@@ -259,10 +259,10 @@ Native-only modules use `#[cfg(not(target_arch = "wasm32"))]`. A crate that cann
 | Domain families | Features with core logic and egui UI | `craft-color-ui`, `craft-draw`, `craft-imaging`, `craft-layers`, `craft-browse`, `craft-text`, `craft-font-manager`, `craft-pages`, `craft-review`, `craft-table`, `craft-timeline`; planned: `craft-code` |
 | Infrastructure services | Egui-free logic that families and apps share | `craft-theme`, `craft-theme-store`, `craft-host`, `craft-i18n`, `craft-settings`, `craft-keymap`, `craft-menu`, `craft-automation`, `craft-update`, `craft-cms`, `craft-ai-core`, `craft-atomic`, `craft-docpath`, `craft-font-catalog`, `craft-font-store`, `craft-font-subset`, `craft-pdf`, `craft-prepress`, `craft-proof` |
 | Formats and codecs | Clean-room readers and writers | `craft-audio`, `craft-crw`, `craft-jpeg`, `craft-media`, `craft-doc`, `craft-ecproj-format`, `craft-pcraft-format`, `craft-vectorcraft-format` |
-| Platform adapters | One operating-system, window-system or browser service each | `craft-platform`, `craft-dialogs`, `craft-window`, `craft-win32`, `craft-quit`, `craft-print`, `craft-web-api`, `craft-web-host`; next: `craft-gpu` |
+| Platform adapters | One operating-system, window-system or browser service each | `craft-platform`, `craft-dialogs`, `craft-window`, `craft-win32`, `craft-font-os-windows`, `craft-quit`, `craft-print`, `craft-web-api`, `craft-web-host`; next: `craft-gpu` |
 | Tooling | Not shipped in apps | `craft-ui-gallery`, `story-render`, `feature-root`, `craft-ui-bench`, `craft-ui-test-kit`, `craft-design-lint`, `craft-plate-test`, `craft-fonts-build`, `craft-media-testkit` |
 
-One crate allows `unsafe` code, wrapping foreign calls behind a safe API so no other crate needs `unsafe`: `craft-win32` (the Win32 window-procedure subclassing and window-handle calls). The workspace lint table sets `unsafe_code = "forbid"`; craft-win32 sets it to `deny` and allows it in `lib.rs`, and the design-lint rule `contract/unsafe-allow` names it. The benchmark's counting allocator (`craft-ui-bench`, `src/alloc.rs`) is the other allowed site. The HarfBuzz FFI behind `craft-font-subset` is outside the workspace ([craft-font-subset](#craft-font-subset)).
+Two crates allow `unsafe` code, wrapping foreign calls behind a safe API so no other crate needs `unsafe`: `craft-win32` (the Win32 window-procedure subclassing and window-handle calls) and `craft-font-os-windows` (the Win32 font registration calls). The workspace lint table sets `unsafe_code = "forbid"`; both set it to `deny` and allow it in `lib.rs`, and the design-lint rule `contract/unsafe-allow` names craft-win32 (craft-font-os-windows is not among the paths it checks). The benchmark's counting allocator (`craft-ui-bench`, `src/alloc.rs`) is the other allowed site. The HarfBuzz FFI behind `craft-font-subset` is outside the workspace ([craft-font-subset](#craft-font-subset)).
 
 Services and adapters may carry a `ui` feature (`craft-keymap`, `craft-update`, `craft-dialogs`) but name no document concept. Module tables: [Appendix B](#appendix-b-crate-and-module-layout).
 
@@ -1300,6 +1300,10 @@ Search and filters over font indexes, installed fonts by family, and the font ma
 | `picker` | Font picker: families, filters, previews, stars, recents, similar fonts (feature `font-picker`) | exists |
 | `store` | What the panel needs from the font store | exists |
 
+#### craft-font-os-windows
+
+The Win32 calls craft-font-store needs to make a font available to every app of the user (the per-user font registry, `AddFontResourceW`, `WM_FONTCHANGE`), behind a safe API; empty on other platforms. It allows `unsafe` code ([3.4](#34-crate-taxonomy)).
+
 #### craft-font-store
 
 The font store: indexes, exact lookup, verified installs into the suite's font folder. Exists.
@@ -1309,7 +1313,7 @@ The font store: indexes, exact lookup, verified installs into the suite's font f
 | `http` | The one HTTPS client | exists |
 | `index`, `source`, `sources` | Font indexes, one source's file and URLs, built-in sources | exists |
 | `pin` | The index commit and hash this build trusts | exists |
-| `store` | Store folder, consent, installs, manifest, removal | exists |
+| `store` | Store folder, consent, installs, manifest, removal, copies in the OS user font folder | exists |
 | `verify` | Checks a file against its index entry | exists |
 
 #### craft-font-subset
@@ -1805,7 +1809,7 @@ Release checking, downloading, installing and self-updating for the app suite an
 
 #### craft-win32
 
-The Win32 window-procedure subclassing and window-handle calls that need `unsafe`, behind a safe API; empty on other platforms. It is the one crate that allows `unsafe` code ([3.4](#34-crate-taxonomy)).
+The Win32 window-procedure subclassing and window-handle calls that need `unsafe`, behind a safe API; empty on other platforms. It is one of the two crates that allow `unsafe` code ([3.4](#34-crate-taxonomy)).
 
 #### craft-window
 

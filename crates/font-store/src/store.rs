@@ -3,8 +3,9 @@
 //! Layout of the folder ([`craft_font_catalog::font_store_dir`]):
 //!
 //! ```text
-//! settings.json        the consent setting and the sources the user added
+//! settings.json        the consent setting, the sources the user added and the other settings
 //! manifest.json        what is installed
+//! os-fonts.json        the ledger of copies in the OS user font folder
 //! indexes/             the last indexes fetched: sources.json, one file per source
 //! previews/            preview subsets from the preview service (WOFF2), a cache of at most 50 MB
 //! <family dir>/        google/fonts' folder name, or <source>/<family>: the fonts and the licence
@@ -24,7 +25,6 @@ use std::time::{Duration, SystemTime};
 use craft_font_catalog::{Catalog, FontEnv, font_store_dir};
 use serde::{Deserialize, Serialize};
 
-use crate::UserSource;
 use crate::http::{Cancel, Client, FetchError};
 use crate::index::{
     Face, Family, FontFile, GOOGLE_FONTS, Index, IndexError, LicenseFile, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, SourceProblem, Unavailable,
@@ -34,10 +34,13 @@ use crate::service::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource};
 use crate::source::{is_source_url, safe_dir, safe_file_name, slug};
 use crate::sources::{MAX_SOURCES_BYTES, SourceEntry, SourcesFile};
 use crate::verify::{VerifyError, is_font, sha256_hex, verify_font};
+use crate::{Conflict, UserSource};
 
+mod os_fonts;
 mod sources;
 mod transaction;
 
+pub use os_fonts::{OsFontFolder, OsFontLayout};
 pub(crate) use transaction::Stage;
 use transaction::{Commit, merge_entry};
 
@@ -81,8 +84,9 @@ pub enum Error {
     /// Downloading is off; the user turns it on in the app.
     #[error("downloading fonts is turned off")]
     NetworkOff,
-    /// An agent tried to turn the network on.
-    #[error("only the user can turn on downloading fonts")]
+    /// An agent tried what only the user may do: turn the network on, change a setting, or add
+    /// or remove a family's copies in the OS user font folder.
+    #[error("only the user can do this, in the app")]
     NotAllowed,
     /// Not an https URL a source can be added from.
     #[error("{0} is not an https URL")]
@@ -118,6 +122,21 @@ pub enum Error {
     /// The operation was cancelled.
     #[error("cancelled")]
     Cancelled,
+    /// Families can't be copied into the OS user font folder here; the reason says why.
+    #[error("{0}")]
+    Unsupported(String),
+    /// Fonts the store didn't add already have the family's PostScript names, or sit where its
+    /// copies would go.
+    #[error("the family can't be copied into your fonts folder: {}", .0.iter().map(|c| match &c.postscript {
+        Some(ps) => format!("{} already has the name {ps}", c.path.display()),
+        None => format!("{} is in the way", c.path.display()),
+    }).collect::<Vec<_>>().join("; "))]
+    Conflict(Vec<Conflict>),
+    /// The ledger of copies in the OS user font folder (`os-fonts.json`) can't be read or
+    /// understood (damaged, or from a newer version). It is kept as it is, and nothing that would
+    /// change it runs.
+    #[error("the record of fonts copied into your fonts folder (os-fonts.json in the font store) can't be used: {0}")]
+    Ledger(String),
     /// Reading or writing the store failed.
     #[error("{what}: {source}")]
     Io {
@@ -180,6 +199,11 @@ pub struct InstalledFamily {
     pub license_file: Option<String>,
     /// The installed files: all of the family's, or some faces.
     pub files: Vec<InstalledFile>,
+    /// The user's choice for this family: copied into the OS user font folder for all apps
+    /// (`true`) or kept in Craft apps only (`false`). `None` when none is recorded (installed
+    /// before the choice existed, or by an agent): [`FontStore::craft_apps_only`] decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_to_all: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -204,6 +228,10 @@ struct Settings {
     preview_service: Option<String>,
     #[serde(default = "on")]
     previews: bool,
+    /// The user keeps store fonts in Craft apps only: the font manager doesn't copy families
+    /// into the OS user font folder.
+    #[serde(default)]
+    craft_apps_only: bool,
     /// The file exists but couldn't be read or parsed.
     #[serde(skip)]
     unreadable: bool,
@@ -215,7 +243,7 @@ fn on() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true, unreadable: false }
+        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true, craft_apps_only: false, unreadable: false }
     }
 }
 
@@ -264,6 +292,9 @@ pub struct FontStore {
     default_preview_service: Option<String>,
     /// The host's network setting, used while the user hasn't chosen. Never saved.
     default_network: Option<Network>,
+    /// The OS user font folder, or why there is none.
+    os_fonts: Result<OsFontFolder, String>,
+    ledger_cache: os_fonts::LedgerCache,
     /// Tests: stands in for the environment variable.
     #[cfg(test)]
     preview_env: Option<Option<String>>,
@@ -279,15 +310,19 @@ impl FontStore {
     /// The store for the app's own interface, in the folder every app reads.
     /// `None` where there is no per-user folder.
     pub fn for_user(env: &FontEnv) -> Option<Self> {
-        Some(Self::new(font_store_dir(env)?, Caller::User))
+        let mut store = Self::new(font_store_dir(env)?, Caller::User);
+        store.set_os_fonts(OsFontFolder::for_env(env));
+        Some(store)
     }
 
     /// The store for an agent (MCP, CLI): it can never turn the network on.
     pub fn for_agent(env: &FontEnv) -> Option<Self> {
-        Some(Self::new(font_store_dir(env)?, Caller::Agent))
+        let mut store = Self::new(font_store_dir(env)?, Caller::Agent);
+        store.set_os_fonts(OsFontFolder::for_env(env));
+        Some(store)
     }
 
-    /// A store in `dir`.
+    /// A store in `dir`, with no OS user font folder ([`FontStore::with_os_fonts`] sets one).
     pub fn new(dir: PathBuf, caller: Caller) -> Self {
         Self {
             dir,
@@ -298,6 +333,8 @@ impl FontStore {
             pack_removal_round_end: AtomicUsize::new(0),
             default_preview_service: None,
             default_network: None,
+            os_fonts: Err("no user font folder was given".into()),
+            ledger_cache: os_fonts::LedgerCache::default(),
             #[cfg(test)]
             preview_env: None,
         }
@@ -369,7 +406,8 @@ impl FontStore {
     // ----- install
 
     /// Installs every file of `family`. Files already installed with the same sha256 aren't
-    /// downloaded again.
+    /// downloaded again. When the family has copies in the OS user font folder, the user's install
+    /// also copies the new files there; an agent's leaves them in [`FontStore::pending_files`].
     pub fn install_family(
         &self,
         index: &Index,
@@ -401,6 +439,7 @@ impl FontStore {
         let wanted: Vec<&FontFile> = files.iter().copied().filter(|f| !have(f) || !folder.join(f.file_name()).is_file()).collect();
         let license_missing = family.license_file_name().is_some_and(|name| !folder.join(name).is_file());
         if wanted.is_empty() && !license_missing {
+            self.reshare(&family.source, &family.family);
             return installed.ok_or_else(|| Error::NotInstalled(family.family.clone()));
         }
         self.require_network()?;
@@ -455,6 +494,9 @@ impl FontStore {
         };
         drop(stage);
         self.rescan();
+        if result.is_ok() {
+            self.reshare(&family.source, &family.family);
+        }
         result
     }
 
@@ -552,13 +594,17 @@ impl FontStore {
             .is_some_and(|i| i.files.iter().any(|x| x.name == file.file_name() && x.sha256 == file.sha256))
     }
 
-    /// Removes the family of this name installed from `source`: its files, its licence and its
-    /// manifest entry. Its folder disappears at once and is deleted after.
+    /// Removes the family of this name installed from `source`: its copies in the OS user font
+    /// folder (as [`FontStore::withdraw`]), its files, its licence and its manifest entry. Its
+    /// folder disappears at once and is deleted after. A family with copies in the OS folder is
+    /// the user's to remove: an agent gets [`Error::NotAllowed`] and nothing changes. Copies this
+    /// build can't reach ([`FontStore::copies_out_of_reach`]) stay, listed in the ledger.
     pub fn remove_family(&self, source: &str, name: &str) -> Result<(), Error> {
         let result = {
             let _lock = self.lock()?;
             let mut manifest = self.read_manifest();
             let pos = manifest.families.iter().position(|f| f.is(source, name)).ok_or_else(|| Error::NotInstalled(name.to_string()))?;
+            self.withdraw_for_removal(source, name, None)?;
             let entry = manifest.families.remove(pos);
             let folder = self.dir.join(&entry.dir);
             let stage = Stage::new(&self.dir)?;
@@ -581,9 +627,11 @@ impl FontStore {
         result
     }
 
-    /// Removes some files of an installed family (one style, say), by their names in its folder.
-    /// Taking out the last one removes the family. Names the family's manifest entry doesn't list
-    /// are left alone.
+    /// Removes some files of an installed family (one style, say), by their names in its folder,
+    /// with their copies in the OS user font folder. Taking out the last one removes the family.
+    /// Names the family's manifest entry doesn't list are left alone. Files with copies in the OS
+    /// folder are the user's to remove: an agent gets [`Error::NotAllowed`] and nothing changes.
+    /// Copies this build can't reach stay, as for [`FontStore::remove_family`].
     pub fn remove_files(&self, source: &str, name: &str, files: &[String]) -> Result<(), Error> {
         let result = {
             let _lock = self.lock()?;
@@ -595,6 +643,7 @@ impl FontStore {
             if removing.is_empty() {
                 return Ok(());
             }
+            self.withdraw_for_removal(source, name, Some(removing.as_slice()))?;
             entry.files.retain(|f| !removing.contains(&f.name));
             let folder = self.dir.join(&entry.dir);
             let stage = Stage::new(&self.dir)?;
@@ -666,7 +715,15 @@ impl FontStore {
 
 impl InstalledFamily {
     fn empty() -> Self {
-        Self { family: String::new(), source: String::new(), dir: String::new(), license: String::new(), license_file: None, files: Vec::new() }
+        Self {
+            family: String::new(),
+            source: String::new(),
+            dir: String::new(),
+            license: String::new(),
+            license_file: None,
+            files: Vec::new(),
+            available_to_all: None,
+        }
     }
 
     /// Whether this is the family `name` (ignoring case) from `source`.
