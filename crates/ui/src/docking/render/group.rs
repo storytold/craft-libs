@@ -32,9 +32,6 @@ const BORDER_BAND: f32 = 4.0;
 /// Width of the "…" button that lists the panels a strip has no room for.
 const OVERFLOW_WIDTH: f32 = 22.0;
 
-/// Points of smooth (trackpad) scrolling that make one wheel notch.
-const WHEEL_NOTCH: f32 = 40.0;
-
 impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// Draw one tab group at `rect`, returning whether the host took exclusive ownership.
     ///
@@ -258,32 +255,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     /// notch, stopping at the ends. Trackpad scrolling adds up to a notch. The host's extra tabs
     /// (`extra`) keep the wheel for their own widgets.
     fn wheel_tabs(&mut self, ui: &Ui, strip: Rect, extra: Rect, panels: &[P], active: usize) {
-        let key = self.id.with(("tab-wheel", panels.first()));
-        if !ui.rect_contains_pointer(strip) || ui.rect_contains_pointer(extra) {
-            ui.ctx().data_mut(|d| d.remove::<f32>(key));
-            return;
-        }
-        let notches: f32 = ui.input(|i| {
-            i.events
-                .iter()
-                .map(|event| match event {
-                    egui::Event::MouseWheel { unit, delta, modifiers, .. } if !modifiers.command && !modifiers.ctrl => match unit {
-                        egui::MouseWheelUnit::Point => delta.y / WHEEL_NOTCH,
-                        egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
-                    },
-                    _ => 0.0,
-                })
-                .sum()
-        });
-        if notches == 0.0 || !notches.is_finite() {
-            return;
-        }
-        let total = ui.ctx().data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0) + notches;
-        let steps = total.trunc();
-        ui.ctx().data_mut(|d| d.insert_temp(key, total - steps));
-        // A wheel turned down scrolls content up: a negative delta selects the next tab.
-        let to = (active as i64).saturating_sub(steps as i64).clamp(0, panels.len().saturating_sub(1) as i64) as usize;
-        if to != active
+        let strip = if ui.rect_contains_pointer(extra) { Rect::NOTHING } else { strip };
+        let id = self.id.with(("tab-wheel", panels.first()));
+        if let Some(to) = tabs::wheel_select(ui, id, strip, active, panels.len())
             && let Some(panel) = panels.get(to)
         {
             self.output.actions.push(Action::Activate { panel: panel.clone() });
