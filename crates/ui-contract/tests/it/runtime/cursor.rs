@@ -244,6 +244,25 @@ fn a_badged_tool_pointer_keeps_its_tip_on_the_hotspot_and_the_badge_below_right(
     }
 }
 
+/// A tool's icon on the pointer is a neutral light silhouette over its dark halo, whatever colour the theme gives the
+/// canvas overlay marks: every pixel of the image is grey, with no tint from the overlay colour.
+#[trial]
+fn a_tool_icon_on_the_pointer_takes_no_overlay_tint() {
+    let mut frames = frames(linux(), 1.0);
+    for cursor in [
+        PaintedCursor::tool(IconId::new("brush"), Vec2::new(4.0, 20.0), None),
+        PaintedCursor::pointer_tool(PointerGlyph::Crosshair, IconId::new("crop")),
+    ] {
+        let image = painted(&mut frames, cursor.clone()).image.unwrap();
+        let tinted = image.rgba.chunks(4).filter(|p| p[3] > 0).find(|p| {
+            let (high, low) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
+            high - low > 2
+        });
+        assert_eq!(tinted, None, "{cursor:?}: a tinted pixel");
+        assert!(image.rgba.chunks(4).any(|p| p[3] == 255 && p[0] > 200), "{cursor:?}: the icon is drawn light");
+    }
+}
+
 /// An unchanged pointer hands the window the same image, so the integration uploads it to the OS once; a new size or
 /// scale makes a new one; a frame whose winner is a system cursor, or that asks for nothing, clears it (egui keeps an
 /// image until it is replaced).
