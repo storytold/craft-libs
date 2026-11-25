@@ -431,6 +431,71 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// PdfCraft #3076 (#2098), hayro-interpret (26) extension: the Central European letters whose
+/// mark isn't a plain accent are drawn in non-embedded standard fonts too: Đ as Ð, đ with a bar
+/// across its ascender, and ď ľ Ľ ť with their apostrophe-shaped caron. Each drew nothing.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn letters_with_a_bar_or_an_apostrophe_caron_are_built_from_their_parts() {
+    let letters = ["D", "Dcroat", "d", "dcroat", "d", "dcaron", "l", "lcaron", "L", "Lcaron", "t", "tcaron"];
+    for base_font in ["Helvetica", "Times-Roman", "Courier-Bold"] {
+        let mut content = String::new();
+        for i in 0..letters.len() {
+            content.push_str(&format!(
+                "BT /F1 40 Tf {} 20 Td <{:02X}> Tj ET
+",
+                10 + 40 * i,
+                65 + i
+            ));
+        }
+        let differences = letters.iter().map(|n| format!("/{n}")).collect::<Vec<_>>().join(" ");
+        let pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 500 80] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /{base_font}
+  /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [65 {differences}] >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let p = render(pdf.as_bytes());
+        // The dark pixels of the i-th letter: how many, its top row (y down) and right column.
+        let ink = |i: u32| {
+            let (mut count, mut top, mut right) = (0u32, u32::MAX, 0u32);
+            for y in 0..p.height {
+                for x in (8 + 40 * i)..(48 + 40 * i).min(p.width) {
+                    if pixel(&p, x, y)[0] < 128 {
+                        count += 1;
+                        top = top.min(y);
+                        right = right.max(x);
+                    }
+                }
+            }
+            (count, top, right)
+        };
+        for pair in 0..letters.len() as u32 / 2 {
+            let (base, built) = (ink(2 * pair), ink(2 * pair + 1));
+            let name = letters[2 * pair as usize + 1];
+            assert!(base.0 > 0, "{base_font} {name}: the base letter draws");
+            assert!(built.0 > base.0, "{base_font} {name} draws its letter and its mark: {built:?} vs {base:?}");
+            match name {
+                // The bar crosses the ascender: nothing above the letter.
+                "dcroat" => assert!(built.1 + 1 >= base.1, "{base_font} đ: the bar stays within the letter: {built:?} vs {base:?}"),
+                // The apostrophe stands right of the letter (ď ť) or of L's stem.
+                "dcaron" | "lcaron" | "tcaron" => assert!(built.2 > base.2, "{base_font} {name}: the apostrophe is right of the letter"),
+                _ => {}
+            }
+            if name == "tcaron" {
+                assert!(built.1 + 2 < base.1, "{base_font} ť: the apostrophe reaches above the t: {built:?} vs {base:?}");
+            }
+        }
+    }
+}
+
 /// A one-page PDF: `page` holds the page dictionary's entries besides its tree links and
 /// contents (the media box, resources, annotations), and `objects` the objects from 5 on.
 fn one_page(page: &str, content: &[u8], objects: &[u8]) -> Vec<u8> {

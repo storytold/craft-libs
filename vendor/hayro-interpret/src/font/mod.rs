@@ -279,6 +279,14 @@ impl<'a> Font<'a> {
                 FontType::Type1(Rc::new(Type1Font::new(dict, font_resolver, cmap_resolver)?))
             }
             // PDFBOX-5463: PDF viewers seem to accept OpenType as well.
+            // PdfCraft patch (111): `/OpenType` isn't a font dictionary subtype (ISO 32000-2
+            // §9.6.2, Table 109), so the font is read by the program it embeds, as other readers
+            // do: a CFF one (Table 124: a `FontFile3` that isn't a TrueType-outline sfnt) or a
+            // Type 1 `FontFile` as a Type 1 font, anything else as TrueType. The five fonts of
+            // PDFBOX-5463 wrap CFF in `OTTO`, and the TrueType reader drew them in a stand-in.
+            OPEN_TYPE if embeds_cff_or_type1_program(dict) => {
+                FontType::Type1(Rc::new(Type1Font::new(dict, font_resolver, cmap_resolver)?))
+            }
             TRUE_TYPE | OPEN_TYPE => FontType::TrueType(Rc::new(TrueTypeFont::new(
                 dict,
                 font_resolver,
@@ -761,6 +769,11 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
 /// hex `A9`); nothing for any other name. Everything from the first `.` is dropped first, as
 /// `glyph_name_to_text` drops it.
 fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
+    glyph_name_radix_numbers(name).map(|(_, n)| n)
+}
+
+/// `glyph_name_numbers` with the radix (10 or 16) each number was read in.
+fn glyph_name_radix_numbers(name: &str) -> impl Iterator<Item = (u32, u32)> + '_ {
     let base = name.split('.').next().unwrap_or_default();
     (1..=3).flat_map(move |prefix| {
         // `from_str_radix` would also take a leading `+`: the number is digits only, and at
@@ -775,9 +788,11 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
                 .then_some(digits)
             });
         digits.into_iter().flat_map(|d| {
-            [10, 16]
-                .into_iter()
-                .filter_map(move |radix| u32::from_str_radix(d, radix).ok())
+            [10, 16].into_iter().filter_map(move |radix| {
+                u32::from_str_radix(d, radix)
+                    .ok()
+                    .map(|n| (radix, n))
+            })
         })
     })
 }
@@ -792,10 +807,29 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
 /// (`/Differences [1 /C1 /C2 … /C80]`) names its own codes too, but the counter says nothing
 /// about the characters (`/C65` is the 65th glyph used, not `A`): a numbered name at a C0
 /// control code (below 32), which no text shows, gives such a counter away and fails the font.
+///
+/// With `hex_control_block` (the Type 3 caller only), a font that names every code by itself
+/// in hexadecimal (`/Differences [0 /x0 /x1 … /xff]`, TeX's dvips Type 3 fonts) passes although
+/// it has names at control codes: there every control code, 0 through 31, has a numbered name,
+/// and each names its code in hexadecimal (`/xa` at 10, `/x1f` at 31). A decimal counter writes
+/// `/C10` at 10, which reads 16 in hexadecimal, and a counter from code 1 leaves code 0 out.
+/// Subsets that number their glyphs in hexadecimal and happen to keep some at their own control
+/// codes (`/G0A` at 10, `/G0D` at 13), where the numbers name no characters, don't fill the
+/// block and still fail.
+///
+/// The block also admits a counter that starts at code 0, writes its numbers in hexadecimal and
+/// fills the block: its `/Differences` (`[0 /x0 /x1 …]`) is the dvips mapping's, name for name
+/// and code for code. Over 5,789 public PDFs (#7710), every font the block admits is a dvips
+/// `/x0` … `/xff` Type 3 font, so only Type 3 fonts get the block; a Type 1 font with a numbered
+/// name at a control code fails as before (`/zz0` … `/zzae` reads nothing, review on #7710).
 pub(crate) fn numbered_names_name_their_codes<'a>(
     names: impl IntoIterator<Item = (u8, &'a str)>,
+    hex_control_block: bool,
 ) -> bool {
-    names
+    // The control codes with a numbered name, one bit each; each of them must name its code in
+    // hexadecimal.
+    let mut at_control = 0u32;
+    let own_codes = names
         .into_iter()
         .filter(|(_, name)| {
             glyph_names::get(name).is_none()
@@ -803,9 +837,22 @@ pub(crate) fn numbered_names_name_their_codes<'a>(
                 && glyph_name_to_text(name).is_none()
         })
         .all(|(code, name)| {
-            let mut numbers = glyph_name_numbers(name).peekable();
-            numbers.peek().is_none() || (code >= 0x20 && numbers.any(|n| n == u32::from(code)))
-        })
+            let code = u32::from(code);
+            let mut numbers = glyph_name_radix_numbers(name).peekable();
+            if numbers.peek().is_none() {
+                return true;
+            }
+            if code >= 0x20 {
+                return numbers.any(|(_, n)| n == code);
+            }
+            if !hex_control_block {
+                return false;
+            }
+            // `code` is below 32, so the shift can't overflow.
+            at_control |= 1 << code;
+            numbers.any(|(radix, n)| radix == 16 && n == code)
+        });
+    own_codes && (at_control == 0 || at_control == u32::MAX)
 }
 
 /// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
@@ -888,4 +935,87 @@ pub(crate) fn normalized_glyph_name(mut name: &str) -> &str {
     }
 
     name
+}
+
+/// PdfCraft patch (111): the sfnt tags of font programs with TrueType outlines (ISO/IEC
+/// 14496-22 §5.2: version 1.0 and the Apple `true` tag) and of font collections, which the
+/// TrueType reader handles as before. `OTTO` wraps CFF.
+pub(crate) const TRUE_TYPE_SFNT_TAGS: [&[u8]; 3] = [&[0, 1, 0, 0], b"true", b"ttcf"];
+
+/// PdfCraft patch (111): whether a font descriptor embeds a CFF or Type 1 program rather than
+/// TrueType outlines: a `FontFile`, or a `FontFile3` (`Type1C`, or `OpenType` with a "CFF "
+/// table: ISO 32000-2 §9.9, Table 124) that doesn't begin with a TrueType sfnt tag. A
+/// `FontFile2` is TrueType. Decoding stops after the tag where the program's filters allow:
+/// each filter stops at four bytes, so when that leaves fewer than four (a PNG predictor that
+/// needs a whole row, or a filter after one whose output was cut short) the program is decoded
+/// again within the usual stream limit.
+fn embeds_cff_or_type1_program(dict: &Dict<'_>) -> bool {
+    let Some(descriptor) = dict.get::<Dict<'_>>(FONT_DESC) else {
+        return false;
+    };
+    if descriptor.contains_key(FONT_FILE2) {
+        return false;
+    }
+    if descriptor.contains_key(FONT_FILE) {
+        return true;
+    }
+    descriptor
+        .get::<Stream<'_>>(FONT_FILE3)
+        .and_then(|program| {
+            program
+                .decoded_within(4)
+                .ok()
+                .filter(|head| head.len() >= 4)
+                .or_else(|| program.decoded().ok())
+        })
+        .is_some_and(|head| !TRUE_TYPE_SFNT_TAGS.iter().any(|tag| head.starts_with(tag)))
+}
+
+#[cfg(test)]
+mod open_type_subtype_tests {
+    use super::embeds_cff_or_type1_program;
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::{Dict, ObjectIdentifier};
+
+    /// Whether the font dictionary (object 5, its descriptor's entries `descriptor`, object 7 a
+    /// stream of `stream_dict` holding `data`) is taken to embed a CFF or Type 1 program.
+    fn cff_or_type1(descriptor: &str, stream_dict: &str, data: &[u8]) -> bool {
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >> endobj\n\
+             5 0 obj << /Type /Font /Subtype /OpenType /FontDescriptor 6 0 R >> endobj\n\
+             6 0 obj << /Type /FontDescriptor {descriptor} >> endobj\n\
+             7 0 obj << {stream_dict} /Length {} >> stream\n",
+            data.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(data);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let pdf = Pdf::new(pdf).unwrap();
+        let font = pdf.xref().get::<Dict<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+        embeds_cff_or_type1_program(&font)
+    }
+
+    #[test]
+    fn an_open_type_font_is_read_by_the_program_it_embeds() {
+        let open_type = "/Subtype /OpenType";
+        // CFF: an `OTTO` wrapper, bare CFF, a Type 1 `FontFile`.
+        assert!(cff_or_type1("/FontFile3 7 0 R", open_type, b"OTTO\0\x01\0\0"));
+        assert!(cff_or_type1("/FontFile3 7 0 R", "/Subtype /Type1C", b"\x01\0\x04\x02"));
+        assert!(cff_or_type1("/FontFile 7 0 R", "", b"%!PS-AdobeFont-1.0"));
+        // The tag is read after the stream's filters.
+        assert!(cff_or_type1("/FontFile3 7 0 R", "/Filter /ASCIIHexDecode", b"4F54544F00010000>"));
+        assert!(!cff_or_type1("/FontFile3 7 0 R", "/Filter /ASCIIHexDecode", b"0001000000050080>"));
+        // TrueType outlines, a collection, a `FontFile2`: TrueType, as before.
+        for head in [&b"\0\x01\0\0\0\x05"[..], b"true\0\x05", b"ttcf\0\x01"] {
+            assert!(!cff_or_type1("/FontFile3 7 0 R", open_type, head), "{head:?}");
+        }
+        assert!(!cff_or_type1("/FontFile2 7 0 R /FontFile3 7 0 R", open_type, b"OTTO"));
+        // No program, or a reference to none: TrueType (a stand-in), as before.
+        assert!(!cff_or_type1("", "", b""));
+        assert!(!cff_or_type1("/FontFile3 8 0 R", open_type, b"OTTO"));
+        // An empty program isn't TrueType: the Type 1 reader's stand-in draws.
+        assert!(cff_or_type1("/FontFile3 7 0 R", open_type, b""));
+    }
 }

@@ -2,11 +2,13 @@
 //! and Standard-14 font metrics.
 
 pub mod encodings;
+mod latin;
 mod std14;
 mod std14_metrics;
 #[cfg(feature = "cos")]
 pub mod wire;
 
+pub use latin::{LatinEncoding, extra_letter, extra_letter_named, first_non_latin, latin_drawable};
 pub use std14::{Match as Std14Match, Std14};
 
 /// The WinAnsiEncoding (ISO 32000-2 Annex D) code for `c`, if the encoding has one.

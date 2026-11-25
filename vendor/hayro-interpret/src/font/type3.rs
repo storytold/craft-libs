@@ -233,6 +233,7 @@ impl<'a> Type3<'a> {
                         let own_codes = *self.own_code_names.get_or_init(|| {
                             numbered_names_name_their_codes(
                                 (0..=u8::MAX).filter_map(|c| Some((c, self.code_to_name(c)?))),
+                                true,
                             )
                         });
                         name.filter(|_| own_codes)
