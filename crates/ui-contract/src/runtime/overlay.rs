@@ -926,14 +926,14 @@ pub(crate) fn end_pass(ctx: &Context) {
         persist.raised.retain(|id, _| roots.contains(id));
         persist.appeared.retain(|id, _| current.iter().any(|entry| entry.id == *id));
         let before = families(&current, &persist.raised);
-        if let Some(point) = pressed {
-            let hit = before
+        if let Some(point) = pressed
+            && let Some(hit) = before
                 .iter()
                 .rev()
-                .find(|members| members.iter().filter(live).filter(|entry| entry.interactable()).any(|entry| entry.rect.contains(point)));
-            if let Some(root) = hit.and_then(|members| members.first()) {
-                stamp(root.id, persist);
-            }
+                .find(|members| members.iter().filter(live).filter(|entry| entry.interactable()).any(|entry| entry.rect.contains(point)))
+            && let Some(root) = hit.first()
+        {
+            stamp(root.id, persist);
         }
         let families = families(&current, &persist.raised);
         let mut order: Vec<Layer> = Vec::new();

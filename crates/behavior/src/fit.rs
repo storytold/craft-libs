@@ -176,15 +176,9 @@ pub fn fit_whole(natural: &[f32], selected: usize, kept: &[bool], available: f32
 }
 
 fn squeeze(natural: &[f32], indices: &[usize], total: f32, minimum: f32) -> Vec<(usize, f32)> {
-    squeeze_floored(natural, indices, total, minimum, |i| natural.get(i).copied().unwrap_or(0.0).min(minimum))
-}
-
-/// Shrinks the tabs at `indices` into `total` to a common cap, found between `start` and the widest natural width,
-/// each tab keeping at least its `floor`.
-fn squeeze_floored(natural: &[f32], indices: &[usize], total: f32, start: f32, floor: impl Fn(usize) -> f32) -> Vec<(usize, f32)> {
     let width = |i: usize| natural.get(i).copied().unwrap_or(0.0);
-    let sum_at = |cap: f32| indices.iter().map(|&i| f64::from(width(i).min(cap.max(floor(i))))).sum::<f64>();
-    let (mut lo, mut hi) = (start, indices.iter().map(|&i| width(i)).fold(start, f32::max));
+    let sum_at = |cap: f32| indices.iter().map(|&i| f64::from(width(i).min(cap.max(width(i).min(minimum))))).sum::<f64>();
+    let (mut lo, mut hi) = (minimum, indices.iter().map(|&i| width(i)).fold(minimum, f32::max));
     if sum_at(hi) > f64::from(total) {
         for _ in 0..32 {
             let mid = lo + (hi - lo) * 0.5;
@@ -204,7 +198,7 @@ fn squeeze_floored(natural: &[f32], indices: &[usize], total: f32, start: f32, f
             let natural = width(i);
             // Also handles a selected tab whose minimum alone exceeds the budget, and prevents
             // accumulated floating-point rounding from placing the overflow button past the end.
-            let width = natural.min(lo.max(floor(i))).min(remaining);
+            let width = natural.min(lo.max(natural.min(minimum))).min(remaining);
             remaining = (remaining - width).max(0.0);
             (i, width)
         })
