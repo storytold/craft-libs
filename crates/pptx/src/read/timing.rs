@@ -1,6 +1,9 @@
 //! Slide transitions (`p:transition`) and animations (`p:timing`).
 
-use crate::anim::{AnimClass, AnimStart, Animation, BuildRole, TextBuild, Transition, build_filled, paragraph_build_roles};
+use crate::anim::{
+    AnimClass, AnimStart, Animation, BuildRole, ChartBuild, ChartBuildKind, ChartBuildStep, ChartTarget, TextBuild, Transition, build_filled,
+    paragraph_build_roles,
+};
 use crate::{Shape, ShapeKind, TextBody, find_shape, find_shape_mut};
 
 use super::shapes::IdCtx;
@@ -240,12 +243,61 @@ pub fn media_settings(timing: &El, ctx: &IdCtx, shapes: &mut [Shape]) {
     }
 }
 
+fn chart_builds(timing: &El, ctx: &IdCtx, shapes: &[Shape]) -> std::collections::HashMap<(u32, u32), ChartBuild> {
+    let mut builds = std::collections::HashMap::new();
+    let mut chart_ids = None;
+    if let Some(list) = timing.child(Local("bldLst")) {
+        for graphic in list.children(Local("bldGraphic")).take(10_000) {
+            let Some(spid) = graphic.attr_local("spid").and_then(value::to_u32_lossy) else { continue };
+            let as_one = graphic.child(Local("bldAsOne")).is_some();
+            let chart = if as_one {
+                // A whole-object record has no DrawingML child identifying its object type.
+                let ids = chart_ids.get_or_insert_with(|| {
+                    let mut ids = std::collections::HashSet::new();
+                    crate::walk(shapes, &mut |shape, _| {
+                        if matches!(shape.kind, ShapeKind::Chart(_)) {
+                            ids.insert(shape.id);
+                        }
+                    });
+                    ids
+                });
+                if !ctx.lookup(spid).is_some_and(|id| ids.contains(&id)) {
+                    continue;
+                }
+                None
+            } else {
+                let Some(chart) = graphic.path(&[Local("bldSub"), Local("bldChart")]) else { continue };
+                Some(chart)
+            };
+            let group = graphic.attr_local("grpId").and_then(value::to_u32_lossy).unwrap_or(0);
+            builds.entry((spid, group)).or_insert(ChartBuild {
+                group,
+                as_one,
+                kind: chart.and_then(|c| c.attr_local("bld")).and_then(ChartBuildKind::from_xml),
+                animate_background: chart.and_then(|c| c.attr_local("animBg")).and_then(value::to_bool),
+                ui_expand: graphic.attr_local("uiExpand").and_then(value::to_bool),
+            });
+        }
+    }
+    builds
+}
+
+fn chart_target(target: &El) -> Option<ChartTarget> {
+    let chart = target.path(&[Local("graphicEl"), Local("chart")])?;
+    Some(ChartTarget {
+        step: ChartBuildStep::from_xml(chart.attr_local("bldStep")?)?,
+        series_index: chart.attr_local("seriesIdx").and_then(value::to_i32),
+        category_index: chart.attr_local("categoryIdx").and_then(value::to_i32),
+    })
+}
+
 /// Flatten the timing tree into the Animation Pane list.
 pub fn animations(imp: &mut Imp, part: &Part, ctx: &IdCtx, timing: &El, shapes: &[Shape]) -> Vec<Animation> {
     let _ = (imp, part);
     let Some(tn) = timing.child(Local("tnLst")) else { return vec![] };
     let mut found = vec![];
     collect(tn, At { trigger: None, group: 0, offset: 0 }, &mut 0, &mut found, 0);
+    let chart_builds = chart_builds(timing, ctx, shapes);
     // Paragraph builds (`bldP build="p"`) by (spid, grpId).
     let by_para: Vec<(u32, String)> = timing
         .child(Local("bldLst"))
@@ -266,6 +318,7 @@ pub fn animations(imp: &mut Imp, part: &Part, ctx: &IdCtx, timing: &El, shapes: 
         let Some(tgt) = c.find(Local("spTgt")) else { continue };
         let Some(file_id) = tgt.attr_local("spid").and_then(value::to_u32_lossy) else { continue };
         let Some(shape) = ctx.lookup(file_id) else { continue };
+        let grp = c.attr_local("grpId").unwrap_or("0");
         let paragraph = tgt.path(&[Local("txEl"), Local("pRg")]).and_then(|p| p.attr_local("st").and_then(value::to_u32_lossy));
         let effect = maps::effect_for_preset(class, preset).unwrap_or_else(|| maps::fallback_effect(class));
         // PowerPoint writes Float Down as its own preset (47), not as Float with a direction.
@@ -288,6 +341,8 @@ pub fn animations(imp: &mut Imp, part: &Part, ctx: &IdCtx, timing: &El, shapes: 
             duration_ms: max_dur(c, 0).unwrap_or(0),
             delay_ms: c.path(&[Local("stCondLst"), Local("cond")]).and_then(|d| ms_attr(d, "delay")).unwrap_or(0),
             paragraph,
+            chart_target: chart_target(tgt),
+            chart_build: chart_builds.get(&(file_id, value::to_u32_lossy(grp).unwrap_or(0))).copied(),
             trigger: f.trigger.and_then(|t| ctx.lookup(t)),
             preset_id: Some(preset),
             preset_subtype: Some(sub),
@@ -320,9 +375,8 @@ pub fn animations(imp: &mut Imp, part: &Part, ctx: &IdCtx, timing: &El, shapes: 
         if let Some(clr) = c.find(Local("animClr")).and_then(|x| x.child(Local("to"))) {
             a.color = dml::color(clr);
         }
-        let grp = c.attr_local("grpId").unwrap_or("0").to_string();
-        let build = paragraph.is_some() && by_para.iter().any(|(s, g)| *s == file_id && *g == grp);
-        out.push((a, file_id, grp, build));
+        let build = paragraph.is_some() && by_para.iter().any(|(s, g)| *s == file_id && g.as_str() == grp);
+        out.push((a, file_id, grp.to_string(), build));
         at.push((f.trigger, f.group, f.offset));
     }
     place_by_parent_delays(&mut out, &at);
