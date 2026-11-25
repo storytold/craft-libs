@@ -47,11 +47,16 @@ fn ignore_moves_current_to_the_next_word_and_past_the_end_is_none() {
     let (mut fixture, dialog) = shown(CheckSpellingDialog::new(two_documents()));
     press(&mut fixture, "Ignore");
     assert_eq!(dialog.borrow().current().map(|item| (item.object, item.range.clone(), item.word.clone())), Some((9, 20..27, "recieve".to_owned())));
+    // Ignore also reports the word it moved past (next's action rule for the button).
+    let action = dialog.borrow_mut().take_action();
+    assert!(
+        matches!(action, Some(SpellingAction::Ignore(ref item)) if item.word == "teh" && item.object == 7),
+        "Ignore reports the word it moved past: {action:?}"
+    );
     press(&mut fixture, "Ignore");
     assert_eq!(dialog.borrow().current(), None, "the walk has passed the end of the list");
-    // The list and the actions are untouched around this reader: Ignore changes neither.
+    // The list is untouched around this reader: Ignore keeps the words listed.
     assert_eq!(dialog.borrow().items().len(), 2, "Ignore keeps the listed words");
-    assert!(dialog.borrow_mut().take_action().is_none(), "Ignore asks the app for nothing");
 }
 
 #[trial]
