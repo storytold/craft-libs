@@ -17,6 +17,7 @@ mod error;
 mod ids;
 #[cfg(test)]
 mod index_limit_tests;
+mod index_store;
 mod meta;
 mod mux;
 #[cfg(test)]
@@ -28,6 +29,7 @@ pub use crate::source::{ByteSource, ReadSeekSource};
 pub use codec::Codec;
 pub use demux::{Demuxer, Keyframe, MkvFile, OpenOptions, Packet, SeekPoint, open, open_with};
 pub use error::{Error, Result};
+pub use index_store::{IndexStore, set_index_store};
 pub use meta::{
     Attachment, Chapter, ChapterDisplay, ClusterInfo, CuePoint, CuePosition, Edition, SeekEntry, SegmentInfo, SimpleTag, Tag, TagTargets,
 };

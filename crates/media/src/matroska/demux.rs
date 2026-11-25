@@ -719,12 +719,58 @@ pub fn open<S: ByteSource>(src: S) -> Result<MkvFile> {
 }
 
 /// Open with explicit options.
+///
+/// A full index (`opts.index`, without `verify_crc` or an `index_limit`) is taken from the
+/// [`super::IndexStore`] registered with [`super::set_index_store`] when it holds this file's, and
+/// saved there after a scan (see [`super::index_store`] for how a file is known and its saved
+/// tables are checked).
 pub fn open_with<S: ByteSource>(src: S, opts: &OpenOptions) -> Result<MkvFile> {
     let mut cache = Cache::default();
-    open_impl(&src, opts, &mut cache)
+    open_stored(&src, opts, &mut cache)
 }
 
-fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Cache) -> Result<MkvFile> {
+/// [`open_impl`], a full index taken from and saved to the registered [`super::IndexStore`].
+fn open_stored<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Cache) -> Result<MkvFile> {
+    let stored = opts.index && !opts.verify_crc && opts.index_limit.is_none();
+    let Some(store) = stored.then(super::index_store::index_store).flatten() else {
+        return open_impl(src, opts, cache, None).map(|(file, _)| file);
+    };
+    let key = super::index_store::key_of(src);
+    if let Some(saved) = key.as_deref().and_then(|key| store.load(key)).and_then(|bytes| super::index_store::decode(&bytes, src.len())) {
+        let mut from_store = Cache::default();
+        // Tables that do not fit the file: scanned as if there were none.
+        if let Ok((file, _)) = open_impl(src, opts, &mut from_store, Some(saved)) {
+            *cache = from_store;
+            return Ok(file);
+        }
+    }
+    let (file, elements) = open_impl(src, opts, cache, None)?;
+    if let Some(key) = key.as_deref()
+        && file.indexed
+        && file.index_end.is_none()
+    {
+        let tracks: Vec<(u64, &[Sample], &[u32])> = file.tracks.iter().map(|t| (t.number, t.samples.as_slice(), t.sync.as_slice())).collect();
+        store.save(key, &super::index_store::encode(&file.clusters, &tracks, &elements, &file.warnings, src.len()));
+    }
+    Ok(file)
+}
+
+/// Opens the file, and returns the positions of the level-1 elements its walk read. With `saved`
+/// (an index from the store), only the headers are walked and the saved tables are attached after
+/// the elements the scan had read are read too; tables that do not fit the file are an error.
+fn open_impl<S: ByteSource + ?Sized>(
+    src: &S,
+    opts: &OpenOptions,
+    cache: &mut Cache,
+    saved: Option<super::index_store::Saved>,
+) -> Result<(MkvFile, Vec<u64>)> {
+    let header_opts;
+    let opts = if saved.is_some() {
+        header_opts = OpenOptions { index: false, ..opts.clone() };
+        &header_opts
+    } else {
+        opts
+    };
     // each pass over the file (open, building the index) gets the whole budget
     cache.recovery_left = RECOVERY_BUDGET;
     let mut io = Io::new(src, cache);
@@ -802,17 +848,35 @@ fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Ca
     if seg.overruns(len) {
         warn(&mut file.warnings, "Segment extends past end of file (truncated)".into());
     }
-    let mut w =
-        Walker { opts, parsed: HashMap::new(), meta_left: len, blocks_seen: false, resuming: false, lookup: None, budget: FrameBudget::new(len) };
+    let mut w = Walker {
+        opts,
+        parsed: HashMap::new(),
+        order: Vec::new(),
+        defer_seek_head: saved.is_some(),
+        meta_left: len,
+        blocks_seen: false,
+        resuming: false,
+        lookup: None,
+        budget: FrameBudget::new(len),
+    };
     w.walk(&mut io, &mut file)?;
+    if let Some(saved) = saved {
+        w.attach(&mut io, &mut file, saved)?;
+    }
     finish_tracks(&mut file);
-    Ok(file)
+    Ok((file, w.order))
 }
 
 struct Walker<'o> {
     opts: &'o OpenOptions,
     /// Start and end of each level-1 element read.
     parsed: HashMap<u64, u64>,
+    /// The starts of the level-1 elements read, in the order they were read (what an
+    /// [`super::IndexStore`] keeps, so that an open from it reads them in the same order).
+    order: Vec<u64>,
+    /// Headers walked for tables from an [`super::IndexStore`]: the SeekHead's targets are read
+    /// after the elements the scan read ([`Walker::attach`]), as the scan read them.
+    defer_seek_head: bool,
     /// Bytes level-1 elements may still read or scan. Distinct elements do not overlap, so a
     /// valid file stays within its length; SeekHead entries pointing into one another do not.
     meta_left: u64,
@@ -937,11 +1001,56 @@ impl Walker<'_> {
             file.indexed = false;
             return Ok(());
         }
-        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], u64::MAX)?;
-        // follow a second-level SeekHead reached through the first one
-        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS], u64::MAX)?;
+        if !self.defer_seek_head {
+            self.follow_seek_head_to_the_end(io, file)?;
+        }
         file.cues.sort_by_key(|c| c.time);
         file.indexed = self.opts.index;
+        file.index_end = None;
+        file.resume = None;
+        Ok(())
+    }
+
+    /// Attaches tables saved by an earlier scan (an [`super::IndexStore`]) to a file whose headers
+    /// were walked: reads the level-1 elements that scan had read (Cues, Chapters, Tags… after the
+    /// clusters) in the order it read them and then what the SeekHead points at, as the scan did,
+    /// checks the saved tracks and clusters against the file, gives the file the scan's warnings,
+    /// and makes it indexed. Tables that do not fit are an error (the caller scans the file
+    /// instead).
+    fn attach<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, saved: super::index_store::Saved) -> Result<()> {
+        let bad = || Error::Invalid("saved index does not fit the file".into());
+        let seg_end = file.segment_end;
+        for position in &saved.elements {
+            if self.parsed.contains_key(position) || *position < file.segment_data_start || *position >= seg_end {
+                continue;
+            }
+            if let Some(h) = io.header(*position, seg_end)?
+                && matches!(h.id, SEEK_HEAD | INFO | TRACKS | CUES | CHAPTERS | TAGS | ATTACHMENTS)
+            {
+                self.level1(io, file, &h, seg_end)?;
+            }
+        }
+        self.follow_seek_head_to_the_end(io, file)?;
+        if saved.tracks.len() != file.tracks.len() || saved.tracks.iter().zip(&file.tracks).any(|((number, _, _), t)| *number != t.number) {
+            return Err(bad());
+        }
+        let cluster_id = CLUSTER.to_be_bytes();
+        for index in super::index_store::clusters_to_check(saved.clusters.len()) {
+            let Some(c) = saved.clusters.get(index) else { return Err(bad()) };
+            if c.offset < file.segment_data_start || c.end > seg_end || io.peek(c.offset, 4)? != cluster_id {
+                return Err(bad());
+            }
+        }
+        file.clusters = saved.clusters;
+        for (track, (_, samples, sync)) in file.tracks.iter_mut().zip(saved.tracks) {
+            track.samples = samples;
+            track.sync = sync;
+        }
+        file.first_cluster = file.clusters.first().map(|c| c.offset).or(file.first_cluster);
+        // The scan's warnings: damage inside clusters, which this open does not read, included.
+        file.warnings = saved.warnings;
+        file.cues.sort_by_key(|c| c.time);
+        file.indexed = true;
         file.index_end = None;
         file.resume = None;
         Ok(())
@@ -951,6 +1060,13 @@ impl Walker<'_> {
     /// loaded yet) can be retried by [`MkvFile::extend_index`] without repeating any of it.
     fn save(&self, file: &mut MkvFile, pos: u64) {
         file.index_end = Some(pos);
+    }
+
+    /// Read every element the SeekHead points at (the last step of a walk through the file).
+    fn follow_seek_head_to_the_end<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile) -> Result<()> {
+        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], u64::MAX)?;
+        // follow a second-level SeekHead reached through the first one
+        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS], u64::MAX)
     }
 
     /// Read the elements of the given kinds that the SeekHead points at below `before`.
@@ -992,6 +1108,9 @@ impl Walker<'_> {
         let result = self.level1_read(io, file, h, limit);
         if result.is_err() && !known {
             self.parsed.remove(&h.pos);
+            if self.order.last() == Some(&h.pos) {
+                self.order.pop();
+            }
             self.meta_left = meta_left;
             file.attachments.truncate(attachments);
         }
@@ -1007,6 +1126,7 @@ impl Walker<'_> {
             Size::Known(_) => h.end(limit),
         };
         self.parsed.insert(h.pos, end);
+        self.order.push(h.pos);
         if h.overruns(limit) {
             warn(&mut file.warnings, format!("element 0x{:X} at {} truncated", h.id, h.pos));
         }
@@ -1153,8 +1273,17 @@ impl MkvFile {
         let mut cache = Cache::default();
         let mut io = Io::new(src, &mut cache);
         let budget = FrameBudget::resumed(io.len, &self.tracks);
-        let mut w =
-            Walker { opts: &opts, parsed: resume.parsed, meta_left: resume.meta_left, blocks_seen: true, resuming: true, lookup: None, budget };
+        let mut w = Walker {
+            opts: &opts,
+            parsed: resume.parsed,
+            order: Vec::new(),
+            defer_seek_head: false,
+            meta_left: resume.meta_left,
+            blocks_seen: true,
+            resuming: true,
+            lookup: None,
+            budget,
+        };
         w.walk_from(&mut io, self, start)
     }
 
@@ -1251,7 +1380,7 @@ impl<S: ByteSource> Demuxer<S> {
 
     pub fn with_options(src: S, opts: OpenOptions) -> Result<Self> {
         let mut cache = Cache::default();
-        let file = open_impl(&src, &opts, &mut cache)?;
+        let file = open_stored(&src, &opts, &mut cache)?;
         // reading packets recovers from damage on its own budget, not what the open left
         cache.recovery_left = RECOVERY_BUDGET;
         let pos = file.first_cluster.unwrap_or(file.segment_end);
@@ -1286,7 +1415,7 @@ impl<S: ByteSource> Demuxer<S> {
         if self.file.index_end.is_some() {
             return self.file.extend_index(&self.src, &opts);
         }
-        self.file = open_impl(&self.src, &opts, &mut self.cache)?;
+        self.file = open_stored(&self.src, &opts, &mut self.cache)?;
         // the index pass spent its own budget; packet reading keeps a whole one
         self.cache.recovery_left = RECOVERY_BUDGET;
         self.lookup = track_index(&self.file.tracks);
