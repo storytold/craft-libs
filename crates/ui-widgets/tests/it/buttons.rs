@@ -17,7 +17,7 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
-use craft_ui::runtime::env::with_env;
+use craft_ui::runtime::env::{Env, InBar, in_room, with_env};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pictures::sample_picture;
@@ -608,6 +608,56 @@ fn a_bars_combo_box_is_as_wide_as_its_options() {
     assert!(in_bar < standard / 2.0, "the bar's combo box fits two digits and its chevron: {in_bar} against {standard}");
     assert!((in_bar - opt_in).abs() < 0.5, "opt-in compact combo box matches in_bar: {opt_in} against {in_bar}");
     assert!((in_bar - floating_bar).abs() < 0.5, "floating bar combo box matches in_bar: {floating_bar} against {in_bar}");
+}
+
+#[trial]
+fn a_nested_in_room_inside_a_bar_does_not_reuse_the_bars_compact_style() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::style::SurfaceKind;
+
+    let mut standard_fixture = Fixture::new(|ui| {
+        let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+        let mut size = "11".to_owned();
+        let _ = ComboBox::new("Standard Size", Bind::bound(&mut size), &options).show(ui);
+    });
+    standard_fixture.settle();
+    let standard = standard_fixture.by_label("Standard Size").expect("the standard combo box").rect.width();
+
+    let seen_keys = Rc::new(Cell::new(None));
+    let seen_in_bar = Rc::new(Cell::new(true));
+    let keys_out = Rc::clone(&seen_keys);
+    let in_bar_out = Rc::clone(&seen_in_bar);
+
+    let mut fixture = Fixture::new(move |ui| {
+        let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+        let mut bar_size = "11".to_owned();
+        let mut room_size = "11".to_owned();
+        let _ = Bar::new("Toolbar", BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+            let bar_key = Env::of(ui).key;
+            // Warm the style cache with the bar's compact InBar(true) entry first.
+            let _ = ComboBox::new("Bar Size", Bind::bound(&mut bar_size), &options).show(ui);
+            in_room(ui, Rect::from_min_size(pos2(0.0, 60.0), vec2(400.0, 80.0)), |ui| {
+                let room_env = Env::of(ui);
+                in_bar_out.set(room_env.get::<InBar>().0);
+                keys_out.set(Some((bar_key, room_env.key)));
+                let _ = ComboBox::new("Room Size", Bind::bound(&mut room_size), &options).show(ui);
+            });
+        });
+    });
+    fixture.room(vec2(500.0, 200.0));
+    fixture.settle();
+
+    let bar_width = fixture.by_label("Bar Size").expect("the bar combo box").rect.width();
+    let room_width = fixture.by_label("Room Size").expect("the nested room combo box").rect.width();
+    let (bar_key, room_key) = seen_keys.get().expect("keys recorded");
+
+    assert!(!seen_in_bar.get(), "nested in_room resets InBar to false");
+    assert_ne!(bar_key, room_key, "nested in_room derives a new EnvKey when resetting InBar");
+    assert!(bar_width < standard / 2.0, "the bar's combo box is compact: {bar_width} against {standard}");
+    assert!(
+        (room_width - standard).abs() < 0.5,
+        "combo box in a nested in_room uses standard width rather than the bar's warmed compact style: {room_width} against {standard}"
+    );
 }
 
 /// A page's side menu (`ControlPlace::SideMenu`) shows its buttons as rows of places: the label in the large body role
