@@ -429,7 +429,8 @@ impl Installer for SuiteStore {
     }
 
     fn withdraw(&self, family: &str, files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
-        let (source, name) = self.found(family, files)?;
+        // A family an unsupported build removed keeps its ledger entry and copies.
+        let (source, name) = self.found(family, files).or_else(|e| self.store.available_family_holding(family, files).ok_or(e))?;
         self.store.withdraw(&source, &name).map_err(err)
     }
 }

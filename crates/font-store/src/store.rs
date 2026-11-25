@@ -724,6 +724,7 @@ impl FontStore {
         let wanted: Vec<&FontFile> = files.iter().copied().filter(|f| !have(f) || !folder.join(f.file_name()).is_file()).collect();
         let license_missing = family.license_file_name().is_some_and(|name| !folder.join(name).is_file());
         if wanted.is_empty() && !license_missing {
+            self.reshare(&family.source, &family.family);
             return installed.ok_or_else(|| Error::NotInstalled(family.family.clone()));
         }
         self.require_network()?;

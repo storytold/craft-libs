@@ -41,7 +41,7 @@ const MAX_LEDGER_BYTES: u64 = 16 << 20;
 /// How the OS user font folder is laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OsFontLayout {
-    /// One folder of files, each named `Craft-<file>`: `~/Library/Fonts`.
+    /// One folder of files, each named `Craft-<family folder>-<file>`: `~/Library/Fonts`.
     Flat,
     /// A folder per family, `<folder>/<store family folder>/<file>`: `~/.local/share/fonts/Craft`,
     /// which fontconfig reads with its subfolders.
@@ -137,7 +137,7 @@ impl OsFontFolder {
     /// Where the copy of `file` of the store family in folder `family_dir` goes.
     fn path_for(&self, family_dir: &str, file: &str) -> PathBuf {
         match self.layout {
-            OsFontLayout::Flat => self.dir.join(format!("Craft-{file}")),
+            OsFontLayout::Flat => self.dir.join(format!("Craft-{family_dir}-{file}")),
             OsFontLayout::Folders => self.dir.join(family_dir).join(file),
         }
     }
@@ -366,6 +366,10 @@ impl Ledger {
                 if owned {
                     restore_removing(&f.path);
                 }
+                if f.mechanism == Mechanism::Present {
+                    // The system copy is gone: the next make-available copies the file.
+                    return std::fs::metadata(&f.path).is_ok();
+                }
                 if f.state == State::Active {
                     return true;
                 }
@@ -513,12 +517,23 @@ impl FontStore {
 
     /// The store files of an available family that have no copy in the OS folder yet, by their
     /// names in its folder: styles installed since (an agent's install doesn't copy them), or
-    /// files whose copy is older than the store's. Empty for a family that isn't available.
+    /// files whose copy is older than the store's, or whose identical system file is gone. Empty
+    /// for a family that isn't available.
     pub fn pending_files(&self, source: &str, name: &str) -> Vec<String> {
         let Some(ledger) = self.cached_ledger() else { return Vec::new() };
         let Some(listed) = ledger.family(source, name) else { return Vec::new() };
         let Some(family) = self.installed_family(source, name) else { return Vec::new() };
-        family.files.iter().filter(|f| !listed.files.iter().any(|x| x.store_file == f.name && x.sha256 == f.sha256)).map(|f| f.name.clone()).collect()
+        family
+            .files
+            .iter()
+            .filter(|f| {
+                !listed
+                    .files
+                    .iter()
+                    .any(|x| x.store_file == f.name && x.sha256 == f.sha256 && (x.mechanism == Mechanism::Copy || std::fs::metadata(&x.path).is_ok()))
+            })
+            .map(|f| f.name.clone())
+            .collect()
     }
 
     /// Makes the installed family available to all apps, from the user's own action: copies its
@@ -607,7 +622,7 @@ impl FontStore {
             let ours: HashSet<FileId> = ledger
                 .families
                 .iter()
-                .flat_map(|f| f.copies().map(|x| &x.path))
+                .flat_map(|f| f.copies().filter(|x| file_sha256(&x.path).as_ref() == Some(&x.sha256)).map(|x| &x.path))
                 .chain(planned.iter().map(|p| &p.path))
                 .filter_map(|p| file_id(p))
                 .collect();
@@ -656,7 +671,7 @@ impl FontStore {
                 let state = if disk.as_ref() == Some(&p.sha256) {
                     State::Active
                 } else {
-                    to_copy.push(p);
+                    to_copy.push((p, disk.clone()));
                     State::Adding
                 };
                 files.push(LedgerFile {
@@ -685,7 +700,7 @@ impl FontStore {
             ledger.families.sort_by_key(|f| (f.family.to_lowercase(), f.source.clone()));
             self.write_ledger(&ledger)?;
 
-            if let Err(e) = to_copy.into_iter().try_for_each(|p| copy_in(folder, p)) {
+            if let Err(e) = to_copy.into_iter().try_for_each(|(p, found)| copy_in(folder, p, found.as_deref())) {
                 ledger.settle(folder);
                 let _ = self.write_ledger(&ledger);
                 return Err(e);
@@ -856,8 +871,9 @@ impl FontStore {
     }
 }
 
-/// Copies a store file to its place through a dot-file, checking the copy's sha256.
-fn copy_in(folder: &OsFontFolder, p: &Planned) -> Result<(), Error> {
+/// Copies a store file to its place through a dot-file, checking the copy's sha256. `found` is
+/// the sha256 of the file planning found at the place (the family's earlier copy), if any.
+fn copy_in(folder: &OsFontFolder, p: &Planned, found: Option<&str>) -> Result<(), Error> {
     let what = || format!("copying {} to {}", p.store_file, p.path.display());
     if let Some(parent) = p.path.parent() {
         std::fs::create_dir_all(parent).map_err(io(what()))?;
@@ -876,11 +892,35 @@ fn copy_in(folder: &OsFontFolder, p: &Planned) -> Result<(), Error> {
             Err(Error::Verify { file: p.store_file.clone(), error: VerifyError::Sha256 })
         }
     });
-    if let Err(e) = checked.and_then(|()| std::fs::rename(&part, &p.path).map_err(io(what()))) {
+    if let Err(e) = checked.and_then(|()| publish(&part, p, found)) {
         let _ = std::fs::remove_file(&part);
         return Err(e);
     }
     Ok(())
+}
+
+/// Moves the checked copy `part` to `p.path`, only over what planning found there: nothing, or
+/// the file with sha256 `found`. A file another app put there since is a conflict.
+fn publish(part: &Path, p: &Planned, found: Option<&str>) -> Result<(), Error> {
+    let conflict = || Error::Conflict(vec![Conflict { postscript: None, path: p.path.clone() }]);
+    let absent = || std::fs::symlink_metadata(&p.path).is_err();
+    if absent() {
+        // A hard link never replaces a file that appeared since the check.
+        match std::fs::hard_link(part, &p.path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(part);
+                return Ok(());
+            }
+            // A file system without hard links falls through to the rename below.
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists && absent() => {}
+            Err(_) => return Err(conflict()),
+        }
+    } else if found.is_none() || file_sha256(&p.path).as_deref() != found {
+        return Err(conflict());
+    }
+    // Over the earlier copy, or without hard links, a file another app writes between the check
+    // above and this rename is replaced: std has no rename that refuses to replace.
+    std::fs::rename(part, &p.path).map_err(io(format!("copying {} to {}", p.store_file, p.path.display())))
 }
 
 /// Deletes a listed copy of the family in store folder `dir` when it is the store's and
