@@ -42,15 +42,18 @@ const LOCK_SUFFIX: &str = ".fixture-lock";
 /// The root of the Cargo workspace that is running the tests.
 ///
 /// The search starts at the `CARGO_MANIFEST_DIR` that Cargo and nextest set for a test process, which
-/// names the package under test. It returns the nearest folder above that whose `Cargo.toml` has a
-/// `[workspace]` table, or the package folder itself when no workspace manifest is found. The process
-/// working directory and `CARGO_TARGET_DIR` are not read. The returned path is canonical.
+/// names the package under test. When the package's `Cargo.toml` sets `package.workspace`, it returns
+/// that folder, resolved against the package folder. Otherwise it returns the nearest folder at or above
+/// the package whose `Cargo.toml` has a `[workspace]` table, or the package folder itself when no
+/// workspace manifest is found. The process working directory and `CARGO_TARGET_DIR` are not read. The
+/// returned path is canonical.
 ///
 /// # Errors
 ///
 /// Returns [`io::ErrorKind::NotFound`] when `CARGO_MANIFEST_DIR` is unset or empty (a test binary run
-/// outside Cargo) or no `Cargo.toml` is found, and an error when a manifest is larger than 1 MiB or
-/// is not UTF-8, or when the folder cannot be canonicalized.
+/// outside Cargo) or no `Cargo.toml` is found, [`io::ErrorKind::InvalidData`] when a manifest is
+/// larger than 1 MiB or is not valid TOML, and an error when a manifest is not UTF-8 or the folder
+/// cannot be canonicalized.
 pub fn workspace_root() -> io::Result<PathBuf> {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").filter(|v| !v.is_empty()).ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "CARGO_MANIFEST_DIR is not set; run the tests through Cargo or set the fixtures root variable")
@@ -61,9 +64,17 @@ pub fn workspace_root() -> io::Result<PathBuf> {
 fn workspace_root_from(manifest_dir: &Path) -> io::Result<PathBuf> {
     let mut package = None;
     for dir in manifest_dir.ancestors() {
-        let Some(text) = read_manifest(&dir.join("Cargo.toml"))? else { continue };
-        if declares_workspace(&text) {
+        let path = dir.join("Cargo.toml");
+        let Some(text) = read_manifest(&path)? else { continue };
+        let keys = scan_manifest(&text)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{} is not a valid TOML manifest: {e}", path.display())))?;
+        if keys.workspace {
             return dir.canonicalize();
+        }
+        if package.is_none()
+            && let Some(workspace) = keys.package_workspace
+        {
+            return dir.join(workspace).canonicalize();
         }
         package.get_or_insert(dir);
     }
@@ -73,13 +84,21 @@ fn workspace_root_from(manifest_dir: &Path) -> io::Result<PathBuf> {
     }
 }
 
-/// Whether a manifest has a `[workspace]` table header, allowing spaces inside the brackets and a
-/// trailing comment.
-fn declares_workspace(manifest: &str) -> bool {
-    manifest.lines().any(|line| {
-        let line = line.split('#').next().unwrap_or_default().trim();
-        line.strip_prefix('[').and_then(|l| l.strip_suffix(']')).is_some_and(|name| name.trim() == "workspace")
-    })
+/// The keys of a manifest that [`workspace_root`] reads.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ManifestKeys {
+    /// The manifest has a `workspace` table, in any TOML form (`[workspace]`, `["workspace"]` or a
+    /// top-level `workspace = { ... }`).
+    workspace: bool,
+    /// The string value of `package.workspace`.
+    package_workspace: Option<String>,
+}
+
+/// Parse a manifest as TOML and read its workspace keys.
+fn scan_manifest(manifest: &str) -> Result<ManifestKeys, toml::de::Error> {
+    let table: toml::Table = manifest.parse()?;
+    let package_workspace = table.get("package").and_then(|p| p.get("workspace")).and_then(toml::Value::as_str).map(str::to_owned);
+    Ok(ManifestKeys { workspace: table.get("workspace").is_some_and(toml::Value::is_table), package_workspace })
 }
 
 fn read_manifest(path: &Path) -> io::Result<Option<String>> {
@@ -114,7 +133,8 @@ pub fn fixtures_root(var: Option<&str>) -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidInput`] when `sub` is absolute or contains `..`, and the error of
+/// Returns [`io::ErrorKind::InvalidInput`] when `sub` is absolute, contains `..`, or has a part that
+/// is not a plain folder name on its own (on Windows, `group\C:outside`), and the error of
 /// [`fixtures_root`] or of creating the folder otherwise.
 pub fn fixtures_dir(sub: &str, var: Option<&str>) -> io::Result<PathBuf> {
     let relative = relative_subdir(sub)?;
@@ -124,17 +144,20 @@ pub fn fixtures_dir(sub: &str, var: Option<&str>) -> io::Result<PathBuf> {
 }
 
 fn relative_subdir(sub: &str) -> io::Result<PathBuf> {
+    let outside = || io::Error::new(io::ErrorKind::InvalidInput, format!("fixture folder {sub:?} is not a relative path inside the fixtures root"));
     let mut relative = PathBuf::new();
     for component in Path::new(sub).components() {
         match component {
-            Component::Normal(part) => relative.push(part),
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("fixture folder {sub:?} is not a relative path inside the fixtures root"),
-                ));
+            Component::Normal(part) => {
+                // `PathBuf::push` parses the part again, so a part such as `C:outside` would replace the path.
+                let mut alone = Path::new(part).components();
+                if !matches!((alone.next(), alone.next()), (Some(Component::Normal(p)), None) if p == part) {
+                    return Err(outside());
+                }
+                relative.push(part);
             }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Err(outside()),
         }
     }
     Ok(relative)
@@ -188,9 +211,38 @@ fn complete_temp(tmp: &Path) -> bool {
     std::fs::symlink_metadata(tmp).is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
-/// Whether `a` and `b` name the same path, directly or after resolving links and `.` components.
-fn same_path(a: &Path, b: &Path) -> bool {
-    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+/// Whether `tmp` and `out` name the same directory entry. A link at `tmp` is an entry of its own even
+/// when it points at `out`; other names are compared after resolving links and `.` components.
+fn same_entry(tmp: &Path, out: &Path) -> bool {
+    if tmp == out {
+        return true;
+    }
+    if std::fs::symlink_metadata(tmp).is_ok_and(|m| m.file_type().is_symlink()) {
+        return matches!((entry_path(tmp), entry_path(out)), (Some(a), Some(b)) if a == b);
+    }
+    matches!((tmp.canonicalize(), out.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// `path` with its folder canonicalized and its last component kept as it is.
+fn entry_path(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    Some(parent.canonicalize().ok()?.join(path.file_name()?))
+}
+
+/// An error when the file name of `out` ends with the suffix reserved for publication locks, in any
+/// letter case, since case-insensitive file systems treat the variants as one name.
+fn check_output_name(out: &Path) -> io::Result<()> {
+    let reserved = out.file_name().is_some_and(|name| {
+        let name = name.as_encoded_bytes();
+        name.len() >= LOCK_SUFFIX.len() && name[name.len() - LOCK_SUFFIX.len()..].eq_ignore_ascii_case(LOCK_SUFFIX.as_bytes())
+    });
+    if reserved {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("fixture {} ends with {LOCK_SUFFIX}, which is reserved for publication locks", out.display()),
+        ));
+    }
+    Ok(())
 }
 
 /// Remove `path` when it is a file or a link. A directory is left as it is.
@@ -231,17 +283,24 @@ fn lock_publication(out: &Path) -> io::Result<File> {
 ///
 /// `tmp` must be a nonempty regular file, normally one claimed by [`temp_path`]. Publication holds a lock
 /// on `<out>.fixture-lock` (kept beside the output), checks `out` again while holding it, and renames
-/// `tmp` only when `out` is not already a complete file. An empty or unreadable regular `out` is
-/// replaced; a directory at `out` is an error. `tmp` is removed on every path that does not rename it,
-/// unless it is a directory.
+/// `tmp` only when `out` is not already a complete file. The check reads only the file type and length
+/// of `out` and does not open it: an empty regular `out` is replaced, a nonempty one is kept even when
+/// it cannot be read, and a directory at `out` is an error. `tmp` is removed on every path that does
+/// not rename it, unless it is a directory or names the same entry as `out`. A link at `tmp` is removed,
+/// not followed.
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidData`] when `tmp` is not a nonempty regular file and `out` is not
-/// complete, and the error of locking or renaming otherwise.
+/// Returns [`io::ErrorKind::InvalidInput`] when `tmp` and `out` name the same entry or the file name of
+/// `out` ends with `.fixture-lock`, [`io::ErrorKind::InvalidData`] when `tmp` is not a nonempty regular
+/// file and `out` is not complete, and the error of locking or renaming otherwise.
 pub fn publish(tmp: &Path, out: &Path) -> io::Result<()> {
-    if same_path(tmp, out) {
+    if same_entry(tmp, out) {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("temporary fixture and output are both {}", out.display())));
+    }
+    if let Err(e) = check_output_name(out) {
+        remove_temp_file(tmp);
+        return Err(e);
     }
     if !complete_temp(tmp) {
         let winner = complete_file(out);
@@ -259,6 +318,8 @@ pub fn publish(tmp: &Path, out: &Path) -> io::Result<()> {
             return Err(e);
         }
     };
+    #[cfg(test)]
+    tests::pause_inside_publication();
     let result = if complete_file(out) {
         remove_temp_file(tmp);
         Ok(())
@@ -299,7 +360,8 @@ fn skip_or_fail<T>(rule: Option<&str>, reason: &str) -> Option<T> {
 /// file. A generator that fails, panics or writes nothing leaves no temporary file behind. When it
 /// fails and another process has published a complete `out` in the meantime, that file is returned.
 /// Otherwise generation is skipped with `None` unless `required_var` (default [`REQUIRE_VAR`]) is
-/// exactly `1`.
+/// exactly `1`. An `out` whose file name ends with `.fixture-lock` is skipped the same way without
+/// calling `make`.
 ///
 /// # Panics
 ///
@@ -312,7 +374,8 @@ pub fn generate(out: &Path, required_var: Option<&str>, make: impl FnOnce(&Path)
 }
 
 /// [`generate`] with `required` given by the caller, so a test can choose it without changing the
-/// process environment.
+/// process environment. The required variable is not read: `true` fails the test even when it is
+/// unset, and `false` skips even when it is `1`.
 ///
 /// # Panics
 ///
@@ -322,6 +385,9 @@ pub fn generate_with(out: &Path, required: bool, make: impl FnOnce(&Path) -> boo
 }
 
 fn generate_inner(out: &Path, rule: Option<&str>, make: impl FnOnce(&Path) -> bool) -> Option<PathBuf> {
+    if let Err(e) = check_output_name(out) {
+        return skip_or_fail(rule, &e.to_string());
+    }
     if complete_file(out) {
         return Some(out.to_path_buf());
     }
@@ -356,10 +422,14 @@ fn generate_inner(out: &Path, rule: Option<&str>, make: impl FnOnce(&Path) -> bo
 ///
 /// The variables apply to this child only; the process environment is not changed. Standard input is
 /// closed. Output past the limit is read and discarded, so the child does not block on a full pipe.
+/// The variables and the standard stream settings are set on `cmd` and stay on it, so a later call
+/// with the same `cmd` passes them again; build a new `Command` for each call that needs a clean
+/// environment.
 ///
 /// # Errors
 ///
-/// Returns the error of starting, reading from or waiting for the child.
+/// Returns the error of starting, reading from or waiting for the child, and the error of starting the
+/// thread that reads standard error, after the child has been killed and waited for.
 pub fn run_generator<I, K, V>(cmd: &mut Command, env: I, max_output: usize) -> io::Result<Output>
 where
     I: IntoIterator<Item = (K, V)>,
@@ -368,7 +438,14 @@ where
 {
     let mut child = cmd.envs(env).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let stderr = child.stderr.take();
-    let stderr_reader = std::thread::spawn(move || read_bounded(stderr, max_output));
+    let stderr_reader = match std::thread::Builder::new().spawn(move || read_bounded(stderr, max_output)) {
+        Ok(reader) => reader,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+    };
     let stdout = read_bounded(child.stdout.take(), max_output);
     let stderr = stderr_reader.join().unwrap_or_else(|_| Err(io::Error::other("the output reader stopped")));
     let status = child.wait()?;
@@ -436,15 +513,27 @@ mod tests {
     const PROBE_ROOT: &str = "CRAFT_TESTKIT_FIXTURES_PROBE_ROOT";
     const PROBE_UNSET: &str = "CRAFT_TESTKIT_FIXTURES_PROBE_UNSET";
     const PROBE_CHILD_ENV: &str = "CRAFT_TESTKIT_FIXTURES_PROBE_CHILD_ENV";
+    const PROBE_HOLD: &str = "CRAFT_TESTKIT_FIXTURES_PROBE_HOLD";
 
     /// A command that runs [`probe`] in a child process of this test binary with `mode` selected.
     fn probe_command(mode: &str) -> Command {
         let mut cmd = Command::new(std::env::current_exe().unwrap());
         cmd.args(["--exact", "fixtures::tests::probe", "--nocapture", "--test-threads=1"]).env(PROBE_VAR, mode);
-        for var in [PROBE_REQUIRED, PROBE_ROOT, PROBE_UNSET, PROBE_CHILD_ENV] {
+        for var in [PROBE_REQUIRED, PROBE_ROOT, PROBE_UNSET, PROBE_CHILD_ENV, PROBE_HOLD] {
             cmd.env_remove(var);
         }
         cmd
+    }
+
+    /// Called by [`publish`] while it holds the publication lock. In a probe child started with
+    /// [`PROBE_HOLD`], it prints `LOCKED` and waits until its standard input is closed.
+    pub(super) fn pause_inside_publication() {
+        if std::env::var_os(PROBE_HOLD).is_none() {
+            return;
+        }
+        println!("LOCKED");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).unwrap();
     }
 
     fn stdout_lines(output: &Output) -> Vec<String> {
@@ -494,8 +583,6 @@ mod tests {
             Some("publish") => {
                 let out = dir.unwrap().join("fixture.bin");
                 let tmp = PathBuf::from(std::env::var_os(PROBE_TMP).unwrap());
-                println!("READY");
-                std::io::Write::flush(&mut std::io::stdout()).unwrap();
                 publish(&tmp, &out).unwrap();
                 println!("PUBLISHED");
             }
@@ -775,25 +862,69 @@ mod tests {
     }
 
     #[test]
-    fn a_publisher_in_another_process_waits_for_the_lock_and_keeps_the_winner() {
+    fn a_publisher_in_another_process_holds_the_lock_and_keeps_the_winner() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("fixture.bin");
-        let first = temp_path(&out).unwrap();
         let second = temp_path(&out).unwrap();
-        std::fs::write(&first, b"first").unwrap();
         std::fs::write(&second, b"second").unwrap();
-        let lock = lock_publication(&out).unwrap();
-        let mut child = probe_command("publish").env(PROBE_DIR, dir.path()).env(PROBE_TMP, &second).stdout(Stdio::piped()).spawn().unwrap();
+        let mut child = probe_command("publish")
+            .env(PROBE_DIR, dir.path())
+            .env(PROBE_TMP, &second)
+            .env(PROBE_HOLD, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
         let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-        assert!(lines.by_ref().map(Result::unwrap).any(|l| l == "READY"), "the child did not start");
-        // The first publisher renames while it holds the lock; the child must wait and then keep it.
-        std::fs::rename(&first, &out).unwrap();
-        drop(lock);
+        assert!(lines.by_ref().map(Result::unwrap).any(|l| l == "LOCKED"), "the child did not reach the publication lock");
+        // The child is paused inside `publish`, after taking the lock and before checking the output.
+        let lock = OpenOptions::new().read(true).write(true).open(dir.path().join("fixture.bin.fixture-lock")).unwrap();
+        assert!(matches!(lock.try_lock(), Err(std::fs::TryLockError::WouldBlock)), "the lock was free while the child published");
+        std::fs::write(&out, b"first").unwrap();
+        drop(child.stdin.take());
         let rest: Vec<String> = lines.map(Result::unwrap).collect();
         assert!(child.wait().unwrap().success(), "{rest:?}");
         assert!(rest.iter().any(|l| l == "PUBLISHED"), "the child did not publish: {rest:?}");
         assert_eq!(std::fs::read(&out).unwrap(), b"first");
         assert!(!second.exists());
+        lock.try_lock().unwrap();
+    }
+
+    #[test]
+    fn outputs_named_like_a_publication_lock_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("video.bin.fixture-lock");
+        let tmp = temp_path(&out).unwrap();
+        std::fs::write(&tmp, b"candidate").unwrap();
+        assert_eq!(publish(&tmp, &out).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert!(!tmp.exists());
+        assert!(!out.exists());
+        assert!(generate_with(&out, false, |_| panic!("generator called for a reserved name")).is_none());
+        assert!(!out.exists());
+        let upper = dir.path().join("video.bin.FIXTURE-LOCK");
+        let tmp = temp_path(&upper).unwrap();
+        std::fs::write(&tmp, b"candidate").unwrap();
+        assert_eq!(publish(&tmp, &upper).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert!(!tmp.exists());
+        assert!(!upper.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_link_to_the_winner_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("fixture.bin");
+        let mut temporary = None;
+        let result = generate_with(&out, false, |tmp| {
+            temporary = Some(tmp.to_path_buf());
+            std::fs::write(&out, b"complete winner").unwrap();
+            std::fs::remove_file(tmp).unwrap();
+            std::os::unix::fs::symlink(&out, tmp).unwrap();
+            true
+        });
+        assert_eq!(result.as_deref(), Some(out.as_path()));
+        assert_eq!(std::fs::read(&out).unwrap(), b"complete winner");
+        assert!(std::fs::symlink_metadata(temporary.unwrap()).is_err(), "the temporary link was left behind");
     }
 
     #[test]
@@ -930,18 +1061,69 @@ mod tests {
 
     #[test]
     fn workspace_headers_may_have_spaces_and_comments() {
-        for header in ["[workspace]", "[workspace] # shared packages", "  [ workspace ]  ", "[workspace]#members"] {
-            assert!(declares_workspace(&format!("{header}\nmembers = []\n")), "missed {header:?}");
+        for header in
+            ["[workspace]", "[workspace] # shared packages", "  [ workspace ]  ", "[workspace]#members", "[\"workspace\"]", "[ 'workspace' ]"]
+        {
+            assert!(scan_manifest(&format!("{header}\nmembers = []\n")).unwrap().workspace, "missed {header:?}");
         }
-        for text in ["[workspace.dependencies]", "[[workspace]]", "# [workspace]", "[package]\nname = \"workspace\""] {
-            assert!(!declares_workspace(text), "accepted {text:?}");
+        for text in ["workspace = { members = [] }\n", "[workspace.dependencies]\n", "[package]\ndescription = \"\"\"\nx\n\"\"\"\n[workspace]\n"] {
+            assert!(scan_manifest(text).unwrap().workspace, "missed {text:?}");
         }
+        for text in [
+            "[[workspace]]",
+            "# [workspace]",
+            "[package]\nname = \"workspace\"",
+            "[package]\nworkspace = { members = [] }",
+            "[package]\ndescription = \"\"\"\n[workspace]\n\"\"\"\n",
+            "[package]\ndescription = '''\n[workspace]\n'''\n",
+            "[package]\ndescription = \"\"\"one\n[workspace]\ntwo\"\"\" # [workspace]\n",
+            "[package]\ndescription = \"\"\"one \\\"\"\"\n[workspace]\n\"\"\"\n",
+        ] {
+            assert!(!scan_manifest(text).unwrap().workspace, "accepted {text:?}");
+        }
+        assert!(scan_manifest("[package\n").is_err());
         let dir = tempfile::tempdir().unwrap();
         let member = dir.path().join("app");
         std::fs::create_dir_all(&member).unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[workspace] # shared packages\nmembers = [\"app\"]\n").unwrap();
         std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
         assert_eq!(workspace_root_from(&member).unwrap(), dir.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn an_explicit_package_workspace_wins_over_ancestors() {
+        for (value, parsed) in [
+            ("\"../shared\"", "../shared"),
+            ("'../shared' # root", "../shared"),
+            ("\"..\\\\shared\"", "..\\shared"),
+            ("\"../\\u0073hared\"", "../shared"),
+            ("\"../\\U00000073hared\"", "../shared"),
+        ] {
+            let keys = scan_manifest(&format!("[package]\nname = \"app\"\nworkspace = {value}\n")).unwrap();
+            assert_eq!(keys.package_workspace.as_deref(), Some(parsed), "{value}");
+        }
+        for text in ["package.workspace = \"../shared\"\n", "package = { name = \"app\", workspace = \"../shared\" }\n"] {
+            assert_eq!(scan_manifest(text).unwrap().package_workspace.as_deref(), Some("../shared"), "{text}");
+        }
+        assert_eq!(scan_manifest("[dependencies]\nworkspace = \"1\"\n").unwrap().package_workspace, None);
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        let shared = dir.path().join("shared");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        std::fs::write(shared.join("Cargo.toml"), "[workspace]\nmembers = [\"../app\"]\n").unwrap();
+        std::fs::write(app.join("Cargo.toml"), "[package]\nname = \"app\"\nworkspace = \"../shared\"\n").unwrap();
+        assert_eq!(workspace_root_from(&app).unwrap(), shared.canonicalize().unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fixture_folders_reject_a_drive_inside_the_path() {
+        for sub in ["group\\C:outside", "group/C:outside", "C:outside"] {
+            assert_eq!(relative_subdir(sub).unwrap_err().kind(), io::ErrorKind::InvalidInput, "accepted {sub}");
+        }
+        assert_eq!(relative_subdir("group\\inside").unwrap(), Path::new("group").join("inside"));
     }
 
     #[test]
@@ -966,11 +1148,12 @@ mod tests {
 
     #[test]
     fn run_generator_sets_variables_for_the_child_only() {
+        let before = std::env::var_os(PROBE_CHILD_ENV);
         let mut cmd = probe_command("env");
         let output = run_generator(&mut cmd, [(PROBE_CHILD_ENV, "child value")], DEFAULT_MAX_OUTPUT).unwrap();
         assert!(output.status.success(), "{output:?}");
         assert_eq!(line_value(&output, "ENV"), "child value");
-        assert!(std::env::var_os(PROBE_CHILD_ENV).is_none());
+        assert_eq!(std::env::var_os(PROBE_CHILD_ENV), before);
     }
 
     #[test]

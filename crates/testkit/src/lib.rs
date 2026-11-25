@@ -15,7 +15,7 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
-//! On native targets, [`fixtures`] locates generated test fixtures under `<workspace>/target/fixtures`,
+//! On native targets, the `fixtures` module locates generated test fixtures under `<workspace>/target/fixtures`,
 //! generates a missing one into a claimed temporary sibling, publishes it under a per-output lock that
 //! keeps a complete file another process published first, and prints the `FIXTURE made`, `cached` and
 //! `skipped` lines that FilmCraft's `cargo xtask fixtures` counts.
