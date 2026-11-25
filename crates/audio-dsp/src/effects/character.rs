@@ -123,11 +123,12 @@ impl RingMod {
 
     /// One period of the lowest frequency the modulation reaches, in ms, from the settings and from
     /// the values still ramping toward them. The envelope follower moves the frequency up only, so
-    /// with it the lowest is the frequency.
+    /// with it the lowest is the frequency. The frequency is held within the same range as in
+    /// [`AudioEffect::process`].
     fn longest_period_ms(&self) -> f32 {
         let down = if self.pv.idx("mod_source") == 1 { 0.0 } else { self.depth.value().max(self.depth.target()) };
         let lowest = self.freq.value().min(self.freq.target()) * (-MOD_OCTAVES * down).exp2();
-        1000.0 / lowest.max(1.0)
+        1000.0 / lowest.clamp(1.0, self.sr * MAX_FRACTION)
     }
 }
 
@@ -216,7 +217,9 @@ impl AudioEffect for RingMod {
                     _ => dry * carrier,
                 };
                 if ch < nch {
-                    channels[ch][i] = dry + mix * (wet - dry);
+                    // In f64, so the difference of two large samples of opposite sign stays finite.
+                    let (dry, wet) = (dry as f64, wet as f64);
+                    channels[ch][i] = (dry + mix as f64 * (wet - dry)) as f32;
                 }
             }
         }
@@ -541,6 +544,66 @@ mod tests {
         let low = ring(&[("effect", 2.0), ("frequency", 200.0), ("resonance", 0.0)], 1).tail_samples();
         assert_eq!(r.tail_samples(), low);
         assert!(low * 10 < high, "{low} vs {high}");
+    }
+
+    /// At a low sample rate the resonators ring at the highest frequency processing reaches, not
+    /// at the setting above it, and the tail covers that ring. A setting below that frequency
+    /// keeps the tail of its own period.
+    #[test]
+    fn resonator_tail_covers_a_frequency_held_at_the_rate_limit() {
+        let sr = 1000.0f32;
+        let mut r = RingMod::new(sr, 1);
+        for (id, v) in [("effect", 2.0), ("frequency", 5000.0), ("resonance", 95.0)] {
+            assert!(r.set_param(id, v), "{id}");
+        }
+        r.reset();
+        let tail = r.tail_samples();
+        let mut x = vec![0.0f32; tail + 200];
+        x[0] = 1.0;
+        r.process(&mut [&mut x]);
+        let after = x[tail + 1..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(after <= 1e-3 * x[0].abs(), "tail {tail}: {after} after it, against {} at the impulse", x[0]);
+        let mut below = RingMod::new(sr, 1);
+        for (id, v) in [("effect", 2.0), ("frequency", 400.0), ("resonance", 95.0)] {
+            assert!(below.set_param(id, v), "{id}");
+        }
+        below.reset();
+        assert_eq!(below.tail_samples(), echo_tail(1000.0 / 400.0, 0.95, sr));
+    }
+
+    /// Frequency Mod reads between two of the largest samples of opposite sign without
+    /// overflowing.
+    #[test]
+    fn frequency_mod_reads_between_huge_samples_of_opposite_sign() {
+        let mut r = ring(&[("effect", 1.0), ("frequency", 500.0)], 1);
+        let mut x = vec![0.0f32; 200];
+        x[6] = -f32::MAX;
+        x[7] = f32::MAX;
+        r.process(&mut [&mut x]);
+        assert!(x.iter().all(|v| v.is_finite()), "{:?}", x.iter().position(|v| !v.is_finite()));
+    }
+
+    /// Mixing a dry and a wet sample of opposite sign at the largest level stays finite: a mix of
+    /// 0 gives the input, and every mix gives the result at a level of 1 scaled up.
+    #[test]
+    fn mixing_huge_samples_of_opposite_sign_stays_finite() {
+        for mix in [0.0f32, 50.0, 100.0] {
+            let run = |level: f32| {
+                let mut r = ring(&[("frequency", 5000.0), ("mix", mix)], 1);
+                let mut x = vec![level; 480];
+                r.process(&mut [&mut x]);
+                x
+            };
+            let (huge, unit) = (run(f32::MAX), run(1.0));
+            assert!(huge.iter().all(|v| v.is_finite()), "mix {mix}");
+            for (i, (h, u)) in huge.iter().zip(&unit).enumerate() {
+                let want = *u as f64 * f32::MAX as f64;
+                assert!((*h as f64 - want).abs() <= 1e-5 * f32::MAX as f64, "mix {mix}, sample {i}: {h} against {want}");
+            }
+            if mix == 0.0 {
+                assert!(huge.iter().all(|v| *v == f32::MAX));
+            }
+        }
     }
 
     /// Raising the sample-and-hold rate takes effect within one new hold, instead of after the
