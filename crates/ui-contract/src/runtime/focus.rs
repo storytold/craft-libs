@@ -17,8 +17,11 @@ pub(crate) use registration::{Group, Stop};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
+use crate::runtime::inspect;
+use crate::style::log_once;
 use craft_behavior::{DocKey, OwnerClass, PartRef};
 use egui::{Context, Id, IdSet, ViewportId};
+use smallvec::SmallVec;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -194,6 +197,9 @@ pub(crate) struct State {
     /// How many of egui's focus candidates of the running pass (`Memory::focus_candidates`) `take_app_widgets` has
     /// read.
     pub(super) candidates_seen: usize,
+    /// The canvases the running pass declared with `host_canvas`, which the end hook takes and looks up among egui's
+    /// widgets.
+    pub(super) host_canvases: SmallVec<[Id; 1]>,
     /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
     surrender_after_scopes: Option<Id>,
     /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
@@ -318,9 +324,17 @@ fn take_app_widgets(ctx: &Context, except: Option<Id>) {
 /// them; Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus. A bare Tab with nothing
 /// focused is never the canvas's, even when it keeps Tab: it moves focus into the window or toggles the panels, so the
 /// canvas cannot trap keyboard navigation. With the canvas focused, the same keys stay in egui, a Tab it keeps and
-/// Escape too, as for any focused widget of the app's own; Escape with nothing focused is the window's cancel. Call it
-/// each pass the canvas shows.
+/// Escape too, as for any focused widget of the app's own; Escape with nothing focused is the window's cancel.
+///
+/// Call it in each pass the canvas shows, before or after the canvas is drawn, with the id of the interactive egui widget
+/// the app draws for it in every such pass (`ui.interact(rect, id, Sense::click())`). egui drops the focus of an id that
+/// no such widget of the pass has, so Tab would lose the focus at the canvas and start over at the window's first stop.
+/// A pass that declares a canvas and draws no widget with its id reports the finding `canvas-without-widget`, and debug
+/// builds log it once. A pass that hides the canvas makes no call.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
+    if !crate::runtime::measure::active(ctx) {
+        with(ctx, |state| state.host_canvases.push(id));
+    }
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
 }
 
@@ -1102,11 +1116,29 @@ pub(crate) fn surrender_after_scopes(ctx: &Context, widget: Id) {
     with(ctx, |state| state.surrender_after_scopes = Some(widget));
 }
 
+/// Reports each canvas the running pass declared (`host_canvas`) whose id no interactive egui widget of the pass has.
+/// Read at the pass's end, since a canvas may be declared before it is drawn. A canvas hidden for one pass and still
+/// declared counts: egui drops its focus at the end of that pass.
+fn report_undrawn_canvases(ctx: &Context) {
+    for id in with(ctx, |state| std::mem::take(&mut state.host_canvases)) {
+        if egui_focus::keeps_focus_of(ctx, id) {
+            continue;
+        }
+        if cfg!(debug_assertions) {
+            log_once(format!("canvas:{id:?}"), || {
+                log::warn!("`host_canvas` declared the canvas {id:?}, but no interactive egui widget with that id was drawn in the pass");
+            });
+        }
+        inspect::finding(ctx, inspect::Finding { rule: "canvas-without-widget", component: "host_canvas", subject: format!("{id:?}") });
+    }
+}
+
 /// The end hook: applies the press's focus move, returns focus to the opener of a scope that went away,
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
     let viewport = viewport(ctx);
     take_app_widgets(ctx, None);
+    report_undrawn_canvases(ctx);
     // A field held a pass for the scope it sits in lets go now, unless that scope is going away with focus in the field:
     // nav::end below then gives the focus back to the scope's opener from where the field holds it.
     if let Some(widget) = with(ctx, |state| state.surrender_deferred.take())

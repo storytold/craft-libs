@@ -12,6 +12,7 @@ use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::ime;
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
+use crate::testing::contract::findings;
 use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
@@ -995,6 +996,36 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
         tab_with_canvas(Some(KeyUse::CANVAS.with_keep(KeepKeys::Tab)), false),
         (vec![(ViewportId::ROOT, ChromeToggle::Panels)], false),
         "a canvas keeps Tab only while focused: with nothing focused, Tab toggles the panels"
+    );
+}
+
+/// Guards the finding that tells an app its canvas stop takes Tab and loses the focus: `host_canvas` named an id that no
+/// egui widget of the pass has. A canvas declared before it is drawn, and one neither declared nor drawn, give none.
+#[trial]
+fn a_host_canvas_no_widget_draws_is_a_finding() {
+    let canvas = named_id("host canvas");
+    let (declared, drawn) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(true)));
+    let (declares, draws) = (Rc::clone(&declared), Rc::clone(&drawn));
+    let mut show = move |ui: &mut Ui| {
+        if declares.get() {
+            host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        }
+        if draws.get() {
+            widget(ui, canvas);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    declared.set(false);
+    drawn.set(false);
+    frames.idle(1, &mut show);
+    assert!(findings(&frames.ctx).is_empty(), "a drawn canvas and a hidden one: {:?}", findings(&frames.ctx));
+    declared.set(true);
+    frames.idle(1, &mut show);
+    let found = findings(&frames.ctx);
+    assert!(
+        matches!(found.as_slice(), [only] if only.rule == "canvas-without-widget" && only.subject == format!("{canvas:?}")),
+        "the declared canvas no widget draws: {found:?}"
     );
 }
 
