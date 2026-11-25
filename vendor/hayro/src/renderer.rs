@@ -865,6 +865,9 @@ pub(crate) struct Renderer {
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
+    /// PdfCraft patch (107): this renders a soft mask, which keeps the context area of the
+    /// content that set it (see `culls_outside_view`).
+    in_soft_mask: bool,
     pub(crate) scaler: Scaler,
     /// PdfCraft patch: low-detail preview render (see `InterpreterSettings::preview`).
     pub(crate) preview: bool,
@@ -1011,6 +1014,7 @@ impl Renderer {
             outline_cache: cache.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
+            in_soft_mask: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
             image_transparency_stack: Vec::new(),
@@ -1118,6 +1122,7 @@ impl Renderer {
                 outline_cache: self.outline_cache.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
+                in_soft_mask: false,
                 scaler: self.scaler,
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
@@ -1658,6 +1663,7 @@ impl Renderer {
             tiling_cells: TilingCells::default(),
             outline_cache: self.outline_cache.clone(),
             in_type3_glyph: false,
+            in_soft_mask: false,
             scaler: self.scaler,
             preview: self.preview,
             image_transparency_stack: Vec::new(),
@@ -1724,6 +1730,7 @@ impl Renderer {
             outline_cache: self.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
+            in_soft_mask: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
             image_transparency_stack: Vec::new(),
@@ -2256,6 +2263,18 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    // PdfCraft patch (107): the canvas is all a page's render shows. Left out: an ink pass,
+    // which records whether the group holds anything it has no tints for, wherever it is
+    // placed; a pattern cell and a Type 3 glyph, whose context area is not in their CTM's space
+    // (the cell's is the page's; a glyph's is its `/FontBBox` without its `/FontMatrix`); and a
+    // soft mask, which keeps the area of the content that set it, so it may be either of those.
+    fn culls_outside_view(&mut self) -> bool {
+        self.ink.pass.is_none()
+            && !self.inside_pattern
+            && !self.in_type3_glyph
+            && !self.in_soft_mask
+    }
+
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -2895,6 +2914,7 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         tiling_cells: TilingCells::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
         in_type3_glyph: false,
+        in_soft_mask: true,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),

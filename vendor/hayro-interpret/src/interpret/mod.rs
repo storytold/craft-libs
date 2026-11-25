@@ -15,6 +15,7 @@ use crate::shading::Shading;
 use crate::util::{OptionLog, RectExt};
 use crate::x_object::{
     FormXObject, ImageXObject, XObject, draw_form_xobject, draw_image_xobject, draw_xobject,
+    outside_view,
 };
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
@@ -1057,7 +1058,13 @@ fn interpret_window<'a>(
                     .decoded_cache
                     .for_render(context.settings.preview);
                 let transfer_function = context.get().graphics_state.transfer_function.clone();
-                if let Some(x_object) = resources.get_x_object(x.0).and_then(|s| {
+                // PdfCraft patch (107): an XObject the device can't show is not decoded or drawn,
+                // except while inks are reported, which lists what the page uses, seen or not.
+                let cull = context.settings.ink_sink.is_none() && device.culls_outside_view();
+                let stream = resources
+                    .get_x_object(x.0)
+                    .filter(|s| !(cull && outside_view(s, context)));
+                if let Some(x_object) = stream.and_then(|s| {
                     XObject::new(
                         &s,
                         &context.settings.warning_sink,

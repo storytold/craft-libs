@@ -147,6 +147,77 @@ mod device {
         assert!(painting.clips.is_empty(), "a painting text mode never clips");
         assert_eq!(painting.paths, 1);
     }
+
+    /// Counts what reaches it; `culls` is its answer to `culls_outside_view`.
+    #[derive(Default)]
+    struct CullDevice {
+        culls: bool,
+        paths: usize,
+        images: usize,
+    }
+
+    impl Device<'_> for CullDevice {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {
+            self.paths += 1;
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {
+            self.images += 1;
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+        fn culls_outside_view(&mut self) -> bool {
+            self.culls
+        }
+    }
+
+    /// A 100 × 100 pt page drawing `content`, where `/F` is a form with `/BBox [0 0 50 50]` and
+    /// `/Matrix [matrix]` filling its box, and `/Im` a 1 × 1 image.
+    fn culled(culls: bool, content: &str, matrix: &str) -> CullDevice {
+        let form = "0 g 0 0 50 50 re f";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /XObject << /F 5 0 R /Im 6 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Matrix [{matrix}] /Length {} >> stream\n{form}\nendstream endobj\n6 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >> stream\n\0\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            content.len(),
+            form.len()
+        );
+        let pdf = craft_pdf::open_slice(bytes.as_bytes(), None).unwrap();
+        let page = &pdf.pages()[0];
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(
+            page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            &cache,
+            page.xref(),
+            InterpreterSettings::default(),
+        );
+        let mut device = CullDevice { culls, ..Default::default() };
+        craft_pdf::interpret_page(page, &mut context, &mut device).unwrap();
+        device
+    }
+
+    /// PdfCraft patch (107), adapted from pdfcer (MIT, same author): for a device that shows only
+    /// its area, a form or image placed wholly outside the area in force -- off the canvas, or
+    /// outside the clip -- is not run or decoded. A device that doesn't say so is given all of it.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn a_device_that_shows_only_its_area_is_not_given_what_lies_outside_it() {
+        let paths = |culls, content, matrix| culled(culls, content, matrix).paths;
+        assert_eq!(paths(true, "/F Do", "1 0 0 1 120 0"), 0, "its matrix places the form right of the canvas");
+        assert_eq!(paths(true, "q 1 0 0 1 0 160 cm /F Do Q", "1 0 0 1 0 0"), 0, "the matrix in force places it above");
+        assert_eq!(paths(true, "60 60 40 40 re W n /F Do", "1 0 0 1 0 0"), 0, "on the canvas, outside the clip");
+        assert_eq!(paths(true, "/F Do", "1 0 0 1 80 0"), 1, "partly on the canvas");
+        assert_eq!(paths(true, "/F Do", "0 1 -1 0 40 0"), 1, "rotated onto the canvas");
+        assert_eq!(paths(false, "/F Do", "1 0 0 1 120 0"), 1, "a device that keeps everything");
+
+        let images = |culls, content| culled(culls, content, "1 0 0 1 0 0").images;
+        assert_eq!(images(true, "q 10 0 0 10 120 20 cm /Im Do Q"), 0, "an image right of the canvas");
+        assert_eq!(images(true, "q 10 0 0 10 95 20 cm /Im Do Q"), 1, "an image partly on it");
+        assert_eq!(images(false, "q 10 0 0 10 120 20 cm /Im Do Q"), 1, "kept by a device that keeps everything");
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

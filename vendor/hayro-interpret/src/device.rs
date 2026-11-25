@@ -140,6 +140,12 @@ pub trait Device<'a> {
     /// Craft patch (flatten): the transparency group just pushed is isolated (`/I true`), until
     /// the matching `pop_transparency_group`.
     fn set_isolated(&mut self) {}
+    /// PdfCraft patch (107): whether this device shows nothing outside the interpreting
+    /// context's area (its canvas, narrowed by the clips in force), so an XObject placed wholly
+    /// outside that area may be skipped before it is decoded. The default keeps every XObject.
+    fn culls_outside_view(&mut self) -> bool {
+        false
+    }
 }
 
 /// A device that discards all drawing operations.

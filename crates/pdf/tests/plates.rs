@@ -562,3 +562,16 @@ fn default_color_spaces_leave_device_color_on_its_plates() {
         }
     }
 }
+
+/// PdfCraft patch (107): the skip of what the page shows none of leaves the inks reported.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn the_ink_sink_reports_the_inks_of_an_image_off_the_page() {
+    let image = stream(&format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace {GOLD}"), &[255]);
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = seen.clone();
+    let sink: InkSinkFn = Arc::new(move |ink: &Ink, _: &dyn Fn(f32) -> [u8; 3]| log.lock().unwrap().push(ink.name().to_owned()));
+    let pdf = page_pdf("q 10 0 0 10 60 60 cm /Im1 Do Q", "/XObject << /Im1 5 0 R >>", &[image]);
+    render(&pdf, &InterpreterSettings { ink_sink: Some(sink), ..Default::default() });
+    assert!(seen.lock().unwrap().iter().any(|name| name == "Gold"));
+}
