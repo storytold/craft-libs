@@ -112,7 +112,11 @@ impl Value {
         match self {
             Value::Int(i) => Some(*i),
             Value::Real(r) => f64_to_i64_checked(*r),
-            Value::Str(s) => s.trim().parse::<i64>().ok().or_else(|| s.trim().parse::<f64>().ok().and_then(f64_to_i64_checked)),
+            Value::Str(s) => match s.trim().parse::<i64>() {
+                Ok(i) => Some(i),
+                Err(err) if matches!(err.kind(), std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow) => None,
+                Err(_) => s.trim().parse::<f64>().ok().and_then(f64_to_i64_checked),
+            },
             Value::Bool(b) => Some(i64::from(*b)),
             _ => None,
         }
@@ -1532,16 +1536,27 @@ mod tests {
         assert_eq!(Value::Real(-9_223_372_036_854_775_808.0).checked_i64(), Some(i64::MIN));
         assert_eq!(Value::Str("-9223372036854775808".into()).checked_i64(), Some(i64::MIN));
 
-        // Just below lower bound: does not fit
+        // Adjacent decimal below lower bound: must not round to i64::MIN via float fallback
+        assert_eq!(Value::Str("-9223372036854775809".into()).checked_i64(), None);
+
+        // Far below lower bound: does not fit
         assert_eq!(Value::Real(-1e30).checked_i64(), None);
         assert_eq!(Value::Str("-1e30".into()).checked_i64(), None);
 
-        // Exclusive upper bound: 2^63 does not fit in i64
+        // Inclusive upper bound: 2^63 - 1 fits
+        assert_eq!(Value::Str("9223372036854775807".into()).checked_i64(), Some(i64::MAX));
+
+        // Exclusive upper bound / adjacent decimal above upper bound: does not fit
         assert_eq!(Value::Real(9_223_372_036_854_775_808.0).checked_i64(), None);
         assert_eq!(Value::Str("9223372036854775808".into()).checked_i64(), None);
 
         // Just below exclusive upper bound: 2^63 - 2048 (largest representable f64 < 2^63)
         assert_eq!(Value::Real(9_223_372_036_854_774_784.0).checked_i64(), Some(9_223_372_036_854_774_784));
+
+        // Float syntax fallback still converts finite real strings within integer range
+        assert_eq!(Value::Str("12.0".into()).checked_i64(), Some(12));
+        assert_eq!(Value::Str("-12.0".into()).checked_i64(), Some(-12));
+        assert_eq!(Value::Str("1e3".into()).checked_i64(), Some(1000));
 
         // Normal values
         assert_eq!(Value::Real(42.0).checked_i64(), Some(42));
