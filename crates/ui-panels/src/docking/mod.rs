@@ -64,7 +64,7 @@ pub use dock_column::{
     group_rects, scale_widths, stacked, width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
-pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicMode, IconicSizes};
+pub use iconic::{FlyoutResize, IconGroupSeparator, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicMode, IconicSizes};
 pub use window_menu::{WindowMenuRows, WindowMenuRowsOutput};
 
 use crate::contract::{

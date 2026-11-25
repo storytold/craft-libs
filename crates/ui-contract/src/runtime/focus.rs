@@ -192,6 +192,11 @@ pub(crate) struct State {
     /// How many of egui's focus candidates of the running pass (`Memory::focus_candidates`) `take_app_widgets` has
     /// read.
     pub(super) candidates_seen: usize,
+    /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
+    surrender_after_scopes: Option<Id>,
+    /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
+    /// closing by the next pass, and its restoration needs the widget to still hold the focus.
+    surrender_deferred: Option<Id>,
 }
 
 fn viewport(ctx: &Context) -> ViewportId {
@@ -1078,11 +1083,45 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     }
 }
 
+/// Releases the text widget `widget` at the end of this pass, after the enclosing scopes have had its Escape: a scope
+/// deciding whether to close still finds the focused stop. No key is replayed and no other widget loses focus.
+pub(crate) fn surrender_after_scopes(ctx: &Context, widget: Id) {
+    with(ctx, |state| state.surrender_after_scopes = Some(widget));
+}
+
 /// The end hook: applies the press's focus move, returns focus to the opener of a scope that went away,
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
     let viewport = viewport(ctx);
     take_app_widgets(ctx, None);
+    // A field held a pass for the scope it sits in lets go now, unless that scope is going away with focus in the field:
+    // nav::end below then gives the focus back to the scope's opener from where the field holds it.
+    if let Some(widget) = with(ctx, |state| state.surrender_deferred.take())
+        && !with(ctx, |state| state.restored_focus(Some(widget)).is_some())
+    {
+        egui_focus::surrender(ctx, widget);
+    }
+    if let Some(widget) = with(ctx, |state| state.surrender_after_scopes.take()) {
+        // A field in a scope that restores focus to an opener (a popover, a dialog) may be in the scope its Escape closes,
+        // which is only closing by the next pass: it is let go then, once the restoration has had its chance.
+        let restoring = with(ctx, |state| {
+            let key = state.focused.get(&widget).copied().unwrap_or((widget, None));
+            let mut at = state.stops.iter().find(|rec| rec.stop.key() == key).and_then(|rec| rec.scope);
+            while let Some(id) = at {
+                let Some(scope) = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id)) else { break };
+                if scope.opener.is_some() {
+                    return true;
+                }
+                at = scope.parent;
+            }
+            false
+        });
+        if restoring {
+            with(ctx, |state| state.surrender_deferred = Some(widget));
+        } else {
+            egui_focus::surrender(ctx, widget);
+        }
+    }
     let app_widget = |id: Id| {
         let made = crate::runtime::pointer::made_by_component(ctx, viewport, id);
         with(ctx, |state| state.app_widget(id, made))

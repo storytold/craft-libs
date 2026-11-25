@@ -297,3 +297,183 @@ fn the_clear_part_empties_the_field_in_the_pass_of_its_click() {
     assert_eq!(text.borrow().as_str(), "", "the click emptied the text");
     assert_eq!(fixture.tree().value(id.get()), Some(""), "the field reads empty in the pass of the click");
 }
+
+/// A field that keeps its text on Escape (`keeps_on_escape`, a live filter's query) commits the typing, lets focus
+/// go and leaves the same Escape to its enclosing scope; it reports the focus loss as `text_lost_focus`.
+#[trial]
+fn a_field_that_keeps_its_text_on_escape_commits_leaves_focus_and_passes_the_escape_on() {
+    let text = Rc::new(RefCell::new(String::new()));
+    let (passed, lost, id) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(false)), Rc::new(Cell::new(Id::NULL)));
+    // What the field reported: the commits and cancels of its events and the passes that reported a submit.
+    let (commits, cancels, submits) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)));
+    let (shown, scope_saw, lost_seen, field) = (text.clone(), passed.clone(), lost.clone(), id.clone());
+    let (seen_commits, seen_cancels, seen_submits) = (commits.clone(), cancels.clone(), submits.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        Stack::new().show(ui, |ui, body| {
+            let out = TextField::new("Filter", Bind::bound(&mut *held)).keeps_on_escape().show(ui);
+            field.set(out.response.id);
+            lost_seen.set(lost_seen.get() || out.text_lost_focus);
+            for event in out.events.iter() {
+                match event {
+                    craft_behavior::EditEvent::Commit { .. } => seen_commits.set(seen_commits.get() + 1),
+                    craft_behavior::EditEvent::Cancel { .. } => seen_cancels.set(seen_cancels.get() + 1),
+                    _ => {}
+                }
+            }
+            seen_submits.set(seen_submits.get() + u32::from(out.submitted));
+            if body.take_cancel() {
+                scope_saw.set(scope_saw.get() + 1);
+            }
+        });
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("abc");
+    fixture.idle(2);
+    assert!(!lost.get(), "typing loses no focus");
+    let (commits_before, cancels_before) = (commits.get(), cancels.get());
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(*text.borrow(), "abc", "Escape keeps the typed text");
+    assert_eq!(commits.get() - commits_before, 1, "the open typing run commits exactly once");
+    assert_eq!(cancels.get() - cancels_before, 0, "and nothing is cancelled");
+    assert_eq!(submits.get(), 0, "the Escape submits nothing");
+    assert_eq!(passed.get(), 1, "the enclosing scope gets the one Escape");
+    assert_ne!(fixture.focused(), Some(id.get()), "the field lets focus go");
+    assert!(lost.get(), "and reports the focus loss");
+}
+
+/// Without `keeps_on_escape` a plain field keeps its default: Escape over a typing run restores the text from before
+/// it and the field takes that Escape; a search field still clears.
+#[trial]
+fn without_keeps_on_escape_plain_and_search_fields_keep_their_escape() {
+    let (plain, search) = (Rc::new(RefCell::new(String::from("old"))), Rc::new(RefCell::new(String::new())));
+    let passed = Rc::new(Cell::new(0_u32));
+    let (a, b, scope_saw) = (plain.clone(), search.clone(), passed.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut first, mut second) = (a.borrow_mut(), b.borrow_mut());
+        Stack::new().show(ui, |ui, body| {
+            TextField::new("Plain", Bind::bound(&mut *first)).id_salt("plain").select_on_focus().show(ui);
+            TextField::search("Search", Bind::bound(&mut *second)).id_salt("search").show(ui);
+            if body.take_cancel() {
+                scope_saw.set(scope_saw.get() + 1);
+            }
+        });
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("new");
+    fixture.idle(1);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(*plain.borrow(), "old", "a plain field's Escape restores the text from before the run");
+    assert_eq!(passed.get(), 0, "and the field takes that Escape");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(1);
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("q");
+    fixture.idle(1);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(*search.borrow(), "", "a search field's Escape still clears");
+}
+
+/// `text_lost_focus` reports a real focus loss without an edit, and nothing while the field keeps focus.
+#[trial]
+fn text_lost_focus_reports_a_focus_loss_without_an_edit() {
+    let (first, second) = (Rc::new(RefCell::new(String::from("one"))), Rc::new(RefCell::new(String::from("two"))));
+    let lost = Rc::new(Cell::new(0_u32));
+    let (a, b, seen) = (first.clone(), second.clone(), lost.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = TextField::new("First", Bind::bound(&mut *a.borrow_mut())).id_salt("first").show(ui);
+        if out.text_lost_focus {
+            seen.set(seen.get() + 1);
+        }
+        TextField::new("Second", Bind::bound(&mut *b.borrow_mut())).id_salt("second").show(ui);
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(lost.get(), 0, "a focused field reports no loss");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(lost.get(), 1, "Tab off the unedited field reports one loss");
+    assert_eq!(*first.borrow(), "one", "and edits nothing");
+}
+
+/// A field that keeps its text on Escape does so only while it can be edited: one that went read-only in the middle of
+/// a typing run takes Escape as a plain field does, so the run is cancelled, not committed. (A read-only component
+/// refuses every event that carries a value, so the cancel reaches the app as an event and writes nothing back.)
+#[trial]
+fn a_field_that_went_read_only_mid_run_cancels_its_run_on_escape() {
+    let text = Rc::new(RefCell::new(String::from("old")));
+    let read_only = Rc::new(Cell::new(false));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let id = Rc::new(Cell::new(Id::NULL));
+    let (shown, locked, log, field) = (text.clone(), read_only.clone(), events.clone(), id.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let out = TextField::new("Filter", Bind::bound(&mut *held)).keeps_on_escape().select_on_focus().read_only(locked.get()).show(ui);
+        field.set(out.response.id);
+        log.borrow_mut().extend(out.events.iter().map(|event| match event {
+            craft_behavior::EditEvent::Commit { .. } => "commit",
+            craft_behavior::EditEvent::Cancel { .. } => "cancel",
+            _ => "other",
+        }));
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("new");
+    fixture.idle(2);
+    assert_eq!(*text.borrow(), "new", "the typing reached the binding");
+    read_only.set(true);
+    fixture.idle(2);
+    events.borrow_mut().clear();
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(3);
+    assert!(!events.borrow().contains(&"commit"), "the run is not committed: {:?}", events.borrow());
+    assert!(events.borrow().contains(&"cancel"), "the run is cancelled: {:?}", events.borrow());
+    // The draft is gone: the field shows the host's value again, not the text typed before the run ended.
+    *text.borrow_mut() = String::from("host");
+    fixture.idle(3);
+    assert_eq!(fixture.tree().value(id.get()), Some("host"), "the field shows the host's value");
+}
+
+/// A kept Escape that closes the popover the field sits in hands focus back to the popover's opener, as any Escape that
+/// closes it does: the field is let go only after the popover's focus restoration has found it holding the focus.
+#[trial]
+fn a_kept_escape_that_closes_its_popover_returns_focus_to_the_opener() {
+    use craft_ui::buttons::Button;
+    use craft_ui::popover::Popover;
+    use craft_ui::testing::contract::clicked;
+    let open = Rc::new(Cell::new(false));
+    let text = Rc::new(RefCell::new(String::new()));
+    let opener_id = Rc::new(Cell::new(Id::NULL));
+    let (shown, held, opener_seen) = (open.clone(), text.clone(), opener_id.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Filter options").show(ui);
+        opener_seen.set(opener.response.id);
+        let mut is_open = shown.get();
+        if clicked(&opener) {
+            is_open = !is_open;
+        }
+        Popover::new("Filter", Bind::bound(&mut is_open)).opened_by(&opener).show(ui, |ui, _| {
+            let mut query = held.borrow_mut();
+            TextField::new("Query", Bind::bound(&mut *query)).keeps_on_escape().show(ui);
+        });
+        shown.set(is_open);
+    });
+    fixture.settle();
+    let button = fixture.by_label("Filter options").expect("the opener");
+    fixture.click(&button);
+    fixture.idle(4);
+    assert!(open.get() && fixture.by_label("Query").is_some(), "the popover opened on its field");
+    fixture.type_text("ab");
+    fixture.idle(2);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(6);
+    assert_eq!(*text.borrow(), "ab", "the kept Escape keeps the text");
+    assert!(!open.get(), "the Escape closed the popover");
+    assert_eq!(fixture.focused(), Some(opener_id.get()), "focus returned to the opener");
+}

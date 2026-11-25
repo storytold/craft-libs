@@ -418,6 +418,7 @@ mod tests {
     /// returns `MAX_RESAMPLE_BLOCK` frames.
     #[test]
     fn source_held_and_block_length_are_bounded() {
+        let t0 = std::time::Instant::now();
         let mut r = StreamResampler::new(1_536_000, 1_000);
         let mut widest = 0;
         let out = r.process(0, 1_024, |_, frames| {
@@ -427,8 +428,11 @@ mod tests {
         assert_eq!((out.len(), out[0].len()), (64, 1_024));
         assert!(widest <= MAX_RESAMPLE_HELD / 64, "{widest}");
         assert!(r.held.iter().map(Vec::len).sum::<usize>() <= MAX_RESAMPLE_HELD);
+        eprintln!("DIAG resample wide ratio {:?}", t0.elapsed());
+        let t1 = std::time::Instant::now();
         let mut r = StreamResampler::new(48_000, 48_000);
         let out = r.process(0, usize::MAX, |_, frames| vec![vec![0.5; frames]]);
+        eprintln!("DIAG resample oversized block {:?}", t1.elapsed());
         assert_eq!(out[0].len(), MAX_RESAMPLE_BLOCK);
         assert!(out[0].iter().all(|&x| x == 0.5));
     }

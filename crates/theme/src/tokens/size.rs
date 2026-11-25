@@ -123,7 +123,17 @@ impl Default for GripShape {
     }
 }
 
-/// Corner radii, edge style, knob shape, well shape and grip marks.
+/// The squares of a reference point picker's square look: the step from one square's centre to the next and a
+/// square's side, in points. The picker is two steps and a square wide.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorShape {
+    /// The step from one square's centre to the next.
+    pub cell: f32,
+    /// A square's side.
+    pub square: f32,
+}
+
+/// Corner radii, edge style, knob shape, well shape, grip marks and the reference point's squares.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -136,6 +146,8 @@ pub struct ShapeTokens {
     pub wells: WellShape,
     /// The marks of the dock grips.
     pub grip: GripShape,
+    /// The squares of a reference point picker's square look.
+    pub locator: LocatorShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.

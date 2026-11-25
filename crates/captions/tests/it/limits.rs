@@ -35,7 +35,8 @@ fn mutated_files_never_panic() {
     for format in Format::ALL {
         let bytes = write(&doc(), format, WriteOptions::default());
         // every byte of a text file, and the header and first blocks of the (sparse) binary one
-        for i in 0..bytes.len().min(2048) {
+        // The gate runs every divisor-th byte; nightly runs every one.
+        for i in (0..bytes.len().min(2048)).step_by(craft_testkit::hostile::divisor()) {
             for v in [0u8, 0x20, 0x3c, 0x7f, 0xff] {
                 let mut m = bytes.clone();
                 if let Some(b) = m.get_mut(i) {
