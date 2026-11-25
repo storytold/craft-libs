@@ -139,8 +139,26 @@ pub struct Hit {
     /// position's digit.
     pub exact: bool,
     /// The text of the Paste event that ran the command, or on the web of the Paste event that
-    /// came with the press that ran it.
+    /// came with the press that ran it. `None` on a release.
     pub pasted: Option<String>,
+    /// Whether the key went down, repeated or came up. [`Phase::Repeat`] comes only with
+    /// [`Dispatcher::with_repeat`] and [`Phase::Release`] only with [`Dispatcher::with_holds`].
+    pub phase: Phase,
+}
+
+/// Whether a [`Hit`] starts a key hold or ends it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Phase {
+    /// The key went down and the command runs.
+    #[default]
+    Press,
+    /// The key is still down and repeated, and the command runs again. A repeat starts no hold.
+    Repeat,
+    /// The key that ran the press came up, or the hold ended without a release: the window lost
+    /// focus, the same key went down again, or the app called [`Dispatcher::release_all`]. The
+    /// other fields are the press's own.
+    Release,
 }
 
 impl Hit {
@@ -150,7 +168,30 @@ impl Hit {
             Lookup::Run(command) => (command, Vec::new()),
             Lookup::Cycle(cycle) => (cycle.first()?.clone(), cycle),
         };
-        Some(Hit { command, cycle, trigger, exact, pasted: None })
+        Some(Hit { command, cycle, trigger, exact, pasted: None, phase: Phase::Press })
+    }
+
+    fn released(self) -> Hit {
+        Hit { pasted: None, phase: Phase::Release, ..self }
+    }
+}
+
+/// A press that ran a command and whose key has not come up yet.
+#[derive(Clone, Debug)]
+struct HeldKey {
+    key: EguiKey,
+    physical: Option<EguiKey>,
+    hit: Hit,
+}
+
+impl HeldKey {
+    /// Whether a key event is for this key. The physical key decides when both report one, so a
+    /// modifier let go first (`:` coming up as `;`) still ends the hold.
+    fn is(&self, key: EguiKey, physical: Option<EguiKey>) -> bool {
+        match (self.physical, physical) {
+            (Some(held), Some(now)) => held == now,
+            _ => self.key == key,
+        }
     }
 }
 
@@ -167,7 +208,8 @@ struct LastPress {
 ///
 /// It reads key presses (repeats only when [`with_repeat`](Self::with_repeat) is on). A press
 /// that runs a command is removed from the events, together with the text it typed when it has
-/// no command modifier, so no widget sees it too. Other events stay.
+/// no command modifier, so no widget sees it too. With [`with_holds`](Self::with_holds), so is
+/// the release that ends its hold. Other events stay.
 ///
 /// On the desktop, egui-winit sends egui's Copy, Cut and Paste events in place of the key press
 /// for any chord of Cmd with C, X or V (Ctrl off macOS; on Windows also Shift+Delete, Ctrl+Insert
@@ -204,6 +246,9 @@ pub struct Dispatcher {
     /// Whether right Alt is held. egui-winit reports AltGr with neither Ctrl nor Alt, so its
     /// presses would otherwise teach the layout as plain ones.
     right_alt: bool,
+    holds: bool,
+    /// The presses whose release is still to come, in press order.
+    held: Vec<HeldKey>,
 }
 
 /// eframe's web build sends a press's Text event first when no text field has focus.
@@ -211,7 +256,16 @@ const TEXT_FIRST: bool = cfg!(target_arch = "wasm32");
 
 impl Default for Dispatcher {
     fn default() -> Dispatcher {
-        Dispatcher { last: None, repeat: false, clipboard: false, text_first: TEXT_FIRST, layout: Layout::new(), right_alt: false }
+        Dispatcher {
+            last: None,
+            repeat: false,
+            clipboard: false,
+            text_first: TEXT_FIRST,
+            layout: Layout::new(),
+            right_alt: false,
+            holds: false,
+            held: Vec::new(),
+        }
     }
 }
 
@@ -221,7 +275,8 @@ impl Dispatcher {
     }
 
     /// Whether held keys run their command again on each repeat (off by default), so a held
-    /// arrow can nudge. Repeats never count toward a double press.
+    /// arrow can nudge. Their hits carry [`Phase::Repeat`]. Repeats never count toward a double
+    /// press.
     pub fn with_repeat(mut self, on: bool) -> Dispatcher {
         self.repeat = on;
         self
@@ -238,6 +293,47 @@ impl Dispatcher {
     pub fn with_clipboard_events(mut self, on: bool) -> Dispatcher {
         self.clipboard = on;
         self
+    }
+
+    /// Whether the release of a key that ran a command is reported too (off by default), for
+    /// commands that act while a key is held: push-to-talk, a hand tool on Space, a momentary
+    /// tool switch.
+    ///
+    /// With it on, each key press that runs a command starts a hold, and the dispatcher returns
+    /// a second [`Hit`] with [`Phase::Release`] and the press's command when that key comes up.
+    /// The release is matched by the physical key, so letting go of a modifier first does not
+    /// change which hold it ends, and the release event is removed from egui's input like its
+    /// press. A hold also ends, with a release hit, when the window loses focus (no release
+    /// arrives then) or when the same key goes down again without coming up. Each hold ends with
+    /// exactly one release hit. Releases are not passed to the `accept` predicate of
+    /// [`dispatch_filtered`](Self::dispatch_filtered); a declined press starts no hold.
+    ///
+    /// Key repeats do not start holds; with [`with_repeat`](Self::with_repeat) their hits carry
+    /// [`Phase::Repeat`] and are not mistaken for the press that started the hold. A command run by a desktop Copy, Cut or Paste event,
+    /// which comes without a key press, starts no hold either. Turning it off starts no new
+    /// holds; the holds in progress still end as described.
+    pub fn with_holds(mut self, on: bool) -> Dispatcher {
+        self.holds = on;
+        self
+    }
+
+    /// The press hits whose keys are still down, in press order. Empty unless
+    /// [`with_holds`](Self::with_holds) is on.
+    pub fn held(&self) -> impl Iterator<Item = &Hit> {
+        self.held.iter().map(|h| &h.hit)
+    }
+
+    /// Ends every hold and returns their release hits, in press order. For an app that stops
+    /// calling [`dispatch`](Self::dispatch) while a key may be down, for example while a modal
+    /// dialog has the keyboard, so that the release it will not see still ends the command.
+    pub fn release_all(&mut self) -> Vec<Hit> {
+        std::mem::take(&mut self.held).into_iter().map(|h| h.hit.released()).collect()
+    }
+
+    /// Ends the hold of the key an event is for, if one is held.
+    fn end_hold(&mut self, key: EguiKey, physical: Option<EguiKey>) -> Option<Hit> {
+        let i = self.held.iter().position(|h| h.is(key, physical))?;
+        Some(self.held.remove(i).hit.released())
     }
 
     /// Starts from what the platform reports about the keyboard layout. The dispatcher also
@@ -260,7 +356,8 @@ impl Dispatcher {
         &mut self.layout
     }
 
-    /// The commands this frame's key presses run with `active` focus, in press order.
+    /// The commands this frame's key presses run with `active` focus, in press order, and with
+    /// [`with_holds`](Self::with_holds) the holds this frame's releases end, in event order.
     ///
     /// A chord pressed again within [`DOUBLE_PRESS`] in the same panel runs its double binding
     /// when it has one; the first press has already run the single binding. The press after a
@@ -289,7 +386,23 @@ impl Dispatcher {
         let mut caused_taken: Vec<Option<bool>> = vec![None; events.len()];
         for (i, event) in events.into_iter().enumerate() {
             match &event {
-                Event::Key { pressed: true, repeat, .. } if !*repeat || self.repeat => {
+                Event::Key { pressed: false, key, physical_key, .. } if !self.held.is_empty() => {
+                    if let Some(hit) = self.end_hold(*key, *physical_key) {
+                        hits.push(hit);
+                        continue;
+                    }
+                }
+                // No release comes for a key that was down when the window lost focus.
+                Event::WindowFocused(false) if !self.held.is_empty() => hits.extend(self.release_all()),
+                Event::Key { pressed: true, repeat, key, physical_key, .. } if !*repeat || self.repeat => {
+                    let (key, physical_key) = (*key, *physical_key);
+                    // A key going down again without having come up lost its release.
+                    if !*repeat
+                        && !self.held.is_empty()
+                        && let Some(hit) = self.end_hold(key, physical_key)
+                    {
+                        hits.push(hit);
+                    }
                     let input = key_input(&event, platform, input);
                     let held = input.mods;
                     if let Some(chord) = self.layout.resolve(&input) {
@@ -313,6 +426,9 @@ impl Dispatcher {
                             caused_taken[j] = Some(hit.is_some());
                         }
                         if let Some(hit) = hit {
+                            if self.holds && !*repeat {
+                                self.held.push(HeldKey { key, physical: physical_key, hit: hit.clone() });
+                            }
                             hits.push(hit);
                             if let Some(j) = text_of[i].filter(|_| !(held.cmd || held.ctrl)) {
                                 drop[j] = true;
@@ -388,7 +504,7 @@ impl Dispatcher {
             chords.iter().find_map(|&chord| Hit::from_lookup(keymap.lookup(&chord, double, active), Trigger { chord, double }, chord == first))
         };
         if repeat {
-            return find(false);
+            return find(false).map(|hit| Hit { phase: Phase::Repeat, ..hit });
         }
         let again = self
             .last

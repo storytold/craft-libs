@@ -446,7 +446,23 @@ lists (hidden entries keep their keys and still count in conflicts).
   While a text field has the keyboard, plain clipboard key presses and presses that typed text in the
   same frame stay with it. That covers AltGr, which a browser on Windows reports as Ctrl+Alt
   followed by the text; a Ctrl+Alt press that types nothing is a command chord.
-  `Dispatcher::new().with_repeat(true)` also runs commands on key repeats (held arrows).
+  `Dispatcher::new().with_repeat(true)` also runs commands on key repeats (held arrows), with
+  `phase: Phase::Repeat`. `with_holds(true)` also reports when a key that ran a command comes up, for push-to-talk, a
+  hand tool on Space or a momentary tool switch: the release is a second `Hit` with
+  `phase: Phase::Release` and the press's command, matched by the physical key. A hold also ends
+  when the window loses focus or the same key goes down again without a release, and
+  `release_all` ends every hold for an app that stops dispatching (a modal dialog). `held()` lists
+  the holds in progress.
+
+  ```rust,ignore
+  for hit in ctx.input_mut(|i| dispatcher.dispatch(i, &keymap, &active)) {
+      match hit.phase {
+          Phase::Press => app.start(&hit.command),
+          Phase::Release => app.stop(&hit.command),
+          _ => {}
+      }
+  }
+  ```
 
   On the desktop, egui-winit sends egui's Copy, Cut and Paste events in place of the key press
   for any chord of Cmd with C, X or V (Ctrl off macOS); the web build sends the press and then
