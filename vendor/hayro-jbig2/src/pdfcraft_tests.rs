@@ -649,7 +649,8 @@ fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
             }
             let _ = tx.send(());
         });
-        rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_else(|_| panic!("{what}: a JBIG2 symbol dictionary must not stall the decoder"));
+        rx.recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap_or_else(|_| panic!("{what}: a JBIG2 symbol dictionary must not stall the decoder"));
     }
 }
 
@@ -716,4 +717,3 @@ fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
     assert_eq!(ink(hex(UPPER_LINE), 16, 12), 0, "an upper range line past an i32");
     assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
 }
-
