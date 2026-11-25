@@ -283,11 +283,92 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     keyless_check(doc)?;
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
-    if doc.reconstructed() || doc.encryption_changed() || doc.full_save_required() {
+    if append_blocker(doc).is_some() {
         return write_full(doc, opts);
     }
+    append_revision(doc, opts)
+}
+
+/// Why a document cannot be saved by appending to its original bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AppendBlocker {
+    /// The document has no revision chain to append to: it was rebuilt from object headers
+    /// because its cross-reference data was unusable, or it was created rather than opened.
+    Reconstructed,
+    /// Encryption was added or removed, which rewrites every object.
+    EncryptionChanged,
+    /// An edit requires that the old revision not remain (a redaction, a new file identifier), or
+    /// edits an object whose cross-reference row and object header give different generations.
+    FullSaveRequired,
+}
+
+impl std::fmt::Display for AppendBlocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Reconstructed => "it has no revision chain to append to",
+            Self::EncryptionChanged => "its encryption was added or removed, which rewrites every object",
+            Self::FullSaveRequired => "an edit requires the old revision not to remain",
+        })
+    }
+}
+
+/// The condition that makes [`write_incremental`] rewrite the whole file and [`write_append_only`]
+/// refuse, or `None`. `None` does not promise that a save succeeds: other restrictions still
+/// apply, such as a stream limit or an edit that needs an encryption key the document was opened
+/// without, and [`write_append_only`] also refuses when setting [`SaveOptions::mod_date`] makes a
+/// full save necessary.
+pub fn append_blocker(doc: &Document) -> Option<AppendBlocker> {
+    if doc.reconstructed() {
+        Some(AppendBlocker::Reconstructed)
+    } else if doc.encryption_changed() {
+        Some(AppendBlocker::EncryptionChanged)
+    } else if doc.full_save_required() {
+        Some(AppendBlocker::FullSaveRequired)
+    } else {
+        None
+    }
+}
+
+/// Why [`write_append_only`] did not save.
+#[derive(Debug, thiserror::Error, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum AppendOnlyError {
+    /// Saving would rewrite the whole file, for this reason.
+    #[error("the document cannot be saved as a new version of the original file: {0}")]
+    Blocked(AppendBlocker),
+    /// Any other refusal or failure, as [`write_incremental`] reports it.
+    #[error(transparent)]
+    Cos(#[from] CosError),
+}
+
+/// [`write_incremental`] without its fallback: the result always starts with the document's
+/// original bytes. Where `write_incremental` would rewrite the whole file, and also where
+/// applying [`SaveOptions::mod_date`] makes that necessary, this returns
+/// [`AppendOnlyError::Blocked`] naming the reason ([`append_blocker`]). Editing an `/Info`
+/// dictionary whose generations disagree is such a case, so the check runs after the date is set.
+pub fn write_append_only(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, AppendOnlyError> {
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit.into());
+    }
+    keyless_check(doc)?;
     let mut doc = doc.clone();
     stamp_mod_date(&mut doc, opts);
+    if let Some(reason) = append_blocker(&doc) {
+        return Err(AppendOnlyError::Blocked(reason));
+    }
+    Ok(append_stamped(doc, opts)?)
+}
+
+/// [`write_incremental`]'s append path, once it has checked that the document can be appended to.
+fn append_revision(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
+    let mut doc = doc.clone();
+    stamp_mod_date(&mut doc, opts);
+    append_stamped(doc, opts)
+}
+
+/// Append a revision to `doc`, whose `/ModDate` is already set.
+fn append_stamped(doc: Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     let original = doc.bytes().clone();
     // The revision is written on its own and joined to the original at the end, so the result is
     // allocated once at its exact size: growing a buffer that holds a large original past a

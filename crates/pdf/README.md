@@ -153,6 +153,9 @@ interpretation needs.
   the file's last one, so earlier revisions and their signatures stay as they were; it falls back
   to `write_full` when an edit cannot be appended. `write_full` renumbers what the trailer
   reaches and, by default, packs objects into object streams. Both return the bytes.
+- `write_append_only` saves only by appending, so the result always starts with the original
+  bytes; where an append is not possible it returns `AppendOnlyError::Blocked` with the reason.
+  `append_blocker` gives that reason without saving.
 - `Document` is cheap to clone: the bytes, index and caches are shared, so a clone is a
   snapshot for undo or a background job.
 - Images: `ImageBudget::decode` gives an image's samples after its filters, CCITT fax and JBIG2

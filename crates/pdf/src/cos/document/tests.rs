@@ -1881,6 +1881,8 @@ fn a_stream_limited_document_cannot_be_saved() {
     {
         assert!(matches!(saved, Err(CosError::ReadOnlyLimit)), "{saved:?}");
     }
+    let saved = crate::cos::write_append_only(&doc, &crate::cos::SaveOptions::default());
+    assert!(matches!(saved, Err(crate::cos::AppendOnlyError::Cos(CosError::ReadOnlyLimit))), "{saved:?}");
     let doc = Document::open(bytes).unwrap();
     assert!(crate::cos::write_full(&doc, &crate::cos::SaveOptions::default()).is_ok());
 }
