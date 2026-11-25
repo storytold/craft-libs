@@ -82,7 +82,8 @@ pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 pub(crate) mod rulers;
 pub(crate) mod scrollbars;
 pub use rulers::{
-    INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule,
+    CENTIMETRE_LABEL_STEP_MIN, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers,
+    RulersOutput, StepLadder, TickRule,
 };
 pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 
