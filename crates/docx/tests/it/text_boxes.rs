@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 
 use craft_wordmodel::para::ShapeKind;
 use craft_wordmodel::props::{TextVert, VAlign};
-use craft_wordmodel::{Document, InlineObject, PartKind, TextBody, para_block};
+use craft_wordmodel::{CharProps, Document, InlineObject, PartKind, Pos, Revision, RevisionKind, TextBody, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -258,4 +258,24 @@ fn story_shared_by_many_shapes_is_written_once() {
     let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.len() < 2_000_000, "document.xml is {} bytes", xml.len());
     assert_eq!(xml.matches(text.as_str()).count(), 1);
+}
+
+#[test]
+fn a_deleted_shapes_text_box_text_is_written_as_del_text() {
+    // A text box whose anchor is deleted goes with its anchor: its text is written deleted by
+    // the same revision, in `w:del` / `w:delText`, where readers look for deleted text (#5924;
+    // the Compare-level tests live in WordCraft, this pins the writer behaviour here).
+    let mut d = Document::from_text("a\nb");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let del = CharProps { del: Some(0), ..Default::default() };
+    let gone = text_box(&mut d, "Box text", TextBody::default());
+    let kept = text_box(&mut d, "Kept text", TextBody::default());
+    d.insert_object(&Pos::body(0, 1), gone, &del).unwrap();
+    d.insert_object(&Pos::body(1, 1), kept, &Default::default()).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    assert!(xml.contains(">Box text</w:delText>"), "{xml}");
+    assert!(!xml.contains(">Box text</w:t>"), "{xml}");
+    assert!(xml.contains(">Kept text</w:t>"), "{xml}");
+    assert!(!xml.contains(">Kept text</w:delText>"), "{xml}");
 }
