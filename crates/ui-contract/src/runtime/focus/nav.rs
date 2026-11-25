@@ -1,7 +1,7 @@
 //! Focus movement: Tab and F6, roving groups, initial focus, restore, programmatic requests and focus after
 //! removal. Every movement reads last pass's registrations and returns the egui changes to apply.
 
-use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
+use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, Stop, StopKey, StopRec, TabReach};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use craft_behavior::nav::step;
@@ -262,27 +262,16 @@ impl State {
         self.enter_stop(rec, FocusOrigin::Press)
     }
 
-    pub(super) fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
+    fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         self.note_entry(&rec);
         let stop = &rec.stop;
-        let roving = stop.group.is_some();
-        let keys = stop.keys;
-        // The app's canvas (`host_canvas`) reads its Escape from egui, as a stop that claims it does: egui keeps its focus
-        // on it. Every other widget of the app's own keeps Escape by its own egui filter.
-        let escape = (stop.host && !stop.automatic()) || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
-        let filter = egui_focus::filter(
-            keys.keep == super::KeepKeys::Tab,
-            roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),
-            roving || keys.keep == super::KeepKeys::BlockArrows,
-            escape,
-        );
         let moved = self.focus_now != Some(stop.root) || self.focused.get(&stop.root) != Some(&stop.key());
         if moved {
             self.arrived = Some((self.frame, stop.key(), origin));
         }
         self.focused.insert(stop.root, stop.key());
         self.focus_now = Some(stop.root);
-        vec![Act::Focus(stop.root, filter)]
+        vec![focus_act(stop)]
     }
 
     /// Focus moving to `rec` from outside a scope that traps nothing and restores focus (a layer that Tab reaches, such as
@@ -743,6 +732,22 @@ impl State {
         }
         back
     }
+}
+
+/// Focus on the egui widget of `stop`, with the key filter its keys ask for.
+pub(super) fn focus_act(stop: &Stop) -> Act {
+    let roving = stop.group.is_some();
+    let keys = stop.keys;
+    // The app's canvas (`host_canvas`) reads its Escape from egui, as a stop that claims it does: egui keeps its focus
+    // on it. Every other widget of the app's own keeps Escape by its own egui filter.
+    let escape = (stop.host && !stop.automatic()) || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
+    let filter = egui_focus::filter(
+        keys.keep == super::KeepKeys::Tab,
+        roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),
+        roving || keys.keep == super::KeepKeys::BlockArrows,
+        escape,
+    );
+    Act::Focus(stop.root, filter)
 }
 
 fn cycle(entries: &[Entry], current: Option<&StopRec>, top: Option<Id>, forward: bool) -> Option<usize> {

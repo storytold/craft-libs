@@ -1180,6 +1180,41 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
     );
 }
 
+/// Focus that Tab moves to the app's canvas in a layer returns to the stop it came from when the layer goes away, also
+/// when the group the canvas sits in first appears in the pass of the Tab: declaring the canvas enters nothing.
+#[trial]
+fn declaring_a_focused_canvas_keeps_the_opener_of_its_layer() {
+    let (opener, canvas) = (named_id("opener"), named_id("host canvas"));
+    let layer = Rc::new(Cell::new(true));
+    let grouped = Rc::new(Cell::new(false));
+    let (shown, group) = (Rc::clone(&layer), Rc::clone(&grouped));
+    let mut show = move |ui: &mut Ui| {
+        widget(ui, opener);
+        register_stop(ui.ctx(), Stop::new(opener, KeyUse::of(Input::Pointer)));
+        if !shown.get() {
+            return;
+        }
+        push_scope(ui.ctx(), named_id("layer"), FocusPolicy::TAB_LAYER, None);
+        if group.get() {
+            push_scope(ui.ctx(), named_id("group"), FocusPolicy::NONE, None);
+        }
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        if group.get() {
+            pop_scope(ui.ctx());
+        }
+        pop_scope(ui.ctx());
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    focus_stop(&mut frames, &mut show, opener);
+    grouped.set(true);
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(canvas), "Tab goes from the stop into the layer");
+    layer.set(false);
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(opener), "the layer gives the focus back to the stop it came from");
+}
+
 /// How an app's window shows the canvas of `host_canvas_findings`.
 #[derive(Clone, Copy, Debug)]
 enum Shown {
@@ -1188,6 +1223,8 @@ enum Shown {
     /// Declared, and drawn with a focusable widget that senses clicks or drags.
     Click,
     Drag,
+    /// Declared, and drawn with a focusable widget in an egui window, whose first pass sizes it invisibly.
+    Window,
     /// Declared, and drawn with a widget that senses drags and is not focusable.
     Unfocusable,
     /// Declared, and drawn in a disabled `Ui`.
@@ -1209,6 +1246,7 @@ fn host_canvas_findings(shown: Shown) -> (bool, Vec<String>) {
             Shown::Hidden | Shown::Undrawn => {}
             Shown::Click => _ = fixture::host_button(ui, canvas, rect),
             Shown::Drag => _ = fixture::host_drag_area(ui, canvas, rect),
+            Shown::Window => areas::host_egui_window(ui.ctx(), named_id("host window"), |ui| _ = widget(ui, canvas)),
             Shown::Unfocusable => fixture::host_unfocusable_area(ui, canvas, rect),
             Shown::Disabled => fixture::host_disabled_button(ui, canvas, rect),
         }
@@ -1225,7 +1263,7 @@ fn host_canvas_findings(shown: Shown) -> (bool, Vec<String>) {
 /// focusable egui widget of the pass has.
 #[trial]
 fn a_host_canvas_no_focusable_widget_draws_is_a_finding() {
-    for shown in [Shown::Click, Shown::Drag] {
+    for shown in [Shown::Click, Shown::Drag, Shown::Window] {
         assert_eq!(host_canvas_findings(shown), (true, Vec::new()), "{shown:?}: Tab stays at a canvas with a focusable widget");
     }
     assert_eq!(host_canvas_findings(Shown::Hidden).1, Vec::<String>::new(), "a hidden canvas makes no call");

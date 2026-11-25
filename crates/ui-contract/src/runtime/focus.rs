@@ -257,9 +257,9 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
             && let Some(rec) = state.stops.iter_mut().find(|rec| rec.stop.host && rec.stop.id == stop.id)
         {
             state.stop_roots.insert(stop.root);
+            let acts = if held && state.given == Some(stop.root) { vec![nav::focus_act(&stop)] } else { Vec::new() };
             rec.stop = stop;
-            let rec = rec.clone();
-            return if held && state.given == Some(rec.stop.root) { state.enter_stop(rec, FocusOrigin::Request) } else { Vec::new() };
+            return acts;
         }
         state.push_stop(stop)
     });
@@ -338,8 +338,8 @@ fn take_app_widgets(ctx: &Context, except: Option<Id>) {
 /// egui widget the app draws for it in every such pass (`Sense::click()`, `Sense::drag()`; the bare flags `Sense::CLICK`
 /// and `Sense::DRAG` are not focusable). egui drops the focus of an id that no such widget of the pass has, so Tab would
 /// lose the focus at the canvas and start over at the window's first stop. A pass that declares a canvas and draws no
-/// such widget reports the finding `canvas-without-widget`, and debug builds log it once. A pass that hides or disables
-/// the canvas makes no call.
+/// such widget reports the finding `canvas-without-widget`, and debug builds log it once; a canvas drawn in an invisible
+/// `Ui` (an egui sizing pass) is not reported as disabled. A pass that hides or disables the canvas makes no call.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     if !crate::runtime::measure::active(ctx) {
         with(ctx, |state| state.host_canvases.push(id));
@@ -1127,13 +1127,14 @@ pub(crate) fn surrender_after_scopes(ctx: &Context, widget: Id) {
 
 /// Reports each canvas the running pass declared (`host_canvas`) whose id no focusable, enabled egui widget of the pass
 /// has. Read at the pass's end, since a canvas may be declared before it is drawn. A canvas hidden for one pass and still
-/// declared counts: egui drops its focus at the end of that pass.
+/// declared counts: egui drops its focus at the end of that pass. Only a visible widget counts as disabled: egui disables
+/// every widget of an invisible `Ui`, as the sizing pass of an `Area`, a `Window` or a `Grid` has.
 fn report_undrawn_canvases(ctx: &Context) {
     for id in with(ctx, |state| state.host_canvases.clone()) {
         let fault = match egui_focus::drawn_widget(ctx, id) {
             None => "no egui widget with the id was drawn",
             Some(widget) if !widget.sense.is_focusable() => "its widget's sense takes no focus",
-            Some(widget) if !widget.enabled => "its widget is disabled, which takes no focus",
+            Some(widget) if widget.visible && !widget.enabled => "its widget is disabled, which takes no focus",
             Some(_) => continue,
         };
         if cfg!(debug_assertions) {
