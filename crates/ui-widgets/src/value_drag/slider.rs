@@ -85,6 +85,10 @@ pub struct Slider<'a> {
     /// moves along the track and ignores it.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// When a press on the track sets the value: on its release or drag (the default), or as the primary button goes
+    /// down. Presses on the thumb and keyboard, wheel and editor input do not change.
+    #[prop]
+    track_press: TrackPress,
     /// The value as the caller words it ("50 %"), in place of the slider's own value text: the number in the step's
     /// decimals, or in one decimal without a step. Assistive technology reads it, and so does a viewer that
     /// shows the value beside the slider.
@@ -96,6 +100,24 @@ pub struct Slider<'a> {
     track_face: Option<TrackFace<'a>>,
     /// The kept part of the range, its ends drawn across the track ([`Slider::trim`]).
     trim: Option<(f64, f64)>,
+    /// The track asks for a short field's length (`size.length.short`) in place of a track's (`size.length.track`):
+    /// a slider beside a number in a document dialog's line, as production's Opacity.
+    #[style_key]
+    #[prop]
+    short: bool,
+}
+
+/// When a press on a slider's track sets the value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrackPress {
+    /// The value jumps to the press when it ends as a click, or follows the pointer once the press starts a drag; a
+    /// press held still changes nothing yet.
+    #[default]
+    OnRelease,
+    /// The value lands where the primary button goes down, in the same pass, and a drag goes on from there: an
+    /// editor whose preview should answer the first touch. A double click still restores the reset value.
+    OnPress,
 }
 
 /// The shape of a slider's thumb.
@@ -126,9 +148,11 @@ impl<'a> Slider<'a> {
             thumb: SliderThumb::Round,
             marks: Marks::default(),
             wheel_step: None,
+            track_press: TrackPress::OnRelease,
             value_text: None,
             track_face: None,
             trim: None,
+            short: false,
         }
     }
 
@@ -185,9 +209,9 @@ impl Component for Slider<'_> {
     type Style = SliderStyle;
     type Output = EditResponse<f64>;
 
-    fn style(cx: &StyleCx<'_>, _: SliderStyleKey) -> SliderStyle {
+    fn style(cx: &StyleCx<'_>, key: SliderStyleKey) -> SliderStyle {
         let control = cx.control();
-        let length = cx.tokens.size.length.track;
+        let length = if key.short { cx.tokens.size.length.short } else { cx.tokens.size.length.track };
         SliderStyle {
             // Where a row shrinks it, the track narrows down to a square of the control's height.
             metrics: Metrics::new().min_size(Vec2::new(length, control.height)).least_width(control.height),
@@ -223,7 +247,9 @@ impl Component for Slider<'_> {
         if self.track_face.is_some() {
             cx.part(track::GROOVE, self.face_rect(cx.style, along));
         }
-        cx.part(TRACK, along.area).sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS).value_part().pointer_only("the arrow keys step the value");
+        let sense = Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS;
+        let sense = if self.track_press == TrackPress::OnPress { sense | Sense::SETS_ON_PRESS } else { sense };
+        cx.part(TRACK, along.area).sense(sense).value_part().pointer_only("the arrow keys step the value");
         cx.part(Self::THUMB, thumb)
             .sense(Sense::DRAG | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Handle, 0))
@@ -253,7 +279,40 @@ impl Component for Slider<'_> {
         let at = |position: f64| marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)));
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(|| scale.middle());
         let press_at = |cx: &Cx<'_, Self>, x: f32| pick.press(&[along.x(scale.position(current(cx)))], x);
+        // Multi-clicks keep the legacy track path: reset wins on Down, and a later drag
+        // can still begin from the reset value through the existing DragStart handling.
+        let follow_track_on_down = self.track_press == TrackPress::OnPress
+            && cx.part(TRACK).press.phase.start().is_none_or(|start| start.button != craft_behavior::PointerButton::Primary || start.clicks < 2);
+        if follow_track_on_down {
+            let press = cx.part(TRACK).press;
+            if let Some(start) = press.phase.start().filter(|start| start.button == craft_behavior::PointerButton::Primary) {
+                if matches!(press.phase, PressPhase::Down { .. }) && cx.in_wheel_run() {
+                    // The pending wheel End must close the old run before follow_press starts the press gesture.
+                    cx.commit();
+                }
+                let absolute = craft_behavior::ValueDrag::absolute(travel.track.clone(), travel.units.clone());
+                if matches!(press.phase, PressPhase::Down { .. })
+                    && let Some(position) = absolute.at(start.origin, rtl)
+                {
+                    // Fine/coarse travel continues from this real snapped landing, not the value before the press.
+                    *cx.memory::<Held>() = Held { from: scale.position(at(position)), press: Some(Press::Jump(0)) };
+                }
+                let held = cx.memory::<Held>().clone();
+                // The existing shared primitive owns Begin/update/commit and the cancelled-held-release latch.
+                cx.follow_press(TRACK, |pos| {
+                    let next = if matches!(press.phase, PressPhase::Down { .. }) {
+                        absolute.at(pos, rtl)
+                    } else {
+                        held.press.and_then(|press_of| travel.value(press_of, held.from, &press, true))
+                    };
+                    next.map(at)
+                });
+            }
+        }
         for key in [Self::THUMB, TRACK] {
+            if key == TRACK && follow_track_on_down {
+                continue;
+            }
             let press = cx.part(key).press;
             match press.phase {
                 PressPhase::DragStart { start, .. } => {

@@ -3,7 +3,7 @@
 use super::dismissal::{dismissal, popup_dismissal};
 use super::opener::{Opening, Trigger};
 use super::place::{OverlayFit, Place};
-use super::placement::{anchor_rect, opened_overlay, placement};
+use super::placement::{anchor_rect, layer_covers_anchor, opened_overlay, placement};
 use super::props::{Outside, Overlay};
 use crate::runtime::access::{self};
 use crate::runtime::egui::areas::{self, LayerSpec};
@@ -134,6 +134,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
     }
+    let covers = layer_covers_anchor(ctx, layer.overlay, memory.opening);
     let layer = &Layer { overlay: opened.as_ref().map_or(layer.overlay, |(overlay, _)| overlay), ..*layer };
     let overlay = layer.overlay;
     let bounds = layer.region.map_or_else(|| areas::safe_rect(ctx), |region| region.intersect(areas::safe_rect(ctx)));
@@ -155,7 +156,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         Some(size) => Some(egui::vec2(size.x.max(min_width), size.y)),
         None => areas::layer_rect(ctx, area).map(|rect| rect.size()),
     };
-    let mut placed = placement(ctx, layer, size, bounds, anchor);
+    let mut placed = placement(ctx, layer, covers, size, bounds, anchor);
     let nudge = Nudge::of(ctx, layer, appears);
     if let Some(nudge) = &nudge {
         placed.at += nudge.offset();
@@ -246,11 +247,13 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.parent = parent;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
+    entry.asked = placed.asked;
     entry.exiting = layer.exiting;
     entry.cover = cover;
     entry.region = layer.region;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
+    entry.closes_on_commands = overlay.dismiss.commands;
     overlay::record(ctx, entry);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
     // The layer closes after its body ran: the run shows it open, so a record of the run is not replayed.
@@ -287,6 +290,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
     }
+    let covers = layer_covers_anchor(ctx, layer.overlay, memory.opening);
     // The popup window lies outside any region of the opener: the work area is its room.
     let layer = &Layer { overlay: opened.as_ref().map_or(layer.overlay, |(overlay, _)| overlay), region: None, ..*layer };
     let overlay = layer.overlay;
@@ -294,7 +298,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     let anchor = anchor_rect(ctx, layer, bounds, &mut memory);
     let min_width = overlay.least_width(anchor.width());
     let measured = layer.size.map(|size| egui::vec2(size.x.max(min_width), size.y));
-    let unplaced = placement(ctx, layer, measured, bounds, anchor);
+    let unplaced = placement(ctx, layer, covers, measured, bounds, anchor);
     let parent = overlay::drawing_parent(ctx);
     let tier = overlay::layer_tier(ctx, overlay.rank);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
@@ -314,7 +318,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
         shown = Some(show_in_popup(ui, layer, &unplaced, min_width, scope, &mut memory, &mut *body));
     });
     let (size, dismissed) = shown.unwrap_or((measured.unwrap_or_default(), None));
-    let placed = if known.is_some() { unplaced } else { placement(ctx, layer, Some(size), bounds, anchor) };
+    let placed = if known.is_some() { unplaced } else { placement(ctx, layer, covers, Some(size), bounds, anchor) };
     let rect = Rect::from_min_size(placed.at, size);
     if known.is_none() {
         windows::place_popup(ctx, layer.id, rect.translate(popup.origin.to_vec2()));
@@ -323,9 +327,11 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.parent = parent;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
+    entry.asked = placed.asked;
     entry.exiting = layer.exiting;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
+    entry.closes_on_commands = overlay.dismiss.commands;
     entry.window = true;
     entry.popup = true;
     overlay::record(ctx, entry);
@@ -404,6 +410,7 @@ fn show_in_popup(
     overlay::end_layer(&ctx);
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
     entry.side = placed.side;
+    entry.asked = placed.asked;
     entry.exiting = layer.exiting;
     entry.cover = cover;
     entry.scoped = scope.is_some();

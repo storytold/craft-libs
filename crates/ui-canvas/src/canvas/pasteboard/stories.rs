@@ -1,9 +1,10 @@
 //! Stories of the pasteboard.
 
-use super::{NAME, PageBorder, PageFrame, Pasteboard, PasteboardColor};
+use super::{ArtboardEdge, NAME, PageBorder, PageFrame, Pasteboard, PasteboardColor};
 use crate::canvas::Canvas;
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, on_canvas_with, story_view};
 use crate::contract::Show as _;
+use crate::primitives::Checker;
 use crate::style::DataColor;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::CanvasView;
@@ -52,6 +53,17 @@ fn artboards(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
 }
 
+/// The two artboards under `ArtboardEdge::Plain`: the active one edged in black, the other in mid grey at a hairline,
+/// as a drawing app's artboards read against the paper.
+#[story(Pasteboard<'static>, covers = [], drive = Drive::Never)]
+fn artboards_with_plain_edges(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let pages: &[PageFrame] = data.value("pages", boards());
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| {
+        Pasteboard::new("Pasteboard", pages).artboard_edge(ArtboardEdge::Plain).show_at(ui, at)
+    })
+}
+
 #[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
 fn page_with_a_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 0.0);
@@ -79,5 +91,62 @@ fn turned_view(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, TURN);
     let border = border_of(data, PageBorder::DropShadow);
     let pages: &[PageFrame] = data.value("pages", boards());
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+}
+
+/// Double presses the name of the first page.
+fn rename_first_name(fixture: &mut Fixture) {
+    click_first_name(fixture);
+    click_first_name(fixture);
+}
+
+/// A page with a transparency grid beside one with a plain fill.
+#[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
+fn page_checker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let border = border_of(data, PageBorder::DropShadow);
+    let pages: &[PageFrame] = data.value(
+        "pages",
+        vec![
+            PageFrame::new(DocRect::new(40.0, 40.0, 240.0, 200.0)).name("Transparent").active(true).checker(Checker::default()),
+            PageFrame::new(DocRect::new(280.0, 40.0, 440.0, 160.0)).name("Filled").active(false).fill(DataColor::new(Color32::from_gray(u8::MAX))),
+        ],
+    );
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+}
+
+/// Artboards whose surround lies under the pictures, so the document shows between and around them.
+#[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
+fn artboards_show_outside(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let border = border_of(data, PageBorder::DropShadow);
+    let pages: &[PageFrame] = data.value("pages", boards());
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| {
+        Pasteboard::new("Pasteboard", pages).shows_outside().border(border).show_at(ui, at)
+    })
+}
+
+/// A narrow page and a wide one at one zoom: the narrow page's name is cut to its width and the narrowest shows none.
+#[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
+fn long_page_names(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let border = border_of(data, PageBorder::DropShadow);
+    let pages: &[PageFrame] = data.value(
+        "pages",
+        vec![
+            PageFrame::new(DocRect::new(40.0, 40.0, 100.0, 200.0)).name("A very long artboard name").active(true),
+            PageFrame::new(DocRect::new(120.0, 40.0, 130.0, 200.0)).name("Too narrow for any name").active(false),
+            PageFrame::new(DocRect::new(150.0, 40.0, 440.0, 200.0)).name("A very long artboard name").active(false),
+        ],
+    );
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+}
+
+/// A double press on a page's name opens its rename field.
+#[story(Pasteboard<'static>, covers = [Open], drive = Drive::Custom(rename_first_name))]
+fn renaming_a_page_name(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let border = border_of(data, PageBorder::DropShadow);
+    let pages: &[PageFrame] = data.value("pages", boards().into_iter().map(|page| page.renames(true)).collect::<Vec<_>>());
     on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
 }

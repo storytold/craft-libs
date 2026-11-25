@@ -130,3 +130,70 @@ fn a_picker_dialog_settles_after_opening() {
         assert!(passes[2..].iter().all(|&n| n == 1), "{name}: every frame from the third runs one pass: {passes:?}; {warned:?}");
     }
 }
+
+/// A form dialog with two panes side by side, as Export for Screens lays them out: a heading, a grid of boards and a
+/// row of a button and a text field that takes the focus as the dialog opens, and options beside. Counts the button's
+/// clicks and the grid's selection events.
+fn panes_with_a_field(clicks: &Rc<Cell<u32>>, picks: &Rc<Cell<usize>>) -> Fixture {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{CollectionEvent, Props as _};
+    use craft_ui::list::ToggleState;
+    use craft_ui::runtime::focus::FocusRequest;
+    use craft_ui::text::TextField;
+    let opening = Rc::new(Cell::new(true));
+    let (clicks, picks, opens) = (clicks.clone(), picks.clone(), opening.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut value = String::new();
+        FormDialog::new("Export", Bind::bound(&mut value)).show(ui, |ui, _, _| {
+            let keys: Vec<u64> = (0..3).collect();
+            let source = keyed(&keys, |key: &u64| *key);
+            Row::new().show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Text::new("Artboards").show(ui);
+                    let out = TileGrid::new("Boards").checks(true).max_rows(3).show_items(ui, &source, &mut |key, _| {
+                        Tile::new(format!("Board {key}")).check(ToggleState::Off).thumb(ThumbAspect::SQUARE, |_, _| {})
+                    });
+                    picks.set(picks.get() + out.response.events.iter().filter(|event| matches!(event, CollectionEvent::Selection { .. })).count());
+                    Row::new().show(ui, |ui, _| {
+                        clicks.set(clicks.get() + Button::new("Clear Selection").show(ui).clicks);
+                        let field = TextField::new("Prefix", Bind::given(String::new()));
+                        if opens.get() { field.request_focus(FocusRequest::Take) } else { field }.show(ui);
+                    });
+                });
+                Stack::new().show(ui, |ui, _| {
+                    Text::new("Options").show(ui);
+                });
+            });
+            true
+        });
+    });
+    fixture.room(egui::vec2(1024.0, 768.0));
+    fixture.settle();
+    opening.set(false);
+    assert!(fixture.focused_stop().is_some(), "the field takes the focus");
+    fixture
+}
+
+/// A press on a button in a row beside a focused text field, under a grid, is the button's: the pane's room holds the
+/// grid's rows and what follows them. (The field keeps the focus, as a dialog's field does when one of its buttons is
+/// pressed.)
+#[trial]
+fn a_press_on_a_button_beside_a_field_is_the_buttons() {
+    let (clicks, picks) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let mut fixture = panes_with_a_field(&clicks, &picks);
+    let button = fixture.by_label("Clear Selection").expect("the button shows");
+    fixture.click(&button).settle();
+    assert_eq!(clicks.get(), 1, "the press on the button clicks it");
+}
+
+/// A click on a tile of a grid over a focused text field picks the tile, and takes the focus off the field.
+#[trial]
+fn a_tile_click_beside_a_focused_field_is_reported() {
+    let (clicks, picks) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let mut fixture = panes_with_a_field(&clicks, &picks);
+    let field = fixture.focused_stop();
+    let tile = fixture.by_label("Board 2").expect("the tile shows");
+    fixture.click(&tile).settle();
+    assert!(picks.get() > 0, "the grid reports the click on its tile as a selection");
+    assert_ne!(fixture.focused_stop(), field, "and the field loses the focus");
+}

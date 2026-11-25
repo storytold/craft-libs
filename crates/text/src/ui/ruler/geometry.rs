@@ -3,7 +3,7 @@
 use super::GapEdge;
 use super::RulerValues;
 use super::TabAlign;
-use super::items::Item;
+use super::items::RulerItem;
 use egui::{Rect, pos2, vec2};
 
 /// Where the column sits on the strip: positions are points from the column's start edge, which
@@ -137,14 +137,14 @@ impl Shapes {
     }
 
     /// The box the item occupies on the strip.
-    pub(super) fn rect(&self, g: &Geometry, item: Item, values: &RulerValues) -> Rect {
+    pub(super) fn rect(&self, g: &Geometry, item: RulerItem, values: &RulerValues) -> Rect {
         let x = g.x(item.position(values, g.width));
         match item {
-            Item::FirstLine => self.first_line(g.strip, x),
-            Item::Hanging => self.hanging(g.strip, x),
-            Item::LeftBox => self.left_box(g.strip, x),
-            Item::Right => self.right(g.strip, x),
-            Item::Stop(_) => self.stop(g.strip, x),
+            RulerItem::FirstLine => self.first_line(g.strip, x),
+            RulerItem::Hanging => self.hanging(g.strip, x),
+            RulerItem::LeftBox => self.left_box(g.strip, x),
+            RulerItem::Right => self.right(g.strip, x),
+            RulerItem::Stop(_) => self.stop(g.strip, x),
         }
     }
 }

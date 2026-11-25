@@ -185,14 +185,14 @@ impl<'a> TypeBar<'a> {
                 .extend(toggle.events.map(|on| TypeBarChange::Orientation(if on { TextOrientation::Vertical } else { TextOrientation::Horizontal })));
 
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &character_words, character, families, picker.as_mut());
+            let family = family_field(ui, &character_words, character, families, None, None, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &character_words, character, families);
+            let family = family_field(ui, &character_words, character, families, None, None);
             preview_family = family.preview;
             rested_family = family.rested;
             edits.extend(family.edits.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
-            let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, CharacterChange::Style);
+            let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, None, CharacterChange::Style);
             edits.extend(style.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
             // The size glyph the Character panel's size row shows. The bar's range ends in fractions (0.01 pt), so
@@ -200,7 +200,14 @@ impl<'a> TypeBar<'a> {
             // its ends at the same decimals, in the unit the field shows (PhotoCraft #12053).
             let side = mark(GlyphLabel::text("tT"), None, FieldLayout::Inside);
             let decimals = fraction_decimals(&units, unit, BAR_SIZE_RANGE);
-            let size = LengthRow { label: bar_words.size.clone(), side, value: character.size, range: BAR_SIZE_RANGE, presets: &size_presets };
+            let size = LengthRow {
+                label: bar_words.size.clone(),
+                side,
+                value: character.size,
+                range: BAR_SIZE_RANGE,
+                presets: &size_presets,
+                disabled: None,
+            };
             let (event, _, alert) = lengths.row_with_alert(ui, size, decimals);
             size_out_of_range = alert;
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));

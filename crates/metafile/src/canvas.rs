@@ -306,7 +306,7 @@ pub(crate) enum Raw {
 }
 
 impl Raw {
-    fn set_region(&mut self, region: RawClip) {
+    pub(crate) fn set_region(&mut self, region: RawClip) {
         match self {
             Raw::Path { region: slot, .. }
             | Raw::Pattern { region: slot, .. }

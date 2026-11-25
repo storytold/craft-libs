@@ -23,6 +23,9 @@ pub type DisplayId = Option<u32>;
 /// Bytes per conversion chunk of [`DisplayTransform::apply_rgba8`] (a whole number of pixels).
 const CHUNK_BYTES: usize = 4 * 65536;
 
+/// Bytes of the stack scratch of [`DisplayTransform::apply_premultiplied_rgba8`] (4096 whole pixels).
+const SCRATCH_BYTES: usize = 4 * 4096;
+
 /// Most cached transforms before the cache is cleared.
 const MAX_TRANSFORMS: usize = 32;
 
@@ -65,6 +68,11 @@ fn usable_monitor(profile: Profile) -> Result<Arc<Profile>, MonitorProblem> {
     cached(Builtin::Srgb.profile(), &profile, opts)
         .map_err(|e| MonitorProblem::CannotLink { description: profile.description.clone(), reason: e.to_string() })?;
     Ok(Arc::new(profile))
+}
+
+/// `icc` parsed and validated as a monitor profile.
+fn parse_monitor(icc: &[u8]) -> Result<Arc<Profile>, MonitorProblem> {
+    Profile::parse(icc).map_err(|e| MonitorProblem::Unreadable { reason: e.to_string() }).and_then(usable_monitor)
 }
 
 fn srgb_entry(status: MonitorStatus) -> MonitorEntry {
@@ -135,6 +143,52 @@ impl DisplayTransform {
             }
         }
     }
+
+    /// Premultiplied RGBA8 pixels converted in place through a fixed scratch of whole pixels:
+    /// alpha 0 is skipped, partial alpha is divided out and multiplied back, a failed chunk is
+    /// left as it was; nothing happens for the identity.
+    // new: the canvas frames hold premultiplied pixels; `display_profile::usable` shares the
+    // monitor check through `check_monitor`.
+    pub fn apply_premultiplied_rgba8(&self, pixels: &mut [u8]) {
+        let Some(t) = &self.transform else { return };
+        let mut scratch = [0u8; SCRATCH_BYTES];
+        for chunk in pixels.chunks_mut(SCRATCH_BYTES).map(|c| {
+            let n = c.len() / 4 * 4;
+            &mut c[..n]
+        }) {
+            let Some(src) = scratch.get_mut(..chunk.len()) else { continue };
+            src.copy_from_slice(chunk);
+            for px in src.as_chunks_mut::<4>().0 {
+                let a = u32::from(px[3]);
+                if a != 0 && a != 255 {
+                    for c in &mut px[..3] {
+                        *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                    }
+                }
+            }
+            // A failed conversion writes nothing (the buffers are checked first): the chunk stays.
+            if t.convert_u8(src, 4, chunk, 4, true).is_err() {
+                continue;
+            }
+            for (d, s) in chunk.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+                let a = u32::from(d[3]);
+                if a == 0 {
+                    *d = *s;
+                } else if a != 255 {
+                    for c in &mut d[..3] {
+                        *c = ((u32::from(*c) * a + 127) / 255) as u8;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Whether `icc` is usable as a monitor profile: [`Profile::parse`] plus the monitor checks, a
+/// parse error giving [`MonitorProblem::Unreadable`].
+// new: `display_profile::usable` in the app tries each profile source until one passes.
+pub fn check_monitor(icc: &[u8]) -> Result<(), MonitorProblem> {
+    parse_monitor(icc).map(drop)
 }
 
 /// Why the monitor profile is what it is.
@@ -216,18 +270,16 @@ impl DisplayCaches {
     pub fn set_monitor(&self, display: DisplayId, icc: Option<&[u8]>) {
         let entry = match icc {
             None => srgb_entry(MonitorStatus::NoProfile),
-            Some(bytes) => match Profile::parse(bytes) {
-                Ok(p) => match usable_monitor(p) {
-                    Ok(profile) => MonitorEntry { profile, status: MonitorStatus::Detected },
-                    Err(reason) => srgb_entry(MonitorStatus::Unusable(reason)),
-                },
-                Err(e) => {
+            Some(bytes) => match parse_monitor(bytes) {
+                Ok(profile) => MonitorEntry { profile, status: MonitorStatus::Detected },
+                Err(problem @ MonitorProblem::Unreadable { .. }) => {
                     if let std::collections::hash_map::Entry::Vacant(v) = lock(&self.monitors).entry(display) {
-                        v.insert(srgb_entry(MonitorStatus::Unusable(MonitorProblem::Unreadable { reason: e.to_string() })));
+                        v.insert(srgb_entry(MonitorStatus::Unusable(problem)));
                         lock(&self.transforms).clear();
                     }
                     return;
                 }
+                Err(problem) => srgb_entry(MonitorStatus::Unusable(problem)),
             },
         };
         lock(&self.monitors).insert(display, entry);
@@ -308,6 +360,39 @@ pub(crate) mod tests {
 
     fn srgb() -> Arc<Profile> {
         Arc::new(Builtin::Srgb.profile().clone())
+    }
+
+    /// Premultiplied conversion agrees with the straight one, leaves alpha and empty pixels alone.
+    #[trial]
+    fn a_premultiplied_conversion_matches_the_straight_one() {
+        let t = DisplayTransform::new(srgb(), p3()).unwrap();
+        assert!(!t.is_identity());
+        let colours = [[255u8, 0, 0], [200, 120, 40], [10, 220, 90]];
+        for c in colours {
+            let mut straight = [c[0], c[1], c[2], 255];
+            t.apply_rgba8(&mut straight);
+            let mut opaque = [c[0], c[1], c[2], 255];
+            t.apply_premultiplied_rgba8(&mut opaque);
+            assert_eq!(opaque, straight, "opaque pixels agree");
+
+            let a = 128u32;
+            let mut half = [0, 1, 2].map(|i| ((u32::from(c[i]) * a + 127) / 255) as u8).to_vec();
+            half.push(a as u8);
+            t.apply_premultiplied_rgba8(&mut half);
+            assert_eq!(half[3], a as u8, "alpha stays");
+            for i in 0..3 {
+                let want = (u32::from(straight[i]) * a + 127) / 255;
+                assert!(want.abs_diff(u32::from(half[i])) <= 1, "channel {i}: {} vs {want}", half[i]);
+            }
+        }
+        let mut empty = [9u8, 8, 7, 0];
+        t.apply_premultiplied_rgba8(&mut empty);
+        assert_eq!(empty, [9, 8, 7, 0]);
+
+        let same = DisplayTransform::new(srgb(), srgb()).unwrap();
+        let mut px = [50u8, 60, 70, 100, 1, 2, 3, 255];
+        same.apply_premultiplied_rgba8(&mut px);
+        assert_eq!(px, [50, 60, 70, 100, 1, 2, 3, 255]);
     }
 
     /// Choosing another monitor profile changes the signature and drops the cached transform.

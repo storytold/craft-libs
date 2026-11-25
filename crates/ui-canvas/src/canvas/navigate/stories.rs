@@ -1,14 +1,15 @@
-//! Stories of the compass and the navigate bar.
+//! Stories of the compass, the navigate bar and the canvas's latched middle scroll.
 
 use crate::bars::{Bar, BarKind};
 use crate::canvas::rotate::RIM;
-use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with};
+use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with, show_document};
 use crate::canvas::{Canvas, NavigateBar, NavigationOptions, RotateView, RotateViewOutput, ViewTarget};
 use crate::contract::{Bind, Show as _, ShowContainer as _, Validity};
+use crate::runtime::access::Role;
 use crate::runtime::env::Message;
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
 use craft_behavior::kurbo::Point;
-use craft_behavior::{CanvasView, Mixed};
+use craft_behavior::{CanvasView, MiddleButton, Mixed};
 use egui::{Rect, Ui, Vec2};
 
 /// The angle the stories start at, in degrees.
@@ -103,4 +104,33 @@ fn rotate_view_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn hand_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let Navigation { view, options, .. } = data.value("navigation", Navigation::default());
     bar_over_canvas(ui, view, |ui, _, _| NavigateBar::hand(&mut *options).show(ui).into())
+}
+
+/// The latched scroll story's zoom, in percent: the document is taller than the canvas, so the latch has room to
+/// scroll.
+const LATCHED: f64 = 200.0;
+
+/// Latches the middle button's scroll with a middle click in the canvas's middle, then rests the pointer below the
+/// anchor, where the view scrolls. The testing kit has no middle-button helper, so the drive sends the raw events.
+fn latch_middle(fixture: &mut Fixture) {
+    let Some(canvas) = fixture.by_role(Role::CANVAS).first().map(|target| target.rect) else { return };
+    let anchor = canvas.center();
+    for pressed in [true, false] {
+        let button = egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+        fixture.frame(vec![pointer::moved(anchor), button]);
+    }
+    fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, canvas.height() / 4.0))]);
+    fixture.idle(3);
+}
+
+/// A canvas whose middle button latches a scroll ([`MiddleButton::AutoScroll`]): the mark shows at the anchor while
+/// the latch runs.
+#[story(Canvas, covers = [], drive = Drive::Custom(latch_middle))]
+fn latched_middle_scroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let room = crate::testing::stage(ui);
+    let view = data.value("view", StoryDocument::STANDARD.view(room, ui.pixels_per_point(), LATCHED));
+    let navigation = NavigationOptions { middle_button: MiddleButton::AutoScroll, ..NavigationOptions::default() };
+    let target = ViewTarget::new(StoryDocument::STANDARD.rect().size());
+    let canvas = Canvas::new("Document").view(Bind::bound(view)).document(target).navigation(navigation);
+    canvas.show_at(ui, room, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD)).output.into()
 }

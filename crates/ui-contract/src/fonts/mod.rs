@@ -8,7 +8,7 @@ pub(crate) mod script;
 pub(crate) mod system;
 
 pub use defaults::{deflated_default_definitions, emoji_icon_font, noto_emoji};
-pub use document::{DOCUMENT_FACES_PER_PASS, FaceBytes, FaceState, MAX_DOCUMENT_FACES, MAX_INTERFACE_FACE_BYTES};
+pub use document::{FaceBytes, FaceState, MAX_DOCUMENT_FACE_BYTES};
 pub use faces::{FaceList, RegularWeight, set_weight};
 pub use on_demand::{FontCandidates, MAX_SCRIPT_READS, NoCandidates, OnDemandFonts, SystemCandidates, han_for_locale, on_demand_registered};
 pub use system::system_font_provider;
@@ -32,6 +32,9 @@ use crate::runtime::frame;
 use crate::runtime::layout_memory;
 use egui::{Context, FontDefinitions, FontFamily};
 
+/// The egui family name of [`FontRef::signature`]; the stack registers it in every build.
+const SIGNATURE_FAMILY: &str = "signature";
+
 /// A font handle: the family a run is set in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FontRef(FontFamily);
@@ -47,6 +50,12 @@ impl FontRef {
         FontRef(FontFamily::Monospace)
     }
 
+    /// The signature face: always a family egui knows. Its chain is the craft-fonts faces of the signature role,
+    /// then the proportional chain; without one in the build, the proportional chain.
+    pub fn signature() -> FontRef {
+        FontRef::named(SIGNATURE_FAMILY)
+    }
+
     /// A family registered under `name`.
     pub fn named(name: &str) -> FontRef {
         FontRef(FontFamily::Name(name.into()))
@@ -56,7 +65,10 @@ impl FontRef {
         FontRef(family)
     }
 
-    pub(crate) fn family(&self) -> FontFamily {
+    /// The egui family that lays the face out, for a layout job an app builds itself: the open paragraph of a text
+    /// editor, whose galley its `TextEditorHost` lays out. Content painters lay document runs out through `DocText`,
+    /// which takes the `FontRef` itself.
+    pub fn family(&self) -> FontFamily {
         self.0.clone()
     }
 }
@@ -64,10 +76,44 @@ impl FontRef {
 /// Gives the UI `definitions`, as when on-demand script coverage loads the glyphs of another script. Text
 /// measured in this pass used the old metrics, so the pass asks for one discard pass: layout memory and the
 /// new metrics agree when the frame is shown. Between frames nothing was measured with the old metrics, and
-/// the next frame measures with the new ones.
+/// the next frame measures with the new ones. What text layout reads of the definitions follows them: framework text
+/// in a semibold role draws in the [`SEMIBOLD`] family only when `definitions` have it, else in the proportional one.
 pub fn load(ctx: &Context, definitions: FontDefinitions) {
+    load_with(ctx, definitions, Vec::new());
+}
+
+/// [`load`], with `providers` serving the characters the faces lack to the probe that measures the definitions' line
+/// ratio: a stack's own providers.
+pub(crate) fn load_with(ctx: &Context, definitions: FontDefinitions, providers: Vec<std::sync::Arc<dyn egui::FontProvider>>) {
+    stack::record_facts(ctx, &definitions, providers);
     egui_fonts::set_definitions(ctx, definitions);
     if frame::in_pass(ctx) {
         layout_memory::ask_discard(ctx);
+    }
+}
+
+#[cfg(all(feature = "testing", any(test, feature = "suite")))]
+pub(crate) mod facts_tests {
+    use crate::fonts::{SEMIBOLD, deflated_default_definitions, load, stack_facts};
+    use crate::testing::trial;
+    use craft_theme::{Contrast, Mode, TypeRole};
+    use egui::{Context, FontFamily};
+
+    /// Definitions an app gives in place of the stack's carry what text layout reads: without the semibold family, a
+    /// framework title draws in a family the definitions have.
+    #[trial]
+    fn a_title_draws_in_a_family_the_loaded_definitions_have() {
+        let ctx = Context::default();
+        let tokens = crate::testing::style::tokens(Mode::Light, Contrast::Standard);
+        let semibold = FontFamily::Name(SEMIBOLD.into());
+        let mut definitions = deflated_default_definitions();
+        load(&ctx, definitions.clone());
+        assert!(stack_facts(&ctx).semibold, "the default definitions have the semibold family");
+        assert_eq!(tokens.font(stack_facts(&ctx), TypeRole::Title, false).family, semibold, "and a title draws in it");
+        definitions.families.remove(&semibold);
+        load(&ctx, definitions.clone());
+        assert!(!stack_facts(&ctx).semibold, "definitions without it say so");
+        let title = tokens.font(stack_facts(&ctx), TypeRole::Title, false).family;
+        assert!(definitions.families.contains_key(&title), "a title draws in a family the definitions have, not {title:?}");
     }
 }

@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::contract::{MemoKey, MemoProps};
+use craft_ui::menu::Alternate;
 use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};
 use crate::modal::ModalRules;
-use crate::model::{Alternate, Builtin, Item, ItemKind, MenuBar, Node};
+use crate::model::{Builtin, Item, ItemKind, MenuBar, Node};
 
 /// What the native menu reports.
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +29,8 @@ pub enum Event {
     /// A click the app's [`NativeMenu::on_command`] hook ran; [`NativeMenu::take_clicks`] leaves it
     /// out.
     Handled(CommandRef),
+    /// The platform began tracking a native menu.
+    Opened,
 }
 
 /// How ⌘C, ⌘X and ⌘V reach egui when the native menu takes them as key equivalents (an Edit
@@ -224,6 +227,8 @@ pub struct NativeMenu {
     /// The commands whose items were check items in a layout so far: they stay check items, so
     /// that `checked` going from `Some` to `None` doesn't rebuild the menus.
     checkable: HashSet<String>,
+    /// A backend reported [`Event::Opened`] since [`NativeMenu::take_opened`] last answered.
+    opened: bool,
 }
 
 impl NativeMenu {
@@ -246,6 +251,7 @@ impl NativeMenu {
             bar: None,
             synced_gate: None,
             checkable: HashSet::new(),
+            opened: false,
         }
     }
 
@@ -340,9 +346,19 @@ impl NativeMenu {
                 Event::Tap(chord) => self.add_key(&host, &chord, true),
                 Event::Click(command) => self.clicks.push(command),
                 Event::Handled(_) => {}
+                // A menu opening changes nothing the menus show, so it does not re-sync them.
+                Event::Opened => {
+                    self.opened = true;
+                    continue;
+                }
             }
             self.dirty = true;
         }
+    }
+
+    /// Whether a backend reported [`Event::Opened`] since the last call; reports it once and clears it.
+    pub fn take_opened(&mut self) -> bool {
+        std::mem::take(&mut self.opened)
     }
 
     /// `tap`: a press and its release, for a click that stands for the key (no key-up follows).

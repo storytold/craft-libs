@@ -32,7 +32,7 @@ where
     let (entries, _) = entries_of(model, state, collator);
     let searching = !state.search.trim().is_empty();
     let shown = Cards::new(model, entries);
-    let mods = craft_ui::runtime::pointer::frame(ui.ctx()).mods;
+    let mods = craft_ui::runtime::pointer::mods(ui.ctx());
     if let Some(key) = rename {
         request_rename(ui.ctx(), id, &key);
     }
@@ -67,7 +67,7 @@ where
     }
     for event in out.response.events {
         match event {
-            CollectionEvent::Selection(change) => events.push(BinEvent::Selection(change)),
+            CollectionEvent::Selection { change, .. } => events.push(BinEvent::Selection(change)),
             CollectionEvent::Activate(key) => events.push(open_event(model, key, mods.cmd, mods.shift || mods.alt)),
             CollectionEvent::ContextMenu(request) => events.push(BinEvent::ContextMenu(request)),
             CollectionEvent::Delete(keys) => events.push(BinEvent::Remove(keys)),

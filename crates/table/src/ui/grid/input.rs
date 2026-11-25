@@ -393,7 +393,7 @@ impl CellGrid<'_> {
                             edits.push(GridEdit::BeginEdit { typed });
                         }
                     }
-                    (Mode::Ready, _) | (_, EditorInput::Newline | EditorInput::Tab | EditorInput::Cancel) => {}
+                    (Mode::Ready, _) | (_, EditorInput::Newline { .. } | EditorInput::Tab | EditorInput::Cancel) => {}
                     (_, EditorInput::Move(..)) if state.pointing() => {}
                     (_, input) => {
                         state.point = None;
@@ -415,7 +415,7 @@ impl CellGrid<'_> {
         if selection.active() != before.active() {
             self.reveal = selection.active().map(|cell| cell.row);
         }
-        let (pointer_edits, swapped) = self.run_pointer(cx, &mut selection, &mut grab, &mut preview, &order, &hidden_rows, &hidden_columns);
+        let (pointer_edits, swapped) = self.run_pointer(cx, &mut selection, &mut grab, &mut preview, &order, &hidden_rows, &hidden_columns, escape);
         self.pass.edits.extend(pointer_edits);
         self.pass.fill_swapped |= swapped;
         self.claim_keys(cx, &state, grab.is_some());
@@ -460,7 +460,7 @@ impl CellGrid<'_> {
         }
     }
 
-    /// Header, edge, corner, fill and border presses.
+    /// Header, edge, corner, fill and border presses; `escape` (the pass's claimed Escape) cancels a running grab.
     #[allow(clippy::too_many_arguments)]
     fn run_pointer(
         &self,
@@ -471,6 +471,7 @@ impl CellGrid<'_> {
         order: &Positions,
         hidden_rows: &dyn Fn(u32) -> bool,
         hidden_columns: &dyn Fn(u32) -> bool,
+        escape: bool,
     ) -> (Vec<GridEdit>, bool) {
         let mut edits = Vec::new();
         let mut swapped = false;
@@ -491,9 +492,13 @@ impl CellGrid<'_> {
             {
                 selection.select_range(all, &space);
             }
-            for &column in &frame.columns {
+        }
+        for &column in &frame.columns {
+            if self.headings {
                 let press = cx.part(COLUMN.at(u64::from(column))).press;
                 Self::line_press(&mut edits, selection, grab, &space, geometry, press, (false, column), Self::column_header(geometry, column));
+            }
+            if self.shows_column_edges() {
                 let edge = cx.part(COLUMN_EDGE.at(u64::from(column))).press;
                 let size = model.columns().size(column) as f32;
                 Self::edge_press(cx, &mut edits, grab, &range_label(words.resize_column.as_str()), (false, column), size, zoom, rtl, edge);
@@ -502,6 +507,8 @@ impl CellGrid<'_> {
                     edits.push(if next_hidden { GridEdit::UnhideColumn { column: column + 1 } } else { GridEdit::AutoFitColumn { column } });
                 }
             }
+        }
+        if self.headings {
             for &row in &frame.rows {
                 let press = cx.part(ROW.at(u64::from(row))).press;
                 Self::line_press(&mut edits, selection, grab, &space, geometry, press, (true, row), Self::row_header(geometry, row));
@@ -517,21 +524,22 @@ impl CellGrid<'_> {
 
         let current = selection.current().cloned();
         let fill = cx.part_if_declared(FILL).map_or(PressState::IDLE, |result| result.press);
-        match (fill.phase, current.clone()) {
-            (PressPhase::DragStart { start, .. }, Some(source)) => {
-                let id = Self::next_gesture(cx);
-                *grab = Some(Grab::Fill { last: source.clone(), menu: start.button == PointerButton::Secondary, source: source.clone(), id });
-                let label = range_label(words.fill.as_str());
-                edits.push(GridEdit::Fill { range: EditEvent::begin(id, Mixed::Same(source), label, None) });
-            }
-            (PressPhase::Drag { pos, .. }, _) => {
+        if let (PressPhase::DragStart { start, .. }, Some(source)) = (fill.phase, current.clone()) {
+            let id = Self::next_gesture(cx);
+            *grab = Some(Grab::Fill { last: source.clone(), menu: start.button == PointerButton::Secondary, source: source.clone(), id });
+            let label = range_label(words.fill.as_str());
+            edits.push(GridEdit::Fill { range: EditEvent::begin(id, Mixed::Same(source), label, None) });
+        }
+        // A drag starts where the pointer already is: its release may follow with no move between.
+        match fill.phase {
+            PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
                 if let Some(Grab::Fill { source, last, id, .. }) = grab {
                     let range = fill_range(source, geometry.cell_at(logical(pos)));
                     *last = range.clone();
                     edits.push(GridEdit::Fill { range: EditEvent::update(*id, range) });
                 }
             }
-            (PressPhase::Release { pos, click: false, .. }, _) => {
+            PressPhase::Release { pos, click: false, .. } => {
                 if let Some(Grab::Fill { source, last, menu, id }) = grab.take() {
                     if menu {
                         edits.push(GridEdit::FillMenu { range: last, anchor: pos });
@@ -542,9 +550,9 @@ impl CellGrid<'_> {
                     }
                 }
             }
-            (PressPhase::Cancel { .. }, _) => {
-                if let Some(Grab::Fill { id, .. }) = grab.take() {
-                    edits.push(GridEdit::Fill { range: EditEvent::cancel(id, craft_behavior::CancelReason::Escape, None) });
+            PressPhase::Cancel { .. } => {
+                if let Some(Grab::Fill { source, id, .. }) = grab.take() {
+                    edits.push(GridEdit::Fill { range: EditEvent::cancel(id, craft_behavior::CancelReason::Escape, Some(Mixed::Same(source))) });
                 }
             }
             _ => {}
@@ -552,17 +560,17 @@ impl CellGrid<'_> {
 
         for side in 0..4u64 {
             let press = cx.part_if_declared(BORDER.at(side)).map_or(PressState::IDLE, |result| result.press);
-            match (press.phase, current.clone()) {
-                (PressPhase::DragStart { start, .. }, Some(source)) => {
-                    let (top, _, left, _) = edges(&source);
-                    let origin = geometry.cell_at(logical(start.origin));
-                    let offset = (i64::from(origin.row) - i64::from(top), i64::from(origin.column) - i64::from(left));
-                    let id = Self::next_gesture(cx);
-                    *grab = Some(Grab::Move { last: CellAt::new(top, left), source: source.clone(), offset, id });
-                    let label = range_label(words.move_cells.as_str());
-                    edits.push(GridEdit::MoveCells { to: EditEvent::begin(id, Mixed::Same(CellAt::new(top, left)), label, None) });
-                }
-                (PressPhase::Drag { pos, .. }, _) => {
+            if let (PressPhase::DragStart { start, .. }, Some(source)) = (press.phase, current.clone()) {
+                let (top, _, left, _) = edges(&source);
+                let origin = geometry.cell_at(logical(start.origin));
+                let offset = (i64::from(origin.row) - i64::from(top), i64::from(origin.column) - i64::from(left));
+                let id = Self::next_gesture(cx);
+                *grab = Some(Grab::Move { last: CellAt::new(top, left), source: source.clone(), offset, id });
+                let label = range_label(words.move_cells.as_str());
+                edits.push(GridEdit::MoveCells { to: EditEvent::begin(id, Mixed::Same(CellAt::new(top, left)), label, None) });
+            }
+            match press.phase {
+                PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
                     if let Some(Grab::Move { source, offset, last, id }) = grab {
                         let at = geometry.cell_at(logical(pos));
                         let shift = |value: u32, by: i64| (i64::from(value) - by).clamp(0, i64::from(u32::MAX)) as u32;
@@ -573,7 +581,7 @@ impl CellGrid<'_> {
                         preview.moving = Some(CellRange::cells(to, CellAt::new(to.row + (bottom - top), to.column + (right - left))));
                     }
                 }
-                (PressPhase::Release { click: false, .. }, _) => {
+                PressPhase::Release { click: false, .. } => {
                     if let Some(Grab::Move { source, last, id, .. }) = grab.take() {
                         let (top, bottom, left, right) = edges(&source);
                         edits.push(GridEdit::MoveCells { to: EditEvent::commit(id, Mixed::Same(CellAt::new(top, left)), last) });
@@ -581,22 +589,40 @@ impl CellGrid<'_> {
                         selection.select_range(moved, &space);
                     }
                 }
-                (PressPhase::Release { pos, click: true, .. }, _) => {
+                PressPhase::Release { pos, click: true, .. } => {
                     selection.select(geometry.cell_at(logical(pos)), &space);
                 }
-                (PressPhase::Cancel { .. }, _) => {
-                    if let Some(Grab::Move { id, .. }) = grab.take() {
-                        edits.push(GridEdit::MoveCells { to: EditEvent::cancel(id, craft_behavior::CancelReason::Escape, None) });
+                PressPhase::Cancel { .. } => {
+                    if let Some(Grab::Move { source, id, .. }) = grab.take() {
+                        let (top, _, left, _) = edges(&source);
+                        let before = Some(Mixed::Same(CellAt::new(top, left)));
+                        edits.push(GridEdit::MoveCells { to: EditEvent::cancel(id, craft_behavior::CancelReason::Escape, before) });
                     }
                 }
                 _ => {}
             }
         }
+        // Escape ends a resize, fill or move here: the part's press runs on, and its release finds no grab to commit.
+        if escape && let Some(held) = grab.take_if(|held| !matches!(held, Grab::Lines { .. })) {
+            let reason = craft_behavior::CancelReason::Escape;
+            edits.extend(match held {
+                Grab::Resize { rows: true, line, id, from, .. } => {
+                    Some(GridEdit::ResizeRow { row: line, height: EditEvent::cancel(id, reason, Some(Mixed::Same(from))) })
+                }
+                Grab::Resize { line, id, from, .. } => {
+                    Some(GridEdit::ResizeColumn { column: line, width: EditEvent::cancel(id, reason, Some(Mixed::Same(from))) })
+                }
+                Grab::Fill { source, id, .. } => Some(GridEdit::Fill { range: EditEvent::cancel(id, reason, Some(Mixed::Same(source))) }),
+                Grab::Move { source, id, .. } => {
+                    let (top, _, left, _) = edges(&source);
+                    Some(GridEdit::MoveCells { to: EditEvent::cancel(id, reason, Some(Mixed::Same(CellAt::new(top, left)))) })
+                }
+                Grab::Lines { .. } => None,
+            });
+            cx.cancel_press(PressCancel::Escape);
+        }
         if let Some(Grab::Fill { last, .. }) = grab {
             preview.fill = Some(last.clone());
-        }
-        if grab.is_some() && cx.take_claimed(ESCAPE) {
-            cx.cancel_press(PressCancel::Escape);
         }
         (edits, swapped)
     }
@@ -687,13 +713,14 @@ impl CellGrid<'_> {
         let emit = |edits: &mut Vec<GridEdit>, event: EditEvent<f32>| {
             edits.push(if rows { GridEdit::ResizeRow { row: line, height: event } } else { GridEdit::ResizeColumn { column: line, width: event } });
         };
+        if let PressPhase::DragStart { .. } = press.phase {
+            let id = Self::next_gesture(cx);
+            *grab = Some(Grab::Resize { rows, line, from: size, id, last: size });
+            emit(edits, EditEvent::begin(id, Mixed::Same(size), label.clone(), None));
+        }
+        // A drag starts where the pointer already is: its release may follow with no move between.
         match press.phase {
-            PressPhase::DragStart { .. } => {
-                let id = Self::next_gesture(cx);
-                *grab = Some(Grab::Resize { rows, line, from: size, id, last: size });
-                emit(edits, EditEvent::begin(id, Mixed::Same(size), label.clone(), None));
-            }
-            PressPhase::Drag { start, pos, .. } => {
+            PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                 if let Some(Grab::Resize { rows: along_rows, line: held, from, id, last }) = grab
                     && *along_rows == rows
                     && *held == line
@@ -719,10 +746,10 @@ impl CellGrid<'_> {
                 }
             }
             PressPhase::Cancel { .. } => {
-                if let Some(Grab::Resize { id, .. }) =
+                if let Some(Grab::Resize { id, from, .. }) =
                     grab.take_if(|grab| matches!(grab, Grab::Resize { rows: r, line: l, .. } if *r == rows && *l == line))
                 {
-                    emit(edits, EditEvent::cancel(id, craft_behavior::CancelReason::Escape, None));
+                    emit(edits, EditEvent::cancel(id, craft_behavior::CancelReason::Escape, Some(Mixed::Same(from))));
                 }
             }
             _ => {}

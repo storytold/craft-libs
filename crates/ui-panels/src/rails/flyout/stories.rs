@@ -29,3 +29,16 @@ fn flyout_button_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let tools = tools(&[BRUSH, BRUSH + 1, BRUSH + 2]);
     FlyoutButton::new(&tools, &BRUSH).show(ui).into()
 }
+
+/// The flyout with its tear-off bar down its end edge; the readout tells where the last tear-off left the bar.
+#[story(FlyoutButton<'static, u8>, covers = [], drive = Drive::Custom(hold_button))]
+fn flyout_button_tear_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tools = tools(&[BRUSH, BRUSH + 1, BRUSH + 2]);
+    let out = FlyoutButton::new(&tools, &BRUSH).tear_off().show(ui);
+    let note = data.note("torn off", "Not torn off".to_owned());
+    if let Some(at) = out.torn_off {
+        *note = format!("torn off at {:.0}, {:.0}", at.x, at.y);
+    }
+    let readout = note.clone();
+    StoryOutput::from(out).readout(readout)
+}
