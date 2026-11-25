@@ -17,8 +17,11 @@ pub(crate) use registration::{Group, Stop};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
+use crate::runtime::inspect;
+use crate::style::log_once;
 use craft_behavior::{DocKey, OwnerClass, PartRef};
 use egui::{Context, Id, IdSet, ViewportId};
+use smallvec::SmallVec;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -194,6 +197,11 @@ pub(crate) struct State {
     /// How many of egui's focus candidates of the running pass (`Memory::focus_candidates`) `take_app_widgets` has
     /// read.
     pub(super) candidates_seen: usize,
+    /// The widget the runtime gave egui's focus, under its own press rule, until the end hook settles it
+    /// (`settle_given`): the focus of an app's own widget is left to egui's rule there.
+    given: Option<Id>,
+    /// The canvases the running pass declared with `host_canvas`, which the end hook looks up among egui's widgets.
+    host_canvases: SmallVec<[Id; 1]>,
     /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
     surrender_after_scopes: Option<Id>,
     /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
@@ -228,7 +236,10 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
     }
     for act in acts {
         match act {
-            Act::Focus(id, filter) => egui_focus::focus_with_filter(ctx, id, filter),
+            Act::Focus(id, filter) => {
+                egui_focus::focus_with_filter(ctx, id, filter);
+                with(ctx, |state| state.given = Some(id));
+            }
             Act::Surrender(id) => egui_focus::surrender(ctx, id),
         }
     }
@@ -236,16 +247,19 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
 
 /// Registers a stop of the running pass in the innermost open scope, in registration order: after the app's own
 /// widgets drawn before it (`take_app_widgets`). The app's own widget `stop` names (`host_canvas`) takes the place of
-/// its stop as one of those widgets, if the pass took it already.
+/// its stop as one of those widgets, if the pass took it already; focus the runtime gave that stop follows the canvas's
+/// keys from then on.
 pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
     take_app_widgets(ctx, Some(stop.root));
+    let held = stop.host && egui_focus::has_focus(ctx, stop.root);
     let acts = with(ctx, |state| {
         if stop.host
             && let Some(rec) = state.stops.iter_mut().find(|rec| rec.stop.host && rec.stop.id == stop.id)
         {
             state.stop_roots.insert(stop.root);
+            let acts = if held && state.given == Some(stop.root) { vec![nav::focus_act(&stop)] } else { Vec::new() };
             rec.stop = stop;
-            return Vec::new();
+            return acts;
         }
         state.push_stop(stop)
     });
@@ -318,9 +332,18 @@ fn take_app_widgets(ctx: &Context, except: Option<Id>) {
 /// them; Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus. A bare Tab with nothing
 /// focused is never the canvas's, even when it keeps Tab: it moves focus into the window or toggles the panels, so the
 /// canvas cannot trap keyboard navigation. With the canvas focused, the same keys stay in egui, a Tab it keeps and
-/// Escape too, as for any focused widget of the app's own; Escape with nothing focused is the window's cancel. Call it
-/// each pass the canvas shows.
+/// Escape too, as for any focused widget of the app's own; Escape with nothing focused is the window's cancel.
+///
+/// Call it in each pass the canvas shows, before or after the canvas is drawn, with the id of the focusable, enabled
+/// egui widget the app draws for it in every such pass (`Sense::click()`, `Sense::drag()`; the bare flags `Sense::CLICK`
+/// and `Sense::DRAG` are not focusable). egui drops the focus of an id that no such widget of the pass has, so Tab would
+/// lose the focus at the canvas and start over at the window's first stop. A pass that declares a canvas and draws no
+/// such widget reports the finding `canvas-without-widget`, and debug builds log it once; a canvas drawn in an invisible
+/// `Ui` (an egui sizing pass) is not reported as disabled. A pass that hides or disables the canvas makes no call.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
+    if !crate::runtime::measure::active(ctx) {
+        with(ctx, |state| state.host_canvases.push(id));
+    }
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
 }
 
@@ -1102,11 +1125,52 @@ pub(crate) fn surrender_after_scopes(ctx: &Context, widget: Id) {
     with(ctx, |state| state.surrender_after_scopes = Some(widget));
 }
 
+/// Reports each canvas the running pass declared (`host_canvas`) whose id no focusable, enabled egui widget of the pass
+/// has. Read at the pass's end, since a canvas may be declared before it is drawn. A canvas hidden for one pass and still
+/// declared counts: egui drops its focus at the end of that pass. Only a visible widget counts as disabled: egui disables
+/// every widget of an invisible `Ui`, as the sizing pass of an `Area`, a `Window` or a `Grid` has.
+fn report_undrawn_canvases(ctx: &Context) {
+    for id in with(ctx, |state| state.host_canvases.clone()) {
+        let fault = match egui_focus::drawn_widget(ctx, id) {
+            None => "no egui widget with the id was drawn",
+            Some(widget) if !widget.sense.is_focusable() => "its widget's sense takes no focus",
+            Some(widget) if widget.visible && !widget.enabled => "its widget is disabled, which takes no focus",
+            Some(_) => continue,
+        };
+        if cfg!(debug_assertions) {
+            log_once(fault.to_owned(), || log::warn!("`host_canvas` declared the canvas {id:?}: {fault}"));
+        }
+        if inspect::reports(ctx) {
+            let subject = format!("{id:?}: {fault}");
+            inspect::finding(ctx, inspect::Finding { rule: "canvas-without-widget", component: "host_canvas", subject });
+        }
+    }
+}
+
+/// Leaves the focus the runtime gave an app's own widget (`State::app_widget`) to egui's rule, at the end of a pass that
+/// drew the widget with no pointer button down: until then the press, and the click its release makes, of the gesture
+/// that gave the focus never takes it back. The record of a focus that has moved, or that egui dropped
+/// because no pass drew the widget, ends here too.
+fn settle_given(ctx: &Context, app_widget: impl Fn(Id) -> bool) {
+    let Some(id) = with(ctx, |state| state.given) else { return };
+    if egui_focus::has_focus(ctx, id) {
+        let drawn = egui_focus::drawn_widget(ctx, id).is_some();
+        if !drawn || (app_widget(id) && crate::runtime::egui::input::button_down(ctx)) {
+            return;
+        }
+        if app_widget(id) {
+            egui_focus::leave_to_egui(ctx, id);
+        }
+    }
+    with(ctx, |state| state.given = None);
+}
+
 /// The end hook: applies the press's focus move, returns focus to the opener of a scope that went away,
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
     let viewport = viewport(ctx);
     take_app_widgets(ctx, None);
+    report_undrawn_canvases(ctx);
     // A field held a pass for the scope it sits in lets go now, unless that scope is going away with focus in the field:
     // nav::end below then gives the focus back to the scope's opener from where the field holds it.
     if let Some(widget) = with(ctx, |state| state.surrender_deferred.take())
@@ -1144,6 +1208,7 @@ pub(crate) fn end(ctx: &Context) {
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport);
     let acts = with(ctx, |state| nav::end(state, focused, on_app_widget, frame));
     apply(ctx, acts);
+    settle_given(ctx, app_widget);
     // Escape over a captured framework press or drag cancels it (`frame::begin_pass`), whatever egui has focused.
     let captured = crate::runtime::pointer::press_captured(ctx) || crate::runtime::drag::running(ctx);
     let host_focus = !captured && with(ctx, |state| state.focus_now).is_some_and(app_widget);
