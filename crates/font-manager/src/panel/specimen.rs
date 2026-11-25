@@ -12,7 +12,7 @@ use egui::{Color32, Vec2};
 
 use crate::Catalog;
 use crate::FaceInfo;
-use crate::panel::faces::{self, Owner, Shown};
+use crate::panel::faces::{self, Owner, Sample, Shown};
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -81,12 +81,16 @@ pub(crate) struct FontSample<'a> {
     /// [`LINE_EM`] of its size.
     #[prop(quantity = "band height the caller's layout gives, in points")]
     band: Option<f32>,
+    /// The variation coordinates (axis tag, value) the face is drawn at, over its own: one registered variable face
+    /// draws every named instance and every axis value.
+    #[prop]
+    coords: &'a [([u8; 4], f32)],
 }
 
 impl<'a> FontSample<'a> {
     /// A sample of `text` in `face` at `points`, named `label`.
     pub(crate) fn new(label: impl Into<Label>, text: impl Into<Cow<'a, str>>, face: SampleFace<'a>, points: f32) -> Self {
-        FontSample { common: Common::new(), text: text.into(), face, points, on_white: false, band: None }.label(label)
+        FontSample { common: Common::new(), text: text.into(), face, points, on_white: false, band: None, coords: &[] }.label(label)
     }
 }
 
@@ -113,7 +117,8 @@ impl Component for FontSample<'_> {
             return Vec2::new(cx.room.unwrap_or(0.0), band);
         };
         let ink = DataColor::new(Color32::PLACEHOLDER);
-        let line = faces::sample_line(|doc| cx.layout_doc(doc), &font, &self.text, self.points, band, cx.room, ink);
+        let sample = Sample::new(&self.text, &font, self.points, ink).at(self.coords);
+        let line = faces::sample_line(|doc| cx.layout_doc(doc), sample, band, cx.room);
         Vec2::new(line.layout.size().x, band)
     }
 
@@ -121,7 +126,7 @@ impl Component for FontSample<'_> {
         let painter = ui.content_painter(cx);
         let ink = faces::sample_ink(&painter, cx.rect, self.on_white, cx.style.ink.egui());
         if let Some(font) = self.face.ready(cx) {
-            faces::paint_sample(&painter, cx.content_rect, &font, &self.text, self.points, ink);
+            faces::paint_sample(&painter, cx.content_rect, Sample::new(&self.text, &font, self.points, ink).at(self.coords));
         }
     }
 
