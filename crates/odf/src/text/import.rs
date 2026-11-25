@@ -107,10 +107,10 @@ pub(super) fn read_meta(xml: &[u8]) -> Meta {
             _ => {}
         },
     });
-    if m.author.is_empty() {
+    if m.author.trim().is_empty() {
         m.author = creator;
     }
-    if m.created.is_empty() {
+    if m.created.trim().is_empty() {
         m.created = mod_date;
     }
     m.keywords = keywords.join(", ");

@@ -9,3 +9,5 @@ target/
 /.claude/
 .idea/
 /vendor/*/target
+
+/.work/
