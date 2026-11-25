@@ -85,7 +85,8 @@ pub enum TransformMode {
     Skew,
     /// A corner moves alone; edges and the outside do nothing.
     Distort,
-    /// A corner moves along one axis and its partner on that side the opposite way.
+    /// A corner moves along one axis and its partner on that side the opposite way; an edge slides along itself, as in
+    /// Skew (measured on the reference). No rotating.
     Perspective,
 }
 
@@ -172,7 +173,7 @@ fn resolve_kind(mode: TransformMode, part: BoxPart, mods: Mods) -> BoxDrag {
     match (mode, part) {
         (TransformMode::Skew, BoxPart::Corner(i)) if i < 4 => BoxDrag::SlideCorner,
         (TransformMode::Rotate, BoxPart::Corner(_) | BoxPart::Edge(_)) => BoxDrag::Rotate,
-        (TransformMode::Skew, BoxPart::Edge(_)) => BoxDrag::Skew,
+        (TransformMode::Skew | TransformMode::Perspective, BoxPart::Edge(_)) => BoxDrag::Skew,
         _ => {
             let mods = mode_mods(mode, part, mods);
             match part {
@@ -321,13 +322,13 @@ impl BoxRules {
     }
 
     /// Whether a drag of `part` changes the box: in Distort only the corners, the inside and the
-    /// reference point; in Skew and Scale everything but the outside; the outside only where rotating is
-    /// allowed; and never a handle the box does not [show](Self::shows). A click outside a refused
+    /// reference point; in Skew, Scale and Perspective everything but the outside; the outside only where
+    /// rotating is allowed; and never a handle the box does not [show](Self::shows). A click outside a refused
     /// zone still applies the box (the overlay's rule).
     pub fn allows(&self, part: BoxPart) -> bool {
         let by_mode = match self.effective_mode() {
             TransformMode::Distort => !matches!(part, BoxPart::Outside | BoxPart::Edge(_)),
-            TransformMode::Skew | TransformMode::Scale => part != BoxPart::Outside,
+            TransformMode::Skew | TransformMode::Scale | TransformMode::Perspective => part != BoxPart::Outside,
             _ => true,
         };
         by_mode && (self.allow.rotate || part != BoxPart::Outside) && self.shows(part)
@@ -495,8 +496,8 @@ fn apply_mode_drag(g: &Gesture, p: Point, rules: &BoxRules, mut mods: Mods) -> B
             let g = Gesture { part: BoxPart::Outside, ..*g };
             apply_drag(&g, p, mods, rules)
         }
-        // An edge slides only along itself.
-        (BoxDrag::Skew, BoxPart::Edge(_)) if mode == TransformMode::Skew => {
+        // An edge slides only along itself, in Perspective as in Skew.
+        (BoxDrag::Skew, BoxPart::Edge(_)) if matches!(mode, TransformMode::Skew | TransformMode::Perspective) => {
             mods.cmd = true;
             mods.shift = true;
             apply_drag(g, p, mods, rules)

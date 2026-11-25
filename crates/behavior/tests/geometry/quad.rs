@@ -1169,6 +1169,36 @@ fn scale_mode_neither_turns_from_outside_nor_distorts() {
     assert_eq!(moved.quad[0], p(180.0, 145.0));
 }
 
+/// Edit › Transform › Perspective leaves the box as it is under a drag that starts outside it, as Scale, Skew and
+/// Distort do (the reference application, 2026-11-25: presses 20 and 30 px off a side of a turned box, dragged 160
+/// and 410 px, changed nothing; before, the drag turned the box).
+#[test]
+fn perspective_mode_does_not_turn_from_outside() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let perspective = BoxRules::in_mode(TransformMode::Perspective);
+    assert!(!perspective.allows(BoxPart::Outside));
+    assert_eq!(perspective.drag_kind(BoxPart::Outside, Mods::NONE), None);
+    let outside = drag(&start, &start, BoxPart::Outside, p(520.0, 226.0), p(513.0, 283.0), Mods::NONE, &perspective);
+    assert_eq!(outside.quad, start.quad, "no turn from outside in Perspective");
+    assert!(perspective.allows(BoxPart::Edge(0)) && perspective.allows(BoxPart::Corner(1)) && perspective.allows(BoxPart::Inside));
+}
+
+/// In Perspective mode a side slides along itself, as in Skew mode, whatever the drag does across it (the reference
+/// application, 2026-11-25: the right side of the 302 × 202 box pressed 3 to 10 px outside its line and dragged 60 px
+/// down slid 60 px down, the same picture as in Skew mode, and the top side dragged by (60, 0) and by (35, 51) slid 60
+/// and 35 px right; before, the side scaled the box).
+#[test]
+fn a_perspective_side_slides_along_itself_as_in_skew() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let (perspective, skew) = (BoxRules::in_mode(TransformMode::Perspective), BoxRules::in_mode(TransformMode::Skew));
+    assert_eq!(perspective.drag_kind(BoxPart::Edge(1), Mods::NONE), skew.drag_kind(BoxPart::Edge(1), Mods::NONE));
+    let right = |rules: &BoxRules| drag(&start, &start, BoxPart::Edge(1), p(455.0, 176.0), p(455.0, 236.0), Mods::NONE, rules);
+    assert!(within(&right(&perspective), [(150.0, 125.0), (452.0, 185.0), (452.0, 387.0), (150.0, 327.0)], 1e-9), "{:?}", right(&perspective).quad);
+    assert_eq!(right(&perspective).quad, right(&skew).quad);
+    let top = drag(&start, &start, BoxPart::Edge(0), p(376.0, 125.0), p(411.0, 176.0), Mods::NONE, &perspective);
+    assert!(within(&top, [(185.0, 125.0), (487.0, 125.0), (452.0, 327.0), (150.0, 327.0)], 1e-9), "{:?}", top.quad);
+}
+
 /// Distort lets a corner go past the opposite diagonal into a concave box (the reference application, 2026-11-24:
 /// the top-left corner of the 302 × 202 box dragged to (331, 246) draws a dart; the picture shows the source until
 /// the box is convex again, and Enter commits nothing).
