@@ -1151,3 +1151,96 @@ mod icc_profile_cache {
         }
     }
 }
+
+/// PdfCraft patch (107), adapted from pdfcer (MIT, same author): an image the page shows none
+/// of, here outside the clip in force, is skipped before it is decoded. `/Big`, a 20000 × 20000
+/// image, fails to decode whenever it is reached, which the raster's diagnostics report.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn an_image_outside_the_clip_is_not_decoded() {
+    let decoded = |content: &str| {
+        let page = "/MediaBox [0 0 100 100] /Resources << /XObject << /Big 5 0 R >> >>";
+        let big = b"5 0 obj << /Type /XObject /Subtype /Image /Width 20000 /Height 20000 /ColorSpace /DeviceRGB \
+                    /BitsPerComponent 8 /Length 3 >> stream\n\0\0\x01\nendstream endobj\n";
+        let pdf = open_slice(&one_page(page, content.as_bytes(), big), None).unwrap();
+        raster::render(&pdf.pages()[0], &RenderCache::new(), &Default::default(), &Options::default()).unwrap().diagnostics.image_decode_failed
+    };
+    assert!(!decoded("0 0 40 40 re W n q 30 0 0 30 60 60 cm /Big Do Q"), "on the page, outside the clip");
+    assert!(decoded("0 0 40 40 re W n q 30 0 0 30 30 30 cm /Big Do Q"), "overlapping the clip");
+    assert!(decoded("q 0 0 40 40 re W n Q q 30 0 0 30 60 60 cm /Big Do Q"), "after the clip is restored");
+}
+
+/// PdfCraft patch (107): a form drawn by a tiling pattern's cell or by a Type 3 glyph is not
+/// skipped. Their context areas are not in the space of their CTM, so a cull there would leave
+/// a clipped pattern fill, a cell box off the origin, or a glyph its `/FontBBox` misses blank,
+/// and so would one in a soft mask that such a cell or glyph sets.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_form_in_a_pattern_cell_or_a_type3_glyph_is_drawn() {
+    let dark = |content: &str, objects: String| {
+        let page = "/MediaBox [0 0 100 100] /Resources << /Pattern << /P 5 0 R >> /Font << /T3 7 0 R >> >>";
+        let pdf = open_slice(&one_page(page, content.as_bytes(), objects.as_bytes()), None).unwrap();
+        let options = Options { background: [255; 4], ..Default::default() };
+        let raster = raster::render(&pdf.pages()[0], &RenderCache::new(), &Default::default(), &options).unwrap();
+        raster.bytes().chunks(4).filter(|px| px.first().is_some_and(|&r| r < 128)).count()
+    };
+    let form = "0 g -100 -100 300 300 re f";
+    let pattern = |bbox: &str| {
+        format!(
+            "5 0 obj << /PatternType 1 /PaintType 1 /TilingType 1 /BBox [{bbox}] /XStep 20 /YStep 20 \
+             /Resources << /XObject << /F 6 0 R >> >> /Length 5 >> stream\n/F Do\nendstream endobj\n\
+             6 0 obj << /Type /XObject /Subtype /Form /BBox [{bbox}] /Length {} >> stream\n{form}\nendstream endobj\n",
+            form.len()
+        )
+    };
+    let fill = "/Pattern cs /P scn 0 0 100 100 re f";
+    assert!(dark(&format!("60 60 30 30 re W n {fill}"), pattern("0 0 20 20")) > 0, "a pattern fill under a clip");
+    assert!(dark(fill, pattern("-100 -100 -80 -80")) > 0, "a pattern cell off the origin");
+
+    let glyph = "10 0 d0 /F Do";
+    let font = format!(
+        "6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >> stream\n{form}\nendstream endobj\n\
+         7 0 obj << /Type /Font /Subtype /Type3 /FontBBox [50 50 60 60] /FontMatrix [0.1 0 0 0.1 0 0] \
+         /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 \
+         /Widths [10] /Resources << /XObject << /F 6 0 R >> >> >> endobj\n\
+         8 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n",
+        form.len(),
+        glyph.len()
+    );
+    assert!(dark("BT /T3 20 Tf 40 40 Td (a) Tj ET", font) > 0, "a glyph its /FontBBox misses");
+
+    // The same, with the form in a soft mask that the cell or glyph sets: white where it shows.
+    let mask = |bbox: &str| {
+        format!(
+            "9 0 obj << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 10 0 R >> >> endobj
+             10 0 obj << /Type /XObject /Subtype /Form /BBox [{bbox}] /Group << /S /Transparency /CS /DeviceGray >>              /Resources << /XObject << /W 11 0 R >> >> /Length 5 >> stream
+/W Do
+endstream endobj
+             11 0 obj << /Type /XObject /Subtype /Form /BBox [{bbox}] /Length 26 >> stream
+1 g -100 -100 300 300 re f
+endstream endobj
+"
+        )
+    };
+    let masked = "/G gs 0 g -100 -100 300 300 re f";
+    let cell = format!(
+        "5 0 obj << /PatternType 1 /PaintType 1 /TilingType 1 /BBox [-100 -100 -80 -80] /XStep 20 /YStep 20          /Resources << /ExtGState << /G 9 0 R >> >> /Length {} >> stream
+{masked}
+endstream endobj
+{}",
+        masked.len(),
+        mask("-100 -100 -80 -80")
+    );
+    assert!(dark(fill, cell) > 0, "a soft mask set in a pattern cell off the origin");
+    let glyph = "10 0 d0 /G gs 0 g 0 0 10 10 re f";
+    let font = format!(
+        "7 0 obj << /Type /Font /Subtype /Type3 /FontBBox [50 50 60 60] /FontMatrix [0.1 0 0 0.1 0 0]          /CharProcs << /a 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97          /Widths [10] /Resources << /ExtGState << /G 9 0 R >> >> >> endobj
+         8 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+{}",
+        glyph.len(),
+        mask("0 0 10 10")
+    );
+    assert!(dark("BT /T3 20 Tf 40 40 Td (a) Tj ET", font) > 0, "a soft mask set in a glyph its /FontBBox misses");
+}

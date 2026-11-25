@@ -111,6 +111,38 @@ impl<'a> FormXObject<'a> {
     }
 }
 
+/// PdfCraft patch (107): whether `stream`, drawn by `Do` now, paints nothing `context` can show,
+/// so it can be skipped before it is decoded. A form paints only inside its `/BBox` under its
+/// `/Matrix` (ISO 32000-2 §8.10.1) and an image only inside the unit square (§8.9.5.2); either,
+/// mapped to device space and widened by a pixel for anti-aliased edges, must miss the area in
+/// force. A box that can't be read or has no finite device position is kept, as is anything
+/// that is neither a form nor an image.
+pub(crate) fn outside_view(stream: &Stream<'_>, context: &Context<'_>) -> bool {
+    let dict = stream.dict();
+    let (local, placed) = match dict.get::<Name<'_>>(SUBTYPE).as_deref() {
+        Some(IMAGE) => (Rect::new(0.0, 0.0, 1.0, 1.0), Affine::IDENTITY),
+        Some(FORM) => {
+            // Read as `FormXObject::new` reads it, so both agree on a box past `f32`'s range.
+            let Some([x0, y0, x1, y1]) = dict.get::<[f32; 4]>(BBOX).map(|b| b.map(f64::from)) else {
+                return false;
+            };
+            let matrix = dict.get::<[f64; 6]>(MATRIX).unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            (Rect::new(x0, y0, x1, y1).abs(), Affine::new(matrix))
+        }
+        _ => return false,
+    };
+    let device = (context.get().ctm * placed).transform_rect_bbox(local).inflate(1.0, 1.0);
+    let view = context.bbox();
+    let finite = [device.x0, device.y0, device.x1, device.y1, view.x0, view.y0, view.x1, view.y1]
+        .iter()
+        .all(|v| v.is_finite());
+    finite
+        && (device.x1 < view.x0
+            || device.x0 > view.x1
+            || device.y1 < view.y0
+            || device.y0 > view.y1)
+}
+
 pub(crate) fn draw_xobject<'a>(
     x_object: &XObject<'a>,
     resources: &Resources<'a>,
