@@ -1,7 +1,8 @@
 //! `runtime::keys::leftover_events`: the keys of a pass that nothing took, for a host that runs shortcuts of its own on
 //! a window's input.
 
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
+use craft_keymap::Overrides;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, Scope};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::keys::leftover_events;
 use craft_ui::testing::focus::key_release;
@@ -9,6 +10,7 @@ use craft_ui::testing::input::{key_press, key_repeat, text};
 use craft_ui::testing::{Frames, trial};
 use egui::{Event, Key, Modifiers, Ui};
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 /// The presses and releases of `events`, in order, each with whether it is a press.
 fn key_events(events: Vec<Event>) -> Vec<(Key, bool)> {
@@ -54,6 +56,11 @@ fn leftover_events_holds_the_keys_no_command_took() {
 #[trial]
 fn leftover_events_holds_both_pastes_of_a_pass() {
     let mut frames = Frames::new();
+    // The library's own Paste is bound to Cmd+V by default, and a paste with nothing focused stands for that chord: the
+    // trial unbinds it, so no command takes the pastes, as in a window that runs no Paste of its own.
+    let mut unbound = Overrides::new();
+    unbound.insert(EditCommands::Paste.id(), Vec::new());
+    frames.commands(CommandInput::new().overrides(Arc::new(unbound)));
     let left = RefCell::new(Vec::new());
     let mut show = |ui: &mut Ui| {
         left.borrow_mut().extend(leftover_events(ui.ctx()));
