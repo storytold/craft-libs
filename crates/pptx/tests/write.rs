@@ -5,8 +5,10 @@ mod common;
 use std::sync::Arc;
 
 use craft_pptx::table::{Cell, Table};
+use craft_pptx::text::LevelStyle;
 use craft_pptx::{
-    ColorRef, Defaults, Geom, MediaId, Plain, Presentation, Rgba, SchemeSlot, Shape, ShapeId, ShapeKind, Size, Slide, SlideId, TextBody, Xfrm,
+    ColorRef, Defaults, Geom, MediaId, Paragraph, Plain, Presentation, Rgba, Run, RunProps, SchemeSlot, Shape, ShapeId, ShapeKind, Size, Slide,
+    SlideId, TextBody, Xfrm,
 };
 
 /// A deck with the plain master and one slide on its layout.
@@ -324,4 +326,75 @@ fn templates_and_shows_differ_in_the_main_content_type() {
         assert!(part(&bytes, "[Content_Types].xml").contains(ct), "{ext}");
         assert_eq!(craft_pptx::import(&bytes, &Plain).unwrap().slides.len(), 1);
     }
+}
+
+/// A shadow with every field set, for effect lists.
+fn shadow() -> craft_pptx::style::Shadow {
+    craft_pptx::style::Shadow {
+        color: ColorRef::rgb(Rgba::rgb(0, 0, 0)),
+        blur: 3.0,
+        dist: 2.0,
+        dir: 45.0,
+        inner: false,
+        sx: 1.0,
+        sy: 1.0,
+        kx: 0.0,
+        ky: 0.0,
+        align: "b".into(),
+        rotate_with_shape: false,
+    }
+}
+
+/// Text whose list style gives it a shadow and a glow, in runs `(text, props)`, saved and
+/// reopened. Returns each reopened run's props as the text resolves them (inherited from the list
+/// style), with the slide XML.
+fn styled_runs_round_trip(runs: &[(&str, RunProps)]) -> (Vec<RunProps>, String) {
+    let mut p = deck();
+    let glow = craft_pptx::style::Glow { color: ColorRef::rgb(Rgba::rgb(255, 0, 0)), radius: 5.0 };
+    let mut text = TextBody::default();
+    text.list_style.set(0, LevelStyle { run: RunProps { shadow: Some(shadow()), glow: Some(glow), ..Default::default() }, ..Default::default() });
+    text.paragraphs.push(Paragraph { runs: runs.iter().map(|(t, props)| Run::with(*t, props.clone())).collect(), ..Default::default() });
+    add(&mut p, Shape { name: "Styled".into(), xfrm: Some(Xfrm::new(10.0, 10.0, 200.0, 50.0)), text: Some(text), ..Default::default() });
+    let bytes = craft_pptx::export(&p, &Plain).unwrap();
+    let xml = part(&bytes, "ppt/slides/slide1.xml");
+    let q = craft_pptx::import(&bytes, &Plain).unwrap();
+    let text = q.slides[0].shapes.iter().find(|s| s.name == "Styled").and_then(|s| s.text.as_ref()).expect("text");
+    let level = &text.list_style.level(0).expect("list style level 1").run;
+    assert!(level.shadow.is_some() && level.glow.is_some(), "the list style keeps its effects");
+    let resolved = text.paragraphs[0]
+        .runs
+        .iter()
+        .map(|r| {
+            let mut props = r.props.clone();
+            props.inherit(level);
+            props
+        })
+        .collect();
+    (resolved, xml)
+}
+
+/// A shadow turned off on text that inherits one is saved as the run's empty `a:effectLst` and
+/// stays off when the file is reopened; a run next to it still inherits the shadow.
+#[test]
+fn a_turned_off_inherited_shadow_stays_off_after_saving_and_reopening() {
+    let off = RunProps { own_effects: Some(true), ..Default::default() };
+    let (runs, xml) = styled_runs_round_trip(&[("No shadow", off), ("Inherited", RunProps::default())]);
+    assert!(xml.contains("<a:effectLst/>") || xml.contains("<a:effectLst></a:effectLst>"), "{xml}");
+    assert_eq!(runs[0].own_effects, Some(true));
+    assert!(runs[0].shadow.is_none() && runs[0].glow.is_none(), "{:?}", runs[0]);
+    assert!(runs[1].shadow.is_some() && runs[1].glow.is_some(), "{:?}", runs[1]);
+}
+
+/// A run's effect list with effects in it replaces the inherited list too: a run that kept its
+/// glow but turned the shadow off does not get the shadow back, and one that set its own shadow
+/// does not get the list style's glow.
+#[test]
+fn a_run_effect_list_with_effects_still_replaces_the_inherited_one() {
+    let glow = craft_pptx::style::Glow { color: ColorRef::rgb(Rgba::rgb(0, 0, 255)), radius: 7.0 };
+    let glowing = RunProps { glow: Some(glow.clone()), own_effects: Some(true), ..Default::default() };
+    let shadowed = RunProps { shadow: Some(shadow()), own_effects: Some(true), ..Default::default() };
+    let (runs, _) = styled_runs_round_trip(&[("Glow only", glowing), ("Shadow only", shadowed)]);
+    assert_eq!(runs[0].glow, Some(glow), "{:?}", runs[0]);
+    assert!(runs[0].shadow.is_none(), "{:?}", runs[0]);
+    assert!(runs[1].shadow.is_some() && runs[1].glow.is_none(), "{:?}", runs[1]);
 }

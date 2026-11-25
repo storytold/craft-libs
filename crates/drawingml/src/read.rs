@@ -603,6 +603,9 @@ pub fn rpr(src: &mut dyn Source, r: &El) -> RunProps {
                 p.glow = fx.glow;
                 p.reflection = fx.reflection;
                 p.soft_edge = fx.soft_edge;
+                // The run's list replaces the one its paragraph and list styles give it, and an
+                // empty one turns their effects off.
+                p.own_effects = Some(true);
             }
             "highlight" => p.highlight = color(e),
             "uFill" => p.underline_color = e.child(Local("solidFill")).and_then(color),
