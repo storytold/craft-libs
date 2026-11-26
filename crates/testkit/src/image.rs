@@ -2,8 +2,8 @@
 //! tolerance with an optional 3×3 neighborhood, a difference image, PNG reading and writing with
 //! size limits, and golden reference checks.
 //!
-//! Every function returns a [`Result`]. [`assert_similar!`](crate::assert_similar) is the one form
-//! that fails a test, and it panics in the calling test.
+//! Every function returns a [`Result`]. `assert_similar!` is the one form that fails a test, and it
+//! panics in the calling test.
 //!
 //! Statistics compare raw 8-bit sample values. PNG decoding does not apply gamma, ICC or sRGB
 //! chunks, so a reference compares as the bytes it stores.
@@ -23,7 +23,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-/// The bless variable [`GoldenOptions::new`] uses.
+/// The bless variable `GoldenOptions::new` uses.
 pub const DEFAULT_BLESS_VAR: &str = "CRAFT_BLESS";
 
 /// The most failure image pairs [`check_golden`] writes for one name in one folder.
@@ -56,6 +56,9 @@ pub enum ImageError {
     MissingReference { path: PathBuf, bless_var: String },
     /// The image is outside the tolerance; the actual and difference images were written.
     GoldenMismatch(Box<GoldenMismatch>),
+    /// The image is outside the tolerance, and the actual and difference images could not be
+    /// encoded or written.
+    GoldenMismatchUnsaved(Box<UnsavedMismatch>),
     /// The PNG stream is malformed, truncated or uses an unsupported form.
     Decode(String),
     /// The PNG encoder failed.
@@ -75,6 +78,17 @@ pub struct GoldenMismatch {
     pub actual: PathBuf,
     /// The difference image, written inside the failure folder.
     pub diff: PathBuf,
+}
+
+/// The details of a failed golden check whose failure images could not be saved.
+#[derive(Debug)]
+pub struct UnsavedMismatch {
+    /// The reference image.
+    pub reference: PathBuf,
+    /// The comparison that failed.
+    pub verdict: Verdict,
+    /// Why the actual or difference image could not be encoded or written.
+    pub error: ImageError,
 }
 
 impl fmt::Display for ImageError {
@@ -105,6 +119,9 @@ impl fmt::Display for ImageError {
                     m.diff.display()
                 )
             }
+            Self::GoldenMismatchUnsaved(m) => {
+                write!(f, "{}: {}; the actual and difference images could not be written: {}", m.reference.display(), m.verdict, m.error)
+            }
             Self::Decode(e) => write!(f, "PNG decoding failed: {e}"),
             Self::Encode(e) => write!(f, "PNG encoding failed: {e}"),
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
@@ -116,6 +133,7 @@ impl std::error::Error for ImageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::GoldenMismatchUnsaved(m) => Some(&m.error),
             _ => None,
         }
     }
@@ -537,8 +555,10 @@ pub struct PngLimits {
     pub max_height: u32,
     /// Largest encoded PNG, read or written, in bytes.
     pub max_input_bytes: usize,
-    /// Largest decoded output in bytes, after conversion to 8-bit gray or RGBA. The decoder's own
-    /// working memory is held to the same number.
+    /// Largest decoded output in bytes, after conversion to 8-bit gray or RGBA. The returned pixels
+    /// never exceed it. The decoder also takes it as a budget for its own working memory, but
+    /// applies that budget on a best-effort basis: it allocates small fixed buffers, such as one for
+    /// chunk data, before it checks the budget.
     pub max_decoded_bytes: usize,
 }
 
@@ -607,12 +627,17 @@ fn to_usize(n: u32) -> Result<usize, ImageError> {
 ///
 /// Palette images and `tRNS` chunks are expanded, samples under 8 bits are scaled to 8 bits, and
 /// 16-bit samples keep their high byte. Interlaced images are returned whole. An animated PNG
-/// returns its default image. The chunks after the image, through `IEND`, are read and their CRCs
-/// checked. The input size, the header's width and height, and the decoded
-/// size are each checked against `limits` before the buffer for them is allocated.
+/// returns its default image. The chunks after the image, through `IEND`, are read, and the CRC of
+/// every chunk, ancillary chunks included, is checked. The input size, the header's width and
+/// height, and the decoded size, both as the decoder returns it and after conversion to gray or
+/// RGBA, are each checked against `limits` and against the largest buffer the platform can
+/// allocate before the buffer for them is allocated.
 pub fn decode_png(bytes: &[u8], limits: PngLimits) -> Result<DecodedPng, ImageError> {
     limit("PNG input bytes", bytes.len() as u64, limits.max_input_bytes as u64)?;
-    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.max_decoded_bytes });
+    let mut options = png::DecodeOptions::default();
+    options.set_skip_ancillary_crc_failures(false);
+    let mut decoder = png::Decoder::new_with_options(Cursor::new(bytes), options);
+    decoder.set_limits(png::Limits { bytes: limits.max_decoded_bytes });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let (width, height) = {
         let info = decoder.read_header_info().map_err(decoding_error)?;
@@ -621,34 +646,42 @@ pub fn decode_png(bytes: &[u8], limits: PngLimits) -> Result<DecodedPng, ImageEr
     limit("PNG width", width, limits.max_width)?;
     limit("PNG height", height, limits.max_height)?;
     let mut reader = decoder.read_info().map_err(decoding_error)?;
-    let size = reader.output_buffer_size().ok_or_else(|| ImageError::LimitExceeded("the decoded PNG does not fit in memory".into()))?;
-    limit("decoded PNG bytes", size as u64, limits.max_decoded_bytes as u64)?;
-    let mut buf = vec![0u8; size];
-    let info = reader.next_frame(&mut buf).map_err(decoding_error)?;
-    reader.finish().map_err(decoding_error)?;
-    if info.bit_depth != png::BitDepth::Eight || (info.width, info.height) != (width, height) {
-        return Err(ImageError::Decode(format!("unexpected {:?}-bit {}x{} output", info.bit_depth, info.width, info.height)));
-    }
     let pixels = to_usize(width)?.checked_mul(to_usize(height)?).ok_or(ImageError::InvalidDimensions { width, height })?;
-    let channels = match info.color_type {
+    let channels = match reader.output_color_type().0 {
         png::ColorType::Grayscale => 1,
         png::ColorType::GrayscaleAlpha => 2,
         png::ColorType::Rgb => 3,
         png::ColorType::Rgba => 4,
         png::ColorType::Indexed => return Err(ImageError::Decode("the palette was not expanded".into())),
     };
-    if channels != 1 {
-        limit("decoded PNG bytes", pixels as u128 * 4, limits.max_decoded_bytes as u64)?;
+    let size = reader.output_buffer_size().ok_or_else(|| ImageError::LimitExceeded("the decoded PNG does not fit in memory".into()))?;
+    limit("decoded PNG bytes", size as u64, limits.max_decoded_bytes as u64)?;
+    limit("decoded PNG buffer bytes", size as u64, isize::MAX as u64)?;
+    let output = if channels == 1 { pixels as u128 } else { pixels as u128 * 4 };
+    limit("decoded PNG bytes", output, limits.max_decoded_bytes as u64)?;
+    limit("decoded PNG buffer bytes", output, isize::MAX as u64)?;
+    let mut buf = vec![0u8; size];
+    let info = reader.next_frame(&mut buf).map_err(decoding_error)?;
+    reader.finish().map_err(decoding_error)?;
+    if info.bit_depth != png::BitDepth::Eight || (info.width, info.height) != (width, height) {
+        return Err(ImageError::Decode(format!("unexpected {:?}-bit {}x{} output", info.bit_depth, info.width, info.height)));
     }
-    let data = pixels
-        .checked_mul(channels)
-        .and_then(|n| buf.get(..n))
-        .ok_or_else(|| ImageError::Decode("the decoded frame is shorter than its size".into()))?;
+    if info.color_type != reader.output_color_type().0 {
+        return Err(ImageError::Decode(format!("unexpected {:?} output", info.color_type)));
+    }
+    let samples = pixels.checked_mul(channels).filter(|&n| n <= buf.len());
+    let Some(samples) = samples else {
+        return Err(ImageError::Decode("the decoded frame is shorter than its size".into()));
+    };
+    if channels == 1 || channels == 4 {
+        // The frame is already in its final form: keep the buffer and drop any row padding.
+        buf.truncate(samples);
+        return Ok(if channels == 1 { DecodedPng::Gray { width, height, pixels: buf } } else { DecodedPng::Rgba { width, height, pixels: buf } });
+    }
+    let data = buf.get(..samples).unwrap_or_default();
     Ok(match channels {
-        1 => DecodedPng::Gray { width, height, pixels: data.to_vec() },
         2 => DecodedPng::Rgba { width, height, pixels: data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect() },
-        3 => DecodedPng::Rgba { width, height, pixels: data.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect() },
-        _ => DecodedPng::Rgba { width, height, pixels: data.to_vec() },
+        _ => DecodedPng::Rgba { width, height, pixels: data.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect() },
     })
 }
 
@@ -688,7 +721,11 @@ fn write_stream(sink: &mut BoundedSink, width: u32, height: u32, color: png::Col
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::High);
     let mut writer = encoder.write_header()?;
-    writer.write_image_data(data)?;
+    // The stream writer hands each compressed block to the sink as it fills, so a sink that refuses
+    // more bytes stops compression early.
+    let mut stream = writer.stream_writer()?;
+    std::io::Write::write_all(&mut stream, data)?;
+    stream.finish()?;
     writer.finish()
 }
 
@@ -872,7 +909,9 @@ fn write_failure(options: &GoldenOptions<'_>, actual: &[u8], diff: &[u8]) -> Res
 ///
 /// A missing reference returns [`ImageError::MissingReference`] unless blessing. When the
 /// comparison fails, the actual and difference images are written as new files inside
-/// `options.failures_dir`, and [`ImageError::GoldenMismatch`] names them. A reference that would
+/// `options.failures_dir`, and [`ImageError::GoldenMismatch`] names them. When they cannot be
+/// encoded or written, [`ImageError::GoldenMismatchUnsaved`] carries the verdict together with
+/// that error. A reference that would
 /// be larger than `options.limits.max_input_bytes` is not written.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn check_golden(reference: &Path, actual: Rgba8<'_>, tolerance: Tolerance, options: GoldenOptions<'_>) -> Result<Verdict, ImageError> {
@@ -913,11 +952,16 @@ fn check_golden_with(
     if verdict.passed() {
         return Ok(verdict);
     }
-    let diff = diff_image(expected, actual)?;
-    let actual_png = encode_png(actual, options.limits)?;
-    let diff_png = encode_png(Rgba8::new(width, height, &diff)?, options.limits)?;
-    let (actual_path, diff_path) = write_failure(&options, &actual_png, &diff_png)?;
-    Err(ImageError::GoldenMismatch(Box::new(GoldenMismatch { reference: reference.to_path_buf(), verdict, actual: actual_path, diff: diff_path })))
+    let saved = diff_image(expected, actual).and_then(|diff| {
+        let actual_png = encode_png(actual, options.limits)?;
+        let diff_png = encode_png(Rgba8::new(width, height, &diff)?, options.limits)?;
+        write_failure(&options, &actual_png, &diff_png)
+    });
+    let reference = reference.to_path_buf();
+    Err(match saved {
+        Ok((actual, diff)) => ImageError::GoldenMismatch(Box::new(GoldenMismatch { reference, verdict, actual, diff })),
+        Err(error) => ImageError::GoldenMismatchUnsaved(Box::new(UnsavedMismatch { reference, verdict, error })),
+    })
 }
 
 /// Fails the test that called [`assert_similar!`](crate::assert_similar); the panic names the

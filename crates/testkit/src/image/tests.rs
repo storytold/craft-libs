@@ -3,13 +3,23 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use super::{
-    BoundedSink, DecodedPng, GoldenOptions, Gray8, ImageError, PngLimits, Rgba8, Tolerance, check_golden, check_golden_with, compare_gray,
-    compare_rgba, decode_png, diff_gray, diff_image, diff_rgba, encode_gray_png, encode_png, is_bless_value, psnr, read_png, write_gray_png,
-    write_png, write_stream,
+    BoundedSink, DecodedPng, GoldenOptions, Gray8, ImageError, PngLimits, Rgba8, Tolerance, check_golden_with, compare_gray, compare_rgba,
+    decode_png, diff_gray, diff_image, diff_rgba, encode_gray_png, encode_png, is_bless_value, psnr, read_png, write_gray_png, write_png,
+    write_stream,
 };
 
-/// A variable no test run sets, so `check_golden` compares instead of blessing.
+/// The bless variable of these tests. Comparison cases call `check_golden_with` with blessing off,
+/// and the `assert_similar!` cases run in a child process with the variable removed, so a value
+/// inherited from the environment cannot turn a comparison into a bless.
 const NO_BLESS: &str = "CRAFT_TESTKIT_SELF_TEST_BLESS";
+
+/// Set in the child processes that `run_child` starts.
+const CHILD_MARKER: &str = "CRAFT_TESTKIT_IMAGE_CHILD";
+
+/// A golden check that compares and never blesses.
+fn compare_golden(reference: &Path, actual: Rgba8<'_>, tolerance: Tolerance, options: GoldenOptions<'_>) -> Result<super::Verdict, ImageError> {
+    check_golden_with(reference, actual, tolerance, options, false)
+}
 
 fn ramp(w: u32, h: u32, alpha: u8) -> Vec<u8> {
     (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8, (i / w * 255 / h) as u8, 77, alpha]).collect()
@@ -514,6 +524,27 @@ fn png_without_a_valid_end_is_an_error() {
 }
 
 #[test]
+fn a_bad_ancillary_crc_is_an_error() {
+    let text: &[u8] = b"Comment\0x";
+    // A tEXt chunk between the image data and IEND.
+    let plain = png_file(2, 1, 8, 0, 0, &[], &[0, 1, 2]);
+    let (body, iend) = plain.split_at(plain.len() - 12);
+    let mut after = body.to_vec();
+    chunk(&mut after, b"tEXt", text);
+    after.extend_from_slice(iend);
+    assert!(decode_png(&after, PngLimits::DEFAULT).is_ok(), "a valid tEXt chunk is accepted");
+    let crc = after.len() - iend.len() - 1;
+    after[crc] ^= 0xFF;
+    assert!(matches!(decode_png(&after, PngLimits::DEFAULT), Err(ImageError::Decode(_))), "after the image");
+    // A tEXt chunk between IHDR and the image data: signature, IHDR, then length, type and data.
+    let mut before = png_file(2, 1, 8, 0, 0, &[(b"tEXt", text)], &[0, 1, 2]);
+    assert!(decode_png(&before, PngLimits::DEFAULT).is_ok());
+    let crc = 8 + 25 + 8 + text.len() + 3;
+    before[crc] ^= 0xFF;
+    assert!(matches!(decode_png(&before, PngLimits::DEFAULT), Err(ImageError::Decode(_))), "before the image");
+}
+
+#[test]
 fn png_limits_reject_header_before_allocation() {
     // The image data is a few bytes, so only the header can trigger the error.
     let wide = png_file(1_000_000, 1, 8, 0, 0, &[], &[0]);
@@ -546,8 +577,19 @@ fn png_decoded_byte_limit() {
     let png = png_file(4, 4, 8, 2, 0, &[], &scanlines);
     let with = |max_decoded_bytes| decode_png(&png, PngLimits { max_decoded_bytes, ..PngLimits::DEFAULT });
     assert!(with(64).is_ok());
-    assert!(matches!(with(50), Err(ImageError::LimitExceeded(_))), "checked after conversion");
+    assert!(matches!(with(50), Err(ImageError::LimitExceeded(_))), "the converted size is checked");
     assert!(matches!(with(47), Err(ImageError::LimitExceeded(_))), "checked before allocation");
+}
+
+/// The size after conversion to RGBA is checked from the header, before any image data is read,
+/// so a stream whose image data is a few bytes still fails on the limit.
+#[test]
+fn the_converted_size_is_checked_before_decoding() {
+    // 4x4 RGB, 48 bytes as decoded and 64 as RGBA, with image data that would not decode.
+    let png = png_file(4, 4, 8, 2, 0, &[], &[0]);
+    let err = decode_png(&png, PngLimits { max_decoded_bytes: 50, ..PngLimits::DEFAULT }).unwrap_err();
+    assert!(matches!(err, ImageError::LimitExceeded(_)), "{err:?}");
+    assert!(matches!(decode_png(&png, PngLimits::DEFAULT), Err(ImageError::Decode(_))));
 }
 
 #[test]
@@ -618,15 +660,15 @@ fn check_golden_accepts_within_tolerance_and_reports_failures() {
     let path = dir.path().join("ramp.png");
     let img = ramp(32, 16, 255);
     write_png(&path, rgba(32, 16, &img), PngLimits::DEFAULT).unwrap();
-    assert!(check_golden(&path, rgba(32, 16, &img), Tolerance::EXACT, options(&failures, "ramp")).is_ok());
+    assert!(compare_golden(&path, rgba(32, 16, &img), Tolerance::EXACT, options(&failures, "ramp")).is_ok());
     let mut near = img.clone();
     near[5] += 1;
-    assert!(check_golden(&path, rgba(32, 16, &near), render(), options(&failures, "ramp")).is_ok());
+    assert!(compare_golden(&path, rgba(32, 16, &near), render(), options(&failures, "ramp")).is_ok());
     let mut far = img.clone();
     far.iter_mut().step_by(4).for_each(|v| *v = 255 - *v);
-    let e = check_golden(&path, rgba(32, 16, &far), render(), options(&failures, "ramp")).unwrap_err();
+    let e = compare_golden(&path, rgba(32, 16, &far), render(), options(&failures, "ramp")).unwrap_err();
     assert!(e.to_string().contains("PSNR"), "{e}");
-    let missing = check_golden(&dir.path().join("missing.png"), rgba(32, 16, &img), render(), options(&failures, "ramp")).unwrap_err();
+    let missing = compare_golden(&dir.path().join("missing.png"), rgba(32, 16, &img), render(), options(&failures, "ramp")).unwrap_err();
     assert!(matches!(missing, ImageError::MissingReference { .. }) && missing.to_string().contains(NO_BLESS), "{missing}");
 }
 
@@ -638,21 +680,21 @@ fn the_check_passes_within_the_tolerance_and_fails_past_it() {
     let (w, h) = (20u32, 10u32);
     let base: Vec<u8> = (0..w * h).flat_map(|i| [i as u8, 100, 200, 255]).collect();
     write_png(&golden, rgba(w, h, &base), PngLimits::DEFAULT).unwrap();
-    assert!(check_golden(&golden, rgba(w, h, &base), per_pixel(), options(&failures, "self-test-same")).is_ok());
+    assert!(compare_golden(&golden, rgba(w, h, &base), per_pixel(), options(&failures, "self-test-same")).is_ok());
     // Small differences everywhere are within the channel tolerance.
     let near: Vec<u8> = base.iter().map(|c| c.saturating_sub(2)).collect();
-    assert!(check_golden(&golden, rgba(w, h, &near), per_pixel(), options(&failures, "self-test-near")).is_ok());
+    assert!(compare_golden(&golden, rgba(w, h, &near), per_pixel(), options(&failures, "self-test-near")).is_ok());
     // A whole row changed is not.
     let mut off = base.clone();
     for px in off.as_chunks_mut::<4>().0.iter_mut().take(w as usize) {
         px[1] = 0;
     }
-    let m = mismatch(check_golden(&golden, rgba(w, h, &off), per_pixel(), options(&failures, "self-test-off")));
+    let m = mismatch(compare_golden(&golden, rgba(w, h, &off), per_pixel(), options(&failures, "self-test-off")));
     assert_eq!(m.verdict.bad_pixels, 20);
     assert!(m.actual.exists() && m.diff.exists());
     assert!(m.diff.ends_with("self-test-off.diff.png"), "{}", m.diff.display());
     // A missing golden fails and says how to make one.
-    let err = check_golden(&dir.path().join("none.png"), rgba(w, h, &base), per_pixel(), options(&failures, "self-test-missing")).unwrap_err();
+    let err = compare_golden(&dir.path().join("none.png"), rgba(w, h, &base), per_pixel(), options(&failures, "self-test-missing")).unwrap_err();
     assert!(err.to_string().contains(&format!("{NO_BLESS}=1")), "{err}");
 }
 
@@ -705,13 +747,13 @@ fn gray_reference_expansion_respects_the_decoded_limit() {
     let shades = gray(4, 4, 9);
     write_gray_png(&reference, g(4, 4, &shades), PngLimits::DEFAULT).unwrap();
     let px: Vec<u8> = shades.iter().flat_map(|&v| [v, v, v, 255]).collect();
-    assert!(check_golden(&reference, rgba(4, 4, &px), Tolerance::EXACT, options(dir.path(), "g")).is_ok());
+    assert!(compare_golden(&reference, rgba(4, 4, &px), Tolerance::EXACT, options(dir.path(), "g")).is_ok());
     // The 16-byte gray reference fits, but its 64-byte RGBA form does not.
     let small = GoldenOptions { limits: PngLimits { max_decoded_bytes: 16, ..PngLimits::DEFAULT }, ..options(dir.path(), "g") };
-    let err = check_golden(&reference, rgba(4, 4, &px), Tolerance::EXACT, small).unwrap_err();
+    let err = compare_golden(&reference, rgba(4, 4, &px), Tolerance::EXACT, small).unwrap_err();
     assert!(matches!(err, ImageError::LimitExceeded(_)), "{err:?}");
     let wide = ramp(8, 2, 255);
-    let err = check_golden(&reference, rgba(8, 2, &wide), Tolerance::EXACT, options(dir.path(), "g")).unwrap_err();
+    let err = compare_golden(&reference, rgba(8, 2, &wide), Tolerance::EXACT, options(dir.path(), "g")).unwrap_err();
     assert!(matches!(err, ImageError::SizeMismatch { a: (4, 4), b: (8, 2) }), "{err:?}");
 }
 
@@ -739,19 +781,19 @@ fn failure_name_rejects_path_components() {
     let long = "a".repeat(101);
     for name in ["", "..", "../escape", "a/b", "a\\b", ".hidden", "C:x", "a b", "x\0", "trailing.", "CON", "nul.x", "com1", "LPT9.png", long.as_str()]
     {
-        let err = check_golden(&reference, rgba(2, 2, &other), Tolerance::EXACT, options(&failures, name)).unwrap_err();
+        let err = compare_golden(&reference, rgba(2, 2, &other), Tolerance::EXACT, options(&failures, name)).unwrap_err();
         assert!(matches!(err, ImageError::InvalidName(_)), "{name:?}: {err:?}");
     }
     assert!(!failures.exists() && !dir.path().join("escape.actual.png").exists());
     for name in ["ok-name_1.v2", "_x", "com0", "console"] {
         assert!(
-            matches!(check_golden(&reference, rgba(2, 2, &other), Tolerance::EXACT, options(&failures, name)), Err(ImageError::GoldenMismatch(_))),
+            matches!(compare_golden(&reference, rgba(2, 2, &other), Tolerance::EXACT, options(&failures, name)), Err(ImageError::GoldenMismatch(_))),
             "{name:?}"
         );
     }
     for var in ["", "A=B", "A\0B"] {
         let bad = GoldenOptions { bless_var: var, ..options(&failures, "ok") };
-        assert!(matches!(check_golden(&reference, rgba(2, 2, &px), Tolerance::EXACT, bad), Err(ImageError::InvalidName(_))), "{var:?}");
+        assert!(matches!(compare_golden(&reference, rgba(2, 2, &px), Tolerance::EXACT, bad), Err(ImageError::InvalidName(_))), "{var:?}");
     }
 }
 
@@ -763,7 +805,7 @@ fn failure_artifacts_stay_in_folder() {
     let px = ramp(3, 3, 255);
     write_png(&reference, rgba(3, 3, &px), PngLimits::DEFAULT).unwrap();
     let other = ramp(3, 3, 1);
-    let m = mismatch(check_golden(&reference, rgba(3, 3, &other), Tolerance::EXACT, options(&failures, "case")));
+    let m = mismatch(compare_golden(&reference, rgba(3, 3, &other), Tolerance::EXACT, options(&failures, "case")));
     assert_eq!(m.actual.parent(), Some(failures.as_path()));
     assert_eq!(m.diff.parent(), Some(failures.as_path()));
     assert_eq!(read_png(&m.actual, PngLimits::DEFAULT).unwrap(), DecodedPng::Rgba { width: 3, height: 3, pixels: other });
@@ -779,9 +821,9 @@ fn failure_artifacts_do_not_overwrite() {
     write_png(&reference, rgba(3, 3, &px), PngLimits::DEFAULT).unwrap();
     let first_img = ramp(3, 3, 1);
     let second_img = ramp(3, 3, 2);
-    let first = mismatch(check_golden(&reference, rgba(3, 3, &first_img), Tolerance::EXACT, options(dir.path(), "same")));
+    let first = mismatch(compare_golden(&reference, rgba(3, 3, &first_img), Tolerance::EXACT, options(dir.path(), "same")));
     let kept = std::fs::read(&first.actual).unwrap();
-    let second = mismatch(check_golden(&reference, rgba(3, 3, &second_img), Tolerance::EXACT, options(dir.path(), "same")));
+    let second = mismatch(compare_golden(&reference, rgba(3, 3, &second_img), Tolerance::EXACT, options(dir.path(), "same")));
     assert_ne!(first.actual, second.actual);
     assert_ne!(first.diff, second.diff);
     assert!(second.actual.ends_with("same-1.actual.png"), "{}", second.actual.display());
@@ -797,7 +839,7 @@ fn parallel_failures_get_distinct_paths() {
     let other = ramp(3, 3, 1);
     let paths: Vec<PathBuf> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..8)
-            .map(|_| s.spawn(|| mismatch(check_golden(&reference, rgba(3, 3, &other), Tolerance::EXACT, options(dir.path(), "race")))))
+            .map(|_| s.spawn(|| mismatch(compare_golden(&reference, rgba(3, 3, &other), Tolerance::EXACT, options(dir.path(), "race")))))
             .collect();
         handles
             .into_iter()
@@ -813,7 +855,57 @@ fn parallel_failures_get_distinct_paths() {
 }
 
 #[test]
+fn a_mismatch_keeps_its_verdict_when_the_failure_images_cannot_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let reference = dir.path().join("r.png");
+    let px = ramp(3, 3, 255);
+    write_png(&reference, rgba(3, 3, &px), PngLimits::DEFAULT).unwrap();
+    // The failure folder is a regular file, so the failure images cannot be written.
+    let blocked = dir.path().join("file");
+    std::fs::write(&blocked, b"x").unwrap();
+    let other = ramp(3, 3, 1);
+    let err = compare_golden(&reference, rgba(3, 3, &other), Tolerance::EXACT, options(&blocked, "case")).unwrap_err();
+    let ImageError::GoldenMismatchUnsaved(m) = &err else { panic!("expected an unsaved mismatch, got {err:?}") };
+    assert_eq!(m.verdict.bad_pixels, 9);
+    assert!(!m.verdict.passed());
+    assert!(matches!(m.error, ImageError::Io { .. }), "{:?}", m.error);
+    assert!(err.to_string().contains("pixels differ") && err.to_string().contains("could not be written"), "{err}");
+    assert!(std::error::Error::source(&err).is_some());
+}
+
+/// Runs `name`, a test of this binary, in a child process with the bless variable removed and
+/// `CHILD_MARKER` set, and returns whether it passed and what it printed.
+fn run_child(name: &str) -> (bool, String) {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env_remove(NO_BLESS)
+        .env(CHILD_MARKER, "1")
+        .output()
+        .unwrap();
+    let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(printed.contains("running 1 test"), "the child did not run the test:\n{printed}");
+    (out.status.success(), printed)
+}
+
+#[test]
 fn assert_similar_returns_the_verdict() {
+    let (passed, printed) = run_child("image::tests::child_assert_similar_passes");
+    assert!(passed, "the child failed:\n{printed}");
+}
+
+#[test]
+fn assert_similar_fails_the_test() {
+    let (passed, printed) = run_child("image::tests::child_assert_similar_fails");
+    assert!(!passed, "the child passed:\n{printed}");
+    assert!(printed.contains("no reference image"), "{printed}");
+}
+
+/// Runs in the child process of `assert_similar_returns_the_verdict`, and passes at once elsewhere.
+#[test]
+fn child_assert_similar_passes() {
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let reference = dir.path().join("r.png");
     let px = ramp(3, 3, 255);
@@ -822,9 +914,13 @@ fn assert_similar_returns_the_verdict() {
     assert!(verdict.passed());
 }
 
+/// Runs in the child process of `assert_similar_fails_the_test`, where it must fail, and passes at
+/// once elsewhere.
 #[test]
-#[should_panic(expected = "no reference image")]
-fn assert_similar_fails_the_test() {
+fn child_assert_similar_fails() {
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let px = ramp(3, 3, 255);
     crate::assert_similar!(&dir.path().join("none.png"), rgba(3, 3, &px), Tolerance::EXACT, options(dir.path(), "none"));
