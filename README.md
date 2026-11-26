@@ -129,6 +129,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
   (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
+- [`craft-ease`](crates/ease/README.md): easing curves, keyed tracks, constant-speed motion paths
+  and damped springs for animation: named eases, CSS `cubic-bezier()`, speed and influence,
+  editable custom and sampled curves, hold keys and a spring stepped by its exact solution.
+  From AniCraft and EffectCraft. No dependencies without the optional `serde` feature.
 - [`craft-elf`](crates/elf/src/lib.rs): ELF program headers and dynamic section entries from untrusted bytes, from Craft Anything: 32- or 64-bit in either byte order, bounded counts and overflow-checked offsets, virtual-address-to-file mapping through `PT_LOAD`, and segment, permission and dynamic tag names.
 - [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
@@ -298,7 +302,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
+  (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`), Bink (`bink`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, a Sierra VMD (`vmd`) demuxer, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
