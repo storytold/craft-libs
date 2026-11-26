@@ -8,6 +8,8 @@
 use craft_jsonrpc::{Limits, Request, RpcError};
 use serde_json::{Value, json};
 
+pub mod roots;
+
 pub const PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// JSON-RPC limits for an MCP connection. MCP requires a string or integer request ID, so
