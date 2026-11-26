@@ -1,6 +1,8 @@
 //! FilmCraft `.fcproj` JSON envelope, version detection and historical migrations.
 //! Project and editor-view types are supplied by the caller.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+pub mod records;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 /// The `format` tag written in every envelope.
