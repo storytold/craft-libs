@@ -140,3 +140,12 @@ the tree carries now (line numbers of the current file):
 The fork's second marker and its `mac.toml` entry are gone; upstream's single entry in
 `design/exceptions/craft-menu/crate.toml` covers line 157.
 
+### Correction, 2026-11-27: the hold lives on the press
+
+The quoted `PressRoute::Space` arm of that round cleared the hold and activated at once; the tree now
+holds the stop on the press and activates it on the release (`crates/ui-contract/src/runtime/keys/route.rs`:
+`PressRoute::Space => space_held::hold(ctx, &rec.stop)`, and `space_release` activates the held record
+when the pass carries the release). The input hook no longer defers a Space press for its release
+(`crates/ui-contract/src/runtime/keys/input.rs`), so a tap reaches the stop once and nothing waits
+behind the pair.
+

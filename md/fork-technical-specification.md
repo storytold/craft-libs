@@ -137,14 +137,31 @@ In canvas applications, holding `Space` temporarily engages the Hand (Pan) tool.
 
 ### 3.3. Resilient Remembered Printer Retention (`craft-print`)
 
-In `crates/print/src/ui/mod.rs`:
+In `crates/print/src/ui/mod.rs`, the listing's two outcomes are kept apart (`State::poll`, lines 265-288):
+
 ```rust
-if !self.printers.is_empty() && !self.printers.iter().any(|p| p.name == self.settings.printer) {
-    self.settings.printer =
-        self.printers.iter().find(|p| p.default).or(self.printers.first()).map(|p| p.name.clone()).unwrap_or_default();
+Ok(printers) => {
+    self.printers = printers;
+    let gone = matches!(&self.settings.destination, Destination::Printer(name) if !self.listed(name));
+    if gone {
+        let fallback = self.printers.iter().find(|p| p.default).or(self.printers.first());
+        self.settings.destination = Destination::Printer(fallback.map(|p| p.name.clone()).unwrap_or_default());
+    }
+    self.message = self.printers.is_empty().then_some(Feedback::NoPrinters);
+    self.discovery = None;
+}
+Err(TryRecvError::Disconnected) => {
+    self.printers.clear();
+    self.message = Some(Feedback::DiscoveryFailed);
+    self.discovery = None;
 }
 ```
-A non-empty guard ensures temporary spooler discovery silence does not wipe the user's remembered printer.
+
+A **failed** listing (the worker closes without an answer) keeps the remembered destination: the panel
+reports `DiscoveryFailed` and changes nothing. A **successful** listing that names no printer is a
+system with no printers: the destination becomes an empty printer name (or the default/first when the
+list is not empty), and the panel reports `NoPrinters`. The field is `settings.destination`, a
+`Destination::Printer(name)` or Save as PDF, not a plain `settings.printer`.
 
 ---
 
@@ -224,7 +241,12 @@ All changes are validated using the MSVC x64 developer toolchain.
 ### Test Execution Commands
 
 The workspace is built with the MSVC x64 toolchain; every command below runs from the repository
-root, and the whole set is one `cargo nextest run --workspace --no-fail-fast`.
+root. The eight crate commands are a focused check; the **workspace** check is a separate command,
+and only it covers every crate:
+
+```powershell
+cargo nextest run --workspace --no-fail-fast
+```
 
 ```powershell
 cargo nextest run -p craft-ui-contract

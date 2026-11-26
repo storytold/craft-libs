@@ -517,13 +517,12 @@ impl Strip<'_> {
     /// component runs, so the press and every event after it wait for the next frame (`HeldInput`): the component
     /// reads what came before the move, and the move and what follows it apply in the order they arrived.
     fn ends_pass(&self, batch: &Batch, event: &KeyEvent) -> bool {
-        // A Space and its release before the next key event wait for one pass together: they are a tap, and the pass
-        // that reports them presses and releases the stop at once (`batch.space_release_pending`).
-        let tap = matches!(event, KeyEvent::Press { key: Key::Space, .. }) && batch.space_release_pending && !self.canvas_space;
+        // A Space press is not deferred for its release: the press holds the stop and the pass with the release
+        // activates it (`route::space_held`), so deferring the pair made it wait on every pass instead.
         let KeyEvent::Press { key, input, .. } = event else { return false };
         let typed =
             !batch.texts.is_empty() || !batch.presses.is_empty() || !batch.clips.is_empty() || !batch.claimed.is_empty() || !batch.escapes.is_empty();
-        tap || typed && matches!(self.use_of(*key, input), PressUse::Tab | PressUse::Pane(_))
+        typed && matches!(self.use_of(*key, input), PressUse::Tab | PressUse::Pane(_))
     }
 }
 

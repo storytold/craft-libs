@@ -345,14 +345,17 @@ fn space_activates_only_a_stop_that_asks_for_it() {
     asked.set(0);
     plain.set(0);
     frames.frame(vec![key_press(Key::Space, Modifiers::NONE)], &mut show);
+    assert_eq!(asked.get(), 0, "the press alone activates nothing: a Space activates on its release");
+    frames.frame(vec![key_release(Key::Space, Modifiers::NONE)], &mut show);
     frames.frame(vec![], &mut show);
-    assert!(asked.get() > 0, "Space activates the stop that asked for it");
+    assert_eq!(asked.get(), 1, "the release activates the stop that asked for it, once");
     assert_eq!(plain.get(), 0, "and nothing else");
 
     focus_on(&mut frames, &mut show, "plain");
     asked.set(0);
     plain.set(0);
     frames.frame(vec![key_press(Key::Space, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::Space, Modifiers::NONE)], &mut show);
     assert_eq!(asked.get(), 0);
     assert_eq!(plain.get(), 0, "a default pointer control leaves Space free");
 }

@@ -658,10 +658,11 @@ fn printers_via_checked(
     available: &mut std::process::Command,
     available_limit: std::time::Duration,
 ) -> Option<Vec<Printer>> {
-    // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them, so
-    // the exit status isn't checked.
-    let queues = match output_within(queues, queues_limit) {
-        Ok(out) => String::from_utf8_lossy(&out).into_owned(),
+    // `lpstat -p` exits 1 with only driverless printers ("No destinations added") and `-e` still
+    // finds those, so that exit is an answer. Any other failed exit is a scheduler that could not
+    // list its queues: it is a failure of the listing, not a system without printers.
+    let (out, err, status) = match output_within_full(queues, queues_limit) {
+        Ok(all) => all,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
             log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
@@ -672,6 +673,15 @@ fn printers_via_checked(
             return None;
         }
     };
+    let queues = String::from_utf8_lossy(&out).into_owned();
+    if !status.success() {
+        let err = String::from_utf8_lossy(&err);
+        let driverless_only = err.contains("No destinations added") || queues.contains("No destinations added");
+        if !driverless_only {
+            log::warn!("no printers: the CUPS scheduler did not list its queues ({status}): {}", err.trim());
+            return None;
+        }
+    }
     // A spooler without `-e`, or one whose discovery doesn't answer in time, only loses the
     // driverless names.
     let available = match output_within(available, available_limit) {
@@ -707,46 +717,73 @@ const OUTPUT_CAP: u64 = 4 << 20;
 /// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
+    output_within_full(command, limit).map(|(out, _, _)| out)
+}
+
+/// [`output_within`] with the command's exit status and its standard error: whether the scheduler
+/// answered at all is not the same as whether it listed a queue, and only the caller knows which
+/// exits are answers.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn output_within_full(
+    command: &mut std::process::Command,
+    limit: std::time::Duration,
+) -> std::io::Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus)> {
     use std::io::Read as _;
     use std::process::Stdio;
-    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let stop = |child: &mut std::process::Child| {
         let _ = child.kill();
         let _ = child.wait();
     };
-    let Some(mut stdout) = child.stdout.take() else {
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         stop(&mut child);
         return Err(std::io::Error::other("the command's output could not be read"));
     };
-    // Read on a thread of its own, so a full pipe never holds the command while the deadline is
-    // kept here. Past the cap the rest is drained and dropped, so the command still finishes.
-    // The output comes back over a channel rather than through `join`: a process the command
-    // started can keep the pipe open after the command itself has exited or been killed, and the
-    // wait for the output must end at the deadline too. Such a reader is left to finish on its
-    // own when that process closes the pipe.
+    // Each pipe is read on a thread of its own, so neither a full pipe holds the command while the
+    // deadline is kept here. Past the cap the rest is drained and dropped, so the command finishes.
+    // The output comes back over channels rather than through `join`: a process the command started
+    // can keep a pipe open after the command itself has exited or been killed, and the wait for the
+    // output must end at the deadline too. Such a reader is left to finish on its own when that
+    // process closes its pipe.
     let (tx, rx) = std::sync::mpsc::channel();
-    let reader = std::thread::Builder::new().name("command output".into()).spawn(move || {
+    let out_reader = std::thread::Builder::new().name("command output".into()).spawn(move || {
         let mut out = Vec::new();
-        let read = (&mut stdout).take(OUTPUT_CAP).read_to_end(&mut out);
-        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        let mut pipe = stdout;
+        let read = (&mut pipe).take(OUTPUT_CAP).read_to_end(&mut out);
+        let _ = std::io::copy(&mut pipe, &mut std::io::sink());
         let _ = tx.send(read.map(|_| out));
     });
-    if let Err(e) = reader {
-        stop(&mut child);
-        return Err(e);
+    let (etx, erx) = std::sync::mpsc::channel();
+    let err_reader = std::thread::Builder::new().name("command errors".into()).spawn(move || {
+        let mut err = Vec::new();
+        let mut pipe = stderr;
+        let read = (&mut pipe).take(OUTPUT_CAP).read_to_end(&mut err);
+        let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+        let _ = etx.send(read.map(|_| err));
+    });
+    for reader in [out_reader, err_reader] {
+        if let Err(e) = reader {
+            stop(&mut child);
+            return Err(e);
+        }
     }
     let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
     let deadline = std::time::Instant::now() + limit;
+    let collect = |rx: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>, left: std::time::Duration| -> std::io::Result<Vec<u8>> {
+        match rx.recv_timeout(left) {
+            Ok(read) => read,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
+        }
+    };
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
+            Ok(Some(status)) => {
                 // A moment's grace, so output written just before an exit at the deadline counts.
                 let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
-                return match rx.recv_timeout(left) {
-                    Ok(read) => read,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
-                };
+                let out = collect(&rx, left)?;
+                let err = collect(&erx, left)?;
+                return Ok((out, err, status));
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
                 stop(&mut child);

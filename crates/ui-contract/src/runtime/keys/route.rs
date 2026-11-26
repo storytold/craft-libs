@@ -22,12 +22,8 @@ use std::sync::Arc;
 /// A held Space: a pass with neither a release nor a pending one clears the hold (a Space pressed in an earlier pass
 /// is still down), and the pass that brings the release activates the stop that was pressed - as a mouse release
 /// clicks, and even when the focus has moved since, since the held stop's member and root are what the release has.
-fn space_release(ctx: &Context, batch: &Batch, target: Option<&StopRec>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
-    if !batch.space_released && !batch.space_release_pending {
-        space_held::clear(ctx);
-        return;
-    }
-    if target.is_none() {
+fn space_release(ctx: &Context, batch: &Batch, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
+    if !batch.space_release_pending && !batch.space_released {
         return;
     }
     if let Some(held) = space_held::held(ctx) {
@@ -111,7 +107,6 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         .map(|(at, _)| at)
         .chain(batch.presses.iter().filter(|press| held_press(press)).filter_map(|press| press.text))
         .collect();
-    space_release(ctx, &batch, target.as_ref(), &mut routed, &mut activated);
     if let Some(rec) = &target {
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             *taken = if let Some(id) = hover_delete.filter(|id| Some(*id) != target.as_ref().map(|rec| rec.stop.id))
@@ -128,6 +123,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             };
             stamp(&mut routed, Source { place: press.place, shift: press.mods.shift });
         }
+        space_release(ctx, &batch, &mut routed, &mut activated);
         // The focused stop reads its typing from egui's input when it is a text field (its egui text widget) or an app's
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
         let reads_egui = rec.stop.host || rec.stop.keys.owner == OwnerClass::Text;
@@ -835,12 +831,9 @@ fn apply_press(
             space_held::clear(ctx);
             route_activate(ctx, rec, routed, activated);
         }
-        // The Space key activates: the input hook holds a tap's press until its release, so both reach this pass and
-        // the stop activates once, as a click does.
-        PressRoute::Space => {
-            space_held::clear(ctx);
-            route_activate(ctx, rec, routed, activated);
-        }
+        // The Space key activates on its release, as a click does: the press holds the stop, and the pass that brings
+        // the release activates it once (`space_release`), even when the focus moved in between.
+        PressRoute::Space => space_held::hold(ctx, &rec.stop),
         PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
         PressRoute::Intent(intent) => push(routed, id, intent, false),
         PressRoute::Nudge(nudge) => routed.entry(id).or_default().nudge = Some(nudge),
@@ -873,6 +866,12 @@ mod space_held {
     /// The stop whose Space was released this pass.
     pub(super) fn held(ctx: &Context) -> Option<Held> {
         memory::peek_clone(ctx, key(ctx))
+    }
+
+    /// Holds `stop` until its Space release arrives: the press activates nothing on its own.
+    pub(super) fn hold(ctx: &Context, stop: &Stop) {
+        let held = Held { id: stop.id, root: stop.root, group: stop.group };
+        memory::put(ctx, key(ctx), held);
     }
 
     /// The pass is over: the stop is no longer the one being activated.
