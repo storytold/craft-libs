@@ -134,11 +134,12 @@ impl RingMod {
 
     /// One period of the lowest frequency the modulation reaches, in ms, from the settings and from
     /// the values still ramping toward them. The envelope follower moves the frequency up only, so
-    /// with it the lowest is the frequency.
+    /// with it the lowest is the frequency. The frequency is held within the same range as in
+    /// [`AudioEffect::process`].
     fn longest_period_ms(&self) -> f32 {
         let down = if self.pv.idx("mod_source") == 1 { 0.0 } else { self.depth.value().max(self.depth.target()) };
         let lowest = self.freq.value().min(self.freq.target()) * (-MOD_OCTAVES * down).exp2();
-        1000.0 / lowest.max(1.0)
+        1000.0 / lowest.clamp(1.0, self.sr * MAX_FRACTION)
     }
 }
 
@@ -236,9 +237,9 @@ impl AudioEffect for RingMod {
                     _ => dry * carrier,
                 };
                 if ch < nch {
-                    // The mix runs in f64, so finite samples near the f32 limit stay finite.
-                    let (dry, wet) = (f64::from(dry), f64::from(wet));
-                    channels[ch][i] = (dry + f64::from(mix) * (wet - dry)) as f32;
+                    // In f64, so the difference of two large samples of opposite sign stays finite.
+                    let (dry, wet) = (dry as f64, wet as f64);
+                    channels[ch][i] = (dry + mix as f64 * (wet - dry)) as f32;
                 }
             }
         }
@@ -250,10 +251,11 @@ impl AudioEffect for RingMod {
 /// the holds average it. Each held sample is rounded to the nearest multiple of the step
 /// `2^(1 - bits)`, so silence stays silence and the range -1 ..= 1 takes `2^bits + 1` levels;
 /// fractional bits give steps between the whole-bit ones. Bits and Rate Divide take effect from
-/// the next sample, and a shorter hold cuts the one in progress short. Mix moves to a new value
-/// over 20 ms.
+/// the next sample: a new Bits rounds the sample being held again, and a shorter hold cuts the
+/// one in progress short. Mix moves to a new value over 20 ms.
 pub struct Bitcrusher {
     pv: ParamValues,
+    /// The input sample each channel holds, before rounding.
     held: Vec<f32>,
     /// Samples since the last capture, counted so that a capture happens when it reaches the hold
     /// length. Infinite after a reset, so the next sample is captured.
@@ -319,17 +321,21 @@ impl AudioEffect for Bitcrusher {
             self.since += 1.0;
             let mix = f64::from(self.mix.tick());
             for (ch, held) in self.held.iter_mut().enumerate() {
-                // A non-finite sample is taken as silence. A channel the block leaves out is fed
-                // silence, so it holds none of its earlier audio when it comes back.
+                // A non-finite sample is taken as silence. A channel the block leaves out holds
+                // silence from its first left-out sample on, so it holds none of its earlier audio
+                // when it comes back.
                 let dry = match channels.get(ch).filter(|_| ch < nch) {
                     Some(c) if c[i].is_finite() => f64::from(c[i]),
                     _ => 0.0,
                 };
-                if capture {
-                    *held = ((dry / step).round() * step).clamp(-limit, limit) as f32;
+                if capture || ch >= nch {
+                    *held = dry as f32;
                 }
                 if ch < nch {
-                    channels[ch][i] = (dry + mix * (f64::from(*held) - dry)) as f32;
+                    // The held input is rounded at the current step, so a change of Bits also
+                    // applies to the hold in progress.
+                    let crushed = ((f64::from(*held) / step).round() * step).clamp(-limit, limit);
+                    channels[ch][i] = (dry + mix * (crushed - dry)) as f32;
                 }
             }
         }
@@ -432,7 +438,7 @@ impl AudioEffect for Tremolo {
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
         if n == 0 {
-            // No sample uses the new settings, so no glide starts.
+            // No sample used the current settings, so a glide in progress goes on unchanged.
             return;
         }
         let nch = channels.len().min(self.channels);
@@ -717,6 +723,66 @@ mod tests {
         assert!(low * 10 < high, "{low} vs {high}");
     }
 
+    /// At a low sample rate the resonators ring at the highest frequency processing reaches, not
+    /// at the setting above it, and the tail covers that ring. A setting below that frequency
+    /// keeps the tail of its own period.
+    #[test]
+    fn resonator_tail_covers_a_frequency_held_at_the_rate_limit() {
+        let sr = 1000.0f32;
+        let mut r = RingMod::new(sr, 1);
+        for (id, v) in [("effect", 2.0), ("frequency", 5000.0), ("resonance", 95.0)] {
+            assert!(r.set_param(id, v), "{id}");
+        }
+        r.reset();
+        let tail = r.tail_samples();
+        let mut x = vec![0.0f32; tail + 200];
+        x[0] = 1.0;
+        r.process(&mut [&mut x]);
+        let after = x[tail + 1..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(after <= 1e-3 * x[0].abs(), "tail {tail}: {after} after it, against {} at the impulse", x[0]);
+        let mut below = RingMod::new(sr, 1);
+        for (id, v) in [("effect", 2.0), ("frequency", 400.0), ("resonance", 95.0)] {
+            assert!(below.set_param(id, v), "{id}");
+        }
+        below.reset();
+        assert_eq!(below.tail_samples(), echo_tail(1000.0 / 400.0, 0.95, sr));
+    }
+
+    /// Frequency Mod reads between two of the largest samples of opposite sign without
+    /// overflowing.
+    #[test]
+    fn frequency_mod_reads_between_huge_samples_of_opposite_sign() {
+        let mut r = ring(&[("effect", 1.0), ("frequency", 500.0)], 1);
+        let mut x = vec![0.0f32; 200];
+        x[6] = -f32::MAX;
+        x[7] = f32::MAX;
+        r.process(&mut [&mut x]);
+        assert!(x.iter().all(|v| v.is_finite()), "{:?}", x.iter().position(|v| !v.is_finite()));
+    }
+
+    /// Mixing a dry and a wet sample of opposite sign at the largest level stays finite: a mix of
+    /// 0 gives the input, and every mix gives the result at a level of 1 scaled up.
+    #[test]
+    fn mixing_huge_samples_of_opposite_sign_stays_finite() {
+        for mix in [0.0f32, 50.0, 100.0] {
+            let run = |level: f32| {
+                let mut r = ring(&[("frequency", 5000.0), ("mix", mix)], 1);
+                let mut x = vec![level; 480];
+                r.process(&mut [&mut x]);
+                x
+            };
+            let (huge, unit) = (run(f32::MAX), run(1.0));
+            assert!(huge.iter().all(|v| v.is_finite()), "mix {mix}");
+            for (i, (h, u)) in huge.iter().zip(&unit).enumerate() {
+                let want = *u as f64 * f32::MAX as f64;
+                assert!((*h as f64 - want).abs() <= 1e-5 * f32::MAX as f64, "mix {mix}, sample {i}: {h} against {want}");
+            }
+            if mix == 0.0 {
+                assert!(huge.iter().all(|v| *v == f32::MAX));
+            }
+        }
+    }
+
     /// Raising the sample-and-hold rate takes effect within one new hold, instead of after the
     /// value already held at the slow rate runs out.
     #[test]
@@ -905,6 +971,41 @@ mod tests {
         assert!((0..30).step_by(2).all(|i| b[i] == input[i]));
     }
 
+    /// A new Bits rounds the sample being held again from the next sample on, from the input it
+    /// took rather than from its rounded value, and the hold keeps its length.
+    #[test]
+    fn bitcrusher_rounds_the_hold_in_progress_at_new_bits() {
+        let mut c = crush(&[("bits", 16.0), ("rate_divide", 4.0)], 1);
+        let mut a = [0.3f32];
+        c.process(&mut [&mut a]);
+        assert!((a[0] - 0.3).abs() < 1e-4);
+        assert!(c.set_param("bits", 1.0));
+        let mut b = [0.9f32];
+        c.process(&mut [&mut b]);
+        assert_eq!(b[0], 0.0, "1 bit did not round the held 0.3 to 0");
+        assert!(c.set_param("bits", 16.0));
+        let mut d = [0.9f32, 0.9, 0.7];
+        c.process(&mut [&mut d]);
+        assert!((d[0] - 0.3).abs() < 1e-4 && d[0] == d[1], "the held input was lost: {d:?}");
+        assert_eq!(changes(&[a[0], b[0], d[0], d[1], d[2]]), vec![0, 1, 2, 4], "the hold did not keep its length");
+    }
+
+    /// A channel left out of one block of a single sample, between two captures, holds silence
+    /// when it comes back instead of the sample it held before.
+    #[test]
+    fn bitcrusher_clears_a_channel_left_out_for_one_sample() {
+        let mut c = crush(&[("bits", 8.0), ("rate_divide", 4.0)], 2);
+        let (mut l, mut r) = ([1.0f32], [1.0f32]);
+        c.process(&mut [&mut l, &mut r]);
+        assert_eq!(r[0], 1.0);
+        let mut l = [0.0f32];
+        c.process(&mut [&mut l]);
+        let (mut l, mut r) = ([0.0f32; 2], [0.0f32; 2]);
+        c.process(&mut [&mut l, &mut r]);
+        assert_eq!(r, [0.0, 0.0], "the channel came back with its earlier hold");
+        assert_eq!(l, [1.0, 1.0], "the channel kept in the block lost its hold");
+    }
+
     /// A held sample sounds for no longer than the tail reports after the input ends.
     #[test]
     fn bitcrusher_tail_covers_the_hold() {
@@ -1069,6 +1170,25 @@ mod tests {
         assert!(b.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02), "the glide jumped");
         assert_eq!(b[glide..], want[glide..]);
         assert!((b[0] - want[0]).abs() > 0.2, "{} {}", b[0], want[0]);
+    }
+
+    /// A shape that only an empty block saw does not restart a glide in progress: the glide goes
+    /// on as if the shape had not changed.
+    #[test]
+    fn tremolo_empty_block_keeps_the_glide() {
+        let glide = (0.02 * SR) as usize;
+        let mut t = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        let mut s = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        for fx in [&mut t, &mut s] {
+            gains(fx, 2000);
+            assert!(fx.set_param("shape", 2.0));
+            gains(fx, 100);
+        }
+        assert!(t.set_param("shape", 1.0));
+        let mut empty: [f32; 0] = [];
+        t.process(&mut [&mut empty[..]]);
+        assert!(t.set_param("shape", 2.0));
+        assert_eq!(gains(&mut t, 2 * glide), gains(&mut s, 2 * glide));
     }
 
     /// A new rate moves the square's edges to a new share of the cycle. Changed just before an

@@ -202,8 +202,12 @@ pub trait AudioEffect: Send {
     }
     /// How long the output keeps sounding after the input stops, in samples (reverb and delay
     /// tails), so an offline render can run past the end of its input. The count starts after
-    /// the latency: a render that keeps all of the output runs `latency() + tail_samples()`
-    /// samples past the end of its input.
+    /// the latency: a render that keeps the tail runs `latency() + tail_samples()` samples past
+    /// the end of its input. An effect whose output decays without reaching zero (a feedback
+    /// delay, a resonator) reports where the decay falls below a cutoff, 60 dB under its start
+    /// for the feedback delays and resonators, so quieter output can still follow that point.
+    /// Those effects also cap the tail they report at 60 s, which is what a feedback of 1 or more
+    /// reports.
     fn tail_samples(&self) -> usize {
         0
     }
