@@ -915,6 +915,15 @@ impl Edges {
             },
         }
     }
+
+    /// The edges of a soft mask drawn for this renderer: anti-aliased, with the same
+    /// thinnest-stroke floor, so a stroke inside the mask is as wide as on the page.
+    pub(crate) fn soft_mask(self) -> Self {
+        Self {
+            threshold: None,
+            output_pixel: self.output_pixel,
+        }
+    }
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -2602,6 +2611,7 @@ impl<'a> Device<'a> for Renderer {
             (opacity, mask, convert_blend_mode(blend_mode))
         };
         let settings = *self.ctx.render_settings();
+        let edges = self.edges.soft_mask();
         let force_images_may_have_transparency = mask.is_some()
             || blend_mode != BlendMode::Normal
             || self
@@ -2620,7 +2630,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, edges))
                     .clone()
             }),
             None,
@@ -2743,13 +2753,14 @@ impl<'a> Device<'a> for Renderer {
 
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'_>>) {
         let settings = *self.ctx.render_settings();
+        let edges = self.edges.soft_mask();
         self.cur_mask = mask.map(|m| {
             let width = self.ctx.width();
             let height = self.ctx.height();
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, edges))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2934,7 +2945,13 @@ fn render_shading_texture(
     )
 }
 
-fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Renderer {
+fn soft_mask_renderer(
+    settings: &RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    edges: Edges,
+) -> Renderer {
     Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
@@ -2955,18 +2972,24 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
-        // Craft patch (hard edges): a soft mask keeps anti-aliased edges and a stroke floor of one
-        // device pixel, which in a supersampled render is one fine pixel: a stroke inside the mask
-        // comes out lighter than the same stroke on the page.
-        edges: Edges::ANTIALIASED,
+        // Craft patch (hard edges): a soft mask keeps anti-aliased edges, and the page's
+        // thinnest-stroke floor (see `Edges::soft_mask`).
+        edges,
     }
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn draw_soft_mask(
+    mask: &SoftMask<'_>,
+    settings: RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    edges: Edges,
+) -> Mask {
     let mut rendered_mask = if mask.mask_type() == MaskType::Luminosity && mask.is_device_cmyk() {
-        cmyk_luminosity(mask, &settings, width, height, preview)
+        cmyk_luminosity(mask, &settings, width, height, preview, edges)
     } else {
-        let mut renderer = soft_mask_renderer(&settings, width, height, preview);
+        let mut renderer = soft_mask_renderer(&settings, width, height, preview, edges);
 
         let bg_color = mask.background_color().to_rgba();
         let apply_bg = bg_color.to_rgba8() != BLACK.to_rgba8().to_u8_array();
@@ -3021,14 +3044,21 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
 /// + 0.59m + 0.11y + k)`. Taken from the colors as drawn, through the CMYK profile, K 100%
 /// would leave about a tenth of the masked object visible. So each process ink's plate of the
 /// group is drawn over the backdrop's film, and the formula is applied to the four tints.
-fn cmyk_luminosity(mask: &SoftMask<'_>, settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn cmyk_luminosity(
+    mask: &SoftMask<'_>,
+    settings: &RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    edges: Edges,
+) -> Mask {
     let backdrop = mask.background_color();
     let pixels = usize::from(width) * usize::from(height);
     let mut ink = vec![0.0_f32; pixels];
     for (plate_ink, weight) in hayro_interpret::color::Ink::PROCESS.into_iter().zip([0.3, 0.59, 0.11, 1.0]) {
         let plate = mask.plate(plate_ink);
         let film = 1.0 - plate.tint(&backdrop);
-        let mut renderer = soft_mask_renderer(settings, width, height, preview);
+        let mut renderer = soft_mask_renderer(settings, width, height, preview, edges);
         renderer.ctx.set_paint(AlphaColor::<Srgb>::new([film, film, film, 1.0]));
         renderer
             .ctx

@@ -170,3 +170,25 @@ fn a_hairline_on_a_pixel_boundary_doubles_with_hard_edges() {
     let smooth = ink(render(20, 4, "0 w 10 0 m 10 4 l S", Options::default(), 4).unwrap());
     assert!((192..320).contains(&smooth), "about one pixel: {smooth}");
 }
+
+/// Draws a 20 × 4 page black through a soft mask of type `kind` whose group draws `group`.
+fn through_mask(kind: &str, group: &str, factor: u32) -> Vec<u8> {
+    let form = ("/Type /XObject /Subtype /Form /BBox [0 0 20 4] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>", group);
+    let resources = format!("/ExtGState << /G0 << /SMask << /Type /Mask /S /{kind} /G 5 0 R >> >> >>");
+    render_with(20, 4, "/G0 gs 0 g 0 0 20 4 re f", &resources, &[form], Options::default(), factor).unwrap()
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_supersampled_hairline_in_a_soft_mask_matches_one_on_the_page() {
+    // The mask is drawn at the fine resolution too, so its thinnest-stroke floor must be one
+    // output pixel as on the page, not one fine pixel.
+    let line = "0 w 10.5 0 m 10.5 4 l S";
+    let ink = |page: &[u8]| (0..20).map(|x| 255 - u32::from(page[x * 4])).sum::<u32>();
+    let on_page = ink(&render(20, 4, line, Options::default(), 4).unwrap());
+    let luminosity = ink(&through_mask("Luminosity", &format!("1 G {line}"), 4));
+    let alpha = ink(&through_mask("Alpha", &format!("0 G {line}"), 4));
+    for (kind, masked) in [("luminosity", luminosity), ("alpha", alpha)] {
+        assert!(masked.abs_diff(on_page) <= 16, "{kind} mask: {masked}, page: {on_page}");
+    }
+}
