@@ -1,12 +1,13 @@
 //! The family card and the collection of cards the panel lists.
 
-use craft_ui::contract::{Props as _, Styled as _, clicked};
+use craft_ui::buttons::{SplitButton, SplitOutput};
+use craft_ui::contract::{ActivateOn, Entry, Props as _, Styled as _, clicked};
 
 use super::{
-    Access, Arc, Badge, Button, Catalog, Collection, CollectionProps, CollectionResponse, Common, Component, ComponentStyle, ContainerProps, Cow, Cx,
-    DisplayOrder, Emphasis, FaceInfo, Flow, FontSample, FontsBrowseWords, Ink, ItemOutput, ItemSource, Kind, Label, Link, MeasureCx, Metrics, Name,
-    NoValue, Outcome, Owner, PartsCx, Pos2, Progress, Proposal, Rect, Response, Role, RuleKind, SampleFace, SelectMode, Selection, Shade, Sizing,
-    SpanLayout, Stateful, StyleCx, Text, TextLook, TextRun, Tone, TypeRole, Variant, Vec2,
+    Access, Badge, Button, Collection, CollectionProps, CollectionResponse, Common, Component, ComponentStyle, ContainerProps, Cow, Cx, DisplayOrder,
+    Emphasis, Flow, FontSample, FontsBrowseWords, HeldFace, Ink, ItemOutput, ItemSource, Kind, Label, Link, MeasureCx, Metrics, Name, NoValue,
+    Outcome, PartsCx, Pos2, Progress, Proposal, Rect, Response, Role, RuleKind, SelectMode, Selection, Shade, Sizing, SpanLayout, Stateful, StyleCx,
+    Text, TextLook, TextRun, Tone, TypeRole, Variant, Vec2,
 };
 use craft_ui::primitives::RectSide;
 
@@ -14,8 +15,9 @@ use craft_ui::primitives::RectSide;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CardEvent {
-    /// Install the family.
-    Install,
+    /// Install the family, for all apps (`true`), for Craft apps only (`false`), or as its recorded choice, else the
+    /// setting, says (`None`).
+    Install(Option<bool>),
     /// Download the family for a preview.
     Preview,
     /// Remove the family from the font store.
@@ -43,6 +45,8 @@ pub enum CardState {
     Offer {
         /// Whether Preview is offered.
         preview: bool,
+        /// Whether Install's menu offers installing for all apps or for Craft apps only.
+        destinations: bool,
     },
 }
 
@@ -62,8 +66,8 @@ pub struct CardData {
     pub curated: bool,
     /// What is at the reading end.
     pub state: CardState,
-    /// The face the sample is drawn in, and whose catalog holds it.
-    pub face: Option<(Owner, FaceInfo, Arc<Catalog>)>,
+    /// The face the sample is drawn in.
+    pub(crate) face: Option<HeldFace>,
 }
 
 /// The pieces of a card at the reading end, in reading order.
@@ -75,6 +79,7 @@ enum End {
     Installed,
     Preview,
     Install,
+    InstallMenu,
     Remove,
     RunningText,
     RunningBar,
@@ -83,12 +88,30 @@ enum End {
 impl End {
     fn event(self) -> Option<CardEvent> {
         match self {
-            End::Install => Some(CardEvent::Install),
+            End::Install | End::InstallMenu => Some(CardEvent::Install(None)),
             End::Preview => Some(CardEvent::Preview),
             End::Remove => Some(CardEvent::Remove),
             End::Retry => Some(CardEvent::Retry),
             _ => None,
         }
+    }
+}
+
+/// What the control of a piece reports.
+trait EndOutput {
+    /// What the pressed control of `end` asks for.
+    fn event(&self, end: End) -> Option<CardEvent>;
+}
+
+impl EndOutput for Response {
+    fn event(&self, end: End) -> Option<CardEvent> {
+        clicked(self).then(|| end.event()).flatten()
+    }
+}
+
+impl EndOutput for SplitOutput<bool> {
+    fn event(&self, end: End) -> Option<CardEvent> {
+        self.chosen.map(|share| CardEvent::Install(Some(share))).or_else(|| self.activated.then(|| end.event()).flatten())
     }
 }
 
@@ -121,6 +144,13 @@ macro_rules! with_end {
             }
             End::Install => {
                 let $c = Button::new($words.install.clone()).description($words.install_family.fill(&[("family", $card.data.name.as_str())]));
+                $body
+            }
+            End::InstallMenu => {
+                let entries = [Entry::new(true, $words.install_all_apps.clone()), Entry::new(false, $words.install_craft_apps.clone())];
+                let $c = SplitButton::new($words.install.clone(), &entries)
+                    .arrow_label($words.install_options.clone())
+                    .description($words.install_family.fill(&[("family", $card.data.name.as_str())]));
                 $body
             }
             End::Remove => {
@@ -236,6 +266,7 @@ impl FamilyCard {
             Kind::Install => words.installing.as_str(),
             Kind::Remove => words.removing.as_str(),
             Kind::Preview => words.downloading.as_str(),
+            Kind::SystemFonts => words.updating_system_fonts.as_str(),
         };
         match fraction {
             Some(fraction) => words.progress.fill(&[("what", what), ("percent", &((fraction * 100.0).round() as u64).to_string())]),
@@ -251,6 +282,7 @@ impl FamilyCard {
                     Kind::Install => &words.failed_install,
                     Kind::Remove => &words.failed_remove,
                     Kind::Preview => &words.failed_download,
+                    Kind::SystemFonts => &words.failed_system_fonts,
                 };
                 (what.clone(), error.clone())
             }
@@ -276,26 +308,18 @@ impl FamilyCard {
             CardState::Installed => ends.push(End::Installed),
             CardState::Removable => ends.push(End::Remove),
             CardState::System => {}
-            CardState::Offer { preview } => {
+            CardState::Offer { preview, destinations } => {
                 if *preview {
                     ends.push(End::Preview);
                 }
-                ends.push(End::Install);
+                ends.push(if *destinations { End::InstallMenu } else { End::Install });
             }
         }
         ends
     }
 
-    /// The face the sample is drawn in: the card's own, or none.
-    fn face(&self) -> SampleFace<'_> {
-        match &self.data.face {
-            Some((owner, face, catalog)) => SampleFace::Face { catalog, owner: *owner, face },
-            None => SampleFace::Missing,
-        }
-    }
-
     fn sample<'a>(&'a self, words: &FontsBrowseWords) -> FontSample<'a> {
-        FontSample::new(words.card_sample.clone(), self.data.sample.as_str(), self.face(), self.data.points)
+        FontSample::new(words.card_sample.clone(), self.data.sample.as_str(), HeldFace::sample(self.data.face.as_ref()), self.data.points)
     }
 
     /// The sizes of the parts at `width`.
@@ -394,9 +418,9 @@ impl Component for FamilyCard {
             draw.edge_rule(RuleKind::Divider, cx.rect, RectSide::Bottom);
         }
         for (piece, rect) in &placed.end {
-            let pressed = with_end!(self, words, *piece, |child| clicked(&ui.child(("end", *piece as u8), *rect, child)));
-            if pressed {
-                self.event = piece.event();
+            let event = with_end!(self, words, *piece, |child| ui.child(("end", *piece as u8), *rect, child).event(*piece));
+            if event.is_some() {
+                self.event = event;
             }
         }
         let sample = self.sample(&words);
@@ -416,7 +440,7 @@ pub struct FamilyCardsStyle {
     metrics: Metrics,
 }
 
-/// The family cards of one list: one Tab stop, Up and Down move the lead, Enter or a double click activates a card.
+/// The family cards of one list: one Tab stop, Up and Down move the lead, Enter or a click activates a card.
 #[derive(craft_ui::contract::Component)]
 #[component(collection)]
 pub struct FamilyCards {
@@ -433,7 +457,7 @@ impl FamilyCards {
         FamilyCards {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single),
+            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click),
         }
         .label(label)
     }
