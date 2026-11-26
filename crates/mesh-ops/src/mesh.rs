@@ -76,7 +76,8 @@ impl Mesh {
 
     /// Vertex indices of triangle `t`.
     pub fn tri(&self, t: usize) -> Option<[usize; 3]> {
-        let i = self.indices.get(t * 3..t * 3 + 3)?;
+        let start = t.checked_mul(3)?;
+        let i = self.indices.get(start..start.checked_add(3)?)?;
         Some([i[0] as usize, i[1] as usize, i[2] as usize])
     }
 
@@ -155,13 +156,17 @@ impl Mesh {
 
     /// Material of triangle `t`.
     pub fn material_of(&self, t: usize) -> Option<usize> {
-        let idx = (t * 3) as u32;
-        self.submeshes.iter().find(|s| idx >= s.start && idx < s.start.saturating_add(s.count)).map(|s| s.material)
+        let idx = u64::try_from(t.checked_mul(3)?).ok()?;
+        self.submeshes.iter().find(|s| idx >= u64::from(s.start) && idx < u64::from(s.start) + u64::from(s.count)).map(|s| s.material)
     }
 
-    /// Triangle index range belonging to material `m` (all submeshes of that material).
+    /// Triangle index range belonging to material `m` (all submeshes of that material), within
+    /// the index buffer.
     pub fn triangles_of(&self, m: usize) -> impl Iterator<Item = usize> + '_ {
-        self.submeshes.iter().filter(move |s| s.material == m).flat_map(|s| (s.start / 3) as usize..((s.start + s.count) / 3) as usize)
+        self.submeshes.iter().filter(move |s| s.material == m).flat_map(move |s| {
+            let end = (u64::from(s.start) + u64::from(s.count)).min(self.indices.len() as u64);
+            (s.start / 3) as usize..(end / 3) as usize
+        })
     }
 
     /// Check that attribute arrays agree and every index is in range.
@@ -192,7 +197,9 @@ impl Mesh {
             return Err(GeomError::Invalid("mesh has non-finite positions".into()));
         }
         for s in &self.submeshes {
-            if s.start as usize + s.count as usize > self.indices.len() || s.material >= self.materials.len().max(1) {
+            let end = u64::from(s.start) + u64::from(s.count);
+            let whole_triangles = s.start.is_multiple_of(3) && s.count.is_multiple_of(3);
+            if !whole_triangles || end > self.indices.len() as u64 || s.material >= self.materials.len().max(1) {
                 return Err(GeomError::Invalid(format!("submesh {} is out of range", s.name)));
             }
         }
@@ -225,8 +232,10 @@ impl Mesh {
         if self.uvs.len() != self.positions.len() {
             self.uvs = vec![Vec2::ZERO; self.positions.len()];
         }
-        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then.
-        let usable = !crate::unwrap::all_triangles_degenerate(self);
+        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then. Its
+        // callbacks read a missing vertex as the origin, which the degenerate check cannot see, so
+        // an index past the last vertex skips it too.
+        let usable = self.indices.iter().all(|&i| (i as usize) < self.positions.len()) && !crate::unwrap::all_triangles_degenerate(self);
         let mut g = Mikk { mesh: self };
         if !usable || !mikktspace::generate_tangents(&mut g) {
             self.simple_tangents();
@@ -346,10 +355,25 @@ impl Mesh {
     }
 
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
-    /// this mesh's material count.
-    pub fn append(&mut self, other: &Mesh) {
+    /// this mesh's material count. Returns an error when an index of `other` is out of range or a
+    /// rebased index or submesh range would not fit in `u32`; an error leaves this mesh unchanged.
+    pub fn append(&mut self, other: &Mesh) -> Result<()> {
+        if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
+            return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
+        }
+        let too_large = |what: &str| GeomError::Invalid(format!("the appended {what} do not fit in u32"));
+        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or_else(|| too_large("vertices"))?;
+        if vertices > 0 && u32::try_from(vertices - 1).is_err() {
+            return Err(too_large("vertices"));
+        }
+        let ibase = u32::try_from(self.indices.len()).map_err(|_| too_large("indices"))?;
+        let index_count = self.indices.len().checked_add(other.indices.len()).ok_or_else(|| too_large("indices"))?;
+        u32::try_from(index_count).map_err(|_| too_large("indices"))?;
+        for s in &other.submeshes {
+            ibase.checked_add(s.start).and_then(|start| start.checked_add(s.count)).ok_or_else(|| too_large("submeshes"))?;
+            s.material.checked_add(self.materials.len()).ok_or_else(|| too_large("submeshes"))?;
+        }
         let base = self.positions.len() as u32;
-        let ibase = self.indices.len() as u32;
         let mbase = self.materials.len();
         self.positions.extend_from_slice(&other.positions);
         self.normals.extend_from_slice(&other.normals);
@@ -372,6 +396,7 @@ impl Mesh {
             start: s.start + ibase,
             count: s.count,
         }));
+        Ok(())
     }
 
     /// Each triangle split into four at its edge midpoints (shared edges share their midpoint);
@@ -428,7 +453,16 @@ impl Mesh {
 
     /// A single-material mesh from raw attributes; computes missing normals and tangents.
     pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
-        let count = indices.len() as u32;
+        let count = u32::try_from(indices.len()).map_err(|_| GeomError::Invalid("the index count does not fit in u32".into()))?;
+        if !indices.len().is_multiple_of(3) {
+            return Err(GeomError::Invalid("index count is not a multiple of 3".into()));
+        }
+        if indices.len() / 3 > MAX_TRIANGLES {
+            return Err(GeomError::Invalid(format!("mesh has more than {MAX_TRIANGLES} triangles")));
+        }
+        if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
+            return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
+        }
         let mut m = Mesh {
             normals: normals.unwrap_or_default(),
             uvs,
@@ -527,7 +561,7 @@ mod tests {
         assert_eq!(seam.wire_edges()[0].len(), 6);
         // Appending keeps each side's diagonals on its own triangles.
         let mut a = Mesh::from_parts(m.positions.clone(), None, m.uvs.clone(), vec![0, 1, 2], "A").unwrap();
-        a.append(&m);
+        a.append(&m).unwrap();
         assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
         assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
     }
@@ -602,10 +636,69 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_unaligned_and_overflowing_submeshes() {
+        for (start, count) in [(1, 3), (0, 4), (3, 6), (u32::MAX, u32::MAX)] {
+            let mut m = quad();
+            m.submeshes[0].start = start;
+            m.submeshes[0].count = count;
+            assert!(m.validate().is_err(), "start {start}, count {count}");
+        }
+    }
+
+    #[test]
+    fn triangle_lookups_survive_huge_indices_and_ranges() {
+        let mut m = quad();
+        assert_eq!(m.tri(usize::MAX), None);
+        assert_eq!(m.tri(usize::MAX / 3 + 1), None);
+        // 1_431_655_766 * 3 is 2 modulo 2^32, which a truncating cast would take for triangle 0's index range
+        assert_eq!(m.material_of(1_431_655_766), None);
+        assert_eq!(m.material_of(usize::MAX), None);
+        m.submeshes[0].start = 3;
+        m.submeshes[0].count = u32::MAX - 2;
+        assert_eq!(m.triangles_of(0).collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn from_parts_refuses_an_out_of_range_index_without_crashing() {
+        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
+        let uvs = vec![Vec2::ZERO, Vec2::X, Vec2::Y];
+        assert!(Mesh::from_parts(positions.clone(), None, uvs.clone(), vec![0, 1, 3], "M").is_err());
+        assert!(Mesh::from_parts(positions.clone(), None, uvs.clone(), vec![0, 1], "M").is_err());
+        assert!(Mesh::from_parts(positions, None, uvs, vec![0, 1, 2], "M").is_ok());
+    }
+
+    #[test]
+    fn compute_tangents_survives_an_out_of_range_index() {
+        let mut m = quad();
+        m.indices[5] = 99;
+        m.compute_tangents();
+        assert_eq!(m.tangents.len(), m.positions.len());
+        assert!(m.tangents.iter().all(|t| t.is_finite()));
+    }
+
+    #[test]
+    fn append_refuses_out_of_range_indices_and_overflowing_submeshes() {
+        let mut a = quad();
+        let before = a.clone();
+        let mut bad_index = quad();
+        bad_index.indices[0] = 99;
+        assert!(a.append(&bad_index).is_err());
+        assert_eq!(a, before);
+
+        let mut overflow = quad();
+        overflow.submeshes[0].start = u32::MAX - 2;
+        assert!(a.append(&overflow).is_err());
+        assert_eq!(a, before);
+
+        a.append(&quad()).unwrap();
+        a.validate().unwrap();
+    }
+
+    #[test]
     fn append_offsets_indices_and_materials() {
         let mut a = quad();
         let b = quad();
-        a.append(&b);
+        a.append(&b).unwrap();
         assert_eq!(a.indices[6], 4);
         assert_eq!(a.submeshes[1].material, 1);
         assert_eq!(a.submeshes[1].start, 6);
@@ -613,10 +706,10 @@ mod tests {
         // Colors on one side only: the other side's vertices become white.
         let mut red = quad();
         red.colors = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 4];
-        a.append(&red);
+        a.append(&red).unwrap();
         assert_eq!(a.colors.len(), 12);
         assert_eq!((a.colors[0], a.colors[8]), (Vec4::ONE, Vec4::new(1.0, 0.0, 0.0, 1.0)));
-        a.append(&quad());
+        a.append(&quad()).unwrap();
         assert_eq!(a.colors[15], Vec4::ONE);
         a.validate().unwrap();
         a.colors.pop();
