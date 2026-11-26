@@ -93,7 +93,7 @@ impl DevelopSettings {
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
     /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
-    /// Kelvin settings. Out-of-range values are brought back into range ([`DevelopSettings::keep_in_range`]).
+    /// Kelvin settings. Out-of-range values are brought back into range (`DevelopSettings::keep_in_range`).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
         let mut v = self.to_json();
         presets::deep_merge(&mut v, partial);
