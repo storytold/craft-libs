@@ -503,6 +503,29 @@ impl<'a> StyleCx<'a> {
         look
     }
 
+    /// The look of a field that sits in a bar (a title bar's search box,
+    /// [`FieldLook::Quiet`](crate::style::FieldLook::Quiet)): [`field`](Self::field) filled with the window background
+    /// (`surface.background`) at rest and with the field fill under the pointer and while it holds focus, and with
+    /// the quieter `line.border` edge at rest. The focus and invalid edges are the field's own. A bevelled well keeps
+    /// its bevel; only its fill changes. At high contrast, and in a theme whose `line.border` is the window background
+    /// itself, the field keeps its own edge, so it still shows at rest.
+    pub fn quiet_field(&self) -> SurfaceLook {
+        let mut look = self.field();
+        let (surface, line) = (&self.tokens.color.surface, &self.tokens.color.line);
+        let (bar, sunken) = (self.color(surface.background), self.color(surface.sunken));
+        let off = self.color(self.tokens.color.state.disabled_fill);
+        look.fill = Stateful::new(bar).off(States::new(bar, sunken, sunken, off)).when(Flags::FOCUSED, sunken);
+        let quiet_edge_shows = self.contrast() == Contrast::Standard && line.border != surface.background;
+        if let Some(edge) = &mut look.border
+            && edge.off.rest != self.color(Rgba::TRANSPARENT)
+            && quiet_edge_shows
+        {
+            let (rest, disabled) = (self.color(line.border), self.color(line.divider));
+            edge.off = States::new(rest, rest, rest, disabled);
+        }
+        look
+    }
+
     /// The look of the closed box of a dropdown picker: the field, filled with the hover fill under the pointer and
     /// while its list is open.
     pub fn dropdown(&self) -> SurfaceLook {
