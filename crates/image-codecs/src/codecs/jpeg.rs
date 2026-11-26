@@ -490,12 +490,14 @@ fn first_component_subsampled(b: &[u8]) -> bool {
 }
 
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
-/// (SOF9–SOF11), lossless (SOF3), or a DCT frame whose precision isn't 8 bits (#4934, #5003).
-/// This includes 12-bit progressive Huffman (SOF2), which `craft-jpeg` supports.
+/// (SOF9–SOF11), lossless (SOF3), a DCT frame whose precision isn't 8 bits (#4934, #5003), or a
+/// sequential frame whose components are coded in separate scans, which zune-jpeg 0.5.15
+/// decodes wrongly ([`craft_jpeg::split_scan_components`], pdfcraft#7852). This includes 12-bit
+/// progressive Huffman (SOF2), which `craft-jpeg` supports.
 fn uses_craft_jpeg(bytes: &[u8]) -> bool {
     match craft_jpeg::frame(bytes) {
         Some(f) if (0xC9..=0xCB).contains(&f.marker) || f.marker == 0xC3 => true,
-        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8,
+        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8 || craft_jpeg::split_scan_components(bytes).is_some(),
         _ => false,
     }
 }

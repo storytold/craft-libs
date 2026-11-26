@@ -152,7 +152,7 @@
       "path": "src/filter/dct.rs",
       "source_sha256": "48452c1817b0a95b079aff068c8a625078c90354978af1de4ff97142e6bb0dd2",
       "source_git_blob": "a4fbd1761ee2b1e16ac2848f0209f563ec529065",
-      "sha256": "148a505517b2a906c123376f4667389df3904a2192be4e7bcc807e67a9a28dc7"
+      "sha256": "04dafdc2370c0130d7e48c39c2c67d5e069d1a2a5779b1ae08ff3b32c8ea20ad"
     },
     {
       "path": "src/filter/jbig2.rs",
