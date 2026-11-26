@@ -86,6 +86,13 @@ pub(crate) fn keep_focus(memory: &mut egui::Memory, id: Id) {
     memory.set_focus_surrender(id, SurrenderFocusOn::Never);
 }
 
+/// Keeps egui from surrendering the focus of `id`, a component's widget that holds it, on a press or click elsewhere: a
+/// focus egui's own widget took again (a text edit requests focus on its click) goes back to the app's rule, and the
+/// runtime moves this focus on press (8.3).
+pub(crate) fn hold(ctx: &Context, id: Id) {
+    ctx.memory_mut(|memory| memory.set_focus_surrender(id, SurrenderFocusOn::Never));
+}
+
 /// Takes key focus from `id` if it holds it.
 pub(crate) fn surrender(ctx: &Context, id: Id) {
     ctx.memory_mut(|memory| memory.surrender_focus(id));
