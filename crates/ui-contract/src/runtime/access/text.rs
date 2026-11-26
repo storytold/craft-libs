@@ -108,9 +108,16 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Opt
             for (run_at, run) in line.runs.iter().enumerate() {
                 let id = run_id(owner, line_at, run_at);
                 let text = line.text.get(run.bytes.clone()).unwrap_or_default();
+                // A line of several runs (a change of direction) is one line to a screen reader.
+                let after = run_at.checked_sub(1).map(|previous| {
+                    let before = line.runs.get(previous).and_then(|p| line.text.get(p.bytes.clone())).unwrap_or_default();
+                    let mid_word =
+                        before.chars().last().is_some_and(|c| !c.is_whitespace()) && text.chars().next().is_some_and(|c| !c.is_whitespace());
+                    (run_id(owner, line_at, previous), mid_word)
+                });
                 adapter::write_run(
                     ctx,
-                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths },
+                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths, after },
                 );
                 let index = u64::try_from(entries.len()).ok();
                 keys::register_node(ctx, id, owner, Some(PartRef { key: RUN, index }), false);

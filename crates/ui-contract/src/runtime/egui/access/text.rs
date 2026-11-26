@@ -19,6 +19,8 @@ pub(crate) struct RunNode<'a> {
     /// Each character's start offset from the run's left edge, and its advance.
     pub positions: &'a [f32],
     pub widths: &'a [f32],
+    /// The node of the run this one goes on from on the same line, and whether it starts inside a word that run began.
+    pub after: Option<(Id, bool)>,
 }
 
 /// What a text component's own node says beyond the common facts.
@@ -36,10 +38,11 @@ fn lengths(text: &str) -> Vec<u8> {
     text.chars().map(|c| u8::try_from(c.len_utf8()).unwrap_or(u8::MAX)).collect()
 }
 
-/// The character index each word starts at.
-fn word_starts(text: &str) -> Vec<u8> {
+/// The character index each word starts at; with `mid_word` the text starts inside a word, so its first character
+/// starts none.
+fn word_starts(text: &str, mid_word: bool) -> Vec<u8> {
     let mut starts = Vec::new();
-    let mut previous_space = true;
+    let mut previous_space = !mid_word;
     for (at, c) in text.chars().enumerate() {
         if previous_space && !c.is_whitespace() {
             starts.push(u8::try_from(at).unwrap_or(u8::MAX));
@@ -65,9 +68,16 @@ pub(crate) fn write_run(ctx: &Context, run: &RunNode<'_>) {
         node.set_character_lengths(lengths(run.text));
         node.set_character_positions(run.positions.to_vec());
         node.set_character_widths(run.widths.to_vec());
-        node.set_word_starts(word_starts(run.text));
+        node.set_word_starts(word_starts(run.text, run.after.is_some_and(|(_, mid_word)| mid_word)));
         node.set_text_direction(if run.rtl { accesskit::TextDirection::RightToLeft } else { accesskit::TextDirection::LeftToRight });
+        if let Some((previous, _)) = run.after {
+            node.set_previous_on_line(previous.accesskit_id());
+        }
     });
+    // The run before it on the line goes on to it: without both links each run reads as a line of its own.
+    if let Some((previous, _)) = run.after {
+        ctx.accesskit_node_builder(previous, |node| node.set_next_on_line(run.id.accesskit_id()));
+    }
 }
 
 /// Adds the text value, the text actions and the selection to the node of `id`.
