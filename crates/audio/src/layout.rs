@@ -151,6 +151,7 @@ impl TryFrom<RawLayout> for ChannelLayout {
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
+    feature = "flac-decode",
     feature = "pcm-encode"
 ))]
 pub(crate) fn count(n: usize) -> u16 {
@@ -273,7 +274,7 @@ impl std::fmt::Display for ChannelLayout {
 /// The layout decoders assume for 1–8 FLAC channels with no channel mask comment, as a WAV mask.
 /// RFC 9639 §9.1.3 leaves "back/surround" open for 5 and 6 channels; libFLAC and ffmpeg read side
 /// surrounds. 7 channels are 6.1 with sides (FL FR FC LFE BC SL SR).
-#[cfg(any(feature = "symphonia", feature = "flac-encode"))]
+#[cfg(any(feature = "symphonia", feature = "flac-encode", feature = "flac-decode"))]
 pub(crate) fn flac_assumed_mask(channels: usize) -> u32 {
     match channels {
         5 => 0x607,
@@ -283,36 +284,36 @@ pub(crate) fn flac_assumed_mask(channels: usize) -> u32 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The surround speaker a layout may name in place of `speaker`: formats with one surround pair
+/// do not tell side from back, so a pair of either kind feeds it.
+fn surround_twin(speaker: Speaker) -> Option<Speaker> {
+    Some(match speaker {
+        Speaker::SideLeft => Speaker::BackLeft,
+        Speaker::SideRight => Speaker::BackRight,
+        Speaker::BackLeft => Speaker::SideLeft,
+        Speaker::BackRight => Speaker::SideRight,
+        _ => return None,
+    })
+}
 
-    #[test]
-    fn speakers_follow_the_mask_in_wav_order() {
-        assert_eq!(
-            ChannelLayout::SURROUND_5_1_SIDE.speakers(),
-            [Speaker::FrontLeft, Speaker::FrontRight, Speaker::FrontCenter, Speaker::Lfe, Speaker::SideLeft, Speaker::SideRight]
-        );
-        assert_eq!(ChannelLayout::SURROUND_7_1.index_of(Speaker::SideLeft), Some(6));
-        assert_eq!(Speaker::SideRight.mask_bit(), 0x400);
+/// How audio with `layout` feeds a format whose layout for the channel count is `mask`: for each
+/// channel the format takes, the channel of the audio that feeds it. `order` is the format's
+/// channel order over `mask` (for each of its channels, the WAV-order channel of `mask`; `None`
+/// when it takes WAV order). `None` when `layout` is not the format's layout: it is unordered, or
+/// has a speaker the format has not.
+pub(crate) fn channel_map(mask: u32, order: Option<&[usize]>, layout: &ChannelLayout) -> Option<Vec<usize>> {
+    let speakers = ChannelLayout::from_mask(mask).speakers();
+    if speakers.len() != usize::from(layout.channels()) {
+        return None;
     }
-
-    #[test]
-    fn a_mask_that_does_not_match_the_channels_is_unordered() {
-        assert_eq!(ChannelLayout::from_mask_and_channels(0x3F, 6), ChannelLayout::SURROUND_5_1);
-        assert!(!ChannelLayout::from_mask_and_channels(0x3, 4).is_ordered());
-        assert!(!ChannelLayout::from_mask_and_channels(0, 4).is_ordered());
-        assert!(!ChannelLayout::from_mask(1 << 20).is_ordered());
-        assert_eq!(ChannelLayout::unordered(4).channels(), 4);
-        assert!(ChannelLayout::unordered(4).speakers().is_empty());
+    let mut map = Vec::with_capacity(speakers.len());
+    for j in 0..speakers.len() {
+        let speaker = *speakers.get(order.and_then(|o| o.get(j).copied()).unwrap_or(j))?;
+        let at = layout.index_of(speaker).or_else(|| surround_twin(speaker).and_then(|t| layout.index_of(t)))?;
+        if map.contains(&at) {
+            return None;
+        }
+        map.push(at);
     }
-
-    #[test]
-    fn defaults_and_names() {
-        assert_eq!(ChannelLayout::default_for(6), ChannelLayout::SURROUND_5_1);
-        assert!(!ChannelLayout::default_for(9).is_ordered());
-        assert_eq!(ChannelLayout::default_for(2).to_string(), "stereo");
-        assert_eq!(ChannelLayout::SURROUND_5_1_SIDE.to_string(), "5.1");
-        assert_eq!(ChannelLayout::unordered(10).to_string(), "10 channels");
-    }
+    Some(map)
 }

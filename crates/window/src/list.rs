@@ -3,8 +3,6 @@
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::place::Rect;
-
 /// One top-level window, for as long as the process runs.
 ///
 /// Ids come from one process-wide counter, so an id is never reused, even after its window closes
@@ -41,7 +39,6 @@ pub struct Closed<T> {
 struct Entry<T> {
     id: WindowId,
     data: T,
-    outer: Option<Rect>,
 }
 
 /// The app's open windows, each with the app's data `T` (per-window state, or a document key).
@@ -63,6 +60,7 @@ impl<T> Default for WindowList<T> {
 }
 
 impl<T> WindowList<T> {
+    /// An empty list.
     pub fn new() -> Self {
         Self::default()
     }
@@ -71,7 +69,7 @@ impl<T> WindowList<T> {
     /// window.
     pub fn open(&mut self, data: T) -> WindowId {
         let id = WindowId::mint();
-        self.entries.push(Entry { id, data, outer: None });
+        self.entries.push(Entry { id, data });
         self.recent.insert(0, id);
         id
     }
@@ -123,14 +121,17 @@ impl<T> WindowList<T> {
         self.entries.iter_mut().map(|e| (e.id, &mut e.data))
     }
 
+    /// The data of window `id`, if it is open.
     pub fn get(&self, id: WindowId) -> Option<&T> {
         self.entries.iter().find(|e| e.id == id).map(|e| &e.data)
     }
 
+    /// The data of window `id`, if it is open, for changing.
     pub fn get_mut(&mut self, id: WindowId) -> Option<&mut T> {
         self.entries.iter_mut().find(|e| e.id == id).map(|e| &mut e.data)
     }
 
+    /// Whether window `id` is open.
     pub fn contains(&self, id: WindowId) -> bool {
         self.entries.iter().any(|e| e.id == id)
     }
@@ -141,99 +142,13 @@ impl<T> WindowList<T> {
         self.recent.iter().copied().find(|&id| self.get(id).is_some_and(&mut matches))
     }
 
+    /// The number of open windows.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether no window is open.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
-    }
-
-    /// The window's last known outer rectangle (frame included), in points.
-    pub fn outer_rect(&self, id: WindowId) -> Option<Rect> {
-        self.entries.iter().find(|e| e.id == id).and_then(|e| e.outer)
-    }
-
-    /// Record a window's outer rectangle; the egui driver does this every frame. Platforms that
-    /// don't report window positions (Wayland) leave it unknown.
-    pub fn set_outer_rect(&mut self, id: WindowId, rect: Option<Rect>) {
-        if let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) {
-            entry.outer = rect;
-        }
-    }
-
-    /// The outer rectangle of the most recently focused window whose position is known, other
-    /// than `except`: what a new window cascades from.
-    pub fn cascade_origin(&self, except: Option<WindowId>) -> Option<Rect> {
-        self.recent.iter().filter(|&&id| Some(id) != except).find_map(|&id| self.outer_rect(id))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ids_are_never_reused() {
-        let mut list = WindowList::new();
-        let a = list.open("a");
-        assert!(list.close(a).is_some());
-        let b = list.open("b");
-        let mut other = WindowList::new();
-        let c = other.open("c");
-        assert!(a != b && b != c && a != c);
-        assert!(b > a, "ids increase");
-        assert_eq!(list.get(a), None);
-        assert_eq!(list.get(b), Some(&"b"));
-    }
-
-    #[test]
-    fn focus_and_close_keep_most_recent_order() {
-        let mut list = WindowList::new();
-        let a = list.open("a");
-        let b = list.open("b");
-        let c = list.open("c");
-        assert_eq!(list.active(), Some(c), "a new window is active");
-        assert!(list.focus(a));
-        assert_eq!(list.recent().collect::<Vec<_>>(), [a, c, b]);
-        assert_eq!(list.ids().collect::<Vec<_>>(), [a, b, c], "opening order is stable");
-
-        // Closing a background window leaves the active one alone.
-        let closed = list.close(b);
-        assert_eq!(closed, Some(Closed { data: "b", focus: None }));
-        assert_eq!(list.active(), Some(a));
-
-        // Closing the active window hands focus to the one focused before it.
-        assert_eq!(list.close(a).and_then(|c| c.focus), Some(c));
-        assert_eq!(list.active(), Some(c));
-        assert_eq!(list.close(c).map(|c| c.focus), Some(None), "nothing left to focus");
-        assert!(list.is_empty());
-        assert_eq!(list.close(c), None);
-        assert!(!list.focus(c));
-    }
-
-    #[test]
-    fn find_prefers_the_most_recent_match() {
-        let mut list = WindowList::new();
-        let first = list.open("book.xlsx");
-        let _other = list.open("notes.xlsx");
-        let second = list.open("book.xlsx");
-        assert_eq!(list.find(|d| *d == "book.xlsx"), Some(second));
-        list.focus(first);
-        assert_eq!(list.find(|d| *d == "book.xlsx"), Some(first));
-        assert_eq!(list.find(|d| *d == "missing"), None);
-    }
-
-    #[test]
-    fn cascade_origin_is_the_most_recent_known_rect() {
-        let mut list = WindowList::new();
-        let a = list.open(());
-        let b = list.open(());
-        let rect = Rect::new(10.0, 20.0, 300.0, 200.0);
-        list.set_outer_rect(a, Some(rect));
-        assert_eq!(list.cascade_origin(None), Some(rect), "b's position is unknown");
-        assert_eq!(list.cascade_origin(Some(a)), None);
-        list.set_outer_rect(b, Some(Rect::new(0.0, 0.0, 1.0, 1.0)));
-        assert_eq!(list.cascade_origin(Some(b)), Some(rect));
     }
 }

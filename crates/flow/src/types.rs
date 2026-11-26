@@ -58,7 +58,7 @@ pub enum Dropped {
     Font,
     /// A link target over [`MAX_LINK`].
     Link,
-    /// Runs' links and fonts past [`MAX_RUN_STRINGS`].
+    /// Runs' links and fonts past `MAX_RUN_STRINGS`.
     RunStrings,
     /// A style name cut to [`MAX_FONT_NAME`].
     StyleName,
@@ -130,10 +130,10 @@ pub struct Fmt {
     pub background: Option<Rgb>,
     /// Tracked insertion of this text (formats that keep revisions: RTF).
     pub ins: Option<RevMark>,
-    /// Tracked deletion of this text. Only [`from_doc_tracked`] keeps deleted text in a flow.
+    /// Tracked deletion of this text. Only `from_doc_tracked` keeps deleted text in a flow.
     pub del: Option<RevMark>,
     /// Tracked formatting change of this text: who made it and the formatting before it (only
-    /// [`from_doc_tracked`] and formats that keep revisions set it).
+    /// `from_doc_tracked` and formats that keep revisions set it).
     pub fmt_change: Option<Box<FmtChange<Fmt>>>,
     /// Formatting beyond the fields above, for formats that keep it (ODT): underline style and
     /// colour, double strike, caps, small caps, hidden, spacing, scale, position, outline,
@@ -155,7 +155,7 @@ pub struct RevMark {
     pub author: String,
     pub date: String,
     /// The source's identity of the change, when it has one (an ODT changed region; the
-    /// revision index in [`from_doc_tracked`]): marks with different ids stay separate
+    /// revision index in `from_doc_tracked`): marks with different ids stay separate
     /// revisions. `None` (RTF) = one revision per kind, author and date.
     pub id: Option<u32>,
 }
@@ -170,8 +170,9 @@ pub struct Img {
     pub w: f32,
     pub h: f32,
     pub alt: String,
-    /// How a floating picture is placed and wrapped, for formats that keep it (ODT); `None`: in
-    /// line with the text.
+    /// Placement and drawing metadata for formats that keep it (ODT). `None` is inline;
+    /// `Some` may also be inline, retaining rotation, mirroring or explicit stacking order.
+    /// The Float wrap, not the Option, determines anchoring.
     pub float: Option<Box<craft_wordmodel::para::Float>>,
     /// The embedded object this picture shows, kept whole (ODT only; see [`OdfObject`]).
     pub object: Option<Arc<OdfObject>>,
@@ -676,6 +677,8 @@ pub struct Para {
     pub kind: Kind,
     pub list: Option<ListInfo>,
     pub align: Option<Align>,
+    /// The paragraph reads right to left (OOXML `w:bidi`, RTF `\rtlpar`).
+    pub rtl: bool,
     pub page_break: bool,
     /// Keep the paragraph on the same page as the next one (ODT `fo:keep-with-next`).
     pub keep_next: bool,
@@ -687,7 +690,7 @@ pub struct Para {
     pub section: Option<Box<craft_wordmodel::SectionProps>>,
     /// Tracked insertion of the paragraph mark.
     pub mark_ins: Option<Box<RevMark>>,
-    /// Tracked deletion of the paragraph mark (only [`from_doc_tracked`] and formats that keep
+    /// Tracked deletion of the paragraph mark (only `from_doc_tracked` and formats that keep
     /// revisions set it).
     pub mark_del: Option<Box<RevMark>>,
     /// Tracked formatting change of the paragraph: the paragraph's formatting before it (kind,
@@ -878,6 +881,10 @@ pub struct Cell {
     /// The width, points, the source gives a cell spanning one column (HTML): see
     /// [`FTable::widths_from_cells`].
     pub width: Option<f32>,
+    /// Whether the source explicitly started a vertical merge (`mso-yfti-vmerge:restart`).
+    pub vmerge_restart: bool,
+    /// Whether this covered placeholder was synthesized by [`FTable::insert_covered`].
+    pub synthetic_covered: bool,
 }
 
 /// A cell's background picture: the picture at its own size, how it fills the cell, and where an
@@ -904,6 +911,8 @@ impl Default for Cell {
             direction: Default::default(),
             picture: None,
             width: None,
+            vmerge_restart: false,
+            synthetic_covered: false,
         }
     }
 }
@@ -957,7 +966,7 @@ pub struct TableExtra {
     /// Its own space above and below, points (ODT's table margins).
     pub space: [Option<f32>; 2],
     /// How many rows at its top repeat at the top of each page (Word's Repeat as header row;
-    /// ODT's `table:table-header-rows`). Its header cells ([`FCell::header`]) may be more: a
+    /// ODT's `table:table-header-rows`). Its header cells (`FCell::header`) may be more: a
     /// table style's header row is one too.
     pub header_rows: usize,
 }
@@ -996,8 +1005,8 @@ impl FTable {
             let mut g = 0usize;
             let mut ci = 0usize;
             while let Some(c) = self.rows.get(r).and_then(|row| row.get(ci)) {
-                let (span, rs, covered) = (c.colspan.clamp(1, 63) as usize, c.rowspan.clamp(1, 1000) as usize, c.covered);
-                if rs > 1 && !covered {
+                let (span, rs, vmerge_restart) = (c.colspan.clamp(1, 63) as usize, c.rowspan.clamp(1, 1000) as usize, c.vmerge_restart);
+                if rs > 1 {
                     for k in 1..rs {
                         work += 1;
                         if work > MAX_COVERED_WORK {
@@ -1014,8 +1023,14 @@ impl FTable {
                             }
                             x += cc.colspan.clamp(1, 63) as usize;
                         }
+                        if at < row.len() && x == g && row[at].covered && (vmerge_restart || row[at].synthetic_covered) {
+                            // Row already has a matching explicit continuation (when this cell had
+                            // `mso-yfti-vmerge:restart`) or a synthetic placeholder from an earlier
+                            // row. Avoid adding a duplicate covered cell which would make the row ragged.
+                            continue;
+                        }
                         if row.len() < 64 {
-                            row.insert(at, Cell { colspan: span as u32, covered: true, ..Default::default() });
+                            row.insert(at, Cell { colspan: span as u32, covered: true, synthetic_covered: true, ..Default::default() });
                         }
                     }
                 }

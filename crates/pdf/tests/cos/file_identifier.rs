@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::testkit::Pdf;
+use super::testkit::Pdf;
 use craft_pdf::cos::{Algorithm, Document, NewEncryption, Object, PdfString, SaveOptions, write_full, write_incremental};
 
 const ID_HEX: &str = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
@@ -122,7 +122,8 @@ fn caller_entropy_makes_the_new_identifier_reproducible() {
 fn an_encrypted_rewrite_keeps_the_first_identifier_string_its_key_depends_on() {
     for algorithm in [Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256] {
         let mut doc = reopen(source(true));
-        doc.set_encryption(&NewEncryption {
+        // The loop covers RC4-128, which `set_encryption` refuses.
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm,
             user_password: "user",
             owner_password: "owner",
@@ -160,7 +161,7 @@ fn unusable_ids() -> Vec<(&'static str, Option<Object>)> {
 /// An encrypted file whose key is derived from the empty string, with its trailer `/ID` replaced by `id`.
 fn protected_with_id(algorithm: Algorithm, id: Option<Object>) -> Vec<u8> {
     let mut doc = reopen(source_with(Some("/ID [<> <>]")));
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm,
         user_password: "user",
         owner_password: "owner",
@@ -260,7 +261,7 @@ fn separate_fresh_processes_get_different_identifiers() {
         let path = std::env::temp_dir().join(format!("craft-pdf-id-probe-{}-{name}.pdf", std::process::id()));
         let out = std::process::Command::new(&exe)
             // The test binary holds every `cos` test module, so the child test is named by its path.
-            .args(["--exact", "file_identifier::stand_in_for_a_fresh_process", "--nocapture", "--"])
+            .args(["--exact", "integration::cos::file_identifier::stand_in_for_a_fresh_process", "--nocapture", "--"])
             .env(ID_PROBE, &path)
             .output()
             .expect("run this test's own binary as a child");

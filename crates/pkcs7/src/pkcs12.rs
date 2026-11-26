@@ -60,7 +60,7 @@ pub const MIN_PASSWORD_CHARS: usize = 8;
 
 /// The most key-derivation work one [`open`] does, in hash blocks summed over every derivation
 /// in the file. The file names its own iteration counts, so without a budget a crafted file
-/// hangs the caller on the password check. A file written by [`write`] needs about
+/// hangs the caller on the password check. A file written by [`fn@write`] needs about
 /// 2 million; real files from other tools need far less.
 const OPEN_BUDGET: u64 = 10_000_000;
 
@@ -182,6 +182,12 @@ impl Cipher {
         };
         r.map(Zeroizing::new).map_err(|_| wrong())
     }
+}
+
+/// Whether `a` and `b` are equal, in time that depends only on their lengths: the MAC is derived
+/// from the password, so it is compared without stopping at the first differing byte.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn hmac(alg: DigestAlg, key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
@@ -411,7 +417,8 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, Error> {
         let key_len = alg.digest(&[]).len();
         let iterations = budget.spend(alg, iterations, key_len)?;
         let key = pkcs12_kdf(alg, &bmp(password), &salt, 3, iterations, key_len);
-        if hmac(alg, &key, &content)? != *expected {
+        let computed = hmac(alg, &key, &content)?;
+        if !same(&computed, &expected) {
             return Err(Error::WrongPassword);
         }
     }

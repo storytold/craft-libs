@@ -1,0 +1,1412 @@
+//! Layout memory: sizes one pass measures and the next pass places by, the one discard pass a change asks for, what
+//! this pass's measuring runs found, and the measurements bodies keep across passes.
+//!
+//! A body's measuring run leaves a transcript: every value it hands forward (a record by id, a measure or a text the
+//! content beside the body shows, a contribution to an aggregator open around it, the transcripts of the bodies nested
+//! in it, in order) and every measure call each
+//! component in it got. A later pass whose inputs are the body's key takes the transcript instead of running the
+//! content: its records serve this pass and its contributions are made again. The real run then asks each component
+//! the calls the transcript holds, at the measuring run's own proposal and room, and compares; a component added,
+//! removed or answering differently drops the kept transcripts of the bodies the real run is inside (up to a boundary)
+//! and asks for the frame's discard pass, so a change shows in its frame.
+//!
+//! A measuring run can run as a draft (`draft`): its caller sees its result before it hands anything forward for good,
+//! and a draft taken back leaves the pass as it found it.
+
+use crate::runtime::egui::sizing;
+use crate::runtime::frame::{self, PerViewport};
+use craft_behavior::layout_memory::{SizeTween, measure_tolerance, measured_change_asks_for_discard};
+use craft_behavior::{Axis, Proposal};
+use egui::{Context, Id, IdMap, IdSet, Vec2};
+use std::any::Any;
+use std::sync::{Arc, Mutex};
+
+/// What an entry holds.
+#[derive(Clone, Copy, Debug)]
+enum Value {
+    Size(Vec2),
+    #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "size tweens are used by the body step"))]
+    Tween(SizeTween),
+}
+
+impl Value {
+    fn at(self, now: f64) -> Vec2 {
+        match self {
+            Value::Size(size) => size,
+            Value::Tween(tween) => tween.at(now),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct Entry {
+    value: Option<Value>,
+    /// The pass that read the entry for a placement, and what it read.
+    used: Option<(u64, Option<Vec2>)>,
+    /// The frame the size last changed in.
+    changed: Option<u64>,
+    /// The last frame that read or wrote the entry.
+    touched: u64,
+}
+
+/// What a measuring run found for a container (under its id) or one of its regions (under `sub(id, "header")`,
+/// `"footer"`, `"end"` and `"controls"`): the room the container was offered and what the region took. Valid only in the egui pass
+/// that recorded it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Measured {
+    pub room: Vec2,
+    pub took: Vec2,
+    /// The other inputs the measure read, as a fingerprint: the shared column widths its rows were given (0 for none).
+    /// [`emit_record`] sets it.
+    pub inputs: u64,
+}
+
+impl Measured {
+    pub(crate) fn new(room: Vec2, took: Vec2) -> Measured {
+        Measured { room, took, inputs: 0 }
+    }
+
+    /// Whether this record serves a run offered `now` along one axis, where it was offered `was` and what it measures
+    /// took `took`: the rooms are equal (within `tolerance`), or the axis is not `given`, the old room did not bound
+    /// what it took and it fits the room now. The one reuse rule for every record of this pass.
+    pub(crate) fn serves(now: f32, was: f32, given: bool, took: f32, tolerance: f32) -> bool {
+        now == was || (now - was).abs() <= tolerance || (!given && took < was - tolerance && took <= now + tolerance)
+    }
+}
+
+/// A value a measuring run hands to an aggregator open around it (a column group, a label scope). `apply` finds its
+/// target among the aggregators open now and does nothing when that one is not open: an aggregator inside the body
+/// closed inside the run, and the body's transcript holds its result as a record.
+pub(crate) trait Contribution: Send + Sync {
+    fn apply(&self, ctx: &Context);
+
+    /// What the contribution reports: its target and kind by id, and its value. A real run's contributions are
+    /// compared with the transcript's by these. `None` for a report only a measuring run makes.
+    fn report(&self) -> Option<(Id, f32)>;
+
+    /// What takes the contribution back, read before it is made: a [`draft`] that is taken back runs it.
+    fn undo(&self, ctx: &Context) -> TakeBack;
+}
+
+/// Restores what a contribution changed in its aggregator ([`Contribution::undo`]).
+pub(crate) type TakeBack = Box<dyn FnOnce(&Context) + Send + Sync>;
+
+/// What a record holds: a measure, or a text the run found that content outside the body shows (the value text a
+/// viewer shows beside a story). A text is an output of the measuring run as much as its size, so it serves exactly
+/// when the run's measure does.
+#[derive(Clone, Debug, PartialEq)]
+enum Recorded {
+    Measured(Measured),
+    /// The width a row's shrink step gave a unit, as a measure, and whether it narrowed the unit or dropped it.
+    Shrink(Measured, ShrinkGiven),
+    Text(Option<Arc<str>>),
+}
+
+/// One thing a measuring run handed forward, in the order it did.
+enum Item {
+    Record(Id, Recorded),
+    Contribute(Arc<dyn Contribution>),
+    Body(Id, Arc<Transcript>),
+}
+
+/// The inputs outside a measure that it read (`read_input`), by key: the widest value of each.
+pub(crate) type Inputs = IdMap<f32>;
+
+/// One measure call a component got, the inputs besides its room it read, and its answer.
+#[derive(Clone)]
+pub(crate) struct Call {
+    pub proposal: Proposal,
+    pub room: Option<f32>,
+    pub inputs: Inputs,
+    pub took: Vec2,
+}
+
+/// What the components of a body's content got from its measuring run: each measure call, and whether it filled the
+/// body's main axis (`Some(axis)`).
+#[derive(Clone, Default)]
+struct Leaf {
+    fill: Option<Axis>,
+    calls: Vec<Call>,
+}
+
+/// What a body's measuring run found.
+struct Transcript {
+    /// The inputs the run measured under.
+    key: Box<dyn Any + Send + Sync>,
+    items: Vec<Item>,
+    leaves: IdMap<Leaf>,
+    /// What the real run of the pass that measured found for the body's regions and its rows that run lazily: the
+    /// backstop for content that allocates without a component.
+    real: Mutex<Option<IdMap<Vec2>>>,
+}
+
+/// A record of this pass's runs.
+#[derive(Clone)]
+struct Found {
+    /// The cumulative pass number that recorded it.
+    pass: u64,
+    recorded: Recorded,
+    /// The body whose kept transcript gave it, rather than a run of this pass.
+    kept: Option<Id>,
+}
+
+/// What a body's last measuring run found, kept for later passes.
+struct Kept {
+    transcript: Arc<Transcript>,
+    /// Other inputs the transcript's records served in the pass that measured (`kept_also_under`).
+    aliases: Vec<Box<dyn Any + Send + Sync>>,
+    /// False once a real run found the content changed.
+    valid: bool,
+    /// The last frame a real run found the content changed under the same inputs: content that changes measures
+    /// again in that frame and the next.
+    moved: Option<u64>,
+    touched: u64,
+}
+
+/// A measuring run whose hand-forwards can be taken back ([`draft`]), and what restores the pass to how it was before it.
+struct Draft {
+    /// How many entries `measuring` had open when the draft began: the ones below are outside it.
+    floor: usize,
+    /// The innermost transcript outside the draft, by its place in `measuring`, and how many items it held then.
+    items: Option<(usize, usize)>,
+    /// What the run changed, in order; taken back in reverse.
+    undo: Vec<Undo>,
+}
+
+/// One change a draft made outside itself, with what was there before.
+enum Undo {
+    /// The record under the id, before the draft's emit replaced it.
+    Record(Id, Option<Found>),
+    /// The body's kept and served transcripts, before the draft's run of the body replaced them.
+    Kept(Id, Option<Kept>, Option<Arc<Transcript>>),
+    /// The draft added an alias to the body's kept transcript.
+    Alias(Id),
+    /// A component's entry in the transcript open at the place, before the draft added to it.
+    Leaf(usize, Id, Option<Leaf>),
+    /// An input the entry open at the place read, before the draft read it.
+    Input(usize, Id, Option<f32>),
+    Contribution(TakeBack),
+    /// What restores a write the draft made to a store outside layout memory (`note_undo`).
+    Store(TakeBack),
+}
+
+impl Scope {
+    fn boundary() -> Scope {
+        Scope { body: None, boundary: true, served: None, fresh: None, visited: IdSet::default(), fills: IdSet::default(), reported: Vec::new() }
+    }
+}
+
+/// What a measuring run has open: a body's transcript, content whose emits no enclosing transcript takes, a probe, or
+/// a component's measure call.
+enum Open {
+    /// `inputs`: what the body's content read outside the body.
+    Body {
+        id: Id,
+        items: Vec<Item>,
+        leaves: IdMap<Leaf>,
+        inputs: Inputs,
+    },
+    Boundary,
+    /// A run that asks a question of content and reads nothing the pass found outside it (`probing`).
+    Probe,
+    /// `inputs`: what the measure read outside its own room.
+    Call {
+        inputs: Inputs,
+    },
+}
+
+/// A content scope of the real run.
+struct Scope {
+    body: Option<Id>,
+    /// Whether a change found inside stops here: a collection's rows, a layer's content.
+    boundary: bool,
+    /// The transcript the body's records came from in this pass (checked against), or the one its measuring run of
+    /// this pass left (whose `real` this run fills).
+    served: Option<Arc<Transcript>>,
+    fresh: Option<Arc<Transcript>>,
+    visited: IdSet,
+    fills: IdSet,
+    /// What the real run contributed in this scope.
+    reported: Vec<(Id, f32)>,
+}
+
+#[derive(Default)]
+pub(crate) struct Entries {
+    entries: IdMap<Entry>,
+    measured: IdMap<Found>,
+    kept: IdMap<Kept>,
+    /// The bodies whose records a kept transcript gave in this pass, with that transcript.
+    served: IdMap<Arc<Transcript>>,
+    measuring: Vec<Open>,
+    scopes: Vec<Scope>,
+    /// The kept calls a real run asks again, as the transcript, the component and the call's index, innermost last:
+    /// `read_input` gives what they read.
+    replaying: Vec<(Arc<Transcript>, Id, usize)>,
+    /// The drafts open, innermost last.
+    drafts: Vec<Draft>,
+    /// This pass asked for the frame's discard pass; the end hook requests it.
+    ask: bool,
+    /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
+    asks: u64,
+    /// The frame whose one discard pass the end hook requested.
+    asked: Option<u64>,
+}
+
+impl Entries {
+    /// Asks for the frame's discard pass.
+    fn ask_discard(&mut self) {
+        self.ask = true;
+        self.asks += 1;
+    }
+
+    /// A real run found the content changed: drops the kept transcripts of `body` and of every body the real run is
+    /// inside, up to the first boundary, and asks for the discard pass.
+    fn changed(&mut self, frame: u64, body: Option<Id>) {
+        log::debug!(target: sizing::RERUN_LOG, "the content of {body:?} changed from its kept transcript");
+        let invalidate = |kept: &mut IdMap<Kept>, body: Id| {
+            if let Some(kept) = kept.get_mut(&body) {
+                kept.valid = false;
+                kept.moved = Some(frame);
+            }
+        };
+        if let Some(body) = body {
+            invalidate(&mut self.kept, body);
+        }
+        for scope in self.scopes.iter().rev() {
+            if let Some(body) = scope.body {
+                invalidate(&mut self.kept, body);
+            }
+            if scope.boundary {
+                break;
+            }
+        }
+        self.ask_discard();
+    }
+
+    /// The innermost open transcript: a body's or a boundary, past the measure calls open inside it.
+    fn transcript(&mut self) -> Option<&mut Open> {
+        self.measuring.iter_mut().rev().find(|open| !matches!(open, Open::Call { .. }))
+    }
+
+    fn push(&mut self, item: Item) {
+        if let Some(Open::Body { items, .. }) = self.transcript() {
+            items.push(item);
+        }
+    }
+
+    /// Where the innermost open transcript sits in `measuring`.
+    fn transcript_at(&self) -> Option<usize> {
+        self.measuring.iter().rposition(|open| !matches!(open, Open::Call { .. }))
+    }
+
+    /// The component entry `id` of the innermost open body's transcript, to add to: a draft that holds no such body
+    /// notes what it was.
+    fn leaf(&mut self, id: Id) -> Option<&mut Leaf> {
+        let at = self.transcript_at()?;
+        let outside = self.drafts.last().is_some_and(|draft| at < draft.floor);
+        let Open::Body { leaves, .. } = &mut self.measuring[at] else { return None };
+        if outside && let Some(draft) = self.drafts.last_mut() {
+            draft.undo.push(Undo::Leaf(at, id, leaves.get(&id).cloned()));
+        }
+        Some(leaves.entry(id).or_default())
+    }
+
+    /// Keeps a draft that ended: its changes stand, and an open draft around it takes them back with its own. The
+    /// outermost one finds the records it replaced from a kept transcript at the same room changed, as each emit
+    /// outside a draft does.
+    fn keep(&mut self, draft: Draft, frame: u64, pass: u64, tolerance: f32) {
+        if let Some(outer) = self.drafts.last_mut() {
+            let floor = outer.floor;
+            outer.undo.extend(draft.undo.into_iter().filter(|undo| match undo {
+                Undo::Leaf(at, ..) | Undo::Input(at, ..) => *at < floor,
+                _ => true,
+            }));
+            return;
+        }
+        let changed: Vec<Id> = draft
+            .undo
+            .iter()
+            .filter_map(|undo| match undo {
+                Undo::Record(id, Some(last)) => kept_differs(last, &self.measured.get(id)?.recorded, pass, tolerance),
+                _ => None,
+            })
+            .collect();
+        for from in changed {
+            self.changed(frame, Some(from));
+        }
+    }
+
+    /// Takes a draft that ended back: the records, kept transcripts and transcript entries are as before it. Returns
+    /// what takes its contributions and its writes to other stores back, in reverse order, to run outside the memory's
+    /// lock, each with whether it takes a contribution back.
+    fn take_back(&mut self, draft: Draft) -> Vec<(TakeBack, bool)> {
+        let mut later = Vec::new();
+        for undo in draft.undo.into_iter().rev() {
+            match undo {
+                Undo::Record(id, last) => match last {
+                    Some(found) => drop(self.measured.insert(id, found)),
+                    None => drop(self.measured.remove(&id)),
+                },
+                Undo::Kept(body, kept, served) => {
+                    match kept {
+                        Some(kept) => drop(self.kept.insert(body, kept)),
+                        None => drop(self.kept.remove(&body)),
+                    }
+                    match served {
+                        Some(served) => drop(self.served.insert(body, served)),
+                        None => drop(self.served.remove(&body)),
+                    }
+                }
+                Undo::Alias(body) => {
+                    if let Some(kept) = self.kept.get_mut(&body) {
+                        kept.aliases.pop();
+                    }
+                }
+                Undo::Leaf(at, id, leaf) => {
+                    if let Some(Open::Body { leaves, .. }) = self.measuring.get_mut(at) {
+                        match leaf {
+                            Some(leaf) => drop(leaves.insert(id, leaf)),
+                            None => drop(leaves.remove(&id)),
+                        }
+                    }
+                }
+                Undo::Input(at, key, value) => {
+                    if let Some(Open::Body { inputs, .. } | Open::Call { inputs }) = self.measuring.get_mut(at) {
+                        match value {
+                            Some(value) => drop(inputs.insert(key, value)),
+                            None => drop(inputs.remove(&key)),
+                        }
+                    }
+                }
+                Undo::Contribution(undo) => later.push((undo, true)),
+                Undo::Store(undo) => later.push((undo, false)),
+            }
+        }
+        if let Some((at, len)) = draft.items
+            && let Some(Open::Body { items, .. }) = self.measuring.get_mut(at)
+        {
+            items.truncate(len);
+        }
+        later
+    }
+
+    /// Whether a probe is open (`probing`).
+    fn probing(&self) -> bool {
+        self.measuring.iter().any(|open| matches!(open, Open::Probe))
+    }
+
+    /// The innermost real-run scope when it checks a kept transcript.
+    fn checking(&mut self) -> Option<&mut Scope> {
+        self.scopes.last_mut().filter(|scope| scope.served.is_some())
+    }
+}
+
+/// The pass, frame and clock of the running viewport, read before the service lock is taken.
+struct Moment {
+    viewport: egui::ViewportId,
+    pass: u64,
+    frame: u64,
+    now: f64,
+}
+
+impl Moment {
+    fn of(ctx: &Context) -> Moment {
+        let facts = frame::facts(ctx);
+        Moment { viewport: facts.viewport, pass: facts.pass_nr, frame: facts.frame_nr, now: facts.now }
+    }
+}
+
+fn with<R>(ctx: &Context, moment: &Moment, f: impl FnOnce(&mut Entries) -> R) -> R {
+    let (out, asked) = PerViewport::<Entries>::with(ctx, moment.viewport, |memory| {
+        let asks = memory.asks;
+        let out = f(memory);
+        (out, memory.asks != asks)
+    });
+    // The ask reaches egui only in the end hook, after the runs of the pass: the record open around the run that asked
+    // notes it here, as every other discard request is counted in egui's output (`replay::close`).
+    if asked {
+        crate::runtime::replay::note_discard(ctx);
+    }
+    out
+}
+
+/// The size entry under `id` as this pass places by it. A placement that read the entry (`None` on a block's
+/// first appearance) compares it with the real size at `record`.
+pub(crate) fn read(ctx: &Context, id: Id) -> Option<Vec2> {
+    if crate::runtime::measure::active(ctx) {
+        return peeking(ctx, |read| read(id));
+    }
+    crate::runtime::replay::note_layout_keep(ctx, id);
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        let entry = memory.entries.entry(id).or_default();
+        entry.touched = moment.frame;
+        let value = entry.value.map(|value| value.at(moment.now));
+        if entry.used.is_none_or(|(pass, _)| pass != moment.pass) {
+            entry.used = Some((moment.pass, value));
+        }
+        value
+    })
+}
+
+/// The size entry under `id` without a placement using it.
+#[cfg(feature = "testing")]
+pub(crate) fn peek(ctx: &Context, id: Id) -> Option<Vec2> {
+    peeking(ctx, |read| read(id))
+}
+
+/// Runs `f` with a reader of the size entries that takes no placement and fixes the pass and clock once, for a
+/// caller that reads many entries.
+pub(crate) fn peeking<R>(ctx: &Context, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| f(&|id| memory.entries.get(&id).and_then(|entry| entry.value).map(|value| value.at(moment.now))))
+}
+
+/// Records the size a block measured this pass. A change asks for a discard pass only under the tolerance
+/// rule: this pass placed with the old value, and the size did not also change in the previous frame.
+pub(crate) fn record(ctx: &Context, id: Id, real: Vec2) {
+    crate::runtime::replay::note_layout_keep(ctx, id);
+    let moment = Moment::of(ctx);
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    with(ctx, &moment, |memory| {
+        let entry = memory.entries.entry(id).or_default();
+        entry.touched = moment.frame;
+        let placed = entry.used.take().filter(|(pass, _)| *pass == moment.pass).map(|(_, value)| value);
+        let changed_last_frame = entry.changed.is_some_and(|frame| frame + 1 == moment.frame);
+        let previous = entry.value.map(|value| value.at(moment.now));
+        if let Some(recorded) = placed
+            && measured_change_asks_for_discard(recorded, real, changed_last_frame, tolerance)
+        {
+            log::debug!(target: sizing::RERUN_LOG, "{id:?} measured {real:?}; the pass placed it by {recorded:?}");
+            memory.ask_discard();
+        }
+        let entry = memory.entries.entry(id).or_default();
+        let differs = previous.is_none_or(|old| (old - real).abs().max_elem() > tolerance);
+        if differs {
+            entry.changed = Some(moment.frame);
+        }
+        entry.value = Some(Value::Size(if differs { real } else { previous.unwrap_or(real) }));
+    });
+}
+
+/// Whether this pass is a real run's: no measuring run is open and egui does not run a sizing pass.
+fn real(ctx: &Context) -> bool {
+    !crate::runtime::measure::active(ctx)
+}
+
+/// Hands forward what a measuring run found under `id`: it serves the rest of this pass, and joins the transcript of
+/// the innermost body whose measuring run is open. A run of this pass that finds, at the same room, something other
+/// than what a kept transcript gave the pass shows that transcript changed.
+pub(crate) fn emit_record(ctx: &Context, id: Id, measured: Measured) {
+    emit(ctx, id, Recorded::Measured(measured));
+}
+
+/// Whether a row's shrink step narrowed a unit below what it asks for in no room, and whether it dropped the unit out
+/// of the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShrinkGiven {
+    pub dropped: bool,
+    pub narrowed: bool,
+}
+
+/// Hands forward what a row's shrink step gave a unit under `id`: its width as `measured` and what else it `given`.
+/// It serves as [`emit_record`]'s measure does.
+pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, given: ShrinkGiven) {
+    emit(ctx, id, Recorded::Shrink(measured, given));
+}
+
+/// Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
+/// hands forward a measure: it serves the rest of this pass, and a later pass that takes the kept measurement of a body
+/// it ran in gets it with that measurement, where the content that found it does not run. A real run emits it too: a
+/// text other than the one a kept transcript gave the pass shows that transcript changed.
+///
+/// A memoized view that replays emits it again.
+pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>) {
+    emit(ctx, id, Recorded::Text(text.map(Arc::from)));
+    super::replay::journal(ctx, || (id, text.map(Arc::<str>::from)), |ctx, (id, text)| emit(ctx, *id, Recorded::Text(text.clone())));
+}
+
+/// The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.
+pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass) {
+        Some(Found { recorded: Recorded::Text(text), .. }) => text.clone(),
+        _ => None,
+    })
+}
+
+fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    with(ctx, &moment, |memory| {
+        // A measure keys on what it read: the room, and the inputs the innermost open body read so far.
+        if let Recorded::Measured(measured) | Recorded::Shrink(measured, _) = &mut recorded {
+            measured.inputs = memory
+                .measuring
+                .iter()
+                .rev()
+                .find_map(|open| match open {
+                    Open::Body { inputs, .. } => Some(fingerprint(inputs)),
+                    Open::Boundary | Open::Probe | Open::Call { .. } => None,
+                })
+                .unwrap_or(0);
+        }
+        let last = memory.measured.insert(id, Found { pass, recorded: recorded.clone(), kept: None });
+        // A draft finds a change when it is kept, against the record it replaced.
+        if let Some(draft) = memory.drafts.last_mut() {
+            draft.undo.push(Undo::Record(id, last));
+        } else if let Some(from) = last.and_then(|last| kept_differs(&last, &recorded, pass, tolerance)) {
+            memory.changed(moment.frame, Some(from));
+        }
+        memory.push(Item::Record(id, recorded));
+    });
+}
+
+/// The body whose kept transcript gave `last` to this pass, when a run of the pass found, at the same room and inputs,
+/// something else (`now`): that transcript changed.
+fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Option<Id> {
+    let Found { pass: at, recorded: was, kept: Some(from) } = last else { return None };
+    let measures = |was: &Measured, now: &Measured, others_differ: bool| {
+        was.inputs == now.inputs
+            && (was.room - now.room).abs().max_elem() <= tolerance
+            && ((was.took - now.took).abs().max_elem() > tolerance || others_differ)
+    };
+    let differs = match (was, now) {
+        (Recorded::Measured(was), Recorded::Measured(now)) => measures(was, now, false),
+        (Recorded::Shrink(was, was_given), Recorded::Shrink(now, now_given)) => measures(was, now, was_given != now_given),
+        (was, now) => was != now,
+    };
+    if *at != pass || !differs {
+        return None;
+    }
+    #[cfg(feature = "testing")]
+    if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
+        eprintln!("layout memory: a run of this pass found {now:?}, the kept record of {from:?} said {was:?}");
+    }
+    Some(*from)
+}
+
+/// How many bodies and measure calls a measuring run has open: an aggregator opened now hands [`read_input`] this
+/// depth, so only the bodies and calls opened inside it count what they read from it as an input.
+pub(crate) fn depth(ctx: &Context) -> usize {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.measuring.len())
+}
+
+/// Where the measure calls a measuring run has open on top of its innermost transcript start: the column the
+/// innermost call lays out in is outside each of them, since each call measures in the `Ui` of the one around it.
+pub(crate) fn calls_from(ctx: &Context) -> usize {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.measuring.iter().rposition(|open| !matches!(open, Open::Call { .. })).map_or(0, |at| at + 1))
+}
+
+/// The bodies and measure calls open from `from` on read `value` from the input `key` outside them (a shared column's
+/// width, the column a component sizes by): the records a body emits key on it, and a call keeps it. Returns the value
+/// to measure with: while a real run asks a kept call again, the value that call read.
+pub(crate) fn read_input(ctx: &Context, from: usize, key: Id, value: f32) -> f32 {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        let replayed = memory.replaying.iter().rev().find_map(|(transcript, id, at)| transcript.leaves.get(id)?.calls.get(*at)?.inputs.get(&key));
+        if let Some(read) = replayed {
+            return *read;
+        }
+        let floor = memory.drafts.last().map_or(0, |draft| draft.floor);
+        for (at, open) in memory.measuring.iter_mut().enumerate().skip(from) {
+            if let Open::Body { inputs, .. } | Open::Call { inputs } = open {
+                if at < floor
+                    && let Some(draft) = memory.drafts.last_mut()
+                {
+                    draft.undo.push(Undo::Input(at, key, inputs.get(&key).copied()));
+                }
+                let read = inputs.entry(key).or_insert(value);
+                *read = read.max(value);
+            }
+        }
+        value
+    })
+}
+
+/// Runs a component's measure `f` as a measure call: in a measuring run, returns with its answer the inputs it read
+/// outside its room, which the call's transcript entry keeps.
+pub(crate) fn measure_call<R>(ctx: &Context, f: impl FnOnce() -> R) -> (R, Inputs) {
+    if !crate::runtime::measure::active(ctx) {
+        return (f(), Inputs::default());
+    }
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.measuring.push(Open::Call { inputs: Inputs::default() }));
+    let out = f();
+    let inputs = with(ctx, &moment, |memory| {
+        let at = memory.measuring.iter().rposition(|open| matches!(open, Open::Call { .. }))?;
+        match memory.measuring.remove(at) {
+            Open::Call { inputs } => Some(inputs),
+            _ => None,
+        }
+    });
+    (out, inputs.unwrap_or_default())
+}
+
+fn fingerprint(inputs: &Inputs) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    if inputs.is_empty() {
+        return 0;
+    }
+    let mut sorted: Vec<(u64, u32)> = inputs.iter().map(|(key, value)| (key.value(), value.to_bits())).collect();
+    sorted.sort_unstable();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    sorted.hash(&mut hasher);
+    hasher.finish().max(1)
+}
+
+/// Makes `contribution` now. A measuring run joins it to the transcript of the innermost body whose run is open; a
+/// real run inside a body a kept transcript serves keeps it to compare with the transcript's.
+pub(crate) fn contribute(ctx: &Context, contribution: Arc<dyn Contribution>) {
+    let moment = Moment::of(ctx);
+    let measuring = crate::runtime::measure::active(ctx);
+    let drafting = measuring && with(ctx, &moment, |memory| !memory.drafts.is_empty());
+    let undo = drafting.then(|| guard::emitting(|| contribution.undo(ctx)));
+    guard::emitting(|| contribution.apply(ctx));
+    #[cfg(feature = "testing")]
+    if measuring {
+        crate::runtime::measure::count_contribution(ctx, 1);
+    }
+    with(ctx, &moment, |memory| {
+        if measuring {
+            if let (Some(undo), Some(draft)) = (undo, memory.drafts.last_mut()) {
+                draft.undo.push(Undo::Contribution(undo));
+            }
+            memory.push(Item::Contribute(contribution));
+        } else if let (Some(scope), Some(report)) = (memory.checking(), contribution.report()) {
+            scope.reported.push(report);
+        }
+    });
+}
+
+/// Runs the measuring run `run` as a draft: everything it hands forward (records, kept transcripts, what it adds to the
+/// transcript open around it, contributions) can be taken back. `keep` decides from its result. Kept, the run stands as
+/// if it had run plainly; taken back, the pass is as it was before the run, so a run that follows replaces it (a body
+/// that fills measured at its content height, then laid out at its room) or none does (a run that only asks). Returns
+/// the result and whether it was kept.
+pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce(&R) -> bool) -> (R, bool) {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        let floor = memory.measuring.len();
+        let items = memory.transcript_at().and_then(|at| match &memory.measuring[at] {
+            Open::Body { items, .. } => Some((at, items.len())),
+            _ => None,
+        });
+        memory.drafts.push(Draft { floor, items, undo: Vec::new() });
+    });
+    let out = run();
+    let kept = keep(&out);
+    let pass = ctx.cumulative_pass_nr();
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    let undo = with(ctx, &moment, |memory| {
+        let draft = memory.drafts.pop()?;
+        if kept {
+            memory.keep(draft, moment.frame, pass, tolerance);
+            return None;
+        }
+        Some(memory.take_back(draft))
+    });
+    for (undo, contribution) in undo.into_iter().flatten() {
+        guard::emitting(|| undo(ctx));
+        #[cfg(feature = "testing")]
+        if contribution {
+            crate::runtime::measure::count_contribution(ctx, -1);
+        }
+        let _ = contribution;
+    }
+    (out, kept)
+}
+
+/// Whether a draft is open (`draft`): a store outside layout memory that a measuring run writes hands what restores
+/// the write to `note_undo`.
+pub(crate) fn drafting(ctx: &Context) -> bool {
+    with(ctx, &Moment::of(ctx), |memory| !memory.drafts.is_empty())
+}
+
+/// Adds `undo`, which restores a write to a store outside layout memory (the lazy children's entries), to the innermost
+/// open draft: a draft taken back runs it, so the draft leaves nothing behind; one kept hands it to the draft around it.
+/// Nothing outside a draft.
+pub(crate) fn note_undo(ctx: &Context, undo: TakeBack) {
+    with(ctx, &Moment::of(ctx), |memory| {
+        if let Some(draft) = memory.drafts.last_mut() {
+            draft.undo.push(Undo::Store(undo));
+        }
+    });
+}
+
+/// Runs `f` as content whose emits no enclosing transcript takes, and whose real run no enclosing body checks: a
+/// collection's rows and its largest-row probe (kept by its own transcript), a layer's content, a lazy
+/// child. `stops_changes`: a change the real run finds inside drops no kept transcript outside. Content whose extent
+/// in the body around it comes from its measure (a lazy child) lets the change through.
+pub(crate) fn boundary<R>(ctx: &Context, stops_changes: bool, f: impl FnOnce() -> R) -> R {
+    let moment = Moment::of(ctx);
+    let measuring = crate::runtime::measure::active(ctx);
+    with(ctx, &moment, |memory| {
+        if measuring {
+            memory.measuring.push(Open::Boundary);
+        } else {
+            memory.scopes.push(Scope { boundary: stops_changes, ..Scope::boundary() });
+        }
+    });
+    let out = f();
+    with(ctx, &moment, |memory| {
+        if measuring {
+            if let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Boundary)) {
+                memory.measuring.remove(at);
+            }
+        } else {
+            memory.scopes.pop();
+        }
+    });
+    out
+}
+
+/// Runs `f`, a measuring run that asks a question of content (the least width of a row's body unit), as a probe: it
+/// reads no record or kept transcript, so every body inside measures its content, and it runs as a [`draft`] taken
+/// back, so it leaves nothing behind (no record, text, transcript, contribution or input of a run outside it). The runs
+/// of the pass outside it find what they would without it.
+pub(crate) fn probing<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.measuring.push(Open::Probe));
+    let (out, _) = draft(ctx, f, |_| false);
+    with(ctx, &moment, |memory| {
+        if let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Probe)) {
+            memory.measuring.remove(at);
+        }
+    });
+    out
+}
+
+/// The measure calls component `id` got in this run (`calls`: each with the inputs it read, `measure_call`, and its
+/// answer). A measuring run adds them to the innermost body's transcript. A real run inside a body whose records a
+/// kept transcript gave checks each call the transcript holds for the component, once per pass: a kept call this run
+/// made too (same proposal and room, no inputs read besides the room) compares with this run's answer, and any other
+/// is asked again (`ask`) under the inputs it read. `ask` runs outside the memory's lock.
+pub(crate) fn leaf_call(ctx: &Context, id: Id, calls: &mut [Call], ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
+    let moment = Moment::of(ctx);
+    if !real(ctx) {
+        with(ctx, &moment, |memory| {
+            if let Some(leaf) = memory.leaf(id) {
+                let kept = &mut leaf.calls;
+                for call in calls {
+                    if !kept.iter().any(|kept| kept.proposal == call.proposal && kept.room == call.room) {
+                        let inputs = std::mem::take(&mut call.inputs);
+                        kept.push(Call { proposal: call.proposal, room: call.room, inputs, took: call.took });
+                    }
+                }
+            }
+        });
+        return;
+    }
+    check(ctx, &moment, id, calls, ask);
+}
+
+fn check(ctx: &Context, moment: &Moment, id: Id, made: &[Call], mut ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
+    let transcript = with(ctx, moment, |memory| {
+        let scope = memory.checking()?;
+        if !scope.visited.insert(id) {
+            return None;
+        }
+        scope.served.clone()
+    });
+    let Some(transcript) = transcript else { return };
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    // A component the transcript does not hold was added; one that answers differently under the inputs it read then
+    // changed. An input that changed since (a shared column a later row widened in the measuring run's sweep) is not a
+    // change of this component: the input's own records and reports are checked where they are made.
+    let same = transcript.leaves.get(&id).is_some_and(|leaf| {
+        leaf.calls.iter().enumerate().all(|(at, call)| {
+            let made = made.iter().find(|made| call.inputs.is_empty() && made.proposal == call.proposal && made.room == call.room);
+            let now = match made {
+                Some(made) => made.took,
+                None => {
+                    with(ctx, moment, |memory| memory.replaying.push((transcript.clone(), id, at)));
+                    let now = ask(call.proposal, call.room);
+                    with(ctx, moment, |memory| memory.replaying.pop());
+                    now
+                }
+            };
+            (now - call.took).abs().max_elem() <= tolerance
+        })
+    });
+    if !same {
+        mismatch(ctx, moment, id);
+    }
+}
+
+fn mismatch(ctx: &Context, moment: &Moment, what: Id) {
+    log::debug!(target: sizing::RERUN_LOG, "a kept transcript changed at {what:?}");
+    #[cfg(feature = "testing")]
+    if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
+        eprintln!("layout memory: a kept transcript changed at {what:?}\n{}", std::backtrace::Backtrace::force_capture());
+    }
+    with(ctx, moment, |memory| memory.changed(moment.frame, None));
+}
+
+/// Component `id` fills the main axis `axis` of the body `body` it sits in. A measuring run adds it to `body`'s
+/// transcript; a real run checks that the transcript says so.
+pub(crate) fn leaf_fill(ctx: &Context, id: Id, body: Id, axis: Axis) {
+    let moment = Moment::of(ctx);
+    let measuring = !real(ctx);
+    let same = with(ctx, &moment, |memory| {
+        if measuring {
+            if let Some(Open::Body { id: open, .. }) = memory.transcript()
+                && *open == body
+                && let Some(leaf) = memory.leaf(id)
+            {
+                leaf.fill = Some(axis);
+            }
+            return true;
+        }
+        let Some(scope) = memory.checking().filter(|scope| scope.body == Some(body)) else { return true };
+        scope.fills.insert(id);
+        scope.served.as_ref().is_some_and(|transcript| transcript.leaves.get(&id).is_some_and(|leaf| leaf.fill == Some(axis)))
+    });
+    if !same {
+        mismatch(ctx, &moment, id);
+    }
+}
+
+/// The least component `id` takes along `axis` in the body whose main axis it fills: the `Proposal::Min` answer its
+/// body's first sweep asked of it (`layout::counting_fills`), as the transcript of that body holds it. A measuring run
+/// reads the transcript open now; a real run the one its content scope is checked against, or the one this pass's
+/// measuring run left. 0 when the body asked it none. The answer is the transcript's, so it is asked again only when
+/// the body measures again.
+pub(crate) fn fill_least(ctx: &Context, id: Id, axis: Axis) -> f32 {
+    fn least_of(leaf: &Leaf, axis: Axis) -> Option<f32> {
+        let call = leaf.calls.iter().find(|call| call.proposal == Proposal::Min)?;
+        Some(if axis == Axis::X { call.took.x } else { call.took.y })
+    }
+    let moment = Moment::of(ctx);
+    let measuring = !real(ctx);
+    with(ctx, &moment, |memory| {
+        let least = if measuring {
+            match memory.transcript() {
+                Some(Open::Body { leaves, .. }) => leaves.get(&id).and_then(|leaf| least_of(leaf, axis)),
+                _ => None,
+            }
+        } else {
+            let scope = memory.scopes.last();
+            let transcript = scope.and_then(|scope| scope.served.as_ref().or(scope.fresh.as_ref()));
+            transcript.and_then(|transcript| transcript.leaves.get(&id)).and_then(|leaf| least_of(leaf, axis))
+        };
+        least.unwrap_or(0.0)
+    })
+}
+
+/// What a real run found under `id` for the innermost body that does not come from a component: a region's size, a
+/// lazy row's extent. The pass that measured the body keeps it; a pass its kept transcript serves compares.
+pub(crate) fn backstop(ctx: &Context, id: Id, took: Vec2) {
+    if !real(ctx) {
+        return;
+    }
+    let moment = Moment::of(ctx);
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    let same = with(ctx, &moment, |memory| {
+        let Some(scope) = memory.scopes.last() else { return true };
+        if let Some(fresh) = &scope.fresh {
+            fresh.real.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_default().insert(id, took);
+            return true;
+        }
+        let Some(served) = &scope.served else { return true };
+        let real = served.real.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        real.as_ref().is_none_or(|real| real.get(&id).is_some_and(|was| (*was - took).abs().max_elem() <= tolerance))
+    });
+    if !same {
+        mismatch(ctx, &moment, id);
+    }
+}
+
+/// What a measuring run of this pass found under `id`, or a kept transcript gave this pass; `None` when neither.
+pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
+        Some(Found { recorded: Recorded::Measured(measured), .. }) => Some(*measured),
+        _ => None,
+    })
+}
+
+/// What a row's shrink step of this pass gave the unit under `id` ([`emit_shrink`]): its width as a measure and
+/// whether it narrowed or dropped the unit.
+pub(crate) fn shrink(ctx: &Context, id: Id) -> Option<(Measured, ShrinkGiven)> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
+        Some(Found { recorded: Recorded::Shrink(measured, given), .. }) => Some((*measured, *given)),
+        _ => None,
+    })
+}
+
+/// Whether a run of this pass, not a kept transcript, recorded what serves under `id`.
+pub(crate) fn run_found(ctx: &Context, id: Id) -> bool {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| !memory.probing() && memory.measured.get(&id).is_some_and(|found| found.pass == pass && found.kept.is_none()))
+}
+
+/// Opens the measuring run of `body`: what it hands forward until `end_measure` becomes its transcript.
+pub(crate) fn begin_measure(ctx: &Context, body: Id) {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        memory.measuring.push(Open::Body { id: body, items: Vec::new(), leaves: IdMap::default(), inputs: Inputs::default() })
+    });
+}
+
+/// Closes the measuring run of `body` and keeps its transcript under the inputs `key` it ran under.
+pub(crate) fn end_measure<K: PartialEq + Send + Sync + 'static>(ctx: &Context, body: Id, key: K) {
+    crate::runtime::replay::note_layout_keep(ctx, body);
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Body { id, .. } if *id == body)) else { return };
+        let Open::Body { items, leaves, .. } = memory.measuring.remove(at) else { return };
+        let transcript = Arc::new(Transcript { key: Box::new(key), items, leaves, real: Mutex::new(None) });
+        let served = memory.served.remove(&body);
+        let last = memory.kept.remove(&body);
+        let moved = last.as_ref().and_then(|last| last.moved);
+        memory.kept.insert(body, Kept { transcript: transcript.clone(), aliases: Vec::new(), valid: true, moved, touched: moment.frame });
+        if let Some(draft) = memory.drafts.last_mut() {
+            draft.undo.push(Undo::Kept(body, last, served));
+        }
+        memory.push(Item::Body(body, transcript));
+    });
+}
+
+/// The records `body`'s measuring run of this pass left also serve the inputs `key` (a real run offers its body other
+/// inputs than an enclosing measuring run did, and the records still serve them): a later pass offering `key` takes the
+/// transcript too.
+pub(crate) fn kept_also_under<K: PartialEq + Send + Sync + 'static>(ctx: &Context, body: Id, key: K) {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| {
+        let fresh = memory.measured.get(&body).is_some_and(|found| found.pass == pass && found.kept.is_none());
+        let Some(kept) = memory.kept.get_mut(&body).filter(|_| fresh) else { return };
+        let known = kept.transcript.key.downcast_ref::<K>() == Some(&key) || kept.aliases.iter().any(|alias| alias.downcast_ref::<K>() == Some(&key));
+        if !known && kept.aliases.len() < 2 {
+            kept.aliases.push(Box::new(key));
+            if let Some(draft) = memory.drafts.last_mut() {
+                draft.undo.push(Undo::Alias(body));
+            }
+        }
+    });
+}
+
+/// Whether the running pass may take kept transcripts: it is not a rerun that shows something the measuring pass did
+/// not see (an edit, a held update, input, an app's own reason).
+fn reuse_allowed(ctx: &Context) -> bool {
+    sizing::rerun_reasons(ctx).is_none_or(|reasons| !reasons.is_empty() && reasons.iter().all(|reason| *reason == sizing::Rerun::Layout))
+}
+
+/// Whether `body`, offered the inputs `key`, takes its kept transcript in this pass instead of measuring: the inputs
+/// are the ones it measured under, no real run since found its content changed, the content did not change in this
+/// frame or the last, and the pass may take kept transcripts. When it does, the transcript's records serve this pass,
+/// its contributions are made again, and the bodies nested in it take theirs as well.
+///
+/// Only the outermost measuring run takes a kept transcript (a body's own measuring run, from its real run). Inside an
+/// enclosing measuring run every body runs its content, so a show call runs its closure and returns its result.
+pub(crate) fn kept_serves<K: PartialEq + Send + Sync + 'static>(ctx: &Context, body: Id, key: &K) -> bool {
+    if !reuse_allowed(ctx) || !crate::runtime::measure::outermost(ctx) {
+        return false;
+    }
+    crate::runtime::replay::note_layout_keep(ctx, body);
+    let moment = Moment::of(ctx);
+    if with(ctx, &moment, |memory| memory.probing()) {
+        return false;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    let replay = with(ctx, &moment, |memory| {
+        // An enclosing body's transcript gave this body's records already, when the inputs are the ones it ran under
+        // there; else its own kept transcript (from a run at the inputs of its own real run) may serve.
+        let under = |kept: &Kept| {
+            kept.transcript.key.downcast_ref::<K>() == Some(key) || kept.aliases.iter().any(|alias| alias.downcast_ref::<K>() == Some(key))
+        };
+        if let Some(transcript) = memory.served.get(&body).cloned()
+            && (transcript.key.downcast_ref::<K>() == Some(key)
+                || memory.kept.get(&body).is_some_and(|kept| Arc::ptr_eq(&kept.transcript, &transcript) && under(kept)))
+        {
+            memory.push(Item::Body(body, transcript));
+            return Some(Vec::new());
+        }
+        let kept = memory.kept.get_mut(&body)?;
+        let settled = kept.moved.is_none_or(|frame| frame + 1 < moment.frame);
+        if !settled || !kept.valid || !under(kept) {
+            return None;
+        }
+        kept.touched = moment.frame;
+        let transcript = kept.transcript.clone();
+        let mut contributions = Vec::new();
+        let mut open = vec![(body, transcript.clone())];
+        while let Some((id, transcript)) = open.pop() {
+            memory.served.insert(id, transcript.clone());
+            if let Some(kept) = memory.kept.get_mut(&id) {
+                kept.touched = moment.frame;
+            }
+            // Nested transcripts are walked after the items before them, in order: first-wins aggregators see the
+            // order a run makes.
+            let mut nested = Vec::new();
+            for item in &transcript.items {
+                match item {
+                    Item::Record(at, recorded) => {
+                        memory.measured.insert(*at, Found { pass, recorded: recorded.clone(), kept: Some(body) });
+                    }
+                    Item::Contribute(contribution) => contributions.push(contribution.clone()),
+                    Item::Body(at, inner) => nested.push((*at, inner.clone())),
+                }
+            }
+            open.extend(nested.into_iter().rev());
+        }
+        memory.push(Item::Body(body, transcript));
+        Some(contributions)
+    });
+    let Some(contributions) = replay else { return false };
+    guard::emitting(|| {
+        for contribution in contributions {
+            contribution.apply(ctx);
+        }
+    });
+    true
+}
+
+/// Opens a content scope of the real run: `body`'s content, or (`None`) content the enclosing body's measure does not
+/// count component by component. `boundary`: a change found inside does not reach the bodies outside.
+pub(crate) fn open_content(ctx: &Context, body: Option<Id>, boundary: bool) {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| {
+        let served = body.and_then(|body| memory.served.get(&body).cloned());
+        let fresh = served.is_none().then(|| body.and_then(|body| memory.kept.get(&body))).flatten().and_then(|kept| {
+            let fresh = memory.measured.get(&body?).is_some_and(|found| found.pass == pass && found.kept.is_none());
+            fresh.then(|| kept.transcript.clone())
+        });
+        memory.scopes.push(Scope { body, boundary: boundary || body.is_none(), served, fresh, ..Scope::boundary() });
+    });
+}
+
+/// Closes the innermost content scope, after `regions` (what the real run found for the body's regions) joined its
+/// backstop. A component the kept transcript holds that the real run did not ask was removed.
+pub(crate) fn close_content(ctx: &Context, regions: &[(Id, Vec2)]) {
+    for (id, took) in regions {
+        backstop(ctx, *id, *took);
+    }
+    let moment = Moment::of(ctx);
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    with(ctx, &moment, |memory| {
+        let Some(mut scope) = memory.scopes.pop() else { return };
+        let Some(served) = &scope.served else { return };
+        let mut made: Vec<(Id, f32)> = served
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Contribute(contribution) => contribution.report(),
+                _ => None,
+            })
+            .collect();
+        let order = |a: &(Id, f32), b: &(Id, f32)| a.0.value().cmp(&b.0.value()).then(a.1.total_cmp(&b.1));
+        // A measuring run may make one report twice (a label decided again after its control reported its minimum).
+        let same = |a: &mut (Id, f32), b: &mut (Id, f32)| a.0 == b.0 && (a.1 - b.1).abs() <= tolerance;
+        made.sort_by(order);
+        made.dedup_by(same);
+        scope.reported.sort_by(order);
+        scope.reported.dedup_by(same);
+        // What the real run reported to the aggregators around its rows is what the measuring run did.
+        let reports_differ = made.len() != scope.reported.len()
+            || made.iter().zip(&scope.reported).any(|(was, now)| was.0 != now.0 || (was.1 - now.1).abs() > tolerance);
+        let removed = reports_differ
+            || served
+                .leaves
+                .iter()
+                .any(|(id, leaf)| (!leaf.calls.is_empty() && !scope.visited.contains(id)) || (leaf.fill.is_some() && !scope.fills.contains(id)));
+        if removed {
+            #[cfg(feature = "testing")]
+            if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
+                eprintln!("layout memory: a component of {:?} did not run", scope.body);
+            }
+            memory.changed(moment.frame, scope.body);
+        }
+    });
+}
+
+/// Starts a size tween under `id` that readers evaluate at their clock. It asks for no discard pass: the
+/// size changes by design while it runs.
+#[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "size tweens are used by the body step"))]
+pub(crate) fn tween(ctx: &Context, id: Id, from: Vec2, to: Vec2, duration: f64) {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        let entry = memory.entries.entry(id).or_default();
+        entry.touched = moment.frame;
+        entry.value = Some(Value::Tween(SizeTween::new(from, to, moment.now, duration)));
+    });
+}
+
+/// Whether a tween under `id` has not reached its end.
+#[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "size tweens are used by the body step"))]
+pub(crate) fn is_animating(ctx: &Context, id: Id) -> bool {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        memory.entries.get(&id).is_some_and(|entry| matches!(entry.value, Some(Value::Tween(tween)) if !tween.is_done(moment.now)))
+    })
+}
+
+/// Drops every kept measurement, so the next pass measures each body as a first pass would.
+#[cfg(feature = "testing")]
+pub fn forget_kept(ctx: &Context) {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        memory.kept.clear();
+        memory.served.clear();
+    });
+}
+
+/// How many component entries the valid kept measurements hold, each body counting only the components directly in
+/// it.
+#[cfg(feature = "testing")]
+pub fn kept_leaves(ctx: &Context) -> usize {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.kept.values().filter(|kept| kept.valid).map(|kept| kept.transcript.leaves.len()).sum())
+}
+
+/// Asks the end hook for the frame's discard pass, as a change of measured size does.
+#[track_caller]
+pub(crate) fn ask_discard(ctx: &Context) {
+    log::debug!(target: sizing::RERUN_LOG, "a discard asked at {}", std::panic::Location::caller());
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, Entries::ask_discard);
+}
+
+/// Whether this pass asked for the frame's discard pass and the end hook will request it from egui: no earlier pass of
+/// the frame got it, and egui can still run this one again.
+pub(crate) fn discard_pending(ctx: &Context) -> bool {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.ask && memory.asked != Some(moment.frame)) && sizing::discardable(ctx)
+}
+
+/// Keeps the entries and kept transcripts of `ids` through this frame, for a replayed run that kept them
+/// (`replay::note_layout_keep`): the replay does not reach them, and an entry no pass touched in a frame is dropped.
+pub(crate) fn keep(ctx: &Context, ids: &[Id]) {
+    if ids.is_empty() {
+        return;
+    }
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        for id in ids {
+            if let Some(entry) = memory.entries.get_mut(id) {
+                entry.touched = moment.frame;
+            }
+            if let Some(kept) = memory.kept.get_mut(id) {
+                kept.touched = moment.frame;
+            }
+        }
+    });
+}
+
+/// The end hook: asks egui for at most one discard pass per frame, and for a repaint when a change cannot get one, so
+/// the next frame shows it; then drops the entries no pass touched in the last frame.
+pub(crate) fn end_hook(ctx: &Context) {
+    let moment = Moment::of(ctx);
+    let (wanted, ask) = with(ctx, &moment, |memory| {
+        let wanted = std::mem::take(&mut memory.ask);
+        let ask = wanted && memory.asked != Some(moment.frame);
+        if ask {
+            memory.asked = Some(moment.frame);
+        }
+        memory.entries.retain(|_, entry| entry.touched + 1 >= moment.frame);
+        memory.kept.retain(|_, kept| kept.touched + 1 >= moment.frame);
+        memory.measured.clear();
+        memory.served.clear();
+        memory.measuring.clear();
+        memory.drafts.clear();
+        memory.scopes.clear();
+        memory.replaying.clear();
+        (wanted, ask)
+    });
+    if ask {
+        sizing::request_discard(ctx, sizing::Rerun::Layout);
+    }
+    if wanted && !(ask && sizing::discardable(ctx)) {
+        ctx.request_repaint();
+    }
+}
+
+/// The testing-build guard of measuring runs. A measuring run hands values forward only through `emit_record` and
+/// `contribute`: in a frame a test fixture drives, a service it touches otherwise panics with the service's type, unless
+/// the type is classified below.
+/// Services give `&mut` for reads and writes alike, so the guard classifies by type, not by access. `Arc` handles kept
+/// in component memory and raw `ctx.data_mut` writes are outside it.
+pub(crate) mod guard {
+    #[cfg(feature = "testing")]
+    thread_local! {
+        static MEASURING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static EMITTING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        /// Whether each service type name touched so far is in `CLASSIFIED`, by the address and length of the name.
+        static SEEN: std::cell::RefCell<std::collections::HashMap<(usize, usize), bool>> = std::cell::RefCell::default();
+    }
+
+    /// The services a measuring run may touch, with why that hands nothing forward around layout memory.
+    #[cfg(feature = "testing")]
+    const CLASSIFIED: &[(&str, &str)] = &[
+        ("layout_memory::Entries", "layout memory itself: emits, transcripts and reads of this pass's records"),
+        // Stacks a run opens and closes itself; what reaches a frame open around the run goes through `contribute`.
+        ("layout::column_group::Open", "column groups: frames the run opens and closes; reports go through contribute"),
+        ("access::scope::Stack", "label and merge scopes: opened and closed by the run; control minimums go through contribute"),
+        ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
+        ("layout::body::ViewFills", "view fills: opened and closed by the memoized view's own run"),
+        ("layout::body::HeldWidths", "held children: opened by the column's own first sweep and closed after its last"),
+        ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
+        ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
+        ("layout::body::WrapRows", "wrapping rows' lines: opened by each sweep of the row and closed after it; the lines go through emit_record"),
+        (
+            "layout::body::FlowStarts",
+            "flow starts: opened by each sweep of the body and closed by its first child in flow; a child reads its body's at its own start, and its measure key holds what it read",
+        ),
+        ("layout::body::Brackets", "bracket reports: opened by each sweep of the bracketed row and taken after its body"),
+        ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
+        ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
+        ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),
+        ("layout::body::RowShortfalls", "shortfalls: asked and taken by the container around the row in the same measuring sweep"),
+        ("runtime::reads::Runs", "measuring runs of the read record: opened and closed by each run; reads go through contribute"),
+        ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),
+        // Read in measuring runs; written by real runs, the frame hooks or the host.
+        ("runtime::env::ViewportEnvs", "env per viewport: installs the run restores, and reads"),
+        ("runtime::env::system::Source", "OS appearance: read; written by install, the input hook and the host's reader"),
+        ("runtime::frame::FrameState", "frame state: read"),
+        ("runtime::frame::ViewportRecord", "viewport record: read"),
+        ("runtime::windows::Shared", "window shells: read"),
+        ("runtime::windows::Record", "window records: read"),
+        ("runtime::windows::hit::Exclusive", "exclusive windows: read"),
+        ("runtime::env::shell::RevealedRects", "revealed rects: read; registered in real runs only"),
+        ("runtime::focus::State", "focus: read; stops register in real runs only"),
+        ("runtime::keys::Stage", "key stage: read"),
+        ("primitives::sensing::Arenas", "arenas: read; members join in real runs only"),
+        ("runtime::pointer::", "pointer state: read; sensing is skipped in measuring runs"),
+        ("runtime::wheel::State", "wheel: read"),
+        ("runtime::drag::", "drag board and targets: read; targets register in real runs"),
+        (
+            "runtime::inputs::Generations",
+            "framework input generations: a replay decided in a measuring run compares them; observing syncs the values a real run of the pass sees",
+        ),
+        ("runtime::overlay::", "overlays: read; opens and closes are effects skipped in measuring runs"),
+        ("contract::overlay::popups::Popups", "popups: read"),
+        ("runtime::replay::Recorder", "run records: opened and closed by real runs; registrations journal there only while one is open"),
+        (
+            "runtime::lazy::Store",
+            "lazy extents: the kept extent of content out of view, its own mechanism; a pass a kept transcript serves decides in its real run, which compares each row by its backstop",
+        ),
+        ("runtime::derived::Store", "derived values: a pure function of their key, so a value a measuring run builds is the one a real run builds"),
+        ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
+        (
+            "contract::items::request::RenameRequests",
+            "rename requests: peeked by the items read so the renamed row stays in the view; taken in real runs only",
+        ),
+        ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
+        ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
+        ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
+        (
+            "runtime::memory::FactRecord<craft_ui_contract::runtime::commands::ShownFact>",
+            "where commands were shown: last pass's, read; registered by real runs only (a measuring run is not parted)",
+        ),
+        (
+            "shell::app_shell::dialogs::Hosts",
+            "dialog hosts: one handle per window, made on first use; dialogs open on clicks, which only real runs sense",
+        ),
+        ("runtime::memory::Registry", "component memory: a measuring run writes only to its peek stage"),
+        ("runtime::egui::access::Reported", "access reports: read; reports are written by real runs"),
+        ("runtime::access::live::Announced", "live announcements: read"),
+        ("runtime::toast::Queue", "toasts: read"),
+        ("runtime::cursor::State", "cursor: read"),
+        ("runtime::motion::Wanted", "motion: repaint wishes, read only to ask for a repaint; the real run adds the same"),
+        ("runtime::ime::Engine", "IME: read"),
+        ("runtime::sampler::", "samplers: read"),
+        ("runtime::egui::input_filter::", "input filter: read"),
+        ("runtime::egui::injected::Injected", "injected input: read"),
+        ("runtime::egui::fixture::WindowFocus", "fixture window focus: read"),
+        ("contract::tooltip::Grace", "tooltip grace: read"),
+        ("runtime::egui::widgets::noted::Noted", "noted widgets: read"),
+        ("runtime::egui::painted::Elisions", "elisions: written where text paints, which a measuring run does not"),
+        ("Stamped<std::collections::hash::set::HashSet<egui::id::Id>>", "per-pass id sets: read"),
+        // Caches: equal inputs give equal values, whichever run fills them.
+        ("primitives::text::TextMemo", "text layouts: a bounded cache keyed by the layout inputs and egui's font-cache generation"),
+        ("style::cache::StyleCache", "style cache"),
+        ("style::replacements::Frozen", "frozen style replacements: cache"),
+        ("runtime::env::tokens::RootTokenCache", "root tokens: cache"),
+        ("runtime::env::host_words::HostWords", "host words: cache"),
+        ("runtime::env::host_words::host_format::System", "host number format: cache"),
+        ("runtime::env::host_words::host_dates::System", "host dates: cache"),
+        ("fonts::stack::install::State", "installed fonts: cache"),
+        ("primitives::textures::Loaded", "textures: cache"),
+        (
+            "primitives::textures::store::Stores",
+            "texture stores: cache; a key's picture at a revision is the same whichever run asks, renders or uploads it",
+        ),
+        ("primitives::textures::loader::Pools", "texture loaders: cache; one per salt, made on first use, and the store's uploads"),
+        ("primitives::textures::thumbnails::Hubs", "thumbnails: cache; one per salt, made on first use, and its per-frame render budget"),
+        ("fonts::document::Registry", "document faces: cache; a face loads the same whichever run asks, and its repaint request is harmless"),
+        ("runtime::egui::fonts::Providers", "font providers and the served faces: cache; a face is served the same whichever run asks"),
+        ("runtime::egui::fonts::Steps", "fonts plugin begin-pass steps: cache; a step added twice runs once"),
+        ("runtime::env::InstalledJobs", "the jobs install was given: set once at install, only read after"),
+        // Testing logs.
+        ("runtime::measure::", "measuring-run counts and the skipped-effect log (testing)"),
+        ("runtime::pass_state::Parked", "pass state between passes: moved into the thread and back, not read"),
+        ("testing::style::StyleRecord", "style log (testing)"),
+        ("runtime::inspect::Log", "inspection log"),
+    ];
+
+    /// Raises one of the depths for as long as it lives: a panic that unwinds out of the run lowers it too, so a later
+    /// frame on the same thread (the next trial a test harness runs there) is not counted inside the run.
+    #[cfg(feature = "testing")]
+    struct Raised(&'static std::thread::LocalKey<std::cell::Cell<u32>>);
+
+    #[cfg(feature = "testing")]
+    impl Raised {
+        fn new(depth: &'static std::thread::LocalKey<std::cell::Cell<u32>>) -> Self {
+            depth.with(|depth| depth.set(depth.get() + 1));
+            Raised(depth)
+        }
+    }
+
+    #[cfg(feature = "testing")]
+    impl Drop for Raised {
+        fn drop(&mut self) {
+            self.0.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+
+    /// Runs `f` inside a measuring run (`measure::run`).
+    pub(crate) fn measuring<R>(f: impl FnOnce() -> R) -> R {
+        #[cfg(feature = "testing")]
+        let _raised = Raised::new(&MEASURING);
+        f()
+    }
+
+    /// Runs `f` as part of an emit or a replay: what it touches is handed forward through layout memory.
+    pub(crate) fn emitting<R>(f: impl FnOnce() -> R) -> R {
+        #[cfg(feature = "testing")]
+        let _raised = Raised::new(&EMITTING);
+        f()
+    }
+
+    /// A service of type `S` is touched.
+    #[cfg(feature = "testing")]
+    #[expect(clippy::panic, reason = "the guard exists to stop a measuring run that reads a service outside the recorded paths")]
+    pub(crate) fn touch<S>() {
+        if !crate::runtime::egui::fixture::driving() || MEASURING.with(std::cell::Cell::get) == 0 || EMITTING.with(std::cell::Cell::get) > 0 {
+            return;
+        }
+        let name = std::any::type_name::<S>();
+        // A measuring run touches its services many times; the substring search over the list runs once per name.
+        let classified = SEEN.with(|seen| {
+            *seen.borrow_mut().entry((name.as_ptr() as usize, name.len())).or_insert_with(|| CLASSIFIED.iter().any(|(ty, _)| name.contains(ty)))
+        });
+        if classified {
+            return;
+        }
+        if std::env::var_os("CRAFT_UI_GUARD_LOG").is_some() {
+            eprintln!("craft-ui guard: {name}");
+            return;
+        }
+        panic!("a measuring run touched the service {name} outside layout_memory::emit_record and contribute");
+    }
+}

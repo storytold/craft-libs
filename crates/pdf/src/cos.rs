@@ -13,6 +13,8 @@
 
 mod budget;
 mod bytes;
+#[cfg(feature = "content")]
+pub mod content;
 mod document;
 mod object;
 pub mod page_labels;
@@ -20,7 +22,7 @@ mod parser;
 mod security;
 mod writer;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod testkit;
 
 pub use crate::crypt::{

@@ -9,9 +9,8 @@
 //! is an error instead.
 //!
 //! When every file in [`FILES`] this build embeds (English and the [`opted_in`] locales) is
-//! there, the `craft_proof_data` cfg is set (the tests that pin
-//! results of the data use it); when none is, `craft_proof_no_data` (the tests of a build without
-//! the data). A partial data folder sets neither, so neither set of tests runs against it.
+//! there, the `craft_proof_data` cfg is set (the tests that pin results of the data use it). A
+//! partial data folder doesn't set it, so those tests don't run against it.
 //!
 //! `include_str!` takes a string, so a `CRAFT_I18N_DIR` that isn't valid UTF-8 can't be embedded:
 //! it is treated like a folder without the data.
@@ -76,7 +75,6 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_REQUIRED");
     println!("cargo::rerun-if-env-changed=CRAFT_PROOF_EMBED");
     println!("cargo::rustc-check-cfg=cfg(craft_proof_data)");
-    println!("cargo::rustc-check-cfg=cfg(craft_proof_no_data)");
     println!("cargo::rustc-check-cfg=cfg(craft_proof_embed, values(\"pl\", \"pt\", \"it\", \"de\", \"ru\"))");
     let opted = opted_in();
     let required = std::env::var("CRAFT_I18N_REQUIRED").is_ok_and(|v| v.trim() == "1");
@@ -134,8 +132,6 @@ fn main() {
     }
     if embedded > 0 && embedded == wanted_files {
         println!("cargo::rustc-cfg=craft_proof_data");
-    } else if embedded == 0 {
-        println!("cargo::rustc-cfg=craft_proof_no_data");
     }
     let _ = writeln!(o, "/// The locales whose Language data is embedded.\npub(crate) static EMBEDDED_LOCALES: &[&str] = &{locales:?};");
     // The licence texts of the embedded locales (`language-data/<locale>/LICENCE*`), for About ›

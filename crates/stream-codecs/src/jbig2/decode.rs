@@ -78,6 +78,15 @@ mod tests {
     use super::*;
     use crate::{encode_jbig2, encode_jbig2_generic};
 
+    /// A registry fallback lacks the budget APIs and breaks consumers outside this workspace.
+    #[test]
+    fn bounded_decoder_dependency_is_explicit_for_external_consumers() {
+        let manifest = include_str!("../../Cargo.toml");
+        let dependency = manifest.lines().find(|line| line.starts_with("hayro-jbig2 =")).unwrap();
+        assert!(dependency.contains(r#"path = "../../vendor/hayro-jbig2""#));
+        assert!(dependency.contains(r#"version = "=0.3.0""#));
+    }
+
     /// [`decode_jbig2_within`] with no limit on the work.
     fn decode_jbig2(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32, max: usize) -> Result<Vec<u8>, CodecError> {
         let mut unbounded = u64::MAX;
@@ -509,7 +518,10 @@ mod tests {
         // decoder, which has the same one and can refuse it first.
         let large = |rows| decode_jbig2(&page_of(&data, 16_384, rows), None, 16_384, rows, usize::MAX);
         assert!(matches!(large(16_385), Err(CodecError::Unsupported(_) | CodecError::Corrupt { .. })), "{:?}", large(16_385));
-        assert!(large(16_384).is_ok(), "{:?}", large(16_384).map(|page| page.len()));
+        // Decoding the 2^28-pixel page takes seconds: nightly only.
+        if craft_testkit::hostile::divisor() == 1 {
+            assert!(large(16_384).is_ok(), "{:?}", large(16_384).map(|page| page.len()));
+        }
 
         // An extension segment (ISO/IEC 14492 7.4.14), which a decoder skips: its 11-byte header
         // gives the length of the data after it.

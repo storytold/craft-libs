@@ -13,6 +13,10 @@ fn numbering_level_index(value: Option<&str>) -> Option<usize> {
     }
 }
 
+fn style_is_default(style: &El) -> bool {
+    style.attr("w:default").is_some_and(|value| !matches!(value.trim(), "0" | "false" | "off" | "False" | "FALSE"))
+}
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -60,6 +64,20 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 }
 
 impl Reader<'_> {
+    /// Whether a style's kept (last) definition is a default table style.
+    fn has_default_table_style(&self, root: &El) -> bool {
+        let mut defaults: Vec<String> = Vec::new();
+        for s in root.children("w:style").take(10_000) {
+            let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
+            let id = self.pc.style_id(raw_id);
+            defaults.retain(|d| *d != id);
+            if s.attr("w:type") == Some("table") && style_is_default(s) {
+                defaults.push(id);
+            }
+        }
+        !defaults.is_empty()
+    }
+
     pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
@@ -67,9 +85,7 @@ impl Reader<'_> {
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(def) = root.children("w:style").find(|s| s.attr("w:type") == Some("paragraph") && style_is_default(s))
             && let Some(id) = def.attr("w:styleId")
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
@@ -93,6 +109,7 @@ impl Reader<'_> {
             }
         }
         let mut sheet = StyleSheet::empty();
+        let mut normal_is_default = None;
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
         if let Some(dd) = root.child("w:docDefaults") {
             if let Some(r) = dd.child("w:rPrDefault").and_then(|d| d.child("w:rPr")) {
@@ -120,6 +137,13 @@ impl Reader<'_> {
                 "numbering" => StyleKind::Numbering,
                 _ => StyleKind::Paragraph,
             };
+            if kind == StyleKind::Paragraph && id == "Normal" {
+                // Word treats the built-in Normal style as the paragraph default when the file
+                // doesn't nominate another style. Keep that fact for an explicitly declared
+                // Normal; the gallery later synthesizes a visually identical Normal when the
+                // file did not declare one, and that synthetic style is not source provenance.
+                normal_is_default = Some(s.attr("w:default").is_none());
+            }
             let name = s.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone());
             let r = |n: &str| s.child_val(n).filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v));
             let mut st = Style {
@@ -135,7 +159,7 @@ impl Reader<'_> {
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
+                default: style_is_default(s)
                     && !matches!(
                         (kind, id.as_str()),
                         (StyleKind::Paragraph, "Normal")
@@ -197,6 +221,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
+        self.no_default_table_style = !self.has_default_table_style(&root);
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
         let fixed: Vec<Option<craft_wordmodel::props::NumRef>> = sheet
@@ -212,6 +237,12 @@ impl Reader<'_> {
             .collect();
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+        }
+        if !sheet.styles.iter().any(|style| style.kind == StyleKind::Paragraph && style.default)
+            && normal_is_default == Some(true)
+            && let Some(normal) = sheet.styles.iter_mut().find(|style| style.kind == StyleKind::Paragraph && style.id == "Normal")
+        {
+            normal.default = true;
         }
         let old_fixed: Vec<Option<Option<craft_wordmodel::props::NumRef>>> = sheet
             .styles
@@ -248,10 +279,19 @@ impl Reader<'_> {
         let mut t = TableStyleParts::default();
         if let Some(tp) = s.child("w:tblPr") {
             if let Some(b) = tp.child("w:tblBorders") {
-                t.borders = Some(self.pc.borders(b));
+                t.borders = Some(self.pc.table_borders(b));
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
+            // Only a twips indent (`dxa`, the default) is a length: `nil` is no indent, and `pct`
+            // or `auto` have no meaning for an indent (ECMA-376 §17.4.50), so the style sets none.
+            // A `w:w` left out is 0 (`CT_TblWidth`), which still overrides a based-on style's.
+            t.indent = tp.child("w:tblInd").and_then(|e| match e.attr("w:type").unwrap_or("dxa") {
+                "dxa" if e.attr("w:w").is_none() => Some(0.0),
+                "dxa" => tw(e, "w:w").map(|i| i.clamp(-1584.0, 1584.0)),
+                "nil" => Some(0.0),
+                _ => None,
+            });
             t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
             t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }
@@ -262,7 +302,7 @@ impl Reader<'_> {
             let f = PartFormat {
                 chr: c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default(),
                 fill: tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_fill(e)),
-                borders: tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.borders(b)),
+                borders: tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.table_borders(b)),
                 align: ppr.as_ref().and_then(|p| p.align),
                 v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(|v| match v {
                     "center" => VAlign::Center,
@@ -281,7 +321,7 @@ impl Reader<'_> {
                     t.fill = f.fill;
                 }
                 if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
-                    t.borders = Some(self.pc.borders(b));
+                    t.borders = Some(self.pc.table_borders(b));
                 }
                 if f.v_align.is_some() {
                     t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
@@ -300,9 +340,11 @@ impl Reader<'_> {
         for a in root.children("w:abstractNum").take(10_000) {
             let Some(id) = a.attr("w:abstractNumId").and_then(u32_of) else { continue };
             let mut levels: Vec<Level> = (0..9).map(default_level).collect();
+            let mut explicit_levels = [false; 9];
             for l in a.children("w:lvl") {
                 let Some(i) = numbering_level_index(l.attr("w:ilvl")) else { continue };
                 levels[i] = self.level(l, i);
+                explicit_levels[i] = true;
             }
             if let Some(link) = a.child_val("w:numStyleLink") {
                 links.push((id, link.to_string()));
@@ -312,6 +354,7 @@ impl Reader<'_> {
                 id,
                 name: a.child_val("w:name").map(str::to_string),
                 levels,
+                explicit_levels: Some(explicit_levels),
                 nsid: a.child_val("w:nsid").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 tmpl: a.child_val("w:tmpl").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 multi_level_type: a
@@ -345,9 +388,13 @@ impl Reader<'_> {
         for (aid, style) in links {
             let num = self.doc.styles.get(&self.pc.style_id(&style)).and_then(|s| s.para.numbering).map(|n| n.num);
             let src = num.and_then(|n| nums.iter().find(|x: &&Num| x.id == n)).map(|x| x.abstract_id);
-            let levels = src.filter(|s| *s != aid).and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s)).map(|a| a.levels.clone());
-            if let (Some(levels), Some(a)) = (levels, abstracts.iter_mut().find(|a| a.id == aid)) {
+            let source = src
+                .filter(|s| *s != aid)
+                .and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s))
+                .map(|a| (a.levels.clone(), a.explicit_levels));
+            if let (Some((levels, explicit_levels)), Some(a)) = (source, abstracts.iter_mut().find(|a| a.id == aid)) {
                 a.levels = levels;
+                a.explicit_levels = explicit_levels;
             }
         }
         Arc::make_mut(&mut self.doc.numbering).abstracts = abstracts;
