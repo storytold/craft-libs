@@ -56,7 +56,7 @@ let apvc: Vec<u8> = enc.decoder_config_record();  // APVDecoderConfigurationReco
 - **Metadata (§8)**: Parses `metadata_mdcv` (`payloadType == 5`, Mastering Display Color Volume)
   and `metadata_cll` (`payloadType == 6`, Content Light-Level Information).
 - **Robustness (§10)**: All size fields, tile coordinates, VLC codeword lengths, and coefficient
-  ranges (`-32768..=32767`) are checked before allocation or shift. Verified by `tests/apv/fuzz.rs`
+  ranges (`-32768..=32767`) are checked before allocation or shift. Verified by `tests/it/apv/fuzz.rs`
   across thousands of mutated and random inputs.
 - **Memory budget**: the samples of one access unit (the decoded tiles and the frame assembled
   from them, plus the same for an auxiliary alpha frame) must fit `DecodeOptions::memory_budget`
@@ -74,7 +74,7 @@ let apvc: Vec<u8> = enc.decoder_config_record();  // APVDecoderConfigurationReco
 
 ## Accuracy (vs FFmpeg as an External Oracle)
 
-`tests/apv/oracle.rs` encodes synthetic test patterns across all 7 profiles, odd dimensions, multiple
+`tests/it/apv/oracle.rs` encodes synthetic test patterns across all 7 profiles, odd dimensions, multiple
 tiles, custom asymmetric quantization matrices, and HDR metadata PBUs, then decodes the resulting
 `.apv` streams with `ffmpeg -v error -xerror -f apv` and compares against `craft_video::apv::decode_frame`.
 Because APV specifies an exact integer inverse transform, **the decoder is 100% bit-exact

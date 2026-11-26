@@ -2,8 +2,8 @@
 //! the raw image IFD's fields and their encrypted `SR2SubIFD` copies into [`SonyLensCorrections`], and validated
 //! ILCE-7RM4A, ILCE-7M3 and ILCE-7CR distortion tables into DNG warps for the shared optics pipeline.
 //!
-//! Tag identity/layout: https://exiftool.org/TagNames/EXIF.html (`0x7031` to `0x7037`, signed shorts) and
-//! https://exiftool.org/TagNames/Sony.html#SR2SubIFD (`0x797d`, `0x7980`, `0x7982`). The `SR2SubIFD` setting tags
+//! Tag identity/layout: <https://exiftool.org/TagNames/EXIF.html> (`0x7031` to `0x7037`, signed shorts) and
+//! <https://exiftool.org/TagNames/Sony.html#SR2SubIFD> (`0x797d`, `0x7980`, `0x7982`). The `SR2SubIFD` setting tags
 //! `0x797c`, `0x797f` and `0x7981` sit next to those tables, unnamed there; they equal the raw IFD's settings in every
 //! file inspected. Geometry inferred independently from files and Sony Imaging Edge exports; see
 //! docs/sony-lens-corrections.md. No lens database and no external decoder code. The MakerNote's similarly named
@@ -1377,10 +1377,12 @@ mod tests {
                     assert_eq!((h.lens_metadata, h.opcodes), (f.lens_metadata, f.opcodes));
                 }
             };
-            for len in 0..good.len() {
+            // The gate runs every divisor-th truncation and byte; nightly runs every one.
+            let step = craft_testkit::hostile::divisor();
+            for len in (0..good.len()).step_by(step) {
                 check(&good[..len]);
             }
-            for at in (0..good.len()).filter(|at| !image.contains(at)) {
+            for at in (0..good.len()).step_by(step).filter(|at| !image.contains(at)) {
                 for v in [0, 0xff, good[at] ^ 0x80, good[at] ^ 0x01] {
                     let mut file = good.clone();
                     file[at] = v;
