@@ -8,7 +8,7 @@ use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::patterns::preferences::{
     GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesModel, PreferencesPage, PreferencesState, PreferencesWindow,
-    PreferencesWords, RowKind, RowSpec,
+    PreferencesWords, RowKind, RowSpec, SearchResults,
 };
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::words::CommonWords;
@@ -259,4 +259,69 @@ fn the_search_shows_how_many_settings_match() {
     let search = fixture.by_label("Search settings").expect("the search field");
     fixture.click(&search).type_text("snap").settle();
     assert!(fixture.texts().iter().any(|t| t.text == "1 match"), "{:?}", fixture.texts().iter().map(|t| &t.text).collect::<Vec<_>>());
+}
+
+/// Two pages that both find "snap", the second also listing the first's setting under the same key.
+struct Shared;
+
+impl PreferencesModel for Shared {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        let grid = || RowSpec::new("snap.grid", "Snap to grid", RowKind::Bool(true));
+        vec![
+            PageSpec::new("general", "General", vec![grid(), RowSpec::new("general.side", "Tools side", RowKind::Bool(false))]),
+            PageSpec::new("canvas", "Canvas", vec![RowSpec::new("canvas.guides", "Snap to guides", RowKind::Bool(true)), grid()]),
+        ]
+    }
+
+    fn set(&mut self, _: &str, _: PrefValue) {}
+
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+
+    fn reset_page(&mut self, _: &str) {}
+}
+
+/// The texts shown after typing `query` into a paged page with `results`.
+fn searched(results: SearchResults, query: &str) -> Vec<String> {
+    let mut state = PreferencesState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        PreferencesPage::new(Bind::bound(&mut state)).search_results(results).show(ui, &mut Shared);
+    });
+    fixture.room(egui::vec2(700.0, 900.0)).settle();
+    let search = fixture.by_label("Search settings").expect("the search field");
+    fixture.click(&search).type_text(query).settle();
+    fixture.texts().iter().map(|run| run.text.trim_end_matches(':').to_owned()).collect()
+}
+
+/// A grouped search shows the matches of every page at once, a setting two pages list only once; the default shows
+/// one page's matches.
+#[trial]
+fn a_grouped_search_shows_every_pages_matches_and_a_shared_setting_once() {
+    let count = |texts: &[String], text: &str| texts.iter().filter(|t| *t == text).count();
+    let grouped = searched(SearchResults::Grouped, "snap");
+    assert!(count(&grouped, "Snap to guides") == 1 && count(&grouped, "Snap to grid") == 1, "both pages' matches, the shared one once: {grouped:?}");
+    assert_eq!(count(&grouped, "Tools side"), 0, "rows that don't match stay hidden: {grouped:?}");
+
+    let picked = searched(SearchResults::default(), "snap");
+    assert!(count(&picked, "Snap to grid") == 1 && count(&picked, "Snap to guides") == 0, "the default shows the first page only: {picked:?}");
+}
+
+/// `reset_section(false)` leaves Reset Section out; the default shows it.
+#[trial]
+fn reset_section_can_be_left_out() {
+    let resets = |reset: bool| {
+        let mut state = PreferencesState::default();
+        let mut fixture = Fixture::new(move |ui| {
+            PreferencesPage::new(Bind::bound(&mut state)).reset_section(reset).show(ui, &mut Shared);
+        });
+        fixture.settle();
+        fixture.by_role(Role::BUTTON).iter().filter(|button| fixture.tree().name_of(button.node) == Some("Reset Section")).count()
+    };
+    assert!(resets(true) > 0, "the default offers Reset Section");
+    assert_eq!(resets(false), 0, "reset_section(false) leaves it out");
 }

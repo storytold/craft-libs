@@ -7,7 +7,7 @@ pub(crate) mod stories;
 #[cfg(doc)]
 use super::model::PreferencesModel;
 use super::model::{Closed, PreferencesDraft, PreferencesOutput};
-use super::page::{PreferencesLayout, PreferencesPage};
+use super::page::{PreferencesLayout, PreferencesPage, SearchResults};
 use super::words::PreferencesWords;
 use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogOutput};
@@ -105,6 +105,13 @@ pub struct PreferencesWindow<'a> {
     /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
     #[prop]
     layout: PreferencesLayout,
+    /// Shows a paged search as `search_results` says ([`PreferencesPage::search_results`]); the default is
+    /// [`SearchResults::PickedPage`].
+    #[prop]
+    search_results: SearchResults,
+    /// Whether each page offers Reset Section ([`PreferencesPage::reset_section`]); on by default.
+    #[prop]
+    reset_section: bool,
     /// Escape keeps the typing in the focused field ([`Dialog::escape_keeps_typing`]): in [`PreferencesMode::Live`]
     /// the typed value stays applied when Escape closes the window. Off by default: Escape cancels the typing.
     #[prop(flag)]
@@ -170,13 +177,15 @@ impl<'a> PreferencesWindow<'a> {
             remember: None,
             mode: PreferencesMode::Staged,
             layout: PreferencesLayout::Paged,
+            search_results: SearchResults::PickedPage,
+            reset_section: true,
             escape_keeps_typing: false,
         }
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
     pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember, mode, layout, escape_keeps_typing } = self;
+        let PreferencesWindow { state, title, embedded, remember, mode, layout, search_results, reset_section, escape_keeps_typing } = self;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
@@ -241,7 +250,11 @@ impl<'a> PreferencesWindow<'a> {
                 let mut guard = session.borrow_mut();
                 let session = &mut *guard;
                 session.begin(cx);
-                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).layout(layout).show(ui, &mut *session.host);
+                let shown = PreferencesPage::new(Bind::bound(&mut session.work))
+                    .layout(layout)
+                    .search_results(search_results)
+                    .reset_section(reset_section)
+                    .show(ui, &mut *session.host);
                 if let Some(request) = shown.pick_color {
                     pick_color = Some(request);
                 }
