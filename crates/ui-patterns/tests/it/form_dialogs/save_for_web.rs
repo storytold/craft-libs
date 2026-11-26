@@ -8,6 +8,8 @@ use craft_ui::patterns::form_dialogs::{
     Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, TableMarks,
     WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant,
 };
+use craft_ui::testing::access::NodeKey;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
@@ -224,6 +226,52 @@ fn the_web_shift_button_follows_the_selected_colors_reported_by_the_host() {
     let unshift = fixture.by_label("Unshift Colors").expect("the Unshift button");
     fixture.click(&unshift).settle();
     assert_eq!(table_events(&host), [(ColorTableEdit::Unshift, vec![shifted])]);
+
+    // With a hand-shifted swatch in the selection, both web actions are still available.
+    let hand_shifted = palette[2];
+    let mut marks = TableMarks::default();
+    marks.web_shifted = Some(vec![shifted]);
+    marks.shifted = vec![([0x99, 0x88, 0x77], hand_shifted)];
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_marks(marks);
+    fixture.settle();
+    let set_selection = |fixture: &Fixture, colors| {
+        host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_json_field(fixture.ctx(), "colorSelection", colors).unwrap();
+    };
+    let unshift = fixture.by_label("Unshift Colors").expect("the shifted selection offers Unshift");
+    fixture.access(AccessActionKind::Focus, &unshift).idle(1);
+    set_selection(&fixture, serde_json::json!(["#cccccc", "#0000ff"]));
+    fixture.settle();
+    assert!(fixture.by_label("Shift to Web Palette").is_some(), "a mixed selection still offers Shift");
+    let unshift = fixture.by_label("Unshift Colors").expect("a mixed selection also offers Unshift");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(unshift.node), "Unshift keeps focus as Shift appears");
+    fixture.key(Key::Space, Modifiers::NONE).settle();
+    assert_eq!(table_events(&host), [(ColorTableEdit::Unshift, vec![shifted])]);
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(unshift.node), "Unshift keeps focus while the host still shows it");
+
+    set_web_shifted(Vec::new());
+    fixture.settle();
+    assert!(fixture.by_label("Unshift Colors").is_none());
+    let shift = fixture.by_label("Shift to Web Palette").expect("Shift stays in the toolbar");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(shift.node), "keyboard focus stays in the palette toolbar");
+
+    set_web_shifted(vec![shifted]);
+    fixture.settle();
+    let unshift = fixture.by_label("Unshift Colors").expect("mixed selection restored");
+    fixture.access(AccessActionKind::Focus, &unshift).idle(1);
+    set_selection(&fixture, serde_json::json!([]));
+    fixture.settle();
+    let menu = fixture.by_label("Color Table Menu").expect("the menu remains available");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(menu.node), "clearing the selection keeps focus in the toolbar");
+
+    set_web_shifted(Vec::new());
+    set_selection(&fixture, serde_json::json!(["#cccccc"]));
+    fixture.settle();
+    let shift = fixture.by_label("Shift to Web Palette").expect("the unshifted selection offers Shift");
+    fixture.access(AccessActionKind::Focus, &shift).idle(1);
+    set_selection(&fixture, serde_json::json!([]));
+    fixture.settle();
+    let menu = fixture.by_label("Color Table Menu").expect("the menu remains available");
+    assert_eq!(fixture.focused().map(NodeKey::of), Some(menu.node), "disabling a focused Shift keeps focus in the toolbar");
 }
 
 #[trial]
