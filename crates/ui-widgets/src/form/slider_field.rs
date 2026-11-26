@@ -105,6 +105,10 @@ pub struct SliderField<'a> {
     /// a short field and the number, as production's Opacity, not the room it is offered.
     #[prop]
     short: bool,
+    /// The range typed values, arrow steps and label scrubs are held to, wider than the track; `None` holds them to
+    /// `range`. An unbounded range means open.
+    #[prop]
+    typed_range: Option<RangeInclusive<f64>>,
     /// The number field selects its whole value when it takes focus, so typing replaces it
     /// ([`NumberField::select_on_focus`]): a click on the value selects it, a drag across it keeps the range.
     #[prop(flag)]
@@ -167,6 +171,7 @@ impl<'a> SliderField<'a> {
             field_sizing: None,
             marks: None,
             short: false,
+            typed_range: None,
             select_on_focus: false,
             field_width: 0.0,
             out_of_range: None,

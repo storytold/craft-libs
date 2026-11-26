@@ -106,7 +106,8 @@ fn graph(ui: &mut Ui, data: &mut StoryData, count: u32, wired: &[(u32, u32)], zo
         shown = shown.zoom(zoom);
     }
     let response = shown.show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
-    for event in &response.events {
+    // P3(graph-w4): ge.C21
+    for event in &response.collection.events {
         if let CollectionEvent::Item(_, NodeEvent::Edit(CompEdit::Fold(edits))) = event {
             for edit in edits {
                 let _ = edit.apply(data.value("open", true));

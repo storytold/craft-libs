@@ -201,6 +201,7 @@ pub struct Button<'a> {
     chord: ButtonChord,
     /// The kind of popup the button opens: AccessKit reports it.
     #[prop(into)]
+    #[style_key]
     popup: Option<PopupKind>,
     /// Whether the popup the button opens is open, as the host knows it.
     #[prop(into)]

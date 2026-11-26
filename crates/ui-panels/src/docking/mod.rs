@@ -260,12 +260,20 @@ pub struct SplitAreaOutput<P> {
     /// The dividers drawn this pass: each split's path from the root (`false` for the first child), the rect of its
     /// handle and the id of the handle's accessibility node.
     pub dividers: Vec<(Vec<bool>, Rect, egui::Id)>,
+    /// The path of the split whose divider was double-clicked this pass (`vec![]` for a pair); the host sets the
+    /// default back. No layout edit is made.
+    pub reset: Option<Vec<bool>>,
 }
 
 /// The first body's share of a pair's room when its layout holds none: an even split.
 const EVEN_SHARE: f32 = 0.5;
 
 impl<P: Clone + PartialEq + Send + Sync + 'static> SplitAreaOutput<P> {
+    /// The edits of a pair's size, in the unit the pair was given; an even `Ratio` when the root is not a split.
+    pub fn pair_size(&self) -> EditEvents<SplitSize> {
+        todo!("pn.C2")
+    }
+
     /// The edits of a [`SplitArea::pair`]'s share: the first body's fraction of the room left after the divider, as the
     /// gesture the divider's drag or keys made.
     pub fn share(&self) -> EditEvents<f32> {
@@ -317,11 +325,12 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> SplitArea<'a, P> 
     }
 
     /// A two-body area: `bodies.0` first along `axis` and `bodies.1` after it, with one divider between them. The first
-    /// body takes `share` of the room left after the divider; the area's response reports the divider's drags and keys
-    /// as [`SplitAreaOutput::share`], and the host hands the share back in the next pass. The body reads each body's
+    /// body's size is a share of the room left after the divider (`SplitSize::Ratio`) or a length in points
+    /// (`FixedFirst`, `FixedSecond`), clamped by `rules`; the area's response reports the divider's drags and keys
+    /// as [`SplitAreaOutput::share`], and the host hands the size back in the next pass. The body reads each body's
     /// rect with [`SplitFramesCx::group_frames`].
-    pub fn pair(label: impl Into<Label>, axis: Axis, bodies: (P, P), share: f32, rules: FrameRules<'a, P>) -> Self {
-        let root = Node::split(axis, SplitSize::Ratio(share), Node::tabs(vec![bodies.0], 0), Node::tabs(vec![bodies.1], 0));
+    pub fn pair(label: impl Into<Label>, axis: Axis, bodies: (P, P), size: SplitSize, rules: FrameRules<'a, P>) -> Self {
+        let root = Node::split(axis, size, Node::tabs(vec![bodies.0], 0), Node::tabs(vec![bodies.1], 0));
         Self::new(label, Bind::given(Layout::new(Some(root), Vec::new())), rules)
     }
 }
@@ -515,7 +524,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
                 Some((path, rect, crate::runtime::access::sub_node_id(cx.core.id, part)))
             })
             .collect();
-        SplitAreaOutput { edit: cx.edit_response(), dividers }
+        // P3(panels-w1): pn.C4
+        SplitAreaOutput { edit: cx.edit_response(), dividers, reset: None }
     }
 }
 

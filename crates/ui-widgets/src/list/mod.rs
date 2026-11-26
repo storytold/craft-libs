@@ -16,7 +16,7 @@ pub(crate) mod view_stories;
 mod view_words;
 mod words;
 
-pub use events::{EventLevel, EventList, EventListStyle, EventLog, EventLogState, LevelCounts, LogEvent};
+pub use events::{EventLevel, EventList, EventListLayout, EventListStyle, EventLog, EventLogState, LevelCounts, LogEvent};
 pub use findings::{Finding, Findings, FindingsList, FindingsListStyle, FindingsSummary, FindingsSummaryStyle, Severity, summary_text};
 pub use predicate::{DropTest, RowTest, RowText};
 pub(crate) use row::RowThumb;

@@ -47,7 +47,7 @@ fn fitted<S: Props>(select: S, fit: bool) -> S {
 }
 
 /// A row of the states story, in the group's inspector rows.
-fn row(label: &'static str) -> Field {
+fn row(label: &'static str) -> Field<'static> {
     Field::new(label).id_salt(label)
 }
 

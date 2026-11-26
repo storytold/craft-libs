@@ -180,6 +180,8 @@ pub struct Thumb {
     falling: bool,
     split: bool,
     alt_reports: bool,
+    #[allow(dead_code)] // P3(panels-w2): pn.C11
+    locked: bool,
 }
 
 impl Thumb {
@@ -200,6 +202,7 @@ impl Thumb {
             falling: false,
             split: false,
             alt_reports: false,
+            locked: false,
         }
     }
 
@@ -252,6 +255,14 @@ impl Thumb {
     #[must_use]
     pub fn split(mut self) -> Self {
         self.split = true;
+        self
+    }
+
+    /// The thumb draws as usual with a value tooltip, but senses hover only: no drag, keys, reset or focus stop. Its
+    /// access node is a read-only slider.
+    #[must_use]
+    pub const fn locked(mut self, on: bool) -> Self {
+        self.locked = on;
         self
     }
 

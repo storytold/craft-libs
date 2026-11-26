@@ -30,13 +30,28 @@ pub struct SegmentedStyle {
 }
 
 /// A row of segments over one value. A `Mixed` binding picks none.
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 #[component(probe(Segmented<'static, u8>))]
 pub struct Segmented<'a, T: Value + 'static> {
     #[common]
     common: Common,
     value: Bind<'a, T>,
     entries: &'a [Entry<T>],
+    /// Whether the segments stay on one row or flow onto further rows when the room is narrower.
+    #[prop]
+    layout: SegmentedLayout,
+}
+
+/// How a [`Segmented`] row lays its segments out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SegmentedLayout {
+    /// One row of segments.
+    #[default]
+    Row,
+    /// Segments flow onto further rows, each the control height, `space.gap.item` apart, when the room is narrower than
+    /// one row.
+    Wrap,
 }
 
 impl<'a, T: Value + 'static> Segmented<'a, T> {
@@ -44,7 +59,7 @@ impl<'a, T: Value + 'static> Segmented<'a, T> {
     /// when it has an icon; separators are not segments.
     pub fn new(label: impl Into<Label>, value: Bind<'a, T>, entries: &'a [Entry<T>]) -> Self {
         debug_assert!(entries.iter().all(|entry| !entry.is_separator()), "a `Segmented` has no separators");
-        Segmented { common: Common::new(), value, entries }.label(label)
+        Segmented { common: Common::new(), value, entries, layout: SegmentedLayout::default() }.label(label)
     }
 
     fn part(at: usize) -> PartRef {

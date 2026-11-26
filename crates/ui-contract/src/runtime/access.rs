@@ -256,7 +256,7 @@ pub enum Politeness {
 }
 
 /// The kind of popup a component opens.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PopupKind {
     /// A menu.

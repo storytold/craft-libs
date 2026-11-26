@@ -78,6 +78,8 @@ pub struct SwatchStyle {
     checker: [Rgba; 2],
     /// The mixed well's colour, which `inner_edge` contrasts with.
     mixed_rgba: Rgba,
+    /// The size of a [`SwatchShape::Bar`] well: `size.stroke.heavy` wide, `size.icon.md` high.
+    bar: Vec2,
 }
 
 impl SwatchStyle {
@@ -106,6 +108,8 @@ pub enum SwatchShape {
     Hexagon,
     /// A round well: a circle in the square, a pill when the swatch fills its width. The ranges of Hue/Saturation.
     Round,
+    /// A colour mark `size.stroke.heavy` wide and `size.icon.md` high, with the well's corners.
+    Bar,
 }
 
 /// What fills a swatch's well.
@@ -438,10 +442,14 @@ impl<T: Value + 'static> Component for Swatch<T> {
             glyph: cx.tokens.size.icon.sm,
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
             mixed_rgba: colors.surface.sunken,
+            bar: Vec2::new(cx.tokens.stroke.heavy, cx.tokens.size.icon.md),
         }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if self.shape == SwatchShape::Bar {
+            return cx.style.bar;
+        }
         let side = cx.style.side;
         let width = if cx.resolved.sizing() == Some(Sizing::FillWidth) {
             cx.room.filter(|room| room.is_finite()).map_or(side, |room| room.max(side))
@@ -464,7 +472,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             self.checked = group.is(value);
         }
         match self.shape {
-            SwatchShape::Square => {}
+            SwatchShape::Square | SwatchShape::Bar => {}
             SwatchShape::Round => cx.focus_shape(FocusShape::Circle),
             SwatchShape::Hexagon => cx.focus_shape(FocusShape::Polygon(hexagon(cx.rect))),
         }
@@ -625,14 +633,14 @@ impl Face<'_> {
     fn radius(&self, rect: Rect) -> CornerRadius {
         match self.shape {
             SwatchShape::Round => UiTokens::corner(rect.width().min(rect.height()) / 2.0),
-            SwatchShape::Square | SwatchShape::Hexagon => self.style.radius,
+            SwatchShape::Square | SwatchShape::Hexagon | SwatchShape::Bar => self.style.radius,
         }
     }
 
     /// The outline of a well in `rect`.
     fn outline(&self, rect: Rect) -> PaintShape {
         match self.shape {
-            SwatchShape::Square | SwatchShape::Round => PaintShape::Rect(rect, self.radius(rect)),
+            SwatchShape::Square | SwatchShape::Round | SwatchShape::Bar => PaintShape::Rect(rect, self.radius(rect)),
             SwatchShape::Hexagon => PaintShape::Polygon(hexagon(rect)),
         }
     }
@@ -656,7 +664,7 @@ impl Face<'_> {
                 let mesh = spectrum_mesh(well.center(), &self.corners(well));
                 match self.shape {
                     SwatchShape::Hexagon => painter.data_shapes([Shape::mesh(mesh)]),
-                    SwatchShape::Square | SwatchShape::Round => painter.mesh_in(well, self.radius(well), mesh),
+                    SwatchShape::Square | SwatchShape::Round | SwatchShape::Bar => painter.mesh_in(well, self.radius(well), mesh),
                 }
             }
             SwatchFill::Image(image) => {
@@ -676,7 +684,9 @@ impl Face<'_> {
                         }
                         painter.data_shapes([Shape::mesh(mesh)]);
                     }
-                    SwatchShape::Square | SwatchShape::Round => painter.picture(texture, well, uv, f32::from(self.radius(well).nw)),
+                    SwatchShape::Square | SwatchShape::Round | SwatchShape::Bar => {
+                        painter.picture(texture, well, uv, f32::from(self.radius(well).nw))
+                    }
                 }
             }
         }
@@ -691,7 +701,7 @@ impl Face<'_> {
     fn well(&self, painter: &ContentPainterCx<'_>, well: Rect, fill: WellFill) {
         painter.with_draw(|draw| match self.shape {
             SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), fill),
-            SwatchShape::Square | SwatchShape::Round => draw.swatch_well(well, self.radius(well), fill),
+            SwatchShape::Square | SwatchShape::Round | SwatchShape::Bar => draw.swatch_well(well, self.radius(well), fill),
         });
     }
 
@@ -700,7 +710,9 @@ impl Face<'_> {
     fn corners(&self, well: Rect) -> Vec<Pos2> {
         match self.shape {
             SwatchShape::Hexagon => hexagon(well),
-            SwatchShape::Square | SwatchShape::Round => vec![well.left_top(), well.right_top(), well.right_bottom(), well.left_bottom()],
+            SwatchShape::Square | SwatchShape::Round | SwatchShape::Bar => {
+                vec![well.left_top(), well.right_top(), well.right_bottom(), well.left_bottom()]
+            }
         }
     }
 }

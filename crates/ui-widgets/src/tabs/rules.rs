@@ -49,6 +49,8 @@ pub enum PanelTabLook {
     /// pointer `state.hover`. A dock group's strip lies on `surface.canvas`, and its panel menu button stands in the
     /// strip's middle.
     Block,
+    /// Pill's surfaces, shapes, strip and menu button, with the tab label set in `TypeRole::SectionCaption`.
+    PillCaption,
 }
 
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.

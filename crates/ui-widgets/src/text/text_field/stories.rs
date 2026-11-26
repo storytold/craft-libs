@@ -19,7 +19,7 @@ const LAYER_LONG: &str = "A layer name long enough to scroll inside the field wh
 const LONG: &str = "A name that runs on well past the end of the field, so the field scrolls its text under the caret";
 
 /// A row of the states story, in the group's inspector rows.
-fn row(label: &'static str) -> Field {
+fn row(label: &'static str) -> Field<'static> {
     Field::new(label).id_salt(label)
 }
 

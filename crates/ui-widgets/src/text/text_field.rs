@@ -196,6 +196,13 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// Sets the type role the field's text is set and measured in; `Body` by default.
+    #[must_use]
+    pub fn role(self, role: crate::style::TypeRole) -> Self {
+        let _ = (self, role);
+        todo!("pn.C9")
+    }
+
     /// Monospace text.
     #[must_use]
     pub fn mono(mut self) -> Self {

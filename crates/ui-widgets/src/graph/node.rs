@@ -1,6 +1,6 @@
 //! `Node`: the one item type of a `NodeGraph`.
 
-use super::kind::{NodeEvent, NodeId, NodeKind, PortRef, WireDrag};
+use super::kind::{NodeEvent, NodeId, NodeKind, PortLabels, PortRef, WireDrag};
 use crate::contract::{
     Access, Common, Component, Cx, DragPreview, DropMark, DropOperation, DropTarget, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx,
     Pointer as _, Props as _, Role, Styled as _,
@@ -53,7 +53,7 @@ impl<E> ItemOutput<NodeEvent<E>> for NodeOutput<E> {
 }
 
 /// A node of a kind: a title, ports, the kind's inline controls and its body paint.
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 #[component(probe(Node<'static, ()>))]
 pub struct Node<'r, E: 'static = ()> {
     #[common]
@@ -61,12 +61,35 @@ pub struct Node<'r, E: 'static = ()> {
     id: NodeId,
     kind: &'r dyn NodeKind<E>,
     event: Option<NodeEvent<E>>,
+    /// The card's edge takes the bad status colour, one weight wider than the selected edge, and wins over it.
+    #[prop]
+    #[allow(dead_code)] // P3(graph-w3): ge.C16
+    failed: bool,
+    /// A strike in the bad status colour, top-left to bottom-right; the node stays interactive.
+    #[prop]
+    #[allow(dead_code)] // P3(graph-w3): ge.C16
+    bypassed: bool,
+    /// For each input port, the id and source port of the wire that ends there.
+    #[allow(dead_code)] // P3(graph-w3): ge.C16
+    fed: Vec<Option<(u64, PortRef)>>,
+    /// When the ports' names show.
+    #[allow(dead_code)] // P3(graph-w3): ge.C16
+    port_labels: PortLabels,
 }
 
 impl<'r, E: 'static> Node<'r, E> {
     /// The node `id` of `kind`; its title names it.
     pub fn new(id: NodeId, kind: &'r dyn NodeKind<E>) -> Self {
-        Node { common: Common::new(), id, kind, event: None }.label(kind.title().to_owned())
+        Node { common: Common::new(), id, kind, event: None, failed: false, bypassed: false, fed: Vec::new(), port_labels: PortLabels::default() }
+            .label(kind.title().to_owned())
+    }
+
+    /// The node as a member of a graph: `fed[port]` is the id and source port of the wire that ends at that input
+    /// port, and `port_labels` says when the ports' names show.
+    #[allow(dead_code)] // P3(graph-w4): ge.C16
+    pub(super) fn in_graph(self, fed: Vec<Option<(u64, PortRef)>>, port_labels: PortLabels) -> Self {
+        let _ = (self, fed, port_labels);
+        todo!("ge.C16")
     }
 }
 
@@ -165,16 +188,20 @@ impl<E: 'static> Component for Node<'_, E> {
         let ports = self.kind.port_count();
         for port in 0..ports {
             if matches!(cx.part(PORT.at(port as u64)).press.phase, PressPhase::DragStart { .. }) {
-                cx.start_drag(WireDrag { from: PortRef::new(self.id, port) }, DragPreview::None);
+                // P3(graph-w3): ge.C17
+                let drag = WireDrag { from: PortRef::new(self.id, port), detached: None, from_direction: self.kind.port_direction(port) };
+                cx.start_drag(drag, DragPreview::None);
             }
         }
         let centers = (0..ports).map(|port| (port, port_center(self.kind, cx.rect, port))).collect();
         let target = PortsTarget { node: self.id, ports: centers, reach: cx.style.reach };
         if let Some(WireDrop { from, to, op }) = cx.drop_target::<WireDrag, _>(&target) {
-            self.event = Some(NodeEvent::Wired { from, to, op });
+            // P3(graph-w3): ge.C18
+            self.event = Some(NodeEvent::Wired { from, to, op, detached: None });
         }
         if let Some(op) = cx.drag_ended::<WireDrag>() {
-            self.event = Some(NodeEvent::WireEnded { op });
+            // P3(graph-w3): ge.C18
+            self.event = Some(NodeEvent::WireEnded { op, from: PortRef::new(self.id, 0), detached: None, loose: None });
         }
     }
 

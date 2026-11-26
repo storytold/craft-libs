@@ -2,9 +2,10 @@
 
 use super::Node;
 use crate::contract::{DropOperation, MeasureCx, PaintUi};
-use crate::primitives::Draw;
-use crate::style::StyleCx;
-use egui::{Rect, Vec2};
+use crate::primitives::{Draw, IconSpec};
+use crate::style::{DataColor, StyleCx};
+use craft_keymap::Mods;
+use egui::{Pos2, Rect, Vec2};
 
 /// The key of a node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,12 +55,109 @@ impl Wire {
     }
 }
 
+/// Which way a wire may run through a port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PortDirection {
+    /// Either way: a wire may start or end here.
+    Any,
+    /// A wire ends here.
+    Input,
+    /// A wire starts here.
+    Output,
+}
+
+/// The side of a node a port sits on; a wire leaves and enters along its side's outward normal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PortSide {
+    /// The left edge.
+    Left,
+    /// The right edge.
+    Right,
+    /// The top edge.
+    Top,
+    /// The bottom edge.
+    Bottom,
+}
+
+/// How a node is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NodeShape {
+    /// A card with a title.
+    #[default]
+    Card,
+    /// A circle filling the node's rect, with no title and its ports on its edge.
+    Dot,
+}
+
+/// When the ports' names show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PortLabels {
+    /// Never.
+    #[default]
+    Hidden,
+    /// Beside each port while the pointer is over the node.
+    OnHover,
+}
+
+/// A node's header: a data-tone band with a rule under it, the elided title in it and the icon at its end.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct NodeHeader {
+    /// The band's tone.
+    pub tone: DataColor,
+    /// The band's height, in document units.
+    pub height: f32,
+    /// The icon at the band's end.
+    pub icon: Option<IconSpec<'static>>,
+}
+
+impl NodeHeader {
+    /// A header band of `tone`, `height` document units high.
+    pub fn new(tone: DataColor, height: f32) -> Self {
+        let _ = (tone, height);
+        todo!("ge.C14")
+    }
+
+    /// The header shows `icon` at its end.
+    #[must_use]
+    pub fn icon(self, icon: IconSpec<'static>) -> Self {
+        let _ = (self, icon);
+        todo!("ge.C14")
+    }
+}
+
+/// A node's footer: one centred caption line at the card's bottom.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct NodeFooter<'a> {
+    /// The caption.
+    pub text: &'a str,
+    /// The footer's height, in document units.
+    pub height: f32,
+}
+
+impl<'a> NodeFooter<'a> {
+    /// A footer of `text`, `height` document units high.
+    pub fn new(text: &'a str, height: f32) -> Self {
+        let _ = (text, height);
+        todo!("ge.C14")
+    }
+}
+
 /// What a drag that starts on a port carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WireDrag {
-    /// The port the drag started on.
+    /// The port the drag started on: the source port of the wire being detached, else the port itself.
     pub from: PortRef,
+    /// The id of the wire the drag took off a fed input, if it did.
+    pub detached: Option<u64>,
+    /// The direction of the port the drag started on.
+    pub from_direction: PortDirection,
 }
 
 /// What a node reports.
@@ -75,12 +173,28 @@ pub enum NodeEvent<E = ()> {
         to: PortRef,
         /// The drop operation: Alt copies.
         op: DropOperation,
+        /// The id of the wire the drag took off an input, if it did.
+        detached: Option<u64>,
     },
     /// A wire that started on a port of this node was released, in the pass after the drop.
     #[non_exhaustive]
     WireEnded {
         /// What the drop did, as the target answered it.
         op: DropOperation,
+        /// The port the drag started on.
+        from: PortRef,
+        /// The id of the wire the drag took off an input, if it did.
+        detached: Option<u64>,
+        /// Where the wire was released, in document units, when no port took it.
+        loose: Option<Pos2>,
+    },
+    /// A primary press and release with no drag, on the node's body or a port.
+    #[non_exhaustive]
+    Clicked {
+        /// The port clicked, or `None` for the body.
+        port: Option<usize>,
+        /// The modifiers held.
+        mods: Mods,
     },
     /// An edit the node's kind reported from its inline controls.
     Edit(E),
@@ -124,4 +238,44 @@ pub trait NodeKind<E: 'static = ()> {
 
     /// Paints the kind's body in `rect`. Colours come from `cx`, through a token or an app token group.
     fn paint_body(&self, _draw: &Draw<'_>, _rect: Rect, _cx: &StyleCx<'_>) {}
+
+    /// Which way a wire may run through port `port`; any way by default.
+    fn port_direction(&self, _port: usize) -> PortDirection {
+        PortDirection::Any
+    }
+
+    /// The side of the node port `port` sits on: the right for an output, the left otherwise.
+    fn port_side(&self, port: usize) -> PortSide {
+        if self.port_direction(port) == PortDirection::Output { PortSide::Right } else { PortSide::Left }
+    }
+
+    /// Whether input port `port` takes more than one wire; no by default.
+    fn port_takes_many(&self, _port: usize) -> bool {
+        false
+    }
+
+    /// The tone of port `port`'s handle; `None` keeps the handle look.
+    fn port_tone(&self, _port: usize, _cx: &StyleCx<'_>) -> Option<DataColor> {
+        None
+    }
+
+    /// The node's header band; none by default.
+    fn header(&self, _cx: &StyleCx<'_>) -> Option<NodeHeader> {
+        None
+    }
+
+    /// The node's footer caption; none by default.
+    fn footer(&self) -> Option<NodeFooter<'_>> {
+        None
+    }
+
+    /// How the node is drawn: a card by default.
+    fn shape(&self) -> NodeShape {
+        NodeShape::Card
+    }
+
+    /// The node's tooltip; none by default.
+    fn tooltip(&self) -> Option<String> {
+        None
+    }
 }

@@ -19,12 +19,12 @@ use egui::Ui;
 
 const SIZE: f64 = 12.0;
 
-#[story(Field, covers = [Default], drive = Drive::Never)]
+#[story(Field<'static>, covers = [Default], drive = Drive::Never)]
 fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("Size").help(Help::Text("In points".into())).show(ui, |ui, _| NumberField::new("Size", data.bind("size", Some(SIZE))).show(ui)).into()
 }
 
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_above_with_status(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("Size")
         .layout(FieldLayout::Above)
@@ -33,7 +33,7 @@ fn field_above_with_status(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into()
 }
 
-#[story(Field, covers = [LongText], drive = Drive::Never)]
+#[story(Field<'static>, covers = [LongText], drive = Drive::Never)]
 fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("A label much longer than the column a form usually gives it")
         .help(Help::Text("A help text much longer than the room under the control, so it wraps onto more than one line".into()))
@@ -42,7 +42,7 @@ fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// A number field whose side label is a link: a click reports to the host and leaves focus alone, a drag scrubs.
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_link_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Field::new("Opacity")
         .side(SideLabel::new().link().scrub(true))
@@ -56,7 +56,7 @@ fn field_link_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A field's link label under each `LinkLabelInk`, each with a free link to options under it: the accent (the default)
 /// with a plain `Link`, then the body ink VectorCraft sets at its root with a `Link` in `Tone::Neutral`, the same ink.
 /// Both stay underlined.
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_link_label_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut rows = |ui: &mut Ui, key: &'static str, tone: Option<Tone>| {
         Stack::new()
@@ -89,7 +89,7 @@ fn field_link_label_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// A field's label under each `CaptionInk`, enabled and disabled: the muted ink (the default), then the normal ink
 /// VectorCraft sets at its root. A disabled label reads in the disabled ink under both.
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_caption_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut rows = |ui: &mut Ui, key: &'static str| {
         Stack::new().id_salt(key).show(ui, |ui, _| {
@@ -113,7 +113,7 @@ fn field_caption_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// A glyph label: the icon shows, the text only names the control.
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_icon_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("Width")
         .side(SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("list")))))
@@ -121,7 +121,7 @@ fn field_icon_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into()
 }
 
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_with_refused_value(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_negative = |size: &Option<f64>| match size {
         Some(size) if *size < 0.0 => Validity::Refuse(Message::new("Size cannot be negative")),
@@ -135,7 +135,7 @@ fn field_with_refused_value(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// An error that needs two fields: the end day may not come before the start day, and the line under the end field
 /// says so.
-#[story(Field, covers = [], drive = Drive::Never)]
+#[story(Field<'static>, covers = [], drive = Drive::Never)]
 fn field_with_cross_field_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = *data.value("start_day", Some(20.0));
     let end_before_start = |start: &Option<f64>, end: &Option<f64>| match end {

@@ -45,7 +45,7 @@ pub struct FieldRowStyle {
 /// the control.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
-pub struct Field {
+pub struct Field<'a> {
     #[common]
     common: Common,
     #[container]
@@ -58,9 +58,12 @@ pub struct Field {
     /// `Text` in the body closure). The value is read by assistive technology and by tests; it is not editable.
     #[prop(into)]
     value: Option<String>,
+    /// The group `Field::trailing` set, shown at the line's end after the control.
+    #[allow(dead_code)] // P3(panels-w2): pn.C7
+    trailing: Option<Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>>,
 }
 
-impl Field {
+impl<'a> Field<'a> {
     /// A field labelled `label`, beside its control, filling the width offered; among the members of a bar it takes
     /// its content width. `sizing` overrides both.
     pub fn new(label: impl Into<Label>) -> Self {
@@ -69,7 +72,7 @@ impl Field {
             .content_in_bar()
             .footer(FooterRegion::new().gap(Gap::Tight).status())
             .label(SideLabel::new());
-        Field { common: Common::new(), props, help: None, layout: None, value: None }.label(label)
+        Field { common: Common::new(), props, help: None, layout: None, value: None, trailing: None }.label(label)
     }
 
     /// Where the label sits relative to the control.
@@ -90,6 +93,14 @@ impl Field {
         self
     }
 
+    /// Ends the row with `group` at the line's end, after the control and outside the body, not in the body's fit. Its
+    /// stops follow the control's in Tab order.
+    #[must_use]
+    pub fn trailing(self, group: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
+        let _ = (self, group);
+        todo!("pn.C7")
+    }
+
     /// How the label is shown and what it does: its icon, detail, scrub, whether it is visible and whether it names
     /// or describes the control. The text stays the field's label. A layout set with `Field::layout` stays, whichever
     /// is called first; without one, the layout is the side label's own.
@@ -103,7 +114,7 @@ impl Field {
     }
 }
 
-impl Component for Field {
+impl Component for Field<'_> {
     const ROLE: Role = Role::GROUP;
     const PARTS: bool = false;
     const STOPS: bool = false;
@@ -129,7 +140,13 @@ impl Component for Field {
     }
 }
 
-impl Container for Field {
+impl Container for Field<'_> {
+    /// Shows the trailing group in one `Row`; nothing when no group is set.
+    fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
+        let _ = (ui, cx);
+        todo!("pn.C8")
+    }
+
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         if let Some((message, tone)) = cx.field_message() {
             Text::new(message.text.clone()).role(TypeRole::Caption).tone(tone).show(ui);

@@ -20,7 +20,7 @@ const RANGE: std::ops::RangeInclusive<f64> = 0.0..=100.0;
 const COLUMNS: std::ops::RangeInclusive<f64> = 1.0..=12.0;
 
 /// A row of the states story, in the group's form rows.
-fn row(label: &'static str) -> Field {
+fn row(label: &'static str) -> Field<'static> {
     Field::new(label).id_salt(label)
 }
 

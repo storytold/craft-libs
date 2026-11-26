@@ -364,6 +364,10 @@ pub struct MenuBar<'a> {
     /// Whether the bar takes F10, Alt and Alt+letter. Off while a dialog or the shortcut recorder owns the keys.
     #[prop]
     keyboard: bool,
+    /// Whether the bar belongs to a view: it is then drawn in its window under every `MenuPlacement`, including
+    /// `ScreenTop`, which hides the app menu's bar. Off by default.
+    #[prop]
+    in_view: bool,
     open: bool,
     /// A menu opened in this pass while none was open when it began.
     opened: bool,
@@ -372,11 +376,11 @@ pub struct MenuBar<'a> {
 impl<'a> MenuBar<'a> {
     /// A bar named `label` with one title per menu, in reading order.
     pub fn new(label: impl Into<Label>, titles: Vec<MenuTitle<'a>>) -> Self {
-        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, opened: false }.label(label)
+        MenuBar { common: Common::new(), titles, help: None, keyboard: true, in_view: false, open: false, opened: false }.label(label)
     }
 
-    fn in_window(env: &EnvView<'_>) -> bool {
-        env.shell().menu() == MenuPlacement::InWindow
+    fn in_window(&self, env: &EnvView<'_>) -> bool {
+        self.in_view || env.shell().menu() == MenuPlacement::InWindow
     }
 
     /// Each title's text without its marker, and its mnemonic: the letter and its character index in the text, none
@@ -504,7 +508,7 @@ impl Component for MenuBar<'_> {
     /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
     /// than every title needs narrows the bar, and the titles that no longer fit go into "…".
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        if !Self::in_window(&cx.env) {
+        if !self.in_window(&cx.env) {
             return Vec2::ZERO;
         }
         let (widths, height, more) = self.widths(cx);
@@ -517,7 +521,7 @@ impl Component for MenuBar<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        if !Self::in_window(&cx.env) {
+        if !self.in_window(&cx.env) {
             return;
         }
         let (widths, _, more) = self.widths(cx);
@@ -542,7 +546,7 @@ impl Component for MenuBar<'_> {
         let slots = Self::slots(found);
         let texts = self.texts(&cx.env);
         let opened = Self::opened(cx, &slots, found);
-        let keys = if self.keyboard && Self::in_window(&cx.env) {
+        let keys = if self.keyboard && self.in_window(&cx.env) {
             cx.register_menu_bar();
             cx.take_menu_keys()
         } else {

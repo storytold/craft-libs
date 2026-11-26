@@ -99,6 +99,13 @@ impl LogEvent {
         now_ms.saturating_sub(self.time_ms) / 1000
     }
 
+    /// The event as one console line: its message with the repeat count in the level's tone and the mono role, with no
+    /// icon and no age.
+    pub fn console_row(&self, words: &EventWords, format: &Format) -> ListRow<'static> {
+        let _ = (words, format);
+        todo!("sh.C2")
+    }
+
     /// The event as a list row: its level icon, its message with the repeat count and, at the end, `age` in the
     /// caption role. A screen reader reads the message, the level and the age. `striped` is `ItemCx::row.striped`.
     pub fn row(&self, age: &str, words: &EventWords, format: &Format, striped: bool) -> ListRow<'static> {
@@ -147,6 +154,12 @@ impl<'a> EventLog<'a> {
     /// The event shown at position `at`.
     pub fn event(&self, at: usize) -> Option<&'a LogEvent> {
         self.shown.get(at).map(|&index| &self.events[index])
+    }
+
+    /// The shown events oldest first, as the console lists them.
+    #[must_use]
+    pub fn oldest_first(self) -> Self {
+        todo!("sh.C2")
     }
 
     /// How many events of each level the whole log holds, shown or not.
@@ -198,6 +211,9 @@ pub struct EventList<'a> {
     /// The selection the caller owns.
     #[prop]
     selection: Option<Bind<'a, Selection<u64>>>,
+    /// How the events are laid out ([`EventListLayout::Log`] by default).
+    #[prop]
+    layout: EventListLayout,
 }
 
 impl<'a> EventList<'a> {
@@ -212,6 +228,7 @@ impl<'a> EventList<'a> {
                 .allow_empty(true)
                 .empty(EventWords::word(NONE).map_or(Label::Empty, Label::Word)),
             selection: None,
+            layout: EventListLayout::default(),
         }
         .label(label)
     }
@@ -254,6 +271,17 @@ impl Collection for EventList<'_> {
     fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
         row.rows(self.items.row_height)
     }
+}
+
+/// How an [`EventList`] lays its events out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EventListLayout {
+    /// The log: newest first, a level icon, the message and the age, one event selected.
+    #[default]
+    Log,
+    /// The console: one line per event, oldest first, in the level's tone and the mono role, following the newest line.
+    Console,
 }
 
 /// The id of the word an empty log shows.
