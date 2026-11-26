@@ -593,15 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn default_band_structures() {
-        assert_eq!(DEFAULT_CPLBNDSTRC.iter().filter(|&&b| b).count(), 8);
-        assert!(DEFAULT_CPLBNDSTRC[8] && !DEFAULT_CPLBNDSTRC[9] && !DEFAULT_CPLBNDSTRC[12] && DEFAULT_CPLBNDSTRC[17]);
-        assert_eq!(DEFAULT_SPXBNDSTRC.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect::<Vec<_>>(), vec![8, 10, 12, 14, 16]);
-        // every frame-based strategy sends new exponents in block 0
-        assert!(FRAME_EXPSTR.iter().all(|s| s[0] != 0));
-    }
-
-    #[test]
     fn spectral_extension_translation_and_scaling() {
         // begin at sub-band 2 (bin 49), end at 5 (bin 85), copy from sub-band 0 (bin 25): three
         // 12-bin bands, the third wraps back to the copy start

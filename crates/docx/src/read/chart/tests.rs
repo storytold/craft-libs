@@ -230,11 +230,12 @@ fn hostile_radar_charts_never_panic() {
     let small =
         chart_items(&space(&format!("<c:radarChart>{}</c:radarChart>", ser(0, "S", None, &["a", "b", "c"], &["1", "2", "3"]))), &theme(), 20.0, 20.0);
     let _ = small;
-    // Caps: thousands of categories and series stay bounded.
-    let cats: Vec<String> = (0..5000).map(|i| format!("c{i}")).collect();
+    // Caps: three times as many categories and series as are drawn stay bounded.
+    let n = 3 * MAX_SPOKES;
+    let cats: Vec<String> = (0..n).map(|i| format!("c{i}")).collect();
     let refs: Vec<&str> = cats.iter().map(String::as_str).collect();
-    let vals = vec!["1"; 5000];
-    let many: Vec<String> = (0..300).map(|i| ser(i, "S", None, &refs, &vals)).collect();
+    let vals = vec!["1"; n];
+    let many: Vec<String> = (0..3 * MAX_RADAR_SERIES).map(|i| ser(i, "S", None, &refs, &vals)).collect();
     let items = radar_chart("marker", &many);
     let polygons = items.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), .. } if *c != GRID)).count();
     assert!(polygons <= MAX_RADAR_SERIES, "{polygons}");
@@ -745,6 +746,11 @@ fn value_axis_title_turns_counter_clockwise_like_word() {
     assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="5400000" vert="horz"/>"#))), Some(90.0));
     // A horizontal title (`rot="0"`) stays horizontal: the plot makes room for it (see below).
     assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="0" vert="horz"/>"#))), Some(0.0));
+    // The horizontal tolerance excludes both boundary angles and keeps equivalent full turns.
+    for (rot, expected) in [(30000, 0.0), (-30000, 0.0), (60000, -90.0), (-60000, -90.0), (10800000, -90.0), (21600000, 0.0)] {
+        let body = format!(r#"<a:bodyPr rot="{rot}" vert="horz"/>"#);
+        assert_eq!(angle(&line_with("", &title(&body))), Some(expected), "rotation {rot}");
+    }
     // Hostile values stay finite.
     let odd = angle(&line_with("", &title(r#"<a:bodyPr rot="99999999999999999999"/>"#)));
     assert!(odd.is_some_and(f32::is_finite));
