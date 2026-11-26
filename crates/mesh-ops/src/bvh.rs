@@ -1,5 +1,8 @@
 //! Bounding volume hierarchy over a mesh's triangles: closest-hit and any-hit ray casts, and
 //! box queries (used by picking, baking and brush stamps).
+//!
+//! Triangles with a non-finite corner are left out, and a query with a non-finite origin,
+//! direction or point, a zero direction, a NaN distance or a NaN box finds nothing.
 
 use glam::{Vec3, Vec3A};
 
@@ -34,6 +37,9 @@ pub struct Bvh {
 }
 
 const LEAF: usize = 4;
+
+/// Most triangles one tree holds: its node indices (up to twice the triangle count) are `u32`.
+pub const MAX_BVH_TRIANGLES: usize = (u32::MAX / 2) as usize;
 
 /// Traversal stack of (node, entry distance): inline for typical depths (no allocation per
 /// ray), spilling to the heap for degenerate trees.
@@ -79,19 +85,35 @@ fn area(lo: Vec3, hi: Vec3) -> f32 {
     d.x * d.y + d.y * d.z + d.z * d.x
 }
 
+/// The centroid of a triangle; thirds first when the sum would overflow.
+fn centroid(t: &[Vec3; 3]) -> Vec3 {
+    let c = (t[0] + t[1] + t[2]) / 3.0;
+    if c.is_finite() { c } else { t[0] / 3.0 + t[1] / 3.0 + t[2] / 3.0 }
+}
+
 impl Bvh {
+    /// The tree over a mesh's triangles. Triangles with a non-finite corner or an index out of
+    /// range are left out, as is every triangle past [`MAX_BVH_TRIANGLES`].
     pub fn new(mesh: &Mesh) -> Bvh {
-        let triangle_count = mesh.triangle_count();
+        let triangle_count = mesh.triangle_count().min(MAX_BVH_TRIANGLES);
         let mut tris = Vec::with_capacity(triangle_count);
+        let mut ids: Vec<u32> = Vec::with_capacity(triangle_count);
 
         for triangle in 0..triangle_count {
             let Some([a, b, c]) = mesh.tri(triangle) else { continue };
-            let position = |i: usize| mesh.positions.get(i).copied().unwrap_or(Vec3::ZERO);
-            tris.push([position(a), position(b), position(c)]);
+            let (Some(a), Some(b), Some(c)) = (mesh.positions.get(a), mesh.positions.get(b), mesh.positions.get(c)) else { continue };
+            if a.is_finite() && b.is_finite() && c.is_finite() {
+                tris.push([*a, *b, *c]);
+                ids.push(triangle as u32);
+            }
+        }
+
+        if tris.is_empty() {
+            return Bvh { nodes: Vec::new(), tris, order: ids };
         }
 
         let mut order: Vec<u32> = (0..tris.len() as u32).collect();
-        let centroids: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
+        let centroids: Vec<Vec3> = tris.iter().map(centroid).collect();
 
         let mut nodes = vec![Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: 0, count: tris.len() as u32 }];
         let mut stack = vec![0usize];
@@ -222,8 +244,12 @@ impl Bvh {
             stack.push(left_child + 1);
         }
 
-        let tris = order.iter().map(|t| tris[*t as usize]).collect();
-        Bvh { nodes, tris, order }
+        let sorted = order.iter().map(|t| tris[*t as usize]).collect();
+        // The triangle indices replace the positions in `order` one by one.
+        for t in &mut order {
+            *t = ids[*t as usize];
+        }
+        Bvh { nodes, tris: sorted, order }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -232,7 +258,7 @@ impl Bvh {
 
     /// The flattened tree (for GPU traversal), root first: bounds, then for a leaf the range
     /// `first..first + count` of [`Bvh::triangles`], for an inner node (`count` 0) the children
-    /// `first` and `first + 1`.
+    /// `first` and `first + 1`. A tree without triangles has no nodes.
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = (Vec3, Vec3, u32, u32)> + '_ {
         self.nodes.iter().map(|n| (n.lo.into(), n.hi.into(), n.first, n.count))
     }
@@ -259,7 +285,10 @@ impl Bvh {
         let e2 = t[2] - t[0];
         let p = d.cross(e2);
         let det = e1.dot(p);
-        if det.abs() < 1e-12 {
+        // A ray in the triangle's plane, or a triangle without area. The determinant is the
+        // product of the two edge lengths, the direction's length and the sines of the angles
+        // between them, so the cutoff shrinks with that product for small triangles.
+        if det.abs() < 1e-12 && (det == 0.0 || det.abs() < 1e-12 * (e1.length() * e2.length() * d.length()).min(1.0)) {
             return None;
         }
         let inv = 1.0 / det;
@@ -281,6 +310,9 @@ impl Bvh {
     }
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
+        if !o.is_finite() || !d.is_finite() || d == Vec3::ZERO || tmax.is_nan() {
+            return None;
+        }
         let root = self.nodes.first().filter(|_| !self.tris.is_empty())?;
         let (oa, inv) = (Vec3A::from(o), Vec3A::ONE / Vec3A::from(d));
         let mut best = None;
@@ -378,8 +410,12 @@ impl Bvh {
         best
     }
 
-    /// Call `f` with every triangle (original index) whose bounds overlap the box.
+    /// Call `f` with every triangle (original index) whose bounds overlap the box. A box with a
+    /// NaN coordinate, or a lower corner past the upper corner on any axis, overlaps nothing.
     pub fn query_box(&self, lo: Vec3, hi: Vec3, mut f: impl FnMut(u32)) {
+        if lo.is_nan() || hi.is_nan() || lo.cmpgt(hi).any() {
+            return;
+        }
         let mut stack = vec![0u32];
         while let Some(i) = stack.pop() {
             let Some(n) = self.nodes.get(i as usize) else { continue };
@@ -674,5 +710,97 @@ mod tests {
         let hit = bvh.closest_filtered(Vec3::new(0.0, 0.0, 10.0), Vec3::NEG_Z, 100.0, &|t| t == 500).unwrap();
         assert_eq!(hit.tri, 500);
         assert_eq!(hit.t, 10.0);
+    }
+
+    #[test]
+    fn bvh_rejects_non_finite_queries_without_callbacks() {
+        let m = primitives::plane(2.0, 4);
+        let bvh = Bvh::new(&m);
+        let mut calls = 0;
+        bvh.query_box(Vec3::new(f32::NAN, -1.0, -1.0), Vec3::ONE, |_| calls += 1);
+        bvh.query_box(Vec3::splat(-1.0), Vec3::new(1.0, f32::NAN, 1.0), |_| calls += 1);
+        // A box whose lower corner is past its upper corner on one axis is empty, even where a
+        // triangle spans both values.
+        bvh.query_box(Vec3::new(0.3, -1.0, -1.0), Vec3::new(0.2, 1.0, 1.0), |_| calls += 1);
+        bvh.query_box(Vec3::new(-1.0, -1.0, 0.3), Vec3::new(1.0, 1.0, 0.2), |_| calls += 1);
+        assert_eq!(calls, 0);
+        // An infinite box is a valid query and finds everything.
+        bvh.query_box(Vec3::NEG_INFINITY, Vec3::INFINITY, |_| calls += 1);
+        assert_eq!(calls, m.triangle_count());
+
+        let (o, d) = (Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Y);
+        assert!(bvh.closest(o, d, 10.0).is_some());
+        let counted = std::cell::Cell::new(0);
+        let filter = |_: u32| {
+            counted.set(counted.get() + 1);
+            true
+        };
+        for (o, d, tmax) in
+            [(Vec3::NAN, d, 10.0), (o, Vec3::new(0.0, f32::NAN, 0.0), 10.0), (o, Vec3::ZERO, 10.0), (o, Vec3::NEG_INFINITY, 10.0), (o, d, f32::NAN)]
+        {
+            assert!(bvh.closest_filtered(o, d, tmax, &filter).is_none(), "{o} {d} {tmax}");
+            assert!(!bvh.occluded(o, d, tmax));
+        }
+        assert_eq!(counted.get(), 0);
+    }
+
+    #[test]
+    fn ray_hits_do_not_depend_on_the_size_of_the_triangle() {
+        for exponent in [-10, -7, -3, 0, 3, 7, 10] {
+            let s = 10f32.powi(exponent);
+            let m = Mesh { positions: vec![Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(0.0, 0.0, s)], indices: vec![0, 1, 2], ..Mesh::default() };
+            let bvh = Bvh::new(&m);
+            // Straight down onto the triangle, from one triangle size above it.
+            let o = Vec3::new(0.25 * s, s, 0.25 * s);
+            let hit = bvh.closest(o, Vec3::NEG_Y, f32::MAX).unwrap_or_else(|| panic!("no hit at 1e{exponent}"));
+            assert!((hit.t / s - 1.0).abs() < 1e-4, "1e{exponent}: {hit:?}");
+            assert!((hit.u - 0.25).abs() < 1e-4 && (hit.v - 0.25).abs() < 1e-4, "1e{exponent}: {hit:?}");
+            assert!(bvh.occluded(o, Vec3::NEG_Y, 2.0 * s), "1e{exponent}");
+            // Beside the triangle, and along its plane.
+            assert!(bvh.closest(Vec3::new(0.75 * s, s, 0.75 * s), Vec3::NEG_Y, f32::MAX).is_none(), "1e{exponent}");
+            assert!(bvh.closest(Vec3::new(-s, 0.0, 0.25 * s), Vec3::X, f32::MAX).is_none(), "1e{exponent}");
+        }
+    }
+
+    #[test]
+    fn a_tree_without_triangles_has_no_nodes() {
+        assert_eq!(Bvh::new(&Mesh::default()).nodes().len(), 0);
+        // Every triangle is left out: one corner is not finite.
+        let rejected = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(f32::NAN, 0.0, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
+        let bvh = Bvh::new(&rejected);
+        assert_eq!(bvh.nodes().len(), 0);
+        assert!(bvh.is_empty());
+        assert!(bvh.closest(Vec3::Z, Vec3::NEG_Z, 10.0).is_none());
+        assert!(bvh.nearest(Vec3::ZERO, 10.0, &|_| true).is_none());
+        let mut found = 0;
+        bvh.query_box(Vec3::splat(-1.0), Vec3::ONE, |_| found += 1);
+        assert_eq!(found, 0);
+    }
+
+    #[test]
+    fn bvh_leaves_out_non_finite_triangles_and_keeps_original_indices() {
+        let mut m = primitives::plane(2.0, 4);
+        // Vertex 0 is the corner of one triangle only.
+        m.positions[0] = Vec3::new(f32::NAN, 0.0, 0.0);
+        m.positions[24] = Vec3::new(0.0, f32::INFINITY, 0.0);
+        // One triangle's index points past the vertices.
+        let out_of_range = m.triangle_count() - 1;
+        m.indices[out_of_range * 3] = m.positions.len() as u32;
+        let skipped = |t: usize| m.tri(t).is_some_and(|c| c.contains(&0) || c.contains(&24) || c.iter().any(|&i| i >= m.positions.len()));
+        let affected = (0..m.triangle_count()).filter(|&t| skipped(t)).count();
+        let bvh = Bvh::new(&m);
+        let mut found = Vec::new();
+        bvh.query_box(Vec3::splat(-10.0), Vec3::splat(10.0), |t| found.push(t));
+        assert_eq!(found.len(), m.triangle_count() - affected);
+        for (lo, hi, _, _) in bvh.nodes() {
+            assert!(lo.is_finite() && hi.is_finite(), "{lo} {hi}");
+        }
+        let (tris, order) = bvh.triangles();
+        assert!(order.iter().all(|&t| !skipped(t as usize)));
+        // Each triangle is stored with the corners of the mesh triangle its index names.
+        for (corners, &t) in tris.iter().zip(order) {
+            let [a, b, c] = m.tri(t as usize).unwrap();
+            assert_eq!(*corners, [m.positions[a], m.positions[b], m.positions[c]]);
+        }
     }
 }
