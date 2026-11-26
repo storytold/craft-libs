@@ -33,6 +33,10 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
+    '.github/workflows/docs.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
+        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/ecproj-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -65,7 +69,8 @@ workflows:
     '.github/workflows/menu.yml':
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
-    '.github/workflows/nightly.yml': []
+    '.github/workflows/nightly.yml':
+        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/pcraft-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -81,6 +86,9 @@ workflows:
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/sonarcloud.yml': []
+    '.github/workflows/theme.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
     '.github/workflows/update.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -142,6 +150,11 @@ dependencies:
         commit: 'sha1-1d88384fd173af6ecb012dfd0264a306b711241a'
         owner_id: 88700172
         repo_id: 422287306
+    'step-security/rust-cache@v2.9.2':
+        ref: 'v2.9.2'
+        commit: 'sha1-8871c8ba063416da7c32246932ea6ae08700453e'
+        owner_id: 88700172
+        repo_id: 822636713
     'step-security/taiki-e-install-action@v2.87.32':
         ref: 'v2.87.32'
         commit: 'sha1-76747d22a7567cc4438546a84f11bdf18e670ab8'

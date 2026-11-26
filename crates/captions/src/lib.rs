@@ -4,7 +4,7 @@
 //! - **Files:** [SubRip](srt) (`.srt`), [WebVTT](vtt) (`.vtt`), [Scenarist SCC](scc) (`.scc`,
 //!   CEA-608 pop-on, roll-up and paint-on on read; pop-on on write), [MacCaption MCC](mcc)
 //!   (`.mcc`, SMPTE ST 334-2 packets with CEA-608 and CEA-708), [EBU STL](stl) (`.stl`, EBU
-//!   Tech 3264), [ASS/SSA](ass) (`.ass`, `.ssa`) and [TTML](ttml) (`.ttml` IMSC1 Text profile, `.dfxp` DFXP) parse into a
+//!   Tech 3264), [ASS/SSA](ass) (`.ass`, `.ssa`), the legacy text formats [MicroDVD](microdvd) (`.sub`), [MPL2](mpl2) (`.mpl`), [SubViewer 2](subviewer) (`.sub`), [VPlayer](vplayer) (`.vpl`) and [SAMI](sami) (`.smi`) and [TTML](ttml) (`.ttml` IMSC1 Text profile, `.dfxp` DFXP) parse into a
 //!   [`Document`] of [`Cue`]s and write back. Readers are forgiving (BOM, UTF-16, Windows-1252
 //!   fallback, CRLF/CR, missing SRT indexes, `,` or `.` milliseconds, missing hours, no blank
 //!   line between cues); writers are strict. WebVTT cue identifiers, cue settings, `<v Speaker>`
@@ -36,17 +36,22 @@ pub mod ass;
 pub mod cea608;
 pub mod jacosub;
 pub mod mcc;
+pub mod microdvd;
 #[cfg(feature = "mov-text")]
 pub mod mov_text;
+pub mod mpl2;
 pub mod pjs;
 pub mod realtext;
+pub mod sami;
 pub mod scc;
 pub mod srt;
 pub mod stl;
+pub mod subviewer;
 mod text;
 /// Exact time: `craft-timeline`'s ticks, frame rates and timecode fields.
 pub use craft_timeline::time;
 pub mod ttml;
+pub mod vplayer;
 pub mod vtt;
 
 pub use text::{decode_entities, entity_at, plain_text};
@@ -77,6 +82,16 @@ pub enum Format {
     Dfxp,
     /// Advanced SubStation Alpha (also reads SubStation Alpha).
     Ass,
+    /// MicroDVD (frame-numbered text).
+    MicroDvd,
+    /// MPL2 (times in tenths of a second).
+    Mpl2,
+    /// SubViewer 2.
+    SubViewer,
+    /// VPlayer (start times only).
+    VPlayer,
+    /// SAMI (HTML-like).
+    Sami,
     /// Phoenix Japanimation Society (PJS) subtitles.
     Pjs,
     /// RealText streaming timed text markup.
@@ -86,7 +101,7 @@ pub enum Format {
 }
 
 impl Format {
-    pub const ALL: [Format; 11] = [
+    pub const ALL: [Format; 16] = [
         Format::Srt,
         Format::WebVtt,
         Format::Scc,
@@ -95,6 +110,11 @@ impl Format {
         Format::Ttml,
         Format::Dfxp,
         Format::Ass,
+        Format::MicroDvd,
+        Format::Mpl2,
+        Format::SubViewer,
+        Format::VPlayer,
+        Format::Sami,
         Format::Pjs,
         Format::RealText,
         Format::JacoSub,
@@ -109,6 +129,11 @@ impl Format {
             Format::Ttml => "TTML (IMSC1)",
             Format::Dfxp => "DFXP (TTML1)",
             Format::Ass => "Advanced SubStation Alpha (ASS)",
+            Format::MicroDvd => "MicroDVD",
+            Format::Mpl2 => "MPL2",
+            Format::SubViewer => "SubViewer 2",
+            Format::VPlayer => "VPlayer",
+            Format::Sami => "SAMI",
             Format::Pjs => "PJS",
             Format::RealText => "RealText",
             Format::JacoSub => "JACOsub",
@@ -124,6 +149,12 @@ impl Format {
             Format::Ttml => "ttml",
             Format::Dfxp => "dfxp",
             Format::Ass => "ass",
+            Format::MicroDvd => "sub",
+            Format::Mpl2 => "mpl",
+            // SubViewer files are `.sub` too, as MicroDVD ones are; `.sbv` tells the two apart.
+            Format::SubViewer => "sbv",
+            Format::VPlayer => "vpl",
+            Format::Sami => "smi",
             Format::Pjs => "pjs",
             Format::RealText => "rt",
             Format::JacoSub => "jss",
@@ -139,6 +170,11 @@ impl Format {
             "ttml" | "imsc" | "imsc1" | "xml" => Some(Format::Ttml),
             "dfxp" => Some(Format::Dfxp),
             "ass" | "ssa" => Some(Format::Ass),
+            "sub" | "microdvd" => Some(Format::MicroDvd),
+            "mpl" | "mpl2" => Some(Format::Mpl2),
+            "subviewer" | "sbv" => Some(Format::SubViewer),
+            "vplayer" | "vpl" => Some(Format::VPlayer),
+            "smi" | "sami" => Some(Format::Sami),
             "pjs" => Some(Format::Pjs),
             "rt" | "realtext" => Some(Format::RealText),
             "jss" | "js" | "jacosub" => Some(Format::JacoSub),
@@ -292,28 +328,51 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if head.starts_with("[Script Info]") {
         return Some(Format::Ass);
     }
+    if head.get(..5).is_some_and(|h| h.eq_ignore_ascii_case("<sami"))
+        && head.as_bytes().get(5).is_some_and(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/')
+    {
+        return Some(Format::Sami);
+    }
+    if subviewer::is_header(head) {
+        return Some(Format::SubViewer);
+    }
     if realtext::is_realtext(head) {
         return Some(Format::RealText);
     }
+    let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
+    let has_arrow_timing = head.lines().take(40).any(|l| srt::parse_timing_line(l).is_some());
     let first_lines: Vec<&str> = head.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect();
+    if first_lines.first().is_some_and(|l| microdvd::is_cue(l)) {
+        return Some(Format::MicroDvd);
+    }
+    if first_lines.first().is_some_and(|l| mpl2::split_cue(l).is_some()) {
+        return Some(Format::Mpl2);
+    }
+    if ext.as_deref() != Some("srt") && !has_arrow_timing && first_lines.iter().any(|l| subviewer::parse_timing(l).is_some()) {
+        return Some(Format::SubViewer);
+    }
+    if !first_lines.is_empty() && first_lines.iter().all(|l| vplayer::split_line(l).is_some()) {
+        return Some(Format::VPlayer);
+    }
     if first_lines.first().is_some_and(|l| pjs::split_cue(l).is_some()) {
         return Some(Format::Pjs);
     }
     if first_lines.iter().any(|l| jacosub::is_timed_line(l)) || (head.starts_with('#') && (head.contains("TimeRes") || head.contains("#T"))) {
         return Some(Format::JacoSub);
     }
-    let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
     if (head.starts_with('<') && (head.contains("<tt ") || head.contains("<tt>") || head.contains(":tt ")))
         && (head.contains("ns/ttml") || head.contains("ttaf1"))
     {
         let legacy = head.contains("ttaf1") || head.contains("dfxp");
         return Some(if ext.as_deref() == Some("dfxp") || (legacy && ext.as_deref() != Some("ttml")) { Format::Dfxp } else { Format::Ttml });
     }
-    let has_arrow_timing = head.lines().take(40).any(|l| srt::parse_timing_line(l).is_some());
     match ext.as_deref() {
         Some("srt") if has_arrow_timing || head.is_empty() => Some(Format::Srt),
         Some("vtt") if has_arrow_timing => Some(Format::WebVtt),
-        Some("srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml" | "ass" | "ssa" | "pjs" | "rt" | "jss" | "js") => None,
+        Some(
+            "srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml" | "ass" | "ssa" | "sub" | "mpl" | "vpl" | "smi" | "sami" | "pjs" | "rt"
+            | "jss" | "js",
+        ) => None,
         _ if has_arrow_timing => Some(Format::Srt),
         _ => None,
     }
@@ -348,6 +407,11 @@ fn parse_unbounded(bytes: &[u8], format: Format) -> Result<Document> {
         Format::Mcc => mcc::parse(&text),
         Format::Ttml | Format::Dfxp => ttml::parse(&text),
         Format::Ass => ass::parse(&text),
+        Format::MicroDvd => microdvd::parse(&text),
+        Format::Mpl2 => mpl2::parse(&text),
+        Format::SubViewer => subviewer::parse(&text),
+        Format::VPlayer => vplayer::parse(&text),
+        Format::Sami => sami::parse(&text),
         Format::Pjs => pjs::parse(&text),
         Format::RealText => realtext::parse(&text),
         Format::JacoSub => jacosub::parse(&text),
@@ -355,7 +419,7 @@ fn parse_unbounded(bytes: &[u8], format: Format) -> Result<Document> {
     }
 }
 
-/// Options for [`write`].
+/// Options for [`fn@write`].
 #[derive(Clone, Copy, Debug)]
 pub struct WriteOptions {
     /// SCC / MCC: drop-frame timecode (the usual choice for 29.97 fps).
@@ -389,6 +453,11 @@ pub fn write(doc: &Document, format: Format, opts: WriteOptions) -> Vec<u8> {
         Format::Ttml => ttml::write(doc, ttml::Flavor::Imsc1, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
         Format::Dfxp => ttml::write(doc, ttml::Flavor::Dfxp, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
         Format::Ass => ass::write(doc).into_bytes(),
+        Format::MicroDvd => microdvd::write(doc, opts.rate).into_bytes(),
+        Format::Mpl2 => mpl2::write(doc).into_bytes(),
+        Format::SubViewer => subviewer::write(doc).into_bytes(),
+        Format::VPlayer => vplayer::write(doc).into_bytes(),
+        Format::Sami => sami::write(doc).into_bytes(),
         Format::Pjs => pjs::write(doc).into_bytes(),
         Format::RealText => realtext::write(doc).into_bytes(),
         Format::JacoSub => jacosub::write(doc).into_bytes(),
@@ -515,7 +584,7 @@ fn lossy_chars(
     }
 }
 
-/// [`write`] into `out`. MCC goes out line by line, so a long `every_frame_until` export is never
+/// [`fn@write`] into `out`. MCC goes out line by line, so a long `every_frame_until` export is never
 /// held in memory; the other formats are small and written whole.
 pub fn write_to(out: &mut dyn std::io::Write, doc: &Document, format: Format, opts: WriteOptions) -> std::io::Result<()> {
     match format {
