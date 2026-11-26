@@ -1,6 +1,6 @@
 # Icon sources
 
-Each folder holds only the files `icons.toml` lists, unchanged from the pinned source (exception: the drawings named below the table), and the set's licence as `LICENSE`. To add an icon, copy its file from the same commit.
+Each folder holds only the files `icons.toml` lists, unchanged from the pinned source (exception: the drawings named below the table), and the set's licence as `LICENSE`. To add an icon, copy its file from the npm package of the version in the table.
 
 | Folder | Set | Licence | Source (tag, commit) | Files taken from |
 |---|---|---|---|---|
@@ -13,6 +13,8 @@ Carbon's licence file is the repository's root `LICENSE` (the icons package has 
 
 Every set folder's files come from the npm package of the version in the table (`@phosphor-icons/core` 2.0.8, `lucide-static` 1.63.0, `@carbon/icons` 11.91.0, `@tabler/icons` 3.50.0), the same releases as the tags above. Phosphor files are `regular` weight, except `star-filled.svg`, `circle-filled.svg` and `warning-filled.svg`, which are Phosphor's `fill` weight (`star-fill.svg`, `circle-fill.svg`, `warning-fill.svg`). `panel-left.svg` is Phosphor's `sidebar-simple` unchanged, and `panel-right.svg` is the same glyph mirrored.
 
+The transform and layout files added for the flip, scale, skew, padding and gap glyphs are these packages' copies, byte for byte, comments and classes included: Lucide's `flip-horizontal`, `flip-vertical`, `gap-horizontal` and `gap-vertical`; Tabler's `flip-horizontal`, `flip-vertical`, `skew-x`, `skew-y`, `arrow-autofit-width`, `arrow-autofit-height`, `spacing-horizontal` and `spacing-vertical`; and Phosphor's `arrows-out-line-horizontal` and `arrows-out-line-vertical`.
+
 `phosphor/` also holds drawings made for the suite, for glyphs the pinned Phosphor release lacks. They follow Phosphor's regular style (256 view box, 16-unit round-capped strokes, some converted to filled outlines), take their shapes from PhotoCraft's glyphs, and carry the suite's own licence:
 
 - `bandage-sparkle`, `brush-replace`, `clip-below`, `clip-release`, `convert-point`, `direct-select`, `eraser-background`, `eraser-magic`, `font-similar`
@@ -24,5 +26,8 @@ Every set folder's files come from the npm package of the version in the table (
 - `sync-lock`, `mark-in`, `mark-out`, `insert-clip`, `overwrite-clip`, `lift-clip`, `extract-clip` (the timeline's lock and edit glyphs, after Premiere Pro's), `keyframe-linear`, `keyframe-bezier`, `keyframe-auto-bezier`, `keyframe-hold`, `keyframe-ease-in`, `keyframe-ease-out` (keyframe nodes after After Effects' shapes: diamond, square for Bezier, circle for Auto Bezier)
 - `key-linear`, `key-linear-filled`, `key-hold`, `key-bezier`, `key-auto-bezier`, `key-continuous-bezier`, `key-ease-in`, `key-ease-out`, `keyframe-easy-ease` (the timeline's single keyframe marks and the graph editor's Easy Ease button, after FilmCraft's diamond, square and circle and After Effects' keys; solid shapes except the outline diamond and the rings)
 - `font-variable`, `scaling`, `slice-select`, `square-dashed-mouse-pointer`, `text-warp`, `triangle-right`, `type-mask`, `type-mask-vertical`
+- `flip-horizontal`, `flip-vertical`, `skew-horizontal`, `skew-vertical`, `padding-top`, `padding-right`, `padding-bottom`, `padding-left`, `gap-horizontal`, `gap-vertical` (the transform and layout panels' glyphs, drawn after the marks those panels make: a dashed axis between two triangles for a flip, a slanted rectangle for the skew along x and the same rectangle transposed for the skew along y, a frame with the space drawn solid on one side for a padding, and two items with a double arrow in the space between them for a gap)
 - `crop-overlay-*` (the crop overlay menu's glyphs), `text-align-top`, `text-align-middle`, `text-align-bottom` (the vertical type options), `dash-align-exact`, `dash-align-corners` (the dash alignment options)
 - `eye-outline` (Phosphor's `eye` without the pupil: the Outline view), `layer-template` (a dashed layer: the Template view)
+
+Where a pinned set already draws one of these meanings, that set uses its own file rather than the base set's: Lucide's `flip-horizontal`, `flip-vertical`, `gap-horizontal` and `gap-vertical`; Tabler's `flip-horizontal`, `flip-vertical`, `skew-x`, `skew-y`, `arrow-autofit-width`, `arrow-autofit-height`, `spacing-horizontal` and `spacing-vertical`; and Phosphor's own `arrows-out-line-horizontal` and `arrows-out-line-vertical` for the axis of scale. A set without one falls back to the base set's drawing, as it does for every other icon, so Lucide and Carbon draw Phosphor's two `arrows-out-line` marks for the axes of scale. The four paddings keep the base set's drawing in every set: the nearest marks the other packs have, Tabler's `box-padding` and `box-margin`, draw a uniform inset around the content, and that names no side.
