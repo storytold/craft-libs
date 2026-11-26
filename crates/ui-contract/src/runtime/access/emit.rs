@@ -365,7 +365,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
                 parent: decl.parent,
                 rect: node.bounds.unwrap_or(decl.rect),
                 text: &run.text,
-                rtl: run.rtl,
+                direction: run.direction,
                 positions: &run.positions,
                 widths: &run.widths,
             },

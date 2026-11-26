@@ -1,5 +1,6 @@
 //! The text nodes of AccessKit: a text component's value, actions and selection, and the `TextRun` nodes below it.
 
+use crate::runtime::access::RunDirection;
 use egui::{Context, Id, Rect};
 
 /// A selection end as AccessKit names it: a run node's key and a character index in the run.
@@ -15,8 +16,8 @@ pub(crate) struct RunNode<'a> {
     pub parent: Id,
     pub rect: Rect,
     pub text: &'a str,
-    pub rtl: bool,
-    /// Each character's start offset from the run's left edge, and its advance.
+    pub direction: RunDirection,
+    /// Each character's start offset from the run's leading edge, and its advance.
     pub positions: &'a [f32],
     pub widths: &'a [f32],
 }
@@ -66,7 +67,12 @@ pub(crate) fn write_run(ctx: &Context, run: &RunNode<'_>) {
         node.set_character_positions(run.positions.to_vec());
         node.set_character_widths(run.widths.to_vec());
         node.set_word_starts(word_starts(run.text));
-        node.set_text_direction(if run.rtl { accesskit::TextDirection::RightToLeft } else { accesskit::TextDirection::LeftToRight });
+        node.set_text_direction(match run.direction {
+            RunDirection::LeftToRight => accesskit::TextDirection::LeftToRight,
+            RunDirection::RightToLeft => accesskit::TextDirection::RightToLeft,
+            RunDirection::TopToBottom => accesskit::TextDirection::TopToBottom,
+            RunDirection::BottomToTop => accesskit::TextDirection::BottomToTop,
+        });
     });
 }
 
