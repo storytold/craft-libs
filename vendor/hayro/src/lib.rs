@@ -71,6 +71,9 @@ pub use renderer::set_cmyk_band_pixels;
 /// PdfCraft patch (30): exported for its regression tests.
 #[doc(hidden)]
 pub use renderer::{OffscreenDraws, offscreen_draws};
+/// PdfCraft patch (33): exported for its regression test.
+#[doc(hidden)]
+pub use renderer::mesh_paint_pixels;
 
 /// A cache used by the renderer.
 ///
@@ -857,5 +860,379 @@ mod mesh_extent_tests {
         let p = render_at(fixture("/Sh0 sh", (195, 100, 205, 110)), 1.0);
         assert_eq!(px(&p, 196, 98), [255, 0, 0, 255]);
         assert_eq!(px(&p, 150, 50), [255, 255, 255, 255]);
+    }
+}
+
+/// What drawing a large page costs, counted rather than timed (the counts are the same on every
+/// machine), and that the faster paths draw the same pixels (storytold/pdfcraft#7396). Small mesh
+/// shadings painted with `sh` were each painted over the whole canvas (hayro patch 33), and an
+/// 8-bit CalRGB image was decoded to `f32`s and converted with six powers a pixel
+/// (hayro-interpret patch 110).
+#[cfg(test)]
+mod large_drawing_cost_tests {
+    use super::{InterpreterSettings, Pdf, Pixmap, RenderCache, RenderSettings, render};
+    use vello_cpu::color::palette::css::WHITE;
+
+    /// A one-page PDF of `width` × `height` pt drawing `content`, with `resources` and the extra
+    /// stream objects `objects` (numbered from 5, each `(dictionary, stream data)`).
+    fn pdf(
+        width: u32,
+        height: u32,
+        content: &str,
+        resources: &str,
+        objects: &[(String, Vec<u8>)],
+    ) -> Vec<u8> {
+        let mut bodies: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+                 /Resources << {resources} >> /Contents 4 0 R >>"
+            )
+            .into_bytes(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+        ];
+        for (dict, data) in objects {
+            let mut body = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+            body.extend_from_slice(data);
+            body.extend_from_slice(b"\nendstream");
+            bodies.push(body);
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(body);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                bodies.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    fn draw(pdf: Vec<u8>) -> Pixmap {
+        let pdf = Pdf::new(pdf).unwrap();
+        let settings = RenderSettings {
+            bg_color: WHITE,
+            ..RenderSettings::default()
+        };
+        let page = pdf.pages().get(0).expect("the fixture has one page");
+        render(page, &RenderCache::new(), &InterpreterSettings::default(), &settings)
+    }
+
+    /// The RGB at `(x, y)`, rows counted from the top.
+    fn rgb_at(pixmap: &Pixmap, x: usize, y: usize) -> [u8; 3] {
+        let p = pixmap.sample(x as u16, y as u16);
+        [p.r, p.g, p.b]
+    }
+
+    /// Forty one-triangle meshes, each 10 pt across, painted with `sh` on a 2000 × 2000 pt
+    /// page. Each was painted over the whole canvas, its texture's transparent edge repeated
+    /// across four million pixels it leaves as they were; now each is painted over its own
+    /// triangle and the transparent pixel around it, and the triangles are where they were.
+    #[test]
+    fn small_mesh_shadings_paint_only_around_their_triangles() {
+        const SIDE: u32 = 2000;
+        const MESHES: u32 = 40;
+        // A red triangle at (0, 0), (10, 0) and (0, 10): flag, x, y and colour for each vertex.
+        let triangle = vec![0u8, 0, 0, 255, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0, 255, 255, 0, 0];
+        let shading = (
+            "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 \
+             /BitsPerFlag 8 /Decode [0 10 0 10 0 1 0 1 0 1]"
+                .to_string(),
+            triangle,
+        );
+        let place = |i: u32| (100 + (i % 8) * 220, 100 + (i / 8) * 360);
+        let content: String = (0..MESHES)
+            .map(|i| {
+                let (x, y) = place(i);
+                format!("q 1 0 0 1 {x} {y} cm /Sh0 sh Q ")
+            })
+            .collect();
+
+        let before = super::mesh_paint_pixels();
+        let page = draw(pdf(SIDE, SIDE, &content, "/Shading << /Sh0 5 0 R >>", &[shading]));
+        let painted = super::mesh_paint_pixels() - before;
+
+        // Each triangle's box is 10 × 10 pixels; with the transparent pixel around it and
+        // rounding out to whole pixels, at most 14 × 14 (over the whole canvas, 40 × 4,000,000).
+        assert!(
+            painted <= u64::from(MESHES) * 14 * 14,
+            "40 small meshes painted {painted} pixels"
+        );
+        for i in 0..MESHES {
+            let (x, y) = place(i);
+            // A point just inside the triangle by its right angle, and one well outside it.
+            let (x, row) = (x as usize, (SIDE - y) as usize);
+            assert_eq!(rgb_at(&page, x + 2, row - 3), [255, 0, 0], "mesh {i} is drawn");
+            assert_eq!(
+                rgb_at(&page, x + 30, row - 30),
+                [255, 255, 255],
+                "mesh {i} paints only its triangle"
+            );
+        }
+    }
+
+    /// The size of the CalRGB test image, in samples (and of its page, in points).
+    const WIDTH: usize = 272;
+    const HEIGHT: usize = 64;
+
+    /// The CalRGB space of the samples below: a gamma, white point and black point other than
+    /// the defaults, so every step of the conversion is taken.
+    const CAL_RGB: &str = "[/CalRGB << /Gamma [1.8 2.2 2.6] \
+                           /Matrix [0.4497 0.2446 0.0252 0.3163 0.672 0.1412 0.1845 0.0833 0.9227] \
+                           /WhitePoint [0.9505 1 1.089] /BlackPoint [0.01 0.02 0.03] >>]";
+
+    /// The 8-bit RGB samples of a [`WIDTH`] × [`HEIGHT`] image: in each row, every value of
+    /// every component and many colours, then a run of one colour.
+    fn samples() -> Vec<u8> {
+        let mut out = Vec::with_capacity(WIDTH * HEIGHT * 3);
+        for y in 0..HEIGHT as u32 {
+            for x in 0..WIDTH as u32 {
+                let rgb = if x >= 256 {
+                    [200, 17, (y * 4) as u8]
+                } else {
+                    [x as u8, ((x * 7 + y * 13) % 256) as u8, ((x * 31 + y * 5) % 256) as u8]
+                };
+                out.extend_from_slice(&rgb);
+            }
+        }
+        out
+    }
+
+    /// A page drawing the [`WIDTH`] × [`HEIGHT`] CalRGB image of `data`, at `bpc` bits a
+    /// sample, at one pixel a sample.
+    fn cal_rgb_page(data: &[u8], bpc: u8) -> Vec<u8> {
+        let image = (
+            format!(
+                "/Type /XObject /Subtype /Image /Width {WIDTH} /Height {HEIGHT} \
+                 /ColorSpace {CAL_RGB} /BitsPerComponent {bpc}"
+            ),
+            data.to_vec(),
+        );
+        let content = format!("q {WIDTH} 0 0 {HEIGHT} 0 0 cm /Im0 Do Q");
+        pdf(WIDTH as u32, HEIGHT as u32, &content, "/XObject << /Im0 5 0 R >>", &[image])
+    }
+
+    /// An 8-bit CalRGB image draws the colours it drew when each pixel was decoded to `f32`s
+    /// and converted on its own, without decoding a sample to an `f32`. The reference is the
+    /// same image at 16 bits, every sample `s` stored as `s × 257`: it still takes the
+    /// per-pixel path, and decodes to the very `f32`s (`s × 257 / 65535` and `s / 255` round
+    /// alike, both being `s / 255` exactly). The 8-bit path reads a component's power from a
+    /// table and the sRGB byte off 255 thresholds; checked this way for every one of the 2^24
+    /// colours under three CalRGB spaces when it was written.
+    #[test]
+    fn calrgb_8bit_images_convert_as_each_pixel_did() {
+        use crate::hayro_interpret::f32_image_samples;
+        let eight = samples();
+        let sixteen: Vec<u8> =
+            eight.iter().flat_map(|s| (u16::from(*s) * 257).to_be_bytes()).collect();
+
+        let before = f32_image_samples();
+        let fast = draw(cal_rgb_page(&eight, 8));
+        let decoded = f32_image_samples() - before;
+        assert_eq!(decoded, 0, "an 8-bit CalRGB image decoded {decoded} samples to f32s");
+
+        let before = f32_image_samples();
+        let reference = draw(cal_rgb_page(&sixteen, 16));
+        let decoded = f32_image_samples() - before;
+        assert_eq!(decoded, (WIDTH * HEIGHT * 3) as u64, "the 16-bit reference is decoded to f32s");
+
+        let size = (WIDTH as u16, HEIGHT as u16);
+        assert_eq!((fast.width(), fast.height()), size);
+        assert_eq!((reference.width(), reference.height()), size);
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                assert_eq!(rgb_at(&fast, x, y), rgb_at(&reference, x, y), "pixel ({x}, {y})");
+            }
+        }
+    }
+
+    /// An 8-bit CalRGB image whose data stops short of its last row, under a colour-key
+    /// `/Mask`, keeps the missing pixels transparent, as when each pixel was decoded to `f32`s:
+    /// the key is matched against the samples there are, and the missing pixels' alpha is
+    /// padded transparent. Matched against the zeros the 8-bit path pads the row with, they
+    /// fell outside the key and were drawn black. Here a 2 × 1 image holds one white pixel,
+    /// keyed out, and the page's red fill shows through both.
+    #[test]
+    fn a_short_colour_keyed_calrgb_row_keeps_its_missing_pixels_transparent() {
+        let image = (
+            format!(
+                "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace {CAL_RGB} \
+                 /BitsPerComponent 8 /Mask [255 255 255 255 255 255]"
+            ),
+            vec![255, 255, 255],
+        );
+        let content = "1 0 0 rg 0 0 20 10 re f q 20 0 0 10 0 0 cm /Im0 Do Q";
+        let page = draw(pdf(20, 10, content, "/XObject << /Im0 5 0 R >>", &[image]));
+        assert_eq!(rgb_at(&page, 5, 5), [255, 0, 0], "the keyed-out pixel shows the fill");
+        assert_eq!(rgb_at(&page, 15, 5), [255, 0, 0], "the missing pixel shows the fill");
+    }
+
+    /// A mesh pattern filled with `f*` in a knockout group keeps its even-odd hole. The mesh
+    /// is painted through its extent as a clip (hayro patch 33), which a shading in a knockout
+    /// group pushes with the non-zero rule; the path was then filled with that rule too, and
+    /// the inner of two rectangles drawn the same way round was painted over.
+    #[test]
+    fn an_even_odd_mesh_fill_in_a_knockout_group_keeps_its_hole() {
+        // Two red triangles over the 100 × 100 square: flag, x, y and colour for each vertex.
+        let vertex = |x: u8, y: u8| [0, x, y, 255, 0, 0];
+        let mesh: Vec<u8> = [(0, 0), (255, 0), (0, 255), (255, 0), (255, 255), (0, 255)]
+            .iter()
+            .flat_map(|&(x, y)| vertex(x, y))
+            .collect();
+        let shading = (
+            "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 \
+             /BitsPerFlag 8 /Decode [0 100 0 100 0 1 0 1 0 1]"
+                .to_string(),
+            mesh,
+        );
+        let group = "/Pattern cs /P0 scn 10 10 80 80 re 30 30 40 40 re f*";
+        let form = (
+            "/Type /XObject /Subtype /Form /BBox [0 0 100 100] \
+             /Group << /S /Transparency /K true >> \
+             /Resources << /Pattern << /P0 << /PatternType 2 /Shading 5 0 R >> >> >>"
+                .to_string(),
+            group.as_bytes().to_vec(),
+        );
+        let page = draw(pdf(100, 100, "/Fm Do", "/XObject << /Fm 6 0 R >>", &[shading, form]));
+        assert_eq!(rgb_at(&page, 20, 50), [255, 0, 0], "the ring between the rectangles");
+        assert_eq!(rgb_at(&page, 50, 50), [255, 255, 255], "the inner rectangle is a hole");
+        assert_eq!(rgb_at(&page, 5, 50), [255, 255, 255], "outside the outer rectangle");
+    }
+}
+
+/// PdfCraft patch (115, storytold/pdfcraft#7514): a Type 4 tint transform that leaves extra
+/// values on its stack paints its top values, and one that leaves too few paints the alternate
+/// space's initial colour, as any evaluation that cannot finish.
+#[cfg(test)]
+mod type4_output_tests {
+    use super::{InterpreterSettings, Pdf, RenderCache, RenderSettings, render};
+    use vello_cpu::color::palette::css::WHITE;
+
+    /// A PDF of the given objects (object 1 the catalog), with a cross-reference table.
+    fn pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+        let mut bytes = b"%PDF-1.7
+".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj
+", i + 1).as_bytes());
+            bytes.extend_from_slice(object);
+            bytes.extend_from_slice(b"
+endobj
+");
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(
+            format!("xref
+0 {}
+0000000000 65535 f 
+", objects.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n 
+").as_bytes());
+        }
+        bytes.extend_from_slice(
+            format!(
+                "trailer << /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        bytes
+    }
+
+    fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
+        let mut bytes = format!("<< {dict} /Length {} >>
+stream
+", data.len()).into_bytes();
+        bytes.extend_from_slice(data);
+        bytes.extend_from_slice(b"
+endstream");
+        bytes
+    }
+
+    /// The RGB in the middle of a 100 × 100 pt page filled at tint 0.6 of
+    /// `[/Separation /Probe <alternate> f]`, `f` a Type 4 function with one input, `outputs`
+    /// output ranges of [0 1] and `program`.
+    fn fill(alternate: &str, outputs: usize, program: &str) -> [u8; 3] {
+        let range = vec!["0 1"; outputs].join(" ");
+        let objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R                  /Resources << /ColorSpace << /CS0 [/Separation /Probe {alternate} 5 0 R] >> >> >>"
+            )
+            .into_bytes(),
+            stream("", b"/CS0 cs 0.6 scn 0 0 100 100 re f"),
+            stream(
+                &format!("/FunctionType 4 /Domain [0 1] /Range [{range}]"),
+                program.as_bytes(),
+            ),
+        ];
+        let pdf = Pdf::new(pdf(&objects)).unwrap();
+        let settings = RenderSettings {
+            bg_color: WHITE,
+            ..RenderSettings::default()
+        };
+        let page = pdf.pages().get(0).expect("the fixture has one page");
+        let pixmap = render(page, &RenderCache::new(), &InterpreterSettings::default(), &settings);
+        assert_eq!((pixmap.width(), pixmap.height()), (100, 100));
+        let p = pixmap.sample(50, 50);
+        [p.r, p.g, p.b]
+    }
+
+    fn assert_rgb(got: [u8; 3], want: [u8; 3], what: &str) {
+        assert!(
+            got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1),
+            "{what}: got {got:?}, want {want:?}"
+        );
+    }
+
+    #[test]
+    fn extra_values_below_the_outputs_are_ignored() {
+        // `0 exch 0 exch 0` leaves 0 0 t 0 for three outputs: the top three, (0, t, 0), are
+        // green. The bottom three were blue.
+        let got = fill("/DeviceRGB", 3, "{0 exch 0 exch 0}");
+        assert_rgb(got, [0, 153, 0], "four values for three outputs");
+        // 1 0 0 | 0 1 0: green from the top three, not red from the bottom three.
+        let got = fill("/DeviceRGB", 3, "{pop 1 0 0 0 1 0}");
+        assert_rgb(got, [0, 255, 0], "six values for three outputs");
+        // 0.2 0.5 | 0.8 into DeviceGray: one output, the top value.
+        let got = fill("/DeviceGray", 1, "{pop 0.2 0.5 0.8}");
+        assert_rgb(got, [204, 204, 204], "three values for one output");
+    }
+
+    #[test]
+    fn a_program_leaving_exactly_the_outputs_is_unchanged() {
+        assert_rgb(fill("/DeviceRGB", 3, "{pop 0 1 0}"), [0, 255, 0], "three for three");
+        assert_rgb(fill("/DeviceRGB", 3, "{dup 0}"), [153, 153, 0], "the input as two outputs");
+    }
+
+    #[test]
+    fn a_program_leaving_too_few_values_paints_the_initial_colour() {
+        for program in ["{pop 0.5}", "{pop 1 0.5}", "{pop}"] {
+            assert_rgb(fill("/DeviceRGB", 3, program), [0, 0, 0], program);
+        }
     }
 }
