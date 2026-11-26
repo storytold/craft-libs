@@ -1054,6 +1054,54 @@ fn each_cell_node_of_a_row_takes_its_columns_bounds() {
     }
 }
 
+/// Each toggle cell of a row has one node, under its cell node and inside the cell: a leading eye reads as a switch
+/// and a trailing check as a check box, each with its state and a click.
+#[trial]
+fn each_toggle_cell_of_a_row_has_one_node_with_its_state_and_click() {
+    use craft_behavior::{ColumnKey, ColumnWidth, Mixed};
+    use craft_ui::contract::{ColumnSpec, Role, ToggleColumn};
+    use craft_ui::list::{ToggleCell, ToggleState};
+    use craft_ui::testing::access::Declared;
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const KEEP: ColumnKey = ColumnKey::new("keep");
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()),
+            ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)),
+            ColumnSpec::toggle(KEEP, "", ToggleColumn::default()),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key).with_toggled(|_, column| *column == EYE);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |_, icx| {
+            let keep = ToggleCell::check(KEEP, ToggleState::Off, "Keep {row}");
+            ListRow::new("Layer 1").cells(icx.cells()).toggle(ToggleCell::eye(EYE, true)).toggle(keep)
+        });
+    });
+    fixture.room(Vec2::new(400.0, 200.0));
+    fixture.settle();
+    let tree = fixture.tree();
+    let toggles: Vec<_> = tree
+        .keys()
+        .into_iter()
+        .filter(|key| matches!(tree.role_of(*key), Some(role) if role == Role::SWITCH || role == Role::CHECK_BOX || role == Role::BUTTON))
+        .collect();
+    let found: Vec<_> = toggles.iter().map(|key| (tree.role_of(*key), tree.name_of(*key))).collect();
+    assert_eq!(toggles.len(), 2, "one node per toggle cell: {found:?}");
+    for key in toggles {
+        let name = tree.name_of(key).unwrap_or_default().to_owned();
+        assert!(name.contains("Layer 1"), "each toggle node is named after its row: {found:?}");
+        let (role, state) = if name == "Keep Layer 1" { (Role::CHECK_BOX, false) } else { (Role::SWITCH, true) };
+        assert_eq!(tree.role_of(key), Some(role), "{name} has its cell's role");
+        assert_eq!(tree.toggled_of(key), Some(Mixed::Same(state)), "{name} carries its state");
+        assert!(tree.declares_key(key, Declared::Click), "{name} takes a click");
+        let cell = tree.parent_of_key(key).unwrap_or_else(|| panic!("{name} has a parent"));
+        assert_eq!(tree.role_of(cell), Some(Role::CELL), "{name} sits under its cell node");
+        let (inner, outer) = (tree.bounds_of(key).unwrap_or(egui::Rect::NOTHING), tree.bounds_of(cell).unwrap_or(egui::Rect::NOTHING));
+        assert!(outer.expand(0.5).contains_rect(inner), "{name} lies inside its cell: {inner:?} in {outer:?}");
+    }
+}
+
 /// A toggle cell's glyph rests in `text.muted` and reads in `text.normal` under the pointer.
 #[trial]
 fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {
