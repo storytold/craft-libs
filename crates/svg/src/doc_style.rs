@@ -1,10 +1,10 @@
 //! Compatibility SVG document/CSS interpretation helpers extracted from EffectCraft.
 //!
 //! Provides presentation-attribute + stylesheet + inline-`style` declaration collection
-//! ([`declared`]), property cascading ([`cascade`]), unit/percentage length resolution
-//! ([`length`], [`attr_len`]), paint reference parsing/resolution ([`PaintRef`], [`paint_ref`],
-//! [`resolve_paint`]), and `viewBox` / `preserveAspectRatio` transforms ([`viewbox`],
-//! [`viewbox_transform`]).
+//! ([`declared`](crate::doc_style::declared)), property cascading ([`cascade`](crate::doc_style::cascade)), unit/percentage length resolution
+//! ([`length`](crate::doc_style::length), [`attr_len`](crate::doc_style::attr_len)), paint reference parsing/resolution ([`PaintRef`](crate::doc_style::PaintRef), [`paint_ref`](crate::doc_style::paint_ref),
+//! [`resolve_paint`](crate::doc_style::resolve_paint)), and `viewBox` / `preserveAspectRatio` transforms ([`viewbox`](crate::doc_style::viewbox),
+//! [`viewbox_transform`](crate::doc_style::viewbox_transform)).
 
 use std::collections::HashMap;
 

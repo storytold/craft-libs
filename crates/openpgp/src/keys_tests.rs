@@ -253,6 +253,11 @@ fn a_copy_with_junk_subkey_bindings_from_the_future_never_pushes_out_the_real_on
 
 #[test]
 fn a_copy_that_costs_more_checks_than_a_key_may_is_refused_not_cut_short() {
+    // Forging and checking more signatures than the cap: nightly only. The revocation test below
+    // proves the same refusal with a smaller cap at the gate.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     let alice = secret(ALICE, Make { subkey: true, ..Make::default() });
     let mallory = secret("Mallory <mallory@example.org>", Make { seed: 6, ..Make::default() });
     let mut copy = SignedPublicKey::from(alice.clone());
