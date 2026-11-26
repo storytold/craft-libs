@@ -1569,6 +1569,15 @@ fn the_shown_view_keeps_the_origin_on_whole_pixels_at_every_zoom() {
         assert!((o.x - want.0).abs() < 1e-3 && (o.y - want.1).abs() < 1e-3, "at {z}: {o:?}; the reference's offsets give {want:?}");
         assert_eq!(view.center, kept.center, "the kept view's centre stays");
     }
+    // An origin half way between two pixels goes up and left, as the reference's does: the document centred in a view
+    // of an odd size at 100 %, and its 201 × 151 pixels at a third in two other views.
+    let centred = |x: f32, y: f32, w: f32, h: f32, zoom: f64, stretch: [f64; 2]| {
+        CanvasView::new(egui::Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)), Point::new(300.0, 225.0), zoom).stretch(stretch)
+    };
+    let third = [201.0 / 200.0, 151.0 / 150.0];
+    assert_eq!(origin(centred(42.0, 92.0, 833.0, 643.0, 1.0, [1.0, 1.0])), Pos2::new(158.0, 188.0));
+    assert_eq!(origin(centred(11.0, 58.0, 1242.0, 677.0, 1.0 / 3.0, third)), Pos2::new(531.0, 321.0));
+    assert_eq!(origin(centred(59.0, 109.0, 816.0, 626.0, 1.0 / 3.0, third)), Pos2::new(366.0, 346.0));
     // Two device pixels per point: whole device pixels, half points.
     let shown = craft_ui::canvas::pixel_aligned(CanvasView::new(rect, Point::new(300.57, 225.5), 1.0 / 6.0), 2.0).to_screen(Point::ZERO);
     for v in [shown.x, shown.y] {
