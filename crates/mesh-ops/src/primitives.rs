@@ -1,17 +1,11 @@
 //! Built-in meshes with clean, non-overlapping UVs: material ball, sphere, (rounded) cube,
 //! cylinder, torus and plane. Y is up; triangles are counter-clockwise seen from outside.
-//!
-//! Each `try_` builder checks its sizes (finite and positive) and its segment counts against
-//! [`Limits`] and returns an error instead of building. A size so large that a coordinate
-//! overflows `f32` is an error too. The builders without `try_` clamp the segment counts to the
-//! default [`Limits::max_segments`] and return an empty mesh for an invalid size.
 
 use std::f32::consts::{PI, TAU};
 
-use glam::{DVec2, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 
-use crate::mesh::{Mesh, Split, SubMesh, unit};
-use crate::{Limits, MeshOpsError, Result};
+use crate::mesh::{Mesh, SubMesh};
 
 /// A UV-space rectangle: origin and size.
 #[derive(Clone, Copy, Debug)]
@@ -38,42 +32,9 @@ struct Builder {
     idx: Vec<u32>,
     /// Per triangle: its [`Mesh::diagonals`] bits.
     diag: Vec<u8>,
-    limits: Limits,
-    /// Set when a part would pass the limits; later parts are skipped.
-    error: Option<MeshOpsError>,
 }
 
 impl Builder {
-    fn new(limits: &Limits) -> Builder {
-        Builder { limits: *limits, ..Builder::default() }
-    }
-
-    /// Whether `vertices` and `triangles` more fit the limits and `u32` indices, with the memory
-    /// for them reserved; records the error when they do not.
-    fn room(&mut self, vertices: Option<usize>, triangles: Option<usize>) -> bool {
-        if self.error.is_some() {
-            return false;
-        }
-        let total_vertices = vertices.and_then(|v| v.checked_add(self.p.len())).unwrap_or(usize::MAX);
-        let total_triangles = triangles.and_then(|t| t.checked_add(self.idx.len() / 3)).unwrap_or(usize::MAX);
-        let error = if total_vertices > self.limits.max_vertices || u32::try_from(total_vertices).is_err() {
-            Some(MeshOpsError::TooLarge { what: "vertex count", got: total_vertices as u64, limit: self.limits.max_vertices as u64 })
-        } else if total_triangles > self.limits.max_triangles || total_triangles.checked_mul(3).and_then(|i| u32::try_from(i).ok()).is_none() {
-            Some(MeshOpsError::TooLarge { what: "triangle count", got: total_triangles as u64, limit: self.limits.max_triangles as u64 })
-        } else {
-            // Both counts fit the limits, so they and three times the triangles are finite.
-            let (v, t) = (vertices.unwrap_or(0), triangles.unwrap_or(0));
-            let reserved = self.p.try_reserve(v).is_ok()
-                && self.n.try_reserve(v).is_ok()
-                && self.uv.try_reserve(v).is_ok()
-                && self.idx.try_reserve(t * 3).is_ok()
-                && self.diag.try_reserve(t).is_ok();
-            (!reserved).then_some(MeshOpsError::OutOfMemory("primitive"))
-        };
-        self.error = error;
-        self.error.is_none()
-    }
-
     fn vert(&mut self, p: Vec3, n: Vec3, uv: Vec2) -> u32 {
         self.p.push(p);
         self.n.push(n.try_normalize().unwrap_or(Vec3::Y));
@@ -83,10 +44,6 @@ impl Builder {
 
     /// A grid of (rows+1)×(cols+1) vertices from `f(row, col)`, rows going "down" the texture.
     fn grid(&mut self, rows: usize, cols: usize, mut f: impl FnMut(usize, usize) -> (Vec3, Vec3, Vec2)) {
-        let vertices = rows.checked_add(1).zip(cols.checked_add(1)).and_then(|(r, c)| r.checked_mul(c));
-        if !self.room(vertices, rows.checked_mul(cols).and_then(|q| q.checked_mul(2))) {
-            return;
-        }
         let base = self.p.len() as u32;
         for i in 0..=rows {
             for j in 0..=cols {
@@ -106,26 +63,17 @@ impl Builder {
         }
     }
 
-    /// The mesh of one material, with tangents. Computing them can split vertices; a copy that
-    /// would take the vertex count over the limit is `TooLarge` before it is made.
-    fn finish(self, material: &str) -> Result<Mesh> {
-        let max_vertices = self.limits.max_vertices;
-        let mut m = self.into_mesh(material)?;
-        m.try_compute_tangents_splitting(Split::UpTo(max_vertices))?;
-        Ok(m)
+    /// The mesh of one material, with tangents.
+    fn finish(self, material: &str) -> Mesh {
+        let mut m = self.into_mesh(material);
+        m.compute_tangents();
+        m
     }
 
     /// The mesh of one material, without tangents.
-    fn into_mesh(self, material: &str) -> Result<Mesh> {
-        if let Some(e) = self.error {
-            return Err(e);
-        }
-        // A finite size near f32::MAX can overflow where the builders add or scale coordinates.
-        if !(self.p.iter().all(|p| p.is_finite()) && self.n.iter().all(|n| n.is_finite()) && self.uv.iter().all(|uv| uv.is_finite())) {
-            return Err(MeshOpsError::Invalid("the primitive's coordinates overflow f32".into()));
-        }
+    fn into_mesh(self, material: &str) -> Mesh {
         let count = self.idx.len() as u32;
-        Ok(Mesh {
+        Mesh {
             positions: self.p,
             normals: self.n,
             uvs: self.uv,
@@ -135,49 +83,14 @@ impl Builder {
             submeshes: vec![SubMesh { name: material.into(), material: 0, start: 0, count }],
             materials: vec![material.into()],
             diagonals: self.diag,
-        })
+        }
     }
 }
 
-/// A mesh of one material with no vertices: what the builders without `try_` return for an
-/// invalid size.
-fn empty(material: &str) -> Mesh {
-    Mesh { submeshes: vec![SubMesh { name: material.into(), material: 0, start: 0, count: 0 }], materials: vec![material.into()], ..Mesh::default() }
-}
-
-/// `value` when it is finite and greater than zero.
-fn positive(what: &str, value: f32) -> Result<f32> {
-    if value.is_finite() && value > 0.0 { Ok(value) } else { Err(MeshOpsError::Invalid(format!("{what} {value} is not a finite positive number"))) }
-}
-
-/// `count`, raised to `min`, when the raised count is within the segment limit.
-fn segments(what: &'static str, count: usize, min: usize, limits: &Limits) -> Result<usize> {
-    let count = count.max(min);
-    crate::check_limit(what, count, limits.max_segments)?;
-    Ok(count)
-}
-
-/// Segments along one axis of a box face: in each of the two bevels, and between them.
-fn box_segments(bevel: f32) -> (usize, usize) {
-    if bevel > 0.0 { (6, 10) } else { (0, 12) }
-}
-
-/// A segment count clamped to the default limit, for the builders without `try_`.
-fn clamped(count: usize) -> usize {
-    count.min(Limits::default().max_segments)
-}
-
-/// UV sphere of `radius` around the origin.
+/// UV sphere of `radius` centred at `center`.
 pub fn sphere(radius: f32, segments: usize, rings: usize) -> Mesh {
-    try_sphere(radius, clamped(segments), clamped(rings), &Limits::default()).unwrap_or_else(|_| empty("Sphere"))
-}
-
-/// [`sphere`] with its parameters checked.
-pub fn try_sphere(radius: f32, segs: usize, rings: usize, limits: &Limits) -> Result<Mesh> {
-    let radius = positive("sphere radius", radius)?;
-    let (segs, rings) = (segments("sphere segments", segs, 3, limits)?, segments("sphere rings", rings, 2, limits)?);
-    let mut b = Builder::new(limits);
-    sphere_into(&mut b, Vec3::ZERO, radius, segs, rings, UvRect::FULL);
+    let mut b = Builder::default();
+    sphere_into(&mut b, Vec3::ZERO, radius, segments.max(3), rings.max(2), UvRect::FULL);
     b.finish("Sphere")
 }
 
@@ -193,39 +106,19 @@ fn sphere_into(b: &mut Builder, center: Vec3, radius: f32, segs: usize, rings: u
 /// A box with rounded edges (`bevel` = edge radius; 0 gives a plain cube). Faces are laid out
 /// in a 3×2 UV atlas.
 pub fn rounded_box(half: Vec3, bevel: f32) -> Mesh {
-    try_rounded_box(half, bevel, &Limits::default()).unwrap_or_else(|_| empty("Box"))
-}
-
-/// [`rounded_box`] with its parameters checked: every half size finite and positive, the bevel
-/// finite (it is clamped to 0..0.95 of the smallest half size). A face has 12 segments along
-/// each axis, or 22 with a bevel, which [`Limits::max_segments`] has to allow.
-pub fn try_rounded_box(half: Vec3, bevel: f32, limits: &Limits) -> Result<Mesh> {
-    for v in half.to_array() {
-        positive("box half size", v)?;
-    }
-    if !bevel.is_finite() {
-        return Err(MeshOpsError::Invalid(format!("box bevel {bevel} is not finite")));
-    }
-    let (in_bevel, between) = box_segments(bevel);
-    crate::check_limit("box segments", 2 * in_bevel + between, limits.max_segments)?;
-    let mut b = Builder::new(limits);
+    let mut b = Builder::default();
     rounded_box_into(&mut b, Vec3::ZERO, half, bevel, UvRect::FULL);
     b.finish("Box")
 }
 
 /// The cube primitive (sharp edges).
 pub fn cube(size: f32) -> Mesh {
-    try_cube(size, &Limits::default()).unwrap_or_else(|_| empty("Cube"))
-}
-
-/// [`cube`] with its size checked.
-pub fn try_cube(size: f32, limits: &Limits) -> Result<Mesh> {
-    let mut m = try_rounded_box(Vec3::splat(positive("cube size", size)? * 0.5), 0.0, limits)?;
+    let mut m = rounded_box(Vec3::splat(size * 0.5), 0.0);
     m.materials = vec!["Cube".into()];
     if let Some(s) = m.submeshes.first_mut() {
         s.name = "Cube".into();
     }
-    Ok(m)
+    m
 }
 
 fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: UvRect) {
@@ -239,7 +132,7 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
         (Vec3::Y, Vec3::X, Vec3::Z),
         (-Vec3::Y, Vec3::X, -Vec3::Z),
     ];
-    let (kb, kc) = box_segments(bevel);
+    let (kb, kc) = if bevel > 0.0 { (6usize, 10usize) } else { (0, 12) };
     // Coordinates along one face axis from -h to h, dense in the bevels.
     let coords = |h: f32| -> Vec<f32> {
         let inner = h - bevel;
@@ -265,9 +158,7 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
             let (a, c) = (cu[j], cv[i]);
             let q = *n * hn + *u * a + *v * c;
             let clamped = q.clamp(-inner, inner);
-            // `unit` gives the same direction where the squared offset overflows, so faces that
-            // share a bevel edge place its vertices at the same positions.
-            let dir = unit(q - clamped).unwrap_or(*n);
+            let dir = (q - clamped).try_normalize().unwrap_or(*n);
             let p = if bevel > 0.0 { clamped + dir * bevel } else { q };
             let nn = if bevel > 0.0 { dir } else { *n };
             (center + p, nn, cell.map((a + hu) / (2.0 * hu), (c + hv) / (2.0 * hv)))
@@ -281,30 +172,26 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
     if profile.len() < 2 {
         return;
     }
-    // Arc lengths and profile directions in `f64`, where the steps between finite `f32` points
-    // and their squares neither overflow nor round to zero, whatever the radius and height.
-    let point = |(r, y): (f32, f32)| DVec2::new(f64::from(r), f64::from(y));
-    let mut len = vec![0.0f64];
+    let mut len = vec![0.0f32];
     for w in profile.windows(2) {
-        let d = (point(w[1]) - point(w[0])).length();
+        let d = Vec2::new(w[1].0 - w[0].0, w[1].1 - w[0].1).length();
         len.push(len.last().copied().unwrap_or(0.0) + d);
     }
-    // A profile of zero length maps every row to the top of `r`.
-    let total = len.last().copied().filter(|t| *t > 0.0 && t.is_finite()).unwrap_or(1.0);
+    let total = len.last().copied().unwrap_or(1.0).max(1e-6);
     let rows = profile.len() - 1;
     b.grid(rows, segs, |i, j| {
         let (rad, y) = profile[i];
         // Profile tangent (downwards) → outward normal in the (r, y) plane.
         let prev = profile[i.saturating_sub(1)];
         let next = profile[(i + 1).min(rows)];
-        let t = (point(next) - point(prev)).try_normalize().map_or(Vec2::NEG_Y, |t| t.as_vec2());
+        let t = Vec2::new(next.0 - prev.0, next.1 - prev.1).try_normalize().unwrap_or(Vec2::NEG_Y);
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
         let phi = u * TAU + PI * 1.5;
         let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
         let p = center + dir * rad + Vec3::Y * y;
         let n = dir * n2.x + Vec3::Y * n2.y;
-        (p, n, r.map(u, (len[i] / total) as f32))
+        (p, n, r.map(u, len[i] / total))
     });
 }
 
@@ -349,7 +236,7 @@ pub fn preview_orb() -> Mesh {
     profile.push((0.0, -BASE_HALF_HEIGHT));
     lathe_into(&mut b, Vec3::Y * BASE_Y, &profile, BASE_SEGMENTS, BASE_UV);
 
-    let Ok(mut m) = b.into_mesh("Preview") else { return empty("Preview") };
+    let mut m = b.into_mesh("Preview");
     // Normals from the triangles: the panel walls are too steep for the sphere's directions
     m.compute_normals();
     // Body and base both run U around the vertical axis, so the tangent is that direction (a
@@ -366,7 +253,7 @@ pub fn preview_orb() -> Mesh {
     m
 }
 
-/// Distance from the center of the [`preview_orb`] body along unit direction `d`.
+/// Distance from the centre of the [`preview_orb`] body along unit direction `d`.
 fn preview_orb_radius(d: Vec3) -> f32 {
     // Rim blends: the sharp faces, and the softly blended left face
     const SHARP_BLEND: f32 = 0.035;
@@ -375,7 +262,7 @@ fn preview_orb_radius(d: Vec3) -> f32 {
     const PANEL_DEPTH: f32 = 0.11;
     const PANEL_BULGE: f32 = 0.04;
     const LEFT_PANEL_SCALE: f32 = 0.9;
-    // Slot around the middle: center height, half-width, edge rounding, depth; it fades out over
+    // Slot around the middle: centre height, half-width, edge rounding, depth; it fades out over
     // this fraction of the left panel's rim
     const SLOT_Y: f32 = -0.03;
     const SLOT_HALF_WIDTH: f32 = 0.05;
@@ -437,9 +324,6 @@ fn preview_orb_radius(d: Vec3) -> f32 {
 
 /// A flat disk facing up (+Y) or down, with planar UVs inside `r`.
 fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, r: UvRect) {
-    if !b.room(segs.checked_add(1), Some(segs)) {
-        return;
-    }
     let n = if up { Vec3::Y } else { Vec3::NEG_Y };
     let c = b.vert(center, n, r.map(0.5, 0.5));
     let first = b.p.len() as u32;
@@ -463,31 +347,18 @@ fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, 
 
 /// A capped cylinder along Y.
 pub fn cylinder(radius: f32, height: f32, segs: usize) -> Mesh {
-    try_cylinder(radius, height, clamped(segs), &Limits::default()).unwrap_or_else(|_| empty("Cylinder"))
-}
-
-/// [`cylinder`] with its parameters checked.
-pub fn try_cylinder(radius: f32, height: f32, segs: usize, limits: &Limits) -> Result<Mesh> {
-    let (radius, height) = (positive("cylinder radius", radius)?, positive("cylinder height", height)?);
-    let segs = segments("cylinder segments", segs, 3, limits)?;
-    let mut b = Builder::new(limits);
+    let mut b = Builder::default();
     let h = height * 0.5;
-    lathe_into(&mut b, Vec3::ZERO, &[(radius, h), (radius, -h)], segs, UvRect { o: Vec2::ZERO, s: Vec2::new(1.0, 0.5) }.inset(0.01));
-    disk_into(&mut b, Vec3::Y * h, radius, true, segs, UvRect { o: Vec2::new(0.0, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
-    disk_into(&mut b, -Vec3::Y * h, radius, false, segs, UvRect { o: Vec2::new(0.5, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
+    lathe_into(&mut b, Vec3::ZERO, &[(radius, h), (radius, -h)], segs.max(3), UvRect { o: Vec2::ZERO, s: Vec2::new(1.0, 0.5) }.inset(0.01));
+    disk_into(&mut b, Vec3::Y * h, radius, true, segs.max(3), UvRect { o: Vec2::new(0.0, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
+    disk_into(&mut b, -Vec3::Y * h, radius, false, segs.max(3), UvRect { o: Vec2::new(0.5, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
     b.finish("Cylinder")
 }
 
 /// A torus around Y.
 pub fn torus(major: f32, minor: f32, segs: usize, sides: usize) -> Mesh {
-    try_torus(major, minor, clamped(segs), clamped(sides), &Limits::default()).unwrap_or_else(|_| empty("Torus"))
-}
-
-/// [`torus`] with its parameters checked.
-pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Limits) -> Result<Mesh> {
-    let (major, minor) = (positive("torus major radius", major)?, positive("torus minor radius", minor)?);
-    let (segs, sides) = (segments("torus segments", segs, 3, limits)?, segments("torus sides", sides, 3, limits)?);
-    let mut b = Builder::new(limits);
+    let mut b = Builder::default();
+    let (segs, sides) = (segs.max(3), sides.max(3));
     b.grid(sides, segs, |i, j| {
         let (u, v) = (j as f32 / segs as f32, i as f32 / sides as f32);
         let phi = u * TAU + PI * 1.5;
@@ -501,14 +372,8 @@ pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Lim
 
 /// A subdivided plane facing +Y.
 pub fn plane(size: f32, subdivisions: usize) -> Mesh {
-    try_plane(size, clamped(subdivisions), &Limits::default()).unwrap_or_else(|_| empty("Plane"))
-}
-
-/// [`plane`] with its parameters checked.
-pub fn try_plane(size: f32, subdivisions: usize, limits: &Limits) -> Result<Mesh> {
-    let size = positive("plane size", size)?;
-    let s = segments("plane subdivisions", subdivisions, 1, limits)?;
-    let mut b = Builder::new(limits);
+    let mut b = Builder::default();
+    let s = subdivisions.max(1);
     b.grid(s, s, |i, j| {
         let (u, v) = (j as f32 / s as f32, i as f32 / s as f32);
         (Vec3::new((u - 0.5) * size, 0.0, (v - 0.5) * size), Vec3::Y, Vec2::new(u, v))
@@ -543,7 +408,7 @@ pub fn udim_plane() -> Mesh {
 pub fn material_ball() -> Mesh {
     let mut ball = Builder::default();
     sphere_into(&mut ball, Vec3::new(0.0, 1.32, 0.0), 1.0, 128, 64, UvRect::FULL);
-    let Ok(mut ball) = ball.finish("Ball") else { return empty("Ball") };
+    let mut ball = ball.finish("Ball");
 
     let mut base = Builder::default();
     let (r, top, bot, bev) = (1.05f32, 0.32f32, 0.0f32, 0.07f32);
@@ -566,7 +431,7 @@ pub fn material_ball() -> Mesh {
     lathe_into(&mut base, Vec3::ZERO, &profile, 128, UvRect { o: Vec2::ZERO, s: Vec2::new(1.0, 0.5) }.inset(0.01));
     disk_into(&mut base, Vec3::new(0.0, top + 0.06, 0.0), 0.42, true, 128, UvRect { o: Vec2::new(0.0, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
     disk_into(&mut base, Vec3::new(0.0, bot, 0.0), r - bev, false, 128, UvRect { o: Vec2::new(0.5, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
-    let Ok(base) = base.finish("Base") else { return ball };
+    let base = base.finish("Base");
     ball.append(&base);
     ball
 }
@@ -576,12 +441,10 @@ pub fn material_ball() -> Mesh {
 pub fn crate_scene() -> Mesh {
     let mut body = Builder::default();
     rounded_box_into(&mut body, Vec3::new(0.0, 0.8, 0.0), Vec3::new(1.2, 0.8, 0.8), 0.12, UvRect::FULL);
-    let Ok(mut m) = body.finish("Crate") else { return empty("Crate") };
+    let mut m = body.finish("Crate");
     let mut lid = Builder::default();
     rounded_box_into(&mut lid, Vec3::new(0.0, 1.72, 0.0), Vec3::new(1.28, 0.12, 0.88), 0.08, UvRect::FULL);
-    if let Ok(lid) = lid.finish("Lid") {
-        m.append(&lid);
-    }
+    m.append(&lid.finish("Lid"));
     let mut handle = torus(0.32, 0.07, 64, 24);
     for p in &mut handle.positions {
         *p = Vec3::new(p.x, p.z, -p.y) + Vec3::new(0.0, 1.84, 0.0);
@@ -665,7 +528,7 @@ mod tests {
             check(&m, if id == "udim_plane" { 2.0 } else { 1.0 });
         }
         assert!(builtin("nope").is_none());
-        assert_eq!(udim_plane().uv_tiles(0, &Limits::default()).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
+        assert_eq!(udim_plane().uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
     }
 
     #[test]
@@ -689,175 +552,5 @@ mod tests {
         let m = material_ball();
         assert_eq!(m.materials, vec!["Ball".to_string(), "Base".to_string()]);
         assert!(m.triangles_of(0).count() > 0 && m.triangles_of(1).count() > 0);
-    }
-
-    #[test]
-    fn primitives_reject_non_finite_parameters() {
-        let l = Limits::default();
-        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            assert!(try_sphere(bad, 16, 8, &l).is_err(), "sphere {bad}");
-            assert!(try_rounded_box(Vec3::new(1.0, bad, 1.0), 0.1, &l).is_err(), "box {bad}");
-            assert!(try_rounded_box(Vec3::ONE, bad, &l).is_err(), "bevel {bad}");
-            assert!(try_cube(bad, &l).is_err(), "cube {bad}");
-            assert!(try_cylinder(bad, 1.0, 16, &l).is_err() && try_cylinder(1.0, bad, 16, &l).is_err(), "cylinder {bad}");
-            assert!(try_torus(bad, 0.3, 16, 8, &l).is_err() && try_torus(1.0, bad, 16, 8, &l).is_err(), "torus {bad}");
-            assert!(try_plane(bad, 4, &l).is_err(), "plane {bad}");
-            for m in [sphere(bad, 16, 8), cube(bad), cylinder(1.0, bad, 16), torus(bad, 0.3, 16, 8), plane(bad, 4)] {
-                assert_eq!(m.triangle_count(), 0);
-                m.validate().unwrap();
-            }
-        }
-    }
-
-    #[test]
-    fn box_rejects_negative_nan_and_zero_half_size() {
-        let l = Limits::default();
-        for half in [Vec3::new(-1.0, 1.0, 1.0), Vec3::new(1.0, 1.0, f32::NAN), Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0)] {
-            assert!(try_rounded_box(half, 0.0, &l).is_err(), "{half}");
-            assert!(try_rounded_box(half, 0.2, &l).is_err(), "{half}");
-            let m = rounded_box(half, 0.2);
-            assert_eq!(m.triangle_count(), 0, "{half}");
-        }
-        for size in [-2.0, 0.0] {
-            assert!(try_cube(size, &l).is_err(), "{size}");
-            assert!(cube(size).uvs.iter().all(|uv| uv.is_finite()));
-        }
-        // A negative bevel is clamped to none, as before.
-        assert_eq!(try_rounded_box(Vec3::ONE, -1.0, &l).unwrap(), try_rounded_box(Vec3::ONE, 0.0, &l).unwrap());
-    }
-
-    #[test]
-    fn primitives_reject_sizes_that_overflow() {
-        let l = Limits::default();
-        // The torus's two radii and the box's doubled half size pass f32::MAX.
-        assert!(try_torus(3e38, 3e38, 16, 8, &l).is_err());
-        assert!(try_rounded_box(Vec3::splat(3e38), 0.0, &l).is_err());
-        assert_eq!(torus(3e38, 3e38, 16, 8).triangle_count(), 0);
-        // The cylinder's profile length is measured on the divided profile, so a height whose
-        // length alone would pass f32::MAX builds.
-        let tall = try_cylinder(1.0, 3e38, 16, &l).unwrap();
-        tall.validate().unwrap();
-        assert!(tall.uvs.iter().all(|uv| (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y)));
-        // Large sizes that stay finite build.
-        let large = [
-            try_sphere(1e30, 16, 8, &l).unwrap(),
-            try_cylinder(1e18, 1e18, 16, &l).unwrap(),
-            try_cube(1e30, &l).unwrap(),
-            try_torus(1e30, 1e29, 16, 8, &l).unwrap(),
-            try_plane(1e30, 4, &l).unwrap(),
-        ];
-        for m in large {
-            assert!(m.triangle_count() > 0);
-            m.validate().unwrap();
-        }
-    }
-
-    #[test]
-    fn a_scaled_primitive_is_the_unit_primitive_scaled() {
-        let l = Limits::default();
-        let close = |a: &Mesh, b: &Mesh, scale: f32| {
-            assert_eq!(a.positions.len(), b.positions.len());
-            for (i, (p, q)) in a.positions.iter().zip(&b.positions).enumerate() {
-                assert!((*p / scale - *q).length() < 1e-5, "position {i}: {} vs {q}", *p / scale);
-            }
-            for (i, (u, v)) in a.uvs.iter().zip(&b.uvs).enumerate() {
-                assert!((*u - *v).length() < 1e-5, "UV {i}: {u} vs {v}");
-            }
-        };
-        // Squared bevel offsets overflow at this size: adjacent faces still meet.
-        close(&try_rounded_box(Vec3::splat(1e30), 1e29, &l).unwrap(), &try_rounded_box(Vec3::ONE, 0.1, &l).unwrap(), 1e30);
-        // A profile far shorter than 1e-6 keeps its share of the UV height.
-        close(&try_cylinder(1e-8, 1e-8, 16, &l).unwrap(), &try_cylinder(1.0, 1.0, 16, &l).unwrap(), 1e-8);
-        close(&try_cylinder(1e-30, 2e-30, 16, &l).unwrap(), &try_cylinder(1.0, 2.0, 16, &l).unwrap(), 1e-30);
-    }
-
-    #[test]
-    fn primitives_reject_oversized_segment_counts() {
-        let l = Limits::default();
-        assert!(try_sphere(1.0, l.max_segments + 1, 8, &l).is_err());
-        assert!(try_sphere(1.0, 8, usize::MAX, &l).is_err());
-        assert!(try_torus(1.0, 0.3, usize::MAX, 8, &l).is_err());
-        assert!(try_cylinder(1.0, 1.0, usize::MAX, &l).is_err());
-        assert!(try_plane(1.0, usize::MAX, &l).is_err());
-        // Within the segment limit, the vertex limit still applies.
-        let few = Limits { max_vertices: 100, ..l };
-        assert!(matches!(try_plane(1.0, 10, &few), Err(MeshOpsError::TooLarge { .. })));
-        assert!(try_plane(1.0, 8, &few).is_ok());
-        // A count under the builder's minimum is raised first, and the raised count is checked.
-        let two = Limits { max_segments: 2, ..l };
-        assert!(try_sphere(1.0, 1, 2, &two).is_err(), "a sphere has at least 3 segments");
-        assert!(try_plane(1.0, 0, &two).is_ok());
-        // A box face has 12 segments along each axis, or 22 with a bevel.
-        let eleven = Limits { max_segments: 11, ..l };
-        assert!(try_cube(1.0, &eleven).is_err());
-        let twelve = Limits { max_segments: 12, ..l };
-        assert!(try_cube(1.0, &twelve).is_ok());
-        assert!(try_rounded_box(Vec3::ONE, 0.1, &twelve).is_err());
-        // The builders without `try_` clamp to the limit.
-        assert_eq!(clamped(usize::MAX), l.max_segments);
-        assert_eq!(clamped(7), 7);
-    }
-
-    #[test]
-    fn vertex_copies_from_tangents_count_against_the_vertex_limit() {
-        // A quad whose second triangle has mirrored UVs: the two shared vertices get one frame
-        // per triangle, so the tangents copy them.
-        let quad = |max_vertices: usize| {
-            let mut b = Builder::new(&Limits { max_vertices, ..Limits::default() });
-            assert!(b.room(Some(4), Some(2)));
-            for (p, uv) in [(Vec3::ZERO, Vec2::ZERO), (Vec3::X, Vec2::X), (Vec3::Y, Vec2::Y), (Vec3::new(1.0, 1.0, 0.0), Vec2::ZERO)] {
-                b.vert(p, Vec3::Z, uv);
-            }
-            b.idx.extend_from_slice(&[0, 1, 2, 1, 3, 2]);
-            b.diag.extend_from_slice(&[0, 0]);
-            b.finish("Quad")
-        };
-        let m = quad(usize::MAX).unwrap();
-        let copies = m.positions.len() - 4;
-        assert!(copies > 0, "the mirrored triangle's corners get their own vertices");
-        // The error comes at the first copy past the limit, before any later copy is made.
-        assert!(matches!(quad(4), Err(MeshOpsError::TooLarge { what: "vertex count", got: 5, limit: 4 })));
-        let under = m.positions.len() - 1;
-        assert!(
-            matches!(quad(under), Err(MeshOpsError::TooLarge { what: "vertex count", got, limit }) if got == m.positions.len() as u64 && limit == under as u64)
-        );
-        assert_eq!(quad(m.positions.len()).unwrap().positions.len(), m.positions.len());
-    }
-
-    #[test]
-    fn primitives_count_the_vertices_tangents_split() {
-        type Build = fn(&Limits) -> Result<Mesh>;
-        // A torus whose minor radius is larger than its major radius folds through its axis.
-        let builds: [(&str, Build); 6] = [
-            ("folded torus", |l| try_torus(0.5, 2.0, 16, 8, l)),
-            ("torus", |l| try_torus(1.0, 0.3, 16, 8, l)),
-            ("sphere", |l| try_sphere(1.0, 16, 8, l)),
-            ("cylinder", |l| try_cylinder(1.0, 2.0, 16, l)),
-            ("rounded box", |l| try_rounded_box(Vec3::ONE, 0.2, l)),
-            ("plane", |l| try_plane(1.0, 4, l)),
-        ];
-        let l = Limits::default();
-        for (name, build) in builds {
-            let full = build(&l).unwrap().vertex_count();
-            let under = Limits { max_vertices: full - 1, ..l };
-            match build(&under) {
-                Ok(m) => panic!("{name}: {} vertices with a limit of {}", m.vertex_count(), full - 1),
-                Err(e) => assert!(matches!(e, MeshOpsError::TooLarge { what: "vertex count", .. }), "{name}: {e:?}"),
-            }
-            assert_eq!(build(&Limits { max_vertices: full, ..l }).unwrap().vertex_count(), full, "{name}");
-        }
-    }
-
-    #[test]
-    fn lathe_uvs_span_the_rectangle_at_any_radius_and_height() {
-        // With the radius 1e30 times the height, the profile step divided by the radius squares to
-        // zero in f32.
-        for (radius, height) in [(1e30f32, 1.0f32), (1.0, 1e30), (1e-30, 1.0)] {
-            let m = try_cylinder(radius, height, 16, &Limits::default()).unwrap();
-            // The side is the first grid: 17 vertices on the top row, 17 on the bottom one.
-            let (top, bottom) = (&m.uvs[..17], &m.uvs[17..34]);
-            assert!(top.iter().all(|uv| (uv.y - 0.01).abs() < 1e-6), "{radius} {height}: {top:?}");
-            assert!(bottom.iter().all(|uv| (uv.y - 0.49).abs() < 1e-6), "{radius} {height}: {bottom:?}");
-        }
     }
 }

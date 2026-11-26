@@ -242,9 +242,6 @@ The mesh operations in crates/mesh-ops are moved from:
   3133062968b8a1566eda12a357cb06062db16687.
   https://github.com/storytold/materialcraft
   Copyright (c) 2026 ArtCraft Team and the MaterialCraft contributors.
-  The index check before tangent generation and its two tests are from TextureCraft pull
-  request #386 by simonhull, revision faa4548a6f34bb61d43f56b3500edb73dd71981b
-  (https://github.com/storytold/texturecraft/pull/386).
   All licensed MIT OR Apache-2.0.
 
 The image-based lighting in crates/pbr (craft-pbr) is adapted from:

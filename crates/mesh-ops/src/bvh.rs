@@ -1,18 +1,9 @@
 //! Bounding volume hierarchy over a mesh's triangles: closest-hit and any-hit ray casts, and
 //! box queries (used by picking, baking and brush stamps).
-//!
-//! The tree is built by binned SAH on all three axes, falling back to a median split on the
-//! widest centroid axis when no SAH split beats a leaf. Triangles with a non-finite corner are
-//! left out, and a query with a non-finite origin, direction or point, a zero direction, a NaN
-//! distance or a NaN box finds nothing.
-//!
-//! Ray casts find hits on triangles with coordinates between about 1e-12 and 1e12. Outside that
-//! range the products in the triangle test overflow or underflow `f32`, and a ray can miss a
-//! triangle it crosses.
 
-use glam::{DVec3, Vec3, Vec3A};
+use glam::{Vec3, Vec3A};
 
-use crate::{Limits, Mesh, MeshOpsError, Result, check_limit, try_vec};
+use crate::Mesh;
 
 #[derive(Clone, Copy, Debug)]
 struct Node {
@@ -43,9 +34,6 @@ pub struct Bvh {
 }
 
 const LEAF: usize = 4;
-
-/// Most triangles one tree holds: its node indices (up to twice the triangle count) are `u32`.
-pub const MAX_BVH_TRIANGLES: usize = (u32::MAX / 2) as usize;
 
 /// Traversal stack of (node, entry distance): inline for typical depths (no allocation per
 /// ray), spilling to the heap for degenerate trees.
@@ -91,79 +79,22 @@ fn area(lo: Vec3, hi: Vec3) -> f32 {
     d.x * d.y + d.y * d.z + d.z * d.x
 }
 
-/// The centroid of a triangle; thirds first when the sum would overflow.
-fn centroid(t: &[Vec3; 3]) -> Vec3 {
-    let c = (t[0] + t[1] + t[2]) / 3.0;
-    if c.is_finite() { c } else { t[0] / 3.0 + t[1] / 3.0 + t[2] / 3.0 }
-}
-
 impl Bvh {
-    /// The tree over a mesh's triangles. Triangles with a non-finite corner or an index out of
-    /// range are left out, as is every triangle past [`MAX_BVH_TRIANGLES`]. When the memory for
-    /// the tree cannot be reserved, the tree is empty.
     pub fn new(mesh: &Mesh) -> Bvh {
-        Bvh::try_new(mesh).unwrap_or(Bvh { nodes: Vec::new(), tris: Vec::new(), order: Vec::new() })
-    }
-
-    /// [`Bvh::new`], or `OutOfMemory` when the memory for the tree cannot be reserved.
-    pub fn try_new(mesh: &Mesh) -> Result<Bvh> {
-        let triangle_count = mesh.triangle_count().min(MAX_BVH_TRIANGLES);
-        let mut tris = try_vec(triangle_count, "BVH triangles")?;
-        let mut ids = try_vec(triangle_count, "BVH triangles")?;
+        let triangle_count = mesh.triangle_count();
+        let mut tris = Vec::with_capacity(triangle_count);
 
         for triangle in 0..triangle_count {
             let Some([a, b, c]) = mesh.tri(triangle) else { continue };
-            let (Some(a), Some(b), Some(c)) = (mesh.positions.get(a), mesh.positions.get(b), mesh.positions.get(c)) else { continue };
-            if a.is_finite() && b.is_finite() && c.is_finite() {
-                tris.push([*a, *b, *c]);
-                ids.push(triangle as u32);
-            }
+            let position = |i: usize| mesh.positions.get(i).copied().unwrap_or(Vec3::ZERO);
+            tris.push([position(a), position(b), position(c)]);
         }
-        Bvh::build(tris, ids)
-    }
 
-    /// The tree over the triangles of `indices`, after checking the counts against `limits`
-    /// and [`MAX_BVH_TRIANGLES`], every index and every position (finite).
-    pub fn from_slices(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<Bvh> {
-        check_limit("vertex count", positions.len(), limits.max_vertices)?;
-        if !indices.len().is_multiple_of(3) {
-            return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
-        }
-        let triangles = indices.len() / 3;
-        check_limit("triangle count", triangles, limits.max_triangles.min(MAX_BVH_TRIANGLES))?;
-        if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
-            return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
-        }
-        if !positions.iter().flatten().all(|v| v.is_finite()) {
-            return Err(MeshOpsError::Invalid("non-finite position".into()));
-        }
-        let mut tris = try_vec(triangles, "BVH triangles")?;
-        let mut ids = try_vec(triangles, "BVH triangles")?;
-        for (t, &[a, b, c]) in indices.as_chunks::<3>().0.iter().enumerate() {
-            let p = |i: u32| positions.get(i as usize).map_or(Vec3::ZERO, |p| Vec3::from_array(*p));
-            tris.push([p(a), p(b), p(c)]);
-            ids.push(t as u32);
-        }
-        Bvh::build(tris, ids)
-    }
+        let mut order: Vec<u32> = (0..tris.len() as u32).collect();
+        let centroids: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
 
-    /// Build over `tris`, whose original triangle indices are `ids`; at most
-    /// [`MAX_BVH_TRIANGLES`] finite triangles. Every list reserves its memory before it grows.
-    /// Without triangles the tree has no nodes.
-    fn build(tris: Vec<[Vec3; 3]>, ids: Vec<u32>) -> Result<Bvh> {
-        if tris.is_empty() {
-            return Ok(Bvh { nodes: Vec::new(), tris, order: Vec::new() });
-        }
-        let out_of_memory = |_| MeshOpsError::OutOfMemory("BVH nodes");
-        let mut order: Vec<u32> = try_vec(tris.len(), "BVH triangles")?;
-        order.extend(0..tris.len() as u32);
-        let mut centroids: Vec<Vec3> = try_vec(tris.len(), "BVH triangles")?;
-        centroids.extend(tris.iter().map(centroid));
-
-        let mut nodes = try_vec(1, "BVH nodes")?;
-        nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: 0, count: tris.len() as u32 });
-        let mut stack = try_vec(1, "BVH nodes")?;
-        stack.push(0usize);
+        let mut nodes = vec![Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: 0, count: tris.len() as u32 }];
+        let mut stack = vec![0usize];
 
         while let Some(node_index) = stack.pop() {
             let Node { first, count, .. } = nodes[node_index];
@@ -280,8 +211,6 @@ impl Bvh {
                 continue;
             }
 
-            nodes.try_reserve(2).map_err(out_of_memory)?;
-            stack.try_reserve(2).map_err(out_of_memory)?;
             let left_child = nodes.len();
             nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first, count: left_count as u32 });
             nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: first + left_count as u32, count: (count - left_count) as u32 });
@@ -293,13 +222,8 @@ impl Bvh {
             stack.push(left_child + 1);
         }
 
-        let mut sorted = try_vec(order.len(), "BVH triangles")?;
-        sorted.extend(order.iter().map(|t| tris[*t as usize]));
-        // The triangle indices replace the positions in `order` one by one.
-        for t in &mut order {
-            *t = ids[*t as usize];
-        }
-        Ok(Bvh { nodes, tris: sorted, order })
+        let tris = order.iter().map(|t| tris[*t as usize]).collect();
+        Bvh { nodes, tris, order }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -308,7 +232,7 @@ impl Bvh {
 
     /// The flattened tree (for GPU traversal), root first: bounds, then for a leaf the range
     /// `first..first + count` of [`Bvh::triangles`], for an inner node (`count` 0) the children
-    /// `first` and `first + 1`. A tree without triangles has no nodes.
+    /// `first` and `first + 1`.
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = (Vec3, Vec3, u32, u32)> + '_ {
         self.nodes.iter().map(|n| (n.lo.into(), n.hi.into(), n.first, n.count))
     }
@@ -326,9 +250,7 @@ impl Bvh {
         let open = t0.is_nan_mask() | t1.is_nan_mask();
         let tn = Vec3A::select(open, Vec3A::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
         let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
-        // A box whose entry distance is +∞ (where 1/d overflows) is not reached, even when `tmax`
-        // is unbounded; no triangle can be hit at that distance.
-        (tn <= tf && tn.is_finite()).then_some(tn)
+        (tn <= tf).then_some(tn)
     }
 
     /// Möller–Trumbore, double sided.
@@ -337,10 +259,7 @@ impl Bvh {
         let e2 = t[2] - t[0];
         let p = d.cross(e2);
         let det = e1.dot(p);
-        // A ray in the triangle's plane, or a triangle without area. The determinant is the
-        // product of the two edge lengths, the direction's length and the sines of the angles
-        // between them, so the cutoff shrinks with that product for small triangles.
-        if det.abs() < 1e-12 && (det == 0.0 || det.abs() < 1e-12 * (e1.length() * e2.length() * d.length()).min(1.0)) {
+        if det.abs() < 1e-12 {
             return None;
         }
         let inv = 1.0 / det;
@@ -362,9 +281,6 @@ impl Bvh {
     }
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
-        if !o.is_finite() || !d.is_finite() || d == Vec3::ZERO || tmax.is_nan() {
-            return None;
-        }
         let root = self.nodes.first().filter(|_| !self.tris.is_empty())?;
         let (oa, inv) = (Vec3A::from(o), Vec3A::ONE / Vec3A::from(d));
         let mut best = None;
@@ -426,14 +342,9 @@ impl Bvh {
         self.traverse(o, d, tmax, true, &|_| true).is_some()
     }
 
-    /// The point nearest to `p` at most `max_dist` (zero or more) away on a triangle accepted by
-    /// `filter` (original index): a [`Hit`] with the distance in `t` and the barycentrics of
-    /// vertices 1 and 2. A point whose squared distance overflows `f32` (a distance above about
-    /// 1.8e19) is not found.
+    /// The point nearest to `p` within `max_dist` on a triangle accepted by `filter` (original
+    /// index): a [`Hit`] with the distance in `t` and the barycentrics of vertices 1 and 2.
     pub fn nearest(&self, p: Vec3, max_dist: f32, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
-        if max_dist.is_nan() || max_dist < 0.0 {
-            return None;
-        }
         let root = self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
         let pa = Vec3A::from(p);
         let box_d2 = |n: &Node| (n.lo - pa).max(pa - n.hi).max(Vec3A::ZERO).length_squared();
@@ -450,9 +361,7 @@ impl Bvh {
                     }
                     let (q, u, v) = closest_on_triangle(p, tri);
                     let dd = (q - p).length_squared();
-                    // The first point found may lie exactly at `max_dist`. A squared distance that
-                    // overflows is not comparable with a squared `max_dist` that overflows too.
-                    if dd.is_finite() && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
+                    if dd < best_d2 {
                         best_d2 = dd;
                         best = Some(Hit { t: dd.sqrt(), tri: orig, u, v });
                     }
@@ -469,12 +378,8 @@ impl Bvh {
         best
     }
 
-    /// Call `f` with every triangle (original index) whose bounds overlap the box. A box with a
-    /// NaN coordinate, or a lower corner past the upper corner on any axis, overlaps nothing.
+    /// Call `f` with every triangle (original index) whose bounds overlap the box.
     pub fn query_box(&self, lo: Vec3, hi: Vec3, mut f: impl FnMut(u32)) {
-        if lo.is_nan() || hi.is_nan() || lo.cmpgt(hi).any() {
-            return;
-        }
         let mut stack = vec![0u32];
         while let Some(i) = stack.pop() {
             let Some(n) = self.nodes.get(i as usize) else { continue };
@@ -499,16 +404,10 @@ impl Bvh {
 }
 
 /// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
-/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5), in `f64`: in `f32` the
-/// region tests round to zero inside thin triangles. A triangle without area is measured as the
-/// point or segment it is, and can be the nearest. An edge of zero length is skipped: the
-/// denominator of its parameter is its squared length.
+/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). Degenerate triangles give
+/// a non-finite distance and are never nearest.
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), t.map(|c| c.as_dvec3()));
-    (q.as_vec3(), v as f32, w as f32)
-}
-
-fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64) {
+    let [a, b, c] = *t;
     let (ab, ac, ap) = (b - a, c - a, p - a);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
@@ -519,9 +418,8 @@ fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64)
     if d3 >= 0.0 && d4 <= d3 {
         return (b, 1.0, 0.0);
     }
-    // d1 - d3 = |ab|², d2 - d6 = |ac|² and (d4 - d3) + (d5 - d6) = |bc|².
     let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 && d1 - d3 > 0.0 {
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
         let v = d1 / (d1 - d3);
         return (a + ab * v, v, 0.0);
     }
@@ -531,60 +429,24 @@ fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64)
         return (c, 0.0, 1.0);
     }
     let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 && d2 - d6 > 0.0 {
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
         let w = d2 / (d2 - d6);
         return (a + ac * w, 0.0, w);
     }
     let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 && (d4 - d3) + (d5 - d6) > 0.0 {
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
         let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
         return (b + (c - b) * w, 1.0 - w, w);
     }
-    let sum = va + vb + vc;
-    if sum > 0.0 {
-        let (v, w) = (vb / sum, vc / sum);
-        // Project p onto the plane instead of rebuilding a + ab v + ac w, whose rounding moves a
-        // point that lies on the plane off it. A point whose height above the plane is 0 stays p.
-        let n = ab.cross(ac);
-        let nn = n.length_squared();
-        let q = if nn > 0.0 { p - n * (n.dot(ap) / nn) } else { a + ab * v + ac * w };
-        return (q, v, w);
-    }
-    // No area and no region matched: the nearest of the three edges.
-    let on_edge = |from: DVec3, to: DVec3| {
-        let d = to - from;
-        let s = if d.length_squared() > 0.0 { ((p - from).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-        (from + d * s, s)
-    };
-    let ((qab, s), (qac, r), (qbc, k)) = (on_edge(a, b), on_edge(a, c), on_edge(b, c));
-    [(qab, s, 0.0), (qac, 0.0, r), (qbc, 1.0 - k, k)]
-        .into_iter()
-        .min_by(|x, y| (x.0 - p).length_squared().total_cmp(&(y.0 - p).length_squared()))
-        .unwrap_or((a, 0.0, 0.0))
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    (a + ab * v + ac * w, v, w)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::primitives;
-
-    #[test]
-    fn a_box_first_reached_at_infinity_is_missed() {
-        let (lo, hi) = (Vec3A::ZERO, Vec3A::ONE);
-        // 1/d overflows on every axis: x, where the direction is subnormal, as well as y and z.
-        for d in [Vec3A::new(1e-39, 0.0, 0.0), Vec3A::new(1e-39, -0.0, -0.0)] {
-            let inv = Vec3A::ONE / d;
-            for o in [Vec3A::new(0.5, -1.0, 0.5), Vec3A::new(0.5, 2.0, 0.5), Vec3A::new(-1.0, 0.5, 0.5)] {
-                assert_eq!(Bvh::slab(lo, hi, o, inv, f32::INFINITY), None, "d {d}, origin {o}");
-            }
-            assert_eq!(Bvh::slab(lo, hi, Vec3A::splat(0.5), inv, f32::INFINITY), Some(0.0), "d {d}, inside");
-        }
-        // A ray parallel to a slab outside it, with a finite exit on another axis.
-        let inv = Vec3A::ONE / Vec3A::new(1.0, 0.0, 0.0);
-        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(0.5, -1.0, 0.5), inv, f32::INFINITY), None);
-        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(-1.0, 0.5, 0.5), inv, f32::INFINITY), Some(1.0));
-        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(0.5, 0.0, 0.5), inv, f32::INFINITY), Some(0.0), "in the plane");
-    }
 
     #[test]
     fn nearest_point_matches_brute_force() {
@@ -611,61 +473,6 @@ mod tests {
         }
         assert!(bvh.nearest(Vec3::splat(100.0), 1.0, &|_| true).is_none(), "out of range");
         assert!(bvh.nearest(Vec3::ZERO, f32::MAX, &|_| false).is_none(), "filtered out");
-    }
-
-    #[test]
-    fn nearest_finds_a_point_inside_a_thin_triangle() {
-        let l = Limits::default();
-        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1e-4, 0.0]], &[0, 1, 2], &l).unwrap();
-        // p = a + 0.5 (b - a) + 0.25 (c - a) lies on the triangle.
-        let p = Vec3::new(0.75, 2.5e-5, 0.0);
-        let hit = bvh.nearest(p, 0.0, &|_| true).unwrap();
-        assert_eq!(hit.t, 0.0);
-        assert!((hit.u - 0.5).abs() < 1e-4 && (hit.v - 0.25).abs() < 1e-4, "{hit:?}");
-    }
-
-    #[test]
-    fn nearest_finds_a_coplanar_point_inside_a_triangle_at_distance_zero() {
-        let l = Limits::default();
-        let bvh = Bvh::from_slices(&[[-1.0, -1.0, 0.0], [2.0, 0.0, 0.0], [0.0, 3.0, 0.0]], &[0, 1, 2], &l).unwrap();
-        // The origin is a + 3/11 (b - a) + 2/11 (c - a); rebuilding it from those weights in
-        // floating point gives x of about -5.6e-17 instead of 0.
-        let hit = bvh.nearest(Vec3::ZERO, 0.0, &|_| true).unwrap();
-        assert_eq!(hit.t, 0.0);
-        assert!((hit.u - 3.0 / 11.0).abs() < 1e-6 && (hit.v - 2.0 / 11.0).abs() < 1e-6, "{hit:?}");
-    }
-
-    #[test]
-    fn nearest_measures_a_triangle_with_a_collapsed_edge() {
-        let l = Limits::default();
-        let p = Vec3::new(0.5, 1.0, 0.0);
-        let (o, x) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
-        // The surviving segment runs from the origin to +X; its point nearest p is (0.5, 0, 0).
-        for (positions, indices) in [(vec![o, o, x], vec![0, 1, 2]), (vec![x, x, o], vec![0, 1, 2]), (vec![o, x], vec![0, 0, 1])] {
-            let bvh = Bvh::from_slices(&positions, &indices, &l).unwrap();
-            let hit = bvh.nearest(p, 10.0, &|_| true);
-            let hit = hit.unwrap_or_else(|| panic!("{positions:?} {indices:?}: no point found"));
-            assert!((hit.t - 1.0).abs() < 1e-6, "{positions:?} {indices:?}: {hit:?}");
-            let [a, b, c] = [0, 1, 2].map(|k| Vec3::from_array(positions[indices[k] as usize]));
-            let q = a * (1.0 - hit.u - hit.v) + b * hit.u + c * hit.v;
-            assert!((q - Vec3::new(0.5, 0.0, 0.0)).length() < 1e-6, "{positions:?} {indices:?}: {q}");
-        }
-    }
-
-    #[test]
-    fn a_tree_without_triangles_has_no_nodes() {
-        let l = Limits::default();
-        assert_eq!(Bvh::from_slices(&[], &[], &l).unwrap().nodes().len(), 0);
-        // Every triangle is left out: one corner is not finite.
-        let rejected = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(f32::NAN, 0.0, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
-        let bvh = Bvh::try_new(&rejected).unwrap();
-        assert_eq!(bvh.nodes().len(), 0);
-        assert!(bvh.is_empty());
-        assert!(bvh.closest(Vec3::Z, Vec3::NEG_Z, 10.0).is_none());
-        assert!(bvh.nearest(Vec3::ZERO, 10.0, &|_| true).is_none());
-        let mut found = 0;
-        bvh.query_box(Vec3::splat(-1.0), Vec3::ONE, |_| found += 1);
-        assert_eq!(found, 0);
     }
 
     #[test]
@@ -867,116 +674,5 @@ mod tests {
         let hit = bvh.closest_filtered(Vec3::new(0.0, 0.0, 10.0), Vec3::NEG_Z, 100.0, &|t| t == 500).unwrap();
         assert_eq!(hit.tri, 500);
         assert_eq!(hit.t, 10.0);
-    }
-
-    #[test]
-    fn bvh_rejects_non_finite_queries_without_callbacks() {
-        let m = primitives::plane(2.0, 4);
-        let bvh = Bvh::new(&m);
-        let mut calls = 0;
-        bvh.query_box(Vec3::new(f32::NAN, -1.0, -1.0), Vec3::ONE, |_| calls += 1);
-        bvh.query_box(Vec3::splat(-1.0), Vec3::new(1.0, f32::NAN, 1.0), |_| calls += 1);
-        // A box whose lower corner is past its upper corner on one axis is empty, even where a
-        // triangle spans both values.
-        bvh.query_box(Vec3::new(0.3, -1.0, -1.0), Vec3::new(0.2, 1.0, 1.0), |_| calls += 1);
-        bvh.query_box(Vec3::new(-1.0, -1.0, 0.3), Vec3::new(1.0, 1.0, 0.2), |_| calls += 1);
-        assert_eq!(calls, 0);
-        // An infinite box is a valid query and finds everything.
-        bvh.query_box(Vec3::NEG_INFINITY, Vec3::INFINITY, |_| calls += 1);
-        assert_eq!(calls, m.triangle_count());
-
-        let (o, d) = (Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Y);
-        assert!(bvh.closest(o, d, 10.0).is_some());
-        let counted = std::cell::Cell::new(0);
-        let filter = |_: u32| {
-            counted.set(counted.get() + 1);
-            true
-        };
-        for (o, d, tmax) in
-            [(Vec3::NAN, d, 10.0), (o, Vec3::new(0.0, f32::NAN, 0.0), 10.0), (o, Vec3::ZERO, 10.0), (o, Vec3::NEG_INFINITY, 10.0), (o, d, f32::NAN)]
-        {
-            assert!(bvh.closest_filtered(o, d, tmax, &filter).is_none(), "{o} {d} {tmax}");
-            assert!(!bvh.occluded(o, d, tmax));
-        }
-        assert_eq!(counted.get(), 0);
-
-        // A negative or NaN distance finds nothing, not the points within its magnitude.
-        assert!(bvh.nearest(Vec3::new(0.0, 0.5, 0.0), 1.0, &|_| true).is_some());
-        assert!(bvh.nearest(Vec3::new(0.0, 0.5, 0.0), -1.0, &|_| true).is_none());
-        assert!(bvh.nearest(Vec3::new(0.0, 0.5, 0.0), f32::NAN, &|_| true).is_none());
-    }
-
-    #[test]
-    fn ray_hits_do_not_depend_on_the_size_of_the_triangle() {
-        for exponent in [-10, -7, -3, 0, 3, 7, 10] {
-            let s = 10f32.powi(exponent);
-            let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [s, 0.0, 0.0], [0.0, 0.0, s]], &[0, 1, 2], &Limits::default()).unwrap();
-            // Straight down onto the triangle, from one triangle size above it.
-            let o = Vec3::new(0.25 * s, s, 0.25 * s);
-            let hit = bvh.closest(o, Vec3::NEG_Y, f32::MAX).unwrap_or_else(|| panic!("no hit at 1e{exponent}"));
-            assert!((hit.t / s - 1.0).abs() < 1e-4, "1e{exponent}: {hit:?}");
-            assert!((hit.u - 0.25).abs() < 1e-4 && (hit.v - 0.25).abs() < 1e-4, "1e{exponent}: {hit:?}");
-            assert!(bvh.occluded(o, Vec3::NEG_Y, 2.0 * s), "1e{exponent}");
-            // Beside the triangle, and along its plane.
-            assert!(bvh.closest(Vec3::new(0.75 * s, s, 0.75 * s), Vec3::NEG_Y, f32::MAX).is_none(), "1e{exponent}");
-            assert!(bvh.closest(Vec3::new(-s, 0.0, 0.25 * s), Vec3::X, f32::MAX).is_none(), "1e{exponent}");
-        }
-    }
-
-    #[test]
-    fn nearest_includes_points_exactly_at_the_distance() {
-        let m = primitives::plane(2.0, 4);
-        let bvh = Bvh::new(&m);
-        // A vertex of the plane, and a point 0.5 above it.
-        let corner = m.positions[6];
-        assert_eq!(bvh.nearest(corner, 0.0, &|_| true).map(|h| h.t), Some(0.0));
-        let above = corner + Vec3::new(0.0, 0.5, 0.0);
-        assert_eq!(bvh.nearest(above, 0.5, &|_| true).map(|h| h.t), Some(0.5));
-        assert!(bvh.nearest(above, 0.499, &|_| true).is_none());
-        // A triangle 1e30 away is outside a distance of 1e20, though both squares overflow.
-        let far = Mesh {
-            positions: vec![Vec3::new(1e30, 0.0, 0.0), Vec3::new(1e30, 1.0, 0.0), Vec3::new(1e30, 0.0, 1.0)],
-            indices: vec![0, 1, 2],
-            ..Mesh::default()
-        };
-        assert!(Bvh::new(&far).nearest(Vec3::ZERO, 1e20, &|_| true).is_none());
-    }
-
-    #[test]
-    fn bvh_leaves_out_non_finite_triangles() {
-        let mut m = primitives::plane(2.0, 4);
-        // Vertex 0 is the corner of one triangle only.
-        m.positions[0] = Vec3::new(f32::NAN, 0.0, 0.0);
-        m.positions[24] = Vec3::new(0.0, f32::INFINITY, 0.0);
-        let affected = m.indices.chunks(3).filter(|t| t.contains(&0) || t.contains(&24)).count();
-        let bvh = Bvh::new(&m);
-        let mut found = Vec::new();
-        bvh.query_box(Vec3::splat(-10.0), Vec3::splat(10.0), |t| found.push(t));
-        assert_eq!(found.len(), m.triangle_count() - affected);
-        for (lo, hi, _, _) in bvh.nodes() {
-            assert!(lo.is_finite() && hi.is_finite(), "{lo} {hi}");
-        }
-        let (_, order) = bvh.triangles();
-        assert!(order.iter().all(|t| m.tri(*t as usize).is_some_and(|c| !c.contains(&0) && !c.contains(&24))));
-    }
-
-    #[test]
-    fn bvh_slices_check_limits_indices_and_positions() {
-        let m = primitives::plane(2.0, 4);
-        let positions: Vec<[f32; 3]> = m.positions.iter().map(|p| p.to_array()).collect();
-        let l = Limits::default();
-        let bvh = Bvh::from_slices(&positions, &m.indices, &l).unwrap();
-        assert_eq!(bvh.triangles().1.len(), m.triangle_count());
-        let hit = bvh.closest(Vec3::new(0.3, 1.0, 0.2), Vec3::NEG_Y, 10.0).unwrap();
-        assert_eq!(Some(hit), Bvh::new(&m).closest(Vec3::new(0.3, 1.0, 0.2), Vec3::NEG_Y, 10.0));
-        assert_eq!(Bvh::try_new(&m).unwrap().triangles(), bvh.triangles());
-        let few = Limits { max_triangles: m.triangle_count() - 1, ..l };
-        assert!(matches!(Bvh::from_slices(&positions, &m.indices, &few), Err(MeshOpsError::TooLarge { .. })));
-        assert!(Bvh::from_slices(&positions, &[0, 1, positions.len() as u32], &l).is_err());
-        assert!(Bvh::from_slices(&positions, &[0, 1], &l).is_err());
-        let mut nan = positions.clone();
-        nan[3][2] = f32::NAN;
-        assert!(Bvh::from_slices(&nan, &m.indices, &l).is_err());
-        assert!(Bvh::from_slices(&[], &[], &l).unwrap().is_empty());
     }
 }
