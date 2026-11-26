@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [features]
-# Serialize / Deserialize on the model types (Note, CtrlEvent, CtrlKind, Sequence).
+# Serialize / Deserialize on the model types (Note, CtrlEvent, CtrlKind, SysExEvent, Sequence).
 serde = ["dep:serde"]
 
 [dependencies]
