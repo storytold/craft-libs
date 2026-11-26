@@ -708,9 +708,11 @@ When a component's remembered state is due for eviction.
 The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
 
 - `craft_behavior::fit::Fit`: `pub struct Fit { pub shown: Vec<usize>, pub overflow: Vec<usize>, pub short: Vec<usize> }`. Which items the strip shows and which go to the overflow menu, as indexes into the input, in input order.
-- `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32> }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
+- `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32>, pub short_order: u16, pub short_late: bool }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
   - `pub const fn new(extent: f32, section: u16, keep: FitKeep) -> Self`. An item `extent` long in `section`.
-  - `pub const fn short(mut self, extent: f32) -> Self`. The item with a shorter form `extent` long, which it takes before any free item leaves.
+  - `pub const fn short(mut self, extent: f32) -> Self`. The item with a shorter form `extent` long, which it takes before any free item leaves unless it is late.
+  - `pub const fn short_order(mut self, order: u16) -> Self`. The item with its short form ranked `order`: lower ranks shorten first, and the last item of a rank first.
+  - `pub const fn short_late(mut self) -> Self`. The item takes its short form only after every free item that can leave has left.
 - `craft_behavior::fit::FitKeep`: `pub enum FitKeep { Free, Pinned, Menu }`. Whether an item may move into the overflow menu, or lives there.
 - `craft_behavior::fit::TabFit`: `pub struct TabFit { pub shown: Vec<(usize, f32)>, pub overflow: Vec<usize>, pub overflow_width: f32 }`. Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 - `craft_behavior::fit::fit`: `pub fn fit(natural: &[f32], selected: usize, available: f32, minimum_width: f32, overflow_width: f32, keep_selected: bool) -> TabFit`. Fit tab widths into `available` points, shrinking the widest tabs first to a common cap.
