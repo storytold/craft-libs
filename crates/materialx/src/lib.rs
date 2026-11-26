@@ -439,7 +439,8 @@ impl Document {
     /// input, a value that is not one to four finite numbers or does not fit its type, and a
     /// `uvtiling` that is not two finite numbers are [`Error::Malformed`]. A shader input that is
     /// not in the table gives the warning `input <name> is not read`; the base weight warning of
-    /// [`Document::read_material`] is not given, since the weight is read.
+    /// [`Document::read_material`] is not given, since the weight is read. A `normalmap` node's
+    /// `scale` other than 1 is not read and gives a warning.
     pub fn read_material_strict(&self, material: Option<&str>) -> Result<StrictMaterial, Error> {
         let Located { mat, shader, kind, nodes, graphs, outputs } = self.locate(material)?;
         let inputs = match kind {
@@ -796,10 +797,20 @@ impl<'a> Resolver<'a> {
                     .map(str::to_owned);
                 Ok(Some(Resolved::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
             }
-            "normalmap" => match child("in") {
-                Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
-                None => Ok(None),
-            },
+            "normalmap" => {
+                // The normal is passed on without the node's scale, so a scale other than 1 is
+                // reported.
+                if let Some(scale) = child("scale") {
+                    let resolved = self.value(scale, node_scope, node_space, hops + 1, &mut Vec::new())?;
+                    if !matches!(resolved, Some(Resolved::Constant { ref values, .. }) if values.iter().all(|s| *s == 1.0)) {
+                        warnings.push(format!("the scale of normalmap node {node_name:?} is not read"));
+                    }
+                }
+                match child("in") {
+                    Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
+                    None => Ok(None),
+                }
+            }
             "convert" => {
                 let Some(i) = child("in") else { return Ok(None) };
                 let Some(value) = self.value(i, node_scope, node_space, hops + 1, warnings)? else { return Ok(None) };
@@ -1240,6 +1251,35 @@ mod tests {
             let r = read(&shader(&format!(r#"<input name="specular_roughness" value="{bad}"/>"#)));
             assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("specular_roughness")), "{bad}: {r:?}");
         }
+    }
+
+    #[test]
+    fn a_normalmap_scale_other_than_1_gives_a_warning() {
+        let with_scale = |scale: &str| {
+            read(&open_pbr(
+                r#"<input name="geometry_normal" nodename="N"/>"#,
+                &format!(r#"<normalmap name="N" type="vector3">{scale}<input name="in" nodename="T"/></normalmap><image name="T" type="vector3"><input name="file" value="n.png"/></image>"#),
+            ))
+            .unwrap()
+        };
+        let scaled = with_scale(r#"<input name="scale" type="float" value="0.5"/>"#);
+        assert_eq!(scaled.warnings, vec![r#"the scale of normalmap node "N" is not read"#.to_owned()]);
+        assert!(matches!(input(&scaled, "geometry_normal"), Some(Resolved::Image { .. })));
+        for plain in ["", r#"<input name="scale" type="float" value="1"/>"#, r#"<input name="scale" type="vector2" value="1, 1"/>"#] {
+            assert!(with_scale(plain).warnings.is_empty(), "{plain}");
+        }
+        // A scale connected to a constant node is read through it.
+        let connected = |value: &str| {
+            read(&open_pbr(
+                r#"<input name="geometry_normal" nodename="N"/>"#,
+                &format!(
+                    r#"<normalmap name="N" type="vector3"><input name="scale" nodename="K"/><input name="in" value="0.5,0.5,1"/></normalmap><constant name="K" type="float"><input name="value" value="{value}"/></constant>"#
+                ),
+            ))
+            .unwrap()
+        };
+        assert!(connected("1").warnings.is_empty(), "{:?}", connected("1").warnings);
+        assert_eq!(connected("2").warnings.len(), 1, "{:?}", connected("2").warnings);
     }
 
     #[test]
