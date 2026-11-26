@@ -1,4 +1,5 @@
-//! `Http::new` as an app gets it, through the public API only.
+//! `Http::new` as an app gets it, through the public API only: the release configuration, or the `local-mirror` one with
+//! that feature on.
 
 use craft_ui::testing::trial;
 use std::io::{BufRead, BufReader, Write};
@@ -30,7 +31,7 @@ fn serve() -> (String, Arc<AtomicUsize>) {
 }
 
 #[trial]
-fn the_remote_agents_refuse_plain_http_and_loopback_links_use_the_direct_agents() {
+fn the_remote_agents_take_plain_http_only_with_a_local_mirror_and_loopback_links_use_the_direct_agents() {
     let (base, seen) = serve();
     let http = Http::new("craft-update-tests/0").unwrap();
     // A loopback link goes to the direct agents, which serve plain HTTP in every build.
@@ -42,6 +43,11 @@ fn the_remote_agents_refuse_plain_http_and_loopback_links_use_the_direct_agents(
     assert_eq!(seen.load(Ordering::SeqCst), 3);
     // Any other plain-HTTP link is refused before it connects, in debug builds too. An upper-case scheme isn't a
     // loopback link, so it goes to a remote agent.
-    assert!(http.get_text(&format!("HTTP{}", &base[4..])).is_err_and(|e| e.contains("refused plain HTTP")));
-    assert_eq!(seen.load(Ordering::SeqCst), 3, "a refused request never connects");
+    let remote = http.get_text(&format!("HTTP{}", &base[4..]));
+    if cfg!(feature = "local-mirror") {
+        assert_eq!(remote.unwrap().as_deref(), Some("{}"));
+    } else {
+        assert!(remote.as_ref().is_err_and(|e| e.contains("refused plain HTTP")), "{remote:?}");
+        assert_eq!(seen.load(Ordering::SeqCst), 3, "a refused request never connects");
+    }
 }
