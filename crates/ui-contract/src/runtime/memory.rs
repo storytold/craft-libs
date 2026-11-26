@@ -462,6 +462,14 @@ pub(crate) fn adopt<T: Any + Clone + Send + Sync>(ctx: &Context, owner: Id, id: 
     });
 }
 
+/// Edits the shown slot of type `T` under `id` in place, outside a memory stage: the slot moves out of context data,
+/// `f` edits it, and it moves back. `f` runs no call that reaches the context.
+pub(crate) fn edit_shown<T: Slot>(ctx: &Context, id: Id, f: impl FnOnce(&mut T)) {
+    let Some(mut moved) = store::take::<Wrapped<SHOWN, T>>(ctx, id) else { return };
+    f(&mut moved.0);
+    store::put(ctx, id, moved);
+}
+
 /// Moves the shown slot of type `T` under `id` out of context data into the graveyard, as eviction does.
 pub(crate) fn dispose_shown<T: Slot>(ctx: &Context, id: Id) {
     let moved = pass_state::with::<Registry, _>(ctx, |reg| {
@@ -996,4 +1004,40 @@ pub fn with_session<T: Slot, R>(ctx: &Context, id: Id, f: impl FnOnce(&mut T) ->
 #[doc(hidden)]
 pub fn unique(source: impl std::hash::Hash + std::fmt::Debug) -> Id {
     store::unique(source)
+}
+
+/// Why [`fork_into`] refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForkError {
+    /// `to` is running a pass: fork into a context between its passes.
+    DuringPass,
+}
+
+impl std::fmt::Display for ForkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForkError::DuringPass => f.write_str("fork into a context between its passes, not during one"),
+        }
+    }
+}
+
+impl std::error::Error for ForkError {}
+
+/// Gives `to` a copy of `from`'s UI memory, for a second context that draws what `from` shows (a headless capture of a
+/// window): egui's memory (areas, scroll areas, collapsing states, options) and the components' remembered state
+/// (scroll offsets, open sections, the session and shown slots of every component), copied by value. `to` keeps its
+/// own runtime: its pass state, focus, overlays, commands, windows and the rest of the services its install made, so
+/// a pass of `to` neither reads nor moves `from`'s, and `to` may run a pass inside one of `from`'s. A runtime service
+/// `to` has none of yet starts fresh in `to` on first use.
+///
+/// Copying egui's memory alone (`to.memory_mut(|m| *m = from.memory(Clone::clone))`) shares the runtime's state
+/// between the two: its services are handles, and a copy of a handle reaches the same state.
+pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError> {
+    if frame::in_pass(to) {
+        return Err(ForkError::DuringPass);
+    }
+    store::copy_memory(from, to);
+    pending::detach_fork(from, to);
+    Ok(())
 }
