@@ -60,7 +60,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
         self
     }
 
-    /// Shows the list with a row per section from `row` and `body` beside it; the section picked this pass.
+    /// Shows the list with a row per section from `row` and `body` beside it; the section picked this pass, which can be
+    /// the one already shown when the user picks it again.
     // PLAN: ty.X70 gives `body: impl FnOnce`; a container runs its body again for a measuring pass, so `body` and
     // `foot` are `FnMut`.
     pub fn show(self, ui: &mut Ui, mut row: impl FnMut(&K) -> ListRow<'static>, mut body: impl FnMut(&mut Ui)) -> Option<K> {
@@ -81,10 +82,15 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
                 }
                 let listed = sections.show_items(ui, source, &mut |key, _| row(key));
                 for event in listed.events {
-                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
-                        && let Some(key) = keys.into_iter().last()
-                    {
-                        picked = Some(key);
+                    match event {
+                        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                            if let Some(key) = keys.into_iter().last() {
+                                picked = Some(key);
+                            }
+                        }
+                        // A click or Enter on the section already shown picks it again.
+                        CollectionEvent::Picked { key, .. } | CollectionEvent::Activate(key) => picked = Some(key),
+                        _ => {}
                     }
                 }
             };

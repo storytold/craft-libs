@@ -32,7 +32,7 @@ pub(crate) mod path_setting;
 mod rows;
 pub(crate) mod window;
 
-pub use page::{PreferencesLayout, PreferencesPage, PreferencesPageOutput};
+pub use page::{PreferencesLayout, PreferencesPage, PreferencesPageOutput, SearchResults};
 
 pub use path_setting::{PathSetting, PathSettingOutput};
 
