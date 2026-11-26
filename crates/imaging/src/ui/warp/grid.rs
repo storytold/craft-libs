@@ -17,7 +17,7 @@ use craft_ui::contract::{
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, HandleLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, DataColor, HandleLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
@@ -85,6 +85,35 @@ pub struct WarpGridStyle {
     reveal: f32,
 }
 
+/// The most thin guide lines a host can ask for inside one cell, each way. It only bounds the work
+/// of one paint; a host's own maximum is its business.
+pub const GUIDE_LINES_MAX: usize = 32;
+
+/// The thin guide lines inside the cells of a [`WarpGrid`], as the host wants them: their colour, how
+/// much of their alpha shows, how many there are in a cell and whether they show at all. Set through
+/// [`WarpGrid::guides`]; no `guides` at all paints the grid's own rule, and so does every field left
+/// at its default here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct WarpGuides {
+    /// The colour of the thin lines. `None` paints them in the style's `line`, as the grid always did.
+    pub line: Option<DataColor>,
+    /// The share of that colour's alpha, 0 to 1: 1 shows the colour whole, 0.5 half as strong. A share
+    /// that is not a number shows the colour whole.
+    pub share: f32,
+    /// How many thin lines to draw inside every cell, each way. `None` keeps the grid's own rule
+    /// ([`WarpMesh::own_guide_count`]); a number is taken as 1 to [`GUIDE_LINES_MAX`].
+    pub density: Option<usize>,
+    /// Whether the thin lines draw at all. The patch boundaries and the anchors always do.
+    pub visible: bool,
+}
+
+impl Default for WarpGuides {
+    fn default() -> Self {
+        WarpGuides { line: None, share: 1.0, density: None, visible: true }
+    }
+}
+
 /// What a press drags.
 #[derive(Clone, Copy, Debug)]
 enum Target {
@@ -130,9 +159,11 @@ struct Report {
 /// pointer and moved from the keyboard as PhotoCraft's Warp has them. The mesh is the binding; the
 /// host's [`rule`](Self::rule) moves it (an anchor carrying its handles, a pull of the surface).
 ///
-/// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
-///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
-///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
+/// - Look: patch boundaries `overlay.line` at `stroke.thin`, and the thin guide lines inside each cell
+///   under them: the one-patch mesh's rule-of-thirds lines, or the colour, share, density and
+///   visibility of [`guides`](Self::guides). Anchors always show; a handle and its arm only near the
+///   pointer, while its anchor or one of its handles is dragged, or while one of its anchor's parts is
+///   picked and the grid has the keyboard.
 /// - Pointer: the nearest anchor or handle within the hit reach drags that point; elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
@@ -159,6 +190,10 @@ pub struct WarpGrid<'a> {
     /// The split tool, when one is armed.
     #[prop]
     split: Option<WarpSplit>,
+    /// The thin guide lines inside the cells, as the host wants them: `None` draws the grid's own rule
+    /// in the style's line, which is how the grid painted before a host had a say.
+    #[prop]
+    guides: Option<WarpGuides>,
     /// The mesh parameters `(s, t)` under a document point, `None` off the surface; by default
     /// [`WarpMesh::surface_at`].
     #[prop(func = "Fn(Point) -> Option<(f64, f64)>")]
@@ -180,6 +215,7 @@ impl<'a> WarpGrid<'a> {
             lines_only: false,
             preset: false,
             split: None,
+            guides: None,
             surface: None,
             rule: None,
             report: Report::default(),
@@ -464,9 +500,29 @@ impl Component for WarpGrid<'_> {
                 draw.stroke(&PaintShape::Path(run), width, color);
             }
         };
-        if mesh.columns() == 1 && mesh.rows() == 1 {
-            for path in mesh.thirds() {
-                stroke(&path, StrokeWidth::Hairline, style.line);
+        let stroke_data = |path: &craft_behavior::kurbo::BezPath, width: StrokeWidth, color: DataColor| {
+            for (run, _) in path_runs(view, path) {
+                draw.stroke(&PaintShape::Path(run), width, color);
+            }
+        };
+        // The thin guide lines inside the cells, under the patch boundaries: the grid's own rule when no
+        // host rule is set, and the host's colour, share, density and visibility when it sets them.
+        if self.guides.is_none_or(|guides| guides.visible) {
+            let paths = match self.guides.and_then(|guides| guides.density) {
+                None => mesh.own_guides(),
+                Some(lines) => mesh.guide_paths(lines.clamp(1, GUIDE_LINES_MAX)),
+            };
+            // A host colour or share paints the lines as data; the grid's own look keeps the style colour.
+            let data = self.guides.filter(|guides| guides.line.is_some() || guides.share != 1.0).map(|guides| {
+                let share = if guides.share.is_finite() { guides.share.clamp(0.0, 1.0) } else { 1.0 };
+                let DataColor(base) = guides.line.unwrap_or_else(|| DataColor::new(style.line.egui()));
+                DataColor::new(if share == 1.0 { base } else { base.linear_multiply(share) })
+            });
+            for path in &paths {
+                match data {
+                    None => stroke(path, StrokeWidth::Hairline, style.line),
+                    Some(line) => stroke_data(path, StrokeWidth::Hairline, line),
+                }
             }
         }
         for path in mesh.boundaries() {
