@@ -601,9 +601,10 @@ fn coefficients(matrix: u16, primaries: u16) -> Result<Option<(f32, f32)>> {
         // 9 is BT.2020 non-constant luminance; 10 (constant luminance) needs other equations and
         // is refused below.
         9 => Some((0.2627, 0.0593)),
-        // Chromaticity-derived non-constant luminance.
+        // Chromaticity-derived non-constant luminance; unspecified primaries are read as BT.709,
+        // as `cicp::linearize` reads them for the HLG gain.
         12 => {
-            let [kr, _, kb] = crate::cicp::luma_weights(primaries);
+            let [kr, _, kb] = crate::cicp::luma_weights(crate::cicp::primaries_or_bt709(primaries));
             Some((kr, kb))
         }
         // 2 (unspecified: AVIF readers assume BT.601), 5, 6 (BT.601) and reserved values.
@@ -1280,6 +1281,16 @@ mod tests {
         }
         assert_eq!(coefficients(0, 1).unwrap(), None);
         assert!(coefficients(12, 9).unwrap().is_some());
+    }
+
+    #[test]
+    fn chromaticity_derived_matrix_reads_unspecified_primaries_as_bt709() {
+        // Matrix 12 derives Kr and Kb from the primaries; `linearize` reads primaries 2 as BT.709
+        // for the HLG gain, so reconstruction uses the same weights.
+        let [kr, _, kb] = crate::cicp::luma_weights(crate::cicp::primaries_or_bt709(2));
+        assert_eq!(coefficients(12, 2).unwrap(), Some((kr, kb)));
+        assert_eq!(coefficients(12, 2).unwrap(), coefficients(12, 1).unwrap());
+        assert_ne!(coefficients(12, 9).unwrap(), coefficients(12, 1).unwrap());
     }
 
     #[cfg(feature = "avif")]
