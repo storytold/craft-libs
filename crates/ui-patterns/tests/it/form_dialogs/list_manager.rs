@@ -103,6 +103,76 @@ fn a_bound_name_box_shows_the_callers_writes_and_takes_the_typed_name() {
     assert!(!enabled(&fixture, "Add"), "an existing name disables Add");
 }
 
+/// The choices a list manager reported and whether it closed.
+type Answers = (Rc<RefCell<Vec<ListManagerChoice>>>, Rc<Cell<bool>>);
+
+/// A list manager whose first action is `first`, with every choice and close it reports.
+fn enter_fixture(first: ListManagerAction) -> (Fixture, Answers) {
+    let choices = Rc::new(RefCell::new(Vec::new()));
+    let closed = Rc::new(Cell::new(false));
+    let (seen, ended) = (Rc::clone(&choices), Rc::clone(&closed));
+    let fixture = Fixture::new(move |ui| {
+        if ended.get() {
+            return;
+        }
+        let actions = vec![first.clone(), ListManagerAction::new("rename", "Rename", ActionEnabled::Always).keeps_open()];
+        let entries = vec![ListManagerEntry::new("a", "Alpha")];
+        let out = ListManager::new("Workspaces", "Name:", entries, actions).opened(Bind::given(true)).show(ui);
+        ended.set(out.closed.is_some());
+        seen.borrow_mut().extend(out.choice);
+    });
+    (fixture, (choices, closed))
+}
+
+// Enter in the name box with no row picked runs the first action while it is enabled, as a click on it does, and
+// leaves the dialog open while it is disabled; with a row picked it still answers once.
+#[trial]
+fn enter_in_the_name_box_runs_the_first_action_only_while_it_is_enabled() {
+    let ok = ListManagerAction::new("ok", "OK", ActionEnabled::Always);
+    let (mut fixture, (choices, closed)) = enter_fixture(ok.clone());
+    fixture.room(Vec2::new(900.0, 700.0)).idle(10);
+    let name = fixture.by_label("Name:").expect("the name box");
+    fixture.click(&name).idle(2);
+    fixture.type_text("Beta").idle(4);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(6);
+    assert!(closed.get(), "Enter closes the dialog as OK would");
+    {
+        let seen = choices.borrow();
+        let [choice] = seen.as_slice() else { panic!("one choice for Enter, got {seen:?}") };
+        assert_eq!((choice.action.as_str(), choice.entry.as_deref(), choice.name.as_str()), ("ok", None, "Beta"));
+    }
+
+    let (mut fixture, (choices, closed)) = enter_fixture(ok.clone());
+    fixture.room(Vec2::new(900.0, 700.0)).idle(10);
+    let alpha = fixture.by_label("Alpha").expect("the list shows Alpha");
+    fixture.click(&alpha).idle(4);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(6);
+    assert!(closed.get(), "Enter on a picked row closes the dialog");
+    assert_eq!(choices.borrow().len(), 1, "Enter on a picked row answers once: {:?}", choices.borrow());
+
+    let (mut fixture, (choices, closed)) = enter_fixture(ok);
+    fixture.room(Vec2::new(900.0, 700.0)).idle(10);
+    let alpha = fixture.by_label("Alpha").expect("the list shows Alpha");
+    fixture.click(&alpha).idle(4);
+    let name = fixture.by_label("Name:").expect("the name box");
+    fixture.click(&name).idle(2);
+    fixture.key(Key::A, Modifiers::COMMAND).idle(2);
+    fixture.type_text("Beta").idle(4);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(6);
+    assert!(closed.get(), "Enter after retyping the name closes the dialog");
+    assert_eq!(choices.borrow().first().map(|choice| choice.name.as_str()), Some("Beta"), "Enter answers with the typed name");
+
+    let (mut fixture, (choices, closed)) = enter_fixture(ListManagerAction::run(&ListManagerWords::default()));
+    fixture.room(Vec2::new(900.0, 700.0)).idle(10);
+    let name = fixture.by_label("Name:").expect("the name box");
+    fixture.click(&name).idle(2);
+    fixture.type_text("Beta").idle(4);
+    assert!(!enabled(&fixture, "Run"), "a new name leaves an entry action off");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(6);
+    assert!(!closed.get(), "Enter does not run a disabled first action");
+    assert!(choices.borrow().is_empty(), "no choice for a disabled first action: {:?}", choices.borrow());
+}
+
 #[trial]
 fn a_committed_rename_reports_entry_and_name_and_escape_keeps_it() {
     let rows = Rc::new(RefCell::new(vec![
