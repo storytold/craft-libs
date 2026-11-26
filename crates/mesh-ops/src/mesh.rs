@@ -410,13 +410,13 @@ impl Mesh {
             return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
         }
         let too_large = |what| GeomError::Invalid(format!("the appended {what} do not fit in u32"));
-        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or(too_large("vertices"))?;
+        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or_else(|| too_large("vertices"))?;
         // The last vertex index is `vertices - 1`.
         if vertices > 0 && u32::try_from(vertices - 1).is_err() {
             return Err(too_large("vertices"));
         }
         let ibase = u32::try_from(self.indices.len()).map_err(|_| too_large("indices"))?;
-        let index_count = self.indices.len().checked_add(other.indices.len()).ok_or(too_large("indices"))?;
+        let index_count = self.indices.len().checked_add(other.indices.len()).ok_or_else(|| too_large("indices"))?;
         u32::try_from(index_count).map_err(|_| too_large("indices"))?;
         // Submeshes of a mesh without a material list use material 0, which gets an unnamed entry
         // so that it stays apart from the other mesh's materials.
@@ -425,9 +425,9 @@ impl Mesh {
         let mbase = self.materials.len() + usize::from(self_unnamed);
         let mut submeshes = try_vec(other.submeshes.len(), "submeshes")?;
         for s in &other.submeshes {
-            let start = s.start.checked_add(ibase).ok_or(too_large("submeshes"))?;
-            start.checked_add(s.count).ok_or(too_large("submeshes"))?;
-            let material = s.material.checked_add(mbase).ok_or(too_large("submeshes"))?;
+            let start = s.start.checked_add(ibase).ok_or_else(|| too_large("submeshes"))?;
+            start.checked_add(s.count).ok_or_else(|| too_large("submeshes"))?;
+            let material = s.material.checked_add(mbase).ok_or_else(|| too_large("submeshes"))?;
             submeshes.push(SubMesh { name: try_name(&s.name, "submeshes")?, material, start, count: s.count });
         }
         let names = try_names(&other.materials, "materials")?;
