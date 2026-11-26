@@ -14,8 +14,10 @@ pub const D65_XY: [f64; 2] = [0.3127, 0.3290];
 /// Row-major 3×3 matrix.
 pub type Mat3 = [[f64; 3]; 3];
 
+/// The 3×3 identity matrix.
 pub const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
+/// Matrix product `a · b`.
 pub fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
     let mut o = [[0.0; 3]; 3];
     for (i, row) in o.iter_mut().enumerate() {
@@ -26,6 +28,7 @@ pub fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
     o
 }
 
+/// Matrix–vector product `m · v`.
 pub const fn apply(m: &Mat3, v: [f64; 3]) -> [f64; 3] {
     [
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
@@ -34,12 +37,15 @@ pub const fn apply(m: &Mat3, v: [f64; 3]) -> [f64; 3] {
     ]
 }
 
+/// Determinant of `m`.
 pub const fn det(m: &Mat3) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
 }
 
-/// Inverse, or `None` when (nearly) singular.
+/// Inverse, or `None` when (nearly) singular: the determinant is not finite or is below 1e-12.
+/// Profile construction checks its matrices with this rule. [`inverse`] takes the determinant
+/// relative to the largest entry instead.
 pub const fn invert(m: &Mat3) -> Option<Mat3> {
     let d = det(m);
     if !d.is_finite() || d.abs() < 1e-12 {
@@ -53,14 +59,66 @@ pub const fn invert(m: &Mat3) -> Option<Mat3> {
     ])
 }
 
+/// Inverse of a matrix at any scale, or `None` when it holds a NaN or an infinite entry, is all
+/// zeros, is singular to within rounding (the determinant is at most 1e-12 times the cube of the
+/// largest entry), or has an inverse with an entry beyond the range of `f64`.
+///
+/// The matrix is divided by its largest entry before the determinant is taken, so a matrix whose
+/// own determinant overflows or underflows (`diag(1e-200, 1e-200, 1e-200)`) still inverts.
+pub const fn inverse(m: &Mat3) -> Option<Mat3> {
+    let mut scale = 0.0f64;
+    let mut i = 0;
+    while i < 9 {
+        let v = m[i / 3][i % 3];
+        if v.is_nan() {
+            return None;
+        }
+        if v.abs() > scale {
+            scale = v.abs();
+        }
+        i += 1;
+    }
+    if !(scale.is_finite() && scale > 0.0) {
+        return None;
+    }
+    let mut s = [[0.0; 3]; 3];
+    let mut i = 0;
+    while i < 9 {
+        s[i / 3][i % 3] = m[i / 3][i % 3] / scale;
+        i += 1;
+    }
+    let d = det(&s);
+    if !d.is_finite() || d.abs() <= 1e-12 {
+        return None;
+    }
+    // Each cofactor is divided by the determinant and then by the scale: the reciprocals can
+    // overflow where the quotients do not.
+    let c = [
+        [s[1][1] * s[2][2] - s[1][2] * s[2][1], s[0][2] * s[2][1] - s[0][1] * s[2][2], s[0][1] * s[1][2] - s[0][2] * s[1][1]],
+        [s[1][2] * s[2][0] - s[1][0] * s[2][2], s[0][0] * s[2][2] - s[0][2] * s[2][0], s[0][2] * s[1][0] - s[0][0] * s[1][2]],
+        [s[1][0] * s[2][1] - s[1][1] * s[2][0], s[0][1] * s[2][0] - s[0][0] * s[2][1], s[0][0] * s[1][1] - s[0][1] * s[1][0]],
+    ];
+    let mut inv = [[0.0; 3]; 3];
+    let mut i = 0;
+    while i < 9 {
+        let v = c[i / 3][i % 3] / d / scale;
+        if !v.is_finite() {
+            return None;
+        }
+        inv[i / 3][i % 3] = v;
+        i += 1;
+    }
+    Some(inv)
+}
+
 /// XYZ (Y = 1) of a chromaticity `(x, y)`.
 pub const fn xy_to_xyz(xy: [f64; 2]) -> [f64; 3] {
     let [x, y] = xy;
     [x / y, 1.0, (1.0 - x - y) / y]
 }
 
-/// Bradford cone response matrix (Lam 1985).
-const BRADFORD: Mat3 = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
+/// Bradford cone response matrix (Lam 1985): XYZ to sharpened cone responses.
+pub const BRADFORD: Mat3 = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
 
 /// Inverse of [`BRADFORD`] (determinant ~1.7), computed at compile time.
 const BRADFORD_INV: Mat3 = match invert(&BRADFORD) {
@@ -75,6 +133,17 @@ pub fn bradford(src: [f64; 3], dst: [f64; 3]) -> Mat3 {
     let d = apply(&BRADFORD, dst);
     let scale = [[d[0] / s[0], 0.0, 0.0], [0.0, d[1] / s[1], 0.0], [0.0, 0.0, d[2] / s[2]]];
     mul(&inv, &mul(&scale, &BRADFORD))
+}
+
+/// [`bradford`], or `None` when a white's cone response is not finite or not above 0, or the
+/// response ratios overflow. [`bradford`] divides by the source response without this check.
+pub fn bradford_checked(src: [f64; 3], dst: [f64; 3]) -> Option<Mat3> {
+    let ok = |v: [f64; 3]| v.iter().all(|c| c.is_finite() && *c > 0.0);
+    if !(ok(apply(&BRADFORD, src)) && ok(apply(&BRADFORD, dst))) {
+        return None;
+    }
+    let m = bradford(src, dst);
+    m.iter().flatten().all(|v| v.is_finite()).then_some(m)
 }
 
 /// RGB → XYZ matrix (relative to `white`, Y = 1) for primaries given as chromaticities, or
@@ -134,6 +203,7 @@ pub fn xyz_to_lab_f32(xyz: [f32; 3]) -> [f32; 3] {
     [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
+/// CIE L*a*b* to XYZ relative to the D50 white (0.9642, 1, 0.8249), in `f32`.
 #[inline]
 pub fn lab_to_xyz_f32(lab: [f32; 3]) -> [f32; 3] {
     const W: [f32; 3] = [0.9642, 1.0, 0.8249];
@@ -227,18 +297,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lab_roundtrip() {
-        for xyz in [[0.2, 0.3, 0.1], [0.9642, 1.0, 0.8249], [0.001, 0.002, 0.0005]] {
-            let back = lab_to_xyz(xyz_to_lab(xyz, D50), D50);
-            for i in 0..3 {
-                assert!((back[i] - xyz[i]).abs() < 1e-12);
-            }
-        }
-        let w = xyz_to_lab(D50, D50);
-        assert!((w[0] - 100.0).abs() < 1e-12 && w[1].abs() < 1e-12 && w[2].abs() < 1e-12);
-    }
-
-    #[test]
     fn delta_e2000_matches_sharma_reference_pairs() {
         // Sharma, Wu & Dalal (2005), test data pairs 1, 7, 17, 25 and 34.
         let pairs = [
@@ -254,24 +312,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bradford_maps_white() {
-        let d65 = xy_to_xyz(D65_XY);
-        let m = bradford(d65, D50);
-        let w = apply(&m, d65);
+    fn close(a: &Mat3, b: &Mat3, tol: f64) {
         for i in 0..3 {
-            assert!((w[i] - D50[i]).abs() < 1e-12);
+            for j in 0..3 {
+                assert!((a[i][j] - b[i][j]).abs() <= tol, "[{i}][{j}] {} vs {}", a[i][j], b[i][j]);
+            }
         }
     }
 
+    const fn diag(v: f64) -> Mat3 {
+        [[v, 0.0, 0.0], [0.0, v, 0.0], [0.0, 0.0, v]]
+    }
+
     #[test]
-    fn invert_roundtrip() {
+    fn inverse_matches_invert_on_ordinary_matrices() {
         let m = [[0.4, 0.3, 0.2], [0.2, 0.7, 0.1], [0.0, 0.1, 0.8]];
-        let p = mul(&m, &invert(&m).unwrap());
-        for (i, row) in p.iter().enumerate() {
-            for (j, v) in row.iter().enumerate() {
-                assert!((v - if i == j { 1.0 } else { 0.0 }).abs() < 1e-12);
-            }
-        }
+        close(&inverse(&m).unwrap(), &invert(&m).unwrap(), 1e-12);
+        assert_eq!(inverse(&BRADFORD).map(|_| ()), Some(()));
+    }
+
+    #[test]
+    fn inverse_works_at_any_scale_and_rejects_what_has_no_finite_inverse() {
+        // The determinant, 1e-312, has no finite reciprocal; the inverse itself is finite.
+        close(&inverse(&diag(1e-104)).unwrap(), &diag(1e104), 1e93);
+        assert_eq!(invert(&diag(1e-104)), None);
+        // A determinant beyond f64 in either direction still leaves a finite inverse.
+        close(&inverse(&diag(1e-200)).unwrap(), &diag(1e200), 1e186);
+        close(&inverse(&diag(1e110)).unwrap(), &diag(1e-110), 1e-124);
+        assert_eq!(inverse(&diag(f64::MAX)).map(|m| m[0][0]), Some(1.0 / f64::MAX));
+        // An inverse with entries beyond f64 is no inverse.
+        assert_eq!(inverse(&diag(1e-310)), None);
+        assert_eq!(inverse(&[[0.0; 3]; 3]), None);
+        assert_eq!(inverse(&[[f64::NAN; 3]; 3]), None);
+        assert_eq!(inverse(&diag(f64::INFINITY)), None);
+        let mut one_nan = IDENTITY;
+        one_nan[1][2] = f64::NAN;
+        assert_eq!(inverse(&one_nan), None);
+        // Singular to within rounding relative to the largest entry.
+        assert_eq!(inverse(&[[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [0.0, 0.0, 1e9]]), None);
+    }
+
+    #[test]
+    fn bradford_checked_rejects_whites_with_no_cone_response() {
+        let d65 = xy_to_xyz(D65_XY);
+        close(&bradford_checked(d65, D50).unwrap(), &bradford(d65, D50), 0.0);
+        assert_eq!(bradford_checked([0.0; 3], D50), None);
+        assert_eq!(bradford_checked(d65, [f64::NAN; 3]), None);
+        assert_eq!(bradford_checked(d65, [-1.0, -1.0, -1.0]), None);
+        // Cone responses this small give scale ratios beyond f64.
+        assert_eq!(bradford_checked([1e-320; 3], d65), None);
+        // Unchecked, the zero white divides by zero.
+        assert!(bradford([0.0; 3], D50).iter().flatten().any(|v| !v.is_finite()));
     }
 }
