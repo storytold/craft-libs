@@ -612,12 +612,15 @@ struct Captured {
 }
 
 enum ReadFail {
-    Limit,
+    /// The output passed the limit. It holds the reader, so the pipe stays open until the caller
+    /// drops it after the child is killed: a child that ends when a write fails is then still
+    /// running when its process tree is ended.
+    Limit(Box<dyn Send>),
     Io(io::Error),
 }
 
 /// Read `r` to its end, or stop with [`ReadFail::Limit`] once it holds more than `cap` bytes.
-fn read_capped(mut r: impl Read, cap: usize) -> Result<Vec<u8>, ReadFail> {
+fn read_capped(mut r: impl Read + Send + 'static, cap: usize) -> Result<Vec<u8>, ReadFail> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
@@ -628,7 +631,7 @@ fn read_capped(mut r: impl Read, cap: usize) -> Result<Vec<u8>, ReadFail> {
             Err(e) => return Err(ReadFail::Io(e)),
         };
         if buf.len().saturating_add(n) > cap {
-            return Err(ReadFail::Limit);
+            return Err(ReadFail::Limit(Box::new(r)));
         }
         buf.extend_from_slice(&chunk[..n]);
     }
@@ -794,9 +797,12 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
         }
         match received {
             Ok((is_stdout, Ok(bytes))) => *(if is_stdout { &mut stdout } else { &mut stderr }) = Some(bytes),
-            Ok((_, Err(ReadFail::Limit))) => {
+            Ok((_, Err(ReadFail::Limit(pipe)))) => {
                 let limit = OracleError::OutputLimit { path: path.to_path_buf(), limit: limits.max_output_bytes };
-                return abort(&mut child, &rx, pending, seen, limit);
+                // The pipe closes only after `abort` has ended the process tree and killed the child.
+                let failed = abort(&mut child, &rx, pending, seen, limit);
+                drop(pipe);
+                return failed;
             }
             Ok((_, Err(ReadFail::Io(source)))) => return abort(&mut child, &rx, pending, seen, read_error(source)),
             Err(RecvTimeoutError::Timeout) => return abort(&mut child, &rx, pending, seen, timeout),
@@ -1224,8 +1230,35 @@ mod tests {
     #[test]
     fn output_is_read_up_to_the_limit() {
         assert_eq!(read_capped(&[7u8; 100][..], 100).ok(), Some(vec![7u8; 100]));
-        assert!(matches!(read_capped(&[7u8; 101][..], 100), Err(ReadFail::Limit)));
+        assert!(matches!(read_capped(&[7u8; 101][..], 100), Err(ReadFail::Limit(_))));
         assert_eq!(read_capped(&[][..], 0).ok(), Some(Vec::new()));
+    }
+
+    /// A reader that sets its flag when it is dropped, standing in for a pipe that closes.
+    struct Closes(&'static [u8], std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Read for Closes {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.0.read(buf)
+        }
+    }
+
+    impl Drop for Closes {
+        fn drop(&mut self) {
+            self.1.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// The pipe stays open past the output limit until the caller drops the failure, so the child
+    /// is still running when the probe ends its process tree.
+    #[test]
+    fn output_over_the_limit_keeps_the_pipe_open() {
+        let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failed = read_capped(Closes(&[7u8; 101], closed.clone()), 100);
+        assert!(matches!(failed, Err(ReadFail::Limit(_))));
+        assert!(!closed.load(std::sync::atomic::Ordering::SeqCst), "the pipe closed when the limit was passed");
+        drop(failed);
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[cfg(unix)]
@@ -1381,7 +1414,7 @@ mod tests {
         if role == "grandchild" {
             let port: u16 = std::env::var(TREE_READY).unwrap().parse().unwrap();
             drop(std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap());
-            std::fs::File::open(&lock).unwrap().lock().unwrap();
+            std::fs::OpenOptions::new().read(true).write(true).open(&lock).unwrap().lock().unwrap();
             return;
         }
         let ready = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -1448,7 +1481,8 @@ mod tests {
         let lock = std::fs::File::create(&lock_path).unwrap();
         lock.lock().unwrap();
         // The grandchild's wait proves nothing on a file system that does not enforce the lock.
-        let other = std::fs::File::open(&lock_path).unwrap();
+        // Both lock handles are writable: an exclusive lock on an NFS mount needs write access.
+        let other = std::fs::OpenOptions::new().read(true).write(true).open(&lock_path).unwrap();
         assert!(matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)), "a second handle took the held lock");
         drop(other);
         let exe = std::env::current_exe().unwrap();
