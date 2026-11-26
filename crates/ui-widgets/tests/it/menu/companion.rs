@@ -77,6 +77,27 @@ fn a_press_on_the_companion_bar_or_its_popup_does_not_close_the_menu_and_the_bar
 }
 
 #[trial]
+fn a_companion_bars_combo_box_is_compact() {
+    let mut fixture = Fixture::new(|ui| {
+        let target = Button::new("Target").show(ui);
+        let options = [craft_ui::contract::Entry::new("8".to_owned(), "8"), craft_ui::contract::Entry::new("72".to_owned(), "72")];
+        let mut size = "11".to_owned();
+        let mut bar = |ui: &mut Ui| {
+            let _ = craft_ui::pickers::ComboBox::new("Font Size", craft_ui::contract::Bind::bound(&mut size), &options).show(ui);
+        };
+        Menu::context("Target menu", &target).companion(&mut bar).show(ui, |ui, _| {
+            MenuItem::new("Copy").show(ui);
+        });
+    });
+    fixture.room(Vec2::new(800.0, 640.0));
+    fixture.settle();
+    let target = fixture.by_label("Target").expect("the target has a node").center();
+    right_click(&mut fixture, target);
+    let combo = fixture.by_label("Font Size").expect("the combo box in companion bar");
+    assert!(combo.rect.width() < 100.0, "combo box in companion bar is compact: {}", combo.rect.width());
+}
+
+#[trial]
 fn escape_closes_the_topmost_layer_first() {
     let page = Rc::new(Cell::new(0));
     let mut fixture = fixture(&page);

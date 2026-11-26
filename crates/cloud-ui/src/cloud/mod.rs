@@ -178,7 +178,8 @@ pub struct Guest {
 /// exists.
 pub struct CloudFiles {
     backend: Option<Box<dyn CloudBackend>>,
-    events: (Sender<Event>, Receiver<Event>),
+    /// Each answer with the account generation its job was issued in.
+    events: (Sender<backend::Stamped>, Receiver<backend::Stamped>),
     /// The badge and its menu. Signing in is the only way into any of this.
     /// The badge is the only control that offers it. It lives here. An
     /// application declares no field for it.
@@ -215,9 +216,14 @@ pub struct CloudFiles {
     /// stay set after a failed sign-in.
     sign_in_from_menu: bool,
     /// Bumped on sign-out and on a new sign-in. Stamped onto every [`Post`]
-    /// handed out by [`submit`] so a reply to a job issued before the bump is
-    /// dropped rather than applied to the session that replaced it.
+    /// handed out by [`submit`] and onto every answer it queues. [`pump`]
+    /// drops an answer to a job issued before the bump rather than applying
+    /// it to the session that replaced it.
     account_generation: Arc<AtomicU64>,
+    /// Set by [`sign_in`] and cleared by the account answer that follows it.
+    /// While it is set both folders read as loading, so no listing is asked
+    /// for before the service says who is now signed in.
+    relist_after_sign_in: bool,
     /// The document Save As must act on, when it is not the active one.
     ///
     /// Set only by the conflict modal's "Save as a copy", so the copy it asks
@@ -256,6 +262,7 @@ impl CloudFiles {
             guest: None,
             sign_in_from_menu: false,
             account_generation: Arc::new(AtomicU64::new(0)),
+            relist_after_sign_in: false,
             save_as_target: None,
         }
     }
@@ -371,11 +378,17 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     cloud.link = None;
     cloud.status = Some(working);
     // A new session. A job the previous one left outstanding may never
-    // answer, and if it does, that answer is not about this account: see
-    // `Post::send`. Busy goes with it, or a stuck read from before this
+    // answer, and if it does, that answer is not about this account: `pump`
+    // drops it. Busy goes with it, or a stuck read from before this
     // sign-in would leave Save refused for a session that never asked for it.
+    // A folder listing that was outstanding is dropped the same way. Both
+    // folders wait for the account answer, which empties them so the next
+    // frame lists them for the account that is now signed in.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.mine = Folder { loading: true, ..Folder::default() };
+    cloud.shared = Folder { loading: true, ..Folder::default() };
+    cloud.relist_after_sign_in = true;
     submit(app, Job::SignIn);
 }
 
@@ -396,26 +409,32 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.status = Some(signed_out);
     // The session this window had ends here. A job it started may never
     // answer, and a reply that does arrive late must not land on whatever
-    // comes next: see `Post::send`. Busy goes with it, so an open or a save
+    // comes next: `pump` drops it. Busy goes with it, so an open or a save
     // that never heard back does not refuse every one after it forever.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.relist_after_sign_in = false;
     cloud.save_as_target = None;
     submit(app, Job::SignOut);
 }
 
 /// Lists one folder. An empty path is the user's root.
+///
+/// Nothing is sent while a sign-in waits for its answer. A listing sent then
+/// can answer after the account does, and its files may be the previous
+/// account's; the answer empties the folder so it is listed again.
 pub fn browse<A: CloudApp>(app: &mut A, path: &str) {
-    if !available(app) {
+    if !available(app) || app.cloud().relist_after_sign_in {
         return;
     }
     app.cloud_mut().mine.begin(path);
     submit(app, Job::List(path.to_owned()));
 }
 
-/// Lists what other people have shared with this user.
+/// Lists what other people have shared with this user. Like [`browse`], it
+/// sends nothing while a sign-in waits for its answer.
 pub fn load_shared<A: CloudApp>(app: &mut A) {
-    if !available(app) {
+    if !available(app) || app.cloud().relist_after_sign_in {
         return;
     }
     app.cloud_mut().shared.begin("");
@@ -608,6 +627,9 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     if app.cloud().busy.is_some() {
         return Err("a cloud transfer is already running".to_owned());
     }
+    if app.cloud().relist_after_sign_in {
+        return Err("wait for the sign-in to finish".to_owned());
+    }
     // A document that does not exist yet has no content type to read. The
     // name a person just typed is the whole of what was asked for.
     let bytes = app.encode(uid, Destination::new(&name))?;
@@ -636,7 +658,13 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
     while let Ok(event) = app.cloud().events.1.try_recv() {
         arrived.push(event);
     }
-    for event in arrived {
+    for (issued, event) in arrived {
+        // A worker that sent just before a sign-out or a new sign-in passed
+        // `Post::send`'s check, and its answer waited here while the session
+        // changed. It is about the session that is gone.
+        if issued != app.cloud().account_generation.load(Ordering::Relaxed) {
+            continue;
+        }
         apply(app, event);
     }
     poll_link(app);
@@ -649,6 +677,15 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
 
 fn apply<A: CloudApp>(app: &mut A, event: Event) {
     let noun = app.kind().noun;
+    if matches!(event, Event::Account(_)) && app.cloud().relist_after_sign_in {
+        // The sign-in has answered, whether or not it succeeded. Both folders
+        // are emptied and not loading, so `start` and the Open page list them
+        // again for whoever is signed in now.
+        let cloud = app.cloud_mut();
+        cloud.relist_after_sign_in = false;
+        cloud.mine = Folder::default();
+        cloud.shared = Folder::default();
+    }
     match event {
         Event::Account(Ok(account)) => {
             let linked = account.provider_linked;

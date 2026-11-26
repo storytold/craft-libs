@@ -313,7 +313,8 @@ impl TryFrom<crate::dnx::Frame> for VideoFrame {
 
     /// A YCbCr frame, or an RGB one whose stored G, B, R planes are reordered to R, G, B; optional
     /// alpha, 16-bit storage. The colour volume (`CLV`) gives only the matrix; primaries, transfer
-    /// and range are not signalled.
+    /// and range are not signalled. An RGB frame is tagged full range, as an RGB frame that does
+    /// not signal a range is.
     fn try_from(p: crate::dnx::Frame) -> Result<Self, FrameError> {
         use crate::dnx::{ChromaFormat, ColorVolume, Interlace};
         let sub = match p.chroma {
@@ -425,8 +426,8 @@ impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
     }
 }
 
-/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity), the
-/// other colour tags unspecified.
+/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity) and
+/// full range, the other colour tags unspecified.
 #[cfg(feature = "vmd-decode")]
 fn paletted(width: usize, height: usize, indices: &[u8], palette: &[[u8; 3]; 256]) -> Result<VideoFrame, FrameError> {
     let too_large = FrameError::Shape("picture size does not fit in u32");
