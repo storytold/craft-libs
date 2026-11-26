@@ -77,6 +77,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
   TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
   FilmCraft.
+- [`craft-cdr`](crates/cdr/README.md): bounded reader and writer of `.cdr` drawings: versions 1 to
+  27 and `.cmx` files read into one drawing model (pages, layers, groups, shapes, fills and
+  outlines), and version 15 `.cdr` files written.
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
