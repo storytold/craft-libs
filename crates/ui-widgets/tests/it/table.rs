@@ -1,0 +1,507 @@
+//! The table's header row and column widths: a double click on a column's edge fits the column to its widest cell in
+//! view, the header menu hides, shows and resets columns, Ctrl or Cmd with an arrow moves the focused column, and the
+//! metadata table's name column follows its widest name up to a third of the table. A header menu too tall for either
+//! side of its point covers the point instead of scrolling.
+
+use craft_behavior::{ColumnKey, ColumnWidth, keyed};
+use craft_host::target::Os;
+use craft_ui::contract::{Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Role, ShowCollection as _};
+use craft_ui::list::ListRow;
+use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable, Table};
+use craft_ui::testing::{Fixture, Room, pointer, trial};
+use craft_ui::text::TextField;
+use egui::{Key, Modifiers, Pos2, Rect};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+/// A text field in a table cell receives typing and reports its edit to the row's owner.
+#[trial]
+fn a_table_cell_text_field_reports_edits() {
+    use craft_behavior::{EditEvent, Selection};
+    use craft_ui::contract::{ReorderRule, SpaceAction};
+    use craft_ui::text::TextField;
+    let edited = Rc::new(RefCell::new(None::<String>));
+    let seen = edited.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::fill(1.0))];
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns)
+            .selection(Bind::given(Selection::single(0)))
+            .reorder(ReorderRule::new())
+            .deletable(true)
+            .space(SpaceAction::Preview)
+            .show_items(ui, &source, &mut |_, icx| {
+                let seen = seen.clone();
+                ListRow::new("File").cells(icx.cells()).cell_field(SIZE, TextField::new("Page range", Bind::given(String::new())), move |out| {
+                    for event in out.events {
+                        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+                        {
+                            *seen.borrow_mut() = Some(value);
+                        }
+                    }
+                })
+            });
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let field = fixture.by_label("Page range").expect("the cell field");
+    fixture.click(&field).type_text("1").settle();
+    assert_eq!(edited.borrow().as_deref(), Some("1"), "typing reports an edit before Enter");
+}
+
+#[trial]
+fn a_table_cell_can_show_a_field_followed_by_text() {
+    use craft_ui::contract::Bind;
+    use craft_ui::text::TextField;
+    for (direction, column) in [
+        (craft_i18n::Direction::Ltr, NAME),
+        (craft_i18n::Direction::Rtl, NAME),
+        (craft_i18n::Direction::Ltr, SIZE),
+        (craft_i18n::Direction::Rtl, SIZE),
+    ] {
+        let mut fixture = Fixture::new(move |ui| {
+            let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::Content)];
+            let keys = [0_usize];
+            let source = keyed(&keys, |key: &usize| *key);
+            Table::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+                ListRow::new("File").cells(icx.cells()).cell_field_suffix(column.clone(), "2 of 3").cell_field(
+                    column.clone(),
+                    TextField::new("Page range", Bind::given(String::new())).placeholder("Choose pages 1–3"),
+                    |_| {},
+                )
+            });
+        });
+        fixture.in_room(Room::Dialog).direction(direction).settle();
+        let field = fixture.by_label("Page range").expect("the range field");
+        let count = fixture.texts().iter().find(|text| text.text == "2 of 3").expect("the count is painted").rect;
+        assert!(
+            if direction == craft_i18n::Direction::Ltr { field.rect.right() <= count.left() } else { count.right() <= field.rect.left() },
+            "field {:?} and count {count:?} follow reading order",
+            field.rect
+        );
+        assert!(field.rect.width() >= 80.0, "the field keeps room for a range: {:?}", field.rect);
+    }
+}
+
+#[trial]
+fn an_accessibility_focused_table_cell_field_reports_typing() {
+    use craft_behavior::EditEvent;
+    use craft_ui::contract::Bind;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::text::TextField;
+    let edited = Rc::new(RefCell::new(None::<String>));
+    let seen = edited.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::Content)];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+            let seen = seen.clone();
+            ListRow::new("File").cells(icx.cells()).cell_field(
+                SIZE,
+                TextField::new("Page range", Bind::given(String::new())).placeholder("All pages"),
+                move |out| {
+                    for event in out.events {
+                        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+                        {
+                            *seen.borrow_mut() = Some(value);
+                        }
+                    }
+                },
+            )
+        });
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let field = fixture.by_label("Page range").expect("the field");
+    fixture.access(AccessActionKind::Focus, &field).type_text("1").settle();
+    assert_eq!(edited.borrow().as_deref(), Some("1"), "typing after accessibility focus reports the edit");
+}
+
+const NAME: ColumnKey = ColumnKey::new("name");
+const SIZE: ColumnKey = ColumnKey::new("size");
+const DATE: ColumnKey = ColumnKey::new("date");
+const LONG: &str = "A file name far longer than the column it starts in";
+
+/// A table of `names` whose name column starts `controls` control heights wide; the app applies the widths the
+/// table reports. Returns the fixture and the column events seen.
+fn files(names: &'static [&'static str], controls: f32) -> (Fixture, Rc<RefCell<Vec<ColumnEvent>>>) {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let width: Rc<Cell<Option<f32>>> = Rc::new(Cell::new(None));
+    let seen = events.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let name = width.get().map_or(ColumnWidth::Controls(controls), ColumnWidth::Fixed);
+        let columns = vec![ColumnSpec::new(NAME, "Name", name).resizable(), ColumnSpec::new(SIZE, "Size", ColumnWidth::Controls(4.0)).resizable()];
+        let keys: Vec<usize> = (0..names.len()).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = Table::new("Files", columns).show_items(ui, &source, &mut |key, icx| ListRow::new(names[*key]).cells(icx.cells()));
+        for event in out.events {
+            if let CollectionEvent::Column(column) = event {
+                if let ColumnEvent::Resized { key, width: wide } = &column
+                    && *key == NAME
+                {
+                    width.set(Some(*wide));
+                }
+                seen.borrow_mut().push(column);
+            }
+        }
+    });
+    fixture.in_room(Room::Dialog).settle();
+    (fixture, events)
+}
+
+fn elided(fixture: &Fixture, text: &str) -> bool {
+    fixture.texts().iter().find(|painted| painted.text == text).is_some_and(|painted| painted.elided)
+}
+
+/// Double clicks the end edge of the header cell `label`; returns the cell's width before.
+fn fit(fixture: &mut Fixture, label: &str) -> f32 {
+    let cell = fixture.by_label(label).expect("the header cell's node").rect;
+    let edge = Pos2::new(cell.right() - 1.0, cell.center().y);
+    fixture.click_at(edge).click_at(edge).settle();
+    cell.width()
+}
+
+fn resized(events: &RefCell<Vec<ColumnEvent>>) -> Option<f32> {
+    events.borrow().iter().rev().find_map(|event| match event {
+        ColumnEvent::Resized { key, width } if *key == NAME => Some(*width),
+        _ => None,
+    })
+}
+
+/// A double click on a narrow column's edge widens it until its longest name in view shows whole; on a wide column of
+/// short names it narrows it, never below its header label.
+#[trial]
+fn a_double_click_on_a_column_edge_fits_the_column_to_its_widest_cell() {
+    let (mut fixture, events) = files(&["A", LONG], 2.0);
+    assert!(elided(&fixture, LONG), "the long name is cut in the narrow column");
+    let before = fit(&mut fixture, "Name");
+    let after = resized(&events).expect("the fit reports the column's new width");
+    assert!(after > before, "the column grew: {before} -> {after}");
+    assert!(!elided(&fixture, LONG), "the long name shows whole");
+    assert!(events.borrow().iter().all(|event| !matches!(event, ColumnEvent::Sort { .. })), "the double click sorts nothing");
+
+    let (mut fixture, events) = files(&["A", "B"], 12.0);
+    let before = fit(&mut fixture, "Name");
+    let after = resized(&events).expect("the fit reports the column's new width");
+    assert!(after < before, "the column narrowed to its short names: {before} -> {after}");
+    assert!(!elided(&fixture, "Name"), "the header label still shows whole");
+}
+
+/// The left edge of the painted run `text`.
+fn left_of(fixture: &Fixture, text: &str) -> f32 {
+    fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect.left()).expect("the text was painted")
+}
+
+/// A metadata table of one group with `names`, each with the value "v{n}"; returns the fixture and the table's rect.
+fn metadata(names: &'static [&'static str]) -> (Fixture, Rc<Cell<Rect>>) {
+    let rect = Rc::new(Cell::new(Rect::NOTHING));
+    let held = rect.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let rows = names.iter().enumerate().map(|(at, name)| MetadataRow::new(*name, format!("v{at}"))).collect();
+        let groups = vec![MetadataGroup::new("Camera", rows)];
+        held.set(MetadataTable::new("Metadata", &groups).show(ui).response.rect);
+    });
+    fixture.in_room(Room::Dialog).settle();
+    (fixture, rect)
+}
+
+/// The name column is as wide as its widest name while that is narrower than a third of the table, and a third of the
+/// table when a name is wider. An idle table measures its rows once, not every pass.
+#[trial]
+fn the_metadata_name_column_fits_its_widest_name_up_to_a_third_of_the_table() {
+    let (mut short, rect) = metadata(&["ISO", "Exposure"]);
+    let table = rect.get();
+    assert!(!elided(&short, "Exposure"), "a short name shows whole");
+    let short_value = left_of(&short, "v1");
+    let name_end = short.texts().iter().find(|painted| painted.text == "Exposure").expect("the name was painted").rect.right();
+    let padding = short_value - name_end;
+    assert!(short_value - table.left() < table.width() / 3.0, "short names leave the values more than two thirds");
+    short.idle(2);
+    assert!(craft_ui::runtime::measure::widest_runs(short.ctx()).is_empty(), "an idle table keeps its rows' measure");
+
+    let (long, _) = metadata(&["ISO", LONG]);
+    assert!(elided(&long, LONG), "a name wider than a third of the table is cut");
+    let long_value = left_of(&long, "v1");
+    assert!(long_value > short_value, "a longer name widens the name column");
+    assert!(long_value - table.left() <= table.width() / 3.0 + padding, "the name column stops at a third of the table");
+}
+
+/// The search field sits at the top of the metadata table, inset at its sides only, and the first group's row starts
+/// where the field ends: no gap above the first group. A field's wrapped value keeps its row a text row high.
+#[trial]
+fn the_metadata_filter_sits_in_the_header_with_no_gap_above_the_first_group() {
+    let rect = Rc::new(Cell::new(Rect::NOTHING));
+    let held = rect.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut filter = String::new();
+        let groups = vec![MetadataGroup::new("Camera", vec![MetadataRow::new("Make", "FUJIFILM")])];
+        held.set(MetadataTable::new("Metadata", &groups).filter(Bind::bound(&mut filter)).show(ui).response.rect);
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let whole = rect.get();
+    let field = fixture.by_label("Filter fields").expect("the search field's node").rect;
+    let group = fixture.by_label("Camera").expect("the group's row").rect;
+    assert!((field.top() - whole.top()).abs() < 0.5, "nothing above the field: {field:?} in {whole:?}");
+    assert!(field.left() > whole.left(), "the field is inset at its start: {field:?} in {whole:?}");
+    assert!((group.top() - field.bottom()).abs() < 0.5, "the first group starts where the field ends: {group:?} under {field:?}");
+    let make = fixture.by_label("Make").expect("the field's row").rect;
+    assert!((make.height() - group.height()).abs() < 0.5, "a row with a one-line wrapped value is as tall as a text row: {make:?}, {group:?}");
+}
+
+/// A table sorted by its hideable Size column, with movable Name and Date columns; the app drops its sort on
+/// `Unsorted`. Returns the fixture and the column events seen.
+fn sorted_files() -> (Fixture, Rc<RefCell<Vec<ColumnEvent>>>) {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sort = Rc::new(RefCell::new(Some(ColumnSort::ascending(SIZE))));
+    let seen = events.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(6.0)).movable(),
+            ColumnSpec::new(SIZE, "Size", ColumnWidth::Controls(4.0)).sortable().hideable(),
+            ColumnSpec::new(DATE, "Date", ColumnWidth::Controls(4.0)).movable(),
+        ];
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let shown = sort.borrow().clone();
+        let out =
+            Table::new("Files", columns).sort(shown).show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+        for event in out.events {
+            if let CollectionEvent::Column(column) = event {
+                if column == ColumnEvent::Unsorted {
+                    *sort.borrow_mut() = None;
+                }
+                seen.borrow_mut().push(column);
+            }
+        }
+    });
+    fixture.in_room(Room::Dialog).settle();
+    (fixture, events)
+}
+
+fn headers(fixture: &Fixture) -> Vec<String> {
+    fixture.by_role(Role::COLUMN_HEADER).iter().filter_map(|target| fixture.tree().name_of(target.node).map(str::to_owned)).collect()
+}
+
+fn secondary_click(fixture: &mut Fixture, at: Pos2) {
+    fixture.frame(vec![pointer::moved(at), pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]).settle();
+}
+
+/// The menu row named `label` of `role`.
+fn menu_row(fixture: &Fixture, role: Role, label: &str) -> Option<craft_ui::testing::Target> {
+    fixture.by_role(role).into_iter().find(|target| fixture.tree().name_of(target.node) == Some(label))
+}
+
+/// A secondary click on a header opens the header menu; unchecking a hideable column hides it, reports it and, as it
+/// was the sorted one, reports the rows unsorted, and the menu stays open; Reset Columns brings it back. A secondary
+/// click on the empty header after the last column opens the menu without the column commands.
+#[trial]
+fn the_header_menu_hides_shows_and_resets_columns() {
+    let (mut fixture, events) = sorted_files();
+    assert_eq!(headers(&fixture), ["Name", "Size", "Date"]);
+    let name = fixture.by_label("Name").expect("the header cell").center();
+    secondary_click(&mut fixture, name);
+    let size = menu_row(&fixture, Role::MENU_ITEM_CHECK_BOX, "Size").expect("the menu lists the hideable column");
+    assert!(menu_row(&fixture, Role::MENU_ITEM_CHECK_BOX, "Name").is_none(), "a column that can't be hidden has no check");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_some(), "the menu of a header lists the column commands");
+    fixture.click(&size).settle();
+    assert_eq!(headers(&fixture), ["Name", "Date"], "the hidden column leaves the header");
+    assert!(events.borrow().contains(&ColumnEvent::Shown { key: SIZE, shown: false }), "the hide is reported");
+    assert!(events.borrow().contains(&ColumnEvent::Unsorted), "hiding the sorted column drops the sort");
+    let reset = menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").expect("the menu stays open after a check");
+    fixture.click(&reset).settle();
+    assert_eq!(headers(&fixture), ["Name", "Size", "Date"], "Reset Columns shows every column again");
+    assert!(events.borrow().contains(&ColumnEvent::Reset), "the reset is reported");
+
+    let date = fixture.by_label("Date").expect("the header cell").rect;
+    let table = fixture.shown();
+    let room = Pos2::new((date.right() + table.right()) / 2.0, date.center().y);
+    secondary_click(&mut fixture, room);
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").is_some(), "the empty header opens the header menu");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_none(), "with no column there are no column commands");
+}
+
+/// The hideable columns of a table whose header menu is taller than the room on either side of the point it opens at.
+const EXTRA: [&str; 14] =
+    ["Kind", "Owner", "Group", "Created", "Modified", "Opened", "Tags", "Rating", "Label", "Path", "Format", "Pixels", "Profile", "Author"];
+
+/// A header menu opened at a point mid-window, too tall for the room above or below the point but not for the window,
+/// covers the point and shows every row.
+#[trial]
+fn a_header_menu_too_tall_for_either_side_of_its_point_covers_it_and_shows_every_row() {
+    let mut fixture = Fixture::new(|ui| {
+        ui.add_space(270.0);
+        let mut columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(4.0)).movable()];
+        columns.extend(EXTRA.iter().map(|name| ColumnSpec::new(ColumnKey::new(name), *name, ColumnWidth::Controls(2.0)).hideable()));
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns).show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+    });
+    fixture.settle();
+    let at = fixture.by_label("Name").expect("the header cell").center();
+    secondary_click(&mut fixture, at);
+    let room = fixture.ctx().content_rect();
+    let first = menu_row(&fixture, Role::MENU_ITEM_CHECK_BOX, EXTRA[0]).expect("the first column's row").rect;
+    let last = menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").expect("the last row").rect;
+    let tall = last.bottom() - first.top();
+    assert!(tall > at.y - room.top() && tall > room.bottom() - at.y, "the rows ({tall}) fit on neither side of the point {at:?}");
+    let menus = fixture.by_role(Role::MENU);
+    assert!(!menus.is_empty(), "the header menu is open");
+    for menu in menus {
+        assert!(room.contains_rect(menu.rect), "the menu {:?} stays inside the window {room:?}", menu.rect);
+        assert!(menu.rect.contains_rect(first) && menu.rect.contains_rect(last), "every row shows: {first:?} to {last:?} in {:?}", menu.rect);
+    }
+}
+
+/// Ctrl or Cmd with Right on a focused movable header moves its column one place on; Right alone moves the focus.
+/// macOS makes Cmd+Right a move to the line's end, which the header reads the same.
+#[trial]
+fn ctrl_or_cmd_with_an_arrow_moves_the_focused_column() {
+    for os in [Os::Linux, Os::Mac] {
+        let (mut fixture, events) = sorted_files();
+        fixture.os(os);
+        // Tab enters the rows; Shift+Tab goes back to the header row, on its first column.
+        fixture.key(Key::Tab, Modifiers::NONE).key(Key::Tab, Modifiers::SHIFT).settle();
+        fixture.key(Key::ArrowRight, Modifiers::COMMAND).settle();
+        let moves: Vec<ColumnEvent> = events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Moved { .. })).cloned().collect();
+        assert_eq!(moves.len(), 1, "{os:?}: one move: {moves:?}");
+        assert!(matches!(&moves[0], ColumnEvent::Moved { key, to, .. } if *key == NAME && *to == 1));
+        assert_eq!(headers(&fixture), ["Size", "Name", "Date"]);
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+        assert_eq!(events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Moved { .. })).count(), 1, "a plain arrow moves no column");
+    }
+}
+
+/// A header cell hosts a text field that edits, its press does not sort and the header label stays its column's name;
+/// a column built with `removable` shows a control that reports its column once when pressed, and none when disabled.
+#[trial]
+fn a_header_field_edits_and_a_header_remove_reports_its_column() {
+    let events = Rc::new(RefCell::new(Vec::<ColumnEvent>::new()));
+    let edits = Rc::new(Cell::new(0_u32));
+    let text = Rc::new(RefCell::new(String::new()));
+    let (seen, counted, held) = (events.clone(), edits.clone(), text.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(10.0)).sortable().removable("Remove Name", true),
+            ColumnSpec::new(SIZE, "Size", ColumnWidth::Controls(6.0)).removable("Remove Size", false),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let mut draft = held.borrow().clone();
+        let out = Table::new("Files", columns)
+            .header_field(NAME, TextField::new("Name title", Bind::bound(&mut draft)), |_| counted.set(counted.get() + 1))
+            .show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+        *held.borrow_mut() = draft;
+        for event in out.events {
+            if let CollectionEvent::Column(column) = event {
+                seen.borrow_mut().push(column);
+            }
+        }
+    });
+    fixture.in_room(Room::Dialog).settle();
+    assert!(fixture.by_label("Name").is_some(), "the column header keeps its name");
+
+    // Tab enters the rows; Shift+Tab goes back to the header's roving group.
+    fixture.key(Key::Tab, Modifiers::NONE).key(Key::Tab, Modifiers::SHIFT).settle();
+    let first = fixture.focused_stop().expect("Shift+Tab reaches the header's group");
+    // The hosted field joins the header's roving group beside the header parts, so arrows reach both kinds of stop.
+    let mut stops = vec![first];
+    for _ in 0..4 {
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+        if let Some(stop) = fixture.focused_stop().filter(|stop| !stops.contains(stop)) {
+            stops.push(stop);
+        }
+    }
+    assert!(stops.iter().any(|(_, part)| part.is_some()), "the header's group has a header part: {stops:?}");
+    assert!(stops.iter().any(|(_, part)| part.is_none()), "the hosted field is a stop of the header's group: {stops:?}");
+
+    let field = fixture.by_label("Name title").expect("the hosted field's node");
+    fixture.click(&field).type_text("x").settle();
+    assert_eq!(text.borrow().as_str(), "x", "typing in the header cell edits the field");
+    assert!(edits.get() > 0, "the field's output reaches the closure");
+    assert!(events.borrow().iter().all(|event| !matches!(event, ColumnEvent::Sort { .. })), "a press on the field does not sort");
+
+    let remove = fixture.by_label("Remove Size").expect("the disabled remove control still shows");
+    fixture.click(&remove).settle();
+    assert!(events.borrow().iter().all(|event| !matches!(event, ColumnEvent::Removed { .. })), "a disabled control reports nothing");
+    let remove = fixture.by_label("Remove Name").expect("the remove control's node");
+    fixture.click(&remove).settle();
+    let removed: Vec<ColumnEvent> = events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Removed { .. })).cloned().collect();
+    assert_eq!(removed, [ColumnEvent::Removed { key: NAME }], "one press reports its column once");
+}
+
+/// A table wider than its room: a fill name column and four numeric columns.
+fn wide_table() -> Fixture {
+    let mut fixture = Fixture::new(|ui| {
+        let numeric = |key: &'static str, header: &'static str| ColumnSpec::new(ColumnKey::new(key), header, ColumnWidth::Controls(3.0)).numeric();
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)),
+            numeric("pages", "Pages"),
+            numeric("size", "Size"),
+            numeric("age", "Age"),
+            numeric("count", "Count"),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::<usize>::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+            ListRow::new(LONG).cells(icx.cells()).cell(ColumnKey::new("pages"), "12").cell(ColumnKey::new("count"), "7")
+        });
+    });
+    fixture.room(egui::Vec2::new(300.0, 200.0)).settle();
+    fixture
+}
+
+fn painted(fixture: &Fixture, text: &str) -> Rect {
+    fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect).expect("the text was painted")
+}
+
+#[trial]
+fn columns_wider_than_the_table_keep_their_least_width_scroll_sideways_with_the_header_and_keep_their_text_in_their_cells() {
+    let mut fixture = wide_table();
+    let header = |fixture: &Fixture, label: &str| fixture.by_label(label).expect("the header cell's node").rect;
+    let table = fixture.by_role(Role::TABLE).first().expect("the table's node").rect;
+    let (name, pages, count) = (header(&fixture, "Name"), header(&fixture, "Pages"), header(&fixture, "Count"));
+    assert!(name.width() >= pages.width() * 2.0 / 3.0 - 0.5, "the fill column keeps the least column width: {name:?} beside {pages:?}");
+    assert!(count.right() > table.right(), "the columns run past the table: {count:?} in {table:?}");
+    let label = fixture.texts().iter().find(|painted| painted.text == LONG).cloned().expect("the label was painted");
+    assert!(label.elided && label.rect.right() <= name.right() + 0.5, "the label stays in its column: {:?} in {name:?}", label.rect);
+    let figure = painted(&fixture, "12");
+    assert!(pages.right() - figure.right() < figure.left() - pages.left(), "a numeric cell ends at its column's end: {figure:?} in {pages:?}");
+    let heading = painted(&fixture, "Pages");
+    assert!(pages.right() - heading.right() < heading.left() - pages.left(), "a numeric header ends at its column's end: {heading:?} in {pages:?}");
+    let before = painted(&fixture, "7");
+    fixture.frame(vec![pointer::moved(table.center())]);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::new(-40.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+    fixture.settle();
+    let (moved_cell, moved_text) = (count.left() - header(&fixture, "Count").left(), before.left() - painted(&fixture, "7").left());
+    assert!(moved_cell > 1.0, "the wheel scrolls the columns sideways: {moved_cell}");
+    assert!((moved_cell - moved_text).abs() < 0.5, "the header scrolls with the rows: header {moved_cell}, row {moved_text}");
+}
+
+/// Production's header menu lists Reset Columns and no column commands: a table can ask for that menu.
+#[trial]
+fn a_plain_header_menu_lists_no_column_commands() {
+    let mut fixture = Fixture::new(|ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(6.0)).movable(),
+            ColumnSpec::new(DATE, "Date", ColumnWidth::Controls(4.0)).movable(),
+        ];
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns)
+            .plain_header_menu(true)
+            .show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let name = fixture.by_label("Name").expect("the header cell").center();
+    secondary_click(&mut fixture, name);
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").is_some(), "the menu opens with Reset Columns");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_none(), "no column commands");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Resize Column…").is_none(), "no Resize Column");
+}

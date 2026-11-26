@@ -1,7 +1,7 @@
 //! Authenticated JSON-lines request framing and dispatch for local control services.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use subtle::ConstantTimeEq;
 
 /// Whether a session token has the control protocol's 64 hexadecimal character form.
@@ -72,12 +72,14 @@ pub enum ReadFailure {
     Rejected(String),
 }
 
-/// Read one `\n`-terminated line of at most `max` bytes into `buf` (newline stripped).
+/// Read one `\n`-terminated line of at most `max` bytes into `buf` (newline stripped, and a `\r`
+/// before it). The `\r\n` or `\n` does not count toward `max`.
 /// `Ok(false)` at end of stream; `Err` when the line is too long or the read fails.
 pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Result<bool, ReadFailure> {
     buf.clear();
-    // `take` bounds the bytes buffered for one line: a peer can't make us allocate more than `max`.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    // `take` bounds the bytes buffered for one line: a peer can't make us allocate more than
+    // `max + 2`, the line and its `\r\n`.
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(2);
     let n = reader.take(limit).read_until(b'\n', buf).map_err(|e| match e.kind() {
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => ReadFailure::Timeout,
         _ => ReadFailure::Rejected(e.to_string()),
@@ -90,12 +92,11 @@ pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usiz
         if buf.last() == Some(&b'\r') {
             buf.pop();
         }
-        return Ok(true);
     }
     if buf.len() > max {
         return Err(ReadFailure::Rejected(format!("request line longer than {max} bytes; closing the connection")));
     }
-    // Last line without a newline, then end of stream.
+    // A complete line, or the last line without a newline, then end of stream.
     Ok(true)
 }
 
@@ -120,16 +121,28 @@ pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line
                     if let Some(o) = r.as_object_mut() {
                         o.insert("id".into(), id);
                     }
-                    if writeln!(out, "{r}").and_then(|()| out.flush()).is_err() {
+                    if write_line(&mut out, &r).is_err() {
                         return;
                     }
                     continue;
                 }
             },
         };
-        let _ = writeln!(out, "{}", json!({"ok": false, "error": reject})).and_then(|()| out.flush());
+        let _ = write_line(&mut out, &json!({"ok": false, "error": reject}));
         return;
     }
+}
+
+/// Write `reply` and its newline to `out` through a buffer, then flush. `writeln!` with a JSON
+/// value writes each string, number and separator separately, which is one system call apiece on
+/// an unbuffered socket. The buffer holds at most `REPLY_BUFFER` bytes, so a large reply is not
+/// copied whole before it is sent.
+fn write_line(out: &mut impl Write, reply: &Value) -> std::io::Result<()> {
+    const REPLY_BUFFER: usize = 64 * 1024;
+    let mut buffered = BufWriter::with_capacity(REPLY_BUFFER, out);
+    serde_json::to_writer(&mut buffered, reply).map_err(std::io::Error::other)?;
+    buffered.write_all(b"\n")?;
+    buffered.flush()
 }
 
 #[cfg(test)]
@@ -193,6 +206,36 @@ mod tests {
         assert_eq!(calls, 1);
     }
     #[test]
+    fn replies_reach_the_writer_in_few_bounded_writes() {
+        struct Writes(Vec<Vec<u8>>);
+        impl Write for Writes {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.push(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let input = b"{\"id\":1,\"method\":\"tree\",\"token\":\"s\"}\n{\"id\":2,\"method\":\"tree\"}\n";
+        let mut writes = Writes(Vec::new());
+        serve_lines(&input[..], &mut writes, "s", 1024, |_, _| Some(json!({"ok": true, "result": {"names": ["a", "b", "c"], "sizes": [1, 2, 3]}})));
+        assert_eq!(writes.0.len(), 2, "one write for the reply and one for the rejection");
+        for line in &writes.0 {
+            assert_eq!(line.last(), Some(&b'\n'));
+            serde_json::from_slice::<Value>(line).unwrap();
+        }
+        // A large reply goes out in a few buffer-sized writes, never as one whole copy.
+        let items: Vec<u32> = (0..100_000).collect();
+        let mut writes = Writes(Vec::new());
+        serve_lines(&b"{\"method\":\"tree\",\"token\":\"s\"}\n"[..], &mut writes, "s", 1024, |_, _| Some(json!({"ok": true, "result": items})));
+        let total: usize = writes.0.iter().map(Vec::len).sum();
+        assert!(writes.0.len() < items.len() / 100);
+        assert!(writes.0.iter().all(|w| w.len() < total));
+        let reply: Value = serde_json::from_slice(&writes.0.concat()).unwrap();
+        assert_eq!(reply["result"].as_array().map(Vec::len), Some(items.len()));
+    }
+    #[test]
     fn client_request_and_reply_keep_optional_fields() {
         let line = request_line(7, None, "status", &json!({"a": 1}));
         assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), json!({"id": 7, "token": null, "method": "status", "params": {"a": 1}}));
@@ -226,6 +269,11 @@ mod tests {
         assert_eq!(read_bounded_line(&mut &b"abc"[..], &mut buf, 3), Ok(true));
         assert_eq!(buf, b"abc");
         assert!(matches!(read_bounded_line(&mut &b"abcd"[..], &mut buf, 3), Err(ReadFailure::Rejected(_))));
+        // The cap counts the line without its `\r\n` or `\n`.
+        assert_eq!(read_bounded_line(&mut &b"abc\r\n"[..], &mut buf, 3), Ok(true));
+        assert_eq!(buf, b"abc");
+        assert!(matches!(read_bounded_line(&mut &b"abcd\n"[..], &mut buf, 3), Err(ReadFailure::Rejected(_))));
+        assert!(matches!(read_bounded_line(&mut &b"abcd\r\n"[..], &mut buf, 3), Err(ReadFailure::Rejected(_))));
         let mut out = Vec::new();
         serve_lines(&b"{broken}\n"[..], &mut out, "secret", 1024, |_, _| panic!("must not dispatch"));
         let reply: Value = serde_json::from_slice(&out).unwrap();
