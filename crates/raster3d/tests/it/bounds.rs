@@ -924,9 +924,10 @@ fn a_depth_distance_that_overflows_is_clipped_in_f64() {
 #[test]
 fn a_discarded_pixel_gives_way_only_to_fragments_inside_the_depth_range() {
     // A white triangle on the near plane (ndc z 1) over a blue background. At pixel (6, 5) the
-    // white triangle's interpolated depth rounds to 1 + 2^-23, outside the depth range, and the
-    // pixel shows the background. A masked, fully transparent triangle at z 0.9 is visible there
-    // and discarded, and the pixel still shows the background.
+    // weights sum to just over 1 in f32, and the interpolated depth stays at 1 instead of rounding
+    // to 1 + 2^-23, so the white triangle covers the pixel. A masked, fully transparent triangle
+    // at z 0.9 lies behind it and is hidden. When the near-plane triangle is itself masked and
+    // transparent, the pixel shows the background, and the hole at z 0.9 is discarded too.
     let mut plain = clip_space_triangle([[0.795, -0.932, 1.0], [0.436, 0.251, 1.0], [-0.323, 0.723, 1.0]]);
     let blue = Material { base: [0.0, 0.0, 1.0, 1.0], unlit: true, double_sided: true, ..Material::default() };
     let hole = Material { alpha_mode: 1, base: [1.0, 1.0, 1.0, 0.0], double_sided: true, ..Material::default() };
@@ -949,8 +950,29 @@ fn a_discarded_pixel_gives_way_only_to_fragments_inside_the_depth_range() {
         s.opaque_count = s.indices.len() as u32;
     }
     let (a, b) = (try_render(&plain, &Limits::default()).unwrap(), try_render(&covered, &Limits::default()).unwrap());
-    assert_eq!(a.color[5 * 8 + 6], [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(a.color[5 * 8 + 6], WHITE);
     assert_eq!(bits4(&b.color), bits4(&a.color));
+    let mut gone = covered.clone();
+    gone.materials[0] = gone.materials[2];
+    let g = try_render(&gone, &Limits::default()).unwrap();
+    assert_eq!(g.color[5 * 8 + 6], [0.0, 0.0, 1.0, 1.0]);
+}
+
+#[test]
+fn black_rough_metal_under_a_bright_environment_never_goes_negative() {
+    let mut s = lit_scene((16, 12), 1, false);
+    s.lights.clear();
+    s.ambient = [0.0; 3];
+    s.env.as_mut().unwrap().intensity = 4.0;
+    s.env.as_mut().unwrap().shadow = -1;
+    for m in &mut s.materials {
+        m.base = [0.0, 0.0, 0.0, 1.0];
+        m.metallic = 1.0;
+        m.roughness = 1.0;
+        (m.tex_base, m.tex_mr) = (-1, -1);
+    }
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert!(t.color.iter().all(|p| p[..3].iter().all(|&c| c >= 0.0)), "{:?}", t.color.iter().find(|p| p[..3].iter().any(|&c| c < 0.0)));
 }
 
 #[test]

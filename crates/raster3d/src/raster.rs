@@ -315,7 +315,9 @@ fn cover(t: &STri, px: f64, py: f64) -> Option<(f32, [f32; 3])> {
     let (l0, l1, l2) = ((e0 / area) as f32, (e1 / area) as f32, (e2 / area) as f32);
     // Back to the stored corner order.
     let l = if swap { [l0, l2, l1] } else { [l0, l1, l2] };
-    let z = l[0] * t.z[0] + l[1] * t.z[1] + l[2] * t.z[2];
+    // The weights sum to 1 only up to rounding, so keep the depth between the corners' depths.
+    let (lo, hi) = (t.z[0].min(t.z[1]).min(t.z[2]), t.z[0].max(t.z[1]).max(t.z[2]));
+    let z = (l[0] * t.z[0] + l[1] * t.z[1] + l[2] * t.z[2]).clamp(lo, hi);
     let q = [l[0] * t.inv_w[0], l[1] * t.inv_w[1], l[2] * t.inv_w[2]];
     let sum = q[0] + q[1] + q[2];
     if sum <= 0.0 {

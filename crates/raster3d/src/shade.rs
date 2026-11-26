@@ -684,7 +684,8 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
         // The environment light's shadow darkens its own diffuse and specular.
         let sh = if m.receives_shadows { env_shadow(s, e, f.pos, ng, n) } else { 1.0 };
         for c in 0..3 {
-            let fs = f0[c] * a + b;
+            // The fit's bias is slightly negative at high roughness; a reflectance cannot be.
+            let fs = (f0[c] * a + b).max(0.0);
             out[c] += (irr[c] * rgb[c] * (1.0 - fs) * (1.0 - metallic) * m.diffuse_k + spec[c] * fs) * ao * sh;
         }
     }
