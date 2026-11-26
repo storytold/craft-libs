@@ -179,7 +179,7 @@ impl OrientSteps {
         if self.oh == 0 { 1.0 } else { self.done as f32 / self.oh as f32 }
     }
 
-    /// Writes bands of [`BAND`] output rows, at least one, then goes on while `more()` returns
+    /// Writes bands of `BAND` output rows, at least one, then goes on while `more()` returns
     /// true; `Some` with the upright image once the last band is written.
     pub fn step(&mut self, more: &mut dyn FnMut() -> bool) -> Result<Option<Image>, CodecError> {
         if !(2..=8).contains(&self.o) {

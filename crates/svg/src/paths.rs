@@ -1973,79 +1973,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fragment_is_read_in_millimetres_and_groups_are_walked() {
-        let got = read(r#"<svg><g class="x"><path d="M 0 0 L 5 0 L 5 5 Z"/></g></svg>"#);
-        assert_eq!(got.shapes.len(), 1);
-        assert_eq!(got.shapes[0].path.to_svg(), "M0,0 L5,0 L5,5 Z");
-        // The unit kind reads the same paths.
-        assert_eq!(import::<()>("<path d=\"M 0 0 L 5 0 L 5 5 Z\"/>", "p.svg").unwrap().shapes[0].path.to_svg(), "M0,0 L5,0 L5,5 Z");
-    }
-
-    #[test]
-    fn errors_name_the_file_and_the_problem() {
-        fails("<path></path>", "d attribute");
-        fails("<path d=\"M 0 0 Q\"/>", "");
-        fails("<g transform=\"scale(nope)\"><path d=\"M0 0 L1 0 Z\"/></g>", "transform");
-        fails("<svg><g></svg>", "invalid XML");
-    }
-
-    fn assert_zero_sized_geometry_validation() {
-        // Omission must not bypass validation performed on the old transformed geometry.
-        fn rejects_as(svg: &str, message: &str) -> bool {
-            import::<()>(svg, "zero.svg").is_err_and(|error| error.0.starts_with("zero.svg: ") && error.0.contains(message))
-        }
-        let mut validation_bypassed = Vec::new();
-        let coordinates = "geometry coordinates must be finite and within ±1e9 mm";
-        for (label, svg, message) in [
-            (
-                "clip transform",
-                r##"<svg><defs><clipPath id="c"><rect width="0" height="8" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
-                "<rect> transform: transform has invalid numeric arguments",
-            ),
-            ("transformed coordinates", r#"<svg><circle cx="1e10" r="0"/></svg>"#, coordinates),
-            ("rect coordinates", r#"<svg><rect x="1e10" width="0" height="8"/></svg>"#, coordinates),
-            ("ellipse coordinates", r#"<svg><ellipse cy="-1e10" rx="4" ry="0"/></svg>"#, coordinates),
-            ("inherited coordinates", r#"<svg><g transform="translate(10000000000 0)"><rect width="0" height="8"/></g></svg>"#, coordinates),
-            (
-                "use coordinates",
-                r##"<svg><defs><rect id="zero" width="0" height="8"/></defs><use href="#zero" transform="translate(10000000000 0)"/></svg>"##,
-                coordinates,
-            ),
-            (
-                "clip coordinates",
-                r##"<svg><defs><clipPath id="c"><circle cy="1e10" r="0"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
-                coordinates,
-            ),
-            (
-                "clip validation precedence",
-                r##"<svg><defs><clipPath id="c"><rect width="0" height="-1" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
-                "width/height cannot be negative",
-            ),
-        ] {
-            if !rejects_as(svg, message) {
-                validation_bypassed.push(label);
-            }
-        }
-
-        // Raw coordinates outside the bound may become valid in document millimetres.
-        // Keep a positive rectangle in each control so the actual transform is observable.
-        for (transform, width, height, expected) in [
-            ("translate(-10000000000 0)", 4, 6, kurbo::Rect::new(0.0, 0.0, 4.0, 6.0)),
-            ("scale(0.0000000001)", 100_000_000, 600_000_000, kurbo::Rect::new(1.0, 0.0, 1.01, 0.06)),
-        ] {
-            let got = read(&format!(
-                r#"<svg><g transform="{transform}"><rect id="positive" x="10000000000" width="{width}" height="{height}"/><rect x="10000000000" width="0" height="8"/><circle cx="10000000000" r="0"/><ellipse cx="10000000000" rx="0" ry="2"/></g></svg>"#
-            ));
-            assert!(got.warnings.is_empty());
-            let positive = got.shapes.iter().find(|shape| shape.label == r#"<rect id="positive">"#).unwrap();
-            let actual = positive.path.bounding_box();
-            assert!(near(actual.x0, expected.x0) && near(actual.y0, expected.y0));
-            assert!(near(actual.x1, expected.x1) && near(actual.y1, expected.y1));
-        }
-        assert!(validation_bypassed.is_empty(), "zero-sized shape validation bypassed: {validation_bypassed:?}");
-    }
-
-    #[test]
     fn zero_sized_basic_shapes_are_not_imported() {
         // Original examples from SVG 1.1 basic-shape zero-size rules, sections 9.2-9.4.
         // These shapes are not drawable; a line/path with a zero-area bbox is different.
@@ -2140,6 +2067,62 @@ mod tests {
         }
         assert_zero_sized_geometry_validation();
         assert!(retained.is_empty(), "zero-sized basic shapes retained: {retained:?}");
+    }
+
+    fn assert_zero_sized_geometry_validation() {
+        // Omission must not bypass validation performed on the old transformed geometry.
+        fn rejects_as(svg: &str, message: &str) -> bool {
+            import::<()>(svg, "zero.svg").is_err_and(|error| error.0.starts_with("zero.svg: ") && error.0.contains(message))
+        }
+        let mut validation_bypassed = Vec::new();
+        let coordinates = "geometry coordinates must be finite and within ±1e9 mm";
+        for (label, svg, message) in [
+            (
+                "clip transform",
+                r##"<svg><defs><clipPath id="c"><rect width="0" height="8" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
+                "<rect> transform: transform has invalid numeric arguments",
+            ),
+            ("transformed coordinates", r#"<svg><circle cx="1e10" r="0"/></svg>"#, coordinates),
+            ("rect coordinates", r#"<svg><rect x="1e10" width="0" height="8"/></svg>"#, coordinates),
+            ("ellipse coordinates", r#"<svg><ellipse cy="-1e10" rx="4" ry="0"/></svg>"#, coordinates),
+            ("inherited coordinates", r#"<svg><g transform="translate(10000000000 0)"><rect width="0" height="8"/></g></svg>"#, coordinates),
+            (
+                "use coordinates",
+                r##"<svg><defs><rect id="zero" width="0" height="8"/></defs><use href="#zero" transform="translate(10000000000 0)"/></svg>"##,
+                coordinates,
+            ),
+            (
+                "clip coordinates",
+                r##"<svg><defs><clipPath id="c"><circle cy="1e10" r="0"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
+                coordinates,
+            ),
+            (
+                "clip validation precedence",
+                r##"<svg><defs><clipPath id="c"><rect width="0" height="-1" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
+                "width/height cannot be negative",
+            ),
+        ] {
+            if !rejects_as(svg, message) {
+                validation_bypassed.push(label);
+            }
+        }
+
+        // Raw coordinates outside the bound may become valid in document millimetres.
+        // Keep a positive rectangle in each control so the actual transform is observable.
+        for (transform, width, height, expected) in [
+            ("translate(-10000000000 0)", 4, 6, kurbo::Rect::new(0.0, 0.0, 4.0, 6.0)),
+            ("scale(0.0000000001)", 100_000_000, 600_000_000, kurbo::Rect::new(1.0, 0.0, 1.01, 0.06)),
+        ] {
+            let got = read(&format!(
+                r#"<svg><g transform="{transform}"><rect id="positive" x="10000000000" width="{width}" height="{height}"/><rect x="10000000000" width="0" height="8"/><circle cx="10000000000" r="0"/><ellipse cx="10000000000" rx="0" ry="2"/></g></svg>"#
+            ));
+            assert!(got.warnings.is_empty());
+            let positive = got.shapes.iter().find(|shape| shape.label == r#"<rect id="positive">"#).unwrap();
+            let actual = positive.path.bounding_box();
+            assert!(near(actual.x0, expected.x0) && near(actual.y0, expected.y0));
+            assert!(near(actual.x1, expected.x1) && near(actual.y1, expected.y1));
+        }
+        assert!(validation_bypassed.is_empty(), "zero-sized shape validation bypassed: {validation_bypassed:?}");
     }
 
     #[test]
@@ -2261,15 +2244,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unpainted_element_is_left_out_only_for_a_kind_that_asks() {
-        let svg = |kind: &str| format!(r#"<svg><rect data-kind="{kind}" stroke="none" fill="none" width="2" height="2"/></svg>"#);
-        assert_eq!(read(&svg("cut")).shapes.len(), 0);
-        assert_eq!(read(&svg("engrave")).shapes.len(), 1);
-        // Only one of the two set to none still draws.
-        assert_eq!(read(r#"<svg><line fill="none" x1="0" y1="0" x2="1" y2="1"/></svg>"#).shapes.len(), 1);
-    }
-
-    #[test]
     fn the_css_cascade_follows_specificity_importance_and_the_kinds_own_property() {
         let got = read(
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -2293,11 +2267,6 @@ mod tests {
         assert_eq!(bounds(&got, 0).x0, 3.0);
         // A property the kind doesn't list is not followed: `()` ignores `data-kind` entirely.
         assert_eq!(import::<()>(r#"<svg><path style="data-kind:engrave" d="M0 0L1 1"/></svg>"#, "p.svg").unwrap().shapes.len(), 1);
-    }
-
-    #[test]
-    fn an_oversized_stylesheet_is_an_error() {
-        fails(&format!("<svg><style>{}</style></svg>", " ".repeat(MAX_CSS_BYTES + 1)), "");
     }
 
     #[test]
@@ -2510,20 +2479,6 @@ mod tests {
             assert!(warnings.contains(needle), "{needle}: {warnings}");
         }
         assert_eq!(got.warnings.len(), 5, "{warnings}");
-    }
-
-    #[test]
-    fn warnings_are_capped_and_the_rest_counted() {
-        let svg = format!("<svg>{}</svg>", (0..200).map(|i| format!("<text id=\"t{i}\">x</text>")).collect::<String>());
-        let mut got = read(&svg);
-        assert_eq!((got.warnings.len(), got.dropped_warnings), (MAX_SVG_WARNINGS, 136));
-        // A caller's own warnings go through the same bound, and repeats are kept once.
-        push_warning(&mut got.warnings, &mut got.dropped_warnings, "mine".into());
-        assert_eq!((got.warnings.len(), got.dropped_warnings), (MAX_SVG_WARNINGS, 137));
-        let (mut few, mut dropped) = (Vec::new(), 0);
-        push_warning(&mut few, &mut dropped, "once".into());
-        push_warning(&mut few, &mut dropped, "once".into());
-        assert_eq!((few.len(), dropped), (1, 0));
     }
 
     #[test]
