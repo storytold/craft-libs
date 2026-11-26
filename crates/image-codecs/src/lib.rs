@@ -50,7 +50,7 @@ pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::jpeg::validate_jpeg_rgba8;
 pub use crate::codecs::png::{
     PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed,
-    encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
+    encode_pq as encode_png_pq, encode_rgba8 as encode_png_rgba8, palette as png_palette, stereo as png_stereo,
 };
 pub use crate::codecs::tiff::{
     PhotoshopTags as TiffPhotoshopTags, TiffBands, encode_plain_rgba16 as encode_tiff_plain_rgba16, photoshop_tags as tiff_photoshop_tags,
