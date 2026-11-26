@@ -4,13 +4,18 @@
 //! entry count and four bytes per entry (red, green, blue, flags), all little-endian. Other
 //! chunks may come before `data`; each chunk is padded to an even length.
 
+/// The `PALETTEENTRY` flag that makes an entry an index into the display's hardware palette
+/// instead of a colour.
+const PC_EXPLICIT: u8 = 0x02;
+
 /// Reads a RIFF palette's colours in file order, flags dropped.
 ///
 /// Chunks before `data` are skipped, and only chunks inside the form's declared size count, so
 /// bytes after the form are ignored. A file that isn't a RIFF palette, a form or chunk that runs
 /// past the end, a `data` chunk with fewer entries than its count, a form without a `data` chunk
-/// and a palette without colours are errors. Never panics. The count is a 16-bit word, so at
-/// most 65 535 colours are returned.
+/// and a palette without colours are errors. An entry flagged `PC_EXPLICIT` holds a hardware
+/// palette index, which an RGB colour can't stand for, so it is an error too. Never panics. The
+/// count is a 16-bit word, so at most 65 535 colours are returned.
 pub fn parse_riff_pal(bytes: &[u8]) -> Result<Vec<[u8; 3]>, String> {
     let cut_short = || String::from("the palette is cut short");
     if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"PAL ".as_slice()) {
@@ -26,7 +31,14 @@ pub fn parse_riff_pal(bytes: &[u8]) -> Result<Vec<[u8; 3]>, String> {
         if id == b"data" {
             let [_, _, lo, hi, entries @ ..] = body else { return Err(cut_short()) };
             let count = usize::from(u16::from_le_bytes([*lo, *hi]));
-            let colors: Vec<[u8; 3]> = entries.as_chunks::<4>().0.iter().take(count).map(|&[r, g, b, _]| [r, g, b]).collect();
+            let colors = entries.as_chunks::<4>().0.iter().take(count).enumerate().map(|(i, &[r, g, b, flags])| {
+                if flags & PC_EXPLICIT == 0 {
+                    Ok([r, g, b])
+                } else {
+                    Err(format!("colour {} of the palette is a hardware palette index, not a colour", i + 1))
+                }
+            });
+            let colors = colors.collect::<Result<Vec<[u8; 3]>, String>>()?;
             if colors.len() < count {
                 return Err(cut_short());
             }
@@ -80,6 +92,18 @@ mod tests {
         let mut extra = pal(&want, 3);
         extra.extend_from_slice(b"junk after the form");
         assert_eq!(parse_riff_pal(&extra).unwrap(), want[..3]);
+    }
+
+    #[test]
+    fn an_entry_that_indexes_the_hardware_palette_is_refused() {
+        let want = colors(3);
+        let mut bytes = pal(&want, 3);
+        assert_eq!(parse_riff_pal(&bytes).unwrap(), want);
+        // Past the chunk header, the version and count words and the first entry: the second
+        // entry's flags byte. The other flags `pal` sets (reserved, no-collapse) still read.
+        let at = bytes.windows(4).position(|w| w == b"data").unwrap() + 8 + 4 + 4 + 3;
+        bytes[at] |= PC_EXPLICIT;
+        assert!(parse_riff_pal(&bytes).is_err());
     }
 
     #[test]
