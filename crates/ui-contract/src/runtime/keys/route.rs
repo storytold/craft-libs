@@ -598,8 +598,10 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
 ///
 /// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
 /// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events: each of
-/// them keeps its own place beside the events egui still holds, equal ones apart. Empty while a component has focus, as
-/// that component owns the keys then. The same in every call of a pass: it reads the pass and changes nothing.
+/// them keeps its own place beside the events egui still holds, equal ones apart. The event stands for its chord by its
+/// typed key and modifiers, so it is the command's where the press that fired the chord carried another physical key (a
+/// layout that types the chord's key on another key). Empty while a component has focus, as that component owns the keys
+/// then. The same in every call of a pass: it reads the pass and changes nothing.
 pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let record = focus::record(ctx, viewport);
@@ -615,7 +617,12 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     });
     let key_of = |input: &KeyInput| input.physical.or(input.typed);
     let same = |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) && input.mods == other.mods;
-    let took = |input: &KeyInput| fired.iter().any(|(fired, by_repeat)| !by_repeat && same(fired, input));
+    // A clipboard event carries the chord's typed key alone, as the platform sends no physical key with it, so it stands
+    // for a press of another physical key where the layout types the chord's key on another key (Cmd+V, typed on the key
+    // I): the event and the press that fired the command are the chord's own.
+    let clip_same =
+        |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) || input.typed.is_some_and(|typed| other.typed == Some(typed));
+    let took = |input: &KeyInput| fired.iter().any(|(fired, by_repeat)| !by_repeat && fired.mods == input.mods && clip_same(fired, input));
     let mut clips = clips.into_iter().peekable();
     let mut ends = ends.into_iter().peekable();
     let events = ctx.input(|input| input.events.clone());

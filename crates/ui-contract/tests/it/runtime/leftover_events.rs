@@ -208,3 +208,40 @@ fn a_disabled_hold_leaves_the_press_and_its_release_to_the_host() {
     );
     assert_eq!(key_events(left.take()), [(Key::X, true), (Key::X, false)], "the press and its release are left over to the host");
 }
+
+/// Cmd+V pressed on `physical` and typed as V, with the platform's paste in the same pass: whether the library's Paste,
+/// which binds Cmd+V, fired for the press, and the pastes the host was left.
+fn paste_pass(physical: Key) -> (bool, Vec<String>) {
+    let mut frames = Frames::new();
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+    let press = Event::Key { key: Key::V, physical_key: Some(physical), pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+    frames.frame(vec![press, Event::Paste("p".to_owned())], &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().any(|fired| fired.command.id == EditCommands::Paste.id());
+    (fired, pasted(left.take()))
+}
+
+/// A paste whose chord was pressed on a key that types another key is the command's: the clipboard event stands for its
+/// chord by its typed key, so it is not left over beside the press that fired the Paste command.
+#[trial]
+fn a_paste_stands_for_a_press_that_fired_its_chord_on_another_physical_key() {
+    // Cmd+V pressed on the key I, as a layout that types V there reports it.
+    let (fired, left) = paste_pass(Key::I);
+    assert!(fired, "the Paste command fired for the press");
+    assert!(left.is_empty(), "the paste is the command's, not the host's, which would paste it twice: {left:?}");
+}
+
+/// A paste whose chord was pressed on the key that types its letter is the command's, as it was before: a clipboard event
+/// stands for its own press by the key both carry.
+#[trial]
+fn a_paste_stands_for_its_own_press() {
+    // Cmd+V pressed on the key V, as a QWERTY layout sends it.
+    let (fired, left) = paste_pass(Key::V);
+    assert!(fired, "the Paste command fired for the press");
+    assert!(left.is_empty(), "the paste stands for its own press: {left:?}");
+}
