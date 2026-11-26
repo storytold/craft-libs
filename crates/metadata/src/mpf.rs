@@ -10,7 +10,7 @@
 //! - [`markers`] lists a JPEG's marker segments before the first scan, for the APPn payloads this
 //!   crate does not interpret itself (for example ISO 21496-1 gain map metadata in APP2).
 //! - [`images`] lists the images after the primary one, with their file offsets.
-//! - [`write`] puts an index into a primary JPEG and appends the other images to it.
+//! - [`fn@write`] puts an index into a primary JPEG and appends the other images to it.
 
 use craft_tiff::{ByteOrder, Tiff};
 
@@ -39,7 +39,7 @@ pub struct MpfImage {
     pub kind: u32,
 }
 
-/// Why [`write`] refused.
+/// Why [`fn@write`] refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MpfError {
     /// The primary image does not start with a JPEG SOI marker, or its segments cannot be walked.

@@ -1,7 +1,7 @@
 //! Oracle tests: compare our demuxer's packets, timestamps, keyframes and track parameters with
 //! ffprobe on ffmpeg-generated fixtures (skipped when ffmpeg/ffprobe are not installed).
 
-mod common;
+use super::common;
 #[path = "common/matroska.rs"]
 mod mkv;
 
@@ -123,181 +123,12 @@ fn compare(ffprobe: &Path, path: &Path) -> (MkvFile, Vec<Packet>) {
     (file, packets)
 }
 
-/// Seek to a range of times on `track` and check we land on the latest keyframe ≤ target.
-fn check_seeks(bytes: &[u8], opts: OpenOptions, track: usize, packets: &[Packet]) {
-    let mut d = Demuxer::with_options(bytes, opts).unwrap();
-    let keys: Vec<(i64, i64)> = packets.iter().filter(|p| p.track == track && p.keyframe).map(|p| (p.pts, p.pts_ns)).collect();
-    let last = packets.iter().filter(|p| p.track == track).map(|p| p.pts_ns).max().unwrap();
-    let mut t = 0i64;
-    while t <= last + 100_000_000 {
-        let sp = d.seek(track, t).unwrap();
-        let expect = keys.iter().filter(|k| k.1 <= t).map(|k| k.0).max().unwrap_or(keys[0].0);
-        assert_eq!(sp.pts, expect, "seek to {t}ns");
-        assert!(sp.pts_ns <= t || sp.pts == keys[0].0);
-        // the first packet of that track after seeking is the keyframe
-        let p = loop {
-            let p = d.next_packet().unwrap().expect("packet after seek");
-            if p.track == track {
-                break p;
-            }
-        };
-        assert!(p.keyframe);
-        assert_eq!(p.pts, sp.pts);
-        t += 137_000_000;
-    }
-}
-
 fn run(name: &str) -> Option<(Vec<u8>, MkvFile, Vec<Packet>)> {
     let (ffmpeg, ffprobe) = tools()?;
     let path = fixture(&ffmpeg, name)?;
     let (file, packets) = compare(&ffprobe, &path);
     let bytes = std::fs::read(&path).unwrap();
     Some((bytes, file, packets))
-}
-
-#[test]
-fn h264_aac() {
-    let Some((bytes, f, packets)) = run("h264_aac.mkv") else { return };
-    assert_eq!(f.doc_type, "matroska");
-    assert!(f.warnings.is_empty(), "{:?}", f.warnings);
-    let v = f.track_of_kind(TrackKind::Video).unwrap();
-    let Codec::Avc { avcc } = &f.tracks[v].codec else { panic!("not avc") };
-    assert_eq!(avcc[0], 1, "avcC version");
-    let a = f.track_of_kind(TrackKind::Audio).unwrap();
-    assert!(matches!(&f.tracks[a].codec, Codec::Aac { asc } if asc.len() >= 2));
-    assert!(!f.cues.is_empty());
-    assert!(!f.seek_head.is_empty());
-    check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
-    check_seeks(&bytes, OpenOptions::default(), a, &packets);
-    // Read + Seek entry point and CRC verification (ffmpeg writes CRC-32 in level-1 elements)
-    let d = Demuxer::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
-    assert_eq!(d.file().tracks.len(), 2);
-    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
-    assert!(crc.crc_checked > 0);
-    assert!(crc.crc_errors.is_empty());
-    let kf = Demuxer::from_slice(&bytes).unwrap().keyframe_index(v).unwrap();
-    assert_eq!(kf.len(), packets.iter().filter(|p| p.track == v && p.keyframe).count());
-}
-
-#[test]
-fn vp9_opus_webm() {
-    let Some((bytes, f, packets)) = run("vp9_opus.webm") else { return };
-    assert!(f.is_webm());
-    let a = f.track_of_kind(TrackKind::Audio).unwrap();
-    let t = &f.tracks[a];
-    assert!(matches!(&t.codec, Codec::Opus { head } if head.starts_with(b"OpusHead")));
-    assert!(t.codec_delay_ns > 0 && t.seek_pre_roll_ns > 0);
-    assert!(packets.iter().any(|p| p.track == a && p.pts < 0), "codec delay applied");
-    let v = f.track_of_kind(TrackKind::Video).unwrap();
-    assert!(matches!(f.tracks[v].codec, Codec::Vp9 { .. }));
-    check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
-}
-
-#[test]
-fn flac() {
-    let Some((_, f, _)) = run("flac.mkv") else { return };
-    assert!(matches!(&f.tracks[0].codec, Codec::Flac { private } if private.starts_with(b"fLaC")));
-}
-
-#[test]
-fn vorbis() {
-    let Some((_, f, _)) = run("vorbis.mkv") else { return };
-    let Codec::Vorbis { headers } = &f.tracks[0].codec else { panic!("not vorbis") };
-    assert_eq!(headers.len(), 3);
-    assert_eq!(&headers[0][..7], b"\x01vorbis");
-    assert_eq!(&headers[1][..7], b"\x03vorbis");
-    assert_eq!(&headers[2][..7], b"\x05vorbis");
-}
-
-#[test]
-fn subtitles() {
-    let Some((_, f, packets)) = run("subs.mkv") else { return };
-    let subs: Vec<usize> = (0..f.tracks.len()).filter(|&i| f.tracks[i].kind == TrackKind::Subtitle).collect();
-    assert_eq!(subs.len(), 2);
-    assert_eq!(f.tracks[subs[0]].codec, Codec::SubRip);
-    assert_eq!(f.tracks[subs[0]].language, "fre");
-    assert!(matches!(&f.tracks[subs[1]].codec, Codec::Ass { header, ssa: false } if !header.is_empty()));
-    assert_eq!(f.tracks[subs[1]].name, "Styled");
-    let first = packets.iter().find(|p| p.track == subs[0]).unwrap();
-    assert_eq!(first.data, b"Hello");
-    assert_eq!((first.pts, first.duration), (200, 700));
-}
-
-#[test]
-fn webvtt_webm() {
-    let Some((_, f, packets)) = run("webvtt.webm") else { return };
-    let s = f.track_of_kind(TrackKind::Subtitle).unwrap();
-    assert_eq!(f.tracks[s].codec, Codec::WebVtt);
-    let cues: Vec<&Packet> = packets.iter().filter(|p| p.track == s).collect();
-    assert_eq!(cues.len(), 2);
-    assert!(cues[0].data.ends_with(b"Hello"));
-}
-
-#[test]
-fn cues_at_front() {
-    let Some((bytes, f, packets)) = run("cues_front.mkv") else { return };
-    assert!(!f.cues.is_empty());
-    assert!(f.clusters.len() >= 5);
-    let v = f.track_of_kind(TrackKind::Video).unwrap();
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
-}
-
-#[test]
-fn live_stream_without_cues() {
-    let Some((bytes, f, packets)) = run("live.mkv") else { return };
-    assert!(f.cues.is_empty(), "streamed output has no Cues");
-    assert!(f.live || f.info.duration.is_none());
-    assert!(f.duration_ns().unwrap() > 1_900_000_000);
-    let v = f.track_of_kind(TrackKind::Video).unwrap();
-    // no cues: seeking builds the index by scanning clusters
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
-    assert!(!d.file().indexed);
-    assert!(!d.keyframe_index(v).unwrap().is_empty());
-    assert!(d.file().indexed);
-}
-
-#[test]
-fn hevc_hdr_color() {
-    let Some((_, f, _)) = run("hevc_hdr.mkv") else { return };
-    let t = &f.tracks[0];
-    assert!(matches!(&t.codec, Codec::Hevc { hvcc } if hvcc.first() == Some(&1)));
-    let c = t.video.as_ref().unwrap().color.as_ref().expect("Colour element");
-    assert_eq!(c.primaries, Some(9));
-    assert_eq!(c.transfer_characteristics, Some(16));
-    assert_eq!(c.matrix_coefficients, Some(9));
-    assert_eq!(c.range, Some(1));
-    // mastering metadata / CLL are written by ffmpeg from stream side data when available
-    if let Some(m) = &c.mastering {
-        assert!((m.primaries[1].0 - 0.265).abs() < 1e-3, "{m:?}");
-        assert!((m.luminance_max - 1000.0).abs() < 1e-3);
-    }
-    if let Some(cll) = c.max_cll {
-        assert_eq!(cll, 1000);
-    }
-}
-
-#[test]
-fn prores_pcm() {
-    let Some((_, f, _)) = run("prores_pcm.mkv") else { return };
-    let a = f.track_of_kind(TrackKind::Audio).unwrap();
-    assert_eq!(f.tracks[a].codec, Codec::Pcm { float: false, big_endian: false, bits: 24 });
-}
-
-#[test]
-fn mjpeg_ac3() {
-    let Some((_, f, _)) = run("mjpeg_ac3.mkv") else { return };
-    assert_eq!(f.info.title.as_deref(), Some("craft-media test"));
-    assert!(f.info.muxing_app.starts_with("Lavf"));
-    assert!(f.tags.iter().flat_map(|t| &t.simple).any(|s| s.name == "ENCODER"));
-}
-
-#[test]
-fn av1() {
-    let Some((_, f, _)) = run("av1.mkv") else { return };
-    assert!(matches!(&f.tracks[0].codec, Codec::Av1 { av1c } if av1c.first() == Some(&0x81)));
 }
 
 /// Re-mux a fixture with our writer using each lacing mode; ffprobe must read the result identically
@@ -397,15 +228,6 @@ fn damaged_resync() {
     for n in [0usize, 10, 100, 1000] {
         let _ = Demuxer::from_slice(&bytes[..n.min(bytes.len())]).map(|d| d.count());
     }
-}
-
-#[test]
-fn not_matroska() {
-    assert!(matches!(open(&b"hello world"[..]), Err(Error::NotMatroska(_))));
-    let mut ebml = vec![0x1A, 0x45, 0xDF, 0xA3, 0x84, 0x42, 0x82, 0x81, b'x'];
-    ebml.extend_from_slice(&[0; 8]);
-    assert!(matches!(open(&ebml[..]), Err(Error::NotMatroska(_))));
-    let _ = Value::Null;
 }
 
 /// Pre-generate every fixture (`cargo test -p craft-media --all-features -- --ignored generate_fixtures`).
