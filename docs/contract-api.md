@@ -3752,6 +3752,7 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
 - `craft_ui::runtime::commands::CommandKind`: re-export of `craft_keymap::CommandKind` (outside these crates).
 - `craft_ui::runtime::commands::CommandRef`: re-export of `craft_keymap::CommandRef` (outside these crates).
 - `craft_ui::runtime::commands::CommandScope`: re-export of `craft_keymap::CommandScope` (outside these crates).
+- `craft_ui::runtime::commands::Dispatch`: re-export of `craft_keymap::Dispatch` (outside these crates).
 - `craft_ui::runtime::commands::EditCommand`: re-export of `craft_behavior::intent::EditCommand`.
 - `craft_ui::runtime::commands::EditCommands`: `pub enum EditCommands { Cut, Copy, Paste, SelectAll, Undo, Redo, Delete }`. The edit commands (11.3). A focused component that lists one in `KEYS.edits` takes it as
   - `pub const ALL: [EditCommands; 7]`. Every edit command that a focused component can take as an `Intent::Edit`.
