@@ -197,26 +197,34 @@ impl ListRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         let wrapped = self.lines.as_ref().map(|lines| {
             let run = lines.run().role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(self.lines_wrap());
-            draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
+            draw.layout(&run, label.width())
         });
         let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);
-        let (label, mut top) = self.text_block(label, sizes, lines + self.below_height(sizes));
-        // A heading's detail sits at the end of the label's line and the title is cut to what it leaves.
-        let beside = match (&self.detail, self.heading) {
+        // A heading's detail sits at the end of the label's first line and the title is cut, or wrapped, to what it
+        // leaves.
+        let beside_shown = match (&self.detail, self.heading) {
             (Some(detail), true) => {
                 let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
-                let shown = draw.layout(&run, label.width());
-                let x = if rtl { label.left() } else { label.right() - shown.size().x };
-                draw.galley(Pos2::new(x, top + (sizes.label_line - shown.size().y) / 2.0), &shown);
-                shown.size().x + sizes.gap
+                Some(draw.layout(&run, label.width()))
             }
-            _ => 0.0,
+            _ => None,
         };
-        if !self.renaming && !self.label_has_field() {
-            let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
-            let look = if muted { &style.cell_muted } else { &style.text };
-            let ink = hue.unwrap_or_else(|| cx.resolve(&look.color));
-            let width = (label.width() - beside).max(0.0);
+        let beside = beside_shown.as_ref().map_or(0.0, |shown| shown.size().x + sizes.gap);
+        let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
+        let look = if muted { &style.cell_muted } else { &style.text };
+        let ink = hue.unwrap_or_else(|| cx.resolve(&look.color));
+        let width = (label.width() - beside).max(0.0);
+        let wrapped_label = self.wraps_label().then(|| self.label_run(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::Wrap));
+        let roles = (look.role, style.detail.role);
+        let label_height = self.label_height(cx.resolved.label, sizes, roles, label.width(), |run, width| draw.layout(run, width).size());
+        let (label, mut top) = self.text_block(label, sizes, label_height, lines + self.below_height(sizes));
+        if let Some(shown) = &beside_shown {
+            let x = if rtl { label.left() } else { label.right() - shown.size().x };
+            draw.galley(Pos2::new(x, top + (sizes.label_line - shown.size().y) / 2.0), shown);
+        }
+        if let Some(run) = &wrapped_label {
+            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(width, label_height)), run);
+        } else if !self.renaming && !self.label_has_field() {
             match (self.document_run(cx.resolved.label, ink.egui()), document, &self.document) {
                 (Some(run), Some(height), Some(rows)) => {
                     // The document line is centred on the label's line, which is the band's middle in a row of a label
@@ -241,7 +249,7 @@ impl ListRow<'_> {
                 }
             }
         }
-        top += sizes.label_line;
+        top += label_height;
         if let Some(detail) = self.detail.as_ref().filter(|_| !self.heading) {
             let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
             draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(label.width(), sizes.detail_line)), &run);
