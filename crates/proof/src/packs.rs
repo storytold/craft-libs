@@ -800,8 +800,12 @@ mod tests {
     /// English-only build (CP4.4's default once language-packs-1 is pinned).
     #[test]
     fn the_default_build_embeds_the_carry_over_locales() {
-        let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().trim().to_ascii_lowercase();
-        let named: Vec<&str> = if embed.is_empty() { vec!["de", "pl", "pt", "it", "ru"] } else { embed.split(',').map(str::trim).collect() };
+        let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().to_ascii_lowercase();
+        let mut named: Vec<_> = embed.split(',').map(str::trim).filter(|locale| !locale.is_empty()).collect();
+        let uses_defaults = named.is_empty();
+        if uses_defaults {
+            named.extend(["de", "pl", "pt", "it", "ru"]);
+        }
         for l in embedded_locales() {
             assert!(
                 l.starts_with("en-")
@@ -811,7 +815,7 @@ mod tests {
                 "{l} is embedded"
             );
         }
-        if cfg!(craft_proof_data) && embed.is_empty() {
+        if cfg!(craft_proof_data) && uses_defaults {
             for l in ["de", "pl", "pt", "it"] {
                 assert!(embedded_locales().contains(&l), "{l} is embedded by default");
             }

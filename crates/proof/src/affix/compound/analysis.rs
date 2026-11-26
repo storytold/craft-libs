@@ -489,13 +489,17 @@ impl AffixDict {
                 // Two suffixes in a row: the outer ones that another suffix's continuation
                 // classes can license, looked for together under one inner scan.
                 if pfx.is_none() && !g.outer_rules.is_empty() {
+                    // The condition checks cost work even when they reject every candidate.
+                    *work = work.saturating_add(g.outer_rules.len());
+                    if *work > MAX_WORK {
+                        return;
+                    }
                     let outers: Vec<&Rule> = g
                         .outer_rules
                         .iter()
                         .filter_map(|&i| self.suffixes.get(i as usize))
                         .filter(|r| !self.cont_holds(r, self.only_in_compound) && r.cond_matches(&root, true))
                         .collect();
-                    *work += outers.len();
                     if !outers.is_empty() {
                         self.inner_analyses(&root, &outers, excluded, work, emit);
                     }
@@ -684,6 +688,19 @@ mod terminal_rule_review_tests {
             &[],
         )
         .unwrap()
+    }
+
+    /// Even when every condition fails, the outer candidates consume the remaining work.
+    #[test]
+    fn rejected_outer_conditions_consume_the_compound_budget() {
+        let dict =
+            AffixDict::from_hunspell("SET UTF-8\nFLAG num\nSFX 1 Y 1\nSFX 1 0 s/2 .\nSFX 2 Y 2\nSFX 2 0 t a\nSFX 2 0 t b\n", "1\nroot/1\n", &[])
+                .unwrap();
+        let mut work = MAX_WORK - 2;
+        let mut emitted = 0;
+        dict.suffix_analyses("rootst", None, Excluded::default(), &mut work, &mut |_| emitted += 1);
+        assert!(work > MAX_WORK, "rejected conditions must exhaust the work budget");
+        assert_eq!(emitted, 0);
     }
 
     /// Nonmatching outer candidates still consume the shared work budget.

@@ -179,19 +179,6 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
     if !left.chars().chain(right.chars()).all(char::is_alphabetic) || left.len() + right.len() > 64 {
         return Err("replacement must contain bounded letters".into());
     }
-    let start = args
-        .next()
-        .ok_or("missing start")?
-        .parse::<usize>()
-        .map_err(|_| "invalid start")?
-        .checked_sub(1)
-        .and_then(|x| x.checked_add(usize::from(raw.starts_with('.'))))
-        .ok_or("invalid start")?;
-    let cut = args.next().ok_or("missing cut")?.parse::<usize>().map_err(|_| "invalid cut")?;
-    if args.next().is_some() {
-        return Err("unexpected replacement fields".into());
-    }
-    let end = start.checked_add(cut).ok_or("replacement overflow")?;
     let mut pos = 0usize;
     let mut values = FxMap::default();
     for c in raw.chars() {
@@ -201,6 +188,26 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
             pos += 1;
         }
     }
+    let pattern_chars = || raw.chars().filter(|c| !c.is_ascii_digit());
+    let leading_dot = usize::from(pattern_chars().next() == Some('.'));
+    let (start, cut) = if let Some(start) = args.next() {
+        let start = start
+            .parse::<usize>()
+            .map_err(|_| "invalid start")?
+            .checked_sub(1)
+            .and_then(|index| index.checked_add(leading_dot))
+            .ok_or("invalid start")?;
+        let cut = args.next().ok_or("missing cut")?.parse::<usize>().map_err(|_| "invalid cut")?;
+        if args.next().is_some() {
+            return Err("unexpected replacement fields".into());
+        }
+        (start, cut)
+    } else {
+        // The short form replaces the full word span, excluding the boundary markers.
+        let trailing_dot = usize::from(pattern_chars().next_back() == Some('.'));
+        (leading_dot, pos.saturating_sub(leading_dot + trailing_dot))
+    };
+    let end = start.checked_add(cut).ok_or("replacement overflow")?;
     if end > pos || cut == 0 {
         return Err("replacement outside pattern".into());
     }
@@ -248,6 +255,21 @@ mod tests {
         assert_eq!(p.opportunities(&w).unwrap(), vec![Opportunity { at: 2, suffix: "z".into() }]);
         assert!(p.points(&w).unwrap().is_empty());
     }
+    /// The short form has the same break and display text as the explicit full-span form.
+    #[test]
+    fn omitted_replacement_fields_use_the_word_span() {
+        for (rule, expanded, word, suffix) in
+            [("f1f/ff=f", "f1f/ff=f,1,2", "ff", "f"), ("1.f1f./ff=f", "1.f1f./ff=f,1,2", "ff", "f"), ("ő1r/őő=r", "ő1r/őő=r,1,2", "őr", "ő")]
+        {
+            let short = Patterns::from_huhyphn(rule).unwrap();
+            let explicit = Patterns::from_huhyphn(expanded).unwrap();
+            let word: Vec<_> = word.chars().collect();
+            let expected = vec![Opportunity { at: 1, suffix: suffix.into() }];
+            assert_eq!(explicit.opportunities(&word), Some(expected.clone()), "{expanded}");
+            assert_eq!(short.opportunities(&word), Some(expected), "{rule}");
+        }
+    }
+
     /// Regression: malformed replacements fail without panicking.
     #[test]
     fn malformed_replacements_fail_without_panicking() {
@@ -256,6 +278,8 @@ mod tests {
             "as5szony/sz=,999999999999999999999,1",
             "as5szony/sz=,3,999999999999999999999",
             "as5szony/sz=,3,1,4",
+            "f1f/ff=f,1",
+            "f1f/ff=f,,2",
             "as5szony/sz=1,3,1",
         ] {
             assert!(Patterns::from_huhyphn(rule).is_err(), "{rule}");
