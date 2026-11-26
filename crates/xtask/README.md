@@ -10,9 +10,11 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `assets` | always | `Policy`, `RowMode`, `check`, `run`, `list_files`, `read_document`, `is_asset`, `ASSET_EXT`: the asset attribution check against the document, folders and extensions the app supplies |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
+| `stats` | `stats` | `run`, `collect` and `write_table`: files, lines and tests of Rust per workspace crate (`cargo xtask stats`) |
 | `icon` | always | `ico::pack`, `icns::pack`, `png_size`, `png_info`, `read_pngs`, `Limits`, and `ico::read_file` and `icns::read_file` for an app's test of its committed icons |
 
-No feature is on by default. `report` adds `serde_json` and `craft-atomic`.
+No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `stats` adds
+`serde_json`.
 
 ## Use
 
@@ -52,6 +54,9 @@ fn ci() -> Result<(), String> {
   `run_cancelable` ends a running child with the processes it started and waits for it. On Unix the
   child runs in its own process group, which `kill -s KILL` ends, so a terminal's Ctrl-C reaches only
   the xtask and the app's Ctrl-C handler sets the flag. On Windows `taskkill /T /F` ends the tree.
+- On Unix a child started by `run_cancelable` is not in the terminal's foreground process group. A
+  child that reads from the terminal is stopped by `SIGTTIN`, and the run waits until the `Cancel` flag
+  is set. Run a command that reads from the terminal with `run`.
 
 ## Errors
 
@@ -152,7 +157,9 @@ process ends. A slot count of 0 or more than 64, or a poll interval (`with_poll`
 error before any file is opened. Next to each
 held lock file, an owner file holds the owner label, which waiting runs print; `holders` reads at
 most 4096 bytes of each and leaves out an owner file whose slot is free, such as one a killed run left
-behind. Where the lock files live, the environment variables that set them, and
+behind. An owner entry that is a link, or on Unix a file with more than one name, is also left
+out, and a link is not followed. On Unix, a lock or owner open does not wait on a FIFO: a FIFO
+lock file counts as a free slot to `holders`, and taking it is a lock error. Where the lock files live, the environment variables that set them, and
 whether a run uses a lock at all are the app's choice.
 
 ## Report
@@ -219,6 +226,42 @@ each PNG as is; no image is decoded.
 Errors are `icon::Error`: `Empty`, `TooManyImages`, `InvalidPng`, `NotSquare`, `UnsupportedSize`,
 `DuplicateSize`, `TooLarge`, `Allocation`, `InvalidIcon` or `Io`.
 
+## Stats
+
+`cargo xtask stats [--exact]` prints the `.rs` files, lines, `#[test]` attributes and `proptest!` blocks
+of each workspace crate. The app passes the `cargo metadata --format-version 1 --no-deps` JSON, a
+function that builds its `cargo` command, and a writer:
+
+```rust,ignore
+Some("stats") => {
+    let options = craft_xtask::stats::Options { exact: rest.contains(&"--exact"), ..Default::default() };
+    craft_xtask::stats::run(&metadata_bytes()?, &options, cargo, &mut std::io::stdout().lock())
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+```
+
+- Each workspace member's folder is walked. Folders named `target` or `fuzz` and folders whose names
+  start with `.` are skipped, and a member inside another member's folder is counted in its own row
+  only. Symbolic links and Windows junctions are not followed, to folders or to files.
+- `#[test]` counts the text `#[test]` on lines that do not start with `//`. Tests that macros generate
+  count once, and `#[tokio::test]` is not counted. `--exact` runs
+  `cargo test -q -p <crate> -- --list` for each crate and counts the lines that end in `: test`. A
+  crate whose listing fails shows `error`, and a line under the table names it.
+- `Limits` bounds every input. A larger input is an error naming the path and the limit:
+
+  | Limit | Default |
+  |---|---|
+  | `metadata_bytes`: the `cargo metadata` JSON | 64 MiB |
+  | `source_bytes`: one `.rs` file | 16 MiB |
+  | `total_source_bytes`: all `.rs` files of a run | 1 GiB |
+  | `entries`: folder entries of a run | 1,000,000 |
+  | `depth`: folder levels below a crate's folder | 256 |
+  | `harness_output_bytes`: one crate's `--list` output | 64 MiB |
+
+  A folder or file that cannot be read and a `.rs` file that is not UTF-8 are errors too.
+- `collect` returns the `Report` without writing it, and `write_table` writes a `Report`.
+
 ## Origin
 
 | Part | Source |
@@ -226,10 +269,14 @@ Errors are `icon::Error`: `Empty`, `TooManyImages`, `InvalidPng`, `NotSquare`, `
 | `runner`: the step loop and summary, `root`, `cargo`, `run`, the nextest probe and fallback, doctests | DesignCraft `xtask/src/main.rs:68-82`, `:160-201`, `:204-249` at [8b169f8](https://github.com/storytold/designcraft/blob/8b169f8ee7832e60ed1ac4c9f5dd34f954d3a992/xtask/src/main.rs) |
 | `lock` and its tests `one_slot_is_exclusive_until_dropped`, `more_slots_admit_more_runs` | LightCraft `xtask/src/ci_lock.rs` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/ci_lock.rs) |
 | `report`: the per-step fields | LightCraft `xtask/src/ci.rs:347-414` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/ci.rs#L347-L414) |
+| `stats`: the folder walk that skips directory links, and the table | DesignCraft `xtask/src/stats.rs` at `dc9eea2695` |
+| `stats`: regular files only, and `a_walk_does_not_follow_directory_links` | WordCraft `xtask/src/stats.rs` at `6b163b33dc` |
+| `stats`: the entry budget that returns an error, and its two tests | CADCraft `xtask/src/stats.rs` at `ca87680fb0` |
+| `stats`: the per-file size limit, and its two tests | GridCraft `xtask/src/stats.rs` at `9e9f13114f` |
 | `icon::ico`: `pack`, `png_size` and the tests `packs_directory_and_payloads`, `rejects_bad_input`, `committed_icon_is_valid` | DeckCraft `xtask/src/ico.rs` at [ae9d525](https://github.com/storytold/deckcraft/blob/ae9d525bce365083bb62b4754bdd346feb2a79b0/xtask/src/ico.rs); CADCraft's copy differs only in its icon path |
 | `icon::icns`: `pack`, the slot table and the tests `fills_every_slot_of_each_size`, `rejects_bad_input`, `committed_icon_is_valid`, `packs_icns_elements` | craft-launcher `xtask/src/icns.rs` at [019330f](https://github.com/storytold/craft-launcher/blob/019330f99aa90a3d6501e134fc48df8d719e15a2/xtask/src/icns.rs); MaterialCraft `xtask/src/ico.rs` at [6e952a9](https://github.com/storytold/materialcraft/blob/6e952a9a10f9bce77f330e430a828c066be6ad9b/xtask/src/ico.rs) |
 | `icon`: the test `rejects_non_png` | VectorCraft `xtask/src/ico.rs` at [4373205](https://github.com/storytold/vectorcraft/blob/437320509da102f5d9aca44d411ffb254f071932/xtask/src/ico.rs) |
-| The root and slot-count errors, the `--exclude` of the xtask package, cancellation, the bounded owner read and the atomic report | written here |
+| The root and slot-count errors, the `--exclude` of the xtask package, cancellation, the bounded owner read and the atomic report; in `stats`, the metadata, total-size, depth and `--list` output limits, the metadata checks and the line naming failed listings | written here |
 | The whole-PNG check, the RGBA check for `.ico`, the size order and duplicate check, `Limits`, the checked lengths and offsets, `read_pngs` and the readers | written here |
 | `assets`: `is_asset`, the exact-row check, `run`, the three asset folders and the test `detects_unattributed_assets` | VectorCraft `xtask/src/assets.rs` at [bada8e1](https://github.com/storytold/vectorcraft/blob/bada8e17103db9917de44e40a1cead5a7fc71c3c/xtask/src/assets.rs) and DesignCraft `xtask/src/assets.rs` at [8b169f8](https://github.com/storytold/designcraft/blob/8b169f8ee7832e60ed1ac4c9f5dd34f954d3a992/xtask/src/assets.rs) |
 | `assets`: the CADCraft and WordCraft extension lists, the `-z` listing, the exit-status check and the tests in `assets::tests::wordcraft` | CADCraft `xtask/src/assets.rs` at [8e69890](https://github.com/storytold/cadcraft/blob/8e6989022398ff5f79adaab77d19fdd7137591f3/xtask/src/assets.rs), WordCraft `xtask/src/assets.rs` at [42a5df5](https://github.com/storytold/wordcraft/blob/42a5df5f94e03288037f731ffd86dee7c7cf1332/xtask/src/assets.rs) |
@@ -250,6 +297,7 @@ No app uses this crate yet.
 | CADCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
 | craft-launcher | Planned: `xtask/src/ico.rs` and `icns.rs` move to `icon`. The `ico` and `icns` commands stay in the app. |
 | MaterialCraft | Planned: `pack_ico` and `pack_icns` move to `icon`. The `ico` and `icns` commands stay in the app. |
+| CADCraft, DeckCraft, DesignCraft, GridCraft, LightCraft, PhotoCraft, VectorCraft, WordCraft | Planned: `xtask/src/stats.rs` moves to `stats`. Each app's switch lists its per-crate counts before and after in its pull request. |
 | VectorCraft, DesignCraft, CADCraft, DeckCraft, WordCraft, GridCraft, LightCraft | Planned: `xtask/src/assets.rs` moves to `assets`, each with its own document, folders and row mode; LightCraft with `RowMode::Patterns`, its forbidden extensions and names, and `license_column: Some(4)`. The `cargo xtask assets` output stays in the app. |
 
 Maintainers: the craft-libs maintainers, until a responsible maintainer or team is agreed in the

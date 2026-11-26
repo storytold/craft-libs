@@ -443,9 +443,59 @@ pub(super) fn z_of(a: &Attrs) -> u32 {
     get(a, "draw:z-index").and_then(|v| v.trim().parse::<u32>().ok()).map_or(0, |z| z.saturating_add(1))
 }
 
-/// `float`'s place in the stacking order as `draw:z-index` (see [`z_of`]): 0 when unknown.
-pub(crate) fn z_index(float: Option<&Float>) -> u32 {
-    float.map_or(0, |f| f.z.saturating_sub(1))
+/// Raw export orders. The package writer normalizes their upper boundary once,
+/// after adding all retained markup, leaving room for one-more model orders.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Stacking {
+    unset: u32,
+}
+
+/// A stored order stays below every unset order; equal stored orders remain equal.
+pub(crate) fn z_index(float: Option<&Float>, stacking: Stacking) -> u32 {
+    match float.map(|f| f.z) {
+        Some(z) if z > 0 => z - 1,
+        _ => stacking.unset,
+    }
+}
+
+/// Include group members and inline frames too: the ODF writer emits their orders.
+pub(crate) fn stacking(doc: &craft_wordmodel::Document) -> Result<Stacking, String> {
+    use craft_wordmodel::para::{GroupChild, InlineObject};
+    use std::collections::BTreeSet;
+    fn members(children: &[GroupChild], depth: usize, orders: &mut BTreeSet<u32>) {
+        for c in children {
+            if let Some((_, _, f)) = c.obj.frame()
+                && f.z > 0
+            {
+                orders.insert(f.z);
+            }
+            if let InlineObject::Group { children, .. } = &c.obj
+                && depth < craft_flow::MAX_GROUP_DEPTH
+            {
+                members(children, depth + 1, orders);
+            }
+        }
+    }
+    let (mut orders, _) = doc.stacking_orders();
+    for blocks in std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks)) {
+        for b in blocks {
+            craft_wordmodel::walk::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let Some((_, _, f)) = o.frame()
+                        && f.z > 0
+                    {
+                        orders.insert(f.z);
+                    }
+                    if let InlineObject::Group { children, .. } = o {
+                        members(children, 0, &mut orders);
+                    }
+                }
+            });
+        }
+    }
+    // Final content/styles normalization includes retained XML, not just modeled frames.
+    // Keep the distinct raw MAX slot here; the package writer removes an unused slot once.
+    Ok(Stacking { unset: orders.last().copied().unwrap_or(0) })
 }
 
 /// How far a frame `h` points tall in line with the text is raised from standing on the
@@ -655,4 +705,38 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
         xy.push_str(&format!(" svg:y=\"{}\"", p(f.y)));
     }
     (anchor, props, xy)
+}
+
+/// Scan the same already-inflated content/style streams as the body and header readers.
+/// The existing event parser supplies the same entity, malformed-input and 128-attribute
+/// truncation behavior; no picture fetch or embedded-object callback is invoked.
+pub(super) fn read_orders(content: &[u8], styles: Option<&[u8]>) -> Result<craft_wordmodel::para::FileOrders, String> {
+    use craft_wordmodel::para::FileOrderScan;
+    let bytes = (content.len() as u64).checked_add(styles.map_or(0, |s| s.len() as u64)).ok_or("stacking-order source size overflow")?;
+    let mut scan = FileOrderScan::new(bytes)?;
+    for xml in std::iter::once(content).chain(styles) {
+        super::xml::events(xml, |ev| {
+            if let super::xml::Ev::Start(_, attrs) = ev
+                && let Some(raw) = get(&attrs, "draw:z-index").and_then(|s| s.trim().parse::<u32>().ok())
+            {
+                scan.observe(raw);
+            }
+        });
+    }
+    scan.finish()
+}
+
+#[cfg(test)]
+mod file_order_tests {
+    #[test]
+    fn file_order_scan_uses_the_existing_odf_attribute_and_entity_rules() {
+        let ignored = format!(r#"<r {} draw:z-index="4294967295"/>"#, (0..128).map(|i| format!(r#"a{i}="x""#)).collect::<Vec<_>>().join(" "));
+        let map = super::read_orders(ignored.as_bytes(), None).unwrap();
+        assert_eq!(map.model_order(Some(u32::MAX - 1)), u32::MAX);
+        let custom = br#"<!DOCTYPE r [<!ENTITY rank "4294967295">]><r draw:z-index="&rank;"/>"#;
+        assert_eq!(super::read_orders(custom, None).unwrap().model_order(Some(u32::MAX - 1)), u32::MAX);
+        let numeric = br#"<r draw:z-index="429496729&#53;"><x draw:z-index="4294967294"/></r>"#;
+        let map = super::read_orders(numeric, None).unwrap();
+        assert_eq!((map.model_order(Some(u32::MAX - 1)), map.model_order(Some(u32::MAX))), (u32::MAX - 1, u32::MAX));
+    }
 }
