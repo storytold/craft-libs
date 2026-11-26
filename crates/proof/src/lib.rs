@@ -92,7 +92,9 @@ pub mod patterns;
 pub mod pl;
 pub mod pt;
 mod registered;
+mod repeated;
 pub mod ru;
+pub mod rules;
 pub mod scowl;
 mod slot;
 mod spelling;
@@ -114,11 +116,31 @@ pub struct Options {
     pub ignore_numbers: bool,
     /// Web and email addresses and file paths (`https://…`, `a@b.org`, `www.…`) are skipped.
     pub ignore_internet: bool,
+    /// With `ignore_uppercase`, words in capitals of any length are taken as correct in every language
+    /// that reads a dictionary: it stops at six letters otherwise (`NASA`, not `ORGANISATIONS`).
+    /// English has never stopped at six, so it changes nothing there. **Off by default.**
+    pub ignore_uppercase_any_length: bool,
+    /// File addresses are skipped, as `ignore_internet` skips web and mail addresses: a token that
+    /// starts with `\\` (a network path), a drive and `:\` or `:/`, `file:`, or `/` or `~/` and has
+    /// another `/` further on, such as `\\server\share` and `/usr/lib`. **Off by default.**
+    pub ignore_file_addresses: bool,
+    /// A word written twice in a row, in the same language and with only white space between, is an
+    /// issue ([`IssueKind::Repeated`]) on the second word; numbers are not words for it. With it on,
+    /// the grammar rule `repeated-word` ([`rules::REPEATED_WORD`]) is not reported, so each is found once.
+    /// **Off by default.**
+    pub flag_repeated: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { ignore_uppercase: true, ignore_numbers: true, ignore_internet: true }
+        Options {
+            ignore_uppercase: true,
+            ignore_numbers: true,
+            ignore_internet: true,
+            ignore_uppercase_any_length: false,
+            ignore_file_addresses: false,
+            flag_repeated: false,
+        }
     }
 }
 
@@ -152,6 +174,9 @@ pub struct Issue {
     /// The language the text was checked in: spelling suggestions come from its dictionary
     /// ([`suggest_in`]).
     pub lang: ProofLang,
+    /// The stable id of the grammar rule that found a [`IssueKind::Grammar`] issue ([`rules`] lists
+    /// them per language); `None` for the others.
+    pub rule: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +186,9 @@ pub enum IssueKind {
     Spelling,
     /// A grammar or spacing problem.
     Grammar,
+    /// A word repeated: found with [`Options::flag_repeated`], on the second word. A spelling
+    /// option's issue (marked as spelling is), with no rule and no suggestion.
+    Repeated,
 }
 
 /// Bumped whenever the user dictionary changes, so cached proofing results can be dropped.
@@ -546,8 +574,8 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// rescanned the token each time, so a long whitespace-free run of punctuation-separated words
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
-    let mut token = (0, 0, false);
-    words(text)
+    let mut token = (0, 0, Address::default());
+    let mut found: Vec<Issue> = words(text)
         .into_iter()
         .filter_map(|(a, b)| {
             if a < token.0 || a >= token.1 {
@@ -555,17 +583,32 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
             }
             spelling_issue(text, a, b, lang(a), opts, token.2)
         })
-        .collect()
+        .collect();
+    if opts.flag_repeated {
+        found.extend(repeated::issues(text, &lang));
+        found.sort_by_key(|i| (i.start, i.end));
+    }
+    found
+}
+
+/// What a whitespace-delimited token looks like, for the words in it that spelling skips.
+#[derive(Clone, Copy, Default)]
+struct Address {
+    /// A web or e-mail address ([`is_address`]).
+    internet: bool,
+    /// A file address ([`spelling::is_file_address`]).
+    file: bool,
 }
 
 /// The whitespace-delimited token enclosing the word at `a..b` of `text`: its byte range, and
-/// whether it looks like a web or e-mail address.
-fn enclosing_token(text: &str, a: usize, b: usize) -> (usize, usize, bool) {
+/// whether it looks like a web, e-mail or file address.
+fn enclosing_token(text: &str, a: usize, b: usize) -> (usize, usize, Address) {
     // The token starts after the last white-space character, whatever its width (a no-break
     // space is two bytes and an ideographic space is three).
     let ts = text.get(..a).and_then(|t| t.char_indices().rev().find(|(_, c)| c.is_whitespace())).map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
     let te = text.get(b..).and_then(|t| t.find(char::is_whitespace)).map(|i| b + i).unwrap_or(text.len());
-    (ts, te, text.get(ts..te).is_some_and(is_address))
+    let token = text.get(ts..te);
+    (ts, te, Address { internet: token.is_some_and(is_address), file: token.is_some_and(spelling::is_file_address) })
 }
 
 /// Does a whitespace-delimited token look like a web or e-mail address (`https://…`, `www.…`,
@@ -607,16 +650,20 @@ fn spelling_message(lang: ProofLang) -> &'static str {
 }
 
 /// The spelling issue of the word at `a..b` of `text`, if it is misspelled in `lang`. Words in
-/// web and e-mail addresses are skipped (unless `opts` says otherwise); `internet` is the
-/// classification of the word's enclosing token, from [`enclosing_token`].
-fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool) -> Option<Issue> {
+/// web and e-mail addresses are skipped (unless `opts` says otherwise), and file addresses when it says
+/// so; `address` is the classification of the word's enclosing token, from [`enclosing_token`].
+fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, address: Address) -> Option<Issue> {
     let w = text.get(a..b)?;
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
-    if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
+    if (opts.ignore_internet && address.internet)
+        || (opts.ignore_file_addresses && address.file)
+        || (lang.is_english() && vi::is_vietnamese_word(w))
+        || is_correct_in_with(w, lang, opts)
+    {
         return None;
     }
     let message = spelling_message(lang);
-    Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
+    Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang, rule: None })
 }
 
 /// Is `word` spelled correctly in `lang`? Always true in a language without a dictionary.
@@ -749,7 +796,9 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
     langs.dedup();
     for lang in langs {
         let found = grammar_in(text, lang, !list_item);
-        v.extend(found.into_iter().filter(|i| lang_at(i.start) == lang));
+        // The option finds the repeated words itself: the rule that overlaps it stays quiet.
+        let rule_overlaps = |i: &Issue| opts.flag_repeated && i.rule == Some(rules::REPEATED_WORD);
+        v.extend(found.into_iter().filter(|i| lang_at(i.start) == lang && !rule_overlaps(i)));
     }
     v.sort_by_key(|i| (i.start, i.end));
     v

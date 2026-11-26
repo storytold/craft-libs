@@ -71,10 +71,6 @@ const PARTICLES: &[&str] = &["то", "либо", "нибудь", "ка", "так
 /// Prefixes joined to a pronoun with a hyphen (`кое-кто`, `кое-где`, `кой-какой`).
 const PRONOUN_PREFIXES: &[&str] = &["кое", "кой"];
 
-/// Words of fewer letters than this written in capitals are taken as abbreviations (`ООО`, `НДС`,
-/// `МГУ`, `ГОСТ`).
-const ABBREVIATION_LETTERS: usize = 6;
-
 /// Is `word` spelled correctly in Russian? Numbers, single letters, short words in capitals,
 /// words with digits and words in other scripts are accepted, and so is every word when no
 /// Russian dictionary is installed.
@@ -105,7 +101,8 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     if n <= 1 || (opts.ignore_numbers && w.chars().any(char::is_numeric)) || !w.chars().any(char::is_alphabetic) {
         return true;
     }
-    if opts.ignore_uppercase && crate::spelling::in_capitals(w) && n <= ABBREVIATION_LETTERS {
+    // Words of few letters in capitals are abbreviations (`ООО`, `НДС`, `МГУ`, `ГОСТ`).
+    if opts.ignore_uppercase && crate::spelling::in_capitals(w) && n <= crate::spelling::capitals_limit(opts) {
         return true;
     }
     // Camel case (`ВКонтакте`, `МирКрасок`): a brand or an identifier, not a dictionary word.
@@ -333,7 +330,7 @@ fn hyphenated(d: &AffixDict, w: &str, opts: &crate::Options) -> bool {
     let last = parts.len() - 1;
     parts.iter().enumerate().all(|(i, p)| {
         // An abbreviation part (`ИИ-консультант`, `SMS-рассылка`) or a known word.
-        if known(d, p) || (opts.ignore_uppercase && crate::spelling::capitals_part(p, ABBREVIATION_LETTERS)) {
+        if known(d, p) || (opts.ignore_uppercase && crate::spelling::capitals_part(p, crate::spelling::capitals_limit(opts))) {
             return true;
         }
         // A first part with a linking vowel: the stem (`северо` → `север`) or its adjective

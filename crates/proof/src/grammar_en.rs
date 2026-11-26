@@ -1,6 +1,6 @@
 //! The English grammar rules.
 
-use super::{Issue, IssueKind, ProofLang, space_runs, words};
+use crate::{Issue, IssueKind, ProofLang, rules, space_runs, words};
 
 /// Grammar issues in a paragraph of English text.
 pub fn check_grammar(text: &str) -> Vec<Issue> {
@@ -27,6 +27,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: format!("Repeated word: \"{w1}\""),
                 suggestions: vec![w0.to_string()],
                 lang: ProofLang::En,
+                rule: Some(rules::REPEATED_WORD),
             });
         }
         if gap == " " && (w0 == "a" || w0 == "A") && w1.chars().next().is_some_and(|c| "aeiouAEIOU".contains(c)) && !starts_consonant_sound(w1) {
@@ -37,6 +38,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: "Use \"an\" before a vowel sound".into(),
                 suggestions: vec![if w0 == "A" { "An" } else { "an" }.into()],
                 lang: ProofLang::En,
+                rule: Some(rules::A_AN),
             });
         }
         if gap == " "
@@ -51,6 +53,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: "Use \"a\" before a consonant sound".into(),
                 suggestions: vec![if w0 == "An" { "A" } else { "a" }.into()],
                 lang: ProofLang::En,
+                rule: Some(rules::A_AN),
             });
         }
     }
@@ -66,6 +69,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
             message: "Remove the space before the punctuation".into(),
             suggestions: vec![text.get(i + 1..i + 2).unwrap_or("").to_string()],
             lang: ProofLang::En,
+            rule: Some(rules::SPACE_BEFORE_PUNCTUATION),
         });
     }
     for run in space_runs(text) {
@@ -76,6 +80,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
             message: "Extra space".into(),
             suggestions: vec![" ".into()],
             lang: ProofLang::En,
+            rule: Some(rules::DOUBLE_SPACE),
         });
     }
     // Sentence start capital.
@@ -91,6 +96,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
                 message: "Capitalize the first word of a sentence".into(),
                 suggestions: vec![fixed],
                 lang: ProofLang::En,
+                rule: Some(rules::SENTENCE_CAPITAL),
             });
         }
         let tail = text.get(*b..).unwrap_or("");

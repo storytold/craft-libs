@@ -3,10 +3,10 @@
 //! Indonesian spelling (PUEBI) writes reduplication with a hyphen (`anak-anak`), the hyphenated
 //! form is offered first, then the single word.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Id }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Id, rule: Some(rule) }
 }
 
 /// Checks `text` for repeated words (offering the hyphenated form first) and spacing problems, with Indonesian messages.
@@ -23,7 +23,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         let [(a0, b0), (a1, b1)] = pair else { continue };
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
         if !gap.is_empty() && gap.chars().all(char::is_whitespace) && w0.chars().all(char::is_alphabetic) && w0.to_lowercase() == w1.to_lowercase() {
-            v.push(issue(*a0, *b1, format!("Kata berulang: “{w1}”"), vec![format!("{w0}-{w1}"), w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Kata berulang: “{w1}”"), vec![format!("{w0}-{w1}"), w0.to_string()]));
         }
     }
 }
@@ -54,10 +54,10 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
                 _ => false,
             };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Spasi sebelum tanda baca".into(), vec![p.to_string()]));
+            v.push(issue(rules::SPACE_BEFORE_PUNCTUATION, i, i + 1 + p.len_utf8(), "Spasi sebelum tanda baca".into(), vec![p.to_string()]));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Spasi ganda".into(), vec![" ".into()]));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Spasi ganda".into(), vec![" ".into()]));
     }
 }

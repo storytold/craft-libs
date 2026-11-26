@@ -304,6 +304,66 @@ notice) is embedded with the dictionaries: `craft_proof::scowl::notice()`, for a
 Embedding SCOWL adds 2,056,533 bytes of Language data (the en-US, en-GB, en-CA and en-AU `.aff`/`.dic`
 and the notice); the Moby list (432,905 bytes) stays for hyphenation.
 
+## Spelling options
+
+`Options` (what the spelling check skips or flags) has three options besides Word's three
+(`ignore_uppercase`, `ignore_numbers`, `ignore_internet`, all on by default). The new ones are **off by
+default**, so a caller that doesn't set them sees nothing change.
+
+| Option | When on |
+|---|---|
+| `ignore_uppercase_any_length` | With `ignore_uppercase`, a word in capitals is skipped whatever its length where the per-language functions (`pl::is_correct_with_options` and the others) and the parts of a hyphenated word (Indonesian, Russian: `SMS-ка`) stopped at six letters (`NASA`, not `ORGANISATIONS`). A whole word in capitals is skipped at any length in every language already, by `ignore_uppercase` alone, as in English |
+| `ignore_file_addresses` | The words of a file address are skipped, as `ignore_internet` skips web and mail addresses: a token (leading brackets and quotes aside) that starts with `\\` (a network path), a drive letter and `:\` or `:/`, or `file:`, or that starts with `/` or `~/` and has another `/` further on (`\\server\share`, `C:\temp`, `/usr/lib`, `~/docs/a`) |
+| `flag_repeated` | A word written twice in a row, in one language that has proofing tools and with only white space between, is an issue of kind `IssueKind::Repeated` on the second word (case ignored; a word needs a letter, so `2026 2026` is none). It has no rule and no suggestion, and its message is the grammar rule's own, in the same language. With it on, the grammar rule `repeated-word` is not reported: each repeat is found once |
+
+```rust
+use craft_proof::{IssueKind, Options, ProofLang, check_text_with};
+
+let opts = Options { ignore_file_addresses: true, flag_repeated: true, ..Options::default() };
+let text = "Open \\\\server\\teh and the the plan";
+let issues = check_text_with(text, &[(0..text.len(), ProofLang::En)], &opts, false, false);
+assert!(issues.iter().all(|i| i.kind == IssueKind::Repeated)); // only the second `the`
+```
+
+Adding fields to `Options` breaks a caller that writes all of them without `..Options::default()`.
+
+## Grammar rule ids
+
+Every grammar issue (`IssueKind::Grammar`) names the rule that found it in `Issue::rule`, a stable
+id a host can use to keep the rules that suit its text and leave the others out (the messages are in
+each language). An id is lower-case words joined by `-`, it is the same wherever one rule applies in
+several languages, and it is **never renamed or reused**: ids are only added. `Issue::rule` is `None`
+for spelling issues (`Spelling`, `Repeated`). `craft_proof::rules::grammar_rules(lang)` returns the
+row of a language, and the constants of `craft_proof::rules` name the ids.
+
+| Language | Rule ids |
+|---|---|
+| English (every English) | `repeated-word`, `a-an`, `space-before-punctuation`, `double-space`, `sentence-capital` |
+| Polish | `repeated-word`, `space-before-punctuation`, `double-space`, `sentence-capital`, `missing-comma`, `we-ze`, `doubled-punctuation` |
+| Portuguese (also `pt-PT`) | `repeated-word`, `space-before-punctuation`, `double-space`, `sentence-capital`, `doubled-punctuation` |
+| Italian | `repeated-word`, `space-before-punctuation`, `double-space`, `sentence-capital`, `doubled-punctuation`, `po-apostrophe`, `qual-e`, `e-apostrophe`, `un-apostrophe-masculine`, `un-apostrophe-feminine` |
+| Croatian | `repeated-word`, `space-before-punctuation`, `double-space`, `sentence-capital`, `doubled-punctuation` |
+| Turkish | `repeated-word`, `space-before-punctuation`, `double-space`, `comma-before-conjunction`, `comma-after-conjunction`, `sentence-capital` |
+| Russian | `repeated-word`, `space-before-punctuation`, `double-space`, `sentence-capital`, `missing-comma`, `doubled-punctuation` |
+| Czech | `repeated-word`, `space-before-punctuation`, `double-space` |
+| Indonesian | `repeated-word`, `space-before-punctuation`, `double-space` |
+| Spanish (every Spanish) | `repeated-word`, `space-after-opening-mark`, `space-before-punctuation`, `double-space`, `opening-marks` |
+| French (every French locale) | `high-punctuation`, `guillemets`, `straight-quotes`, `repeated-word`, `sentence-capital`, `elision` |
+
+German, Bulgarian and the other `ProofLang::Pack` languages have no grammar rules, so no ids.
+
+What each id finds: `repeated-word` a word twice in a row (not what the language doubles on purpose);
+`space-before-punctuation` a space where the language puts none; `double-space` two or more spaces;
+`sentence-capital` a lower-case word that begins a sentence or the paragraph (off for the first word of
+a list item: `check_text_with(.., list_item = true)`); `doubled-punctuation` `,,` and the like;
+`missing-comma` a comma before a word that opens a clause; `a-an` English `a`/`an`; `we-ze` Polish
+`w`/`we` and `z`/`ze`; `opening-marks` a Spanish `?` or `!` with no `¿` or `¡`; `space-after-opening-mark`
+a space after one; `high-punctuation` the French no-break space before `; : ! ?`; `guillemets` the
+no-break space inside `«` `»`; `straight-quotes` `"` where `«` `»` belong; `elision` `le arbre` for
+`l’arbre`; `po-apostrophe`, `qual-e`, `e-apostrophe`, `un-apostrophe-masculine` and
+`un-apostrophe-feminine` the Italian apostrophe rules; `comma-before-conjunction` and
+`comma-after-conjunction` the Turkish commas a conjunction takes none of.
+
 ## Check
 
 ```sh

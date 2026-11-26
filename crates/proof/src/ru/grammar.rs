@@ -17,7 +17,7 @@
 //!
 //! No English rule (such as `a`/`an`) applies to Russian text.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
 /// Words Russian repeats on purpose: interjections, onomatopoeia and emphatic doubling.
 const ALLOWED_REPEATS: &[&str] = &[
@@ -435,8 +435,8 @@ const PREPOSITIONS: &[&str] = &[
     "поверх",
 ];
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Ru }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Ru, rule: Some(rule) }
 }
 
 fn capitalize(w: &str) -> String {
@@ -472,7 +472,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && w0.to_lowercase() == w1.to_lowercase()
             && !ALLOWED_REPEATS.contains(&w0.to_lowercase().as_str())
         {
-            v.push(issue(*a0, *b1, format!("Повтор слова: «{w1}»"), vec![w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Повтор слова: «{w1}»"), vec![w0.to_string()]));
         }
     }
 }
@@ -500,11 +500,17 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             _ => false,
         };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Лишний пробел перед знаком препинания".into(), vec![p.to_string()]));
+            v.push(issue(
+                rules::SPACE_BEFORE_PUNCTUATION,
+                i,
+                i + 1 + p.len_utf8(),
+                "Лишний пробел перед знаком препинания".into(),
+                vec![p.to_string()],
+            ));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Двойной пробел".into(), vec![" ".into()]));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Двойной пробел".into(), vec![" ".into()]));
     }
 }
 
@@ -548,7 +554,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
             ends_sentence(text.get(pb..a).unwrap_or(""), text.get(pa..pb).unwrap_or(""))
         };
         if starts && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
-            v.push(issue(a, b, "Предложение начинается со строчной буквы".into(), vec![capitalize(w)]));
+            v.push(issue(rules::SENTENCE_CAPITAL, a, b, "Предложение начинается со строчной буквы".into(), vec![capitalize(w)]));
         }
     }
 }
@@ -577,7 +583,7 @@ fn missing_commas(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         if NO_COMMA_AFTER.contains(&p) || PREPOSITIONS.contains(&p) {
             continue;
         }
-        v.push(issue(pb, b, format!("Возможно, пропущена запятая перед «{w}»"), vec![format!(", {w}")]));
+        v.push(issue(rules::MISSING_COMMA, pb, b, format!("Возможно, пропущена запятая перед «{w}»"), vec![format!(", {w}")]));
     }
 }
 
@@ -606,7 +612,7 @@ fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
                 b'.' => vec![".".into(), "…".into()],
                 _ => vec![char::from(b).to_string()],
             };
-            v.push(issue(i, end, "Повтор знака препинания".into(), suggestions));
+            v.push(issue(rules::DOUBLED_PUNCTUATION, i, end, "Повтор знака препинания".into(), suggestions));
         }
         i += run.max(1);
     }

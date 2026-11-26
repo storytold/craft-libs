@@ -18,7 +18,7 @@
 //!
 //! No English rule (such as `a`/`an`) applies to Polish text.
 
-use crate::{Issue, IssueKind, ProofLang, words};
+use crate::{Issue, IssueKind, ProofLang, rules, words};
 
 /// Words Polish repeats on purpose: interjections, onomatopoeia and emphatic doubling.
 const ALLOWED_REPEATS: &[&str] = &[
@@ -226,8 +226,8 @@ const PREPOSITIONS: &[&str] = &[
     "blisko",
 ];
 
-fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
-    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Pl }
+fn issue(rule: &'static str, start: usize, end: usize, message: String, suggestions: Vec<String>) -> Issue {
+    Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Pl, rule: Some(rule) }
 }
 
 fn capitalize(w: &str) -> String {
@@ -273,7 +273,7 @@ fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && w0.to_lowercase() == w1.to_lowercase()
             && !ALLOWED_REPEATS.contains(&w0.to_lowercase().as_str())
         {
-            v.push(issue(*a0, *b1, format!("Powtórzone słowo: „{w1}”"), vec![w0.to_string()]));
+            v.push(issue(rules::REPEATED_WORD, *a0, *b1, format!("Powtórzone słowo: „{w1}”"), vec![w0.to_string()]));
         }
     }
 }
@@ -301,11 +301,17 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             _ => false,
         };
         if flag {
-            v.push(issue(i, i + 1 + p.len_utf8(), "Zbędna spacja przed znakiem interpunkcyjnym".into(), vec![p.to_string()]));
+            v.push(issue(
+                rules::SPACE_BEFORE_PUNCTUATION,
+                i,
+                i + 1 + p.len_utf8(),
+                "Zbędna spacja przed znakiem interpunkcyjnym".into(),
+                vec![p.to_string()],
+            ));
         }
     }
     for run in crate::space_runs(text) {
-        v.push(issue(run.start, run.end, "Podwójna spacja".into(), vec![" ".into()]));
+        v.push(issue(rules::DOUBLE_SPACE, run.start, run.end, "Podwójna spacja".into(), vec![" ".into()]));
     }
 }
 
@@ -349,7 +355,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
             ends_sentence(text.get(pb..a).unwrap_or(""), text.get(pa..pb).unwrap_or(""))
         };
         if starts && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
-            v.push(issue(a, b, "Wielka litera na początku zdania".into(), vec![capitalize(w)]));
+            v.push(issue(rules::SENTENCE_CAPITAL, a, b, "Wielka litera na początku zdania".into(), vec![capitalize(w)]));
         }
     }
 }
@@ -372,7 +378,7 @@ fn missing_commas(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         if w.starts_with("któr") && (PREPOSITIONS.contains(&p) || p == "to") {
             continue;
         }
-        v.push(issue(pb, b, format!("Brak przecinka przed „{w}”"), vec![format!(", {w}")]));
+        v.push(issue(rules::MISSING_COMMA, pb, b, format!("Brak przecinka przed „{w}”"), vec![format!(", {w}")]));
     }
 }
 
@@ -398,7 +404,7 @@ fn we_ze(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         };
         if wanted {
             let fixed = if w0.starts_with(char::is_uppercase) { capitalize(long) } else { long.to_string() };
-            v.push(issue(*a0, *b0, format!("Przed tym słowem piszemy „{long}”"), vec![fixed]));
+            v.push(issue(rules::WE_ZE, *a0, *b0, format!("Przed tym słowem piszemy „{long}”"), vec![fixed]));
         }
     }
 }
@@ -428,7 +434,7 @@ fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
                 b'.' => vec![".".into(), "…".into()],
                 _ => vec![char::from(b).to_string()],
             };
-            v.push(issue(i, end, "Powtórzony znak interpunkcyjny".into(), suggestions));
+            v.push(issue(rules::DOUBLED_PUNCTUATION, i, end, "Powtórzony znak interpunkcyjny".into(), suggestions));
         }
         i += run.max(1);
     }
