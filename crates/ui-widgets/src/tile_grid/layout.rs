@@ -1,4 +1,4 @@
-//! Where tiles, group headers and tail rows go: `arrange` lays out justified rows and card grids under group headers,
+//! Where tiles, group headers and tail rows go: `arrange` lays out rows or columns under group headers,
 //! the tail rows follow them, and `GridLayout` is the item layout the grid hands the item step. Equal tiles without
 //! groups or tail rows are `craft_behavior::TileLayout`; everything else is an arrangement. Every tile is its picture
 //! plus what the tile adds around it (`Around`), in every tiling.
@@ -221,6 +221,12 @@ pub enum Tiling {
         /// Picture width divided by height.
         aspect: f32,
     },
+    /// Equal-width columns of pictures at their own aspect, filled from the shortest column.
+    #[non_exhaustive]
+    Waterfall {
+        /// Picture width at the current zoom.
+        side: f32,
+    },
 }
 
 impl Tiling {
@@ -232,6 +238,11 @@ impl Tiling {
     /// Cards with pictures `side` wide.
     pub fn cards(side: f32, aspect: f32) -> Self {
         Tiling::Cards { side, aspect }
+    }
+
+    /// Waterfall columns with pictures up to `side` wide.
+    pub fn waterfall(side: f32) -> Self {
+        Tiling::Waterfall { side }
     }
 }
 
@@ -253,7 +264,7 @@ pub struct TileRow {
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct TileArrangement {
-    /// Rows, top to bottom.
+    /// Rows, top to bottom. Waterfall arrangements have independent columns and no rows.
     pub rows: Vec<TileRow>,
     /// Each tile's picture rect from the arrangement's top left; `Rect::NOTHING` for a tile of a closed group.
     pub tiles: Vec<Rect>,
@@ -265,6 +276,15 @@ pub struct TileArrangement {
     pub tails: Vec<Rect>,
     /// The whole height.
     pub height: f32,
+    waterfall: Option<WaterfallIndex>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct WaterfallIndex {
+    /// Tiles in each occupied column, in top-to-bottom order. Columns start at the reading edge.
+    columns: Vec<Vec<usize>>,
+    /// The vertical span of each open, nonempty group, excluding its header.
+    groups: Vec<(usize, f32, f32)>,
 }
 
 impl TileArrangement {
@@ -354,9 +374,28 @@ impl TileArrangement {
 
     /// The group whose tiles cross the top edge `top`, for the pinned header.
     pub fn group_at(&self, top: f32) -> Option<usize> {
+        if let Some(waterfall) = &self.waterfall {
+            let at = waterfall.groups.partition_point(|&(_, _, end)| end < top);
+            return waterfall.groups.get(at).and_then(|&(group, start, _)| (start <= top).then_some(group));
+        }
         let row = self.rows.get(self.rows_between(top, top).start)?;
         row.group
     }
+
+    /// The group headers that cross `top..bottom`, in group order. A pinned header can be outside this range.
+    pub(super) fn headers_between(&self, top: f32, bottom: f32) -> Range<usize> {
+        rects_between(&self.headers, top, bottom)
+    }
+
+    pub(super) fn tails_between(&self, top: f32, bottom: f32) -> Range<usize> {
+        rects_between(&self.tails, top, bottom)
+    }
+}
+
+fn rects_between(rects: &[Rect], top: f32, bottom: f32) -> Range<usize> {
+    let first = rects.partition_point(|rect| rect.bottom() < top);
+    let count = rects[first..].partition_point(|rect| rect.top() <= bottom);
+    first..first + count
 }
 
 /// The spacing `arrange` reads.
@@ -398,6 +437,8 @@ pub fn aspects_of<K>(source: &dyn ItemSource<K>) -> Vec<f32> {
 /// - `Justified`: tiles fill a row with pictures `row_height` high until the next would pass the width; the row's
 ///   pictures are then scaled so its tiles and gaps fill the width exactly; a group's last row keeps `row_height`.
 /// - `Cards`: as many columns as fit; each group starts a new row below its header.
+/// - `Waterfall`: as many equal-width columns as fit; each picture keeps its aspect and goes in the shortest column,
+///   with ties going to the reading start. Each group starts below the tallest preceding column.
 /// - `groups` are in display order and cover only the tiles they name; tiles outside every group sit in rows
 ///   without a header. A closed group has its header only.
 /// - `inset` pads the sides and the bottom, and the top unless a group header opens the grid: that header sits at
@@ -408,6 +449,9 @@ pub fn arrange<K>(aspects: &[f32], groups: &[TileGroup<K>], width: f32, tiling: 
     let ArrangeSpacing { gap, inset, group_header } = spacing;
     let content = (width - 2.0 * inset).max(1.0);
     let mut out = TileArrangement { tiles: vec![Rect::NOTHING; n], ..TileArrangement::default() };
+    if matches!(tiling, Tiling::Waterfall { .. }) {
+        out.waterfall = Some(WaterfallIndex::default());
+    }
 
     let spans = group_spans(groups, n);
     let mut segments: Vec<(Option<usize>, Range<usize>)> = Vec::new();
@@ -490,6 +534,36 @@ pub fn arrange<K>(aspects: &[f32], groups: &[TileGroup<K>], width: f32, tiling: 
                     i = j;
                 }
             }
+            Tiling::Waterfall { side } => {
+                let Some(index) = &mut out.waterfall else { continue };
+                if range.is_empty() {
+                    continue;
+                }
+                let side = side.min(content - around.width()).max(MIN_PICTURE);
+                let card = side + around.width();
+                let columns = columns_in(content, card, gap).min(range.len());
+                index.columns.resize_with(index.columns.len().max(columns), Vec::new);
+                let mut ends = vec![y; columns];
+                let mut tallest = y;
+                for tile in range {
+                    let Some((column, end)) = ends.iter_mut().enumerate().min_by(|(_, a), (_, b)| a.total_cmp(b)) else { break };
+                    let x = inset + around.start + column as f32 * (card + gap);
+                    let top = *end + around.top;
+                    let height = side / sanitized[tile];
+                    // A hint too extreme to represent in this layout falls back to a square picture.
+                    let height = if top + height > top && (top + height + around.bottom + gap).is_finite() { height } else { side };
+                    let picture = Rect::from_min_size(pos2(x, top), vec2(side, height));
+                    let bottom = picture.bottom() + around.bottom;
+                    out.tiles[tile] = picture;
+                    index.columns[column].push(tile);
+                    tallest = tallest.max(bottom);
+                    *end = bottom + gap;
+                }
+                if let Some(group) = group {
+                    index.groups.push((group, y, tallest));
+                }
+                y = tallest;
+            }
         }
     }
     out.height = y + inset;
@@ -518,12 +592,9 @@ pub(super) struct Recipe {
     pub(super) stamp: u64,
     pub(super) width: f32,
     pub(super) tiles: usize,
-    pub(super) side: f32,
-    pub(super) aspect: f32,
-    pub(super) justified: bool,
+    pub(super) tiling: Tiling,
     pub(super) around: Around,
-    /// A group header's height.
-    pub(super) group_header: f32,
+    pub(super) spacing: ArrangeSpacing,
     /// Each group's first tile, count and open state.
     pub(super) groups: Vec<(usize, usize, bool)>,
     /// How many tail rows follow, and their height.
@@ -549,7 +620,7 @@ impl GridLayout {
     /// those of the grid's outline: the header of every group stands just before the group's first tile, and the tail
     /// rows follow every tile and header.
     pub fn arranged(arrangement: TileArrangement, width: f32, around: Around) -> Self {
-        let rows = arrangement.outline_rows().into();
+        let rows = if arrangement.waterfall.is_some() { Arc::default() } else { arrangement.outline_rows().into() };
         let starts = arrangement.starts.as_slice().into();
         GridLayout { kind: Kind::Arranged { arrangement: Arc::new(arrangement), rows, starts, width, around }, recipe: None }
     }
@@ -628,6 +699,25 @@ impl GridLayout {
             pos2(picture.right() + around.end, picture.bottom() + around.bottom),
         )
     }
+
+    /// Find tiles by column. The cards in each column have sorted tops and bottoms, even across group boundaries.
+    fn waterfall_tiles<'a>(
+        arrangement: &'a TileArrangement,
+        index: &'a WaterfallIndex,
+        around: Around,
+        view: Rect,
+    ) -> impl Iterator<Item = usize> + 'a {
+        let card = move |tile| Self::card(arrangement, around, tile);
+        let first = index.columns.partition_point(|column| column.first().is_some_and(|&tile| card(tile).right() < view.left()));
+        let columns = &index.columns[first..];
+        let count = columns.partition_point(|column| column.first().is_some_and(|&tile| card(tile).left() <= view.right()));
+        columns[..count].iter().flat_map(move |column| {
+            let first = column.partition_point(|&tile| card(tile).bottom() < view.top());
+            let rest = &column[first..];
+            let count = rest.partition_point(|&tile| card(tile).top() <= view.bottom());
+            rest[..count].iter().copied()
+        })
+    }
 }
 
 fn shifted(offset: ScrollPos, inset: f32) -> ScrollPos {
@@ -649,18 +739,26 @@ impl ItemLayout for GridLayout {
     fn visible(&self, offset: ScrollPos, view: Vec2, out: &mut Vec<usize>) {
         match &self.kind {
             Kind::Equal { tiles, inset } => tiles.visible(shifted(offset, *inset), view, out),
-            Kind::Arranged { arrangement, starts, .. } => {
+            Kind::Arranged { arrangement, starts, around, .. } => {
                 let top = offset.y as f32;
                 let bottom = top + view.y;
+                let left = offset.x as f32;
+                let right = left + view.x;
                 let mut found: Vec<usize> = Vec::new();
-                for row in &arrangement.rows[arrangement.rows_between(top, bottom)] {
-                    found.extend(row.tiles.clone().map(|tile| outline_position(starts, tile)));
+                if let Some(index) = &arrangement.waterfall {
+                    let view = Rect::from_min_max(pos2(left, top), pos2(right, bottom));
+                    found.extend(Self::waterfall_tiles(arrangement, index, *around, view).map(|tile| outline_position(starts, tile)));
+                } else {
+                    for row in &arrangement.rows[arrangement.rows_between(top, bottom)] {
+                        found.extend(row.tiles.clone().map(|tile| outline_position(starts, tile)));
+                    }
                 }
                 let pinned = arrangement.pinned(top).map(|(group, _)| group);
-                let shown = arrangement.headers.iter().enumerate().filter(|(_, header)| header.bottom() >= top && header.top() <= bottom);
-                found.extend(shown.map(|(group, _)| group).chain(pinned).map(|group| starts[group] + group));
-                let tails = arrangement.tails.iter().enumerate().filter(|(_, tail)| tail.bottom() >= top && tail.top() <= bottom);
-                found.extend(tails.map(|(tail, _)| arrangement.tail_from() + tail));
+                let crosses = |rect: Rect| arrangement.waterfall.is_none() || (rect.left() <= right && rect.right() >= left);
+                let headers = arrangement.headers_between(top, bottom).chain(pinned).filter(|&group| crosses(arrangement.headers[group]));
+                found.extend(headers.map(|group| starts[group] + group));
+                let tails = arrangement.tails_between(top, bottom).filter(|&tail| crosses(arrangement.tails[tail]));
+                found.extend(tails.map(|tail| arrangement.tail_from() + tail));
                 found.sort_unstable();
                 found.dedup();
                 out.extend(found);
@@ -700,12 +798,17 @@ impl ItemLayout for GridLayout {
                 {
                     return Some(header(group));
                 }
-                if let Some(tail) = arrangement.tails.iter().position(|tail| tail.contains(at)) {
+                if let Some(tail) = arrangement.tails_between(at.y, at.y).find(|&tail| arrangement.tails[tail].contains(at)) {
                     return Some(arrangement.tail_from() + tail);
                 }
                 let below = arrangement.headers.partition_point(|header| header.top() <= at.y);
                 if let Some(group) = below.checked_sub(1).filter(|&group| arrangement.headers[group].contains(at)) {
                     return Some(header(group));
+                }
+                if let Some(index) = &arrangement.waterfall {
+                    return Self::waterfall_tiles(arrangement, index, *around, Rect::from_min_max(at, at))
+                        .min()
+                        .map(|tile| outline_position(starts, tile));
                 }
                 let row = arrangement.rows.get(arrangement.rows_between(at.y, at.y).start)?;
                 row.tiles.clone().find(|&tile| Self::card(arrangement, *around, tile).contains(at)).map(|tile| outline_position(starts, tile))
@@ -716,6 +819,7 @@ impl ItemLayout for GridLayout {
     fn nav(&self) -> NavShape {
         match &self.kind {
             Kind::Equal { tiles, .. } => tiles.nav(),
+            Kind::Arranged { arrangement, .. } if arrangement.waterfall.is_some() => NavShape::StaggeredGrid,
             Kind::Arranged { .. } => NavShape::RaggedGrid,
         }
     }

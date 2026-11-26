@@ -4,3 +4,4 @@ pub(crate) mod cells;
 pub(crate) mod grid;
 pub(crate) mod keys;
 pub(crate) mod tile;
+pub(crate) mod waterfall;
