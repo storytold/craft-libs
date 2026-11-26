@@ -2193,6 +2193,55 @@ mod test {
             let t = solve_t_for_y(line(y0, y1), y0 / 2.0 + y1 / 2.0);
             assert!((t - 0.5).abs() < 1e-9, "t = {t} from {y0} to {y1}");
         }
+
+        // Curves from `a` to `a + b` whose height is `a + b * t^3` (control points a, a, a,
+        // a + b) or `a + b * (3t^2 - 2t^3)` (control points a, a, a + b, a + b), solved at a
+        // height that is not the midpoint. The last value in each row is the polynomial at
+        // `t`: 0.75^3 = 0.421875, 3 * 0.25^2 - 2 * 0.25^3 = 0.15625 and
+        // 3 * 0.75^2 - 2 * 0.75^3 = 0.84375. Without scaling, `3.0 * p1` or `3.0 * p2`
+        // overflows to infinity for each of them.
+        for (a, b, [s1, s2, s3], t, fraction) in [
+            (7e307, 8e307, [0.0, 0.0, 1.0], 0.75, 0.421875),
+            (-1.5e308, 1e308, [0.0, 1.0, 1.0], 0.25, 0.15625),
+            (-8e307, 1.6e308, [0.0, 1.0, 1.0], 0.75, 0.84375),
+        ] {
+            let c = CubicBez::new(
+                Point::new(0.0, a),
+                Point::new(2.0, a + b * s1),
+                Point::new(5.0, a + b * s2),
+                Point::new(10.0, a + b * s3),
+            );
+            let got = solve_t_for_y(c, a + b * fraction);
+            assert!((got - t).abs() < 1e-9, "t = {got}, expected {t}, from {a} to {}", a + b);
+        }
+    }
+
+    #[test]
+    fn overlapping_rectangles_near_the_float_limit() {
+        // Two rectangles that overlap in (5, 1.1e308)-(10, 1.2e308). Without `f64::midpoint`
+        // in the curve comparison, a debug build fails the `x0 < x1 && x1 < x2` assertion in
+        // `interpolate_quadratic` while it builds this topology.
+        let mut path = kurbo::BezPath::new();
+        for (x0, y0, x1, y1) in [(0.0, 1e308, 10.0, 1.2e308), (5.0, 1.1e308, 15.0, 1.3e308)] {
+            path.move_to((x0, y0));
+            path.line_to((x1, y0));
+            path.line_to((x1, y1));
+            path.line_to((x0, y1));
+            path.close_path();
+        }
+        let top = crate::topology::Topology::from_path(&path, 1e-6).unwrap();
+
+        for (inside, expected) in [
+            (2, kurbo::Rect::new(5.0, 1.1e308, 10.0, 1.2e308)),
+            (1, kurbo::Rect::new(0.0, 1e308, 15.0, 1.3e308)),
+        ] {
+            let contours = top.contours(|w| *w >= inside);
+            let boxes: Vec<_> = contours
+                .contours()
+                .map(|c| kurbo::Shape::bounding_box(&c.path))
+                .collect();
+            assert_eq!(boxes, [expected], "winding number at least {inside}");
+        }
     }
 
     #[test]
