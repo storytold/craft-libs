@@ -280,11 +280,16 @@ pub struct HeaderParts {
     pub start: f32,
     /// The width at the end edge.
     pub end: f32,
+    /// The least the end edge narrows to, when the line is too narrow for the header's children to keep `keep`
+    /// beside the end parts' whole width. `None`: the end edge keeps its width.
+    pub end_least: Option<f32>,
+    /// The room the header's children keep before the end edge narrows below `end` (to `end_least`).
+    pub keep: f32,
 }
 
 impl HeaderParts {
     /// No room for parts.
-    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0 };
+    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0, end_least: None, keep: 0.0 };
 
     /// `width` at the start edge.
     pub const fn start(mut self, width: f32) -> Self {
@@ -295,6 +300,14 @@ impl HeaderParts {
     /// `width` at the end edge.
     pub const fn end(mut self, width: f32) -> Self {
         self.end = width;
+        self
+    }
+
+    /// The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
+    /// for both, the children's least room comes before the end parts' whole width.
+    pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self {
+        self.end_least = Some(least);
+        self.keep = keep;
         self
     }
 }
@@ -335,6 +348,20 @@ pub enum QuietHeader {
     /// The header heads the body: its flow starts as after a rule, so the first section under the title draws no rule
     /// above it and sections after it keep theirs. Production VectorCraft's kind line over its inspector's sections.
     Heads,
+}
+
+/// The cursor over a header's move band ([`DragBand::Move`]). An app sets it once at its root (`RootEnv::values`); the
+/// default is `Hand`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MoveBandCursor {
+    /// The open hand, and the closed hand while the band is dragged.
+    #[default]
+    Hand,
+    /// The arrow, as an OS title bar shows, also over the click-only controls on the band (menu titles, buttons):
+    /// production VectorCraft's title bar and panel headers.
+    Arrow,
 }
 
 /// A header region, filled by `Container::header`.
@@ -639,7 +666,8 @@ pub enum ScrollIndicator {
     Strips,
     /// A bar that takes no room from the content, as a tool rail or an options bar shows its overflow: it lies in the
     /// container's end padding (its bottom padding for x), over the content where the container has none, and shows
-    /// only while the pointer is over the container or presses the bar.
+    /// only while the pointer is over the container or presses the bar, or while the content overflows when the scroll
+    /// shows it at rest ([`Scroll::at_rest`]).
     Overlay,
 }
 
@@ -655,11 +683,13 @@ pub struct Scroll {
     pub notch: Notch,
     /// How the overflow shows.
     pub indicator: ScrollIndicator,
+    /// Whether an overlay bar also shows while the pointer is away from the container.
+    pub at_rest: bool,
 }
 
 impl Scroll {
     const fn on(axes: ScrollAxes) -> Scroll {
-        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar }
+        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar, at_rest: false }
     }
 
     /// Shows the overflow along y as scroll strips instead of a bar.
@@ -683,6 +713,18 @@ impl Scroll {
     /// Whether the overflow shows as an overlay bar.
     pub const fn has_overlay(&self) -> bool {
         matches!(self.indicator, ScrollIndicator::Overlay)
+    }
+
+    /// Shows an overlay bar whenever the content overflows, also while the pointer is away from the container. A bar of
+    /// another indicator already shows at rest.
+    pub const fn at_rest(mut self) -> Scroll {
+        self.at_rest = true;
+        self
+    }
+
+    /// Whether the overlay bar shows only while the pointer is over the container or presses the bar.
+    pub const fn overlay_hides_at_rest(&self) -> bool {
+        self.has_overlay() && !self.at_rest
     }
 
     /// Scrolls along y.

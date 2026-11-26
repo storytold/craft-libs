@@ -115,7 +115,8 @@ pub enum LayerRole {
     /// An ordinary layer.
     #[default]
     Plain,
-    /// A progress window: `any_open` leaves it out, as it blocks nothing the user waits on.
+    /// A progress window: `any_open` with `OpenFilter::Asks` leaves it out, as it asks the user nothing. The other
+    /// filters count it, since it still covers the window.
     Progress,
     /// A field over its owner's own content that edits it in place (a page's rename field): it is part of the owner,
     /// so the owner reports no open or expanded state and no popup it controls while it shows.
@@ -132,6 +133,8 @@ pub enum OpenFilter {
     Modal,
     /// Layers that take keys: popups and modals.
     Keys,
+    /// Modal layers that wait for the user's answer: every modal layer except a progress window.
+    Asks,
 }
 
 /// One shown egui layer.
@@ -313,7 +316,8 @@ pub(crate) struct Persist {
     popup_over_modal: bool,
     /// The layers that first showed while the primary button was held, until that press ends.
     held_open: IdSet,
-    /// The root frame and pass each shown layer first ran its body in; gone with the layer's last entry.
+    /// The root frame and pass each shown layer first ran its body in, and for a layer of this window that shows in a
+    /// popup window of its own, the pass it first asked for it in; gone with the layer's last entry.
     appeared: IdMap<(u64, u64)>,
     /// The roots whose asked raise ran in a pass where a floating window (re)appeared: egui raises every layer that
     /// shows again, and its area order keeps the old order among the layers raised in one pass, so the raise is asked
@@ -441,12 +445,19 @@ pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| {
-        pass.last.iter().filter(|entry| !entry.exiting && entry.role != LayerRole::Progress).any(|entry| match filter {
+        pass.last.iter().filter(|entry| !entry.exiting).any(|entry| match filter {
             OpenFilter::Any => true,
             OpenFilter::Modal => entry.blocks_window(),
             OpenFilter::Keys => entry.takes_keys(),
+            OpenFilter::Asks => entry.blocks_window() && entry.role != LayerRole::Progress,
         })
     })
+}
+
+/// Whether a popup or a modal of the running viewport was shown last frame: the layers whose rank takes keys, which the
+/// window of a dock is not.
+pub(crate) fn popup_or_modal_open(ctx: &Context) -> bool {
+    with_pass(ctx, |pass| pass.last.iter().any(|entry| !entry.exiting && entry.rank.takes_keys()))
 }
 
 /// The layer that receives Cancel: the newest member of the topmost family that takes keys.
@@ -546,11 +557,29 @@ fn reopened(ctx: &Context, id: Id, exiting: bool) -> bool {
     !exiting && with_pass(ctx, |pass| pass.last.iter().any(|entry| entry.id == id && entry.exiting))
 }
 
-/// Whether the layer `id` appears in this pass, read before its `begin_layer`: it was hidden in the last pass, or it
+/// Whether the layer `id` appears in this pass, read before its `note_appeared`: it was hidden in the last pass, or it
 /// faded out and is open again. What the layer remembers starts fresh then; a discard pass that repeats the frame
 /// keeps what the first pass of the frame recorded.
 pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
     reopened(ctx, id, exiting) || with_persist(ctx, pass::current_viewport(ctx), |persist| !persist.appeared.contains_key(&id))
+}
+
+/// Records that the layer `id` shows in the running viewport in this pass; returns whether it appears in it
+/// ([`appears`]). A layer shown in a popup window is recorded in its opener's viewport too, where its host runs.
+pub(crate) fn note_appeared(ctx: &Context, id: Id, exiting: bool) -> bool {
+    let appears = appears(ctx, id, exiting);
+    if appears {
+        let viewport = pass::current_viewport(ctx);
+        let first = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
+        with_persist(ctx, viewport, |persist| persist.appeared.insert(id, first));
+    }
+    appears
+}
+
+/// Whether the layer `id` first showed in the running viewport in this root frame, in any of its passes.
+pub(crate) fn appeared_this_frame(ctx: &Context, id: Id) -> bool {
+    let now = pass::root_frame_nr(ctx);
+    with_persist(ctx, pass::current_viewport(ctx), |persist| persist.appeared.get(&id).is_some_and(|(frame, _)| *frame == now))
 }
 
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
@@ -558,7 +587,7 @@ pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
 pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side: Option<Side>) {
     // Which layers a press opened reads the presses and releases.
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
-    let reopened = reopened(ctx, id, exiting);
+    let new = note_appeared(ctx, id, exiting);
     with_pass(ctx, |pass| {
         pass.drawing.push((id, tier));
         pass.exiting.push(exiting);
@@ -566,19 +595,11 @@ pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side
             pass.sides.push((id, side));
         }
     });
-    let viewport = pass::current_viewport(ctx);
-    let first = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
     let (down, released) = pointer::with_pass_raw(ctx, |read| {
         let released = read.frame.as_ref().filter(|frame| frame.release == Some(craft_behavior::PointerButton::Primary)).map(|frame| frame.pos);
         (read.primary_down, released)
     });
-    let release = with_persist(ctx, viewport, |persist| {
-        let new = reopened || !persist.appeared.contains_key(&id);
-        if reopened {
-            persist.appeared.insert(id, first);
-        } else {
-            persist.appeared.entry(id).or_insert(first);
-        }
+    let release = with_persist(ctx, pass::current_viewport(ctx), |persist| {
         if exiting {
             return None;
         }

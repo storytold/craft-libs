@@ -1,8 +1,8 @@
 //! The in-memory font store used by tests.
 
 use super::{
-    AtomicBool, Condvar, Downloaded, Family, HashMap, Index, Installer, Mutex, Ordering, Path, PathBuf, Progress, RemoveRequest, StoreError,
-    UserSource, err,
+    AtomicBool, Condvar, Conflict, Downloaded, Family, HashMap, Index, Installer, MadeAvailable, Mutex, Ordering, Path, PathBuf, Progress,
+    RemoveRequest, StoreError, UserSource, err,
 };
 use super::{LegalText, PreviewServiceSource, PreviewStore};
 
@@ -18,6 +18,10 @@ pub enum Call {
     Remove(String),
     /// Asked to download the family.
     Download(String),
+    /// Asked to copy the family into the OS user font folder.
+    MakeAvailable(String),
+    /// Asked to take the family's copies out of the OS user font folder.
+    Withdraw(String),
 }
 
 /// A font store without a network: "downloads" come from a table of file bytes by index path,
@@ -43,6 +47,13 @@ pub struct FakeStore {
     changed: Mutex<Vec<String>>,
     /// Downloads stop halfway while this is true.
     held: (Mutex<bool>, Condvar),
+    /// Families made available to all apps, by name.
+    available: Mutex<Vec<String>>,
+    craft_apps_only: AtomicBool,
+    /// Families' recorded choices, by lower-case name.
+    choices: Mutex<HashMap<String, bool>>,
+    /// What the next [`Installer::make_available`] refuses with.
+    refusal: Mutex<Option<Vec<Conflict>>>,
 }
 
 impl FakeStore {
@@ -63,6 +74,10 @@ impl FakeStore {
             fetched: Mutex::new(Vec::new()),
             changed: Mutex::new(Vec::new()),
             held: (Mutex::new(false), Condvar::new()),
+            available: Mutex::new(Vec::new()),
+            craft_apps_only: AtomicBool::new(false),
+            choices: Mutex::new(HashMap::new()),
+            refusal: Mutex::new(None),
         }
     }
 
@@ -95,6 +110,13 @@ impl FakeStore {
     pub fn fail_next(&self, error: &str) {
         if let Ok(mut failure) = self.failure.lock() {
             *failure = Some(error.to_owned());
+        }
+    }
+
+    /// The next [`Installer::make_available`] is refused for `conflicts`.
+    pub fn refuse_next(&self, conflicts: Vec<Conflict>) {
+        if let Ok(mut refusal) = self.refusal.lock() {
+            *refusal = Some(conflicts);
         }
     }
 
@@ -201,6 +223,10 @@ impl Installer for FakeStore {
         if let Some(outside) = request.files.iter().find(|f| !self.in_store(f)) {
             return Err(StoreError(format!("{} isn't in the font store", outside.display())));
         }
+        if request.whole {
+            self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(&request.family));
+            self.choices.lock().map_err(err)?.remove(&request.family.to_lowercase());
+        }
         for file in &request.files {
             std::fs::remove_file(file).map_err(err)?;
         }
@@ -302,6 +328,57 @@ impl Installer for FakeStore {
         }
         let bytes = self.files.get(path).ok_or_else(|| StoreError(format!("{path} isn't available")))?;
         Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
+    }
+
+    fn available_to_all_supported(&self) -> bool {
+        true
+    }
+
+    fn is_available_to_all(&self, family: &str, _files: &[PathBuf]) -> bool {
+        self.available.lock().is_ok_and(|a| a.iter().any(|f| f.eq_ignore_ascii_case(family)))
+    }
+
+    fn craft_apps_only(&self) -> bool {
+        self.craft_apps_only.load(Ordering::SeqCst)
+    }
+
+    fn set_craft_apps_only(&self, on: bool) -> Result<(), StoreError> {
+        self.craft_apps_only.store(on, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The folders in its folder but the preview cache, as families.
+    fn store_families(&self) -> Vec<(String, Vec<PathBuf>)> {
+        let previews = self.preview_cache();
+        let dirs = std::fs::read_dir(&self.dir).into_iter().flatten().flatten().filter(|e| e.path().is_dir() && Some(e.path()) != previews);
+        dirs.map(|e| (e.file_name().to_string_lossy().into_owned(), vec![e.path()])).collect()
+    }
+
+    fn available_to_all_choice(&self, family: &str, _files: &[PathBuf]) -> Option<bool> {
+        self.choices.lock().ok()?.get(&family.to_lowercase()).copied()
+    }
+
+    fn set_available_to_all_choice(&self, family: &str, _files: &[PathBuf], on: bool) -> Result<(), StoreError> {
+        self.choices.lock().map_err(err)?.insert(family.to_lowercase(), on);
+        Ok(())
+    }
+
+    fn make_available(&self, family: &str, _files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {
+        self.record(Call::MakeAvailable(family.to_owned()));
+        if let Some(conflicts) = self.refusal.lock().map_err(err)?.take() {
+            return Ok(MadeAvailable::Refused(conflicts));
+        }
+        let mut available = self.available.lock().map_err(err)?;
+        if !available.iter().any(|f| f.eq_ignore_ascii_case(family)) {
+            available.push(family.to_owned());
+        }
+        Ok(MadeAvailable::Done)
+    }
+
+    fn withdraw(&self, family: &str, _files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        self.record(Call::Withdraw(family.to_owned()));
+        self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(family));
+        Ok(Vec::new())
     }
 }
 

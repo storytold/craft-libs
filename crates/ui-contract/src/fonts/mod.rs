@@ -24,7 +24,7 @@ pub use craft_fonts_build::{EmbeddedFace, ServedFace};
 pub use language::{I18nScripts, LanguageScripts};
 pub use served::loader::{FetchDone, FetchWake, FontFetcher};
 pub use served::loading;
-pub use stack::{CjkRows, Emoji, Family, SEMIBOLD, Stack, SystemFonts, UiFonts};
+pub use stack::{CjkRows, Emoji, Family, SEMIBOLD, Stack, SystemFonts, TAB_TITLE, UiFonts};
 pub(crate) use stack::{StackFacts, stack_facts};
 
 use crate::runtime::egui::fonts as egui_fonts;
@@ -94,7 +94,7 @@ pub(crate) fn load_with(ctx: &Context, definitions: FontDefinitions, providers: 
 
 #[cfg(all(feature = "testing", any(test, feature = "suite")))]
 pub(crate) mod facts_tests {
-    use crate::fonts::{SEMIBOLD, deflated_default_definitions, load, stack_facts};
+    use crate::fonts::{SEMIBOLD, TAB_TITLE, deflated_default_definitions, load, stack_facts};
     use crate::testing::trial;
     use craft_theme::{Contrast, Mode, TypeRole};
     use egui::{Context, FontFamily};
@@ -115,5 +115,30 @@ pub(crate) mod facts_tests {
         assert!(!stack_facts(&ctx).semibold, "definitions without it say so");
         let title = tokens.font(stack_facts(&ctx), TypeRole::Title, false).family;
         assert!(definitions.families.contains_key(&title), "a title draws in a family the definitions have, not {title:?}");
+    }
+
+    /// A tab title draws in the tab-title family when the loaded definitions have it, and in the semibold family, or
+    /// the proportional one without that, when they don't; it keeps the label's size.
+    #[trial]
+    fn a_tab_title_draws_in_the_tab_title_family_only_where_the_definitions_have_it() {
+        let ctx = Context::default();
+        let tokens = crate::testing::style::tokens(Mode::Light, Contrast::Standard);
+        let (semibold, tab) = (FontFamily::Name(SEMIBOLD.into()), FontFamily::Name(TAB_TITLE.into()));
+        let font = |ctx: &Context| tokens.font_weighted(stack_facts(ctx), TypeRole::TabTitle, false, true);
+        let mut definitions = deflated_default_definitions();
+        load(&ctx, definitions.clone());
+        assert!(!stack_facts(&ctx).tab_title, "the default definitions have no tab-title family");
+        assert_eq!(font(&ctx).family, semibold, "a tab title draws in the semibold family");
+        assert_eq!(font(&ctx).size, tokens.font(stack_facts(&ctx), TypeRole::Label, false).size, "at the label's size");
+        let chain = definitions.families.get(&semibold).cloned().unwrap_or_default();
+        definitions.families.insert(tab.clone(), chain);
+        load(&ctx, definitions.clone());
+        assert!(stack_facts(&ctx).tab_title);
+        assert_eq!(font(&ctx).family, tab, "with the family a tab title draws in it");
+        assert_eq!(tokens.font_weighted(stack_facts(&ctx), TypeRole::Label, false, true).family, semibold, "a strong label does not");
+        definitions.families.remove(&tab);
+        definitions.families.remove(&semibold);
+        load(&ctx, definitions);
+        assert_eq!(font(&ctx).family, FontFamily::Proportional, "without either family a tab title draws in the proportional one");
     }
 }
