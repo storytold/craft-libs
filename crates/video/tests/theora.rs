@@ -608,6 +608,39 @@ fn test_theora_encoder_invalid_input_rejected() {
     let mut pic = test_picture(32, 32);
     pic.y_stride = 16;
     assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    // Out-of-frame configuration picture bounds cannot bypass active picture validation
+    let cfg_out_of_frame = EncoderConfig {
+        width: 32,
+        height: 32,
+        pic_width: 16,
+        pic_height: 32,
+        pic_x: 32,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    assert!(matches!(Encoder::new(cfg_out_of_frame), Err(Error::DimensionMismatch(_))));
+
+    let cfg_zero_pic = EncoderConfig {
+        width: 32,
+        height: 32,
+        pic_width: 0,
+        pic_height: 32,
+        pic_x: 0,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv420,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    assert!(matches!(Encoder::new(cfg_zero_pic), Err(Error::DimensionMismatch(_))));
 }
 
 #[test]

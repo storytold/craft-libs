@@ -104,8 +104,15 @@ fn alloc_vec_exact<T: Clone>(val: T, n: usize) -> Result<Vec<T>> {
 impl Encoder {
     /// Create a new encoder with the given configuration.
     pub fn new(config: EncoderConfig) -> Result<Self> {
-        if config.width == 0 || config.height == 0 {
+        if config.width == 0 || config.height == 0 || config.pic_width == 0 || config.pic_height == 0 {
             return Err(Error::DimensionMismatch("dimensions cannot be zero"));
+        }
+        if config.pic_x > 255
+            || config.pic_y > 255
+            || config.pic_x.checked_add(config.pic_width).is_none_or(|end| end > config.width)
+            || config.pic_y.checked_add(config.pic_height).is_none_or(|end| end > config.height)
+        {
+            return Err(Error::DimensionMismatch("picture region exceeds frame bounds"));
         }
         let frame_width = config.width.checked_add(15).map(|w| w & !15).ok_or(Error::DimensionMismatch("width overflows"))?;
         let frame_height = config.height.checked_add(15).map(|h| h & !15).ok_or(Error::DimensionMismatch("height overflows"))?;
