@@ -29,6 +29,12 @@ use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tai
 use crate::{AudioEffect, ParamSpec, ParamValues, Smoothed, Unit, block_len, flush32, param_plumbing};
 use std::f64::consts::TAU;
 
+/// Weighted sum of a dry and a wet sample. A mix of 0 gives the dry sample and a mix of 1 gives the
+/// wet one exactly, however far apart their magnitudes are.
+fn blend(dry: f64, wet: f64, mix: f64) -> f64 {
+    (1.0 - mix) * dry + mix * wet
+}
+
 /// Smoothing time of the frequency, resonance, depth and mix, in ms.
 const SM: f32 = 20.0;
 const RING_EFFECTS: &[&str] = &["Ring", "Frequency Mod", "Resonator +", "Resonator -"];
@@ -239,7 +245,7 @@ impl AudioEffect for RingMod {
                 if ch < nch {
                     // In f64, so the difference of two large samples of opposite sign stays finite.
                     let (dry, wet) = (dry as f64, wet as f64);
-                    channels[ch][i] = (dry + mix as f64 * (wet - dry)) as f32;
+                    channels[ch][i] = blend(dry, wet, f64::from(mix)) as f32;
                 }
             }
         }
@@ -335,7 +341,7 @@ impl AudioEffect for Bitcrusher {
                     // The held input is rounded at the current step, so a change of Bits also
                     // applies to the hold in progress.
                     let crushed = ((f64::from(*held) / step).round() * step).clamp(-limit, limit);
-                    channels[ch][i] = (dry + mix * (crushed - dry)) as f32;
+                    channels[ch][i] = blend(dry, crushed, mix) as f32;
                 }
             }
         }
@@ -781,6 +787,15 @@ mod tests {
                 assert!(huge.iter().all(|v| *v == f32::MAX));
             }
         }
+    }
+
+    /// At a mix of 100% the output is the wet sample even when the dry sample is far larger.
+    #[test]
+    fn full_mix_keeps_a_small_wet_sample_beside_a_huge_dry_one() {
+        let mut c = crush(&[("mix", 100.0), ("bits", 16.0), ("rate_divide", 4.0)], 1);
+        let mut y = vec![0.5, f32::MAX, f32::MAX, f32::MAX, 0.25];
+        c.process(&mut [&mut y]);
+        assert_eq!(y[1], 0.5, "the held sample was lost at full mix: {y:?}");
     }
 
     /// Raising the sample-and-hold rate takes effect within one new hold, instead of after the

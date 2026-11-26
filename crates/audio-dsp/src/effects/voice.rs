@@ -450,7 +450,8 @@ impl AudioEffect for VoicePitch {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let len = block_len(channels);
-        let ch = channels.len().min(self.lines.len());
+        // The mean runs over every configured channel, so a channel left out counts as silence.
+        let ch = self.lines.len();
         let dry_at = self.mask + 1 - self.latency;
         let follow_target = self.follow_target();
         // The formant stage moves the envelope by the inverse of the pitch ratio.
@@ -1270,6 +1271,30 @@ mod tests {
             out.push((l, r));
         }
         assert!(out[0] == out[1], "leaving the channel out changed the output");
+    }
+
+    /// Leaving a silent third channel out of a block does not change the pitch the tracker finds,
+    /// so a shifted voice comes out the same on the channels that remain.
+    #[test]
+    fn a_silent_channel_left_out_keeps_the_tracked_pitch() {
+        let n = SR as usize;
+        let (low, high) = (sine(187.5, 0.2, SR as f64, n, 0.0), sine(375.0, 0.24, SR as f64, n, 0.0));
+        let left: Vec<f32> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
+        let right: Vec<f32> = low.iter().zip(&high).map(|(a, b)| -a + b).collect();
+        let mut out = Vec::new();
+        for omit in [false, true] {
+            let mut p = VoicePitch::new(SR, 3);
+            assert!(p.set_param("semitones", 5.0));
+            p.reset();
+            let (mut l, mut r, mut s) = (left.clone(), right.clone(), vec![0.0f32; n]);
+            if omit {
+                p.process(&mut [&mut l, &mut r]);
+            } else {
+                p.process(&mut [&mut l, &mut r, &mut s]);
+            }
+            out.push((l, r));
+        }
+        assert!(out[0] == out[1], "leaving a silent channel out changed the tracked pitch");
     }
 
     /// The tracker finds a voice's period down to 70 Hz and reports nothing for silence.
