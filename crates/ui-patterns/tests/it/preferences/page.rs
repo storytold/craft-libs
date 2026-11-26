@@ -12,7 +12,7 @@ use craft_ui::patterns::preferences::{
 };
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::words::CommonWords;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::{Fixture, trial};
 use egui::Ui;
 use std::cell::{Cell, RefCell};
@@ -324,4 +324,93 @@ fn reset_section_can_be_left_out() {
     };
     assert!(resets(true) > 0, "the default offers Reset Section");
     assert_eq!(resets(false), 0, "reset_section(false) leaves it out");
+}
+
+/// A grouped search lists only the pages that show a group: Canvas's only "grid" match is the setting General shows.
+#[trial]
+fn a_grouped_search_lists_no_page_whose_matches_all_show_elsewhere() {
+    let grouped = searched(SearchResults::Grouped, "grid");
+    assert!(grouped.iter().any(|t| t.contains("General")), "the page that shows the match is listed: {grouped:?}");
+    assert!(!grouped.iter().any(|t| t.contains("Canvas")), "a page with no group of its own is not listed: {grouped:?}");
+}
+
+/// Two long pages whose every row matches "setting": each page's (key, label) pairs.
+struct Many(Vec<(String, String)>, Vec<(String, String)>);
+
+impl Many {
+    fn new() -> Self {
+        let rows = |page: &str| (1..=20).map(|n| (format!("{page}.{n}"), format!("{page} setting {n}"))).collect();
+        Many(rows("Alpha"), rows("Beta"))
+    }
+}
+
+impl PreferencesModel for Many {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        fn rows(rows: &[(String, String)]) -> Vec<RowSpec<'_>> {
+            rows.iter().map(|(key, label)| RowSpec::new(key, label, RowKind::Bool(true))).collect()
+        }
+        vec![PageSpec::new("alpha", "Alpha", rows(&self.0)), PageSpec::new("beta", "Beta", rows(&self.1))]
+    }
+
+    fn set(&mut self, _: &str, _: PrefValue) {}
+
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+
+    fn reset_page(&mut self, _: &str) {}
+}
+
+/// Picking the page already selected brings its group back into view after the body scrolled away from it.
+#[trial]
+fn picking_the_selected_page_again_scrolls_its_group_back_into_view() {
+    let mut state = PreferencesState::default();
+    let mut many = Many::new();
+    let mut fixture = Fixture::new(move |ui| {
+        PreferencesPage::new(Bind::bound(&mut state)).search_results(SearchResults::Grouped).show(ui, &mut many);
+    });
+    let room = egui::vec2(700.0, 300.0);
+    fixture.room(room).settle();
+    let search = fixture.by_label("Search settings").expect("the search field");
+    fixture.click(&search).type_text("setting").settle();
+    let top = |fixture: &Fixture| fixture.texts().iter().find(|t| t.text.trim_end_matches(':') == "Beta setting 1").map(|t| t.rect.top());
+    // The glide to the group outlasts `settle`, so frames run until the row stops moving.
+    let glide_out = |fixture: &mut Fixture| {
+        let mut still = 0;
+        let mut last = top(fixture);
+        for _ in 0..600 {
+            fixture.frame(vec![]);
+            let now = top(fixture);
+            still = if now == last { still + 1 } else { 0 };
+            last = now;
+            if still >= 10 {
+                break;
+            }
+        }
+    };
+    let pick_beta = |fixture: &mut Fixture| {
+        let rows = fixture.by_role(Role::LIST_ITEM);
+        let beta =
+            rows.iter().find(|row| fixture.tree().name_of(row.node).is_some_and(|name| name.starts_with("Beta"))).expect("Beta in the page list");
+        fixture.click(beta).settle();
+        glide_out(fixture);
+    };
+    let in_view = |top: f32| (0.0..room.y).contains(&top);
+    assert!(top(&fixture).is_none_or(|top| !in_view(top)), "the Beta group starts out of view");
+    pick_beta(&mut fixture);
+    assert!(top(&fixture).is_some_and(in_view), "picking Beta brings its group into view: {:?}", top(&fixture));
+
+    let body = egui::pos2(room.x - 60.0, room.y / 2.0);
+    for _ in 0..10 {
+        fixture.frame(vec![moved(body), wheel(-120.0)]);
+    }
+    fixture.settle();
+    assert!(top(&fixture).is_none_or(|top| !in_view(top)), "the wheel scrolls the Beta group out of view: {:?}", top(&fixture));
+
+    pick_beta(&mut fixture);
+    assert!(top(&fixture).is_some_and(in_view), "picking Beta again brings its group back into view: {:?}", top(&fixture));
 }

@@ -8,7 +8,7 @@ use super::rows::{RowsOut, ShownRow, reset_button, show_row};
 use super::search::{self, Listed};
 use super::window::PreferencesState;
 use super::words::PreferencesWords;
-use crate::contract::{Bind, NoValue, Outcome, Pad, Pattern, Props, Scroll, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Lazy, NoValue, Outcome, Pad, Pattern, Props, Scroll, Show as _, ShowContainer as _};
 use crate::display::{Shade, Text};
 use crate::form::FieldGroup;
 use crate::layout_components::{Row, Stack};
@@ -271,9 +271,8 @@ fn page_entries(pages: &[PageSpec<'_>], listed: &[Listed]) -> Vec<PageEntry> {
 fn grouped_snapshot<H: PreferencesModel + ?Sized>(host: &H, matcher: &Matcher) -> GroupedSnapshot {
     let pages = host.pages();
     let listed = search::list_pages(&pages, matcher);
-    let list = page_entries(&pages, &listed);
     let mut seen = HashSet::new();
-    let shown = listed
+    let shown: Vec<ShownPage> = listed
         .iter()
         .filter_map(|l| {
             let mut page = shown_page(matcher, l, &pages[l.index]);
@@ -284,6 +283,9 @@ fn grouped_snapshot<H: PreferencesModel + ?Sized>(host: &H, matcher: &Matcher) -
             (page.custom || !page.groups.is_empty()).then_some(page)
         })
         .collect();
+    // The list names only the pages the column shows, so that every entry has a group to scroll to.
+    let mut list = page_entries(&pages, &listed);
+    list.retain(|entry| shown.iter().any(|page| page.id == entry.id));
     GroupedSnapshot { list, shown }
 }
 
@@ -387,8 +389,8 @@ fn page_row(list: &[PageEntry], key: &str) -> ListRow<'static> {
     if entry.is_some_and(|entry| entry.dimmed) { row.ink(RowInk::Dimmed) } else { row }
 }
 
-/// Shows the search field, the page list and, beside it, one scrolling column of every page in `snap`. A picked page
-/// the column has not scrolled to yet is brought into view once.
+/// Shows the search field, the page list and, beside it, one scrolling column of every page in `snap`. Each pick of a
+/// page, also of the one already selected, brings it into view once.
 fn show_grouped<H: PreferencesModel + ?Sized>(
     ui: &mut Ui,
     host: &mut H,
@@ -411,11 +413,10 @@ fn show_grouped<H: PreferencesModel + ?Sized>(
             |key| page_row(&snap.list, key),
             |ui| {
                 for page in &snap.shown {
-                    let top = ui.cursor().min;
+                    // An empty mark at the group's top for the scroll to glide to; the group itself always runs, so
+                    // Tab reaches every group.
+                    Lazy::new(("group", page.id.as_str()), 0.0).reveal(jump && page.id == current.id).show(ui, |_| {});
                     Stack::new().id_salt(page.id.as_str()).show(ui, |ui, _| show_page(ui, host, page, true, draw, out));
-                    if jump && page.id == current.id {
-                        ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(1.0, 1.0)), Some(egui::Align::TOP));
-                    }
                 }
             },
         );
@@ -423,6 +424,8 @@ fn show_grouped<H: PreferencesModel + ?Sized>(
         state.scrolled_to = state.selected.clone();
     }
     if let Some(key) = picked {
+        // A pick, also of the page already selected, brings its group into view on the next pass.
+        state.scrolled_to.clear();
         state.selected = key;
     }
 }
