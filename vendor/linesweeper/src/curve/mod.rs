@@ -3122,7 +3122,8 @@ mod test {
     }
 
     // Craft patch (inline pieces) tests: a decomposition is no larger than two
-    // inline pieces, and one with more pieces than that keeps all of them.
+    // inline pieces, one or two pieces stay inline, and one with more pieces
+    // than that keeps all of them on the heap.
     #[test]
     fn horizontal_decomposition_stores_two_pieces_inline() {
         assert!(
@@ -3154,6 +3155,7 @@ mod test {
         for (c, count) in cases {
             let decomp = AlmostHorizontalDecomposition::from_monotone_cubic(c);
             assert_eq!(decomp.pieces.len(), count);
+            assert_eq!(decomp.pieces.spilled(), count > 2);
             assert_eq!(decomp.pieces[0].c.p0, c.p0);
             assert_eq!(decomp.pieces[count - 1].c.p3, c.p3);
             for pair in decomp.pieces.windows(2) {
