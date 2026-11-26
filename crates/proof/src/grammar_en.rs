@@ -94,17 +94,23 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
             });
         }
         let tail = text.get(*b..).unwrap_or("");
-        let punctuation = tail.trim_start_matches(['"', '”', ')', '\'']);
-        // Two or more dots are an ellipsis, not a full stop ending a sentence.
-        // A Unicode ellipsis (U+2026) does not match sentence-ending punctuation either,
-        // and neither does the full stop of "e.g." or "i.e.".
-        after_end = matches!(punctuation.chars().next(), Some('.' | '!' | '?'))
-            && !punctuation.starts_with("..")
-            && punctuation.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ')
-            && !(punctuation.starts_with('.') && ends_e_g_or_i_e(text, *a, *b));
+        // The full stop right after "e.g." or "i.e." ends no sentence, but a question mark after it
+        // still ends one, and a full stop after a closing quote isn't the abbreviation's own.
+        after_end = ends_sentence(tail) && !tail.strip_prefix('.').is_some_and(|rest| !ends_sentence(rest) && ends_e_g_or_i_e(text, *a, *b));
     }
     v.sort_by_key(|i| i.start);
     v
+}
+
+/// Does `tail`, the text after a word, end a sentence: a full stop, `!` or `?` after any closing
+/// quotes or brackets, then a space after any further marks? Two or more dots are an ellipsis, not
+/// a full stop ending a sentence. A Unicode ellipsis (U+2026) does not match sentence-ending
+/// punctuation either.
+fn ends_sentence(tail: &str) -> bool {
+    let punctuation = tail.trim_start_matches(['"', '”', ')', '\'']);
+    matches!(punctuation.chars().next(), Some('.' | '!' | '?'))
+        && !punctuation.starts_with("..")
+        && punctuation.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ')
 }
 
 /// Is the word at `a..b` of `text` the end of "e.g." or "i.e." without its last full stop, in any

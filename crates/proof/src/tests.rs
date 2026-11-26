@@ -525,7 +525,9 @@ fn ellipses_do_not_start_sentences() {
 }
 
 /// #3725: the full stop of "e.g." or "i.e." (also written "eg." and "ie.") ends no sentence, so
-/// the word after it needs no capital; "IE." in capitals (the browser) still ends one.
+/// the word after it needs no capital, also before a closing quote. "IE." in capitals (the
+/// browser) still ends one, and so do a question mark after that full stop and a full stop after
+/// a closing quote, which isn't the abbreviation's own.
 #[test]
 fn the_full_stop_of_e_g_or_i_e_ends_no_sentence() {
     let capitals = |text: &str| -> Vec<String> {
@@ -540,10 +542,13 @@ fn the_full_stop_of_e_g_or_i_e_ends_no_sentence() {
         "Keep it short, i.e. one line.",
         "E.g. answers come first.",
         "Some forms, eg. this one, differ.",
+        "Abbreviations like \"i.e.\" need no capital after them.",
     ] {
         assert!(capitals(text).is_empty(), "{text}: {:?}", capitals(text));
     }
-    assert_eq!(capitals("It works in Chrome but not IE. we need a fix."), ["we"]);
+    for text in ["It works in Chrome but not IE. we need a fix.", "Should it be e.g.? we use both.", "The label says \"ie\". we kept it."] {
+        assert_eq!(capitals(text), ["we"], "{text}");
+    }
 }
 
 /// #3725: a web or e-mail address (`https://…`, `www.…`, `someone@example.org`) isn't the first
