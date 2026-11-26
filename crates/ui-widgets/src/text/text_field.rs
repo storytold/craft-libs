@@ -359,9 +359,10 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     type Style = FieldStyle;
     type Output = EditResponse<C::Value>;
 
-    /// A search field is a search input, so a screen reader can name it as one.
+    /// A search field is a search input, so a screen reader can name it as one. A masked or multi-line search field
+    /// keeps the password or multi-line role its editor gives it.
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        if self.search {
+        if self.search && !self.options.mask && !self.options.multiline() {
             access.role(Role::SEARCH_INPUT);
         }
     }
