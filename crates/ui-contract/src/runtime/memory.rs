@@ -1012,12 +1012,15 @@ pub fn unique(source: impl std::hash::Hash + std::fmt::Debug) -> Id {
 pub enum ForkError {
     /// `to` is running a pass: fork into a context between its passes.
     DuringPass,
+    /// `from` and `to` are the same context: a fork needs a second one to copy into.
+    SameContext,
 }
 
 impl std::fmt::Display for ForkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ForkError::DuringPass => f.write_str("fork into a context between its passes, not during one"),
+            ForkError::SameContext => f.write_str("fork into a second context, not into the one copied from"),
         }
     }
 }
@@ -1036,6 +1039,10 @@ impl std::error::Error for ForkError {}
 pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError> {
     if frame::in_pass(to) {
         return Err(ForkError::DuringPass);
+    }
+    // Two handles to one context share its data: copying it onto itself would detach the original's own state.
+    if store::aliased(from, to) {
+        return Err(ForkError::SameContext);
     }
     store::copy_memory(from, to);
     pending::detach_fork(from, to);

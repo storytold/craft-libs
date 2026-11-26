@@ -125,3 +125,19 @@ fn a_copied_pending_slot_takes_no_landed_result_from_the_context_it_was_forked_f
     assert_eq!(*shadow_seen.borrow(), Pending::Loading { progress: None }, "the fork submits a job of its own");
     assert_eq!(*shadow_other.borrow(), Pending::Loading { progress: None }, "for each result type it copied");
 }
+
+#[trial]
+fn fork_into_the_same_context_is_refused_and_leaves_its_own_state_alone() {
+    let jobs = Arc::new(ManualJobs::new());
+    let id = global("fork.pending", "same");
+    let mut window = Frames::new();
+    window.host(host_over(jobs.clone()));
+    let seen = RefCell::new(Pending::<u32, String>::default());
+    window.frame(vec![], |ui| *seen.borrow_mut() = poll_type(ui, id, 5u32));
+    jobs.run_all();
+    // The same context through a second handle.
+    let alias = window.ctx.clone();
+    assert_eq!(fork_into(&window.ctx, &alias), Err(ForkError::SameContext), "a context is not forked into itself");
+    window.frame(vec![], |ui| *seen.borrow_mut() = poll_type(ui, id, 5u32));
+    assert_eq!(*seen.borrow(), Pending::Ready(5), "the context still takes its own landed result");
+}
