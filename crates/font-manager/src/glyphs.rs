@@ -306,9 +306,12 @@ struct CellsCache {
     cells: Arc<Vec<GlyphCell>>,
 }
 
-/// The tile selection of the main grid.
+/// The tile selection of the main grid and the host's last mark in the shown cells.
 #[derive(Clone, Default)]
-struct Marked(Selection<usize>);
+struct Marked {
+    selection: Selection<usize>,
+    host: Option<(GlyphCell, usize)>,
+}
 
 /// The alternates popup: whether it is open, the cell it was opened for and that cell's alternates, read once when
 /// it opened.
@@ -422,7 +425,7 @@ pub struct GlyphsPanel<'a> {
     /// Whether the app has a place to insert a glyph: a double click or Enter inserts.
     #[prop]
     can_insert: bool,
-    /// The host's cell (the selected character); the grid selects it.
+    /// The host's cell (the selected character); a change selects it without overriding grid navigation.
     #[prop]
     marked: Option<GlyphCell>,
     /// In this pass only, the grid moves its lead to that cell and scrolls it into view. The host passes it in the
@@ -574,11 +577,14 @@ impl<'a> GlyphsPanel<'a> {
             let cells = category_cells(cx.memory::<CellsCache>(), source, face.0, face.1, &state.category, &state.recent);
             let index_of = |cell: GlyphCell| cells.iter().position(|c| *c == cell);
             let mut marked = cx.memory::<Marked>().clone();
-            if let Some(at) = marked_cell.and_then(index_of)
-                && marked.0.lead != Some(at)
+            let host = marked_cell.and_then(|cell| index_of(cell).map(|at| (cell, at)));
+            if let Some((_, at)) = host
+                && (marked.host != host || reveal_cell == marked_cell)
+                && marked.selection.lead != Some(at)
             {
-                marked.0 = Selection::single(at);
+                marked.selection = Selection::single(at);
             }
+            marked.host = host;
             match &empty {
                 Some(text) if cells.is_empty() => {
                     Text::new(text.clone()).shade(Shade::Muted).show(ui);
@@ -589,7 +595,7 @@ impl<'a> GlyphsPanel<'a> {
                         .zoom(GridZoom::Fixed(size))
                         .caption(CaptionPlace::None)
                         .select(SelectMode::Single)
-                        .selection(Bind::bound(&mut marked.0));
+                        .selection(Bind::bound(&mut marked.selection));
                     if let Some(at) = reveal_cell.and_then(index_of) {
                         grid = grid.reveal(at);
                     }
@@ -660,7 +666,7 @@ impl<'a> GlyphsPanel<'a> {
             // Footer: the selection, the count and the zoom.
             let n = cells.len() as u64;
             let count = words.count.text(n, &env.format().integer(n));
-            let info = match marked.0.lead.and_then(|lead| cells.get(lead)).copied() {
+            let info = match marked.selection.lead.and_then(|lead| cells.get(lead)).copied() {
                 Some(GlyphCell::Char(c)) => match source.describe(face.0, face.1, GlyphCell::Char(c)).gid {
                     Some(gid) => words.selected_glyph.fill(&[("code", &code(c)), ("gid", &gid.to_string()), ("count", &count)]),
                     None => words.selected.fill(&[("code", &code(c)), ("count", &count)]),
