@@ -295,10 +295,11 @@ fn naming_a_card_below_the_fold_scrolls_it_into_view() {
     });
     let room = egui::vec2(700.0, 300.0);
     fixture.room(room).settle();
-    // The title's top against the clip it was painted under, which is the body, not the search row above it.
-    let top = |fixture: &Fixture| fixture.texts().iter().find(|t| t.text == "Second").map(|t| (t.rect.top(), t.clip));
-    let in_view = |(top, clip): (f32, egui::Rect)| (clip.min.y..clip.max.y).contains(&top);
-    assert!(top(&fixture).is_none_or(|top| !in_view(top)), "the Second card starts below the view");
+    // The title against the clip it was painted under, which is the body, not the search row above it.
+    let top = |fixture: &Fixture| fixture.texts().iter().find(|t| t.text == "Second").map(|t| (t.rect, t.clip));
+    let below = |(title, clip): (egui::Rect, egui::Rect)| title.top() >= clip.max.y;
+    let in_view = |(title, clip): (egui::Rect, egui::Rect)| clip.min.y <= title.top() && title.bottom() <= clip.max.y;
+    assert!(top(&fixture).is_none_or(below), "the Second card starts below the view");
     *pick.borrow_mut() = Some("second".into());
     fixture.settle();
     // The glide to the card outlasts `settle`, so frames run until the title stops moving.
