@@ -334,7 +334,7 @@ fn the_fill_lasso_flyout_remembers_its_polygonal_tool() {
     rig.fixture.frame(vec![pointer::secondary(at, true)]);
     rig.fixture.frame(vec![pointer::secondary(at, false)]);
     rig.fixture.idle(3);
-    let rows = rig.fixture.by_role(Role::MENU_ITEM_RADIO);
+    let rows = rig.fixture.by_role(Role::MENU_ITEM_CHECK_BOX);
     let names: Vec<_> = rows.iter().map(|row| rig.fixture.tree().name_of(row.node)).collect();
     assert_eq!(names, [Some("Lasso Tool"), Some("Polygonal Lasso Tool")]);
     rig.fixture.click(&rows[1]).idle(2);
@@ -352,7 +352,7 @@ fn the_fill_lasso_flyout_remembers_its_polygonal_tool() {
 
     let polygon = rig.fixture.by_label("Polygonal Lasso Tool").expect("the slot shows its last choice");
     rig.fixture.press(&polygon).advance(0.7).idle(3);
-    let rows = rig.fixture.by_role(Role::MENU_ITEM_RADIO);
+    let rows = rig.fixture.by_role(Role::MENU_ITEM_CHECK_BOX);
     let names: Vec<_> = rows.iter().map(|row| rig.fixture.tree().name_of(row.node)).collect();
     assert_eq!(names, [Some("Lasso Tool"), Some("Polygonal Lasso Tool")], "holding opens the same ordered flyout");
     rig.fixture.frame(vec![pointer::moved(rows[0].center())]);
