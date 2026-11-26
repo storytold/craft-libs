@@ -154,6 +154,7 @@ impl Native {
     fn update(&mut self, bar: &MenuBar) {
         let (spec, targets) = lower(bar);
         let (native, live) = (&mut self.bar, &self.targets);
+        // design: allow[contract/motion](the AppKit menu rebuild retry is a native timer outside any pass, not a motion clock; the runtime clock is a web_time Instant, not std, on wasm)
         let attempt = self.retry.attempt(&spec, Instant::now, || {
             let rebuilt = native.apply(&spec);
             if rebuilt {
@@ -165,7 +166,7 @@ impl Native {
         // due asks again.
         if let Attempt::Retry(wait) = attempt {
             self.pending = Some(bar.clone());
-            self.ctx.request_repaint_after(wait);
+            craft_ui::runtime::frame::request_repaint_after(&self.ctx, wait.as_secs_f64());
         }
     }
 }
