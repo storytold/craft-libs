@@ -227,7 +227,8 @@ pub struct Prompt<'a> {
     escape: Option<DialogRole>,
     /// Whether the dialog reports the alert-dialog role, described by the message and any tone.
     alert: bool,
-    /// What the dialog's layer is for.
+    /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
+    #[prop(vis = "pub(super)")]
     layer_role: LayerRole,
 }
 
@@ -252,13 +253,6 @@ impl<'a> Prompt<'a> {
     #[must_use]
     pub(super) fn alert(mut self) -> Self {
         self.alert = true;
-        self
-    }
-
-    /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
-    #[must_use]
-    pub(super) fn layer_role(mut self, role: LayerRole) -> Self {
-        self.layer_role = role;
         self
     }
 
