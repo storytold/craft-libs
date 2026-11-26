@@ -190,6 +190,11 @@ pub struct CloudFiles {
     pub account_fault: Option<Fault>,
     /// The account is asked for once per run. A frame never asks again.
     asked_account: bool,
+    /// Set by [`sign_out`] and cleared by [`sign_in`]. While it is set, the
+    /// pages ask the service nothing. [`Job::SignOut`] has no answer and no
+    /// order against a later job, so a provider that still holds the session
+    /// could answer an account or listing request with the departed account.
+    signed_out: bool,
     /// The folder being browsed. Shared by the Open and Save As pages, which
     /// are never on screen together.
     pub mine: Folder,
@@ -243,6 +248,7 @@ impl CloudFiles {
             account: None,
             account_fault: None,
             asked_account: false,
+            signed_out: false,
             mine: Folder::default(),
             shared: Folder::default(),
             source: Source::default(),
@@ -337,8 +343,10 @@ pub fn submit<A: CloudApp>(app: &A, job: Job) {
 }
 
 /// Asks who is signed in, once per run, and lists the root folder.
+///
+/// After [`sign_out`] it asks nothing until the next [`sign_in`].
 pub fn start<A: CloudApp>(app: &mut A) {
-    if !available(app) {
+    if !available(app) || app.cloud().signed_out {
         return;
     }
     if !app.cloud().asked_account {
@@ -368,6 +376,7 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     // would then be swallowed by the guard that stops a frame asking twice. A
     // button that does nothing the second time reads as a broken button.
     cloud.asked_account = true;
+    cloud.signed_out = false;
     cloud.link = None;
     cloud.status = Some(working);
     // A new session. A job the previous one left outstanding may never
@@ -389,6 +398,10 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.account = None;
     cloud.account_fault = None;
     cloud.asked_account = false;
+    // File › Open and Save As call `start` on every frame. Without this, the
+    // next frame would ask who is signed in and list the root folder while
+    // the sign-out may still be on its way.
+    cloud.signed_out = true;
     cloud.link = None;
     cloud.mine = Folder::default();
     cloud.shared = Folder::default();

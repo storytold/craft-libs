@@ -235,6 +235,43 @@ fn a_late_reply_from_before_sign_out_is_dropped() {
     );
 }
 
+/// File › Open calls `start` on every frame. A sign-out has no answer, so nothing orders it
+/// before a request the next frame sends. A provider that still holds the session answers that
+/// request with the departed account, and the window must not show that account or its files.
+#[test]
+fn a_page_drawn_after_sign_out_does_not_bring_the_account_back() {
+    let (mut app, held, _log) = two_tabs();
+    start(&mut app);
+    let (_, post) = held.take(|j| matches!(j, Job::Account)).unwrap();
+    post.send(Event::Account(Ok(account("Previous Person"))));
+    held.take(|j| matches!(j, Job::List(_))).unwrap();
+    drain(&mut app, &egui::Context::default());
+    sign_out(&mut app);
+    start(&mut app);
+    // Whatever the frame asked is answered as a provider that has not yet ended the session would.
+    while let Some((job, post)) = held.take(|j| matches!(j, Job::Account | Job::List(_))) {
+        match job {
+            Job::Account => post.send(Event::Account(Ok(account("Previous Person")))),
+            Job::List(path) => post.send(Event::Listed { path, entries: Ok(vec![entry("/Payroll 2026.note", "p1")]) }),
+            _ => {}
+        }
+    }
+    drain(&mut app, &egui::Context::default());
+    let r = report(&app);
+    assert!(
+        r["account"].is_null() && r["entries"].as_array().is_some_and(Vec::is_empty),
+        "signed out, yet account={} entries={}",
+        r["account"],
+        r["entries"]
+    );
+    sign_in(&mut app);
+    let (_, post) = held.take(|j| matches!(j, Job::SignIn)).unwrap();
+    post.send(Event::Account(Ok(account("Ada"))));
+    drain(&mut app, &egui::Context::default());
+    start(&mut app);
+    assert!(held.take(|j| matches!(j, Job::List(_))).is_some(), "the next sign-in lists the root folder again");
+}
+
 /// Save as a copy, then the first click on the Save As page is refused (no name typed yet). The
 /// second click, with a name, must still copy the conflicted document A, not the active tab B.
 #[test]
