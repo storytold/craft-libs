@@ -80,13 +80,14 @@ impl OrbitCamera {
 
     /// Frames a bounding box at the viewport's width-to-height `aspect`, keeping the angles.
     /// Returns an error and leaves the camera unchanged when `aspect` is not finite or is at
-    /// most 0.0001, or when the framed view-projection is not finite.
+    /// most 0.0001, or when a finite view cannot contain every box corner.
     pub fn frame_with_aspect(&mut self, lo: Vec3, hi: Vec3, aspect: f32) -> crate::Result<()> {
         if !aspect.is_finite() || aspect <= 1e-4 {
             return Err(crate::GeomError::Invalid("camera aspect must be finite and greater than 0.0001".into()));
         }
-        let target = lo * 0.5 + hi * 0.5;
-        let r = ((hi - lo).length() * 0.5).max(1e-3);
+        let target = ((lo.as_dvec3() + hi.as_dvec3()) * 0.5).as_vec3();
+        let reach = (lo.as_dvec3() - target.as_dvec3()).abs().max((hi.as_dvec3() - target.as_dvec3()).abs());
+        let r = (reach.length() as f32).max(1e-3);
         let vertical = self.fov_radians() * 0.5;
         let angle = if aspect < 1.0 { (vertical.tan() * aspect).atan() } else { vertical };
         let distance = r / angle.sin() * 1.1;
@@ -94,7 +95,15 @@ impl OrbitCamera {
             return Err(crate::GeomError::Invalid("camera framing bounds do not produce a finite view".into()));
         }
         let framed = OrbitCamera { target, scene_radius: r, distance, ..*self };
-        if framed.view_proj(aspect).is_finite() {
+        let contains = framed.view_proj(aspect).is_finite()
+            && [lo.x, hi.x].into_iter().all(|x| {
+                [lo.y, hi.y].into_iter().all(|y| {
+                    [lo.z, hi.z]
+                        .into_iter()
+                        .all(|z| framed.project(Vec3::new(x, y, z), aspect).is_some_and(|p| p.is_finite() && p.x.abs() <= 1.0 && p.y.abs() <= 1.0))
+                })
+            });
+        if contains {
             *self = framed;
             Ok(())
         } else {
@@ -109,13 +118,17 @@ impl OrbitCamera {
         }
     }
 
-    /// Pan by a screen fraction (dx, dy in viewport heights).
+    /// Pan by a screen fraction (dx, dy in viewport heights). A movement that collapses the eye
+    /// onto the target or produces a non-finite view leaves the camera unchanged.
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let f = self.forward();
         let right = f.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
         let up = right.cross(f);
         let scale = self.distance * (self.fov_radians() * 0.5).tan() * 2.0;
-        self.target += (-right * dx + up * dy) * scale;
+        let candidate = OrbitCamera { target: self.target + (-right * dx + up * dy) * scale, ..*self };
+        if candidate.eye() != candidate.target && candidate.view_proj(1.0).is_finite() {
+            *self = candidate;
+        }
     }
 
     /// Dolly by a factor exponent (positive zooms in). A distance whose view-projection at aspect 1
@@ -165,6 +178,38 @@ impl OrbitCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn framing_encloses_a_translated_box_around_the_stored_target() {
+        let mut camera = OrbitCamera { yaw: 0.0, pitch: 0.0, ..OrbitCamera::default() };
+        let (lo, hi) = (1e8f32, 1e8f32 + 8.0);
+        camera.frame_with_aspect(Vec3::splat(lo), Vec3::splat(hi), 1.0).unwrap();
+        for x in [lo, hi] {
+            for y in [lo, hi] {
+                for z in [lo, hi] {
+                    let projected = camera.project(Vec3::new(x, y, z), 1.0).unwrap();
+                    assert!(projected.x.abs() <= 1.0 && projected.y.abs() <= 1.0, "{projected:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pan_preserves_the_camera_when_rounding_would_collapse_the_eye() {
+        let mut camera = OrbitCamera {
+            target: Vec3::new(67_108_860.0, 0.0, -67_108_864.0),
+            yaw: std::f32::consts::FRAC_PI_4,
+            pitch: 0.0,
+            distance: 5.0,
+            fov: 150.0,
+            ..OrbitCamera::default()
+        };
+        assert!(camera.view().is_finite());
+        let before = camera;
+        camera.pan(-0.25, 0.0);
+        assert_eq!(camera, before);
+        assert!(camera.view().is_finite());
+    }
 
     #[test]
     fn framing_keeps_box_corners_inside_a_portrait_viewport() {
