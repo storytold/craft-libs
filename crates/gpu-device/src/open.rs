@@ -172,12 +172,12 @@ pub async fn open_async(
     if let Some(first) = order.first() {
         log_choice(&candidates, *first, preference.power());
     }
-    let mut tried_software = false;
+    let mut tried: Vec<&Candidate> = Vec::new();
     for index in order {
         let (Some(adapter), Some(candidate)) = (adapters.get(index), candidates.get(index)) else {
             continue;
         };
-        tried_software |= candidate.is_software();
+        tried.push(candidate);
         match open_on(adapter, request).await {
             Ok((device, queue)) => return Ok(finish(adapter.clone(), device, queue, candidate.clone(), preference, notices)),
             Err(error) => {
@@ -186,11 +186,12 @@ pub async fn open_async(
             }
         }
     }
-    // In a browser the request below would ask for the same adapter again.
-    if cfg!(not(target_arch = "wasm32")) && !tried_software {
+    // wgpu's fallback adapter, unless the loop above already tried it. In a browser the request
+    // below would ask for the same adapter again.
+    if cfg!(not(target_arch = "wasm32")) {
         let options = wgpu::RequestAdapterOptions { force_fallback_adapter: true, compatible_surface: surface, ..Default::default() };
-        if let Ok(adapter) = instance.request_adapter(&options).await {
-            let candidate = Candidate::of(&adapter, surface);
+        let fallback = instance.request_adapter(&options).await.ok().map(|a| (Candidate::of(&a, surface), a));
+        if let Some((candidate, adapter)) = fallback.filter(|(c, _)| !tried.contains(&c)) {
             match open_on(&adapter, request).await {
                 Ok((device, queue)) => {
                     log::info!("graphics adapter chosen: {candidate}");
