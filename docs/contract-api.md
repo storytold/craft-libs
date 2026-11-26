@@ -504,7 +504,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
 - `craft_behavior::dock::DockSide`: `pub enum DockSide { Start, End, Top, Bottom, Center }`. The side of a group a dropped panel docks on, in reading order: `Start` is the left half in a left-to-right
   - `pub const fn axis(self) -> Option<Axis>`. The axis the side splits along; `None` for `Center`.
   - `pub fn area(self, group: Rect) -> Rect`. The part of `group` a panel docked on this side takes: the half on that side, or the whole group.
-- `craft_behavior::dock::Action`: `pub enum Action<P> { Move { panel: P, anchor: P, placement: DockPlacement<P> }, Float { panel: P, rect: Rect }, Close { panel: P }, Activate { panel: P }, Open { panel: P, anchor: Option<P> }, OpenAt { panel: P, anchor: P, placement: DockPlacement<P> }, MoveFloating { panel: P, rect: Rect, edge: Option<DockEdge> }, ResizeSplit { path: Vec<bool>, size: SplitSize }, SetStackOpen { panel: P, open: bool }, ResizeStack { panel: P, height: Option<f32> }, MoveGroup { panel: P, to: Target<P> }, StepGroup { panel: P, up: bool }, MoveColumn { panel: P, to: Target<P> }, MoveWindow { panel: P, to: Target<P> }, CloseGroup { panel: P }, CloseWindow { panel: P }, CloseOthers { panel: P }, SetMinimized { panel: P, minimized: bool }, SetIconic { panel: P, iconic: bool }, ResizeColumn { panel: P, width: f32 }, SetColumnSteps { panel: P, steps: u16 }, ResizeGroup { panel: P, height: Option<f32> }, ResizeFlyoutWidth { panel: P, width: Option<f32> }, MoveFlyoutTop { panel: P, offset: Option<f32> }, ResizeIconic { panel: P, width: Option<f32> }, SetNative { panel: P, placement: Option<Placement> }, MovePanel { panel: P, to: Target<P> } }`. Groups, columns and floating windows are named by a panel they contain.
+- `craft_behavior::dock::Action`: `pub enum Action<P> { Move { panel: P, anchor: P, placement: DockPlacement<P> }, Float { panel: P, rect: Rect }, Close { panel: P }, Activate { panel: P }, Open { panel: P, anchor: Option<P> }, OpenAt { panel: P, anchor: P, placement: DockPlacement<P> }, MoveFloating { panel: P, rect: Rect, edge: Option<DockEdge> }, ResizeSplit { path: Vec<bool>, size: SplitSize }, SetStackOpen { panel: P, open: bool }, ResizeStack { panel: P, height: Option<f32> }, MoveGroup { panel: P, to: Target<P> }, StepGroup { panel: P, up: bool }, MoveColumn { panel: P, to: Target<P> }, MoveWindow { panel: P, to: Target<P> }, CloseGroup { panel: P }, CloseWindow { panel: P }, CloseOthers { panel: P }, SetMinimized { panel: P, minimized: bool }, SetIconic { panel: P, iconic: bool }, ResizeColumn { panel: P, width: f32 }, SetColumnSteps { panel: P, steps: u16 }, ResizeGroup { panel: P, height: Option<f32> }, ResizeFlyoutWidth { panel: P, width: Option<f32> }, MoveFlyoutTop { panel: P, offset: Option<f32> }, ResizeIconic { panel: P, width: Option<f32> }, SetNative { panel: P, placement: Option<Placement> }, MovePanel { panel: P, to: Target<P> }, Restore { panel: P, location: Location<P> } }`. Groups, columns and floating windows are named by a panel they contain.
   - `pub fn move_beside(panel: P, anchor: P, placement: DockPlacement<P>) -> Self`. Builds [`Action::Move`].
   - `pub fn float(panel: P, rect: Rect) -> Self`. Builds [`Action::Float`].
   - `pub fn close(panel: P) -> Self`. Builds [`Action::Close`].
@@ -533,6 +533,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn resize_iconic(panel: P, width: Option<f32>) -> Self`. Builds [`Action::ResizeIconic`].
   - `pub fn set_native(panel: P, placement: Option<Placement>) -> Self`. Builds [`Action::SetNative`].
   - `pub fn move_panel(panel: P, to: Target<P>) -> Self`. Builds [`Action::MovePanel`].
+  - `pub fn restore(panel: P, location: Location<P>) -> Self`. Builds [`Action::Restore`].
 - `craft_behavior::dock::Arrangement`: `pub enum Arrangement { TileAllVertically, TileAllHorizontally, TwoUpVertical, TwoUpHorizontal, ThreeUpVertical, ThreeUpHorizontal, ThreeUpStacked, FourUp, SixUp, ConsolidateAllToTabs, Cascade, Tile, FloatInWindow, FloatAllInWindows, NewWindowForDocument, MatchZoom, MatchLocation, MatchRotation, MatchAll }`. One Window › Arrange entry. The n-up entries split the document area into that many
   - `pub fn group_count(self, documents: usize) -> Option<usize>`. How many document groups an n-up or tile arrangement wants, `None` for the window and
   - `pub fn enabled(self, documents: usize, groups: usize, floating: usize) -> bool`. Whether the entry is enabled with `documents` open and `floating` floating windows:
@@ -633,7 +634,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn version(&self) -> u32`. The format version the workspace was read with.
   - `pub fn layout(&self) -> &Layout<P>`. The current arrangement.
   - `pub fn hidden(&self) -> &[(P, Location<P>)]`. The closed panels, and panels the application does not register now, with where each one goes back.
-  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels with the docked location each one left.
+  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels, and the closed panels that were floating, with the docked location each one left.
   - `pub fn revision(&self) -> Revision`. The revision of this workspace value: it moves with every write, and no other value has it.
   - `pub fn generation(&self) -> u64`. The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
   - `pub fn raise_window_floor(&mut self, floor: u64)`. Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
@@ -2823,7 +2824,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub const fn on_activate(mut self, on: bool) -> Self`. Closes when a component inside is activated, except an opener toggling its popup.
   - `pub const fn commands(mut self, on: bool) -> Self`. Closes when a key, a native menu pick or the palette runs a command from outside it; off for a layer its host
   - `pub const fn timeout(mut self, seconds: Option<f32>) -> Self`. Closes after `seconds`.
-- `craft_ui::contract::overlay::DragBounds`: `pub enum DragBounds { Inside, TitleVisible }`. How much of a floating layer stays inside the window when the user moves it, when it is placed at a position, and
+- `craft_ui::contract::overlay::DragBounds`: `pub enum DragBounds { Inside, TitleVisible }`. How much of a floating layer stays inside the window: the whole layer (`Inside`, the default) or a strip of its title.
 - `craft_ui::contract::overlay::FloatPlace`: `pub struct FloatPlace { pub pos: Option<Pos2>, pub corner: Align2 }`. Where a floating layer sits.
   - `pub const fn centred() -> Self`. Centred in the viewport.
   - `pub const fn at(pos: Pos2) -> Self`. With its left-top at `pos`.

@@ -61,10 +61,11 @@ impl FloatPlace {
     }
 }
 
-/// How much of a floating layer stays inside the window when the user moves it, when it is placed at a position, and
-/// when it shows at the placement a pass stored: the window's safe rect, cut to the overlay's
-/// [`bounds`](super::Overlay::bounds) when it sets them. Bounds of the overlay's own still hold the whole layer while
-/// the user moves it.
+/// How much of a floating layer stays inside the window: the whole layer (`Inside`, the default) or a strip of its title.
+///
+/// It holds while the user moves the layer, when the layer is placed at a position, and when it shows at the placement
+/// a pass stored: the window's safe rect, cut to the overlay's [`bounds`](super::Overlay::bounds) when it sets them.
+/// Bounds of the overlay's own still hold the whole layer while the user moves it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DragBounds {
