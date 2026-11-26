@@ -775,11 +775,20 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         let dir = std::env::temp_dir().join(format!("craft-owner-only-inherit-only-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)(IO)R").output().unwrap();
+        let me = current_user_sid().unwrap();
+        // The folder's list is only the user's and the Users entry, not what the temp folder hands
+        // down: a CI runner's lets Administrators in too, which the check would name first.
+        let ok = std::process::Command::new("icacls")
+            .arg(&dir)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("*{me}:(OI)(CI)F"))
+            .args(["/grant", "*S-1-5-32-545:(OI)(CI)(IO)R"])
+            .output()
+            .unwrap();
         assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
         let sddl = sddl_of(&dir).unwrap();
         assert!(sddl.contains(";IO;") && sddl.contains(";S-1-5-32-545)"), "the inherit-only entry for Users is read: {sddl}");
-        let me = current_user_sid().unwrap();
+        assert_eq!(foreign_access(&sddl, &me), None, "a file's check leaves the inherit-only entry out: {sddl}");
         assert!(foreign_folder_access(&sddl, &me).is_some_and(|p| p.contains("S-1-5-32-545")), "{sddl}");
         let _ = std::fs::remove_dir_all(&dir);
     }
