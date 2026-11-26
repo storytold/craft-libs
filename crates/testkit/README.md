@@ -251,7 +251,7 @@ The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The
 | `list_tools()` | Reads `tools/list` pages through `nextCursor` and returns the tools as sent. More than `max_pages` pages returns `TooManyPages`, and tools that add up to more than `max_line_bytes` of JSON return `ToolListTooLarge`. |
 | `notify(method, params)` | Sends a notification, which has no id and gets no reply. |
 | `take_notifications()` | Returns the notifications kept so far without waiting. |
-| `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. |
+| `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. After the child exits, it waits up to 5 s for the rest of stderr to be read. |
 
 While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error, close the connection and stop the child; later calls return `Closed`. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
 

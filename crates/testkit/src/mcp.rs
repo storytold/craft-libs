@@ -41,6 +41,10 @@ const READ_QUEUE: usize = 4;
 const WRITE_QUEUE: usize = 64;
 /// How often [`McpChild::close`] checks whether the child has exited.
 const EXIT_POLL: Duration = Duration::from_millis(10);
+/// How long [`McpChild::close`] waits, after the child has exited, for the stderr thread to read to
+/// the end of stderr. Only a process that keeps the child's stderr open after the child exits makes
+/// it wait this long.
+const STDERR_DRAIN: Duration = Duration::from_secs(5);
 /// Bytes of an unreadable stdout line quoted in a protocol error.
 const PREVIEW: usize = 80;
 /// The JSON-RPC error code for a method the client does not offer.
@@ -250,7 +254,10 @@ pub struct CloseOutcome {
     /// The child was stopped because it did not exit within [`McpLimits::close_grace`], or an
     /// earlier failure stopped it.
     pub forced: bool,
-    /// The last [`McpLimits::stderr_tail_bytes`] bytes the child wrote on stderr.
+    /// The last [`McpLimits::stderr_tail_bytes`] bytes the child wrote on stderr. After the child
+    /// exits, [`McpChild::close`] waits up to 5 s for the rest of stderr to be read, whatever
+    /// [`McpLimits::close_grace`] is. A process the child started that keeps stderr open past that
+    /// leaves the bytes read so far.
     pub stderr: Vec<u8>,
 }
 
@@ -666,7 +673,7 @@ impl McpChild {
         };
         let stderr = match &self.stderr {
             Some(tail) => {
-                let _ = tail.done.recv_timeout(grace);
+                let _ = tail.done.recv_timeout(STDERR_DRAIN);
                 tail.copy()
             }
             None => Vec::new(),

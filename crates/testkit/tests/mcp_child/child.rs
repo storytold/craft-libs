@@ -20,6 +20,7 @@ const TESTS: &[(&str, Test)] = &[
     ("child_exits_before_initialize", child_exits_before_initialize),
     ("stderr_flood_does_not_block", stderr_flood_does_not_block),
     ("close_forces_and_reaps_unresponsive_child", close_forces_and_reaps_unresponsive_child),
+    ("close_keeps_stderr_written_before_exit", close_keeps_stderr_written_before_exit),
 ];
 
 pub fn run() -> ExitCode {
@@ -53,10 +54,16 @@ pub fn run() -> ExitCode {
 /// Runs as the child: `server` answers `initialize` with the version asked for and every tool call
 /// with `ECHO_VAR`, and exits when its stdin closes; `flood` also writes `FLOOD` bytes and `END` on
 /// stderr before each reply; `silent` reads and never answers; `stubborn` answers but does not
-/// exit when its stdin closes; `exit` exits at once with code 3.
+/// exit when its stdin closes; `exit` exits at once with code 3; `goodbye` writes `FLOOD` bytes and
+/// `BYE` on stderr and exits without reading.
 fn serve(mode: &str) -> ExitCode {
     if mode == "exit" {
         return ExitCode::from(3);
+    }
+    if mode == "goodbye" {
+        let mut err = std::io::stderr();
+        let written = err.write_all(&vec![b'e'; FLOOD]).and_then(|()| err.write_all(b"BYE"));
+        return if written.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
     }
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -158,4 +165,14 @@ fn close_forces_and_reaps_unresponsive_child() -> Result<(), String> {
     c.initialize(PROTOCOL_VERSION).map_err(|e| e.to_string())?;
     let out = c.close().map_err(|e| e.to_string())?;
     check(out.forced && out.status.is_some_and(|s| !s.success()), || format!("close: {out:?}"))
+}
+
+fn close_keeps_stderr_written_before_exit() -> Result<(), String> {
+    let limits = McpLimits { stderr_tail_bytes: 4096, close_grace: Duration::ZERO, ..McpLimits::default() };
+    let mut c = start("goodbye", limits)?;
+    // The child's stdout ends when it exits, after its stderr is written.
+    let err = c.initialize(PROTOCOL_VERSION).err();
+    check(matches!(err, Some(McpError::Ended | McpError::Io { .. })), || format!("initialize: {err:?}"))?;
+    let out = c.close().map_err(|e| e.to_string())?;
+    check(out.stderr.len() == 4096 && out.stderr.ends_with(b"eeeBYE"), || format!("kept {} bytes of stderr", out.stderr.len()))
 }
