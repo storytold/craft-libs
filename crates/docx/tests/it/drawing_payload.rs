@@ -301,6 +301,23 @@ fn omitted_picture_fill_settings_read_as_office_reads_them() {
     assert!(!saved.contains("algn"), "{saved}");
 }
 
+/// Percentages in the strict form (`50%`) read as the transitional integers do (`50000`): the
+/// tile's scale, the part of the picture used and where it is stretched to.
+#[test]
+fn a_picture_fills_percent_signed_percentages_are_read() {
+    let fill = |a: &str, b: &str| {
+        let (p, _) = picture_fill_saved(&format!(
+            r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:srcRect l="{a}"/><a:tile sx="{b}" sy="{b}"/></a:blipFill></wps:spPr><wps:bodyPr/>"#
+        ));
+        let (q, _) = picture_fill_saved(&format!(
+            r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:stretch><a:fillRect r="{a}"/></a:stretch></a:blipFill></wps:spPr><wps:bodyPr/>"#
+        ));
+        (p.crop[0], p.tile.map(|t| (t.sx, t.sy)), q.stretch[2])
+    };
+    assert_eq!(fill("10%", "50%"), fill("10000", "50000"));
+    assert_eq!(fill("10%", "50%"), (0.1, Some((50.0, 50.0)), 10.0));
+}
+
 /// A Drawing Canvas's picture background is saved with its picture and reads back as that
 /// picture fill; it was written as `a:noFill` and lost on save.
 #[test]

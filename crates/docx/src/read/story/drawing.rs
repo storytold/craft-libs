@@ -334,7 +334,7 @@ impl Reader<'_> {
         let insets = |e: Option<&El>| {
             let mut r = [0.0f32; 4];
             for (slot, n) in r.iter_mut().zip(["l", "t", "r", "b"]) {
-                *slot = e.and_then(|e| e.attr(n)).and_then(int).map_or(0.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
+                *slot = e.and_then(|e| e.attr(n)).and_then(percentage).map_or(0.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
             }
             r
         };
@@ -342,7 +342,7 @@ impl Reader<'_> {
         let stretch = insets(bf.child("a:stretch").and_then(|s| s.child("a:fillRect")));
         let fx = crate::units::blip_fx(blip);
         let tile = bf.child("a:tile").map(|t| {
-            let pct = |n: &str| t.attr(n).and_then(int).map_or(100.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
+            let pct = |n: &str| t.attr(n).and_then(percentage).map_or(100.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
             let off = |n: &str| t.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
             let flip = match t.attr("flip") {
                 Some("x") => GradientFlip::X,
@@ -921,4 +921,13 @@ fn group_xfrm(sppr: Option<&El>) -> Xfrm {
         ch_off: pair("a:chOff", "x", "y", max),
         ch_ext: pos(pair("a:chExt", "cx", "cy", max)),
     }
+}
+
+/// A DrawingML percentage (`ST_Percentage`) in thousandths of a percent: the transitional integer
+/// form (`50000`) or the strict form with a percent sign (`50%`), which Office reads too.
+fn percentage(v: &str) -> Option<i64> {
+    let v = v.trim();
+    let Some(p) = v.strip_suffix('%') else { return int(v) };
+    let units = p.trim().parse::<f64>().ok()? * 1000.0;
+    units.is_finite().then(|| units.clamp(-1e12, 1e12).round() as i64)
 }
