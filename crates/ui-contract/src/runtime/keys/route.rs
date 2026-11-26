@@ -600,8 +600,10 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
 /// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events: each of
 /// them keeps its own place beside the events egui still holds, equal ones apart. The event stands for its chord by its
 /// typed key and modifiers, so it is the command's where the press that fired the chord carried another physical key (a
-/// layout that types the chord's key on another key). Empty while a component has focus, as that component owns the keys
-/// then. The same in every call of a pass: it reads the pass and changes nothing.
+/// layout that types the chord's key on another key). That press's own key is the one its command holds, so a release of
+/// the chord's typed key, of a press the host holds from an earlier pass, is left over to the host. Empty while a
+/// component has focus, as that component owns the keys then. The same in every call of a pass: it reads the pass and
+/// changes nothing.
 pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let record = focus::record(ctx, viewport);
@@ -622,7 +624,16 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     // I): the event and the press that fired the command are the chord's own.
     let clip_same =
         |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) || input.typed.is_some_and(|typed| other.typed == Some(typed));
-    let took = |input: &KeyInput| fired.iter().any(|(fired, by_repeat)| !by_repeat && fired.mods == input.mods && clip_same(fired, input));
+    // The key a command holds once it took the press `input` stands for, and `None` when no command took it. The key is
+    // the fired press's own, which is not always the chord's typed key: Cmd+V typed on the key I holds I, so the release
+    // of a V the host holds from an earlier pass stays the host's. A fired press that names no key holds the clip's own,
+    // which is the chord's (a clip names its chord's key).
+    let took = |input: &KeyInput| -> Option<Key> {
+        let Some((taken, _)) = fired.iter().find(|(fired, by_repeat)| !by_repeat && fired.mods == input.mods && clip_same(fired, input)) else {
+            return None;
+        };
+        key_of(taken).or_else(|| key_of(input))
+    };
     let mut clips = clips.into_iter().peekable();
     let mut ends = ends.into_iter().peekable();
     let events = ctx.input(|input| input.events.clone());
@@ -691,11 +702,13 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
 }
 
 /// Puts `clip` in `left` in [`leftover_events`] when no command took the press it stands for (`took`); a press a command
-/// took holds its key in `down` until its release, as a key's own press does.
-fn leave_clip(clip: LeftClip, took: impl Fn(&KeyInput) -> bool, down: &mut Vec<Key>, left: &mut Vec<Event>) {
-    if !took(&clip.input) {
+/// took holds the key `took` names for it in `down` until its release, as a key's own press does.
+fn leave_clip(clip: LeftClip, took: impl Fn(&KeyInput) -> Option<Key>, down: &mut Vec<Key>, left: &mut Vec<Event>) {
+    let Some(key) = took(&clip.input) else {
         left.push(clip.event);
-    } else if let Some(key) = clip.input.physical.or(clip.input.typed).filter(|key| !down.contains(key)) {
+        return;
+    };
+    if !down.contains(&key) {
         down.push(key);
     }
 }

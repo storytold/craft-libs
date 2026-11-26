@@ -245,3 +245,36 @@ fn a_paste_stands_for_its_own_press() {
     assert!(fired, "the Paste command fired for the press");
     assert!(left.is_empty(), "the paste stands for its own press: {left:?}");
 }
+
+/// A paste holds the key its chord was pressed on, not the letter it types: the release of a key the host holds from an
+/// earlier pass, coming in the paste's pass, is left over to the host, whose key would otherwise stay held.
+#[trial]
+fn a_paste_holds_the_key_its_chord_was_pressed_on() {
+    let mut frames = Frames::new();
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+
+    // The host holds V from a press no command took, whose release is still to come.
+    frames.frame(vec![key_press(Key::V, Modifiers::NONE)], &mut show);
+    assert!(take_output(&frames.ctx).fired.is_empty(), "a plain V runs no command");
+    assert_eq!(key_events(left.take()), [(Key::V, true)], "the press is the host's, and the host holds V");
+
+    // Cmd+V pressed on the key I, as a layout that types V there reports it, with the platform's paste in the same pass
+    // and the releases of both keys after it.
+    let press = Event::Key { key: Key::V, physical_key: Some(Key::I), pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+    frames.frame(
+        vec![press, Event::Paste("p".to_owned()), key_release(Key::I, Modifiers::COMMAND), key_release(Key::V, Modifiers::COMMAND)],
+        &mut show,
+    );
+    assert!(take_output(&frames.ctx).fired.iter().any(|fired| fired.command.id == EditCommands::Paste.id()), "the Paste command fired for the press");
+    assert_eq!(
+        key_events(left.take()),
+        [(Key::V, false)],
+        "the paste holds the key its press was made on, I, so the release of the V the host holds is left over to it and the I release stays the command's"
+    );
+}
