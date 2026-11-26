@@ -59,7 +59,7 @@ impl Matrix {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Transfer {
     /// BT.709 display, approximated with the sRGB curve by this slim conversion layer.
-    /// This is not a pure-gamma BT.1886 decode.
+    /// This is not a pure-gamma BT.1886 decode; [`bt1886_eotf`] is.
     #[default]
     Bt709,
     Srgb,
@@ -301,6 +301,41 @@ pub fn hlg_inverse_oetf(e: f32) -> f32 {
     if e <= 0.5 { e * e / 3.0 } else { (((e - c) / a).exp() + b) / 12.0 }
 }
 
+/// The BT.1886 exponent.
+const BT1886_GAMMA: f64 = 2.4;
+
+/// BT.1886 constants `a` and `b` for a display's white and black luminance, or `None` when white
+/// is not measurably above black, or is NaN or infinite. A black below 0, or NaN, is taken as 0.
+/// The constants are in `f64`, so a black close to white keeps the curve's endpoints.
+fn bt1886_ab(white: f32, black: f32) -> Option<(f64, f64)> {
+    let (white, black) = (f64::from(white), f64::from(black.max(0.0)));
+    let (w, k) = (white.powf(1.0 / BT1886_GAMMA), black.powf(1.0 / BT1886_GAMMA));
+    let d = w - k;
+    if d.is_finite() && d > 0.0 { Some((d.powf(BT1886_GAMMA), k / d)) } else { None }
+}
+
+/// ITU-R BT.1886 reference display EOTF: a BT.709 signal (0..1) to screen luminance, for a
+/// display with the given white and black luminance (any unit, e.g. cd/m²). With `white` 1 and
+/// `black` 0 it is a pure 2.4 gamma. [`to_linear`] with [`Transfer::Bt709`] uses the sRGB curve
+/// instead. A `black` below 0, or NaN, is taken as 0. When `white` is not measurably above
+/// `black`, or is NaN or infinite, the result is `black`.
+pub fn bt1886_eotf(v: f32, white: f32, black: f32) -> f32 {
+    match bt1886_ab(white, black) {
+        Some((a, b)) => (a * (f64::from(v) + b).max(0.0).powf(BT1886_GAMMA)) as f32,
+        None => black.max(0.0),
+    }
+}
+
+/// Inverse of [`bt1886_eotf`]: screen luminance to a BT.709 signal. Luminance at or below
+/// `black` gives 0. When `white` is not measurably above `black`, or is NaN or infinite, the
+/// result is 0.
+pub fn bt1886_inverse_eotf(l: f32, white: f32, black: f32) -> f32 {
+    match bt1886_ab(white, black) {
+        Some((a, b)) if l > black.max(0.0) => ((f64::from(l) / a).powf(1.0 / BT1886_GAMMA) - b).max(0.0) as f32,
+        _ => 0.0,
+    }
+}
+
 /// 256-entry table: sRGB-encoded u8 → linear f32.
 pub fn srgb_u8_to_linear_table() -> &'static [f32; 256] {
     static T: OnceLock<[f32; 256]> = OnceLock::new();
@@ -516,6 +551,37 @@ mod tests {
         for (i, got) in linear_to_srgb_u8_table().iter().enumerate() {
             let want = (encode(i as f64 / 4095.0) * 255.0).round() as u8;
             assert_eq!(*got, want, "linear {i}/4095");
+        }
+    }
+
+    #[test]
+    fn bt1886_follows_the_recommendation() {
+        // BT.1886 with Lw = 100 cd/m² and Lb = 0: L = 100 · V^2.4.
+        assert!((bt1886_eotf(0.5, 100.0, 0.0) - 100.0 * 0.5f32.powf(2.4)).abs() < 1e-3);
+        // A pure gamma has no linear toe, so near black it is darker than the sRGB curve.
+        assert!(bt1886_eotf(0.02, 1.0, 0.0) < to_linear(0.02, Transfer::Bt709) / 10.0);
+        // A black level lifts code 0 to the display's black and keeps code 1 at its white.
+        for (white, black) in [(100.0, 0.1), (300.0, 0.5), (1.0, 0.0)] {
+            assert!((bt1886_eotf(0.0, white, black) - black).abs() < 1e-4 * white);
+            assert!((bt1886_eotf(1.0, white, black) - white).abs() < 1e-4 * white);
+            for v in [0.0, 0.1, 0.5, 0.9, 1.0] {
+                let l = bt1886_eotf(v, white, black);
+                assert!((bt1886_inverse_eotf(l, white, black) - v).abs() < 1e-4, "{white} {black} {v}");
+            }
+            assert_eq!(bt1886_inverse_eotf(black / 2.0, white, black), 0.0);
+        }
+        assert!(bt1886_eotf(0.5, 100.0, 0.1) > bt1886_eotf(0.5, 100.0, 0.0));
+        // A black close to white keeps both endpoints of the inverse.
+        assert_eq!(bt1886_inverse_eotf(99.99, 100.0, 99.99), 0.0);
+        assert!((bt1886_inverse_eotf(100.0, 100.0, 99.99) - 1.0).abs() < 1e-3);
+        // A display whose white is not above its black.
+        assert_eq!(bt1886_eotf(0.5, 1.0, 1.0), 1.0);
+        assert_eq!(bt1886_inverse_eotf(0.5, 0.0, 0.0), 0.0);
+        assert_eq!(bt1886_inverse_eotf(0.5, f32::NAN, 0.0), 0.0);
+        assert_eq!(bt1886_eotf(0.5, 100.0, f32::NAN), bt1886_eotf(0.5, 100.0, 0.0));
+        for (white, black) in [(1.0, 0.999_999_94), (f32::INFINITY, 0.0)] {
+            assert!(bt1886_eotf(0.5, white, black).is_finite());
+            assert!(bt1886_inverse_eotf(0.5, white, black).is_finite());
         }
     }
 
