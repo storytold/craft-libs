@@ -7,7 +7,7 @@ use craft_ui::pickers::Select;
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Key, Modifiers, Rect, Ui};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Entries 1 to 4; 2 and 4 are reached from the open list only.
@@ -107,4 +107,39 @@ fn a_value_on_no_entry_reads_as_the_placeholder_the_face_shows() {
         let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
         assert_eq!(fixture.tree().value_of(node), Some(read), "the field reads what its face shows");
     }
+}
+
+#[trial]
+fn an_unlisted_current_value_paints_and_reads_without_becoming_a_choice() {
+    let current = Rc::new(Cell::new(9u8));
+    let painted = Rc::new(RefCell::new(Vec::new()));
+    let held = Rc::clone(&current);
+    let pictures = Rc::clone(&painted);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "Uniform")];
+        let out = Select::new("Profile", Bind::given(held.get()), &entries)
+            .unlisted_label("Custom")
+            .picture(|value, _, _| pictures.borrow_mut().push(*value))
+            .show(ui);
+        if let Some(value) = out.events.landed().copied() {
+            held.set(value);
+        }
+    });
+    fixture.settle();
+    let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
+    assert_eq!(fixture.tree().value_of(node), Some("Custom"));
+    let face = painted.take();
+    assert!(!face.is_empty() && face.iter().all(|&value| value == 9), "the face draws only the current value: {face:?}");
+
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert_eq!(fixture.by_role(Role::LIST_BOX_OPTION).len(), 1, "the popup offers only Uniform");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(current.get(), 9);
+    fixture.key(Key::End, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(current.get(), 1, "End lands on the only choice");
+    assert_eq!(fixture.tree().value_of(node), Some("Uniform"));
 }
