@@ -136,7 +136,7 @@ fn action_editor_keeps_unknown_metadata_until_an_explicit_choice() {
     press(&mut fixture, "Icon");
     press(&mut fixture, "Crop");
     assert_eq!(shared.borrow().value.action.icon, "ActionsCrop");
-    assert_eq!(fixture.tree().focused_key(), Some(node(&fixture, "Icon").node), "choosing a glyph returns real focus to its trigger");
+    assert_eq!(fixture.tree().focused_key(), node(&fixture, "Icon").node, "choosing a glyph returns real focus to its trigger");
     assert_eq!(shared.borrow().published.icon, "future-icon", "no published action was bound to the editor");
     press(&mut fixture, "Icon");
     press(&mut fixture, "Default icon");

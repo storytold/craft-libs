@@ -79,7 +79,7 @@ pub(super) fn show(
                         .label(label.clone())
                         .tooltip(label.clone())
                         .selected(value.action.icon == *name)
-                        .id_salt(*name)
+                        .id_salt(name)
                         .enabled(editable)
                         .show(ui)
                         .clicks
