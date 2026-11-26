@@ -163,7 +163,9 @@ impl PaintUi<'_> {
         let env = Env::of(self.ui);
         let mut child = child;
         let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
-        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, egui_cell: false, text: &label, side: &side, under: &under };
+        // Without a node of its own the composite leaves the label to the node its own `Ui` sits under.
+        let parent = self.node.then_some(self.id);
+        let at = LeafLabel { id, owner: self.id, parent, row: rect, egui_cell: false, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
@@ -187,7 +189,8 @@ impl PaintUi<'_> {
         let outer = Env::of(parent);
         let kids = self.kids.get_or_insert_with(|| {
             let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
-            alloc::child(parent, access::with_parent(builder, self.id))
+            // Without a node of its own the composite leaves its children to the node its own `Ui` sits under.
+            alloc::child(parent, if self.node { access::with_parent(builder, self.id) } else { builder })
         });
         let ctx = kids.ctx().clone();
         let env = super::cx::child_env(&outer, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
