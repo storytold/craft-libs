@@ -873,6 +873,60 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// Craft patch (hard edges): how vector edges are drawn (see [`Edges`]).
+    edges: Edges,
+}
+
+/// Craft patch (hard edges): how this renderer draws the edges of fills, strokes, glyph outlines
+/// and clips. Anti-aliased edges are composited one shape at a time, so two shapes that meet
+/// partway across a pixel each cover part of it and the backdrop shows through the join (a grey
+/// seam between two black boxes). With hard edges two shapes sharing an edge leave no seam,
+/// though a junction of three or more can leave a pixel uncovered; a caller that renders at
+/// `k`× and box-averages the result gets smooth edges with no seam along shared edges.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Edges {
+    /// vello_cpu's aliasing threshold: a pixel whose coverage reaches it is covered, any other
+    /// is not. `None` anti-aliases.
+    threshold: Option<u8>,
+    /// Device pixels per output pixel, so the thinnest-stroke floor stays one output pixel when
+    /// the caller reduces the render.
+    output_pixel: f32,
+}
+
+impl Edges {
+    /// As without the patch.
+    pub(crate) const ANTIALIASED: Self = Self {
+        threshold: None,
+        output_pixel: 1.0,
+    };
+
+    /// Coverage of at least half a pixel covers it: two shapes that share an edge cover every
+    /// pixel along it at least once between them, and neither grows by more than half a pixel.
+    /// Three or more shapes meeting inside a pixel can each cover less than half of it and leave
+    /// it uncovered; vello_cpu's coverage is an area, so no threshold tiles every junction.
+    const HARD_THRESHOLD: u8 = 128;
+
+    /// The edges `hard` asks for, with `output_pixel` device pixels per output pixel (a value
+    /// that is not finite or below one counts as one).
+    pub(crate) fn new(hard: bool, output_pixel: f32) -> Self {
+        Self {
+            threshold: hard.then_some(Self::HARD_THRESHOLD),
+            output_pixel: if output_pixel.is_finite() && output_pixel > 1.0 {
+                output_pixel
+            } else {
+                1.0
+            },
+        }
+    }
+
+    /// The edges of a soft mask drawn for this renderer: anti-aliased, with the same
+    /// thinnest-stroke floor, so a stroke inside the mask is as wide as on the page.
+    pub(crate) fn soft_mask(self) -> Self {
+        Self {
+            threshold: None,
+            output_pixel: self.output_pixel,
+        }
+    }
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -996,9 +1050,12 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        edges: Edges,
     ) -> Self {
+        let mut ctx = RenderContext::new_with(width, height, settings);
+        ctx.set_aliasing_threshold(edges.threshold);
         Self {
-            ctx: RenderContext::new_with(width, height, settings),
+            ctx,
             color_replacement,
             in_annotations: false,
             knockout: Vec::new(),
@@ -1015,6 +1072,7 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            edges,
         }
     }
 
@@ -1025,7 +1083,9 @@ impl Renderer {
         is_text: bool,
         path: &BezPath,
     ) -> f64 {
-        let threshold = if is_text { 0.25 } else { 1.0 };
+        // Craft patch (hard edges): the floor is in output pixels, so a render the caller reduces
+        // keeps its hairlines one output pixel wide.
+        let threshold = (if is_text { 0.25 } else { 1.0 }) * self.edges.output_pixel;
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
         // specification. If we are stroking text, we reduce the threshold as it will otherwise
@@ -1122,6 +1182,9 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                // Craft patch (hard edges): an image's alpha mask is drawn as an image, which keeps
+                // anti-aliased edges (and draws no strokes).
+                edges: Edges::ANTIALIASED,
             };
             let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1662,7 +1725,9 @@ impl Renderer {
             preview: self.preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            edges: self.edges,
         };
+        renderer.ctx.set_aliasing_threshold(self.edges.threshold);
         t.interpret(&mut renderer, initial_transform, is_stroke);
         let mut pix = offscreen_pixmap(size.0, size.1, true);
         renderer.ctx.flush();
@@ -1731,11 +1796,13 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            edges: self.edges,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
             knockout_passes: Vec::new(),
         };
+        renderer.ctx.set_aliasing_threshold(self.edges.threshold);
         // The pass draws inside a layer of its own. On the bare canvas, vello_cpu fills a tile
         // that a paint covers completely without the blend mode, so the middle of a group wider
         // than about two tiles lost its blend (#3777).
@@ -2453,7 +2520,8 @@ impl<'a> Device<'a> for Renderer {
             }
         }
 
-        self.ctx.set_aliasing_threshold(None);
+        // Craft patch (hard edges): back to this renderer's edges.
+        self.ctx.set_aliasing_threshold(self.edges.threshold);
     }
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
@@ -2546,6 +2614,7 @@ impl<'a> Device<'a> for Renderer {
             (opacity, mask, convert_blend_mode(blend_mode))
         };
         let settings = *self.ctx.render_settings();
+        let edges = self.edges.soft_mask();
         let force_images_may_have_transparency = mask.is_some()
             || blend_mode != BlendMode::Normal
             || self
@@ -2564,7 +2633,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, edges))
                     .clone()
             }),
             None,
@@ -2687,13 +2756,14 @@ impl<'a> Device<'a> for Renderer {
 
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'_>>) {
         let settings = *self.ctx.render_settings();
+        let edges = self.edges.soft_mask();
         self.cur_mask = mask.map(|m| {
             let width = self.ctx.width();
             let height = self.ctx.height();
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, edges))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2878,7 +2948,13 @@ fn render_shading_texture(
     )
 }
 
-fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Renderer {
+fn soft_mask_renderer(
+    settings: &RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    edges: Edges,
+) -> Renderer {
     Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
@@ -2899,14 +2975,24 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        // Craft patch (hard edges): a soft mask keeps anti-aliased edges, and the page's
+        // thinnest-stroke floor (see `Edges::soft_mask`).
+        edges,
     }
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn draw_soft_mask(
+    mask: &SoftMask<'_>,
+    settings: RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    edges: Edges,
+) -> Mask {
     let mut rendered_mask = if mask.mask_type() == MaskType::Luminosity && mask.is_device_cmyk() {
-        cmyk_luminosity(mask, &settings, width, height, preview)
+        cmyk_luminosity(mask, &settings, width, height, preview, edges)
     } else {
-        let mut renderer = soft_mask_renderer(&settings, width, height, preview);
+        let mut renderer = soft_mask_renderer(&settings, width, height, preview, edges);
 
         let bg_color = mask.background_color().to_rgba();
         let apply_bg = bg_color.to_rgba8() != BLACK.to_rgba8().to_u8_array();
@@ -2961,14 +3047,21 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
 /// + 0.59m + 0.11y + k)`. Taken from the colors as drawn, through the CMYK profile, K 100%
 /// would leave about a tenth of the masked object visible. So each process ink's plate of the
 /// group is drawn over the backdrop's film, and the formula is applied to the four tints.
-fn cmyk_luminosity(mask: &SoftMask<'_>, settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn cmyk_luminosity(
+    mask: &SoftMask<'_>,
+    settings: &RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    edges: Edges,
+) -> Mask {
     let backdrop = mask.background_color();
     let pixels = usize::from(width) * usize::from(height);
     let mut ink = vec![0.0_f32; pixels];
     for (plate_ink, weight) in hayro_interpret::color::Ink::PROCESS.into_iter().zip([0.3, 0.59, 0.11, 1.0]) {
         let plate = mask.plate(plate_ink);
         let film = 1.0 - plate.tint(&backdrop);
-        let mut renderer = soft_mask_renderer(settings, width, height, preview);
+        let mut renderer = soft_mask_renderer(settings, width, height, preview, edges);
         renderer.ctx.set_paint(AlphaColor::<Srgb>::new([film, film, film, 1.0]));
         renderer
             .ctx
