@@ -466,7 +466,9 @@ impl McpChild {
     }
 
     /// Connects to a server that reads `writer` and writes `reader`, such as one running on a
-    /// thread of the test. [`McpLimits::stderr_tail_bytes`] is not used.
+    /// thread of the test. [`McpLimits::stderr_tail_bytes`] is not used. A thread reads `reader`
+    /// until it ends, so the server must drop its end of `reader` for that thread to stop; after
+    /// [`McpChild::close`] or a drop, the thread also stops at the next line the server writes.
     pub fn connect(reader: impl Read + Send + 'static, writer: impl Write + Send + 'static, limits: McpLimits) -> Result<Self, McpError> {
         limits.validate()?;
         Self::start(reader, writer, limits)
@@ -656,7 +658,8 @@ impl McpChild {
     /// it, and returns its exit status. For a connection made with [`McpChild::connect`], it ends
     /// the writer thread, which drops the writer once the lines already queued are written, and
     /// returns no status without waiting for that thread. A writer blocked on a server that has
-    /// stopped reading stays with the thread until the server drops its reading end.
+    /// stopped reading stays with the thread until the server drops its reading end, and the thread
+    /// reading `reader` stays blocked until the server drops its writing end or writes a line.
     pub fn close(mut self) -> Result<CloseOutcome, McpError> {
         self.writer = None;
         let grace = self.limits.close_grace;

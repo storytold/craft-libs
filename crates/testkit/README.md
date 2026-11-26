@@ -241,7 +241,7 @@ Changes from `craft-media-testkit`'s `hammer`:
 
 The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
 
-`McpChild::spawn(path, args, env)` starts an MCP server program with its stdin and stdout piped. The variables in `env` are set for the child only; the test process's environment is not changed. `McpChild::connect(reader, writer, limits)` talks to a server that runs in the test process. Each message is one line of JSON-RPC 2.0, as the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) describes.
+`McpChild::spawn(path, args, env)` starts an MCP server program with its stdin and stdout piped. The variables in `env` are set for the child only; the test process's environment is not changed. `McpChild::connect(reader, writer, limits)` talks to a server that runs in the test process; its reading thread stops when the server drops its end of `reader`, or at the next line the server writes after `close()`. Each message is one line of JSON-RPC 2.0, as the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) describes.
 
 | Call | What it does |
 |---|---|
