@@ -126,6 +126,7 @@ mod tests {
         for separator in [":", "=", " "] {
             for indent in ["", " \t"] {
                 let input = format!("{indent}00:00:01{separator}  hello  \n{indent}00:00:02{separator}   \n");
+                assert_eq!(crate::detect(input.as_bytes(), None), Some(crate::Format::VPlayer), "{input:?}");
                 let doc = parse(&input).unwrap();
                 assert_eq!(doc.cues.len(), 1, "{input:?}");
                 assert_eq!(doc.cues[0].text, "hello", "{input:?}");
@@ -133,6 +134,23 @@ mod tests {
                 assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
             }
         }
+    }
+
+    #[test]
+    fn detection_keeps_clearing_lines_at_each_sampled_position() {
+        for separator in [":", "=", " "] {
+            for at in 0..3 {
+                let mut lines = ["00:00:01=one".to_owned(), "00:00:02=two".to_owned(), "00:00:03=three".to_owned()];
+                lines[at] = format!(" \t00:00:0{}{separator} \t", at + 1);
+                let input = format!("\u{feff}\n \t\n{}\n", lines.join("\n"));
+                let format = crate::detect(input.as_bytes(), None).unwrap();
+                assert_eq!(format, crate::Format::VPlayer, "{input:?}");
+                let document = crate::parse(input.as_bytes(), format).unwrap();
+                assert_eq!(document.cues.len(), 2, "{input:?}");
+                assert!(document.warnings.is_empty(), "{:?}", document.warnings);
+            }
+        }
+        assert_eq!(crate::detect(b"00:00:01 hello\n00:00:02\n", None), None);
     }
 
     #[test]
