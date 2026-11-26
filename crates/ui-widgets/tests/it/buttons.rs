@@ -27,6 +27,126 @@ use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Response, Ui, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+pub(crate) mod detail_wrapping {
+    use super::{Button, Cell, Fixture, Frames, IconId, Key, Modifiers, Rc, Rect, vec2};
+    use craft_behavior::Proposal;
+    use craft_ui::contract::{LeastWidth, Props as _, Role, Show as _, ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Stack;
+    use craft_ui::testing::{Target, focus::AccessActionKind, trial};
+
+    const DETAIL: &str = "Learn the essential tools. Choose a skill to see the tutorials for that skill.";
+
+    fn wrapped_detail(fixture: &mut Fixture, title: &str) -> Target {
+        let shapes = fixture.frame_shapes();
+        let detail = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == DETAIL => Some(text),
+                _ => None,
+            })
+            .expect("the whole detail paints");
+        let button = fixture.by_label(title).expect("the button is named");
+        assert!(detail.galley.rows.len() > 1, "the detail wraps across lines");
+        assert!(button.rect.expand(0.5).contains_rect(detail.visual_bounding_rect()), "the detail fits inside the button");
+        button
+    }
+
+    #[trial]
+    fn a_button_detail_stays_on_one_line_without_the_opt_in() {
+        let mut fixture = Fixture::new(|ui| {
+            Button::new("Quick guide").detail(DETAIL).sizing(Sizing::FillWidth).show(ui);
+        });
+        fixture.room(vec2(172.0, 220.0)).settle();
+        let rows = fixture.frame_shapes().iter().find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.text() == DETAIL => Some(text.galley.rows.len()),
+            _ => None,
+        });
+        assert_eq!(rows, Some(1), "ordinary button detail remains a single line");
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_fits_its_face_and_keeps_one_activation_target() {
+        const TITLE: &str = "Quick guide";
+        let activations = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&activations);
+        let mut fixture = Fixture::new(move |ui| {
+            let button = Button::new(TITLE).icon(IconId::new("copy")).detail(DETAIL).wrap_detail(true).sizing(Sizing::FillWidth);
+            if button.show(ui).clicked() {
+                seen.set(seen.get() + 1);
+            }
+        });
+        fixture.room(vec2(172.0, 220.0)).settle();
+        let button = wrapped_detail(&mut fixture, TITLE);
+        assert_eq!(fixture.tree().description_of(button.node), Some(DETAIL));
+        assert_eq!(fixture.by_role(Role::BUTTON).len(), 1);
+
+        fixture.click(&button).settle();
+        assert_eq!(activations.get(), 1);
+        fixture.access(AccessActionKind::Focus, &button);
+        assert_eq!(fixture.tree().focused_key(), button.node);
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        assert_eq!(activations.get(), 2, "clicking and pressing Enter each activate the button once");
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_measures_at_an_explicit_width() {
+        let width = 134.0;
+        for proposal in [Proposal::Width(width), Proposal::Size(vec2(width, 100.0))] {
+            let mut fixture = Fixture::new(move |ui| {
+                let mut button = Button::new("Quick guide").detail(DETAIL).wrap_detail(true);
+                let height = button.measure_in(ui, proposal).y;
+                let room = Rect::from_min_size(ui.cursor().min, vec2(width, height));
+                button.show_at(ui, room);
+            });
+            fixture.room(vec2(440.0, 220.0)).settle();
+            wrapped_detail(&mut fixture, "Quick guide");
+        }
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_keeps_explicit_unbounded_queries_unwrapped() {
+        let sizes = |width| {
+            let mut frames = Frames::new();
+            let mut out = [egui::Vec2::ZERO; 4];
+            frames.idle(1, |ui| {
+                let room = Rect::from_min_size(ui.cursor().min, vec2(width, 380.0));
+                Stack::new().fill().show_at(ui, room, |ui, _| {
+                    let mut button = Button::new("Quick guide").detail(DETAIL).wrap_detail(true);
+                    out = [Proposal::Ideal, Proposal::Width(f32::INFINITY), Proposal::Size(vec2(f32::INFINITY, 300.0)), Proposal::Width(width)]
+                        .map(|proposal| button.measure_in(ui, proposal));
+                });
+            });
+            out
+        };
+        let narrow = sizes(134.0);
+        let wide = sizes(580.0);
+        assert_eq!(narrow[..3], wide[..3], "the unbounded queries are independent of their parent");
+        assert!(narrow[3].y > narrow[0].y, "the explicit finite width wraps the caption");
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_measures_its_minimum_height_at_its_style_width_floor() {
+        let mut frames = Frames::new();
+        frames.idle(1, |ui| {
+            let mut button = Button::new("Quick guide").detail(DETAIL).wrap_detail(true).least_width(LeastWidth::SideMenu);
+            let minimum = button.measure_in(ui, Proposal::Min);
+            let at_width = button.measure_in(ui, Proposal::Width(minimum.x));
+            assert!((minimum.y - at_width.y).abs() < 0.5, "the minimum height follows the returned width: {minimum:?}, {at_width:?}");
+        });
+    }
+
+    #[trial]
+    fn a_wrapped_button_detail_measures_its_minimum_height_at_its_reserved_title_width() {
+        let mut frames = Frames::new();
+        frames.idle(1, |ui| {
+            let mut button = Button::new("I").detail(DETAIL).wrap_detail(true).room_for("WWWWWWWWW");
+            let minimum = button.measure_in(ui, Proposal::Min);
+            let at_width = button.measure_in(ui, Proposal::Width(minimum.x));
+            assert!((minimum.y - at_width.y).abs() < 0.5, "the caption uses the reserved width: {minimum:?}, {at_width:?}");
+        });
+    }
+}
+
 /// The button kinds that take an arrangement.
 #[derive(Clone, Copy, Debug)]
 enum Kind {
