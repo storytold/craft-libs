@@ -285,6 +285,34 @@ fn a_footer_bar_whose_wrapped_actions_shorten_puts_them_back_on_one_line() {
     assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the focused action keeps its focus");
 }
 
+/// A bar with a leading control narrowed until its actions wrap keeps them inside it in the first frame at the new
+/// width, and each action keeps its id on the new lines.
+#[trial]
+fn a_footer_bar_wraps_its_actions_beside_a_leading_control_in_the_first_frame() {
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let icons = ["ban", "check", "copy", "trash", "plus", "more", "list", "grid"];
+        let (output, _) = FooterBar::actions(icons.map(|icon| FooterAction::new(IconId::new(icon), icon))).show_footer_leading(ui, |ui, _| {
+            IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+        });
+        *out.borrow_mut() = (output.response.rect, output.responses.iter().map(|response| (response.id, response.rect)).collect::<Vec<_>>());
+    });
+    fixture.room(Vec2::new(900.0, 200.0)).settle();
+    let wide = seen.borrow().1.clone();
+    assert!(wide.iter().all(|(_, rect)| (rect.min.y - wide[0].1.min.y).abs() < 0.5), "one line in a wide bar: {wide:?}");
+    fixture.room(Vec2::new(120.0, 200.0)).frame(Vec::new());
+    let (bar, narrow) = seen.borrow().clone();
+    assert_eq!(narrow.len(), 8);
+    assert!(narrow.iter().any(|(_, rect)| (rect.min.y - narrow[0].1.min.y).abs() >= 0.5), "the actions take more lines: {narrow:?}");
+    for (_, rect) in &narrow {
+        assert!(bar.expand(0.5).contains_rect(*rect), "{rect:?} lies outside the bar {bar:?} in the first narrow frame");
+    }
+    for ((was, _), (now, _)) in wide.iter().zip(&narrow) {
+        assert_eq!(was, now, "an action's id changed when the actions wrapped");
+    }
+}
+
 const DIALOG_BUTTONS: [&str; 4] = ["Reset", "Don't Save", "Cancel", "OK"];
 
 /// The rect of a bar of four dialog buttons and the rect of each button, in a room `width` wide; `leading` puts a

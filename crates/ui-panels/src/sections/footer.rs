@@ -16,15 +16,16 @@ use crate::runtime::keys;
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::WindowHost;
 use crate::style::{ComponentStyle, GlyphRole, RuleKind, StyleCx};
-use craft_behavior::{Insets, Metrics, OwnerClass, Sense};
+use craft_behavior::{Insets, Metrics, OwnerClass, Proposal, Sense};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::{
     Variant,
     variant::{Emphasis, Tone},
 };
-use egui::{Context, Id, Pos2, Rect, Response, Ui};
+use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
 use std::any::Any;
+use std::cell::Cell;
 use std::fmt;
 use std::sync::Arc;
 
@@ -79,8 +80,8 @@ struct DropShown {
     over: bool,
 }
 
-/// Shows an action's drop slot around its button.
-type DropShow = dyn Fn(&mut Ui, &FooterAction) -> DropShown + Send + Sync;
+/// Shows an action's drop slot around its button, under the id given (`member_id`) or an id from the flow.
+type DropShow = dyn Fn(&mut Ui, &FooterAction, Option<Id>) -> DropShown + Send + Sync;
 
 /// An icon action of a panel footer: an `IconButton` named by its label.
 #[derive(Clone)]
@@ -189,19 +190,26 @@ impl FooterAction {
     #[must_use]
     pub fn accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
         let accepts: Arc<dyn Fn(&P) -> bool + Send + Sync> = Arc::new(accepts);
-        self.drops = Some(Arc::new(move |ui, action| {
+        self.drops = Some(Arc::new(move |ui, action, id| {
             let accepts = Arc::clone(&accepts);
-            let slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled);
-            let shown = slot.show(ui, |ui, _| action.icon_button(DropAction::<P>::accepting(ui)).show(ui).response);
+            let mut slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled);
+            if let Some(id) = id {
+                slot = slot.id(id.with("drop"));
+            }
+            let shown = slot.show(ui, |ui, _| action.icon_button(DropAction::<P>::accepting(ui), id).show(ui).response);
             let response = shown.inner.unwrap_or_else(|| shown.output.response.clone());
             DropShown { response, dropped: shown.output.dropped.map(|payload| Arc::new(payload) as Dropped), over: shown.output.over }
         }));
         self
     }
 
-    /// The button, enabled when the action is or when `accepting` lifts it for an accepted drag over it.
-    fn icon_button(&self, accepting: bool) -> IconButton<'static> {
+    /// The button, enabled when the action is or when `accepting` lifts it for an accepted drag over it, with the id
+    /// `id` when given.
+    fn icon_button(&self, accepting: bool, id: Option<Id>) -> IconButton<'static> {
         let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting).selected(self.pressed);
+        if let Some(id) = id {
+            button = button.id(id);
+        }
         if let Some(tone) = self.tone {
             button = button.variant(Variant::look(Emphasis::Ghost, tone));
         }
@@ -696,7 +704,8 @@ impl FooterBar {
             self.props.layout = self.props.layout.clone().wrap(true);
         }
         let mut led = None;
-        let shown = self.show(ui, |ui, bar| match &content {
+        let probed = leading.is_some() && !matches!(content, Content::Body);
+        let mut body = |ui: &mut Ui, bar: &mut BodyCx<'_>, end: EndGroup<'_>| match &content {
             Content::Body => Shown::default(),
             Content::Actions(actions) => {
                 let mut shown = Shown::default();
@@ -704,23 +713,27 @@ impl FooterBar {
                 let from_end = || (start..actions.len()).rev();
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls are units of the bar's row, so they narrow to leave the actions their
-                    // width; the end group fills the rest.
-                    let room = ui.max_rect();
-                    led = Some(leading(ui, bar));
-                    show_actions(ui, actions, 0..start, &mut shown);
-                    show_end_group(ui, bar, room, |ui| {
-                        let from = shown.responses.len();
-                        show_actions(ui, actions, from_end(), &mut shown);
-                        shown.responses[from..].iter().map(|(at, response)| (member_key(*at, &actions[*at].label), response.clone())).collect()
-                    });
+                    // width; the end group fills the rest. The actions take their ids from the bar, so they keep them
+                    // when the end group wraps.
+                    let base = Some(bar.id);
+                    let ran = leading(ui, bar);
+                    if matches!(end, EndGroup::Show { .. }) {
+                        led = Some(ran);
+                    }
+                    show_actions(ui, actions, 0..start, &mut shown, base);
+                    show_end_group(ui, bar, end, |ui| show_actions(ui, actions, from_end(), &mut shown, base));
                 } else if start == 0 {
-                    show_actions(ui, actions, from_end(), &mut shown);
+                    show_actions(ui, actions, from_end(), &mut shown, None);
                 } else {
                     // The two groups share a wrapping row. Side by side, the end group fills the rest of the line at its
                     // end edge; in a bar too narrow for both, it goes on a line of its own.
                     Row::new().fill_width().wrap(true).show(ui, |ui, _| {
-                        Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
-                        Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                        Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown, None));
+                        Row::new()
+                            .fill_width()
+                            .align(RowAlign::End)
+                            .wrap(true)
+                            .show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown, None));
                     });
                 }
                 shown.responses.sort_by_key(|(at, _)| *at);
@@ -739,9 +752,9 @@ impl FooterBar {
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.live(armed_for));
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let look = Env::of(ui).get::<DialogButtonLook>();
-                // Shows the buttons and returns their keys and responses, in display order.
-                let place = |ui: &mut Ui, shown: &mut Shown| {
-                    let mut members = Vec::with_capacity(buttons.len());
+                // Shows the buttons. With `base`, each takes its id from it (`member_id`); `measured` shows them only to
+                // measure the line, so no chord is held or taken.
+                let place = |ui: &mut Ui, shown: &mut Shown, base: Option<Id>, measured: bool| {
                     for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
@@ -770,9 +783,10 @@ impl FooterBar {
                         if default_at == Some(at) {
                             widget = widget.default_stop();
                         }
-                        let output = widget.show(ui);
-                        members.push((member_key(at, &button.label), output.response.clone()));
-                        let clicked = crate::contract::clicked(&output);
+                        if let Some(base) = base {
+                            widget = widget.id(member_id(base, at));
+                        }
+                        let clicked = crate::contract::clicked(&widget.show(ui));
                         if live && clicked {
                             shown.picked = Some(at);
                         }
@@ -786,31 +800,39 @@ impl FooterBar {
                         let alt = key.map(|key| Chord::new(Mods::ALT, key)).filter(|_| chorded && os != Os::Mac);
                         let modified = button.chord.filter(|_| chorded);
                         let chords = letter.into_iter().chain(alt).chain(modified);
-                        for chord in chords.filter(|_| live && !ui.is_sizing_pass()) {
+                        for chord in chords.filter(|_| live && !measured && !ui.is_sizing_pass()) {
                             keys::capture(&ctx, owner, chord);
                             if keys::take_claimed(&ctx, owner, chord) {
                                 shown.picked = Some(at);
                             }
                         }
                     }
-                    members
                 };
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest, sit at
                     // the end edge and continue on a new line when they do not fit beside the leading controls at their
-                    // least.
-                    let room = ui.max_rect();
-                    led = Some(leading(ui, bar));
-                    show_end_group(ui, bar, room, |ui| place(ui, &mut shown));
+                    // least. The buttons take their ids from the bar, so they keep them when they wrap.
+                    let base = Some(bar.id);
+                    let ran = leading(ui, bar);
+                    let probe = matches!(end, EndGroup::Probe(_));
+                    if !probe {
+                        led = Some(ran);
+                    }
+                    show_end_group(ui, bar, end, |ui| place(ui, &mut shown, base, probe));
                 } else {
-                    place(ui, &mut shown);
+                    place(ui, &mut shown, None, false);
                 }
-                if enter && shown.picked.is_none() && !ui.is_sizing_pass() {
+                if enter && shown.picked.is_none() && !ui.is_sizing_pass() && matches!(end, EndGroup::Show { .. }) {
                     shown.picked = default_at.filter(|_| enter_reaches_footer(&ctx) && keys::take_submit(&ctx));
                 }
                 shown
             }
-        });
+        };
+        // A bar with leading controls is first measured with its end group on one line, in this pass, to find whether
+        // the group runs past the bar's line once the leading controls have narrowed; the bar then shows the group on
+        // more lines if it does, in its measuring run and its real run alike.
+        let wraps = probed && self.end_group_runs_past(ui, |ui, bar, end| body(ui, bar, end));
+        let shown = self.show(ui, |ui, bar| body(ui, bar, EndGroup::Show { wraps }));
         let inner = shown.inner.unwrap_or_default();
         let mods = if inner.picked.is_some() || inner.dropped.is_some() {
             crate::runtime::pointer::frame(ui.ctx()).pick_mods
@@ -827,99 +849,109 @@ impl FooterBar {
         };
         (output, led)
     }
-}
 
-/// A bar with leading controls whose end group, on one line, ran past the bar's edge in a pass: the bar's width, the
-/// width the leading controls took and the end group's line length then.
-#[derive(Clone, Copy, Debug, Default)]
-struct EndRanPast(Option<RanPast>);
-
-#[derive(Clone, Copy, Debug)]
-struct RanPast {
-    width: f32,
-    leading: f32,
-    line: f32,
-}
-
-/// The placement of a bar's end group in the last real pass, and the member that had the focus: its key
-/// (`member_key`) and its id.
-#[derive(Clone, Copy, Debug, Default)]
-struct EndFocus {
-    wrapped: bool,
-    focused: Option<(Id, Id)>,
-}
-
-/// The key of an end group member: its index in the given order and its label.
-fn member_key(at: usize, label: &Label) -> Id {
-    Id::NULL.with((at, label.as_str()))
-}
-
-/// Shows the end group of a bar with leading controls, `body`, at the end edge of `room`, the bar's line; `body`
-/// returns each member's key (`member_key`) and its response, in display order. The group stays on one line while the
-/// leading controls can narrow to leave it its width. After that line ran past the bar's edge, the group continues on a
-/// new line instead, until the bar widens, the leading controls take less or the group's line shortens: then it tries
-/// one line again. A member that had the focus keeps it when the group changes placement.
-fn show_end_group(ui: &mut Ui, bar: &mut BodyCx<'_>, room: Rect, mut body: impl FnMut(&mut Ui) -> Vec<(Id, Response)>) {
-    let leading = ui.min_rect().width();
-    let ran_past = bar.memory_at::<EndRanPast>("end_ran_past");
-    // Half a point: less than a pixel shows at any scale the box runs.
-    if ran_past.0.is_some_and(|past| room.width() > past.width + 0.5 || leading < past.leading - 0.5) {
-        ran_past.0 = None;
-    }
-    let wraps = ran_past.0.is_some();
-    let shown = Row::new()
-        .fill_width()
-        .align(RowAlign::End)
-        .wrap(wraps)
-        .show(ui, |ui, _| {
-            let members = body(ui);
-            (ui.min_rect(), members)
-        })
-        .inner;
-    let ctx = ui.ctx().clone();
-    let Some((rect, members)) = shown else { return };
-    if !room.width().is_finite() || crate::runtime::measure::active(&ctx) {
-        return;
-    }
-    // A placement change gives the members other ids: the member with the focused member's key takes the focus back,
-    // unless the focus has moved to another widget since.
-    let now = ctx.memory(|memory| memory.focused());
-    let focus = bar.memory_at::<EndFocus>("end_focus");
-    if focus.wrapped != wraps
-        && let Some((key, was)) = focus.focused
-        && now.is_none_or(|id| id == was)
-        && let Some((_, member)) = members.iter().find(|(member_key, _)| *member_key == key)
-        && !member.has_focus()
-    {
-        member.request_focus();
-    }
-    let focused = members.iter().find(|(_, member)| member.has_focus()).map(|(key, member)| (*key, member.id));
-    *focus = EndFocus { wrapped: wraps, focused };
-    let line = line_length(ui, members.iter().map(|(_, member)| member.rect));
-    let ran_past = bar.memory_at::<EndRanPast>("end_ran_past");
-    if ran_past.0.is_some_and(|past| line < past.line - 0.5) {
-        // The group shortened: the next pass tries one line again.
-        ran_past.0 = None;
-        ctx.request_repaint();
-    } else if !wraps && (rect.left() < room.left() - 0.5 || rect.right() > room.right() + 0.5) {
-        ran_past.0 = Some(RanPast { width: room.width(), leading, line });
-        ctx.request_repaint();
+    /// Whether the end group of a bar with leading controls runs past the bar's line on one line, once the leading
+    /// controls have narrowed as far as the bar's row narrows them: a measure of a copy of the bar under an id of its
+    /// own, in the room the bar is shown in, whose `body` lays the group out on one line (`EndGroup::Probe`).
+    fn end_group_runs_past(&mut self, ui: &Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>, EndGroup<'_>) -> Shown) -> bool {
+        let room = ui.available_size();
+        if !room.x.is_finite() {
+            return false;
+        }
+        let id = ui.next_auto_id().with("footer.end_probe");
+        // The probe carries the bar's props (its size, glyph role and look), under an id of its own.
+        let mut probe = FooterBar {
+            common: self.common.clone(),
+            props: self.props.clone(),
+            content: Content::Body,
+            actions: self.actions,
+            enter: false,
+            column: self.column,
+            start: self.start,
+            arms: Vec::new(),
+            armed_for: self.armed_for,
+        }
+        .id(id);
+        let ran_past = Cell::new(None);
+        probe.measure_in(ui, Proposal::Size(room), |ui, bar| {
+            body(ui, bar, EndGroup::Probe(&ran_past));
+        });
+        // A measure that this pass already took serves again without running the body: the answer it found then stands.
+        let ctx = ui.ctx();
+        let wraps = match ran_past.get() {
+            Some(ran_past) => {
+                ctx.data_mut(|data| data.insert_temp(id, ran_past));
+                ran_past
+            }
+            None => ctx.data(|data| data.get_temp(id)).unwrap_or(false),
+        };
+        // The bar's kept measure holds the group's old placement: a pass whose placement differs from the last shown
+        // one runs again, measuring the bar afresh.
+        if !crate::runtime::measure::active(ctx) {
+            let shown = id.with("shown");
+            let was = ctx.data_mut(|data| {
+                let was = data.get_temp::<bool>(shown);
+                data.insert_temp(shown, wraps);
+                was
+            });
+            if was.is_some_and(|was| was != wraps) {
+                if frame::discardable(ctx) {
+                    frame::discard_pass(ctx, "a footer bar's end group changed lines");
+                } else {
+                    ctx.request_repaint();
+                }
+            }
+        }
+        wraps
     }
 }
 
-/// The length of a line of members at `rects`, with the gap of `ui` between each two.
-fn line_length(ui: &Ui, rects: impl Iterator<Item = Rect>) -> f32 {
-    let (sum, count) = rects.fold((0.0, 0u16), |(sum, count), rect| (sum + rect.width(), count.saturating_add(1)));
-    sum + ui.spacing().item_spacing.x * f32::from(count.saturating_sub(1))
+/// How one run of the body of a bar with leading controls lays out its end group.
+#[derive(Clone, Copy)]
+enum EndGroup<'a> {
+    /// The bar's probe (`FooterBar::end_group_runs_past`): the group stays on one line, and whether it runs past the
+    /// bar's line in the run is set here; a later run of the measure sets it again.
+    Probe(&'a Cell<Option<bool>>),
+    /// The bar shown: the group continues on a new line when `wraps`.
+    Show { wraps: bool },
 }
 
-/// Shows the bar's `actions` at the indexes `order`, in display order, and collects what happened to them.
-fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item = usize>, shown: &mut Shown) {
+/// The id of the member at `at` in the given order of a bar whose members take their ids from `base`.
+fn member_id(base: Id, at: usize) -> Id {
+    base.with(("footer.member", at))
+}
+
+/// Shows the end group of a bar with leading controls, `body`, in a row that fills the rest of the bar's line and sits
+/// at its end edge, as `end` lays it out. The probe takes the group's place on one line instead: as long as the group
+/// is on one line, measured, with nothing shown.
+fn show_end_group(ui: &mut Ui, bar: &BodyCx<'_>, end: EndGroup<'_>, mut body: impl FnMut(&mut Ui)) {
+    match end {
+        EndGroup::Probe(ran_past) => {
+            let room = ui.max_rect();
+            // In a room without an end, the group takes its one-line length.
+            let unbounded = Proposal::Size(Vec2::new(f32::INFINITY, room.height()));
+            let line = Row::new().id(bar.id.with("footer.end_line")).measure_in(ui, unbounded, |ui, _| body(ui));
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(line.x, 0.0), egui::Sense::hover());
+            if room.width().is_finite() {
+                // Half a point: less than a pixel shows at any scale the box runs.
+                ran_past.set(Some(rect.left() < room.left() - 0.5 || rect.right() > room.right() + 0.5));
+            }
+        }
+        EndGroup::Show { wraps } => {
+            Row::new().fill_width().align(RowAlign::End).wrap(wraps).show(ui, |ui, _| body(ui));
+        }
+    }
+}
+
+/// Shows the bar's `actions` at the indexes `order`, in display order, and collects what happened to them. With `base`,
+/// each action takes its id from it (`member_id`); without, from the flow.
+fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item = usize>, shown: &mut Shown, base: Option<Id>) {
     for at in order {
         let action = &actions[at];
+        let id = base.map(|base| member_id(base, at));
         let response = match &action.drops {
             Some(drops) => {
-                let slot = drops(ui, action);
+                let slot = drops(ui, action, id);
                 if let Some(payload) = slot.dropped {
                     shown.dropped = Some(FooterDrop { index: at, payload });
                 }
@@ -928,7 +960,7 @@ fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item
                 }
                 slot.response
             }
-            None => action.icon_button(false).show(ui).response,
+            None => action.icon_button(false, id).show(ui).response,
         };
         if crate::contract::clicked(&response) {
             shown.picked = Some(at);
