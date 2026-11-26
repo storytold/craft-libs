@@ -22,13 +22,13 @@
 //! this crate already speak version 1. Those bridges put the app's own release in `ready`'s
 //! `version` (`"0.14.0"`): a host treats any `version` it doesn't know as `"1"`.
 //!
+//! What the app then shows in its title bar — saved, saving, unsaved, the stored version, how many
+//! people are in the document, and a read-only session — is [`status`], from the same messages.
+//!
 //! The app is hosted when its URL has `?host=parent` (framed by a same-origin page: messages go
 //! through `postMessage`) or its canvas has `data-host="page"` (the page runs it directly:
 //! messages are `CustomEvent`s on the canvas, the fields in `detail`). This module is the contract
 //! itself and builds everywhere; [`web`] (wasm32 only) is the bridge an app's web shell calls.
-//!
-//! What the app then shows in its title bar — saved, saving, unsaved, the stored version, how many
-//! people are in the document, and a read-only session — is [`status`], from the same messages.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
