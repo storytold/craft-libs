@@ -19,7 +19,7 @@ pub use crate::model::write::Format;
 pub struct Handle(pub u32);
 
 /// The handles of the fixed objects every drawing has. Entities and table entries count up from
-/// [`FIRST_FREE`].
+/// `FIRST_FREE`.
 pub mod fixed {
     use super::Handle;
     pub const LAYER_TABLE: Handle = Handle(0x1);

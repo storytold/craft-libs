@@ -318,6 +318,10 @@ fn webp_lossy_request_is_a_lossy_file() {
 #[test]
 fn one_pixel_images_roundtrip() {
     for f in rw_formats() {
+        // The JPEG XL encoder refuses images narrower than two pixels (jxl_export.rs pins the error).
+        if f == Format::Jxl {
+            continue;
+        }
         let img = synth(1, 1, ChannelLayout::Rgb, SampleType::U8, 1, 0.0);
         let back = decode(&encode(&img, f, &EncodeOptions::default()).unwrap()).unwrap();
         assert_eq!(back.dimensions(), (1, 1), "{f:?}");

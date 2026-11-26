@@ -32,6 +32,31 @@ pub struct LocalizedName {
     pub name: String,
 }
 
+/// The kind of outlines a face draws: the first of its outline tables found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Outlines {
+    /// `glyf` table.
+    TrueType,
+    /// `CFF ` table.
+    Cff,
+    /// `CFF2` table.
+    Cff2,
+    /// `VARC` table (composite variable glyphs).
+    Composite,
+}
+
+impl Outlines {
+    /// The outlines of a face that has the tables `has` reports, in the order of the outline
+    /// tables: `glyf`, `CFF `, `CFF2`, `VARC`. `None` when it has none: a face with none (outlines
+    /// in Apple's `hvgl` table, bitmaps only) draws nothing and is left out.
+    pub(crate) fn of(has: impl Fn(&[u8; 4]) -> bool) -> Option<Self> {
+        [(b"glyf", Self::TrueType), (b"CFF ", Self::Cff), (b"CFF2", Self::Cff2), (b"VARC", Self::Composite)]
+            .into_iter()
+            .find_map(|(tag, kind)| has(tag).then_some(kind))
+    }
+}
+
 /// One face of an installed or added font: one face of a file, or one named instance of a
 /// variable font.
 #[derive(Clone, Debug, PartialEq)]
@@ -65,12 +90,25 @@ pub struct FaceInfo {
     pub variations: Vec<([u8; 4], f32)>,
     /// The face has variation axes.
     pub variable: bool,
+    /// The kind of outlines the face draws.
+    pub outlines: Outlines,
     /// The OS/2 `fsType` embedding permissions (0 without an OS/2 table).
     pub fs_type: u16,
     /// The OS/2 code page bits (`ulCodePageRange1`, `ulCodePageRange2`).
     pub code_pages: [u32; 2],
+    /// The OS/2 `usWeightClass` as the file states it; `None` without an OS/2 table. A named instance has its file's.
+    pub weight_class: Option<u16>,
+    /// The OS/2 `sFamilyClass` (high byte: the IBM class; 0 without an OS/2 table).
+    pub family_class: i16,
+    /// The OS/2 PANOSE digits (all 0 without an OS/2 table).
+    pub panose: [u8; 10],
+    /// The `post` table marks the face fixed-pitch.
+    pub fixed_pitch: bool,
     /// The file the face is in; `None` for a face added as bytes.
     pub path: Option<PathBuf>,
+    /// The size in bytes of the file when it was scanned; `None` for a face added as bytes. A caller that draws with the
+    /// face checks it before loading, so no file system read happens while it paints.
+    pub file_bytes: Option<u64>,
     /// The face's number in its file: its index in a collection (0 in a single font), or for a
     /// Mac suitcase font the number of its `sfnt` resource.
     pub index: u32,
@@ -106,9 +144,6 @@ const MAX_INSTANCES: usize = 512;
 pub(crate) const MAX_FACES: u32 = 256;
 /// The largest table the scan reads.
 const MAX_TABLE: u32 = 1 << 20;
-/// Tables holding outlines a renderer draws. A face with none of them (outlines in Apple's `hvgl`
-/// table, bitmaps only) draws nothing and is left out.
-const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];
 
 pub(crate) fn norm(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
@@ -220,7 +255,7 @@ fn sort_dedup(v: &mut Vec<String>) {
 
 /// The faces `font` (face `index` of its file) offers: the face itself, then the named instances
 /// of a variable font. Empty when it has no family name.
-pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&Path>, source: Source) -> Vec<Face> {
+pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, outlines: Outlines, index: u32, path: Option<&Path>, source: Source) -> Vec<Face> {
     let Some(family) = name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]) else { return vec![] };
     let style = name(font, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]).unwrap_or_else(|| "Regular".into());
     let typo_family = localized(font, StringId::TYPOGRAPHIC_FAMILY_NAME);
@@ -231,8 +266,10 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     // `name` read past the record cap `localized` keeps, so it decides whether a typographic family exists.
     let has_typo_family = name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME]).is_some();
     let family_records = if has_typo_family { &typo_family } else { &legacy_family };
+    // A language the typographic records leave out keeps its legacy name (`宋体` beside an English-only typographic `SimSun`).
+    let legacy_only = legacy_family.iter().filter(|(language, _)| has_typo_family && !typo_family.iter().any(|(l, _)| l == language));
     let mut localized_families: Vec<LocalizedName> = Vec::new();
-    for (language, n) in family_records {
+    for (language, n) in family_records.iter().chain(legacy_only) {
         if *n != family && !localized_families.iter().any(|l| l.name == *n) {
             localized_families.push(LocalizedName { language: language.clone(), name: n.clone() });
         }
@@ -281,6 +318,15 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     });
     let fs_type = os2.as_ref().map_or(0, |t| t.fs_type());
     let code_pages = os2.as_ref().map_or([0, 0], |t| [t.ul_code_page_range_1().unwrap_or(0), t.ul_code_page_range_2().unwrap_or(0)]);
+    let weight_class = os2.as_ref().map(|t| t.us_weight_class());
+    let family_class = os2.as_ref().map_or(0, |t| t.s_family_class());
+    let mut panose = [0u8; 10];
+    if let Some(digits) = os2.as_ref().map(|t| t.panose_10()) {
+        for (slot, digit) in panose.iter_mut().zip(digits.iter()) {
+            *slot = *digit;
+        }
+    }
+    let fixed_pitch = font.post().ok().is_some_and(|p| p.is_fixed_pitch() != 0);
     let axes = font.axes();
     let legacy_pair = has_typo_family
         .then(|| name(font, &[StringId::FAMILY_NAME]))
@@ -301,9 +347,15 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
         italic: selection_italic || style_italic(&style),
         variations: vec![],
         variable: !axes.is_empty(),
+        outlines,
         fs_type,
         code_pages,
+        weight_class,
+        family_class,
+        panose,
+        fixed_pitch,
         path: path.map(Path::to_path_buf),
+        file_bytes: None,
         index,
         source,
         blob: None,
@@ -391,8 +443,8 @@ pub(crate) fn face_count(data: &[u8]) -> u32 {
 pub(crate) fn data_faces(data: &[u8], max_faces: u32, path: Option<&Path>, source: Source) -> Vec<Face> {
     (0..face_count(data).min(max_faces))
         .filter_map(|i| Some((i, skrifa::FontRef::from_index(data, i).ok()?)))
-        .filter(|(_, f)| OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()))
-        .flat_map(|(i, f)| font_faces(&f, i, path, source))
+        .filter_map(|(i, f)| Some((i, Outlines::of(|t| f.table_data(skrifa::Tag::new(t)).is_some())?, f)))
+        .flat_map(|(i, outlines, f)| font_faces(&f, outlines, i, path, source))
         .collect()
 }
 
@@ -405,9 +457,11 @@ pub(crate) fn file_faces(path: &Path, max_read: u64, source: Source) -> Vec<Face
             return vec![];
         }
         let mut faces = Vec::new();
+        let file_bytes = Some(crate::suitcase::fork_len(path));
         for (resource, font) in (0u32..).zip(crate::suitcase::read_fonts(path)) {
             for mut face in data_faces(&font, 1, Some(path), source) {
                 face.info.index = resource;
+                face.info.file_bytes = file_bytes;
                 faces.push(face);
             }
         }
@@ -447,9 +501,7 @@ fn reader_faces(mut file: impl std::io::Read + std::io::Seek, max_faces: u32, ma
             let tables = usize::from(u16::from_be_bytes(dir.get(4..6)?.try_into().ok()?));
             let records = read_at(u64::from(start) + 12, tables * 16)?;
             let records: Vec<&[u8]> = records.as_chunks::<16>().0.iter().map(|r| r.as_slice()).collect();
-            if !records.iter().any(|r| OUTLINE_TABLES.iter().any(|t| r.starts_with(*t))) {
-                return None;
-            }
+            let outlines = Outlines::of(|t| records.iter().any(|r| r.starts_with(t)))?;
             let mut table = |tag: &[u8; 4]| -> Option<Vec<u8>> {
                 let rec = records.iter().find(|r| r.starts_with(tag))?;
                 let (offset, len) = (be32(rec, 8)?, be32(rec, 12)?);
@@ -467,9 +519,13 @@ fn reader_faces(mut file: impl std::io::Read + std::io::Seek, max_faces: u32, ma
             }
             let refs: Vec<(&[u8; 4], &[u8])> = tables.iter().map(|(t, d)| (*t, d.as_slice())).collect();
             let font = sfnt_of(&refs)?;
-            Some(font_faces(&skrifa::FontRef::new(&font).ok()?, index, Some(path), source))
+            Some(font_faces(&skrifa::FontRef::new(&font).ok()?, outlines, index, Some(path), source))
         })
         .flatten()
+        .map(|mut face| {
+            face.info.file_bytes = Some(file_len);
+            face
+        })
         .collect()
 }
 

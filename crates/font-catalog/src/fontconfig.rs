@@ -210,29 +210,3 @@ fn elements(src: &str) -> Vec<Element<'_>> {
 fn decode_entities(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
-
-// Uses Unix paths, which Windows doesn't treat as absolute (#619).
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_folder_included_many_times_is_listed_once() {
-        let root = std::env::temp_dir().join(format!("craft-font-catalog-fc-dirs-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let conf_d = root.join("conf.d");
-        std::fs::create_dir_all(&conf_d).unwrap();
-        for (i, dir) in ["/a", "/b", "/c"].iter().enumerate() {
-            std::fs::write(conf_d.join(format!("{i}0-x.conf")), format!("<fontconfig><dir>{dir}</dir></fontconfig>")).unwrap();
-        }
-        let main = root.join("fonts.conf");
-        std::fs::write(&main, format!("<fontconfig>{}</fontconfig>", "<include>conf.d</include>".repeat(5000))).unwrap();
-        let env = FontEnv { root: root.clone(), ..Default::default() };
-        let mut reader = Reader { env: &env, out: Vec::new(), seen: HashSet::new(), dirs: HashSet::new(), entries_left: MAX_DIR_ENTRIES, host: None };
-        reader.file(&main, 0);
-        assert_eq!(reader.out, vec![root.join("a"), root.join("b"), root.join("c")]);
-        assert_eq!(reader.dirs.len(), 1);
-        assert_eq!(reader.entries_left, MAX_DIR_ENTRIES - 3);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-}

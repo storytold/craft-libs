@@ -1,0 +1,91 @@
+# API map of the "Cell space" family: the shared cell-selection rules of a sheet and a document table.
+# Filled in by the contract-cells track; the codemods and the app scan read it.
+
+family = "Cell space"
+new_module = "craft_behavior"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "CellRef"
+old = "craft_ui::behavior::cells::CellRef"
+new = ""
+status = "removed"
+note = "Replaced by `CellAt<u32>` (a cell by position; `CellAt::new(row, column)`). The type is generic over the row key: a collection's selection holds `CellAt<Key>`."
+
+[[type]]
+name = "CellAt"
+old = ""
+new = "craft_behavior::CellAt"
+status = "replaced"
+note = "`CellAt<K> { row: K, column: u32 }`; `CellAt<u32>` is legacy `CellRef`. Serializes as `{\"row\", \"column\"}`, as `CellRef` did."
+
+[[type]]
+name = "CellRange"
+old = "craft_ui::behavior::cells::CellRange"
+new = "craft_behavior::CellRange"
+status = "moved"
+note = "A rectangle by its first and last row key and its column range: `CellRange<K> { first, last, columns: Range<u32>, lead_column }`; `CellRange<u32>` is legacy `CellRange`. Not `Copy` (clone it). `CellRange::new(a, b)` from two corners is `CellRange::cells(a, b)`; `start`/`end` are `first`/`last` and `columns`; `columns()` is `column_span()`. The stored form is unchanged."
+
+[[type]]
+name = "CellSelection"
+old = "craft_ui::behavior::cells::CellSelection"
+new = "craft_behavior::CellSelection"
+status = "moved"
+note = "`CellSelection<K>`, `CellSelection<u32>` for a sheet or table over `Positions`. `Default` is the empty selection (legacy A1: set `CellSelection::cell(CellAt::new(0, 0))`). `active()`, `anchor()` and `current()` return options, and `anchor()` is `anchor_cell()`. `bounds`, `head`, `is_single_cell`, `select`, `select_range`, `extend_to`, `extend`, `add`, `step`, `advance` take the `CellSpace` and, for a cell, a `CellAt<K>`; `contains(cell)` is `contains_cell(RowAt, column)`. `change()` reports the selection to a collection."
+
+[[type]]
+name = "CellSpace"
+old = "craft_ui::behavior::cells::CellSpace"
+new = "craft_behavior::CellSpace"
+status = "moved"
+note = "`CellSpace::new(rows, columns)` is `CellSpace::new(&Positions::new(rows), columns)`; the type carries the row key. `merges`, `hidden_rows`, `hidden_columns`, `selectable` take positions, as before. New: `place`, `place_range`, `keyed`, `keyed_range`."
+
+[[type]]
+name = "CellDirection"
+old = "craft_ui::behavior::cells::CellDirection"
+new = "craft_behavior::CellDirection"
+status = "moved"
+
+[[type]]
+name = "CellAdvance"
+old = "craft_ui::behavior::cells::CellAdvance"
+new = "craft_behavior::CellAdvance"
+status = "moved"
+
+[[type]]
+name = "Positions"
+old = ""
+new = "craft_behavior::Positions"
+status = "replaced"
+note = "The display order of a grid whose row keys are their positions: `CellSpace::new(&Positions::new(rows), columns)`."
+
+[[type]]
+name = "RowAt"
+old = ""
+new = "craft_behavior::RowAt"
+status = "replaced"
+note = "A row as a selection reads it: `RowAt { key, at, order }`. `SelectionModel::contains` and `contains_cell` take it."
+
+[[setter]]
+type = "CellRange"
+old = "columns()"
+new = "column_span()"
+
+[[setter]]
+type = "CellSelection"
+old = "anchor()"
+new = "anchor_cell()"
+
+[[setter]]
+type = "CellSpace"
+old = "new(rows, columns)"
+new = "new(&Positions::new(rows), columns)"
+
+[[type]]
+name = "PlacedSelection"
+old = ""
+new = "craft_behavior::PlacedSelection"
+status = "replaced"
+note = "A selection by position in one display order, from `SelectionModel::placed(order)`: `holds_row(at)`, `holds_cell(at, column)`, `rows()`. Read once per pass instead of `contains` per row. `CellSelection::toggle(cell, space)` is Cmd/Ctrl+click with the order; `CellSpace::all()` and `whole_columns()` return `Option` (`None` for an empty order); `ItemLayout::column_shown(index)` answers hidden columns; `SelectionModel::cells_mut()` became `cells(&self)`."
