@@ -1,4 +1,4 @@
-//! Explicit PNG density, verbatim EXIF and JPEG APP metadata helpers for encoded images.
+//! Explicit PNG density and sRGB, verbatim EXIF and JPEG APP metadata helpers for encoded images.
 //! Normal encoder APIs still normalize metadata for upright pixels; callers opt in to these helpers.
 use crate::{CodecError, Format};
 
@@ -128,6 +128,35 @@ pub fn png_pixels_per_meter_chunk((x, y): (u32, u32)) -> Result<[u8; 21], CodecE
 /// and image data as supplied. It bounds the returned file by `max_bytes` and never inflates pixels.
 pub fn with_png_pixels_per_meter(png: &[u8], resolution: (u32, u32), max_bytes: usize) -> Result<Vec<u8>, CodecError> {
     let density = png_pixels_per_meter_chunk(resolution)?;
+    rewrite_png_header_chunk(png, b"pHYs", &density, max_bytes, "PNG density rewrite")
+}
+
+/// Rendering intent stored in a PNG sRGB chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SrgbRenderingIntent {
+    Perceptual = 0,
+    RelativeColorimetric = 1,
+    Saturation = 2,
+    AbsoluteColorimetric = 3,
+}
+
+/// Insert one sRGB chunk after IHDR and remove old sRGB declarations through IEND.
+///
+/// The source must already contain sRGB samples. Images with an ICC or cICP color
+/// declaration or conflicting legacy gamma or chromaticities are refused.
+/// The output is bounded by `max_bytes`. Pixel and other chunk bytes are preserved.
+pub fn with_png_srgb(png: &[u8], intent: SrgbRenderingIntent, max_bytes: usize) -> Result<Vec<u8>, CodecError> {
+    let mut chunk = [0; 13];
+    chunk[..4].copy_from_slice(&1u32.to_be_bytes());
+    chunk[4..8].copy_from_slice(b"sRGB");
+    chunk[8] = intent as u8;
+    let crc = crc32fast::hash(&chunk[4..9]);
+    chunk[9..].copy_from_slice(&crc.to_be_bytes());
+    rewrite_png_header_chunk(png, b"sRGB", &chunk, max_bytes, "PNG sRGB rewrite")
+}
+
+fn rewrite_png_header_chunk(png: &[u8], kind: &[u8; 4], replacement: &[u8], max_bytes: usize, operation: &str) -> Result<Vec<u8>, CodecError> {
     let header = png
         .get(..PNG_IHDR_END)
         .filter(|h| h.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR"))
@@ -142,24 +171,35 @@ pub fn with_png_pixels_per_meter(png: &[u8], resolution: (u32, u32), max_bytes: 
         }
         at += chunk.len();
         match &chunk[4..8] {
-            b"pHYs" => removed += chunk.len(),
+            name if name == kind => removed += chunk.len(),
+            b"iCCP" | b"cICP" if kind == b"sRGB" => return Err(error(Format::Png, "PNG already declares an ICC or cICP color profile")),
+            b"gAMA" if kind == b"sRGB" && &chunk[8..chunk.len() - 4] != 45_455u32.to_be_bytes().as_slice() => {
+                return Err(error(Format::Png, "PNG gAMA is incompatible with sRGB"));
+            }
+            b"cHRM" if kind == b"sRGB" => {
+                // PNG Third Edition, table 17. The encoded values are scaled by 100,000.
+                const SRGB_CHROMATICITIES: [u32; 8] = [31_270, 32_900, 64_000, 33_000, 30_000, 60_000, 15_000, 6_000];
+                if &chunk[8..chunk.len() - 4] != SRGB_CHROMATICITIES.map(u32::to_be_bytes).as_flattened() {
+                    return Err(error(Format::Png, "PNG cHRM is incompatible with sRGB"));
+                }
+            }
             b"IEND" if chunk.len() == 12 => break at,
             b"IEND" => return Err(CodecError::malformed(Format::Png, "nonempty IEND")),
             _ => {}
         }
     };
     let size = (png.len() - removed)
-        .checked_add(density.len())
+        .checked_add(replacement.len())
         .filter(|&size| size <= max_bytes)
-        .ok_or_else(|| CodecError::LimitExceeded("PNG density rewrite byte budget".into()))?;
+        .ok_or_else(|| CodecError::LimitExceeded(format!("{operation} byte budget")))?;
     let mut out = Vec::new();
-    out.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded("PNG density rewrite allocation".into()))?;
+    out.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded(format!("{operation} allocation")))?;
     out.extend_from_slice(header);
-    out.extend_from_slice(&density);
+    out.extend_from_slice(replacement);
     let (datastream, trailing) = png.split_at(end);
     let mut at = PNG_IHDR_END;
     while let Some(chunk) = png_chunk_at(datastream, at) {
-        if &chunk[4..8] != b"pHYs" {
+        if &chunk[4..8] != kind {
             out.extend_from_slice(chunk);
         }
         at += chunk.len();
@@ -424,6 +464,82 @@ mod tests {
         let edited = with_png_pixels_per_meter(&png, resolution, png.len() + 21).unwrap();
         assert_eq!(edited.len(), png.len() + 21);
         assert_eq!(crate::png_probe::pixels_per_meter(&edited), Some(resolution));
+    }
+
+    #[test]
+    fn png_srgb_rewrite_replaces_duplicates_and_preserves_the_encoded_image() {
+        let image = crate::Image::from_u8(2, 1, crate::ChannelLayout::Rgba, vec![19, 33, 51, 127, 98, 80, 61, 255]).unwrap();
+        let plain = crate::encode(&image, Format::Png, &crate::EncodeOptions::default()).unwrap();
+        let old = b"\0\0\0\x01sRGB\0\xae\xce\x1c\xe9";
+        let density = png_pixels_per_meter_chunk((11_811, 5_906)).unwrap();
+        let iend = plain.len() - 12;
+        let trailer = b"container trailer";
+        let input = [&plain[..33], old, &density, &plain[33..iend], old, &plain[iend..], trailer].concat();
+        for (intent, expected_chunk) in [
+            (SrgbRenderingIntent::Perceptual, old),
+            (SrgbRenderingIntent::RelativeColorimetric, b"\0\0\0\x01sRGB\x01\xd9\xc9\x2c\x7f"),
+            (SrgbRenderingIntent::Saturation, b"\0\0\0\x01sRGB\x02\x40\xc0\x7d\xc5"),
+            (SrgbRenderingIntent::AbsoluteColorimetric, b"\0\0\0\x01sRGB\x03\x37\xc7\x4d\x53"),
+        ] {
+            let expected = [&plain[..33], expected_chunk, &density, &plain[33..], trailer].concat();
+            let edited = with_png_srgb(&input, intent, expected.len()).unwrap();
+            assert_eq!(edited, expected);
+            assert_eq!(with_png_srgb(&edited, intent, edited.len()).unwrap(), edited);
+            assert_eq!(crate::png_probe::pixels_per_meter(&edited), Some((11_811, 5_906)));
+            let decoded = crate::decode(&edited[..edited.len() - trailer.len()]).unwrap();
+            assert_eq!(decoded.data(), image.data());
+        }
+    }
+
+    #[test]
+    fn png_srgb_rewrite_rejects_profile_conflicts_truncation_and_output_overflow() {
+        let image = crate::Image::from_u8(1, 1, crate::ChannelLayout::Rgb, vec![15, 20, 35]).unwrap();
+        let plain = crate::encode(&image, Format::Png, &crate::EncodeOptions::default()).unwrap();
+        let intent = SrgbRenderingIntent::Perceptual;
+        for end in 0..plain.len() {
+            assert!(with_png_srgb(&plain[..end], intent, usize::MAX).is_err(), "prefix {end}");
+        }
+        for kind in [b"iCCP", b"cICP"] {
+            let bytes = [&plain[..33], b"\0\0\0\0", kind, &crc32fast::hash(kind).to_be_bytes(), &plain[33..]].concat();
+            assert!(matches!(with_png_srgb(&bytes, intent, usize::MAX), Err(CodecError::Encode { .. })));
+        }
+        assert!(matches!(with_png_srgb(&plain, intent, plain.len() + 12), Err(CodecError::LimitExceeded(_))));
+        assert_eq!(with_png_srgb(&plain, intent, plain.len() + 13).unwrap().len(), plain.len() + 13);
+    }
+
+    #[test]
+    fn png_srgb_rewrite_requires_compatible_legacy_color_chunks() {
+        fn chunk(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = (payload.len() as u32).to_be_bytes().to_vec();
+            bytes.extend_from_slice(kind);
+            bytes.extend_from_slice(payload);
+            let crc = crc32fast::hash(&bytes[4..]);
+            bytes.extend_from_slice(&crc.to_be_bytes());
+            bytes
+        }
+
+        let image = crate::Image::from_u8(1, 1, crate::ChannelLayout::Rgb, vec![15, 20, 35]).unwrap();
+        let plain = crate::encode(&image, Format::Png, &crate::EncodeOptions::default()).unwrap();
+        let (header, rest) = plain.split_at(33);
+        let gamma = chunk(b"gAMA", &45_455u32.to_be_bytes());
+        let standard = [31_270u32, 32_900, 64_000, 33_000, 30_000, 60_000, 15_000, 6_000];
+        let chroma = chunk(b"cHRM", &standard.map(u32::to_be_bytes).concat());
+        let compatible = [header, &gamma, &chroma, rest].concat();
+        let intent = SrgbRenderingIntent::Perceptual;
+        let marker = b"\0\0\0\x01sRGB\0\xae\xce\x1c\xe9";
+        assert_eq!(with_png_srgb(&compatible, intent, usize::MAX).unwrap(), [header, marker, &gamma, &chroma, rest].concat());
+
+        let other_gamma = chunk(b"gAMA", &45_454u32.to_be_bytes());
+        let mut other_chroma = standard;
+        other_chroma[7] += 1;
+        let other_chroma = chunk(b"cHRM", &other_chroma.map(u32::to_be_bytes).concat());
+        let incomplete_chroma = chunk(b"cHRM", &standard[..7].iter().flat_map(|value| value.to_be_bytes()).collect::<Vec<_>>());
+        let conflicts = [(&other_gamma, &chroma), (&gamma, &other_chroma), (&gamma, &incomplete_chroma)];
+        let rejected = conflicts.map(|(g, c)| {
+            let incompatible = [header, g, c, rest].concat();
+            matches!(with_png_srgb(&incompatible, intent, usize::MAX), Err(CodecError::Encode { .. }))
+        });
+        assert_eq!(rejected, [true; 3]);
     }
 
     #[test]

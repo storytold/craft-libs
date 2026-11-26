@@ -809,6 +809,13 @@ impl Default for EncodeOptions {
     }
 }
 
+#[cfg(test)]
+extern crate self as craft_audio;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;
+
 // An encoder refusing its settings is an encode error, not damaged input.
 #[cfg(all(test, feature = "aac-encode"))]
 mod tests {
