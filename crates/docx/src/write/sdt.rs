@@ -280,7 +280,13 @@ fn kind(w: &mut W, k: &ControlKind) {
                 w.open(tag, &[("w:lastValue", last_value)]);
             }
             for i in items {
-                w.empty("w:listItem", &[("w:displayText", &i.display), ("w:value", i.value())]);
+                let value = i.value();
+                match (i.display.is_empty(), value.is_empty()) {
+                    (true, true) => w.empty("w:listItem", &[]),
+                    (true, false) => w.empty("w:listItem", &[("w:value", value)]),
+                    (false, true) => w.empty("w:listItem", &[("w:displayText", &i.display)]),
+                    (false, false) => w.empty("w:listItem", &[("w:displayText", &i.display), ("w:value", value)]),
+                }
             }
             w.close(tag);
         }
