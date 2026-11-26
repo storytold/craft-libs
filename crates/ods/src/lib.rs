@@ -30,6 +30,7 @@
 
 mod content;
 mod model;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 

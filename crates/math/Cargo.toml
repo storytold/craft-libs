@@ -12,6 +12,9 @@ workspace = true
 
 [dependencies]
 craft-xml = { workspace = true }
+# A conforming XML parser (names, namespaces, characters), for checking kept OMML before it is
+# written verbatim; already in the lock as a dependency of other crates.
+roxmltree = "0.21"
 serde = { workspace = true }
 
 [dev-dependencies]

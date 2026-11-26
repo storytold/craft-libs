@@ -1,0 +1,19 @@
+[package]
+name = "craft-sbs"
+description = "Bounded SBS package/schema XML parsing, sniffing, embedded resource codecs, and envelope writing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.23"
+craft-mime = { workspace = true }
+craft-xml = { workspace = true }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+roxmltree = "0.21"
+thiserror = { workspace = true }

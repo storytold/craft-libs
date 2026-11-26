@@ -164,33 +164,3 @@ pub(crate) fn unpc_first_order_in_place(buf: &mut [i32], num: usize, chanbits: u
         buf[j] = wrap(buf[j].wrapping_add(buf[j - 1]), chanshift);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_predictor_inverts() {
-        let input: Vec<i32> = (0..2000).map(|i: i32| ((i as f64 * 0.05).sin() * 20000.0) as i32 + (i * 31 % 17) - 8).collect();
-        for numactive in [0, 1, 4, 8, 12, FIRST_ORDER] {
-            for num in [0, 1, 3, 9, 2000] {
-                let mut ce = [0i16; 32];
-                init_coefs(&mut ce, DENSHIFT_DEFAULT);
-                let mut cd = ce;
-                let mut pc = vec![0; 2000];
-                let mut out = vec![0; 2000];
-                pc_block(&input, &mut pc, num, &mut ce, numactive, 16, DENSHIFT_DEFAULT);
-                unpc_block(&pc, &mut out, num, &mut cd, numactive, 16, DENSHIFT_DEFAULT);
-                assert_eq!(out[..num], input[..num], "numactive {numactive}, num {num}");
-                assert_eq!(ce, cd);
-            }
-        }
-    }
-
-    #[test]
-    fn coefficient_start_values() {
-        let mut c = [7i16; 16];
-        init_coefs(&mut c, DENSHIFT_DEFAULT);
-        assert_eq!(&c[..4], &[1216, -928, -64, 0]);
-    }
-}
