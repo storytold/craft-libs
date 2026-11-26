@@ -450,7 +450,7 @@ impl AudioEffect for VoicePitch {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let len = block_len(channels);
-        let ch = channels.len().min(self.lines.len());
+        let ch = self.lines.len();
         let dry_at = self.mask + 1 - self.latency;
         let follow_target = self.follow_target();
         // The formant stage moves the envelope by the inverse of the pitch ratio.
@@ -558,11 +558,12 @@ impl Envelope {
             *v = history.ring[(history.pos + i) & mask] as f64 * w;
         }
         let len = self.frame.len();
-        for (lag, (r, w)) in self.r.iter_mut().zip(&self.lags).enumerate() {
-            *r = dot(&self.frame[..len - lag], &self.frame[lag..]) * w;
-        }
+        self.r[0] = dot(&self.frame, &self.frame) * self.lags[0];
         if !(self.r[0] > 0.0 && self.r[0].is_finite()) {
             return false;
+        }
+        for (lag, (r, w)) in self.r.iter_mut().zip(&self.lags).enumerate().skip(1) {
+            *r = dot(&self.frame[..len - lag], &self.frame[lag..]) * w;
         }
         self.r[0] *= 1.0 + WHITE;
         levinson(&self.r, &mut self.a, &mut self.prev);
@@ -1173,7 +1174,7 @@ mod tests {
     fn formant_stage_output_stays_finite() {
         let (sr, f0) = (SR as f64, 150.0);
         let mut x = vowel(f0, 600.0, 2000.0, sr, SR as usize * 2);
-        let (p1, _) = formants(&x, f0, 1.0, sr);
+        let (p1, p2) = formants(&x, f0, 1.0, sr);
         for (i, bad) in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX, -f32::MAX].into_iter().enumerate() {
             x[3000 + i * 1500] = bad;
             x[3001 + i * 1500] = bad;
@@ -1191,6 +1192,10 @@ mod tests {
         let y = run(&mut p, &x);
         assert!(y.iter().all(|v| v.is_finite()));
         assert!(rms(settled(&y)) > 0.01);
+        let shifted_f0 = f0 * 2f64.powf(-7.0 / 12.0);
+        let (q1, q2) = formants(&y, shifted_f0, 1.0, sr);
+        assert!((q1 / p1 - 1.0).abs() < 0.12, "Keep Formants: {p1} read {q1}");
+        assert!((q2 / p2 - 1.0).abs() < 0.05, "Keep Formants: {p2} read {q2}");
     }
 
     /// A block that leaves channels out feeds them silence, so when they come back without a
@@ -1270,6 +1275,30 @@ mod tests {
             out.push((l, r));
         }
         assert!(out[0] == out[1], "leaving the channel out changed the output");
+    }
+
+    /// Leaving a silent third channel out of a block does not change the pitch the tracker finds,
+    /// so a shifted voice comes out the same on the channels that remain.
+    #[test]
+    fn a_silent_channel_left_out_keeps_the_tracked_pitch() {
+        let n = SR as usize;
+        let (low, high) = (sine(187.5, 0.2, SR as f64, n, 0.0), sine(375.0, 0.24, SR as f64, n, 0.0));
+        let left: Vec<f32> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
+        let right: Vec<f32> = low.iter().zip(&high).map(|(a, b)| -a + b).collect();
+        let mut out = Vec::new();
+        for omit in [false, true] {
+            let mut p = VoicePitch::new(SR, 3);
+            assert!(p.set_param("semitones", 5.0));
+            p.reset();
+            let (mut l, mut r, mut s) = (left.clone(), right.clone(), vec![0.0f32; n]);
+            if omit {
+                p.process(&mut [&mut l, &mut r]);
+            } else {
+                p.process(&mut [&mut l, &mut r, &mut s]);
+            }
+            out.push((l, r));
+        }
+        assert!(out[0] == out[1], "leaving a silent channel out changed the tracked pitch");
     }
 
     /// The tracker finds a voice's period down to 70 Hz and reports nothing for silence.
