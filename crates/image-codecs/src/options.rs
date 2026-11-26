@@ -328,8 +328,10 @@ pub struct EncodeOptions {
     pub embed_icc: bool,
     /// Embed EXIF, XMP and text when the format supports it. The resolution
     /// ([`Metadata::dpi`](crate::Metadata::dpi)) is written whenever it is `Some` and the format
-    /// has a field for it (JPEG, PNG, TIFF), whatever this says: clear `meta.dpi` to leave it out.
-    /// WebP, which only holds it in EXIF, follows this flag.
+    /// has a field for it (JPEG, PNG, TIFF), whatever this says; WebP, which only holds it in
+    /// EXIF, follows this flag. Clearing `meta.dpi` leaves out only that field: with this flag on,
+    /// the source EXIF and XMP are written with any resolution they record, and a TIFF's Photoshop
+    /// image resources (which can hold one) are written either way.
     pub embed_metadata: bool,
 }
 

@@ -674,3 +674,38 @@ fn dpi_dropped_warning_follows_the_metadata_choice() {
         assert!(!w.contains(&FidelityWarning::DpiDropped), "{format:?}: {w:?}");
     }
 }
+
+/// Clearing `meta.dpi` leaves out only the format's own resolution field. With metadata on, the
+/// source EXIF and XMP are written with the resolution they record; a TIFF's Photoshop image
+/// resources are written either way (#1329 review).
+#[test]
+fn cleared_dpi_keeps_the_resolution_in_embedded_metadata() {
+    let on = EncodeOptions::default();
+    let off = EncodeOptions { embed_metadata: false, ..Default::default() };
+    let base = || {
+        let mut img = tagged(ChannelLayout::Rgb, SampleType::U8);
+        img.meta = Metadata::default();
+        img
+    };
+    // EXIF: JPEG and PNG carry the source IFD0 resolution; TIFF writes only the EXIF sub-IFD.
+    let mut img = base();
+    img.meta.exif = Some(exif_with_resolution(&camera_exif(&LE), (240.0, 240.0)).into_owned());
+    for format in [Format::Jpeg, Format::Png] {
+        assert_eq!(decode(&encode(&img, format, &on).unwrap()).unwrap().meta.dpi, Some((240.0, 240.0)), "{format:?} EXIF on");
+        assert_eq!(decode(&encode(&img, format, &off).unwrap()).unwrap().meta.dpi, None, "{format:?} EXIF off");
+    }
+    // XMP: written with its `tiff:` resolution in all three.
+    let mut img = base();
+    img.meta.xmp = Some(r#"<rdf:Description tiff:XResolution="200/1" tiff:YResolution="200/1" tiff:ResolutionUnit="2"/>"#.into());
+    for format in [Format::Jpeg, Format::Png, Format::Tiff] {
+        let back = decode(&encode(&img, format, &on).unwrap()).unwrap();
+        assert!(back.meta.xmp.as_deref().is_some_and(|x| x.contains(r#"tiff:XResolution="200/1""#)), "{format:?} XMP on");
+        let back = decode(&encode(&img, format, &off).unwrap()).unwrap();
+        assert!(back.meta.xmp.is_none(), "{format:?} XMP off");
+    }
+    // A TIFF's Photoshop image resources (with ResolutionInfo) are document content.
+    let mut img = base();
+    img.meta.photoshop_resources = Some(irb(300.0));
+    let back = decode(&encode(&img, Format::Tiff, &off).unwrap()).unwrap();
+    assert_eq!(back.meta.photoshop_resources, Some(irb(300.0)));
+}
