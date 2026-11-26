@@ -351,7 +351,16 @@ fn limits_are_checked_from_the_headers() {
     // is over; the 1 MiB slack always admits small pictures.
     assert!(ok(Limits { max_ratio: 0, ..d }));
     // A header claiming a huge data window over a few bytes of file is refused by the ratio.
-    let big = file(vec![layer(None, 4096, 4096, &["R"], false, exr::prelude::Compression::ZIP16)], (4096, 4096));
+    // Only headers are read here: keep the large declared windows without encoding their pixels.
+    let mut big = file(vec![layer(None, 8, 4, &["R"], false, exr::prelude::Compression::ZIP16)], (8, 4));
+    let window: Vec<u8> = [0i32, 0, 4095, 4095].iter().flat_map(|v| v.to_le_bytes()).collect();
+    for tag in ["dataWindow\0box2i\0", "displayWindow\0box2i\0"] {
+        let tag = tag.as_bytes();
+        let at = big.windows(tag.len()).position(|w| w == tag).unwrap() + tag.len() + 4;
+        big[at..at + 16].copy_from_slice(&window);
+    }
+    // At 1024 file bytes the default ratio admits 64 MiB, but ratio 1 plus 1 MiB slack does not.
+    big.resize(1024, 0);
     assert!(ok_big(&big));
     assert!(matches!(parts(&big, &Limits { max_ratio: 1, ..d }), Err(Error::LimitExceeded(_))));
 }
