@@ -95,8 +95,8 @@ pub(crate) fn note_clip(ctx: &Context, id: Id, clip: egui::Rect) {
 /// update the platform gets into the clips its nodes show under ([`note_clip`]).
 pub(crate) fn settle_output(ctx: &Context, output: &mut egui::FullOutput) {
     settle_focus(output);
-    // A closed window never runs again to replace or drop its entry, so the frame's end hook prunes the store to the
-    // viewports that are open.
+    // A closed window never runs again to replace or drop its entry, so the begin hook prunes the store to the viewports
+    // that are open as a frame begins.
     crate::runtime::frame::register_prune(ctx, std::any::TypeId::of::<Settled>(), prune_settled);
     let update = output.platform_output.accesskit_update.clone();
     let clips = memory::with::<Settled, _>(ctx, |settled| {

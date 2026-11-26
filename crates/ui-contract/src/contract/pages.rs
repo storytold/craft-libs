@@ -56,7 +56,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
             });
             let size = kept.unwrap_or_else(|| {
                 replay::open_in_pass(&ctx);
-                let size = measure::run(&ctx, || {
+                let size = measure::measuring(&ctx, || {
                     // What the hidden page measures joins no transcript around it: the run that shows the pages does
                     // not show it, so nothing there checks it.
                     layout_memory::boundary(&ctx, true, || {

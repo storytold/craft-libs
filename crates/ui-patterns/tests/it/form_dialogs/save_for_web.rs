@@ -439,3 +439,30 @@ fn a_palette_answer_in_a_measured_frame_shifts_the_entry_once() {
     let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour once");
 }
+
+/// The rects of the preview panes the view shows, found by their accessible names (`{pane}: {first}, {second}`).
+fn pane_rects(fixture: &Fixture) -> Vec<Rect> {
+    let tree = fixture.tree();
+    let is_pane = |name: &str| (name.starts_with("Original") || name.starts_with("Optimized")) && name.contains(": ");
+    tree.keys().into_iter().filter(|key| tree.name_of(*key).is_some_and(is_pane)).filter_map(|key| fixture.target(key)).map(|t| t.rect).collect()
+}
+
+/// The panes take the height of the settings column beside them, so they reach down to its Image Size rows, and 4-Up
+/// splits that height between its two rows of panes.
+#[trial]
+fn the_preview_panes_take_the_height_beside_the_settings() {
+    let (_, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()));
+    for (view, count) in [("2-Up", 2), ("4-Up", 4)] {
+        let tab = fixture.by_label(view).expect("the view tab");
+        fixture.click(&tab).idle(4);
+        let percent = fixture.by_label("Percent").expect("the Image Size rows").rect;
+        let panes = pane_rects(&fixture);
+        assert_eq!(panes.len(), count, "{view} shows {count} panes");
+        let bottom = panes.iter().map(|pane| pane.bottom()).fold(f32::MIN, f32::max);
+        assert!(bottom > percent.top(), "{view}: the panes end at {bottom}, above the Percent row at {}", percent.top());
+        let top = panes.iter().map(|pane| pane.top()).fold(f32::MAX, f32::min);
+        let (upper, lower): (Vec<&Rect>, Vec<&Rect>) = panes.iter().partition(|pane| pane.top() <= top + 0.5);
+        assert_eq!(upper.len(), 2, "{view}: two panes to a row");
+        assert!(lower.iter().all(|pane| upper.iter().all(|up| pane.top() >= up.bottom())), "{view}: the second row is below the first");
+    }
+}
