@@ -335,7 +335,7 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         let content = Env::of(ui).content;
         let fill = |measured: f32, offered: f32, along: Axis| {
             let given = if along == Axis::X { !content.0 } else { !content.1 };
-            crate::layout::fill_size(ui, id, along, measured, offered, given)
+            crate::layout::fill_size(ui, id, along, measured, offered, given, 1.0) // P3(views-w2): vw.F2
         };
         // The control beside an inspector's label fills the cell the label leaves, unless its caller sized it to its
         // content.

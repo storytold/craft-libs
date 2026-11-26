@@ -204,7 +204,7 @@ impl Lazy {
         let rect = child.min_rect();
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
-        let fills = if memo { crate::layout::take_view_fill(&ctx, id) } else { None };
+        let fills = if memo { crate::layout::take_view_fill(&ctx, id).map(|(axis, _weight)| axis) } else { None }; // P3(views-w2): vw.F2
         let record = run.recording.then(|| replay::close(&ctx, place.layer));
         if let Some(shift) = audited {
             return place_audit_run(ui, Audited { name, id, view, rect, record: record.as_ref(), shift }, out, &run);
@@ -350,7 +350,7 @@ fn place_unit(ui: &mut Ui, (shrink, fills): (Option<Shrink>, Option<Axis>), id: 
     let along = match crate::layout::fill_share(ui, axis) {
         Some(share) => Some(share),
         None if crate::layout::counting_fills(ui, axis) && !env.least => {
-            crate::layout::count_fill_view(ui);
+            crate::layout::count_fill_view(ui, 1.0); // P3(views-w2): vw.F2
             Some(0.0)
         }
         None => None,

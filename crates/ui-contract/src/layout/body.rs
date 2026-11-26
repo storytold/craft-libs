@@ -139,12 +139,12 @@ pub(crate) struct Cursors(IdMap<Cursor>);
 
 /// The number of children that fill the main axis of each `Stack` or `Row` body measured this pass, by body id.
 #[derive(Default)]
-pub(crate) struct FillCounts(IdMap<u32>);
+pub(crate) struct FillCounts(IdMap<f32>);
 
 /// The memoized views running this pass whose content holds a direct child that fills the axis the body around the
 /// view shares (`Scoped::fill_view`), by view id, with that axis.
 #[derive(Default)]
-pub(crate) struct ViewFills(IdMap<Axis>);
+pub(crate) struct ViewFills(IdMap<(Axis, f32)>);
 
 /// What makes a child of a content-sized `Stack` column a held child: it measures at its own width while the column
 /// settles its width from the others, and the column's second sweep gives it the settled width.
@@ -415,7 +415,7 @@ enum MainFill {
 /// `given` is the caller's own fact: whether the child is given `axis` (a leaf where its body does not size from its
 /// content, a container given the axis or held across its column, a collection where it fills). `offered` is the room
 /// the flow offers it along `axis`, `measured` what it measured.
-pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32, given: bool) -> f32 {
+pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32, given: bool, weight: f32) -> f32 {
     let env = Env::of(ui);
     // Across an unwrapped row's content-height line a child that fills is shown across the line the row settled on in
     // its measuring run, where the child measured at its own size.
@@ -429,12 +429,12 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
         return measured;
     }
     if let Some((view, along)) = env.fill_view.filter(|(_, along)| *along == axis) {
-        pass_state::with::<ViewFills, _>(ui.ctx(), |fills| fills.0.insert(view, along));
+        pass_state::with::<ViewFills, _>(ui.ctx(), |fills| fills.0.insert(view, (along, weight)));
     }
     // In a body that shares the axis and scrolls along it, a share never cuts the child's content: what is past the
     // view scrolls.
     if env.fill_body.is_some_and(|(_, along)| along == axis) && view_room(ui, axis).is_some() {
-        return match main_fill(ui, id, axis) {
+        return match main_fill(ui, id, axis, weight) {
             MainFill::Measuring => 0.0,
             MainFill::Share(share, _) => measured.max(share),
             MainFill::Room(_) => measured,
@@ -443,7 +443,7 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
     if !offered.is_finite() {
         return measured;
     }
-    match main_fill(ui, id, axis) {
+    match main_fill(ui, id, axis, weight) {
         MainFill::Measuring => 0.0,
         MainFill::Share(share, least) => least.max(share),
         MainFill::Room(least) => least.max(offered),
@@ -452,7 +452,7 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
 
 /// What the child `id` of `ui`'s body that fills along `axis` takes there, with its least along it
 /// (`layout_memory::fill_least`). Called once per such child and run.
-fn main_fill(ui: &Ui, id: Id, axis: Axis) -> MainFill {
+fn main_fill(ui: &Ui, id: Id, axis: Axis, weight: f32) -> MainFill {
     let env = Env::of(ui);
     let Some((body, _)) = env.fill_body.filter(|(_, along)| *along == axis) else { return MainFill::Room(0.0) };
     layout_memory::leaf_fill(ui.ctx(), id, body, axis);
@@ -460,22 +460,22 @@ fn main_fill(ui: &Ui, id: Id, axis: Axis) -> MainFill {
         return MainFill::Share(share, layout_memory::fill_least(ui.ctx(), id, axis));
     }
     if measure::active(ui.ctx()) {
-        count_fill(ui.ctx(), body);
+        count_fill(ui.ctx(), body, weight);
         return MainFill::Measuring;
     }
     MainFill::Room(layout_memory::fill_least(ui.ctx(), id, axis))
 }
 
 /// Counts one child that fills the main axis of the sharing body `body`, in the first sweep of its measuring run.
-fn count_fill(ctx: &egui::Context, body: Id) {
-    pass_state::with::<FillCounts, _>(ctx, |counts| *counts.0.entry(body).or_insert(0) += 1);
+fn count_fill(ctx: &egui::Context, body: Id, weight: f32) {
+    pass_state::with::<FillCounts, _>(ctx, |counts| *counts.0.entry(body).or_insert(0.0) += weight);
 }
 
 /// Counts the memoized view whose content fills the main axis of `ui`'s sharing body as one child that fills it, in the
 /// first sweep of the body's measuring run (`counting_fills`), as a child shown there directly is counted.
-pub(crate) fn count_fill_view(ui: &Ui) {
+pub(crate) fn count_fill_view(ui: &Ui, weight: f32) {
     if let Some((body, _)) = Env::of(ui).fill_body {
-        count_fill(ui.ctx(), body);
+        count_fill(ui.ctx(), body, weight);
     }
 }
 
@@ -486,7 +486,7 @@ pub(crate) fn open_view_fill(ctx: &egui::Context, view: Id) {
 
 /// The axis the content of the memoized view `view` filled in the run that just ended, as `fill_size` noted it; closes
 /// the record.
-pub(crate) fn take_view_fill(ctx: &egui::Context, view: Id) -> Option<Axis> {
+pub(crate) fn take_view_fill(ctx: &egui::Context, view: Id) -> Option<(Axis, f32)> {
     pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view))
 }
 
@@ -1127,14 +1127,14 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
         let (inner, rect, room) = {
             let mut first = laid_out_child(ui, layout);
             let room = share_room(&first, axis);
-            pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.insert(id, 0));
+            pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.insert(id, 0.0));
             let inner = share_sweep(&mut first, &mut sweep_env, id, axis, None, body);
             (inner, first.min_rect(), room)
         };
-        let fills = pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.remove(&id)).unwrap_or(0);
+        let fills = pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.remove(&id)).unwrap_or(0.0);
         let fixed = along(rect.size());
-        layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(Vec2::ZERO, Vec2::new(fixed, fills as f32)));
-        let share = (fills > 0 && room.is_finite()).then(|| ((room - fixed) / fills as f32).max(0.0));
+        layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(Vec2::ZERO, Vec2::new(fixed, fills)));
+        let share = (fills > 0.0 && room.is_finite()).then(|| ((room - fixed) / fills).max(0.0));
         ((inner, rect, share), share.is_some())
     });
     match first {

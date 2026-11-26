@@ -241,7 +241,11 @@ pub enum CollectionEvent<K, E> {
     Rested(K),
     /// A primary double click on the collection's empty space, below or between its items (FilmCraft's media bin
     /// imports).
-    EmptyActivated,
+    #[non_exhaustive]
+    EmptyActivated {
+        /// The double click's screen point.
+        at: Pos2,
+    },
     /// A secondary click on the collection's empty space, below or between its items, or anywhere in an empty
     /// collection: the app opens the collection's own menu (Photoshop's Layers panel: the thumbnail sizes). The
     /// selection is unchanged.

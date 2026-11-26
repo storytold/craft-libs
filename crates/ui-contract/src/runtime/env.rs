@@ -138,6 +138,9 @@ pub struct Scoped {
     pub(crate) roving: Option<Id>,
     /// From `ContainerProps.transform`.
     pub transform: Option<CanvasTransform>,
+    /// The product of the `ContainerProps::transform` scales around the scope, 1.0 outside them.
+    #[allow(dead_code)] // P3(graph-w2): ge.C12
+    pub(crate) view_scale: f32,
     /// The `Grid` or spread `Row` body whose cursor places the children in flow.
     pub(crate) grid: Option<Id>,
     /// The `Grid` body of `grid` sets its cells at the top of their row (`CellAlign::Top`), not in its middle.
@@ -439,6 +442,7 @@ impl Scoped {
         self.arena = None;
         self.roving = None;
         self.transform = None;
+        self.view_scale = 1.0;
         self.scroll_owner = None;
         self.fallback_collection = None;
         self.wheel = WheelScope::Plain;
@@ -723,6 +727,7 @@ impl Env {
                 arena: None,
                 roving: None,
                 transform: None,
+                view_scale: 1.0,
                 grid: None,
                 grid_top: false,
                 content_column: false,

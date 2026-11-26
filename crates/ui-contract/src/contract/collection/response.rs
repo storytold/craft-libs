@@ -43,7 +43,7 @@ pub struct CollectionResponse<K, E> {
 }
 
 /// The drop a release would make on a collection now.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum PendingDrop<K> {
     /// The collection's own items move: the move `CollectionEvent::Reorder` would carry.

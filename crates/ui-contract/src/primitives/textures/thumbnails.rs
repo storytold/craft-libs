@@ -344,6 +344,15 @@ impl<K: TextureKey> Thumbnails<K> {
         }
     }
 
+    /// Requests, resolves and paints the thumbnail of `key` in `rect`: a [`ThumbRequest::for_cell`] at the rect's longer
+    /// side and the display scale, [`state`](Self::state) at `Priority::VISIBLE`, and [`paint`](Self::paint) with the
+    /// default [`ThumbPaint`], or with the checker off and `paper` under it when `paper` is set. Returns whether the
+    /// store painted; the caller draws its own fallback.
+    pub fn paint_cell(&self, cx: &ContentPainterCx<'_>, rect: Rect, source: &dyn ThumbSource<K>, key: &K, paper: Option<DataColor>) -> bool {
+        let _ = (cx, rect, source, key, paper);
+        todo!("sh.C11")
+    }
+
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));

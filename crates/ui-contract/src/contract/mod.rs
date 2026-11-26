@@ -726,6 +726,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         true
     }
 
+    /// Whether a primary drag pressed on the part `part` of the collection moves the selection, as a drag from an item
+    /// does, in a spatial layout. The default keeps every collection as it is.
+    fn moves_from_part(&self, _part: craft_behavior::PartRef) -> bool {
+        false
+    }
+
     /// Whether the collection's own dragged items may land before `insert` (a position of the display order, `over` is
     /// the item the pointer is on, none over an empty collection). A refused spot shows no drop mark.
     fn accepts(&self, _drag: &ListDrag<Self::Key>, _over: Option<&Self::Key>, _insert: usize) -> bool {

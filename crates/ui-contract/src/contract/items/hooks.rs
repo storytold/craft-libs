@@ -193,7 +193,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let width = if self.content_sized(comp) || self.from_content.0 {
             size.x
         } else {
-            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
+            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true, 1.0) // P3(graph-w1): vw.F2
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
             (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
@@ -210,7 +210,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let offset = ScrollPos { x: self.offset_x, y: self.offset.clamp(0.0, self.max_offset(view.height())) };
         let mut layout = self.layout.take()?;
         Arc::make_mut(&mut layout).set_view(view.size(), offset);
-        let (_, order) = self.built(&layout, view, offset);
+        let (_, order) = self.built(&layout, view, offset, None); // P3(graph-w1): ge.C8
         let rects = order.into_iter().map(|at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
         self.layout = Some(layout);
         Some(Rc::new(Rows { rects, offset, view: clear }))
@@ -389,7 +389,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             None => (0..layout.column_count() as u64).collect(),
         };
         let grid = layout.grid().map(|grid| self.grid_screen(&layout, grid, rect, rtl));
-        let (shown, order) = self.built(&layout, rect, offset);
+        let (shown, order) = self.built(&layout, rect, offset, None); // P3(graph-w1): ge.C8
         self.visible = shown.first().copied().unwrap_or(0)..shown.last().map_or(0, |last| last + 1);
         let command_scope = comp.props(Internal::new()).command_scope;
         if let Some(scope) = command_scope {

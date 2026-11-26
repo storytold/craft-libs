@@ -22,6 +22,11 @@ pub struct EnvView<'a> {
 }
 
 impl<'a> EnvView<'a> {
+    /// The product of the `ContainerProps::transform` scales around the scope, 1.0 outside them.
+    pub fn view_scale(&self) -> f32 {
+        todo!("ge.C12")
+    }
+
     /// The footer a `FooterSlot` under this scope places, if a container offers one.
     pub(crate) fn footer_slot(&self) -> Option<super::FooterSlotOf> {
         self.scoped.footer_slot

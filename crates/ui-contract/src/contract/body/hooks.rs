@@ -390,8 +390,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // size once the room is less.
                 let room = crate::layout::flow_room(ui);
                 let (x, y) = (
-                    crate::layout::fill_size(ui, id, Axis::X, size.x, room.x, self.given.0),
-                    crate::layout::fill_size(ui, id, Axis::Y, size.y, room.y, self.given.1),
+                    crate::layout::fill_size(ui, id, Axis::X, size.x, room.x, self.given.0, 1.0), // P3(views-w2): vw.F2
+                    crate::layout::fill_size(ui, id, Axis::Y, size.y, room.y, self.given.1, 1.0), // P3(views-w2): vw.F2
                 );
                 Vec2::new(x, y)
             }
@@ -404,16 +404,18 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 let room = if held { room.min(crate::layout::flow_room(ui).x) } else { room };
                 // Given the height of the row line it sits on, it fills that line (`given_axes`).
                 let height = if self.given.1 {
-                    crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, crate::layout::flow_room(ui).y, true)
+                    crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, crate::layout::flow_room(ui).y, true, 1.0) // P3(views-w2): vw.F2
                 } else {
                     size.y
                 };
-                Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), height)
+                // P3(views-w2): vw.F2
+                Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held, 1.0), height)
             }
             // Its content's width, and the height as `Fill` takes it.
             Sizing::FillHeight => {
                 let room = crate::layout::flow_room(ui);
-                Vec2::new(size.x, crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, room.y, self.given.1))
+                // P3(views-w2): vw.F2
+                Vec2::new(size.x, crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, room.y, self.given.1, 1.0))
             }
             Sizing::Content => size,
         }

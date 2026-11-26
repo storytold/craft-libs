@@ -52,7 +52,14 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// The rows in view and the positions the pass builds: the rows in view (out-of-view content runs nowhere,
     /// `runtime::lazy`), then the rows kept alive while scrolled out (the lead, the anchor, the renaming row and the
     /// grabbed row).
-    pub(super) fn built(&self, layout: &C::ItemLayout, view: Rect, offset: ScrollPos) -> (Vec<usize>, Vec<usize>) {
+    pub(super) fn built(
+        &self,
+        layout: &C::ItemLayout,
+        view: Rect,
+        offset: ScrollPos,
+        xf: Option<crate::runtime::egui::areas::LayerMap>,
+    ) -> (Vec<usize>, Vec<usize>) {
+        let _ = xf; // P3(graph-w1): ge.C8
         let mut shown = Vec::new();
         layout.visible(offset, view.size(), &mut shown);
         let mut order = shown.clone();

@@ -39,6 +39,9 @@ pub struct Common {
     pub(crate) ltr_axis: bool,
     /// A leaf's `Props::sizing`; a container or collection keeps it in its `ContainerProps`.
     pub(crate) sizing: Option<Sizing>,
+    /// `Props::fill_weight`.
+    #[allow(dead_code)] // P3(views-w2): vw.F1
+    pub(crate) fill_weight: Option<f32>,
 }
 
 impl Common {
@@ -64,6 +67,7 @@ impl Common {
             command_scope: None,
             ltr_axis: false,
             sizing: None,
+            fill_weight: None,
         }
     }
 }
@@ -128,6 +132,13 @@ pub trait Props: Meta + Sized {
     fn sizing(mut self, sizing: Sizing) -> Self {
         self.set_sizing(sizing, Internal::new());
         self
+    }
+
+    /// A child filling the main axis of a `Stack` or `Row` takes `weight` shares of the room left; the default is 1, and
+    /// a non-finite or non-positive weight counts as 1.
+    fn fill_weight(self, weight: f32) -> Self {
+        let _ = weight;
+        todo!("vw.F1")
     }
 
     /// The variant; one the component does not accept gives its default.

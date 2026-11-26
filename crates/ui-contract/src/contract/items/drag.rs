@@ -683,6 +683,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             DropPlace::Between => self
                 .spot(layout, rect, offset, rtl, None, at)
                 .map(|spot| (DropAt::Gap { key: Some(self.source.key(spot.over)), insert: spot.insert }, spot.mark)),
+            DropPlace::Spot => todo!("ge.C10"),
             DropPlace::Onto => {
                 let over = (at.y >= rect.min.y).then(|| layout.hit(Self::logical(layout, rect, rtl, at), offset)).flatten()?;
                 if !self.source.enabled(over) {

@@ -3,6 +3,7 @@
 
 use craft_behavior::Cursor;
 use craft_keymap::Mods;
+use egui::Pos2;
 use std::any::{Any, TypeId};
 use std::fmt;
 use std::rc::Rc;
@@ -17,10 +18,12 @@ pub enum DropPlace {
     Between,
     /// Onto the item under the pointer, which shows the `Into` mark and `RowState::drop_target`.
     Onto,
+    /// At the point under the pointer, in a spatial layout: where the drop lands is the point itself.
+    Spot,
 }
 
 /// The place of one drop.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum DropAt<K> {
     /// Between items: before the position `insert` of the display order, the source's length after the last item.
@@ -33,6 +36,14 @@ pub enum DropAt<K> {
     },
     /// Onto the item.
     Onto(K),
+    /// At a point of a spatial layout, from a drop kind at `DropPlace::Spot`.
+    #[non_exhaustive]
+    Spot {
+        /// The item under the pointer, if any.
+        over: Option<K>,
+        /// The drop point, in the items' own space.
+        at: Pos2,
+    },
 }
 
 impl<K> DropAt<K> {
@@ -46,6 +57,7 @@ impl<K> DropAt<K> {
         match self {
             DropAt::Gap { key, .. } => key.as_ref(),
             DropAt::Onto(key) => Some(key),
+            DropAt::Spot { over, .. } => over.as_ref(),
         }
     }
 }

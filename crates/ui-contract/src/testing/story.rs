@@ -697,7 +697,7 @@ impl CollectionKind {
             CollectionEvent::Activate(_) => CollectionKind::Activate,
             CollectionEvent::Refused(_) => CollectionKind::Refused,
             CollectionEvent::Rested(_) => CollectionKind::Rested,
-            CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
+            CollectionEvent::EmptyActivated { .. } => CollectionKind::EmptyActivated,
             CollectionEvent::EmptyContextMenu { .. } => CollectionKind::EmptyContextMenu,
             CollectionEvent::EdgePressed { .. } => CollectionKind::EdgePressed,
             CollectionEvent::Preview(_) => CollectionKind::Preview,
