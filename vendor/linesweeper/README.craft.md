@@ -155,8 +155,8 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests, the `generators`
-tests, the two `paperjs` trials that need no data files, and the tests in the `visualize_op` and
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests, the unit and
+regression tests again with the `slow-asserts` feature, the `generators` tests, the two `paperjs` trials that need no data files, and the tests in the `visualize_op` and
 `curve_metrics` examples, and checks that every registered target compiles with all features. The
 `craft-prepress` tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter
 lists this directory, so a pull request that changes files here starts `pdf.yml`, which runs the
@@ -164,6 +164,7 @@ script. No workflow runs clippy on this copy. Run the tests and clippy from this
 
 ```sh
 cargo test --locked --lib --test regression
+cargo test --locked --lib --test regression --features slow-asserts
 cargo test --locked --lib --features generators generators::
 cargo test --locked --test paperjs pixmap_distance_counts_coverage
 cargo test --locked --test paperjs load_errors_are_reported

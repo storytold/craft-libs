@@ -20,6 +20,7 @@ cargo test --manifest-path "$test_root/hayro-syntax/Cargo.toml" --doc "${patches
 cargo test --manifest-path "$test_root/hayro-syntax/Cargo.toml" --lib --no-default-features --features std "${patches[@]}"
 cp -R "$root/vendor/linesweeper" "$test_root/linesweeper"
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --lib --test regression
+cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --lib --test regression --features slow-asserts
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --test paperjs pixmap_distance_counts_coverage
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --test paperjs load_errors_are_reported
 cargo test --manifest-path "$test_root/linesweeper/Cargo.toml" --locked --lib --features generators generators::
