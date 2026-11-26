@@ -37,7 +37,7 @@ use crate::runtime::env::{EnvView, Label};
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::{Facts, Remember as _};
 use crate::runtime::words::common::CommonWords;
-use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole};
+use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
 use crate::text::TextField;
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Arrows, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
@@ -61,6 +61,19 @@ pub enum MenuTitlePad {
     /// The padding inside controls (`space.pad.control`): titles set closer, as in an app bar whose menus share the
     /// line with many controls.
     Control,
+}
+
+/// How a menu bar's titles stand. An app sets it once at its root (`RootEnv::values`); the default is a menu row's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MenuTitleLook {
+    /// A menu row's: square corners, a control high, [`MenuTitlePad`] beside the text.
+    #[default]
+    Row,
+    /// A bare push button's, as egui's menu bar draws its titles: a push button high with the button's corners
+    /// (`radius.button`) and `space.gap.tight` beside the text, the titles `space.pad.control` apart.
+    Button,
 }
 
 /// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the command
@@ -114,15 +127,14 @@ impl Component for TitleFace {
         let surface = cx.command_row_look();
         let ink = cx.command_row_ink(tokens.color.text.normal);
         let control = cx.control();
+        let (surface, pad, height) = match (cx.env::<MenuTitleLook>(), cx.env::<MenuTitlePad>()) {
+            (MenuTitleLook::Button, _) => (surface.radius(UiTokens::corner(tokens.shape.radius.button)), tokens.space.gap.tight, cx.button_height()),
+            (MenuTitleLook::Row, MenuTitlePad::Regular) => (surface, tokens.space.pad.regular, control.height),
+            (MenuTitleLook::Row, MenuTitlePad::Control) => (surface, tokens.space.pad.control, control.height),
+        };
         TitleFaceStyle {
             surface,
-            metrics: Metrics::new()
-                .padding(craft_behavior::Insets::horizontal(match cx.env::<MenuTitlePad>() {
-                    MenuTitlePad::Regular => tokens.space.pad.regular,
-                    MenuTitlePad::Control => tokens.space.pad.control,
-                }))
-                .min_size(Vec2::new(0.0, control.height))
-                .gap(control.gap),
+            metrics: Metrics::new().padding(craft_behavior::Insets::horizontal(pad)).min_size(Vec2::new(0.0, height)).gap(control.gap),
             focus: cx.focus_look(),
             text: TextLook::new(TypeRole::Label, ink.clone()),
             icon: IconLook::new(control.icon, ink),
@@ -255,6 +267,10 @@ pub struct MenuBarOutput {
     pub open: bool,
     /// The titles alone (with "…" when it shows), from the first title's reading start to the last title's end.
     pub titles: Rect,
+    /// The width every title takes side by side with none in "…", whatever room the bar had: a host that places
+    /// controls after the titles on the same row compares it with the room it leaves the bar. Zero when the bar
+    /// shows nothing (`MenuPlacement::ScreenTop`).
+    pub natural: f32,
     /// True in the one pass where a menu of the bar opened while no menu of the bar was open when the pass began. A
     /// rerun pass in the same frame and a switch from one open title to another report false.
     pub opened: bool,
@@ -353,6 +369,8 @@ pub struct MenuBar<'a> {
     #[prop]
     keyboard: bool,
     open: bool,
+    /// The width of every title side by side, from this pass's measure or parts step.
+    natural: f32,
     /// A menu opened in this pass while none was open when it began.
     opened: bool,
 }
@@ -360,7 +378,7 @@ pub struct MenuBar<'a> {
 impl<'a> MenuBar<'a> {
     /// A bar named `label` with one title per menu, in reading order.
     pub fn new(label: impl Into<Label>, titles: Vec<MenuTitle<'a>>) -> Self {
-        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, opened: false }.label(label)
+        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false, natural: 0.0, opened: false }.label(label)
     }
 
     fn in_window(env: &EnvView<'_>) -> bool {
@@ -387,13 +405,23 @@ impl<'a> MenuBar<'a> {
         if shown == 0 { words.bar_all.as_str().to_owned() } else { words.bar_more.as_str().to_owned() }
     }
 
-    /// Each title's width as its face measures, the face height, and the width of the "…" title.
+    /// Each title's width as its face measures, the face height, and the width of the "…" title, each with the gap
+    /// after it ([`Self::gap`]).
     fn widths(&self, cx: &MeasureCx<'_, Self>) -> (Vec<f32>, f32, f32) {
         let texts = self.texts(&cx.env);
+        let gap = Self::gap(cx);
         let sizes: Vec<Vec2> = texts.iter().map(|(text, _)| cx.face(Self::face(text, false, None))).collect();
         let more = cx.face(Self::face(&Self::more_text(&cx.env.words::<MenuWords>(), 1), false, None));
         let height = sizes.iter().map(|size| size.y).fold(more.y, f32::max);
-        (sizes.iter().map(|size| size.x).collect(), height, more.x)
+        (sizes.iter().map(|size| size.x + gap).collect(), height, more.x + gap)
+    }
+
+    /// The room after each title: `space.pad.control` between titles that stand as buttons, none between rows.
+    fn gap(cx: &MeasureCx<'_, Self>) -> f32 {
+        match cx.env.get::<MenuTitleLook>() {
+            MenuTitleLook::Button => cx.tokens.space.pad.control,
+            MenuTitleLook::Row => 0.0,
+        }
     }
 
     fn slot_part(open: Open) -> PartRef {
@@ -486,7 +514,8 @@ impl Component for MenuBar<'_> {
             return Vec2::ZERO;
         }
         let (widths, height, more) = self.widths(cx);
-        let width = if cx.proposal == Proposal::Min { more } else { widths.iter().sum() };
+        self.natural = widths.iter().sum();
+        let width = if cx.proposal == Proposal::Min { more } else { self.natural };
         Vec2::new(width, height)
     }
 
@@ -499,15 +528,18 @@ impl Component for MenuBar<'_> {
             return;
         }
         let (widths, _, more) = self.widths(cx);
+        self.natural = widths.iter().sum();
         let fit = fit_titles(&widths, more, rect.width());
+        let gap = Self::gap(cx);
         let mut flow = Flow::new(rect, cx.flow.is_rtl());
         for (at, width) in widths.iter().take(fit.shown).enumerate() {
             let (cell, rest) = flow.take_start(*width);
             flow = rest;
+            let cell = Flow::new(cell, cx.flow.is_rtl()).take_start(width - gap).0;
             cx.part(TITLE.at(at as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", at);
         }
         if fit.overflow {
-            let (cell, _) = flow.take_start(more);
+            let cell = flow.take_start(more - gap).0;
             cx.part(MORE, cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", fit.shown);
         }
         cx.roving(Roving::new(NavShape::Flat).arrows(Arrows::Horizontal));
@@ -739,6 +771,6 @@ impl Component for MenuBar<'_> {
         let rects = Self::slots(found).into_iter().filter_map(|slot| cx.part_if_declared(Self::slot_part(slot)).map(|result| result.rect));
         let start = if cx.flow.is_rtl() { cx.rect.right_top() } else { cx.rect.left_top() };
         let titles = rects.reduce(Rect::union).unwrap_or_else(|| Rect::from_min_size(start, Vec2::ZERO));
-        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, opened: self.opened }
+        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, natural: self.natural, opened: self.opened }
     }
 }
