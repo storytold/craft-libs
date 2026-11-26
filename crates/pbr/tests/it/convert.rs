@@ -91,6 +91,24 @@ fn mesh_defaults_are_the_gltf_defaults() {
 }
 
 #[test]
+fn mesh_extensions_that_are_not_converted_are_reported_as_dropped() {
+    let mut m = Mesh::default();
+    for name in ["KHR_materials_transmission", "KHR_materials_clearcoat", "KHR_materials_unlit", "KHR_materials_emissive_strength"] {
+        m.extensions.insert(name.into(), craft_mesh::serde_json::json!({}));
+    }
+    let c = try_from_mesh(&m).unwrap();
+    assert!(dropped(&c, "KHR_materials_transmission"), "{:?}", c.report);
+    assert_eq!(c.report.items.len(), 1, "{:?}", c.report);
+    // craft-mesh reads part of these two.
+    m.extensions.insert("KHR_materials_clearcoat".into(), craft_mesh::serde_json::json!({ "clearcoatNormalTexture": { "index": 0 } }));
+    m.extensions.insert("KHR_materials_pbrSpecularGlossiness".into(), craft_mesh::serde_json::json!({ "specularFactor": [1, 0, 0] }));
+    let c = try_from_mesh(&m).unwrap();
+    assert!(dropped(&c, "clearcoatNormalTexture"), "{:?}", c.report);
+    assert!(approximated(&c, "KHR_materials_pbrSpecularGlossiness"), "{:?}", c.report);
+    assert_eq!(c.report.items.len(), 3, "{:?}", c.report);
+}
+
+#[test]
 fn mesh_textures_keep_their_uv_state_scale_and_encoding() {
     let mr = TextureRef {
         image: 2,

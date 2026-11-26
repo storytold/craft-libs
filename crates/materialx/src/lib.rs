@@ -660,7 +660,8 @@ fn parse_values(text: &str) -> Option<Vec<f32>> {
 }
 
 /// The value of the input `input`, read as a `boolean` (`true` or `false`, as 1 or 0) or an
-/// `integer` (one whole number) when its type says so, and as numbers otherwise.
+/// `integer` (one whole number) when its type says so, and as numbers otherwise. A `float`,
+/// vector or color type needs as many numbers as it has channels.
 fn input_numbers(input: &El, text: &str) -> Option<Vec<f32>> {
     match input.attr("type") {
         Some("boolean") => match text.trim() {
@@ -669,7 +670,7 @@ fn input_numbers(input: &El, text: &str) -> Option<Vec<f32>> {
             _ => None,
         },
         Some("integer") => text.trim().parse::<i32>().ok().map(|v| vec![v as f32]),
-        _ => parse_values(text),
+        ty => parse_values(text).filter(|v| ty.and_then(channels).is_none_or(|n| v.len() == n)),
     }
 }
 
@@ -1266,7 +1267,8 @@ mod tests {
             let m = read(&open_pbr(&format!(r#"<input name="base_color" type="color3" value="{text}"/>"#), "")).unwrap();
             assert_eq!(input(&m, "base_color"), Some(&constant(&[0.5, 0.25, 0.125], None)), "{text:?}");
         }
-        for bad in ["0.5 x 1", "0.5 0.25 0.125 1 2", " "] {
+        // A color3 holds three numbers.
+        for bad in ["0.5 x 1", "0.5 0.25 0.125 1 2", " ", "0.5", "0.5, 0.25", "0.5 0.25 0.125 1"] {
             let r = read(&open_pbr(&format!(r#"<input name="base_color" type="color3" value="{bad}"/>"#), ""));
             assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("base_color")), "{bad:?}: {r:?}");
         }

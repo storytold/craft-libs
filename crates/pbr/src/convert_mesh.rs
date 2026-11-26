@@ -9,6 +9,17 @@ use crate::surface::{
     TextureEncoding, TextureInput, TextureSource, UNIT, UvTransform, Wrap, checked,
 };
 
+/// The material extensions whose values `craft_mesh` reads into `craft_mesh::Material`'s fields.
+/// It reads only part of `KHR_materials_pbrSpecularGlossiness` and of `KHR_materials_clearcoat`.
+const CONVERTED_EXTENSIONS: &[&str] = &[
+    "KHR_materials_unlit",
+    "KHR_materials_emissive_strength",
+    "KHR_materials_pbrSpecularGlossiness",
+    "KHR_materials_clearcoat",
+    "KHR_materials_sheen",
+];
+const SPECULAR_GLOSSINESS: &str = "KHR_materials_pbrSpecularGlossiness";
+
 /// Converts a `craft_mesh::Material` as glTF 2.0 defines its metallic-roughness material
 /// (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials>).
 ///
@@ -24,6 +35,12 @@ use crate::surface::{
 ///   are sRGB-encoded and the others are linear, as glTF and its extensions define them.
 /// - Dropped and reported: the clearcoat textures when the clearcoat factor is 0, and the sheen
 ///   textures when the sheen color factor is black. Each extension turns its layer off then.
+///   Every other material extension in `craft_mesh::Material::extensions`, such as
+///   `KHR_materials_transmission`, is dropped and reported by its name, and so is the
+///   `clearcoatNormalTexture` of `KHR_materials_clearcoat`, which `craft_mesh` does not read.
+/// - Reported as [`ReportItem::Approximated`]: `KHR_materials_pbrSpecularGlossiness`, which
+///   `craft_mesh` reads as its diffuse color and texture with roughness from the glossiness,
+///   without its specular color or specular-glossiness texture.
 ///
 /// Every value is checked and none is clamped. Base color channels, alpha, metallic,
 /// roughness, occlusion strength and the clearcoat and sheen values must be numbers from 0 to 1;
@@ -94,6 +111,18 @@ pub fn try_from_mesh(m: &MeshMaterial) -> Result<Conversion, ConvertError> {
     }
     if m.unlit {
         report.items.push(ReportItem::Unshaded { input: "unlit".into() });
+    }
+    for name in m.extensions.keys().filter(|k| !CONVERTED_EXTENSIONS.contains(&k.as_str())) {
+        report.items.push(ReportItem::Dropped { input: name.clone(), why: "the extension is not converted" });
+    }
+    if m.extensions.get("KHR_materials_clearcoat").is_some_and(|c| c.get("clearcoatNormalTexture").is_some()) {
+        report.items.push(ReportItem::Dropped { input: "clearcoatNormalTexture".into(), why: "craft-mesh does not read it" });
+    }
+    if m.extensions.contains_key(SPECULAR_GLOSSINESS) {
+        report.items.push(ReportItem::Approximated {
+            input: SPECULAR_GLOSSINESS.into(),
+            how: "read as its diffuse color and texture with roughness from the glossiness; its specular color and texture are not converted",
+        });
     }
     let surface = Surface {
         name: m.name.clone(),
