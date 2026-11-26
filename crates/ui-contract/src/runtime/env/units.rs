@@ -408,11 +408,17 @@ impl Units {
     /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
     /// typed text by the same rules. Under [`ZoomPrecision::Whole`] it writes whole percents.
     pub fn zoom_codec(&self) -> NumberCodec {
-        let decimals = match self.zoom {
+        NumberCodec::new(self.reader(Some(UnitKind::Percent)), self.zoom_decimals()).zoom_typing()
+    }
+}
+
+impl Units {
+    /// The most decimals a zoom shows: the env's [`ZoomPrecision`], shared by `zoom_codec` and `zoom_percent`.
+    fn zoom_decimals(&self) -> usize {
+        match self.zoom {
             ZoomPrecision::Fractional => ZOOM_DECIMALS,
             ZoomPrecision::Whole => 0,
-        };
-        NumberCodec::new(self.reader(Some(UnitKind::Percent)), decimals).zoom_typing()
+        }
     }
 }
 
@@ -426,9 +432,8 @@ impl Units {
     }
 
     /// The same units with `zoom` as the decimals a zoom shows: the env's [`ZoomPrecision`].
-    #[doc(hidden)]
     #[must_use]
-    pub fn with_zoom_precision(mut self, zoom: ZoomPrecision) -> Self {
+    pub(crate) fn with_zoom_precision(mut self, zoom: ZoomPrecision) -> Self {
         self.zoom = zoom;
         self
     }
@@ -543,9 +548,9 @@ impl Units {
     }
 
     /// A zoom of `n` percent: `100%`, `12.5%`, `66.67%`. The fewest digits that show it to two decimals, so the
-    /// ladder's thirds read as Photoshop shows them.
+    /// ladder's thirds read as Photoshop shows them. Under [`ZoomPrecision::Whole`] a whole percent.
     pub fn zoom_percent(&self, n: f64) -> String {
-        self.text(UnitKind::Percent, n, 0..=2)
+        self.text(UnitKind::Percent, n, 0..=self.zoom_decimals())
     }
 
     /// `n` degrees: `12°`.
