@@ -8,7 +8,9 @@ pub(crate) mod thumb_row;
 pub(crate) mod track;
 mod words;
 
+pub use crate::runtime::keys::{ScalarKeyPolicy, ScalarKeyTrigger};
 pub use angle_dial::{AngleDial, AngleDialStyle, AngleOrientation};
+pub use craft_behavior::{DragModifier, DragModifiers};
 pub use point_picker::{Backdrop, PointMark, PointPicker, PointPickerStyle, PointPickerWords, SamePoint};
 pub use range_slider::{RangeSlider, RangeSliderStyle};
 pub use slider::{Slider, SliderStyle, SliderThumb, TrackPress};

@@ -120,7 +120,7 @@ pub use value::{
     Applied, CancelReason, EditEvent, EditEvents, EditPolicy, Gesture, GestureId, GestureNote, GesturePhase, Mixed, Preview, Validity, Value,
     same_in_f32, same_in_f32_at,
 };
-pub use value_drag::{DragWarp, ValueDrag, wrap_value};
+pub use value_drag::{DragModifier, DragModifiers, DragWarp, ValueDrag, wrap_value};
 pub use wheel::{GESTURE_GAP, Wheel, WheelEase, WheelFocus, WheelGesture, WheelNotch, WheelPhase, WheelRoom, WheelSource, WheelTaker, WheelUnit};
 
 #[cfg(test)]

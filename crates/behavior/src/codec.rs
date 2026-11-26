@@ -154,10 +154,10 @@ impl Codec for PlainText {
     }
 }
 
-/// A reader a caller adds for words that stand for numbers.
+/// A caller's text-to-number reader.
 type Custom = Arc<dyn Fn(&str) -> Option<f64> + Send + Sync>;
 
-/// An optional number: empty text is `None`; anything else reads through a [`Reader`].
+/// An optional number: empty text is `None`; anything else reads through a [`Reader`] unless overridden with [`NumberCodec::parse_with`].
 #[derive(Clone)]
 pub struct NumberCodec {
     reader: Reader,
@@ -165,6 +165,8 @@ pub struct NumberCodec {
     /// Every decimal place is written, trailing zeros included.
     fixed: bool,
     custom: Option<Custom>,
+    /// An authoritative reader for the complete, trimmed, non-empty input.
+    primary: Option<Custom>,
     /// Typing rules of a zoom field ([`NumberCodec::zoom_typing`]).
     zoom: bool,
     /// A lone percentage is that share of the start value ([`NumberCodec::share_of_start`]).
@@ -182,6 +184,7 @@ impl fmt::Debug for NumberCodec {
             .field("share", &self.share)
             .field("signed_zoom", &self.signed_zoom)
             .field("custom", &self.custom.is_some())
+            .field("primary", &self.primary.is_some())
             .finish()
     }
 }
@@ -193,6 +196,11 @@ impl PartialEq for NumberCodec {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
+        let same_primary = match (&self.primary, &other.primary) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
         self.reader == other.reader
             && self.decimals == other.decimals
             && self.fixed == other.fixed
@@ -200,6 +208,7 @@ impl PartialEq for NumberCodec {
             && self.share == other.share
             && self.signed_zoom == other.signed_zoom
             && same_custom
+            && same_primary
     }
 }
 
@@ -233,7 +242,7 @@ const NUMBER_SAMPLE: &str = "0000.00";
 impl NumberCodec {
     /// A codec reading with `reader` and writing at most `decimals` decimal places.
     pub fn new(reader: Reader, decimals: usize) -> Self {
-        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false, share: false, signed_zoom: false }
+        NumberCodec { reader, decimals, fixed: false, custom: None, primary: None, zoom: false, share: false, signed_zoom: false }
     }
 
     /// The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
@@ -303,6 +312,16 @@ impl NumberCodec {
         self
     }
 
+    /// The same codec with an authoritative reader for the complete, trimmed, non-empty input. It replaces the
+    /// reader's expressions/relative input, zoom parsing and `or_parse`: `None` or a non-finite result rejects the
+    /// input without fallback. Empty text still means `None`. Formatting and the character filter are unchanged.
+    ///
+    /// Use this when a domain's existing grammar must own the whole value, rather than adding a word with `or_parse`.
+    pub fn parse_with(mut self, parse: impl Fn(&str) -> Option<f64> + Send + Sync + 'static) -> Self {
+        self.primary = Some(Arc::new(parse));
+        self
+    }
+
     /// The widest text the codec writes for a number in `range`: the longest of each end and the number one place of
     /// the last decimal inside it ("100" and "99.9" over 0 to 100 at one decimal), so a field over the range is sized
     /// for any value it shows in it.
@@ -366,6 +385,9 @@ impl Codec for NumberCodec {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Ok((None, ParseNote::default()));
+        }
+        if let Some(parse) = &self.primary {
+            return parse(trimmed).filter(|number| number.is_finite()).map(|number| (Some(number), ParseNote::default())).ok_or(NotAValue);
         }
         if self.zoom {
             return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
