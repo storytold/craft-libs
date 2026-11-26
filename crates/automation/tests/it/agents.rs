@@ -376,6 +376,28 @@ fn a_taken_port_retry_reuses_the_checked_token() {
     assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
 }
 
+/// The checked token is kept only for retries with the same settings: turning agents off and on again reads the token
+/// file again, so a server never listens with a token the file no longer holds.
+#[trial]
+fn a_settings_change_reads_the_token_file_again() {
+    let dir = temp_dir("link-token-settings");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = u32::from(taken.local_addr().unwrap().port());
+    assert!(link.sync(Some(&on(port)), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::Listen { .. })), "{:?}", link.status());
+
+    assert!(!link.sync(None, &host).stopped, "nothing was running");
+    // While agents are off the token file changes; here it can't be read at all, which the next start must report.
+    std::fs::remove_file(dir.path().join(TOKEN_FILE)).unwrap();
+    std::fs::create_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    drop(taken);
+    let back = link.sync(Some(&on(port)), &host);
+    assert!(back.requests.is_none(), "started with the token the file no longer holds");
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+}
+
 /// Dropping the link stops its server and removes its connection file.
 #[trial]
 fn dropping_the_link_removes_its_connection_file() {
