@@ -77,6 +77,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
   TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
   FilmCraft.
+- [`craft-cdr`](crates/cdr/README.md): bounded reader and writer of `.cdr` drawings: versions 1 to
+  27 and `.cmx` files read into one drawing model (pages, layers, groups, shapes, fills and
+  outlines), and version 15 `.cdr` files written.
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
@@ -219,6 +222,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-i18n-build`](crates/i18n-build/README.md): embeds the optional craft-i18n catalogs
+  from an app's `build.rs` (`CRAFT_I18N_DIR`, `CRAFT_I18N_REQUIRED`) as the table `craft-i18n`
+  reads, with each regional locale's parent and the app's own catalogs merged in. No
+  dependencies.
 - [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
@@ -402,9 +409,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
   replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
-  copies of a valid input, and fails the test with the case that panicked or did not finish. Its
-  `fixtures` module (native targets only) generates test fixtures under `target/fixtures` and
-  publishes each one under a lock. Not published.
+  copies of a valid input, and fails the test with the case that panicked or did not finish. Its `rng`
+  module holds two seeded generators for repeatable test input. Its `fixtures` module (native targets
+  only) generates test fixtures under `target/fixtures` and publishes each one under a lock. Not
+  published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and
