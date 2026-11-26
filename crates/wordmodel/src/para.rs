@@ -864,7 +864,7 @@ mod tests {
                 media: media.into(),
                 crop: [0.0; 4],
                 stretch: [0.0; 4],
-                transparency: 0.0,
+                fx: Default::default(),
                 rot_with_shape: true,
                 tile: None,
             })))

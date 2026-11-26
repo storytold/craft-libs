@@ -167,7 +167,7 @@ fn own_picture_fill_is_the_shapes_fill() {
     assert_eq!((float.wrap, float.x, float.y), (Wrap::InFrontOfText, 72.0, 100.0));
     let p = picture_fill(&objects[0]);
     assert_eq!(doc.media[&p.media].as_slice(), BLUE_PNG);
-    assert_eq!((p.crop, p.stretch, p.transparency, p.rot_with_shape), ([0.1, 0.0, 0.2, 0.0], [0.0, 0.0, -7.574, 0.0], 60.0, true));
+    assert_eq!((p.crop, p.stretch, p.fx.transparency, p.rot_with_shape), ([0.1, 0.0, 0.2, 0.0], [0.0, 0.0, -7.574, 0.0], 60_000, true));
     // Saved and read back: the same picture fill, the picture kept in the package.
     let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     let q = picture_fill(&back.body[0].as_para().unwrap().objects[0]);
@@ -228,7 +228,7 @@ fn a_picture_fill_without_its_picture_is_dropped() {
     let xml = format!("{}{}{}", &INLINE_XML[..start], payload, &INLINE_XML[end..]);
     let doc = craft_docx::read(&package(&xml)).unwrap();
     let InlineObject::Shape { fill, .. } = &doc.body[0].as_para().unwrap().objects[0] else { panic!() };
-    assert!(!matches!(fill, Some(craft_wordmodel::fill::Fill::Picture(_))), "{fill:?}");
+    assert!(fill.is_none(), "{fill:?}");
     craft_docx::write(&doc).unwrap();
 }
 
@@ -251,6 +251,56 @@ fn a_tiled_picture_fill_keeps_its_tiling() {
     assert_eq!(q.tile, p.tile);
 }
 
+/// The shape at `payload`'s place in the test drawing, read; and its `a:blipFill` as saved.
+fn picture_fill_saved(payload: &str) -> (craft_wordmodel::fill::PictureFill, String) {
+    let start = INLINE_XML.find("<wps:spPr>").unwrap();
+    let end = INLINE_XML.find("</wps:wsp>").unwrap();
+    let xml = format!("{}{}{}", &INLINE_XML[..start], payload, &INLINE_XML[end..]);
+    let doc = craft_docx::read(&package(&xml)).unwrap();
+    let p = picture_fill(&doc.body[0].as_para().unwrap().objects[0]).clone();
+    let bytes = craft_docx::write(&doc).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let saved = std::io::read_to_string(z.by_name("word/document.xml").unwrap()).unwrap();
+    let fill = saved.find("<a:blipFill").map(|i| saved[i..].split("</a:blipFill>").next().unwrap_or("").to_string()).unwrap_or_default();
+    (p, fill)
+}
+
+/// A picture-filled shape keeps its picture's brightness and contrast (`a:lum`) through a save,
+/// as a picture does; it was read as a picture before, which kept them.
+#[test]
+fn a_picture_fills_brightness_and_contrast_survive_a_save() {
+    let payload = r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdIsolationRect"><a:lum bright="20000" contrast="-30000"/></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill></wps:spPr><wps:bodyPr/>"#;
+    let (p, saved) = picture_fill_saved(payload);
+    assert_eq!((p.fx.bright, p.fx.contrast), (20_000, -30_000));
+    assert!(saved.contains(r#"<a:lum bright="20000" contrast="-30000"/>"#), "{saved}");
+}
+
+/// What a picture fill leaves out is what Office reads for it ([MS-OI29500] Part 1 §20.1.8):
+/// `rotWithShape` true and tiling (from the top left, at the picture's size). Saved, both are
+/// written out, and a `rotWithShape` of false is written as such rather than left to the default.
+#[test]
+fn omitted_picture_fill_settings_read_as_office_reads_them() {
+    let (p, saved) = picture_fill_saved(
+        r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdIsolationRect"/></a:blipFill></wps:spPr><wps:bodyPr/>"#,
+    );
+    assert!(p.rot_with_shape);
+    let tile = p.tile.expect("tiled when no mode is stated");
+    assert_eq!((tile.tx, tile.ty, tile.sx, tile.sy, tile.align.as_str()), (0.0, 0.0, 100.0, 100.0, ""));
+    assert!(saved.contains(r#"rotWithShape="1""#) && saved.contains("<a:tile") && !saved.contains("<a:stretch"), "{saved}");
+    // An explicit stretch stays a stretch, an explicit false stays false, and an alignment
+    // DrawingML doesn't have is dropped rather than saved.
+    let (p, saved) = picture_fill_saved(
+        r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill rotWithShape="0"><a:blip r:embed="rIdIsolationRect"/><a:stretch/></a:blipFill></wps:spPr><wps:bodyPr/>"#,
+    );
+    assert!(!p.rot_with_shape && p.tile.is_none(), "{p:?}");
+    assert!(saved.contains(r#"rotWithShape="0""#) && saved.contains("<a:stretch"), "{saved}");
+    let (p, saved) = picture_fill_saved(
+        r#"<wps:spPr><a:prstGeom prst="rect"/><a:blipFill><a:blip r:embed="rIdIsolationRect"/><a:tile algn="xyz"/></a:blipFill></wps:spPr><wps:bodyPr/>"#,
+    );
+    assert_eq!(p.tile.map(|t| t.align), Some(String::new()));
+    assert!(!saved.contains("algn"), "{saved}");
+}
+
 /// A Drawing Canvas's picture background is saved with its picture and reads back as that
 /// picture fill; it was written as `a:noFill` and lost on save.
 #[test]
@@ -258,7 +308,8 @@ fn a_canvas_picture_background_round_trips() {
     use craft_wordmodel::fill::{Fill, PictureFill};
     let mut doc = Document::new();
     doc.media.insert("background.png".into(), Arc::new(BLUE_PNG.to_vec()));
-    let pic = PictureFill { media: "background.png".into(), crop: [0.0; 4], stretch: [0.0; 4], transparency: 0.0, rot_with_shape: true, tile: None };
+    let pic =
+        PictureFill { media: "background.png".into(), crop: [0.0; 4], stretch: [0.0; 4], fx: Default::default(), rot_with_shape: true, tile: None };
     let canvas = InlineObject::Group {
         w: 200.0,
         h: 100.0,

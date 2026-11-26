@@ -10,6 +10,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
 
+use crate::picfx::PicFx;
 use crate::props::Rgb;
 #[cfg(test)]
 use crate::wordart::MAX_STOPS;
@@ -46,13 +47,15 @@ pub struct PictureFill {
     /// (negative: past them, cut off by the outline).
     #[serde(default)]
     pub stretch: [f32; 4],
-    /// Transparency, percent (`a:alphaModFix`; 0 = opaque).
-    #[serde(default)]
-    pub transparency: f32,
-    /// Turns with the shape (`rotWithShape`).
+    /// Brightness, contrast and transparency of the picture (`a:lum` and `a:alphaModFix` in its
+    /// `a:blip`), as a picture's: the same correction applies.
+    #[serde(default, skip_serializing_if = "PicFx::is_identity")]
+    pub fx: PicFx,
+    /// Turns with the shape (`rotWithShape`; Office takes an omitted one as true).
     #[serde(default)]
     pub rot_with_shape: bool,
-    /// `a:tile`, kept for saving (drawn stretched).
+    /// `a:tile`, kept for saving (drawn stretched). Office tiles a picture fill that states
+    /// neither `a:tile` nor `a:stretch`, so a reader gives that one the default tiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tile: Option<PictureTile>,
 }
@@ -73,9 +76,17 @@ pub struct PictureTile {
     pub sy: f32,
     #[serde(default, skip_serializing_if = "GradientFlip::is_none")]
     pub flip: GradientFlip,
-    /// Where the tiles are aligned (`algn`: `tl`, `ctr`…); empty for the default.
+    /// Where the tiles are aligned (`algn`: one of [`TILE_ALIGNS`]); empty for the default (`tl`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub align: String,
+}
+
+/// The tile alignments DrawingML allows (`ST_RectAlignment`, ECMA-376 §20.1.10.53).
+pub const TILE_ALIGNS: [&str; 9] = ["tl", "t", "tr", "l", "ctr", "r", "bl", "b", "br"];
+
+/// `align` when it is a DrawingML tile alignment, else empty (the default).
+pub fn tile_align(align: &str) -> String {
+    if TILE_ALIGNS.contains(&align) { align.to_string() } else { String::new() }
 }
 
 fn hundred() -> f32 {
@@ -205,13 +216,14 @@ impl Fill {
                     sx: clamp(t.sx, -MAX_INSET * 10.0, MAX_INSET * 10.0, 100.0),
                     sy: clamp(t.sy, -MAX_INSET * 10.0, MAX_INSET * 10.0, 100.0),
                     flip: t.flip,
-                    align: if t.align.len() <= 8 { t.align.clone() } else { String::new() },
+                    align: tile_align(&t.align),
                 });
                 Fill::Picture(Arc::new(PictureFill {
                     media: p.media.clone(),
                     crop,
                     stretch: rect(p.stretch),
-                    transparency: clamp(p.transparency, 0.0, 100.0, 0.0),
+                    // The corrections only: a soft edge is a shape effect here, not the fill's.
+                    fx: PicFx::new(p.fx.bright, p.fx.contrast, p.fx.transparency),
                     rot_with_shape: p.rot_with_shape,
                     tile,
                 }))
@@ -324,7 +336,7 @@ mod tests {
     }
 
     fn picture(media: &str) -> PictureFill {
-        PictureFill { media: media.into(), crop: [0.0; 4], stretch: [0.0; 4], transparency: 0.0, rot_with_shape: true, tile: None }
+        PictureFill { media: media.into(), crop: [0.0; 4], stretch: [0.0; 4], fx: PicFx::default(), rot_with_shape: true, tile: None }
     }
 
     #[test]
@@ -332,7 +344,7 @@ mod tests {
         let p = PictureFill {
             crop: [0.1, 0.0, 0.2, 0.0],
             stretch: [0.0, 0.0, -7.5, 0.0],
-            transparency: 25.0,
+            fx: PicFx::new(20_000, -40_000, 25_000),
             tile: Some(PictureTile { tx: 1.0, ty: 2.0, sx: 50.0, sy: 50.0, flip: GradientFlip::X, align: "tl".into() }),
             ..picture("banner.png")
         };
@@ -350,14 +362,14 @@ mod tests {
         let p = PictureFill {
             crop: [0.9, f32::NAN, 0.9, -3.0],
             stretch: [f32::INFINITY, -1e9, 1e9, 5.0],
-            transparency: 400.0,
-            tile: Some(PictureTile { tx: f32::NAN, sx: 1e12, align: "x".repeat(100), ..Default::default() }),
+            fx: PicFx { bright: 900_000, contrast: -900_000, transparency: 400_000, soft_edge_emu: Some(5) },
+            tile: Some(PictureTile { tx: f32::NAN, sx: 1e12, align: "xyz".into(), ..Default::default() }),
             ..picture("p.png")
         };
         let Some(Fill::Picture(q)) = Fill::Picture(Arc::new(p)).sanitized() else { panic!() };
         assert!(q.crop[0] + q.crop[2] <= 0.99 + 1e-6 && q.crop[1] == 0.0 && q.crop[3] == 0.0, "{:?}", q.crop);
         assert_eq!(q.stretch, [0.0, -MAX_INSET, MAX_INSET, 5.0]);
-        assert_eq!(q.transparency, 100.0);
+        assert_eq!(q.fx, PicFx::new(100_000, -100_000, 100_000));
         let t = q.tile.clone().unwrap_or_default();
         assert_eq!((t.tx, t.sx, t.align.as_str()), (0.0, MAX_INSET * 10.0, ""));
         assert_eq!(Fill::Picture(Arc::new(picture(""))).sanitized(), None);

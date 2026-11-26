@@ -322,9 +322,11 @@ impl Reader<'_> {
     }
 
     /// A shape's picture fill `bf` (`a:blipFill`, ECMA-376 Part 1 §20.1.8.14): its picture
-    /// (`a:blip`, faded by `a:alphaModFix`), the part of it used (`a:srcRect`), where it is
-    /// stretched to (`a:stretch/a:fillRect`) or how it is tiled (`a:tile`, kept for saving and
-    /// drawn stretched). `None` (no fill) when its picture can't be found.
+    /// (`a:blip`, with the brightness, contrast and fade a picture has), the part of it used
+    /// (`a:srcRect`), where it is stretched to (`a:stretch/a:fillRect`) or how it is tiled
+    /// (`a:tile`, kept for saving and drawn stretched). `None` (no fill) when its picture can't
+    /// be found. Omitted, `rotWithShape` is true and the fill mode is tiling, as Office reads
+    /// them ([MS-OI29500] Part 1 §20.1.8).
     fn picture_fill(&mut self, bf: &El, rels: &Rels) -> Option<Fill> {
         let blip = bf.child("a:blip")?;
         let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
@@ -338,8 +340,7 @@ impl Reader<'_> {
         };
         let crop = insets(bf.child("a:srcRect")).map(|v| v / 100.0);
         let stretch = insets(bf.child("a:stretch").and_then(|s| s.child("a:fillRect")));
-        let amt = blip.child("a:alphaModFix").and_then(|a| a.attr("amt")).and_then(int).unwrap_or(100_000);
-        let transparency = 100.0 - amt.clamp(0, 100_000) as f32 / 1000.0;
+        let fx = crate::units::blip_fx(blip);
         let tile = bf.child("a:tile").map(|t| {
             let pct = |n: &str| t.attr(n).and_then(int).map_or(100.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
             let off = |n: &str| t.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
@@ -349,11 +350,13 @@ impl Reader<'_> {
                 Some("xy") => GradientFlip::Xy,
                 _ => GradientFlip::None,
             };
-            let align = t.attr("algn").filter(|a| a.len() <= 3 && a.chars().all(|c| c.is_ascii_alphabetic())).unwrap_or("").to_string();
+            let align = craft_wordmodel::fill::tile_align(t.attr("algn").unwrap_or(""));
             PictureTile { tx: off("tx"), ty: off("ty"), sx: pct("sx"), sy: pct("sy"), flip, align }
         });
-        let rot_with_shape = on_off_attr(bf, "rotWithShape");
-        Fill::Picture(Arc::new(PictureFill { media, crop, stretch, transparency, rot_with_shape, tile })).sanitized()
+        // Neither mode stated: Office tiles it, at the picture's size from the top left.
+        let tile = tile.or_else(|| bf.child("a:stretch").is_none().then(|| PictureTile { sx: 100.0, sy: 100.0, ..PictureTile::default() }));
+        let rot_with_shape = bf.attr("rotWithShape").is_none_or(|_| on_off_attr(bf, "rotWithShape"));
+        Fill::Picture(Arc::new(PictureFill { media, crop, stretch, fx, rot_with_shape, tile })).sanitized()
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
