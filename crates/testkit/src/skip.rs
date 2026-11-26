@@ -147,7 +147,8 @@ pub fn craft_fonts(present: bool, required: bool) -> bool {
 /// font data and the index of the face in a collection (`0` for a single font). A face that does
 /// not parse covers nothing, and the characters must all come from the same face. Each combining
 /// mark is a character of its own. Text that is empty or only whitespace is covered when at least
-/// one face parses.
+/// one face parses. Needs the `font-coverage` feature.
+#[cfg(feature = "font-coverage")]
 pub fn craft_fonts_cover(text: &str, faces: &[(&[u8], u32)]) -> bool {
     use skrifa::MetadataProvider as _;
     faces.iter().any(|&(data, index)| {
@@ -437,6 +438,7 @@ mod tests {
     }
 
     /// A font holding only a format 12 `cmap` table that maps each range of code points.
+    #[cfg(feature = "font-coverage")]
     fn face(ranges: &[(u32, u32)]) -> Vec<u8> {
         let subtable_len = 16 + 12 * ranges.len() as u32;
         let mut data = Vec::new();
@@ -468,6 +470,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "font-coverage")]
     fn craft_fonts_cover_the_advertised_scripts() {
         let latin_greek_cyrillic = face(&[(0x41, 0x5A), (0x61, 0x7A), (0x391, 0x3C9), (0x410, 0x44F)]);
         let faces: &[(&[u8], u32)] = &[(&latin_greek_cyrillic, 0)];
@@ -479,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "font-coverage")]
     fn coverage_needs_one_face_that_parses_and_maps_every_character() {
         let a = face(&[(u32::from('A'), u32::from('A'))]);
         let b = face(&[(u32::from('B'), u32::from('B'))]);

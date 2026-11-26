@@ -262,25 +262,6 @@ let ff = craft_testkit::require_ffmpeg!("FILMCRAFT_FFMPEG", "FILMCRAFT_REQUIRE_O
 
 A missing program goes to `skip::skip` with the required variable the caller names (`skip::REQUIRED_VAR`, `CRAFT_TEST_REQUIRED`, by default). The test prints a `SKIPPED:` line and returns, or fails, under the rule in the `skip` section below. `oracle::outcome` sorts a lookup result into `Outcome::Missing` and `Outcome::Fail` without reading the required variable's value. A required variable name that is empty or holds `=` or a NUL character fails the test even when the program is found. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
 
-## serial
-
-`serial` is native only.
-
-- `TestLock::new()` is `const`, so a lock can be a `static`:
-  `static L: TestLock = TestLock::new(); let _g = L.hold();`.
-- The thread that holds a lock can call `hold()` again. The lock is released when the last of that
-  thread's guards is dropped, in any order.
-- A test that panics while it holds a lock does not block the next one, and a poisoned internal
-  mutex is recovered.
-- `gpu_lock()` is the one lock of the process for tests that build a GPU harness or device.
-  `hold_gpu_lock()` takes it and keeps it until the calling thread ends; a second call on the same
-  thread does nothing more.
-- A guard is not `Send`. The lock covers one process: under nextest each test runs in its own
-  process.
-- The module reads no environment variables and prints nothing.
-
-The tests use channel handshakes and contain no sleeps or time limits.
-
 ## skip
 
 The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
@@ -299,7 +280,8 @@ A variable name that is empty or holds `=` or a NUL character also fails the tes
 environment is read.
 
 `skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
-or a `RequiredError` that names the variable.
+or a `RequiredError` that names the variable. Every module of this crate that reads a required
+variable reads it with `skip::required`, so one rule applies to all of them.
 
 The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
 `CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
@@ -331,12 +313,32 @@ passes the value to return as the third argument, for example `Ok(())`.
 `option_env!` value, or the table `craft-fonts-build` generates. A required failure names
 `CRAFT_FONTS_REQUIRED=1`.
 
-`craft_fonts_cover(text, faces)` returns `true` when one face maps every character of `text` that
-is not whitespace. Each face is font data with its index in a collection (`0` for a single font). A
-face that does not parse covers nothing, and coverage is not combined across faces.
+`craft_fonts_cover(text, faces)` needs the `font-coverage` feature, which adds skrifa. It returns
+`true` when one face maps every character of `text` that is not whitespace. Each face is font data
+with its index in a collection (`0` for a single font). A face that does not parse covers nothing,
+and coverage is not combined across faces.
 
 The module does not change the process environment. Its tests that read a real variable run the
 test binary again as a child process with that variable set.
+
+## serial
+
+`serial` is native only.
+
+- `TestLock::new()` is `const`, so a lock can be a `static`:
+  `static L: TestLock = TestLock::new(); let _g = L.hold();`.
+- The thread that holds a lock can call `hold()` again. The lock is released when the last of that
+  thread's guards is dropped, in any order.
+- A test that panics while it holds a lock does not block the next one, and a poisoned internal
+  mutex is recovered.
+- `gpu_lock()` is the one lock of the process for tests that build a GPU harness or device.
+  `hold_gpu_lock()` takes it and keeps it until the calling thread ends; a second call on the same
+  thread does nothing more.
+- A guard is not `Send`. The lock covers one process: under nextest each test runs in its own
+  process.
+- The module reads no environment variables and prints nothing.
+
+The tests use channel handshakes and contain no sleeps or time limits.
 
 ## Origin
 
@@ -386,14 +388,6 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 | The same probe, with `CRAFT_PDF_ORACLES_REQUIRED` | storytold/craft-libs | `crates/pdf/tests/cos/oracle.rs` | `75a654f4` |
 | Search order and install folders | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
 
-### rng
-
-| Module | Source | Path | Commit |
-|---|---|---|---|
-| `rng` (`XorShift64`) | storytold/filmcraft | `crates/dnx/tests/it/fuzz_hostile.rs:9-20` | `0a881266` |
-| `rng` (`XorShift64`) | storytold/craft-libs | `crates/video/tests/dnx/fuzz_hostile.rs:9-20` | `9f10d434` |
-| `rng` (`XorShift64Star`) | storytold/craft-libs | `crates/jpeg/tests/mutation.rs:28-46` | `97c83dc9` |
-
 ### skip
 
 | Code | Repository | Path | Commit |
@@ -403,6 +397,14 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 | `require_*!`, `skip` | storytold/filmcraft | `crates/testkit/src/lib.rs`, `crates/testkit/src/oracle.rs` | `cff7e1442e` |
 | `skip`, `skip_with` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
 | `craft_fonts_cover` | storytold/gridcraft | `crates/ui-egui/src/theme.rs` | `06c2b1440b` |
+
+### rng
+
+| Module | Source | Path | Commit |
+|---|---|---|---|
+| `rng` (`XorShift64`) | storytold/filmcraft | `crates/dnx/tests/it/fuzz_hostile.rs:9-20` | `0a881266` |
+| `rng` (`XorShift64`) | storytold/craft-libs | `crates/video/tests/dnx/fuzz_hostile.rs:9-20` | `9f10d434` |
+| `rng` (`XorShift64Star`) | storytold/craft-libs | `crates/jpeg/tests/mutation.rs:28-46` | `97c83dc9` |
 
 ## Migration
 
@@ -459,15 +461,6 @@ cases change, and keep the test names.
 
 Each adoption keeps the variable names the repository uses today. Its required variable then follows the `skip` rule, and the adoption says which values change, as the `skip` table below describes.
 
-### serial
-
-| Consumer | Module | Switched |
-|---|---|---|
-| PhotoCraft | `serial` | No |
-| DeckCraft | `serial` | No |
-| EffectCraft | `serial` | No |
-| PdfCraft | `serial` | No |
-
 ### skip
 
 | Consumer | Code it replaces | State |
@@ -483,3 +476,12 @@ After an adoption, an app that reads any value as required skips on an empty val
 a configuration error on every other value except `1`, `0` included. An app that accepts `true`, `yes`
 and `on` fails on those values as a configuration error.
 Each adoption says which values change and keeps the variable name.
+
+### serial
+
+| Consumer | Module | Switched |
+|---|---|---|
+| PhotoCraft | `serial` | No |
+| DeckCraft | `serial` | No |
+| EffectCraft | `serial` | No |
+| PdfCraft | `serial` | No |
