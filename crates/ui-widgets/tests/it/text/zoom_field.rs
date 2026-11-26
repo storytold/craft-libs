@@ -279,6 +279,45 @@ fn a_press_on_a_draft_holding_part_keeps_the_typed_zoom_and_a_press_elsewhere_ap
     );
 }
 
+/// With no typed zoom, Tab leaves the field for the next stop and Shift+Tab comes back to it, so the controls after a
+/// zoom field are reached by keyboard. With a typed zoom, Tab still rewrites it and keeps the focus.
+#[trial]
+fn tab_without_a_typed_zoom_moves_to_the_next_stop_and_shift_tab_returns() {
+    let kept = Kept::new();
+    let app = kept.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Row::new().show(ui, |ui, _| {
+            let _ = ZoomField::new(ZOOM, Some(app.view.get()), DOCUMENT).show(ui);
+            let _ = Button::new("Zoom Out").show(ui);
+            let _ = Button::new("Zoom In").show(ui);
+        });
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let field = fixture.by_label(ZOOM).expect("the zoom field").node;
+    let zoom_out = fixture.by_label("Zoom Out").expect("the first button").node;
+    assert_eq!(fixture.tree().focused_key(), field, "Tab from nothing focuses the zoom field");
+
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), zoom_out, "Tab from the zoom field focuses the first button after it");
+    fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    assert_eq!(fixture.tree().focused_key(), field, "Shift+Tab from the button returns to the zoom field");
+    fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), field, "Tab from the stop before it returns to the zoom field");
+
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text("045");
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), field, "Tab with a typed zoom keeps the focus");
+    assert_eq!(text(&fixture), "45", "and rewrites the typed zoom");
+    assert!(close(kept.zoom(), 100.0), "and applies nothing: {}", kept.zoom());
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fixture.tree().focused_key(), zoom_out, "Tab after Enter applied the zoom moves on");
+}
+
 /// The ids of the app's Cut, Copy and Delete that the frames since the last call fired.
 fn app_edits_fired(fixture: &Fixture) -> Vec<String> {
     let edits = [EditCommands::Cut, EditCommands::Copy, EditCommands::Delete].map(|command| CommandRef::from(command).id);
