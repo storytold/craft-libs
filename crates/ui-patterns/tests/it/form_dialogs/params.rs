@@ -868,6 +868,26 @@ fn a_count_per_inch_row_shows_per_inch_and_reads_the_count() {
     }
 }
 
+/// In the default look, where the field draws `/in` apart, a typed `/in` after the count is read as the unit, and a `/`
+/// before a number still divides.
+#[trial]
+fn a_count_per_inch_row_reads_a_typed_per_inch() {
+    let detail = vec![Param::new("detail", "Detail", ParamKind::number(Some(0.0), Some(100.0), 10.0, 1.0, 0)).unit(UnitKind::PerInch)];
+    for typed in ["40/in", "40 /IN", "80/2"] {
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let params = detail.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamDialog::new("Distort", "Distort", params.clone()).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        });
+        fixture.room(Vec2::new(1280.0, 800.0)).settle();
+        let field = fixture.by_label("Detail").expect("the number field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed).key(Key::Tab, Modifiers::NONE).settle();
+        assert_eq!(values.borrow().number("detail"), Some(40.0), "{typed:?} commits the count");
+    }
+}
+
 /// Scale's merge: a `{w, h}` object keeps what it leaves out from the held value; anything else is refused.
 fn merge_scale(fields: &mut DialogFields, key: &str, value: serde_json::Value) -> Result<(), String> {
     let serde_json::Value::Object(incoming) = value else { return Err(format!("{key} takes an object")) };
