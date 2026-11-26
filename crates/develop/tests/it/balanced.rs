@@ -1,7 +1,7 @@
 //! Original synthetic RAW scenes from storytold/lightcraft#1463, generated in these tests.
 
 use craft_develop::raster::Rgb32f;
-use craft_develop::sensor::{Method, RawDevelopExt, highlight};
+use craft_develop::sensor::{self, Method, RawDevelopExt, highlight};
 use craft_raw::opcodes::{Opcode, OpcodeLists};
 use craft_raw::{BlackLevel, Cfa, ColorData, Orientation, RawData, RawFormat, RawImage, Rect};
 
@@ -356,6 +356,30 @@ fn the_clip_mask_marks_the_colours_interpolated_from_clipped_samples() {
 }
 
 #[test]
+fn a_caller_demosaicking_its_own_mosaic_gets_the_same_clip_mask() {
+    let (w, h) = (40usize, 30usize);
+    let light = photograph(w, h, |x, y| if (x - 18.0).powi(2) + (y - 14.0).powi(2) < 49.0 { 6.0 } else { 0.4 });
+    let mut cases = layouts();
+    cases.push(("RGGB bilinear".into(), Cfa::bayer("RGGB").unwrap(), Method::Bilinear));
+    for (name, cfa, method) in cases {
+        let mut raw = raw_of(w, h, &cfa, DAYLIGHT, |x, y| [light[y * w + x]; 3]);
+        raw.crop = Rect::new(2, 1, 33, 27);
+        let (_, expected) = raw.develop_balanced_masked(method, DAYLIGHT, CLIP).unwrap();
+        let n = raw.normalized().unwrap();
+        let crop = raw.develop_crop(n.width, n.height);
+        assert_eq!(sensor::clip_mask(&n, crop, method, CLIP), expected, "{name}");
+        assert!(expected.is_some(), "{name}: clipped samples");
+        let outside = Rect::new(crop.x + 1, crop.y, n.width - crop.x, crop.height);
+        assert!(sensor::clip_mask(&n, outside, method, CLIP).is_none(), "{name}: a crop past the mosaic");
+        let mut four_colour = n.clone();
+        four_colour.cfa.as_mut().unwrap().pattern[0] = 3;
+        assert!(sensor::clip_mask(&four_colour, crop, method, CLIP).is_none(), "{name}: a colour index past blue");
+        let huge = sensor::Normalized { width: usize::MAX, height: 2, data: Vec::new(), ..n.clone() };
+        assert!(sensor::clip_mask(&huge, Rect::new(0, 0, 1, 1), method, CLIP).is_none(), "{name}: dimensions past usize");
+    }
+}
+
+#[test]
 fn ppg_clip_mask_marks_same_colour_dependencies() {
     let cfa = Cfa::bayer("RGGB").unwrap();
     let wb = [1.0; 3];
@@ -528,7 +552,9 @@ fn coloured_highlights_keep_their_brightness_at_the_edges() {
     let tubes = [([1.0f32, 0.15, 0.1], 3.5f32), ([1.0, 0.85, 0.15], 2.6), ([0.25, 1.0, 0.4], 2.0)];
     let scenes = suns.map(|(tint, level)| (tint, level, true)).into_iter().chain(tubes.map(|(tint, level)| (tint, level, false)));
     let lum = |p: [f32; 3]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
-    for (tint, level, sun) in scenes {
+    // The gate develops every divisor-th (scene, layout) pair, a different layout per scene; nightly all of them.
+    let divisor = craft_testkit::hostile::divisor();
+    for (scene_index, (tint, level, sun)) in scenes.enumerate() {
         let scene_name = if sun { "sun" } else { "tube" };
         let scene = |x: f32, y: f32| {
             if sun {
@@ -548,7 +574,10 @@ fn coloured_highlights_keep_their_brightness_at_the_edges() {
             })
         });
         let truth = |x: usize, y: usize| -> [f32; 3] { std::array::from_fn(|c| lights[c][y * w + x]) };
-        for (name, cfa, method) in layouts() {
+        for (layout_index, (name, cfa, method)) in layouts().into_iter().enumerate() {
+            if !(scene_index + layout_index).is_multiple_of(divisor) {
+                continue;
+            }
             let raw = raw_of(w, h, &cfa, DAYLIGHT, truth);
             let (mut img, mask) = raw.develop_balanced_masked(method, DAYLIGHT, CLIP).unwrap();
             let mut by_value = img.clone();
