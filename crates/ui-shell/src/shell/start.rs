@@ -878,7 +878,7 @@ impl StartScreen<'_> {
                         column_links(&page, ui, links_title.as_ref(), links);
                     });
                 });
-                ui.allocate_space(vec2(0.0, margin));
+                ui.add_space(env.tokens.size.page.margin);
             });
             return StartOutput { response: shown.output, actions: actions.into_inner() };
         }

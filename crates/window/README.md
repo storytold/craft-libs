@@ -138,7 +138,8 @@ bottom. egui does not expose the OS work area, so this is an estimate, not an OS
 description: `Bar` of `Menu`s of `Node`s (`Item { id, label, enabled, checked, shortcut }`, submenus,
 separators, and the platform's own items such as Services and Zoom). `NativeBar::install` makes it the
 application's menu bar, `NativeBar::apply` keeps it in step (a changed `structure` key rebuilds, a changed
-`windows` key rebuilds only the Windows menu, anything else updates in place), and the `Handler` set with
+`windows` key rebuilds only the Windows menu, anything else updates in place; `NativeBar::failed` reports a
+rebuild that failed and left the menus as they were), and the `Handler` set with
 `NativeBar::set_handler` receives each chosen item's `id`, the modifiers held and whether a key press chose it.
 `install_app_menu` installs a minimal app menu whose Quit reports to a handler. Off macOS (and without the
 feature) every call does nothing, so callers need no platform check. craft-menu lowers its menu model to
