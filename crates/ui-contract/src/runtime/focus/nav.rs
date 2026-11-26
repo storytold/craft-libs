@@ -408,8 +408,11 @@ impl State {
         // Tab out of a menu that lets it leave (`Menu::tab_exits`) goes on from the menu's opener, either way, as if the
         // menu were part of it: the menu's own rows are no entries, so Shift+Tab reaches the stop before the opener.
         let exits = current.as_ref().and_then(|rec| self.tab_exit_menu(rec.scope));
+        // the trap is read before the exit swaps the focus for the menu's opener: a trapping submenu's trap must still
+        // hold, and its opener sits outside it
+        let trap_of_focus = self.trap_of(current.as_ref());
         let mut current = exits.and_then(|menu| self.return_stop(menu)).or(current);
-        let trap = self.trap_of(current.as_ref());
+        let trap = trap_of_focus.or_else(|| self.trap_of(current.as_ref()));
         let in_dialog = trap.and_then(|id| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Dialog);
         let fields = in_dialog && dialog_tab == TabReach::Fields;
         let mut entries = self.entries(trap, all_controls && !fields);
@@ -454,11 +457,13 @@ impl State {
         let mut at = scope;
         while let Some(id) = at {
             let rec = self.last_scopes.get(&id)?;
-            if rec.policy.kind == ScopeKind::Menu && !rec.policy.trap {
-                return Some(id);
-            }
-            if rec.policy.kind == ScopeKind::Dialog {
+            // The first scope that traps ends the walk, whatever it is: a dialog shown from inside such a menu, or a
+            // submenu that traps its own keys. Its trap keeps Tab inside it until it closes.
+            if rec.policy.trap {
                 return None;
+            }
+            if rec.policy.kind == ScopeKind::Menu {
+                return Some(id);
             }
             at = rec.parent;
         }
