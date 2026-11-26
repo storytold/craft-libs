@@ -14,7 +14,7 @@ use egui::Ui;
 
 use super::channel::{ChannelRule, ChannelUnit, channel_name};
 use super::compact::Body;
-use super::{Collected, ColorPicker, ColorPickerWords, Pass, PickedColor};
+use super::{Collected, ColorPicker, ColorPickerWords, HeldInput, Pass, PickedColor};
 use crate::ui::{AreaMode, AreaShape, CompareSwatch};
 
 /// Two columns that never stack: the two halves of the picker, the right half (compare block and actions over the two
@@ -126,7 +126,8 @@ impl<'a> Body<'a> {
 
     /// The rows of one model's channels, two cells each: the radio that chooses the area mode (empty where the channel
     /// offers none), then the channel's number field with its letter before it and its unit after it. The radio's
-    /// accessible name is the channel's name.
+    /// accessible name is the channel's name. A number typed outside the channel's range inserts the closest value and
+    /// is reported as [`HeldInput::Number`].
     fn model_rows(&self, ui: &mut Ui, pass: &Pass<'a>, model: &'a dyn ColorModel, choice: ModelChoice<'_>, got: &mut Collected) {
         let ModelChoice { visible, offered, words } = choice;
         let values = pass.shown.values_in(model);
@@ -176,12 +177,19 @@ impl<'a> Body<'a> {
                         Some(kind) => field.unit_kind(kind),
                         None => field,
                     };
-                    field.show(ui).edit
+                    let shown = field.show(ui);
+                    (shown.edit, shown.out_of_range)
                 });
                 if let Some(unit) = &unit {
                     Text::new(Label::from(unit.clone())).shade(Shade::Muted).show(ui);
                 }
-                if let Some(edit) = edit.inner {
+                if let Some((edit, held)) = edit.inner {
+                    if let Some(mut alert) = held {
+                        // The reference names the range without the unit: "between 0 and 360", "between 0 and 100".
+                        alert.unit = None;
+                        alert.unit_kind = None;
+                        got.held = Some(HeldInput::Number(alert));
+                    }
                     got.adopt(edit, pass.shown, |v, mine| {
                         if let Some(v) = v {
                             *mine = mine.with_channel(model, i, *v, &pass.rules);

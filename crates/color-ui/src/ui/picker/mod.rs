@@ -9,6 +9,8 @@ mod full;
 pub(crate) mod hex_case_tests;
 #[cfg(all(test, feature = "screen-testing"))]
 pub(crate) mod hex_short_input_tests;
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod range_alert_tests;
 pub(crate) mod screen_pick;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -23,6 +25,7 @@ use craft_theme::{ColorModel, ModelValues, Srgba, builtin_models};
 use craft_ui::contract::{Bind, BindMut, BodyCx, EditResponse, Outcome, Props as _, Remember as _, ShowContainer};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
+use craft_ui::text::RangeAlert;
 use egui::{Pos2, Response, Ui};
 
 use super::{AreaMode, ColorWarning};
@@ -107,6 +110,9 @@ pub enum ScreenPickGesture {
 pub enum HeldInput {
     /// The Full layout's hex field took more than six digits and inserted `ffffff`.
     Hex,
+    /// A Full layout channel field took a number outside its range and inserted the closest value; the alert names the
+    /// range without the unit, as the reference does ("An integer between 0 and 360 is required.").
+    Number(RangeAlert),
 }
 
 /// What [`ColorPicker`] reports.

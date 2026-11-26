@@ -588,8 +588,9 @@ impl ColorPickerDialog {
     }
 
     /// The alert for input the picker held to its range and replaced with the closest value, once, titled like the
-    /// dialog: "A number between 000000 and ffffff is required. Closest value inserted." for the hex field. The host
-    /// opens it over the picker.
+    /// dialog: "A number between 000000 and ffffff is required. Closest value inserted." for the hex field, "An integer
+    /// between 0 and 255 is required. Closest value inserted." for a channel field (its range, without the unit). The
+    /// host opens it over the picker.
     pub fn take_range_alert(&mut self) -> Option<Alert<'static>> {
         let (title, message) = self.range_alert_words()?;
         self.pending_alert = None;
@@ -599,8 +600,16 @@ impl ColorPickerDialog {
     /// The title and message of the range alert the dialog holds.
     fn range_alert_words(&self) -> Option<(Label, Label)> {
         let (title, held, env) = self.pending_alert.as_ref()?;
+        let words = env.words::<TextWords>();
         let message = match held {
-            HeldInput::Hex => Label::from(env.words::<TextWords>().range_number.fill(&[("low", "000000"), ("high", "ffffff")])),
+            HeldInput::Hex => Label::from(words.range_number.fill(&[("low", "000000"), ("high", "ffffff")])),
+            HeldInput::Number(alert) => {
+                let units = env.units();
+                let low = units.number(*alert.range.start(), alert.decimals.clone());
+                let high = units.number(*alert.range.end(), alert.decimals.clone());
+                let sentence = if alert.whole { &words.range_integer } else { &words.range_number };
+                Label::from(sentence.fill(&[("low", low.as_str()), ("high", high.as_str())]))
+            }
         };
         Some((title.clone(), message))
     }
