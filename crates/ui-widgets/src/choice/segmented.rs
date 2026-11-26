@@ -125,14 +125,16 @@ impl Placement {
     }
 
     /// The rect of segment `at` in `rect`, its lines sharing the height `rect` leaves after the gaps between them, and
-    /// each line's start edge the reading start.
+    /// each line's start edge the reading start. A segment that reaches past `rect` is cut at its edges.
     fn rect(&self, at: usize, rect: Rect, gap: f32, rtl: bool) -> Rect {
         let (line, start) = self.cells[at];
         let lines = self.lines.max(1) as f32;
         let height = ((rect.height() - (lines - 1.0) * gap) / lines).max(0.0);
         let top = rect.min.y + line as f32 * (height + gap);
         let line = Rect::from_min_size(pos2(rect.min.x, top), vec2(rect.width(), height));
-        Flow::new(line, rtl).span(start, self.widths[at])
+        let cell = Flow::new(line, rtl).span(start, self.widths[at]);
+        let clamp = |x: f32| x.clamp(line.min.x, line.max.x);
+        Rect::from_x_y_ranges(clamp(cell.min.x)..=clamp(cell.max.x), cell.y_range())
     }
 }
 
@@ -169,8 +171,9 @@ impl<T: Value + 'static> Component for Segmented<'_, T> {
         let placement = if one_line { place(&self.widths(cx), f32::INFINITY, gap) } else { self.arrange(cx, rect.width()) };
         let current = self.position_of(cx.value());
         for (at, entry) in self.entries.iter().enumerate() {
-            let mut part = cx.part(Self::part(at), placement.rect(at, rect, gap, rtl));
-            if entry.icon_spec().is_some() || placement.widths[at] < placement.wants[at] {
+            let cell = placement.rect(at, rect, gap, rtl);
+            let mut part = cx.part(Self::part(at), cell);
+            if entry.icon_spec().is_some() || cell.width() < placement.wants[at] - 0.5 {
                 part = part.tooltip(entry.label().clone());
             }
             if !entry.is_enabled() {
