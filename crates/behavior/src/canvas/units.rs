@@ -101,10 +101,12 @@ impl RulerUnits {
         (position - zero) * self.per_doc
     }
 
-    /// The least and most decimals a ruler writes a tick of labelled step `step` with. Whole ticks are whole numbers;
-    /// a step of at least 1 takes the decimals it has (none for 5, one for 2.5). Under [`TickLabels::Distance`] a
-    /// smaller step takes at least two (PhotoCraft's `0.50`), more when it has them (0.025), and every tick takes them
-    /// all; under [`TickLabels::Signed`] a tick drops the trailing zeros (`1` on a sixteenth-inch ruler).
+    /// The least and most decimals a ruler writes a tick of labelled step `step` with.
+    ///
+    /// Whole ticks are whole numbers; a step of at least 1 takes the decimals it has (none for 5, one for 2.5). Under
+    /// [`TickLabels::Distance`] a smaller step takes at least two (PhotoCraft's `0.50`), more when it has them
+    /// (0.025), and every tick takes them all; under [`TickLabels::Signed`] a tick drops the trailing zeros (`1` on a
+    /// sixteenth-inch ruler).
     pub fn label_decimals(&self, step: f64) -> RangeInclusive<usize> {
         let most = match self.ticks {
             Ticks::Decimal { whole: true } => 0,

@@ -63,9 +63,10 @@ impl WindowLevel {
     }
 }
 
-/// How an OS window opens (21.2): what it is for, who draws its frame, where it stands and whether it has a taskbar
-/// entry. Its size limits, position and resizability are the container's fallback `Overlay`'s (`size_limits`,
-/// `placed`, `resizable`).
+/// How an OS window opens (21.2): what it is for, who draws its frame, where it stands and whether it has a taskbar entry.
+///
+/// Its size limits, position and resizability are the container's fallback `Overlay`'s (`size_limits`, `placed`,
+/// `resizable`).
 ///
 /// A chrome or caption layout the spec leaves unset is the installed decision's for the window's kind
 /// (`InstallSpec::frame`); with no decision installed the window has the OS's frame.
