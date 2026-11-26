@@ -16,7 +16,10 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   and barycentrics under the texel center; `surface_at` turns them into a position, normal and
   tangent frame.
 - **Primitives.** Sphere, rounded box, cube, cylinder, torus and plane with UVs and tangents, and
-  the built-in scenes in `primitives::BUILTINS`.
+  the built-in scenes in `primitives::BUILTINS`. `primitives::cube` and `primitives::rounded_box`
+  return `Result<Mesh>`. They reject non-finite or nonpositive dimensions and dimensions whose
+  doubled half extents overflow. A box bevel must be finite and between zero and 95% of its
+  smallest half extent; an invalid bevel returns `GeomError::Invalid`.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
   leaf. It answers closest-hit, any-hit and filtered ray casts, nearest-point queries and box
   queries.

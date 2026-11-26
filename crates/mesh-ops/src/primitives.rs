@@ -6,6 +6,7 @@ use std::f32::consts::{PI, TAU};
 use glam::{Vec2, Vec3};
 
 use crate::mesh::{Mesh, SubMesh};
+use crate::{GeomError, Result};
 
 /// A UV-space rectangle: origin and size.
 #[derive(Clone, Copy, Debug)]
@@ -105,20 +106,28 @@ fn sphere_into(b: &mut Builder, center: Vec3, radius: f32, segs: usize, rings: u
 
 /// A box with rounded edges (`bevel` = edge radius; 0 gives a plain cube). Faces are laid out
 /// in a 3×2 UV atlas.
-pub fn rounded_box(half: Vec3, bevel: f32) -> Mesh {
+/// Each half extent must be finite and positive, and its doubled value must be finite.
+/// `bevel` must be finite and between zero and 95% of the smallest half extent.
+pub fn rounded_box(half: Vec3, bevel: f32) -> Result<Mesh> {
+    if !half.is_finite() || !half.cmpgt(Vec3::ZERO).all() || !(half * 2.0).is_finite() {
+        return Err(GeomError::Invalid("box half extents must be positive and finite, with finite doubled extents".into()));
+    }
+    if !bevel.is_finite() || bevel < 0.0 || bevel > half.min_element() * 0.95 {
+        return Err(GeomError::Invalid("box bevel must be finite and between zero and 95% of the smallest half extent".into()));
+    }
     let mut b = Builder::default();
     rounded_box_into(&mut b, Vec3::ZERO, half, bevel, UvRect::FULL);
-    b.finish("Box")
+    Ok(b.finish("Box"))
 }
 
-/// The cube primitive (sharp edges).
-pub fn cube(size: f32) -> Mesh {
-    let mut m = rounded_box(Vec3::splat(size * 0.5), 0.0);
+/// The cube primitive (sharp edges). `size` must be finite and have a finite positive half extent.
+pub fn cube(size: f32) -> Result<Mesh> {
+    let mut m = rounded_box(Vec3::splat(size * 0.5), 0.0)?;
     m.materials = vec!["Cube".into()];
     if let Some(s) = m.submeshes.first_mut() {
         s.name = "Cube".into();
     }
-    m
+    Ok(m)
 }
 
 fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: UvRect) {
@@ -466,8 +475,8 @@ pub fn builtin(id: &str) -> Option<Mesh> {
     Some(match id {
         "material_ball" | "materialball" | "ball" => material_ball(),
         "sphere" => sphere(1.0, 128, 64),
-        "cube" => cube(2.0),
-        "rounded_cube" | "roundedcube" | "box" => rounded_box(Vec3::ONE, 0.15),
+        "cube" => cube(2.0).ok()?,
+        "rounded_cube" | "roundedcube" | "box" => rounded_box(Vec3::ONE, 0.15).ok()?,
         "cylinder" => cylinder(1.0, 2.0, 96),
         "torus" => torus(1.0, 0.35, 128, 48),
         "plane" => plane(2.0, 16),
@@ -495,6 +504,39 @@ pub const BUILTINS: [(&str, &str); 9] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_cube_dimensions_do_not_panic() {
+        for size in [-1.0, 0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let result = std::panic::catch_unwind(|| cube(size));
+            assert!(result.is_ok(), "cube({size}) panicked");
+            assert!(result.unwrap().is_err(), "cube({size}) must reject invalid dimensions");
+        }
+    }
+
+    #[test]
+    fn invalid_rounded_box_dimensions_do_not_panic() {
+        for axis in 0..3 {
+            for value in [-1.0, 0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX] {
+                let mut half = Vec3::ONE;
+                half[axis] = value;
+                let result = std::panic::catch_unwind(|| rounded_box(half, 0.0));
+                assert!(result.is_ok(), "rounded_box({half:?}) panicked");
+                assert!(result.unwrap().is_err(), "rounded_box({half:?}) must reject invalid dimensions");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_box_bevels_are_rejected_instead_of_clamped() {
+        for bevel in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.950001] {
+            assert!(rounded_box(Vec3::ONE, bevel).is_err(), "{bevel}");
+        }
+        for bevel in [0.0, 0.95] {
+            assert!(rounded_box(Vec3::ONE, bevel).is_ok(), "{bevel}");
+        }
+        assert!(cube(2.0).is_ok());
+    }
 
     /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
     /// and the UV mapping is not mirrored (tangent handedness +1).

@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn cube_unwraps_without_overlaps() {
-        check(primitives::cube(2.0), 0.3);
+        check(primitives::cube(2.0).unwrap(), 0.3);
     }
 
     #[test]
