@@ -13,8 +13,8 @@ use super::words::ParamWords;
 use crate::buttons::{Button, IconButton, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _, Sampler as _,
-    Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
+    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelKind, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _,
+    Sampler as _, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
 };
 use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -451,10 +451,9 @@ impl Line<'_> {
         // the captions share a column ([`CaptionColumn`]), where it stands beside the group as every caption does.
         let env = Env::of(ui);
         let view = env.view();
-        if matches!(self.param.kind, ParamKind::Custom(_))
-            && view.get::<LabelScheme>() == LabelScheme::Inline
-            && !view.get::<CaptionColumn>().shared()
-        {
+        let own_caption = view.get::<LabelScheme>() == LabelScheme::Inline && !view.get::<CaptionColumn>().shared();
+        let heading = matches!(self.param.kind, ParamKind::Custom(_)) && own_caption;
+        if heading {
             field = field.layout(FieldLayout::Above);
         }
         if self.compact {
@@ -463,10 +462,16 @@ impl Line<'_> {
         if let Some(tip) = self.param.tooltip_text() {
             field = field.tooltip(tip.clone());
         }
-        if self.param.option().resettable() {
+        let options = self.param.option();
+        if options.resettable() {
             field = field.side(SideLabel::new().reset_dot(true));
+        } else if options.hides_caption() && !heading {
+            field = field.side(SideLabel::new().kind(LabelKind::Hidden));
+            if own_caption {
+                field = field.layout(FieldLayout::Above);
+            }
         }
-        field.show(ui, |ui, _| match self.param.option().help_link() {
+        field.show(ui, |ui, _| match options.help_link() {
             None => body(ui),
             Some(_) => beside(ui, |ui| {
                 body(ui);

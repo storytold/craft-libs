@@ -77,6 +77,28 @@ fn rows(params: Vec<Param>, values: &Rc<RefCell<DialogFields>>) -> Fixture {
     fixture
 }
 
+#[trial]
+fn a_hidden_caption_keeps_the_controls_name() {
+    let lengths = craft_ui::runtime::env::LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    let fixture = rows(
+        vec![
+            Param::number("width", "Width", 100.0, 1.0, 2).length(lengths).hide_caption(),
+            Param::new("range", "Range", ParamKind::text("1-3")).hide_caption(),
+            Param::new("height", "Height", ParamKind::int(None, None, 100)),
+            Param::new("amount", "Amount", ParamKind::range(0.0, 10.0, 5.0, SliderScale::Linear)).hide_caption().resettable(),
+        ],
+        &Rc::new(RefCell::new(DialogFields::new())),
+    );
+    let tree = fixture.tree();
+    assert!(fixture.by_role(Role::SPIN_BUTTON).iter().any(|target| tree.name_of(target.node) == Some("Width")));
+    assert!(fixture.by_role(Role::TEXT_INPUT).iter().any(|target| tree.name_of(target.node) == Some("Range")));
+    let texts = fixture.texts();
+    let paints = |caption: &str| texts.iter().any(|run| run.text.trim_end_matches(':') == caption);
+    assert!(paints("Height"), "ordinary rows still paint their caption");
+    assert!(paints("Amount"), "resettable rows keep the caption with the reset dot");
+    assert!(!paints("Width") && !paints("Range"), "hidden captions use no paint");
+}
+
 /// The opt-in range keeps its numeric value and only opens its slider from the field's arrow.
 #[trial]
 fn a_popup_slider_opens_from_a_typed_range_row() {
@@ -1176,6 +1198,29 @@ fn a_group_row_under_a_heading_of_its_name_shows_the_name_once() {
     let names = texts.iter().filter(|(text, _)| text.trim() == "Pages").count();
     assert_eq!(names, 1, "the heading alone names the group: {texts:?}");
     assert!(text_at(&texts, "The options").is_some(), "the group shows: {texts:?}");
+}
+
+#[trial]
+fn hiding_side_captions_keeps_the_heading_above_a_custom_row() {
+    let params = vec![Param::custom("pages", "Pages", |ui, _, _| ui.label("The options")).hide_caption()];
+    let texts = inline_texts(params);
+    assert!(text_at(&texts, "Pages").unwrap().bottom() <= text_at(&texts, "The options").unwrap().top());
+}
+
+#[trial]
+fn a_hidden_caption_does_not_indent_an_inline_field_without_a_shared_column() {
+    let params = [
+        Param::new("first", "A long visible caption", ParamKind::text("first")),
+        Param::new("second", "Second", ParamKind::text("second")).hide_caption(),
+    ];
+    let mut values = DialogFields::new();
+    let mut fixture = Fixture::new(move |ui| {
+        ParamRows::new("Form", &params, Bind::bound(&mut values)).labels(LabelScheme::Inline).show(ui);
+    });
+    fixture.settle();
+    let name = fixture.texts().iter().find(|text| text.text.contains("A long visible caption")).unwrap();
+    let hidden = fixture.by_role(Role::TEXT_INPUT).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Second")).unwrap();
+    assert!((name.rect.left() - hidden.rect.left()).abs() <= 1.0, "the hidden row starts at the leading edge: {hidden:?}");
 }
 
 /// A text row with `select_on_focus` selects its whole text when it takes the focus, so typing replaces it (PdfCraft's
