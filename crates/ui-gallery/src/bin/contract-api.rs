@@ -1,6 +1,6 @@
 //! Writes `docs/contract-api.md`: every public item of craft-behavior and of craft-ui's shared modules (the runtime,
 //! style, primitives, contract, layout and test kit of craft-ui-contract, and the layout components of
-//! craft-ui-widgets), with its path, its signature line and the first line of its doc comment.
+//! craft-ui-widgets), with its path, its signature line and the first sentence of its doc comment.
 //!
 //! `cl cargo run -p craft-ui-gallery --bin contract-api` rewrites the file. The sources are parsed with `syn`,
 //! following `mod`, `pub mod` and `pub use` from each crate root, so a re-export is listed under the path it is public
@@ -90,7 +90,9 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn first_doc_line(attrs: &[Attribute]) -> String {
+/// The text of the doc comment's lines, trimmed.
+fn doc_lines(attrs: &[Attribute]) -> Vec<String> {
+    let mut lines = Vec::new();
     for attr in attrs {
         if !attr.path().is_ident("doc") {
             continue;
@@ -99,14 +101,41 @@ fn first_doc_line(attrs: &[Attribute]) -> String {
             && let Expr::Lit(literal) = &pair.value
             && let Lit::Str(text) = &literal.lit
         {
-            let line = text.value();
-            let line = line.trim();
-            if !line.is_empty() {
-                return line.to_owned();
-            }
+            lines.push(text.value().trim().to_owned());
         }
     }
-    String::new()
+    lines
+}
+
+/// The words a doc line may end with without ending its sentence.
+const ABBREVIATIONS: [&str; 6] = ["e.g.", "i.e.", "cf.", "vs.", "etc.", "approx."];
+
+/// Whether `line` ends the summary: its sentence's full stop, or the colon that introduces a list below it.
+fn ends_summary(line: &str) -> bool {
+    let line = line.trim_end();
+    let Some(last) = line.chars().last() else { return true };
+    if last == ':' {
+        return true;
+    }
+    matches!(last, '.' | '!' | '?') && !ABBREVIATIONS.iter().any(|short| line.ends_with(short))
+}
+
+/// The summary shown for an item: the first sentence of its doc comment's first paragraph. Source doc comments are
+/// wrapped by hand, so a line that does not end its sentence continues on the next one; the summary carries those
+/// lines to the end of the sentence, and stops at a colon that introduces a list.
+fn doc_summary(attrs: &[Attribute]) -> String {
+    let mut summary = String::new();
+    let paragraph = doc_lines(attrs).into_iter().skip_while(String::is_empty).take_while(|line| !line.is_empty());
+    for line in paragraph {
+        if !summary.is_empty() {
+            summary.push(' ');
+        }
+        summary.push_str(&line);
+        if ends_summary(&summary) {
+            break;
+        }
+    }
+    summary
 }
 
 fn is_hidden(attrs: &[Attribute]) -> bool {
@@ -203,16 +232,16 @@ fn variant_line(variant: &syn::Variant) -> String {
 fn def_of(item: &Item) -> Option<Def> {
     let (name, signature, doc, vis, members, is_type) = match item {
         Item::Fn(function) => {
-            (function.sig.ident.to_string(), fn_line(&function.vis, &function.sig), first_doc_line(&function.attrs), &function.vis, Vec::new(), false)
+            (function.sig.ident.to_string(), fn_line(&function.vis, &function.sig), doc_summary(&function.attrs), &function.vis, Vec::new(), false)
         }
         Item::Struct(item) => {
             let signature = format!("pub struct {}{}{}", item.ident, generics_and_where(&item.generics), fields_summary(&item.fields));
-            (item.ident.to_string(), signature, first_doc_line(&item.attrs), &item.vis, Vec::new(), true)
+            (item.ident.to_string(), signature, doc_summary(&item.attrs), &item.vis, Vec::new(), true)
         }
         Item::Enum(item) => {
             let variants: Vec<String> = item.variants.iter().map(variant_line).collect();
             let signature = format!("pub enum {}{} {{ {} }}", item.ident, generics_and_where(&item.generics), variants.join(", "));
-            (item.ident.to_string(), signature, first_doc_line(&item.attrs), &item.vis, Vec::new(), true)
+            (item.ident.to_string(), signature, doc_summary(&item.attrs), &item.vis, Vec::new(), true)
         }
         Item::Trait(item) => {
             let supers = if item.supertraits.is_empty() { String::new() } else { format!(": {}", tidy(&item.supertraits)) };
@@ -221,36 +250,26 @@ fn def_of(item: &Item) -> Option<Def> {
                 .items
                 .iter()
                 .filter_map(|member| match member {
-                    TraitItem::Fn(function) => Some(Member { signature: tidy(&function.sig), doc: first_doc_line(&function.attrs) }),
-                    TraitItem::Type(assoc) => Some(Member { signature: format!("type {}", assoc.ident), doc: first_doc_line(&assoc.attrs) }),
+                    TraitItem::Fn(function) => Some(Member { signature: tidy(&function.sig), doc: doc_summary(&function.attrs) }),
+                    TraitItem::Type(assoc) => Some(Member { signature: format!("type {}", assoc.ident), doc: doc_summary(&assoc.attrs) }),
                     TraitItem::Const(assoc) => {
-                        Some(Member { signature: format!("const {}: {}", assoc.ident, tidy(&assoc.ty)), doc: first_doc_line(&assoc.attrs) })
+                        Some(Member { signature: format!("const {}: {}", assoc.ident, tidy(&assoc.ty)), doc: doc_summary(&assoc.attrs) })
                     }
                     _ => None,
                 })
                 .collect();
-            (item.ident.to_string(), signature, first_doc_line(&item.attrs), &item.vis, members, true)
+            (item.ident.to_string(), signature, doc_summary(&item.attrs), &item.vis, members, true)
         }
         Item::Type(item) => {
             let signature = format!("pub type {}{} = {}", item.ident, generics_and_where(&item.generics), tidy(&item.ty));
-            (item.ident.to_string(), signature, first_doc_line(&item.attrs), &item.vis, Vec::new(), true)
+            (item.ident.to_string(), signature, doc_summary(&item.attrs), &item.vis, Vec::new(), true)
         }
-        Item::Const(item) => (
-            item.ident.to_string(),
-            format!("pub const {}: {}", item.ident, tidy(&item.ty)),
-            first_doc_line(&item.attrs),
-            &item.vis,
-            Vec::new(),
-            false,
-        ),
-        Item::Static(item) => (
-            item.ident.to_string(),
-            format!("pub static {}: {}", item.ident, tidy(&item.ty)),
-            first_doc_line(&item.attrs),
-            &item.vis,
-            Vec::new(),
-            false,
-        ),
+        Item::Const(item) => {
+            (item.ident.to_string(), format!("pub const {}: {}", item.ident, tidy(&item.ty)), doc_summary(&item.attrs), &item.vis, Vec::new(), false)
+        }
+        Item::Static(item) => {
+            (item.ident.to_string(), format!("pub static {}: {}", item.ident, tidy(&item.ty)), doc_summary(&item.attrs), &item.vis, Vec::new(), false)
+        }
         _ => return None,
     };
     let hidden = is_hidden(attrs_of(item));
@@ -394,7 +413,7 @@ impl Walker<'_> {
         let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or_default();
         let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let dir = if matches!(stem, "lib" | "mod" | "main") { parent } else { parent.join(stem) };
-        let doc = first_doc_line(&file.attrs);
+        let doc = doc_summary(&file.attrs);
         self.items(&file.items, module, &dir, reachable, doc);
     }
 
@@ -416,7 +435,7 @@ impl Walker<'_> {
                     let public = is_public(&declared.vis);
                     entry.children.push(name.clone());
                     let inline = declared.content.as_ref().map(|(_, content)| content.clone());
-                    pending.push((name, dir.to_path_buf(), reachable && public, inline.map(|content| (first_doc_line(&declared.attrs), content))));
+                    pending.push((name, dir.to_path_buf(), reachable && public, inline.map(|content| (doc_summary(&declared.attrs), content))));
                 }
                 Item::Use(import) => Self::uses(import, &mut entry, is_hidden(&import.attrs)),
                 Item::Impl(imp) if imp.trait_.is_none() => {
@@ -428,11 +447,11 @@ impl Walker<'_> {
                             .iter()
                             .filter_map(|member| match member {
                                 ImplItem::Fn(function) if is_public(&function.vis) && !is_hidden(&function.attrs) => {
-                                    Some(Member { signature: fn_line(&function.vis, &function.sig), doc: first_doc_line(&function.attrs) })
+                                    Some(Member { signature: fn_line(&function.vis, &function.sig), doc: doc_summary(&function.attrs) })
                                 }
                                 ImplItem::Const(constant) if is_public(&constant.vis) => Some(Member {
                                     signature: format!("pub const {}: {}", constant.ident, tidy(&constant.ty)),
-                                    doc: first_doc_line(&constant.attrs),
+                                    doc: doc_summary(&constant.attrs),
                                 }),
                                 _ => None,
                             })
@@ -449,7 +468,7 @@ impl Walker<'_> {
                         let def = Def {
                             name: format!("{name}!"),
                             signature: format!("macro_rules! {name}"),
-                            doc: first_doc_line(&mac.attrs),
+                            doc: doc_summary(&mac.attrs),
                             public: true,
                             hidden: false,
                             members: Vec::new(),
@@ -705,8 +724,8 @@ fn listing(root: &Path) -> String {
     out.push_str(
         "# Contract API\n\nGenerated by `cl cargo run -p craft-ui-gallery --bin contract-api`; do not edit. Every public item of\n\
          `craft_behavior` and of the shared modules of `craft_ui` (`contract`, `layout`, `layout_components`, `primitives`,\n\
-         `runtime`, `style`, `testing` and the crate root), by public path, with its signature line and the first line of\n\
-         its doc comment. Inherent methods and trait methods are indented under their type. Setters written by\n\
+         `runtime`, `style`, `testing` and the crate root), by public path, with its signature line and the first sentence\n\
+         of its doc comment. Inherent methods and trait methods are indented under their type. Setters written by\n\
          `#[derive(Props)]` are not listed: each `#[prop]` field of a type is a setter of the same name.\n\n\
          craft-ui-contract defines every module listed here except `layout_components`, which craft-ui-widgets defines;\n\
          the craft-ui facade re-exports each under the same name. `craft_ui::testing` also re-exports the story helpers\n\
