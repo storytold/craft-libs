@@ -116,11 +116,21 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   after `I18n::reset_format`. A count in `trn` is therefore grouped and in the region's digits
   (`1.234 Dateien`, `١٬٢٣٤ ملفًا`); for names written into documents or files (`Copy 1234`), use
   `trn_plain`, which writes `0`–`9` without grouping or isolate marks.
-- **CLDR data:** decimal symbols, digits and plural rules (`data/numbers.postcard`, about 10 KB) and
-  percent patterns (`data/locales.rs`) cover every CLDR locale; `data/generate.sh` rebuilds both
-  from CLDR. The ICU4X crates are pinned to one minor version (`~2.3`), the one the data is
-  generated for. The ICU4X code and data add about 90 KB to a stripped release build and 80 KB to
-  wasm.
+- **CLDR data:** decimal symbols, digits and plural rules (`data/numbers.postcard`, about 10 KB),
+  percent patterns (`data/locales.rs`) and date data (`data/dates.postcard`, about 340 KB) cover
+  every CLDR locale; `data/generate.sh` rebuilds all three from CLDR 48.2.1. The ICU4X crates are
+  pinned to one minor version (`~2.3`), the one the data is generated for. The ICU4X code and the
+  number data add about 90 KB to a stripped release build and 80 KB to wasm; the date data is
+  extra.
+- **Dates:** `DateFormat` (`I18n::dates`, `set_dates`, `reset_dates`, as `I18n::format` is for
+  numbers) writes dates and times for the region's time locale and clock in the `Short`, `Medium`,
+  `Long` and `Full` lengths, month and weekday names (`NameLength`), the first day of the week and
+  `parse_date` for typed dates; `CalendarDate` and `DateTime` do the day arithmetic. Dates are
+  always Gregorian for now: no other calendar's data is embedded, so th-TH and fa-IR write
+  Gregorian years. The field order, names, digits and clock follow the region. CLDR 48 puts
+  U+202F before AM and PM in English, so compare formatted strings after normalising it. If the
+  data fails to load, `format` writes `YYYY-MM-DD hh:mm`. Relative times ("3 minutes ago") are
+  craft-ui's `localized::relative_age`.
 - **Formatting region:** `Region` holds how numbers, times and measurements are written, apart
   from the interface language: the number and time locales (BCP 47), metric or US measurement, A4
   or Letter, and the decimal and grouping separators (or no grouping) and clock when the system
