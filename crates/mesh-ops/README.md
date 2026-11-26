@@ -20,7 +20,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
   leaf. It answers closest-hit, any-hit and filtered ray casts, nearest-point queries and box
   queries.
-- **Camera.** `OrbitCamera` and `Ray` give an orbit view and picking rays.
+- **Camera.** `OrbitCamera` and `Ray` give an orbit view and picking rays. `frame` fits a square
+  viewport; `frame_with_aspect` fits a width-to-height aspect greater than 0.0001 and returns an
+  error when the aspect or framed view is invalid.
 
 `GeomError::Invalid` is the one error type. `rayon` parallelizes the UV G-buffer, and `serde`
 serializes `OrbitCamera`; both are always on.

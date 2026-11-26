@@ -75,15 +75,30 @@ impl OrbitCamera {
     /// is not finite, or whose framed view-projection at aspect 1 is not finite (an eye that
     /// rounds to the target, or terms past the `f32` range), leaves the camera unchanged.
     pub fn frame(&mut self, lo: Vec3, hi: Vec3) {
+        let _ = self.frame_with_aspect(lo, hi, 1.0);
+    }
+
+    /// Frames a bounding box at the viewport's width-to-height `aspect`, keeping the angles.
+    /// Returns an error and leaves the camera unchanged when `aspect` is not finite or is at
+    /// most 0.0001, or when the framed view-projection is not finite.
+    pub fn frame_with_aspect(&mut self, lo: Vec3, hi: Vec3, aspect: f32) -> crate::Result<()> {
+        if !aspect.is_finite() || aspect <= 1e-4 {
+            return Err(crate::GeomError::Invalid("camera aspect must be finite and greater than 0.0001".into()));
+        }
         let target = lo * 0.5 + hi * 0.5;
         let r = ((hi - lo).length() * 0.5).max(1e-3);
-        let distance = r / (self.fov_radians() * 0.5).sin() * 1.1;
+        let vertical = self.fov_radians() * 0.5;
+        let angle = if aspect < 1.0 { (vertical.tan() * aspect).atan() } else { vertical };
+        let distance = r / angle.sin() * 1.1;
         if !(target.is_finite() && distance.is_finite()) {
-            return;
+            return Err(crate::GeomError::Invalid("camera framing bounds do not produce a finite view".into()));
         }
         let framed = OrbitCamera { target, scene_radius: r, distance, ..*self };
-        if framed.view_proj(1.0).is_finite() {
+        if framed.view_proj(aspect).is_finite() {
             *self = framed;
+            Ok(())
+        } else {
+            Err(crate::GeomError::Invalid("camera framing bounds do not produce a finite view".into()))
         }
     }
 
@@ -107,8 +122,12 @@ impl OrbitCamera {
     /// is not finite (an eye that rounds to a target far from the origin) leaves the camera
     /// unchanged.
     pub fn zoom(&mut self, amount: f32) {
+        if amount.is_nan() {
+            return;
+        }
         let r = self.scene_radius.max(1e-3);
-        let distance = (self.distance * (-amount).exp()).clamp(r * 0.05, r * 200.0);
+        let scaled = self.distance * (-amount).exp();
+        let distance = if self.distance > r * 200.0 { scaled.max(r * 0.05) } else { scaled.clamp(r * 0.05, r * 200.0) };
         let zoomed = OrbitCamera { distance, ..*self };
         if zoomed.eye() != zoomed.target && zoomed.view_proj(1.0).is_finite() {
             *self = zoomed;
@@ -146,6 +165,54 @@ impl OrbitCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn framing_keeps_box_corners_inside_a_portrait_viewport() {
+        for ortho in [false, true] {
+            for aspect in [0.25, 1.0, 4.0] {
+                let mut camera = OrbitCamera { yaw: 0.0, pitch: 0.0, ortho, ..OrbitCamera::default() };
+                camera.frame_with_aspect(-Vec3::ONE, Vec3::ONE, aspect).unwrap();
+                for x in [-1.0, 1.0] {
+                    for y in [-1.0, 1.0] {
+                        for z in [-1.0, 1.0] {
+                            let point = camera.project(Vec3::new(x, y, z), aspect).unwrap();
+                            assert!(point.x.abs() <= 1.0 && point.y.abs() <= 1.0, "{ortho} {aspect}: {point:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn portrait_framing_keeps_zoom_continuous_beyond_the_default_distance_limit() {
+        for ortho in [false, true] {
+            let mut camera = OrbitCamera { ortho, ..OrbitCamera::default() };
+            camera.frame_with_aspect(-Vec3::ONE, Vec3::ONE, 0.001).unwrap();
+            let distance = camera.distance;
+            for amount in [0.0, -0.1, 0.1, f32::NAN] {
+                let mut zoomed = camera;
+                zoomed.zoom(amount);
+                if amount == 0.0 || amount.is_nan() {
+                    assert_eq!(zoomed.distance, distance);
+                } else if amount < 0.0 {
+                    assert!(zoomed.distance > distance);
+                } else {
+                    assert!(zoomed.distance < distance && zoomed.distance > distance * 0.8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn framing_rejects_invalid_aspects_without_changing_the_camera() {
+        let camera = OrbitCamera::default();
+        for aspect in [0.0, -1.0, 1e-4, f32::NAN, f32::INFINITY] {
+            let mut framed = camera;
+            assert!(framed.frame_with_aspect(-Vec3::ONE, Vec3::ONE, aspect).is_err());
+            assert_eq!(framed, camera);
+        }
+    }
 
     #[test]
     fn orbit_preserves_the_camera_when_the_eye_would_round_to_its_target() {
