@@ -297,7 +297,7 @@ impl Rules {
     /// themselves, or with an `AF` table the alias its leading digits number, as Hunspell reads
     /// them (`2x` is alias 2). A field without digits or an undefined alias reads as no flags:
     /// the stem is still a word, the rule still applies, without the flags (Hunspell warns).
-    fn flags<'a>(&'a self, written: &'a str) -> &'a str {
+    pub(super) fn flags<'a>(&'a self, written: &'a str) -> &'a str {
         if !self.aliases_on {
             return written;
         }
