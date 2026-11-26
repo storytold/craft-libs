@@ -340,6 +340,16 @@ pub enum Action<P> {
         /// The destination.
         to: Target<P>,
     },
+    /// Move one shown panel, without the rest of its group, to a recorded place, as reopening a closed panel
+    /// restores it: the split size, sibling subtree, group, column and accordion state of `location` come back
+    /// with it. Dock Panel returns a floating panel to the docked place it left this way.
+    #[non_exhaustive]
+    Restore {
+        /// The panel the action applies to.
+        panel: P,
+        /// Where the panel goes back.
+        location: Location<P>,
+    },
 }
 
 impl<P> Location<P> {
@@ -488,6 +498,11 @@ impl<P> Action<P> {
     /// Builds [`Action::MovePanel`].
     pub fn move_panel(panel: P, to: Target<P>) -> Self {
         Self::MovePanel { panel, to }
+    }
+
+    /// Builds [`Action::Restore`].
+    pub fn restore(panel: P, location: Location<P>) -> Self {
+        Self::Restore { panel, location }
     }
 }
 

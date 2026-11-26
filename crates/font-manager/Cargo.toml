@@ -11,6 +11,7 @@ repository.workspace = true
 reads = [
     "crates/ui-contract/fonts/inter/Inter-Regular.ttf",
     "crates/ui-contract/fonts/inter/Inter-SemiBold.ttf",
+    "crates/font-subset/tests/data/orbitron/Orbitron[wght].ttf",
     "crates/font-subset/tests/data/sarabun/Sarabun-Regular.ttf",
     "crates/ui-contract/tests/fonts/NotoSansCJKsc-test.otf",
 ]
