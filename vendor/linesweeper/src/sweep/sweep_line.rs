@@ -567,13 +567,13 @@ impl<'segs> Sweeper<'segs> {
 
     fn compare_segments(&self, i: SegIdx, j: SegIdx) -> RefMut<'_, CurveOrder> {
         RefMut::map(self.comparisons.borrow_mut(), |c| {
-            c.compare_segments(self.segments, i, j)
+            c.compare_non_horizontal_segments(self.segments, i, j)
         })
     }
 
     fn compare_segments_conservatively(&self, i: SegIdx, j: SegIdx) -> RefMut<'_, CurveOrder> {
         RefMut::map(self.conservative_comparisons.borrow_mut(), |c| {
-            c.compare_segments(self.segments, i, j)
+            c.compare_non_horizontal_segments(self.segments, i, j)
         })
     }
 
@@ -1706,7 +1706,7 @@ impl SegmentOrder {
                     continue;
                 }
 
-                let order = cmp.compare_segments(segments, segi, segj);
+                let order = cmp.compare_non_horizontal_segments(segments, segi, segj);
                 if order.order_at(y) == Order::Right {
                     return Some((segi, segj));
                 }
@@ -1745,7 +1745,8 @@ impl SegmentOrder {
             // will be in the future, so as to minimize swapping.
             // (We could also try checking whether the new segment is a contour neighbor of
             // the segment at pos. That should be a pretty common case.)
-            let cmp = comparer.compare_segments(segments, seg_idx, self.segs[pos].seg);
+            let cmp =
+                comparer.compare_non_horizontal_segments(segments, seg_idx, self.segs[pos].seg);
             return match cmp.order_after(y) {
                 Order::Right => pos + 1,
                 Order::Ish => pos,
@@ -1771,7 +1772,7 @@ impl SegmentOrder {
             if start.y == y && segments[other].start() == start {
                 comparer.with_order(segments, other, seg_idx, orders)
             } else {
-                orders(comparer.compare_segments(segments, other, seg_idx))
+                orders(comparer.compare_non_horizontal_segments(segments, other, seg_idx))
             }
         };
 

@@ -24,8 +24,8 @@ pub struct ComparisonCache {
     next_purge: usize,
     accuracy: f64,
     tolerance: f64,
-    // Craft patch (work limit): the number of calls to `compare_segments` and
-    // `with_order`, cached or not, which `Sweeper` checks against its work
+    // Craft patch (work limit): the number of calls to
+    // `compare_non_horizontal_segments` and `with_order`, cached or not, which `Sweeper` checks against its work
     // limit.
     pub(crate) calls: u64,
     // Craft patch (comparison cache arena): the arena that `inner` describes.
@@ -79,10 +79,26 @@ impl ComparisonCache {
 
     /// Compares two segments, returning their order.
     ///
-    /// # Panics
-    ///
-    /// Panics if either segment is horizontal.
+    /// Returns `None` if either segment is horizontal.
     pub fn compare_segments(
+        &mut self,
+        segments: &Segments,
+        i: SegIdx,
+        j: SegIdx,
+    ) -> Option<&mut CurveOrder> {
+        // Craft patch (horizontal comparison): horizontal segments are
+        // rejected with `None` instead of reaching the comparison.
+        if segments[i].is_horizontal() || segments[j].is_horizontal() {
+            return None;
+        }
+        Some(self.compare_non_horizontal_segments(segments, i, j))
+    }
+
+    /// Compares two segments that are not horizontal, returning their order.
+    ///
+    /// The sweep line, `position` and `topology` hold only segments that are
+    /// not horizontal, and call this directly.
+    pub(crate) fn compare_non_horizontal_segments(
         &mut self,
         segments: &Segments,
         i: SegIdx,
@@ -146,13 +162,13 @@ impl ComparisonCache {
         self.next_purge = usize::MAX;
     }
 
-    /// Compares two segments without storing a new result.
+    /// Compares two segments that are not horizontal without storing a new result.
     ///
-    /// `f` receives the order that [`ComparisonCache::compare_segments`] would return: the stored
-    /// one if there is one, otherwise one computed the same way and dropped after `f` returns.
-    /// Each call counts as one comparison toward the sweep's work limit, as a call to
-    /// [`ComparisonCache::compare_segments`] does.
-    pub fn with_order<R>(
+    /// `f` receives the order that [`ComparisonCache::compare_non_horizontal_segments`] would
+    /// return: the stored one if there is one, otherwise one computed the same way and dropped
+    /// after `f` returns. Each call counts as one comparison toward the sweep's work limit, as a
+    /// call to [`ComparisonCache::compare_non_horizontal_segments`] does.
+    pub(crate) fn with_order<R>(
         &mut self,
         segments: &Segments,
         i: SegIdx,
@@ -269,12 +285,10 @@ fn order_if_far_apart(segi: &Segment, segj: &Segment, margin: f64) -> Option<Cur
 fn compute(segments: &Segments, i: SegIdx, j: SegIdx, tolerance: f64, accuracy: f64) -> CurveOrder {
     let segi = &segments[i];
     let segj = &segments[j];
-    // Craft patch (horizontal comparison): horizontal segments are
-    // rejected with a message in every build profile.
-    assert!(
-        !segi.is_horizontal() && !segj.is_horizontal(),
-        "compare_segments does not take horizontal segments"
-    );
+    // Craft patch (horizontal comparison): `compare_segments` returns `None`
+    // for horizontal segments, and the crate calls this only for segments
+    // that are not horizontal.
+    debug_assert!(!segi.is_horizontal() && !segj.is_horizontal());
 
     let forward = if let (Some(l0), Some(l1)) = (segi.as_kurbo_line(), segj.as_kurbo_line()) {
         curve::line::intersect_lines(l0, l1, tolerance)
@@ -429,7 +443,8 @@ mod tests {
                 for i in segments.indices() {
                     for j in segments.indices() {
                         if i != j {
-                            let compared = intervals(cmp.compare_segments(&segments, i, j));
+                            let compared =
+                                intervals(cmp.compare_non_horizontal_segments(&segments, i, j));
                             let margin = far_apart_margin(tolerance, accuracy);
                             if order_if_far_apart(&segments[i], &segments[j], margin).is_some() {
                                 let full = full_comparison(&segments, i, j, accuracy, tolerance);
@@ -480,7 +495,7 @@ mod tests {
 
         let mut cmp = ComparisonCache::new(tolerance, accuracy);
         assert_eq!(
-            intervals(cmp.compare_segments(&segments, SegIdx(0), curve_b)),
+            intervals(cmp.compare_non_horizontal_segments(&segments, SegIdx(0), curve_b)),
             vec![(0.0, height, Order::Left)]
         );
     }
@@ -553,7 +568,7 @@ mod tests {
                     let computed =
                         unstored.with_order(&segments, i, j, |c| c.iter().collect::<Vec<_>>());
                     let expected = stored
-                        .compare_segments(&segments, i, j)
+                        .compare_non_horizontal_segments(&segments, i, j)
                         .iter()
                         .collect::<Vec<_>>();
                     assert_eq!(computed, expected);
@@ -577,6 +592,7 @@ mod tests {
         assert_eq!(
             cmp_cache
                 .compare_segments(&segments, SegIdx(0), SegIdx(1))
+                .unwrap()
                 .iter()
                 .next()
                 .unwrap()
@@ -586,7 +602,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "compare_segments does not take horizontal segments")]
     fn horizontal_and_cubic() {
         let mut segments = Segments::default();
         segments.add_points([(-1.0, 1.0), (2.0, 1.0)]);
@@ -595,22 +610,39 @@ mod tests {
         path.curve_to((1.0, 0.5), (-1.0, 1.5), (0.0, 2.0));
         segments.add_non_closed_bez_path(&path).unwrap();
         let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
-        cmp_cache.compare_segments(&segments, SegIdx(0), SegIdx(1));
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(0), SegIdx(1))
+                .is_none()
+        );
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(1), SegIdx(0))
+                .is_none()
+        );
     }
 
     #[test]
-    #[should_panic(expected = "compare_segments does not take horizontal segments")]
     fn horizontal_and_line() {
         let mut segments = Segments::default();
         segments.add_points([(-1.0, 1.0), (2.0, 1.0)]);
         segments.add_points([(0.0, 0.0), (0.0, 2.0)]);
         let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
-        cmp_cache.compare_segments(&segments, SegIdx(1), SegIdx(0));
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(1), SegIdx(0))
+                .is_none()
+        );
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(0), SegIdx(1))
+                .is_none()
+        );
     }
 
     fn first_order(cmp_cache: &mut ComparisonCache, segments: &Segments) -> Order {
         cmp_cache
-            .compare_segments(segments, SegIdx(0), SegIdx(1))
+            .compare_non_horizontal_segments(segments, SegIdx(0), SegIdx(1))
             .iter()
             .next()
             .unwrap()
@@ -654,7 +686,7 @@ mod tests {
         assert_eq!(first_order(&mut cmp_cache, &segments), Order::Left);
 
         segments.add_points([(2.0, 0.0), (2.0, 1.0)]);
-        cmp_cache.compare_segments(&segments, SegIdx(1), SegIdx(2));
+        cmp_cache.compare_non_horizontal_segments(&segments, SegIdx(1), SegIdx(2));
         assert_eq!(cmp_cache.inner.len(), 2);
     }
 
@@ -681,7 +713,7 @@ mod tests {
         for i in segments.indices() {
             for j in segments.indices() {
                 if i != j {
-                    cmp_cache.compare_segments(&segments, i, j);
+                    cmp_cache.compare_non_horizontal_segments(&segments, i, j);
                 }
             }
         }
@@ -706,10 +738,16 @@ mod tests {
                 if i.0 >= j.0 {
                     continue;
                 }
-                let reverse_before = entries(reverse_first.compare_segments(&segments, j, i));
-                let forward = forward_first.compare_segments(&segments, i, j).clone();
-                let reverse_after = forward_first.compare_segments(&segments, j, i).clone();
-                let forward_again = entries(forward_first.compare_segments(&segments, i, j));
+                let reverse_before =
+                    entries(reverse_first.compare_non_horizontal_segments(&segments, j, i));
+                let forward = forward_first
+                    .compare_non_horizontal_segments(&segments, i, j)
+                    .clone();
+                let reverse_after = forward_first
+                    .compare_non_horizontal_segments(&segments, j, i)
+                    .clone();
+                let forward_again =
+                    entries(forward_first.compare_non_horizontal_segments(&segments, i, j));
                 let flipped: Vec<_> = entries(&forward)
                     .into_iter()
                     .map(|(y0, y1, order)| (y0, y1, order.flip()))

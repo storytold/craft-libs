@@ -582,7 +582,8 @@ pub(crate) fn compute_positions(
         let mut west_scan = vec![entry.idx];
         let mut cur = entry.idx;
         while let Some(nbr) = scan_order.west_neighbor_after(cur, y0) {
-            let order = cmp.compare_segments(segs, orig_seg_map[nbr], orig_seg_map[cur]);
+            let order =
+                cmp.compare_non_horizontal_segments(segs, orig_seg_map[nbr], orig_seg_map[cur]);
             let (_, cmp_end_y, cmp_order) = order.iter().find(|(_, end_y, _)| *end_y > y0).unwrap();
 
             if cmp_order == Order::Left {
@@ -601,7 +602,8 @@ pub(crate) fn compute_positions(
         let mut east_scan = vec![];
         let mut cur = entry.idx;
         while let Some(nbr) = scan_order.east_neighbor_after(cur, y0) {
-            let order = cmp.compare_segments(segs, orig_seg_map[cur], orig_seg_map[nbr]);
+            let order =
+                cmp.compare_non_horizontal_segments(segs, orig_seg_map[cur], orig_seg_map[nbr]);
             let (_, cmp_end_y, cmp_order) = order.iter().find(|(_, end_y, _)| *end_y > y0).unwrap();
 
             if cmp_order == Order::Left {
