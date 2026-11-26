@@ -24,7 +24,8 @@ pub fn take_claimed(ctx: &Context, id: Id, chord: Chord) -> bool {
 
 /// Reads the earliest claimed chord of `id` that is one of `chords`, consuming it: the claimed chords of a frame come
 /// back in the order they were pressed.
-pub(crate) fn take_first_claimed(ctx: &Context, id: Id, chords: &[Chord]) -> Option<Chord> {
+#[doc(hidden)]
+pub fn take_first_claimed(ctx: &Context, id: Id, chords: &[Chord]) -> Option<Chord> {
     if crate::runtime::measure::active(ctx) {
         return None;
     }

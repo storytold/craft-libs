@@ -69,3 +69,58 @@ fn a_claimed_press_takes_its_text_and_leaves_other_typing() {
     assert!(claimed.get(), "the capture took Alt+7");
     assert_eq!(*typed.borrow(), ["a"], "the captured press typed nothing; the next key's text reached the field");
 }
+
+/// An app consumes several canvas shortcuts in arrival order, rather than the order of its binding table.
+#[trial]
+fn an_app_reads_claimed_chords_in_order_without_taking_another_owners_or_excluded_keys() {
+    use craft_ui::runtime::keys::{claim, take_first_claimed};
+    use craft_ui::testing::measuring_run;
+
+    const THREE: Chord = Chord::new(Mods::ALT, craft_keymap::Key::Num3);
+    const FIVE: Chord = Chord::new(Mods::ALT, craft_keymap::Key::Num5);
+    const SEVEN: Chord = Chord::new(Mods::ALT, craft_keymap::Key::Num7);
+    const NINE: Chord = Chord::new(Mods::ALT, craft_keymap::Key::Num9);
+    let mut frames = Frames::new();
+    let canvas = named_id("ordered canvas");
+    let other = named_id("other owner");
+    let read = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        widget(ui, canvas);
+        register_stop(ui.ctx(), Stop::new(canvas, KeyUse::CANVAS));
+        for chord in [THREE, SEVEN, NINE] {
+            claim(ui.ctx(), canvas, chord);
+        }
+        craft_ui::runtime::keys::capture(ui.ctx(), other, FIVE);
+        if read.replace(false) {
+            // A measuring pass must leave the real pass's pending input untouched.
+            assert_eq!(measuring_run(ui.ctx(), || take_first_claimed(ui.ctx(), canvas, &[THREE, NINE])), None);
+            assert_eq!(take_first_claimed(ui.ctx(), other, &[THREE, NINE]), None, "another owner cannot take the canvas's input");
+            assert_eq!(take_first_claimed(ui.ctx(), canvas, &[THREE, NINE]), Some(NINE));
+            assert_eq!(take_first_claimed(ui.ctx(), canvas, &[THREE, NINE]), Some(THREE));
+            assert_eq!(take_first_claimed(ui.ctx(), canvas, &[THREE, NINE]), None, "each press is consumed once");
+            assert_eq!(take_first_claimed(ui.ctx(), canvas, &[FIVE]), None);
+            assert_eq!(take_first_claimed(ui.ctx(), other, &[FIVE]), Some(FIVE), "the other owner's input remains");
+            assert_eq!(take_first_claimed(ui.ctx(), canvas, &[SEVEN]), Some(SEVEN), "an excluded chord remains");
+            assert_eq!(take_first_claimed(ui.ctx(), canvas, &[SEVEN]), None);
+        }
+    };
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(canvas));
+    frames.idle(2, &mut show);
+    read.set(true);
+    frames.frame(
+        vec![
+            key_press(Key::Num9, Modifiers::ALT),
+            key_release(Key::Num9, Modifiers::ALT),
+            key_press(Key::Num3, Modifiers::ALT),
+            key_release(Key::Num3, Modifiers::ALT),
+            key_press(Key::Num7, Modifiers::ALT),
+            key_release(Key::Num7, Modifiers::ALT),
+            key_press(Key::Num5, Modifiers::ALT),
+            key_release(Key::Num5, Modifiers::ALT),
+            Event::ModifiersChanged(Modifiers::NONE),
+        ],
+        &mut show,
+    );
+    assert!(!read.get(), "the pass read the real key input");
+}
