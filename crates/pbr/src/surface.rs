@@ -10,8 +10,8 @@ use crate::{Material, PbrError};
 /// [`Material::try_direct`]. When [`Surface::unlit`] is set, the surface shows its base color
 /// without lighting, and [`Material::try_direct`] does not give its appearance.
 ///
-/// Made by [`try_from_mesh`](crate::try_from_mesh) and
-/// [`try_from_materialx`](crate::try_from_materialx), which check every value.
+/// Made by `try_from_mesh` (the `mesh` feature) and `try_from_materialx` (the `materialx`
+/// feature), which check every value.
 /// `#[non_exhaustive]`: read and change the fields, but get a value from a conversion.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
