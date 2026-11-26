@@ -1262,6 +1262,9 @@ impl<W: WindingNumber> Topology<W> {
     /// we don't know whether two segments are coincident until we've processed
     /// their second endpoint.
     fn merge_coincident(&mut self) {
+        // `scan_west` stays as built, because `build_scan_line_orders` reads it. This copy
+        // is pointed past deleted segments as the loop finds them.
+        let mut live_west = self.scan_west.clone();
         for idx in 0..self.winding.inner.len() {
             let idx = OutputSegIdx(idx);
             if self.deleted[idx] {
@@ -1285,12 +1288,7 @@ impl<W: WindingNumber> Topology<W> {
                 //
                 // An earlier merge may have deleted the west neighbor, so skip deleted segments
                 // to reach the nearest live one.
-                let mut west = self.scan_west[idx];
-                while let Some(w) = west
-                    && self.deleted[w]
-                {
-                    west = self.scan_west[w];
-                }
+                let west = Self::nearest_live_west(&mut live_west, &self.deleted, idx);
                 if y0 != y1 && west != Some(cw_nbr.idx) {
                     continue;
                 }
@@ -1322,6 +1320,34 @@ impl<W: WindingNumber> Topology<W> {
                 }
             }
         }
+    }
+
+    /// Returns the nearest segment west of `seg` that is not deleted, following
+    /// `live_west` past deleted segments, and points every segment passed on the way
+    /// at the result.
+    ///
+    /// Deleted segments stay deleted, so a shortened link still skips only deleted
+    /// segments. If the result is deleted later, the next call continues from it.
+    fn nearest_live_west(
+        live_west: &mut OutputSegVec<Option<OutputSegIdx>>,
+        deleted: &OutputSegVec<bool>,
+        seg: OutputSegIdx,
+    ) -> Option<OutputSegIdx> {
+        let mut west = live_west[seg];
+        while let Some(w) = west
+            && deleted[w]
+        {
+            west = live_west[w];
+        }
+        let mut cur = live_west[seg];
+        while let Some(w) = cur
+            && deleted[w]
+        {
+            cur = live_west[w];
+            live_west[w] = west;
+        }
+        live_west[seg] = west;
+        west
     }
 
     /// Iterates over indices of all output segments.
@@ -2899,7 +2925,10 @@ mod tests {
         },
     };
 
-    use super::{Affine, Contour, ContourIdx, Contours, Correctness, HalfOutputSegVec, OneOfTwo, Topology};
+    use super::{
+        Affine, Contour, ContourIdx, Contours, Correctness, HalfOutputSegVec, OneOfTwo,
+        OutputSegIdx, OutputSegVec, Topology,
+    };
 
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
@@ -3599,6 +3628,54 @@ mod tests {
             let area = contour_area_sum(path, eps);
             assert!(area < 1e-6, "eps {eps}: area {area}");
         }
+    }
+
+    #[test]
+    fn merge_coincident_many_copies() {
+        // 64 copies in one direction leave the square once.
+        let mut bez = BezPath::default();
+        for _ in 0..64 {
+            bez.extend(&BezPath::from_svg(&rect_path(0.0, 0.0, 10.0, 10.0, false)).unwrap());
+        }
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), 1);
+        let square = contours.contours().next().unwrap();
+        assert_eq!(kurbo::Shape::area(&square.path).abs(), 100.0);
+
+        // 32 copies in each direction cancel.
+        let mut bez = BezPath::default();
+        for i in 0..64 {
+            bez.extend(&BezPath::from_svg(&rect_path(0.0, 0.0, 10.0, 10.0, i % 2 == 1)).unwrap());
+        }
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        assert_eq!(top.segment_indices().count(), 0);
+    }
+
+    #[test]
+    fn nearest_live_west_shortens_the_links_it_follows() {
+        // Segment i has segment i - 1 to its west; segments 1 to 4 are deleted.
+        let mut live_west = OutputSegVec::from_vec(
+            (0..6usize)
+                .map(|i| i.checked_sub(1).map(OutputSegIdx))
+                .collect(),
+        );
+        let mut deleted = OutputSegVec::from_vec(vec![false; 6]);
+        for i in 1..5 {
+            deleted[OutputSegIdx(i)] = true;
+        }
+        let west = Topology::<i32>::nearest_live_west(&mut live_west, &deleted, OutputSegIdx(5));
+        assert_eq!(west, Some(OutputSegIdx(0)));
+        for i in 1..6 {
+            assert_eq!(live_west[OutputSegIdx(i)], Some(OutputSegIdx(0)));
+        }
+
+        // When the result is deleted later, the next call continues past it.
+        deleted[OutputSegIdx(0)] = true;
+        let west = Topology::<i32>::nearest_live_west(&mut live_west, &deleted, OutputSegIdx(5));
+        assert_eq!(west, None);
+        assert_eq!(live_west[OutputSegIdx(5)], None);
+        assert_eq!(live_west[OutputSegIdx(0)], None);
     }
 
     #[test]
