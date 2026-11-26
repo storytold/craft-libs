@@ -156,10 +156,11 @@ fn one() -> f64 {
 
 /// Where `earlier` and `later` are cut, when `later` starts inside `earlier` (a crossfade): the
 /// absolute position `later.start + later.cut` (the middle of the overlap when no cut is stored),
-/// clamped to the overlap. Everything that needs the splice point of a crossfade goes through this.
-/// Two clips that do not overlap have no cut to speak of: `later.start`.
+/// clamped to the overlap, which ends where the first of the two clips ends. Everything that needs
+/// the splice point of a crossfade goes through this. Two clips that do not overlap have no cut to
+/// speak of: `later.start`.
 pub fn crossfade_cut(earlier: &Clip, later: &Clip) -> Samples {
-    let overlap = earlier.end().saturating_sub(later.start).max(0);
+    let overlap = earlier.end().min(later.end()).saturating_sub(later.start).max(0);
     later.start.saturating_add(later.cut.unwrap_or(overlap / 2).clamp(0, overlap))
 }
 
@@ -583,6 +584,20 @@ mod tests {
         a.length = i64::MAX;
         let at = crossfade_cut(&a, &b);
         assert!(at >= b.start && at <= a.end().max(b.start));
+    }
+
+    #[test]
+    fn a_clip_inside_another_is_cut_inside_itself() {
+        // B at [900, 950), wholly inside A at [0, 1100): the overlap is B, not [900, 1100).
+        let (a, mut b) = pair(None);
+        b.length = 50;
+        let none = crossfade_cut(&a, &b);
+        assert!(none > b.start && none < b.end());
+        assert!(((none - b.start) - (b.end() - none)).abs() <= 1);
+        for c in [b.length + 1, 150, i64::MAX] {
+            b.cut = Some(c);
+            assert!((b.start..=b.end()).contains(&crossfade_cut(&a, &b)), "{c}");
+        }
     }
 
     #[test]
