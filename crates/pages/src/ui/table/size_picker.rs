@@ -144,7 +144,7 @@ impl TableSizePicker {
 impl Component for TableSizePicker {
     const ROLE: Role = Role::GRID;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Enter);
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both);
     type Style = TableSizePickerStyle;
     type Output = TableSizePickerOutput;
 

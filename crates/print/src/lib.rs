@@ -646,6 +646,18 @@ fn printers_via(
     available: &mut std::process::Command,
     available_limit: std::time::Duration,
 ) -> Vec<Printer> {
+    printers_via_checked(queues, queues_limit, available, available_limit).unwrap_or_default()
+}
+
+/// [`printers_via`], keeping a listing that could not be asked as `None`: a spooler that did not
+/// answer is not a system without printers, and the two callers need to tell them apart.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn printers_via_checked(
+    queues: &mut std::process::Command,
+    queues_limit: std::time::Duration,
+    available: &mut std::process::Command,
+    available_limit: std::time::Duration,
+) -> Option<Vec<Printer>> {
     // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them, so
     // the exit status isn't checked.
     let queues = match output_within(queues, queues_limit) {
@@ -653,11 +665,11 @@ fn printers_via(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
             log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
-            return Vec::new();
+            return None;
         }
         Err(e) => {
             log::warn!("no printers: the CUPS scheduler did not list its queues ({e}); is cupsd running and answering?");
-            return Vec::new();
+            return None;
         }
     };
     // A spooler without `-e`, or one whose discovery doesn't answer in time, only loses the
@@ -669,7 +681,14 @@ fn printers_via(
             None
         }
     };
-    printers_parsed(&queues, available.as_deref())
+    Some(printers_parsed(&queues, available.as_deref()))
+}
+
+/// [`printers`] keeping a failed listing as `None`, for a caller that must not read a failure as an
+/// empty system.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn printers_checked() -> Option<Vec<Printer>> {
+    printers_via_checked(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT)
 }
 
 /// The queue's current choices from `lpoptions -p NAME -l`, run like the `lpstat` commands: its
@@ -766,9 +785,13 @@ pub(crate) fn printer_queues_checked() -> Option<Vec<Printer>> {
     {
         windows::printer_queues_checked()
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        Some(printers())
+        printers_checked()
+    }
+    #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
+    {
+        None
     }
 }
 

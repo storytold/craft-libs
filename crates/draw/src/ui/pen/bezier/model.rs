@@ -333,7 +333,7 @@ impl SelectedAnchors {
 pub(crate) mod reads {
     use std::cell::Cell;
 
-    // design: allow[contract/no-global-state](a trial's counter of overlay reads: it measures the drawing, it drives none of it)
+    // A trial's counter of overlay reads: it measures the drawing, it drives none of it.
     thread_local! {
         static READS: Cell<usize> = const { Cell::new(0) };
     }

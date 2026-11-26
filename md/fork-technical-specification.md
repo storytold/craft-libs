@@ -253,12 +253,12 @@ To guarantee that continuous synchronization with official upstream (`storytold/
 1. **`crates/zip` Non-Upstream Protection**:
    `crates/zip` is a customized fork crate carrying `scan_offsets` EOCD64 chunked scanning. It must NEVER be added to `upstream_only_prefixes` or wiped via `git checkout --theirs`.
 2. **Keyboard Associated Constants Preservation**:
-   In `crates/ui-panels/src/rails/flyout.rs` and `crates/ui-patterns/src/action/button.rs`, the associated constant:
+   In `crates/ui-panels/src/rails/flyout.rs` and `crates/ui-widgets/src/buttons/button.rs`, the associated constant:
    ```rust
    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_space_activation();
    ```
    is mandatory. It ensures keyboard activation for rail buttons without sacrificing canvas Space-key Hand/Pan tool isolation. It must NEVER be removed when cleaning up obsolete UI hooks.
-3. **Automated Conflict Resolution Hunk Matching**:
-   Any conflict marker hunk carrying known fork identifiers (`drop_dangling_relations`, `prune_controls`, `activate_on_space`, `with_space_activation`, `space_activates`, `ActivateKeys::Enter`, `PressRoute::Space`, `PressRoute::Free`, `!self.printers.is_empty()`, `KANA_SAMPLE`, `is_cjk_song`, `shown_name`, `localized_families`, `Layr`, `Mt16`, `Mt32`, `Mtrn`, `MTrn`, `scan_offsets`, `EOCD64`, `carry`) must automatically resolve to preserve fork modifications (`ours`).
+3. **Conflict Resolution Review, One Hunk at a Time**:
+   A conflict hunk carrying a known fork identifier (`drop_dangling_relations`, `prune_controls`, `activate_on_space`, `with_space_activation`, `space_activates`, `ActivateKeys::Enter`, `PressRoute::Space`, `PressRoute::Free`, `!self.printers.is_empty()`, `KANA_SAMPLE`, `is_cjk_song`, `shown_name`, `localized_families`, `Layr`, `Mt16`, `Mt32`, `Mtrn`, `MTrn`, `scan_offsets`, `EOCD64`, `carry`) is a hunk to read, not one to resolve with `ours`. Each such hunk is resolved with both sides kept where they change different things, and with the fork's side only where the upstream change is already present or contradicts a fork rule. Resolving every matching hunk with `ours` silently drops the upstream fix that shares the hunk, and the merge then passes tests while the fix is gone.
 4. **Pre-Push MSVC Verification Gate**:
    Prior to pushing synchronized commits to `fork:next` or retagging releases, all eight test suites above (2,729 tests) must execute and pass under MSVC x64 with 0 failures and 0 Clippy warnings.

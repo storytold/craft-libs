@@ -440,6 +440,14 @@ fn filter_chips(
     });
 }
 
+/// The text a row draws, and whether it is the automatic sample: a face that draws kana replaces the automatic
+/// sample, and a host's own preview text is kept as it is given.
+#[derive(Clone, Copy)]
+struct SampleText<'a> {
+    text: &'a str,
+    auto: bool,
+}
+
 /// The sample of a family row: its text ([`row_text`]) in the regular face of `family` at `size.side × SAMPLE_EM`, in a
 /// band of the thumbnail side `size.side` as the banner's, named "{shown}: {text}" as the font manager names its
 /// samples, so the row keeps the family's name to itself; no face for a family the catalog lacks.
@@ -449,7 +457,7 @@ fn sample<'a>(
     infos: &'a FamilyInfos,
     family: &str,
     shown: &str,
-    text: &str,
+    text: SampleText<'_>,
     size: Sample,
 ) -> FontSample<'a> {
     let text = row_text(at, catalog, infos, family, text, shown);
@@ -460,13 +468,12 @@ fn sample<'a>(
 
 /// What `family`'s sample says ([`FamilyInfos::sample_text`]) once its regular face is ready; `text` while it loads,
 /// when the sample shows nothing yet.
-fn row_text(at: &impl FacesCx, catalog: &Arc<Catalog>, infos: &FamilyInfos, family: &str, text: &str, shown: &str) -> String {
-    let Some(info) = infos.families.get(family) else { return text.to_owned() };
+fn row_text(at: &impl FacesCx, catalog: &Arc<Catalog>, infos: &FamilyInfos, family: &str, text: SampleText<'_>, shown: &str) -> String {
+    let Some(info) = infos.families.get(family) else { return text.text.to_owned() };
     match faces::shown(at, catalog, Owner::Installed, &info.regular) {
-        Shown::Ready(_) => {
-            faces::bytes(at, Owner::Installed, &info.regular).map_or_else(|| text.to_owned(), |face| infos.sample_text(family, text, shown, &face))
-        }
-        _ => text.to_owned(),
+        Shown::Ready(_) => faces::bytes(at, Owner::Installed, &info.regular)
+            .map_or_else(|| text.text.to_owned(), |face| infos.sample_text(family, text.text, shown, &face, text.auto)),
+        _ => text.text.to_owned(),
     }
 }
 
@@ -592,7 +599,10 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     // The library picker always shows the banner, with the sample word when the host gives no text.
     let banner_text = picker.preview_text.or((!plain).then_some(words.sample.as_str()));
     // Every row's sample is the banner's text: the host's text, else the sample word.
-    let sample_text = picker.preview_text.unwrap_or(words.sample.as_str());
+    let (sample_text, sample_auto) = match picker.preview_text {
+        Some(text) => (text, false),
+        None => (words.sample.as_str(), true),
+    };
     let name = words.list.clone();
     let mut stars: Vec<(String, bool)> = Vec::new();
     let mut over_rows = false;
@@ -613,7 +623,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                 });
                 let label = words.preview_of.fill(&[("family", shown_name.as_str())]);
                 // What the family's row shows: the text, or its name or first glyphs when the face can't draw it.
-                let shown_text = row_text(faces_at, catalog, &infos, &banner_family, text, &shown_name);
+                let shown_text = row_text(faces_at, catalog, &infos, &banner_family, SampleText { text, auto: sample_auto }, &shown_name);
                 FontPreviewBanner::new(label, &shown_name, &shown_text, face).on_white(on_white).show(ui);
             }
             if let Some(filters) = filters.as_mut() {
@@ -693,7 +703,16 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 if size == ThumbSize::None {
                                     return line;
                                 }
-                                let sample = sample(faces_at, catalog, &infos, &row.family, &row.shown, sample_text, sample_size).on_white(on_white);
+                                let sample = sample(
+                                    faces_at,
+                                    catalog,
+                                    &infos,
+                                    &row.family,
+                                    &row.shown,
+                                    SampleText { text: sample_text, auto: sample_auto },
+                                    sample_size,
+                                )
+                                .on_white(on_white);
                                 line.cell_field(SAMPLE, sample, |_| {})
                             }
                         });

@@ -1,9 +1,0 @@
-config_version = 1
-
-[[exception]]
-name = "bezier-overlay-read-counter"
-kind = "marker"
-rule = "contract/no-global-state"
-path = "crates/draw/src/ui/pen/bezier/model.rs"
-reason = "A trial's per-thread count of overlay reads: it measures the drawing and drives none of it."
-count = 1

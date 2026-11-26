@@ -115,25 +115,26 @@ impl FamilyInfos {
     /// What a family's sample says, in its row and in the banner: `sample` when the family's regular face (`face`, as
     /// the face registry loaded it) draws it, else its name, else the first glyphs the face has (a symbol face, or a
     /// face without the sample's script).
-    pub(super) fn sample_text(&self, family: &str, sample: &str, shown: &str, face: &FaceBytes) -> String {
+    pub(super) fn sample_text(&self, family: &str, sample: &str, shown: &str, face: &FaceBytes, auto: bool) -> String {
         let key = (family.to_owned(), sample.to_owned());
         if let Some(text) = lock(&self.samples).get(&key) {
             return text.clone();
         }
-        let text = draws(face, sample, shown).unwrap_or_default();
+        let text = draws(face, sample, shown, auto).unwrap_or_default();
         lock(&self.samples).insert(key, text.clone());
         text
     }
 }
 
-fn draws(face: &FaceBytes, sample: &str, shown: &str) -> Option<String> {
+fn draws(face: &FaceBytes, sample: &str, shown: &str, auto: bool) -> Option<String> {
     let font = FontRef::from_index(&face.bytes, face.index).ok()?;
     let map = font.charmap();
     let inked = inked(&font);
     let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some_and(&inked));
     // The fork's kana sample, taken after upstream's inked test: a face that draws kana is listed
-    // by what it draws, and a face with the codepoints but no ink is not.
-    if has_kana_sample(&drawn) {
+    // by what it draws, and a face with the codepoints but no ink is not. It is the automatic sample
+    // only: a host that names its preview text keeps it in every row.
+    if auto && has_kana_sample(&drawn) {
         return Some(KANA_SAMPLE.to_owned());
     }
     if drawn(sample) {

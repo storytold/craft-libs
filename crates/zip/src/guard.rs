@@ -124,9 +124,7 @@ pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u
             for offset in scan_offsets(reader, eocd64, locator_pos, EOCD64).map_err(io_err)? {
                 let mut head = [0u8; 40];
                 reader.seek(SeekFrom::Start(offset)).map_err(io_err)?;
-                if reader.read_exact(&mut head).is_err() {
-                    continue;
-                }
+                reader.read_exact(&mut head).map_err(io_err)?;
                 let count = |at: usize| {
                     u64::from_le_bytes([head[at], head[at + 1], head[at + 2], head[at + 3], head[at + 4], head[at + 5], head[at + 6], head[at + 7]])
                 };

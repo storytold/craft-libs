@@ -198,12 +198,13 @@ fn a_browser_post_never_reaches_the_app() {
     stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
     let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
     let body = format!("{}\n{}\n", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}}), json!({"id": 2, "method": "test.ping"}));
-    // The request line with the end of the head, in one write: a host's HTTP inspection (ESET's filter driver
-    // on the machine this was measured on) holds an incomplete request head and never passes it on - a bare
-    // request line arrived after 0 bytes in 10 seconds, the same line with the blank line after it in 13 ms.
-    // What the trial asserts is unchanged: the refusal answers the request line, and the body below, sent
-    // afterwards, is never dispatched.
-    write!(stream, "POST / HTTP/1.1\r\n\r\n").expect("written");
+    // The whole head in one write, blank line last: a host's HTTP inspection (ESET's filter driver on the
+    // machine this was measured on) holds an incomplete request head and never passes it on - a bare request
+    // line arrived after 0 bytes in 10 seconds, the same line with the blank line after it in 13 ms. The head
+    // is what a browser sends, so the trial tests a valid POST; what it asserts is unchanged: the refusal
+    // answers the request line, and the body below, sent afterwards, is never dispatched.
+    let head = format!("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n", body.len());
+    write!(stream, "{head}").expect("written");
     let refused = read_json(&mut reader).expect("a reply to the request line");
     assert_eq!(refused["ok"], false, "{refused}");
     assert_eq!(refused["error"], "authentication required", "{refused}");
