@@ -431,7 +431,7 @@ impl State {
         let mut after = None;
         if let Some(ref opener) = current
             && exits.is_some()
-            && !entries.iter().any(|entry| entry.holds(&opener, opener.stop.group.map(|group| self.last().outermost(group))))
+            && !entries.iter().any(|entry| entry.holds(opener, opener.stop.group.map(|group| self.last().outermost(group))))
         {
             let place = self.place(opener);
             after = Some(entries.iter().filter(|entry| self.place(entry.arrival()) < place).count());
