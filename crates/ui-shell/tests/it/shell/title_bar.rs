@@ -94,6 +94,65 @@ fn a_title_bar_in_an_embedded_shell_acts_on_no_window() {
     assert!(!commands.is_empty(), "the window's bar acts on the window");
 }
 
+/// App-side hit testing must give an overlapping caption the same precedence as a native hit sink.
+#[trial]
+fn caption_presses_win_over_the_window_top_edge_and_corner() {
+    use craft_host::target::{Backend, Os};
+    use craft_ui::runtime::windows::{ResizeEdge, WindowHost};
+
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let shell = ShellInfo::default().os(Os::Linux).backend(Backend::X11);
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let close_requested = Cell::new(false);
+    let frame = |events| {
+        windows.frame(events, vec![], |ui| {
+            let _ = AppShell::new(WindowKey::main())
+                .title_bar(|ui, _, close_requested: &mut &Cell<bool>| {
+                    let bar = TitleBar::new().show_titled(ui, Title::new("Document"), |_, _| {}, |_, _| {});
+                    close_requested.set(close_requested.get() || bar.close_requested);
+                })
+                .show(ui, &mut &close_requested);
+        })
+    };
+    for _ in 0..3 {
+        frame(vec![]);
+    }
+    let regions = WindowHost::of(&windows.ctx).caption_regions(ViewportId::ROOT).expect("the shell registers window chrome");
+    let caption = regions.buttons.iter().find(|(kind, _)| *kind == Caption::Close).expect("the Close button").1;
+    for edge in [ResizeEdge::Top, ResizeEdge::TopRight] {
+        let grip = regions.edges.iter().find(|(kind, _)| *kind == edge).expect("the resize grip").1;
+        let overlap = grip.intersect(caption);
+        assert!(overlap.is_positive(), "the test must exercise a real overlap at {edge:?}");
+        close_requested.set(false);
+        let at = overlap.center();
+        frame(vec![moved(at)]);
+        let mut sent = frame(vec![press(at)]).commands;
+        sent.extend(frame(vec![release(at)]).commands);
+        assert!(!sent.iter().any(|(_, c)| matches!(c, ViewportCommand::BeginResize(_) | ViewportCommand::StartDrag)), "{edge:?}: {sent:?}");
+        assert!(close_requested.get(), "the button gets the whole press at {edge:?}");
+
+        // With enough travel to turn the press into a drag, the grip still must not
+        // take over. A stationary click alone can succeed even when the grip owns drag.
+        close_requested.set(false);
+        let away = at + vec2(-55.0, 20.0);
+        let mut sent = frame(vec![press(at)]).commands;
+        sent.extend(frame(vec![moved(away)]).commands);
+        sent.extend(frame(vec![release(away)]).commands);
+        assert!(!sent.iter().any(|(_, c)| matches!(c, ViewportCommand::BeginResize(_) | ViewportCommand::StartDrag)), "{edge:?}: {sent:?}");
+        assert!(!close_requested.get(), "dragging away cancels the caption press at {edge:?}");
+    }
+
+    let top = regions.edges.iter().find(|(edge, _)| *edge == ResizeEdge::Top).expect("the top resize grip").1;
+    let at = top.center();
+    assert!(!caption.contains(at), "the remaining top edge is not a caption");
+    frame(vec![moved(at)]);
+    let mut sent = frame(vec![press(at)]).commands;
+    sent.extend(frame(vec![moved(at + vec2(0.0, 20.0))]).commands);
+    assert!(sent.iter().any(|(_, c)| matches!(c, ViewportCommand::BeginResize(egui::ResizeDirection::North))), "{sent:?}");
+}
+
 /// The shell sends the window title once after a change and not again while the viewport reports it; an embedded shell
 /// sends none.
 #[trial]
