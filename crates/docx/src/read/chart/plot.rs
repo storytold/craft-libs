@@ -3,9 +3,11 @@ use super::canvas::{
 };
 use super::format::format_value;
 use super::model::{DataLabel, DataTable, Grouping, Kind, LabelPos, Series, Symbol, TickPos};
-use super::parse::{category_text, series_name};
+use super::parse::{category_text, own_fill, series_name};
 use super::polar::{draw_data_labels, label_of, value_text};
-use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, LINE_W, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
+use super::{
+    AXIS, Chart, El, Fill, GAP, GRID, GraphicItem, LINE, LINE_W, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure,
+};
 
 /// Line width of the stroked marker symbols (x, plus, star), points.
 const MARKER_STROKE: f32 = 1.5;
@@ -17,7 +19,13 @@ pub(super) fn label(s: &str) -> String {
 /// Chart area: the chart space's fill and border (white and borderless by default).
 pub(super) fn backdrop(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h: f32) {
     let sp = space.child("c:spPr");
+    // A gradient is painted as the file states it; a solid fill as before.
+    let gradient = sp.and_then(|p| own_fill(p, theme)).filter(|f| matches!(f, Fill::Gradient(_)));
+    if let Some(fill) = gradient.clone() {
+        out.push(GraphicItem::Fill { rect: [0.0, 0.0, w, h], fill });
+    }
     let fill = match sp {
+        _ if gradient.is_some() => None,
         Some(p) if p.child("a:noFill").is_some() => None,
         Some(p) => fill_colour(p, theme).or(Some(Rgb::WHITE)),
         None => Some(Rgb::WHITE),
@@ -257,6 +265,9 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         return;
     }
     let g = Frame { plot, horiz: c.horizontal, n: c.n, vs: ax.vs, xs: ax.xs, mid: c.val.mid };
+    if let Some(fill) = &c.plot_fill {
+        out.push(GraphicItem::Fill { rect: plot.arr(), fill: fill.clone() });
+    }
     if c.val.grid {
         draw_grid(out, &g, &ax.vticks);
     }
@@ -581,8 +592,15 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
             let (p0, p1) = (g.val(v0), g.val(v1));
             let (p0, p1) = (p0.min(p1), p0.max(p1));
             let segs = if g.horiz { rect_segs(p0, a, p1, a + thick) } else { rect_segs(a, p0, a + thick, p1) };
-            if !s.no_fill {
-                fill(out, segs.clone(), c.point_colour(j, i));
+            // A shaded series paints each column with its gradient (a point's own colour wins).
+            let own_colour = s.points.get(i).is_some_and(Option::is_some);
+            match &s.shading {
+                Some(shading) if !s.no_fill && !own_colour => {
+                    let rect = if g.horiz { [p0, a, p1 - p0, thick] } else { [a, p0, thick, p1 - p0] };
+                    out.push(GraphicItem::Fill { rect, fill: shading.clone() });
+                }
+                _ if !s.no_fill => fill(out, segs.clone(), c.point_colour(j, i)),
+                _ => {}
             }
             // An explicit outline shows without a fill too (the series' colour is the line's here).
             if let (true, true, Some(w)) = (s.line, s.no_fill, s.line_w) {

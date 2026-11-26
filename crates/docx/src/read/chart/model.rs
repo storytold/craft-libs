@@ -1,4 +1,4 @@
-use super::Rgb;
+use super::{Fill, Rgb};
 
 /// A data label to draw once the chart is: the value at (`x`, `y`), centred there (`inside`, in
 /// white on the fill) or just beside it (above, or right of a horizontal bar's end).
@@ -238,4 +238,6 @@ pub(super) struct Series {
     pub(super) raw: Vec<Option<f64>>,
     /// The chart type the series is drawn as: a combination chart has more than one.
     pub(super) kind: Kind,
+    /// A gradient fill (`a:gradFill`) its columns are painted with; `color` is its first colour.
+    pub(super) shading: Option<Fill>,
 }

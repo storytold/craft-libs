@@ -137,6 +137,9 @@ pub enum GraphicItem {
     },
     /// A picture (`Document::media` key) stretched into `rect`.
     Image { rect: [f32; 4], media: String },
+    /// `rect` painted with a shape fill, solid or gradient (a chart area's, a plot area's or a
+    /// gradient-filled column's).
+    Fill { rect: [f32; 4], fill: crate::fill::Fill },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

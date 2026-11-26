@@ -8,11 +8,12 @@
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 
+use craft_wordmodel::fill::Fill;
 use craft_wordmodel::graphic::{GraphicItem, PathSeg, TextAlign};
 use craft_wordmodel::para::ShapeKind;
 use craft_wordmodel::props::Rgb;
 
-use super::drawing_color::{fill_colour, slot};
+use super::drawing_color::{fill as read_fill, fill_colour, slot};
 use crate::units::{int, measure};
 use crate::xml::El;
 
@@ -262,6 +263,8 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// The plot area's own fill (`c:plotArea/c:spPr`).
+    plot_fill: Option<Fill>,
     /// Where the file puts the legend by hand: x, y, width, height as shares of the chart.
     legend_box: Option<[f32; 4]>,
     /// The data table under the plot, when the file shows one.

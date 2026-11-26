@@ -3,7 +3,8 @@ use super::model::{Axis, Crosses, DataTable, Grouping, Kind, LabelPos, Pos, Seri
 use super::plot::Scale;
 use super::plot::label;
 use super::{
-    AXIS, Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure, slot,
+    AXIS, Chart, El, FONT, Fill, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure,
+    read_fill, slot,
 };
 
 impl Chart {
@@ -121,6 +122,7 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            plot_fill: plot.child("c:spPr").and_then(|p| own_fill(p, theme)),
             legend_box: legend_el.and_then(manual_layout),
             data_table,
             title_bold: title_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true),
@@ -422,6 +424,7 @@ impl Series {
             marker_color,
             raw: Vec::new(),
             kind: Kind::Bar,
+            shading: sp.and_then(|p| p.child("a:gradFill")).and_then(|g| read_fill(g, theme, None)).filter(|f| matches!(f, Fill::Gradient(_))),
         }
     }
 }
@@ -626,6 +629,12 @@ fn run_defaults_colour(body: &El, theme: &[Rgb]) -> Option<Rgb> {
 /// Whether the chart's own text properties (`c:txPr`) make its text bold.
 pub(super) fn chart_bold(space: &El) -> Option<bool> {
     space.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(|d| d.attr("b")).map(truthy)
+}
+
+/// The fill a `c:spPr` states for its area: solid, pattern (its foreground) or gradient.
+pub(super) fn own_fill(sp: &El, theme: &[Rgb]) -> Option<Fill> {
+    let f = sp.els().find(|e| matches!(e.name.as_str(), "a:solidFill" | "a:gradFill" | "a:pattFill"))?;
+    read_fill(f, theme, None)
 }
 
 /// The chart's own text colour (its `c:txPr`), the grey Word's default style uses without one.
