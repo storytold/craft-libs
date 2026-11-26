@@ -158,6 +158,8 @@ impl CurveOrder {
         if cfg!(feature = "metrics") {
             self.metrics.entries.push(MetricsEntry::new(end, status));
         }
+        #[cfg(test)]
+        CURVE_ORDER_PUSHES.with(|n| n.set(n.get() + 1));
         if let Some(last) = self.cmps.last_mut() {
             match (last.order, order) {
                 (Order::Right, Order::Right)
@@ -1494,6 +1496,8 @@ fn max_slope(c: CubicBez) -> f64 {
 #[cfg(test)]
 thread_local! {
     static SKIP_CONTROL_POINT_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // Counts `CurveOrder::push` calls on this thread, with or without the `metrics` feature.
+    static CURVE_ORDER_PUSHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(not(test))]
@@ -2230,34 +2234,6 @@ mod test {
     }
 
     #[test]
-    fn overlapping_rectangles_near_the_float_limit() {
-        // Two rectangles that overlap in (5, 1.1e308)-(10, 1.2e308). Without `f64::midpoint`
-        // in the curve comparison, a debug build fails the `x0 < x1 && x1 < x2` assertion in
-        // `interpolate_quadratic` while it builds this topology.
-        let mut path = kurbo::BezPath::new();
-        for (x0, y0, x1, y1) in [(0.0, 1e308, 10.0, 1.2e308), (5.0, 1.1e308, 15.0, 1.3e308)] {
-            path.move_to((x0, y0));
-            path.line_to((x1, y0));
-            path.line_to((x1, y1));
-            path.line_to((x0, y1));
-            path.close_path();
-        }
-        let top = crate::topology::Topology::from_path(&path, 1e-6).unwrap();
-
-        for (inside, expected) in [
-            (2, kurbo::Rect::new(5.0, 1.1e308, 10.0, 1.2e308)),
-            (1, kurbo::Rect::new(0.0, 1e308, 15.0, 1.3e308)),
-        ] {
-            let contours = top.contours(|w| *w >= inside);
-            let boxes: Vec<_> = contours
-                .contours()
-                .map(|c| kurbo::Shape::bounding_box(&c.path))
-                .collect();
-            assert_eq!(boxes, [expected], "winding number at least {inside}");
-        }
-    }
-
-    #[test]
     fn compare_near_the_float_limit() {
         let h = 1e306;
         // Without `f64::midpoint`, the sum of two heights overflows to infinity for every
@@ -2632,14 +2608,12 @@ mod test {
             (-10.0 * ish, 0.5 * ish, Order::Right),
         ] {
             let c1 = shifted(c0, dx, dy);
+            CURVE_ORDER_PUSHES.with(|n| n.set(0));
             let cmp = intersect_cubics(c0, c1, ish / 2.0, ish);
+            let pushes = CURVE_ORDER_PUSHES.with(std::cell::Cell::get);
             let y0 = c1.p0.y;
             assert_eq!(cmp.iter().collect::<Vec<_>>(), vec![(y0, s, order)]);
-            assert!(
-                cmp.metrics.entries.len() <= 4,
-                "{} entries for ({dx}, {dy})",
-                cmp.metrics.entries.len()
-            );
+            assert!(pushes <= 4, "{pushes} pushes for ({dx}, {dy})");
         }
     }
 

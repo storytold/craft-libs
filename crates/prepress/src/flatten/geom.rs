@@ -497,9 +497,12 @@ impl Arrangement {
 /// sweep left winding numbers that disagree around a point, and can still panic on other degenerate
 /// input; either way that input is degenerate.
 fn contours(top: &Topology<Multi>, inside: impl Fn(&Multi) -> bool) -> Result<Contours, GeomError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.try_contours(inside)))
-        .map_err(|_| GeomError::Degenerate)?
-        .map_err(|_| GeomError::Degenerate)
+    walk_result(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| top.try_contours(inside))))
+}
+
+/// Maps a contour walk that panicked or returned an error to [`GeomError::Degenerate`].
+fn walk_result<T>(walk: std::thread::Result<Result<T, linesweeper::Error>>) -> Result<T, GeomError> {
+    walk.map_err(|_| GeomError::Degenerate)?.map_err(|_| GeomError::Degenerate)
 }
 
 /// A point as a map key (the arrangement's vertices are exact).
@@ -1000,15 +1003,16 @@ mod tests {
 
     #[test]
     fn inconsistent_windings_are_degenerate() {
-        // A predicate that changes its answer makes the windings around a point disagree.
+        // A walk that returns an error or panics gives `Degenerate`; one that finishes gives its contours.
+        assert_eq!(walk_result::<u8>(Ok(Err(linesweeper::Error::InconsistentWindingNumbers))), Err(GeomError::Degenerate));
+        assert_eq!(walk_result::<u8>(Err(Box::new("walk panicked"))), Err(GeomError::Degenerate));
+        assert_eq!(walk_result(Ok(Ok(7_u8))), Ok(7));
         let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0))];
         let arrangement = Arrangement::new(&shapes, &[], DEFAULT_SLIVER, DEFAULT_MAX_SWEEP_WORK, DEFAULT_MAX_TOPOLOGY_UNITS).unwrap();
-        let calls = std::cell::Cell::new(0_u32);
-        let flipping = |_: &Multi| {
-            calls.set(calls.get() + 1);
-            calls.get().is_multiple_of(2)
-        };
-        assert_eq!(contours(&arrangement.top, flipping).err(), Some(GeomError::Degenerate));
+        assert_eq!(contours(&arrangement.top, |w: &Multi| w.get(0) != 0).map(|c| c.contours().count()), Ok(1));
+        // A walk that panics, in debug and release builds alike, gives `Degenerate`.
+        let panicking = |_: &Multi| -> bool { panic!("degenerate walk") };
+        assert_eq!(contours(&arrangement.top, panicking).err(), Some(GeomError::Degenerate));
     }
 
     /// The regions with their sources and areas rounded to 1e-6, sorted.

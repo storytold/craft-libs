@@ -709,7 +709,8 @@ impl<W: WindingNumber> Topology<W> {
     ///
     /// Each output segment counts as one unit plus the
     /// [`WindingNumber::storage_units`] of its two winding numbers, so this limit bounds the
-    /// memory the topology uses.
+    /// memory the output segments and their winding numbers use. The points the sweep
+    /// records are not counted; the work limit bounds them.
     pub fn from_paths_with_limits<'a, Iter>(
         paths: Iter,
         eps: f64,
@@ -3017,6 +3018,26 @@ mod tests {
         //check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
+    }
+
+    #[test]
+    fn overlapping_rectangles_near_the_float_limit() {
+        // Two rectangles that overlap in (5, 1.1e308)-(10, 1.2e308). Their coordinates are
+        // above `MAX_COORDINATE`, so `Topology::from_path` returns `Error::TooLarge` instead
+        // of building a topology. The curve tests `compare_near_the_float_limit` and
+        // `solve_for_t_near_the_float_limit` cover the comparison at these heights.
+        let mut path = BezPath::new();
+        for (x0, y0, x1, y1) in [(0.0, 1e308, 10.0, 1.2e308), (5.0, 1.1e308, 15.0, 1.3e308)] {
+            path.move_to((x0, y0));
+            path.line_to((x1, y0));
+            path.line_to((x1, y1));
+            path.line_to((x0, y1));
+            path.close_path();
+        }
+        assert_eq!(
+            Topology::<i32>::from_path(&path, 1e-6).err(),
+            Some(crate::Error::TooLarge)
+        );
     }
 
     // Craft patch (input rules) test.

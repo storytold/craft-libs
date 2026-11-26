@@ -961,6 +961,8 @@ impl<'segs> Sweeper<'segs> {
             {
                 self.removal_scan_steps += 1;
             }
+            // Each entry the scan visits counts toward the work limit.
+            self.segments_passed = self.segments_passed.saturating_add(1);
             if let Some(run_live) = ended_runs.live_before(i) {
                 live = run_live;
                 break;
@@ -2975,7 +2977,7 @@ mod tests {
         let set_line = |sweep: &mut Sweeper, order: &[SegIdx]| {
             sweep.line.segs = TreeVec::default();
             for (pos, &seg) in order.iter().enumerate() {
-                sweep.line.segs.insert(pos, SegmentOrderEntry::new(seg, &segs, 0.1));
+                sweep.line.insert(pos, SegmentOrderEntry::new(seg, &segs, 0.1));
             }
         };
 
@@ -3639,6 +3641,21 @@ mod tests {
             "{} steps",
             sweep.removal_scan_steps
         );
+    }
+
+    // The removal scan's walk over segments that end at this y counts toward the work limit.
+    #[test]
+    fn removal_scan_counts_the_entries_it_visits() {
+        let segs = mk_segs(&[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]);
+        let ids: Vec<SegIdx> = segs.indices().collect();
+        let mut sweep = Sweeper::new(&segs, 0.1);
+        for (pos, &seg) in ids.iter().enumerate() {
+            sweep.line.insert(pos, SegmentOrderEntry::new(seg, &segs, 0.1));
+        }
+        sweep.y = 1.0;
+        let before = sweep.segments_passed;
+        sweep.scan_for_removal(ids.len(), &mut EndedRuns::default());
+        assert_eq!(sweep.segments_passed - before, ids.len() as u64);
     }
 
     // Craft patch (removal scan): two groups of segments end at y = 10, each
