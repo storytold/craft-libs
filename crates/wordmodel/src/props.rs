@@ -102,6 +102,58 @@ mod tests {
         assert_eq!((base.font_ascii_theme, base.font_hansi_theme), (Some(ThemeFont::MajorAscii), None));
     }
 
+    /// A font set alone is the font of all the run's Latin text; a high-ANSI font set alone keeps
+    /// the ASCII font and its slot.
+    #[test]
+    fn a_font_clears_the_high_ansi_font_and_a_high_ansi_font_keeps_the_font() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Verdana"),
+            font_hansi: s("Georgia"),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MajorHAnsi),
+            ..Default::default()
+        };
+        let font = base.clone().overlaid(&CharProps { font: s("Arial"), ..Default::default() });
+        assert_eq!((font.font_hansi.as_deref(), font.font_hansi_theme, font.high_ansi_font()), (None, None, Some("Arial")));
+        let hansi = base.clone().overlaid(&CharProps { font_hansi: s("Arial"), ..Default::default() });
+        assert_eq!((hansi.font.as_deref(), hansi.font_ascii_theme), (Some("Verdana"), Some(ThemeFont::MinorHAnsi)));
+        assert_eq!((hansi.font_hansi.as_deref(), hansi.font_hansi_theme), (Some("Arial"), None));
+        // A high-ANSI font equal to the font is the font alone.
+        let same = base.overlaid(&CharProps { font_hansi: s("Verdana"), ..Default::default() });
+        assert_eq!((same.font_hansi.as_deref(), same.high_ansi_font()), (None, Some("Verdana")));
+    }
+
+    /// Every combination of Latin fonts and slots in a base and a run: the base plus what `minus`
+    /// keeps of the run is the run again.
+    #[test]
+    fn minus_keeps_what_the_high_ansi_font_needs() {
+        let fonts = [None, Some("A"), Some("B"), Some("C")];
+        let slots = [None, Some(ThemeFont::MinorHAnsi), Some(ThemeFont::MajorHAnsi)];
+        let mut all = Vec::new();
+        for font in [Some("A"), Some("B")] {
+            for hansi in fonts.iter().filter(|h| h.is_none() || **h != font) {
+                for ascii_slot in slots {
+                    for hansi_slot in slots {
+                        all.push(CharProps {
+                            font: font.map(str::to_string),
+                            font_hansi: hansi.map(str::to_string),
+                            font_ascii_theme: ascii_slot,
+                            font_hansi_theme: hansi_slot,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+        for base in &all {
+            for run in &all {
+                let back = base.clone().overlaid(&run.clone().minus(base));
+                assert_eq!(&back, run, "base {base:?}");
+            }
+        }
+    }
+
     #[test]
     fn rgb_hex() {
         assert_eq!(Rgb(255, 0, 16).hex(), "FF0010");

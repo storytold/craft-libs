@@ -158,17 +158,18 @@ fn empty_default_faces_dont_count_against_the_script_limit() {
     assert!(minor.contains(r#"<a:font script="S255" typeface="F255"/>"#), "{minor}");
 }
 
-/// Latin slots naming different faces: the model has one Latin font, the ASCII one, so only the
-/// slot that still names it is written; the other is left out rather than made to name a face
-/// it didn't.
+/// Latin slots naming different faces: the ASCII slot names `font` and the hAnsi slot
+/// `font_hansi`, and each is written back with the face it names.
 #[test]
-fn a_latin_slot_naming_another_face_is_not_written() {
+fn latin_slots_naming_different_faces_are_both_written() {
     let body = r#"<w:p><w:r><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="majorHAnsi"/></w:rPr><w:t>Mixed</w:t></w:r></w:p>"#;
     let d = craft_docx::read(&docx(body, STYLES)).unwrap();
-    assert_eq!(d.body[0].as_para().unwrap().runs[0].props.font.as_deref(), Some("Verdana"));
+    let props = &d.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!((props.font.as_deref(), props.font_hansi.as_deref()), (Some("Verdana"), Some("Georgia")));
     let doc = rfonts(&part(&craft_docx::write(&d).unwrap(), "word/document.xml"));
     let run = doc.iter().find(|f| f.contains("Verdana")).unwrap_or_else(|| panic!("{doc:?}"));
-    assert!(run.contains(r#"w:asciiTheme="minorHAnsi""#) && !run.contains("w:hAnsiTheme"), "{run}");
+    assert!(run.contains(r#"w:ascii="Verdana""#) && run.contains(r#"w:hAnsi="Georgia""#), "{run}");
+    assert!(run.contains(r#"w:asciiTheme="minorHAnsi""#) && run.contains(r#"w:hAnsiTheme="majorHAnsi""#), "{run}");
 }
 
 /// A long script id (a language tag, which DrawingML allows) doesn't use up a place the

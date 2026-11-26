@@ -21,6 +21,7 @@ mod emphasis_marks;
 mod fixtures;
 mod font_table;
 mod glossary;
+mod hansi_font;
 mod heading_levels;
 mod kashida;
 mod kept_omml_check;

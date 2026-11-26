@@ -270,7 +270,14 @@ impl PropCtx {
                     // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
                     // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
                     // `docDefaults` font, and so does a hinted run, as in Word.
-                    c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
+                    // `w:ascii` is the font of U+0000–U+007F and `w:hAnsi` of the other Latin
+                    // characters (§17.3.2.26), each inherited on its own: a run naming only its
+                    // hAnsi font keeps the inherited ASCII font. `font_hansi` stays unset when both
+                    // are the same font.
+                    let ascii = themed("w:asciiTheme").or_else(|| named("w:ascii"));
+                    let hansi = themed("w:hAnsiTheme").or_else(|| named("w:hAnsi"));
+                    c.font_hansi = hansi.clone().filter(|h| ascii.as_ref().is_none_or(|a| a != h));
+                    c.font = ascii;
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
@@ -282,11 +289,13 @@ impl PropCtx {
                     // breaks in a document with an East Asian language.
                     c.font_ea_theme = k.attr("w:eastAsiaTheme").and_then(ThemeFont::parse);
                     c.font_cs_theme = k.attr("w:cstheme").and_then(ThemeFont::parse);
-                    // The Latin slots too, when `font` came from them: saving writes them back while
-                    // they still name `font`, so the text keeps following the theme in Word.
+                    // The Latin slots too, each when its font came from it: saving writes them back
+                    // while they still name that font, so the text keeps following the theme in Word.
+                    let latin = |a: &str| k.attr(a).and_then(ThemeFont::parse).filter(|t| t.is_latin());
                     if c.font.is_some() {
-                        let latin = |a: &str| k.attr(a).and_then(ThemeFont::parse).filter(|t| t.is_latin());
                         c.font_ascii_theme = latin("w:asciiTheme");
+                    }
+                    if hansi.is_some() {
                         c.font_hansi_theme = latin("w:hAnsiTheme");
                     }
                 }

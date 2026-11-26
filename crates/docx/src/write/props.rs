@@ -59,7 +59,12 @@ fn round(v: f32) -> i64 {
 fn rfonts(w: &mut W, c: &CharProps) {
     let mut fonts: Vec<(&str, &str)> = Vec::new();
     if let Some(f) = &c.font {
-        fonts.extend([("w:ascii", f.as_str()), ("w:hAnsi", f.as_str())]);
+        fonts.push(("w:ascii", f.as_str()));
+    }
+    // The high-ANSI font: its own, else the ASCII font set with it (see `CharProps::font_hansi`).
+    let hansi = c.font_hansi.as_ref().or(c.font.as_ref());
+    if let Some(f) = hansi {
+        fonts.push(("w:hAnsi", f.as_str()));
     }
     if let Some(ea) = &c.font_ea {
         fonts.push(("w:eastAsia", ea));
@@ -70,7 +75,7 @@ fn rfonts(w: &mut W, c: &CharProps) {
     if let Some(t) = latin_slot(c.font_ascii_theme, c.font.as_ref()) {
         fonts.push(("w:asciiTheme", t));
     }
-    if let Some(t) = latin_slot(c.font_hansi_theme, c.font.as_ref()) {
+    if let Some(t) = latin_slot(c.font_hansi_theme, hansi) {
         fonts.push(("w:hAnsiTheme", t));
     }
     if let Some(t) = c.font_ea_theme {
