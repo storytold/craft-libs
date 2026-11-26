@@ -874,10 +874,8 @@ fn deferred_audio_export_keeps_unmerged_nested_sound_on_its_own_lane() {
     deferred_audio_pair(seq, "Restored");
     assert_eq!(seq.audio_tracks[1].items[0].name, "Restored", "the collision must leave picture and sound on different lanes");
     let expected = deferred_audio_lanes(seq);
-    let original = [
-        seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Restored").unwrap().clone(),
-        seq.audio_tracks[1].items[0].clone(),
-    ];
+    let original =
+        [seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Restored").unwrap().clone(), seq.audio_tracks[1].items[0].clone()];
     let (reopened, text, report) = roundtrip(&imported.project, id, Format::Fcpxml, &xopts());
     assert!(!report.mentions("track import limit"), "{report}");
     // Separate source selections carry the two lanes; FCPXML ref-clip has no cross-reference
