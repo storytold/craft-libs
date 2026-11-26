@@ -30,7 +30,7 @@ use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
 pub(crate) use model::Axis;
-use model::{Grouping, Kind, Pos, Series};
+use model::{DataTable, Grouping, Kind, Pos, Series};
 pub(crate) use parse::chart_axes;
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
@@ -252,6 +252,8 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// The data table under the plot, when the file shows one.
+    data_table: Option<DataTable>,
     /// Bold title, legend and other text, as their text properties say (a title is bold by
     /// default), and the title's size.
     title_bold: bool,

@@ -1,8 +1,10 @@
-use super::canvas::{Rect, clip_text, fill, rect_segs, runs, seg, stroke, text, text_angle, text_at, text_w, vertical_text, widest, wrap};
+use super::canvas::{
+    Rect, SWATCH, clip_text, fill, rect_segs, runs, seg, stroke, swatch, text, text_angle, text_at, text_w, vertical_text, widest, wrap,
+};
 use super::format::format_value;
-use super::model::{DataLabel, Grouping, Kind, LabelPos, Series, Symbol};
-use super::parse::category_text;
-use super::polar::{draw_data_labels, label_of};
+use super::model::{DataLabel, DataTable, Grouping, Kind, LabelPos, Series, Symbol};
+use super::parse::{category_text, series_name};
+use super::polar::{draw_data_labels, label_of, value_text};
 use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, LINE_W, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
 
 /// Line width of the stroked marker symbols (x, plus, star), points.
@@ -169,7 +171,8 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let lh = fs * LINE;
     let scatter = c.kind == Kind::Scatter;
     let (cat_on, val_on) = (!c.cat.deleted, !c.val.deleted);
-    let (cat_labels, val_labels) = (cat_on && c.cat.labels, val_on && c.val.labels);
+    // A data table heads its columns with the categories, so they aren't drawn under the axis.
+    let (cat_labels, val_labels) = (cat_on && c.cat.labels && c.data_table.is_none(), val_on && c.val.labels);
     let title = title_left(c, cat_on, val_on, area.w);
     // A display-units label stands turned left of the value labels (under them for bars).
     let unit_room = if val_labels && c.val.unit_label.is_some() { lh + GAP } else { 0.0 };
@@ -180,6 +183,11 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     } else {
         0.0
     } + title;
+    // A data table's series names sit left of the plot, under the value labels.
+    let left = match &c.data_table {
+        Some(t) => left.max(table_names_w(c, t, fs).min(area.w * 0.4)),
+        None => left,
+    };
     let band_w = (area.w - left).max(1.0) / c.n as f32;
     let wrapped: Vec<Vec<String>> = if cat_labels && !scatter {
         let width = if c.horizontal { left - title - GAP } else { band_w };
@@ -190,7 +198,9 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let widest_line = wrapped.iter().flatten().map(|s| text_w(s, fs)).fold(0.0, f32::max);
     let skip = ((widest_line / band_w).ceil() as usize).max(1);
     let label_lines = wrapped.iter().map(Vec::len).max().unwrap_or(1) as f32;
-    let bottom = (if cat_labels && !c.horizontal {
+    let bottom = (if c.data_table.is_some() {
+        (1 + c.series.len()) as f32 * lh
+    } else if cat_labels && !c.horizontal {
         if scatter { lh + GAP } else { label_lines * lh + GAP }
     } else if c.horizontal && val_labels {
         lh + GAP + unit_room
@@ -288,7 +298,9 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             }
         }
     }
-    if !c.cat.deleted && c.cat.labels {
+    if let Some(t) = &c.data_table {
+        draw_data_table(out, c, t, &g, m.left);
+    } else if !c.cat.deleted && c.cat.labels {
         draw_category_labels(out, c, &g, &ax.xticks, &m, area);
     }
     draw_axis_titles(out, c, &g, area);
@@ -326,6 +338,66 @@ fn draw_axis_titles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect
     {
         let t = clip_text(t, g.plot.w, c.text_size);
         text_angle(out, Rect { x: g.plot.x, y: area.bottom() - lh, w: g.plot.w, h: lh }, &t, c.text_size, false, c.text_colour, 0.0);
+    }
+}
+
+/// Width of a data table's name column: keys, series names and padding.
+fn table_names_w(c: &Chart, t: &DataTable, fs: f32) -> f32 {
+    let keys = if t.keys { SWATCH + GAP } else { 0.0 };
+    let names = c.series.iter().enumerate().map(|(j, s)| text_w(&series_name(s, j), fs)).fold(0.0, f32::max);
+    keys + names + 2.0 * GAP
+}
+
+/// A data table under the plot: the categories over the plot's bands, then a row per series with
+/// its key and name left of the plot and its values under the categories.
+fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Frame, margin: f32) {
+    let (fs, lh) = (c.text_size, c.text_size * LINE);
+    let plot = g.plot;
+    let band = g.band();
+    // The name column keeps to the left margin `axis_margins` reserved for it.
+    let names_w = table_names_w(c, t, fs).min(margin).min(plot.x.max(0.0));
+    let (x0, top) = (plot.x - names_w, plot.bottom());
+    let rows = 1 + c.series.len();
+    let bottom = top + rows as f32 * lh;
+    for (i, cat) in c.cats.iter().enumerate() {
+        let x = g.band_start(i);
+        text(out, Rect { x, y: top, w: band, h: lh }, &clip_text(cat, band, fs), fs, TextAlign::Center, t.bold, t.text);
+    }
+    for (j, s) in c.series.iter().enumerate() {
+        let y = top + (j + 1) as f32 * lh;
+        let mut x = x0 + GAP;
+        if t.keys {
+            swatch(out, x, y + (lh - SWATCH) / 2.0, c.series_colour(j));
+            x += SWATCH + GAP;
+        }
+        // Cut short only past the plot's edge: the column was sized to the widest name.
+        let name = clip_text(&series_name(s, j), (plot.x - x).max(1.0), fs);
+        text(out, Rect { x, y, w: (plot.x - x - GAP).max(1.0), h: lh }, &name, fs, TextAlign::Left, t.bold, t.text);
+        for i in 0..g.n {
+            let Some(v) = s.raw.get(i).copied().flatten() else { continue };
+            let x = g.band_start(i);
+            text(out, Rect { x, y, w: band, h: lh }, &clip_text(&value_text(s, v), band, fs), fs, TextAlign::Center, t.bold, t.text);
+        }
+    }
+    let line = |out: &mut Vec<GraphicItem>, segs| stroke(out, segs, t.line, 0.75);
+    if t.horz {
+        for r in 1..rows {
+            let y = top + r as f32 * lh;
+            line(out, seg(if r == 1 { plot.x } else { x0 }, y, plot.right(), y));
+            if r == 1 {
+                line(out, seg(x0, y, plot.x, y));
+            }
+        }
+    }
+    if t.vert {
+        for i in 0..=g.n {
+            let x = plot.x + i as f32 * band;
+            line(out, seg(x, top, x, bottom));
+        }
+    }
+    if t.outline {
+        line(out, rect_segs(plot.x, top, plot.right(), top + lh));
+        line(out, rect_segs(x0, top + lh, plot.right(), bottom));
     }
 }
 

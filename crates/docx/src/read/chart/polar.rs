@@ -147,6 +147,14 @@ pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
     })
 }
 
+/// A value of `s` in the series' number format (a data table's cells).
+pub(super) fn value_text(s: &Series, v: f64) -> String {
+    match s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General")) {
+        Some(f) => format_value(v, f, 1.0),
+        None => general_value(v),
+    }
+}
+
 /// A value in the `General` format: whole numbers without decimals, others with up to six.
 fn general_value(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 {

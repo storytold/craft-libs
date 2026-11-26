@@ -74,7 +74,7 @@ pub(super) fn stroke(out: &mut Vec<GraphicItem>, segs: Vec<PathSeg>, color: Rgb,
     }
 }
 
-fn swatch(out: &mut Vec<GraphicItem>, x: f32, y: f32, color: Rgb) {
+pub(super) fn swatch(out: &mut Vec<GraphicItem>, x: f32, y: f32, color: Rgb) {
     out.push(GraphicItem::Shape {
         rect: [x, y, SWATCH, SWATCH],
         kind: ShapeKind::Rectangle,

@@ -154,6 +154,17 @@ impl Symbol {
     }
 }
 
+/// A chart's data table (`c:dTable`): the plotted values in a grid under the plot.
+pub(super) struct DataTable {
+    pub(super) horz: bool,
+    pub(super) vert: bool,
+    pub(super) outline: bool,
+    pub(super) keys: bool,
+    pub(super) text: Rgb,
+    pub(super) bold: bool,
+    pub(super) line: Rgb,
+}
+
 pub(super) struct Series {
     pub(super) name: String,
     /// The series' `c:idx` (an `xsd:unsignedInt`), which picks its automatic colour; `None`

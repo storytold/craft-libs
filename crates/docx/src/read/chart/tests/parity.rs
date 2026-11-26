@@ -278,3 +278,39 @@ fn hostile_display_units_never_panic() {
         assert!(!items.is_empty(), "{unit}");
     }
 }
+
+/// A data table (`c:dTable`) under the plot: the categories head its columns, and each series
+/// has a row of its values in its number format. The categories aren't drawn twice.
+#[test]
+fn a_data_table_lists_each_series_values_under_the_plot() {
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable></c:plotArea>"#,
+        ser(0, "North", None, &["Q1", "Q2"], &["41", "-13"]),
+        ser(1, "South", None, &["Q1", "Q2"], &["27", "33"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let texts = chart_texts(&items);
+    let count = |s: &str| texts.iter().filter(|(t, _, _)| t == s).count();
+    // Values that are no axis tick, so each is drawn once.
+    for s in ["North", "South", "41", "-13", "27", "33"] {
+        assert_eq!(count(s), 1, "{s} in the table: {texts:?}");
+    }
+    assert_eq!(count("Q1"), 1, "the categories head the table, once");
+    let y = |s: &str| texts.iter().find(|(t, _, _)| t == s).map(|(_, r, _)| r[1]).unwrap();
+    assert!(y("Q1") < y("41") && y("41") < y("27"), "header row, then a row per series");
+}
+
+/// A data table's name column stays inside the margin reserved for it: a series name wider
+/// than that is cut short instead of running off the chart.
+#[test]
+fn a_long_data_table_name_stays_inside_the_chart() {
+    let long = "A very long series name that is much wider than the chart allows for its table";
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:dTable><c:showKeys val="1"/></c:dTable></c:plotArea>"#,
+        ser(0, long, None, &["Q1", "Q2"], &["41", "27"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let (name, rect, _) = chart_texts(&items).into_iter().find(|(t, _, _)| t.starts_with("A very")).expect("the series name");
+    assert!(rect[0] >= 0.0, "the name starts inside the chart: {rect:?}");
+    assert!(name.ends_with('…'), "the name is cut short: {name}");
+}

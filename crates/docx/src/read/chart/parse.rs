@@ -1,8 +1,8 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, LabelPos, Pos, Series, Symbol};
+use super::model::{Axis, DataTable, Grouping, Kind, LabelPos, Pos, Series, Symbol};
 use super::plot::label;
 use super::{
-    Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure, slot,
+    AXIS, Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure, slot,
 };
 
 impl Chart {
@@ -58,10 +58,28 @@ impl Chart {
         let mut cats = cats;
         cats.resize(n, String::new());
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
+        let data_table = if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
+            plot.child("c:dTable").map(|d| {
+                let flag = |n: &str| d.child(n).is_some_and(|e| e.attr("val").is_none_or(truthy));
+                DataTable {
+                    horz: flag("c:showHorzBorder"),
+                    vert: flag("c:showVertBorder"),
+                    outline: flag("c:showOutline"),
+                    keys: flag("c:showKeys"),
+                    text: element_text_colour(d, theme).unwrap_or_else(|| chart_text_colour(space, theme)),
+                    bold: element_bold(d).or_else(|| chart_bold(space)).unwrap_or(false),
+                    line: d.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)).unwrap_or(AXIS),
+                }
+            })
+        } else {
+            None
+        };
         for s in &mut series {
             s.values.resize(n, None);
             s.xs.resize(n, None);
-            if s.labels == Some(true) {
+            // The file's values are kept for data labels and a data table (100% stacked charts
+            // turn `values` into shares).
+            if s.labels == Some(true) || data_table.is_some() {
                 s.raw = s.values.clone();
             }
         }
@@ -102,6 +120,7 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            data_table,
             title_bold: title_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true),
             title_size: title_el.and_then(element_size).unwrap_or(TITLE_SIZE),
             legend_bold: legend_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(false),
@@ -187,12 +206,13 @@ impl Chart {
                 .map(|(i, c)| (if c.is_empty() { (i + 1).to_string() } else { c.clone() }, self.point_colour(0, i)))
                 .collect();
         }
-        self.series
-            .iter()
-            .enumerate()
-            .map(|(j, s)| (if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }, self.series_colour(j)))
-            .collect()
+        self.series.iter().enumerate().map(|(j, s)| (series_name(s, j), self.series_colour(j))).collect()
     }
+}
+
+/// A series' name, or Word's "Series n" for one without.
+pub(super) fn series_name(s: &Series, j: usize) -> String {
+    if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }
 }
 
 /// The series of a chart type element, within what is left of the chart's cell `budget`; parsing
