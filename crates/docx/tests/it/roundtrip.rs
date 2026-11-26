@@ -439,6 +439,7 @@ fn images_round_trip() {
         crop: [0.1, 0.0, 0.25, 0.05],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let floating = InlineObject::Image {
         media: key.clone(),
@@ -449,6 +450,7 @@ fn images_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let aligned = InlineObject::Image {
         media: key.clone(),
@@ -469,6 +471,7 @@ fn images_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let mut floats = vec![floating.clone(), aligned];
     for wrap in [Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::BehindText, Wrap::InFrontOfText] {
@@ -481,6 +484,7 @@ fn images_round_trip() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            lock_aspect: false,
         });
     }
     let mut p = Paragraph::with_text("pic: ", CharProps::default());
@@ -1287,6 +1291,7 @@ fn groups_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let oval = InlineObject::Shape {
         kind: ShapeKind::Ellipse,
@@ -1383,6 +1388,7 @@ fn drawing_canvas_round_trips() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
@@ -1850,6 +1856,7 @@ fn kitchen_sink() -> Document {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            lock_aspect: false,
         },
         &CharProps::default(),
     )
@@ -1960,6 +1967,7 @@ fn hostile_model_values_still_write() {
             crop: [f32::NAN; 4],
             fx: Default::default(),
             ole: None,
+            lock_aspect: false,
         },
         &CharProps::default(),
     )
@@ -2231,6 +2239,7 @@ fn rotation_and_flips_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let shape = |kind, float| InlineObject::Shape {
         kind,
@@ -2744,6 +2753,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     };
     let shape = |alt: AltText| InlineObject::Shape {
         kind: ShapeKind::Ellipse,

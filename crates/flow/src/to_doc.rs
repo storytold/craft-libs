@@ -405,6 +405,7 @@ impl<'a> Builder<'a> {
                     crop,
                     fx: Default::default(),
                     ole,
+                    lock_aspect: false,
                 })
             }
             // Its drawing is made from the chart by the program that opens the document

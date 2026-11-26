@@ -27,6 +27,11 @@ pub enum InlineObject {
         /// [`crate::graphic::Embedded`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
+        /// The picture's frame keeps its aspect ratio
+        /// (`wp:cNvGraphicFramePr/a:graphicFrameLocks/@noChangeAspect`, ECMA-376 Part 1 §20.4.2.4
+        /// and §20.1.2.2.19). False when the file did not lock the frame. This is not `a:picLocks`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        lock_aspect: bool,
     },
     /// A chart or SmartArt diagram (see [`crate::graphic`]).
     Graphic {

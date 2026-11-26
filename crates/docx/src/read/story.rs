@@ -212,5 +212,6 @@ fn placeholder_of(s: &str) -> String {
 }
 
 fn on_off_attr(e: &El, name: &str) -> bool {
-    e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+    // The reader keeps surrounding space, so ` false ` is the token `false`.
+    e.attr(name).is_some_and(|v| !matches!(v.trim(), "0" | "false" | "off"))
 }

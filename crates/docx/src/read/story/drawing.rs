@@ -89,6 +89,9 @@ impl Reader<'_> {
             }
             obj
         };
+        if let InlineObject::Image { lock_aspect, .. } = &mut obj {
+            *lock_aspect = graphic_frame_locks_aspect(c);
+        }
         if !alt.is_empty() {
             obj.set_alt_text(&alt);
         }
@@ -319,7 +322,7 @@ impl Reader<'_> {
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
         let fx = crate::units::blip_fx(blip).with_soft_edge_emu(radius);
-        Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None })
+        Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None, lock_aspect: false })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
@@ -622,6 +625,13 @@ impl Reader<'_> {
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }
+}
+
+/// `wp:cNvGraphicFramePr/a:graphicFrameLocks/@noChangeAspect` (ECMA-376 Part 1 §20.4.2.4,
+/// §20.1.2.2.19). Absent, or any value the schema's boolean reads as false, is unlocked.
+/// `a:picLocks` is a different element and is not this lock.
+fn graphic_frame_locks_aspect(frame: &El) -> bool {
+    frame.child("wp:cNvGraphicFramePr").and_then(|e| e.child("a:graphicFrameLocks")).is_some_and(|e| on_off_attr(e, "noChangeAspect"))
 }
 
 /// The frame of a `w:drawing`: its `wp:inline` or `wp:anchor` element, the size in points,
