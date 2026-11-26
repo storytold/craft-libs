@@ -14,7 +14,7 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::screen_pick::ScreenPickButton;
-use super::{Collected, ColorPickerLayout, ColorPickerWords, HeldInput, Pass};
+use super::{Collected, ColorPickerLayout, ColorPickerWords, HeldInput, Pass, Rules};
 use crate::ui::channels::WEB_LEVELS;
 use crate::ui::{AreaMode, AreaShape, ColorArea, ColorStrip, ColorWarning};
 
@@ -149,7 +149,14 @@ impl<'a> Body<'a> {
         if pass.focus_hex {
             focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
         }
-        got.adopt(edit, pass.shown, |v, mine| *mine = mine.with_hex(*v, &pass.rules));
+        // A draft applies through the host's constraint only: snapped as typed, the colour the field applied would come
+        // back moved and the field would drop the draft. The commit goes through Only Web Colors' snap as well, so a
+        // typed 123456 commits as 003366.
+        let typing = Rules { web: false, constrain: pass.rules.constrain.clone() };
+        got.adopt_typed(edit, pass.shown, &|v, mine| *mine = mine.with_hex(*v, &typing), &|v, mine| {
+            // The typed draft already shows unsnapped: its commit goes through the rules even when it is that colour.
+            *mine = mine.with_hex(*v, &pass.rules).through(&pass.rules);
+        });
     }
 
     /// The screen-pick button; its press is the output's `screen_pick`.

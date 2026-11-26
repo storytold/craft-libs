@@ -7,7 +7,7 @@ use std::rc::Rc;
 use craft_host::{AppInfo, Host};
 use craft_theme::Srgba;
 use craft_ui::contract::Role;
-use craft_ui::dialog::DialogHost;
+use craft_ui::dialog::{DialogHost, dialog_id};
 use craft_ui::testing::{Fixture, Target};
 use egui::{Key, Modifiers, vec2};
 
@@ -70,6 +70,14 @@ impl Rig {
         self.fixture.type_text(text);
         self.fixture.key(Key::Tab, Modifiers::NONE);
         self.fixture.settle();
+    }
+
+    /// Sets Only Web Colors as its check box would.
+    pub fn web_colors(&mut self, on: bool) {
+        let ctx = self.fixture.ctx().clone();
+        let set = self.dialogs.borrow_mut().set_json_field(&ctx, dialog_id(("color-picker", "foreground")), "webColors", serde_json::json!(on));
+        assert_eq!(set, Ok(()), "Only Web Colors is a field of the dialog");
+        self.fixture.idle(4);
     }
 
     /// The range alert the dialog holds for the host, as its title and message, taken once.

@@ -21,6 +21,8 @@ pub(crate) mod stories;
 #[cfg(all(test, feature = "screen-testing"))]
 pub(crate) mod test_rig;
 mod value;
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod web_hex_tests;
 
 use std::sync::Arc;
 
@@ -224,8 +226,20 @@ impl Collected {
     /// Adopts `edit` of a child as an edit of the picker's colour: `map` applies the child's value to a copy of `shown`,
     /// the colour the pass showed.
     fn adopt<V: Value>(&mut self, edit: EditResponse<V>, shown: PickedColor, map: impl Fn(&V, &mut PickedColor)) {
+        self.adopt_typed(edit, shown, &map, &map);
+    }
+
+    /// Adopts `edit` as [`adopt`](Self::adopt) does, mapping the values of a running edit (`Update`) through `typing` and
+    /// the value it ends on (`Commit`, `Set`) through `done`.
+    fn adopt_typed<V: Value>(
+        &mut self,
+        edit: EditResponse<V>,
+        shown: PickedColor,
+        typing: &dyn Fn(&V, &mut PickedColor),
+        done: &dyn Fn(&V, &mut PickedColor),
+    ) {
         let before = if self.empty { Mixed::Mixed } else { Mixed::Same(shown) };
-        let made = |value: &V| {
+        let made = |map: &dyn Fn(&V, &mut PickedColor), value: &V| {
             let mut colour = shown;
             map(value, &mut colour);
             colour
@@ -233,10 +247,10 @@ impl Collected {
         for event in &edit.events {
             let adopted = match event {
                 EditEvent::Begin { id, label, doc_key, .. } => EditEvent::begin(*id, before, label.clone(), *doc_key),
-                EditEvent::Update { id, value, .. } => EditEvent::update(*id, made(value)),
-                EditEvent::Commit { id, after, .. } => EditEvent::commit(*id, before, made(after)),
+                EditEvent::Update { id, value, .. } => EditEvent::update(*id, made(typing, value)),
+                EditEvent::Commit { id, after, .. } => EditEvent::commit(*id, before, made(done, after)),
                 EditEvent::Cancel { id, reason, .. } => EditEvent::cancel(*id, *reason, Some(before)),
-                EditEvent::Set { after, label, doc_key, .. } => EditEvent::set(before, made(after), label.clone(), *doc_key),
+                EditEvent::Set { after, label, doc_key, .. } => EditEvent::set(before, made(done, after), label.clone(), *doc_key),
                 _ => continue,
             };
             self.edits.push(adopted);
@@ -294,7 +308,8 @@ impl Pass<'_> {
 ///   colour's 8-bit sRGB: greys keep their hue, black its hue and saturation, a typed Lab colour outside sRGB its
 ///   values. [`PickedColor::model`] carries them, and the host's binding holds them between passes.
 /// - Only Web Colors ([`web_colors`](ColorPicker::web_colors), else kept by the picker): every colour reported has each
-///   of red, green and blue on a multiple of 0x33, whichever child made it. The Full layout shows the check box.
+///   of red, green and blue on a multiple of 0x33, whichever child made it. The Full layout shows the check box. A hex
+///   value typed meanwhile (`123456`) commits snapped per channel (`003366`); while it is typed, its draft shows as is.
 ///
 /// AccessKit: a `Group` named by the label; channel fields and sliders are named by the channel's name ("Hue"), or
 /// `<model> <channel>` ("OKLCH hue") while another shown model has a channel of that name.
