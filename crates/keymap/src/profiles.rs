@@ -51,7 +51,9 @@ pub type Builtins<'a> = [(&'a str, Overrides)];
 pub enum ProfileError {
     /// Empty, over [`MAX_SET_NAME`] chars, or with control characters.
     BadName,
+    /// A set of this name exists.
     NameTaken,
+    /// No set of this name exists.
     NotFound,
     /// Built-in sets cannot be changed, renamed or deleted.
     BuiltIn,
@@ -94,13 +96,25 @@ pub enum SetProblem {
     /// A set without a valid name: none, empty, over [`MAX_SET_NAME`] chars, with control
     /// characters or with spaces around it. `name` is what was stored, cut to [`MAX_SET_NAME`]
     /// chars.
-    BadName { name: String },
+    BadName {
+        /// The name as stored, cut to [`MAX_SET_NAME`] chars.
+        name: String,
+    },
     /// A second set of this name; the first one stays.
-    Duplicate { name: String },
+    Duplicate {
+        /// The repeated name.
+        name: String,
+    },
     /// Overrides that are neither a list nor a map.
-    BadOverrides { name: String },
+    BadOverrides {
+        /// The set's name.
+        name: String,
+    },
     /// Sets past [`MAX_SETS`].
-    TooMany { ignored: usize },
+    TooMany {
+        /// How many sets were dropped.
+        ignored: usize,
+    },
     /// Stored by a newer craft-keymap; what this version reads is loaded.
     NewerVersion(u64),
 }
@@ -162,6 +176,7 @@ impl Profiles {
         builtins.iter().map(|(n, _)| n.to_string()).chain(self.sets.keys().cloned()).collect()
     }
 
+    /// Whether `name` is one of `builtins`.
     pub fn is_builtin(name: &str, builtins: &Builtins) -> bool {
         builtins.iter().any(|(n, _)| *n == name)
     }
@@ -180,6 +195,7 @@ impl Profiles {
         self.get(self.active_name(builtins), builtins).unwrap_or(&NO_OVERRIDES)
     }
 
+    /// The overrides of the set `name`, built-in or user.
     pub fn get<'a>(&'a self, name: &str, builtins: &'a Builtins) -> Option<&'a Overrides> {
         self.sets.get(name).or_else(|| builtins.iter().find(|(n, _)| *n == name).map(|(_, o)| o))
     }
@@ -203,6 +219,7 @@ impl Profiles {
         renamed
     }
 
+    /// Makes `name` the set in use. [`ProfileError::NotFound`] when there is no such set.
     pub fn select(&mut self, name: &str, builtins: &Builtins) -> Result<(), ProfileError> {
         self.reconcile(builtins);
         if self.get(name, builtins).is_none() {
@@ -250,6 +267,7 @@ impl Profiles {
         Ok(name)
     }
 
+    /// Renames the user set `from` to `to` and returns the name stored. Built-in sets cannot be renamed.
     pub fn rename(&mut self, from: &str, to: &str, builtins: &Builtins) -> Result<String, ProfileError> {
         self.reconcile(builtins);
         if Self::is_builtin(from, builtins) {
@@ -275,6 +293,7 @@ impl Profiles {
         Ok(to)
     }
 
+    /// Deletes the user set `name`. Built-in sets cannot be deleted.
     pub fn delete(&mut self, name: &str, builtins: &Builtins) -> Result<(), ProfileError> {
         self.reconcile(builtins);
         if Self::is_builtin(name, builtins) {
@@ -365,7 +384,7 @@ impl Profiles {
     }
 
     /// Whether `name` matches a built-in or user set, ignoring case.
-    pub(crate) fn taken(&self, name: &str, builtins: &Builtins) -> bool {
+    pub fn taken(&self, name: &str, builtins: &Builtins) -> bool {
         let lower = name.to_lowercase();
         self.builtin_like(name, builtins) || self.sets.keys().any(|k| k.to_lowercase() == lower)
     }

@@ -23,18 +23,14 @@ fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
 
-/// `doc` with the stacking order of its body's floating objects cleared: saving gives objects
-/// without one an order (`relativeHeight`), so tests about other properties compare without it.
+/// `doc` without the stacking order a save gives objects made in the app (`relativeHeight`,
+/// read back as `Float::z`), to compare them with the objects as made.
 fn unstacked(mut doc: Document) -> Document {
-    for b in &mut doc.body {
-        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
-            for o in &mut p.objects {
-                if let Some(f) = o.float_mut() {
-                    f.z = 0;
-                }
-            }
+    doc.objects_mut(&|_| true, &mut |o| {
+        if let Some(f) = o.float_mut() {
+            f.z = 0;
         }
-    }
+    });
     doc
 }
 
@@ -72,6 +68,9 @@ fn every_char_prop_round_trips() {
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
+        // Theme slots naming Georgia in the document's theme (set below).
+        font_ascii_theme: Some(craft_wordmodel::props::ThemeFont::MajorHAnsi),
+        font_hansi_theme: Some(craft_wordmodel::props::ThemeFont::MajorAscii),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),
@@ -128,6 +127,8 @@ fn every_char_prop_round_trips() {
         cs: Some(true),
         font_cs: Some("B Nazanin".into()),
         font_ea: Some("宋体".into()),
+        font_ea_theme: Some(craft_wordmodel::props::ThemeFont::MinorEastAsia),
+        font_cs_theme: Some(craft_wordmodel::props::ThemeFont::MinorBidi),
         size_cs: Some(13.0),
         bold_cs: Some(false),
         italic_cs: Some(true),
@@ -141,13 +142,15 @@ fn every_char_prop_round_trips() {
             vert_compress: Some(true),
         }),
         link: None,
+        link_tooltip: None,
         ins: None,
         del: None,
         fmt_change: None,
     };
     let auto =
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
-    let d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
+    let mut d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
+    d.settings.major_font = "Georgia".into();
     let r = rt(&d);
     let p = paras(&r)[0];
     assert_eq!(p.text, "plain everything auto");
@@ -569,6 +572,7 @@ fn table_style_formatting_round_trips() {
         borders: Some(Borders { top: Some(Border::single(1.0)), ..Default::default() }),
         fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
         cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
+        indent: Some(0.0),
         header_chr: CharProps { italic: Some(true), ..Default::default() },
         header_fill: Some(Rgb(0xFF, 0xFF, 0)),
         header_borders: Some(Borders::all(Border::single(1.5))),

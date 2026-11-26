@@ -6,6 +6,7 @@
 //! ([`styles`]). A record that does not parse fails the read.
 
 mod expr;
+mod external;
 mod formula;
 mod ftab;
 mod styles;
@@ -22,8 +23,9 @@ use crate::sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, Sheet
 use crate::strings::StringItem;
 use crate::workbook::{DefinedName, SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
-pub(crate) use formula::Links;
+pub(crate) use external::{EXTERNAL_LINK, external_link};
 use formula::{Book, Mode, Name, Xti};
+pub(crate) use formula::{ExternalInfo, Links};
 pub(crate) use styles::styles;
 pub(crate) use table::{TABLE, index_table, table};
 
@@ -39,6 +41,8 @@ const MAX_SHEETS: usize = 1024;
 const MAX_BOOKS: usize = 65_536;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
+/// External link references read at most.
+const MAX_EXTERNAL_LINKS: usize = 65_536;
 /// Table parts one worksheet lists at most.
 const MAX_TABLE_PARTS: usize = 65_536;
 /// Most column records in one worksheet: one per column.
@@ -325,6 +329,19 @@ pub(crate) fn workbook(
                 return Ok((wb, links, Names { pending, sheets: bundle_sheets }));
             }
             39 | 355 | 357 | 358 | 362 | 667 => {
+                // BrtSupBookSrc: an external link part, by its relationship id, in the order a
+                // formula's `[1]` counts.
+                // One that can't be read keeps its place, empty, so later links keep their numbers.
+                if id == 355 && wb.external_references.len() < MAX_EXTERNAL_LINKS {
+                    let mut b = Bytes::new(payload);
+                    match b.text(255).and_then(|rel| b.finish().map(|()| rel)) {
+                        Ok(rel) => wb.external_references.push(rel),
+                        Err(_) => {
+                            warnings.warn("XLSB: an external link reference could not be read");
+                            wb.external_references.push(String::new());
+                        }
+                    }
+                }
                 if let Some(l) = links.as_mut()
                     && link_record(id, payload, l, &mut pending).is_err()
                 {
@@ -614,7 +631,10 @@ fn link_record(id: u16, payload: &[u8], links: &mut Links, pending: &mut Vec<Pen
                 _ => Book::Addin,
             });
         }
-        355 => links.books.push(Book::External),
+        355 => {
+            links.books.push(Book::External(links.external.len()));
+            links.external.push(None);
+        }
         362 => {
             // [MS-XLSB] 2.4.672: cXti "MUST be less than 65536" (PtgRef3d's ixti is 16 bits).
             let count = b.u32()?;
