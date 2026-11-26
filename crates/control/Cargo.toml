@@ -24,6 +24,8 @@ serde_json = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The per-launch control token: 32 random bytes from the operating system (MIT OR Apache-2.0).
 getrandom = "0.3"
+# The request-line reader and the reply's result, shared with servers built on it (MIT OR Apache-2.0, ours).
+craft-control-protocol = { workspace = true }
 # The launcher's app list, read in one place for the launcher, the gateway and every app (MIT OR Apache-2.0, ours).
 craft-ai-agents = { workspace = true, optional = true }
 craft-atomic = { workspace = true, optional = true }

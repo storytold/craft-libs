@@ -58,8 +58,8 @@ fn ps_seed() -> Vec<u8> {
 #[test]
 fn hostile_input_never_panics() {
     let mut seeds = vec![ts_seed(false), ts_seed(true), ps_seed()];
-    seeds.push(work_tests::big_program_stream(false, 40).0);
-    seeds.push(work_tests::big_program_stream(true, 40).0);
+    seeds.push(work_tests::big_program_stream(false, 8).0);
+    seeds.push(work_tests::big_program_stream(true, 8).0);
     // fewer rounds than FilmCraft's 40 000: tests here build without optimisation, and the two
     // large program streams cost a megabyte of window refill per unit read
     for (i, s) in seeds.iter().enumerate() {

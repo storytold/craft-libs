@@ -226,3 +226,52 @@ with `ICM_DONE_OUTSIDEDC`, reapplied after `StartPage`; driver-managed RGB uses 
 Vendor driver automatic color correction remains a driver setting and requires qualification.
 Other platforms return `rgb::PrintError::Unsupported`. The Windows PDF backend and its existing
 completion dependency pin are independent of this additional MIT OR Apache-2.0 API.
+
+## Print settings and feedback (`ui` feature)
+
+`craft_print::ui::State` holds the transient printer selection, copies, duplex and grayscale settings,
+plus discovery and submission receivers. Hosts supply `Discover` and `Submit` workers; neither
+the state nor the controls invokes an OS spooler or generates PDF content. Apps map `Settings`
+to ``Job`` and own the Print action, page selection, preview and export behavior.
+
+`State::run` polls the workers and draws `PrintPanel` over the settings, starting discovery on the first pass; apps
+that draw their own dialog around the panel use it. `PrintDialog` is Photoshop's Print Settings: a preview of the
+paper, printable area, image box and marks (when the app gives a `PrintSheet`; without one the dialog shows its
+`message`), the panel, and the app's `PrintSection` rows (`ParamRows`), with Print,
+Cancel and Done in the footer. Dragging the image box reports its total travel from the press in paper points as
+`EditEvents`. `HostedPrint` is the same dialog owned by a `DialogHost`. It holds no discovery closure: it asks with
+`take_refresh` (the first pass and each Refresh) and the app answers with `listen`, passing `discover()` or its own
+receiver, so a list that needs the app's session works too. `State::listen` takes the receiver and refuses while a
+discovery or a job runs.
+
+`PrintLayout::Stacked` (the default) stacks the printer panel and every section beside the preview.
+`PrintLayout::Sections` puts the preset row, `PrintPanel` in `PrintPanelLayout::PrinterOnly` (the printer, Refresh
+and, with `driver`, a Setup… button whose press is `PrintDialogOutput::setup` and `HostedPrint::take_setup`) and the
+`header` rows above a list of the sections beside the shown one; the preview, its readout and the sheet step stand
+under the list. The shown section is the dialog's memory unless the host binds it with `section`.
+
+`PrintMode::PresetEditor` replaces the preset, printer and header rows with a Preset name field whose refusal
+(`check_name`) shows under it; OK reads "Save Preset" and there is no Done.
+
+`PrintPresets` fills the preset row: the presets, the held one (`[Custom]` shows while none is) and the built-in
+names. The dialog keeps no store: the row's Apply, Create, Rename and Delete go to `PrintDialogOutput::presets`
+(`HostedPrint::take_preset_events`) and the host answers with `HostedPrint::set_presets`.
+
+A `PrintSheet` with `count(n)` more than one shows Previous, "{n} of {count}" and Next under the preview; a step is
+`PrintDialogOutput::sheet` and `HostedPrint::sheet_index`. `outlines` draws each sheet's rectangle on the paper.
+
+Automation lists `section`, `sheet`, `preset` and, in the editor, `name` beside the settings keys. `choice: "done"`
+makes the next `confirm` answer Done; any other value is refused. `held_ok` keeps the dialog open until the app
+answers its Print with `answer_ok`; an `Err` shows its reason under the sections.
+
+Apps render typed `Feedback` using their own translations. `poll` requests occasional repaints
+while work is pending. Refresh disables submission until the new printer list arrives, preserves
+a still-present selection, and otherwise chooses the system default or first available printer.
+An empty or failed discovery cannot leave a stale printer ready to submit.
+
+`ready` is false while a job is pending. `begin` refuses replacing an active job receiver;
+dropping a receiver does not cancel a native job. Apps must test readiness before invoking the
+host submit callback and keep active work alive when closing a window. Queue-default duplex is
+represented by `None`, independently of explicit one-sided, long-edge or short-edge choices.
+Receipts and backend errors remain unmodified data for the app to display. These controls work
+on WASM too; browser PDF printing remains an app-owned service.
