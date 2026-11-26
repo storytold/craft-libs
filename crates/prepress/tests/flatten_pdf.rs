@@ -11,10 +11,10 @@ use craft_pdf::write::backend::paint::{Fill, FillRule as KFillRule};
 use craft_pdf::write::{Metadata, Writer};
 use craft_plate_test::reference::{self, Context};
 use craft_plate_test::scene;
-use craft_prepress::flatten::kurbo::{BezPath, PathEl};
+use craft_prepress::flatten::kurbo::{BezPath, PathEl, Point};
 use craft_prepress::flatten::pdf::{ReadOptions, ReadReport, read_page};
-use craft_prepress::flatten::{DisplayList, FillRule, GroupItem, Item, Paint};
-use craft_prepress::{CmsConversion, Options, plates, to_pdf_color};
+use craft_prepress::flatten::{DisplayList, FillItem, FillRule, GroupItem, ImageItem, ImageSpace, Item, Paint};
+use craft_prepress::{CmsConversion, InkColor, InkId, Options, Process, plates, to_pdf_color};
 
 fn scene_pdf(id: &str) -> Vec<u8> {
     let scenes = scene::load_dir(&scene::scenes_dir()).unwrap();
@@ -94,6 +94,84 @@ fn opaque_items_separate_as_the_source() {
             assert!(differ * 100 < pa.len(), "{id}: plate {k} differs in {differ} of {} pixels", pa.len());
         }
     }
+}
+
+fn fill_items(list: &DisplayList) -> Vec<(Vec<&GroupItem>, &FillItem)> {
+    leaves(&list.items)
+        .into_iter()
+        .filter_map(|(groups, item)| match item {
+            Item::Fill(f) => Some((groups, f)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn ink(p: Process) -> InkId {
+    InkId::process(p)
+}
+
+/// A one-page PDF from raw content and resources, objects numbered from 5.
+fn raw_pdf(content: &str, resources: &str, objects: &[String]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+    out.extend_from_slice(
+        format!("3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 120] /Contents 4 0 R /Resources << {resources} >> >> endobj\n").as_bytes(),
+    );
+    out.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+    for (i, body) in objects.iter().enumerate() {
+        out.extend_from_slice(format!("{} 0 obj {body} endobj\n", i + 5).as_bytes());
+    }
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    out
+}
+
+fn stream(dict: &str, data: &str) -> String {
+    format!("<< {dict} /Length {} >> stream\n{data}\nendstream", data.len())
+}
+
+fn hex_image(dict: &str, hex: &str) -> String {
+    stream(&format!("/Type /XObject /Subtype /Image /Filter /ASCIIHexDecode {dict}"), &format!("{hex}>"))
+}
+
+fn images(list: &DisplayList) -> Vec<(Vec<&GroupItem>, &ImageItem)> {
+    leaves(&list.items)
+        .into_iter()
+        .filter_map(|(groups, item)| match item {
+            Item::Image(im) => Some((groups, im)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn tints_at(im: &ImageItem, p: Point) -> Vec<(InkId, f32)> {
+    let u = im.transform.inverse() * p;
+    let (w, h) = (im.size.0 as usize, im.size.1 as usize);
+    let (x, y) = (((u.x * w as f64) as usize).min(w - 1), ((u.y * h as f64) as usize).min(h - 1));
+    let ids: Vec<InkId> = match &im.space {
+        ImageSpace::Gray => vec![ink(Process::Black)],
+        ImageSpace::Cmyk => Process::ALL.iter().map(|p| ink(*p)).collect(),
+        ImageSpace::Inks(ids) => ids.clone(),
+        ImageSpace::Rgb => panic!("RGB image"),
+    };
+    let n = if im.space == ImageSpace::Gray { 1 } else { ids.len() };
+    let s = &im.samples[(y * w + x) * n..(y * w + x + 1) * n];
+    if im.space == ImageSpace::Gray {
+        return vec![(ids[0], 1.0 - f32::from(s[0]) / 255.0)];
+    }
+    ids.into_iter().zip(s).map(|(id, v)| (id, f32::from(*v) / 255.0)).collect()
+}
+
+fn tint(tints: &[(InkId, f32)], id: InkId) -> f32 {
+    tints.iter().find(|t| t.0 == id).map_or(0.0, |t| t.1)
+}
+
+fn stop_tints(stops: &[(f32, InkColor)], s: f32) -> Vec<(InkId, f32)> {
+    let k = stops.iter().position(|st| st.0 >= s).unwrap();
+    let (lo, hi) = (&stops[k.saturating_sub(1)], &stops[k]);
+    let u = if hi.0 > lo.0 { (s - lo.0) / (hi.0 - lo.0) } else { 1.0 };
+    let (InkColor::Tints(a), InkColor::Tints(b)) = (&lo.1, &hi.1) else { panic!() };
+    a.iter().zip(b).map(|(x, y)| (x.0, x.1 + (y.1 - x.1) * u)).collect()
 }
 
 /// sRGB `rgb` in FOGRA39, the default fallback, with `intent`, converted by craft-cms itself.
