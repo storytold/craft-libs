@@ -167,6 +167,54 @@ fn a_row_range_bounds_the_list_and_it_scrolls_past_the_cap() {
     assert!(seen[0].range().start > first, "the capped list scrolls its rows under the wheel");
 }
 
+/// A list capped at more rows than it has shows them all and has nothing to scroll, so a key that moves its lead to a
+/// row below the panel's foot scrolls the panel just far enough to show that row, as for a list with the natural
+/// height: an arrow to the first hidden row, then Page Down to the last.
+#[trial]
+fn a_capped_list_showing_all_its_rows_has_the_panel_show_its_lead() {
+    use craft_ui::contract::{ContainerProps, Scroll, ShowContainer as _};
+    use craft_ui::testing::layout::Block;
+    use craft_ui_test_kit::body::Slab;
+    const LEN: usize = 6;
+    let words = Count(LEN);
+    for cap in [None, Some(20)] {
+        let seen = Seen::default();
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+                Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, _| {
+                    Block::new(Vec2::new(VIEW.x, VIEW.y - 2.0 * ROW_H)).show(ui);
+                    seen.take(List::new(SelectMode::Single).rows(0, cap).id_salt("list").show_items(ui, &words, &mut |_, _| Row::new()));
+                    Block::new(Vec2::new(VIEW.x, VIEW.y)).show(ui);
+                });
+            });
+        };
+        frames.idle(3, &mut show);
+        focus_list(&mut frames, &seen, &mut show);
+        let foot = ORIGIN.y + VIEW.y;
+        let before = seen.rect.get();
+        // The rows are ROW_H high from the list's top: the first two show, the third starts at the foot.
+        let row_bottom = |list: Rect, at: usize| list.top() + (at + 1) as f32 * ROW_H;
+        assert!(row_bottom(before, 2) > foot + SAME, "cap {cap:?}: the third row starts below the panel's foot: {before:?}");
+        for _ in 0..LEN {
+            if seen.leads().last() == Some(&2) {
+                break;
+            }
+            press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+        }
+        assert_eq!(seen.leads().last(), Some(&2), "cap {cap:?}: the arrows moved the lead to the third row");
+        frames.idle(10, &mut show);
+        let after = seen.rect.get();
+        assert!(row_bottom(after, 2) <= foot + SAME, "cap {cap:?}: the third row shows: {before:?}, then {after:?}");
+        assert!(before.top() - after.top() < 2.0 * ROW_H, "cap {cap:?}: the panel moved no further than the row needs: {before:?}, then {after:?}");
+        press(&mut frames, Key::PageDown, Modifiers::NONE, &mut show);
+        frames.idle(10, &mut show);
+        assert_eq!(seen.leads().last(), Some(&(LEN - 1)), "cap {cap:?}: Page Down moved the lead to the last row");
+        let paged = seen.rect.get();
+        assert!(row_bottom(paged, LEN - 1) <= foot + SAME, "cap {cap:?}: Page Down shows the last row: {after:?}, then {paged:?}");
+    }
+}
+
 /// One tab stop; the lead moves by arrows, Home and End, Page and type-ahead; selection by Space, Shift and Ctrl.
 #[trial]
 fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
