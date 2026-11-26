@@ -398,6 +398,11 @@ fn symbols(page: &mut Page) -> Option<()> {
 /// here, and the page's own dictionary holds only the others (none, when it has none), as
 /// [`encode_shared`] writes them; `None` too for a page that places none of the shared ones.
 fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>) -> Option<Vec<u8>> {
+    plan_within(page, columns, rows, copies, log_strips, shared, MAX_CODED_SYMBOLS)
+}
+
+/// [`plan`] coding at most `max` symbols.
+fn plan_within(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>, max: usize) -> Option<Vec<u8>> {
     let symbol = |s: u32| page.symbols.get(s as usize);
     let global = |s: u32| shared.and_then(|g| g.ids.get(s as usize).copied().flatten());
     let globals = shared.map_or(0, |g| g.count);
@@ -405,7 +410,7 @@ fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u3
     let mut kept: Vec<u32> =
         (0..page.symbols.len() as u32).filter(|s| global(*s).is_none() && symbol(*s).is_some_and(|s| s.uses >= copies)).collect();
     let count = usize::try_from(globals).ok()?.checked_add(kept.len())?;
-    if !(2..=MAX_CODED_SYMBOLS).contains(&count) {
+    if !(2..=max).contains(&count) {
         return None;
     }
     kept.sort_by_key(|s| symbol(*s).map(|s| (s.height, s.width)));
@@ -934,10 +939,22 @@ mod tests {
             }
             (samples(&picture), columns as u32, rows as u32)
         };
+        // At a cap of 300 symbols, then (nightly: each picture is tens of thousands of marks coded and decoded) at
+        // MAX_CODED_SYMBOLS and past it through `encode_jbig2`.
+        let max = 300;
+        let (data, columns, rows) = codes(max, 0);
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(decode(&plan_within(&at_cap, columns, rows, 1, None, None, max).unwrap()), unpack(&data, columns, rows));
+        // One more distinct mark, each once: neither plan is made.
+        let (data, columns, rows) = codes(max + 1, 0);
+        let past = page(&data, columns).unwrap();
+        assert!(plan_within(&past, columns, rows, 1, None, None, max).is_none() && plan_within(&past, columns, rows, 2, None, None, max).is_none());
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS, 0);
         let at_cap = page(&data, columns).unwrap();
         assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
-        // One more distinct mark, each once: neither plan is made.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 0);
         let past = page(&data, columns).unwrap();
         assert!(plan(&past, columns, rows, 1, None, None).is_none() && plan(&past, columns, rows, 2, None, None).is_none());
@@ -1241,6 +1258,10 @@ mod tests {
     /// in. Ten marks of the first image are in two images after it, with 464 first seen there.
     #[test]
     fn past_the_marks_a_group_holds_later_ones_arent_shared() {
+        // 66,000 marks coded in four images: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (a, b) = (samples(&combs(0..40_000)), samples(&combs(40_000..65_536)));
         let late = combs((0..10).chain(65_536..66_000).collect::<Vec<_>>().into_iter());
         let (rows, late) = (late.len() as u32, samples(&late));
@@ -1259,6 +1280,10 @@ mod tests {
     /// or a generic region, whichever is smaller).
     #[test]
     fn past_the_shared_limit_the_most_widely_held_marks_are_shared() {
+        // 50,000 marks coded in three images: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (both, first) = (combs(0..20_000), combs(0..10_000));
         let rows = both.len();
         let first: Bitmap = first.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 120 * 36], rows - first.len())).collect();

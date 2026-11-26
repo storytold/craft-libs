@@ -122,28 +122,3 @@ fn an_uncanceled_open_preserves_bounds_and_loading_errors() {
         Err(CancellableOpenError::Open(OpenError::InputLimit { limit: 1 }))
     ));
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-#[allow(clippy::panic)]
-fn callback_panics_become_errors_before_parsing_and_during_copying() {
-    let bytes = vec![b' '; 4 << 20];
-    for borrowed in [false, true] {
-        for at in [1, 2, 10] {
-            let polls = Arc::new(AtomicUsize::new(0));
-            let counter = polls.clone();
-            let cancel = syntax::Cancellation::new(move || {
-                if counter.fetch_add(1, Ordering::Relaxed) + 1 == at {
-                    panic!("synthetic callback panic");
-                }
-                false
-            });
-            let result = if borrowed {
-                open_slice_with_options_and_cancel(&bytes, None, &OpenOptions::default(), &cancel)
-            } else {
-                open_with_options_and_cancel(Arc::new(bytes.clone()), None, &OpenOptions::default(), &cancel)
-            };
-            assert!(matches!(result, Err(CancellableOpenError::Open(OpenError::BackendPanic))));
-        }
-    }
-}

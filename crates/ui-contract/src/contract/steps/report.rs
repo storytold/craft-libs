@@ -1,0 +1,368 @@
+//! Step 16, report: the AccessKit node and its sub-nodes.
+
+use super::stops::takes_focus;
+use crate::contract::Validity;
+use crate::contract::cx::{CxCore, Decls};
+use crate::contract::run::{ErasedPass, TypeFacts};
+use crate::primitives::FaceRecord;
+use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, SetPosition, SubDecl, SubNode, scope};
+use crate::runtime::commands::ResolvedCommand;
+use crate::runtime::env::{Label, Message};
+use crate::runtime::focus::{self};
+use crate::runtime::{inspect, keys, pass_state};
+use crate::style::Flags;
+use craft_behavior::{PartRef, Sense};
+use egui::Id;
+
+/// What step 16 reads that the pass computed before: the part declarations, the sense and the container facts.
+pub(crate) struct ReportIn<'a> {
+    pub decls: &'a Decls,
+    pub sense: Sense,
+    /// The container's `ContainerProps.live`.
+    pub live: Option<Politeness>,
+    /// The axes the container's body scrolls on.
+    pub scrolls: (bool, bool),
+    /// The roving group the component's own stop is in.
+    pub group: Option<Id>,
+    /// The roving group of the component's body, which it owns: its report writes its members' places in the set.
+    pub owns: Option<Id>,
+    /// The expanded state of a collapsible container, unless `Component::access` says otherwise.
+    pub expanded: Option<bool>,
+    /// The position the component reports itself, ahead of its group's and its item facts'.
+    pub position: Option<SetPosition>,
+}
+
+/// The bound command's hint and shortcut text, which describe and key its node.
+fn command_facts<'a>(ctx: &egui::Context, command: &'a ResolvedCommand) -> (Option<&'a str>, Option<&'a str>) {
+    let text = command.chord_text.as_deref();
+    #[cfg(feature = "testing")]
+    if text.is_some() {
+        crate::runtime::measure::count_chord_text(ctx);
+    }
+    #[cfg(not(feature = "testing"))]
+    let _ = ctx;
+    (command.hint.as_deref(), text)
+}
+
+/// The message of a validity that warns, refuses or errs, and whether it warns.
+pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)> {
+    match validity {
+        Validity::Warn(message) => Some((message, true)),
+        Validity::Refuse(message) | Validity::Error(message) => Some((message, false)),
+        _ => None,
+    }
+}
+
+/// Step 16, report: the AccessKit node filled with its sub-nodes, the label-scope patch and the merge, then the
+/// cursor request. Returns the validity message no enclosing container shows as its status line: the component's
+/// own tooltip shows it.
+pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) -> Option<String> {
+    let validity = register_validity(p);
+    register_shown(p.core_ref());
+    report_access(p, facts, input, validity.as_ref().map(|(text, _)| text.clone()));
+    // The body's members have run and reported: each that left its place to the group takes it among this pass's
+    // members.
+    if let Some(group) = input.owns {
+        let ctx = &p.core_ref().ctx;
+        for (member, position) in focus::group_positions(ctx, group) {
+            access::write_set_position(ctx, member, position);
+        }
+    }
+    crate::contract::cx::write_cursor(p.core_ref());
+    validity.filter(|(_, shown)| !shown).map(|(text, _)| text)
+}
+
+/// Registers a component bound to a command as where that command is shown, for `commands::shown`. A measuring run
+/// or a layer that shows nothing records nothing (`parted`), and a component the clip cuts is not shown whole.
+fn register_shown(core: &CxCore<'_>) {
+    let Some(command) = core.command.as_deref().filter(|_| core.parted && core.visible == core.rect) else { return };
+    let label = if *core.resolved.label == *command.label { Label::from(command.label.clone()) } else { Label::from(core.resolved.label.to_owned()) };
+    crate::runtime::commands::note_shown(&core.ctx, core.response.layer_id, core.visible, label, &command.command);
+}
+
+/// The message of a validity that warns or refuses as text, registered with the innermost label scope, and whether
+/// that scope's container shows it as its status line.
+fn register_validity(p: &dyn ErasedPass<'_>) -> Option<(String, bool)> {
+    let core = p.core_ref();
+    let (message, warns) = p.validity()?;
+    let text = core.env.resolve(&message.text).as_str().to_owned();
+    let shown = scope::register_message(&core.ctx, message, message.effective_tone(warns), text.clone());
+    Some((text, shown))
+}
+
+/// `validity` is the validity message as text: the node's description when the component gives none.
+fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>, validity: Option<String>) {
+    let core = p.core_ref();
+    let (ctx, id) = (&core.ctx, core.id);
+    // Without a node, `Access` is read only for a merged role's facts, and for its role when the roles the type may
+    // report include both a role with a node and none, which leave the label scope differently. Otherwise (AccessKit
+    // off, or a role with no node) the component's access data is never built.
+    let roles = || std::iter::once(&facts.role).chain(facts.alt_roles);
+    let merges = roles().any(|role| *role == Role::Merged);
+    let node_or_none = roles().any(|role| matches!(role, Role::Node(_))) && roles().any(|role| *role == Role::None);
+    let reads_access = core.node || merges || node_or_none;
+    let (mut access, value_text) = if reads_access { p.access() } else { (Access::default(), p.value_text()) };
+    if let Some(text) = &value_text {
+        match &mut access.numeric {
+            Some(numeric) => numeric.text = Some(text.clone()),
+            None => access.value = access.value.take().or_else(|| Some(text.clone())),
+        }
+    }
+    *core.value_text.borrow_mut() = value_text;
+    let role = access.role.unwrap_or(facts.role);
+    debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
+    let flags = core.state.flags;
+    let resolved = core.resolved;
+    // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
+    // for the inspected region, which keytips place their badges by.
+    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
+    let paint = core.paint.borrow();
+    if role == Role::Merged {
+        let facts = scope::Merged {
+            name: resolved.label.to_owned(),
+            description: access.description.clone().or_else(|| resolved.description.map(str::to_owned)).or_else(|| validity.clone()),
+            flags,
+            enabled: resolved.enabled,
+        };
+        scope::finish(ctx, id, Some(facts));
+        scope::leave(ctx, id);
+        return;
+    }
+    scope::finish(ctx, id, None);
+    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
+    // then stays only as the place of the children shown inside it, which assistive technology passes over: left
+    // unwritten it would be reported as a node of unknown role.
+    let Role::Node(role) = role else {
+        if core.node {
+            access::pass_through(ctx, id);
+        }
+        scope::leave(ctx, id);
+        return;
+    };
+    if !core.node {
+        return;
+    }
+    // Facts that only a node shows are built after the node check.
+    let carried = scope::carried_name(ctx, id);
+    for node in &mut access.nodes {
+        if let Some(toggle) = core.toggles.iter().find(|toggle| toggle.part == node.part) {
+            node.expanded = Some(toggle.open);
+        }
+    }
+    access.access_key = access.access_key.or(core.resolved.access_key);
+    if access.grid == access::GridPlace::default() {
+        access.grid = core.grid;
+    }
+    let (hint, shortcut) = core.command.as_deref().map_or((None, None), |command| command_facts(ctx, command));
+    for (_, label) in &mut access.custom_actions {
+        *label = core.env.resolve(label);
+    }
+    let tooltip_text = resolved.tooltip.map(|tooltip| core.env.resolve(&tooltip.spec().text));
+    let tooltip = tooltip_text.as_ref().map(Label::as_str);
+    if access.live.is_none() {
+        access.live = input.live;
+    }
+    if access.expanded.is_none() {
+        access.expanded = input.expanded;
+    }
+    if access.position.is_none() {
+        access.position = input.position;
+    }
+    // A member of a roving group that gives no place of its own takes it from the group's owner, which knows the
+    // members of the pass only after they all ran; its item facts' place stands until then.
+    let group_place = input.group.filter(|_| access.position.is_none());
+    if access.position.is_none() {
+        access.position = core.env.facts_of(id).map(|facts| facts.position);
+    }
+    let inner_of = access::fold::owner_of(ctx, id);
+    let folded = access::fold::take(ctx, id);
+    if access.value.is_none() {
+        access.value = folded.as_ref().and_then(|folded| folded.value.clone());
+    }
+    let focusable = takes_focus(resolved) && (input.sense.contains(Sense::FOCUS) || folded.is_some());
+    // A button over a two-state value (a shown `bool`, a toggle command's checked state) is pressed or not, and says
+    // so off as well as on.
+    let two_state = (role == crate::runtime::egui::access::NodeRole::Button)
+        .then(|| p.shown_bool().or_else(|| core.command.as_deref().and_then(|command| command.checked)))
+        .flatten();
+    let own = Own {
+        id,
+        component: facts.name,
+        role,
+        rect: core.rect,
+        label: resolved.label,
+        names_nothing: access.value.is_none() && carried.as_deref() == Some(resolved.label),
+        tooltip,
+        elided: paint.elided.as_deref(),
+        description: resolved.description,
+        validity: validity.as_deref(),
+        hint,
+        shortcut,
+        display: facts.input == craft_behavior::Input::Display,
+        flags,
+        selected: resolved.selected.or(two_state),
+        enabled: resolved.enabled,
+        read_only: resolved.read_only,
+        focusable,
+        clickable: resolved.enabled && input.sense.contains(Sense::CLICK),
+        context_menu: crate::runtime::egui::access::offers_context_menu(ctx, id),
+        keeps_name: resolved.keeps_name,
+        scrolls: input.scrolls,
+        access: &access,
+        popups: &if facts.overlays { crate::contract::overlay::popups_shown(ctx, id) } else { Vec::new() },
+        popups_by_part: crate::contract::overlay::has_toggle_nodes(&core.toggles, &access.nodes),
+        ltr_axis: resolved.ltr_axis,
+    };
+    if let Some(owner) = inner_of {
+        // Shown as the owner's control: the owner's node is the one node, and stands for this root's key focus.
+        access::hide(ctx, id);
+        scope::leave(ctx, id);
+        access::fold::offer(ctx, owner, access::fold::Folded { inner: id, value: access.value.clone() });
+        if flags.contains(Flags::FOCUSED) {
+            access::set_focus(ctx, owner);
+        }
+    } else {
+        access::report(ctx, &own);
+        if let Some(group) = group_place {
+            focus::takes_group_position(ctx, id, group);
+        }
+    }
+    if let Some(folded) = &folded {
+        keys::register_node(ctx, id, folded.inner, None, focusable);
+    }
+    let editor_record = || {
+        let widget = core.editor.as_ref()?.widget;
+        pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
+    };
+    if let Some(facts) = core.text_access.take().or_else(editor_record) {
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.unit.as_deref(), access.value.as_deref());
+    } else if let Some(editor) = &core.editor {
+        crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
+    }
+    if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
+        access::set_focus(ctx, id);
+    }
+    let facts = core.env.facts_of(id);
+    for node in &mut access.nodes {
+        // A cell of an item row knows its row; its column is the position of its column key among the columns the
+        // collection shows, or, for a cell keyed by position, its repeat index.
+        let (Some(facts), Role::Node(crate::runtime::egui::access::NodeRole::Cell | crate::runtime::egui::access::NodeRole::GridCell)) =
+            (facts, node.role)
+        else {
+            continue;
+        };
+        let column = match &node.column {
+            Some(key) => facts.columns.iter().position(|column| column == key),
+            None => node.part.index.map(|index| index as usize),
+        };
+        node.grid = access::GridPlace {
+            row_index: node.grid.row_index.or(Some(facts.position.index)),
+            column_index: node.grid.column_index.or(column),
+            ..node.grid
+        };
+    }
+    let parent = access::fold::owner_of(ctx, id).unwrap_or(id);
+    report_parts(core, input.decls, &access.nodes, &paint.faces, parent);
+}
+
+/// The sub-nodes of a component's parts: the nodes its `access` declared, each with the face painted for it, then a
+/// node for every other face. `parent` is the node a part attaches to unless it names one (`SubNode::under`).
+pub(crate) fn report_parts(core: &CxCore<'_>, decls: &Decls, nodes: &[SubNode], faces: &[FaceRecord], parent: Id) {
+    let mut seen = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        seen.push(node.part);
+        report_sub(core, decls, node, faces.iter().find(|face| face.part == node.part), parent);
+    }
+    for face in faces.iter().filter(|face| !seen.contains(&face.part)) {
+        report_sub(core, decls, &SubNode::new(face.part, face.role), Some(face), parent);
+    }
+    for (decl, extras) in decls {
+        let part = PartRef { key: decl.key, index: decl.index };
+        let Some((role, name)) = &extras.node else { continue };
+        if seen.contains(&part) || faces.iter().any(|face| face.part == part) {
+            continue;
+        }
+        let mut node = SubNode::new(part, *role);
+        node.name = access::Name::Text(name.clone());
+        report_sub(core, decls, &node, None, parent);
+    }
+}
+
+fn report_sub(core: &CxCore<'_>, decls: &Decls, node: &SubNode, face: Option<&FaceRecord>, parent: Id) {
+    let key = (node.part.key, node.part.index);
+    let result = core.results.get(&key);
+    let declared = decls.iter().find(|(decl, _)| (decl.key, decl.index) == key);
+    let mut node = node.clone();
+    node.flags |= result.map_or(Flags::empty(), |result| result.flags);
+    let decl = SubDecl {
+        owner: core.id,
+        component: "",
+        node: &node,
+        rect: result.map_or(core.rect, |result| result.rect),
+        enabled: core.resolved.enabled && face.is_none_or(|face| face.enabled),
+        focusable: takes_focus(core.resolved) && declared.is_some_and(|(_, extras)| extras.focusable),
+        clickable: core.resolved.enabled && declared.is_some_and(|(decl, extras)| decl.sense.contains(Sense::CLICK) && !extras.no_access_click),
+        active: core.active == Some(node.part),
+        face: face.map(|face| FaceFacts {
+            name: &face.name,
+            flags: face.flags,
+            numeric: face.numeric.as_ref(),
+            expanded: face.expanded,
+            value: face.value.as_deref(),
+            color: face.color,
+        }),
+        label: core.resolved.label,
+        parent: node.under.map_or(parent, |under| access::sub_node_id(core.id, under)),
+    };
+    access::report_sub(&core.ctx, &decl);
+}
+
+/// A node of a component whose size failed the guard: it shows nothing, so it is an unnamed group. The component's own
+/// role would promise what the role rules require (a slider's range, a tab's position) of a node that has none.
+pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
+    let (Role::Node(_), Role::Node(role)) = (facts.role, Role::GROUP) else { return };
+    let access = Access { position: core.env.facts_of(core.id).map(|facts| facts.position), ..Access::default() };
+    access::report(
+        &core.ctx,
+        &Own {
+            id: core.id,
+            component: facts.name,
+            role,
+            rect: core.rect,
+            label: "",
+            names_nothing: false,
+            tooltip: None,
+            elided: None,
+            description: None,
+            validity: None,
+            hint: None,
+            shortcut: None,
+            display: false,
+            flags: Flags::empty(),
+            selected: None,
+            enabled: core.resolved.enabled,
+            read_only: core.resolved.read_only,
+            focusable: false,
+            clickable: false,
+            context_menu: false,
+            keeps_name: false,
+            scrolls: (false, false),
+            access: &access,
+            popups: &[],
+            popups_by_part: false,
+            ltr_axis: core.resolved.ltr_axis,
+        },
+    );
+}
+
+/// The text facts an editor body reported through its `EditorHandle` in the running pass, by editor widget: the
+/// owning component's report step reads its own (owed by ribbon-w5, S-L168). Pass-local, so nothing outlives the pass.
+#[derive(Default)]
+pub(crate) struct EditorRecords(std::collections::HashMap<egui::Id, crate::runtime::access::text::TextFacts>);
+
+/// Puts `facts` in the running pass's record for the editor part `widget`.
+pub(crate) fn note_editor_facts(ctx: &egui::Context, widget: egui::Id, facts: crate::runtime::access::text::TextFacts) {
+    pass_state::with::<EditorRecords, _>(ctx, |records| {
+        records.0.insert(widget, facts);
+    });
+}

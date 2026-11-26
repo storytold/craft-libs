@@ -342,30 +342,42 @@ impl Table {
     }
     /// Whether [`Table::normalize`] would drop rows or columns to fit [`MAX_CELLS`].
     pub fn over_cap(&self) -> bool {
-        let n = self.cols.len();
-        n > MAX_CELLS || self.rows.len() > (MAX_CELLS / n.max(1)).max(1)
+        self.over(MAX_CELLS)
     }
     /// What [`Table::normalize`] would leave of this table, cloning only the rows and cells that
     /// survive (an oversized table is not copied whole first).
     pub fn normalized(&self) -> Table {
-        let n = self.cols.len().min(MAX_CELLS);
-        let keep = (MAX_CELLS / n.max(1)).max(1);
-        let rows = self.rows.iter().take(keep).map(|r| Row { height: r.height, cells: r.cells.iter().take(n).cloned().collect() }).collect();
-        let mut t = Table { cols: self.cols[..n].to_vec(), rows, background: self.background.clone(), style: self.style.clone(), ..*self };
-        t.normalize();
-        if self.over_cap() {
-            t.clip_spans();
-        }
-        t
+        self.normalized_within(MAX_CELLS)
     }
     /// Make every row have exactly `cols.len()` cells (repair after loading). A grid over
     /// [`MAX_CELLS`] loses its last rows (and columns) first, so a file naming many rows and many
     /// columns but few cells cannot make this allocate their product.
     pub fn normalize(&mut self) {
-        let truncated = self.over_cap();
-        self.cols.truncate(MAX_CELLS);
+        self.normalize_within(MAX_CELLS);
+    }
+    /// [`Table::over_cap`] for a cap of `max` cells.
+    fn over(&self, max: usize) -> bool {
         let n = self.cols.len();
-        self.rows.truncate((MAX_CELLS / n.max(1)).max(1));
+        n > max || self.rows.len() > (max / n.max(1)).max(1)
+    }
+    /// [`Table::normalized`] for a cap of `max` cells.
+    fn normalized_within(&self, max: usize) -> Table {
+        let n = self.cols.len().min(max);
+        let keep = (max / n.max(1)).max(1);
+        let rows = self.rows.iter().take(keep).map(|r| Row { height: r.height, cells: r.cells.iter().take(n).cloned().collect() }).collect();
+        let mut t = Table { cols: self.cols[..n].to_vec(), rows, background: self.background.clone(), style: self.style.clone(), ..*self };
+        t.normalize_within(max);
+        if self.over(max) {
+            t.clip_spans();
+        }
+        t
+    }
+    /// [`Table::normalize`] for a cap of `max` cells.
+    fn normalize_within(&mut self, max: usize) {
+        let truncated = self.over(max);
+        self.cols.truncate(max);
+        let n = self.cols.len();
+        self.rows.truncate((max / n.max(1)).max(1));
         for r in &mut self.rows {
             r.cells.resize_with(n, || Cell::new(""));
             for c in &mut r.cells {
@@ -741,18 +753,27 @@ mod tests {
 
     #[test]
     fn normalize_caps_a_sparse_grid_at_max_cells() {
-        let mut t = Table { cols: vec![10.0; 1000], rows: vec![Row::default(); 1000], ..Default::default() };
-        t.normalize();
-        assert_eq!(t.cols.len(), 1000);
-        assert_eq!(t.rows.len(), MAX_CELLS / 1000);
-        assert!(t.rows.iter().all(|r| r.cells.len() == 1000));
-        let mut t = Table { cols: vec![1.0; MAX_CELLS + 5], rows: vec![Row::default(); 3], ..Default::default() };
-        t.normalize();
-        assert_eq!((t.cols.len(), t.rows.len()), (MAX_CELLS, 1));
-        let wide = Table { cols: vec![10.0; 1000], rows: vec![Row { height: 1.0, cells: vec![Cell::new("x"); 1500] }; 150], ..Default::default() };
-        let mut n = wide.clone();
-        n.normalize();
-        assert_eq!(wide.normalized(), n);
+        // At a cap 100 times smaller; nightly also at MAX_CELLS.
+        let full = craft_testkit::hostile::divisor() == 1;
+        for max in [MAX_CELLS / 100].into_iter().chain(full.then_some(MAX_CELLS)) {
+            let cols = max / 100;
+            let mut t = Table { cols: vec![10.0; cols], rows: vec![Row::default(); 1000], ..Default::default() };
+            t.normalize_within(max);
+            assert_eq!(t.cols.len(), cols);
+            assert_eq!(t.rows.len(), max / cols);
+            assert!(t.rows.iter().all(|r| r.cells.len() == cols));
+            let mut t = Table { cols: vec![1.0; max + 5], rows: vec![Row::default(); 3], ..Default::default() };
+            t.normalize_within(max);
+            assert_eq!((t.cols.len(), t.rows.len()), (max, 1));
+            let wide = Table {
+                cols: vec![10.0; cols],
+                rows: vec![Row { height: 1.0, cells: vec![Cell::new("x"); cols + cols / 10] }; max / cols + 1],
+                ..Default::default()
+            };
+            let mut n = wide.clone();
+            n.normalize_within(max);
+            assert_eq!(wide.normalized_within(max), n);
+        }
         let mut t = Table::new(4, 4, 400.0, 30.0);
         t.normalize();
         assert_eq!((t.n_rows(), t.n_cols()), (4, 4));
