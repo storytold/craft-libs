@@ -215,6 +215,13 @@ fn the_rules_of_a_locale_come_from_the_data() {
         assert_eq!(rules.ordinal, [Category::Other], "German, Polish, Arabic and Japanese have one ordinal category");
     }
     assert!(LocaleRules::for_locale("xx").is_none());
+    // The data has every language CLDR has plural rules for, also the two ICU4X's own compiled data lacks.
+    for code in ["ckb", "dv", "tg"] {
+        let rules = LocaleRules::for_locale(code).unwrap_or_else(|| panic!("{code}"));
+        assert!(!rules.cardinal.is_empty(), "{code}");
+        let total: usize = Category::ALL.iter().map(|c| rules.whole_numbers(Select::Plural, *c).len()).sum();
+        assert_eq!(total, 1001, "{code}");
+    }
     // The whole numbers of each category, from the same data.
     assert_eq!(en.whole_numbers(Select::Plural, Category::One), [1]);
     assert_eq!(de.whole_numbers(Select::Plural, Category::One), [1]);
