@@ -47,6 +47,8 @@ pub enum Kind {
     Psd,
     Qoi,
     OpenExr,
+    /// OpenRaster layered image (`.ora`).
+    Ora,
     // Audio.
     /// MPEG-1/2 Audio Layer III, with or without an ID3v2 tag.
     Mp3,
@@ -128,11 +130,13 @@ pub enum Kind {
     BinaryPlist,
     // Documents.
     Pdf,
+    /// Silhouette Studio cutting document (`.studio`, `.studio3`).
+    Studio,
 }
 
 impl Kind {
     /// Every kind, in the order [`identify`](crate::identify) documents them.
-    pub const ALL: [Kind; 56] = [
+    pub const ALL: [Kind; 58] = [
         Kind::Png,
         Kind::Jpeg,
         Kind::Gif,
@@ -146,6 +150,7 @@ impl Kind {
         Kind::Psd,
         Kind::Qoi,
         Kind::OpenExr,
+        Kind::Ora,
         Kind::Mp3,
         Kind::Aac,
         Kind::Flac,
@@ -189,6 +194,7 @@ impl Kind {
         Kind::Sqlite,
         Kind::BinaryPlist,
         Kind::Pdf,
+        Kind::Studio,
     ];
 
     /// The media type to send or store with the file: the IANA registration where one exists,
@@ -223,6 +229,7 @@ impl Kind {
             Kind::Psd => ("image/vnd.adobe.photoshop", "psd", Image),
             Kind::Qoi => ("image/qoi", "qoi", Image),
             Kind::OpenExr => ("image/x-exr", "exr", Image),
+            Kind::Ora => ("image/openraster", "ora", Image),
             Kind::Mp3 => ("audio/mpeg", "mp3", Audio),
             Kind::Aac => ("audio/aac", "aac", Audio),
             Kind::Flac => ("audio/flac", "flac", Audio),
@@ -265,6 +272,7 @@ impl Kind {
             Kind::Sqlite => ("application/vnd.sqlite3", "sqlite", Database),
             Kind::BinaryPlist => ("application/x-bplist", "plist", Database),
             Kind::Pdf => ("application/pdf", "pdf", Document),
+            Kind::Studio => ("application/x-silhouette-studio", "studio", Document),
         }
     }
 }

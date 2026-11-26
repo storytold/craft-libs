@@ -88,7 +88,15 @@ pub fn transversal_after(left: CubicBez, right: CubicBez, y1: f64) -> bool {
         quad_max_between(r2.y, r1.y, r0.y, 0.0..=t1_right)
     };
 
-    left_max_dx_dt * right_dy_dt < right_min_dx_dt * left_dy_dt
+    // We want `left_max_dx_dt / left_dy_dt < right_min_dx_dt / right_dy_dt`.
+    // Multiplying out keeps the direction of that inequality only when both
+    // dy/dt bounds are positive. A bound at or below zero (for example after
+    // rounding leaves a control point slightly below the start) does not bound
+    // the slope at all, so we give the conservative answer. Writing the test
+    // as `> 0.0` also returns `false` for nan.
+    left_dy_dt > 0.0
+        && right_dy_dt > 0.0
+        && left_max_dx_dt * right_dy_dt < right_min_dx_dt * left_dy_dt
 }
 
 pub fn transversal_before(left: CubicBez, right: CubicBez, y0: f64) -> bool {
@@ -185,5 +193,44 @@ mod tests {
         };
 
         assert!(transversal_after(left, right, 0.01));
+    }
+
+    // Two curves that leave the same start point in opposite directions, the
+    // left one to the right and the right one to the left, so they cross right
+    // after the start. Their first control points are at `p1_y`.
+    fn crossing_pair(p1_y: f64) -> (CubicBez, CubicBez) {
+        let left = CubicBez {
+            p0: (0., 1.).into(),
+            p1: (1., p1_y).into(),
+            p2: (2., 2.).into(),
+            p3: (3., 3.).into(),
+        };
+        let right = CubicBez {
+            p0: (0., 1.).into(),
+            p1: (-1., p1_y).into(),
+            p2: (-2., 2.).into(),
+            p3: (-3., 3.).into(),
+        };
+        (left, right)
+    }
+
+    #[test]
+    fn crossing_with_negative_start_dy() {
+        let one_below = 1.0f64.next_down();
+        for p1_y in [1.0 - 1e-6, 1.0 - 1e-12, one_below, 1.0, 1.0f64.next_up()] {
+            let (left, right) = crossing_pair(p1_y);
+            assert!(!transversal_after(left, right, 1.5), "p1.y = {p1_y:e}");
+        }
+
+        // The same pair reflected in y, so that the last control points are
+        // slightly above the end.
+        let reflect = |c: CubicBez| CubicBez {
+            p0: (c.p3.x, -c.p3.y).into(),
+            p1: (c.p2.x, -c.p2.y).into(),
+            p2: (c.p1.x, -c.p1.y).into(),
+            p3: (c.p0.x, -c.p0.y).into(),
+        };
+        let (left, right) = crossing_pair(one_below);
+        assert!(!transversal_before(reflect(left), reflect(right), -1.5));
     }
 }
