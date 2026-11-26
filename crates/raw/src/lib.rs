@@ -93,6 +93,9 @@ mod arw6_testenc;
 mod arw_lens;
 #[cfg(feature = "arw")]
 mod arw_lens_rm6;
+/// Two-field Coolpix NEFs: field order and the CYGM mosaic.
+#[cfg(feature = "nef")]
+mod coolpix;
 /// Bounded DNG strip and tile sample reader.
 #[cfg(feature = "line-dng")]
 pub mod dng_lines;

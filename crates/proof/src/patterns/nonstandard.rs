@@ -5,7 +5,9 @@ use super::{FxMap, MAX_PATTERN_LEN, Patterns, pack};
 /// the hyphen only when this break is selected; it is never added to source text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opportunity {
+    /// The character index in the source word where the break occurs.
     pub at: usize,
+    /// Display letters to insert before the hyphen when the break is used.
     pub suffix: Box<str>,
 }
 

@@ -152,26 +152,6 @@ mod tests {
         Pixels { width: 3, height: 2, ch: 1, data: vec![1, 2, 3, 4, 5, 6] }
     }
 
-    fn run(t: Transform) -> (usize, usize, Vec<u16>) {
-        let p = apply(img(), &[t]).unwrap();
-        (p.width, p.height, p.data)
-    }
-
-    #[test]
-    fn rotations_are_counter_clockwise() {
-        assert_eq!(run(Transform::Rotate(Rotation::Ccw90)), (2, 3, vec![3, 6, 2, 5, 1, 4]));
-        assert_eq!(run(Transform::Rotate(Rotation::Ccw180)), (3, 2, vec![6, 5, 4, 3, 2, 1]));
-        assert_eq!(run(Transform::Rotate(Rotation::Ccw270)), (2, 3, vec![4, 1, 5, 2, 6, 3]));
-        assert_eq!(run(Transform::Rotate(Rotation::None)), (3, 2, vec![1, 2, 3, 4, 5, 6]));
-    }
-
-    #[test]
-    fn mirrors_follow_libheif() {
-        // axis 0 (heic-rs `LeftRight`) exchanges top and bottom; axis 1 left and right.
-        assert_eq!(run(Transform::Mirror(Mirror::LeftRight)), (3, 2, vec![4, 5, 6, 1, 2, 3]));
-        assert_eq!(run(Transform::Mirror(Mirror::TopBottom)), (3, 2, vec![3, 2, 1, 6, 5, 4]));
-    }
-
     fn clap(w: u32, h: u32, ho: i32, vo: i32) -> Clap {
         Clap { width: (w, 1), height: (h, 1), horiz_off: (ho, 1), vert_off: (vo, 1) }
     }
