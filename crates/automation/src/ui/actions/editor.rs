@@ -285,7 +285,7 @@ impl<'a> ActionEditor<'a> {
 }
 
 #[cfg(feature = "screen-testing")]
-mod stories {
+pub(crate) mod stories {
     use super::*;
     use crate::actions::ActionColor;
     use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
