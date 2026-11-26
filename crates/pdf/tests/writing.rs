@@ -1,7 +1,7 @@
 //! Integration tests of craft-pdf: writing.
 
 #![cfg(feature = "write")]
-#![allow(clippy::unwrap_used, clippy::panic, clippy::unreachable)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use backend::configure::PdfVersion;
 use backend::geom::{PathBuilder, Rect, Size};
@@ -192,6 +192,43 @@ mod row_prediction {
         encoder.finish().unwrap()
     }
 
+    /// Serialize complete candidate filter-stream objects, including Length and DecodeParms.
+    /// The common image dictionary entries cancel; this control uses the shared framing writer.
+    fn complete_stream_size(data: &[u8], samples: &Samples, predicted: bool, ascii: bool) -> usize {
+        let mut encoded = Vec::new();
+        if ascii {
+            for (i, byte) in data.iter().enumerate() {
+                write!(&mut encoded, "{byte:02X}").unwrap();
+                if (i + 1) % 35 == 0 {
+                    encoded.push(b'\n');
+                }
+            }
+        } else {
+            encoded.extend_from_slice(data);
+        }
+        let filter = if ascii { "[/ASCIIHexDecode /FlateDecode]" } else { "/FlateDecode" };
+        let parms = if predicted {
+            let dict = format!(
+                "<< /Predictor 12 /Columns {} /Colors {} /BitsPerComponent {} >>",
+                samples.size.0,
+                components(samples.space),
+                bpc(samples.bits)
+            );
+            if ascii { format!(" /DecodeParms [null {dict}]") } else { format!(" /DecodeParms {dict}") }
+        } else {
+            String::new()
+        };
+        let mut writer = craft_pdf::classic::Writer::with_capacity(0).unwrap();
+        writer.object(1, "<< /Type /Catalog /Pages 2 0 R >>").unwrap();
+        writer.object(2, "<< /Type /Pages /Kids [] /Count 0 >>").unwrap();
+        writer.stream(3, &format!("/Filter {filter}{parms}"), &encoded).unwrap();
+        let pdf = writer.finish(1, None).unwrap();
+        // The one control stream is the last object, immediately before the classic xref table.
+        let start = pdf.windows(b"3 0 obj\n".len()).position(|bytes| bytes == b"3 0 obj\n").unwrap();
+        let end = pdf.windows(b"\nxref\n".len()).rposition(|bytes| bytes == b"\nxref\n").unwrap();
+        end - start
+    }
+
     fn image(row: &Row) -> Image {
         if row.png {
             Image::from_png(PNG16.to_vec().into(), false).unwrap()
@@ -227,10 +264,12 @@ mod row_prediction {
         assert_eq!(dict.get::<i32>(b"BitsPerComponent"), Some(bpc(samples.bits)));
         assert_eq!(stream.decoded().unwrap().as_ref(), expected, "all samples, including 16-bit byte rollover");
 
+        let has_params = dict.contains_key(b"DecodeParms");
         let params = if ascii {
             let filters: Vec<_> = dict.get::<Array<'_>>(b"Filter").unwrap().iter::<Name<'_>>().map(|n| n.as_str().to_owned()).collect();
             assert_eq!(filters, ["ASCIIHexDecode", "FlateDecode"]);
-            dict.get::<Array<'_>>(b"DecodeParms").map(|array| {
+            has_params.then(|| {
+                let array = dict.get::<Array<'_>>(b"DecodeParms").unwrap();
                 let slots: Vec<_> = array.iter::<Object<'_>>().collect();
                 assert_eq!(slots.len(), 2, "one DecodeParms slot per filter");
                 assert!(matches!(slots[0], Object::Null(_)), "ASCIIHex has no parameters");
@@ -238,7 +277,7 @@ mod row_prediction {
             })
         } else {
             assert_eq!(dict.get::<Name<'_>>(b"Filter").unwrap().as_str(), "FlateDecode");
-            dict.get::<Dict<'_>>(b"DecodeParms")
+            has_params.then(|| dict.get::<Dict<'_>>(b"DecodeParms").unwrap())
         };
         params.map(|params| {
             let predictor = params.get::<i32>(b"Predictor").unwrap();
@@ -275,17 +314,21 @@ mod row_prediction {
             assert_eq!(names, ["Magenta", "Cyan"], "preserve colorant/sample order");
         } else {
             let name = match row.samples.space {
-                ImageColorspace::Luma => "DeviceGray",
-                ImageColorspace::Rgb => "DeviceRGB",
-                ImageColorspace::Cmyk => "DeviceCMYK",
-                ImageColorspace::DeviceN => unreachable!(),
+                ImageColorspace::Luma => Some("DeviceGray"),
+                ImageColorspace::Rgb => Some("DeviceRGB"),
+                ImageColorspace::Cmyk => Some("DeviceCMYK"),
+                ImageColorspace::DeviceN => None,
             };
-            assert_eq!(dict.get::<Name<'_>>(b"ColorSpace").unwrap().as_str(), name);
+            assert_eq!(dict.get::<Name<'_>>(b"ColorSpace").unwrap().as_str(), name.unwrap());
         }
         if let Some(alpha) = &row.samples.alpha {
             let mask = dict.get::<Stream<'_>>(b"SMask").unwrap();
             assert_eq!(mask.dict().get::<Name<'_>>(b"ColorSpace").unwrap().as_str(), "DeviceGray");
-            check_plane(&mask, alpha, &row.samples, 1, ascii);
+            let mask_predictor = check_plane(&mask, alpha, &row.samples, 1, ascii);
+            if row.samples.space == ImageColorspace::Luma && row.samples.bits == BitsPerComponent::Sixteen {
+                // This multi-row rollover mask is compressible; other masks may legitimately keep raw Flate.
+                assert_eq!(mask_predictor, Some(12), "{} (ASCII={ascii}): predict the compressible soft mask", row.name);
+            }
         } else {
             assert!(dict.get::<Object<'_>>(b"SMask").is_none(), "{}: no extra alpha plane", row.name);
         }
@@ -301,8 +344,8 @@ mod row_prediction {
                 name: row.name,
                 ascii,
                 predictor,
-                // Compare like encoded payloads. Production separately accounts for DecodeParms
-                // overhead; the tiny/noisy rows above check its raw fallback.
+                // Compare like encoded payloads. The separate overhead control below compares
+                // complete streams; tiny/noisy rows also retain their raw fallback checks.
                 selected: stream.raw_data().len(),
                 unpredicted: if ascii { raw.len() * 2 + raw.len() / 35 } else { raw.len() },
             }
@@ -390,6 +433,41 @@ mod row_prediction {
                 must_keep_raw: true,
             });
         }
+
+        // Prediction saves payload bytes here, but cannot pay for its serialized parameters in
+        // either output mode. A payload-only selection would wrongly predict this multi-row image.
+        let overhead = Samples {
+            color: (0..3u8).flat_map(|y| (0..4u8).flat_map(move |x| (0..3u8).map(move |c| x * 19 + y * 7 + c * 31))).collect(),
+            alpha: None,
+            size: (4, 3),
+            bits: BitsPerComponent::Eight,
+            space: ImageColorspace::Rgb,
+        };
+        let mut up = Vec::new();
+        for (y, row) in overhead.color.chunks_exact(12).enumerate() {
+            up.push(2);
+            for (x, byte) in row.iter().enumerate() {
+                let previous = if y == 0 { 0 } else { overhead.color[(y - 1) * 12 + x] };
+                up.push(byte.wrapping_sub(previous));
+            }
+        }
+        let raw = raw_deflate(&overhead.color);
+        let predicted = raw_deflate(&up);
+        assert!(predicted.len() < raw.len(), "the overhead control must save compressed payload bytes");
+        for ascii in [false, true] {
+            assert!(
+                complete_stream_size(&predicted, &overhead, true, ascii) > complete_stream_size(&raw, &overhead, false, ascii),
+                "ASCII={ascii}: serialized parameters must outweigh the payload saving"
+            );
+        }
+        rows.push(Row {
+            name: "serialized overhead RGB",
+            samples: overhead,
+            rgba: true,
+            png: false,
+            must_predict: false,
+            must_keep_raw: true,
+        });
 
         let png_samples = rows
             .iter()
