@@ -495,6 +495,25 @@ mod device_from_craft_gpu_device {
     }
 
     #[test]
+    fn a_pending_read_fails_when_validation_and_out_of_memory_coexist() {
+        for oom_first in [true, false] {
+            let device = opened();
+            let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);
+            let handle = ctx.upload_buffer("pending", b"abcd").expect("upload");
+            let request = ctx.request_read(handle).expect("read");
+            let faults = [Fault::Error(craft_gpu_device::OUT_OF_MEMORY.into()), Fault::Error("Validation Error".into())];
+            for index in if oom_first { [0, 1] } else { [1, 0] } {
+                device.health.mark(faults[index].clone());
+            }
+            let outcomes = ctx.poll_reads();
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes[0].request, request);
+            assert_eq!(outcomes[0].result, Err(GpuFault::Operation("Validation Error".into())));
+            assert!(ctx.poll_reads().is_empty());
+        }
+    }
+
+    #[test]
     fn polling_faults_complete_all_pending_reads_once() {
         let device = opened();
         let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);

@@ -569,7 +569,7 @@ impl GpuContext for WgpuContext {
             // A non-blocking poll that also runs after an error other than a loss was recorded,
             // and records a loss instead of panicking when the device is gone.
             d.health.probe(&d.device);
-            let fault = d.health.device_status().err().or_else(|| d.health.fault().filter(|fault| !fault.is_out_of_memory()).map(GpuFault::from));
+            let fault = d.health.polling_fault().map(GpuFault::from);
             if let Some(fault) = fault {
                 outcomes.extend(d.pending.drain(..).map(|p| ReadOutcome { request: p.request, handle: p.handle, result: Err(fault.clone()) }));
                 return outcomes;
