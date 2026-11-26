@@ -339,6 +339,9 @@ PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) b
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 `Image::to_rgba_f32(&limits)` checks its output buffer against the same `Limits` and returns
 `CodecError::LimitExceeded` before allocating when the RGBA f32 copy would exceed them.
+`Image::try_to_rgba8(&limits)` and `Image::try_to_rgba16(&limits)` do the same for the 8-bit and
+16-bit RGBA copies. `Image::into_rgba8(&limits)` consumes the image and returns the pixel buffer of
+an RGBA8 image without copying it; other images are converted with the same check.
 PNG `cICP` and `cLLI` values are retained as image color metadata. `encode_png_pq` writes linear-light
 Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the required chunks.
 
