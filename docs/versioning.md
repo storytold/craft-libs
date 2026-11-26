@@ -38,7 +38,7 @@ documented workflow. App-owned settings schemas and migration policy remain the 
 responsibility; library releases do not automatically migrate consumer data.
 
 For public egui APIs in `0.1.x`, keep the egui 0.36 compatibility line. The minimum Rust version
-is 1.95. Compatible transitive updates still need validation and release-note coverage when
+is 1.96. Compatible transitive updates still need validation and release-note coverage when
 observable. Cargo's version-range rules do not select newer Git tags: changing a release pin
 is always an explicit manifest edit.
 

@@ -194,96 +194,97 @@ pub fn fidelity_warnings(image: &Image, format: Format) -> Vec<FidelityWarning> 
 /// Warnings for writing `image` as `format` with the given options.
 pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOptions) -> Vec<FidelityWarning> {
     use FidelityWarning as W;
-    let c = caps(format);
-    let mut w = Vec::new();
-    if !c.write {
-        w.push(W::WriteUnsupported { format });
-        return w;
+    let format_caps = caps(format);
+    let mut warnings = Vec::new();
+    if !format_caps.write {
+        warnings.push(W::WriteUnsupported { format });
+        return warnings;
     }
-    if let Some((mw, mh)) = format.max_dimensions()
-        && (image.width() > mw || image.height() > mh)
+    if let Some((max_width, max_height)) = format.max_dimensions()
+        && (image.width() > max_width || image.height() > max_height)
     {
-        w.push(W::DimensionsExceeded { max_width: mw, max_height: mh });
+        warnings.push(W::DimensionsExceeded { max_width, max_height });
     }
-    let p = plan(image, format, opts);
-    let (sl, ss) = (image.layout(), image.sample_type());
+    let encode_plan = plan(image, format, opts);
+    let (source_layout, source_sample) = (image.layout(), image.sample_type());
 
     // Depth
-    let lossy_depth = match (ss, p.sample) {
-        (a, b) if a == b => false,
+    let lossy_depth = match (source_sample, encode_plan.sample) {
+        (source, target) if source == target => false,
         (SampleType::U8, _) => false,
         (SampleType::U16, SampleType::F32) => false,
         (SampleType::F16, SampleType::F32) => false,
         _ => true,
     };
-    // DPX at 10 or 12 bits and Cineon keep fewer bits than their U16 plan: float samples always
-    // lose precision there, 16-bit ones unless they are already code values at that depth.
-    if let Some(bits) = dpx::packed_bits(format, opts).filter(|_| ss != SampleType::U8) {
-        if ss.is_float() || !dpx::keeps_u16_samples(&image.converted(p.layout, SampleType::U16), bits) {
-            w.push(W::BitsReduced { from: ss, bits });
+    // 10/12-bit DPX and Cineon drop bits: floats always, U16 unless already code values
+    if let Some(bits) = dpx::packed_bits(format, opts).filter(|_| source_sample != SampleType::U8) {
+        if source_sample.is_float() || !dpx::keeps_u16_samples(&image.converted(encode_plan.layout, SampleType::U16), bits) {
+            warnings.push(W::BitsReduced { from: source_sample, bits });
         }
     } else if lossy_depth {
-        w.push(W::DepthReduced { from: ss, to: p.sample });
+        warnings.push(W::DepthReduced { from: source_sample, to: encode_plan.sample });
     }
-    // FITS stores floats as 0..1 (see `codecs::fits`), so out-of-range values are clipped too.
-    if ss.is_float() && (!p.sample.is_float() || format == Format::Fits) && image.has_out_of_range() {
-        w.push(W::RangeClipped);
+    // FITS stores floats as 0..1 (see `codecs::fits`), so out-of-range values are clipped too
+    if source_sample.is_float() && (!encode_plan.sample.is_float() || format == Format::Fits) && image.has_out_of_range() {
+        warnings.push(W::RangeClipped);
     }
 
     // Layout
-    if sl.has_alpha() && !p.layout.has_alpha() && image.has_translucency() {
-        w.push(W::AlphaDiscarded);
+    if source_layout.has_alpha() && !encode_plan.layout.has_alpha() && image.has_translucency() {
+        warnings.push(W::AlphaDiscarded);
     }
-    // An IFF/ILBM mask plane holds one bit per pixel.
+    // An IFF/ILBM mask plane holds one bit per pixel
     let binary_alpha = matches!(format, Format::Gif | Format::Iff) || (format == Format::Dds && opts.dds.compression == DdsCompression::Bc1);
-    if binary_alpha && p.layout.has_alpha() && image.has_translucency() {
-        w.push(W::AlphaBinarized);
+    if binary_alpha && encode_plan.layout.has_alpha() && image.has_translucency() {
+        warnings.push(W::AlphaBinarized);
     }
-    if sl.is_cmyk() && !p.layout.is_cmyk() {
-        w.push(W::CmykConverted { to: p.layout });
+    if source_layout.is_cmyk() && !encode_plan.layout.is_cmyk() {
+        warnings.push(W::CmykConverted { to: encode_plan.layout });
     }
-    if sl.is_lab() && !p.layout.is_lab() {
-        w.push(W::LabConverted { to: p.layout });
+    if source_layout.is_lab() && !encode_plan.layout.is_lab() {
+        warnings.push(W::LabConverted { to: encode_plan.layout });
     }
-    if !sl.is_gray() && p.layout.is_gray() {
-        w.push(W::ColorToGray);
+    if !source_layout.is_gray() && encode_plan.layout.is_gray() {
+        warnings.push(W::ColorToGray);
     }
 
     // Compression
     if format == Format::Gif {
-        w.push(W::PaletteQuantized);
-    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) || (format == Format::Dds && opts.dds.compression.is_block()) {
-        w.push(W::LossyCompression);
+        warnings.push(W::PaletteQuantized);
+    } else if format_caps.lossy || (format == Format::WebP && !opts.webp_lossless) || (format == Format::Dds && opts.dds.compression.is_block()) {
+        warnings.push(W::LossyCompression);
     }
 
     // Metadata
-    if image.icc.is_some() && opts.embed_icc && (!c.icc || !sl.same_model(p.layout)) {
-        w.push(W::IccDropped);
+    // A raw JPEG 2000 codestream has no colour box
+    let raw_jp2 = format == Format::Jp2 && opts.jp2_codestream;
+    if image.icc.is_some() && opts.embed_icc && (!format_caps.icc || raw_jp2 || !source_layout.same_model(encode_plan.layout)) {
+        warnings.push(W::IccDropped);
     }
     if opts.embed_metadata {
-        let m = &image.meta;
-        if m.exif.is_some() && !c.exif {
-            w.push(W::ExifDropped);
+        let meta = &image.meta;
+        if meta.exif.is_some() && !format_caps.exif {
+            warnings.push(W::ExifDropped);
         }
-        if m.xmp.is_some() && !c.xmp {
-            w.push(W::XmpDropped);
+        if meta.xmp.is_some() && !format_caps.xmp {
+            warnings.push(W::XmpDropped);
         }
         if format == Format::Jpeg {
-            if let Some(exif) = m.exif.as_deref().filter(|e| crate::codecs::jpeg::exif_segment(e, None).is_none()) {
-                w.push(W::MetadataTooLarge { what: "EXIF", bytes: exif.len() });
+            if let Some(exif) = meta.exif.as_deref().filter(|e| crate::codecs::jpeg::exif_segment(e, None).is_none()) {
+                warnings.push(W::MetadataTooLarge { what: "EXIF", bytes: exif.len() });
             }
-            if let Some(xmp) = m.xmp.as_deref().filter(|x| crate::codecs::jpeg::xmp_segment(x, None).is_none()) {
-                w.push(W::MetadataTooLarge { what: "XMP", bytes: xmp.len() });
+            if let Some(xmp) = meta.xmp.as_deref().filter(|x| crate::codecs::jpeg::xmp_segment(x, None).is_none()) {
+                warnings.push(W::MetadataTooLarge { what: "XMP", bytes: xmp.len() });
             }
         }
-        if m.dpi.is_some() && (!c.dpi || (format == Format::WebP && !crate::codecs::webp::keeps_dpi(image))) {
-            w.push(W::DpiDropped);
+        if meta.dpi.is_some() && (!format_caps.dpi || (format == Format::WebP && !crate::codecs::webp::keeps_dpi(image))) {
+            warnings.push(W::DpiDropped);
         }
-        // DPX keeps its own header fields, not free-form text.
-        let text_kept = |k: &str| c.text && (format != Format::Dpx || crate::codecs::dpx::KEYS.contains(&k));
-        if m.text.iter().any(|(k, _)| !text_kept(k)) {
-            w.push(W::TextDropped);
+        // DPX keeps its own header fields, not free-form text
+        let text_kept = |key: &str| format_caps.text && (format != Format::Dpx || crate::codecs::dpx::KEYS.contains(&key));
+        if meta.text.iter().any(|(key, _)| !text_kept(key)) {
+            warnings.push(W::TextDropped);
         }
     }
-    w
+    warnings
 }
