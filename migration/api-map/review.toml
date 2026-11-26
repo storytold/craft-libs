@@ -1,0 +1,523 @@
+# API map of the "Review" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Review"
+new_module = "craft_review::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+# review-b
+
+[[type]]
+name = "VersionHistoryPanel"
+old = "craft_review::ui::VersionHistoryPanel"
+new = "craft_review::ui::VersionHistoryPanel"
+status = "replaced"
+note = "A `Pattern` over a `Stack` with a tree `List`; `new(versions, branches, now)`, `previewing(..)`; panel state lives in the body's session slot."
+
+[[type]]
+name = "VersionHistoryPanelOutput"
+old = "craft_review::ui::VersionHistoryPanelOutput"
+new = "craft_review::ui::VersionHistoryPanelOutput"
+status = "same"
+
+[[type]]
+name = "VersionPreviewBanner"
+old = "craft_review::ui::VersionPreviewBanner"
+new = "craft_review::ui::VersionPreviewBanner"
+status = "replaced"
+note = "A `Pattern` shown with `show(ui, canvas)`; `new(version, now)`; a `Popover` at the top of the canvas."
+
+[[type]]
+name = "VersionPreviewBannerOutput"
+old = "craft_review::ui::VersionPreviewBannerOutput"
+new = "craft_review::ui::VersionPreviewBannerOutput"
+status = "same"
+
+[[type]]
+name = "VersionAction"
+old = "craft_review::ui::VersionAction"
+new = "craft_review::ui::VersionAction"
+status = "replaced"
+note = "The struct-like variants `Save`, `Rename` and `CreateBranch` are `#[non_exhaustive]`: match them with `..`."
+
+[[type]]
+name = "SignaturePadDialog"
+old = "craft_review::ui::SignaturePadDialog"
+new = "craft_review::ui::SignaturePadDialog"
+status = "replaced"
+note = "A `StackDialog` on `Dialog`; the draw pad is the leaf `DrawPad`."
+
+[[type]]
+name = "SignaturePadResult"
+old = "craft_review::ui::SignaturePadResult"
+new = "craft_review::ui::SignaturePadResult"
+status = "same"
+
+[[type]]
+name = "SignatureSettings"
+old = "craft_review::ui::SignatureSettings"
+new = "craft_review::ui::SignatureSettings"
+status = "replaced"
+note = "`#[non_exhaustive]`: start from `SignatureSettings::default()` and assign fields."
+
+[[type]]
+name = "paint_signature"
+old = "craft_review::ui::paint_signature"
+new = "craft_review::ui::paint_signature"
+status = "replaced"
+note = "Takes a `Draw`, the rect, the signature and a `DataColor`; an image signature is shown with a `Picture`."
+
+[[type]]
+name = "RevisionsPanel"
+old = "craft_review::ui::RevisionsPanel"
+new = "craft_review::ui::RevisionsPanel"
+status = "replaced"
+note = "A `Pattern`; `new(label, compared_with, revisions)`, `by_position(..)`."
+
+[[type]]
+name = "RevisionsPanelOutput"
+old = "craft_review::ui::RevisionsPanelOutput"
+new = "craft_review::ui::RevisionsPanelOutput"
+status = "same"
+
+[[type]]
+name = "PeopleBar"
+old = "craft_review::ui::PeopleBar"
+new = "craft_review::ui::PeopleBar"
+status = "replaced"
+note = "A `Pattern`; `new(transport)`, `following(..)`; `show(ui)` has no canvas rect."
+
+[[type]]
+name = "PeopleBarOutput"
+old = "craft_review::ui::PeopleBarOutput"
+new = "craft_review::ui::PeopleBarOutput"
+status = "same"
+
+[[type]]
+name = "RemoteCursors"
+old = "craft_review::ui::RemoteCursors"
+new = "craft_review::ui::RemoteCursors"
+status = "replaced"
+note = "A builder shown in the canvas body with `show_at(ui, rect)`; `new(label, transport)` takes no clock: each person's `RemoteCursor` glides and fades on the motion service."
+
+[[type]]
+name = "RemoteCursor"
+old = ""
+new = "craft_review::ui::RemoteCursor"
+status = "replaced"
+note = "A canvas control component, one person's cursor; `new(label, &Participant)`."
+
+[[type]]
+name = "paint_pointer"
+old = "craft_review::ui::paint_pointer"
+new = "craft_review::ui::paint_pointer"
+status = "replaced"
+note = "Takes a `Draw`, the halo colour, the size, the tip and the fill."
+
+[[type]]
+name = "CursorChatBox"
+old = "craft_review::ui::CursorChatBox"
+new = "craft_review::ui::CursorChatBox"
+status = "replaced"
+note = "A `Pattern`; `new(text, open)`, `show(ui, pointer)`; the app opens it from its `/` command."
+
+[[type]]
+name = "CursorChatBoxOutput"
+old = "craft_review::ui::CursorChatBoxOutput"
+new = "craft_review::ui::CursorChatBoxOutput"
+status = "same"
+
+[[type]]
+name = "paint_chat_bubble"
+old = "craft_review::ui::paint_chat_bubble"
+new = "craft_review::ui::paint_chat_bubble"
+status = "replaced"
+note = "Takes the `PaintUi` and a `BubbleLook` built from the style context; the ink on the person's colour comes from `StyleCx::ink_on`."
+
+[[type]]
+name = "VotePill"
+old = "craft_review::ui::VotePill"
+new = "craft_review::ui::VotePill"
+status = "replaced"
+note = "A `Pattern`; `new(transport)`, `editable(..)`, `has_selection(..)`."
+
+[[type]]
+name = "VotePillOutput"
+old = "craft_review::ui::VotePillOutput"
+new = "craft_review::ui::VotePillOutput"
+status = "same"
+
+[[type]]
+name = "JoinField"
+old = "craft_review::ui::JoinField"
+new = "craft_review::ui::JoinField"
+status = "replaced"
+note = "A `Pattern`; `new(transport, typed)`."
+
+[[type]]
+name = "JoinFieldOutput"
+old = "craft_review::ui::JoinFieldOutput"
+new = "craft_review::ui::JoinFieldOutput"
+status = "same"
+
+[[type]]
+name = "paint_avatar"
+old = "craft_review::ui::paint_avatar"
+new = "craft_review::ui::paint_avatar"
+status = "replaced"
+note = "Replaced by `Avatar` (a leaf) and `paint_avatar(ui, rect, name, fill: DataColor)` for canvas painters; the initials' ink comes from `StyleCx::ink_on`."
+
+[[type]]
+name = "ReviewStyle"
+old = "craft_review::ui::ReviewStyle"
+new = ""
+status = "removed"
+note = "Each component's style hook reads the tokens."
+
+[[type]]
+name = "PresenceLabels"
+old = "craft_review::ui::PresenceLabels"
+new = ""
+status = "removed"
+note = "`PresenceWords`."
+
+[[type]]
+name = "VersionsLabels"
+old = "craft_review::ui::VersionsLabels"
+new = ""
+status = "removed"
+note = "`VersionsWords`."
+
+[[type]]
+name = "SignatureLabels"
+old = "craft_review::ui::SignatureLabels"
+new = ""
+status = "removed"
+note = "`SignatureWords`."
+
+[[type]]
+name = "RevisionsLabels"
+old = "craft_review::ui::RevisionsLabels"
+new = ""
+status = "removed"
+note = "`RevisionsWords`."
+
+[[type]]
+name = "VoteLabels"
+old = "craft_review::ui::VoteLabels"
+new = ""
+status = "removed"
+note = "`VoteWords`."
+
+[[type]]
+name = "JoinLabels"
+old = "craft_review::ui::JoinLabels"
+new = ""
+status = "removed"
+note = "`JoinWords`."
+
+[[type]]
+name = "ChatLabels"
+old = "craft_review::ui::ChatLabels"
+new = ""
+status = "removed"
+note = "`ChatWords`."
+
+[[type]]
+name = "WORDS"
+old = "craft_review::ui::WORDS"
+new = ""
+status = "removed"
+note = "Registered by `words!`; the crate's `testing` module lists them."
+
+[[type]]
+name = "COUNTS"
+old = "craft_review::ui::COUNTS"
+new = ""
+status = "removed"
+note = "Registered by `words!`."
+
+[[type]]
+name = "stories"
+old = "craft_review::ui::stories"
+new = ""
+status = "removed"
+note = "`#[story]` registration and the crate's `testing` module."
+
+[[type]]
+name = "CommentsPanel"
+old = "craft_review::ui::CommentsPanel"
+new = "craft_review::ui::CommentsPanel"
+status = "same"
+
+[[type]]
+name = "CommentsPanelOutput"
+old = "craft_review::ui::CommentsPanelOutput"
+new = "craft_review::ui::CommentsPanelOutput"
+status = "same"
+
+[[type]]
+name = "CommentsPanelState"
+old = "craft_review::ui::CommentsPanelState"
+new = "craft_review::ui::CommentsPanelState"
+status = "replaced"
+note = "`#[non_exhaustive]`: start from `CommentsPanelState::default()` and assign fields."
+
+[[type]]
+name = "CommentEdit"
+old = "craft_review::ui::CommentEdit"
+new = "craft_review::ui::CommentEdit"
+status = "replaced"
+note = "Every struct-like variant is `#[non_exhaustive]`: match them with `..`."
+
+[[type]]
+name = "CommentPins"
+old = "craft_review::ui::CommentPins"
+new = "craft_review::ui::CommentPins"
+status = "same"
+
+[[type]]
+name = "CommentPin"
+old = "craft_review::ui::CommentPin"
+new = "craft_review::ui::CommentPin"
+status = "replaced"
+note = "`#[non_exhaustive]`: build with `CommentPin::new(id, point, author, text, color)` and the `unread(bool)` and `resolved(bool)` setters."
+
+[[type]]
+name = "CommentPinsOutput"
+old = "craft_review::ui::CommentPinsOutput"
+new = "craft_review::ui::CommentPinsOutput"
+status = "same"
+
+[[type]]
+name = "PinMove"
+old = "craft_review::ui::PinMove"
+new = "craft_review::ui::PinMove"
+status = "replaced"
+note = "`#[non_exhaustive]`: match with `PinMove { thread, to, .. }`."
+
+[[type]]
+name = "PinCluster"
+old = "craft_review::ui::PinCluster"
+new = "craft_review::ui::PinCluster"
+status = "replaced"
+note = "`#[non_exhaustive]`: read its fields; the panel builds it."
+
+[[type]]
+name = "ThreadPopover"
+old = "craft_review::ui::ThreadPopover"
+new = "craft_review::ui::ThreadPopover"
+status = "same"
+
+[[type]]
+name = "ThreadPopoverOutput"
+old = "craft_review::ui::ThreadPopoverOutput"
+new = "craft_review::ui::ThreadPopoverOutput"
+status = "same"
+
+[[type]]
+name = "CommentComposer"
+old = "craft_review::ui::CommentComposer"
+new = "craft_review::ui::CommentComposer"
+status = "same"
+
+[[type]]
+name = "CommentComposerResponse"
+old = "craft_review::ui::thread::CommentComposerResponse"
+new = ""
+status = "removed"
+note = "`closed` is `cancelled`; `posted` is unchanged. Replaced by `CommentComposerOutput`."
+
+[[type]]
+name = "CommentsLabels"
+old = "craft_review::ui::CommentsLabels"
+new = ""
+status = "removed"
+note = "Replaced by the words! set of the new name; apps no longer pass labels. Replaced by `CommentsWords`."
+
+[[type]]
+name = "ThreadLabels"
+old = "craft_review::ui::ThreadLabels"
+new = ""
+status = "removed"
+note = "Replaced by the words! set of the new name; apps no longer pass labels. Replaced by `ThreadWords`."
+
+[[setter]]
+type = "CommentsPanel"
+old = "new(id_salt, threads, state)"
+new = "new(label, threads, state)"
+
+[[setter]]
+type = "CommentsPanel"
+old = "labels(CommentsLabels)"
+new = ""
+
+[[setter]]
+type = "CommentsPanel"
+old = "annotate_labels(AnnotateLabels)"
+new = ""
+
+[[setter]]
+type = "CommentsPanel"
+old = "(no time prop)"
+new = "now(unix_seconds)"
+
+[[setter]]
+type = "CommentPins"
+old = "new(id_salt, pins, me)"
+new = "new(label, pins, me)"
+
+[[setter]]
+type = "CommentPins"
+old = "labels(ThreadLabels)"
+new = ""
+
+[[setter]]
+type = "CommentPinsOutput"
+old = "moved: Option<EditEvent<PinMove>>"
+new = "moved: Option<PinMove>"
+
+[[setter]]
+type = "ThreadPopover"
+old = "new(id_salt, thread, anchor_rect, me, people, draft)"
+new = "new(thread, opener_response, me, people, draft)"
+
+[[setter]]
+type = "ThreadPopover"
+old = "labels(ThreadLabels)"
+new = ""
+
+[[setter]]
+type = "ThreadPopover"
+old = "(no time prop)"
+new = "now(unix_seconds)"
+
+[[setter]]
+type = "CommentComposer"
+old = "new(id_salt, anchor, draft)"
+new = "new(anchor, draft)"
+
+[[setter]]
+type = "CommentComposer"
+old = "labels(ThreadLabels)"
+new = ""
+
+# review-a
+
+[[type]]
+name = "AnnotateTool"
+old = "craft_review::ui::annotate::AnnotateTool"
+new = "craft_review::ui::annotate::AnnotateTool"
+status = "replaced"
+note = "`#[non_exhaustive]`: build with `AnnotateTool::new`. A `CanvasTool` on the new tool host. Pointers arrive in screen points and the tool maps them to page units with the canvas's space. `take_edits` and the public fields stay; a selection edit carries a `SelectionChange` (`Set`, `Toggle`, `Clear`); edit events carry the undo step's name and a `Mixed` before value. `new_annotation_params` and `create_from_form` serve the `New Annotation...` command form."
+
+[[type]]
+name = "AnnotationOverlay"
+old = "craft_review::ui::annotate::AnnotationOverlay"
+new = "craft_review::ui::annotate::AnnotationOverlay"
+status = "same"
+note = "A canvas control: `new(label, annotations, selected)` and `show_at(ui, canvas_rect)`. `paint(painter, tokens, to_screen)` is gone: the view is the canvas's."
+
+[[type]]
+name = "AnnotationToolbar"
+old = "craft_review::ui::annotate::AnnotationToolbar"
+new = "craft_review::ui::annotate::AnnotationToolbar"
+status = "same"
+note = "A pattern over a `Bar`: `new(tool)` (the id salt is gone) and `show(ui)`. Each group is a `FlyoutButton` of `AnnotateCommand`s."
+
+[[type]]
+name = "AnnotationToolbarOutput"
+old = "craft_review::ui::annotate::AnnotationToolbarOutput"
+new = "craft_review::ui::annotate::AnnotationToolbarOutput"
+status = "same"
+note = "`response` and `changed`; `flyouts` is gone."
+
+[[type]]
+name = "AnnotateLabels"
+old = "craft_review::ui::annotate::AnnotateLabels"
+new = ""
+status = "removed"
+note = "Words register through `words!`. The per-tool tooltips are the labels of `AnnotateCommand`; `kind` and `palette_color` stay beside the type. Replaced by `AnnotateWords`."
+
+[[setter]]
+type = "AnnotationToolbar"
+old = "new(id_salt, tool)"
+new = "new(tool)"
+
+[[setter]]
+type = "AnnotationToolbar"
+old = "labels(labels)"
+note = "Removed: words register through `words!`."
+
+[[setter]]
+type = "AnnotationToolbarOutput"
+old = "flyouts"
+note = "Removed: `FlyoutButton` owns its flyout."
+
+[[setter]]
+type = "AnnotationOverlay"
+old = "new(annotations, selected)"
+new = "new(label, annotations, selected)"
+
+[[setter]]
+type = "AnnotationOverlay"
+old = "paint(painter, tokens, to_screen)"
+new = "show_at(ui, rect)"
+note = "The overlay maps through the canvas's view."
+
+[[type]]
+name = "CommentComposerOutput"
+old = ""
+new = "craft_review::ui::CommentComposerOutput"
+status = "replaced"
+note = "Replaces `CommentComposerResponse`. `closed` is `cancelled`; `posted` is unchanged."
+
+[[type]]
+name = "CommentsWords"
+old = ""
+new = "craft_review::ui::CommentsWords"
+status = "replaced"
+note = "Replaces `CommentsLabels`. Replaced by the words! set of the new name; apps no longer pass labels."
+
+[[type]]
+name = "ThreadWords"
+old = ""
+new = "craft_review::ui::ThreadWords"
+status = "replaced"
+note = "Replaces `ThreadLabels`. Replaced by the words! set of the new name; apps no longer pass labels."
+
+[[type]]
+name = "AnnotateWords"
+old = ""
+new = "craft_review::ui::annotate::AnnotateWords"
+status = "replaced"
+note = "Replaces `AnnotateLabels`. Words register through `words!`. The per-tool tooltips are the labels of `AnnotateCommand`; `kind` and `palette_color` stay beside the type."
+
+[[setter]]
+type = "PeopleBar"
+old = "following(Option<ParticipantId>)"
+new = "following(ParticipantId)"
+note = "Omit the call when nobody is followed."
+
+[[setter]]
+type = "VersionHistoryPanel"
+old = "previewing(Option<VersionId>)"
+new = "previewing(VersionId)"
+note = "Omit the call when no version is previewed."
+
+[[type]]
+name = "FollowCommand"
+old = ""
+new = "craft_review::ui::FollowCommand"
+status = "replaced"
+note = "`#[non_exhaustive]` command set: `StopFollowing`, bound to Escape, taken by `FollowFrame`, which is the instance of the `follow` scope while it shows."
+
+[[type]]
+name = "FollowFrameOutput"
+old = ""
+new = "craft_review::ui::FollowFrameOutput"
+status = "replaced"
+note = "`#[non_exhaustive]`: the `FollowFrame` output, `response` and `stopped`."
+

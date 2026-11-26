@@ -2,7 +2,7 @@
 //! a coarse grid of 1D gain tables carrying the maker's local tone mapping. Apple ProRAW has one.
 //!
 //! We read and write the tag (a DNG export keeps it) but don't render it by default: Lightroom
-//! Classic renders Apple ProRAW without the map (see [`crate::profile`]), and so do we. The photo's
+//! Classic renders Apple ProRAW without the map (see `crate::profile`), and so do we. The photo's
 //! "camera local tone mapping" option renders it ([`GainTableMap::gain`], applied by the pipeline),
 //! as the camera itself does.
 //!
@@ -37,7 +37,7 @@
 //! (<https://helpx.adobe.com/camera-raw/digital-negative.html>, "DNG Specification".) So we read
 //! the fields in the file's byte order, and fall back to big-endian for writers that followed the
 //! opcode-list convention. A read in the wrong order can't pass for a valid map: one of
-//! `MapPointsV` / `MapPointsH` is below 256 (their product is at most [`MAX_TABLES`]), so swapped
+//! `MapPointsV` / `MapPointsH` is below 256 (their product is at most `MAX_TABLES`), so swapped
 //! it is at least 2^24 and the size checks reject it. We write in the file's byte order.
 
 pub use craft_raw::gaintable::GainTableMap;

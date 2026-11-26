@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "home-desktop-insets"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/ui-shell/src/shell/start.rs"
+reason = "The desktop Home page's outer margins (36 and 54 points) are larger than any spacing token."
+count = 1
