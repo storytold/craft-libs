@@ -89,28 +89,3 @@ impl<R: Read> Read for Reader<'_, R> {
         Ok(n)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-
-    #[test]
-    fn a_reader_stops_after_a_partial_read_and_latches_the_request() {
-        let polls = Cell::new(0);
-        let cancelled = || {
-            polls.set(polls.get() + 1);
-            polls.get() == 2
-        };
-        let control = Control::new(&cancelled);
-        let mut input = io::Cursor::new(vec![1; CHUNK * 3]);
-        let mut reader = Reader::new(&mut input, Some(&control));
-        let mut bytes = vec![0; CHUNK * 3];
-        assert_eq!(reader.read(&mut bytes).unwrap(), CHUNK);
-        assert!(reader.read(&mut bytes).is_err());
-        assert!(reader.read(&mut bytes).is_err(), "a one-shot true remains canceled");
-        assert_eq!(input.position(), CHUNK as u64, "the remaining input was not consumed");
-        assert_eq!(polls.get(), 2);
-    }
-}

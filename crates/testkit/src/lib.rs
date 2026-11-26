@@ -1,6 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
-
 //! Source-level platform regression guards and verification utilities for the Craft application suite.
 //!
 //! This crate provides non-panicking source analysis guards that detect known platform hazards
@@ -14,6 +13,9 @@
 //!   where `std::time::Instant::now()` panics on `wasm32`.
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
+//!
+//! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
+//! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
 //!
 //! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
 //! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
@@ -29,6 +31,11 @@
 //! byte limit and a timeout, and caches the result for the process. Its `require_oracle!`,
 //! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test when a program is
 //! missing. It is not built for `wasm32`.
+//!
+//! On targets other than `wasm32`, [`serial`] holds [`serial::TestLock`], a lock that a `static`
+//! can hold and that the thread holding it can take again, and [`serial::gpu_lock`], the one lock
+//! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
+//! different lock can run at the same time as one that takes this one.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
@@ -46,7 +53,10 @@ pub mod guards;
 pub mod hostile;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod oracle;
+pub mod rng;
 pub mod sample_damage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod serial;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};

@@ -2,10 +2,10 @@ name: Keymap
 
 on:
   push:
-    branches: [main]
-    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+    branches: [main, next]
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
   pull_request:
-    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
   workflow_dispatch:
 
 permissions:
@@ -46,14 +46,12 @@ jobs:
           toolchain: stable
           components: clippy
       - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
-      # `snapshot` covers `ui` and `egui` and compiles the dialog screenshots, which need a GPU
-      # to run, so the test steps leave them out.
-      - run: cargo clippy -p craft-keymap --all-targets --features snapshot --locked -- -D warnings
-      # Doctests run once, in the `ui` step.
+      - run: cargo clippy -p craft-keymap --all-targets --features egui --locked -- -D warnings
+      # Doctests run once, in the `egui` step.
       - name: Test core
         run: cargo test -p craft-keymap --no-default-features --lib --tests --locked
-      - name: Test egui dispatch and the shortcuts dialog
-        run: cargo test -p craft-keymap --features ui --locked
+      - name: Test egui dispatch
+        run: cargo test -p craft-keymap --features egui --locked
   wasm:
     timeout-minutes: 10
     name: Keymap WASM
@@ -70,4 +68,4 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - run: cargo check -p craft-keymap --features ui --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-keymap --features egui --locked --target wasm32-unknown-unknown

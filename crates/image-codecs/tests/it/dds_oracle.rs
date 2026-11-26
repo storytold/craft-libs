@@ -477,6 +477,9 @@ fn digests() -> Vec<(String, String)> {
     // downsampler's edge spans in only one direction.
     let sizes = [(517u32, 389u32), (1, 1), (2, 3), (3, 2), (5, 5), (1, 9), (9, 1), (6, 13)];
     let layouts = [ChannelLayout::Rgba, ChannelLayout::Rgb, ChannelLayout::GrayA, ChannelLayout::Gray];
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th case.
+    let step = craft_media_testkit::hostile::divisor();
+    let mut index = 0usize;
     for (i, &(w, h)) in sizes.iter().enumerate() {
         for layout in layouts {
             // The large picture in every layout; the small ones in RGBA and gray.
@@ -486,6 +489,10 @@ fn digests() -> Vec<(String, String)> {
             let img = image(w, h, layout, 0x5eed + i as u64);
             for compression in COMPRESSIONS {
                 for mipmaps in [false, true] {
+                    index += 1;
+                    if !(index - 1).is_multiple_of(step) {
+                        continue;
+                    }
                     let name = format!("{layout:?}-{w}x{h}-{}-mips{}", compression.name(), u8::from(mipmaps));
                     let opts = EncodeOptions { dds: DdsOptions { compression, mipmaps }, ..Default::default() };
                     let file = encode(&img, Format::Dds, &opts).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -497,6 +504,10 @@ fn digests() -> Vec<(String, String)> {
         }
     }
     for (name, file) in foreign_files() {
+        index += 1;
+        if !(index - 1).is_multiple_of(step) {
+            continue;
+        }
         let back = decode(&file).unwrap_or_else(|e| panic!("{name}: {e}"));
         out.push((format!("{name}-decode"), image_digest(&back)));
     }
@@ -508,7 +519,12 @@ fn dds_output_matches_the_pinned_digests() {
     let got = digests();
     let pinned = |name: &str| PINNED.iter().find(|(n, _)| *n == name).map(|(_, d)| *d);
     let mismatched: Vec<&str> = got.iter().filter(|(name, digest)| pinned(name) != Some(digest.as_str())).map(|(n, _)| n.as_str()).collect();
-    let stale: Vec<&str> = PINNED.iter().filter(|(n, _)| !got.iter().any(|(g, _)| g == n)).map(|(n, _)| *n).collect();
+    // A sampled run does not compute every pinned case.
+    let stale: Vec<&str> = if craft_media_testkit::hostile::divisor() > 1 {
+        Vec::new()
+    } else {
+        PINNED.iter().filter(|(n, _)| !got.iter().any(|(g, _)| g == n)).map(|(n, _)| *n).collect()
+    };
     if !mismatched.is_empty() || !stale.is_empty() {
         eprintln!("const PINNED: &[(&str, &str)] = &[");
         for (name, digest) in &got {
