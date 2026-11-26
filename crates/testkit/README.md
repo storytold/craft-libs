@@ -260,7 +260,7 @@ let qpdf = craft_testkit::require_oracle!(craft_testkit::oracle::find("qpdf", "-
 let ff = craft_testkit::require_ffmpeg!("FILMCRAFT_FFMPEG", "FILMCRAFT_REQUIRE_ORACLES");
 ```
 
-A missing program prints a `SKIPPED (oracle)` line and returns from the test. When the required variable (`CRAFT_REQUIRE_ORACLES` by default) is exactly `1`, a missing program fails the test instead. Other values, such as `true`, `yes` or `0`, do not count. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
+A missing program goes to `skip::skip` with the required variable the caller names (`skip::REQUIRED_VAR`, `CRAFT_TEST_REQUIRED`, by default). The test prints a `SKIPPED:` line and returns, or fails, under the rule in the `skip` section below. `oracle::outcome` sorts a lookup result into `Outcome::Missing` and `Outcome::Fail` without reading the required variable's value. A required variable name that is empty or holds `=` or a NUL character fails the test even when the program is found. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
 
 ## serial
 
@@ -457,7 +457,7 @@ cases change, and keep the test names.
 | EffectCraft | `crates/opusenc/tests/it/ffmpeg.rs` and the tests that call ffmpeg or ffprobe | Pending |
 | SoundCraft | `crates/video/src/tests.rs` | Pending |
 
-Each adoption keeps the variable names the repository uses today. A repository whose required variable accepts other values than `1` today changes that reading in its own pull request.
+Each adoption keeps the variable names the repository uses today. Its required variable then follows the `skip` rule, and the adoption says which values change, as the `skip` table below describes.
 
 ### serial
 

@@ -27,10 +27,11 @@
 //! failed lookup is not cached.
 //!
 //! No function here panics. [`require_oracle!`](crate::require_oracle), [`require_ffmpeg!`](crate::require_ffmpeg)
-//! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test: a missing program
-//! prints a `SKIPPED (oracle)` line and returns from the test, unless the required variable
-//! ([`REQUIRED_VAR`] by default) is exactly `1`, in which case the test fails. Every other error,
-//! such as a wrong explicit path or a timeout, fails the test.
+//! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test. A missing program
+//! goes to [`skip::skip`](crate::skip::skip) with the required variable the caller names
+//! ([`skip::REQUIRED_VAR`](crate::skip::REQUIRED_VAR) by default): the test prints a `SKIPPED:` line
+//! and returns, or fails under that module's rule for the variable's value. Every other error, such
+//! as a wrong explicit path or a timeout, fails the test.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -41,10 +42,6 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
-
-/// The default variable that turns a missing oracle from a skip into a test failure. It counts as
-/// set only when its value is exactly `1`.
-pub const REQUIRED_VAR: &str = "CRAFT_REQUIRE_ORACLES";
 
 const UNIX_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/opt/local/bin", "/snap/bin"];
 const WINDOWS_DIRS: &[&str] = &[r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin", r"C:\ProgramData\chocolatey\bin"];
@@ -177,11 +174,6 @@ fn install_hint(program: &str) -> &'static str {
     }
 }
 
-/// Whether a required variable's value turns skips into failures: only exactly `1` does.
-pub fn required(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|v| v == OsStr::new("1"))
-}
-
 /// The default explicit-path variable for `program`: `CRAFT_` and the program name in upper case,
 /// with each character other than a letter or digit written as `_` (`CRAFT_FFMPEG`).
 pub fn explicit_var(program: &str) -> String {
@@ -309,51 +301,53 @@ fn format_names(line: &str) -> Vec<&str> {
 /// What a `require_*` macro does with a lookup result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Print this line and return from the test.
-    Skip(String),
+    /// The program is missing. [`skip::skip`](crate::skip::skip) takes this reason and decides
+    /// whether the test skips or fails.
+    Missing(String),
     /// Fail the test with this message.
     Fail(String),
 }
 
-/// Decide a lookup result under `required_var` as the process environment sets it. An invalid
-/// `required_var` fails.
+/// Sort a lookup result: a missing program becomes [`Outcome::Missing`] with the error as its
+/// reason, and every other error becomes [`Outcome::Fail`]. A `required_var` that cannot name a
+/// variable (empty, or holding `=` or a NUL character) becomes [`Outcome::Fail`] whatever the
+/// result, as [`skip::required`](crate::skip::required) rejects it. The variable's value is not
+/// read here.
 pub fn outcome(result: Result<Oracle, OracleError>, required_var: &str) -> Result<Oracle, Outcome> {
     if !valid_var(required_var) {
-        return Err(Outcome::Fail(format!("oracle setup failed: {}", OracleError::InvalidVariable { variable: required_var.to_owned() })));
+        return Err(Outcome::Fail(format!("oracle setup failed: {}", crate::skip::RequiredError::BadName { variable: required_var.to_owned() })));
     }
-    outcome_with(result, required_var, required(std::env::var_os(required_var).as_deref()))
-}
-
-/// Decide a lookup result: a missing program skips unless `required`; every other error fails.
-pub fn outcome_with(result: Result<Oracle, OracleError>, required_var: &str, required: bool) -> Result<Oracle, Outcome> {
     match result {
         Ok(oracle) => Ok(oracle),
-        Err(e) if e.is_missing() && !required => Err(Outcome::Skip(format!("SKIPPED (oracle): {e}; set {required_var}=1 to make this a failure"))),
-        Err(e) if e.is_missing() => Err(Outcome::Fail(format!("oracle required: {e}, and {required_var}=1 forbids skipping"))),
+        Err(e) if e.is_missing() => Err(Outcome::Missing(e.to_string())),
         Err(e) => Err(Outcome::Fail(format!("oracle setup failed: {e}"))),
     }
 }
 
-/// `let qpdf = require_oracle!(oracle::find("qpdf", "--version"));` binds the oracle, or prints a
-/// `SKIPPED (oracle)` line and returns from the calling test when the program is missing.
-/// `require_oracle!(probe, "PDFCRAFT_ORACLES_REQUIRED")` reads that required variable instead of
-/// [`REQUIRED_VAR`](crate::oracle::REQUIRED_VAR), and a third argument is the value to return.
+/// `let qpdf = require_oracle!(oracle::find("qpdf", "--version"));` binds the oracle, or skips the
+/// calling test through [`skip::skip`](crate::skip::skip) and returns from it when the program is
+/// missing. `require_oracle!(probe, "PDFCRAFT_ORACLES_REQUIRED")` passes that required variable
+/// instead of [`skip::REQUIRED_VAR`](crate::skip::REQUIRED_VAR), and a third argument is the value
+/// to return.
 ///
-/// The test fails when the required variable is exactly `1` and the program is missing, and on
-/// any other error. The macro fails the test with `panic!`, which expands in the calling test.
+/// A missing program fails the test when [`skip::required`](crate::skip::required) returns `true`
+/// or an error for the required variable. Any other error fails the test as well. The macro fails
+/// the test with `panic!`, which expands in the calling test.
 #[macro_export]
 macro_rules! require_oracle {
     ($probe:expr) => {
-        $crate::require_oracle!($probe, $crate::oracle::REQUIRED_VAR, ())
+        $crate::require_oracle!($probe, $crate::skip::REQUIRED_VAR, ())
     };
     ($probe:expr, $required_var:expr) => {
         $crate::require_oracle!($probe, $required_var, ())
     };
-    ($probe:expr, $required_var:expr, $ret:expr) => {
-        match $crate::oracle::outcome($probe, $required_var) {
+    ($probe:expr, $required_var:expr, $ret:expr) => {{
+        // The variable expression is evaluated once, so the name checked is the name read.
+        let required_var: &str = &$required_var;
+        match $crate::oracle::outcome($probe, required_var) {
             ::core::result::Result::Ok(oracle) => oracle,
-            ::core::result::Result::Err($crate::oracle::Outcome::Skip(line)) => {
-                ::std::eprintln!("{line}");
+            ::core::result::Result::Err($crate::oracle::Outcome::Missing(reason)) => {
+                let _ = $crate::skip::skip(&reason, required_var);
                 return $ret;
             }
             ::core::result::Result::Err($crate::oracle::Outcome::Fail(message)) => {
@@ -362,7 +356,7 @@ macro_rules! require_oracle {
                 ::core::panic!("{message}");
             }
         }
-    };
+    }};
 }
 
 /// `let ff = require_ffmpeg!();` is [`require_oracle!`](crate::require_oracle) for ffmpeg.
@@ -860,19 +854,28 @@ mod tests {
     // Moved from PdfCraft `crates/oracle/src/lib.rs` and craft-libs `crates/pdf/tests/cos/oracle.rs`.
 
     #[test]
-    fn a_missing_oracle_is_fatal_exactly_when_it_is_required() {
-        let missing = || Err(OracleError::Missing { program: "qpdf".into() });
-        let Err(Outcome::Skip(opt)) = outcome_with(missing(), "PDFCRAFT_ORACLES_REQUIRED", false) else { panic!("optional absence must skip") };
-        let Err(Outcome::Fail(req)) = outcome_with(missing(), "PDFCRAFT_ORACLES_REQUIRED", true) else { panic!("required absence must fail") };
-        assert!(opt.contains("SKIPPED"), "{opt}");
-        assert!(opt.contains("apt install qpdf"), "{opt}");
-        assert!(opt.contains("PDFCRAFT_ORACLES_REQUIRED"), "{opt}");
-        assert!(req.contains("required"), "{req}");
-        assert!(req.contains("forbids skipping"), "{req}");
-        assert!(!req.contains("SKIPPED"), "{req}");
-        // An error other than absence fails even when nothing is required.
+    fn only_a_missing_oracle_goes_to_the_skip_rule() {
+        let Err(Outcome::Missing(reason)) = outcome(Err(OracleError::Missing { program: "qpdf".into() }), "PDFCRAFT_ORACLES_REQUIRED") else {
+            panic!("an absent program must go to the skip rule")
+        };
+        assert!(reason.contains("qpdf"), "{reason}");
+        assert!(reason.contains("apt install qpdf"), "{reason}");
+        // An error other than absence fails without reading any required variable.
         let bad = Err(OracleError::InvalidExplicitPath { variable: "CRAFT_QPDF".into(), path: "/nope".into() });
-        assert!(matches!(outcome_with(bad, REQUIRED_VAR, false), Err(Outcome::Fail(_))));
+        let Err(Outcome::Fail(message)) = outcome(bad, "PDFCRAFT_ORACLES_REQUIRED") else { panic!("a wrong explicit path must fail") };
+        assert!(message.starts_with("oracle setup failed"), "{message}");
+    }
+
+    /// A found program does not hide a required variable name that `skip::required` rejects.
+    #[cfg(unix)]
+    #[test]
+    fn a_found_oracle_still_fails_on_an_invalid_required_variable_name() {
+        let d = Scratch::new("found-name");
+        script(d.path(), "qpdf", "echo 'qpdf version 11.9.0'");
+        let found = || find_on(d.path(), "qpdf", "--version", ProbeLimits::VERSION);
+        assert!(outcome(found(), "PDFCRAFT_ORACLES_REQUIRED").is_ok());
+        let decided = outcome(found(), "CRAFT=REQUIRED");
+        assert!(matches!(decided, Err(Outcome::Fail(ref m)) if m.contains("cannot name a variable")), "{decided:?}");
     }
 
     #[test]
@@ -916,15 +919,6 @@ mod tests {
     }
 
     // Behavior of the shared module.
-
-    #[test]
-    fn required_value_is_exactly_one() {
-        assert!(required(Some(OsStr::new("1"))));
-        for v in ["", "0", " 1", "1 ", "01", "true", "TRUE", "yes", "on"] {
-            assert!(!required(Some(OsStr::new(v))), "{v:?}");
-        }
-        assert!(!required(None));
-    }
 
     #[test]
     fn invalid_variable_names_are_errors() {
