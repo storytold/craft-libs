@@ -541,6 +541,9 @@ impl McpChild {
     /// this crate's client info, waits up to [`McpLimits::initialize_timeout`] for the reply, then
     /// sends `notifications/initialized`. Returns the reply's result. A reply with another protocol
     /// version returns [`McpError::UnsupportedVersion`] and closes the connection.
+    /// The result must contain a `capabilities` object and a `serverInfo` object with string
+    /// `name` and `version` fields. Missing or invalid fields return [`McpError::Protocol`] and
+    /// close the connection.
     pub fn initialize(&mut self, version: &str) -> Result<Value, McpError> {
         let params = json!({
             "protocolVersion": version,

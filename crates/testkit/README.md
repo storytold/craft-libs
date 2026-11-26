@@ -245,7 +245,7 @@ The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The
 
 | Call | What it does |
 |---|---|
-| `initialize(version)` | Sends `initialize` with `version` (`mcp::PROTOCOL_VERSION` is `2025-06-18`), waits for the reply, then sends `notifications/initialized`. A reply with another version returns `UnsupportedVersion` and closes the connection. |
+| `initialize(version)` | Sends `initialize` with `version` (`mcp::PROTOCOL_VERSION` is `2025-06-18`), validates the reply, then sends `notifications/initialized`. The result must contain `capabilities` and `serverInfo` objects, with string `serverInfo.name` and `serverInfo.version` fields. Invalid fields return `Protocol` and close the connection. A reply with another version returns `UnsupportedVersion` and closes the connection. |
 | `request(method, params)`, `request_within(.., timeout)` | Sends a request with a new numeric id and returns the `result` of the reply with that id. Well-formed replies with other ids are skipped. An error reply returns `Rpc` with its code, message and data, and the connection stays usable. |
 | `call_tool(name, args)`, `call_tool_within(.., timeout)` | Sends `tools/call` and returns the tool result unchanged, `content` and `isError` included. |
 | `list_tools()` | Reads `tools/list` pages through `nextCursor` and returns the tools as sent. More than `max_pages` pages returns `TooManyPages`, and tools that add up to more than `max_line_bytes` of JSON return `ToolListTooLarge`. |
@@ -253,7 +253,7 @@ The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The
 | `take_notifications()` | Returns the notifications kept so far without waiting. |
 | `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. After the child exits, it waits up to 5 s for the rest of stderr to be read. |
 
-While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error, close the connection and stop the child; later calls return `Closed`. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
+While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. Server requests require string or integer IDs. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error and close the connection; later calls return `Closed`. A terminal failure discards queued writes and unread messages. A write already in progress may finish. After the end of stdout or an I/O error, `close()` or dropping the connection reaps the child. Other terminal failures stop and reap it immediately. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
 
 `McpLimits` holds the limits. These defaults are the crate's own values:
 
