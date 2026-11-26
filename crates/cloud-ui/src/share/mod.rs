@@ -740,13 +740,16 @@ impl ShareDialog {
                 }
             }
             Answer::Linked => {
-                // An account arrived, so the list is stale.
-                if let Some(sheet) = &mut self.open {
-                    sheet.destinations = None;
-                }
-                let seq = self.issue(Request::Destinations);
-                if let Some(sheet) = &mut self.open {
-                    sheet.destinations_seq = Some(seq);
+                // An account arrived, so the list is stale. With no sheet open
+                // there is no list to reload.
+                if self.open.is_some() {
+                    if let Some(sheet) = &mut self.open {
+                        sheet.destinations = None;
+                    }
+                    let seq = self.issue(Request::Destinations);
+                    if let Some(sheet) = &mut self.open {
+                        sheet.destinations_seq = Some(seq);
+                    }
                 }
             }
             Answer::Withdrawn { share_id } => {
