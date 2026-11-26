@@ -259,13 +259,15 @@ While a call waits, the client answers the child's `ping` with an empty result a
 
 | Field | Default | Range |
 |---|---|---|
-| `max_line_bytes` | 64 MiB, for one stdout line and for the whole `list_tools` result | at least 1 |
+| `max_line_bytes` | 64 MiB, for one stdout line, for the whole `list_tools` result, and for the total compact JSON bytes of retained notifications | at least 1 |
 | `request_timeout` | 30 s | more than zero, at most 1 hour |
 | `initialize_timeout` | 60 s | more than zero, at most 1 hour |
 | `close_grace` | 2 s | at most 1 hour |
 | `max_pages` | 64 | at least 1 |
-| `max_notifications` | 0 (notifications are not kept); the oldest is dropped when the queue is full | at most 4096 |
+| `max_notifications` | 0 (notifications are not kept); oldest entries are dropped to satisfy both this count and the `max_line_bytes` byte budget | at most 4096 |
 | `stderr_tail_bytes` | 0 (stderr goes to the null device); otherwise the last bytes written are kept | at most 16 MiB |
+
+A notification whose compact JSON encoding exceeds `max_line_bytes` is discarded without removing previously retained notifications.
 
 `McpLimits::timeouts_from_var(name)` sets both deadlines from a variable that holds a whole number of seconds from 1 to 3600; `mcp::TIMEOUT_VAR` (`CRAFT_TEST_MCP_TIMEOUT_SECS`) is the default name. Any other value returns an error.
 

@@ -138,6 +138,34 @@ fn pages_are_followed() {
 }
 
 #[test]
+fn notifications_are_bounded_by_total_json_bytes() {
+    let notes: Vec<Value> = (0..3)
+        .map(|index| json!({"jsonrpc": "2.0", "method": "notifications/message", "params": {"index": index, "data": "x".repeat(96)}}))
+        .collect();
+    let limits = McpLimits { max_notifications: 4, max_line_bytes: notes[0].to_string().len() * 3 / 2, ..McpLimits::default() };
+    let sent = notes.clone();
+    let mut c = fake_with(limits, move |_, req| {
+        let mut lines: Vec<String> = sent.iter().map(Value::to_string).collect();
+        lines.push(result(req, json!(true)));
+        Some(lines)
+    });
+    assert_eq!(c.request("x", Value::Null).unwrap(), json!(true));
+    assert_eq!(c.take_notifications(), vec![notes[2].clone()]);
+    assert!(c.take_notifications().is_empty());
+}
+
+#[test]
+fn a_notification_larger_than_the_capture_budget_keeps_earlier_messages() {
+    let oversized = r#"{"jsonrpc":"2.0","method":"n","params":{"n":1e1}}"#;
+    let kept = json!({"jsonrpc": "2.0", "method": "n", "params": {}});
+    let limits = McpLimits { max_notifications: 4, max_line_bytes: oversized.len(), ..McpLimits::default() };
+    let first = kept.to_string();
+    let mut c = fake_with(limits, move |_, req| Some(vec![first.clone(), oversized.to_string(), result(req, json!(true))]));
+    assert_eq!(c.request("x", Value::Null).unwrap(), json!(true));
+    assert_eq!(c.take_notifications(), vec![kept]);
+}
+
+#[test]
 fn notifications_log_lines_and_stale_replies_are_skipped() {
     // A log line on stdout is a protocol error (`non_json_stdout_is_protocol_error`); a
     // notification and a stale reply are skipped.

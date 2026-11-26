@@ -58,7 +58,8 @@ const METHOD_NOT_FOUND: i64 = -32601;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpLimits {
     /// The longest stdout line read, without its newline, and the most bytes of JSON
-    /// [`McpChild::list_tools`] returns in all. Default 64 MiB; must be at least 1.
+    /// [`McpChild::list_tools`] returns in all. This also caps the total compact JSON bytes of
+    /// retained notifications. Default 64 MiB; must be at least 1.
     pub max_line_bytes: usize,
     /// How long [`McpChild::request`], [`McpChild::call_tool`] and each page of
     /// [`McpChild::list_tools`] wait for the reply. Default 30 s; from 1 ns to [`MAX_TIMEOUT`].
@@ -72,6 +73,8 @@ pub struct McpLimits {
     pub max_pages: usize,
     /// The most notifications kept for [`McpChild::take_notifications`]; when the queue is full,
     /// the oldest is dropped. Default 0, which keeps none; at most [`MAX_NOTIFICATIONS`].
+    /// Oldest entries are also dropped to keep their total compact JSON size within
+    /// [`McpLimits::max_line_bytes`]. A single notification larger than that budget is discarded.
     pub max_notifications: usize,
     /// The most bytes of the child's stderr kept, the last ones written. Default 0, which sends
     /// stderr to the null device; at most [`MAX_STDERR_TAIL`]. Not used by [`McpChild::connect`].
@@ -380,7 +383,8 @@ pub struct McpChild {
     /// The exit status of a child already reaped, and whether it was stopped.
     exit: Option<(ExitStatus, bool)>,
     closed: Option<String>,
-    notifications: VecDeque<Value>,
+    notifications: VecDeque<(Value, usize)>,
+    notification_bytes: usize,
     stderr: Option<StderrTail>,
 }
 
@@ -523,6 +527,7 @@ impl McpChild {
             exit: None,
             closed: None,
             notifications: VecDeque::new(),
+            notification_bytes: 0,
             stderr: None,
         })
     }
@@ -683,7 +688,8 @@ impl McpChild {
                 break;
             }
         }
-        self.notifications.drain(..).collect()
+        self.notification_bytes = 0;
+        self.notifications.drain(..).map(|(value, _)| value).collect()
     }
 
     /// Closes the child's stdin, waits up to [`McpLimits::close_grace`] for it to exit, then stops
@@ -775,10 +781,18 @@ impl McpChild {
             }
             (Some(Value::String(_)), None) => {
                 if self.limits.max_notifications > 0 {
-                    if self.notifications.len() >= self.limits.max_notifications {
-                        self.notifications.pop_front();
+                    let mut count = ByteCount(0);
+                    serde_json::to_writer(&mut count, &v).map_err(|error| self.fail(McpError::Protocol(error.to_string())))?;
+                    if count.0 > self.limits.max_line_bytes {
+                        return Ok(None);
                     }
-                    self.notifications.push_back(v);
+                    while self.notifications.len() >= self.limits.max_notifications || self.notification_bytes > self.limits.max_line_bytes - count.0
+                    {
+                        let Some((_, removed)) = self.notifications.pop_front() else { break };
+                        self.notification_bytes = self.notification_bytes.saturating_sub(removed);
+                    }
+                    self.notification_bytes += count.0;
+                    self.notifications.push_back((v, count.0));
                 }
                 Ok(None)
             }
