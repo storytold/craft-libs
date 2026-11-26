@@ -1319,8 +1319,7 @@ mod tests {
     fn visiting_legacy_code_pages_emits_only_the_final_decoding() {
         // The first string looks like UTF-8 but is two Shift-JIS katakana. The second
         // establishes the code page, so a binary visitor must not emit its provisional pass.
-        let groups: [(i16, &[u8]); 5] =
-            [(9, b"$DWGCODEPAGE"), (3, b"ANSI_932"), (1, b"\xC3\xB1"), (1, b"\x90\x7D\x96\xCA"), (0, b"EOF")];
+        let groups: [(i16, &[u8]); 5] = [(9, b"$DWGCODEPAGE"), (3, b"ANSI_932"), (1, b"\xC3\xB1"), (1, b"\x90\x7D\x96\xCA"), (0, b"EOF")];
         let mut ascii = Vec::new();
         let mut binary = BINARY_SENTINEL.to_vec();
         for (code, value) in groups {
