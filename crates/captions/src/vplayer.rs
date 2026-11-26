@@ -98,16 +98,20 @@ pub fn write(doc: &Document) -> String {
         })
         .collect();
 
-    for (i, (c, lines)) in active_cues.iter().enumerate() {
-        let start_cs = cs(c.start);
+    let mut resolved_cues: Vec<(i64, i64, &Vec<String>)> = Vec::with_capacity(active_cues.len());
+    let mut prev_end = 0i64;
+    for (c, lines) in &active_cues {
+        let start_cs = cs(c.start).max(prev_end);
         let end_cs = cs(c.end).max(start_cs + 1);
+        prev_end = end_cs;
+        resolved_cues.push((start_cs, end_cs, lines));
+    }
+
+    for (i, &(start_cs, end_cs, lines)) in resolved_cues.iter().enumerate() {
         out.push_str(&format!("{}={}\n", clock(start_cs), lines.join("|")));
-        let next_start_cs = active_cues.get(i + 1).map(|(n, _)| cs(n.start));
+        let next_start_cs = resolved_cues.get(i + 1).map(|&(next_s, _, _)| next_s);
         if next_start_cs != Some(end_cs) {
-            let next_too_early = next_start_cs.is_some_and(|next| next <= start_cs);
-            if !next_too_early {
-                out.push_str(&format!("{}=\n", clock(end_cs)));
-            }
+            out.push_str(&format!("{}=\n", clock(end_cs)));
         }
     }
     out
@@ -129,6 +133,27 @@ mod tests {
         assert_eq!(parsed.cues[0].text, "Short");
         assert_eq!(parsed.cues[0].start, ms_to_tick(0));
         assert_eq!(parsed.cues[0].end, ms_to_tick(10));
+    }
+
+    #[test]
+    fn adjacent_short_cues_do_not_collide_after_rounding() {
+        let doc = Document {
+            cues: vec![
+                Cue { start: ms_to_tick(1000), end: ms_to_tick(1001), text: "First".to_string(), ..Default::default() },
+                Cue { start: ms_to_tick(1001), end: ms_to_tick(1020), text: "Second".to_string(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let written = write(&doc);
+        assert_eq!(written, "00:00:01.00=First\n00:00:01.01=Second\n00:00:01.02=\n");
+        let parsed = parse(&written).unwrap();
+        assert_eq!(parsed.cues.len(), 2);
+        assert_eq!(parsed.cues[0].text, "First");
+        assert_eq!(parsed.cues[0].start, ms_to_tick(1000));
+        assert_eq!(parsed.cues[0].end, ms_to_tick(1010));
+        assert_eq!(parsed.cues[1].text, "Second");
+        assert_eq!(parsed.cues[1].start, ms_to_tick(1010));
+        assert_eq!(parsed.cues[1].end, ms_to_tick(1020));
     }
 
     #[test]

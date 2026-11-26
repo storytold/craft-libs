@@ -5,9 +5,9 @@
 //! {24}{72}First line|{y:i}second line in italics
 //! ```
 //!
-//! A line is `{first frame}{last frame}text`; `|` starts a new line. A first cue `{1}{1}` whose text
-//! is a number gives the frame rate; without it the rate is 23.976 fps (the rate other readers
-//! assume). Control codes `{y:i}` / `{y:b}` / `{y:u}` (italic, bold, underline; `i,b` together)
+//! A line is `{first frame}{last frame}text`; `|` starts a new line. A first cue `{1}{1}` or `{0}{0}`
+//! whose text is a number gives the frame rate; without it the rate is 23.976 fps (the rate other
+//! readers assume). Control codes `{y:i}` / `{y:b}` / `{y:u}` (italic, bold, underline; `i,b` together)
 //! and `{c:$BBGGRR}` (colour) style the line they start; the capital forms `{Y:…}` and `{C:…}`
 //! style every later line of the cue too. Other controls (`{f:…}` font, `{s:…}` size, `{h:…}`, …)
 //! are dropped. Writing always starts with the `{1}{1}` rate line and styles a line only when
@@ -143,7 +143,7 @@ pub fn parse(text: &str) -> Result<Document> {
             continue;
         }
         match split_cue(line) {
-            Some((1, 1, t)) if rows.is_empty() && !has_rate_line && header_rate(t).is_some() => {
+            Some((0, 0, t) | (1, 1, t)) if rows.is_empty() && !has_rate_line && header_rate(t).is_some() => {
                 rate = header_rate(t).unwrap_or(rate);
                 has_rate_line = true;
             }
@@ -224,6 +224,11 @@ mod tests {
     fn rate_header() {
         let d = parse("{1}{1}25.000\n{25}{50}x\n").unwrap();
         assert_eq!(d.cues[0].start, FrameRate::FPS_25.tick_of(25));
+        let d = parse("{0}{0}25.000\n{25}{50}x\n{50}{75}29.97\n").unwrap();
+        assert_eq!(d.cues.len(), 2);
+        assert_eq!(d.cues[0].start, FrameRate::FPS_25.tick_of(25));
+        assert_eq!(d.cues[1].start, FrameRate::FPS_25.tick_of(50));
+        assert_eq!(d.cues[1].text, "29.97");
         let d = parse("{25}{50}x\n").unwrap();
         assert_eq!(d.cues[0].start, DEFAULT_RATE.tick_of(25));
     }

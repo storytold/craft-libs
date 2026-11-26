@@ -159,6 +159,15 @@ fn microdvd_counts_frames_at_the_given_rate() {
     assert_eq!(String::from_utf8(bytes.clone()).expect("utf8"), "{1}{1}25.000\n{50}{100}x\n");
     let back = parse(&bytes, Format::MicroDvd).expect("parse");
     assert_eq!((back.cues[0].start, back.cues[0].end), (Tick(2 * T), Tick(4 * T)));
+
+    for header in ["{1}{1}25.000", "{0}{0}25.000"] {
+        let fixture = format!("{header}\n{{50}}{{100}}First cue\n{{100}}{{150}}23.976\n");
+        let parsed = parse(fixture.as_bytes(), Format::MicroDvd).expect("parse rate header fixture");
+        assert_eq!(parsed.cues.len(), 2, "{header}");
+        assert_eq!((parsed.cues[0].start, parsed.cues[0].end), (Tick(2 * T), Tick(4 * T)), "{header}");
+        assert_eq!((parsed.cues[1].start, parsed.cues[1].end), (Tick(4 * T), Tick(6 * T)), "{header}");
+        assert_eq!(parsed.cues[1].text, "23.976", "{header}");
+    }
 }
 
 #[test]
