@@ -1,5 +1,68 @@
 use super::{Align, Cell, FBlock, Fmt, Para, Rgb, VAlign};
 
+/// Most characters kept of one list level's `\leveltext` (a length, then up to 255 characters).
+pub(super) const MAX_LEVEL_TEXT: usize = 256;
+
+/// One level of an RTF list table (`\listlevel`): whether it is numbered, its number format
+/// (`\levelnfc`), the number of its first item (`\levelstartat`) and its level text as read.
+#[derive(Clone, Debug)]
+pub(super) struct ListLevel {
+    pub(super) ordered: bool,
+    pub(super) format: craft_wordmodel::section::NumFormat,
+    pub(super) start: u32,
+    pub(super) text: String,
+}
+
+impl Default for ListLevel {
+    fn default() -> Self {
+        ListLevel { ordered: true, format: craft_wordmodel::section::NumFormat::Decimal, start: 1, text: String::new() }
+    }
+}
+
+impl ListLevel {
+    /// The number format of an RTF `\levelnfc` code, the MSONFC codes of Word's lists: 0x00 to
+    /// 0x27 in the order of `NumFormat::ALL` (0x17 bullet), 0xFF none, any other decimal.
+    pub(super) fn format_of(nfc: i32) -> craft_wordmodel::section::NumFormat {
+        use craft_wordmodel::section::NumFormat;
+        match nfc {
+            255 => NumFormat::None,
+            0..=0x27 => usize::try_from(nfc).ok().and_then(|i| NumFormat::ALL.get(i)).copied().unwrap_or(NumFormat::Decimal),
+            _ => NumFormat::Decimal,
+        }
+    }
+
+    /// The level text in Word's notation (`%1)`, `(%1)`, `%1.%2.`): the characters its first one
+    /// counts, with the placeholders 0 to 8 as `%1` to `%9`. Empty when the file gave none. A
+    /// length past the characters takes those there, without the `;` that ends the group's text.
+    pub(super) fn word_text(&self) -> String {
+        let mut chars = self.text.chars();
+        let Some(len) = chars.next() else { return String::new() };
+        let mut body: Vec<char> = chars.take(len as usize).collect();
+        if body.len() < len as usize && body.last() == Some(&';') {
+            body.pop();
+        }
+        let mut out = String::new();
+        for c in body {
+            match c as u32 {
+                n @ 0..=8 => out.push_str(&format!("%{}", n + 1)),
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// The label the level's paragraphs show, when the file gave its level text: its format and
+    /// text, or its bullet.
+    pub(super) fn label(&self) -> Option<craft_flow::Label> {
+        use craft_wordmodel::section::NumFormat;
+        let text = self.word_text();
+        if text.is_empty() || self.format == NumFormat::None {
+            return None;
+        }
+        Some(craft_flow::Label::of_level(self.format, &text))
+    }
+}
+
 /// Deepest group nesting we track; deeper groups share the innermost state.
 pub(super) const MAX_GROUPS: usize = 512;
 
@@ -32,6 +95,9 @@ pub(super) enum Dest {
     Info(u8),
     Created,
     ListTable,
+    /// A list level's `\leveltext`: its length, then its characters, a level number placeholder
+    /// as the bytes 0 to 8 (#2085).
+    LevelText,
     ListOverride,
     FldInst,
     Pict,

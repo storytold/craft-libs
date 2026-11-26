@@ -1,5 +1,5 @@
 use crate::color::{CmykSimulation, Color, ColorComponents, ColorSpace, DeviceFamily, Ink, Plate, device_cmyk_to_gray};
-use crate::context::{Context, FormsDrawing, InterpreterCache, with_forms_drawing};
+use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::function::Function;
 use crate::interpret::state::State;
@@ -83,8 +83,9 @@ struct Repr<'a> {
     device_cmyk: bool,
     /// Craft patch (CMYK masks): the page plate's printing condition, for [`SoftMask::plate`].
     simulation: Option<CmykSimulation>,
-    /// Craft patch (self-draw scope): the forms being drawn where the mask was set.
-    forms: FormsDrawing,
+    /// PdfCraft patch (89): the forms being drawn where the mask was set; its group is drawn
+    /// nested in them, not in the forms that paint through it.
+    forms_drawing: Vec<ObjectIdentifier>,
 }
 
 impl Hash for Repr<'_> {
@@ -181,12 +182,12 @@ impl<'a> SoftMask<'a> {
         let root_transform = context.get().ctm;
         let bbox = context.bbox();
         let resources_key = resources_cache_key(&parent_resources);
+        let forms_drawing = crate::context::forms_drawing();
         let simulation = context
             .settings
             .plate
             .as_ref()
             .and_then(|p| p.simulation.clone());
-        let forms = FormsDrawing::current();
         let cache_key = hash128(&(
             simulation.as_ref().map(|s| s.digest()),
             dict.cache_key(),
@@ -194,8 +195,7 @@ impl<'a> SoftMask<'a> {
             [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
             resources_key,
             nesting_depth,
-            // Craft patch (self-draw scope): the mask skips the forms it was set in.
-            forms.ids(),
+            &forms_drawing,
         ));
 
         Some(Self(Rc::new(Repr {
@@ -221,7 +221,7 @@ impl<'a> SoftMask<'a> {
             nesting_depth,
             device_cmyk,
             simulation,
-            forms,
+            forms_drawing,
         })))
     }
 
@@ -262,14 +262,12 @@ impl<'a> SoftMask<'a> {
             state,
             self.0.nesting_depth,
         );
-        with_forms_drawing(&self.0.forms, || draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device));
+        crate::context::drawing_within(&self.0.forms_drawing, || {
+            draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+        });
     }
 
     /// Interpret the contents of the mask into the given device.
-    ///
-    /// Craft patch (self-draw scope): the contents draw inside the forms the mask was set in,
-    /// so a device may interpret the mask while it draws any form: a mask that draws that form
-    /// draws it, and one that draws a form it was set in skips that form.
     pub fn interpret(&self, device: &mut impl Device<'a>) {
         let state = State::new(self.0.root_transform);
         let mut ctx = Context::new_with(
@@ -282,7 +280,9 @@ impl<'a> SoftMask<'a> {
             self.0.nesting_depth,
         );
         ctx.luminosity_in_device_cmyk = self.0.luminosity_in_device_cmyk;
-        with_forms_drawing(&self.0.forms, || draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device));
+        crate::context::drawing_within(&self.0.forms_drawing, || {
+            draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+        });
     }
 
     /// Return the object identifier of the mask.

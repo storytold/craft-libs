@@ -1,7 +1,6 @@
 //! Interacting with the different kinds of PDF fonts.
 
 use crate::context::Context;
-use crate::context::FormsDrawing;
 use crate::context::InterpreterCache;
 use crate::device::Device;
 use crate::font::cid::Type0Font;
@@ -15,6 +14,7 @@ use crate::interpret::state::State;
 use crate::{CMapResolverFn, CacheKey, FontResolverFn, InterpreterSettings, Paint};
 use bitflags::bitflags;
 use hayro_syntax::object::Name;
+use hayro_syntax::object::ObjectIdentifier;
 use hayro_syntax::object::dict::keys::SUBTYPE;
 use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::object::{Dict, Stream};
@@ -223,16 +223,17 @@ pub struct Type3Glyph<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) nesting_depth: u32,
     pub(crate) char_code: u32,
-    /// Craft patch (self-draw scope): the forms being drawn where the glyph was shown.
-    pub(crate) forms: FormsDrawing,
+    /// PdfCraft patch (89): the forms being drawn where the glyph was shown; its procedure is
+    /// drawn nested in them, not in the forms the device is drawing when it interprets it.
+    pub(crate) forms_drawing: Vec<ObjectIdentifier>,
 }
 
 /// A glyph defined by PDF drawing instructions.
 impl<'a> Type3Glyph<'a> {
     /// Draw the type3 glyph to the given device.
     ///
-    /// Craft patch (self-draw scope): the glyph procedure draws inside the forms the glyph was
-    /// shown in, wherever the device interprets it (see [`crate::SoftMask::interpret`]).
+    /// PdfCraft patch (89): the glyph procedure draws inside the forms the glyph was shown in,
+    /// wherever the device interprets it.
     pub fn interpret(
         &self,
         device: &mut impl Device<'a>,
@@ -240,7 +241,7 @@ impl<'a> Type3Glyph<'a> {
         glyph_transform: Affine,
         paint: &Paint<'a>,
     ) {
-        crate::context::with_forms_drawing(&self.forms, || {
+        crate::context::drawing_within(&self.forms_drawing, || {
             self.font
                 .render_glyph(self, transform, glyph_transform, paint, device)
         });
@@ -394,7 +395,7 @@ impl<'a> Font<'a> {
                     settings: ctx.settings.clone(),
                     nesting_depth,
                     char_code,
-                    forms: FormsDrawing::current(),
+                    forms_drawing: crate::context::forms_drawing(),
                 };
 
                 Glyph::Type3(Box::new(shape_glyph))

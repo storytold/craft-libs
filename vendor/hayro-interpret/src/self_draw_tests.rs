@@ -1,7 +1,8 @@
-//! Craft patch (self-draw scope) tests: a form that draws itself, directly or through another
-//! form, a soft mask, a tiling pattern or a Type 3 glyph set inside it, is skipped and the page
-//! reported truncated (patch (89)). A soft mask, tiling pattern or Type 3 glyph set outside a
-//! form draws that form in full when the device interprets it while drawing the form.
+//! PdfCraft patch (89) tests: a form that draws itself through a soft mask, a tiling pattern or
+//! a Type 3 glyph set inside it is skipped, and the page is not reported truncated. A soft mask,
+//! tiling pattern or Type 3 glyph set outside a form draws that form in full when the device
+//! interprets it while drawing the form. The tests of a form that draws itself directly or
+//! through another form are in `context.rs`.
 
 use crate::context::content_was_truncated;
 use crate::font::{Glyph, Type3Glyph};
@@ -182,26 +183,6 @@ const SQUARE: &str = "0 0 10 10 re f";
 // through the page's.
 
 #[test]
-fn a_form_that_draws_itself_is_skipped() {
-    let pdf = pdf("<< /XObject << /F 5 0 R >> >>", "/F Do", &[form("0 0 10 10 re f /F Do")]);
-    let (drawn, truncated) = draw(&pdf, false);
-    assert_eq!(drawn, Drawn { paths: 1, ..Drawn::default() });
-    assert!(truncated);
-}
-
-#[test]
-fn a_form_that_draws_itself_through_another_form_is_skipped() {
-    let pdf = pdf(
-        "<< /XObject << /F 5 0 R /H 6 0 R >> >>",
-        "/F Do",
-        &[form("0 0 10 10 re f /H Do"), form("/F Do")],
-    );
-    let (drawn, truncated) = draw(&pdf, false);
-    assert_eq!(drawn, Drawn { paths: 1, ..Drawn::default() });
-    assert!(truncated);
-}
-
-#[test]
 fn a_soft_mask_set_outside_a_form_draws_that_form() {
     // The mask is set on the page and draws the form the page then draws; the device interprets
     // it while it draws that form.
@@ -225,7 +206,7 @@ fn a_soft_mask_set_inside_a_form_that_it_draws_skips_that_form() {
     );
     let (drawn, truncated) = draw(&pdf, false);
     assert_eq!(drawn, Drawn { paths: 1, ..Drawn::default() });
-    assert!(truncated);
+    assert!(!truncated);
 }
 
 #[test]
@@ -249,7 +230,7 @@ fn a_tiling_pattern_set_inside_a_form_that_it_draws_skips_that_form() {
     );
     let (drawn, truncated) = draw(&pdf, false);
     assert_eq!(drawn, Drawn { paths: 1, ..Drawn::default() });
-    assert!(truncated);
+    assert!(!truncated);
 }
 
 #[test]
@@ -278,5 +259,5 @@ fn a_type3_glyph_shown_inside_a_form_that_it_draws_skips_that_form() {
     );
     let (drawn, truncated) = draw(&pdf, false);
     assert_eq!(drawn, Drawn { paths: 1, ..Drawn::default() });
-    assert!(truncated);
+    assert!(!truncated);
 }

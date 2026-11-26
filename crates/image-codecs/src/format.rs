@@ -411,8 +411,9 @@ impl PrefixDetector {
 /// magic and is recognized last, by header plausibility.
 ///
 /// JPEG-LS is told from JPEG by the frame header that follows the marker segments, so `bytes`
-/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`]. Use
-/// [`detect_prefix`] on a buffer that may hold only the start of a file.
+/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`] when it
+/// starts with `FF D8 FF`, and a buffer of only `FF D8` matches no format. Use [`detect_prefix`] on
+/// a buffer that may hold only the start of a file: for `FF D8` it asks for a 4-byte prefix.
 pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -454,10 +455,11 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
         return Some(Format::Hdr);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
-        if is_avif_ftyp(b) {
+        let prefix = &b[..b.len().min(64)];
+        if is_avif_ftyp(prefix) {
             return Some(Format::Avif);
         }
-        if is_heif_ftyp(b) {
+        if is_heif_ftyp(prefix) {
             return Some(Format::Heif);
         }
     }
@@ -505,11 +507,21 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     None
 }
 
-/// The `ftyp` brands: the major brand, then the compatible ones (the minor version between them is skipped).
-fn ftyp_brands(b: &[u8]) -> impl Iterator<Item = &[u8; 4]> {
-    let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-    let end = size.clamp(12, b.len().min(64));
-    b[8..end].as_chunks::<4>().0.iter().enumerate().filter(|(i, _)| *i != 1).map(|(_, c)| c)
+/// The major brand and complete compatible brands in a leading ISO-BMFF `ftyp` box.
+///
+/// Pass at most the bytes the caller wants to inspect. A missing box or incomplete major
+/// brand yields an empty iterator. For sniffing, a declared size below 12 still permits the
+/// major brand. Compatible brands stop at the declared box end or the available prefix,
+/// whichever comes first. This does not validate the full box.
+pub fn ftyp_brands(prefix: &[u8]) -> impl Iterator<Item = &[u8; 4]> + Clone {
+    let brands = match prefix.first_chunk::<12>() {
+        Some(header) if &header[4..8] == b"ftyp" => {
+            let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+            &prefix[8..size.clamp(12, prefix.len())]
+        }
+        _ => &[],
+    };
+    brands.as_chunks::<4>().0.iter().enumerate().filter(|(i, _)| *i != 1).map(|(_, brand)| brand)
 }
 
 fn is_avif_ftyp(b: &[u8]) -> bool {
