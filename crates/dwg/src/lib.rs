@@ -825,7 +825,9 @@ mod native {
             return Ok(fixed);
         }
         let keep = |record: &VisualStyleRecord, fixed: &mut std::collections::HashSet<_>| {
-            if record.candidate && record.fixed && !record.modern
+            if record.candidate
+                && record.fixed
+                && !record.modern
                 && let Some(handle) = record.handle.filter(|h| matches!(doc.objects.get(h), Some(ObjectType::VisualStyle(_))))
             {
                 fixed.insert(handle);
@@ -1103,7 +1105,7 @@ mod native {
     /// differently by version: read as R2000, an AC1032 file's mental ray render settings came out
     /// a class version too high, for which the ODA rejects the whole DWG, and a field lost its
     /// cached value. So the DXF is read as `kept` declares; the formats of the DXF's own pre-2007
-    /// fields, which the reader skips then, are restored ([`legacy_field_formats`]). A `kept`
+    /// fields, which the reader skips then, are restored. A `kept`
     /// version that is unknown, or not newer than the DXF's own, changes nothing.
     pub fn dxf_to_dwg_kept_as(dxf: &[u8], version: &str, kept: &str) -> Result<Vec<u8>, String> {
         dxf_to_dwg_kept_noted(dxf, version, kept).map(|(dwg, _)| dwg)
@@ -2519,7 +2521,7 @@ mod bridge {
         {
             let ascii = visualstyle_dxf(tail);
             let tags = craft_dxf::parse_with_limit(&ascii, ascii.len()).unwrap();
-            let binary = craft_dxf::write_binary(&tags, true);
+            let binary = craft_dxf::write_binary(&tags, true).unwrap();
             for bytes in [&ascii, &binary] {
                 let doc = acadrust::DxfReader::from_reader(Cursor::new(bytes.to_vec())).unwrap().read().unwrap();
                 assert!(matches!(doc.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
@@ -2536,7 +2538,7 @@ mod bridge {
         let mut opacity = full[..fixed].to_vec();
         opacity.extend_from_slice(b"40\n0.6\n0\nENDSEC\n0\nEOF\n");
         let tags = craft_dxf::parse_with_limit(&opacity, opacity.len()).unwrap();
-        let binary = craft_dxf::write_binary(&tags, true);
+        let binary = craft_dxf::write_binary(&tags, true).unwrap();
         for bytes in [&opacity, &binary] {
             let doc = acadrust::DxfReader::from_reader(Cursor::new(bytes.to_vec())).unwrap().read().unwrap();
             assert!(matches!(doc.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
@@ -2545,13 +2547,12 @@ mod bridge {
             assert_eq!(report.get("VISUALSTYLE"), Some(&1), "opacity-only fixed style, binary {}", craft_dxf::is_binary(bytes));
         }
         let doc = acadrust::DxfReader::from_reader(Cursor::new(full.clone())).unwrap().read().unwrap();
-        for (tail, omitted) in [
-            ("0\nXRECORD\n5\nF\n100\nAcDbVisualStyle\n176\n0\n", true),
-            ("176\n0\n0\nXRECORD\n5\nF\n100\nAcDbVisualStyle\n70\n0\n", false),
-        ] {
+        for (tail, omitted) in
+            [("0\nXRECORD\n5\nF\n100\nAcDbVisualStyle\n176\n0\n", true), ("176\n0\n0\nXRECORD\n5\nF\n100\nAcDbVisualStyle\n70\n0\n", false)]
+        {
             let ascii = visualstyle_dxf(tail);
             let tags = craft_dxf::parse_with_limit(&ascii, ascii.len()).unwrap();
-            let binary = craft_dxf::write_binary(&tags, true);
+            let binary = craft_dxf::write_binary(&tags, true).unwrap();
             for bytes in [&ascii, &binary] {
                 let fixed = native::fixed_visualstyles(bytes, &doc).unwrap();
                 assert_eq!(fixed.contains(&acadrust::Handle::new(0xE)), omitted, "an adjacent record cannot change the style layout");
