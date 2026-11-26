@@ -229,6 +229,26 @@ The colour management module in crates/cms is extracted from:
   Licensed MIT OR Apache-2.0. Its generated ICC profile is dedicated to the public domain
   (CC0-1.0); see ATTRIBUTION.md.
 
+The image-based lighting in crates/pbr (craft-pbr) is adapted from:
+- TextureCraft, crates/render/src/ibl.rs, revision fe8ee1bdb0243335560d3e726633cc0433ee99fc,
+  copied without its tests to crates/pbr/tests/it/reference/texturecraft.rs.
+  https://github.com/storytold/texturecraft
+  Copyright (c) 2026 ArtCraft Team and the TextureCraft contributors.
+- MaterialCraft, crates/render/src/ibl.rs, revision 4ff5af9af7371613ee37b186e03caf49ee6dbd88,
+  whose differing parts are copied to crates/pbr/tests/it/reference/materialcraft.rs.
+  https://github.com/storytold/materialcraft
+  Copyright (c) 2026 ArtCraft Team and the MaterialCraft contributors.
+The BRDF, environment BRDF and default environment in crates/pbr are adapted from:
+- EffectCraft, crates/render/src/three_d/adv/shade.rs and adv/scene.rs, revision
+  41da144555a1c8ddbbe94876a00259832322d00c, whose shading functions and default environment
+  are copied to crates/pbr/tests/it/reference/effectcraft.rs.
+  https://github.com/storytold/effectcraft
+  Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
+The WGSL text in crates/pbr/src/shade.wgsl is adapted from:
+- EffectCraft, crates/gpu/src/shaders/advanced3d.wgsl, revision
+  f4d45dfef3a280d96aff1d4eb5f1950160adefc2 (above).
+All four sources are licensed MIT OR Apache-2.0. crates/pbr/README.md lists the changes from them.
+
 Optional PDF writer
 
 Krilla 0.8.2 (https://github.com/LaurenzV/krilla), MIT OR Apache-2.0.
@@ -269,9 +289,10 @@ linesweeper
 
 linesweeper 0.5.0 (https://crates.io/crates/linesweeper/0.5.0), MIT OR Apache-2.0, is stored in
 vendor/linesweeper with its upstream license files and local patches, to src/sweep/sweep_line.rs,
-src/curve/mod.rs, src/curve/line.rs and docs/sweep.typ. Its manifest names Joe Neeman as author, and
-its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See vendor/linesweeper/README.craft.md and
-vendor/linesweeper/SOURCE.json for provenance, the local patches and the files left out.
+src/curve/transverse.rs, src/curve/mod.rs, src/curve/line.rs and docs/sweep.typ. Its manifest names
+Joe Neeman as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
+vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance, the local
+patches and the files left out.
 
 Platform lifecycle source provenance
 

@@ -8,6 +8,7 @@ mod brdf;
 mod differential;
 mod moved;
 mod numeric;
+mod wgsl;
 
 /// Verbatim copies of the apps' previous code, run by `differential` and `brdf`.
 mod reference {
