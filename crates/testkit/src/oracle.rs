@@ -667,18 +667,41 @@ impl Drop for ReaderSlot {
 /// Read one pipe on its own thread and send the result as `(is_stdout, bytes)`. It fails without
 /// reading when [`MAX_LIVE_READERS`] readers are alive, which happens when earlier failed runs left
 /// readers blocked on pipes that a surviving process holds open.
-fn spawn_reader(pipe: Option<impl Read + Send + 'static>, is_stdout: bool, cap: usize, tx: Sender<StreamResult>) -> io::Result<()> {
+/// A refused reader returns the pipe with the error, so the caller keeps it open until the process
+/// tree has ended.
+fn spawn_reader(
+    pipe: Option<impl Read + Send + 'static>,
+    is_stdout: bool,
+    cap: usize,
+    tx: Sender<StreamResult>,
+) -> Result<(), (io::Error, Option<Box<dyn Send>>)> {
+    spawn_reader_in(&LIVE_READERS, MAX_LIVE_READERS, pipe, is_stdout, cap, tx)
+}
+
+/// [`spawn_reader`] with the reader count and its limit given.
+fn spawn_reader_in(
+    live: &'static AtomicUsize,
+    max: usize,
+    pipe: Option<impl Read + Send + 'static>,
+    is_stdout: bool,
+    cap: usize,
+    tx: Sender<StreamResult>,
+) -> Result<(), (io::Error, Option<Box<dyn Send>>)> {
     let Some(pipe) = pipe else {
         let _ = tx.send((is_stdout, Ok(Vec::new())));
         return Ok(());
     };
-    let Some(slot) = ReaderSlot::take(&LIVE_READERS, MAX_LIVE_READERS) else {
-        return Err(io::Error::other("too many pipe readers are still blocked on earlier probes"));
+    let Some(slot) = ReaderSlot::take(live, max) else {
+        let e = io::Error::other("too many pipe readers are still blocked on earlier probes");
+        return Err((e, Some(Box::new(pipe))));
     };
-    std::thread::Builder::new().name("craft-testkit-oracle-pipe".into()).spawn(move || {
-        let _slot = slot;
-        let _ = tx.send((is_stdout, read_capped(pipe, cap)));
-    })?;
+    std::thread::Builder::new()
+        .name("craft-testkit-oracle-pipe".into())
+        .spawn(move || {
+            let _slot = slot;
+            let _ = tx.send((is_stdout, read_capped(pipe, cap)));
+        })
+        .map_err(|e| (e, None))?;
     Ok(())
 }
 
@@ -812,11 +835,16 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
     };
     let (tx, rx) = mpsc::channel();
     let read_error = |source| OracleError::Read { path: path.to_path_buf(), source };
-    if let Err(source) = spawn_reader(child.stdout.take(), true, limits.max_output_bytes, tx.clone()) {
-        return abort(&mut child, &rx, 0, seen, read_error(source));
+    if let Err((source, pipe)) = spawn_reader(child.stdout.take(), true, limits.max_output_bytes, tx.clone()) {
+        // A refused pipe closes only after `abort` has ended the process tree and killed the child.
+        let failed = abort(&mut child, &rx, 0, seen, read_error(source));
+        drop(pipe);
+        return failed;
     }
-    if let Err(source) = spawn_reader(child.stderr.take(), false, limits.max_output_bytes, tx) {
-        return abort(&mut child, &rx, 1, seen, read_error(source));
+    if let Err((source, pipe)) = spawn_reader(child.stderr.take(), false, limits.max_output_bytes, tx) {
+        let failed = abort(&mut child, &rx, 1, seen, read_error(source));
+        drop(pipe);
+        return failed;
     }
     let timeout = OracleError::Timeout { path: path.to_path_buf(), timeout: limits.timeout };
     let (mut stdout, mut stderr) = (None, None);
@@ -888,6 +916,32 @@ mod tests {
         drop(first);
         assert_eq!(LIVE.load(Ordering::Acquire), 1);
         assert!(ReaderSlot::take(&LIVE, 2).is_some(), "a dropped slot must be reusable");
+    }
+
+    #[test]
+    fn a_refused_reader_returns_its_pipe_still_open() {
+        use std::sync::Arc;
+        struct Pipe(Arc<AtomicUsize>);
+        impl Read for Pipe {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Ok(0)
+            }
+        }
+        impl Drop for Pipe {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        static FULL: AtomicUsize = AtomicUsize::new(1);
+        let closed = Arc::new(AtomicUsize::new(0));
+        let (tx, _rx) = mpsc::channel();
+        let Err((_, pipe)) = spawn_reader_in(&FULL, 1, Some(Pipe(closed.clone())), true, 10, tx) else {
+            panic!("a full reader count must refuse the pipe");
+        };
+        assert_eq!(closed.load(Ordering::Acquire), 0, "the refused pipe must stay open");
+        assert!(pipe.is_some(), "the refused pipe must come back with the error");
+        drop(pipe);
+        assert_eq!(closed.load(Ordering::Acquire), 1);
     }
 
     /// A new folder under the system temporary folder, removed with its contents on drop.
