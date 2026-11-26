@@ -394,21 +394,21 @@ const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 /// `ext`, a descendant of `parents` (outermost first), as markup that stands on its own: it
 /// gets the parents' namespace declarations for the prefixes it uses (Markup Compatibility's
-/// attributes included, [`compatibility_prefixes`]), and the prefixes they mark
-/// ignorable (`mc:Ignorable`) that still name the namespace they marked join its own. `None`
+/// attributes included, [`compatibility_prefixes`]), and the namespaces they mark ignorable
+/// (`mc:Ignorable`) join its own, each under a prefix that still names it there. `None`
 /// when it uses a prefix nothing declares, which a save could only write as markup no reader
 /// accepts.
 fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String> {
     let mut scope: Vec<(&str, &str)> = Vec::new();
-    // Each prefix a parent marks ignorable, with the namespace it named there: the mark is on
-    // the namespace, not on the prefix's spelling.
+    // Each namespace a parent marks ignorable, with the prefix that named it there: the mark is
+    // on the namespace, not on the prefix's spelling.
     let mut marked: Vec<(&str, &str)> = Vec::new();
     for e in parents {
         declare(&mut scope, e);
         let tokens = e.attrs.iter().find(|(k, _)| is_ignorable(k, &scope)).map(|(_, v)| v.split_whitespace());
         for t in tokens.into_iter().flatten() {
             if let Some(&binding) = scope.iter().find(|(p, _)| *p == t)
-                && !marked.contains(&binding)
+                && !marked.iter().any(|(_, u)| *u == binding.1)
             {
                 marked.push(binding);
             }
@@ -422,8 +422,15 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
     let mut el = ext.clone();
     let mut ext_scope = scope.clone();
     declare(&mut ext_scope, ext);
-    // A marked prefix a later parent or `ext` binds to another namespace no longer marks it.
-    let ignorable: Vec<&str> = marked.iter().filter(|b| ext_scope.contains(b)).map(|(p, _)| *p).collect();
+    // A marked namespace keeps the prefix that marked it while that prefix still names it, and
+    // otherwise takes another prefix that does; with none, nothing in `ext` can name it.
+    let ignorable: Vec<&str> =
+        marked
+            .iter()
+            .filter_map(|&(p, uri)| {
+                if ext_scope.contains(&(p, uri)) { Some(p) } else { ext_scope.iter().find(|(o, u)| *u == uri && !o.is_empty()).map(|(o, _)| *o) }
+            })
+            .collect();
     if !ignorable.is_empty() {
         match el.attrs.iter_mut().find(|(k, _)| is_ignorable(k, &ext_scope)) {
             Some((_, v)) => {

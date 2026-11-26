@@ -368,21 +368,56 @@ fn kept_extensions_do_not_mark_ignorable_a_prefix_their_comment_rebinds() {
     }
 }
 
-/// Whether the extension kept from an `extLst` carrying `ext_decls`, in a comment element
-/// carrying `comment_decls`, under a root that marks `q` ignorable, marks `q` ignorable by
-/// Markup Compatibility, as read and after a save and a second read; each with the kept markup.
-fn kept_marks_q_ignorable(comment_decls: &str, ext_decls: &str) -> Vec<(bool, String)> {
-    const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+/// The root marks the namespace `q` names ignorable, and `alias` names it too: when the comment
+/// element binds `q` to another namespace, kept markup naming `alias` (here in
+/// `mc:ProcessContent`, which needs its prefix ignorable) still marks that namespace ignorable,
+/// under `alias`, through a save and a second round trip.
+#[test]
+fn kept_extensions_mark_ignorable_under_another_prefix_a_namespace_whose_prefix_their_comment_rebinds() {
     let cex = format!(
-        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" {comment_decls}><x:extLst {ext_decls}><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:old" xmlns:alias="urn:old" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:q="urn:b"><x:extLst mc:ProcessContent="alias:note"><alias:note><r:reactions/></alias:note></x:extLst></x:commentExtensible></x:commentsExtensible>"#
     );
-    let doc = comments_with_cex(&cex);
+    for (ext, markup) in kept_markup(&cex) {
+        let ignorable = ignorable_namespaces(&ext);
+        assert!(ignorable.contains(&"urn:old") && !ignorable.contains(&"urn:b"), "{markup}");
+        assert!(ext.ns_decls().any(|d| d == ("alias", "urn:old")), "{markup}");
+    }
+}
+
+const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+/// The extension kept from commentsExtensible.xml `cex`, as read and after a save and a second
+/// read: each parsed, and as written.
+fn kept_markup(cex: &str) -> Vec<(craft_xml::El, String)> {
+    let doc = comments_with_cex(cex);
     let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     [doc, back]
         .iter()
         .map(|d| {
             let markup = d.comments.values().find_map(|c| c.extensions.clone()).unwrap();
-            let ext = craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap();
+            (craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap(), markup)
+        })
+        .collect()
+}
+
+/// The namespaces kept markup `ext` marks ignorable by Markup Compatibility, by its own
+/// declarations.
+fn ignorable_namespaces(ext: &craft_xml::El) -> Vec<&str> {
+    let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
+    let tokens = ext.attrs.iter().filter(|(k, _)| k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)));
+    tokens.flat_map(|(_, v)| v.split_whitespace()).filter_map(|t| ext.ns_decls().find(|(p, _)| *p == t).map(|(_, u)| u)).collect()
+}
+
+/// Whether the extension kept from an `extLst` carrying `ext_decls`, in a comment element
+/// carrying `comment_decls`, under a root that marks `q` ignorable, marks `q` ignorable by
+/// Markup Compatibility, as read and after a save and a second read; each with the kept markup.
+fn kept_marks_q_ignorable(comment_decls: &str, ext_decls: &str) -> Vec<(bool, String)> {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" {comment_decls}><x:extLst {ext_decls}><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    kept_markup(&cex)
+        .into_iter()
+        .map(|(ext, markup)| {
             let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
             let marked = ext.attrs.iter().any(|(k, v)| {
                 k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)) && v.split_whitespace().any(|t| t == "q")
