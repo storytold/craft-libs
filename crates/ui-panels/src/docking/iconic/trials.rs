@@ -1,5 +1,5 @@
 //! Trials of `IconicColumn`: the letter of a panel without an icon, the names a wide column shows, the grips of its
-//! groups, the resizes of its flyouts, and a flyout that a command leaves open.
+//! groups, the heights and resizes of its flyouts, and a flyout that a command leaves open.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::{CELL, GRIP};
@@ -8,8 +8,8 @@ use crate::contract::overlay::{self, OpenFilter};
 use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
-    DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconGroupSeparator, IconicColumn, PanelKey,
-    PanelSpec,
+    DockColumn, DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutHeight, FlyoutResize, GroupAt, GroupDrag, GroupGrip,
+    IconGroupSeparator, IconicColumn, PanelKey, PanelSpec,
 };
 use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
 use crate::runtime::drag;
@@ -420,6 +420,79 @@ fn a_flyout_with_an_offset_in_a_short_viewport_stays_inside_and_resizes_its_widt
         assert!(near(after.width(), before.width() + 60.0), "{height}: {before:?} -> {after:?}");
         assert!(bounds.contains_rect(after), "{height}: {after:?}");
     }
+}
+
+/// The body height a panel asks for docked in a column, well above what its one-line body measures.
+const DOCKED: f32 = 260.0;
+
+/// A panel with a one-line body that asks for [`DOCKED`] in a dock column, its flyout `height` tall; the other panel
+/// asks for no height.
+fn docked_tall(height: FlyoutHeight) -> impl Fn(&u8) -> PanelSpec {
+    move |panel| match panel {
+        0 => PanelSpec::new("Swatches").heights(DockHeights::new(DOCKED)).flyout_height(height),
+        _ => PanelSpec::new("Brushes"),
+    }
+}
+
+/// What a group with a one-line body measures in the trials: its strip, the body's padding and a line, four strips.
+fn one_line(sizes: &DockSizes) -> f32 {
+    sizes.strip * 4.0
+}
+
+/// The height of the flyout of the [`docked_tall`] panel at `height`, whose group measures [`one_line`], and the dock
+/// sizes it showed in.
+fn flyout_height_of(height: FlyoutHeight) -> (f32, DockSizes) {
+    let shown = Rc::new(Cell::new(None));
+    let (seen, open) = (Rc::clone(&shown), Cell::new(None));
+    let spec = docked_tall(height);
+    let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+    let mut fixture = Fixture::new(move |ui| {
+        let column = Column::new(vec![Group::new(vec![0], 0)]);
+        let measured = one_line(&StyleCx::with_root(ui.ctx(), DockSizes::style));
+        let mut now = open.get();
+        IconicColumn::new("Panels", global("iconic column", "flyout height"), &column, Bind::bound(&mut now), &spec)
+            .within(screen())
+            .show_flyouts_at(ui, place, |_, at, _, _| match at {
+                GroupAt::Measure(_) => Some(measured),
+                GroupAt::Show(rect) => {
+                    seen.set(Some(rect));
+                    None
+                }
+            });
+        open.set(now);
+    });
+    fixture.room(SCREEN).settle();
+    let icon = fixture.by_label("Swatches").expect("the Swatches icon").rect.center();
+    fixture.click_at(icon).settle();
+    (shown.get().expect("the flyout is open").height(), StyleCx::with_root(fixture.ctx(), DockSizes::style))
+}
+
+/// A panel that asks for a tall docked height opens a flyout at least that tall by default; with
+/// `FlyoutHeight::Content` its flyout is as tall as its one-line body measures, while docked in a column its group
+/// keeps the docked height.
+#[trial]
+fn a_content_tall_flyout_ignores_the_docked_height_that_its_docked_group_keeps() {
+    let (by_default, sizes) = flyout_height_of(FlyoutHeight::Docked);
+    let (docked, measured) = (DOCKED + sizes.strip, one_line(&sizes));
+    assert!(measured < docked && measured > sizes.strip + sizes.least, "the body measures between the least and the docked height");
+    assert!(near(by_default, docked), "by default the flyout takes the docked height: {by_default} for {docked}");
+    let (content, _) = flyout_height_of(FlyoutHeight::Content);
+    assert!(near(content, measured), "a content-tall flyout is as tall as its body measures: {content} for {measured}");
+
+    let rects = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&rects);
+    let spec = docked_tall(FlyoutHeight::Content);
+    let mut fixture = Fixture::new(move |ui| {
+        let column = Column::new(vec![Group::new(vec![0], 0), Group::new(vec![1], 0)]);
+        let mut shown = Vec::new();
+        DockColumn::new("Panels", global("dock column", "flyout height"), &column, &spec).show_groups(ui, |group, rect, _, _| {
+            shown.push((group.panels.first().copied(), rect));
+        });
+        *seen.borrow_mut() = shown;
+    });
+    fixture.room(SCREEN).settle();
+    let group = rects.borrow().iter().find(|(panel, _)| *panel == Some(0)).map(|(_, rect)| *rect).expect("the docked group shows");
+    assert!(near(group.height(), docked), "docked in a column the group keeps its docked height: {group:?} for {docked}");
 }
 
 /// The names of the panels of the tall-body trials, which set no heights.

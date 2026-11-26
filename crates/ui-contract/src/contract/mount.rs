@@ -243,7 +243,7 @@ impl Host for LayerHost {
             overlay = mapped;
         }
         let screen = overlay::screen_for(&ctx, env, &overlay);
-        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, self.moving, screen, env.tokens.space.inset.screen);
+        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, self.moving, screen, &env.tokens);
         // An anchored resizable layer has no position to seed: its default size is held as its minimum until the
         // user resizes it.
         if overlay.fit == overlay::OverlayFit::Resizable
