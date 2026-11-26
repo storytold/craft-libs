@@ -12,7 +12,8 @@ and contains no `unsafe` code.
   (compressor, expander and gate, limiter, maximizer, multiband and tube-modeled compressors),
   delays and reverbs (including convolution and surround), modulation, restoration (denoise,
   dehum, click remover, de-esser, de-reverb, speech enhancement), channel tools, distortion,
-  dither, a signal generator and a loudness meter.
+  dither, a signal generator, a loudness meter, and a pitch shifter for a live voice with 10 ms
+  of latency.
 - `loudness`: an ITU-R BS.1770-4 / EBU R128 meter with momentary, short-term and integrated
   loudness, loudness range (EBU Tech 3342), sample peak and true peak.
 - `pan`: stereo pan laws, a surround panner over any layout of up to 16 speakers, and first-order
@@ -76,6 +77,9 @@ The crate combines two crates from the ArtCraft apps, with changes:
   `648ed9db9a0e98cc55643babffac381521a556c8`: the tail length, offline mode, events, saved state
   and editor parts of the trait, the maximizer, dither, panning, the signal generator and the
   offline resampler.
+- [storytold/soundcraft](https://github.com/storytold/soundcraft) `crates/dsp` at
+  `915481be1b49d7e0502e07b059d0c0198c61911a`: the two crossfaded read taps of the voice pitch
+  shifter (`src/plugins/pitch.rs`) and its YIN pitch tracker (`src/pitch_detect.rs`).
 
 `NOTICE` keeps the copyright notices of both projects.
 

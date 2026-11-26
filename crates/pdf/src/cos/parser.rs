@@ -974,26 +974,34 @@ mod tests {
 
     #[test]
     fn one_object_has_a_node_budget() {
-        const N: usize = 1000;
-        fn capped(data: &[u8]) -> Lexer<'_> {
+        fn capped(data: &[u8], max: usize) -> Lexer<'_> {
             let mut lx = Lexer::new(data, 0);
-            lx.max_nodes = N;
+            lx.max_nodes = max;
             lx
         }
 
         assert_eq!(MAX_NODES, 1 << 22);
-        // A wide array (from a tiny compressed object stream) must not grow without bound.
-        let wide = |n: usize| format!("[{}]", "0 ".repeat(n));
-        let at_cap = capped(wide(N - 1).as_bytes()).object();
-        assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == N - 1));
-        assert!(capped(wide(N).as_bytes()).object().is_err());
-        // The same inside a dictionary value and a nested array.
-        assert!(capped(format!("<< /A {} >>", wide(N)).as_bytes()).object().is_err());
-        assert!(capped(format!("[[{}] ]", "0 ".repeat(N)).as_bytes()).object().is_err());
-        // The budget is per top-level object: a lexer reused for many operands keeps working.
-        let two = wide(N - 1).repeat(2);
-        let mut lx = capped(two.as_bytes());
-        assert!(lx.object().is_ok() && lx.object().is_ok());
+        // Exercise every budget path with small inputs in the gate; nightly also keeps the real cap.
+        // wasm32 has no divisor and always runs the gate's part.
+        #[cfg(not(target_arch = "wasm32"))]
+        let full = craft_testkit::hostile::divisor() == 1;
+        #[cfg(target_arch = "wasm32")]
+        let full = false;
+        let caps = [1000].into_iter().chain(full.then_some(MAX_NODES));
+        for max in caps {
+            // A wide array (from a tiny compressed object stream) must not grow without bound.
+            let wide = |n: usize| format!("[{}]", "0 ".repeat(n));
+            let at_cap = capped(wide(max - 1).as_bytes(), max).object();
+            assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == max - 1));
+            assert!(capped(wide(max).as_bytes(), max).object().is_err());
+            // The same inside a dictionary value and a nested array.
+            assert!(capped(format!("<< /A {} >>", wide(max)).as_bytes(), max).object().is_err());
+            assert!(capped(format!("[[{}] ]", "0 ".repeat(max)).as_bytes(), max).object().is_err());
+            // The budget is per top-level object: a lexer reused for many operands keeps working.
+            let two = wide(max - 1).repeat(2);
+            let mut lx = capped(two.as_bytes(), max);
+            assert!(lx.object().is_ok() && lx.object().is_ok());
+        }
     }
 
     /// A plain real is read without a cleaned copy of its token; the forms that need one read
