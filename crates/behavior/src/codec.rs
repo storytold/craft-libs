@@ -326,14 +326,15 @@ impl NumberCodec {
         if self.zoom {
             return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
         }
-        // The `+` an explicit-plus field writes is the number's sign when it is typed back, not a relative edit. The
-        // digit may follow a space ("+ 2.50"), and the signed number is absolute: it re-enters neither the reader's
-        // relative `+` nor the share of the start value.
+        // The `+` an explicit-plus field writes is the number's sign when it is typed back, not a relative edit: what
+        // follows, a number ("+2.50", "+ 2.50", "+٣") or an expression ("+(2+3)"), is read on its own, so it re-enters
+        // neither the reader's relative `+` (which would add it to the start value) nor the share of the start value.
+        // A lone "+" is no number, so it falls through to the reader, which refuses it.
         if self.plus
-            && let Some(rest) = trimmed.strip_prefix('+')
-            && rest.trim_start().starts_with(|c: char| crate::quantity::digit(c).is_some() || c == self.reader.decimal_separator())
+            && let Some(rest) = trimmed.strip_prefix('+').map(str::trim_start)
+            && !rest.is_empty()
         {
-            return self.parse_tagged_with(rest.trim_start(), &None, false);
+            return self.parse_tagged_with(rest, &None, false);
         }
         if share && let Some(share_of_start) = self.reader.share(trimmed) {
             return start.map(|start| (Some(start * share_of_start), ParseNote::default())).ok_or(NotAValue);
@@ -482,6 +483,11 @@ mod review_tests {
         assert_eq!(plain.parse("+ 2", &Some(10.0)).ok(), Some(Some(12.0)), "a plain field's plus still adds to the start");
         // The digit after the sign may be written in any script the reader reads: Arabic-Indic ٣ is 3.
         assert_eq!(angle.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "a sign before an Arabic-Indic digit is still the number's");
+        // The signed text is absolute for every lead the reader accepts, an expression too: "+(2+3)" is 5, not 15.
+        assert_eq!(angle.parse("+(2+3)", &Some(10.0)).ok(), Some(Some(5.0)), "a signed expression is the number, not added to the start");
+        assert_eq!(angle.parse("+2+3", &Some(10.0)).ok(), Some(Some(5.0)), "and a signed sum reads the same as without the sign");
+        assert_eq!(angle.parse("-(2+3)", &Some(10.0)).ok(), Some(Some(-5.0)), "a minus stays absolute, as it was");
+        assert_eq!(plain.parse("+(2+3)", &Some(10.0)).ok(), Some(Some(15.0)), "a plain field still adds a leading plus to the start");
         assert_eq!(angle.parse("\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "and the reader reads that digit as before");
         assert_eq!(plain.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(13.0)), "a plain field still adds it to the start");
     }
