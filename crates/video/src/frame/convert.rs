@@ -473,6 +473,21 @@ impl TryFrom<crate::ffv1::Frame> for VideoFrame {
     }
 }
 
+#[cfg(feature = "bink-decode")]
+impl TryFrom<crate::bink::Picture> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit 4:2:0 frame. Bink signals no colour description, and the picture carries no timing.
+    fn try_from(p: crate::bink::Picture) -> Result<Self, FrameError> {
+        let planes = vec![
+            Plane::packed(p.width, p.height, 8, Samples::U8(p.y))?,
+            Plane::packed(p.chroma_width, p.chroma_height, 8, Samples::U8(p.u))?,
+            Plane::packed(p.chroma_width, p.chroma_height, 8, Samples::U8(p.v))?,
+        ];
+        VideoFrame::new(p.width, p.height, ColorFamily::YCbCr, Subsampling::S420, planes, None)
+    }
+}
+
 #[cfg(feature = "theora-decode")]
 impl TryFrom<crate::theora::Picture> for VideoFrame {
     type Error = FrameError;
