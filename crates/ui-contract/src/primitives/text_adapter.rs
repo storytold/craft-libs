@@ -469,7 +469,12 @@ fn keep_focus_and_place_caret(ctx: &Context, widget: Id, input: &AdapterIn<'_>, 
     {
         let near = at.clamp(input.rect.min, input.rect.max);
         let caret = shown.galley.cursor_from_pos(near - shown.galley_pos).index.0;
-        select(ctx, widget, caret, caret);
+        // Shift extends the selection from its anchor, as it does on the text: only a plain press moves the anchor too.
+        let anchor = match selection(ctx, widget).filter(|_| held_mods(ctx).shift) {
+            Some((_, anchor)) => anchor,
+            None => caret,
+        };
+        select(ctx, widget, anchor, caret);
     }
 }
 

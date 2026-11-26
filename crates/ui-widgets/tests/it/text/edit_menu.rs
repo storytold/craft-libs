@@ -226,3 +226,21 @@ fn the_edit_menu_offers_cut_copy_and_delete_only_with_a_selection() {
         assert!(!disabled(&rig, row), "{row} is enabled with a selection");
     }
 }
+
+/// A Shift-click in the room around the text extends the selection from its anchor, as a Shift-click on the text does,
+/// rather than collapsing it at the caret the press places.
+#[trial]
+fn a_shift_click_in_the_room_around_the_text_keeps_the_anchor() {
+    let mut rig = rig();
+    // Put the caret at the end of "hello" with a plain click, then extend with Shift into the room before the text.
+    let field = rig.fixture.by_label("Name").expect("the field").rect;
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(egui::pos2(field.right() - 4.0, field.center().y));
+    rig.fixture.settle();
+    let at = rig.padding_start();
+    rig.fixture.advance(1.0);
+    rig.fixture.hold(Modifiers::SHIFT).click_at(at);
+    rig.fixture.hold(Modifiers::NONE).settle();
+    rig.type_text("X");
+    assert_eq!(*rig.text.borrow(), "X", "the Shift-click selected from the end back to the first character");
+}
