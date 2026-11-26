@@ -35,7 +35,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+/// The eight-byte magic number that opens a Bento container.
 pub const MAGIC: [u8; 8] = [0xA4, b'C', b'M', 0xA5, b'H', b'd', b'r', 0xD7];
+/// The size in bytes of one label in the container table.
 pub const LABEL_SIZE: usize = 24;
 
 // standard object ids
@@ -97,6 +99,7 @@ impl Default for Writer {
 }
 
 impl Writer {
+    /// An empty writer that assigns user object ids from the first free id.
     pub fn new() -> Writer {
         Writer { data: Vec::new(), names: HashMap::new(), next: MIN_USER_ID, entries: Vec::new() }
     }
@@ -114,14 +117,17 @@ impl Writer {
         id
     }
 
+    /// The id of the global property named `name`, assigned on first use.
     pub fn property(&mut self, name: &str) -> u32 {
         self.named(GLOBAL_PROP_NAME, name)
     }
 
+    /// The id of the global type named `name`, assigned on first use.
     pub fn type_id(&mut self, name: &str) -> u32 {
         self.named(GLOBAL_TYPE_NAME, name)
     }
 
+    /// Allocates the next free user object id.
     pub fn new_object(&mut self) -> u32 {
         let id = self.next;
         self.next += 1;
@@ -156,6 +162,7 @@ impl Writer {
         self.entries.push((obj, OBJ_REFERENCES, TYPE_7BIT_ASCII, vec![seg]));
     }
 
+    /// Finishes the container and returns its bytes.
     pub fn finish(mut self) -> Vec<u8> {
         let seed = self.next;
         self.entries.push((TOC_OBJECT, TOC_SEED, TOC_TYPE, vec![Seg::Imm(seed.to_be_bytes().to_vec())]));
@@ -245,6 +252,7 @@ impl<'a> Container<'a> {
         self.objects.keys().copied()
     }
 
+    /// Opens `data` as a Bento container, or says why it is not one.
     pub fn open(data: &'a [u8]) -> Result<Container<'a>, String> {
         if !sniff(data) {
             return Err("no Bento label at the end of the file".into());
@@ -362,11 +370,13 @@ impl<'a> Container<'a> {
         Ok(out)
     }
 
+    /// The id registered for `name`, if any.
     pub fn id_of(&self, name: &str) -> Option<u32> {
         self.by_name.get(name).copied()
     }
 
     #[allow(dead_code)]
+    /// The name registered for `id`, if any.
     pub fn name_of(&self, id: u32) -> Option<&str> {
         self.names.get(&id).map(String::as_str)
     }
