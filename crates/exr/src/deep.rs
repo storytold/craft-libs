@@ -24,6 +24,7 @@ use half::f16;
 
 use crate::channels::ColorLayout;
 use crate::decode::{Error, Limits, Result, SampleType, check_previews};
+use crate::scanline;
 
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Malformed(e.to_string())
@@ -152,49 +153,6 @@ fn seek_to(cur: &mut Cursor<&[u8]>, pos: u64) -> Result<()> {
 
 // --- decompression ----------------------------------------------------------------------------
 
-/// Undo the ZIP predictor: each byte was stored as its difference to the previous byte plus
-/// 128 (so a zero difference is 0x80), modulo 256. Applies to the sample-count table and the
-/// sample data alike.
-fn differences_to_samples(buf: &mut [u8]) {
-    if let Some(&first) = buf.first() {
-        let mut prev = i16::from(first);
-        for b in buf.iter_mut().skip(1) {
-            let s = (prev + i16::from(*b) - 128) as u8;
-            prev = i16::from(s);
-            *b = s;
-        }
-    }
-}
-
-/// Undo the ZIP half-split: the stream is `[first half][second half]` with the second half
-/// holding every second byte of the original; weave them back together. The scratch copy is
-/// allocated fallibly, so a buffer that passed `max_bytes` but not the allocator is an error.
-fn interleave_byte_blocks(buf: &mut [u8]) -> Result<()> {
-    let half = buf.len().div_ceil(2);
-    let mut out = alloc_zeroed::<u8>(buf.len())?;
-    let mut k = 0usize;
-    for i in 0..buf.len() / 2 {
-        let (a, b) = (buf.get(i).copied(), buf.get(half + i).copied());
-        if let (Some(a), Some(b), Some(pair)) = (a, b, out.get_mut(k..k + 2)) {
-            if let Some(byte) = pair.first_mut() {
-                *byte = a;
-            }
-            if let Some(byte) = pair.get_mut(1) {
-                *byte = b;
-            }
-        }
-        k += 2;
-    }
-    if buf.len() % 2 == 1 && half > 0 {
-        let last = buf.get(half - 1).copied();
-        if let (Some(last), Some(slot)) = (last, out.get_mut(k)) {
-            *slot = last;
-        }
-    }
-    buf.copy_from_slice(&out);
-    Ok(())
-}
-
 /// Make room in `out` for `extra` more bytes, `limit` in all. Grows by doubling like `Vec`,
 /// but never reserves past `limit`: callers admit exactly that size against `max_bytes`, and
 /// plain doubling reserved up to twice as much. Fallible, so a failed allocation is an error.
@@ -211,38 +169,8 @@ fn reserve_up_to(out: &mut Vec<u8>, extra: usize, limit: usize, what: &str) -> R
     Ok(())
 }
 
-/// OpenEXR RLE tokens: a negative byte `n` means `-n` literal bytes follow, a non-negative
-/// byte `n` means the next byte repeats `n + 1` times (as `ImfRle.cpp` and the `exr` crate).
-fn rle_decode(src: &[u8], expected: usize, what: &str) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    reserve_up_to(&mut out, expected.min(1 << 20), expected, what)?;
-    let mut i = 0;
-    while i < src.len() {
-        let count = src[i] as i8;
-        i += 1;
-        let n = if count < 0 { (-(count as i32)) as usize } else { count as usize + 1 };
-        if out.len().saturating_add(n) > expected {
-            return Err(err(format!("{what}: RLE data expands past {expected} bytes")));
-        }
-        reserve_up_to(&mut out, n, expected, what)?;
-        if count < 0 {
-            let end = i.saturating_add(n);
-            let run = src.get(i..end.min(src.len())).ok_or_else(|| err(format!("{what}: RLE run points past the compressed data")))?;
-            if run.len() != n {
-                return Err(err(format!("{what}: RLE run points past the compressed data")));
-            }
-            out.extend_from_slice(run);
-            i = end;
-        } else {
-            let b = src.get(i).copied().ok_or_else(|| err(format!("{what}: RLE run points past the compressed data")))?;
-            i += 1;
-            out.resize(out.len() + n, b);
-        }
-    }
-    if out.len() != expected {
-        return Err(err(format!("{what}: RLE data expands to {} bytes, expected {expected}", out.len())));
-    }
-    Ok(out)
+fn scanline_error(what: &str, error: std::io::Error) -> Error {
+    if error.kind() == std::io::ErrorKind::OutOfMemory { Error::LimitExceeded(format!("{what}: {error}")) } else { err(format!("{what}: {error}")) }
 }
 
 /// Decompress `what` to exactly `expected` bytes. Like flat blocks, a payload that already
@@ -258,10 +186,7 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
         Compression::Uncompressed => Err(err(format!("{what}: expected {expected} uncompressed bytes, found {}", packed.len()))),
         Compression::RLE => {
             // Like ZIPS, RLE runs over the predicted, byte-split stream.
-            let mut out = rle_decode(packed, expected, what)?;
-            differences_to_samples(&mut out);
-            interleave_byte_blocks(&mut out)?;
-            Ok(out)
+            scanline::decode_rle(packed, expected).map_err(|error| scanline_error(what, error))
         }
         Compression::ZIP1 => {
             // Inflate straight into `out`, grown with `reserve_up_to` rather than by
@@ -290,9 +215,7 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
             if out.len() != expected {
                 return Err(err(format!("{what}: zlib data expands to {} bytes, expected {expected}", out.len())));
             }
-            differences_to_samples(&mut out);
-            interleave_byte_blocks(&mut out)?;
-            Ok(out)
+            scanline::undo_byte_prediction(out).map_err(|error| scanline_error(what, error))
         }
         other => Err(unsup(format!("deep data with {other:?} compression (NONE, RLE and ZIPS are supported)"))),
     }

@@ -41,6 +41,8 @@ enum Inner {
     Ffv1(Box<crate::ffv1::Decoder>),
     #[cfg(feature = "vp8-decode")]
     Vp8(Box<crate::vp8::Decoder>),
+    #[cfg(feature = "mjpeg")]
+    Mjpeg(crate::mjpeg::Decoder),
 }
 
 /// A decoder for one video track, whatever its codec: built from the track's [`CodecParams`],
@@ -57,6 +59,7 @@ enum Inner {
 /// | DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
 /// | APV | `apv-decode` | ignored (access units carry the format) |
 /// | FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+/// | Motion JPEG | `mjpeg` | ignored (each packet carries its own picture) |
 /// | VP8 | `vp8-decode` | ignored (key frames carry the format) |
 ///
 /// With an `avcC` or `hvcC` record, packets are length-prefixed NAL units, as MP4 and Matroska
@@ -67,10 +70,10 @@ enum Inner {
 /// metadata, and MPEG-2 `extradata` holds sequence headers, their extensions, user data and GOP
 /// headers.
 ///
-/// ProRes, DNx, APV and FFV1 return one frame per packet. APV selects the first decodable
+/// ProRes, DNx, APV, FFV1 and Motion JPEG return one frame per packet. APV selects the first decodable
 /// primary frame and its alpha, as the codec's default decoder does. FFV1 supports version 3,
 /// range-coded key frames. VP8 hidden frames update references without returning a picture.
-/// These five decoders have no delayed output; reset keeps FFV1 configuration and dimensions.
+/// These decoders have no delayed output; reset keeps FFV1 configuration and dimensions.
 ///
 /// Other codecs are [`VideoError::Unsupported`], as is a codec whose decoder feature is off.
 ///
@@ -152,9 +155,42 @@ impl TrackDecoder {
         self.codec
     }
 
+    /// Whether this codec's validated track configuration declares an alpha plane.
+    ///
+    /// FFV1 v3 can answer this before the first packet, from its [extra plane
+    /// flag](https://www.rfc-editor.org/rfc/rfc9043.html#section-4.2.10). Other codecs currently
+    /// return `None`. Container alpha and alpha signaled in pictures can require separate inspection.
+    pub fn configured_alpha(&self) -> Option<bool> {
+        #[cfg(feature = "ffv1")]
+        match &self.inner {
+            Inner::Ffv1(decoder) => Some(decoder.has_alpha()),
+            // FFV1 is the only variant when no other dispatcher codec features are enabled.
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+        #[cfg(not(feature = "ffv1"))]
+        None
+    }
+
     /// The explicit worker-thread cap, or `None` when using the codec's default.
     pub fn threads(&self) -> Option<usize> {
         self.threads
+    }
+
+    /// Tighten the Motion JPEG decoder's working allocation cap in bytes.
+    ///
+    /// The cap persists across reset. Requests above the current cap leave it at the current value.
+    /// Other codecs return a video unsupported error.
+    #[cfg(feature = "mjpeg")]
+    pub fn limit_mjpeg_allocation(&mut self, max_bytes: u64) -> Result<(), VideoError> {
+        match &mut self.inner {
+            Inner::Mjpeg(decoder) => {
+                decoder.limit_allocation(max_bytes);
+                Ok(())
+            }
+            #[allow(unreachable_patterns)]
+            _ => Err(VideoError::Unsupported("allocation cap is a Motion JPEG track option".to_string())),
+        }
     }
 
     /// Whether draft mode is enabled (for reduced-resolution playback only; never for export).
@@ -187,6 +223,8 @@ impl TrackDecoder {
             Inner::Ffv1(_) => {}
             #[cfg(feature = "vp8-decode")]
             Inner::Vp8(_) => {}
+            #[cfg(feature = "mjpeg")]
+            Inner::Mjpeg(_) => {}
         }
     }
 
@@ -242,6 +280,11 @@ impl TrackDecoder {
                 let pic = dec.decode(packet)?;
                 self.single(pic, pts)
             }
+            #[cfg(feature = "mjpeg")]
+            Inner::Mjpeg(dec) => {
+                let pic = dec.decode(packet)?;
+                self.single(pic, pts)
+            }
             #[cfg(feature = "vp8-decode")]
             Inner::Vp8(dec) => {
                 let pic = dec.decode(packet, pts)?;
@@ -293,6 +336,8 @@ impl TrackDecoder {
             Inner::Ffv1(_) => Ok(std::mem::take(&mut self.held)),
             #[cfg(feature = "vp8-decode")]
             Inner::Vp8(_) => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "mjpeg")]
+            Inner::Mjpeg(_) => Ok(std::mem::take(&mut self.held)),
         }
     }
 
@@ -348,6 +393,8 @@ impl TrackDecoder {
             Inner::Apv => Ok(()),
             #[cfg(feature = "ffv1")]
             Inner::Ffv1(_) => Ok(()),
+            #[cfg(feature = "mjpeg")]
+            Inner::Mjpeg(_) => Ok(()),
             #[cfg(feature = "vp8-decode")]
             Inner::Vp8(dec) => {
                 dec.reset();
@@ -357,7 +404,7 @@ impl TrackDecoder {
     }
 
     /// Frame-only decoders do not take timestamps; attach the packet timestamp after conversion.
-    #[cfg(any(feature = "prores", feature = "dnx", feature = "apv-decode", feature = "ffv1"))]
+    #[cfg(any(feature = "prores", feature = "dnx", feature = "apv-decode", feature = "ffv1", feature = "mjpeg"))]
     fn single<P>(&mut self, pic: P, pts: i64) -> Result<Vec<VideoFrame>, VideoError>
     where
         VideoFrame: TryFrom<P, Error = FrameError>,
@@ -458,6 +505,8 @@ impl Inner {
             CodecId::Apv => Ok(Inner::Apv),
             #[cfg(feature = "vp8-decode")]
             CodecId::Vp8 => Ok(Inner::Vp8(Box::default())),
+            #[cfg(feature = "mjpeg")]
+            CodecId::Mjpeg => Ok(Inner::Mjpeg(crate::mjpeg::Decoder::new())),
             #[cfg(feature = "ffv1")]
             CodecId::Ffv1 => {
                 let (width, height) = params
