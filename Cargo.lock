@@ -1863,6 +1863,7 @@ dependencies = [
  "craft-media-source",
  "craft-menu",
  "craft-mesh",
+ "craft-mesh-ops",
  "craft-metadata",
  "craft-metafile",
  "craft-midi",
@@ -2286,6 +2287,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "socket2",
  "tempfile",
 ]
 
@@ -2653,6 +2655,7 @@ dependencies = [
  "exr",
  "flate2",
  "half",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -3477,6 +3480,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-flow",
+ "craft-html",
+ "craft-markdown",
  "craft-math",
  "craft-metafile",
  "craft-wordmodel",
