@@ -119,5 +119,9 @@ pub mod raw_video;
 #[cfg(feature = "screen-video")]
 pub mod screen_video;
 
+/// Theora video (Xiph.Org specification): decoder and encoder.
+#[cfg(any(feature = "theora-decode", feature = "theora-encode"))]
+pub mod theora;
+
 #[cfg(feature = "vmd-decode")]
 pub mod vmd;
