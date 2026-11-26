@@ -24,7 +24,7 @@ decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3, MP3 and Opus encoders.
-# All but Opus are also file formats of `encode` and `FileEncoder`.
+# All but Opus are also file formats of `encode` and `FileEncoder`; all are codecs of `PacketEncoder`.
 encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-encode", "mp3-encode", "opus-encode", "vorbis-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
 lossless-encode = ["pcm-encode", "flac-encode"]
@@ -44,6 +44,8 @@ aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
 aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
+# SMPTE ST 302M (AES3 audio in MPEG-2 transport streams): packet decoder and encoder.
+s302m = []
 # ADPCM (`adpcm`): IMA WAV, Microsoft, Yamaha and Flash (SWF) decoders and encoders.
 adpcm = ["craft-media/bitstream"]
 # QOA (Quite OK Audio) files: decoder and encoder in the `qoa` module, each on its own.
@@ -54,6 +56,7 @@ qoa-encode = []
 g722 = []
 # ITU-T G.726 ADPCM speech codec (16/24/32/40 kbit/s).
 g726 = []
+# The Opus encoder (`opus::encoder`), and Opus through `PacketEncoder`.
 opus-encode = []
 # GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
 gsm = ["gsm-decode", "gsm-encode"]
