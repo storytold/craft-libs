@@ -68,10 +68,14 @@ impl Mesh {
         self.positions.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
     }
 
-    /// Bounding-sphere radius around the bounds center (at least a small epsilon).
+    /// Bounding-sphere radius around the bounds center, at least 1e-4. Bounds wider than
+    /// `f32::MAX` give `f32::MAX`.
     pub fn radius(&self) -> f32 {
         let (lo, hi) = self.bounds();
-        ((hi - lo).length() * 0.5).max(1e-4)
+        let half = hi * 0.5 - lo * 0.5;
+        let largest = half.abs().max_element();
+        let length = if largest > 1e6 { (half / largest).length() * largest } else { (hi - lo).length() * 0.5 };
+        length.clamp(1e-4, f32::MAX)
     }
 
     /// Vertex indices of triangle `t`.
@@ -416,13 +420,35 @@ impl Mesh {
         m
     }
 
-    /// Uniformly scale and translate so the mesh is centered with the given bounding radius.
+    /// Uniformly scale and translate so the mesh is centered with the given bounding radius. A
+    /// radius that is not a finite positive number, or is so large that a corner of the bounds
+    /// would pass `f32::MAX`, leaves the mesh unchanged.
     pub fn normalize_to(&mut self, radius: f32) {
+        if !(radius.is_finite() && radius > 0.0) {
+            return;
+        }
         let (lo, hi) = self.bounds();
-        let c = (lo + hi) * 0.5;
-        let s = radius / self.radius();
+        // Offsets from the low corner, halved only when the span passes f32::MAX, and a divided
+        // length keep every intermediate value finite near f32::MAX and nonzero for a mesh far
+        // smaller than the floor of `Mesh::radius`.
+        let k = if (hi - lo).is_finite() { 1.0 } else { 0.5 };
+        let offset = |p: Vec3| p * k - lo * k;
+        let w = offset(hi);
+        let largest = w.abs().max_element();
+        if largest == 0.0 {
+            // Every position is the center.
+            for p in &mut self.positions {
+                *p = offset(*p);
+            }
+            return;
+        }
+        let s = radius / (w / largest).length();
+        let moved = |p: Vec3| (offset(p) / largest * 2.0 - w / largest) * s;
+        if !(moved(lo).is_finite() && moved(hi).is_finite()) {
+            return;
+        }
         for p in &mut self.positions {
-            *p = (*p - c) * s;
+            *p = moved(*p);
         }
     }
 
@@ -599,6 +625,52 @@ mod tests {
         let mut m = quad();
         m.uvs.pop();
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn normalize_handles_large_coordinates_tiny_meshes_and_large_radii() {
+        // A radius that is not a finite positive number leaves the mesh unchanged.
+        let mut m = quad();
+        let before = m.clone();
+        m.normalize_to(f32::NAN);
+        m.normalize_to(-1.0);
+        m.normalize_to(0.0);
+        m.normalize_to(f32::INFINITY);
+        assert_eq!(m, before);
+        // Coordinates near f32::MAX reach a radius without overflowing.
+        let mut wide = quad();
+        wide.positions = vec![Vec3::new(-3e38, -3e38, 0.0), Vec3::new(3e38, -3e38, 0.0), Vec3::new(3e38, 3e38, 0.0), Vec3::new(-3e38, 3e38, 0.0)];
+        wide.normalize_to(2.0);
+        assert!(wide.positions.iter().all(|p| p.is_finite()), "{:?}", wide.positions);
+        let corner = wide.positions[2];
+        assert!((corner.length() - 2.0).abs() < 1e-3, "{corner:?}");
+        // A mesh far smaller than the radius floor keeps its shape.
+        for size in [1e-6f32, 1e-20, 1e-36] {
+            let mut small = quad();
+            for p in &mut small.positions {
+                *p *= size;
+            }
+            small.normalize_to(1.0);
+            assert!(small.positions.iter().all(|p| p.is_finite()), "{size}: {:?}", small.positions);
+            assert!((small.radius() - 1.0).abs() < 1e-4, "{size}: {}", small.radius());
+        }
+        // A scale past f32::MAX still reaches the radius when every corner fits.
+        let mut tiny = crate::primitives::plane(0.002, 2);
+        tiny.normalize_to(1e38);
+        assert!(tiny.positions.iter().all(|p| p.is_finite()), "{:?}", tiny.positions);
+        assert!((tiny.radius() / 1e38 - 1.0).abs() < 1e-4, "{}", tiny.radius());
+        // Subnormal spans and radii keep distinct vertices apart.
+        let mut sub = quad();
+        sub.positions = vec![Vec3::ZERO, Vec3::new(f32::from_bits(1), 0.0, 0.0)];
+        sub.normalize_to(1.0);
+        assert!(sub.positions[0] != sub.positions[1], "{:?}", sub.positions);
+        let mut least = quad();
+        least.normalize_to(f32::from_bits(1));
+        assert!(least.positions[0] != least.positions[2], "{:?}", least.positions);
+        let mut unit = quad();
+        unit.normalize_to(f32::MAX);
+        let corner = unit.positions[2] / f32::MAX;
+        assert!((corner - Vec3::new(1.0, 1.0, 0.0).normalize()).length() < 1e-4, "{:?}", unit.positions);
     }
 
     #[test]
