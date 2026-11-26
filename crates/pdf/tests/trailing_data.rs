@@ -106,3 +106,18 @@ fn an_appended_update_with_a_damaged_end_still_reads_the_update() {
     assert!(!doc.repair_log().iter().any(|l| l.contains("ends at byte")), "{:?}", doc.repair_log());
     assert_eq!(renderer_widths(&file), [500.0], "the renderer reads the same page");
 }
+
+/// An appended update whose damaged `startxref` follows an object header with a stray number
+/// before it (`42 3 0 obj`), which a rebuild skips: still an update, not another file's data, so
+/// the update's page wins in both readers.
+#[test]
+fn an_appended_update_after_a_stray_number_still_reads_the_update() {
+    let (mut file, _) = document();
+    file.extend_from_slice(b"42 3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 100] >>\nendobj\n");
+    file.extend_from_slice(b"startxref\nnot an offset\n%%EOF\n");
+
+    let doc = Document::open(Arc::new(file.clone())).expect("the object layer opens the file");
+    assert_eq!(object_layer_widths(&doc), [Some(500)], "the update's page: {:?}", doc.repair_log());
+    assert!(!doc.repair_log().iter().any(|l| l.contains("ends at byte")), "{:?}", doc.repair_log());
+    assert_eq!(renderer_widths(&file), [500.0], "the renderer reads the same page");
+}

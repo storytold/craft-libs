@@ -98,6 +98,24 @@ fn more_than_one_startxref(data: &[u8]) -> bool {
 /// returns: each is a full open of the data before it, rebuild included.
 const MAX_EARLIER_ENDS: usize = 8;
 
+/// PdfCraft patch: (trailing data) the most earlier `startxref`s [`earlier_document_ends`] looks
+/// at, newest first, whether or not each names a document's end: a recovered tail can hold
+/// millions of them, and each costs a bounded check ([`document_end_at`]). A separate bound from
+/// [`MAX_EARLIER_ENDS`], so a run of `startxref`s that end nothing doesn't stop the search before
+/// the ends it would have found. `pdfcraft-cos` uses the same bounds, so the two find the same
+/// ends.
+const MAX_STARTXREF_CANDIDATES: usize = 4096;
+
+/// PdfCraft patch: (trailing data) the most white space [`document_end_at`] skips between
+/// `startxref`, its offset and `%%EOF`, and the most digits it reads for the offset, so each
+/// candidate's check is bounded.
+const MAX_FOOTER_WHITE_SPACE: usize = 1024;
+const MAX_OFFSET_DIGITS: usize = 20;
+
+/// PdfCraft patch: (trailing data) the most integers [`starts_with_object_header`] reads before
+/// `obj`: a header and the stray numbers before it that a rebuild skips.
+const MAX_HEADER_INTEGERS: usize = 8;
+
 /// PdfCraft patch: (trailing data) where `data` could end as a whole document before its last
 /// `startxref`, newest first: after the `%%EOF` (and its end-of-line marker) of each earlier
 /// `startxref N %%EOF` whose `N` names a cross-reference table (`xref`) or an `N G obj` header
@@ -115,10 +133,12 @@ pub(crate) fn earlier_document_ends(data: &[u8]) -> Vec<usize> {
         return ends;
     };
     let mut before = data.get(..last).unwrap_or_default();
-    while ends.len() < MAX_EARLIER_ENDS {
+    let mut candidates = 0;
+    while ends.len() < MAX_EARLIER_ENDS && candidates < MAX_STARTXREF_CANDIDATES {
         let Some(at) = findr_needle(before, needle) else {
             break;
         };
+        candidates += 1;
         before = data.get(..at).unwrap_or_default();
         if let Some(end) = document_end_at(data, at) {
             ends.push(end);
@@ -155,14 +175,18 @@ pub(crate) fn trailing_data_end(data: &[u8]) -> Option<usize> {
 /// PdfCraft patch: (trailing data) the end of the document whose `startxref` is at `at`, if it
 /// is followed by an offset and `%%EOF` and the offset names a cross-reference section.
 fn document_end_at(data: &[u8], at: usize) -> Option<usize> {
-    let skip_white_space = |mut i: usize| {
-        while data.get(i).is_some_and(|&b| is_white_space_character(b)) {
+    let skip_white_space = |from: usize| {
+        let mut i = from;
+        while i - from < MAX_FOOTER_WHITE_SPACE && data.get(i).is_some_and(|&b| is_white_space_character(b)) {
             i += 1;
         }
         i
     };
     let start = skip_white_space(at.checked_add(b"startxref".len())?);
-    let digits = data.get(start..)?.iter().take_while(|b| b.is_ascii_digit()).count();
+    let digits = data.get(start..)?.iter().take(MAX_OFFSET_DIGITS + 1).take_while(|b| b.is_ascii_digit()).count();
+    if digits > MAX_OFFSET_DIGITS {
+        return None;
+    }
     let offset: usize = core::str::from_utf8(data.get(start..start + digits)?).ok()?.parse().ok()?;
     let mut end = skip_white_space(start + digits);
     if !data.get(end..)?.starts_with(b"%%EOF") {
@@ -179,20 +203,31 @@ fn document_end_at(data: &[u8], at: usize) -> Option<usize> {
     (section.starts_with(b"xref") || starts_with_object_header(section)).then_some(end)
 }
 
-/// PdfCraft patch: (trailing data) whether `data` starts with `N G obj`.
+/// PdfCraft patch: (trailing data) whether `data` starts with `N G obj`, or with such a header
+/// after stray integers (`42 3 0 obj`), as a rebuild reads it: the rebuild skips the numbers that
+/// aren't followed by `obj` and takes the header after them (`fallback_xref_map_inner`, and
+/// `object_headers` in `pdfcraft-cos`), so an appended update that starts so is PDF syntax, not
+/// another file's data. At most [`MAX_HEADER_INTEGERS`] integers. `pdfcraft-cos` reads alike.
 fn starts_with_object_header(data: &[u8]) -> bool {
     let mut i = 0;
-    for _ in 0..2 {
-        let digits = data.get(i..).map_or(0, |rest| rest.iter().take_while(|b| b.is_ascii_digit()).count());
-        let spaces = data.get(i + digits..).map_or(0, |rest| {
-            rest.iter().take_while(|&&b| is_white_space_character(b)).count()
+    for integers in 0..=MAX_HEADER_INTEGERS {
+        let rest = data.get(i..).unwrap_or_default();
+        if integers >= 2 && rest.starts_with(b"obj") {
+            return true;
+        }
+        if integers == MAX_HEADER_INTEGERS {
+            break;
+        }
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        let spaces = rest.get(digits..).map_or(0, |after| {
+            after.iter().take_while(|&&b| is_white_space_character(b)).count()
         });
         if digits == 0 || spaces == 0 {
             return false;
         }
         i += digits + spaces;
     }
-    data.get(i..).is_some_and(|rest| rest.starts_with(b"obj"))
+    false
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.

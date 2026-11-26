@@ -572,6 +572,22 @@ const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its e
 /// data before it, rebuild included.
 const MAX_EARLIER_ENDS: usize = 8;
 
+/// The most earlier `startxref`s [`earlier_document_ends`] looks at, newest first, whether or not
+/// each names a document's end: a recovered tail can hold millions of them, and each costs a
+/// bounded check ([`document_end_at`]). A separate bound from [`MAX_EARLIER_ENDS`], so a run of
+/// `startxref`s that end nothing doesn't stop the search before the ends it would have found. The
+/// renderer uses the same bounds (hayro-syntax `xref.rs`), so the two find the same ends.
+const MAX_STARTXREF_CANDIDATES: usize = 4096;
+
+/// The most white space [`document_end_at`] skips between `startxref`, its offset and `%%EOF`,
+/// and the most digits it reads for the offset, so each candidate's check is bounded.
+const MAX_FOOTER_WHITE_SPACE: usize = 1024;
+const MAX_OFFSET_DIGITS: usize = 20;
+
+/// The most integers [`starts_with_object_header`] reads before `obj`: a header and the stray
+/// numbers before it that a rebuild skips.
+const MAX_HEADER_INTEGERS: usize = 8;
+
 /// Where `data` could end as a whole document before its last `startxref`, newest first: after
 /// the `%%EOF` (and its end-of-line marker) of each earlier `startxref N %%EOF` whose `N` names a
 /// cross-reference table (`xref`) or an `N G obj` header before it. A file recovered from a
@@ -581,15 +597,26 @@ const MAX_EARLIER_ENDS: usize = 8;
 /// fragments' objects for the document's, which share their numbers. The renderer finds the same
 /// ends (hayro-syntax `earlier_document_ends`), so the two read the same document.
 pub(super) fn earlier_document_ends(data: &[u8]) -> Vec<usize> {
-    let mut startxrefs = Vec::new();
-    let mut from = 0;
-    while let Some(at) = find(data, b"startxref", from, data.len()) {
-        startxrefs.push(at);
-        from = at + 9;
-    }
+    // Backward from the end, keeping at most `MAX_EARLIER_ENDS`: a recovered tail can hold
+    // millions of `startxref`s, and none past the bounds is collected.
+    let mut ends = Vec::new();
     // The last one is the whole file's own.
-    startxrefs.pop();
-    startxrefs.into_iter().rev().filter_map(|at| document_end_at(data, at)).take(MAX_EARLIER_ENDS).collect()
+    let Some(last) = super::reader::rfind(data, b"startxref", 0) else {
+        return ends;
+    };
+    let mut before = &data[..last];
+    let mut candidates = 0;
+    while ends.len() < MAX_EARLIER_ENDS && candidates < MAX_STARTXREF_CANDIDATES {
+        let Some(at) = super::reader::rfind(before, b"startxref", 0) else {
+            break;
+        };
+        candidates += 1;
+        before = &data[..at];
+        if let Some(end) = document_end_at(data, at) {
+            ends.push(end);
+        }
+    }
+    ends
 }
 
 /// The latest earlier end of a document in `data` ([`earlier_document_ends`]) when the file's own
@@ -613,14 +640,18 @@ fn trailing_data_end(data: &[u8]) -> Option<usize> {
 /// The end of the document whose `startxref` is at `at`, if it is followed by an offset and
 /// `%%EOF` and the offset names a cross-reference section.
 fn document_end_at(data: &[u8], at: usize) -> Option<usize> {
-    let skip_white_space = |mut i: usize| {
-        while data.get(i).copied().is_some_and(crate::cos::is_whitespace) {
+    let skip_white_space = |from: usize| {
+        let mut i = from;
+        while i - from < MAX_FOOTER_WHITE_SPACE && data.get(i).copied().is_some_and(crate::cos::is_whitespace) {
             i += 1;
         }
         i
     };
     let start = skip_white_space(at.checked_add(9)?);
-    let digits = data.get(start..)?.iter().take_while(|b| b.is_ascii_digit()).count();
+    let digits = data.get(start..)?.iter().take(MAX_OFFSET_DIGITS + 1).take_while(|b| b.is_ascii_digit()).count();
+    if digits > MAX_OFFSET_DIGITS {
+        return None;
+    }
     let offset: usize = std::str::from_utf8(data.get(start..start + digits)?).ok()?.parse().ok()?;
     let mut end = skip_white_space(start + digits);
     if !data.get(end..)?.starts_with(b"%%EOF") {
@@ -637,18 +668,29 @@ fn document_end_at(data: &[u8], at: usize) -> Option<usize> {
     (section.starts_with(b"xref") || starts_with_object_header(section)).then_some(end)
 }
 
-/// Whether `data` starts with `N G obj`.
+/// Whether `data` starts with `N G obj`, or with such a header after stray integers
+/// (`42 3 0 obj`), as a rebuild reads it: the rebuild skips the numbers that aren't followed by
+/// `obj` and takes the header after them (`object_headers`, and the renderer's rebuild), so an
+/// appended update that starts so is PDF syntax, not another file's data. At most
+/// [`MAX_HEADER_INTEGERS`] integers. The renderer reads alike (hayro-syntax `xref.rs`).
 fn starts_with_object_header(data: &[u8]) -> bool {
     let mut i = 0;
-    for _ in 0..2 {
-        let digits = data.get(i..).map_or(0, |rest| rest.iter().take_while(|b| b.is_ascii_digit()).count());
-        let spaces = data.get(i + digits..).map_or(0, |rest| rest.iter().take_while(|&&b| crate::cos::is_whitespace(b)).count());
+    for integers in 0..=MAX_HEADER_INTEGERS {
+        let rest = data.get(i..).unwrap_or_default();
+        if integers >= 2 && rest.starts_with(b"obj") {
+            return true;
+        }
+        if integers == MAX_HEADER_INTEGERS {
+            break;
+        }
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        let spaces = rest.get(digits..).map_or(0, |after| after.iter().take_while(|&&b| crate::cos::is_whitespace(b)).count());
         if digits == 0 || spaces == 0 {
             return false;
         }
         i += digits + spaces;
     }
-    data.get(i..).is_some_and(|rest| rest.starts_with(b"obj"))
+    false
 }
 
 /// Whether `data` has more than one `startxref`: an update was appended to it, or it is
