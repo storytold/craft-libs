@@ -161,7 +161,7 @@ impl Restart {
     }
 
     /// `start` runs when the app closes.
-    #[cfg_attr(not(any(windows, unix, test)), allow(dead_code))]
+    #[cfg(any(test, feature = "screen-testing"))]
     pub(crate) fn later(start: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
         Self::later_reason(move || start().map_err(Reason::data))
     }

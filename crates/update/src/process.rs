@@ -809,7 +809,7 @@ pub(crate) mod inherited_pipe_tests {
 }
 
 /// Runs a helper while polling cancellation and draining its bounded output.
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn cancellable_output(cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, String> {
     cancellable_output_reason(cmd, check).map_err(|reason| reason.to_string())
 }
