@@ -159,7 +159,10 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if pp.bidi == Some(true) {
             attrs.push_str(" style:writing-mode=\"rl-tb\"");
         }
-        attrs.push_str(&super::writer::border_attrs(pp.borders));
+        // At the width each side is drawn at, as the paragraph's own borders already are by the
+        // time the flow model holds them: ODF has no border that is drawn and takes no room
+        // (storytold/wordcraft#5065).
+        attrs.push_str(&super::writer::border_attrs(pp.borders.map(|b| b.as_drawn())));
         if let Some(bg) = pp.shading {
             attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
@@ -1058,6 +1061,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.stacking = super::frames::stacking(doc)?;
     w.note_numbers = Some([false, true].map(|endnote| {
         let o = doc.note_options(&doc.last_section, endnote);
         (o.num_fmt, o.num_start)
@@ -1186,6 +1190,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.stacking = w.stacking;
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
@@ -1275,10 +1280,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
+    // Choose the gap from everything actually written, including unknown retained
+    // drawings and master pages. Remapping modeled frames alone can alias an order
+    // present only in retained XML. Values are spliced without reserializing XML.
+    let orders = super::frames::read_orders(content.as_bytes(), Some(styles.as_bytes()))?;
+    let content = super::xml::remap_orders(content.as_bytes(), |raw| orders.file_order(raw))?;
+    let styles = super::xml::remap_orders(styles.as_bytes(), |raw| orders.file_order(raw))?;
     // The manifest lists every file already: the writer adds the files only.
     for (name, data) in [
-        ("content.xml", content.as_bytes()),
-        ("styles.xml", styles.as_bytes()),
+        ("content.xml", content.as_ref()),
+        ("styles.xml", styles.as_ref()),
         ("meta.xml", meta.as_bytes()),
         ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
@@ -1314,7 +1325,9 @@ fn page_look(doc: &Document, sec: &SectionProps) -> String {
 /// they go round: each border at its distance from the edge (WordCraft's), which becomes the
 /// margin, with the rest of the way to the text as its padding.
 fn page_borders(b: Option<craft_wordmodel::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
-    let Some(b) = b.filter(|b| b.any_visible()) else { return (String::new(), margins) };
+    // A page border of width 0 (a DOCX one without `w:sz`) is drawn at the thinnest line: ODF has
+    // no border that is drawn and still takes no room (storytold/wordcraft#5065).
+    let Some(b) = b.map(|b| b.as_drawn()).filter(|b| b.any_visible()) else { return (String::new(), margins) };
     let mut out = margins;
     let mut attrs = String::new();
     for (i, (side, edge)) in [("top", b.top), ("bottom", b.bottom), ("left", b.left), ("right", b.right)].into_iter().enumerate() {
