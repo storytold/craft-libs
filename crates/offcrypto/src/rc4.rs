@@ -133,8 +133,8 @@ impl Rc4 {
 impl Drop for Rc4 {
     fn drop(&mut self) {
         self.s.zeroize();
-        self.i = 0;
-        self.j = 0;
+        self.i.zeroize();
+        self.j.zeroize();
     }
 }
 

@@ -39,7 +39,8 @@ decrypt; `check` is that question on its own.
 ## RC4 in the binary formats
 
 A password-protected `.doc`, `.xls` or `.ppt` keeps its usual streams and encrypts their
-contents in place with RC4 (header version 1.1) or RC4 CryptoAPI (2.2, 3.2 or 4.2). The `rc4`
+contents in place: a `.doc` or `.xls` with RC4 (header version 1.1) or RC4 CryptoAPI (2.2, 3.2
+or 4.2), a `.ppt` with RC4 CryptoAPI only. The `rc4`
 module reads the encryption header, checks the password against its verifier and gives the key
 of each block; which bytes are encrypted, and with which block number, is the format's business.
 
