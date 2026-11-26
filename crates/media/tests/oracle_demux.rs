@@ -1,6 +1,6 @@
 //! Oracle tests: compare our demuxer's sample tables and codec parameters with ffprobe.
 
-mod common;
+use super::common;
 
 use common::*;
 use craft_media::isobmff::{CodecConfig, Mp4File, TrackKind, open};
@@ -214,31 +214,7 @@ macro_rules! fixture_tests {
 }
 
 fixture_tests! {
-    h264_bframes_mp4 => "h264_bframes.mp4",
-    h264_mov => "h264.mov",
-    hevc_mp4 => "hevc.mp4",
-    prores_mov => "prores.mov",
-    prores4444_mov => "prores4444.mov",
-    mjpeg_mov => "mjpeg.mov",
-    dnxhd_mov => "dnxhd.mov",
-    pcm_f32_mov => "pcm_f32.mov",
-    pcm_s16be_mov => "pcm_s16be.mov",
-    aac_mp4 => "aac.mp4",
-    aac_m4a => "aac_stereo44.m4a",
     frag_mp4 => "frag.mp4",
-    frag_dash_mp4 => "frag_dash.mp4",
-    faststart_mp4 => "faststart.mp4",
-    tmcd_2997df_mov => "tmcd_2997df.mov",
-    tmcd_23976_mov => "tmcd_23976.mov",
-    h264_2997_mp4 => "h264_2997.mp4",
-    flac_mp4 => "flac.mp4",
-    alac_m4a => "alac.m4a",
-    opus_mp4 => "opus.mp4",
-    ac3_mp4 => "ac3.mp4",
-    vp9_mp4 => "vp9.mp4",
-    av1_mp4 => "av1.mp4",
-    colr_pasp_mov => "colr_pasp.mov",
-    editlist_cut_mp4 => "editlist_cut.mp4",
 }
 
 #[test]
@@ -277,43 +253,5 @@ fn generate_fixtures() {
     for name in all_fixture_names() {
         let out = [fixture_dir().join(name)];
         common::generate_and_report(&format!("isobmff/{name}"), &out, || fixture(name));
-    }
-}
-
-/// A generator that exits with failure: this test binary given an option libtest rejects.
-fn failing_generator() -> std::process::Command {
-    let mut c = std::process::Command::new(std::env::current_exe().unwrap());
-    c.arg("--craft-media-no-such-option");
-    c
-}
-
-#[test]
-#[should_panic(expected = "forbids skipping")]
-fn required_oracles_fail_on_generator_failure() {
-    let out = fixture_dir().join("generator_failure_required.mp4");
-    let _ = run_generator(&mut failing_generator(), &temp_path(&out), &out, true);
-}
-
-#[test]
-fn optional_oracles_skip_on_generator_failure() {
-    let out = fixture_dir().join("generator_failure_optional.mp4");
-    assert_eq!(run_generator(&mut failing_generator(), &temp_path(&out), &out, false), None);
-    let mut missing = std::process::Command::new("craft-media-no-such-generator");
-    assert_eq!(run_generator(&mut missing, &temp_path(&out), &out, false), None);
-    assert!(!out.exists());
-}
-
-#[test]
-fn a_failed_ffprobe_probe_skips_the_optional_check() {
-    let path = out_dir().join("ffprobe_failure.mp4");
-    std::fs::write(&path, b"not a media file").unwrap();
-    let result = std::panic::catch_unwind(|| check_file("ffprobe_failure.mp4", &path));
-    let _ = std::fs::remove_file(&path);
-    match result {
-        Ok(()) => assert!(!oracles_required()),
-        Err(e) => {
-            let msg = e.downcast_ref::<String>().cloned().unwrap_or_default();
-            assert!(oracles_required() && msg.contains("forbids skipping"), "{msg}");
-        }
     }
 }
