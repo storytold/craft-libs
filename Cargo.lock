@@ -2040,6 +2040,7 @@ name = "craft-appkit"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
 ]
@@ -2272,6 +2273,7 @@ dependencies = [
  "craft-ai-agents",
  "craft-atomic",
  "craft-flags",
+ "craft-platform",
  "dirs",
  "getrandom 0.3.4",
  "log",
@@ -2410,6 +2412,7 @@ name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-browse",
@@ -4155,6 +4158,7 @@ dependencies = [
 name = "craft-suite-account"
 version = "0.1.0"
 dependencies = [
+ "craft-platform",
  "dirs",
  "keyring",
  "keyring-core",
