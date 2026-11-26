@@ -51,6 +51,36 @@ pub struct Mesh {
 /// Hard cap on mesh size accepted from files (triangles).
 pub const MAX_TRIANGLES: usize = 20_000_000;
 
+fn oom(what: &str) -> GeomError {
+    GeomError::Invalid(format!("out of memory allocating {what}"))
+}
+
+/// An empty array with room for `capacity` items, or an error naming `what`.
+fn try_with_capacity<T>(capacity: usize, what: &str) -> Result<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(capacity).map_err(|_| oom(what))?;
+    Ok(v)
+}
+
+/// A copy of `from` in a reserved array, or an error naming `what`.
+fn try_copy<T: Clone>(from: &[T], what: &str) -> Result<Vec<T>> {
+    let mut v = try_with_capacity(from.len(), what)?;
+    v.extend_from_slice(from);
+    Ok(v)
+}
+
+fn try_name(name: &str) -> Result<String> {
+    let mut s = String::new();
+    s.try_reserve_exact(name.len()).map_err(|_| oom("names"))?;
+    s.push_str(name);
+    Ok(s)
+}
+
+/// The unit vector along `v`, scaled first so a long vector cannot overflow; zero when `v` is zero.
+fn unit(v: Vec3) -> Vec3 {
+    v.try_normalize().or_else(|| (v / v.abs().max_element()).try_normalize()).unwrap_or(Vec3::ZERO)
+}
+
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
@@ -375,45 +405,115 @@ impl Mesh {
     }
 
     /// Each triangle split into four at its edge midpoints (shared edges share their midpoint);
-    /// attributes are interpolated and submesh ranges keep their triangles.
+    /// attributes are interpolated and submesh ranges keep their triangles. Returns an unchanged
+    /// copy when [`Mesh::try_subdivided`] fails.
     pub fn subdivided(&self) -> Mesh {
-        let mut m = Mesh { indices: Vec::with_capacity(self.indices.len() * 4), ..self.clone() };
-        let has = |len: usize| len == self.positions.len();
+        self.try_subdivided().unwrap_or_else(|_| self.clone())
+    }
+
+    /// [`Mesh::subdivided`] for a mesh whose indices are in range and whose submeshes are whole
+    /// triangles of existing materials. Midpoints are the half-sums of their end points, and
+    /// normals and tangents are rescaled to unit length before the sum can overflow. Each copied
+    /// array is reserved first, and a failed allocation is an error instead of an abort.
+    pub fn try_subdivided(&self) -> Result<Mesh> {
+        let n = self.positions.len();
+        if !self.indices.len().is_multiple_of(3) {
+            return Err(GeomError::Invalid("index count is not a multiple of 3".into()));
+        }
+        if let Some(bad) = self.indices.iter().find(|&&i| i as usize >= n) {
+            return Err(GeomError::Invalid(format!("index {bad} out of range ({n} vertices)")));
+        }
+        for s in &self.submeshes {
+            let whole = s.start % 3 == 0 && s.count % 3 == 0;
+            let inside = (s.start as usize).checked_add(s.count as usize).is_some_and(|end| end <= self.indices.len());
+            if !whole || !inside || s.material >= self.materials.len().max(1) {
+                return Err(GeomError::Invalid(format!("submesh {} is out of range", s.name)));
+            }
+        }
+        let triangles = self.triangle_count();
+        // Each triangle adds at most three midpoints; shared edges add fewer.
+        let most_vertices = n.saturating_add(triangles.saturating_mul(3));
+        let out_indices = triangles.checked_mul(12).ok_or_else(|| GeomError::Invalid("too many indices".into()))?;
+        if u32::try_from(out_indices).is_err() || u32::try_from(most_vertices).is_err() {
+            return Err(GeomError::Invalid("the subdivided mesh does not fit in u32 indices".into()));
+        }
+
+        // Diagonals stay empty here and are built below when the input has them.
+        let mut m = Mesh {
+            positions: try_copy(&self.positions, "positions")?,
+            normals: try_copy(&self.normals, "normals")?,
+            tangents: try_copy(&self.tangents, "tangents")?,
+            uvs: try_copy(&self.uvs, "UVs")?,
+            colors: try_copy(&self.colors, "colors")?,
+            indices: try_with_capacity(out_indices, "indices")?,
+            submeshes: Vec::new(),
+            materials: Vec::new(),
+            diagonals: Vec::new(),
+        };
+        m.submeshes.try_reserve_exact(self.submeshes.len()).map_err(|_| oom("submeshes"))?;
+        for s in &self.submeshes {
+            m.submeshes.push(SubMesh { name: try_name(&s.name)?, material: s.material, start: s.start * 4, count: s.count * 4 });
+        }
+        m.materials.try_reserve_exact(self.materials.len()).map_err(|_| oom("materials"))?;
+        for name in &self.materials {
+            m.materials.push(try_name(name)?);
+        }
+
+        let has = |len: usize| len == n;
         let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
-        let mut mids = std::collections::HashMap::new();
-        let mut mid = |m: &mut Mesh, a: u32, b: u32| -> u32 {
+        let mut mids: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
+        // Half-sums: (a + b) * 0.5 overflows for coordinates near f32::MAX.
+        let mid = |m: &mut Mesh, mids: &mut std::collections::HashMap<(u32, u32), u32>, a: u32, b: u32| -> u32 {
             *mids.entry((a.min(b), a.max(b))).or_insert_with(|| {
                 let (i, j) = (a as usize, b as usize);
-                m.positions.push((self.positions[i] + self.positions[j]) * 0.5);
+                let half = |x: Vec3, y: Vec3| x * 0.5 + y * 0.5;
+                m.positions.push(half(self.positions[i], self.positions[j]));
                 if has_n {
-                    m.normals.push((self.normals[i] + self.normals[j]).normalize_or_zero());
+                    m.normals.push(unit(half(self.normals[i], self.normals[j])));
                 }
                 if has_t {
                     let (ti, tj) = (self.tangents[i], self.tangents[j]);
-                    m.tangents.push((ti.truncate() + tj.truncate()).normalize_or_zero().extend(ti.w));
+                    m.tangents.push(unit(half(ti.truncate(), tj.truncate())).extend(ti.w));
                 }
                 if has_uv {
-                    m.uvs.push((self.uvs[i] + self.uvs[j]) * 0.5);
+                    m.uvs.push(self.uvs[i] * 0.5 + self.uvs[j] * 0.5);
                 }
                 if has_c {
-                    m.colors.push((self.colors[i] + self.colors[j]) * 0.5);
+                    m.colors.push(self.colors[i] * 0.5 + self.colors[j] * 0.5);
                 }
+                // At most n + 3 x triangles vertices, checked to fit above.
                 (m.positions.len() - 1) as u32
             })
         };
-        for t in self.indices.as_chunks::<3>().0 {
-            if t.iter().any(|&i| i as usize >= self.positions.len()) {
-                continue;
+        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
+            // A triangle adds at most three midpoints.
+            mids.try_reserve(3).map_err(|_| oom("subdivided vertices"))?;
+            m.positions.try_reserve(3).map_err(|_| oom("positions"))?;
+            if has_n {
+                m.normals.try_reserve(3).map_err(|_| oom("normals"))?;
             }
-            let (a, b, c) = (t[0], t[1], t[2]);
-            let (ab, bc, ca) = (mid(&mut m, a, b), mid(&mut m, b, c), mid(&mut m, c, a));
+            if has_t {
+                m.tangents.try_reserve(3).map_err(|_| oom("tangents"))?;
+            }
+            if has_uv {
+                m.uvs.try_reserve(3).map_err(|_| oom("UVs"))?;
+            }
+            if has_c {
+                m.colors.try_reserve(3).map_err(|_| oom("colors"))?;
+            }
+            let (ab, bc, ca) = (mid(&mut m, &mut mids, a, b), mid(&mut m, &mut mids, b, c), mid(&mut m, &mut mids, c, a));
             m.indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
         }
-        for s in &mut m.submeshes {
-            s.start *= 4;
-            s.count *= 4;
+        // Children 0 to 2 keep the halves of the parent's edges; child 3 and the edges between
+        // children are new, real edges.
+        if !self.diagonals.is_empty() {
+            m.diagonals = try_with_capacity(triangles * 4, "diagonals")?;
+            for t in 0..triangles {
+                let d = self.diagonals.get(t).copied().unwrap_or(0);
+                m.diagonals.extend_from_slice(&[d & 0b101, d & 0b011, d & 0b110, 0]);
+            }
         }
-        m
+        Ok(m)
     }
 
     /// Uniformly scale and translate so the mesh is centered with the given bounding radius.
@@ -589,6 +689,64 @@ mod tests {
         assert_eq!(m.uvs.len(), 9);
         assert_eq!((m.submeshes[0].start, m.submeshes[0].count), (0, 24));
         m.validate().unwrap();
+    }
+
+    #[test]
+    fn subdivision_keeps_midpoints_finite() {
+        let mut m = quad();
+        m.positions[0] = Vec3::new(3e38, 0.0, 0.0);
+        m.positions[1] = Vec3::new(3e38, 0.0, 0.0);
+        m.uvs[0] = Vec2::new(3e38, 0.0);
+        m.uvs[1] = Vec2::new(3e38, 0.0);
+        // Edge 0-1: the sum of the normals overflows; edge 2-3: its squared length does.
+        m.normals = vec![Vec3::new(3e38, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0), Vec3::new(1e20, 0.0, 0.0), Vec3::new(1e20, 0.0, 0.0)];
+        m.tangents = vec![Vec4::new(3e38, 0.0, 0.0, 1.0); 4];
+        m.colors = vec![Vec4::splat(3e38); 4];
+        let s = m.try_subdivided().unwrap();
+        assert_eq!(s.positions.len(), 9);
+        assert!(s.positions.contains(&Vec3::new(3e38, 0.0, 0.0)));
+        assert!(s.positions.iter().all(|p| p.is_finite()) && s.uvs.iter().all(|p| p.is_finite()) && s.colors.iter().all(|p| p.is_finite()));
+        for n in &s.normals[4..] {
+            assert!((*n - Vec3::X).length() < 1e-6, "{:?}", s.normals);
+        }
+        for t in &s.tangents[4..] {
+            assert!((*t - Vec4::new(1.0, 0.0, 0.0, 1.0)).length() < 1e-6, "{:?}", s.tangents);
+        }
+    }
+
+    #[test]
+    fn subdivision_keeps_submeshes_materials_and_diagonals() {
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        m.diagonals = vec![0b100, 0b001];
+        let s = m.try_subdivided().unwrap();
+        assert_eq!(s.materials, m.materials);
+        assert_eq!(
+            s.submeshes.iter().map(|s| (s.name.as_str(), s.material, s.start, s.count)).collect::<Vec<_>>(),
+            vec![("a", 0, 0, 12), ("b", 1, 12, 12)]
+        );
+        assert_eq!(s.positions[..4], m.positions[..]);
+        assert_eq!(s.diagonals, vec![0b100, 0, 0b100, 0, 0b001, 0b001, 0, 0]);
+        s.validate().unwrap();
+        // An input without diagonals gives a result without them.
+        assert!(quad().try_subdivided().unwrap().diagonals.is_empty());
+    }
+
+    #[test]
+    fn subdivision_rejects_a_bad_mesh() {
+        let mut bad_index = quad();
+        bad_index.indices[0] = 99;
+        assert!(bad_index.try_subdivided().is_err());
+        assert_eq!(bad_index.subdivided(), bad_index);
+        let mut bad_material = quad();
+        bad_material.submeshes[0].material = 5;
+        assert!(bad_material.try_subdivided().is_err());
+        assert_eq!(bad_material.subdivided(), bad_material);
+        let mut partial = quad();
+        partial.submeshes[0].count = 4;
+        assert!(partial.try_subdivided().is_err());
     }
 
     #[test]
