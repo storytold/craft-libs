@@ -80,7 +80,7 @@ the app's pins (`apps.<id>`), then the theme's high-contrast pins, then the app'
 ### Built-in themes
 
 `craft.artcraft`, `craft.graphite`, `craft.studio`, `craft.adwaita`, `craft.breeze`, `craft.pro`,
-`craft.soft` (both variants); `craft.pro-light-gray`, `craft.classic` (light only);
+`craft.soft`, `craft.catppuccin` (both variants); `craft.pro-light-gray`, `craft.classic` (light only);
 `craft.solarized-dark` (dark only). `craft.soft` has `contrast_intent: low`. `craft.app-default` is not a theme: it stands for the
 app's own palette, and settings lists it beside the others. High contrast is a setting, not a
 theme. `SUITE_DEFAULT` is `craft.artcraft`.
