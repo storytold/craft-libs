@@ -7,7 +7,7 @@ chromatic aberration (CA). LightCraft reads them and turns distortion into a DNG
 reaches the same **Optics ▸ Enable Lens Corrections** (`optics.lens_profile`) as a DNG's embedded warp and Panasonic's
 RW2 distortion data. Lateral CA is parsed and converts to the warp's red and blue planes, but it is **off by default**:
 applied after demosaic it made the render's CA worse (Verification). Vignetting is read but not applied (below). The
-conversion is verified on the **ILCE-7RM6** and, for distortion, the **ILCE-6700** ([ILCE-6700](#ilce-6700)); the
+conversion is verified on the **ILCE-7RM6** and, for distortion, the **ILCE-6700** ([ILCE-6700](#ilce-6700)) and the **ZV-E10** ([ZV-E10](#zv-e10)); the
 ILCE-7RM4A has its own conversion, with other conventions
 ([Two conventions](#two-conventions)), and other Sony bodies' tables give no correction until they are verified.
 
@@ -105,7 +105,7 @@ the photo (portrait files are covered) and is carried by DNG export, as RW2's is
 ## Which bodies get it
 
 Only bodies on one of two allowlists in `arw_lens_rm6.rs` get an opcode: `FULL_FRAME_CROP` (today `ILCE-7RM6`,
-9984 × 6656) and `APSC_BODIES` (today `ILCE-6700`, below). The unit and the knot spacing are verified per body; a body
+9984 × 6656) and `APSC_BODIES` (today `ILCE-6700` and `ZV-E10`, below, each with its distortion unit). The unit and the knot spacing are verified per body; a body
 with another sensor size or another unit would be warped wrongly. Other bodies get no correction from this conversion;
 the ILCE-7RM4A gets its own, with other conventions (below). To add a body: collect photos of it shot with distortion
 correction on (several lenses and focal lengths), repeat the camera-JPEG registration below against the uncorrected
@@ -113,7 +113,7 @@ render, confirm the unit, the knot spacing and the zoom rule (or measure the bod
 default crop to `FULL_FRAME_CROP`, or an APS-C body whose knots span its own crop (as measured for the ILCE-6700) to
 `APSC_BODIES`, with a test; an APS-C body also needs its fit gate checked against the camera JPEG (see *ILCE-6700*).
 
-For bodies in `APSC_BODIES` (today `ILCE-6700`), the knots span the file's own default crop: spacing = its half
+For bodies in `APSC_BODIES` (today `ILCE-6700` and `ZV-E10`), the knots span the file's own default crop: spacing = its half
 diagonal / (knot count − 1). This crop-based rule applies only to that list. The ILCE-7RM6 keeps its sensor-fixed
 400 px in both modes; in full frame (16 knots) the crop-based rule gives the same 400 px, and in its APS-C mode
 (11 knots) it would give 392 px, which was only an alternative measurement there (it fits as well, above).
@@ -165,6 +165,29 @@ As rendered (`lightcraft-cli render`, Enable Lens Corrections on):
 
 At 11.7 mm and longer an exception of this kind fits worse than the body's rule (412 px / 14500 on the grid: 0.73–1.19 px against 0.48–0.69 px), so it stops at
 10.5 mm, the longest measured focal length where it helps; 10.6–11.6 mm is unmeasured and takes the body's rule.
+
+## ZV-E10
+
+The ZV-E10 (APS-C, 6000 × 4000 default crop at (12, 12) in 6048 × 4024 storage) writes 11-knot tables like the
+ILCE-6700, zero-padded to the same 17 values. Measured as above on 4 photos shot with distortion correction Auto (the
+E PZ 16-50 mm F3.5-5.6 OSS, which forces it; its owner's photos, only the summary numbers here): 2 at 16 mm, 1 at 29 mm
+(portrait) and 1 at 32 mm. Feature matches between the uncorrected render and the camera JPEG
+(LightCraft's `tools/sony_distortion_check.py`, SIFT agreement after the best similarity), the camera's map applied to the render's
+points in a scan of knot spacing 340–380 px and unit 15000–17800:
+
+| | p95 residual at 1440 px |
+|---|---|
+| Uncorrected | 2.7–18.7 px (16 mm: 18.6–18.7 px) |
+| The ILCE-6700's rule (half diagonal / 10 = 360.56 px, unit 15000), as rendered | 0.45–2.18 px: the 16 mm photos over-corrected by about 9 % |
+| Sensor-fixed 400 px, unit 16384 | 0.43–3.21 px |
+| **Half diagonal / 10 = 360.56 px, unit 16384** (exact table) | **0.27–0.61 px** |
+| The same as LightCraft renders it (`lightcraft-cli render`, Enable Lens Corrections on, fitted polynomial) | **0.26–0.64 px** (median residual 0.07–0.36 px) |
+
+At 360.56 px every unit from 16300 to 17000 lands within 0.60–0.64 px worst (the measurement's floor on these scenes);
+spacing and unit trade off along a ridge as on the ILCE-6700 (375 px / 15700 and 380 px / 15400 reach 0.59 px), so the
+body keeps the ILCE-6700's crop-based spacing and takes its own unit, 16384, in `APSC_BODIES`. The fitted polynomial
+passes the 0.5 px APS-C fit gate on all four tables, the strongest (16 mm, −1905 at the last knot) included. An HDR
+merge of a ZV-E10 bracket keeps the warp in the merged DNG's `OpcodeList3`, as for any raw with embedded corrections.
 
 ## Two conventions
 
@@ -344,7 +367,7 @@ the resampled source by the source, framing and output size, so tone, colour and
 
 ## Limits
 
-- **ILCE-7RM6 and ILCE-6700 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the
+- **ILCE-7RM6, ILCE-6700 and ZV-E10 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the
   full-frame crop, or an APS-C body's own crop), unit and zoom rule are unverified, so they get no correction from this conversion (the ILCE-7RM4A's distortion has
   its own: [Two conventions](#two-conventions)).
 - **ILCE-6700 at strong barrel distortion:** the body's rule leaves 1.36–1.38 px at the Sigma 10–18 mm's 10 mm end;
@@ -355,6 +378,10 @@ the resampled source by the source, framing and output size, so tone, colour and
   6656 × 4608 frame, misses the 0.5 px fit gate, so that photo stays uncorrected (5.3 px). Other wide lenses with
   similarly strong tables are unmeasured. Its vignetting and lateral CA tables are read, not applied: measured in
   #2801 (the camera JPEG doesn't compensate vignetting, as on the ILCE-7RM6).
+- **ZV-E10: one lens, four photos.** Only the E PZ 16-50 mm (16–32 mm) is measured. Its unit, 16384, differs from
+  the ILCE-6700's 15000; the ILCE-6700's own E 16–55 mm at 16 mm also fits a higher unit (16000, above), so the unit
+  may belong to the lens rather than the body. Other lenses on the ZV-E10 are unmeasured and take 16384. The
+  ZV-E10M2 (another sensor) is not covered.
 - **APS-C distortion is unverified in camera on the ILCE-7RM6:** no APS-C photo with distortion correction on was available; the APS-C
   knot spacing is verified on CA only, and the APS-C zoom follows the full-frame rule.
 - **Aspect-ratio crops** (in-camera 4:3, 16:9, 1:1) were not measured; the correction uses the crop the file records.

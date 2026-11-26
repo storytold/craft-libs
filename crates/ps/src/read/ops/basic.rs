@@ -68,7 +68,7 @@ pub fn copy(ip: &mut Interp) -> R {
             ip.charge(src.len() as u64)?;
             ip.alloc(src.len().saturating_mul(2 * OBJ_BYTES))?;
             for (k, v) in src.entries() {
-                dst.put(k, v);
+                ip.dict_put(&dst, k, v)?;
             }
             ip.push(Obj::Dict(dst))
         }
@@ -739,8 +739,8 @@ pub fn def(ip: &mut Interp) -> R {
     let k = ip.pop()?;
     key_cost(ip, &k)?;
     ip.alloc(2 * OBJ_BYTES)?;
-    ip.current_dict()?.put(k, v);
-    Ok(())
+    let d = ip.current_dict()?;
+    ip.dict_put(&d, k, v)
 }
 
 pub fn load(ip: &mut Interp) -> R {
@@ -759,8 +759,7 @@ pub fn store(ip: &mut Interp) -> R {
     key_cost(ip, &k)?;
     let key = k.key();
     let d = ip.d.iter().rev().find(|d| d.known(&key)).cloned().map_or_else(|| ip.current_dict(), Ok)?;
-    d.put(k, v);
-    Ok(())
+    ip.dict_put(&d, k, v)
 }
 
 pub fn get(ip: &mut Interp) -> R {
@@ -802,8 +801,7 @@ pub fn put(ip: &mut Interp) -> R {
         Obj::Dict(d) => {
             key_cost(ip, &k)?;
             ip.alloc(2 * OBJ_BYTES)?;
-            d.put(k, v);
-            Ok(())
+            ip.dict_put(&d, k, v)
         }
         Obj::Array(a, _) => {
             let i = usize::try_from(int_of(&k)?).map_err(|_| PsErr::Ps("rangecheck"))?;
@@ -829,8 +827,7 @@ pub fn undef(ip: &mut Interp) -> R {
     let k = ip.pop()?;
     key_cost(ip, &k)?;
     let d = ip.pop_dict()?;
-    d.remove(&k.key());
-    Ok(())
+    ip.dict_remove(&d, &k.key())
 }
 
 pub fn where_(ip: &mut Interp) -> R {

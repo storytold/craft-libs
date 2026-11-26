@@ -4,7 +4,8 @@ Codecs for flat raster image formats, written in pure Rust. This crate defines i
 type and shares its baseline and extended JPEG decoders through `craft-jpeg`, its optional HEIF
 decoder through `craft-heif`, and its optional AVIF decoder through `craft-video`'s AV1 decoder.
 It builds for `wasm32-unknown-unknown` and does no filesystem I/O: decoders take `&[u8]` and
-encoders return `Vec<u8>`.
+encoders return `Vec<u8>`. `read_bounded(reader, max_bytes)` reads a caller's file or stream into
+bytes for them and fails with `ErrorKind::FileTooLarge` when the input is longer than `max_bytes`.
 
 It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
 
@@ -46,7 +47,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | yes (header pixels per metre) | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` (read) / built in (RLE write, one scanline per packet) |
 | ICO | yes | yes | U8 | RGBA (at most 256×256) | yes | no | no | no | no | no | no | `image` |
-| DDS | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC5, when `EncodeOptions::dds` asks for one) | [`craft-dds`](../dds/README.md) |
+| DDS | yes | yes | U8, U16 (U16 read only) | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC5, when `EncodeOptions::dds` asks for one) | [`craft-dds`](../dds/README.md) |
 | Netpbm (PBM/PGM/PPM/PAM/PFM) | yes | yes | U8, U16, F32 (float: PFM gray/RGB only) | all six (PAM `CMYK`/`CMYK_ALPHA`) | yes (PAM) | no | no | no | no | no | no | built in |
 | QOI | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
@@ -76,6 +77,12 @@ the encode plan, and `fidelity_warnings` reports the conversion when it loses in
 `Image::convert` applies the same ICC rule: it keeps the profile only when the colour model stays
 the same.
 
+`Image::to_rgba8` changes only the layout and sample type. With the `cms` feature,
+`Image::to_display_rgba8` also converts the colors through `craft-cms`: from the embedded ICC
+profile, or from the CICP description of an RGB image without one, into the display profile the
+caller passes. An image with neither is treated as sRGB. `Image::source_profile` returns the
+profile it converts from.
+
 Palette BMP and PNG pixels decode as RGB(A) in `Image`; `bmp_palette` and `png_palette` expose the
 embedded table (and a PNG's transparent entry) so `photocraft-io` can open them in Indexed Color mode.
 `bmp_palette` returns the colours the header declares, not the decoder's 256-entry padding.
@@ -97,13 +104,15 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 
 * **DDS** (through [`craft-dds`](../dds/README.md), whose `DdsCompression` and `DdsOptions` are
   re-exported). The top mip level of a 2D texture: uncompressed pixels described by channel masks
-  (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha), BC1/BC2/BC3 (DXT1/DXT3/DXT5) or
-  unsigned BC4/BC5 (ATI1/ATI2, BC4U/BC5U, DXGI 79, 80, 82 and 83), with the legacy header or the
-  DX10 one. BC4 opens as Gray and BC5 as RGB with blue 0 (BC5 stores only red and green; a normal
-  map's Z is not reconstructed). ATI2 is read as Microsoft reads it, red in the first block.
-  Uncompressed row padding follows the header's `DDSD_PITCH` stride; without that flag, rows are
-  tightly packed. Everything opens as U8; the other mip levels are ignored. Cubemaps, texture
-  arrays, volume textures, premultiplied-alpha textures (DXT2/DXT4, or DX10 alpha mode 2), signed (SNORM) BC4/BC5 and other formats
+  (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha), 16 bits per channel
+  (`R16_UNORM`, `R16G16_UNORM`, `R16G16B16A16_UNORM` and their typeless forms, legacy FourCC 36),
+  BC1/BC2/BC3 (DXT1/DXT3/DXT5) or unsigned BC4/BC5 (ATI1/ATI2, BC4U/BC5U, DXGI 79, 80, 82 and 83),
+  with the legacy header or the DX10 one. BC4 opens as Gray, and BC5 and `R16G16_UNORM` as RGB
+  with blue 0 (they store only red and green; a normal map's Z is not reconstructed). ATI2 is read
+  as Microsoft reads it, red in the first block. Uncompressed row padding follows the header's
+  `DDSD_PITCH` stride; without that flag, rows are tightly packed. The 16-bit formats and masks
+  with a channel wider than 8 bits open as U16, everything else as U8; the other mip levels are
+  ignored. Cubemaps, texture arrays, volume textures, premultiplied-alpha textures (DXT2/DXT4, or DX10 alpha mode 2), signed (SNORM) BC4/BC5 and other formats
   (BC6H, BC7, float) are refused with `CodecError::Unsupported`. Writing (`EncodeOptions::dds`)
   makes a 2D texture: uncompressed by default (BGRA, BGRX, or luminance with or without alpha, so
   it reads back exactly), BC1/BC2/BC3 (from RGBA) with the legacy header, or BC4 (from gray, for
@@ -336,6 +345,9 @@ PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) b
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 `Image::to_rgba_f32(&limits)` checks its output buffer against the same `Limits` and returns
 `CodecError::LimitExceeded` before allocating when the RGBA f32 copy would exceed them.
+`Image::try_to_rgba8(&limits)` and `Image::try_to_rgba16(&limits)` do the same for the 8-bit and
+16-bit RGBA copies. `Image::into_rgba8(&limits)` consumes the image and returns the pixel buffer of
+an RGBA8 image without copying it; other images are converted with the same check.
 PNG `cICP` and `cLLI` values are retained as image color metadata. `encode_png_pq` writes linear-light
 Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the required chunks.
 
