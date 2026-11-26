@@ -211,7 +211,7 @@ Some("pdf-deps") => {
   and for `http` and `https` the scheme and host in lowercase, a port written as its number, and
   without the default port (`https://github.com:0443/o/r` becomes `https://github.com/o/r`).
 - `FeatureRule::Contains` requires the listed features and allows others. `FeatureRule::Exactly`
-  allows the listed features only. Both read the package's node in `resolve.nodes`.
+  requires every listed feature and allows no others. Both read the package's node in `resolve.nodes`.
 - `Scope::Active` rejects a forbidden package that has a resolved node, development dependencies
   included. `Scope::ProductionFrom(root)` rejects a forbidden package reached from `root` over normal
   or build edges; one reached only through development edges is allowed. `Name::Family("hayro")`
