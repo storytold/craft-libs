@@ -15,6 +15,7 @@
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
+//! - `stats` (feature `stats`): files, lines and tests of Rust per workspace crate (`cargo xtask stats`).
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -44,6 +45,15 @@ pub mod lock;
 #[cfg(feature = "report")]
 pub mod report;
 pub mod runner;
+#[cfg(feature = "stats")]
+pub mod stats;
+
+/// Writes one diagnostic line to stderr. A failed write, such as one to a closed pipe, is ignored, so a
+/// diagnostic never stops a run.
+pub(crate) fn note(line: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
 
 /// Keeps the tests that start child processes apart from the tests that check whether a slot is free.
 /// A child holds copies of the parent's open files, and so its file locks, until it starts its program.

@@ -1,4 +1,4 @@
-//! wgpu-backed [`GpuContext`](craft_gpu::GpuContext).
+//! wgpu-backed [`GpuContext`].
 //!
 //! WebGPU on `wasm32`; native APIs when backend features are enabled. With the `adapter-probe`
 //! feature (native only), [`WgpuContext::new`] opens a real device through `craft-gpu-device`
@@ -16,7 +16,7 @@
 //! Readback is asynchronous end to end (`request_read` + `poll_reads`), because WebGPU can only
 //! map a buffer that way. Native, with a real device, drives it with `Buffer::map_async` plus
 //! `Device::poll`. The blocking `read_buffer` convenience (see
-//! [`GpuContext`](craft_gpu::GpuContext)'s trait docs) blocks efficiently on native by polling
+//! [`GpuContext`]'s trait docs) blocks efficiently on native by polling
 //! the device while it waits. On `wasm32` the backing is always the in-memory staging store
 //! today, whose reads complete synchronously, and `read_buffer` serves them; only a read that
 //! did not complete synchronously returns a fault there, since blocking would freeze the one
@@ -82,12 +82,23 @@ mod native {
     /// The descriptor has no display handle because this context never has a window (no surface
     /// is ever requested); FilmCraft's own off-screen export device uses the same constructor for
     /// the same reason (`filmcraft-gpu`'s `export_renderer.rs`, see `docs/gpu-backends.md`).
+    ///
+    /// The process holds one instance, made on the first call and returned by every later one,
+    /// so `WGPU_BACKEND` is read once. Every context and every probe requests its adapter from
+    /// it. An instance per context loads and unloads every installed Vulkan driver each time, and
+    /// on Linux with Ubuntu's `mesa-vulkan-drivers` installed, contexts opened that way from
+    /// several threads at once crash with SIGSEGV while a lavapipe device is in use.
     pub(crate) fn instance() -> wgpu::Instance {
-        let mut desc = craft_gpu_device::native_descriptor();
-        if let Some(backends) = wgpu::Backends::from_env() {
-            desc.backends = backends;
-        }
-        wgpu::Instance::new(desc)
+        static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| {
+                let mut desc = craft_gpu_device::native_descriptor();
+                if let Some(backends) = wgpu::Backends::from_env() {
+                    desc.backends = backends;
+                }
+                wgpu::Instance::new(desc)
+            })
+            .clone()
     }
 
     /// Open a real device on `instance` with `craft-gpu-device`'s choice for

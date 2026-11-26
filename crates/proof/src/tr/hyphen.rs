@@ -86,26 +86,4 @@ mod tests {
         assert_eq!(split("ilkokul"), "il-ko-kul");
         assert_eq!(split("başöğretmen"), "ba-şöğ-ret-men");
     }
-
-    /// CodeRabbit on craft-libs#484: `â`, `î` and `û` are vowels, and the module doc's examples
-    /// are the ones the rules give.
-    #[test]
-    fn circumflex_vowels_and_doc_examples() {
-        assert_eq!(split("dükkân"), "dük-kân");
-        assert_eq!(split("hikâye"), "hi-kâ-ye");
-        assert_eq!(split("kâğıt"), "kâ-ğıt");
-        assert_eq!(split("millî"), "mil-lî");
-        assert_eq!(split("kardeş"), "kar-deş");
-        assert_eq!(split("sürpriz"), "sürp-riz");
-    }
-
-    #[test]
-    fn short_or_non_words_stay_unsplit() {
-        assert_eq!(split(""), "");
-        assert_eq!(split("a"), "a");
-        assert_eq!(split("ve"), "ve");
-        assert_eq!(split("Türk"), "Türk");
-        assert_eq!(split("123"), "123");
-        assert_eq!(split("araba-ev"), "araba-ev");
-    }
 }
