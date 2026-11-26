@@ -93,7 +93,19 @@ fn object() -> Descriptor {
 
 /// Write a preset: the 11 keys in their order, each tool as `{toolKey, keyboardShortcut}`, and
 /// `keyboardShortcut` only for a [`Shortcut::Text`].
-pub fn write(preset: &ToolbarPreset) -> Vec<u8> {
+///
+/// A preset [`read`] would refuse is an error instead: a list with more groups, or a group with
+/// more tools, than [`read`] takes, or bytes over [`MAX_BYTES`].
+pub fn write(preset: &ToolbarPreset) -> Result<Vec<u8>> {
+    let max_entries = usize::try_from(LIMITS.max_list_items).unwrap_or(usize::MAX);
+    for groups in [&preset.toolbar, &preset.extras] {
+        if groups.len() > max_entries {
+            return Err(PsdError::LimitExceeded("toolbar preset groups"));
+        }
+        if groups.iter().any(|group| group.len() > max_entries) {
+            return Err(PsdError::LimitExceeded("toolbar preset tools in a group"));
+        }
+    }
     let groups = |groups: &[Vec<Tool>]| -> Value {
         Value::List(
             groups
@@ -115,7 +127,7 @@ pub fn write(preset: &ToolbarPreset) -> Vec<u8> {
                 .collect(),
         )
     };
-    object()
+    let bytes = object()
         .with("tver", Value::Integer(preset.version))
         .with("tpad", Value::Integer(preset.pad))
         .with("fgbg", Value::Boolean(preset.show_colors))
@@ -127,7 +139,11 @@ pub fn write(preset: &ToolbarPreset) -> Vec<u8> {
         .with("ddkb", Value::Boolean(preset.disable_extras_shortcuts))
         .with("tlst", groups(&preset.toolbar))
         .with("oflt", groups(&preset.extras))
-        .to_bytes()
+        .to_bytes();
+    if bytes.len() > MAX_BYTES {
+        return Err(PsdError::LimitExceeded("toolbar preset bytes"));
+    }
+    Ok(bytes)
 }
 
 /// Read a preset. The file must be one whole descriptor of at most [`MAX_BYTES`] whose `tlst` and

@@ -1,6 +1,7 @@
 //! Toolbar presets (`.tbr`): the measured layout, round trips and hostile input
 //! (storytold/photocraft#14624).
 
+use craft_psd::PsdError;
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
 use craft_psd::tbr::{self, MAX_BYTES, Shortcut, Tool, ToolbarPreset};
 
@@ -28,7 +29,7 @@ fn object() -> Descriptor {
 
 #[test]
 fn a_written_preset_has_the_measured_layout() {
-    let bytes = tbr::write(&sample());
+    let bytes = tbr::write(&sample()).unwrap();
     // Name: one NUL; class `null`.
     assert_eq!(bytes[..14], [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, b'n', b'u', b'l', b'l']);
     let d = Descriptor::from_bytes(&bytes).unwrap();
@@ -60,7 +61,7 @@ fn a_preset_round_trips_every_value() {
         ..sample()
     };
     for preset in [ToolbarPreset::default(), sample(), changed] {
-        assert_eq!(tbr::read(&tbr::write(&preset)).unwrap(), preset);
+        assert_eq!(tbr::read(&tbr::write(&preset).unwrap()).unwrap(), preset);
     }
 }
 
@@ -78,7 +79,7 @@ fn a_hand_made_preset_keeps_its_tools_and_skips_the_rest() {
 
 #[test]
 fn a_damaged_preset_is_refused() {
-    let good = tbr::write(&sample());
+    let good = tbr::write(&sample()).unwrap();
     let mut bad: Vec<Vec<u8>> = vec![Vec::new(), vec![b'x'; 100], [good.as_slice(), &[0]].concat(), vec![0; MAX_BYTES + 1]];
     bad.extend((1..good.len()).map(|n| good[..n].to_vec()));
     bad.push(object().with("tver", Value::Integer(1)).to_bytes());
@@ -89,4 +90,35 @@ fn a_damaged_preset_is_refused() {
     for bytes in &bad {
         assert!(tbr::read(bytes).is_err(), "{} bytes were read as a preset", bytes.len());
     }
+}
+
+/// The writer stops where the reader does: a preset at each limit round trips, and one past it is
+/// a limit error rather than bytes the reader would refuse.
+#[test]
+fn a_preset_at_the_limits_round_trips_and_one_past_them_is_refused() {
+    let tools = |n: usize| (0..n).map(|_| tool(b"blur", Shortcut::Absent)).collect::<Vec<_>>();
+    let at_limit = [
+        ToolbarPreset { toolbar: vec![tools(256)], ..ToolbarPreset::default() },
+        ToolbarPreset { extras: vec![Vec::new(); 256], ..ToolbarPreset::default() },
+    ];
+    let past_limit = [
+        ToolbarPreset { toolbar: vec![tools(257)], ..ToolbarPreset::default() },
+        ToolbarPreset { extras: vec![Vec::new(); 257], ..ToolbarPreset::default() },
+    ];
+    for preset in at_limit {
+        assert_eq!(tbr::read(&tbr::write(&preset).unwrap()).unwrap(), preset);
+    }
+    for preset in past_limit {
+        assert!(matches!(tbr::write(&preset), Err(PsdError::LimitExceeded(_))));
+    }
+
+    // A shortcut long enough to bring the file within one UTF-16 unit of MAX_BYTES, then one
+    // unit longer.
+    let long = |n: usize| ToolbarPreset { toolbar: vec![vec![tool(b"blur", text(&"x".repeat(n)))]], ..ToolbarPreset::default() };
+    let base = tbr::write(&long(0)).unwrap().len();
+    let fits = long((MAX_BYTES - base) / 2);
+    let bytes = tbr::write(&fits).unwrap();
+    assert!(bytes.len() <= MAX_BYTES && bytes.len() + 2 > MAX_BYTES, "{} bytes is not at the limit", bytes.len());
+    assert_eq!(tbr::read(&bytes).unwrap(), fits);
+    assert!(matches!(tbr::write(&long((MAX_BYTES - base) / 2 + 1)), Err(PsdError::LimitExceeded(_))));
 }
