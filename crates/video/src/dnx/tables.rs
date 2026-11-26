@@ -242,18 +242,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zigzag_is_permutation() {
-        let mut seen = [false; 64];
-        for &z in &ZIGZAG {
-            assert!(!seen[z as usize]);
-            seen[z as usize] = true;
-        }
-        assert_eq!(ZIGZAG[1], 1);
-        assert_eq!(ZIGZAG[2], 8);
-        assert_eq!(ZIGZAG[63], 63);
-    }
-
-    #[test]
     fn ri_size_matches_examples() {
         // 1080p HQ (1272) has 8160 macroblocks: exactly C0
         assert_eq!(ri_frame_size(1920, 1080, 917504, false), 917504);

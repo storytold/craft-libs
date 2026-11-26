@@ -1,6 +1,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-//! Dehaze, Clarity and Texture resolved for one frame: the sizes, radii and constants their
+//! Dehaze, Clarity, Texture and Detail resolved for one frame: the sizes, radii and constants their
 //! filters use, so another implementation of them (the GPU preview,
 //! `photocraft_gpu::CameraRawDevelop`) runs the same filters. [`develop`](super::develop) builds
 //! its own from the same constructors.
@@ -13,6 +13,9 @@
 //!   J. Sun, *Fast Guided Filter*, arXiv 2015), weighted toward the midtones.
 //! - **Texture** raises its difference from a Gaussian blur (three box passes), limited to
 //!   ±[`TEXTURE_LIMIT`].
+//! - **Detail** works on BT.709 luminance and two chroma planes: a guided filter of the luminance
+//!   by itself for luminance noise, a Gaussian of the chroma for colour noise, then an unsharp
+//!   mask of the luminance, optionally weighted by its smoothed gradient.
 
 use super::{CameraRaw, DevelopInputs};
 
@@ -144,6 +147,80 @@ impl Texture {
     }
 }
 
+/// Detail (noise reduction, then sharpening) on BT.709 luminance Y and the chroma B − Y, R − Y,
+/// resolved for one frame. Each part is `None` when it is off.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Detail {
+    pub luminance: Option<LuminanceNoise>,
+    pub color: Option<ColorNoise>,
+    pub sharpen: Option<Sharpen>,
+}
+
+/// Luminance noise reduction: a guided filter of Y by itself, with some of the detail kept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LuminanceNoise {
+    /// The guided filter's radius.
+    pub radius: usize,
+    /// Its regularisation.
+    pub eps: f32,
+    /// The share of Y's difference from the filter that stays.
+    pub keep: f32,
+}
+
+/// Colour noise reduction: a Gaussian of both chroma planes, with some of the detail kept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorNoise {
+    /// The Gaussian's box radii, in order.
+    pub radii: Vec<usize>,
+    /// The share of the chroma's difference from the blur that stays.
+    pub keep: f32,
+}
+
+/// Sharpening: Y plus `amount` times its difference from a Gaussian (after noise reduction),
+/// clamped to ±`limit` and scaled by `scale`, optionally weighted by an edge mask.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sharpen {
+    /// The Gaussian's box radii, in order.
+    pub radii: Vec<usize>,
+    pub amount: f32,
+    pub limit: f32,
+    pub scale: f32,
+    /// Masking: the box radii of another Gaussian of Y, and the smoothstep edges its gradient's
+    /// length is weighed between.
+    pub mask: Option<(Vec<usize>, [f32; 2])>,
+}
+
+impl Detail {
+    /// Detail for `p` at the job's pixel scale; `None` when sharpening and both noise reductions
+    /// are off.
+    pub fn new(p: &CameraRaw, inputs: &DevelopInputs) -> Option<Self> {
+        let ps = inputs.pixel_scale.clamp(0.01, 1.0);
+        // The controls' documented 0..=100 range: raw values drive the filter radii below.
+        let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
+        let luminance = (nl > 0.0).then(|| {
+            let n = nl / 100.0;
+            LuminanceNoise { radius: ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize, eps: (n * 0.06).powi(2) + 1e-6, keep: nld / 100.0 * 0.5 }
+        });
+        let color = (nc > 0.0).then(|| ColorNoise { radii: gauss_radii((nc / 100.0 * 6.0 * ps).max(0.3)), keep: ncd / 100.0 * 0.3 });
+        let sharpen = (p.sharpen_amount > 0.0).then(|| {
+            let det = super::sharpening_detail(p.sharpen_detail);
+            // Masking: an edge mask from the gradient of a smoothed luminance.
+            let mask = (p.sharpen_masking > 0.0).then(|| {
+                let t = p.sharpen_masking / 100.0 * 0.08;
+                (gauss_radii(1.0 * ps.max(0.5)), [t * 0.5, t + 1e-4])
+            });
+            Sharpen {
+                radii: gauss_radii((p.sharpen_radius.clamp(0.5, 3.0) * ps).max(0.3)),
+                amount: p.sharpen_amount / 100.0 * 1.2,
+                limit: 0.03 + det * 0.3,
+                scale: 0.5 + 0.5 * det,
+                mask,
+            }
+        });
+        (luminance.is_some() || color.is_some() || sharpen.is_some()).then_some(Detail { luminance, color, sharpen })
+    }
+}
+
 /// The box radii of develop's Gaussian of `sigma`: none below 0.3.
 pub(crate) fn gauss_radii(sigma: f32) -> Vec<usize> {
     if sigma < 0.3 {
@@ -187,6 +264,31 @@ mod tests {
         assert!(
             Dehaze::new(&off, 858, 572).is_none() && Clarity::new(&off, 858, 572).is_none() && Texture::new(&off, &scale(1.0), 858, 572).is_none()
         );
+    }
+
+    #[test]
+    fn detail_parts_follow_their_sliders_and_shrink_on_a_proxy() {
+        let full = DevelopInputs::default();
+        let scale = |pixel_scale| DevelopInputs { pixel_scale, ..full };
+        assert!(Detail::new(&CameraRaw::default(), &full).is_none());
+        // Each part is on only when its own slider is.
+        let parts = |p: &CameraRaw| Detail::new(p, &full).map(|d| (d.luminance.is_some(), d.color.is_some(), d.sharpen.is_some()));
+        assert_eq!(parts(&cr! { noise_luminance: 40.0}), Some((true, false, false)));
+        assert_eq!(parts(&cr! { noise_color: 40.0}), Some((false, true, false)));
+        assert_eq!(parts(&cr! { sharpen_amount: 40.0}), Some((false, false, true)));
+        let masked = |m| Detail::new(&cr! { sharpen_amount: 40.0, sharpen_masking: m}, &full).and_then(|d| d.sharpen).map(|s| s.mask.is_some());
+        assert_eq!((masked(0.0), masked(50.0)), (Some(false), Some(true)));
+        // Out-of-range noise sliders act as their ends.
+        assert_eq!(Detail::new(&cr! { noise_luminance: 1e30}, &full), Detail::new(&cr! { noise_luminance: 100.0}, &full));
+        // On the dialog's proxy the filters are no wider than at full size.
+        let p = cr! { noise_luminance: 80.0, noise_color: 80.0, sharpen_amount: 80.0, sharpen_radius: 3.0, sharpen_masking: 50.0};
+        let (big, small) = (Detail::new(&p, &full).unwrap(), Detail::new(&p, &scale(0.143)).unwrap());
+        let reach = |r: &[usize]| r.iter().sum::<usize>();
+        let (bl, sl) = (big.luminance.unwrap(), small.luminance.unwrap());
+        assert!(sl.radius < bl.radius);
+        assert!(reach(&small.color.unwrap().radii) < reach(&big.color.unwrap().radii));
+        let (bs, ss) = (big.sharpen.unwrap(), small.sharpen.unwrap());
+        assert!(reach(&ss.radii) < reach(&bs.radii) && reach(&ss.mask.unwrap().0) <= reach(&bs.mask.unwrap().0));
     }
 
     #[test]
