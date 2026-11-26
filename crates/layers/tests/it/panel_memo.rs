@@ -190,7 +190,7 @@ fn the_active_layers_blend_mode_runs_the_blend_rows() {
     let mut rig = rig(FakeLayers::fifty());
     {
         let mut tree = rig.tree.borrow_mut();
-        let active = tree.selection.active.clone().expect("the sample has an active layer");
+        let active = tree.selection.active.expect("the sample has an active layer");
         let layer = tree.layers.iter_mut().find(|layer| layer.id == active).expect("the active layer is listed");
         layer.info.blend_key = String::from("multiply");
     }
