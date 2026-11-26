@@ -430,32 +430,34 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spaced: bool) 
                 i += 1;
             }
             FBlock::Para(p) if p.list.is_some() => {
-                // Nested lists from consecutive list paragraphs.
-                let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
+                // Nested lists from consecutive list paragraphs. The list id keeps adjacent
+                // independent lists (a changed numbering id in the source) from merging: even at
+                // the same level and of the same kind, a different id starts a new `<ol>`/`<ul>`.
+                let mut stack: Vec<(bool, u32, bool)> = Vec::new(); // (ordered, list id, li open)
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     let Some(li) = q.list else { break };
                     let lv = li.level.min(8) as usize;
                     while stack.len() > lv + 1 {
                         close_list(&mut stack, out);
                     }
-                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered) {
+                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered || s.1 != li.list) {
                         close_list(&mut stack, out);
                     }
                     while stack.len() < lv + 1 {
                         if let Some(top) = stack.last_mut()
-                            && !top.1
+                            && !top.2
                         {
                             out.push_str("<li>");
-                            top.1 = true;
+                            top.2 = true;
                         }
                         out.push_str(if li.ordered { "<ol>" } else { "<ul>" });
-                        stack.push((li.ordered, false));
+                        stack.push((li.ordered, li.list, false));
                     }
                     if let Some(top) = stack.last_mut() {
-                        if top.1 {
+                        if top.2 {
                             out.push_str("</li>\n");
                         }
-                        top.1 = true;
+                        top.2 = true;
                     }
                     let body = inlines_html(&q.inlines);
                     let attrs = para_attrs(q, false);
@@ -507,8 +509,8 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spaced: bool) 
     }
 }
 
-fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
-    if let Some((ordered, li_open)) = stack.pop() {
+fn close_list(stack: &mut Vec<(bool, u32, bool)>, out: &mut String) {
+    if let Some((ordered, _, li_open)) = stack.pop() {
         if li_open {
             out.push_str("</li>");
         }
@@ -518,7 +520,7 @@ fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
 
 /// A complete HTML document.
 pub fn export(doc: &Document) -> String {
-    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, lists: true, ..Default::default() });
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
@@ -526,7 +528,7 @@ pub fn export(doc: &Document) -> String {
 /// clipboard beside its text, equations as MathML (#816). With no style sheet to give them, its
 /// plain paragraphs and headings carry their own spacing and indents.
 pub fn export_fragment(doc: &Document) -> String {
-    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, lists: true, ..Default::default() });
     let mut out = String::from("<meta charset=\"utf-8\">");
     blocks_html(&flow.blocks, &mut out, 0, true);
     out
