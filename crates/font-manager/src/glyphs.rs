@@ -325,6 +325,11 @@ struct CellsCache {
 #[derive(Clone, Default)]
 struct Marked(Selection<usize>);
 
+/// The glyph a context menu was opened on. Later passes keep this glyph: the grid remembers the row, and another
+/// glyph of a same-length list must not take the menu over.
+#[derive(Clone, Copy, Default)]
+struct HeldMenu(Option<GlyphCell>);
+
 /// The alternates popup: whether it is open, the cell it was opened for and that cell's alternates, read once when
 /// it opened.
 #[derive(Clone, Default)]
@@ -624,14 +629,22 @@ impl<'a> GlyphsPanel<'a> {
                             None => tile,
                         }
                     });
-                    // The collection keeps the request while the menu hung from this response stays open.
+                    // The click names the glyph. Later passes keep that glyph: the grid remembers the row, so a
+                    // same-length list must not move the open menu onto whatever glyph is there now.
+                    let clicked = shown_grid.response.events.iter().find_map(|event| match event {
+                        CollectionEvent::ContextMenu(request) => cells.get(request.key).copied(),
+                        _ => None,
+                    });
+                    let mut held = *cx.memory::<HeldMenu>();
+                    if let Some(cell) = clicked {
+                        held = HeldMenu(Some(cell));
+                    }
                     let opener = shown_grid.response.response.clone();
-                    menu = shown_grid
-                        .response
-                        .menu
-                        .as_ref()
-                        .and_then(|request| cells.get(request.key).copied())
-                        .map(|cell| GlyphCellMenu { cell, opener });
+                    menu = shown_grid.response.menu.is_some().then_some(held.0).flatten().map(|cell| GlyphCellMenu { cell, opener });
+                    if shown_grid.response.menu.is_none() {
+                        held = HeldMenu(None);
+                    }
+                    *cx.memory::<HeldMenu>() = held;
                     for event in shown_grid.response.events {
                         match event {
                             CollectionEvent::Activate(key) => activated = cells.get(key).copied().or(activated),
