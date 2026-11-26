@@ -1,7 +1,8 @@
 //! `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` on an app's [`DialogHost`], for every dialog type.
 //!
-//! The app's method table hands these methods to [`dialog_method`] and lists [`inspect`] under `ui.inspect`'s
-//! `dialogs`. A dialog is named by the `id` `inspect` lists, or `"top"` for the top one; its fields are its
+//! The app's method table hands these methods to [`dialog_method`], or to [`dialog_reply`] for a reply that waits
+//! for the app's answer to a held OK, and lists [`inspect`] under `ui.inspect`'s `dialogs`. A dialog is named by the
+//! `id` `inspect` lists, or `"top"` for the top one; its fields are its
 //! [`StackDialog::json_fields`](craft_ui::dialog::StackDialog::json_fields). Opening a dialog (`ui.dialog.open`) and
 //! running the command its answer is for stay the app's: an answer waits for the app's `DialogHost::take` as a
 //! click's would.
@@ -10,6 +11,7 @@ use craft_ui::dialog::{DialogHost, DialogId, HeldOk, StandardPrompt};
 use egui::Context;
 use serde_json::{Value, json};
 
+use crate::control::Reply;
 use crate::protocol::Params;
 
 /// The most `fields` one `ui.dialog.set` call takes.
@@ -36,7 +38,8 @@ pub fn inspect(host: &DialogHost) -> Value {
 /// - `ui.dialog.set {dialog, field, value}` sets one field ([`DialogHost::set_json_field`]); `{dialog, fields: [{field,
 ///   value?}]}` sets a list of at most [`MAX_DIALOG_FIELDS`], all or none ([`DialogHost::set_json_fields`]).
 /// - `ui.dialog.confirm {dialog, choice?}` answers OK, as the default button would, after setting the `choice` field
-///   when one is given (which button of a prompt). A dialog that holds its OK files it for the app, which answers it.
+///   when one is given (which button of a prompt). A dialog that holds its OK files it for the app, which answers it;
+///   a second confirm while that answer waits is refused.
 /// - `ui.dialog.cancel {dialog}` closes the dialog as Escape would: a standard prompt with a button for its Escape
 ///   answer gives that answer, with its tag; any other dialog closes with its children with Cancel.
 pub fn dialog_method(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -47,6 +50,26 @@ pub fn dialog_method(host: &mut DialogHost, ctx: &Context, method: &str, params:
         _ => return None,
     };
     Some(run(host, ctx, method, params, fields))
+}
+
+/// [`dialog_method`] as the [`Reply`] the app hands to [`ControlChannel::settle`](crate::ControlChannel::settle): a
+/// `ui.dialog.confirm` that files a dialog's held OK for the app replies once the app answers it
+/// ([`Reply::AfterHeldOk`], answered by [`ControlChannel::poll_held`](crate::ControlChannel::poll_held)), so a refusal
+/// reaches the caller as the reply's error, in its reason's English text. Every other call replies at once.
+pub fn dialog_reply(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value) -> Option<Reply> {
+    // The dialog is named before the call: a confirm that closes it may leave another dialog on top.
+    let named = dialog_id(host, params).ok();
+    // A refusal this confirm replaces still answers the confirms it refused.
+    let refused = match named.and_then(|id| host.held_state(id)) {
+        Some(HeldOk::Refused(reason)) => Some(reason.as_str().to_owned()),
+        _ => None,
+    };
+    let result = dialog_method(host, ctx, method, params)?;
+    let held = named.filter(|&id| method == "ui.dialog.confirm" && result.is_ok() && host.held_state(id) == Some(HeldOk::Waiting));
+    Some(match held.and_then(|id| Some((id, host.open_serial(id)?))) {
+        Some((dialog, open)) => Reply::AfterHeldOk { dialog, open, refused },
+        None => Reply::from_result(result),
+    })
 }
 
 fn run(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value, fields: &[&str]) -> Result<Value, String> {
@@ -67,6 +90,10 @@ fn run(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value, field
             }
         },
         "ui.dialog.confirm" => {
+            // A second OK while the first waits files nothing, as the disabled button shows.
+            if host.held_state(id) == Some(HeldOk::Waiting) {
+                return Err("the dialog's OK waits for the app's answer to an earlier OK".to_owned());
+            }
             if let Some(choice) = params.get("choice") {
                 host.set_json_field(ctx, id, "choice", choice.clone())?;
             }

@@ -68,3 +68,22 @@ fn the_hit_reach_is_one_read_in_a_scope_and_from_the_context() {
         assert_eq!(Env::root_hit_reach(ui.ctx()), reach);
     });
 }
+
+/// A read-only zoom text follows the env's zoom precision: whole under `Whole`, with its fraction by default.
+#[trial]
+fn zoom_percent_follows_the_zoom_precision() {
+    use craft_ui::runtime::env::ZoomPrecision;
+    let mut frames = Frames::new();
+    frames.frame(vec![], |ui| {
+        let fractional = Env::of(ui).units().zoom_percent(94.15);
+        let whole = with_env(
+            ui,
+            |o| {
+                o.values.set(ZoomPrecision::Whole);
+            },
+            |ui| Env::of(ui).units().zoom_percent(94.15),
+        );
+        assert!(fractional.contains('.') || fractional.contains(','), "the default keeps a fraction: {fractional}");
+        assert!(!whole.contains('.') && !whole.contains(','), "whole has no decimal mark: {whole}");
+    });
+}
