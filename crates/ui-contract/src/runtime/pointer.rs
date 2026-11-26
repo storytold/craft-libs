@@ -236,6 +236,9 @@ pub(crate) struct Shapes {
     /// running pass and the last: such a widget lies under every widget and shape on its layer and stands for none.
     this_grounds: IdSet,
     last_grounds: IdSet,
+    /// The screen rects the running pass's components follow the pointer in ([`follows_pointer`]): a move there runs a
+    /// pass whatever lies under it.
+    this_follows: Vec<Rect>,
     /// The paint order the running pass's next registration takes.
     next: u32,
     /// What lies under the pass's hover point, found over `last` at the begin hook with the pass's egui targets:
@@ -381,6 +384,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         shapes.last_texts = std::mem::take(&mut shapes.this_texts);
         shapes.this_made.clear();
         shapes.last_grounds = std::mem::take(&mut shapes.this_grounds);
+        shapes.this_follows.clear();
         shapes.next = 0;
         shapes.hover = None;
         shapes.winner = None;
@@ -658,6 +662,63 @@ pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_grounds.insert(widget);
     });
+}
+
+/// Records that what the running pass shows in `rect` (screen points) follows the pointer: a cursor drawn at the
+/// pointer, a readout of the point under it. A pointer move into, out of or within `rect` runs a pass even when
+/// nothing under the pointer changes ([`gate_pointer_moves`]).
+pub fn follows_pointer(ctx: &Context, rect: Rect) {
+    crate::runtime::replay::journal(ctx, || rect, |ctx, &rect| follows_pointer(ctx, rect));
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.this_follows.push(rect));
+}
+
+/// Lets a pointer move run no pass when nothing it would change differs: egui's gate
+/// ([`egui::Context::set_pointer_move_gate`]) answers [`move_needs_pass`]. An app opts in once; without it every move
+/// runs a pass.
+pub fn gate_pointer_moves(ctx: &Context) {
+    ctx.set_pointer_move_gate(Some(Arc::new(|ctx: &Context, viewport: ViewportId, from: Option<Pos2>, to: Pos2| {
+        move_needs_pass(ctx, viewport, from, to)
+    })));
+}
+
+/// Whether a pointer move from `from` to `to` in `viewport`, with no button held, needs a pass, judged on the last
+/// finished pass: when the pointer comes in, a drag runs, either point lies in a rect that follows the pointer, or the
+/// layer, egui's widgets or the component shapes under the two points differ. Equal answers mean no hover, cursor or
+/// part under the pointer changes, so the frame would look the same; the move stays in egui's input for the next pass.
+pub fn move_needs_pass(ctx: &Context, viewport: ViewportId, from: Option<Pos2>, to: Pos2) -> bool {
+    let Some(from) = from else { return true };
+    if drag::runs_elsewhere(ctx, viewport) || drag::running(ctx) {
+        return true;
+    }
+    let follows =
+        PerViewport::<Shapes>::with(ctx, viewport, |record| record.this_follows.iter().any(|rect| rect.contains(from) || rect.contains(to)));
+    follows || ctx.widgets_at(viewport, from) != ctx.widgets_at(viewport, to) || shapes_under(ctx, viewport, from) != shapes_under(ctx, viewport, to)
+}
+
+/// The layer under `at` and the component shapes there that hit it, as the last finished pass of `viewport` recorded
+/// them: each as its root and its index in the root's record.
+fn shapes_under(ctx: &Context, viewport: ViewportId, at: Pos2) -> (Option<Layer>, Vec<(Id, usize)>) {
+    let Some(layer) = areas::layer_at(ctx, at) else { return (None, Vec::new()) };
+    let point = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
+    let hit = PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.this.get(&layer).map_or_else(Vec::new, |roots| {
+            let mut hit: Vec<(Id, usize)> = roots
+                .iter()
+                .flat_map(|(root, entry)| {
+                    entry
+                        .shapes
+                        .iter()
+                        .zip(&entry.placed)
+                        .enumerate()
+                        .filter(|(_, (shape, placed))| placed.clip.contains(point) && shape.hits(point))
+                        .map(move |(index, _)| (*root, index))
+                })
+                .collect();
+            hit.sort_unstable_by_key(|(root, index)| (root.value(), *index));
+            hit
+        })
+    });
+    (Some(layer), hit)
 }
 
 /// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
