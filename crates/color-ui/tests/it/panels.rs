@@ -215,6 +215,24 @@ fn a_fill_stroke_panels_warnings_keep_their_room_so_the_spectrum_holds_still() {
     assert_eq!(clean, warned, "the spectrum with no warning and with both");
 }
 
+/// A host's names for the FillStroke layout's swap and default buttons replace the panel's words, so a host can name
+/// its keys there; without them the buttons keep the words.
+#[trial]
+fn a_fill_stroke_panel_names_its_buttons_as_the_host_asks() {
+    let names = |given: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let panel = ColorPanel::new(Bind::bound(&mut state), [RED, BLUE]).layout(ColorPanelLayout::FillStroke);
+            let panel = if given { panel.buttons("Swap (Shift+X)", "Default (D)") } else { panel };
+            let _ = panel.show(ui);
+        });
+        fixture.room(COLOR_ROOM).settle();
+        ["Swap (Shift+X)", "Default (D)", "Swap fill and stroke", "Default fill and stroke"].map(|name| fixture.by_label(name).is_some())
+    };
+    assert_eq!(names(true), [true, true, false, false], "the host's names");
+    assert_eq!(names(false), [false, false, true, true], "the panel's words");
+}
+
 /// The spectrum's tooltip is the shown mode's name, and a Shift click on it moves the state to the next mode without
 /// editing a paint.
 #[trial]
