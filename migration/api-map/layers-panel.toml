@@ -1,0 +1,196 @@
+# API map of the "Layers panel" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Layers panel"
+new_module = "craft_layers::ui::panel"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "LayersPanel"
+old = "craft_layers::ui::panel::LayersPanel"
+new = "craft_layers::ui::panel::LayersPanel"
+status = "same"
+note = "`LayersPanel<'a, T>` is a pattern on a `Stack` (header: filter bar and blend rows; body: the `List`; footer: `FooterBar`). `new(tree)` takes no id salt (the id comes from the call site) and `show(ui)` returns `LayersOutput<T::Id>`, an `Outcome`. State lives in the stack's root slot. Setters: see the setter entries."
+
+[[type]]
+name = "LayersOutput"
+old = "craft_layers::ui::panel::LayersOutput"
+new = "craft_layers::ui::panel::LayersOutput"
+status = "same"
+note = "`events` and `response`. `drop_preview` and `min_width` are gone: the list reports no pending drop target, and the panel sizes by content."
+
+[[type]]
+name = "LayersEvent"
+old = "craft_layers::ui::panel::LayersEvent"
+new = "craft_layers::ui::panel::LayersEvent"
+status = "same"
+note = "Same variants, with `Select(LayerSelect)` carrying a `SelectionChange`, `ThumbClick { mods: craft_keymap::Mods }`, `Open(craft_ui::contract::OpenChange)` (field `key`), `Toggle` carrying an `EditEvent<bool>`, and `UndoShowOnly(LayerRowKey)` (Escape during an Alt eye sweep: undo that sweep's `ShowOnly`). `SettingsChanged`-style results come from `LayersPanelCommands::settings_action`."
+
+[[type]]
+name = "ActivateOn"
+old = "craft_layers::ui::panel::ActivateOn"
+new = "craft_layers::ui::panel::ActivateOn"
+status = "same"
+note = "`Name` is gone: a double click on the name renames, and the list reports the other activations as `Row` or `Thumbnail`."
+
+[[type]]
+name = "LayerColumn"
+old = "craft_layers::ui::panel::LayerColumn"
+new = "craft_layers::ui::panel::LayerColumn"
+status = "same"
+note = ""
+
+[[type]]
+name = "LayerDrop"
+old = "craft_layers::ui::panel::LayerDrop"
+new = "craft_layers::ui::panel::LayerDrop"
+status = "same"
+note = ""
+
+[[type]]
+name = "LayerMove"
+old = "craft_layers::ui::panel::LayerMove"
+new = "craft_layers::ui::panel::LayerMove"
+status = "same"
+note = "`position` is `LayerPosition` (`Before`, `After`, `Into`), the panel's own enum: `craft_behavior` has no `DropPosition`."
+
+[[type]]
+name = "LayerSelect"
+old = "craft_layers::ui::panel::LayerSelect"
+new = "craft_layers::ui::panel::LayerSelect"
+status = "same"
+note = "`{ change: SelectionChange<Id>, part }` replaces `{ layer, pick, part }`: `Set(layers)` for Replace and Range, `Toggle(layer)`, `Clear`."
+
+[[type]]
+name = "LayerToggle"
+old = "craft_layers::ui::panel::LayerToggle"
+new = "craft_layers::ui::panel::LayerToggle"
+status = "same"
+note = "`row` is `rows`, every row a sweep crossed in the pass, in order; the events of one sweep share the gesture of `edit`, an `EditEvent<bool>` `Set` with the new state."
+
+[[type]]
+name = "MenuTarget"
+old = "craft_layers::ui::panel::MenuTarget"
+new = "craft_layers::ui::panel::MenuTarget"
+status = "same"
+note = "`part` is `None` when the press landed on a row: the list reports no thumbnail under a context request."
+
+[[type]]
+name = "RowTransfer"
+old = "craft_layers::ui::panel::RowTransfer"
+new = "craft_layers::ui::panel::RowTransfer"
+status = "same"
+note = ""
+
+[[type]]
+name = "SubRowMove"
+old = "craft_layers::ui::panel::SubRowMove"
+new = "craft_layers::ui::panel::SubRowMove"
+status = "same"
+note = ""
+
+[[type]]
+name = "LayersFooterAction"
+old = "craft_layers::ui::panel::LayersFooterAction"
+new = "craft_layers::ui::panel::LayersFooterAction"
+status = "same"
+note = ""
+
+[[type]]
+name = "LayersFooterButton"
+old = "craft_layers::ui::panel::LayersFooterButton"
+new = "craft_layers::ui::panel::LayersFooterButton"
+status = "same"
+note = ""
+
+[[type]]
+name = "LayersLabels"
+old = "craft_layers::ui::panel::LayersLabels"
+new = ""
+status = "removed"
+note = "Replaced by the word set `LayersPanelWords` (`layersPanel.<name>` ids), read with `Env::of(ui).words::<LayersPanelWords>()`."
+
+[[type]]
+name = "LayersPanelWords"
+old = ""
+new = "craft_layers::ui::panel::LayersPanelWords"
+status = "replaced"
+note = "The panel's words; the crate's `WORDS` constant goes."
+
+[[type]]
+name = "LayersStyle"
+old = "craft_layers::ui::panel::LayersStyle"
+new = ""
+status = "removed"
+note = "Component styles: sizes come from `ListRow`'s layer form and the control size."
+
+[[type]]
+name = "LayersMenuAction"
+old = "craft_layers::ui::panel::LayersMenuAction"
+new = "craft_layers::ui::panel::LayersMenuAction"
+status = "same"
+note = "Returned by `LayersPanelCommands::settings_action`, which replaces `LayersPanel::run_command`; `LayersPanel::panel_menu` is the free function `panel_rows`, which lists `PanelRow::Command` rows."
+
+[[type]]
+name = "LayersPanelCommands"
+old = ""
+new = "craft_layers::ui::panel::LayersPanelCommands"
+status = "replaced"
+note = "The `layersPanel` command set: the panel-menu rows, the stacking keys and the effects keys. The app owns the commands and turns them into events with `event(tree, label)`."
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::new(id_salt, tree)"
+new = "LayersPanel::new(tree)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::settings(&mut LayersSettings)"
+new = "LayersPanel::settings(&LayersSettings)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::filter(&mut LayerFilter)"
+new = "LayersPanel::filter(Bind<LayerFilter>)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::labels(LayersLabels)"
+new = "removed (words)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::visibility_key(KeyboardShortcut)"
+new = "removed (a toggle cell's tooltip names no key)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::trailing(width, add)"
+new = "removed (a row's trailing slot holds text, icons and parts only)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::row_menu(Fn(&MenuTarget) -> Vec<MenuEntry<String>>)"
+new = "LayersPanel::row_menu(Fn(&MenuTarget) -> Vec<Entry<String>>)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::min_width(ui)"
+new = "removed (content sizing)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::style(tokens)"
+new = "removed (component styles)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::panel_menu(ctx, id_salt, settings)"
+new = "panel_rows(words)"
+
+[[setter]]
+type = "LayersPanel"
+old = "LayersPanel::run_command(ctx, id_salt, settings, command)"
+new = "LayersPanelCommands::settings_action(settings)"
