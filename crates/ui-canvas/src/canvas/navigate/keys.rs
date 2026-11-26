@@ -18,14 +18,28 @@ pub enum PageKey {
 }
 
 impl PageKey {
-    /// Points a Shift + page key scrolls.
+    /// Document pixels a Shift + page key scrolls, at any zoom ([`small_step`](Self::small_step)).
     pub const SMALL_STEP: f32 = 10.0;
 
+    /// The points a Shift + page key scrolls a view of `zoom` (screen points per document pixel) on a screen of
+    /// `pixels_per_point`: [`SMALL_STEP`](Self::SMALL_STEP) document pixels, rounded to whole device pixels and at
+    /// least one, so 10 at 50 %, 100 %, 200 % and 400 % and 12 at 25 % (2.5 device pixels make 3), whatever the
+    /// display scaling. A zoom or scale that is not finite and positive steps one device pixel.
+    pub fn small_step(zoom: f64, pixels_per_point: f32) -> f32 {
+        let ppp = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+        let device = f64::from(Self::SMALL_STEP) * zoom * f64::from(ppp);
+        let device = if device.is_finite() { device.round().max(1.0) } else { 1.0 };
+        // At most a few thousand device pixels at the largest zoom, so the cast keeps the value.
+        #[allow(clippy::cast_possible_truncation)]
+        let device = device.min(f64::from(f32::MAX)) as f32;
+        device / ppp
+    }
+
     /// Photoshop's page keys for the move a focused canvas took: Page Up and Page Down scroll a canvas height up or
-    /// down, Cmd/Ctrl turns them sideways (Page Up left, Page Down right), Shift makes the step
-    /// [`SMALL_STEP`](Self::SMALL_STEP); Home and End show the corners. `None` for other moves, with Alt, or with
+    /// down, Cmd/Ctrl turns them sideways (Page Up left, Page Down right), Shift makes the step `small` points
+    /// ([`small_step`](Self::small_step)); Home and End show the corners. `None` for other moves, with Alt, or with
     /// Shift or Cmd on Home and End. `canvas` is the canvas size in points.
-    pub fn of(step: NavMove, mods: MoveMods, canvas: Vec2) -> Option<PageKey> {
+    pub fn of(step: NavMove, mods: MoveMods, canvas: Vec2, small: f32) -> Option<PageKey> {
         if mods.fine {
             return None;
         }
@@ -38,7 +52,7 @@ impl PageKey {
         };
         let sideways = mods.lead;
         let length = match (mods.extend, sideways) {
-            (true, _) => Self::SMALL_STEP,
+            (true, _) => small,
             (false, true) => canvas.x,
             (false, false) => canvas.y,
         };
