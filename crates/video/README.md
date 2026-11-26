@@ -56,6 +56,10 @@ comes with its codec's feature):
   decoder reports them. ProRes signals the picture's shape (4:3 or 16:9); the sample aspect
   ratio is worked out from it and the frame size.
 
+Theora pictures retain the header's pixel aspect ratio in `theora::Picture::par`. Conversion
+sets `VideoFrame::sar` to `None` when either component is zero. When constructing a
+`theora::Picture`, initialize `par` with `(0, 0)` if the pixel aspect ratio is unknown.
+
 The constructors check that every plane's buffer, stride and size fit the frame, so a picture
 with inconsistent fields is an error, not an out-of-bounds read.
 
