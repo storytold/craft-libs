@@ -10,7 +10,7 @@ use crate::format::FormatErrors;
 use crate::id::{AppId, IconPackId};
 use crate::ramp::Mode;
 use crate::theme::{
-    AppOverrides, ContrastIntent, EdgeSeed, GripSeed, ModePins, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
+    AppOverrides, ContrastIntent, EdgeSeed, GripSeed, LocatorSeed, ModePins, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
 };
 use crate::tokens::{ColorToken, KnobShape, RadiusSet, WellShape};
 
@@ -140,6 +140,8 @@ pub enum ShapeValue {
     Wells(Option<WellShape>),
     /// [`ShapeSeed::grip`].
     Grip(Option<GripSeed>),
+    /// [`ShapeSeed::locator`].
+    Locator(Option<LocatorSeed>),
 }
 
 /// Which field of the shape a [`ShapeValue`] holds.
@@ -159,10 +161,12 @@ pub enum ShapeField {
     Wells,
     /// [`ShapeSeed::grip`].
     Grip,
+    /// [`ShapeSeed::locator`].
+    Locator,
 }
 
 impl ShapeField {
-    const ALL: [ShapeField; 7] = [
+    const ALL: [ShapeField; 8] = [
         ShapeField::Radius,
         ShapeField::RadiusOffset,
         ShapeField::ButtonRadius,
@@ -170,6 +174,7 @@ impl ShapeField {
         ShapeField::Knob,
         ShapeField::Wells,
         ShapeField::Grip,
+        ShapeField::Locator,
     ];
 
     fn get(self, s: &ShapeSeed) -> ShapeValue {
@@ -181,6 +186,7 @@ impl ShapeField {
             ShapeField::Knob => ShapeValue::Knob(s.knob),
             ShapeField::Wells => ShapeValue::Wells(s.wells),
             ShapeField::Grip => ShapeValue::Grip(s.grip),
+            ShapeField::Locator => ShapeValue::Locator(s.locator),
         }
     }
 }
@@ -195,6 +201,7 @@ impl ShapeValue {
             ShapeValue::Knob(_) => ShapeField::Knob,
             ShapeValue::Wells(_) => ShapeField::Wells,
             ShapeValue::Grip(_) => ShapeField::Grip,
+            ShapeValue::Locator(_) => ShapeField::Locator,
         }
     }
 
@@ -207,11 +214,13 @@ impl ShapeValue {
             ShapeValue::Knob(v) => s.knob = v,
             ShapeValue::Wells(v) => s.wells = v,
             ShapeValue::Grip(v) => s.grip = v,
+            ShapeValue::Locator(v) => s.locator = v,
         }
     }
 }
 
-const NO_SHAPE: ShapeSeed = ShapeSeed { radius: None, radius_offset: None, button_radius: None, edge: None, knob: None, wells: None, grip: None };
+const NO_SHAPE: ShapeSeed =
+    ShapeSeed { radius: None, radius_offset: None, button_radius: None, edge: None, knob: None, wells: None, grip: None, locator: None };
 
 /// A theme's name, variants, contrast intent or icon pack.
 #[derive(Clone, Debug, PartialEq)]

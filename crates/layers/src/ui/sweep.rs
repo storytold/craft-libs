@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, GestureId, Mixed};
+use craft_keymap::Mods;
 use craft_ui::contract::{SweepApply, SweepStep, ToggleEdit};
 
 /// The cells of a sweep over `column` as events in `out`. The cells of one sweep are `Update`s of the gesture of its
@@ -63,6 +64,7 @@ pub(crate) fn sweep_events<K: Clone, C: Copy + PartialEq, O: SweepOut<K, C>>(
             push_cell(out, Some(gesture), cell.key, column, edit);
         }
         SweepStep::UndoShowOnly(cell) => out.undo_show_only(cell.key),
+        SweepStep::Claimed(cell) => out.claimed(cell.key, column, cell.mods),
         _ => {}
     }
 }
@@ -83,6 +85,12 @@ pub(crate) trait SweepOut<K, C> {
     /// The cancel of a show-only press on `key`. A plain column never gives it.
     fn undo_show_only(&mut self, key: K) {
         let _ = key;
+    }
+
+    /// A first press on `key` in `column` with the claimed `mods` held: it belongs to the host and flips nothing. A
+    /// column that claims no modifiers never gives it.
+    fn claimed(&mut self, key: K, column: C, mods: Mods) {
+        let _ = (key, column, mods);
     }
 }
 

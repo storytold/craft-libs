@@ -19,7 +19,7 @@ use craft_ui::primitives::textures::{Revision, ThumbSource, Thumbnails};
 use craft_ui::primitives::{ContentPainterCx, HAlign, PaintShape, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, TypeRole};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, TypeRole};
 use craft_ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::{ColorImage, CornerRadius, Rect, Response, Ui, Vec2};
 
@@ -189,7 +189,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
 
     fn sizes(&self, cx: &MeasureCx<'_, Self>) -> Sizes {
         let words = cx.env.words::<GalleryWords>();
-        let button = cx.face(IconButton::new(IconId::new("more")).label(words.more.clone()));
+        let button = cx.face(IconButton::new(IconId::new("more")).label(words.more.clone()).glyphs(GlyphRole::Compact));
         Sizes { tile: cx.face(GalleryTile::blank(self.aspect, self.thumb_size, self.captioned())), button, gap: cx.gap() }
     }
 }
@@ -341,7 +341,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
     for event in out.response.events {
         match event {
             CollectionEvent::Activate(key) => result.picked = Some(key),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(key) = keys.last() {
                     result.picked = Some(*key);
                 }
@@ -723,9 +723,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
             draw.rule(craft_ui::style::RuleKind::Divider, egui::pos2(self.column.left(), y1), egui::pos2(self.column.right(), y1));
             draw.rule(craft_ui::style::RuleKind::Divider, egui::pos2(self.column.left(), y2), egui::pos2(self.column.right(), y2));
         }
-        ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0));
-        ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last));
-        ui.face(MORE, IconButton::new(IconId::new("more")).label(words.more.clone()));
+        ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0).glyphs(GlyphRole::Compact));
+        ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last).glyphs(GlyphRole::Compact));
+        ui.face(MORE, IconButton::new(IconId::new("more")).label(words.more.clone()).glyphs(GlyphRole::Compact));
     }
 
     /// The context request is recorded after `update`, so `finish` reads it: a secondary click on a tile, or the Menu

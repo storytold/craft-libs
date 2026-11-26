@@ -86,6 +86,135 @@ pub struct Wheel {
     pub rotation: f32,
     /// Rotation of a two-finger touch, in radians.
     pub touch_rotation: f32,
+    /// Two fingers' movement this pass, in points.
+    pub touch_pan: Vec2,
+    /// The running gesture's scroll gathered so far, this share included, in its owner's points.
+    pub gathered: Vec2,
+    /// Whether the owner marked the running gesture moved (`Pointer::mark_wheel_moved`).
+    pub moved: bool,
+}
+
+/// The eased motion of a canvas's line wheel: notches gather into owed motion that later passes pay out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WheelEase {
+    owed: kurbo::Vec2,
+    burst: u32,
+    last_notch: f64,
+    last_sign: Vec2,
+    last_paid: f64,
+}
+
+/// Notches closer than this many seconds are a fast spin and grow the burst.
+const FAST_NOTCH: f64 = 0.08;
+/// Notches this many seconds apart, or more, start a new burst.
+const BURST_RESET: f64 = 0.3;
+/// The multiplier one fast notch adds.
+const BURST_STEP: f32 = 0.4;
+/// The burst notches that count toward the multiplier.
+const BURST_TICKS: u32 = 13;
+/// Notches kept past `BURST_TICKS`, so a few slower notches in a spin do not drop the multiplier at once.
+const BURST_HOLD: u32 = 4;
+/// The largest multiplier.
+const BURST_CAP: f32 = 6.0;
+/// The most motion owed on an axis, in points: a hostile run of notches cannot grow it without bound.
+const MAX_OWED: f32 = 16384.0;
+/// The longest pass the ease pays for, in seconds: after a stall it does not jump the whole way at once.
+const LONGEST_PASS: f64 = 0.1;
+/// The seconds a pass is taken to last when the ease starts from rest, so the first notch moves in its own pass.
+const FIRST_PASS: f64 = 1.0 / 60.0;
+/// Owed motion this small, in points, is paid whole.
+const SETTLE: f32 = 0.01;
+
+/// The sign of `v`: 0 for zero, where `f32::signum` gives 1.
+fn sign(v: f32) -> f32 {
+    if v > 0.0 {
+        1.0
+    } else if v < 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
+impl WheelEase {
+    /// Adds the line pan `pan` of this pass, at time `now`, to the owed motion; a burst of notches under 0.08 s apart
+    /// accelerates it, a reversal or 0.3 s idle resets the burst.
+    pub fn feed(&mut self, pan: Vec2, now: f64) {
+        if !now.is_finite() || !pan.is_finite() || pan == Vec2::ZERO {
+            return;
+        }
+        let signs = Vec2::new(sign(pan.x), sign(pan.y));
+        let idle = now - self.last_notch;
+        let reversed = signs.x * self.last_sign.x < 0.0 || signs.y * self.last_sign.y < 0.0;
+        if self.last_sign == Vec2::ZERO || !(0.0..BURST_RESET).contains(&idle) || reversed {
+            self.burst = 0;
+        } else if idle < FAST_NOTCH {
+            self.burst = (self.burst + 1).min(BURST_TICKS + BURST_HOLD);
+        } else {
+            // A slower notch in the same direction sheds one, rather than extending the burst.
+            self.burst = self.burst.saturating_sub(1);
+        }
+        self.last_notch = now;
+        self.last_sign = signs;
+        let boost = (1.0 + BURST_STEP * self.burst.min(BURST_TICKS) as f32).min(BURST_CAP);
+        if !self.owes() {
+            self.last_paid = now - FIRST_PASS;
+        }
+        self.owed = kurbo::Vec2::new(owe(self.owed.x, f64::from(pan.x * boost)), owe(self.owed.y, f64::from(pan.y * boost)));
+    }
+
+    /// Drops the owed motion on the axes marked.
+    pub fn cancel_axis(&mut self, x: bool, y: bool) {
+        if x {
+            self.owed.x = 0.0;
+        }
+        if y {
+            self.owed.y = 0.0;
+        }
+    }
+
+    /// The step this pass pays at time `now`: `1 − 0.1^(dt/0.1)` of the owed motion, with `dt` since the last paid pass.
+    pub fn step(&mut self, now: f64) -> Vec2 {
+        if !now.is_finite() || now < self.last_paid {
+            // A clock that runs backwards or breaks cannot tell how much to pay: the tail goes.
+            self.owed = kurbo::Vec2::ZERO;
+            self.last_paid = if now.is_finite() { now } else { self.last_paid };
+            return Vec2::ZERO;
+        }
+        let dt = (now - self.last_paid).min(LONGEST_PASS);
+        self.last_paid = now;
+        if !self.owes() || dt <= 0.0 {
+            return Vec2::ZERO;
+        }
+        let fraction = 1.0 - 0.1_f64.powf(dt / 0.1);
+        let paid = Vec2::new(pay(self.owed.x, fraction), pay(self.owed.y, fraction));
+        self.owed -= kurbo::Vec2::new(f64::from(paid.x), f64::from(paid.y));
+        // A tail below normal f32 precision cannot move a view and must not keep scheduling frames.
+        if self.owed.x.abs() < f64::from(f32::MIN_POSITIVE) {
+            self.owed.x = 0.0;
+        }
+        if self.owed.y.abs() < f64::from(f32::MIN_POSITIVE) {
+            self.owed.y = 0.0;
+        }
+        paid
+    }
+
+    /// Whether motion is still owed.
+    pub fn owes(&self) -> bool {
+        self.owed != kurbo::Vec2::ZERO
+    }
+}
+
+/// `owed` with `more` added on one axis: motion the other way drops what was owed, and the sum stays within
+/// `MAX_OWED`.
+fn owe(owed: f64, more: f64) -> f64 {
+    let owed = if more * owed < 0.0 { 0.0 } else { owed };
+    (owed + more).clamp(-f64::from(MAX_OWED), f64::from(MAX_OWED))
+}
+
+/// The part of `owed` one pass pays, `fraction` of it; a remainder under `SETTLE` is paid whole.
+fn pay(owed: f64, fraction: f64) -> f32 {
+    if owed.abs() <= f64::from(SETTLE) { owed as f32 } else { (owed * fraction) as f32 }
 }
 
 impl Wheel {
@@ -104,6 +233,9 @@ impl Wheel {
             touch_zoom: 1.0,
             rotation: 0.0,
             touch_rotation: 0.0,
+            touch_pan: Vec2::ZERO,
+            gathered: Vec2::ZERO,
+            moved: false,
         }
     }
 
@@ -128,6 +260,13 @@ impl Wheel {
     /// The same gesture with the two-finger touch rotation `radians`.
     pub const fn touch_rotation(mut self, radians: f32) -> Self {
         self.touch_rotation = radians;
+        self
+    }
+
+    /// The same gesture with the two-finger touch movement `pan`, in points.
+    #[must_use]
+    pub const fn touch_pan(mut self, pan: Vec2) -> Self {
+        self.touch_pan = pan;
         self
     }
 
@@ -422,15 +561,15 @@ fn for_field(wheel: &Wheel) -> bool {
     !(mods.alt || mods.cmd || mods.ctrl) && (wheel.scroll.y != 0.0 || (mods.shift && wheel.scroll.x != 0.0))
 }
 
-/// Whether `wheel` carries a pinch, a touch zoom or a rotation: the zoom share's values.
+/// Whether `wheel` carries a pinch, a touch zoom, a rotation or a two-finger pan: the zoom share's values.
 fn pinches(wheel: &Wheel) -> bool {
-    wheel.zoom != 1.0 || wheel.touch_zoom != 1.0 || wheel.rotation != 0.0 || wheel.touch_rotation != 0.0
+    wheel.zoom != 1.0 || wheel.touch_zoom != 1.0 || wheel.rotation != 0.0 || wheel.touch_rotation != 0.0 || wheel.touch_pan != Vec2::ZERO
 }
 
 /// `wheel` without the zoom share's values: a scroll share carries no pinch or rotation, so a field or a scroll region
 /// never reads one.
 const fn scroll_only(wheel: Wheel) -> Wheel {
-    Wheel { zoom: 1.0, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0, zooms: false, ..wheel }
+    Wheel { zoom: 1.0, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0, touch_pan: Vec2::ZERO, zooms: false, ..wheel }
 }
 
 /// The split rule. A focused field (a `WheelTaker::field` taker that holds `focus`, or an app's own text field) takes
@@ -579,6 +718,7 @@ fn split_at<O: Copy + PartialEq>(
                 share.touch_zoom *= part.touch_zoom;
                 share.rotation += part.rotation;
                 share.touch_rotation += part.touch_rotation;
+                share.touch_pan += part.touch_pan;
                 share.zooms |= part.zooms;
             }
             None => shares.push((owner, part)),
@@ -646,5 +786,40 @@ mod tests {
         assert_eq!(shares.iter().map(|(o, w)| (*o, w.zooms)).collect::<Vec<_>>(), [(1, false)], "no zoom taker: the zone is passed over");
         let shares = split(&[region, view, zone], at, wheel(4.0, 0.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
         assert_eq!(shares.iter().map(|(o, w)| (*o, w.zooms)).collect::<Vec<_>>(), [(2, false)], "the horizontal share passes the zone");
+    }
+
+    #[test]
+    fn fast_notches_accelerate_to_a_cap_and_reset_on_reversal_or_idle_but_a_lone_notch_does_not() {
+        const NOTCH: f64 = 40.0;
+        // What one notch of `y` points adds to the owed motion.
+        let notch = |ease: &mut WheelEase, y: f64, now: f64| {
+            let before = ease.owed.y;
+            ease.feed(Vec2::new(0.0, y as f32), now);
+            ease.owed.y - before
+        };
+        let mut ease = WheelEase::default();
+        assert_eq!(notch(&mut ease, NOTCH, 1.0), NOTCH, "a lone notch is one notch");
+        assert_eq!(notch(&mut ease, NOTCH, 1.5), NOTCH, "a slow notch is one notch");
+
+        let mut gains = Vec::new();
+        for i in 1..=20 {
+            gains.push(notch(&mut ease, NOTCH, 1.5 + f64::from(i) * 0.02));
+        }
+        // The owed sum rounds in its last bits, so per-notch gains compare within a hundredth of a point.
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        assert!(gains.windows(2).all(|pair| pair[1] > pair[0] - 0.01), "a fast run never pays less per notch: {gains:?}");
+        let fastest = gains.iter().copied().fold(0.0, f64::max);
+        assert!(fastest > 2.0 * NOTCH, "a fast run accelerates: {gains:?}");
+        assert!(fastest < 6.0 * NOTCH + 0.01, "the acceleration is capped: {gains:?}");
+        assert!(gains.last().is_some_and(|&last| near(last, 6.0 * NOTCH)), "a long run reaches the cap and stays there: {gains:?}");
+
+        notch(&mut ease, -NOTCH, 1.5 + 21.0 * 0.02);
+        assert_eq!(ease.owed.y, -NOTCH, "a reversal drops what was owed and starts again at one notch");
+
+        for i in 1..=10 {
+            notch(&mut ease, -NOTCH, 2.0 + f64::from(i) * 0.02);
+        }
+        assert!(notch(&mut ease, -NOTCH, 2.0 + 11.0 * 0.02) < -NOTCH - 1.0, "precondition: the run is fast again");
+        assert!(near(notch(&mut ease, -NOTCH, 5.0), -NOTCH), "an idle gap starts again at one notch");
     }
 }

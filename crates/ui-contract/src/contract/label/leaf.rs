@@ -1,11 +1,11 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{FieldLayout, Glyph, LabelKind, LabelScheme};
+use super::props::{CaptionInk, FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk, LinkLabelUnderline};
 use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
 use crate::contract::{Cx, MeasureCx, PaintUi, PartsCx, Styled as _};
-use crate::primitives::{IconSpec, TextRun, Wrap};
+use crate::primitives::{IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
 use crate::runtime::access::{Access, Name};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::words::CommonWords;
@@ -30,12 +30,15 @@ pub(super) struct LabelStyle {
     gap: f32,
     /// The detail: `text.muted`, `text.disabled` with a disabled control.
     detail: Stateful<StyleColor>,
-    /// The name: `TypeRole::Label` in `text.muted`; after a check box or a radio, `TypeRole::Body` in `text.normal`.
-    /// `text.disabled` with a disabled control.
+    /// The name: `TypeRole::Label` in the [`CaptionInk`]; after a check box or a radio, `TypeRole::Body` in
+    /// `text.normal`. `text.disabled` with a disabled control.
     #[style(text)]
     name: TextLook,
     /// The glyph and icon: their own ink (`None`), `text.disabled` with a disabled control.
     glyph: Stateful<Option<StyleColor>>,
+    /// The width (`stroke.thin`) of a one-line link's underline where the label draws it inside its rect
+    /// ([`LinkLabelUnderline::Inside`]); `None` where egui draws it with the text.
+    underline: Option<f32>,
 }
 
 /// What the label leaf reports.
@@ -87,6 +90,9 @@ pub(super) struct LabelLeaf {
     /// and wraps in its room instead of eliding.
     #[style_key]
     pub(super) after: bool,
+    /// The label is a link (`LabelPress::Link`): its name reads in the link look and is underlined.
+    #[style_key]
+    pub(super) link: bool,
     /// The control the label names takes the label into its own hit target: the label senses nothing itself.
     pub(super) claimed: bool,
     /// The size of the content the label step shows after the text, inside the label: 0 without one.
@@ -129,6 +135,7 @@ impl LabelLeaf {
             baseline: Cell::new(0.0),
             first_line: Cell::new(0.0),
             after: false,
+            link: false,
             claimed: false,
             trailing: Vec2::ZERO,
             named: true,
@@ -143,6 +150,8 @@ impl LabelLeaf {
 
 impl Component for LabelLeaf {
     const ROLE: crate::contract::Role = crate::contract::Role::LABEL;
+    // A link label is a link to assistive technology too, not a second name of its control.
+    const ALT_ROLES: &'static [crate::contract::Role] = &[crate::contract::Role::LINK];
     const OVERLAYS: bool = false;
     // The label is no key target: Enter and Space go to its control, which a click on the label focuses.
     const KEYS: crate::runtime::focus::KeyUse =
@@ -167,14 +176,24 @@ impl Component for LabelLeaf {
             // A caption reads as secondary; a check box's or a radio's text after it is the control's own.
             name: {
                 let text = &cx.tokens.color.text;
-                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
-                let (ink, off) = (cx.color(ink), cx.color(text.disabled));
-                TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                let caption = if cx.env::<CaptionInk>() == CaptionInk::Normal { text.normal } else { text.muted };
+                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, caption) };
+                let neutral = cx.env::<LinkLabelInk>() == LinkLabelInk::Neutral;
+                if key.link && !neutral {
+                    // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
+                    TextLook { role, ..cx.link_look(true) }
+                } else {
+                    // A neutral link label reads in the body ink; its underline still marks it.
+                    let ink = if key.link { text.normal } else { ink };
+                    let (ink, off) = (cx.color(ink), cx.color(text.disabled));
+                    TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                }
             },
             glyph: {
                 let off = Some(cx.color(cx.tokens.color.text.disabled));
                 Stateful::new(None).off(States::new(None, None, None, off))
             },
+            underline: (cx.env::<LinkLabelUnderline>() == LinkLabelUnderline::Inside).then_some(cx.tokens.stroke.thin),
         }
     }
 
@@ -257,6 +276,9 @@ impl Component for LabelLeaf {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.link {
+            access.role(crate::contract::Role::LINK);
+        }
         if let Some(words) = &self.words {
             access.name(Name::Text(words.clone()));
         }
@@ -348,13 +370,24 @@ impl Component for LabelLeaf {
             let name_ink = cx.resolve(&cx.style.name.color);
             let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).role(cx.style.name.role).color(name_ink));
             let colon_width = colon.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
-            let run = TextRun::new(cx.core.resolved.label).role(cx.style.name.role).color(name_ink);
+            let underline = cx.style.underline.filter(|_| self.link && !wrapped);
+            let named = if self.link && underline.is_none() {
+                TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()])
+            } else {
+                TextRun::new(cx.core.resolved.label)
+            };
+            let run = named.role(cx.style.name.role).color(name_ink);
             let run = if wrapped { run.wrap(Wrap::Wrap) } else { run.elide() };
             let name = draw.layout(&run, (rest.rect().width() - colon_width).max(0.0)).size();
             let (name_rect, after) = rest.take_start(name.x);
             let name_at =
                 if wrapped { Rect::from_min_size(egui::pos2(name_rect.min.x, middle - line / 2.0), name) } else { centred(name_rect, name.y) };
             draw.text(name_at, &run);
+            if let Some(width) = underline {
+                // egui's underline lies on the text box's bottom edge, which a rect shorter than the box would clip.
+                let y = name_at.bottom().min(cx.rect.bottom()) - width / 2.0;
+                draw.stroke(&PaintShape::Path(vec![egui::pos2(name_at.left(), y), egui::pos2(name_at.right(), y)]), StrokeWidth::Thin, name_ink);
+            }
             let after = match colon {
                 Some(run) => {
                     let (colon_rect, after) = after.take_start(colon_width);
@@ -395,18 +428,20 @@ impl Component for LabelLeaf {
 }
 
 /// The colon a beside label draws after its shown text in a form (`LabelScheme::Form`), unless that text ends in one:
-/// a text label's, and in a bar a glyph text's as well ("X:"). An inspector's labels draw none. The label's node and
-/// the control keep the name as given.
+/// a text label's, in a bar a glyph text's as well ("X:"), and under `GlyphColon::Form` a glyph caption's. An
+/// inspector's labels draw none. The label's node and the control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
-    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() != LabelScheme::Form {
+    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() == LabelScheme::Inspector {
         return None;
     }
     let text = match &input.side.kind {
         LabelKind::Text | LabelKind::Short(_) => env.view().resolve(input.side.kind.shown(input.text)),
-        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 => match glyph.resolved(env.view()) {
-            Glyph::Text(text) => text,
-            Glyph::Icon(_) => return None,
-        },
+        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 || (glyph.caption && env.values.get::<GlyphColon>() == GlyphColon::Form) => {
+            match glyph.resolved(env.view()) {
+                Glyph::Text(text) => text,
+                Glyph::Icon(_) => return None,
+            }
+        }
         _ => return None,
     };
     if text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {

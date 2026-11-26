@@ -12,7 +12,7 @@ use craft_ui::runtime::commands::Commands as _;
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Event, Key, Modifiers, Ui};
+use egui::{Event, Key, Modifiers, Ui, Vec2};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -59,6 +59,23 @@ fn keys_in_the_open_list_move_the_value_and_escape_puts_it_back() {
     fixture.settle();
     assert!(!list_open(&mut fixture), "Escape closes the list");
     assert_eq!(value(&mut fixture), 1, "and puts back the value from before the list opened");
+}
+
+/// The list that Escape closed is closed for its field's keys while it still fades out: the Enter that follows at once
+/// is the field's own and opens the list again, rather than choosing a row of the list that is leaving.
+#[trial]
+fn enter_on_the_field_right_after_escape_opens_the_list_again_during_its_exit_fade() {
+    let mut fixture = focused();
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(value(&mut fixture), 1, "Escape puts back the value from before the list opened");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Enter on the focused field opens the list again before the old one has faded out");
+    assert_eq!(value(&mut fixture), 1, "and picks no row of the list that was leaving");
 }
 
 #[trial]
@@ -296,6 +313,33 @@ fn the_wheel_steps_the_open_select_a_line_an_entry_and_commits_when_it_stops() {
     assert_eq!(steps.iter().filter(|step| **step == "commit").count(), 1, "the wheel's end commits the run once: {steps:?}");
     assert!(!steps.contains(&"cancel"), "and puts nothing back: {steps:?}");
     assert_eq!(*value.borrow(), 4);
+}
+
+/// The entry a long select holds.
+const HELD: u8 = 40;
+
+/// A select over sixty entries, holding `HELD`.
+fn long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries: Vec<Entry<u8>> = (0..60u8).map(|at| Entry::new(at, format!("Item {at}"))).collect();
+    Select::new("Pick", data.bind("value", HELD), &entries).show(ui).into()
+}
+
+#[trial]
+fn a_long_list_in_a_short_window_opens_on_the_roomier_side_with_the_pick_in_view() {
+    let mut fixture = Fixture::story(&Story::new("select_long", long));
+    fixture.room(Vec2::new(400.0, 240.0)).settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    let window = fixture.ctx().content_rect();
+    let list = fixture.by_role(Role::LIST_BOX).first().expect("Alt+Down opens the list").rect;
+    assert!(window.contains_rect(list), "the list {list:?} stays inside the window {window:?}");
+    let held = fixture.by_label(&format!("Item {HELD}")).expect("the held entry shows").rect;
+    assert!(list.expand(0.5).contains_rect(held), "the held entry {held:?} is in view in the list {list:?}");
+    fixture.key(Key::Space, Modifiers::NONE);
+    fixture.settle();
+    assert!(!list_open(&mut fixture), "Space on the lead picks and closes the list");
+    assert_eq!(*fixture.data().value("value", HELD), HELD, "the lead the list opened on is the held entry");
 }
 
 /// The pointer over a row of an open list moves the lead only: the held value stays the selected option in every

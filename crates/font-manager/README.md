@@ -10,7 +10,7 @@ Fonts tab; the standalone app
 | `filter` | always | Search over the index: family names ignoring case and accents, category, language (English name, autonym or id) and script |
 | `index` | always | The pinned built-in indexes (Google Fonts and Noto) compiled into [`craft-font-store`](../font-store/README.md) (`bundled`), each family's source (`source_label`: its name and whether it is curated), and the categories |
 | `installed` | always | The installed fonts [`craft-font-catalog`](../font-catalog/README.md) sees, grouped by family and source |
-| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`). `SuiteStore` is craft-font-store's store (native only), `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
+| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`), the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`), and a family's copies in the OS user font folder (`available_to_all_supported`, `is_available_to_all`, `not_yet_available`, `make_available`, `withdraw`) with its recorded choice (`available_to_all_choice`, `set_available_to_all_choice`, the default `craft_apps_only`, and `shares` for the two together). `SuiteStore` is craft-font-store's store (native only), `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown. What the preview pool (craft-font-store's `preview`) reads is the `PreviewStore` part |
 | `FontsPanel` | `ui` | The whole interface as one egui panel |
 | `glyphs` | `ui` | `GlyphsPanel`: the character grid of a face with categories, zoom and Recently Used; the app supplies the glyphs through `GlyphSource`, which also reports when it is ready and when its faces change. Sizes are the `glyphs.*` tokens |
 | `missing` | `ui` | `document_fonts`, `missing_font_warnings` and `MissingFontsDialog`: which fonts a document names are not installed, and a replacement for each |
@@ -28,14 +28,16 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   English name or its own, "Japanese · 日本語"), script, source, and installed or not; each option
   with its count.
 - **Family cards**, one per row: the name, style count, category and source on one line with the
-  card's state at its end (Install and Preview, Installed, a progress bar while downloading,
+  card's state at its end (Install, whose menu installs for all apps or for Craft apps only, and
+  Preview, Installed, a progress bar while downloading,
   Couldn't install with Retry, "Not curated" for a source the user added), and a large sample in
   the face below. The list is virtual: only the cards on screen are laid out, and their faces load
   as they come into view. The arrow keys step through the cards and Enter opens one.
 - **Sample toolbar**: a preset (a sentence in the language filtered by, or in the family's own
   script when it has no Latin; the alphabet; numerals), the sample text, and the size.
 - **Details sheet** over the list: every style in its own face with Install or Remove for each,
-  Install all and Remove all, the source, designer, licence, scripts and languages, and what a
+  Install all (with the same menu) and Remove all, whether the family is available to all apps
+  with the switch that changes it, the source, designer, licence, scripts and languages, and what a
   preview downloads.
 - **Installed**: system and font store fonts as the same cards, filtered by source. Only font
   store families can be removed; system fonts are removed with the system's own tools.
@@ -45,8 +47,8 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
 
 `FontsPanel` fills the `Ui` it is given and has no window, menu or interface fonts of its own; the
 craft-ui's theme gives it the colours and interface fonts. The faces it draws samples in come from
-craft-ui's document-face registry, which loads them a few per pass and evicts the ones off screen,
-without touching the host's fonts. Right-to-left interfaces mirror through the layout; sample text
+craft-ui's document-face registry, which loads them on the host's jobs, keeps the ones drawn lately
+up to a budget of font file bytes, and never touches the host's fonts. Right-to-left interfaces mirror through the layout; sample text
 keeps its own direction.
 
 The panel follows the `craft_host::Host` installed in the egui context (`Host::builder(..).install(ctx)`):

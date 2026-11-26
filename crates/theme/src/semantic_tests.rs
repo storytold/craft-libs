@@ -126,6 +126,7 @@ fn spec_pairs() -> Vec<(T, T, f64, f64)> {
         p.extend(TEXT_BGS.map(|bg| (fg, bg, 4.5, 7.0)));
     }
     p.extend([T::StateSelected, T::StateSelectedHover].map(|bg| (T::TextOnSelected, bg, 4.5, 7.0)));
+    p.push((T::TextOnInverse, T::SurfaceInverse, 4.5, 7.0));
     p.extend(CONTROL_BGS.map(|bg| (T::AccentText, bg, 4.5, 7.0)));
     p.push((T::AccentOnSoft, T::AccentSoft, 4.5, 7.0));
     p.extend([T::AccentSolid, T::AccentHover, T::AccentPressed].map(|bg| (T::TextOnAccent, bg, 4.5, 7.0)));

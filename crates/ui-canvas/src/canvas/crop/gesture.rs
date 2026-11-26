@@ -70,6 +70,10 @@ pub(super) struct Rules {
     pub image: bool,
     pub auto_center: bool,
     pub fills_uncovered: bool,
+    /// The smallest side a resize may leave, in document units: a step that would go under it keeps the last frame.
+    pub min_side: f64,
+    /// The quad the frame is bounded to: a step that would leave the frame outside it keeps the last frame.
+    pub area: Option<[Point; 4]>,
     /// An edge or corner drag, and a move, may take the frame past `bounds`, turned or not: the crop grows the canvas
     /// there, as in the reference application (a document crop, not one bounded by a placed picture's source).
     pub resize_grows: bool,
@@ -124,6 +128,11 @@ impl Rules {
                 } else {
                     at.resized(*part, by, hold, mods.alt)
                 };
+                // A step that would leave a side under the minimum keeps the last frame, as a step the bounds refuse
+                // does: the resize stops there instead of crossing it.
+                if !next.size_ok(self.min_side) {
+                    return Some(drag.last);
+                }
                 grows = self.resize_grows;
                 (next, true, self.ratio.is_some() || mods.shift)
             }
@@ -147,10 +156,11 @@ impl Rules {
         if !next.is_finite() {
             return None;
         }
-        match self.bounds.filter(|_| !grows) {
-            Some(bounds) => next.within(bounds, resizing, held).or(Some(drag.last)),
+        let kept = match self.bounds.filter(|_| !grows) {
+            Some(bounds) => next.within(bounds, resizing, held),
             None => Some(next),
-        }
+        };
+        kept.filter(|kept| self.area.is_none_or(|area| inside_quad(kept, &area))).or(Some(drag.last))
     }
 
     /// The screen point of `pos` after the canvas's snapping: an end of the Straighten line.
@@ -201,6 +211,22 @@ impl Rules {
         };
         if by.x.is_finite() && by.y.is_finite() { (to + by * travel_per_unit, lines) } else { (to, Vec::new()) }
     }
+}
+
+/// How far (a cross product, in document units squared) a corner may lie past a quad's edge and still count as inside
+/// it: rounding, not a visible gap.
+const QUAD_TOLERANCE: f64 = 1e-6;
+
+/// Whether every corner of `frame` lies in the convex `quad`, whichever way the quad winds. A quad with no area bounds
+/// nothing.
+fn inside_quad(frame: &CropBox, quad: &[Point; 4]) -> bool {
+    let side = |a: Point, b: Point, p: Point| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let winding = side(quad[0], quad[1], quad[2]);
+    if !winding.is_finite() || winding == 0.0 {
+        return true;
+    }
+    let sign = winding.signum();
+    frame.corners().iter().all(|p| (0..4).all(|i| side(quad[i], quad[(i + 1) % 4], *p) * sign >= -QUAD_TOLERANCE))
 }
 
 /// The move that slides corner `point` along direction `along` (its diagonal) onto the nearest of `lines` it crosses

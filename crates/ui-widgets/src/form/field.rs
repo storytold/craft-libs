@@ -50,8 +50,7 @@ pub struct Field {
     common: Common,
     #[container]
     props: ContainerProps,
-    /// Shows `help` under the control while the control has no validity message.
-    #[prop]
+    /// Shown under the control while the control has no validity message (`Field::help`).
     help: Option<Help>,
     /// The layout `Field::layout` set, which `Field::side` keeps.
     layout: Option<FieldLayout>,
@@ -78,6 +77,16 @@ impl Field {
     pub fn layout(mut self, layout: FieldLayout) -> Self {
         self.layout = Some(layout);
         self.props.label = self.props.label.take().map(|side| side.layout(layout));
+        self
+    }
+
+    /// Shows `help` under the control while the control has no validity message. Its text is the help line of the
+    /// field's label scope (`ContainerProps::help`), so it joins the control's description.
+    #[must_use]
+    pub fn help(mut self, help: Help) -> Self {
+        let (Help::Text(text) | Help::Status(_, text)) = &help;
+        self.props = self.props.help(text.clone());
+        self.help = Some(help);
         self
     }
 

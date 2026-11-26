@@ -82,17 +82,21 @@ pub struct CanvasPanel<'a> {
     /// Documents are opening: the tab strip shows even when the host hides the tabs, in normal mode.
     #[prop]
     opening: bool,
+    /// The tab strip shows large tabs (`size.bar.tab_large` high, not `size.bar.tab`): give the strip's
+    /// `DocumentTabs::large` the same value.
+    #[prop]
+    large_tabs: bool,
 }
 
 impl<'a> CanvasPanel<'a> {
     /// A panel with no tab strip.
     pub fn new() -> Self {
-        CanvasPanel { tabs: None, opening: false }
+        CanvasPanel { tabs: None, opening: false, large_tabs: false }
     }
 
     /// Lays the panel out in `ui`, the body of the dock's canvas panel, with `document` in the area left.
     pub fn show(self, ui: &mut Ui, mut document: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> CanvasPanelOutput {
-        let CanvasPanel { tabs, opening } = self;
+        let CanvasPanel { tabs, opening, large_tabs } = self;
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
         let shell = env.get::<ShellEntry>().0;
@@ -101,8 +105,10 @@ impl<'a> CanvasPanel<'a> {
 
         let mut tabs_rect = None;
         if let (Some(mut add), true) = (tabs.map(|RegionBody(add)| add), tabs_shown) {
-            // The document tabs sit on the window's background, as tab strips do.
-            let out = ShellRegion::pane(ShellPane::new("document_tabs").edge(PaneEdge::Top))
+            // The document tabs sit on the window's background, as tab strips do, as high as their tabs.
+            let bar = &env.tokens.size.bar;
+            let height = if large_tabs { bar.tab_large } else { bar.tab };
+            let out = ShellRegion::pane(ShellPane::new("document_tabs").edge(PaneEdge::Top).extent(height))
                 .surface(SurfaceKind::Background)
                 .id_salt("document_tabs")
                 .label(words.document_tabs.clone())

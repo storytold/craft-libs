@@ -1,6 +1,6 @@
 //! Stories of `Select`.
 
-use super::Select;
+use super::{Select, SelectLook};
 use crate::contract::LabelScheme;
 use crate::contract::{Bind, Entry, Props, Role, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::form::{Field, FieldGroup};
@@ -88,6 +88,13 @@ fn select_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Select::new("Blend mode", data.bind("first", 0u8), &entries).show(ui).into()
 }
 
+/// A filled select (`SelectLook::Filled`, VectorCraft's status bar): `surface.control` with no edge until it has focus.
+#[story(Select<'static, u8>, covers = [], drive = Drive::Never)]
+fn select_filled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = modes();
+    Select::new("Blend mode", data.bind("filled", 0u8), &entries).look(SelectLook::Filled).show(ui).into()
+}
+
 #[story(Select<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn select_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
@@ -119,6 +126,19 @@ fn select_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn select_searchable_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = resampling();
     Select::new("Resampling", data.bind("searchable_open", 2u8), &entries).searchable().show(ui).into()
+}
+
+/// Entries that say what they do: an enabled entry's description is its row's tooltip and accessible description,
+/// and a disabled entry shows its reason in its place.
+#[story(Select<'static, u8>, covers = [], drive = Drive::Custom(open_listbox))]
+fn select_described_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = [
+        Entry::new(0u8, "Fast").description("Recognises printed text quickly; handwriting is skipped"),
+        Entry::new(1, "Accurate").description("Reads each page twice and keeps the likelier text"),
+        Entry::new(2, "Handwriting").description("Reads handwritten notes as well as print").disabled_reason("No handwriting model is installed"),
+        Entry::new(3, "Plain"),
+    ];
+    Select::new("Engine", Bind::bound(data.value("engine", 0u8)), &entries).show(ui).into()
 }
 
 #[story(Select<'static, u8>, covers = [], disabled_text = "Pick a layer first")]

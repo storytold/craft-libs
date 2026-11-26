@@ -4,7 +4,7 @@
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
 use craft_ui::patterns::form_dialogs::{
-    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit,
+    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLicense, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit,
 };
 use craft_ui::testing::{Fixture, access, trial};
 use egui::Vec2;
@@ -25,6 +25,21 @@ static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
         52,
     )
 });
+
+#[trial]
+fn icon_links_leave_room_for_their_visible_labels() {
+    let info = AboutInfo::new("App", "An app", "1").links([
+        AboutLink::new("A much longer community link", "https://example.org").icon(craft_behavior::IconId::new("globe")),
+        AboutLink::new("Go", "https://example.org").icon(craft_behavior::IconId::new("globe")),
+    ]);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&info, &CREDITS).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let long = fixture.by_label("A much longer community link").expect("long link").rect;
+    let short = fixture.by_label("Go").expect("short link").rect;
+    assert!(long.width() > short.width(), "the icon link must show its label");
+}
 
 #[trial]
 fn a_click_on_a_name_in_the_grab_bag_reports_its_profile() {
@@ -161,6 +176,47 @@ fn the_listed_about_shows_tab_faces() {
     assert!(listed > 3.0, "a listed tab is a face with its title set in: {listed}");
 }
 
+/// The names of the grab bag, in the order it shows them.
+fn grab_bag(fixture: &Fixture) -> Vec<String> {
+    fixture.by_role(Role::LINK).iter().filter_map(|link| fixture.tree().name_of(link.node).map(str::to_owned)).collect()
+}
+
+/// Picks `entry` from the Sort list.
+fn pick_sort(fixture: &mut Fixture, entry: &str) {
+    let sort = fixture.by_label("Sort").expect("the Sort list");
+    fixture.click(&sort).idle(4);
+    let pick = fixture.by_label(entry).unwrap_or_else(|| panic!("the Sort list offers {entry}"));
+    fixture.click(&pick).idle(10);
+}
+
+// The name order ignores the `@` of a username and the case, so display names and usernames interleave; someone
+// with no commit date sorts after everyone with one, by first and by last commit. A slip reorders the credits.
+#[trial]
+fn contributors_sort_by_name_without_at_or_case_and_undated_last() {
+    let credits = Credits::new(
+        vec![
+            Contributor::new("carl").counts(0, 9).active("2025-01-01T10:00:00Z", "2026-01-01T10:00:00Z"),
+            Contributor::new("zed").display_name("Bea").counts(1, 0),
+            Contributor::new("alice").counts(0, 3).active("2025-03-01T10:00:00Z", "2025-04-01T10:00:00Z"),
+        ],
+        Vec::new(),
+        12,
+    );
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&INFO, &credits).tab(Bind::given(AboutTab::Contributors)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    assert_eq!(grab_bag(&fixture), ["@carl", "@alice", "@zed"], "oldest first commit first, the undated last");
+
+    pick_sort(&mut fixture, "Last commit");
+    assert_eq!(grab_bag(&fixture), ["@alice", "@carl", "@zed"], "oldest last commit first, the undated last");
+
+    let display = fixture.by_label("Display name").expect("Show offers Display name");
+    fixture.click(&display).idle(10);
+    pick_sort(&mut fixture, "Name (A\u{2013}Z)");
+    assert_eq!(grab_bag(&fixture), ["@alice", "Bea", "@carl"], "names compare without the `@` and the case");
+}
+
 #[trial]
 fn about_tab_is_a_field() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
@@ -224,6 +280,69 @@ fn an_app_tab_shows_after_models_and_is_a_tab_field_value() {
 
     let refused = host.borrow_mut().set_json_field(&ctx, id, "tab", json!("languages"));
     assert!(refused.is_err(), "a name that is no tab's is refused");
+}
+
+/// The tab titles in the strip, in order.
+fn tab_titles(fixture: &Fixture) -> Vec<String> {
+    fixture.by_role(Role::TAB).iter().filter_map(|tab| access::name(fixture.tree(), tab.node).map(str::to_owned)).collect()
+}
+
+/// Whether a painted run of text holds `text`.
+fn painted(fixture: &Fixture, text: &str) -> bool {
+    fixture.texts().iter().any(|painted| painted.text.contains(text))
+}
+
+/// Guards the Licenses tab: it follows Models and comes before an app tab, it opens on the first license's text, and
+/// the License picker shows the license picked in it in place of the first.
+#[trial]
+fn the_licenses_tab_follows_models_and_shows_the_picked_license() {
+    let licenses = [AboutLicense::new("MIT License", "Permission is hereby granted"), AboutLicense::new("Font License", "Reserved Font Name")];
+    let mut app = [AboutAppTab::new("languageData", "Languages", |_| {})];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&INFO, &CREDITS).tab(Bind::given(AboutTab::Licenses)).licenses(&licenses).app_tabs(&mut app).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    assert_eq!(tab_titles(&fixture), ["About", "Contributors", "Models", "Licenses", "Languages"], "Licenses follows Models");
+    assert!(painted(&fixture, "Permission is hereby granted"), "the tab opens on the first license");
+    assert!(!painted(&fixture, "Reserved Font Name"), "one license shows at a time");
+
+    let picker =
+        fixture.by_role(Role::COMBO_BOX).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("License")).expect("the picker");
+    fixture.click(&picker).idle(4);
+    let font = fixture.by_label("Font License").expect("the picker lists the second license");
+    fixture.click(&font).idle(10);
+    assert!(painted(&fixture, "Reserved Font Name"), "the picked license shows");
+    assert!(!painted(&fixture, "Permission is hereby granted"), "in place of the first");
+}
+
+/// Guards the Licenses tab's absence: without licenses the strip has no Licenses tab and the hosted dialog's `tab`
+/// field refuses its name; with them `tab` takes the name, shows the text without a picker for one license, and lists
+/// it back.
+#[trial]
+fn the_licenses_tab_shows_only_with_licenses_and_is_a_tab_field_value() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0");
+    let id = host.borrow_mut().open(HostedAbout::new(info.clone(), CREDITS.clone()));
+    fixture.idle(10);
+    assert!(!tab_titles(&fixture).iter().any(|title| title == "Licenses"), "no Licenses tab without licenses");
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().set_json_field(&ctx, id, "tab", json!("licenses")).is_err(), "`tab` refuses Licenses without licenses");
+    host.borrow_mut().close_by_id(id);
+    fixture.idle(4);
+
+    let licensed = HostedAbout::new(info, CREDITS.clone()).licenses([AboutLicense::new("MIT License", "Permission is hereby granted")]);
+    let id = host.borrow_mut().open(licensed);
+    fixture.idle(10);
+    assert!(tab_titles(&fixture).iter().any(|title| title == "Licenses"), "the Licenses tab shows with licenses");
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("licenses")).expect("`tab` takes the Licenses tab's name");
+    fixture.idle(4);
+    assert!(painted(&fixture, "Permission is hereby granted"), "setting `tab` shows the license");
+    assert!(fixture.by_role(Role::COMBO_BOX).is_empty(), "one license needs no picker");
+    let fields = host.borrow().get::<HostedAbout>().and_then(|about| about.json_fields());
+    assert_eq!(fields, Some(json!({ "tab": "licenses" })));
 }
 
 /// The contributors of the order trial: a capitalised login with a display name, an undated (pull request only)

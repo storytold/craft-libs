@@ -2,7 +2,7 @@
 //! reopens with its last-used values, and Reset restores the opening ones.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,10 +27,14 @@ pub enum FieldValue {
     Point([f64; 2]),
     /// A row-major grid of integers (Custom filter's 5×5 kernel).
     Grid(Vec<i64>),
+    /// sRGB components and opacity in 0..=1, as a color parameter with opacity is kept (`#rrggbbaa` is these times
+    /// 255). After `Grid` so an untagged read keeps four integers a grid; a remembering dialog reads four integers
+    /// under a color row with opacity back as this.
+    Rgba([f32; 4]),
     /// A list of values of any kind: Color Table's colours, Replace Color's sampled points. Last
-    /// so an untagged read keeps the fixed-shape variants above; a list of integers or of two or
-    /// three numbers reads back as `Grid`, `Point` or `Color`, which [`DialogFields::list`] turns
-    /// back into the list.
+    /// so an untagged read keeps the fixed-shape variants above; a list of integers or of two,
+    /// three or four numbers reads back as `Grid`, `Point`, `Color` or `Rgba`, which
+    /// [`DialogFields::list`] turns back into the list.
     List(Vec<FieldValue>),
     /// Any JSON value: what a [`ParamKind::Custom`](super::ParamKind::Custom) row keeps under its key when its value is
     /// structured (Blur Gallery's pins, `[{x, y, blur, …}]`). Last so an untagged read keeps the fixed-shape variants
@@ -84,6 +88,15 @@ pub struct DialogFields {
     values: BTreeMap<String, FieldValue>,
     #[serde(skip)]
     opening: BTreeMap<String, FieldValue>,
+    /// The keys marked mixed ([`DialogFields::set_mixed`]).
+    #[serde(skip)]
+    mixed: BTreeSet<String>,
+    /// The marks the opening snapshot kept, which Reset restores.
+    #[serde(skip)]
+    opening_mixed: BTreeSet<String>,
+    /// The keys of the tabs a reset button reset ([`DialogFields::mark_reset`]).
+    #[serde(skip)]
+    reset: BTreeSet<String>,
 }
 
 /// Equal when the values are; the opening snapshot is bookkeeping, not content.
@@ -101,12 +114,33 @@ impl DialogFields {
 
     /// Builds from `(key, value)` pairs.
     pub fn from_pairs(pairs: impl IntoIterator<Item = (impl Into<String>, impl Into<FieldValue>)>) -> Self {
-        Self { values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(), opening: BTreeMap::new() }
+        Self {
+            values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            opening: BTreeMap::new(),
+            mixed: BTreeSet::new(),
+            opening_mixed: BTreeSet::new(),
+            reset: BTreeSet::new(),
+        }
     }
 
-    /// Sets `key` to `value`, replacing any earlier value.
+    /// Sets `key` to `value`, replacing any earlier value. An edit answers a mixed mark, so it clears it.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<FieldValue>) {
-        self.values.insert(key.into(), value.into());
+        let key = key.into();
+        self.mixed.remove(&key);
+        self.values.insert(key, value.into());
+    }
+
+    /// Marks `key` as differing over what the dialog or panel edits: its value is removed and its row shows blank. The
+    /// marks are not serialized, so a mixed key is absent from `json_fields` and every answer.
+    pub fn set_mixed(&mut self, key: impl Into<String>) {
+        let key = key.into();
+        self.values.remove(&key);
+        self.mixed.insert(key);
+    }
+
+    /// Whether `key` is marked mixed.
+    pub fn is_mixed(&self, key: &str) -> bool {
+        self.mixed.contains(key)
     }
 
     /// The value under `key`, if any.
@@ -119,8 +153,9 @@ impl DialogFields {
         self.values.get_mut(key)
     }
 
-    /// Removes `key` and returns its value.
+    /// Removes `key` and returns its value; the key is no longer marked mixed.
     pub fn remove(&mut self, key: &str) -> Option<FieldValue> {
+        self.mixed.remove(key);
         self.values.remove(key)
     }
 
@@ -179,6 +214,20 @@ impl DialogFields {
         }
     }
 
+    /// `Rgba` as RGB and opacity in 0–1, a `Color` as opaque, or a `Grid` of four cells (the shape an untagged read
+    /// gives a color stored as four integers, `[1, 0, 0, 1]`), else `None`.
+    pub fn rgba(&self, key: &str) -> Option<[f32; 4]> {
+        match self.values.get(key)? {
+            FieldValue::Rgba(c) => Some(*c),
+            FieldValue::Color([r, g, b]) => Some([*r, *g, *b, 1.0]),
+            FieldValue::Grid(cells) => match cells[..] {
+                [r, g, b, a] => Some([r as f32, g as f32, b as f32, a as f32]),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// `Point` as `[x, y]`, else `None`.
     pub fn point(&self, key: &str) -> Option<[f64; 2]> {
         match self.values.get(key)? {
@@ -195,7 +244,7 @@ impl DialogFields {
         }
     }
 
-    /// A `List`, or a `Grid`, `Point` or `Color` as the list of its numbers (the shapes an
+    /// A `List`, or a `Grid`, `Point`, `Color` or `Rgba` as the list of its numbers (the shapes an
     /// untagged read gives a stored list of numbers, and an empty list), or a `Json` array read as
     /// those values. The key may have no parameter row: a host keeps its own data under it (a key
     /// without a row is not remembered).
@@ -205,6 +254,7 @@ impl DialogFields {
             FieldValue::Grid(cells) => Cow::Owned(cells.iter().map(|c| FieldValue::Int(*c)).collect()),
             FieldValue::Point(p) => Cow::Owned(p.iter().map(|n| FieldValue::Number(*n)).collect()),
             FieldValue::Color(c) => Cow::Owned(c.iter().map(|n| FieldValue::Number(f64::from(*n))).collect()),
+            FieldValue::Rgba(c) => Cow::Owned(c.iter().map(|n| FieldValue::Number(f64::from(*n))).collect()),
             FieldValue::Json(serde_json::Value::Array(items)) => {
                 Cow::Owned(items.iter().map(|item| serde_json::from_value(item.clone())).collect::<Result<_, _>>().ok()?)
             }
@@ -227,10 +277,22 @@ impl DialogFields {
         self.values.is_empty()
     }
 
+    /// Marks the tab `key` as reset by a reset button.
+    pub fn mark_reset(&mut self, key: impl Into<String>) {
+        self.reset.insert(key.into());
+    }
+
+    /// Whether a reset button reset the tab `key`; `snapshot` and `reset` clear the marks.
+    pub fn was_reset(&self, key: &str) -> bool {
+        self.reset.contains(key)
+    }
+
     /// Records the current values as the opening ones. Dialogs call it on open; a host that
     /// changes a value from outside the dialog (a script) does not move the snapshot.
     pub fn snapshot(&mut self) {
         self.opening = self.values.clone();
+        self.opening_mixed = self.mixed.clone();
+        self.reset.clear();
     }
 
     /// Restores the snapshot. Keys added since the snapshot are kept; keys removed since come
@@ -240,9 +302,17 @@ impl DialogFields {
         for (key, value) in &self.opening {
             if self.values.get(key) != Some(value) {
                 self.values.insert(key.clone(), value.clone());
+                self.mixed.remove(key);
                 changed = true;
             }
         }
+        for key in &self.opening_mixed {
+            if self.mixed.insert(key.clone()) {
+                self.values.remove(key);
+                changed = true;
+            }
+        }
+        self.reset.clear();
         changed
     }
 

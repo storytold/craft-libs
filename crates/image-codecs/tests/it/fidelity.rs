@@ -222,9 +222,16 @@ fn every_warning_has_a_message() {
 /// The warnings must agree with what actually comes back from the file.
 #[test]
 fn warnings_match_actual_roundtrip_behaviour() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th format, layout and sample type.
+    let step = craft_media_testkit::hostile::divisor();
+    let mut index = 0usize;
     for f in rw_formats() {
         for l in ChannelLayout::ALL {
             for s in SampleType::ALL {
+                index += 1;
+                if !(index - 1).is_multiple_of(step) {
+                    continue;
+                }
                 let img = test_image(l, s);
                 let w = warns(&img, f);
                 let back = decode(&encode(&img, f, &EncodeOptions::default()).unwrap()).unwrap();

@@ -33,7 +33,7 @@
 //!         Some(Outcome::Import { formats, .. }) => self.pick_import_file(formats),
 //!         Some(Outcome::Export { name, json, .. }) => self.save_file(&name, json),
 //!         Some(Outcome::Summary { name, html, .. }) => self.show_summary(&name, html),
-//!         Some(Outcome::Remembered(answers)) => self.settings.import_answers.extend(answers),
+//!         Some(Outcome::Remembered { targets, codes }) => self.settings.import_answers.extend(targets, codes),
 //!         _ => {}
 //!     }
 //!     if !state.is_open() {
@@ -53,7 +53,7 @@
 //! | `Import { formats }` | Opens a file of one of the formats, then calls [`ShortcutsDialog::import_json`] (craft-keymap JSON, [`JSON_FORMAT`]) or reads it into a `ForeignSet` and calls [`ShortcutsDialog::review_import`]. |
 //! | `Export { name, json }`, `ExportAs { format, name, keymap }` | Writes the set where the user chooses (a download on the web). |
 //! | `Summary { name, html, text }` | Shows, saves or prints the summary. |
-//! | `Remembered(answers)` | Keeps the user's import answers for the next import (`ImportOptions::remembered`). |
+//! | `Remembered { targets, codes }` | Keeps the user's import answers for the next import (`ImportOptions::remembered` and `ImportOptions::codes`). |
 //!
 //! The crate never opens a file dialog or touches the file system. When the app's own step fails
 //! while the dialog is open (a file it cannot read), [`DialogState::show_error`] shows the
@@ -78,6 +78,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use craft_behavior::edit_history::Step;
 use craft_keymap::{Binding, Builtins, CommandDef, CommandRef, ForeignSet, ImportOptions, Keymap, ProfileError, Profiles, Trigger};
@@ -119,7 +120,7 @@ mod words;
 
 pub use codec::ChordCodec;
 pub use import_offer::{ImportOffer, ImportOfferWords, NoOffer, OfferAnswer, OfferRecord};
-pub use pages::{DialogSnapshot, DialogTab};
+pub use pages::{DialogSnapshot, DialogTab, ReviewCode, ReviewEntry, ReviewSnapshot};
 pub use state::DialogState;
 pub use words::{ShortcutWords, kys_error_text, trigger_text};
 
@@ -173,8 +174,14 @@ pub enum Outcome {
         /// The summary as plain text.
         text: String,
     },
-    /// Import answers the user gave (item → command), for the app to keep for later imports.
-    Remembered(BTreeMap<String, CommandRef>),
+    /// Import answers the user gave, for the app to keep for later imports.
+    #[non_exhaustive]
+    Remembered {
+        /// The target picked by remember key (`None`: No equivalent), feeding `ImportOptions::remembered`.
+        targets: BTreeMap<String, Option<CommandRef>>,
+        /// The answer for each undecided code by `key:N` / `mods:N`, feeding `ImportOptions::codes`.
+        codes: BTreeMap<String, Option<String>>,
+    },
 }
 
 /// What happens when a recorded chord is held by other commands.
@@ -280,6 +287,10 @@ pub struct Options {
     /// The window title [`ShortcutsDialog::show`] draws and the summary's heading, already translated.
     /// `None`: the dialog's own "Keyboard Shortcuts".
     pub title: Option<String>,
+    /// `None`: an editable dialog opens at the room the window gives it, and a read-only one at a moderate fixed size.
+    /// Otherwise the dialog opens at this size, in points, until the user resizes it; a size that is not finite is
+    /// ignored.
+    pub size: Option<egui::Vec2>,
     /// true; false shows the table read-only with Close and Summarize.
     pub editable: bool,
     /// The name, already translated, that edits of a built-in set are saved under. `None`: the dialog's own
@@ -293,7 +304,7 @@ pub struct Options {
     pub double_press: bool,
     /// false: Backspace or Delete without modifiers removes the binding being recorded over.
     pub backspace_clears: bool,
-    /// false: Enter when idle is OK.
+    /// false: Enter closes nothing; true: Enter when idle is OK.
     pub enter_is_ok: bool,
     /// false: rows sort by translated label instead of catalog order.
     pub sort_by_label: bool,
@@ -301,6 +312,10 @@ pub struct Options {
     pub area_tabs: bool,
     /// The app's own Show entries.
     pub areas: Vec<Area>,
+    /// false: Show lists All Commands, each menu, Tools, each panel and Other before the app's own
+    /// [`areas`](Self::areas); true: it lists only the app's own entries (and Fixed Keys), and the
+    /// dialog opens on the first of them.
+    pub own_areas: bool,
     /// `None`: every catalog entry is listed. Otherwise the table, its Show entries and search
     /// list only the entries it returns true for; the others keep their bindings and still count
     /// in conflicts.
@@ -326,6 +341,7 @@ impl Default for Options {
     fn default() -> Options {
         Options {
             title: None,
+            size: None,
             editable: true,
             custom_set_name: None,
             conflicts: ConflictMode::Ask,
@@ -336,6 +352,7 @@ impl Default for Options {
             sort_by_label: false,
             area_tabs: false,
             areas: Vec::new(),
+            own_areas: false,
             visible: None,
             keyboard: false,
             fixed: Vec::new(),
@@ -378,6 +395,25 @@ impl craft_ui::contract::Outcome for ShortcutsOutput {
     }
 }
 
+/// The Hold Shortcuts setting the dialog shows and edits.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HoldSetting {
+    /// Whether hold shortcuts are on.
+    pub on: bool,
+    /// The delay, in seconds, before a held key counts as a hold.
+    pub delay: f64,
+    /// The delays the field accepts.
+    pub range: RangeInclusive<f64>,
+}
+
+impl HoldSetting {
+    /// Hold shortcuts `on`, holding after `delay` seconds, with the field accepting `range`.
+    pub fn new(on: bool, delay: f64, range: RangeInclusive<f64>) -> Self {
+        HoldSetting { on, delay, range }
+    }
+}
+
 /// The dialog for one pass: what it edits, borrowed, and how it behaves.
 #[must_use = "show the dialog with `show`"]
 #[derive(Pattern)]
@@ -386,12 +422,20 @@ pub struct ShortcutsDialog<'a> {
     sets: Option<(&'a mut Profiles, &'a Builtins<'a>)>,
     options: Option<&'a Options>,
     tabs: Option<Box<dyn pages::TabSet + 'a>>,
+    holds: Option<&'a mut HoldSetting>,
 }
 
 impl<'a> ShortcutsDialog<'a> {
+    /// Shows the Hold Shortcuts switch, its delay and the explanation, and a Hold column recorded like the
+    /// shortcut column. Cancel restores the setting; the app saves it on [`Outcome::Ok`].
+    pub fn holds(mut self, holds: &'a mut HoldSetting) -> Self {
+        self.holds = Some(holds);
+        self
+    }
+
     /// A dialog editing `keymap`; without further builder calls it has no sets and default options.
     pub fn new(keymap: &'a mut Keymap) -> Self {
-        ShortcutsDialog { keymap, sets: None, options: None, tabs: None }
+        ShortcutsDialog { keymap, sets: None, options: None, tabs: None, holds: None }
     }
 
     /// Shows and edits named sets.
@@ -465,7 +509,8 @@ impl<'a> ShortcutsDialog<'a> {
                 &fallback
             }
         };
-        let mut env = Env { keymap: self.keymap, sets: self.sets, options, tabs: self.tabs.as_deref_mut().map(pages::shorten), text: say };
+        let mut env =
+            Env { keymap: self.keymap, sets: self.sets, options, tabs: self.tabs.as_deref_mut().map(pages::shorten), text: say, holds: self.holds };
         f(&mut env)
     }
 
@@ -511,6 +556,11 @@ impl<'a> ShortcutsDialog<'a> {
         });
     }
 }
+
+/// The width a read-only shortcuts dialog opens at, in points.
+const READ_ONLY_WIDTH: f32 = 560.0;
+/// The height a read-only shortcuts dialog opens at, in points.
+const READ_ONLY_HEIGHT: f32 = 480.0;
 
 /// What a footer button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -575,9 +625,18 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
     let enter = env.options.enter_is_ok && !state.modal() && !state.is_recording();
     let title = env.title();
     let mut open = true;
+    // A read-only reference opens at a fixed, moderate height (production's key list scrolls inside it), not at the
+    // window's; the user's own resize is still remembered.
+    let reference = !env.options.editable;
+    let asked = env.options.size.filter(|size| size.is_finite());
+    let size = asked.or(reference.then_some(egui::vec2(READ_ONLY_WIDTH, READ_ONLY_HEIGHT)));
     let session = RefCell::new(Session { env, state });
     let shown = Dialog::new(title)
         .resizable(true)
+        .overlay(|overlay| match size {
+            Some(size) => overlay.size(size),
+            None => overlay,
+        })
         .remember(SaveKey::new("craft_menu.shortcuts"))
         .outer_gesture(true)
         .collection_body()

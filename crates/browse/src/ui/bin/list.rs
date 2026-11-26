@@ -179,7 +179,7 @@ where
     }
     for event in out.events {
         match event {
-            CollectionEvent::Selection(change) => events.push(BinEvent::Selection(change)),
+            CollectionEvent::Selection { change, .. } => events.push(BinEvent::Selection(change)),
             CollectionEvent::Activate(key) => events.push(open_event(model, key, mods.cmd, mods.shift || mods.alt)),
             CollectionEvent::ContextMenu(request) => events.push(BinEvent::ContextMenu(request)),
             CollectionEvent::Delete(keys) => events.push(BinEvent::Remove(keys)),

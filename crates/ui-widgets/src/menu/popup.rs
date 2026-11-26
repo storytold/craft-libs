@@ -93,6 +93,57 @@ pub fn layer(submenu: bool) -> Overlay {
     base.dismiss(Dismiss::new().outside(Outside::Absorb).on_activate(true)).focus(FocusPolicy::MENU.initial(Initial::Default))
 }
 
+/// A row of a menu that picks a caller's value: an entry, or a submenu of rows.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum MenuRow<T> {
+    /// An entry, shown as [`entry_rows`] shows it.
+    Entry(Entry<T>),
+    /// A submenu row of the label that shows `rows`, recursively; a submenu with no enabled row is disabled.
+    Submenu(Label, Vec<MenuRow<T>>),
+}
+
+impl<T> From<Entry<T>> for MenuRow<T> {
+    fn from(entry: Entry<T>) -> Self {
+        MenuRow::Entry(entry)
+    }
+}
+
+/// Shows `rows` as `entry_rows` shows entries, a submenu as `Menu::submenu_row_enabled`, and returns the value picked at
+/// any depth.
+pub fn menu_rows<T: Clone>(ui: &mut Ui, rows: &[MenuRow<T>]) -> Option<T> {
+    let mut picked = None;
+    for row in rows {
+        match row {
+            MenuRow::Entry(entry) => {
+                if entry_rows(ui, std::slice::from_ref(entry)).is_some() {
+                    picked = entry.value().cloned();
+                }
+            }
+            MenuRow::Submenu(label, inner) => {
+                let mut chosen = None;
+                Menu::submenu_row_enabled(ui, label.clone(), has_enabled(inner), |ui, _| {
+                    if let Some(value) = menu_rows(ui, inner) {
+                        chosen = Some(value);
+                    }
+                });
+                if chosen.is_some() {
+                    picked = chosen;
+                }
+            }
+        }
+    }
+    picked
+}
+
+/// Whether any row of `rows`, at any depth, is an enabled entry.
+fn has_enabled<T>(rows: &[MenuRow<T>]) -> bool {
+    rows.iter().any(|row| match row {
+        MenuRow::Entry(entry) => entry.is_enabled() && !entry.is_separator() && !entry.is_heading(),
+        MenuRow::Submenu(_, inner) => has_enabled(inner),
+    })
+}
+
 /// Shows one row per entry, a caption for a heading, a rule for a separator, and returns the index of the entry that
 /// ran. In a value menu
 /// ([`Menu::values`]) every row is a radio item and the checked entry carries the mark; elsewhere a checked entry
@@ -244,7 +295,8 @@ impl<'a> Menu<'a> {
     }
 
     /// A context menu named `label`, hanging from where the pointer was when it opened, with `opener` getting the
-    /// focus back when it closes by key.
+    /// focus back when it closes by key. An item's menu hangs from its collection's response and shows while the
+    /// collection reports the item's request (`CollectionResponse::menu`), whose key its rows act on.
     pub fn context(label: impl Into<Label>, opener: &Response) -> Self {
         let mut menu = Menu::new(label);
         menu.opener = Some(opener.id);
@@ -285,8 +337,24 @@ impl<'a> Menu<'a> {
     /// [`submenu_row`](Menu::submenu_row) with `enabled`: a row with it false draws disabled and does not open (a
     /// submenu none of whose rows can run).
     pub fn submenu_row_enabled(ui: &mut Ui, label: impl Into<Label>, enabled: bool, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> MenuItemOutput {
+        Menu::submenu_row_lettered(ui, label, enabled, None, body)
+    }
+
+    /// [`submenu_row_enabled`](Menu::submenu_row_enabled) whose row takes `mnemonic` in place of the level's pick
+    /// ([`MenuItem::mnemonic`]).
+    pub fn submenu_row_lettered(
+        ui: &mut Ui,
+        label: impl Into<Label>,
+        enabled: bool,
+        mnemonic: Option<char>,
+        body: impl FnMut(&mut Ui, &mut BodyCx<'_>),
+    ) -> MenuItemOutput {
         let label = label.into();
-        let head = MenuItem::submenu(label.clone()).enabled(enabled).show(ui);
+        let mut head = MenuItem::submenu(label.clone()).enabled(enabled);
+        if let Some(letter) = mnemonic {
+            head = head.mnemonic(letter);
+        }
+        let head = head.show(ui);
         let mut open = head.submenu_open;
         let show = |ui: &mut Ui| {
             Menu::submenu(label, &head.response)

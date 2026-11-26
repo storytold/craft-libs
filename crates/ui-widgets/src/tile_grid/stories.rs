@@ -1,20 +1,36 @@
 //! Stories of `Tile` and `ThumbnailSlider`.
 
 use super::{
-    BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, ThumbnailSlider, Tile, TileBadge, TileFlag, TileMark, TilePartEvent, TileStatus, TileZoom,
+    BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, CardText, StackLook, ThumbnailSlider, Tile, TileBadge, TileFlag, TileMark, TilePartEvent,
+    TileStatus, TileZoom,
 };
 use crate::contract::{Props as _, Show as _, Validity};
 use crate::list::{ThumbAspect, ToggleState};
 use crate::runtime::env::Message;
+use crate::style::DataColor;
 use crate::testing::pictures::StoryPictures;
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
 use craft_behavior::{IconId, Mixed};
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
-use egui::Ui;
+use egui::{Color32, Ui};
 
 const CAP: f64 = 4.0;
 const ZOOM_RANGE: TileZoom = TileZoom::bounded(0.5, 4.0, 0.25, 1.0);
+
+/// The hover actions of the tile and grid action stories, in the order the tiles add them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
+#[command(prefix = "tileStory", story)]
+pub(super) enum TileStoryCommand {
+    #[command(label = "Rotate", icon = "rotate_cw")]
+    Rotate,
+    #[command(label = "Remove", icon = "trash")]
+    Remove,
+}
+
+/// The action stories' actions, by the index `TilePartEvent::Action` reports. A variant is named as its label, so the
+/// stories find an action by the variant's name.
+pub(super) const ACTIONS: [TileStoryCommand; 2] = [TileStoryCommand::Rotate, TileStoryCommand::Remove];
 
 #[story(Tile<'static>, covers = [Default], drive = Drive::Activate)]
 fn tile(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -48,6 +64,60 @@ fn tile_badges_and_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         *rating = stars;
     }
     out.into()
+}
+
+/// A stack of pages shown as two offset sheets behind the picture instead of the ×N badge; the count stays in the
+/// tile's accessible name.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_stack_sheets(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Scans.pdf").thumb(ThumbAspect::new(3, 4), StoryPictures::of(ui.ctx()).thumb(5)).stack(3).stack_look(StackLook::Sheets).show(ui).into()
+}
+
+/// Hovers the tile, so its actions show, and clicks the first.
+fn click_action(fixture: &mut Fixture) {
+    let Some(tile) = fixture.by_label("IMG_0005.jpg") else { return };
+    fixture.frame(vec![pointer::moved(tile.center())]).idle(1);
+    if let Some(action) = fixture.by_label(&format!("{:?}", ACTIONS[0])) {
+        fixture.click(&action);
+    }
+}
+
+/// Two hover actions in the picture's corner, shown while the pointer is over the tile or it has visible focus; the
+/// readout names the last one run.
+#[story(Tile<'static>, covers = [], drive = Drive::Custom(click_action))]
+fn tile_actions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let out = Tile::new("IMG_0005.jpg")
+        .thumb(ThumbAspect::new(3, 2), StoryPictures::of(ui.ctx()).thumb(5))
+        .action(IconId::new("rotate_cw"), TileStoryCommand::Rotate)
+        .action(IconId::new("trash"), TileStoryCommand::Remove)
+        .show(ui);
+    let last = data.value("last", None::<String>);
+    if let Some(TilePartEvent::Action(at)) = out.event
+        && let Some(name) = ACTIONS.get(at)
+    {
+        *last = Some(format!("{name:?}"));
+    }
+    let readout = format!("Last action: {}", last.as_deref().unwrap_or("none"));
+    StoryOutput::from(out).readout(readout)
+}
+
+/// An icon tile whose glyph takes a data hue, inked for contrast on the picture's surface.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_hue(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Quarterly report.pdf").icon(IconId::new("file")).hue(DataColor::new(Color32::from_rgb(196, 64, 52))).show(ui).into()
+}
+
+/// A page card (`CardText::Page`): a letter-size page on its shadow on a flat card, its name on up to two lines, as
+/// VectorCraft's New Document presets and page templates show it.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_page(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Social Square Post 1080×1080").card().card_text(CardText::Page).detail("1080 × 1080 px").page(1080.0, 1080.0).show(ui).into()
+}
+
+/// A compact action card: icon and name, a description, and the action that activates the whole card.
+#[story(Tile<'static>, covers = [], drive = Drive::Activate)]
+fn tile_summary_card(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Arrange pages").icon(IconId::new("layout_grid")).detail("Move · Rotate · Delete").summary_action("Use now").card().show(ui).into()
 }
 
 fn click_check(fixture: &mut Fixture) {

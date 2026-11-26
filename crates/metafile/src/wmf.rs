@@ -10,10 +10,136 @@ use crate::geom::{self, ArcKind, P};
 use crate::text::{ETO_CLIPPED, ETO_OPAQUE, Font, MAX_CHARS, decode_bytes};
 use crate::{Error, Frame, MAX_PATH_OPS};
 
-const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
+pub(crate) const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
 const DEFAULT_INCH: f64 = 1440.0;
 /// A placeable WMF plays into a target sized in points; brushes are laid out in 96-dpi pixels.
 const PT_PER_PX: f64 = 72.0 / 96.0;
+const META_ESCAPE: u16 = 0x0626;
+const META_ESCAPE_ENHANCED_METAFILE: u16 = 0x000F;
+const WMFC_IDENTIFIER: u32 = 0x4346_4D57;
+const WMFC_COMMENT_TYPE: u32 = 0x0000_0001;
+const WMFC_VERSION: u32 = 0x0001_0000;
+const WMFC_HEADER_LEN: usize = 34;
+/// Largest embedded EMF reassembled from `META_ESCAPE_ENHANCED_METAFILE` chunks (16 MiB).
+pub(crate) const MAX_EMBEDDED_EMF_BYTES: usize = 16 * 1024 * 1024;
+
+pub(crate) struct ParsedWmf {
+    pub cv: Canvas,
+    pub frame: Option<Frame>,
+    pub embedded_emf: Option<Vec<u8>>,
+    pub embedded_emf_capped: bool,
+}
+
+enum CollectorState {
+    Empty,
+    Collecting { buf: Vec<u8>, total: usize, expected_records: u32, seen_records: u32 },
+    Done(Vec<u8>),
+    Invalid,
+}
+
+/// Reassembles an embedded EMF from `META_ESCAPE_ENHANCED_METAFILE` (`0x0626` / `0x000F`) chunks
+/// ([MS-WMF] §2.3.6.14).
+struct EmfCollector {
+    state: CollectorState,
+    capped: bool,
+}
+
+impl EmfCollector {
+    fn new() -> Self {
+        Self { state: CollectorState::Empty, capped: false }
+    }
+
+    fn push(&mut self, r: Bytes) {
+        if r.u16(6) != Some(META_ESCAPE_ENHANCED_METAFILE) {
+            return;
+        }
+        // Only "WMFC" with CommentType == 1 carries an embedded EMF; other MFCOMMENT records are ignored.
+        if r.u32(10) != Some(WMFC_IDENTIFIER) || r.u32(14) != Some(WMFC_COMMENT_TYPE) {
+            return;
+        }
+        if !matches!(self.state, CollectorState::Empty | CollectorState::Collecting { .. }) {
+            return;
+        }
+        let Some(byte_count) = r.u16(8).map(usize::from) else {
+            self.state = CollectorState::Invalid;
+            return;
+        };
+        if byte_count < WMFC_HEADER_LEN || 10usize.checked_add(byte_count).is_none_or(|end| end > r.0.len()) {
+            self.state = CollectorState::Invalid;
+            return;
+        }
+        let (Some(version), Some(flags), Some(record_count)) = (r.u32(18), r.u32(24), r.u32(28)) else {
+            self.state = CollectorState::Invalid;
+            return;
+        };
+        let (Some(current_size), Some(remaining), Some(total_size)) =
+            (r.u32(32).map(|v| v as usize), r.u32(36).map(|v| v as usize), r.u32(40).map(|v| v as usize))
+        else {
+            self.state = CollectorState::Invalid;
+            return;
+        };
+        if version != WMFC_VERSION
+            || flags != 0
+            || record_count == 0
+            || current_size == 0
+            || total_size == 0
+            || WMFC_HEADER_LEN.checked_add(current_size).is_none_or(|n| n > byte_count)
+        {
+            self.state = CollectorState::Invalid;
+            return;
+        }
+        if total_size > MAX_EMBEDDED_EMF_BYTES {
+            self.capped = true;
+            self.state = CollectorState::Invalid;
+            return;
+        }
+        let Some(chunk) = r.slice(44, current_size) else {
+            self.state = CollectorState::Invalid;
+            return;
+        };
+        let state = std::mem::replace(&mut self.state, CollectorState::Invalid);
+        self.state = match state {
+            CollectorState::Empty => {
+                if current_size.checked_add(remaining) != Some(total_size) {
+                    CollectorState::Invalid
+                } else {
+                    let mut buf = Vec::new();
+                    buf.extend_from_slice(chunk);
+                    if remaining == 0 {
+                        if record_count == 1 { CollectorState::Done(buf) } else { CollectorState::Invalid }
+                    } else {
+                        CollectorState::Collecting { buf, total: total_size, expected_records: record_count, seen_records: 1 }
+                    }
+                }
+            }
+            CollectorState::Collecting { mut buf, total, expected_records, mut seen_records } => {
+                if total_size != total
+                    || record_count != expected_records
+                    || seen_records >= expected_records
+                    || buf.len().checked_add(current_size).and_then(|n| n.checked_add(remaining)) != Some(total)
+                {
+                    CollectorState::Invalid
+                } else {
+                    buf.extend_from_slice(chunk);
+                    seen_records += 1;
+                    if remaining == 0 {
+                        if seen_records == expected_records && buf.len() == total { CollectorState::Done(buf) } else { CollectorState::Invalid }
+                    } else {
+                        CollectorState::Collecting { buf, total, expected_records, seen_records }
+                    }
+                }
+            }
+            other => other,
+        };
+    }
+
+    fn finish(self) -> (Option<Vec<u8>>, bool) {
+        match self.state {
+            CollectorState::Done(buf) => (Some(buf), self.capped),
+            _ => (None, self.capped),
+        }
+    }
+}
 
 pub(crate) fn is_wmf(b: Bytes) -> bool {
     if b.u32(0) == Some(PLACEABLE_KEY) {
@@ -22,9 +148,9 @@ pub(crate) fn is_wmf(b: Bytes) -> bool {
     matches!(b.u16(0), Some(1 | 2)) && b.u16(2) == Some(9) && matches!(b.u16(4), Some(0x100 | 0x300))
 }
 
-/// Reads all records. Returns the drawing state and the picture frame, or an error when no record
-/// could be read at all.
-pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
+/// Reads all records. Returns the drawing state, picture frame, and any complete embedded EMF
+/// reassembled from `META_ESCAPE_ENHANCED_METAFILE`, or an error when no record could be read.
+pub(crate) fn parse(input: Bytes) -> Result<ParsedWmf, Error> {
     let placeable = input.u32(0) == Some(PLACEABLE_KEY);
     // Placeable bounds: logical corners (left, top, right, bottom) and their size in points.
     let (hdr, bounds) = if placeable {
@@ -52,6 +178,7 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
     }
     // Keep the player target independent of subsequent mapping changes.
     let mut player_target = bounds.map(|(_, size)| size);
+    let mut emf_collector = EmfCollector::new();
     let mut parsed = 0usize;
     while !cv.full() {
         let (Some(words), Some(func)) = (input.u32(pos), pos.checked_add(4).and_then(|o| input.u16(o))) else { break };
@@ -60,7 +187,11 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
         if func == 0 {
             break;
         }
-        record(&mut cv, func, Bytes(rec));
+        if func == META_ESCAPE {
+            emf_collector.push(Bytes(rec));
+        } else {
+            record(&mut cv, func, Bytes(rec));
+        }
         if func == 0x020C && cv.window_set && player_target.is_none() && !cv.viewport_set {
             let we = cv.map.window_ext();
             let target = (we.0.abs(), we.1.abs());
@@ -93,7 +224,8 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
         None if cv.window_set => Some(Frame { rect: cv.map.window_rect(), size: None }),
         None => None,
     };
-    Ok((cv, frame))
+    let (embedded_emf, embedded_emf_capped) = emf_collector.finish();
+    Ok(ParsedWmf { cv, frame, embedded_emf, embedded_emf_capped })
 }
 
 fn record(cv: &mut Canvas, func: u16, r: Bytes) {
@@ -202,9 +334,9 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
 }
 
 /// Records that change nothing the picture keeps: relative-absolute and stretch modes, character
-/// spacing and justification, mapper flags, palettes, escapes and the layout. Every other record
+/// spacing and justification, mapper flags, palettes and the layout. Every other record
 /// the reader does not play is counted as skipped.
-const IGNORED: &[u16] = &[0x0105, 0x0107, 0x0108, 0x020A, 0x0231, 0x0234, 0x0035, 0x0037, 0x0139, 0x0436, 0x0626, 0x0149];
+const IGNORED: &[u16] = &[0x0105, 0x0107, 0x0108, 0x020A, 0x0231, 0x0234, 0x0035, 0x0037, 0x0139, 0x0436, 0x0149];
 
 /// A 16-bit WMF handle as a canvas object index: stock objects are `0x8000 | index`, which the
 /// canvas reads with the 32-bit stock flag.

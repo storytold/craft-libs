@@ -1,25 +1,28 @@
-//! The font picker's flows: style rows under an expanded family, served families and the rested report, and similar
-//! fonts.
+//! The font picker's flows: style rows under an expanded family, served families and the rested report, similar
+//! fonts, and the host's rows.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use craft_behavior::{PartKey, Preview};
+use craft_behavior::{GESTURE_GAP, PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FamilySet, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize, FontScript,
+    HostFontGroup, HostFontRow, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
+use craft_theme::{Contrast, Mode};
 use craft_ui::buttons::ControlPlace;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::{Label, with_env};
+use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::focus::AccessActionKind;
-use craft_ui::testing::pointer::moved;
+use craft_ui::testing::pointer::{moved, wheel_lines};
 use craft_ui::testing::{Fixture, Room, last_frame_derived_builds, trial};
-use egui::{Event, Key, Modifiers};
+use egui::{Color32, Event, Key, Modifiers, Shape};
 
 const INTER_REGULAR: &[u8] = include_bytes!("../../../ui-contract/fonts/inter/Inter-Regular.ttf");
 const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../ui-contract/fonts/inter/Inter-SemiBold.ttf");
@@ -29,6 +32,7 @@ fn catalog_of(faces: &[&[u8]]) -> Arc<Catalog> {
     for bytes in faces {
         catalog.add_bytes(bytes.to_vec(), Source::Bundled, &Limits::default()).expect("a font file");
     }
+    catalog.rescan();
     catalog
 }
 
@@ -43,16 +47,55 @@ struct Seen {
     actions: Vec<usize>,
     /// The id of the shown picker, as the last pass reported it.
     id: Option<egui::Id>,
+    /// The keys of the host rows picked, in order.
+    host_picks: Vec<String>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {
+    rig_full(catalog, served, FontPickerSettings::default(), None, Vec::new(), None)
+}
+
+/// A rig whose picker keeps `settings` and, when given, `filters`.
+fn rig_with(catalog: Arc<Catalog>, served: Vec<String>, settings: FontPickerSettings, filters: Option<FontFilters>) -> (Fixture, Rc<RefCell<Seen>>) {
+    rig_full(catalog, served, settings, filters, Vec::new(), None)
+}
+
+/// A picker with one host group (without a heading) per entry of `host`, showing the host row `current_host` as its
+/// value when given.
+fn rig_with_host(
+    catalog: Arc<Catalog>,
+    served: Vec<String>,
+    host: Vec<Vec<HostFontRow>>,
+    current_host: Option<String>,
+) -> (Fixture, Rc<RefCell<Seen>>) {
+    rig_full(catalog, served, FontPickerSettings::default(), None, host, current_host)
+}
+
+fn rig_full(
+    catalog: Arc<Catalog>,
+    served: Vec<String>,
+    settings: FontPickerSettings,
+    filters: Option<FontFilters>,
+    host: Vec<Vec<HostFontRow>>,
+    current_host: Option<String>,
+) -> (Fixture, Rc<RefCell<Seen>>) {
     let seen = Rc::new(RefCell::new(Seen::default()));
     let shown = Rc::clone(&seen);
-    let mut settings = FontPickerSettings::default();
+    let (mut settings, mut filters) = (settings, filters);
     let mut fx = Fixture::new(move |ui| {
         let mut seen = shown.borrow_mut();
-        let out =
-            FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served).show(ui);
+        let groups: Vec<HostFontGroup<'_>> = host.iter().map(|rows| HostFontGroup::new(None, rows)).collect();
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .served(&served)
+            .host(&groups);
+        if let Some(filters) = filters.as_mut() {
+            picker = picker.filters(Bind::bound(filters));
+        }
+        if let Some(key) = &current_host {
+            picker = picker.current_host(key.clone());
+        }
+        let out = picker.show(ui);
         match out.preview {
             Preview::Shows(family) => seen.preview = Some(family),
             Preview::Ended => seen.preview = None,
@@ -62,6 +105,7 @@ fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>
             seen.picks.push((family, out.picked_style));
         }
         seen.rested.extend(out.rested);
+        seen.host_picks.extend(out.host_picked);
     });
     fx.in_room(Room::Window);
     fx.settle();
@@ -76,6 +120,28 @@ fn open(fx: &mut Fixture) {
 
 fn present(fx: &Fixture, text: &str) -> bool {
     fx.by_label(text).is_some() || fx.texts().iter().any(|painted| painted.text == text)
+}
+
+/// A selection of several families leaves the family field empty, on screen and to assistive technology, as the
+/// reference applications do: no family name and no word stands in for it.
+#[trial]
+fn a_mixed_family_shows_an_empty_field() {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut family = craft_behavior::Mixed::<String>::Mixed;
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound_mixed(&mut family), &catalog).show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let field = fx.by_role(craft_ui::runtime::access::Role::COMBO_BOX).into_iter().next().expect("the family field");
+    assert!(fx.tree().value_of(field.node).is_none_or(str::is_empty), "the mixed family has no accessible value");
+    let words: Vec<String> = fx
+        .texts()
+        .iter()
+        .filter(|painted| field.rect.contains_rect(painted.rect) && painted.text.chars().any(char::is_alphabetic))
+        .map(|painted| painted.text.clone())
+        .collect();
+    assert!(words.is_empty(), "the field paints no text: {words:?}");
 }
 
 #[trial]
@@ -121,19 +187,20 @@ fn a_served_family_lists_without_a_sample_and_is_reported_rested_once() {
 }
 
 #[trial]
-fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a_reference() {
+fn similar_fonts_put_the_reference_family_first_and_leave_the_list_alone_without_a_reference() {
     let catalog = catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR]);
     let mut similar = FontFilters::default();
-    similar.similar = true;
+    similar.similar = Some("Inter".to_owned());
     let infos = FamilyInfos::of(&catalog);
-    let rows = family_rows(&catalog, &infos, "", None, &similar, "Inter", "en");
+    let rows = family_rows(&catalog, &infos, "", None, &similar, &[], "en");
     let names: Vec<&str> = rows.iter().map(|row| row.family.as_str()).collect();
-    assert_eq!(names.first(), Some(&"Inter"), "the current family first, though it is not first by name");
+    assert_eq!(names.first(), Some(&"Inter"), "the reference family first, though it is not first by name");
     assert!(rows.len() <= SIMILAR_COUNT);
 
-    // A current family the catalog lacks has no traits: the list stays as unfiltered.
-    let unfiltered = family_rows(&catalog, &infos, "", None, &FontFilters::default(), "", "en");
-    assert_eq!(family_rows(&catalog, &infos, "", None, &similar, "Missing", "en"), unfiltered);
+    // A reference family the catalog lacks has no traits: the list stays as unfiltered.
+    let unfiltered = family_rows(&catalog, &infos, "", None, &FontFilters::default(), &[], "en");
+    similar.similar = Some("Missing".to_owned());
+    assert_eq!(family_rows(&catalog, &infos, "", None, &similar, &[], "en"), unfiltered);
 }
 
 #[trial]
@@ -184,6 +251,43 @@ fn a_preview_over_a_typed_query_keeps_the_query_and_the_list() {
 }
 
 #[trial]
+fn a_host_row_pick_reports_its_key_and_leaves_the_family() {
+    let host = || {
+        vec![vec![
+            HostFontRow::face("document", "Document Sans", None),
+            HostFontRow::notice("Subset fonts can't take new text"),
+            HostFontRow::action("load", "Load font file"),
+        ]]
+    };
+    let (mut fx, seen) = rig_with_host(catalog_of(&[INTER_REGULAR]), vec![], host(), None);
+    open(&mut fx);
+    let load = fx.by_label("Load font file").expect("the action row");
+    fx.click(&load);
+    fx.settle();
+    assert_eq!(seen.borrow().host_picks, ["load"], "the action row reports its key");
+    assert_eq!(seen.borrow().family, "", "a host pick writes no family");
+    assert!(seen.borrow().picks.is_empty(), "a host pick is no family pick and no recent family");
+    assert!(fx.by_label("Load font file").is_none(), "the list closed");
+
+    open(&mut fx);
+    let face = fx.by_label("Document Sans").expect("the face row");
+    fx.click(&face);
+    fx.settle();
+    assert_eq!(seen.borrow().host_picks, ["load", "document"], "the face row reports its key");
+    assert_eq!(seen.borrow().family, "", "a host face writes no family");
+    assert!(seen.borrow().picks.is_empty(), "a host face is no family pick");
+
+    // The closed field shows the host face; ArrowDown steps over the notice to the action row.
+    let (mut fx, seen) = rig_with_host(catalog_of(&[INTER_REGULAR]), vec![], host(), Some("document".to_owned()));
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(seen.borrow().host_picks, ["load"], "the arrow skips the notice");
+    assert!(seen.borrow().picks.is_empty(), "and picks no family");
+    assert_eq!(seen.borrow().family, "");
+}
+
+#[trial]
 fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() {
     let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
     for family in ["Inter", "Hack"] {
@@ -196,6 +300,163 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
         fx.settle();
         assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some(family), "the typed name is picked");
     }
+}
+
+fn three_faces() -> Arc<Catalog> {
+    catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR])
+}
+
+/// The families of `catalog` in list order under `filters` and `sets`.
+fn listed(catalog: &Arc<Catalog>, filters: &FontFilters, sets: &[FamilySet<'_>]) -> Vec<String> {
+    family_rows(catalog, &FamilyInfos::of(catalog), "", None, filters, sets, "en").into_iter().map(|row| row.family).collect()
+}
+
+/// Focuses the field and rests the pointer on it, so the wheel turns over the closed field.
+fn aim_at_field(fx: &mut Fixture) {
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.key(Key::Tab, Modifiers::NONE);
+    fx.frame(vec![moved(field.center())]);
+}
+
+#[trial]
+fn the_closed_fields_wheel_steps_one_family_per_line_through_the_filtered_order_and_commits_one_gesture() {
+    let all = listed(&three_faces(), &FontFilters::default(), &[]);
+    assert_eq!(all.len(), 3);
+
+    let (mut fx, seen) = rig(three_faces(), vec![]);
+    seen.borrow_mut().family = all[0].clone();
+    aim_at_field(&mut fx);
+    fx.frame(vec![wheel_lines(-1.0), wheel_lines(1.0)]);
+    fx.advance(GESTURE_GAP * 2.0).idle(3);
+    assert_eq!(seen.borrow().family, all[0], "opposite notches in one pass step nothing");
+    assert!(seen.borrow().picks.is_empty());
+
+    fx.frame(vec![wheel_lines(-2.0)]);
+    assert_eq!(seen.borrow().family, all[2], "two lines step two families");
+    assert!(seen.borrow().picks.is_empty(), "nothing is picked while the wheel turns");
+    fx.advance(GESTURE_GAP * 2.0).idle(3);
+    assert_eq!(seen.borrow().picks, [(all[2].clone(), None)], "the run's end picks once");
+
+    let mut settings = FontPickerSettings::default();
+    settings.favorites = vec![all[0].clone(), all[2].clone()];
+    let mut favorites = FontFilters::default();
+    favorites.favorites = true;
+    let (mut fx, seen) = rig_with(three_faces(), vec![], settings, Some(favorites));
+    seen.borrow_mut().family = all[0].clone();
+    aim_at_field(&mut fx);
+    fx.frame(vec![wheel_lines(-1.0)]);
+    assert_eq!(seen.borrow().family, all[2], "a line steps over the family the favorites filter hides");
+    fx.advance(GESTURE_GAP * 2.0).idle(3);
+    assert_eq!(seen.borrow().picks, [(all[2].clone(), None)]);
+}
+
+#[trial]
+fn a_script_filter_keeps_only_the_families_whose_face_covers_the_script() {
+    let catalog = three_faces();
+    let unfiltered = listed(&catalog, &FontFilters::default(), &[]);
+    let with = |script: FontScript| {
+        let mut filters = FontFilters::default();
+        filters.script = Some(script);
+        listed(&catalog, &filters, &[])
+    };
+    assert_eq!(with(FontScript::Latin), unfiltered, "every shipped face covers Latin");
+    assert!(with(FontScript::Thai).is_empty(), "none covers Thai");
+    assert!(with(FontScript::Japanese).is_empty(), "none covers Japanese");
+}
+
+/// Thai coverage comes from the face's `cmap` and Japanese from its `OS/2` code pages and Unicode ranges, which the
+/// scan's records do not hold: a Thai face and a CJK face each pass their own script's filter and not the other's.
+#[trial]
+fn a_thai_and_a_cjk_face_each_pass_their_own_scripts_filter() {
+    const THAI: &[u8] = include_bytes!("../../../font-subset/tests/data/sarabun/Sarabun-Regular.ttf");
+    const CJK: &[u8] = include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf");
+    let catalog = catalog_of(&[INTER_REGULAR, THAI, CJK]);
+    let with = |script: FontScript| {
+        let mut filters = FontFilters::default();
+        filters.script = Some(script);
+        listed(&catalog, &filters, &[])
+    };
+    let (thai, japanese) = (with(FontScript::Thai), with(FontScript::Japanese));
+    assert!(thai.iter().any(|family| family.contains("Sarabun")) && !thai.iter().any(|family| family.contains("CJK")), "Thai: {thai:?}");
+    assert!(
+        japanese.iter().any(|family| family.contains("CJK")) && !japanese.iter().any(|family| family.contains("Sarabun")),
+        "Japanese: {japanese:?}"
+    );
+    assert!(!thai.iter().chain(&japanese).any(|family| family.contains("Inter")), "Inter covers neither");
+}
+
+#[trial]
+fn a_host_set_keeps_only_its_families_and_an_ordered_one_lists_them_in_its_order() {
+    let catalog = three_faces();
+    let all = listed(&catalog, &FontFilters::default(), &[]);
+    // The host keeps canonical lowercase names.
+    let members = vec![all[2].to_ascii_lowercase(), all[0].to_ascii_lowercase()];
+    let mut on = FontFilters::default();
+    on.sets = vec!["document".to_owned()];
+
+    let plain = [FamilySet::new("document", "Document", &members)];
+    assert_eq!(listed(&catalog, &on, &plain), [all[0].clone(), all[2].clone()], "its families, in the name order");
+
+    let ordered = [FamilySet::new("document", "Document", &members).ordered()];
+    assert_eq!(listed(&catalog, &on, &ordered), [all[2].clone(), all[0].clone()], "its families, in its own order");
+
+    let disabled = [FamilySet::new("document", "Document", &members).ordered().enabled(false)];
+    assert_eq!(listed(&catalog, &on, &disabled), all, "a disabled set's key filters nothing");
+    assert_eq!(listed(&catalog, &on, &[]), all, "a key naming no set filters nothing");
+}
+
+#[trial]
+fn a_picker_that_stops_showing_with_a_preview_is_reported_once_in_ended_previews() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let shown = Rc::new(Cell::new(true));
+    let id = Rc::new(Cell::new(None));
+    let (visible, at) = (Rc::clone(&shown), Rc::clone(&id));
+    let mut family = String::new();
+    let mut fx = Fixture::new(move |ui| {
+        if visible.get() {
+            let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).show(ui);
+            at.set(Some(out.edit.response.id));
+        }
+        // Evicted memory drops in the next component's run, so the window keeps showing one.
+        craft_ui::display::Text::new("Size").show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let hover_hack = |fx: &mut Fixture| {
+        open(fx);
+        let hack = fx.by_label("Hack").expect("the Hack row");
+        fx.frame(vec![Event::PointerMoved(hack.center())]);
+        fx.settle();
+    };
+
+    hover_hack(&mut fx);
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+    assert!(take_output(fx.ctx()).ended_previews.is_empty(), "a picker that ended its own preview names none");
+
+    hover_hack(&mut fx);
+    shown.set(false);
+    fx.settle();
+    // Past the eviction grace, which ends the picker's shown life.
+    fx.advance(1.0);
+    fx.idle(3);
+    let ended = take_output(fx.ctx()).ended_previews;
+    assert_eq!(ended.iter().filter(|ended| Some(**ended) == id.get()).count(), 1, "the picker that stopped showing is named once: {ended:?}");
+}
+
+#[trial]
+fn samples_on_white_paint_dark_ink_on_a_lighter_paper_in_a_dark_theme() {
+    let white_papers = |on_white: bool| {
+        let mut settings = FontPickerSettings::default();
+        settings.samples_on_white = on_white;
+        let (mut fx, _) = rig_with(three_faces(), vec![], settings, None);
+        fx.theme(Mode::Dark, Contrast::Standard);
+        fx.settle();
+        open(&mut fx);
+        fx.frame_shapes().into_iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == Color32::WHITE)).count()
+    };
+    assert!(white_papers(true) >= 3, "each family's sample sits on a white paper, in a dark theme");
+    assert_eq!(white_papers(false), 0, "without the setting no sample paper is white");
 }
 
 /// A picker as the character controls host it: a given value, the filters (so the class column shows beside the
@@ -314,6 +575,9 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
     fx.settle();
 
     let field = fx.by_label("Font family").expect("the family field");
+    // Unfocus after Escape so the click below is a focusing click that selects all text in Plain mode.
+    fx.click_at(field.rect.right_center() + egui::vec2(20.0, 0.0));
+    fx.settle();
     fx.click(&field);
     fx.settle();
     fx.type_text("x");
@@ -329,6 +593,76 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
     fx.settle();
     assert_eq!(seen.borrow().family, "Zapfino", "a name that is no family is applied as typed");
     assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some("Zapfino"));
+}
+
+#[trial]
+fn clicking_the_font_field_selects_all_without_opening_dropdown_and_chevron_toggles() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let words = FontPickerWords::default();
+    let (recently, all) = (words.recently_used.as_str(), words.all_fonts.as_str());
+
+    // 1. Clicking the text field focuses and selects all text without opening the dropdown popup
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(!present(&fx, recently), "recently used fonts do not open on field click");
+    assert!(!present(&fx, all), "all fonts do not open on field click");
+
+    // 2. Typing in the field opens the dropdown filtered on matches
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "Hack"), "typing in the field opens the dropdown with matches");
+
+    // Pressing Enter commits the typed family and closes the dropdown
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "committing typed query closes the dropdown");
+
+    // 3. Clicking the dropdown arrow (chevron) toggles the dropdown list open
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    assert!(present(&fx, recently), "recently used fonts show up on chevron click");
+    assert!(present(&fx, all), "all fonts show up on chevron click");
+
+    // 4. Clicking inside the field while already open keeps dropdown open
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(present(&fx, all), "dropdown remains open on click inside field");
+
+    // 5. Clicking the chevron button again toggles the dropdown closed
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "dropdown closes on chevron click toggle");
+}
+
+#[trial]
+fn clicking_the_focused_plain_box_places_caret_instead_of_selecting_all() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let field = fx.by_label("Font family").expect("the family field");
+
+    // 1. The first click gives the field focus and selects all text
+    fx.click(&field);
+    fx.settle();
+
+    // 2. Clicking again after double-click interval places the caret before the "I" without re-selecting all
+    fx.advance(1.0);
+    fx.click_at(field.rect.left_center() + egui::vec2(6.0, 0.0));
+    fx.settle();
+
+    // 3. Typing "Ha" inserts before "Inter" producing "HaInter" rather than replacing the text with "Ha"
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "HaInter"), "typing inserts at placed caret before the existing family name");
+    assert!(!present(&fx, "Hack"), "Hack is not suggested because draft is HaInter, not Ha");
 }
 
 #[trial]
@@ -393,6 +727,48 @@ fn a_ribbons_font_box_is_short_and_keeps_its_width() {
     assert!((ribbon - length).abs() < 0.5, "the ribbon's font box is the small field length {length}: {ribbon}");
     let long = picker_width("Source Sans Pro Semibold Condensed Extra", true);
     assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
+}
+
+/// In a toolbar (`InBar`) or when `compact` is set, the font box is held at the small field length,
+/// narrower than in a form, and keeps its width whichever family it shows.
+#[trial]
+fn a_bars_font_box_is_short_and_keeps_its_width() {
+    let bar_width = |family: &'static str, in_bar: bool, compact: bool| {
+        let catalog = catalog_of(&[INTER_REGULAR]);
+        let mut fx = Fixture::new(move |ui| {
+            let mut family = family.to_owned();
+            let mut show = |ui: &mut egui::Ui| {
+                let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain);
+                if compact {
+                    picker = picker.compact(true);
+                }
+                let _ = picker.show(ui);
+            };
+            if in_bar {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(craft_ui::contract::InBar(true));
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fx.in_room(Room::Window);
+        fx.settle();
+        fx.by_label("Font family").expect("the picker").rect.width()
+    };
+    let standard = bar_width("Inter", false, false);
+    let bar = bar_width("Inter", true, false);
+    let opt_in = bar_width("Inter", false, true);
+    assert!(bar < standard - 0.5, "the bar's font box is narrower: {bar} against {standard}");
+    assert!((bar - opt_in).abs() < 0.5, "the opt-in compact picker matches the bar picker: {opt_in} against {bar}");
+    let length = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.field.sm;
+    assert!((bar - length).abs() < 0.5, "the bar's font box is the small field length {length}: {bar}");
+    let long = bar_width("Source Sans Pro Semibold Condensed Extra", true, false);
+    assert!((long - bar).abs() < 0.5, "a long family name leaves its width in a bar: {long} against {bar}");
 }
 
 /// The width of a plain picker over "Inter" in a ribbon group's place, in a row beside a block that leaves it 60 pt of
@@ -545,6 +921,64 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
     );
 }
 
+/// Texture ids of textured meshes whose centre falls inside `rect`.
+fn mesh_textures(shapes: &[egui::Shape], rect: egui::Rect, out: &mut Vec<egui::TextureId>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => mesh_textures(inner, rect, out),
+            egui::Shape::Mesh(mesh) if rect.contains(mesh.calc_bounds().center()) => {
+                out.push(mesh.texture_id);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[trial]
+fn the_missing_font_warning_icon_is_a_filled_triangle() {
+    use std::cell::Cell;
+
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let seen = Rc::new(Cell::new(None));
+    let held = Rc::clone(&seen);
+    let mut family = "Gotham".to_owned();
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).shown_as("Inter").show(ui);
+        held.set(Some(out.edit.response.id));
+    });
+    fx.pixels_per_point(2.0);
+    fx.record_paint();
+    fx.in_room(Room::Window);
+    fx.settle();
+    let picker = seen.get().expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    let mut paint = fx.take_paint().expect("recorded paint output");
+    let mut textures = Vec::new();
+    for clipped in &paint.shapes {
+        mesh_textures(std::slice::from_ref(&clipped.shape), mark, &mut textures);
+    }
+    let texture = *textures.first().expect("the missing-font warning icon paints a texture");
+    let image = paint
+        .textures_delta
+        .set
+        .get(&texture)
+        .and_then(|deltas| deltas.last())
+        .map(|delta| match &delta.image {
+            egui::ImageData::Color(color) => color,
+        })
+        .expect("the warning icon texture was uploaded");
+    let [w, h] = image.size;
+    let alpha = |fx: f32, fy: f32| {
+        let x = ((w as f32 * fx) as usize).min(w - 1);
+        let y = ((h as f32 * fy) as usize).min(h - 1);
+        image.pixels[y * w + x].a()
+    };
+    let (left, right, center) = (alpha(0.34, 0.69), alpha(0.66, 0.69), alpha(0.50, 0.48));
+    paint.textures_delta.clear();
+    assert!(left > 128 && right > 128, "the triangle interior is filled, not an outline (left={left}, right={right}, size={w}x{h})");
+    assert!(center < 128, "the exclamation stem stays knocked out inside the filled triangle (center={center})");
+}
+
 /// The library picker's family and settings, as the last pass left them.
 struct Library {
     family: String,
@@ -620,6 +1054,86 @@ fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
     );
 }
 
+/// The repository's Noto Sans CJK SC subset (CFF): its line (hhea 1160/-288) is taller than Inter's.
+const CJK_SUBSET: &[u8] = include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf");
+
+/// "中文", which the subset draws and Inter lacks.
+const CJK_TEXT: &str = "\u{4E2D}\u{6587}";
+
+/// An open library list at Large over Inter and the CJK subset, with `family` current and the preview text `text`
+/// holds at each pass.
+fn cjk_rig(family: &'static str, text: Rc<Cell<Option<&'static str>>>) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, CJK_SUBSET]);
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    settings.preview = FontPreviewSize::Large;
+    let mut fx = Fixture::new(move |ui| {
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).settings(Bind::bound(&mut settings));
+        if let Some(text) = text.get() {
+            picker = picker.preview_text(text);
+        }
+        picker.show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// The host's text can arrive while the list is open (a selection made after the menu opened): every row follows it,
+/// in a CJK face too, and no row keeps the sample word.
+#[trial]
+fn rows_sample_the_host_text_that_arrives_after_the_list_opened() {
+    let text = Rc::new(Cell::new(None));
+    let mut fx = cjk_rig("Inter", Rc::clone(&text));
+    assert!(fx.by_label("Inter: Sample").is_some(), "without a host text the rows show the sample word");
+    text.set(Some(CJK_TEXT));
+    fx.settle();
+    assert!(fx.by_label(&format!("Noto Sans CJK SC: {CJK_TEXT}")).is_some(), "the CJK face's row shows the host's text");
+    assert!(fx.by_label("Inter: Inter").is_some(), "Inter lacks the text's letters: its row shows its name");
+    for family in ["Inter", "Noto Sans CJK SC"] {
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family}'s row no longer shows the sample word");
+    }
+}
+
+/// The baseline of a painted text, on screen.
+fn baseline_of(text: &egui::epaint::TextShape) -> f32 {
+    let row = text.galley.rows.first().expect("a row");
+    text.pos.y + row.pos.y + row.row.glyphs.first().map_or(row.row.size.y, |glyph| glyph.pos.y)
+}
+
+/// Faces whose lines differ (Inter's and the CJK subset's, which is taller) sit on one baseline in their rows, and each
+/// sample's ink, the rows' and the banner's, stays inside its band: none is clipped.
+#[trial]
+fn every_sample_sits_on_one_baseline_inside_its_band() {
+    let mut fx = cjk_rig("Noto Sans CJK SC", Rc::new(Cell::new(Some(CJK_TEXT))));
+    let shapes = fx.frame_clipped_shapes();
+    let painted = |text: &str, band: egui::Rect| {
+        shapes
+            .iter()
+            .filter_map(|(_, shape)| match shape {
+                egui::Shape::Text(painted) if painted.galley.job.text == text => Some(painted),
+                _ => None,
+            })
+            .find(|painted| band.contains(painted.visual_bounding_rect().center()))
+            .unwrap_or_else(|| panic!("{text} painted in {band:?}"))
+    };
+    let mut offsets = Vec::new();
+    for (family, text) in [("Inter", "Inter"), ("Noto Sans CJK SC", CJK_TEXT)] {
+        let band = fx.by_label(&format!("{family}: {text}")).unwrap_or_else(|| panic!("{family}'s sample")).rect;
+        let sample = painted(text, band);
+        let ink = sample.visual_bounding_rect();
+        assert!(band.expand(0.01).contains_rect(ink), "{family}'s ink {ink:?} stays inside its band {band:?}");
+        offsets.push(baseline_of(sample) - band.top());
+    }
+    assert!((offsets[0] - offsets[1]).abs() < 0.5, "both samples sit on one baseline in their bands: {offsets:?}");
+    let banner = fx.by_label("Font preview: Noto Sans CJK SC").expect("the banner").rect;
+    let ink = painted(CJK_TEXT, banner).visual_bounding_rect();
+    assert!(banner.contains_rect(ink), "the banner's ink {ink:?} stays inside the banner {banner:?}");
+    let name = fx.texts().iter().find(|text| text.text == "Noto Sans CJK SC" && banner.contains_rect(text.rect)).expect("the banner's name").rect;
+    assert!(ink.top() >= name.bottom(), "the banner's sample stays below its name: {ink:?} {name:?}");
+}
+
 /// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
 /// to open (a recent row included), the sample after the name; and a rule, not blank room, ends the recent group.
 #[trial]
@@ -676,4 +1190,72 @@ fn a_class_narrows_the_list_and_all_classes_restores_it() {
     fx.click(&all);
     fx.settle();
     assert!(fx.by_label("Favorite Inter").is_some(), "every family is back");
+}
+
+#[trial]
+fn a_click_on_a_rows_sample_picks_its_family() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR]), vec![]);
+    open(&mut fx);
+    let inter = fx.by_label("Inter").expect("the Inter row");
+    let sample = fx
+        .texts()
+        .iter()
+        .find(|painted| painted.text == "Sample" && inter.rect.contains(painted.rect.center()))
+        .map(|painted| painted.rect.center())
+        .expect("Inter's row shows its sample");
+    fx.click_at(sample);
+    fx.settle();
+    assert_eq!(seen.borrow().picks, [("Inter".to_owned(), None)], "the click picks the row");
+}
+
+/// The open list loads its rows' faces through the host's jobs, never in a pass, and a list opened again over the
+/// same rows loads none of them again.
+#[trial]
+fn the_list_loads_its_sample_faces_off_the_pass_and_once() {
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    let (mut fx, _) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
+    fx.host(Arc::new(host));
+    open(&mut fx);
+    assert!(present(&fx, "Inter"), "the rows show while their faces load");
+    assert!(jobs.waiting() > 0, "the rows' faces wait for the host's jobs");
+    jobs.run_all();
+    fx.settle();
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(jobs.waiting(), 0, "the list opened again loads no face");
+}
+
+#[trial]
+fn the_closed_field_skips_building_stops_while_idle_and_steps_on_input() {
+    let all = listed(&three_faces(), &FontFilters::default(), &[]);
+    assert_eq!(all.len(), 3);
+
+    let (mut fx, seen) = rig(three_faces(), vec![]);
+    seen.borrow_mut().family = all[0].clone();
+    fx.frame(vec![]);
+    let before = craft_font_manager::picker::stop_builds(fx.ctx());
+    for _ in 0..5 {
+        fx.frame(vec![]);
+    }
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), before, "idle closed frames do not rebuild stops");
+
+    aim_at_field(&mut fx);
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), before, "focusing and hovering without stepping do not rebuild stops");
+
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(seen.borrow().family, all[1], "ArrowDown steps to the next family");
+    let after_key = craft_font_manager::picker::stop_builds(fx.ctx());
+    assert_eq!(after_key, before + 1, "one ArrowDown builds stops once");
+
+    fx.frame(vec![wheel_lines(-1.0)]);
+    assert_eq!(seen.borrow().family, all[2], "wheel down steps to the following family");
+    let after_wheel = craft_font_manager::picker::stop_builds(fx.ctx());
+    assert_eq!(after_wheel, after_key + 1, "one wheel tick builds stops once");
+
+    fx.advance(GESTURE_GAP * 2.0).idle(3);
+    assert_eq!(seen.borrow().picks.last().map(|(f, _)| f.as_str()), Some(all[2].as_str()), "wheel end commits the stepped family");
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), after_wheel, "wheel end and idle frames do not rebuild stops");
 }
