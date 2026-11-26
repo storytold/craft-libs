@@ -137,7 +137,9 @@ app translates. The dialog never opens a file dialog or touches the file system.
 
 ## Windows, Linux and web: the in-window bar
 
-`MenuBarUi` draws a laid-out bar and returns the titles' rect (`MenuBarOutput`). Show it inside a
+`MenuBarUi` draws a laid-out bar and returns the titles' rect and the width every title takes side by
+side (`MenuBarOutput`). A host that puts controls after the titles on the same row compares that
+width with the room it leaves the bar. Show it inside a
 `Stack` (a top panel's body) or the title bar's row: there the titles that don't fit its room fold
 into "…".
 Each item is a command row: its enabled state, check mark and chord follow the command in the
