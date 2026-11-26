@@ -1,7 +1,7 @@
 //! [`LassoTool`]: the freehand Lasso with Alt-latched straight segments, and the pieces the Polygonal Lasso shares.
 
 use craft_behavior::geometry::{ConstrainStyle, DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
-use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerButton, PointerGlyph};
+use craft_behavior::{CancelReason, Cursor, CursorIcon, PaintedCursor, PointerButton, PointerGlyph};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
@@ -53,7 +53,8 @@ pub(super) struct LassoCursor<'a> {
 
 /// The arrow with its tip on the point the outline starts from, the lasso icon below and right of it and the
 /// operation's badge beside the icon: the latched one while an outline is open, else the live modifiers';
-/// Cmd is the Move tool's, so it shows none. Over the selection, the cursors of [`cursor_over`].
+/// Cmd is the Move tool's, so it shows none. Under the canvas's precise cursor, the crosshair with the badge. Over the
+/// selection, the cursors of [`cursor_over`].
 pub(super) fn cursor(shown: &LassoCursor<'_>, probe: &dyn SelectionProbe, cx: &ToolContext<'_>) -> Cursor {
     let LassoCursor { icon, draft, operation, bar, inside, rule } = shown;
     if !draft.is_open()
@@ -69,6 +70,11 @@ pub(super) fn cursor(shown: &LassoCursor<'_>, probe: &dyn SelectionProbe, cx: &T
     } else {
         SelectionOperation::resolve(*bar, cx.mods, probe.has_selection()).badge()
     };
+    // Under the canvas's precise cursor (Other Cursors > Precise, swapped by Caps Lock) the pointer is the crosshair,
+    // its centre the point the outline takes, with the operation's badge.
+    if cx.precise() {
+        return badge.map_or(CursorIcon::Crosshair.into(), |badge| PaintedCursor::badged(CursorIcon::Crosshair, badge).into());
+    }
     PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, icon.icon(), badge).into()
 }
 
