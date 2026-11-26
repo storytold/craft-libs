@@ -734,6 +734,85 @@ fn a_rename_left_open_stays_with_its_document() {
     assert!(!edits.borrow().iter().any(|edit| matches!(edit, SwatchEdit::Rename { .. })), "nothing is renamed: {:?}", edits.borrow());
 }
 
+#[trial]
+fn opt_in_reports_only_rejected_swatch_and_group_renames() {
+    use craft_ui::patterns::presets::{PresetEvent, PresetView};
+
+    let entry = |name: &str| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0]));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red"), entry("Rose")] },
+        SwatchGroup { name: "Other".to_owned(), entries: Vec::new() },
+    ];
+    let red = SwatchKey::Swatch("Red".to_owned());
+    let basics = SwatchKey::Group("Basics".to_owned());
+    for (opt_in, key, name, accepted) in [
+        (false, &red, "Rose", false),
+        (false, &basics, "Other", false),
+        (true, &red, "Rose", false),
+        (true, &basics, "Other", false),
+        (true, &red, " Red ", false),
+        (true, &red, "Coral", true),
+        (true, &basics, "Favorites", true),
+    ] {
+        let mut start = SwatchesState::default();
+        start.browser.view = PresetView::List;
+        let state = Rc::new(RefCell::new(start));
+        let edits = Rc::new(RefCell::new(Vec::new()));
+        let renames = Rc::new(RefCell::new(Vec::new()));
+        let (held, seen_edits, seen_renames) = (Rc::clone(&state), Rc::clone(&edits), Rc::clone(&renames));
+        let groups = groups.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut current = held.borrow_mut();
+            let mut panel = SwatchesPanel::new(&groups, Bind::bound(&mut *current), RED);
+            if opt_in {
+                panel = panel.report_invalid_renames(true);
+            }
+            let out = panel.show(ui);
+            seen_edits.borrow_mut().extend(out.edits);
+            seen_renames.borrow_mut().extend(out.events.into_iter().filter_map(|event| match event {
+                PresetEvent::Rename { key, text, .. } => Some((key, text)),
+                _ => None,
+            }));
+        });
+        fixture.room(Vec2::new(320.0, 400.0)).settle();
+        let label = if key == &red { "Red" } else { "Basics" };
+        let tree = fixture.tree();
+        let row = tree
+            .with_role(Role::TREE_ITEM)
+            .into_iter()
+            .find(|&node| tree.name_of(node).is_some_and(|actual| actual == label || actual.starts_with(&format!("{label},"))))
+            .and_then(|node| fixture.target(node))
+            .unwrap_or_else(|| {
+                panic!("the {label} row is shown, names: {:?}", tree.keys().into_iter().filter_map(|key| tree.name_of(key)).collect::<Vec<_>>())
+            });
+        fixture.click(&row).key(Key::F2, Modifiers::NONE).type_text(name).settle();
+        let tree = fixture.tree();
+        assert!(tree.keys().into_iter().any(|key| tree.value_of(key) == Some(name)), "the rename field shows {name}");
+        let selection = state.borrow().selection.clone();
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+        let rejected = opt_in && matches!(name, "Rose" | "Other");
+        if rejected {
+            assert_eq!(*renames.borrow(), [(key.clone(), name.to_owned())]);
+        } else {
+            assert!(renames.borrow().is_empty(), "{name}");
+        }
+        if accepted {
+            let reported = edits.borrow();
+            assert!(
+                match &reported[..] {
+                    [SwatchEdit::Rename { swatch, name: new }] => key == &SwatchKey::Swatch(swatch.clone()) && new == name,
+                    [SwatchEdit::RenameGroup { group, name: new }] => key == &SwatchKey::Group(group.clone()) && new == name,
+                    _ => false,
+                },
+                "{name}: {reported:?}",
+            );
+        } else {
+            assert!(edits.borrow().is_empty(), "{name}");
+            assert_eq!(state.borrow().selection, selection, "{name}");
+        }
+    }
+}
+
 fn table_entries(count: usize) -> Vec<(Label, Srgba)> {
     (0..count).map(|i| (Label::from(format!("Index {i}")), Srgba::rgb(i as f32 / count as f32, 0.5, 0.25))).collect()
 }
