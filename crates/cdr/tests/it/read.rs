@@ -3,7 +3,7 @@
 
 use craft_cdr::model::{Blend, Cap, Color, Flags, Geometry, Join, LayerKind, Matrix, Object, Segment};
 use craft_cdr::synth::{self, V, chunk, list};
-use craft_cdr::{Error, Limits, Warning, read};
+use craft_cdr::{Error, Limits, Warning, preview, read};
 use proptest::prelude::*;
 
 fn shapes(objects: &[Object]) -> Vec<&craft_cdr::model::Shape> {
@@ -2167,6 +2167,7 @@ proptest! {
         let mut b = b"RIFF".to_vec();
         b.extend(bytes);
         let _ = read(&b, Limits::default());
+        let _ = preview(&b, Limits::default());
     }
 
     #[test]
@@ -2177,6 +2178,7 @@ proptest! {
             b[at % n] = v;
         }
         let _ = read(&b, Limits::default());
+        let _ = preview(&b, Limits::default());
     }
 
     #[test]
@@ -2222,6 +2224,65 @@ proptest! {
                 data[at % n] = v;
             }
         }
-        let _ = read(&synth::zip(&members, b""), Limits::default());
+        let zip = synth::zip(&members, b"");
+        let _ = read(&zip, Limits::default());
+        // The package has no picture member, and `preview` does not read the damaged drawing.
+        prop_assert_eq!(preview(&zip, Limits::default()), Ok(None));
     }
+
+    #[test]
+    fn preview_never_panics_on_mutated_pictures(version in prop::sample::select(vec![700u16, 1100, 1300, 1500, 1700]), deflate: bool, zipped: bool, edits in prop::collection::vec((any::<usize>(), any::<u8>()), 1..24)) {
+        let bitmap = disp_body(5, 3, 8);
+        let mut b = if version < 1400 {
+            // A compressed list before the `DISP` chunk, which the walk passes over.
+            let mut content = vec![chunk(b"vrsn", version.to_le_bytes().to_vec())];
+            content.push(synth::cmpr(&synth::sample_content(version)));
+            content.push(chunk(b"DISP", bitmap));
+            synth::riff(version, &content)
+        } else {
+            let (name, picture) = if version < 1700 {
+                ("metadata/thumbnails/thumbnail.bmp", [b"BM".as_slice(), &bitmap].concat())
+            } else {
+                ("previews/thumbnail.png", [b"\x89PNG\r\n\x1a\n".as_slice(), &bitmap].concat())
+            };
+            let mut picture = synth::Member { name: name.into(), data: picture, deflate };
+            // Edits to the member before it is zipped reach past its CRC-32.
+            if !zipped {
+                let n = picture.data.len();
+                for &(at, v) in &edits {
+                    picture.data[at % n] = v;
+                }
+            }
+            if version < 1600 {
+                synth::zip(&[synth::Member { name: "content/riffData.cdr".into(), data: synth::sample(version, false), deflate }, picture], b"")
+            } else {
+                let mut body = vec![chunk(b"vrsn", version.to_le_bytes().to_vec())];
+                body.extend(synth::sample_content(version));
+                synth::package16(version, &body, deflate, &[picture])
+            }
+        };
+        if zipped || version < 1400 {
+            let n = b.len();
+            for (at, v) in edits {
+                b[at % n] = v;
+            }
+        }
+        let _ = preview(&b, Limits::default());
+    }
+}
+
+/// A `DISP` body: 4 bytes, a 40-byte bitmap info header for `bits` per pixel, a full color table
+/// and the rows.
+fn disp_body(width: u32, rows: u32, bits: u16) -> Vec<u8> {
+    let mut b = 8u32.to_le_bytes().to_vec();
+    b.extend(40u32.to_le_bytes());
+    b.extend(width.to_le_bytes());
+    b.extend(rows.to_le_bytes());
+    b.extend(1u16.to_le_bytes());
+    b.extend(bits.to_le_bytes());
+    b.extend([0; 24]);
+    b.extend((0..(1u32 << bits) * 4).map(|i| i as u8));
+    let stride = (width * u32::from(bits)).div_ceil(32) * 4;
+    b.extend((0..stride * rows).map(|i| (i * 3) as u8));
+    b
 }
