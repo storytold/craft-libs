@@ -1,0 +1,36 @@
+{
+ "packages": [
+  {
+   "name": "craft-ui",
+   "features": {},
+   "dependencies": [
+    {
+     "name": "craft-domain",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/ui/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-domain",
+   "features": {},
+   "dependencies": [],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/domain/src/lib.rs"
+    }
+   ]
+  }
+ ]
+}

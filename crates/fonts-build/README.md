@@ -20,8 +20,8 @@ Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the pack
 ## Using it
 
 `Cargo.toml` (same `rev` as the app's other craft-libs crates). The `subset` feature goes on the
-build-dependency only: it brings in the subsetter ([skera](https://crates.io/crates/skera) and the
-fontations crates), which the app itself never needs. Cargo's resolver 2 and later (edition 2021
+build-dependency only: it brings in the subsetter (craft-font-subset, which compiles HarfBuzz's
+C++), which the app itself needs only for its own run-time subsetting. Cargo's resolver 2 and later (edition 2021
 and later) keep build-dependency features apart from the app's, so the dependency stays without
 it.
 
@@ -98,8 +98,11 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
-index, bytes }` literals; any struct with those fields and that name in scope works too.
-`EmbeddedFace` itself has `name()`, `has_script(tag)`, `is_cjk()` and `weight()`.
+index, bytes, role }` literals; any struct with those fields and that name in scope works too.
+`role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")`, `Some("signature")` or
+`None`; craft-ui's font stack leads the Monospace family with the `mono` face and the signature
+family (`FontRef::signature()`) with the `signature` face. `EmbeddedFace` itself has `name()`,
+`has_script(tag)`, `is_cjk()` and `weight()`.
 
 ## Document fonts
 
@@ -178,8 +181,8 @@ the five cuts take about 3 MB together.
   with a `cargo::warning`: a full CJK face is never embedded for the interface by accident. A
   checkout whose manifest has no interface face is a `cargo::warning` too. With `CRAFT_FONTS_REQUIRED=1` that
   makes `scripts(&["Hant"])` an error; with catalogs, an interface face satisfies it.
-- An interface face with CFF outlines is an error (`Error::NotTrueType`), even when not required:
-  the subsetter cuts TrueType (`glyf`) faces correctly, but not CFF ones.
+- Interface faces may have TrueType (`glyf`) or CFF outlines; a cut keeps its source's format and
+  extension.
 
 The catalogs come from craft-i18n. An app's build reads them from the checkout `CRAFT_I18N_DIR`
 names (craft-i18n's `docs/integration.md`); the fonts build script reads the same variable, as in
@@ -199,4 +202,6 @@ exact only for the catalogs it was cut to. It also reruns the build script when 
 One face per line, eight or nine fields separated by `" | "`; craft-fonts' `docs/integration.md`
 defines them. Lines starting with `#` are comments. A file field ending in `#<n>` names face `n` of
 a font collection (`fonts/noto-sans-cjk/NotoSansCJK.ttc#2`); without it the index is 0. The ninth
-field, `role`, is `ui` on interface faces and absent elsewhere. Fields after the ninth are ignored.
+field, `role`, is `ui` on interface faces, `mono` on the monospace face, `signature` on the signature
+face and absent elsewhere. Fields
+after the ninth are ignored.

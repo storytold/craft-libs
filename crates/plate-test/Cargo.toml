@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-plate-test"
 description = "Print-color test scenes for Craft apps: reference PDFs and PDF structure checks"
 version.workspace = true

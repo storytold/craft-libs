@@ -49,12 +49,15 @@ use crate::plates::{self, Fallback, pdf_text};
 /// How [`flatten_document`] reads, flattens and writes.
 #[derive(Clone, Debug, Default)]
 pub struct FlattenDocumentOptions {
+    /// How the PDF interpreter reads each page.
     pub read: ReadOptions,
+    /// How each page is flattened.
     pub flatten: FlattenOptions,
     /// The pages to flatten, from 0; all when `None`.
     pub pages: Option<Range<usize>>,
     /// Written as `/Producer`.
     pub producer: String,
+    /// What to do with a page the interpreter cannot read.
     pub unreadable: Unreadable,
     /// The output's PDF version. Below 1.6, DeviceN spaces get no NChannel attributes; at 1.4,
     /// krilla also enforces the 1.4 implementation limits (reals, array and dictionary sizes),
@@ -90,6 +93,7 @@ pub struct FlattenDocumentReport {
     pub unflattened: Vec<(usize, String)>,
     /// Pages read and separated with an output intent other than the one written.
     pub other_intents: Vec<usize>,
+    /// Sums of the per-page reports in `pages`.
     pub totals: FlattenTotals,
 }
 
@@ -99,42 +103,77 @@ pub struct FlattenDocumentReport {
 pub struct FlattenTotals {
     /// Top-level items cut into regions.
     pub flattened: usize,
+    /// Regions rasterized, summed over pages.
     pub complex_regions: usize,
     /// Groups rasterized whole.
     pub complex_groups: usize,
+    /// Raster images written for complex regions.
     pub raster_images: usize,
+    /// Device pixels of those images.
     pub raster_pixels: u64,
     /// The lowest resolution a complex region was rasterized at, when one needed less than
     /// [`FlattenOptions::raster_dpi`].
     pub lowest_dpi: Option<f32>,
     /// Raster images read.
     pub images: usize,
+    /// Images that failed to decode and were left out.
     pub unreadable_images: usize,
+    /// Tiling pattern fills left out (see `ReadReport::dropped_tilings`).
     pub dropped_tilings: usize,
+    /// Spot inks past the ink set's capacity whose tints were dropped.
     pub dropped_inks: usize,
+    /// Printing annotations left out because `ReadOptions::annotations` is `false`.
     pub dropped_annotations: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
+/// Why [`flatten_document`] failed.
 pub enum FlattenDocumentError {
     #[error(transparent)]
+    #[allow(missing_docs)]
     Open(#[from] OpenError),
     #[error("pages {start}..{end} are not pages of the document's {count}")]
-    PageRange { start: usize, end: usize, count: usize },
+    /// The requested page range is not within the document.
+    PageRange {
+        /// First requested page, from 0.
+        start: usize,
+        /// End of the requested range (exclusive).
+        end: usize,
+        /// Number of pages in the document.
+        count: usize,
+    },
     #[error("page {page} (from 0): {source}")]
-    Read { page: usize, source: ReadError },
+    /// The interpreter failed on a page and [`Unreadable::Fail`] is set.
+    Read {
+        /// Page index, from 0.
+        page: usize,
+        #[allow(missing_docs)]
+        source: ReadError,
+    },
     #[error("page {page} (from 0): {source}")]
-    Flatten { page: usize, source: FlattenError },
+    /// Flattening a page failed.
+    Flatten {
+        /// Page index, from 0.
+        page: usize,
+        #[allow(missing_docs)]
+        source: FlattenError,
+    },
     #[error("page {page} (from 0): {source}")]
-    Write { page: usize, source: WriteError },
+    /// Writing a flattened page failed.
+    Write {
+        /// Page index, from 0.
+        page: usize,
+        #[allow(missing_docs)]
+        source: WriteError,
+    },
     /// Serializing the document failed.
     #[error(transparent)]
     Serialize(#[from] pdf_write::WriteError),
 }
 
 /// `pdf` with the transparency of every page in [`FlattenDocumentOptions::pages`] flattened, as
-/// one PDF. See the [module docs](self) for what carries over.
+/// one PDF. See the module docs for what carries over.
 pub fn flatten_document(pdf: &[u8], opts: &FlattenDocumentOptions) -> Result<(Vec<u8>, FlattenDocumentReport), FlattenDocumentError> {
     flatten_document_with_progress(pdf, opts, &mut |_, _| {})
 }

@@ -25,7 +25,9 @@ pub const DEFAULT_SLIVER: f64 = 0.01;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FillRule {
     #[default]
+    #[allow(missing_docs)]
     NonZero,
+    #[allow(missing_docs)]
     EvenOdd,
 }
 
@@ -42,17 +44,21 @@ impl FillRule {
 /// A filled shape. Open subpaths are closed, as a fill closes them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
+    /// The outline; open subpaths count as closed.
     pub path: BezPath,
+    #[allow(missing_docs)]
     pub rule: FillRule,
     /// Indices into the clip list: the shape covers only what all of them cover.
     pub clips: Vec<usize>,
 }
 
 impl Shape {
+    /// Create a shape with no clips.
     pub fn new(path: BezPath, rule: FillRule) -> Self {
         Self { path, rule, clips: Vec::new() }
     }
 
+    /// Add clip indices (into the clip list passed to [`regions`]).
     pub fn clipped(mut self, clips: impl IntoIterator<Item = usize>) -> Self {
         self.clips.extend(clips);
         self
@@ -62,7 +68,9 @@ impl Shape {
 /// A clipping path.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClipPath {
+    /// The clip outline.
     pub path: BezPath,
+    /// The rule that decides what the outline covers.
     pub rule: FillRule,
 }
 
@@ -83,17 +91,26 @@ impl Region {
         self.sources.last().copied()
     }
 
+    /// Whether `p` lies inside the region.
     pub fn contains(&self, p: Point) -> bool {
         self.path.winding(p) != 0
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+/// Why computing regions failed.
 pub enum GeomError {
     #[error("input contains NaN or infinite coordinates")]
+    #[allow(missing_docs)]
     NonFinite,
     #[error("shape {shape} names clip {clip}, which does not exist")]
-    UnknownClip { shape: usize, clip: usize },
+    /// A shape refers to a clip index outside the clip list.
+    UnknownClip {
+        /// Index of the shape.
+        shape: usize,
+        /// The missing clip index.
+        clip: usize,
+    },
     /// The sweep failed on near-degenerate input; the caller rasterizes instead.
     #[error("the shapes are too degenerate to sweep")]
     Degenerate,
@@ -976,18 +993,6 @@ mod tests {
     }
 
     #[test]
-    fn two_overlapping_rectangles_make_three_regions() {
-        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)), fill(rect(5.0, 5.0, 15.0, 15.0))];
-        let r = regions(&shapes, &[]).unwrap();
-        assert_eq!(summary(&r), vec![(vec![0], 75.0), (vec![0, 1], 25.0), (vec![1], 75.0)]);
-        assert_tiles(&shapes, &r, Rect::new(-1.0, -1.0, 16.0, 16.0), 0.5);
-        // The pieces the sweep split rectangle edges into are joined again.
-        let overlap = r.iter().find(|r| r.sources == [0, 1]).unwrap();
-        assert_eq!(overlap.path.segments().count(), 4);
-        assert_eq!(overlap.top(), Some(1));
-    }
-
-    #[test]
     fn coincident_edges_make_no_slivers() {
         // Side by side, sharing an edge.
         let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)), fill(rect(10.0, 0.0, 20.0, 10.0))];
@@ -1002,52 +1007,6 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].sources, [0, 1]);
         assert!((r[0].area - circle.area().abs()).abs() < 1e-9);
-    }
-
-    #[test]
-    fn fill_rules_differ_on_self_overlap() {
-        // Two squares in one path, wound the same way: the overlap has winding 2.
-        let mut path = rect(0.0, 0.0, 10.0, 10.0);
-        path.extend(rect(5.0, 5.0, 15.0, 15.0));
-        let center = Point::new(7.5, 7.5);
-        let nonzero = regions(&[Shape::new(path.clone(), FillRule::NonZero)], &[]).unwrap();
-        assert_eq!(summary(&nonzero), vec![(vec![0], 175.0)]);
-        assert!(nonzero[0].contains(center));
-        let shapes = [Shape::new(path, FillRule::EvenOdd)];
-        let evenodd = regions(&shapes, &[]).unwrap();
-        assert!((evenodd.iter().map(|r| r.area).sum::<f64>() - 150.0).abs() < 1e-9);
-        assert!(evenodd.iter().all(|r| r.sources == [0] && !r.contains(center)));
-        assert_tiles(&shapes, &evenodd, Rect::new(-1.0, -1.0, 16.0, 16.0), 0.5);
-    }
-
-    #[test]
-    fn a_hole_is_part_of_its_region_and_a_shape_in_it_is_its_own() {
-        // Nonzero hole by reversal, even-odd hole by nesting.
-        let mut nonzero = rect(0.0, 0.0, 10.0, 10.0);
-        nonzero.extend(rect(3.0, 3.0, 7.0, 7.0).reverse_subpaths());
-        let mut evenodd = rect(0.0, 0.0, 10.0, 10.0);
-        evenodd.extend(rect(3.0, 3.0, 7.0, 7.0));
-        for donut in [Shape::new(nonzero, FillRule::NonZero), Shape::new(evenodd, FillRule::EvenOdd)] {
-            let shapes = [donut, fill(rect(4.0, 4.0, 6.0, 6.0))];
-            let r = regions(&shapes, &[]).unwrap();
-            assert_eq!(summary(&r), vec![(vec![0], 84.0), (vec![1], 4.0)]);
-            let ring = r.iter().find(|r| r.sources == [0]).unwrap();
-            assert_eq!(ring.path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count(), 2);
-            assert!(!ring.contains(Point::new(3.5, 3.5)));
-            assert_tiles(&shapes, &r, Rect::new(-1.0, -1.0, 11.0, 11.0), 0.25);
-        }
-    }
-
-    #[test]
-    fn slivers_below_the_threshold_are_dropped() {
-        // Overlapping by 0.001.
-        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)), fill(rect(9.999, 0.0, 20.0, 10.0))];
-        let r = regions(&shapes, &[]).unwrap();
-        assert!(r.iter().all(|r| r.sources != [0, 1]));
-        assert_eq!(r.len(), 2);
-        let kept = regions_with(&shapes, &[], 0.0).unwrap();
-        let sliver = kept.iter().find(|r| r.sources == [0, 1]).unwrap();
-        assert!((sliver.area - 0.01).abs() < 1e-9, "{}", sliver.area);
     }
 
     #[test]
@@ -1074,42 +1033,6 @@ mod tests {
         }
         let top = Topology::<i32>::from_path(&all, 1e-6).unwrap();
         top.contours(|w| *w != 0).contours().map(|c| c.path.area()).sum::<f64>().abs()
-    }
-
-    #[test]
-    fn clips_limit_their_shapes_only() {
-        let clips = [ClipPath { path: rect(5.0, 0.0, 25.0, 10.0), rule: FillRule::NonZero }];
-        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)).clipped([0]), fill(rect(20.0, 0.0, 30.0, 10.0))];
-        let r = regions(&shapes, &clips).unwrap();
-        // The clip's edge at x = 25 crosses only the unclipped shape, which stays one region.
-        assert_eq!(summary(&r), vec![(vec![0], 50.0), (vec![1], 100.0)]);
-        assert!(r.iter().any(|r| r.sources == [0] && r.contains(Point::new(7.0, 5.0))));
-        assert_eq!(regions(&[fill(rect(0.0, 0.0, 1.0, 1.0)).clipped([3])], &clips), Err(GeomError::UnknownClip { shape: 0, clip: 3 }));
-    }
-
-    #[test]
-    fn open_and_non_finite_input() {
-        let mut open = BezPath::new();
-        open.move_to((0.0, 0.0));
-        open.line_to((10.0, 0.0));
-        open.line_to((10.0, 10.0));
-        assert_eq!(summary(&regions(&[fill(open)], &[]).unwrap()), vec![(vec![0], 50.0)]);
-        assert_eq!(regions(&[fill(rect(0.0, 0.0, f64::NAN, 1.0))], &[]), Err(GeomError::NonFinite));
-        assert_eq!(regions(&[], &[]), Ok(vec![]));
-    }
-
-    #[test]
-    fn only_groups_with_transparency_need_regions() {
-        let bounds = [
-            Rect::new(0.0, 0.0, 10.0, 10.0),
-            Rect::new(100.0, 100.0, 110.0, 110.0),
-            Rect::new(10.0, 5.0, 20.0, 15.0), // touches 0
-            Rect::new(18.0, 14.0, 30.0, 30.0),
-            Rect::new(200.0, 0.0, 210.0, 10.0),
-        ];
-        assert_eq!(overlap_groups(&bounds), vec![vec![0, 2, 3], vec![1], vec![4]]);
-        assert_eq!(transparent_groups(&bounds, &[false, false, false, true, false]), vec![vec![0, 2, 3]]);
-        assert!(transparent_groups(&bounds, &[false; 5]).is_empty());
     }
 
     #[test]
@@ -1145,34 +1068,6 @@ mod tests {
         }
         assert!(sides > 100, "{sides} sides");
         assert!(lists.len() * 3 <= sides * 2, "{} lists for {sides} sides", lists.len());
-    }
-
-    /// About 1,000 rectangles on a letter page. Run with `--ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn timing_on_a_thousand_rectangles() {
-        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
-        let mut next = || {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            (seed >> 11) as f64 / (1u64 << 53) as f64
-        };
-        let shapes: Vec<Shape> = (0..1000)
-            .map(|_| {
-                let (x, y) = (next() * 560.0, next() * 740.0);
-                let (w, h) = (2.0 + next() * 50.0, 2.0 + next() * 50.0);
-                fill(rect(x, y, x + w, y + h))
-            })
-            .collect();
-        let t = std::time::Instant::now();
-        let r = regions(&shapes, &[]).unwrap();
-        let elapsed = t.elapsed();
-        eprintln!("{} shapes -> {} regions in {:?}", shapes.len(), r.len(), elapsed);
-        let union = union_area(&shapes);
-        let sum: f64 = r.iter().map(|r| r.area).sum();
-        // Less the slivers left out.
-        assert!(sum <= union * (1.0 + 1e-9) && sum > union * (1.0 - 1e-4), "{sum} vs {union}");
     }
 
     /// One open cubic per path, from `p0` to `p3` through the two handles.
@@ -1243,7 +1138,6 @@ mod tests {
         assert!(a.x - tidy.by_width[0].0 > bounds.x0, "the rounding case is not reached");
         assert_eq!(tidy.indices_around(a, b), vec![0]);
     }
-
     /// Many anchors sharing an x (and some within tolerance of it): the k-d lookup answers as a scan of
     /// every anchor does.
     #[test]

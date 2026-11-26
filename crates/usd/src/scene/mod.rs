@@ -1,9 +1,9 @@
 //! Neutral USDA/USDC scene, prim, and layer read/write.
 //!
-//! Parses `.usda` (text) and `.usdc` (Crate binary) layers into a neutral [`Layer`]
+//! Parses `.usda` (text) and `.usdc` (Crate binary) layers into a neutral [`Layer`](crate::scene::Layer)
 //! representation (keeping `def`/`over`/`class` specifiers, internal references, coordinate
 //! metadata, payload/sublayer/variant warnings, and decoded byte budgets), and writes neutral
-//! [`UsdLayer`] scenes to `.usda` text or `.usdc` Crate binary.
+//! [`UsdLayer`](crate::scene::UsdLayer) scenes to `.usda` text or `.usdc` Crate binary.
 
 pub mod usda;
 pub mod usdc;

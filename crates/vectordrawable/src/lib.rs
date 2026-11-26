@@ -6,7 +6,7 @@
 //! - [`model`]: what a drawable holds, in viewport coordinates: paths with a solid or gradient
 //!   fill and a stroke Android draws itself, and groups with a scale-rotate-translate transform
 //!   and a clip outline.
-//! - [`write`]: the XML ([`write::document`]), with its numbers, colours, path data and escaping.
+//! - [`write`](mod@write): the XML ([`write::document`]), with its numbers, colours, path data and escaping.
 //! - [`paint`]: fitting a gradient drawn through any affine frame to what a drawable can say: a
 //!   linear gradient's end point projected, radial and sweep gradients in a `<group>` that maps
 //!   the unit circle, a sweep's stops turned.
