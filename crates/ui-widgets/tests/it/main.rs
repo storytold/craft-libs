@@ -13,7 +13,8 @@ pub(crate) mod contract;
 pub(crate) mod disabled_fade;
 pub(crate) mod field_text_centred;
 pub(crate) mod focus_ring;
-
+pub(crate) mod graph;
+pub(crate) mod graph_annotations;
 pub(crate) mod keys;
 pub(crate) mod label;
 pub(crate) mod layer;
@@ -27,6 +28,7 @@ pub(crate) mod pickers;
 pub(crate) mod picture;
 pub(crate) mod popover;
 pub(crate) mod runtime;
+pub(crate) mod segmented;
 
 pub(crate) mod suite_rtl;
 pub(crate) mod suite_rules;
