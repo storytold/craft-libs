@@ -19,6 +19,8 @@ pub mod apng;
 pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
+#[cfg(feature = "cms")]
+mod display;
 mod error;
 pub mod exif_color;
 pub mod exr_stream;

@@ -77,6 +77,12 @@ the encode plan, and `fidelity_warnings` reports the conversion when it loses in
 `Image::convert` applies the same ICC rule: it keeps the profile only when the colour model stays
 the same.
 
+`Image::to_rgba8` changes only the layout and sample type. With the `cms` feature,
+`Image::to_display_rgba8` also converts the colors through `craft-cms`: from the embedded ICC
+profile, or from the CICP description of an RGB image without one, into the display profile the
+caller passes. An image with neither is treated as sRGB. `Image::source_profile` returns the
+profile it converts from.
+
 Palette BMP and PNG pixels decode as RGB(A) in `Image`; `bmp_palette` and `png_palette` expose the
 embedded table (and a PNG's transparent entry) so `photocraft-io` can open them in Indexed Color mode.
 `bmp_palette` returns the colours the header declares, not the decoder's 256-entry padding.
