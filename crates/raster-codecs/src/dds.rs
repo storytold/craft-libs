@@ -121,9 +121,11 @@ pub fn info(bytes: &[u8]) -> Result<DdsInfo, CodecError> {
 }
 
 /// Decode the declared mip chain, charging all retained pixels to one output-byte budget.
-/// Cancellation is checked before each level; no partial chain is returned.
+/// Cancellation is checked before each level; no partial chain is returned. Channels wider than
+/// 8 bits decode at 16 bits, as [`decode`] opens the top level.
 pub fn decode_levels(bytes: &[u8], limits: &Limits, cancel: &dyn Fn() -> bool) -> Result<Vec<Image>, CodecError> {
     let texture = craft_dds::Texture::parse(bytes).map_err(dds_error)?;
+    let wide = texture.bits_per_channel() > 8;
     let mut images = Vec::new();
     images.try_reserve_exact(texture.levels() as usize).map_err(|_| CodecError::LimitExceeded("cannot allocate DDS mip list".into()))?;
     let mut remaining = limits.max_alloc;
@@ -134,10 +136,18 @@ pub fn decode_levels(bytes: &[u8], limits: &Limits, cancel: &dyn Fn() -> bool) -
         let level = texture.mip_level(i).map_err(dds_error)?;
         let layout = layout(&level);
         let level_limits = Limits { max_alloc: remaining, ..*limits };
-        level_limits.check(level.width(), level.height(), layout, SampleType::U8)?;
-        let pixels = level.decode_with_limit(remaining).map_err(dds_error)?;
-        remaining = remaining.checked_sub(pixels.len() as u64).ok_or_else(|| CodecError::LimitExceeded("DDS mip chain exceeds max_alloc".into()))?;
-        images.push(Image::from_u8(level.width(), level.height(), layout, pixels)?);
+        let exceeded = || CodecError::LimitExceeded("DDS mip chain exceeds max_alloc".into());
+        if wide {
+            level_limits.check(level.width(), level.height(), layout, SampleType::U16)?;
+            let pixels = level.decode16_with_limit(remaining).map_err(dds_error)?;
+            remaining = remaining.checked_sub(pixels.len() as u64 * 2).ok_or_else(exceeded)?;
+            images.push(Image::from_u16(level.width(), level.height(), layout, &pixels)?);
+        } else {
+            level_limits.check(level.width(), level.height(), layout, SampleType::U8)?;
+            let pixels = level.decode_with_limit(remaining).map_err(dds_error)?;
+            remaining = remaining.checked_sub(pixels.len() as u64).ok_or_else(exceeded)?;
+            images.push(Image::from_u8(level.width(), level.height(), layout, pixels)?);
+        }
     }
     Ok(images)
 }

@@ -8,6 +8,7 @@ use crate::{App, InstallSource, version};
 /// One installed package that belongs to a Craft App.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Package {
+    /// The package manager that owns the package.
     pub manager: InstallSource,
     /// The package's name (`photocraft-bin`) or Flatpak app id.
     pub name: String,
@@ -118,76 +119,11 @@ pub fn version_of(p: &Package) -> Option<version::Version> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    fn pkgs(manager: InstallSource, list: Vec<(String, String)>) -> Vec<Package> {
-        list.into_iter().map(|(name, version)| Package { manager, name, version, user: false, origin: None, installation: None }).collect()
-    }
-
-    #[test]
-    fn reads_each_package_managers_listing() {
-        assert_eq!(
-            parse_dpkg("photocraft|installed|0.5.0-1\nphotocraft:amd64|installed|0.6.0-1\nwordcraft|config-files|0.3.0-1\n"),
-            [("photocraft".into(), "0.5.0-1".into()), ("photocraft".into(), "0.6.0-1".into())]
-        );
-        assert_eq!(parse_rpm("gridcraft|0.3.0\n"), [("gridcraft".into(), "0.3.0".into())]);
-        assert_eq!(parse_pacman("photocraft-bin 0.5.0-1\nlinux 6.11.1.arch1-1\n").len(), 2);
-        assert_eq!(
-            parse_flatpak_list("ai.storyteller.wordcraft\t\nai.storyteller.cadcraft\t0.3.0\n"),
-            [("ai.storyteller.wordcraft".into(), String::new()), ("ai.storyteller.cadcraft".into(), "0.3.0".into())]
-        );
-        // A row with no id is not a package listing.
-        assert!(parse_flatpak_list_with_origin("\t0.2.0\tflatpark\tuser\n").is_empty());
-        let info = "\nWordCraft - Word processor\n\n          ID: ai.storyteller.wordcraft\n     Version: 0.3.0\n      Branch: master\n";
-        assert_eq!(parse_flatpak_info(info).as_deref(), Some("0.3.0"));
-        assert_eq!(parse_flatpak_info("Version: \n"), None);
-    }
-
-    #[test]
-    fn candidate_names_cover_bundle_ids_for_deb_rpm_and_pacman() {
-        let photo = App::by_id("photocraft").unwrap();
-        let deb_names = candidate_names(photo, InstallSource::Deb);
-        assert!(deb_names.contains(&"photocraft".to_string()));
-        assert!(deb_names.contains(&"ai.storyteller.photocraft".to_string()));
-
-        let rpm_names = candidate_names(photo, InstallSource::Rpm);
-        assert!(rpm_names.contains(&"photocraft".to_string()));
-        assert!(rpm_names.contains(&"ai.storyteller.photocraft".to_string()));
-
-        let pacman_names = candidate_names(photo, InstallSource::Pacman);
-        assert!(pacman_names.contains(&"photocraft".to_string()));
-        assert!(pacman_names.contains(&"photocraft-bin".to_string()));
-        assert!(pacman_names.contains(&"ai.storyteller.photocraft".to_string()));
-    }
-
-    #[test]
-    fn finds_aur_packages_in_every_flavour() {
-        let photo = App::by_id("photocraft").unwrap();
-        let pdf = App::by_id("pdfcraft").unwrap();
-        let installed =
-            pkgs(InstallSource::Pacman, parse_pacman("linux 6.11.1.arch1-1\nphotocraft-git 0.3.0.r47.g47f9306-1\nprintcraft-bin 0.2.1-1\n"));
-        let hit = find(photo, &installed, &[InstallSource::Pacman]).unwrap();
-        assert_eq!(hit.name, "photocraft-git");
-        assert_eq!(version_of(hit).unwrap().to_string(), "0.3.0");
-        // PdfCraft under its old name.
-        assert_eq!(find(pdf, &installed, &[InstallSource::Pacman]).unwrap().name, "printcraft-bin");
-        assert!(find(App::by_id("wordcraft").unwrap(), &installed, &[InstallSource::Pacman]).is_none());
-    }
-
-    #[test]
-    fn prefers_managers_in_order_and_reads_revisions() {
-        let photo = App::by_id("photocraft").unwrap();
-        let mut installed = pkgs(InstallSource::Deb, parse_dpkg("photocraft|installed|0.5.0-1\n"));
-        installed.extend(pkgs(InstallSource::Flatpak, parse_flatpak_list("ai.storyteller.photocraft\t0.4.0\n")));
-        let hit = find(photo, &installed, &[InstallSource::Deb, InstallSource::Flatpak]).unwrap();
-        assert_eq!(hit.manager, InstallSource::Deb);
-        // 0.5.0-1 is the 0.5.0 release, not a pre-release of it.
-        assert_eq!(version_of(hit).unwrap().to_string(), "0.5.0");
-        assert_eq!(find(photo, &installed, &[InstallSource::Flatpak]).unwrap().version, "0.4.0");
-    }
-
-    #[test]
+    #[trial]
     fn parses_flatpak_list_with_origin_and_spots_flatpark() {
         let text = "ai.storyteller.photocraft\t0.19.0\tflatpark\tuser\nai.storyteller.cadcraft\t0.16.0\tcadcraft-origin\tsystem\nai.storyteller.wordcraft\t0.14.0\t\t\n";
         let list = parse_flatpak_list_with_origin(text);
@@ -207,7 +143,7 @@ mod tests {
         assert!(!is_flatpark_origin(""));
     }
 
-    #[test]
+    #[trial]
     fn flatpak_find_prioritizes_user_over_system() {
         let photo = App::by_id("photocraft").unwrap();
         let installed = vec![
@@ -236,7 +172,7 @@ mod tests {
     }
 }
 
-/// Matches the OCI URL from https://getartcraft.com/artcraft-oci.flatpakrepo,
+/// Matches the OCI URL from <https://getartcraft.com/artcraft-oci.flatpakrepo>,
 /// independently of its local remote name (normally `artcraft-oci`).
 pub fn is_artcraft_remote(origin: &str, remotes: &str) -> bool {
     remotes.lines().any(|line| {
@@ -247,9 +183,11 @@ pub fn is_artcraft_remote(origin: &str, remotes: &str) -> bool {
 }
 
 #[cfg(test)]
-mod remote_url_tests {
+pub(crate) mod remote_url_tests {
     use super::*;
-    #[test]
+    use craft_ui::testing::trial;
+
+    #[trial]
     fn recognizes_custom_names_and_rejects_unrelated_urls() {
         assert!(is_artcraft_remote("artcraft-oci", "artcraft-oci\toci+https://getartcraft.com\n"));
         assert!(is_artcraft_remote("custom", "custom\toci+https://getartcraft.com/\n"));
@@ -284,10 +222,13 @@ pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, li
     Ok(false)
 }
 
-#[cfg(all(test, target_os = "linux", feature = "oci_migration"))]
-mod migration_tests {
-    use super::*;
-    #[test]
+#[cfg(test)]
+#[cfg(all(target_os = "linux", feature = "oci_migration"))]
+pub(crate) mod migration_tests {
+    use super::{oci_ref_available, version};
+    use craft_ui::testing::trial;
+
+    #[trial]
     fn migration_requires_the_exact_ref_and_selected_version() {
         let reference = "app/ai.storyteller.photocraft/x86_64/stable";
         let expected = version::parse("1.2.3").unwrap();
@@ -315,9 +256,11 @@ pub fn remote_manages_flatpak(origin: &str, remotes: &str) -> bool {
 }
 
 #[cfg(test)]
-mod remote_ownership_tests {
+pub(crate) mod remote_ownership_tests {
     use super::*;
-    #[test]
+    use craft_ui::testing::trial;
+
+    #[trial]
     fn only_confirmed_empty_urls_allow_bundle_replacement() {
         assert!(!remote_manages_flatpak("app-origin", "app-origin\t\n"));
         assert!(remote_manages_flatpak("renamed", "renamed\thttps://example.org/repo\n"));

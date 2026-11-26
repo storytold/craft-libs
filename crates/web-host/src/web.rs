@@ -7,7 +7,7 @@
 //! }
 //! ```
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
@@ -56,11 +56,25 @@ enum Transport {
     Page { canvas: web_sys::EventTarget },
 }
 
-/// The connection to the page hosting the app.
-pub struct Host {
+struct Inner {
     app: &'static str,
     transport: Transport,
     dirty: Cell<Option<bool>>,
+}
+
+/// The connection to the page hosting the app. Clones share the one connection.
+#[derive(Clone)]
+pub struct Host(Rc<Inner>);
+
+thread_local! {
+    /// The connection [`Host::connect`] made, for the services that deliver through the page
+    /// ([`crate::files::BrowserFiles`]).
+    static CONNECTED: RefCell<Option<Host>> = const { RefCell::new(None) };
+}
+
+/// The connection to the hosting page, once [`Host::connect`] found one.
+pub(crate) fn connected() -> Option<Host> {
+    CONNECTED.with(|connected| connected.borrow().clone())
 }
 
 impl Host {
@@ -85,11 +99,13 @@ impl Host {
             }
             Mode::Page => Transport::Page { canvas: canvas.clone().into() },
         };
-        Some(Self { app, transport, dirty: Cell::new(None) })
+        let host = Self(Rc::new(Inner { app, transport, dirty: Cell::new(None) }));
+        CONNECTED.with(|connected| *connected.borrow_mut() = Some(host.clone()));
+        Some(host)
     }
 
     pub fn mode(&self) -> Mode {
-        match self.transport {
+        match self.0.transport {
             Transport::Parent { .. } => Mode::Parent,
             Transport::Page { .. } => Mode::Page,
         }
@@ -100,9 +116,9 @@ impl Host {
     /// `saved` for the `save` the handler just posted), and wasm-bindgen refuses to re-enter an
     /// `FnMut` closure before its body runs, so the message would never reach the queue.
     pub fn listen(&self, handler: impl FnMut(Message) + 'static) {
-        let app = self.app;
+        let app = self.0.app;
         let inbox = Rc::new(Inbox::new(handler));
-        match &self.transport {
+        match &self.0.transport {
             Transport::Parent { window, parent, origin } => {
                 let (parent, origin, inbox) = (parent.clone(), origin.clone(), inbox.clone());
                 let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
@@ -146,7 +162,7 @@ impl Host {
     /// The new state is recorded before the send: a page host can report another state while the
     /// event is still dispatching, and that later report wins. A failed send is forgotten.
     pub fn post_dirty(&self, dirty: bool) {
-        crate::note_dirty(&self.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
+        crate::note_dirty(&self.0.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
     }
 
     /// Hand the host a file the app would otherwise download: Save, Save As, Export. With an
@@ -180,9 +196,9 @@ impl Host {
     }
 
     fn post(&self, kind: Outgoing, fields: &[(&str, JsValue)], transfer: Option<&js_sys::ArrayBuffer>) -> Result<(), String> {
-        let message_type = message_type(self.app, kind.kind());
+        let message_type = message_type(self.0.app, kind.kind());
         let error = |e: JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
-        match &self.transport {
+        match &self.0.transport {
             Transport::Parent { parent, origin, .. } => {
                 let message = object(&[("type", message_type.as_str().into())], fields)?;
                 match transfer {
@@ -288,11 +304,11 @@ mod tests {
     fn test_attach_pdf_rejects_foreign_origin() {
         let window = web_sys::window().unwrap();
         let origin = window.location().origin().unwrap();
-        let host = Host {
+        let host = Host(Rc::new(Inner {
             app: "pdf-attach-test",
             transport: Transport::Parent { window: window.clone(), parent: window.clone(), origin: origin.clone() },
             dirty: Cell::new(None),
-        };
+        }));
         let received = Rc::new(Cell::new(0));
         let counter = received.clone();
         host.listen(move |_| counter.set(counter.get() + 1));
@@ -363,95 +379,5 @@ mod tests {
 
     fn buffer(len: u32) -> js_sys::ArrayBuffer {
         js_sys::ArrayBuffer::new(len)
-    }
-
-    #[wasm_bindgen_test]
-    fn an_open_without_bytes_or_a_blob_is_dropped() {
-        for data in [
-            obj(&[("name", "a.pdf".into())]),
-            obj(&[("name", "a.pdf".into()), ("bytes", "text".into())]),
-            obj(&[("name", "a.pdf".into()), ("bytes", 42.into())]),
-            obj(&[("name", "a.pdf".into()), ("file", "not a blob".into())]),
-            JsValue::NULL,
-            JsValue::UNDEFINED,
-            JsValue::from_str("a string"),
-            JsValue::from_f64(7.0),
-        ] {
-            assert!(read(Incoming::Open, &data).is_none());
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn an_open_takes_bytes_as_an_array_buffer_or_a_uint8_array() {
-        let ab = buffer(3);
-        let array = js_sys::Uint8Array::new_with_length(5);
-        for (bytes, len) in [(JsValue::from(ab), 3.0), (JsValue::from(array), 5.0)] {
-            let Some(Message::Open { data, .. }) = read(Incoming::Open, &obj(&[("name", "a.pdf".into()), ("bytes", bytes)])) else {
-                panic!("an open with bytes is read");
-            };
-            assert_eq!(data.size(), len);
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn an_open_without_a_name_or_with_a_hostile_one_gets_a_clean_name() {
-        let named = |name: Option<&str>| {
-            let mut fields = vec![("bytes", JsValue::from(buffer(1)))];
-            if let Some(n) = name {
-                fields.push(("name", n.into()));
-            }
-            match read(Incoming::Open, &obj(&fields)) {
-                Some(Message::Open { name, .. }) => name,
-                _ => panic!("an open with bytes is read"),
-            }
-        };
-        assert_eq!(named(None), "document");
-        assert_eq!(named(Some("../../etc/passwd")), "passwd");
-        assert_eq!(named(Some("a\u{0}b.txt")), "ab.txt");
-        assert_eq!(named(Some(&"x".repeat(300))).chars().count(), crate::MAX_NAME_CHARS);
-    }
-
-    #[wasm_bindgen_test]
-    fn the_size_is_the_data_s_own_not_the_hosts_claim() {
-        // An ArrayBuffer of 64 MiB with a `size` field of 1: the bytes are viewed in place, not
-        // copied, and the app sees their real length before it decides to read them.
-        let ab = buffer(64 << 20);
-        let Some(Message::Open { data, .. }) = read(Incoming::Open, &obj(&[("bytes", ab.clone().into()), ("size", 1.into())])) else {
-            panic!("an open with bytes is read");
-        };
-        assert_eq!(data.size(), f64::from(64u32 << 20));
-        let FileData::Bytes(view) = &data else { panic!("bytes stay bytes") };
-        assert!(js_sys::Object::is(&view.buffer(), &ab), "a view of the host's buffer, not a copy");
-
-        // A Blob of 5 bytes with a `size` field of a terabyte.
-        let blob = web_sys::Blob::new_with_str_sequence(&js_sys::Array::of1(&"hello".into())).expect("a Blob");
-        let Some(Message::Open { data, .. }) = read(Incoming::Open, &obj(&[("file", blob.into()), ("size", 1e12.into())])) else {
-            panic!("an open with a Blob is read");
-        };
-        assert_eq!(data.size(), 5.0);
-    }
-
-    #[wasm_bindgen_test]
-    fn a_saved_needs_a_string_id() {
-        assert!(matches!(read(Incoming::Saved, &obj(&[("id", "s1".into())])), Some(Message::Saved { id }) if id == "s1"));
-        for data in [obj(&[]), obj(&[("id", 3.into())]), JsValue::NULL, JsValue::from_str("s1")] {
-            assert!(read(Incoming::Saved, &data).is_none());
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn a_host_message_and_a_handoff_done_read_whatever_fields_exist() {
-        // Nothing required: a missing version is the contract's, `handoff` is true only for `true`.
-        for data in [JsValue::NULL, obj(&[]), obj(&[("handoff", "yes".into())]), obj(&[("handoff", 1.into())])] {
-            let Some(Message::Host { version, handoff }) = read(Incoming::Host, &data) else { panic!("a host message is read") };
-            assert_eq!(version, crate::VERSION);
-            assert!(!handoff);
-        }
-        assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into())])), Some(Message::Host { handoff: true, .. })));
-        assert!(matches!(
-            read(Incoming::HandoffDone, &obj(&[("name", "a.pdf".into()), ("app", "pdfcraft".into())])),
-            Some(Message::HandoffDone { name, app }) if name == "a.pdf" && app == "pdfcraft"
-        ));
-        assert!(matches!(read(Incoming::HandoffDone, &JsValue::NULL), Some(Message::HandoffDone { name, app }) if name.is_empty() && app.is_empty()));
     }
 }

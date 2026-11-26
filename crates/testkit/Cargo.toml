@@ -5,24 +5,22 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Source-level platform regression guards, skip-or-fail helpers and verification utilities for the Craft application suite"
+description = "Source-level platform regression guards, test deadlines, hostile-input helpers, skip-or-fail helpers and a reentrant test lock for the Craft application suite"
 publish = false
 
 [features]
 # Pinned-corpus manifests and the `corpus::pinned` test gate (native only).
-corpus = ["dep:sha2", "dep:libc", "dep:rustix"]
+corpus = ["dep:sha2", "dep:libc"]
 
 [dependencies]
 sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = { version = "0.2", optional = true }
-
-[target.'cfg(target_vendor = "apple")'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "fs"], optional = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 skrifa = { version = "0.47", default-features = false, features = ["std"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [lints]
 workspace = true
