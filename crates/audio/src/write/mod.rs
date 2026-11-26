@@ -36,9 +36,10 @@ use std::io::{Seek, Write};
 /// keeps values above full scale. `opts.layout`, when set, must have `buf`'s channel count.
 ///
 /// The lossy formats take `opts.rate_control`. AAC and ALAC are written as M4A, which records the
-/// encoder's priming and the exact length, so the file decodes to `buf`'s frames. MP3, AC-3 and
-/// E-AC-3 are raw streams, which have no place for that: they decode with the codec's delay in
-/// front and padded to whole frames.
+/// encoder's priming and the exact length, so the file decodes to `buf`'s frames. MP3 does the
+/// same with an Info frame in front of the audio, whose LAME tag gives the delay and padding.
+/// AC-3 and E-AC-3 are raw streams, which have no place for that: they decode with the codec's
+/// delay in front and padded to whole frames.
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {

@@ -21,6 +21,19 @@ fn tones(sample_rate: u32, channels: usize, frames: usize) -> AudioBuffer {
     AudioBuffer { sample_rate, channels: (0..channels).map(channel).collect() }
 }
 
+/// A 3 kHz sine in each channel (phase shifted per channel): high enough that a decode one sample
+/// off scores far below one in line (`aligned`).
+fn treble(sample_rate: u32, channels: usize, frames: usize) -> AudioBuffer {
+    let channel = |c: usize| (0..frames).map(|i| ((i as f32 * 3000.0 * std::f32::consts::TAU / sample_rate as f32) + c as f32).sin() * 0.4).collect();
+    AudioBuffer { sample_rate, channels: (0..channels).map(channel).collect() }
+}
+
+/// Whether `got` is `want` decoded in line with it: clearly better than one sample early or late.
+fn aligned(want: &[f32], got: &[f32]) -> Result<(), String> {
+    let (at, early, late) = (snr(want, got), snr(&want[1..], got), snr(want, &got[1..]));
+    if at > 15.0 && at > early.max(late) + 6.0 { Ok(()) } else { Err(format!("{at:.1} dB in line, {early:.1} / {late:.1} dB a sample off")) }
+}
+
 /// Signal-to-noise ratio in dB of `got` against `want`, over the frames both have.
 fn snr(want: &[f32], got: &[f32]) -> f64 {
     let (signal, noise) =
@@ -151,15 +164,48 @@ fn channels_reach_their_speakers() {
     }
 }
 
-/// MP3, AC-3 and E-AC-3 are raw streams: the audio comes back behind the codec's delay.
+/// An MP3 file starts with an Info frame whose LAME tag gives the delay and padding: it decodes to
+/// the length encoded, sample-aligned with the input, at every frame size and padding pattern.
+#[test]
+fn an_mp3_file_decodes_to_the_length_encoded() {
+    for (sample_rate, channels, frames, bitrate) in [
+        (48_000, 2, 48_000, None),
+        (44_100, 2, 30_001, None),
+        (32_000, 1, 1, None),
+        (22_050, 1, 10_000, Some(8000)),
+        (24_000, 2, 576, None),
+        (48_000, 2, 9000, Some(32_000)),
+    ] {
+        let buf = tones(sample_rate, channels, frames);
+        let opts = EncodeOptions::new(EncodeFormat::Mp3);
+        let opts = if let Some(bps) = bitrate { opts.with_bitrate(bps) } else { opts };
+        let file = encode(&buf, &opts).unwrap();
+        let case = format!("{sample_rate} Hz, {channels} ch, {frames} frames, {bitrate:?}");
+        let tag = craft_audio::mp3::InfoTag::parse(&file).unwrap_or_else(|| panic!("{case}: no Info frame"));
+        let fs = if sample_rate >= 32_000 { 1152 } else { 576 };
+        let audio_frames = (frames + craft_audio::mp3::DELAY as usize).div_ceil(fs) as u32;
+        let padding = audio_frames * fs as u32 - frames as u32 - 528;
+        assert_eq!((tag.frames, tag.delay_padding), (Some(audio_frames), Some((528, padding))), "{case}");
+        let (info, out) = decode(&file, Some("mp3")).unwrap();
+        assert_eq!((info.codec, info.container, info.frames, out.frames()), (CodecId::Mp3, Container::MpegAudio, frames as u64, frames), "{case}");
+        // In line with the input, to the sample (a low rate codes a 3 kHz tone too poorly to tell).
+        if frames >= 9000 && bitrate.is_none() {
+            let buf = treble(sample_rate, channels, frames);
+            let (_, out) = decode(&encode(&buf, &opts).unwrap(), Some("mp3")).unwrap();
+            for (want, got) in buf.channels.iter().zip(&out.channels) {
+                aligned(want, got).unwrap_or_else(|e| panic!("{case}: {e}"));
+            }
+        }
+    }
+}
+
+/// AC-3 and E-AC-3 are raw streams: the audio comes back behind the codec's delay.
 #[test]
 fn raw_streams_decode_behind_the_codec_delay() {
     let buf = tones(48_000, 2, 48_000);
-    for (format, codec, container, delay, floor) in [
-        (EncodeFormat::Mp3, CodecId::Mp3, Container::MpegAudio, craft_audio::mp3::DELAY as usize, 25.0),
-        (EncodeFormat::Ac3, CodecId::Ac3, Container::Ac3, 256, 15.0),
-        (EncodeFormat::Eac3, CodecId::Eac3, Container::Ac3, 256, 15.0),
-    ] {
+    for (format, codec, container, delay, floor) in
+        [(EncodeFormat::Ac3, CodecId::Ac3, Container::Ac3, 256, 15.0), (EncodeFormat::Eac3, CodecId::Eac3, Container::Ac3, 256, 15.0)]
+    {
         let file = encode(&buf, &EncodeOptions::new(format)).unwrap();
         let (info, out) = decode(&file, Some(format.extension())).unwrap();
         assert_eq!((info.codec, info.container, info.sample_rate, info.layout, info.damaged), (codec, container, 48_000, ChannelLayout::STEREO, 0));
@@ -251,11 +297,12 @@ fn no_audio_gives_an_empty_file() {
 fn the_bit_rate_is_followed() {
     let buf = tones(48_000, 2, 48_000);
     let size = |opts: &EncodeOptions| encode(&buf, opts).unwrap().len();
-    // MP3 at 48 kHz: 24 bytes per frame and kbit/s, 43 frames for a second and the delay.
-    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3)), 43 * 192 * 3);
-    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(130_000)), 43 * 128 * 3);
-    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(1)), 43 * 32 * 3);
-    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(u32::MAX)), 43 * 320 * 3);
+    // MP3 at 48 kHz: 3 bytes per frame and kbit/s, 43 frames for a second and the delay, and the
+    // Info frame in front (at 32 kbit/s one of 64, the lowest the tag fits in).
+    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3)), 44 * 192 * 3);
+    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(130_000)), 44 * 128 * 3);
+    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(1)), 43 * 32 * 3 + 64 * 3);
+    assert_eq!(size(&EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(u32::MAX)), 44 * 320 * 3);
     // AC-3: 32 packets of 1536 frames, 4 bytes per packet and kbit/s.
     assert_eq!(size(&EncodeOptions::new(EncodeFormat::Ac3)), 32 * 192 * 4);
     assert_eq!(size(&EncodeOptions::new(EncodeFormat::Ac3).with_bitrate(100_000)), 32 * 96 * 4);
@@ -446,9 +493,21 @@ fn ffmpeg_reads_the_files() {
         assert!(out == buf.channels, "ALAC, {channels} channels");
     }
     let buf = tones(44_100, 2, 20_000);
-    for (format, delay, floor) in
-        [(EncodeFormat::Mp3, craft_audio::mp3::DELAY as usize, 25.0), (EncodeFormat::Ac3, 256, 15.0), (EncodeFormat::Eac3, 256, 15.0)]
-    {
+    // ffmpeg takes the MP3's delay and padding from its LAME tag: the length that went in, in line
+    // to the sample; MPEG-2 mono, and an Info frame at a higher rate than the audio's, too.
+    for (sample_rate, channels, frames, bitrate) in [(44_100, 2, 20_000, None), (24_000, 1, 7001, None), (48_000, 2, 9000, Some(32_000))] {
+        let opts = EncodeOptions::new(EncodeFormat::Mp3);
+        let opts = if let Some(bps) = bitrate { opts.with_bitrate(bps) } else { opts };
+        let buf = treble(sample_rate, channels, frames);
+        let out = ffmpeg_decode(&ff, &encode(&buf, &opts).unwrap(), &format!("stream_{sample_rate}_{channels}.mp3"), channels);
+        for (want, got) in buf.channels.iter().zip(&out) {
+            assert_eq!(got.len(), frames, "MP3 at {sample_rate} Hz, {channels} ch");
+            if bitrate.is_none() {
+                aligned(want, got).unwrap_or_else(|e| panic!("MP3 at {sample_rate} Hz, {channels} ch: {e}"));
+            }
+        }
+    }
+    for (format, delay, floor) in [(EncodeFormat::Ac3, 256, 15.0), (EncodeFormat::Eac3, 256, 15.0)] {
         let name = format!("stream.{}", format.extension());
         let out = ffmpeg_decode(&ff, &encode(&buf, &EncodeOptions::new(format)).unwrap(), &name, 2);
         for (want, got) in buf.channels.iter().zip(&out) {
@@ -570,10 +629,10 @@ fn the_bit_rate_used_can_be_asked_for() {
     for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac, EncodeFormat::Alac] {
         assert_eq!(rate(EncodeOptions::new(format).with_bitrate(96_000), 48_000, 2), None, "{format:?}");
     }
-    // The size of a second of MP3 is the rate reported.
+    // The size of a second of MP3 is the rate reported (its 43 frames and the Info frame).
     let buf = tones(48_000, 2, 48_000);
     let opts = EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(130_000);
-    assert_eq!(encode(&buf, &opts).unwrap().len() as u32, 43 * 1152 / 8 * opts.bitrate(48_000, 2).unwrap().unwrap() / 48_000);
+    assert_eq!(encode(&buf, &opts).unwrap().len() as u32, 44 * 1152 / 8 * opts.bitrate(48_000, 2).unwrap().unwrap() / 48_000);
     assert!(is_unsupported(EncodeOptions::new(EncodeFormat::Mp3).bitrate(48_000, 6)));
 }
 
