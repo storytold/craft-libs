@@ -277,6 +277,9 @@ impl PartialOrd for IntersectionEvent {
     }
 }
 
+// Craft patch (repeated intersection): see `Sweeper::repeat_key`.
+type RepeatKey = (SegIdx, SegIdx, Option<usize>, Option<usize>, u64);
+
 #[derive(Clone, Debug, Default)]
 struct EventQueue {
     /// The enter events are stored in `Segments`; this is the index of the first
@@ -618,6 +621,28 @@ impl<'segs> Sweeper<'segs> {
         (touch, first)
     }
 
+    // Craft patch (repeated intersection): the key under which `next_line`
+    // records a handled intersection event. It holds the pair, the positions
+    // of both segments in the sweep line, and a 64-bit SipHash of the segments
+    // from one of those positions to the other, in order. The hash keeps each
+    // key the same size however many segments lie between the pair. The
+    // position searches and the segments hashed count toward the work limit.
+    fn repeat_key(&mut self, left: SegIdx, right: SegIdx) -> RepeatKey {
+        use std::hash::{Hash, Hasher};
+
+        let left_pos = self.find_position(left);
+        let right_pos = self.find_position(right);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        if let (Some(a), Some(b)) = (left_pos, right_pos) {
+            let hashed = u64::try_from(a.abs_diff(b)).unwrap_or(u64::MAX).saturating_add(1);
+            self.segments_passed = self.segments_passed.saturating_add(hashed);
+            for entry in self.line.segs.range(a.min(b)..=a.max(b)) {
+                entry.seg.hash(&mut hasher);
+            }
+        }
+        (left, right, left_pos, right_pos, hasher.finish())
+    }
+
     /// Moves the sweep forward, returning the next sweep line.
     ///
     /// Returns `None` when sweeping is complete.
@@ -676,9 +701,11 @@ impl<'segs> Sweeper<'segs> {
         // do not compare transitively, handling one pair can queue another
         // pair at this same y again, and the pairs can cycle forever through
         // the same positions. A pair is handled at most once per y for each
-        // pair of positions it holds in the sweep line; a repeat is queued
-        // again at the pair's next order change instead, if that comes before
-        // both ends.
+        // arrangement of the sweep line from one segment of the pair to the
+        // other (see `repeat_key`). When the segments between the pair change,
+        // the key changes and `handle_intersection` checks them again. A
+        // repeat of the same arrangement is queued again at the pair's next
+        // order change instead, if that comes before both ends.
         let mut handled = FxHashSet::default();
         #[cfg(test)]
         let mut events_at_y = 0usize;
@@ -696,8 +723,7 @@ impl<'segs> Sweeper<'segs> {
                 );
             }
             let (left, right) = (intersection.left, intersection.right);
-            let positions = (self.line.position(left), self.line.position(right));
-            if !handled.insert((left, right, positions)) {
+            if !handled.insert(self.repeat_key(left, right)) {
                 let next_y = self
                     .compare_segments(left, right)
                     .iter()
@@ -2895,11 +2921,71 @@ mod tests {
         segs.add_bez_path(&circles).unwrap();
         let mut sweep = Sweeper::new(&segs, 1e-6);
         let mut bufs = SweepLineBuffers::default();
-        let mut lines = 0;
-        while sweep.next_line(&mut bufs).is_some() {
-            lines += 1;
+        let mut seen = FxHashSet::default();
+        while let Some(line) = sweep.next_line(&mut bufs) {
+            let y = line.y();
+            let mut idx = 0;
+            while let Some(seg) = line.line_segment(idx) {
+                let s = &segs[seg];
+                assert!(
+                    s.start().y <= y && y <= s.end().y,
+                    "segment {seg:?} is in the sweep line at y={y}"
+                );
+                seen.insert(seg);
+                idx += 1;
+            }
         }
-        assert!(lines > 0);
+        for seg in segs.indices() {
+            assert!(
+                segs[seg].is_horizontal() || seen.contains(&seg),
+                "segment {seg:?} never entered the sweep line"
+            );
+        }
+
+        // The five circles overlap almost entirely: their union has one
+        // boundary, the area all five cover is not empty, and no region is
+        // wound negatively or more than five times.
+        let top = crate::topology::Topology::from_path(&circles, 1e-6).unwrap();
+        for idx in top.segment_indices() {
+            let half = idx.first_half();
+            for w in [top.winding_clockwise(half), top.winding_counter_clockwise(half)] {
+                assert!((0..=5).contains(w), "winding number {w} on {idx:?}");
+            }
+        }
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 1);
+        assert!(top.contours(|w| *w == 5).contours().count() > 0);
+        let bbox = top.bounding_box();
+        let corners = [(bbox.x0, 450.0), (bbox.y0, 450.0), (bbox.x1, 550.0), (bbox.y1, 550.0)];
+        for (got, want) in corners {
+            assert!((got - want).abs() < 1e-3, "{bbox:?}");
+        }
+    }
+
+    // A pair with the same two positions but different segments between them
+    // gets a new repeat key, so `next_line` hands it to `handle_intersection`,
+    // which checks the segments between the pair again.
+    #[test]
+    fn repeat_key_includes_segments_between_the_pair() {
+        let segs = mk_segs(&[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0), (4.0, 4.0)]);
+        let ids: Vec<SegIdx> = segs.indices().collect();
+        let (a, b, c, d, e) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
+        let mut sweep = Sweeper::new(&segs, 0.1);
+        let set_line = |sweep: &mut Sweeper, order: &[SegIdx]| {
+            sweep.line.segs = TreeVec::default();
+            for (pos, &seg) in order.iter().enumerate() {
+                sweep.line.segs.insert(pos, SegmentOrderEntry::new(seg, &segs, 0.1));
+            }
+        };
+
+        set_line(&mut sweep, &[a, b, c, d]);
+        let first = sweep.repeat_key(a, d);
+        set_line(&mut sweep, &[a, c, b, d]);
+        assert_ne!(sweep.repeat_key(a, d), first);
+        set_line(&mut sweep, &[a, e, c, d]);
+        assert_ne!(sweep.repeat_key(a, d), first);
+        set_line(&mut sweep, &[a, b, c, d]);
+        assert_eq!(sweep.repeat_key(a, d), first);
+        assert_eq!(sweep.repeat_key(d, a).4, first.4);
     }
 
     // Wide, flat shapes (x up to 1e12, y below 1e-3) whose sweep delays an
