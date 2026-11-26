@@ -4,7 +4,8 @@ Codecs for flat raster image formats, written in pure Rust. This crate defines i
 type and shares its baseline and extended JPEG decoders through `craft-jpeg`, its optional HEIF
 decoder through `craft-heif`, and its optional AVIF decoder through `craft-video`'s AV1 decoder.
 It builds for `wasm32-unknown-unknown` and does no filesystem I/O: decoders take `&[u8]` and
-encoders return `Vec<u8>`.
+encoders return `Vec<u8>`. `read_bounded(reader, max_bytes)` reads a caller's file or stream into
+bytes for them and fails with `ErrorKind::FileTooLarge` when the input is longer than `max_bytes`.
 
 It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
 

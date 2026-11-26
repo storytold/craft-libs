@@ -95,6 +95,22 @@ pub fn decode_with(bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecErr
     decode_as_with(format, bytes, opts)
 }
 
+/// Read `reader` to its end, at most `max_bytes`, for [`decode_with`]. [`Limits`] bound the
+/// decoded image; this bounds the encoded input, for example an opened file.
+///
+/// The read stops one byte past `max_bytes`, so a file that grows after its size was checked, or
+/// a stream with no end, is not read further. Longer input fails with
+/// [`std::io::ErrorKind::FileTooLarge`].
+pub fn read_bounded(reader: impl std::io::Read, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, format!("the image input is longer than {max_bytes} bytes")));
+    }
+    Ok(bytes)
+}
+
 /// Decode as a specific format with default [`Limits`].
 pub fn decode_as(format: Format, bytes: &[u8]) -> Result<Image, CodecError> {
     decode_as_with(format, bytes, &DecodeOptions::default())
