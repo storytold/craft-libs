@@ -460,6 +460,24 @@ mod tests {
         assert_eq!(calls, ["first"]);
     }
     #[test]
+    fn tcp_peer_sending_blank_lines_still_loses_the_connection_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let server =
+            std::thread::spawn(move || serve_tcp(stream, "secret", 1024, Duration::from_millis(200), None, |_, _| panic!("must not dispatch")));
+        // Every read finds a new line, so a deadline that restarted on each read would never expire.
+        // The loop ends when the server closes the connection; the guard only stops a hung test.
+        client.set_write_timeout(Some(Duration::from_secs(30))).unwrap();
+        let guard = Instant::now() + Duration::from_secs(30);
+        while client.write_all(b"\n").is_ok() {
+            assert!(Instant::now() < guard, "the server kept reading past the first-request deadline");
+            std::thread::yield_now();
+        }
+        assert!(Instant::now() < guard, "the server stopped reading but kept the connection open");
+        assert!(server.join().unwrap().is_ok());
+    }
+    #[test]
     fn tcp_rejects_zero_wait_times() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
