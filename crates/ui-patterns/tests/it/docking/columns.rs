@@ -426,6 +426,10 @@ fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses
 /// How tall the flyout of [`UnderWindow`]'s Alpha group measures.
 const FLYOUT_HEIGHT: f32 = 300.0;
 
+/// The frames a flyout closed in a pass still shows its group over: its 150 ms `motion.open` exit fade at 1/60 s, which
+/// is nine, and a few to spare. A `settle` runs four.
+const FLYOUT_FADE_FRAMES: usize = 12;
+
 /// Panels for a docked flyout under a floating window: Alpha's group, in the flyout, is a view that measures
 /// [`FLYOUT_HEIGHT`] and records the rect it shows in, this pass; Beta, in the window, shows a button that counts its
 /// clicks.
@@ -502,8 +506,15 @@ fn a_flyout_stands_among_the_floating_windows_in_their_order() {
     let flyout_layer = ctx.layer_id_at(Pos2::new(open.left() + 8.0, open.center().y)).expect("the flyout shows beside the window");
     assert_ne!(flyout_layer, window_layer, "the flyout and the window are layers of their own: {flyout_layer:?}");
 
-    // Closed and opened again, the flyout is the one opened after the window.
-    fixture.click_at(icon).settle();
+    // Closed and opened again, the flyout is the one opened after the window. A closed flyout keeps showing over the
+    // frames of its exit fade, more than a settle runs, so the icon is clicked again once they have run.
+    fixture.click_at(icon);
+    for _ in 0..FLYOUT_FADE_FRAMES {
+        if flyout.get().is_none() {
+            break;
+        }
+        fixture.frame(Vec::new());
+    }
     assert!(flyout.get().is_none(), "the icon of the open panel closes its flyout");
     fixture.click_at(icon).settle();
     let open = flyout.get().expect("the flyout is open again");
