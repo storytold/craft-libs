@@ -10,6 +10,10 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **Normals and tangents.** Smooth normals are area weighted. Tangents come from MikkTSpace, which
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign.
+  A vertex whose triangles have different tangent frames (mirrored UVs) is split into one copy
+  per frame. A mesh with more than 2,048 triangles around one vertex, or with non-finite
+  positions or UVs, or with positions or UVs above 1e6 or below 1e-6 in magnitude, gets per-vertex tangents from UV gradients instead of MikkTSpace. Tangents
+  are always finite; a non-finite normal counts as +Y.
 - **UV unwrapping.** `unwrap::auto_unwrap` makes a non-overlapping layout per material, splitting
   vertices where charts meet.
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle

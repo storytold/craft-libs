@@ -1,6 +1,6 @@
 //! The internal triangle mesh.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{DVec3, Vec2, Vec3, Vec4};
 
 use crate::{GeomError, Result};
 
@@ -50,6 +50,24 @@ pub struct Mesh {
 
 /// Hard cap on mesh size accepted from files (triangles).
 pub const MAX_TRIANGLES: usize = 20_000_000;
+
+/// Positions and UVs go to MikkTSpace only when their largest magnitude lies between the
+/// reciprocal of this and this, so edge lengths, cross products and their products with UVs
+/// neither overflow nor underflow in `f32`. Other meshes get the `f64` per-vertex tangents.
+const SAFE_MAGNITUDE: f32 = 1e6;
+
+/// Most triangles around one vertex (as MikkTSpace welds vertices) for which tangents come from
+/// MikkTSpace. It visits the triangles around a vertex recursively, one call per triangle, so a
+/// larger fan could exhaust the stack; such meshes get the per-vertex fallback. This crate's own
+/// value.
+pub const MAX_MIKKTSPACE_VALENCE: usize = 2_048;
+
+/// Most comparisons MikkTSpace may make welding corners, for which tangents come from it. It
+/// compares each corner with the corners before it at the same position until one has the same
+/// normal and UV, so `k` corners at one position can cost about `k²` comparisons; the sum of `k²`
+/// over the positions stays within this. This crate's own value: the 6,144 corners at the pole of
+/// a sphere with 2,048 segments take about 3.8e7.
+pub const MAX_MIKKTSPACE_WELD_WORK: u64 = 1 << 27;
 
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
@@ -216,51 +234,91 @@ impl Mesh {
         self.normals = normals.into_iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
     }
 
-    /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails).
+    /// MikkTSpace tangents (falls back to per-vertex tangents if generation fails). A mesh with
+    /// an index out of range, a non-finite position or UV, a position or UV with a magnitude
+    /// outside 1e-6 to 1e6 (zero is fine), only degenerate triangles, more than
+    /// [`MAX_MIKKTSPACE_VALENCE`] triangles around one vertex or corners whose welding would take
+    /// more than [`MAX_MIKKTSPACE_WELD_WORK`] comparisons does not go to MikkTSpace. Missing
+    /// normals are computed and missing UVs are zero. A non-finite normal counts as +Y.
+    ///
+    /// MikkTSpace gives each triangle corner its own tangent frame. A vertex whose corners get
+    /// different frames (UVs mirrored across it) is split: every further frame gets a copy of
+    /// the vertex, and the corners with that frame use the copy. A copy whose index would not
+    /// fit in `u32` is not made, and those corners keep the first frame.
     pub fn compute_tangents(&mut self) {
-        self.tangents = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); self.positions.len()];
-        if self.normals.len() != self.positions.len() {
+        let n = self.positions.len();
+        if self.normals.len() != n {
             self.compute_normals();
         }
-        if self.uvs.len() != self.positions.len() {
-            self.uvs = vec![Vec2::ZERO; self.positions.len()];
+        if self.uvs.len() != n {
+            self.uvs = vec![Vec2::ZERO; n];
         }
-        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then.
-        let usable = !crate::unwrap::all_triangles_degenerate(self);
-        let mut g = Mikk { mesh: self };
-        if !usable || !mikktspace::generate_tangents(&mut g) {
-            self.simple_tangents();
-        }
-        for (t, n) in self.tangents.iter_mut().zip(&self.normals) {
-            // Orthonormalize against the normal; repair degenerate results.
-            let v = t.truncate();
-            let o = (v - *n * n.dot(v)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
-            *t = o.extend(if t.w < 0.0 { -1.0 } else { 1.0 });
-        }
-    }
+        let normals: Vec<Vec3> = self.normals.iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
+        let mut corners = vec![Vec4::ZERO; self.indices.len()];
 
-    fn simple_tangents(&mut self) {
-        let mut tangents = vec![Vec3::ZERO; self.positions.len()];
-        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
-            let (a, b, c) = (a as usize, b as usize, c as usize);
-            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let (Some(ua), Some(ub), Some(uc)) = (self.uvs.get(a), self.uvs.get(b), self.uvs.get(c)) else { continue };
-            let (e1, e2) = (*pb - *pa, *pc - *pa);
-            let (d1, d2) = (*ub - *ua, *uc - *ua);
-            let determinant = d1.x * d2.y - d2.x * d1.y;
-            if determinant.abs() < 1e-12 {
-                continue;
+        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then. Its
+        // callbacks read a missing vertex as the origin, which the degenerate check cannot see,
+        // so an index past the last vertex skips it too.
+        let usable = in_safe_range(self.positions.iter().flat_map(|p| p.to_array()))
+            && in_safe_range(self.uvs.iter().flat_map(|uv| uv.to_array()))
+            && self.indices.iter().all(|&i| (i as usize) < n);
+        let mut g = Mikk { positions: &self.positions, normals: &normals, uvs: &self.uvs, indices: &self.indices, corners: &mut corners };
+        if !(usable && !g.all_triangles_degenerate() && g.affordable() && mikktspace::generate_tangents(&mut g)) {
+            let per_vertex = simple_tangents(&self.positions, &normals, &self.uvs, &self.indices);
+            for (corner, v) in corners.iter_mut().zip(&self.indices) {
+                *corner = per_vertex.get(*v as usize).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0));
             }
+        }
 
-            let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
-            for v in [a, b, c] {
-                if let Some(x) = tangents.get_mut(v) {
-                    *x += tangent;
+        // Orthonormalize a tangent against the normal of vertex `v`; repair degenerate results.
+        let frame = |v: usize, t: Vec4| {
+            let n = normals.get(v).copied().unwrap_or(Vec3::Y);
+            let d = t.truncate();
+            let o = (d - n * n.dot(d)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
+            o.extend(if t.w < 0.0 { -1.0 } else { 1.0 })
+        };
+        for (t, v) in corners.iter_mut().zip(&self.indices) {
+            *t = frame(*v as usize, *t);
+        }
+
+        // One tangent per vertex: the first corner's frame, and a copy of the vertex for each
+        // other frame its corners have. Corners that share a frame get bit-identical tangents.
+        let bits = |t: Vec4| t.to_array().map(f32::to_bits);
+        let mut tangents = vec![None::<Vec4>; n];
+        let mut copies: Vec<(u32, Vec4)> = Vec::new();
+        let mut copy_of: std::collections::HashMap<(u32, [u32; 4]), u32> = std::collections::HashMap::new();
+        for (index, &t) in self.indices.iter_mut().zip(&corners) {
+            let v = *index;
+            let Some(slot) = tangents.get_mut(v as usize) else { continue };
+            match slot {
+                None => *slot = Some(t),
+                Some(first) if bits(*first) == bits(t) => {}
+                Some(_) => {
+                    if let Some(&copy) = copy_of.get(&(v, bits(t))) {
+                        *index = copy;
+                    } else if let Ok(copy) = u32::try_from(n + copies.len()) {
+                        copies.push((v, t));
+                        copy_of.insert((v, bits(t)), copy);
+                        *index = copy;
+                    }
                 }
             }
         }
 
-        self.tangents = tangents.into_iter().map(|t| t.try_normalize().unwrap_or(Vec3::X).extend(1.0)).collect();
+        // A vertex no triangle uses gets +X made perpendicular to its normal.
+        let mut out: Vec<Vec4> = tangents.iter().enumerate().map(|(v, t)| t.unwrap_or_else(|| frame(v, Vec4::new(1.0, 0.0, 0.0, 1.0)))).collect();
+        out.extend(copies.iter().map(|(_, t)| *t));
+        let has_colors = self.colors.len() == n;
+        for &(v, _) in &copies {
+            let v = v as usize;
+            self.positions.push(self.positions.get(v).copied().unwrap_or_default());
+            self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
+            self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
+            if has_colors {
+                self.colors.push(self.colors.get(v).copied().unwrap_or(Vec4::ONE));
+            }
+        }
+        self.tangents = out;
     }
 
     /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
@@ -449,38 +507,145 @@ impl Mesh {
     }
 }
 
+/// Per-vertex tangents from the UV gradients of the triangles around each vertex: the fallback
+/// when MikkTSpace does not run or fails. `w` is -1 where the summed direction up the image
+/// (toward smaller v) lies against `cross(normal, tangent)`, and +1 otherwise, as MikkTSpace
+/// sets it. Edges, UV differences and sums are taken in `f64`, and a triangle is skipped when
+/// its UV edges are nearly parallel relative to their lengths, so tiny UV differences still
+/// set the direction.
+fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32]) -> Vec<Vec4> {
+    let mut sums = vec![(DVec3::ZERO, DVec3::ZERO); positions.len()];
+    for &[a, b, c] in indices.as_chunks::<3>().0 {
+        let (a, b, c) = (a as usize, b as usize, c as usize);
+        let (Some(pa), Some(pb), Some(pc)) = (positions.get(a), positions.get(b), positions.get(c)) else { continue };
+        let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
+        let (e1, e2) = (pb.as_dvec3() - pa.as_dvec3(), pc.as_dvec3() - pa.as_dvec3());
+        let (d1, d2) = (ub.as_dvec2() - ua.as_dvec2(), uc.as_dvec2() - ua.as_dvec2());
+        let determinant = d1.x * d2.y - d2.x * d1.y;
+        if !determinant.is_finite() || determinant.abs() <= 1e-12 * d1.length() * d2.length() {
+            continue;
+        }
+
+        let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
+        // The direction in which v shrinks, which is up the image.
+        let up = (e1 * d2.x - e2 * d1.x) / determinant;
+        if !tangent.is_finite() || !up.is_finite() {
+            continue;
+        }
+        for v in [a, b, c] {
+            if let Some((t, u)) = sums.get_mut(v) {
+                *t += tangent;
+                *u += up;
+            }
+        }
+    }
+
+    sums.into_iter()
+        .enumerate()
+        .map(|(v, (t, up))| {
+            let t = t.try_normalize().map(|t| t.as_vec3()).filter(|t| t.is_finite()).unwrap_or(Vec3::X);
+            let up = up.try_normalize().map(|up| up.as_vec3()).unwrap_or(Vec3::ZERO);
+            let n = normals.get(v).copied().unwrap_or(Vec3::Y);
+            let w = if n.cross(t).dot(up) < 0.0 { -1.0 } else { 1.0 };
+            t.extend(w)
+        })
+        .collect()
+}
+
+/// Whether the values are finite and their largest magnitude is zero or lies between the
+/// reciprocal of [`SAFE_MAGNITUDE`] and it.
+fn in_safe_range(values: impl Iterator<Item = f32>) -> bool {
+    let mut largest = 0.0_f32;
+    for c in values {
+        if !c.is_finite() {
+            return false;
+        }
+        largest = largest.max(c.abs());
+    }
+    largest == 0.0 || (1.0 / SAFE_MAGNITUDE..=SAFE_MAGNITUDE).contains(&largest)
+}
+
+/// The arrays MikkTSpace reads, and the tangent of every triangle corner it writes.
 struct Mikk<'a> {
-    mesh: &'a mut Mesh,
+    positions: &'a [Vec3],
+    normals: &'a [Vec3],
+    uvs: &'a [Vec2],
+    indices: &'a [u32],
+    corners: &'a mut [Vec4],
 }
 
 impl Mikk<'_> {
     fn vi(&self, face: usize, vert: usize) -> usize {
-        self.mesh.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+        self.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+    }
+
+    /// True when the mesh has triangles and every one of them has two corners at the same
+    /// position as MikkTSpace gets it.
+    fn all_triangles_degenerate(&self) -> bool {
+        use mikktspace::Geometry;
+        self.num_faces() > 0
+            && (0..self.num_faces()).all(|f| {
+                let p = |v| self.position(f, v);
+                p(0) == p(1) || p(0) == p(2) || p(1) == p(2)
+            })
+    }
+
+    /// Whether MikkTSpace's work on this input stays bounded: at most
+    /// [`MAX_MIKKTSPACE_VALENCE`] triangles around one vertex, which it visits recursively, one
+    /// call per triangle, and at most [`MAX_MIKKTSPACE_WELD_WORK`] for welding.
+    fn affordable(&self) -> bool {
+        let (valence, weld_work) = self.welding();
+        valence <= MAX_MIKKTSPACE_VALENCE && weld_work <= MAX_MIKKTSPACE_WELD_WORK
+    }
+
+    /// The most triangles that share one vertex as MikkTSpace sees it, and the sum of the squared
+    /// corner counts of its positions. It welds corners whose position, normal and UV, as this
+    /// type passes them, are equal (0 and -0 alike).
+    fn welding(&self) -> (usize, u64) {
+        use mikktspace::Geometry;
+        let bits = |x: f32| if x == 0.0 { 0 } else { x.to_bits() };
+        let mut count: std::collections::HashMap<[u32; 8], usize> = std::collections::HashMap::new();
+        let mut at_position: std::collections::HashMap<[u32; 3], u64> = std::collections::HashMap::new();
+        let (mut most, mut work) = (0, 0u64);
+        for face in 0..self.num_faces() {
+            for vert in 0..3 {
+                let ([px, py, pz], [nx, ny, nz], [u, v]) = (self.position(face, vert), self.normal(face, vert), self.tex_coord(face, vert));
+                let c = count.entry([px, py, pz, nx, ny, nz, u, v].map(bits)).or_insert(0);
+                *c += 1;
+                most = most.max(*c);
+                // k² grows by 2k + 1 with the (k + 1)th corner.
+                let k = at_position.entry([px, py, pz].map(bits)).or_insert(0);
+                work = work.saturating_add(k.saturating_mul(2).saturating_add(1));
+                *k += 1;
+            }
+        }
+        (most, work)
     }
 }
 
 impl mikktspace::Geometry for Mikk<'_> {
     fn num_faces(&self) -> usize {
-        self.mesh.indices.len() / 3
+        self.indices.len() / 3
     }
     fn num_vertices_of_face(&self, _face: usize) -> usize {
         3
     }
     fn position(&self, face: usize, vert: usize) -> [f32; 3] {
-        self.mesh.positions.get(self.vi(face, vert)).copied().unwrap_or_default().to_array()
+        (self.positions.get(self.vi(face, vert)).copied().unwrap_or_default()).to_array()
     }
     fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
-        self.mesh.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y).to_array()
+        self.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y).to_array()
     }
     fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
         // MikkTSpace expects OpenGL texture coordinates (v up); our UVs are glTF (v down). With
-        // v flipped, the bitangent `cross(N, T) * w` points up the image, as glTF requires.
-        let uv = self.mesh.uvs.get(self.vi(face, vert)).copied().unwrap_or_default();
-        [uv.x, 1.0 - uv.y]
+        // v negated, the bitangent `cross(N, T) * w` points up the image, as glTF requires.
+        // Negating keeps differences in v that `1 - v` would round away.
+        let uv = self.uvs.get(self.vi(face, vert)).copied().unwrap_or_default();
+        [uv.x, -uv.y]
     }
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
-        let i = self.vi(face, vert);
-        if let Some(t) = self.mesh.tangents.get_mut(i) {
+        // One tangent per corner: corners of a vertex can get different frames.
+        if let Some(t) = self.corners.get_mut(face * 3 + vert) {
             *t = Vec4::from_array(tangent);
         }
     }
@@ -512,6 +677,127 @@ mod tests {
         }
         assert_eq!(m.material_of(1), Some(0));
         assert_eq!(m.triangles_of(0).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_vertex_with_mirrored_frames_is_split() {
+        // Triangle (0, 1, 2) has u growing with x. Triangle (1, 3, 2) has the opposite UV
+        // orientation, so vertices 1 and 2 need one tangent frame for each triangle.
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)];
+        let m = Mesh::from_parts(
+            corners.to_vec(),
+            None,
+            vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 0.0), Vec2::new(1.0, 2.0)],
+            vec![0, 1, 2, 1, 3, 2],
+            "Default",
+        )
+        .unwrap();
+        assert_eq!(m.positions.len(), 6, "vertices 1 and 2 each get a copy");
+        assert_eq!((m.normals.len(), m.uvs.len(), m.tangents.len()), (6, 6, 6));
+        let signs = |t: usize| m.indices[t * 3..t * 3 + 3].iter().map(|&i| m.tangents[i as usize].w).collect::<Vec<_>>();
+        assert!(signs(0).iter().all(|w| *w == signs(0)[0]), "{:?}", signs(0));
+        assert!(signs(1).iter().all(|w| *w == signs(1)[0]), "{:?}", signs(1));
+        assert_ne!(signs(0)[0], signs(1)[0]);
+        let originals = [0, 1, 2, 3, 1, 2];
+        for (i, p) in m.positions.iter().enumerate() {
+            assert_eq!(*p, corners[originals[i]], "vertex {i}");
+        }
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn split_vertices_keep_their_colors() {
+        let mut m = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)],
+            uvs: vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 0.0), Vec2::new(1.0, 2.0)],
+            colors: (0..4).map(|i| Vec4::splat(i as f32 / 4.0)).collect(),
+            indices: vec![0, 1, 2, 1, 3, 2],
+            materials: vec!["Default".into()],
+            submeshes: vec![SubMesh { name: "Default".into(), material: 0, start: 0, count: 6 }],
+            ..Mesh::default()
+        };
+        m.compute_tangents();
+        assert_eq!(m.positions.len(), 6);
+        assert_eq!(m.colors, [0, 1, 2, 3, 1, 2].map(|i| Vec4::splat(i as f32 / 4.0)));
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn tangents_stay_finite_for_non_finite_input() {
+        let mut m = quad();
+        m.normals[0] = Vec3::NAN;
+        m.normals[1] = Vec3::splat(f32::INFINITY);
+        m.compute_tangents();
+        assert!(m.tangents.iter().all(|t| t.is_finite() && (t.truncate().length() - 1.0).abs() < 1e-4), "{:?}", m.tangents);
+
+        let mut m = quad();
+        m.uvs[2] = Vec2::new(f32::NAN, 0.0);
+        m.positions[1].x = f32::INFINITY;
+        m.compute_tangents();
+        assert!(m.tangents.iter().all(|t| t.is_finite()), "{:?}", m.tangents);
+    }
+
+    #[test]
+    fn far_and_tiny_triangles_keep_their_tangent() {
+        for edge in [1e-20_f32, 1e20] {
+            let m = Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::new(edge, 0.0, 0.0), Vec3::new(0.0, edge, 0.0)],
+                Some(vec![Vec3::Z; 3]),
+                vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 0.0)],
+                vec![0, 1, 2],
+                "Default",
+            )
+            .unwrap();
+            for t in &m.tangents {
+                assert!((t.truncate() - Vec3::X).length() < 1e-4 && t.w == 1.0, "edge {edge}: {t:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_tangents_agree_with_mikktspace() {
+        // Each mesh is the quad with its UVs flipped one way; the fallback sets the same
+        // direction and bitangent sign MikkTSpace does.
+        for flip in [Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0), Vec2::new(1.0, -1.0)] {
+            let mut m = quad();
+            for uv in &mut m.uvs {
+                *uv = Vec2::new(uv.x * flip.x, uv.y * flip.y);
+            }
+            m.compute_tangents();
+            let fallback = simple_tangents(&m.positions, &m.normals, &m.uvs, &m.indices);
+            assert_eq!(m.tangents.len(), 4);
+            for (mikk, simple) in m.tangents.iter().zip(&fallback) {
+                assert!((mikk.truncate() - simple.truncate()).length() < 1e-4, "flip {flip}: {mikk:?} {simple:?}");
+                assert_eq!(mikk.w, simple.w, "flip {flip}");
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_tangents_use_tiny_uv_differences() {
+        // u grows with y and v with x, over a range of 1e-7: the UV determinant is -1e-14.
+        let s = 1e-7_f32;
+        let positions = [Vec3::ZERO, Vec3::X, Vec3::Y];
+        let uvs = [Vec2::ZERO, Vec2::new(0.0, s), Vec2::new(s, 0.0)];
+        for t in simple_tangents(&positions, &[Vec3::Z; 3], &uvs, &[0, 1, 2]) {
+            assert!((t.truncate() - Vec3::Y).length() < 1e-4, "{t:?}");
+        }
+    }
+
+    #[test]
+    fn a_fan_around_one_vertex_skips_mikktspace() {
+        for (k, affordable) in [(MAX_MIKKTSPACE_VALENCE, true), (MAX_MIKKTSPACE_VALENCE + 1, false)] {
+            let mut positions = vec![Vec3::ZERO];
+            for i in 0..=k {
+                let a = i as f32 / k as f32 * std::f32::consts::TAU;
+                positions.push(Vec3::new(a.cos(), a.sin(), 0.0));
+            }
+            let indices: Vec<u32> = (0..k as u32).flat_map(|i| [0, i + 1, i + 2]).collect();
+            let (normals, uvs) = (vec![Vec3::Z; positions.len()], vec![Vec2::ZERO; positions.len()]);
+            let mut corners = vec![Vec4::ZERO; indices.len()];
+            let g = Mikk { positions: &positions, normals: &normals, uvs: &uvs, indices: &indices, corners: &mut corners };
+            assert_eq!(g.affordable(), affordable, "{k} triangles");
+        }
     }
 
     #[test]
