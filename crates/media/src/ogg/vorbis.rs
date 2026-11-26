@@ -263,11 +263,11 @@ fn setup_modes(h: &[u8], channels: u8) -> Option<Vec<bool>> {
     }
     let floors = b.read(6)? + 1;
     for _ in 0..floors {
-        floor(&mut b)?;
+        floor(&mut b, codebooks)?;
     }
     let residues = b.read(6)? + 1;
     for _ in 0..residues {
-        residue(&mut b)?;
+        residue(&mut b, codebooks)?;
     }
     let mappings = b.read(6)? + 1;
     for _ in 0..mappings {
@@ -333,36 +333,48 @@ fn codebook(b: &mut Bits<'_>) -> Option<()> {
     Some(())
 }
 
-/// Passes over one floor configuration (§6.2.1, §7.2.2).
-fn floor(b: &mut Bits<'_>) -> Option<()> {
+/// Passes over one floor configuration (§6.2.1, §7.2.2), whose books are among `codebooks`.
+fn floor(b: &mut Bits<'_>, codebooks: u32) -> Option<()> {
     match b.read(16)? {
         0 => {
             // order, rate, bark map size, amplitude bits, amplitude offset, then the books
             b.skip(8 + 16 + 16 + 6 + 8)?;
             let books = b.read(4)? + 1;
-            b.skip(u64::from(books) * 8)
+            for _ in 0..books {
+                if b.read(8)? >= codebooks {
+                    return None;
+                }
+            }
+            Some(())
         }
-        1 => floor1(b),
+        1 => floor1(b, codebooks),
         _ => None,
     }
 }
 
-/// Passes over one residue configuration (§8.6.1).
-fn residue(b: &mut Bits<'_>) -> Option<()> {
+/// Passes over one residue configuration (§8.6.1), whose books are among `codebooks`.
+fn residue(b: &mut Bits<'_>, codebooks: u32) -> Option<()> {
     if b.read(16)? > 2 {
         return None;
     }
     // begin, end, partition size, then the classifications and the classbook
     b.skip(24 + 24 + 24)?;
     let classifications = b.read(6)? + 1;
-    b.skip(8)?;
+    if b.read(8)? >= codebooks {
+        return None;
+    }
     let mut books = 0u64;
     for _ in 0..classifications {
         let low = b.read(3)?;
         let high = if b.read(1)? == 1 { b.read(5)? } else { 0 };
         books += u64::from((high << 3 | low).count_ones());
     }
-    b.skip(books * 8)
+    for _ in 0..books {
+        if b.read(8)? >= codebooks {
+            return None;
+        }
+    }
+    Some(())
 }
 
 /// Passes over one mapping configuration (§4.2.4, mappings), whose submaps name one of `floors`
@@ -397,8 +409,9 @@ fn mapping(b: &mut Bits<'_>, channels: u8, floors: u32, residues: u32) -> Option
     Some(())
 }
 
-/// Passes over a floor 1 configuration (§7.2.2).
-fn floor1(b: &mut Bits<'_>) -> Option<()> {
+/// Passes over a floor 1 configuration (§7.2.2), whose books are among `codebooks`. The X list,
+/// with its two implicit end points, holds at most 65 distinct values.
+fn floor1(b: &mut Bits<'_>, codebooks: u32) -> Option<()> {
     let partitions = b.read(5)?;
     let mut classes = Vec::with_capacity(partitions as usize);
     for _ in 0..partitions {
@@ -409,13 +422,26 @@ fn floor1(b: &mut Bits<'_>) -> Option<()> {
     for d in dims.iter_mut().take(count) {
         *d = b.read(3)? + 1;
         let subclasses = b.read(2)?;
-        if subclasses != 0 {
-            b.skip(8)?;
+        if subclasses != 0 && b.read(8)? >= codebooks {
+            return None;
         }
-        b.skip((1u64 << subclasses) * 8)?;
+        // a subclass book is its number plus one, and 0 means none
+        for _ in 0..1u32 << subclasses {
+            if b.read(8)? > codebooks {
+                return None;
+            }
+        }
     }
     b.skip(2)?;
     let range = b.read(4)?;
     let points: u64 = classes.iter().map(|&c| u64::from(dims[c])).sum();
-    b.skip(points * u64::from(range))
+    if points + 2 > 65 {
+        return None;
+    }
+    let mut xs = vec![0u32, 1u32 << range];
+    for _ in 0..points {
+        xs.push(b.read(range)?);
+    }
+    xs.sort_unstable();
+    xs.windows(2).all(|w| w[0] != w[1]).then_some(())
 }

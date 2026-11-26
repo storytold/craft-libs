@@ -53,6 +53,27 @@ struct Codebook {
 
 /// [`setup`] with the given codebook and the floor and residue its one mapping's submap names.
 fn setup_with(modes: &[bool], book: Codebook, floor: u32, residue: u32) -> Vec<u8> {
+    let plain_floor = |w: &mut BitWriter| {
+        // one floor 1 with no partitions: multiplier and range bits
+        w.put(0, 6).put(1, 16).put(0, 5).put(0, 2).put(0, 4);
+    };
+    let plain_residue = |w: &mut BitWriter| {
+        // one residue 0 with one classification, classbook 0 and no books
+        w.put(0, 6).put(0, 16).put(0, 24).put(0, 24).put(0, 24).put(0, 6).put(0, 8).put(0, 3).put(0, 1);
+    };
+    setup_parts(modes, book, floor, residue, &plain_floor, &plain_residue)
+}
+
+/// [`setup_with`] with the floor and residue configurations written by the given closures, each
+/// starting with its count of 0 (one entry).
+fn setup_parts(
+    modes: &[bool],
+    book: Codebook,
+    floor: u32,
+    residue: u32,
+    write_floor: &dyn Fn(&mut BitWriter),
+    write_residue: &dyn Fn(&mut BitWriter),
+) -> Vec<u8> {
     let mut w = BitWriter::default();
     // one codebook: 2 entries of length 1
     w.put(0, 8).put(0x56_4342, 24).put(book.dims, 16).put(2, 24).put(0, 1).put(0, 1).put(0, 5).put(0, 5).put(book.lookup, 4);
@@ -66,10 +87,8 @@ fn setup_with(modes: &[bool], book: Codebook, floor: u32, residue: u32) -> Vec<u
     }
     // one time-domain transform
     w.put(0, 6).put(0, 16);
-    // one floor 1 with no partitions: multiplier and range bits
-    w.put(0, 6).put(1, 16).put(0, 5).put(0, 2).put(0, 4);
-    // one residue 0 with one classification and no books
-    w.put(0, 6).put(0, 16).put(0, 24).put(0, 24).put(0, 24).put(0, 6).put(0, 8).put(0, 3).put(0, 1);
+    write_floor(&mut w);
+    write_residue(&mut w);
     // one mapping: one submap, no coupling, reserved bits, the submap's time, floor and residue
     w.put(0, 6).put(0, 16).put(0, 1).put(0, 1).put(0, 2).put(0, 8).put(floor, 8).put(residue, 8);
     w.put(modes.len() as u32 - 1, 6);
@@ -164,6 +183,75 @@ fn a_mapping_names_only_configured_floors_and_residues() {
     assert!(VorbisModes::parse(&id, &setup_with(&[false, true], plain, 0, 0)).is_some());
     assert_eq!(VorbisModes::parse(&id, &setup_with(&[false, true], plain, 1, 0)), None, "floor 1 of one floor");
     assert_eq!(VorbisModes::parse(&id, &setup_with(&[false, true], plain, 0, 1)), None, "residue 1 of one residue");
+}
+
+/// The setup of [`setup_with`] with one floor 1 (partition list, then classes) and one residue.
+fn books_setup(floor: &dyn Fn(&mut BitWriter), residue: &dyn Fn(&mut BitWriter)) -> Option<VorbisModes> {
+    let plain = Codebook { dims: 1, lookup: 0 };
+    VorbisModes::parse(&identification(), &setup_parts(&[false, true], plain, 0, 0, floor, residue))
+}
+
+#[test]
+fn residue_books_name_configured_codebooks() {
+    let residue = |classbook: u32, book: u32| {
+        move |w: &mut BitWriter| {
+            // one classification with the first cascade bit set, which names one book
+            w.put(0, 6).put(0, 16).put(0, 24).put(0, 24).put(0, 24).put(0, 6).put(classbook, 8).put(1, 3).put(0, 1);
+            w.put(book, 8);
+        }
+    };
+    let floor = |w: &mut BitWriter| {
+        w.put(0, 6).put(1, 16).put(0, 5).put(0, 2).put(0, 4);
+    };
+    assert!(books_setup(&floor, &residue(0, 0)).is_some());
+    assert_eq!(books_setup(&floor, &residue(1, 0)), None, "classbook 1 of one codebook");
+    assert_eq!(books_setup(&floor, &residue(0, 1)), None, "book 1 of one codebook");
+}
+
+#[test]
+fn floor_books_name_configured_codebooks() {
+    let residue = |w: &mut BitWriter| {
+        w.put(0, 6).put(0, 16).put(0, 24).put(0, 24).put(0, 24).put(0, 6).put(0, 8).put(0, 3).put(0, 1);
+    };
+    // floor 0: order, rate, bark map size, amplitude bits and offset, one book
+    let floor0 = |book: u32| {
+        move |w: &mut BitWriter| {
+            w.put(0, 6).put(0, 16).put(0, 8).put(0, 16).put(0, 16).put(0, 6).put(0, 8).put(0, 4).put(book, 8);
+        }
+    };
+    assert!(books_setup(&floor0(0), &residue).is_some());
+    assert_eq!(books_setup(&floor0(1), &residue), None);
+    // floor 1: one partition of class 0 with one dimension and 1 subclass bit, a master book and
+    // two subclass books (number plus one), then 2 range bits and one X value
+    let floor1 = |master: u32, sub: u32, x: u32| {
+        move |w: &mut BitWriter| {
+            w.put(0, 6).put(1, 16).put(1, 5).put(0, 4).put(0, 3).put(1, 2).put(master, 8).put(sub, 8).put(0, 8);
+            w.put(0, 2).put(2, 4).put(x, 2);
+        }
+    };
+    assert!(books_setup(&floor1(0, 1, 1), &residue).is_some());
+    assert!(books_setup(&floor1(0, 0, 1), &residue).is_some(), "no subclass book");
+    assert_eq!(books_setup(&floor1(1, 1, 1), &residue), None, "master book 1");
+    assert_eq!(books_setup(&floor1(0, 2, 1), &residue), None, "subclass book 1");
+    assert_eq!(books_setup(&floor1(0, 1, 0), &residue), None, "X value equal to the implicit 0");
+    assert_eq!(books_setup(&floor1(0, 1, 1), &residue).map(|m| m.long), Some(vec![false, true]));
+}
+
+#[test]
+fn floor_one_x_values_are_distinct() {
+    let residue = |w: &mut BitWriter| {
+        w.put(0, 6).put(0, 16).put(0, 24).put(0, 24).put(0, 24).put(0, 6).put(0, 8).put(0, 3).put(0, 1);
+    };
+    // one partition of class 0 with two dimensions and no subclasses, 3 range bits, two X values
+    let floor1 = |a: u32, b: u32| {
+        move |w: &mut BitWriter| {
+            w.put(0, 6).put(1, 16).put(1, 5).put(0, 4).put(1, 3).put(0, 2).put(0, 8);
+            w.put(0, 2).put(3, 4).put(a, 3).put(b, 3);
+        }
+    };
+    assert!(books_setup(&floor1(3, 5), &residue).is_some());
+    assert_eq!(books_setup(&floor1(3, 3), &residue), None, "repeated X value");
+    assert_eq!(books_setup(&floor1(0, 5), &residue), None, "X value equal to the implicit 0");
 }
 
 #[test]
