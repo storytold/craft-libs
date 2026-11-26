@@ -68,13 +68,13 @@ const LAME: &[Lame] = &[
 const MIN_SNR: f64 = 100.0;
 
 fn generate(out: &Path, cmd: impl FnOnce(&Path) -> Command) -> Option<PathBuf> {
-    crate::testkit::fixtures::generate(out, |tmp| cmd(tmp).stdin(Stdio::null()).status().is_ok_and(|s| s.success()))
+    crate::integration::codecs::testkit::fixtures::generate(out, |tmp| cmd(tmp).stdin(Stdio::null()).status().is_ok_and(|s| s.success()))
 }
 
 /// The LAME stream for `s`, or `None` (after saying so) when this ffmpeg has no `libmp3lame`; a
 /// failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`.
 fn lame_stream(ff: &Path, s: &Lame) -> Option<PathBuf> {
-    let out = crate::testkit::fixtures_dir("mp3dec").join(format!("{}.mp3", s.name));
+    let out = crate::integration::codecs::testkit::fixtures_dir("mp3dec").join(format!("{}.mp3", s.name));
     generate(&out, |tmp| {
         let mut c = Command::new(ff);
         c.args(["-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i"])
@@ -164,7 +164,7 @@ fn lame_streams_match_ffmpeg() {
 #[test]
 fn lame_cli_streams_match_ffmpeg() {
     let ff = require_ffmpeg!();
-    let Some(lame) = crate::testkit::oracle::find_tool("lame") else {
+    let Some(lame) = crate::integration::codecs::testkit::oracle::find_tool("lame") else {
         eprintln!("lame not installed, skipped");
         return;
     };
@@ -174,7 +174,7 @@ fn lame_cli_streams_match_ffmpeg() {
         ("forced_ms_44k", &["-m", "f", "-b", "96"], 44_100, 2),
     ];
     for &(name, args, rate, channels) in cases {
-        let dir = crate::testkit::fixtures_dir("mp3dec");
+        let dir = crate::integration::codecs::testkit::fixtures_dir("mp3dec");
         let wav = dir.join(format!("{name}.wav"));
         let input = if channels == 1 { "aevalsrc=exprs=if(lt(mod(t\\,0.2)\\,0.004)\\,0.9\\,0.05)*sin(2*PI*700*t)" } else { CLICKS };
         generate(&wav, |tmp| {
@@ -203,7 +203,7 @@ fn lame_cli_streams_match_ffmpeg() {
 #[test]
 fn our_encoder_streams_match_ffmpeg() {
     let ff = require_ffmpeg!();
-    let dir = crate::testkit::fixtures_dir("mp3dec");
+    let dir = crate::integration::codecs::testkit::fixtures_dir("mp3dec");
     for (rate, channels, kbps, stereo) in [
         (44_100, 2, 192, StereoMode::JointStereo),
         (48_000, 2, 128, StereoMode::Stereo),
@@ -286,7 +286,7 @@ struct Candidate {
 
 /// Write `frames` (edited copies) as a stream and compare it with ffmpeg.
 fn check_edited(ff: &Path, frames: Vec<Vec<u8>>, rate: u32, channels: usize, name: &str) {
-    let path = crate::testkit::fixtures_dir("mp3dec").join(format!("{name}.mp3"));
+    let path = crate::integration::codecs::testkit::fixtures_dir("mp3dec").join(format!("{name}.mp3"));
     std::fs::write(&path, frames.concat()).unwrap();
     check(ff, &path, rate, channels, name);
 }
@@ -370,7 +370,7 @@ fn mixed_blocks_match_ffmpeg() {
 #[test]
 fn info_tag_of_a_lame_stream() {
     let ff = require_ffmpeg!();
-    let out = crate::testkit::fixtures_dir("mp3dec").join("tagged_44k.mp3");
+    let out = crate::integration::codecs::testkit::fixtures_dir("mp3dec").join("tagged_44k.mp3");
     let f = generate(&out, |tmp| {
         let mut c = Command::new(&ff);
         c.args(["-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=44100", "-t", "1"])

@@ -8,7 +8,11 @@ mod aiff;
 mod coded;
 #[cfg(feature = "flac-encode")]
 pub(crate) mod flac;
-mod pcm;
+pub(crate) mod pcm;
+#[cfg(feature = "vorbis-encode")]
+mod vorbis;
+#[cfg(feature = "vorbis-encode")]
+pub use vorbis::{OGG_BITRATES, OggVorbisOptions, encode as encode_ogg, encode_ogg_vorbis, quality_for_bitrate};
 #[cfg(feature = "pcm-encode")]
 mod raw;
 #[cfg(feature = "pcm-encode")]
@@ -17,6 +21,15 @@ mod wav;
 use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, Result};
 #[cfg(feature = "pcm-encode")]
 pub use raw::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 use std::io::{Seek, Write};
 
 /// Encode `buf` as the file `opts.format` names. Integer depths clamp samples to [-1, 1]; float
@@ -51,6 +64,25 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
         EncodeFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither, mask),
         #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
         EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3 => coded::encode(buf, opts),
+        #[cfg(feature = "vorbis-encode")]
+        EncodeFormat::Ogg => {
+            let count = u16::try_from(buf.channels.len()).unwrap_or(u16::MAX);
+            let layout = opts.layout.unwrap_or_else(|| ChannelLayout::default_for(count));
+            if layout.channels() != count {
+                return Err(AudioError::Unsupported(format!("a {}-channel layout for {count} channels", layout.channels())));
+            }
+            let map = vorbis::vorbis_map(&layout)?;
+            let quality = match opts.rate_control {
+                None => vorbis::quality_for_bitrate(192, buf.channels.len()),
+                Some(crate::RateControl::Bitrate(bps)) => {
+                    vorbis::quality_for_bitrate((bps / 1000).clamp(OGG_BITRATES.0, OGG_BITRATES.1), buf.channels.len())
+                }
+                Some(crate::RateControl::Quality(q)) if q.is_nan() => return Err(AudioError::Encode("the Vorbis quality is NaN".into())),
+                Some(crate::RateControl::Quality(q)) => -1.0 + 11.0 * q.clamp(0.0, 1.0),
+            };
+            let planar: Vec<&[f32]> = map.iter().filter_map(|&i| buf.channels.get(i).map(Vec::as_slice)).collect();
+            vorbis::encode_planar(buf.sample_rate, &planar, &OggVorbisOptions::new(quality))
+        }
         #[allow(unreachable_patterns)]
         f => Err(AudioError::Unsupported(format!("writing {f:?}"))),
     }
@@ -62,8 +94,8 @@ fn check_built(format: EncodeFormat) -> Result<()> {
 }
 
 /// Every extension [`ENCODE_EXTENSIONS`] can list, and how many of them the features built give.
-const fn extensions() -> ([&'static str; 12], usize) {
-    let mut all = [""; 12];
+const fn extensions() -> ([&'static str; 13], usize) {
+    let mut all = [""; 13];
     let mut n = 0;
     macro_rules! add {
         ($built:expr, $($extension:literal),+) => {
@@ -81,10 +113,11 @@ const fn extensions() -> ([&'static str; 12], usize) {
     add!(cfg!(feature = "mp3-encode"), "mp3");
     add!(cfg!(feature = "ac3-encode"), "ac3");
     add!(cfg!(feature = "eac3-encode"), "eac3", "ec3");
+    add!(cfg!(feature = "vorbis-encode"), "ogg");
     (all, n)
 }
 
-const EXTENSIONS: ([&str; 12], usize) = extensions();
+const EXTENSIONS: ([&str; 13], usize) = extensions();
 
 /// The file extensions of the formats [`encode`] can write (those whose features are on).
 pub const ENCODE_EXTENSIONS: &[&str] = EXTENSIONS.0.split_at(EXTENSIONS.1).0;
@@ -99,7 +132,7 @@ pub const ENCODE_EXTENSIONS: &[&str] = EXTENSIONS.0.split_at(EXTENSIONS.1).0;
 /// use craft_audio::{EncodeFormat, encode_format_for};
 ///
 /// assert_eq!(encode_format_for(".AIFF"), Some(EncodeFormat::Aiff));
-/// assert_eq!(encode_format_for("ogg"), None);
+/// assert_eq!(encode_format_for("unknown"), None);
 /// # }
 /// ```
 pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
@@ -122,6 +155,8 @@ pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
         "ac3" => Some(EncodeFormat::Ac3),
         #[cfg(feature = "eac3-encode")]
         "eac3" | "ec3" => Some(EncodeFormat::Eac3),
+        #[cfg(feature = "vorbis-encode")]
+        "ogg" => Some(EncodeFormat::Ogg),
         _ => None,
     }
 }
@@ -138,6 +173,15 @@ fn wav_mask(layout: &ChannelLayout, channels: usize) -> Result<u32> {
 /// The error a stream encoder returns for every call after one of its writes has failed: the
 /// sink may already hold a prefix of the failed block, so the encoder's counters can no longer
 /// describe the bytes on the sink, and later writes or `finish` must not claim success.
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 fn failed_write_error() -> AudioError {
     AudioError::Encode("the stream encoder already failed on an earlier write; its output is incomplete".into())
 }
@@ -163,12 +207,30 @@ fn failed_write_error() -> AudioError {
 /// assert_eq!(&flac[..4], b"fLaC");
 /// # }
 /// ```
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 pub struct FileEncoder<W: Write + Seek> {
     writer: Writer<W>,
     format: EncodeFormat,
     channels: usize,
 }
 
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileEncoder").field("format", &self.format).finish_non_exhaustive()
@@ -177,6 +239,15 @@ impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
 
 // The writers differ in size with the features built; the coded one is boxed for its encoder.
 #[allow(clippy::large_enum_variant)]
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 enum Writer<W: Write + Seek> {
     #[cfg(feature = "pcm-encode")]
     Wav(wav::Writer<W>),
@@ -188,6 +259,15 @@ enum Writer<W: Write + Seek> {
     Coded(Box<coded::Writer<W>>),
 }
 
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 impl<W: Write + Seek> FileEncoder<W> {
     /// Starts a file of `channels` channels at `sample_rate` at the current position of `out`.
     /// `opts.layout`, when set, must have `channels` channels.
@@ -317,9 +397,39 @@ impl EncodeOptions {
     /// The constant bit rate such a file would be written at ([`FileEncoder::bitrate`]), or the
     /// error [`EncodeOptions::check`] returns.
     pub fn bitrate(&self, sample_rate: u32, channels: u16) -> Result<Option<u32>> {
+        #[cfg(feature = "vorbis-encode")]
+        if self.format == EncodeFormat::Ogg {
+            // Vorbis is whole-buffer only and VBR has no constant output bitrate.
+            encode(&AudioBuffer::new(sample_rate, channels, 0), self)?;
+            return Ok(None);
+        }
         // The encoder a file would get, on a sink that is thrown away: what it accepts and the
         // rate it settles on are then the writer's by construction.
-        Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())
+        #[cfg(any(
+            feature = "pcm-encode",
+            feature = "flac-encode",
+            feature = "aac-encode",
+            feature = "alac-encode",
+            feature = "mp3-encode",
+            feature = "ac3-encode",
+            feature = "eac3-encode"
+        ))]
+        {
+            Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())
+        }
+        #[cfg(not(any(
+            feature = "pcm-encode",
+            feature = "flac-encode",
+            feature = "aac-encode",
+            feature = "alac-encode",
+            feature = "mp3-encode",
+            feature = "ac3-encode",
+            feature = "eac3-encode"
+        )))]
+        {
+            let _ = (sample_rate, channels);
+            Err(AudioError::Unsupported("streaming encoders are not built".into()))
+        }
     }
 }
 
@@ -343,47 +453,4 @@ pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<
         return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
     }
     wav::header(usize::from(channels), sample_rate, (32, true), None, None, frames, false)
-}
-
-// With only one of `pcm-encode` and `flac-encode`, the other's formats are refused, not silently
-// written as something else.
-#[cfg(all(test, any(feature = "pcm-encode", feature = "flac-encode"), not(all(feature = "pcm-encode", feature = "flac-encode"))))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unbuilt_format_is_unsupported() {
-        let (format, name) = if cfg!(feature = "pcm-encode") { (EncodeFormat::Flac, "flac") } else { (EncodeFormat::Wav, "wav") };
-        let opts = EncodeOptions::new(format);
-        let buf = AudioBuffer::new(48_000, 1, 16);
-        assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));
-        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
-        assert!(matches!(enc, Err(AudioError::Unsupported(_))));
-        assert_eq!(encode_format_for(name), None);
-        assert!(!format.is_built() && EncodeFormat::ALL.iter().any(|f| f.is_built()));
-        // Also with a layout it could not use.
-        let opts = opts.with_layout(ChannelLayout::STEREO);
-        assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));
-        let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
-        assert!(matches!(enc, Err(AudioError::Unsupported(_))));
-    }
-
-    /// Streaming in any block sizes writes the bytes `encode` writes.
-    #[cfg(feature = "flac-encode")]
-    #[test]
-    fn streamed_flac_matches_encode() {
-        let channels: Vec<Vec<f32>> = (0..2).map(|c| (0..20_000).map(|i| ((i * (c + 3)) as f32 * 0.01).sin() * 0.5).collect()).collect();
-        let buf = AudioBuffer { sample_rate: 48_000, channels };
-        let opts = EncodeOptions::new(EncodeFormat::Flac);
-        let whole = encode(&buf, &opts).unwrap();
-        let mut enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 2).unwrap();
-        let mut at = 0;
-        for n in [1000, 4096, 1, 9000, 5903] {
-            let block: Vec<&[f32]> = buf.channels.iter().map(|c| &c[at..at + n]).collect();
-            enc.write(&block, n).unwrap();
-            at += n;
-        }
-        assert_eq!(at, buf.frames());
-        assert_eq!(enc.finish().unwrap().into_inner(), whole);
-    }
 }

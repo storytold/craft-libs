@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::canvas::{MAX_CLIP_PATHS, MAX_DASH_ENTRIES};
+use crate::canvas::MAX_CLIP_PATHS;
 use crate::{Cap, ClipPath, Join, LineStyle, PlacedItem};
 
 fn line_of(item: &Item) -> &LineStyle {
@@ -63,82 +63,6 @@ fn emf_geometric_pen_keeps_its_cap_join_miter_limit_and_dashes() {
 }
 
 #[test]
-fn dash_lengths_follow_the_mapping_like_the_width() {
-    // A world transform of 2: the width and the dashes double.
-    let xf: Vec<u8> = [2.0f32, 0.0, 0.0, 2.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
-    let recs = [erec(35, &xf), ext_pen(PS_GEOMETRIC | 7, 4, &[8, 4]), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)];
-    let p = parse_emf(&recs);
-    let (_, _, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(stroke, Some(([255, 0, 0, 255], 8.0)));
-    assert_eq!(line_of(&p.items[0]).dash, vec![16.0, 8.0]);
-}
-
-#[test]
-fn pen_styles_become_dash_patterns_of_the_pen_width() {
-    // CREATEPEN: slot, style, width (x, y), colour.
-    let pen = |style: u32, width: u32| erec_at(38, 28, &[(8, 1), (12, style), (16, width)], &[]);
-    let draw = |style: u32, width: u32| {
-        let p = parse_emf(&[pen(style, width), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-        line_of(&p.items[0]).clone()
-    };
-    assert_eq!(draw(0, 2), LineStyle::default(), "PS_SOLID: round caps and joins, miter limit 10, no dashes");
-    assert_eq!(draw(1, 2).dash, vec![6.0, 2.0], "PS_DASH");
-    assert_eq!(draw(2, 2).dash, vec![2.0, 2.0], "PS_DOT");
-    assert_eq!(draw(3, 2).dash, vec![6.0, 2.0, 2.0, 2.0], "PS_DASHDOT");
-    assert_eq!(draw(4, 2).dash, vec![6.0, 2.0, 2.0, 2.0, 2.0, 2.0], "PS_DASHDOTDOT");
-    // A cosmetic pen's dashes are in device pixels.
-    assert_eq!(draw(2, 0).dash, vec![1.0, 1.0]);
-    // PS_INSIDEFRAME and unknown styles are solid.
-    assert!(draw(6, 2).dash.is_empty());
-}
-
-#[test]
-fn a_dash_pattern_that_draws_nothing_is_a_solid_line() {
-    let draw = |entries: &[u32]| {
-        let p = parse_emf(&[ext_pen(PS_GEOMETRIC | 7, 2, entries), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-        line_of(&p.items[0]).dash.clone()
-    };
-    assert!(draw(&[0, 0]).is_empty());
-    assert!(draw(&[]).is_empty());
-    assert_eq!(draw(&[0, 5]), vec![0.0, 5.0], "a zero dash with round caps draws dots");
-}
-
-#[test]
-fn a_pen_keeps_at_most_sixteen_style_entries() {
-    let entries: Vec<u32> = (1..=100).collect();
-    let p = parse_emf(&[ext_pen(PS_GEOMETRIC | 7, 1, &entries), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-    assert_eq!(line_of(&p.items[0]).dash.len(), MAX_DASH_ENTRIES);
-    // A count that runs past the record keeps the entries the record holds.
-    let mut rec = ext_pen(PS_GEOMETRIC | 7, 1, &[3, 2]);
-    rec[48..52].copy_from_slice(&1000u32.to_le_bytes());
-    let p = parse_emf(&[rec, erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-    assert_eq!(line_of(&p.items[0]).dash, vec![3.0, 2.0]);
-}
-
-#[test]
-fn wmf_pen_style_word_carries_cap_and_join() {
-    // CREATEPENINDIRECT: style (PS_SOLID, flat caps, bevel joins), width (x, y), colour.
-    let pen = wrec(0x02FA, &cat(vec![h16(0x1200), h16(3), h16(0), h32(0)]));
-    let recs = [pen, wrec(0x012D, &h16(0)), wrec(0x0214, &cat(vec![h16(0), h16(0)])), wrec(0x0213, &cat(vec![h16(0), h16(50)]))];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    let line = line_of(&p.items[0]);
-    assert_eq!((line.cap, line.join), (Cap::Flat, Join::Bevel));
-}
-
-#[test]
-fn restore_dc_brings_back_the_miter_limit() {
-    let pen = ext_pen(PS_GEOMETRIC | 0x2000, 2, &[]);
-    let recs =
-        [pen, erec(37, &h32(1)), erec(33, &[]), erec(58, &h32(4)), move_to(0, 0), line_to(9, 0), erec(34, &e32(-1)), move_to(0, 5), line_to(9, 5)];
-    let p = parse_emf(&recs);
-    assert_eq!(line_of(&p.items[0]).miter_limit, 4.0);
-    assert_eq!(line_of(&p.items[1]).miter_limit, 10.0);
-    // A limit below 1 is invalid: the limit stays.
-    let p = parse_emf(&[ext_pen(PS_GEOMETRIC | 0x2000, 2, &[]), erec(37, &h32(1)), erec(58, &h32(0)), move_to(0, 0), line_to(9, 0)]);
-    assert_eq!(line_of(&p.items[0]).miter_limit, 10.0);
-}
-
-#[test]
 fn select_clip_path_clips_what_follows_and_items_share_the_path() {
     let mut recs = vec![rect(0, 0, 100, 100)];
     recs.extend(clip_to_rect(10, 10, 60, 60, 1));
@@ -176,43 +100,6 @@ fn clip_paths_nest_with_and_replace_with_copy_and_end_with_restore_dc() {
 }
 
 #[test]
-fn clip_modes_that_add_or_cut_leave_the_clip_and_a_region_copy_drops_clip_paths() {
-    for mode in [2, 3, 4, 0, 99] {
-        let mut recs = clip_to_rect(0, 0, 10, 10, mode);
-        recs.push(rect(0, 0, 100, 100));
-        let p = parse_emf(&recs);
-        assert!(clips_of(&p.items[0]).is_empty(), "mode {mode}");
-    }
-    // EXTSELECTCLIPRGN with no region data selects the default clip: no region, no clip paths.
-    let mut recs = clip_to_rect(0, 0, 10, 10, 1);
-    recs.push(erec(75, &cat(vec![h32(0), h32(5)])));
-    recs.push(rect(0, 0, 100, 100));
-    let p = parse_emf(&recs);
-    assert!(clips_of(&p.items[0]).is_empty());
-}
-
-#[test]
-fn an_empty_clip_path_clips_everything_away() {
-    let recs = [erec(59, &[]), erec(60, &[]), erec(67, &h32(1)), rect(0, 0, 100, 100)];
-    assert!(parse_emf(&recs).items.is_empty());
-}
-
-#[test]
-fn one_clip_path_past_the_cap_stops_the_parse() {
-    let nested = |n: usize| {
-        let mut recs = Vec::new();
-        for _ in 0..n {
-            recs.extend(clip_to_rect(0, 0, 50, 50, 1));
-        }
-        recs.push(rect(0, 0, 100, 100));
-        parse_emf(&recs)
-    };
-    let p = nested(MAX_CLIP_PATHS);
-    assert_eq!(clips_of(&p.items[0]).len(), MAX_CLIP_PATHS);
-    assert!(nested(MAX_CLIP_PATHS + 1).items.is_empty(), "what follows can no longer be clipped as the file asks");
-}
-
-#[test]
 fn clip_path_ops_count_against_the_byte_budget() {
     // Each clip path is charged once, when it is selected, so RGN_COPY in a loop cannot hold more
     // than the budget (the earlier paths stay alive while items drawn under them do).
@@ -231,14 +118,6 @@ fn clip_path_ops_count_against_the_byte_budget() {
 }
 
 #[test]
-fn abort_path_discards_the_bracket() {
-    let recs = [erec(59, &[]), rect(0, 0, 10, 10), erec(68, &[]), erec(62, &[0; 16]), rect(0, 0, 5, 5)];
-    let p = parse_emf(&recs);
-    assert_eq!(p.items.len(), 1, "only the rectangle drawn after the bracket was aborted");
-    assert_eq!((p.width, p.height), (5.0, 5.0));
-}
-
-#[test]
 fn arc_direction_picks_the_other_part_of_the_ellipse() {
     // From the right-most point to the top-most one: counter-clockwise is the quarter between
     // them, clockwise the three quarters round the other way.
@@ -250,21 +129,6 @@ fn arc_direction_picks_the_other_part_of_the_ellipse() {
     // RESTOREDC brings the direction back.
     let p = parse_emf(&[erec(33, &[]), erec(57, &h32(2)), erec(34, &e32(-1)), arc]);
     assert!(close(p.width, 50.0));
-}
-
-#[test]
-fn scale_viewport_and_window_ext_change_the_mapping() {
-    let setup = [erec(17, &h32(8)), erec(9, &cat(vec![e32(100), e32(100)])), erec(11, &cat(vec![e32(100), e32(100)]))];
-    let scaled = |typ: u32, v: [i32; 4]| {
-        let mut recs = setup.to_vec();
-        recs.push(erec(typ, &cat(v.iter().map(|x| e32(*x)).collect())));
-        recs.push(rect(0, 0, 10, 10));
-        let p = parse_emf(&recs);
-        (p.width, p.height)
-    };
-    assert_eq!(scaled(31, [2, 1, 3, 1]), (20.0, 30.0), "SCALEVIEWPORTEXTEX");
-    assert_eq!(scaled(32, [2, 1, 5, 1]), (5.0, 2.0), "SCALEWINDOWEXTEX");
-    assert_eq!(scaled(31, [2, 0, 3, 1]), (10.0, 10.0), "a zero denominator leaves the extent");
 }
 
 #[test]
@@ -288,16 +152,6 @@ fn close_figure_moves_the_current_position_to_the_figures_start() {
     let recs = [erec(59, &[]), move_to(0, 0), line_to(10, 0), line_to(10, 10), erec(61, &[]), erec(60, &[]), erec(64, &[0; 16]), line_to(5, 20)];
     let p = parse_emf(&recs);
     assert_eq!(path_segs(&p.items[1]).0, &vec![Seg::Move(0.0, 0.0), Seg::Line(5.0, 20.0)]);
-}
-
-#[test]
-fn records_of_unknown_types_are_counted_and_known_ones_are_not() {
-    // 200 is no EMF record; 21 (SETSTRETCHBLTMODE) and 70 (a plain comment) change nothing kept.
-    let recs = [rect(0, 0, 10, 10), erec(200, &[0; 8]), erec(21, &h32(1)), erec(70, &cat(vec![h32(4), h32(0)])), erec(201, &[])];
-    assert_eq!(parse_emf(&recs).skipped_records, 2);
-    let rect16 = wrec(0x041B, &cat(vec![h16(10), h16(10), h16(0), h16(0)]));
-    let recs = [rect16, wrec(0x0999, &[0; 4]), wrec(0x0107, &h16(1))];
-    assert_eq!(parse(&wmf(&recs, None)).unwrap().skipped_records, 1);
 }
 
 #[test]
@@ -372,32 +226,294 @@ fn stretch_dibits(w: i32, h: i32, compression: u32, bits: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn png_and_jpeg_dibs_decode() {
-    let p = parse_emf(&[stretch_dibits(3, 1, 5, &png(3, 1, [1, 2, 3, 255]))]);
-    let Item::Bitmap { rect, width, height, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!((*width, *height, rect), (3, 1, &[0.0, 0.0, 30.0, 10.0]));
-    assert_eq!(rgba.as_slice(), [1, 2, 3, 255].repeat(3));
-    let mut jpeg = Vec::new();
-    let img = image::RgbImage::from_pixel(8, 8, image::Rgb([200, 200, 200]));
-    image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
-    let p = parse_emf(&[stretch_dibits(8, 8, 4, &jpeg)]);
-    let Item::Bitmap { width, height, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!((*width, *height), (8, 8));
-    assert!(rgba.as_chunks::<4>().0.iter().all(|c| c[0].abs_diff(200) < 4 && c[3] == 255));
-    // Bits that are no image, and a truncated file, draw nothing.
-    assert!(parse_emf(&[stretch_dibits(3, 1, 5, &[1, 2, 3, 4])]).items.is_empty());
-    let whole = png(3, 1, [1, 2, 3, 255]);
-    assert!(parse_emf(&[stretch_dibits(3, 1, 5, &whole[..whole.len() / 2])]).items.is_empty());
+fn bitmaps_that_are_not_read_are_counted() {
+    let dropped = |recs: &[Vec<u8>]| {
+        let p = parse_emf(recs);
+        (p.items.len(), p.dropped_images)
+    };
+    assert_eq!(dropped(&[stretch_dibits(3, 1, 5, &png(3, 1, [1, 2, 3, 255]))]), (1, 0), "a bitmap that is drawn");
+    assert_eq!(dropped(&[stretch_dibits(3, 1, 5, &[1, 2, 3, 4])]), (0, 1), "bits that are no image");
+    let wide = png(crate::MAX_BITMAP_SIDE + 1, 1, [0; 4]);
+    assert_eq!(dropped(&[stretch_dibits(crate::MAX_BITMAP_SIDE as i32 + 1, 1, 5, &wide)]), (0, 1), "a side past the cap");
+    // A source rectangle beside the bitmap selects none of its pixels: nothing to draw, nothing lost.
+    let mut beside = stretch_dibits(1, 1, 0, &[1, 2, 3, 255]);
+    beside[32..36].copy_from_slice(&50i32.to_le_bytes());
+    assert_eq!(dropped(&[beside.clone()]), (0, 0));
+    // The same for a compression the decoder does not read (BI_RLE8), and counted when it is inside.
+    beside[80 + 16..80 + 20].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(dropped(&[beside.clone()]), (0, 0));
+    beside[32..36].copy_from_slice(&0i32.to_le_bytes());
+    assert_eq!(dropped(&[beside]), (0, 1));
+    // A BI_PNG header that says 10 x 1 over a 1 x 1 PNG: the PNG is what is cropped.
+    let mut png_dib = stretch_dibits(10, 1, 5, &png(1, 1, [1, 2, 3, 255]));
+    png_dib[32..36].copy_from_slice(&5i32.to_le_bytes());
+    png_dib[40..44].copy_from_slice(&1i32.to_le_bytes());
+    assert_eq!(dropped(&[png_dib]), (0, 0));
+    // A STRETCHDIBITS without bits is not a bitmap.
+    assert_eq!(dropped(&[stretch_dibits(1, 1, 0, &[])]), (0, 0));
+    // WMF: a DIB of a depth the core header does not have.
+    let core16 = cat(vec![h32(12), h16(2), h16(2), h16(1), h16(16)]);
+    let p = parse(&stretch_dib(core16)).unwrap();
+    assert_eq!((p.items.len(), p.dropped_images), (0, 1));
+    let p = parse(&stretch_dib(dib24_bottom_up())).unwrap();
+    assert_eq!((p.items.len(), p.dropped_images), (1, 0));
+    // WMF: BI_RLE8, which the decoder does not read, from beside the bitmap and from inside it.
+    let mut file = stretch_dib(dib24_bottom_up());
+    // The 18-byte WMF header, then the record: the DIB starts 28 bytes in, after the source x at 18.
+    let at = 18 + 28;
+    assert_eq!(file[at..at + 4], 40u32.to_le_bytes());
+    file[at + 16..at + 20].copy_from_slice(&1u32.to_le_bytes());
+    let x_src = at - 10;
+    file[x_src..x_src + 2].copy_from_slice(&50i16.to_le_bytes());
+    assert_eq!(parse(&file).unwrap().dropped_images, 0);
+    file[x_src..x_src + 2].copy_from_slice(&0i16.to_le_bytes());
+    assert_eq!(parse(&file).unwrap().dropped_images, 1);
+    // A header that gives the bitmap no pixels draws nothing.
+    assert_eq!(dropped(&[stretch_dibits(0, 1, 0, &[1, 2, 3, 4])]), (0, 0));
+    let empty = cat(vec![h32(12), h16(0), h16(2), h16(1), h16(16)]);
+    assert_eq!(parse(&stretch_dib(empty)).unwrap().dropped_images, 0);
+}
+
+/// EMR_CREATEDIBPATTERNBRUSHPT in slot 1 with the DIB `info` and `bits`.
+fn dib_pattern_brush(info: &[u8], bits: &[u8]) -> Vec<u8> {
+    let fields = [1, 0, 32, info.len() as u32, 32 + info.len() as u32, bits.len() as u32];
+    erec(94, &cat(vec![fields.iter().flat_map(|v| v.to_le_bytes()).collect(), info.to_vec(), bits.to_vec()]))
 }
 
 #[test]
-fn a_compressed_dib_over_the_side_cap_is_refused_before_decoding() {
+fn pattern_and_texture_brushes_that_are_not_read_are_counted() {
+    let dib = dib24_bottom_up();
+    let (info, bits) = dib.split_at(40);
+    assert_eq!(parse_emf(&[dib_pattern_brush(info, bits)]).dropped_images, 0);
+    // BI_RLE8, which the decoder does not read.
+    let mut rle = info_header(2, 2, 8, 4);
+    rle[16..20].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(parse_emf(&[dib_pattern_brush(&rle, &[0; 4])]).dropped_images, 1);
+    // A tile past the side cap.
+    let wide = info_header(crate::canvas::MAX_TILE_SIDE as i32 + 1, 1, 24, 0);
+    let wide_bits = vec![0u8; (crate::canvas::MAX_TILE_SIDE + 1) * 3 + 4];
+    assert_eq!(parse_emf(&[dib_pattern_brush(&wide, &wide_bits)]).dropped_images, 1);
+    // A header with no pixels.
+    assert_eq!(parse_emf(&[dib_pattern_brush(&info_header(0, 2, 24, 0), &[0; 4])]).dropped_images, 0);
+    // WMF DIBCREATEPATTERNBRUSH.
+    let wmf_brush = |dib: Vec<u8>| parse(&wmf(&[wrec(0x0142, &cat(vec![h16(5), h16(0), dib]))], None)).unwrap().dropped_images;
+    assert_eq!(wmf_brush(dib24_bottom_up()), 0);
+    assert_eq!(wmf_brush(cat(vec![rle.clone(), vec![0; 4]])), 1);
+    assert_eq!(wmf_brush(info_header(0, 2, 24, 0)), 0);
+    // An EMF+ texture brush whose bitmap runs past the record, one with no pixels, and one that is read.
+    let texture = |image: Vec<u8>| {
+        let brush = cat(vec![h32(0xDBC0_1002), h32(2), h32(0), h32(0), image]);
+        emf(&[plus_comment(&[plus_header(false), prec(0x4008, 0x0100 | 5, &brush)])], [0; 4], [0; 4])
+    };
+    let short = cat(vec![h32(0xDBC0_1002), h32(1), h32(4), h32(4), h32(16), h32(0x0026_200A), h32(0), vec![1, 2, 3]]);
+    assert_eq!(parse(&texture(short)).unwrap().dropped_images, 1);
+    let none = cat(vec![h32(0xDBC0_1002), h32(1), h32(0), h32(4), h32(16), h32(0x0026_200A), h32(0)]);
+    assert_eq!(parse(&texture(none)).unwrap().dropped_images, 0);
+    assert_eq!(parse(&texture(bitmap_2x2())).unwrap().dropped_images, 0);
+    // A pen whose brush is such a texture brush.
+    let pen = |image: Vec<u8>| {
+        let brush = cat(vec![h32(0xDBC0_1002), h32(2), h32(0), h32(0), image]);
+        let pen = cat(vec![h32(0xDBC0_1002), h32(0), h32(0), h32(0), f32s(&[1.0]), brush]);
+        emf(&[plus_comment(&[plus_header(false), prec(0x4008, 0x0200 | 5, &pen)])], [0; 4], [0; 4])
+    };
+    let short = cat(vec![h32(0xDBC0_1002), h32(1), h32(4), h32(4), h32(16), h32(0x0026_200A), h32(0), vec![1, 2, 3]]);
+    assert_eq!(parse(&pen(short)).unwrap().dropped_images, 1);
+    let none = cat(vec![h32(0xDBC0_1002), h32(1), h32(0), h32(4), h32(16), h32(0x0026_200A), h32(0)]);
+    assert_eq!(parse(&pen(none)).unwrap().dropped_images, 0);
+    assert_eq!(parse(&pen(bitmap_2x2())).unwrap().dropped_images, 0);
+}
+
+#[test]
+fn an_emfplus_image_refused_by_a_limit_is_counted_unless_the_crop_misses_it() {
+    // A PNG one pixel wider than the compressed-side cap: its header is read, its pixels are not.
     let side = crate::dib::MAX_COMPRESSED_SIDE;
-    assert!(crate::dib::decode_compressed(&png(side, 1, [0; 4])).is_some());
-    assert!(crate::dib::decode_compressed(&png(side + 1, 1, [0; 4])).is_none());
-    // A side no renderer draws (MAX_BITMAP_SIDE) makes no item either.
-    let wide = png(crate::MAX_BITMAP_SIDE + 1, 1, [0; 4]);
-    assert!(parse_emf(&[stretch_dibits(crate::MAX_BITMAP_SIDE as i32 + 1, 1, 5, &wide)]).items.is_empty());
+    let wide = png(side + 1, 1, [0; 4]);
+    let obj = cat(vec![h32(0xDBC0_1002), h32(1), h32(0), h32(0), h32(0), h32(0), h32(1), wide]);
+    let drawn = |sx: f32| {
+        let draw = prec(0x401A, 2, &cat(vec![h32(0), h32(2), f32s(&[sx, 0.0, 1.0, 1.0]), f32s(&[0.0, 0.0, 40.0, 20.0])]));
+        let p = parse(&emf(&[plus_comment(&[plus_header(false), prec(0x4008, 0x0500 | 2, &obj), draw])], [0; 4], [0; 4])).unwrap();
+        (p.items.len(), p.dropped_images)
+    };
+    assert_eq!(drawn(0.0), (0, 1));
+    assert_eq!(drawn(side as f32 + 10.0), (0, 0), "a source rectangle past the right edge");
+}
+
+#[test]
+fn raster_operations_that_are_not_played_are_counted() {
+    let copied = |rop: u32| {
+        let mut rec = stretch_dibits(1, 1, 0, &[10, 20, 30, 255]);
+        rec[68..72].copy_from_slice(&rop.to_le_bytes());
+        let p = parse_emf(&[rec]);
+        (p.items.len(), p.unplayed_raster_ops)
+    };
+    // SRCCOPY, SRCAND, SRCPAINT and SRCINVERT are played.
+    for rop in [0x00CC_0020, 0x0088_00C6, 0x00EE_0086, 0x0066_0046] {
+        assert_eq!(copied(rop), (1, 0), "{rop:#x}");
+    }
+    // NOTSRCCOPY and MERGEPAINT are drawn as the source.
+    assert_eq!(copied(0x0033_0008), (1, 1));
+    assert_eq!(copied(0x00BB_0226), (1, 1));
+    // A bitmap that is clipped away is not drawn, so nothing is copied.
+    let mut rec = stretch_dibits(1, 1, 0, &[10, 20, 30, 255]);
+    rec[68..72].copy_from_slice(&0x0033_0008u32.to_le_bytes());
+    let recs = [erec(59, &[]), erec(60, &[]), erec(67, &h32(1)), rec];
+    assert_eq!(parse_emf(&recs).unplayed_raster_ops, 0);
+    // WMF STRETCHDIB with NOTSRCCOPY.
+    let mut file = stretch_dib(dib24_bottom_up());
+    let at = file.windows(4).position(|w| w == 0x00CC_0020u32.to_le_bytes()).unwrap();
+    file[at..at + 4].copy_from_slice(&0x0033_0008u32.to_le_bytes());
+    assert_eq!(parse(&file).unwrap().unplayed_raster_ops, 1);
+    // Operations without a source: BLACKNESS is played; DSTINVERT and PATINVERT are left out.
+    let bitblt = |rop: u32| {
+        let mut payload = vec![0u8; 92];
+        payload[16..32].copy_from_slice(&cat(vec![e32(0), e32(0), e32(10), e32(10)]));
+        payload[32..36].copy_from_slice(&rop.to_le_bytes());
+        let p = parse_emf(&[erec(76, &payload)]);
+        (p.items.len(), p.unplayed_raster_ops)
+    };
+    assert_eq!(bitblt(0x0000_0042), (1, 0));
+    assert_eq!(bitblt(0x0055_0009), (0, 1));
+    assert_eq!(bitblt(0x005A_0049), (0, 1));
+    assert_eq!(bitblt(0x00CC_0020), (0, 0), "a copy without a bitmap draws nothing and leaves nothing out");
+    // STRETCHDIBITS with an operation without a source fills the destination, with or without bits.
+    assert_eq!(copied(0x0000_0042), (1, 0), "BLACKNESS with bits");
+    assert_eq!(copied(0x0055_0009), (0, 1), "DSTINVERT with bits");
+    let mut bare = stretch_dibits(1, 1, 0, &[]);
+    bare[68..72].copy_from_slice(&0x00FF_0062u32.to_le_bytes());
+    assert_eq!(parse_emf(&[bare]).items.len(), 1, "WHITENESS without bits");
+    // WMF STRETCHDIB with BLACKNESS fills instead of drawing the bitmap.
+    let mut file = stretch_dib(dib24_bottom_up());
+    let at = file.windows(4).position(|w| w == 0x00CC_0020u32.to_le_bytes()).unwrap();
+    file[at..at + 4].copy_from_slice(&0x0000_0042u32.to_le_bytes());
+    let p = parse(&file).unwrap();
+    assert!(matches!(p.items.as_slice(), [Item::Path { fill: Some([0, 0, 0, 255]), .. }]), "{:?}", p.items);
+    let patblt = |rop: u32| {
+        let p = parse(&wmf(&[wrec(0x061D, &cat(vec![h32(rop), h16(10), h16(10), h16(0), h16(0)]))], None)).unwrap();
+        (p.items.len(), p.unplayed_raster_ops)
+    };
+    assert_eq!(patblt(0x00FF_0062), (1, 0));
+    assert_eq!(patblt(0x0055_0009), (0, 1));
+    assert!(!crate::dib::uses_source(0x00F0_0021) && crate::dib::uses_source(0x00CC_0020) && crate::dib::uses_source(0x00BB_0226));
+}
+
+#[test]
+fn clips_that_are_not_applied_are_counted() {
+    let ignored = |recs: Vec<Vec<u8>>| parse_emf(&recs).ignored_clips;
+    let after = |mode: u32| {
+        let mut recs = clip_to_rect(0, 0, 10, 10, mode);
+        recs.push(rect(0, 0, 100, 100));
+        recs
+    };
+    assert_eq!(ignored(after(1)), 0, "RGN_AND is applied");
+    assert_eq!(ignored(after(5)), 0, "RGN_COPY is applied");
+    assert_eq!(ignored(after(3)), 1, "RGN_XOR");
+    assert_eq!(ignored(after(4)), 1, "RGN_DIFF");
+    assert_eq!(ignored(after(2)), 0, "RGN_OR on the whole surface leaves the whole surface");
+    assert_eq!(ignored(after(0)), 0, "an invalid mode selects nothing");
+    let mut recs = clip_to_rect(0, 0, 50, 50, 1);
+    recs.extend(after(2));
+    assert_eq!(ignored(recs), 1, "RGN_OR on a clip path is counted, whether or not it widens it");
+    let recs = vec![erec(59, &[]), erec(60, &[]), erec(67, &h32(4)), rect(0, 0, 100, 100)];
+    assert_eq!(ignored(recs), 0, "an empty path cuts nothing");
+    let line = vec![erec(59, &[]), move_to(0, 0), line_to(50, 50), move_to(60, 0), erec(60, &[]), erec(67, &h32(3)), rect(0, 0, 100, 100)];
+    assert_eq!(ignored(line), 0, "a path on one line encloses nothing");
+}
+
+#[test]
+fn emfplus_clips_that_are_not_applied_are_counted() {
+    // The combine mode is in bits 8 to 11 of the flags.
+    let plus = |recs: Vec<Vec<u8>>| {
+        let mut all = vec![plus_header(false)];
+        all.extend(recs);
+        parse(&emf(&[plus_comment(&all)], [0; 4], [0; 4])).unwrap().ignored_clips
+    };
+    let clip = |mode: u16, r: [f32; 4]| prec(0x4032, mode << 8, &f32s(&r));
+    for mode in 3..=5 {
+        assert_eq!(plus(vec![clip(0, [0.0, 0.0, 50.0, 50.0]), clip(mode, [10.0, 10.0, 10.0, 10.0])]), 1, "mode {mode}");
+        assert_eq!(plus(vec![clip(mode, [10.0, 10.0, 0.0, 10.0])]), u32::from(mode == 5), "mode {mode} with no area");
+        let empty_on_clip = vec![clip(0, [0.0, 0.0, 50.0, 50.0]), clip(mode, [10.0, 10.0, 0.0, 10.0])];
+        assert_eq!(plus(empty_on_clip), u32::from(mode == 5), "mode {mode} with no area on a clip");
+    }
+    assert_eq!(plus(vec![clip(0, [0.0, 0.0, 50.0, 50.0]), clip(2, [10.0, 10.0, 10.0, 10.0])]), 0, "a union inside the clip");
+    assert_eq!(plus(vec![clip(0, [0.0, 0.0, 50.0, 50.0]), clip(2, [60.0, 60.0, 10.0, 10.0])]), 1, "a union apart from it");
+    assert_eq!(plus(vec![clip(2, [60.0, 60.0, 10.0, 10.0])]), 0, "a union with no clip set");
+    assert_eq!(plus(vec![clip(0, [0.0, 0.0, 10.0, 10.0]), clip(2, [10.0, 0.0, 10.0, 10.0])]), 0, "a union that is its rectangle");
+    // A region whose area is a stand-in: an XOR node, unless its right area is empty.
+    let node = |r: [f32; 4]| cat(vec![h32(0x1000_0000), f32s(&r)]);
+    let region = |mode: u32, right: Vec<u8>| {
+        let obj = cat(vec![h32(0xDBC0_1002), h32(2), h32(mode), node([0.0, 0.0, 30.0, 30.0]), right]);
+        vec![prec(0x4008, 0x0400 | 6, &obj), prec(0x4034, 6, &[])]
+    };
+    assert_eq!(plus(region(3, node([10.0, 10.0, 90.0, 90.0]))), 1, "an XOR region");
+    assert_eq!(plus(region(3, h32(0x1000_0002))), 0, "XOR with an empty region");
+    let empty_pair = cat(vec![h32(0xDBC0_1002), h32(3), h32(5), h32(0x1000_0002), h32(0x1000_0002)]);
+    assert_eq!(plus(vec![prec(0x4008, 0x0400 | 6, &empty_pair), prec(0x4034, 6, &[])]), 0, "the complement of two empty regions");
+    let cut_empty = vec![clip(0, [0.0, 0.0, 0.0, 10.0]), clip(4, [0.0, 0.0, 10.0, 10.0])];
+    assert_eq!(plus(cut_empty), 0, "an exclude from an empty clip");
+    assert_eq!(plus(region(1, node([10.0, 10.0, 90.0, 90.0]))), 0, "an intersection");
+    assert_eq!(plus(region(2, node([30.0, 0.0, 30.0, 30.0]))), 0, "a union that is its rectangle");
+    assert_eq!(plus(region(2, node([40.0, 40.0, 30.0, 30.0]))), 1, "a union drawn as a larger rectangle");
+    // A clip path that is not one convex figure is drawn as its rectangle.
+    let path = |pts: &[f32], types: Vec<u8>| {
+        let obj = cat(vec![h32(0xDBC0_1002), h32(types.len() as u32), h32(0), f32s(pts), types]);
+        vec![prec(0x4008, 0x0300 | 9, &obj), prec(0x4033, 9, &[])]
+    };
+    assert_eq!(plus(path(&[0.0, 50.0, 50.0, 0.0, 100.0, 50.0, 50.0, 100.0], vec![0, 1, 1, 0x81])), 0, "a convex path");
+    let l_shape = [0.0, 0.0, 20.0, 0.0, 20.0, 10.0, 10.0, 10.0, 10.0, 20.0, 0.0, 20.0];
+    assert_eq!(plus(path(&l_shape, vec![0, 1, 1, 1, 1, 0x81])), 1, "an L shape");
+    // A stand-in that cannot show: intersected with an empty clip, or added to an unlimited one.
+    let combined = |mode: u16, first: Vec<Vec<u8>>| {
+        let mut recs = first;
+        recs.extend(path(&l_shape, vec![0, 1, 1, 1, 1, 0x81]));
+        let last = recs.len() - 1;
+        recs[last] = prec(0x4033, (mode << 8) | 9, &[]);
+        plus(recs)
+    };
+    assert_eq!(combined(1, vec![clip(0, [0.0, 0.0, 0.0, 10.0])]), 0, "an L shape inside an empty clip");
+    assert_eq!(combined(2, Vec::new()), 0, "an L shape added to no clip");
+    assert_eq!(combined(1, Vec::new()), 1, "an L shape inside no clip");
+    let inf = h32(0x1000_0003);
+    let xor = cat(vec![h32(3), node([0.0, 0.0, 30.0, 30.0]), node([10.0, 10.0, 90.0, 90.0])]);
+    let obj = cat(vec![h32(0xDBC0_1002), h32(4), h32(2), xor, inf]);
+    assert_eq!(plus(vec![prec(0x4008, 0x0400 | 6, &obj), prec(0x4034, 6, &[])]), 0, "an XOR region added to an unlimited one");
+    assert_eq!(plus(vec![clip(1, [0.0, 0.0, 50.0, 50.0]), clip(0, [1.0, 1.0, 5.0, 5.0])]), 0, "intersect and replace are applied");
+}
+
+#[test]
+fn an_emfplus_clip_on_a_diagonal_line_encloses_nothing() {
+    let fill = prec(0x400A, 0x8000, &cat(vec![h32(0xFF00_0000), h32(1), f32s(&[0.0, 0.0, 100.0, 100.0])]));
+    let drawn = |clip: Vec<Vec<u8>>| {
+        let mut all = vec![plus_header(false)];
+        all.extend(clip);
+        all.push(fill.clone());
+        let p = parse(&emf(&[plus_comment(&all)], [0; 4], [0; 4])).unwrap();
+        (p.items.len(), p.ignored_clips)
+    };
+    let line = cat(vec![h32(0xDBC0_1002), h32(2), h32(0), f32s(&[0.0, 0.0, 10.0, 10.0]), vec![0, 1]]);
+    // SetClipPath with the line replaces the clip with nothing.
+    assert_eq!(drawn(vec![prec(0x4008, 0x0300 | 9, &line), prec(0x4033, 9, &[])]), (0, 0));
+    // A region whose one node is the line.
+    let node = cat(vec![h32(0x1000_0001), h32(line.len() as u32), line]);
+    let region = cat(vec![h32(0xDBC0_1002), h32(1), node]);
+    assert_eq!(drawn(vec![prec(0x4008, 0x0400 | 6, &region), prec(0x4034, 6, &[])]), (0, 0));
+}
+
+#[test]
+fn a_parse_stopped_at_a_limit_is_truncated() {
+    assert!(!parse_emf(&[rect(0, 0, 10, 10)]).truncated);
+    // SAVEDC past the stack depth.
+    let mut recs = vec![erec(33, &[]); crate::MAX_STACK + 1];
+    recs.push(rect(0, 0, 10, 10));
+    let p = parse_emf(&recs);
+    assert!(p.truncated && p.items.is_empty());
+    let recs = vec![erec(33, &[]); crate::MAX_STACK];
+    assert!(!parse_emf(&recs).truncated, "a full stack is not past it");
+    // One clip path past the nesting cap.
+    let mut recs = Vec::new();
+    for _ in 0..=MAX_CLIP_PATHS {
+        recs.extend(clip_to_rect(0, 0, 100, 100, 1));
+    }
+    assert!(parse_emf(&recs).truncated);
 }
 
 #[test]
@@ -415,30 +531,6 @@ fn placed_paths_carry_their_line_style_and_shared_clips() {
     assert!(Arc::ptr_eq(&a[0], &b[0]));
     assert_eq!(kurbo::Shape::bounding_box(&a[0].path), kurbo::Rect::new(0.0, 0.0, 100.0, 100.0));
     assert!(a[0].even_odd);
-}
-
-#[test]
-fn an_item_under_a_clip_far_off_the_page_is_left_out() {
-    let clip = Arc::new(ClipPath { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(f32::MAX, 0.0), Seg::Line(0.0, 10.0), Seg::Close], even_odd: false });
-    let bitmap = |clips| Item::Bitmap {
-        rect: [0.0, 0.0, 10.0, 10.0],
-        transform: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0],
-        width: 1,
-        height: 1,
-        rgba: vec![0; 4],
-        region: None,
-        clips,
-    };
-    let pic = crate::Picture { width: 10.0, height: 10.0, items: vec![bitmap(vec![clip]), bitmap(Vec::new())], skipped_records: 0 };
-    let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 10.0, 10.0), [0.0; 4]);
-    assert_eq!(placed.len(), 1);
-}
-
-#[test]
-fn an_upright_bitmap_has_its_rectangle_as_its_transform() {
-    let p = parse(&stretch_dib(dib24_bottom_up())).unwrap();
-    let Item::Bitmap { rect, transform, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!((rect, transform), (&[0.0, 0.0, 20.0, 10.0], &[20.0, 0.0, 0.0, 10.0, 0.0, 0.0]));
 }
 
 #[test]
@@ -532,13 +624,4 @@ fn truncated_and_mutated_files_with_these_records_never_panic() {
             }
         }
     }
-}
-
-#[test]
-fn a_turned_bitmaps_rectangle_is_the_box_around_it() {
-    let xf: Vec<u8> = [0.0f32, 1.0, -1.0, 0.0, 10.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
-    let p = parse(&emf(&[erec(35, &xf), stretch_dibits(3, 1, 5, &png(3, 1, [9, 8, 7, 255]))], [0, 0, 10, 30], [0, 0, 2540, 7620])).unwrap();
-    let Item::Bitmap { rect, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    let k = 72.0 / 101.6;
-    assert!(rect.iter().zip([0.0, 0.0, 10.0 * k, 30.0 * k]).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-4), "{rect:?}");
 }

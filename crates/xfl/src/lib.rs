@@ -23,8 +23,24 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 
+/// Neutral views of the XFL document, timeline, layer and frame schema.
+pub mod document;
 /// XFL's edge-attribute grammar, independent of any consuming application's geometry types.
 pub mod edges;
+/// Borrowed views of native XFL filter records.
+pub mod filters;
+/// Borrowed views of native XFL media library records.
+pub mod media;
+/// Borrowed views of native XFL shape and style elements.
+pub mod shape;
+/// Borrowed views of native XFL shape-hint records.
+pub mod shape_hints;
+/// Borrowed views of native XFL frame-sound and envelope records.
+pub mod sound;
+/// Borrowed views of native XFL text-field and text-run schema.
+pub mod text;
+/// Borrowed views of native XFL tween and custom-ease records.
+pub mod tween;
 
 /// Largest single entry inflated (bytes).
 pub const MAX_ENTRY: usize = 256 * 1024 * 1024;
@@ -85,6 +101,19 @@ pub struct Archive<'a> {
     folders: usize,
     /// Bytes still to hand out ([`MAX_TOTAL`] at first).
     budget: Cell<u64>,
+}
+
+/// The package root selected from an XFL archive's `DOMDocument.xml` paths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum XflPackageRoot<'a> {
+    /// A document XML file is directly at the archive root.
+    Document,
+    /// The sole eligible top-level folder containing a document.
+    Folder(&'a str),
+    /// No document path was found.
+    Missing,
+    /// More than one eligible top-level folder contains a document, sorted by name.
+    Multiple(Vec<&'a str>),
 }
 
 const END: u32 = 0x0605_4b50;
@@ -250,6 +279,7 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     // it from an empty EOCD-shaped record inside the preceding archive's comment. Keep it as a
     // last resort while searching for an older, structurally stronger candidate.
     let mut empty_sfx = None;
+    let mut measured_directory = None;
     let mut fallback = None;
     // Fake EOCD records in a comment can all describe the same large directory. Cache binary
     // directory jumps so checking each candidate does not rescan every entry.
@@ -289,6 +319,21 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
             let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate)
                 .filter(|&(dir, _)| directory_is_exact(data, dir, size.into(), count.into(), &mut directory_jumps))
             else {
+                // An overstated size is safe to ignore only when the recorded entries fill
+                // the byte range from the declared offset to this single-disk end record.
+                // The classic entry count is below MAX_ENTRIES, so the walk checks every entry.
+                if count != 0
+                    && u32_at(data, candidate + 4) == Some(0)
+                    && u16_at(data, candidate + 8) == Some(count)
+                    && let Ok(start) = usize::try_from(offset)
+                    && let Some(measured) = candidate.checked_sub(start).and_then(|n| u32::try_from(n).ok())
+                    && measured < size
+                    && directory_is_exact(data, start, measured.into(), count.into(), &mut directory_jumps)
+                {
+                    // Keep scanning for a valid declared size. Among measured candidates,
+                    // prefer the earliest record so a copy in its comment cannot hide it.
+                    measured_directory = Some((count.into(), measured.into(), offset.into(), candidate));
+                }
                 continue;
             };
             if count == 0 && shift > 0 {
@@ -299,7 +344,13 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
         eocd = Some(candidate);
         break;
     }
-    let eocd = eocd.or(empty_sfx).or(fallback).ok_or(ZipError::NotZip)?;
+    let eocd = eocd.or(empty_sfx);
+    if eocd.is_none()
+        && let Some(directory) = measured_directory
+    {
+        return Ok(directory);
+    }
+    let eocd = eocd.or(fallback).ok_or(ZipError::NotZip)?;
     let field16 = |o: usize| u16_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let field32 = |o: usize| u32_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let (disk, dir_disk, on_disk, count) = (field16(4)?, field16(6)?, field16(8)?, field16(10)?);
@@ -525,6 +576,25 @@ impl<'a> Archive<'a> {
     /// The files' paths (`/`-separated, folders left out).
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
+    }
+
+    /// Selects the package root from XFL document paths. A root-level document takes precedence;
+    /// otherwise only a single-level folder is eligible, with macOS metadata excluded.
+    pub fn xfl_package_root(&self) -> XflPackageRoot<'_> {
+        if self.entries.contains_key("DOMDocument.xml") {
+            return XflPackageRoot::Document;
+        }
+        let mut folders: Vec<&str> = self
+            .names()
+            .filter_map(|name| name.strip_suffix("/DOMDocument.xml"))
+            .filter(|folder| !folder.contains('/') && *folder != "__MACOSX")
+            .collect();
+        folders.sort_unstable();
+        match folders.as_slice() {
+            [] => XflPackageRoot::Missing,
+            [folder] => XflPackageRoot::Folder(folder),
+            _ => XflPackageRoot::Multiple(folders),
+        }
     }
 
     /// How many files and folder entries the archive lists.

@@ -1,8 +1,9 @@
 # craft-media
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
-clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers, and
-Ogg and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers,
+an MPEG-2 Systems (transport and program stream) demuxer and transport stream muxer, and Ogg and
+Sierra VMD demuxers, written from the public specifications. No `unsafe`, no panics on malformed
 input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
 (for `mxf`), `serde` (optional).
 
@@ -22,12 +23,13 @@ that codec crates use to describe a file and configure a decoder.
 | `avi` | `craft_media::avi` | none |
 | `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
-| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
+| `vmd` | `craft_media::vmd` | none |
+| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource`, `craft_media::interleave` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi`, `mxf` and `mpegts` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -199,6 +201,15 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | `ac-3`/`ec-3` | `Ac3 { dac3 }` / `Eac3 { dec3 }` |
 | `tmcd` | `Timecode(TimecodeConfig)`: flags (drop frame), timescale, frame duration, fps, start frame, reel name; `format_frame()` |
 | anything else | `Unknown { fourcc, raw }` |
+
+An encoder's parameter sets give the `avcC` and `hvcC` records directly:
+`AvcConfig::from_parameter_sets(sps, pps, length_size)` and
+`HevcConfig::from_parameter_sets(vps, sps, pps, length_size)` read the profile, level and the other
+fields the record repeats from the SPS, including the High-profile chroma format and bit depths of
+`avcC`, and mark each `hvcC` array complete. `AvcSps::parse` and `HevcSps::parse` return those SPS
+fields, and `HevcSps::picture_size` is the picture size inside the conformance window. A NAL unit of
+the wrong type, an empty one, one longer than 65,535 bytes or a length size other than 1, 2 or 4 is
+an error.
 
 Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `gama` and `btrt` into
 `VideoParams`, and QuickTime's `logs` box into `VideoParams::log_transfer_function`: the CoreMedia log
@@ -446,8 +457,22 @@ link of a chained file), unless it carries on the page sequence of a stream with
 page yet. Damage recovery may read bytes again up to twice the file's length plus 1 MiB, so a file
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
+`probe` reads only the first pages: it stops once every stream that begins there has its header
+packets, after `PROBE_PACKETS` data packets, or at the first page that would start after
+`PROBE_BYTES` (128 MiB), a limit the search past damage keeps to as well. `PacketReader`
+reads the same first pages, then returns the data packets of every stream in file order, one page
+at a time, into a buffer the caller reuses. It keeps no packet list, so the cap on kept packets does
+not apply to it; damage is skipped with the same budget and warnings as `open`. Header packets stay
+in `streams()`, where a later link of a chained file appears as a new stream when its pages are
+reached. `OggFile::read_packet_into` reads a packet into a reused buffer.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
-No muxer.
+
+The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
+(storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
+packets, granule positions, BOS/EOS, CRC-32), puts each header packet on pages of its own, closes
+audio pages at a byte or packet target, and can replace the final granule position for Ogg Opus
+end trimming. `opus_tags` and `vorbis_comment` build the comment headers; tag names that are not
+valid field names (Vorbis I §5.2.1) are left out.
 
 ## `avi`
 
@@ -542,7 +567,8 @@ FourCC, size, frame rate, packet count, audio format and duration.
 A clean-room MPEG-2 Systems demuxer from FilmCraft's `filmcraft-mpegts`
 (storytold/filmcraft@4bec22b): transport streams (188-byte, 192-byte BDAV / M2TS, 204-byte) and
 program streams (MPEG-1/2 PS, VOB, MOD). No GPL/LGPL code (FFmpeg, libavformat) was consulted;
-FFmpeg is a fixture generator and test oracle only. No muxer, no decoding.
+FFmpeg is a fixture generator and test oracle only. No decoding. The transport stream writer is
+`mpegts::mux` ([below](#transport-stream-writer)).
 
 ```rust
 use craft_media::mpegts::{Kind, open};
@@ -630,6 +656,116 @@ helpers on arbitrary bytes. `tests/oracle_mpegts.rs` compares ten ffmpeg-made fi
 and HEVC video; MP2, ADTS and LATM AAC, AC-3, E-AC-3, Blu-ray and DVD LPCM; TS, M2TS, VOB and
 MPEG-1 system streams) with ffprobe's packets: unit counts, sizes, timestamps and key flags.
 
+### Transport stream writer
+
+`mpegts::mux::Muxer` writes one program to any `std::io::Write` as frames arrive, so the same code
+writes `.ts` files, HLS segments and SRT payloads. Its `Codec`, `Stream` and `Error` types are its
+own, separate from the demuxer's.
+
+```rust
+use craft_media::mpegts::mux::{Codec, Config, Frame, Muxer, Stream};
+
+let streams = [Stream::new(0x100, Codec::H264), Stream::new(0x101, Codec::AacAdts)];
+let mut ts = Muxer::new(Vec::new(), Config::default(), &streams)?;
+let idr = [0, 0, 0, 1, 0x65, 0x88, 0x84];
+ts.write_frame(0, &Frame { data: &idr, pts: 90_000, dts: None, key: true })?;
+let bytes = ts.finish()?;
+assert_eq!(bytes.len() % 188, 0);
+```
+
+- A program association section and a program map section, each ending with its CRC-32. They are
+  written at the start, every `Config::psi_interval`, before every video keyframe when
+  `Config::psi_before_keyframes` is set, and before the first frame after `Muxer::replace_writer`
+  or `Muxer::discontinuity`.
+- One PES packet per frame, with PTS and, when it differs from the PTS, DTS:
+
+  | `Codec` | stream_type | stream_id | Frames passed in |
+  |---|---|---|---|
+  | `H264` | 0x1B | 0xE0 | Annex B access units; an access unit delimiter is added when missing |
+  | `Hevc` | 0x24 | 0xE0 | Annex B access units; an access unit delimiter is added when missing |
+  | `Mpeg2Video` | 0x02 | 0xE0 | MPEG-2 pictures from their first start code |
+  | `Mpeg1Video` | 0x01 | 0xE0 | MPEG-1 pictures from their first start code |
+  | `Mpeg4Part2` | 0x10 | 0xE0 | MPEG-4 Part 2 visual frames from their first start code |
+  | `Av1(Av1Config)` | 0x06 | 0xBD | temporal units in the low overhead format (every OBU has `obu_size`) |
+  | `AacAdts` | 0x0F | 0xC0 | ADTS frames; their `frame_length` fields must tile the frame |
+  | `Aac { .. }` | 0x0F | 0xC0 | raw AAC frames; the writer adds the ADTS header |
+  | `Opus { channels }` | 0x06 | 0xBD | Opus access units, 1 to 8 channels; the writer adds the Opus control header |
+  | `OpusMapped(OpusMapping)` | 0x06 | 0xBD | Opus multistream access units with an explicit channel mapping |
+  | `Ac3` | 0x81 | 0xBD | AC-3 sync frames |
+  | `Eac3` | 0x87 | 0xBD | E-AC-3 sync frames (bsid 11 to 16) |
+  | `MpegAudio { low_sample_rate }` | 0x03 or 0x04 | 0xC0 | MPEG audio frames, layers I to III, whose version matches the stream type |
+
+  `Codec::aac_from_asc` turns an AudioSpecificConfig into the `Aac` fields, and refuses one that
+  an ADTS header cannot carry (frameLengthFlag 1, for one). An `Opus { channels }` access unit is
+  one Opus packet for 1 or 2 channels. For 3 to 8 channels it holds the streams of mapping family 1
+  in the order that table 4-3 of the Opus transport draft gives, and every stream but the last uses
+  the self-delimited framing of RFC 6716 Appendix B. `OpusMapped` takes any other layout.
+- Descriptors in the program map section: a registration descriptor `AC-3` or `EAC3` on AC-3 and
+  E-AC-3 streams; a registration descriptor `Opus` and an extension descriptor (tag 0x7F,
+  extension tag 0x80) on Opus streams, whose channel_config_code is the channel count for
+  `Opus { channels }` and 0x81 with the mapping family, stream counts and channel mapping for
+  `OpusMapped`; a registration descriptor `AV01` and the AV1 video descriptor (tag 0x80) built
+  from `Av1Config` (`Av1Config::from_av1c` reads an AV1CodecConfigurationRecord); and an
+  ISO 639 language descriptor on any stream that has a language.
+- For AV1, each OBU follows the start code 0x000001 with emulation prevention bytes, temporal
+  delimiters and padding OBUs that end with a zero byte are left out, and each PES packet holds
+  one temporal unit. A keyframe must carry a
+  sequence header, and tile list OBUs are refused.
+- For Opus, `Muxer::write_frame_with_trim` writes the control header's start and end trims (each
+  at most 8 191 samples, `MAX_OPUS_TRIM`). A start trim is allowed only while every earlier frame
+  of the stream was trimmed whole, 65 535 samples in all.
+- The PCR on `Config::pcr_pid`: one of the streams' PIDs, or a PID that carries only PCRs. PCRs
+  are never more than `Config::pcr_interval` apart (at most 100 ms, H.222.0 §2.7.2). The PCR is
+  the largest DTS so far minus `Config::pcr_delay`, 1 to 90 000 ticks (`MAX_PCR_DELAY`, the
+  one-second limit of §2.4.2.6). A live output calls `Muxer::advance` while no frames arrive; its
+  time is on the DTS scale, so the PCR it writes is that time minus `pcr_delay`.
+- A continuity counter per PID, the random access indicator on keyframes, adaptation field
+  stuffing, and timestamps written modulo 2^33. `Muxer::discontinuity` starts a new time base:
+  the next packet of every stream PID and of the PCR PID sets the discontinuity_indicator
+  (§2.4.3.5), and timestamps may then go back.
+
+Packets go to the output in batches of `Config::batch_packets` (7 by default, 1 316 bytes, one UDP
+datagram), each in one `write` call, and the rest of a batch at the end of every `write_frame` and
+`advance` unless `Config::hold_packets` is set. The batch is allocated once, in `Muxer::new`. After
+an `Error::Io` the output may hold part of a packet; `Stats::packets` counts only whole packets.
+`Muxer::replace_writer` returns the old output in a `Segment` (packet and frame counts, first and
+last PTS, whether it starts with a keyframe, any error from its last packets), and the new output
+starts with the PAT, the PMT and a PCR. `Muxer::replace_writer_continuing` swaps the output
+without adding them.
+
+Frames are checked before anything is written. A stream's DTS must not go back, a video stream's
+DTS must increase, a DTS may not be after its PTS, and a frame may be at most `pcr_delay` behind
+the largest DTS written so far (`Error::Timestamp`). Audio frames must fit in one PES packet, and
+video frames are at most `MAX_VIDEO_FRAME` (`MAX_UNIT_BYTES`, counting the start codes and escape
+bytes the writer adds; `Error::FrameTooLarge`). A program has 1 to 32 streams on PIDs 0x0010 to
+0x1FFE (`Error::BadPid`, `Error::DuplicatePid`), and its program map section is at most 1 021 bytes
+(`Error::PsiTooLarge`). A gap in the timeline longer than `MAX_PCR_FILL` PCR intervals gets one PCR
+at its end and is counted in `Stats::pcr_gaps`.
+
+`Config::default()`: program 1 with its PMT on PID 0x1000, the PCR on the first video stream (or
+the first stream) every 40 ms and 700 ms behind the DTS, the PAT and PMT every 100 ms and before
+keyframes, and writes of 7 packets.
+
+Gaps: one program per stream; no null packets (no constant bit rate); not written: LPCM (H.222.0
+defines no LPCM stream type for transport streams), AAC in LATM, DTS, subtitles and teletext. The
+demuxer reads Opus and AV1 streams as `Unknown(6)` and MPEG-4 Part 2 as `Unknown(0x10)`, one unit
+per PES packet.
+
+Specifications: the ones above, and Opus Interactive Audio Codec Transport Multiplexing Standard,
+draft TS V0.1.3 (2015-10), for the Opus control header and descriptors; RFC 6716 for Opus packet
+durations and self-delimited framing; Carriage of AV1 in MPEG-2 TS (Alliance for Open Media
+working draft) and the AV1 Bitstream & Decoding Process Specification for AV1; ISO/IEC 14496-3
+for the AudioSpecificConfig; ATSC A/52 for the AC-3 and E-AC-3 stream types and registration
+descriptors.
+
+Tests: `tests/mpegts_mux_readback.rs` reads the output back with the demuxer: streams, codecs,
+languages, every frame's bytes, PTS and DTS, keyframes and the PCR range, with no continuity or
+CRC warnings, including AV1 units, Opus with an explicit mapping and a start trim, both sides of a
+discontinuity, and the output that follows an I/O error. `tests/mpegts_mux_fuzz.rs` muxes random
+programs and timelines with idle gaps and output swaps and reads them back, and feeds random bytes
+to every codec. Unit tests check every PES header's fixed bits, the sections' CRC, and that every
+refused frame writes nothing.
+
 ## `mxf`
 
 A clean-room MXF demuxer and writer from FilmCraft's `filmcraft-mxf` (storytold/filmcraft@4bec22b):
@@ -655,6 +791,7 @@ Implemented from the SMPTE documents (editions used):
 | SMPTE ST 386 | 2004 | D-10 (IMX) mapping: container label, sound element type |
 | SMPTE ST 2019-4 | 2009 | VC-3 (DNxHD / DNxHR) mapping |
 | SMPTE RDD 44 | 2017 | Apple ProRes mapping |
+| Adobe CinemaDNG Image Data Format Specification | 1.0.0.0 (September 2009), §7 | CinemaDNG in MXF: frame-wrapped DNG picture elements (element type 42h), the essence container labels for CFA / LinearRaw content, RGBA descriptor; the labels are the specification's **provisional** values from Adobe's experimental range (byte 9 = 0Fh), not SMPTE-registered |
 | SMPTE RP 224 / RP 210 | registers | labels: data definitions, picture coding, essence containers, operational patterns; property labels of the primer pack (writer) |
 | SMPTE ST 330 | 2011 | basic UMIDs of the written packages |
 
@@ -696,7 +833,10 @@ let pcm = mxf.read_pcm(&file, a, 48_000, 1920)?; // planar f32, sample-exact
   orders by the bitstream (the AVC picture order counts).
 - **Codecs.** From the picture essence coding label, then the essence container label, then the
   essence bytes: AVC / AVC-Intra, VC-3, ProRes (profile from the label), MPEG-2,
-  MPEG-4 visual, JPEG 2000, DV, uncompressed.
+  MPEG-4 visual, JPEG 2000, DV, uncompressed, CinemaDNG (the CinemaDNG container labels, the
+  registered MXF-GC TIFF/EP container and TIFF/EP picture coding labels, a 42h picture element
+  type, or a TIFF header with the DNGVersion tag at the start of the essence; the DNG pictures
+  themselves are decoded by `craft-raw`).
 - **Sound.** PCM chunks (frame- or clip-wrapped) with sample counts; `read_pcm` decodes
   little-endian 8/16/24/32-bit PCM (wave / AES3 descriptors) and ST 331 AES3 elements (D-10).
 - **Timecode.** The material package timecode component (start frame count, rounded base,
@@ -769,7 +909,10 @@ w.finish()?;
   element types 0x0C / 0x0D), ProRes (RDD 44: coding label profile byte, container `02 1C`),
   AVC byte stream (ST 381-3: container `02 10 60`, coding label from `profile_idc`; Annex B access
   units with in-band SPS / PPS — the AVC sub-descriptor is not written), Broadcast Wave PCM
-  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02).
+  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02), CinemaDNG (frame-wrapped DNG
+  datasets, element type 0x42, the provisional container label `0F 0A 0D 0B 02 7F 01/02 00`, an
+  RGBA descriptor with pixel layout and reference levels of the decoded 16-bit RGB picture and no
+  coding label; OP-Atom is refused because it is clip-wrapped here and DNG datasets cannot be).
 - `write_opatom_pcm(&OpAtomPcm, &[i32])` builds a complete in-memory OP-Atom PCM file (AAF media
   consolidation); `encode_pcm` interleaves planar f32 as little-endian PCM.
 
@@ -801,14 +944,64 @@ ffmpeg's decoded sound sample for sample; and files written by `MxfWriter` from 
 which ffprobe must describe like their source and ffmpeg must decode to the same pictures and
 sound.
 
+## `vmd`
+
+A clean-room demuxer for Sierra VMD (Video and Music Data), the video format of Sierra's and
+Coktel Vision's 1990s games (Phantasmagoria, Gabriel Knight 2, Shivers, …). There is no official
+specification; it is written from the public description at
+<https://wiki.multimedia.cx/index.php/VMD>.
+
+```rust
+use craft_media::vmd::{FrameKind, open};
+
+let file = open(&bytes)?;                    // header and table of contents
+let (num, den) = file.frame_rate();          // pictures a second, as a fraction
+for (i, frame) in file.frames.iter().enumerate() {
+    let data = file.read_frame(&bytes, i)?;  // one frame's data, read on demand
+    match frame.kind {
+        FrameKind::Video { new_palette, .. } => { /* file.picture_rect(i), craft_video::vmd */ }
+        FrameKind::Audio { flags } => { /* craft_audio::vmd */ }
+        FrameKind::Other(_) => {}
+    }
+}
+```
+
+- A file is a sequence of blocks, one picture period each (`Frame::block`). A block holds the
+  same number of frames in every block; a block with no picture has a frame of no data or of
+  type 0 in its place, and the picture stays as it was.
+- `frame_rate()`: a file with sound plays one block of sound a picture (sample rate over block
+  length); a file without plays 10 pictures a second.
+- Timing: the video frame of block `n` is shown at picture period `n`. Sound is one continuous
+  stream from the first picture on: decode the sound frames in file order and play the samples
+  end to end. The first sound frame holds many blocks (28 in most Phantasmagoria files), loaded
+  ahead by the player, so a later sound frame is heard that much later than the block it is
+  stored in, and the sound outlasts the pictures.
+- `video_params()` and `audio_params()` return `CodecParams` with `CodecId::VmdVideo` and
+  `CodecId::VmdAudio` and the 816-byte header as `extradata`, which is what
+  `craft_video::vmd::Decoder::new` and `craft_audio::vmd::Decoder::new` take.
+  `header_bytes()` is the same header.
+- `picture_rect(index)` places a video frame's update in the picture. Frame coordinates are
+  screen coordinates; a frame as large as the picture that is not at the screen's corner gives
+  the picture's position from then on, as ffmpeg was seen to do. A frame with no rectangle in
+  the picture can still carry a palette (`craft_video::vmd::Decoder::decode_palette`).
+
+Gaps: only the 816-byte header is read. The later Coktel Vision revisions with a longer header
+or one without a palette are refused (`Error::NotVmd`). Files with 16-bit, 24-bit or Indeo 3
+pictures, or with IMA ADPCM sound, open, and report `CodecId::Unknown` for that stream. `sniff`
+has only the two-byte header length to go by, so check the file extension too.
+
+Tests: unit tests on files from the test kit's VMD writer (`craft_media_testkit::vmd`; ffmpeg
+reads VMD but cannot write it), hostile input, and `tests/oracle_vmd.rs`, which compares the
+streams and picture rate with ffprobe's.
+
 ## Containers, codecs and codec parameters
 
 Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
-  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`), with `name()`.
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`, `Vmd`), with `name()`.
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
-  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
+  `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, `VmdVideo`, `VmdAudio`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
 - `PcmFormat`: the layout of uncompressed samples, built with `PcmFormat::int(bits, signed,
   big_endian)` or `PcmFormat::float(bits, big_endian)`.
@@ -820,7 +1013,7 @@ Always built, with no dependencies, so codec crates share them:
   Matroska's `CodecPrivate`, as ffmpeg's extradata does: the `AudioSpecificConfig` for AAC, the
   `OpusHead` for Opus (MP4's `dOps` is converted), Xiph-laced headers for Vorbis (`xiph_lace`,
   `None` for more than 256 packets), `fLaC` + metadata blocks for FLAC, the
-  `avcC`/`hvcC`/`av1C`/`apvC` record for video.
+  `avcC`/`hvcC`/`av1C`/`apvC` record for video, the 816-byte file header for VMD video and sound.
 
 All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
@@ -828,10 +1021,43 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
 always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
-`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource` and `mpegts::ByteSource` are the same trait. It is implemented for `[u8]`,
+`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource`, `mpegts::ByteSource` and `vmd::ByteSource` are the same trait. It is implemented for `[u8]`,
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.
+
+## Interleaving live streams
+
+`craft_media::interleave::Interleaver` (always built) merges the packets of several live streams,
+such as a video and an audio encoder, into the time order that `matroska::MkvWriter` and
+`mpegts::mux` take. Each stream's packets are pushed with a non-decreasing `order` (a time shared
+by every stream, for example the decoding time in nanoseconds), and `pop` releases them sorted by
+`(order, stream)`. A packet waits only while a stream that has not ended could still send one that
+sorts before it.
+
+```rust
+use craft_media::interleave::{InterleaveError, Interleaver};
+use std::num::NonZeroUsize;
+
+const MAX_HELD: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+let mut il = Interleaver::new(2, 2_000_000_000).with_max_held(MAX_HELD); // 2 s of lag
+il.push(0, video_dts_ns, video_packet)?;
+il.push(1, audio_dts_ns, audio_packet)?;
+loop {
+    match il.pop() {
+        Ok(Some(p)) => { /* write p.value to stream p.stream */ }
+        Ok(None) => break,                             // wait for more packets
+        Err(InterleaveError::Behind(stream)) => { /* that encoder is too slow: stop */ break }
+        Err(e) => return Err(e.into()),
+    }
+}
+il.end_all(); // at the end, pop releases every held packet in order
+```
+
+When the held packets span more than the lag limit, or reach the packet limit, while a stream has
+nothing queued, `pop` returns `Behind` with that stream and keeps every packet. `push` refuses a
+packet beyond the packet limit (`Full`), on an ended or unknown stream, or with an `order` earlier
+than the stream's previous packet.
 
 ## Tests
 
@@ -842,7 +1068,8 @@ custom source (a web `Blob`, a network range reader) to use every container with
   additions, color and mastering metadata, Chapters, Tags, Attachments, CRC-32, Cue-less seek,
   hostile cluster timestamps) and mux-demux round trips. For Ogg (`src/ogg`): page parsing, CRC,
   packets across pages, damage resync and its read budget, lost pages, chained links and stray
-  beginning-of-stream flags, the packet and header caps, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
+  beginning-of-stream flags, the packet and header caps, the first-pages probe and its limits, the
+  sequential reader against `open`, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
 - `tests/roundtrip.rs`: property tests that write random multi-track files (progressive and
   fragmented) and read them back.
 - `tests/oracle_demux.rs` and `tests/oracle_mux.rs` compare the demuxer and muxer with ffprobe and

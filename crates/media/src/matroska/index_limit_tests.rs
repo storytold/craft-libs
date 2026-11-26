@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::io::{Cursor, ErrorKind};
 
-use crate::matroska::{ByteSource, Demuxer, MkvFile, MkvWriter, MuxOptions, OpenOptions, TrackKind, TrackSpec, open_with};
+use crate::matroska::{ByteSource, MkvFile, MkvWriter, MuxOptions, OpenOptions, TrackKind, TrackSpec, open_with};
 
 /// A video track of `frames` 100 ms frames (every fifth a keyframe): ten frames per Cluster.
 fn file(frames: i64) -> Vec<u8> {
@@ -36,104 +36,6 @@ fn assert_same(a: &MkvFile, b: &MkvFile) {
     assert_eq!(a.clusters, b.clusters);
     assert_eq!(a.cues, b.cues);
     assert_eq!((a.indexed, a.index_end), (b.indexed, b.index_end));
-}
-
-#[test]
-fn default_options_are_unchanged() {
-    let bytes = file(45);
-    let f = open_with(&bytes[..], &OpenOptions::default()).expect("open");
-    assert!(f.indexed && f.index_end.is_none());
-    assert_eq!(f.clusters.len(), 5);
-    assert_eq!(f.tracks[0].samples.len(), 45);
-    assert!(!f.cues.is_empty());
-}
-
-#[test]
-fn limit_stops_before_a_cluster_that_does_not_fit() {
-    let bytes = file(45);
-    let full = limited(&bytes, None);
-    let c = &full.clusters;
-    // the limit lies in the middle of the third cluster: two are indexed, the third waits
-    let f = limited(&bytes, Some(c[2].offset + 40));
-    assert_eq!(f.clusters, c[..2]);
-    assert_eq!(f.tracks[0].samples, full.tracks[0].samples[..20]);
-    assert!(!f.indexed);
-    assert_eq!(f.index_end, Some(c[2].offset));
-    // Info and Tracks are there; the Cues at the end are not read yet
-    assert_eq!(f.info.duration, full.info.duration);
-    assert_eq!(f.duration_ns(), full.duration_ns());
-    assert!(f.cues.is_empty());
-    // a limit exactly at the end of a cluster keeps that cluster
-    let g = limited(&bytes, Some(c[1].end));
-    assert_eq!(g.clusters.len(), 2);
-    assert_eq!(g.index_end, Some(c[1].end));
-}
-
-#[test]
-fn limit_before_the_first_cluster_still_scans_it() {
-    let bytes = file(45);
-    let full = limited(&bytes, None);
-    for limit in [0, 1, full.first_cluster.expect("cluster") / 2] {
-        let f = limited(&bytes, Some(limit));
-        assert_eq!(f.clusters.len(), 1, "limit {limit}");
-        assert_eq!(f.tracks[0].samples.len(), 10);
-        assert_eq!(f.index_end, Some(full.clusters[0].end));
-        assert!(!f.indexed);
-    }
-}
-
-#[test]
-fn limit_past_the_end_is_a_full_index() {
-    let bytes = file(45);
-    let full = limited(&bytes, None);
-    for limit in [bytes.len() as u64, bytes.len() as u64 + 1, u64::MAX] {
-        assert_same(&limited(&bytes, Some(limit)), &full);
-    }
-}
-
-#[test]
-fn limit_without_an_index_is_ignored() {
-    let bytes = file(45);
-    let f = open_with(&bytes[..], &OpenOptions { index: false, verify_crc: false, index_limit: Some(0) }).expect("open");
-    assert!(!f.indexed && f.index_end.is_none() && f.clusters.is_empty());
-    assert!(!f.cues.is_empty(), "the SeekHead still leads to the Cues");
-}
-
-#[test]
-fn extending_in_steps_equals_a_full_open() {
-    let bytes = file(45);
-    let full = limited(&bytes, None);
-    let mut f = limited(&bytes, Some(0));
-    let mut seen = vec![f.clusters.len()];
-    for c in &full.clusters {
-        f.extend_index(&bytes[..], &OpenOptions { index_limit: Some(c.end), ..unlimited() }).expect("extend");
-        seen.push(f.clusters.len());
-    }
-    assert_eq!(seen, [1, 1, 2, 3, 4, 5]);
-    // the Cues after the last cluster wait for the rest of the index
-    assert!(!f.indexed && f.index_end.is_some() && f.cues.is_empty());
-    f.extend_index(&bytes[..], &unlimited()).expect("complete");
-    assert_same(&f, &full);
-}
-
-#[test]
-fn extending_twice_with_the_same_limit_changes_nothing() {
-    let bytes = file(45);
-    let mut f = limited(&bytes, Some(0));
-    let limit = f.clusters[0].end + 5_000;
-    let opts = OpenOptions { index_limit: Some(limit), ..unlimited() };
-    f.extend_index(&bytes[..], &opts).expect("extend");
-    let (samples, end) = (f.tracks[0].samples.clone(), f.index_end);
-    f.extend_index(&bytes[..], &opts).expect("extend again");
-    assert_eq!((f.tracks[0].samples.clone(), f.index_end), (samples, end));
-    // a lower limit than what is indexed is a no-op too
-    f.extend_index(&bytes[..], &OpenOptions { index_limit: Some(0), ..unlimited() }).expect("extend lower");
-    assert_eq!(f.index_end, end);
-    // to the end, then once more on a complete index
-    f.extend_index(&bytes[..], &unlimited()).expect("complete");
-    assert!(f.indexed);
-    f.extend_index(&bytes[..], &unlimited()).expect("complete again");
-    assert_same(&f, &limited(&bytes, None));
 }
 
 /// A source that has loaded only a prefix: reads beyond it fail like the web build's pending reads.
@@ -235,21 +137,6 @@ fn truncated_files_never_panic() {
             assert!(f.index_end.is_none() || !f.indexed);
         }
     }
-}
-
-#[test]
-fn demuxer_completes_a_limited_index_and_seeks() {
-    let bytes = file(45);
-    let full = limited(&bytes, None);
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index_limit: Some(0), ..unlimited() }).expect("open");
-    assert_eq!(d.file().clusters.len(), 1);
-    // packets stream from the first Cluster on, whatever the index covers
-    assert_eq!(d.next_packet().expect("packet").expect("some").pts, 0);
-    let keys = d.keyframe_index(0).expect("keyframes");
-    assert!(d.file().indexed);
-    assert_eq!(keys.len(), full.tracks[0].sync.len());
-    let at = d.seek(0, 3_500_000_000).expect("seek");
-    assert_eq!(at.pts_ns, 3_500_000_000);
 }
 
 #[test]

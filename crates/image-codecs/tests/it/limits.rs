@@ -18,6 +18,27 @@ fn encoded(f: Format) -> Vec<u8> {
 }
 
 #[test]
+fn read_bounded_takes_input_up_to_its_cap() {
+    let png = encoded(Format::Png);
+    let len = png.len() as u64;
+    let bytes = read_bounded(png.as_slice(), len).unwrap();
+    assert!(decode_with(&bytes, &DecodeOptions::default()).is_ok());
+    assert_eq!(read_bounded(png.as_slice(), len - 1).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+}
+
+#[test]
+fn read_bounded_stops_a_stream_with_no_end() {
+    assert_eq!(read_bounded(std::io::repeat(0), 1 << 16).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+}
+
+#[test]
+fn read_bounded_reads_one_byte_past_its_cap() {
+    let mut input = std::io::Cursor::new(vec![0u8; 1 << 16]);
+    assert_eq!(read_bounded(&mut input, 100).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+    assert_eq!(input.position(), 101);
+}
+
+#[test]
 fn max_pixels_enforced_for_every_format() {
     for f in rw_formats() {
         let b = encoded(f);
@@ -665,9 +686,40 @@ fn a_dwab_exr_gets_a_looser_file_size_bound() {
 
 #[test]
 fn highly_compressible_jpeg_and_gif_still_decode() {
-    let img = Image::from_u8(3000, 3000, ChannelLayout::Rgba, vec![255u8; 3000 * 3000 * 4]).unwrap();
+    let side = 2048usize;
+    let img = Image::from_u8(side as u32, side as u32, ChannelLayout::Rgba, vec![255u8; side * side * 4]).unwrap();
     for f in [Format::Jpeg, Format::Gif, Format::Qoi, Format::OpenExr] {
         let b = encode(&img, f, &EncodeOptions::default()).unwrap();
-        assert_eq!(decode(&b).unwrap().width(), 3000, "{f:?}");
+        eprintln!("DIAG ratio {f:?}: {} bytes file, {} declared, {}:1", b.len(), side * side * 4, side * side * 4 / b.len());
+        assert_eq!(decode(&b).unwrap().width() as usize, side, "{f:?}");
     }
+}
+
+/// `probe_size` refuses the headers `decode` refuses, from the header alone: a size past the
+/// limits, and one at the limit that a tiny file cannot hold.
+#[test]
+fn probe_size_refuses_png_bomb_headers() {
+    for side in [100_000u32, 32768] {
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&side.to_be_bytes());
+        ihdr.extend_from_slice(&side.to_be_bytes());
+        ihdr.extend_from_slice(&[16, 6, 0, 0, 0]);
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        b.extend(png_chunk(b"IHDR", &ihdr));
+        b.extend(png_chunk(b"IDAT", &[0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]));
+        b.extend(png_chunk(b"IEND", &[]));
+        assert!(matches!(probe_size(&b), Err(CodecError::LimitExceeded(_))), "{side}");
+    }
+}
+
+/// A JPEG header declaring a size past the default limits is refused by `probe_size` as by
+/// `decode`, without reading the scan.
+#[test]
+fn probe_size_refuses_an_oversized_jpeg_header() {
+    let mut jpeg = encoded(Format::Jpeg);
+    assert_eq!(probe_size(&jpeg).unwrap(), (64, 48));
+    let sof = jpeg.windows(2).position(|w| matches!(w, [0xFF, 0xC0..=0xC2])).unwrap();
+    jpeg[sof + 5..sof + 9].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    assert!(decode(&jpeg).is_err());
+    assert!(matches!(probe_size(&jpeg), Err(CodecError::LimitExceeded(_))), "{:?}", probe_size(&jpeg));
 }

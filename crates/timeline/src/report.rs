@@ -1,8 +1,8 @@
 //! What an import or export could not represent exactly.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 /// Severity of a report entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Level {
     /// Informational (an assumption the importer made).
     Info,
@@ -10,8 +10,7 @@ pub enum Level {
     Warning,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReportEntry {
     pub level: Level,
     pub message: String,
@@ -20,8 +19,7 @@ pub struct ReportEntry {
 }
 
 /// What an import/export could not represent exactly. Identical messages are merged with a count.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Report {
     pub entries: Vec<ReportEntry>,
 }
@@ -34,6 +32,29 @@ impl Report {
         } else {
             self.entries.push(ReportEntry { level, message, count: 1 });
         }
+    }
+    /// Add a warning while bounding distinct diagnostics. `limit` counts every distinct entry already
+    /// in the report, informational ones included, exactly like FilmCraft's `MAX_REPORT_ENTRIES`
+    /// budget this replaces; past it a new message is counted under "further diagnostics omitted".
+    /// Existing messages continue to be counted.
+    pub fn warn_limited(&mut self, limit: Option<usize>, message: impl Into<String>) {
+        self.push_limited(Level::Warning, limit, message);
+    }
+    /// Add an informational diagnostic under the same distinct-entry budget as [`Report::warn_limited`].
+    pub fn info_limited(&mut self, limit: Option<usize>, message: impl Into<String>) {
+        self.push_limited(Level::Info, limit, message);
+    }
+    /// Add a diagnostic at `level`, counting a new message past `limit` distinct entries under
+    /// "further diagnostics omitted"; a message already in the report keeps its own count.
+    pub fn push_limited(&mut self, level: Level, limit: Option<usize>, message: impl Into<String>) {
+        let mut message = message.into();
+        if let Some(limit) = limit
+            && self.entries.len() >= limit
+            && !self.entries.iter().any(|e| e.level == level && e.message == message)
+        {
+            message = "further diagnostics omitted".into();
+        }
+        self.push(level, message);
     }
     pub fn warn(&mut self, message: impl Into<String>) {
         self.push(Level::Warning, message);
@@ -71,5 +92,33 @@ impl std::fmt::Display for Report {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn limited_entries_share_one_budget_and_keep_existing_counts() {
+        let mut r = Report::default();
+        r.info_limited(Some(2), "a");
+        r.warn_limited(Some(2), "b");
+        r.info_limited(Some(2), "c");
+        r.info_limited(Some(2), "a");
+        r.warn_limited(Some(2), "a");
+        r.push_limited(Level::Warning, None, "d");
+        let got: Vec<_> = r.entries.iter().map(|e| (e.level, e.message.as_str(), e.count)).collect();
+        assert_eq!(
+            got,
+            [
+                (Level::Info, "a", 2),
+                (Level::Warning, "b", 1),
+                (Level::Info, "further diagnostics omitted", 1),
+                (Level::Warning, "further diagnostics omitted", 1),
+                (Level::Warning, "d", 1),
+            ]
+        );
     }
 }

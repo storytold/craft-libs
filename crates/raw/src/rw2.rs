@@ -122,6 +122,8 @@ const COMPRESSION: u16 = 0x000b;
 const LINEARITY_LIMIT: [u16; 3] = [0x000e, 0x000f, 0x0010];
 const BLACK_RGB: [u16; 3] = [0x001c, 0x001d, 0x001e];
 const WB_RGB: [u16; 3] = [0x0024, 0x0025, 0x0026];
+/// The table of the white balance types (see [`panasonic_kelvin_presets`]).
+const WB_TABLE: u16 = 0x0027;
 const RAW_FORMAT: u16 = 0x002d;
 /// The in-camera aspect-ratio crop: top, left, bottom, right in sensor coordinates.
 const CROP: [u16; 4] = [0x002f, 0x0030, 0x0031, 0x0032];
@@ -339,6 +341,28 @@ fn decode_words(src: &[u8], shift: u32, out: &mut [u16]) {
             *v = src.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map_or(0, |b| u16::from_le_bytes(b) >> shift);
         }
     });
+}
+
+/// CIE daylight D55, CIE 1931 (x, y).
+const D55_XY: [f64; 2] = [0.33242, 0.34743];
+/// The 3200 K Planckian light (the ISO 7589 studio tungsten lamp), CIE 1931 (x, y) from Kim et al.'s (2002) cubic
+/// approximation of the Planckian locus.
+const TUNGSTEN_3200_XY: [f64; 2] = [0.423_181_806_762_695_35, 0.399_077_685_165_656_9];
+
+/// The Kelvin scale of a body without colour matrices, from tag `0x0027` (`WBInfo2`; tag number and entry layout
+/// from `exiftool -v3` run as a black-box tool on the files): a count, then that many entries of the white
+/// balance type and the camera's red, green and blue multipliers for it. Types 20 and 24 are the cameras' "D55" and
+/// "ISO studio tungsten" whites: CIE daylight D55 (5500 K) and the ISO 7589 studio tungsten lamp, a 3200 K
+/// Planckian light. Those two give a neutral pair ([`crate::kelvin::KelvinPresets::from_neutral_lights`]).
+fn panasonic_kelvin_presets(ifd: &Ifd, order: ByteOrder) -> Option<crate::kelvin::KelvinPresets> {
+    let v = u16_array(ifd, WB_TABLE, order)?;
+    let n = (*v.first()? as usize).min(v.len() / 4);
+    let entry = |code: u16| {
+        let e = v.get(1..)?.as_chunks::<4>().0.iter().take(n).find(|e| e[0] == code)?;
+        Some([f32::from(e[1]), f32::from(e[2]), f32::from(e[3])])
+    };
+    let (tungsten, d55) = (entry(24)?, entry(20)?);
+    crate::kelvin::KelvinPresets::from_neutral_lights([TUNGSTEN_3200_XY, D55_XY], tungsten, d55)
 }
 
 /// A tag as a `u16` array: SHORT values, or the little-endian contents of an UNDEFINED / BYTE value.
@@ -615,11 +639,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         _ => Rect::new(0, 0, active.width, active.height),
     };
-    if !data.is_empty() {
+    // Packed formats 2/5/7 are lossless sample containers: zero is an ordinary
+    // code, not evidence of a mapped-out photosite. The documented zero repair
+    // applies to the predictive format 4 and older word containers only.
+    if !data.is_empty() && matches!(encoding, Encoding::Words | Encoding::Blocks { kind: Block::Format4, .. }) {
         fill_defects(&mut data, w, active);
     }
 
-    let cfa = cfa(ifd0.u16(CFA_PATTERN).unwrap_or(1));
+    let cfa_code = ifd0.u16(CFA_PATTERN);
+    // RGGB is still usable when metadata is absent or unknown, but callers
+    // must be able to distinguish that fallback from a recorded sensor phase.
+    let assumed_cfa = !matches!(cfa_code, Some(1..=4));
+    let cfa = cfa(cfa_code.unwrap_or(1));
     let read = BLACK_RGB.map(|tag| ifd0.f64(tag).filter(|v| v.is_finite() && *v >= 0.0));
     let tags = read.map(|v| v.unwrap_or(0.0) as f32);
     let offset = match encoding {
@@ -662,15 +693,17 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: panasonic_kelvin_presets(ifd0, tiff.order), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists { list3: distortion(ifd0, active).into_iter().collect(), ..Default::default() },
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -935,6 +968,35 @@ mod tests {
     }
 
     #[test]
+    fn white_balance_table_gives_kelvin_presets() {
+        let (w, h) = (70usize, 20usize);
+        let target = image(w, h, 200, 4000);
+        let mut stream = vec![];
+        for px in target.chunks(14) {
+            stream.extend_from_slice(&encode_block(px, None).0);
+        }
+        let payload = rotate(stream);
+        let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 4)];
+        tags.extend(BLACK_RGB.iter().map(|&tag| short(tag, 128)));
+        tags.extend(WB_RGB.iter().zip([512, 256, 384]).map(|(&tag, v)| short(tag, v)));
+        let decode = |table: Option<Vec<u16>>| {
+            let mut tags = tags.clone();
+            tags.extend(table.map(|t| (WB_TABLE, Value::Short(t))));
+            crate::decode(&file(w as u16, h as u16, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])).unwrap()
+        };
+        assert!(decode(None).color.kelvin_presets.is_none());
+        // three entries: Fine Weather (ignored), D55 and ISO studio tungsten, as red/green/blue multipliers
+        let table = vec![3, 9, 480, 256, 400, 20, 380, 256, 500, 24, 250, 256, 700];
+        let p = decode(Some(table)).color.kelvin_presets.unwrap();
+        let unit = |r: f32, b: f32| [r / 256.0, 1.0, b / 256.0];
+        assert_eq!(p.neutral_pair(), Some([unit(250.0, 700.0), unit(380.0, 500.0)]));
+        assert_eq!(p.neutral_lights(), Some([TUNGSTEN_3200_XY, D55_XY]));
+        // a missing light, or a count beyond the data, gives none
+        assert!(decode(Some(vec![1, 20, 500, 256, 380])).color.kelvin_presets.is_none());
+        assert!(decode(Some(vec![9, 20, 500, 256, 380, 24, 700, 256])).color.kelvin_presets.is_none());
+    }
+
+    #[test]
     fn format4_and_6_round_trip_through_files() {
         // format 4: 14 pixels per block, rotated chunks, blocks continuous across rows (here 70 = 5 blocks per row)
         let (w, h) = (70usize, 300usize);
@@ -1070,17 +1132,61 @@ mod tests {
     }
 
     #[test]
+    fn cfa_fallback_provenance_preserves_pixels_in_header_and_full_modes() {
+        let pixels: Vec<u16> = (0..72).map(|i| 17 + i * 113).collect();
+        let payload = pack(&pixels, 14);
+        for (code, expected, assumed) in [
+            (None, "RGGB", true),
+            (Some(0), "RGGB", true),
+            (Some(5), "RGGB", true),
+            (Some(u16::MAX), "RGGB", true),
+            (Some(1), "RGGB", false),
+            (Some(2), "GRBG", false),
+            (Some(3), "GBRG", false),
+            (Some(4), "BGGR", false),
+        ] {
+            let mut tags = vec![short(BITS, 14), short(RAW_FORMAT, 7)];
+            if let Some(code) = code {
+                tags.push(short(CFA_PATTERN, code));
+            }
+            let bytes = file(18, 4, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!((image.width, image.height), (18, 4));
+                assert_eq!(image.cfa.as_ref().unwrap().name(), expected, "code {code:?}");
+                assert_eq!(image.notices, crate::RawNotices { assumed_cfa: assumed, ..Default::default() }, "code {code:?}, {mode:?}");
+                assert_eq!(samples(&image), if mode == Mode::Full { pixels.as_slice() } else { &[] });
+            }
+        }
+    }
+
+    #[test]
+    fn lossless_packed_formats_preserve_zero_codes_inside_the_active_area() {
+        let (w, h) = (90usize, 12usize);
+        for (format, bits, rotated) in [(5u16, 12u32, true), (5, 14, true), (7, 14, false), (2, 12, false)] {
+            let mut px = vec![1000u16; w * h];
+            px[5 * w + 20] = 0;
+            let payload = pack(&px, bits);
+            let bytes = rw2(w as u16, h as u16, bits as u16, format, 100, &if rotated { rotate(payload) } else { payload });
+            assert_eq!(samples(&crate::decode(&bytes).unwrap()), px, "format {format}/{bits}");
+        }
+    }
+
+    #[test]
     fn levels_crop_defects_and_cfa() {
         let (w, h) = (90usize, 60usize);
         let mut px: Vec<u16> = (0..w * h).map(|i| 300 + (i % 7) as u16).collect();
-        // a saturation plateau sets the white level; zeros inside the active area are defects
+        // A saturation plateau sets the white level. In the older word container,
+        // isolated zeros inside the active area are documented mapped-out defects.
         px[10 * w..20 * w].fill(3900);
         px[30 * w + 40] = 0;
         px[1] = 0; // in the border: left alone
-        let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(RAW_FORMAT, 5)];
+        let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(COMPRESSION, 34828)];
         tags.extend([0x002f, 0x0030, 0x0031, 0x0032].iter().zip([12u16, 10, 52, 80]).map(|(&tag, v)| short(tag, v)));
         tags.extend(LINEARITY_LIMIT.map(|tag| short(tag, 2000))); // recorded limits are not used
-        let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+        // Compression 34828 stores left-justified samples in little-endian u16 words.
+        let words: Vec<u8> = px.iter().flat_map(|&v| (v << 4).to_le_bytes()).collect();
+        let bytes = file(w as u16, h as u16, &tags, &words, &|off| vec![(t::STRIP_OFFSETS, Value::Long(vec![off]))]);
         let r = crate::decode(&bytes).unwrap();
         let d = samples(&r);
         assert_eq!(d[30 * w + 40], ((px[30 * w + 38] as u32 + px[30 * w + 42] as u32 + px[28 * w + 40] as u32 + px[32 * w + 40] as u32) / 4) as u16);
