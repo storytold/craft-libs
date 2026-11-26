@@ -1351,7 +1351,7 @@ fn a_padded_table_draws_its_header_rows_and_empty_text_inside_the_pad() {
 }
 
 /// The ink of the text run `label` paints in `shapes`.
-fn ink_of(shapes: &[egui::Shape], label: &str) -> egui::Color32 {
+pub(crate) fn ink_of(shapes: &[egui::Shape], label: &str) -> egui::Color32 {
     shapes
         .iter()
         .find_map(|shape| match shape {

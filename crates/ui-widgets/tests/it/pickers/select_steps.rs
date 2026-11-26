@@ -10,6 +10,8 @@ use egui::{Key, Modifiers, Rect, Ui};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::list::ink_of;
+
 /// Entries 1 to 4; 2 and 4 are reached from the open list only.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two").stepped(false), Entry::new(3u8, "Three"), Entry::new(4u8, "Four").stepped(false)];
@@ -107,4 +109,31 @@ fn a_value_on_no_entry_reads_as_the_placeholder_the_face_shows() {
         let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
         assert_eq!(fixture.tree().value_of(node), Some(read), "the field reads what its face shows");
     }
+}
+
+/// An unlisted current value has the same ink as a listed value and is read as the current value.
+/// Opening the list from the keyboard still offers the original choices.
+#[trial]
+fn an_unlisted_select_value_uses_value_ink_and_is_not_a_menu_option() {
+    let story = Story::new("select_unlisted", |ui, data| {
+        let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two")];
+        Select::new("Pick", data.bind("value", 1u8), &entries).placeholder("Unavailable").unlisted_label("Custom").show(ui).into()
+    });
+    let mut fixture = Fixture::story(&story);
+    fixture.settle();
+    let listed_ink = ink_of(&fixture.frame_shapes(), "One");
+    *fixture.data().value("value", 1u8) = 9;
+    fixture.settle();
+    assert_eq!(ink_of(&fixture.frame_shapes(), "Custom"), listed_ink, "the current value uses the same ink as a listed value");
+    let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
+    assert_eq!(fixture.tree().value_of(node), Some("Custom"));
+
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert_eq!(fixture.by_role(Role::LIST_BOX_OPTION).len(), 2, "the popup offers the two entries");
+    let other = fixture.by_label("Two").expect("a listed option");
+    fixture.click(&other).settle();
+    assert_eq!(*fixture.data().value("value", 1u8), 2);
+    assert_eq!(fixture.tree().value_of(node), Some("Two"));
 }
