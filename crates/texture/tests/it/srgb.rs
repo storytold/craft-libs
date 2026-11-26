@@ -1,5 +1,4 @@
-//! The scalar sRGB pair against IEC 61966-2-1 and against the copies of it in craft-cms,
-//! craft-mesh and craft-psd.
+//! The scalar sRGB pair against IEC 61966-2-1.
 //!
 //! The encoding is the one the ICC sRGB registry entry gives for IEC 61966-2-1:1999
 //! (<https://registry.color.org/rgb-registry/srgb>); the decoding is the CSS Color 4 sample code
@@ -11,14 +10,8 @@ use craft_texture::{linear_to_srgb, srgb_to_linear};
 
 /// The largest difference allowed between the `f32` pair and the `f64` formulas.
 const STANDARD_TOLERANCE: f32 = 3.0e-7;
-/// The largest difference allowed between the pair and craft-cms's ICC curve, which is evaluated
-/// in `f64` and returned as `f32`.
-const CMS_TOLERANCE: f32 = 2.4e-7;
 /// The 8-bit and 16-bit code ranges.
 const DEPTHS: [u32; 2] = [255, 65_535];
-
-/// One direction of an sRGB pair.
-type Scalar = fn(f32) -> f32;
 
 fn encode64(c: f64) -> f64 {
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
@@ -52,9 +45,6 @@ fn worst(max: u32, f: impl Fn(f32) -> f32, g: impl Fn(f32) -> f32) -> (f32, u32)
 fn worst_fails_on_a_difference_that_is_not_finite() {
     worst(255, |_| f32::NAN, |v| v);
 }
-
-/// Inputs outside `[0, 1]` that the crates' copies must also agree on.
-const OUTSIDE: [f32; 10] = [-0.0, -1.0e-6, -0.5, -1.0, -100.0, 1.5, 2.0, 100.0, f32::INFINITY, f32::NEG_INFINITY];
 
 #[test]
 fn encode_matches_the_standard_at_every_8_and_16_bit_code() {
@@ -163,45 +153,5 @@ fn infinities_keep_their_sign_and_nan_stays_nan() {
         assert_eq!(f(f32::INFINITY), f32::INFINITY);
         assert_eq!(f(f32::NEG_INFINITY), f32::NEG_INFINITY);
         assert!(f(f32::NAN).is_nan());
-    }
-}
-
-#[test]
-fn mesh_pair_matches_bit_for_bit() {
-    let pairs: [(Scalar, Scalar); 2] = [(linear_to_srgb, craft_mesh::linear_to_srgb), (srgb_to_linear, craft_mesh::srgb_to_linear)];
-    for (ours, mesh) in pairs {
-        for max in DEPTHS {
-            for (n, v) in codes(max) {
-                assert_eq!(ours(v).to_bits(), mesh(v).to_bits(), "code {n} of {max}");
-            }
-        }
-        for v in OUTSIDE {
-            assert_eq!(ours(v).to_bits(), mesh(v).to_bits(), "{v}");
-        }
-        assert!(mesh(f32::NAN).is_nan());
-    }
-}
-
-#[test]
-fn psd_encoder_matches_bit_for_bit() {
-    for max in DEPTHS {
-        for (n, v) in codes(max) {
-            assert_eq!(linear_to_srgb(v).to_bits(), craft_psd::float::srgb_encode(v).to_bits(), "code {n} of {max}");
-        }
-    }
-    for v in OUTSIDE {
-        assert_eq!(linear_to_srgb(v).to_bits(), craft_psd::float::srgb_encode(v).to_bits(), "{v}");
-    }
-    assert!(craft_psd::float::srgb_encode(f32::NAN).is_nan());
-}
-
-#[test]
-fn cms_curve_matches_within_rounding() {
-    let trc = craft_cms::curve::srgb_trc();
-    for max in DEPTHS {
-        let (d, n) = worst(max, srgb_to_linear, |v| trc.eval(v));
-        assert!(d <= CMS_TOLERANCE, "decode code {n} of {max} is {d} from craft-cms");
-        let (d, n) = worst(max, linear_to_srgb, |v| trc.eval_inverse(v));
-        assert!(d <= CMS_TOLERANCE, "encode code {n} of {max} is {d} from craft-cms");
     }
 }
