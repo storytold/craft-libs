@@ -260,6 +260,12 @@ impl TrackEncoder {
             #[cfg(feature = "vp9-encode")]
             CodecId::Vp9 => {
                 cfg.reject_unsupported("VP9", false, false)?;
+                if !matches!(cfg.color.primaries, 0..=2) || !matches!(cfg.color.transfer, 0..=2) || !matches!(cfg.color.matrix, 0..=2) {
+                    return Err(VideoError::Unsupported(format!(
+                        "VP9: encoder signals BT.709 only (requested primaries={}, transfer={}, matrix={})",
+                        cfg.color.primaries, cfg.color.transfer, cfg.color.matrix
+                    )));
+                }
                 let target_kbps = if cfg.rate_mode == RateControlMode::ConstantQuality { None } else { cfg.bitrate_kbps };
                 let vcfg = crate::vp9::EncoderConfig {
                     width,
@@ -285,6 +291,9 @@ impl TrackEncoder {
             }
             #[cfg(feature = "mpeg2-encode")]
             CodecId::Mpeg2Video => {
+                if cfg.color.full_range {
+                    return Err(VideoError::Unsupported("MPEG-2: full-range samples cannot be signalled".into()));
+                }
                 let (m_num, m_den) = nearest_mpeg2_fps(fps_num, fps_den);
                 let mut mcfg = crate::mpeg2::encode::EncoderConfig::new(width, height, m_num, m_den);
                 mcfg.chroma = crate::mpeg2::ChromaFormat::Yuv420;
@@ -334,6 +343,9 @@ impl TrackEncoder {
             #[cfg(feature = "prores")]
             CodecId::ProRes => {
                 cfg.reject_unsupported("ProRes", false, true)?;
+                if cfg.color.full_range {
+                    return Err(VideoError::Unsupported("ProRes: full-range samples cannot be signalled".into()));
+                }
                 let profile = match cfg.profile.as_deref().map(str::to_ascii_lowercase).as_deref() {
                     None | Some("422") | Some("standard") => crate::prores::Profile::Standard,
                     Some("proxy") => crate::prores::Profile::Proxy,
@@ -343,12 +355,33 @@ impl TrackEncoder {
                         return Err(VideoError::Unsupported(format!("ProRes: profile `{other}` is not available (4:2:2 profiles only)")));
                     }
                 };
-                let pcfg = crate::prores::EncoderConfig::new(profile, width, height);
+                let mut pcfg = crate::prores::EncoderConfig::new(profile, width, height);
+                if cfg.color != ColorTags::UNSPECIFIED {
+                    let h273_or = |v: u8, default: u8| if matches!(v, 0 | 2) { default } else { v };
+                    pcfg.color = crate::prores::ColorInfo {
+                        primaries: h273_or(cfg.color.primaries, pcfg.color.primaries),
+                        transfer: h273_or(cfg.color.transfer, pcfg.color.transfer),
+                        matrix: h273_or(cfg.color.matrix, pcfg.color.matrix),
+                    };
+                }
                 Inner::ProRes(Box::new(crate::prores::Encoder::with_config(pcfg)))
             }
             #[cfg(feature = "dnx")]
             CodecId::Dnxhd => {
                 cfg.reject_unsupported("DNxHR", false, true)?;
+                if cfg.color.full_range {
+                    return Err(VideoError::Unsupported("DNxHR: full-range samples cannot be signalled".into()));
+                }
+                let color_volume = match cfg.color.matrix {
+                    0..=2 => crate::dnx::ColorVolume::Bt709,
+                    9 => crate::dnx::ColorVolume::Bt2020Ncl,
+                    10 => crate::dnx::ColorVolume::Bt2020Cl,
+                    other => {
+                        return Err(VideoError::Unsupported(format!(
+                            "DNxHR: matrix {other} has no DNx colour volume (supported: BT.709=1, BT.2020 NCL=9, BT.2020 CL=10)"
+                        )));
+                    }
+                };
                 let profile = match cfg.profile.as_deref().map(str::to_ascii_lowercase).as_deref() {
                     None | Some("hq") => crate::dnx::Profile::Hq,
                     Some("lb") => crate::dnx::Profile::Lb,
@@ -358,7 +391,8 @@ impl TrackEncoder {
                         return Err(VideoError::Unsupported(format!("DNxHR: profile `{other}` is not available (LB, SQ, HQ, HQX)")));
                     }
                 };
-                let dcfg = crate::dnx::EncoderConfig::new(profile, width, height);
+                let mut dcfg = crate::dnx::EncoderConfig::new(profile, width, height);
+                dcfg.color_volume = color_volume;
                 Inner::Dnx(Box::new(crate::dnx::Encoder::with_config(dcfg)?))
             }
             #[cfg(feature = "apv-encode")]
@@ -578,7 +612,7 @@ impl TrackEncoder {
                     cr: yuv.v,
                     alpha: None,
                     interlace: crate::prores::Interlace::Progressive,
-                    color: crate::prores::ColorInfo::default(),
+                    color: enc.config().color,
                     aspect_ratio: 0,
                     frame_rate_code: 0,
                 };
@@ -589,6 +623,7 @@ impl TrackEncoder {
             Inner::Dnx(enc) => {
                 let depth = enc.config().bit_depth;
                 let profile = enc.config().profile;
+                let color_volume = enc.config().color_volume;
                 let yuv = frame_to_yuv422_u16(frame, depth, self.color)?;
                 let dframe = crate::dnx::Frame {
                     width: self.width,
@@ -601,7 +636,7 @@ impl TrackEncoder {
                     cr: yuv.v,
                     alpha: None,
                     interlace: crate::dnx::Interlace::Progressive,
-                    color_volume: crate::dnx::ColorVolume::Bt709,
+                    color_volume,
                     cid: profile.cid(),
                     par: (0, 0),
                 };
@@ -1448,5 +1483,55 @@ mod tests {
             VideoFrame::new(2, 2, ColorFamily::Gray, Subsampling::S444, vec![Plane::packed(2, 2, 8, Samples::U8(vec![235; 4])).unwrap()], None)
                 .unwrap();
         assert_eq!(pixel_rgb8(&gray, 0, 0).unwrap(), [255, 255, 255]);
+    }
+
+    #[cfg(feature = "mpeg2-encode")]
+    #[test]
+    fn mpeg2_rejects_full_range_output() {
+        let mut cfg = TrackEncoderConfig::new(CodecId::Mpeg2Video, 64, 64, 25, 1);
+        cfg.color.full_range = true;
+        assert!(matches!(TrackEncoder::new(cfg), Err(VideoError::Unsupported(_))));
+    }
+
+    #[cfg(feature = "vp9-encode")]
+    #[test]
+    fn vp9_rejects_non_bt709_colour_description() {
+        let mut cfg = TrackEncoderConfig::new(CodecId::Vp9, 64, 64, 25, 1);
+        cfg.color.matrix = 6;
+        assert!(matches!(TrackEncoder::new(cfg), Err(VideoError::Unsupported(_))));
+    }
+
+    #[cfg(feature = "prores")]
+    #[test]
+    fn prores_propagates_colour_matrix_and_rejects_full_range() {
+        let mut full = TrackEncoderConfig::new(CodecId::ProRes, 64, 64, 25, 1);
+        full.color.full_range = true;
+        assert!(matches!(TrackEncoder::new(full), Err(VideoError::Unsupported(_))));
+
+        let mut cfg = TrackEncoderConfig::new(CodecId::ProRes, 64, 64, 25, 1);
+        cfg.color = ColorTags { primaries: 6, transfer: 6, matrix: 6, full_range: false };
+        let mut enc = TrackEncoder::new(cfg).unwrap();
+        let packets = enc.encode(&test_ycbcr_frame(64, 64), 0).unwrap();
+        let hdr = crate::prores::probe(&packets[0].data).unwrap();
+        assert_eq!(hdr.color, crate::prores::ColorInfo { primaries: 6, transfer: 6, matrix: 6 });
+    }
+
+    #[cfg(feature = "dnx")]
+    #[test]
+    fn dnx_propagates_colour_volume_and_rejects_unsupported_matrices() {
+        let mut bad = TrackEncoderConfig::new(CodecId::Dnxhd, 64, 64, 25, 1);
+        bad.color.matrix = 6;
+        assert!(matches!(TrackEncoder::new(bad), Err(VideoError::Unsupported(_))));
+
+        let mut full = TrackEncoderConfig::new(CodecId::Dnxhd, 64, 64, 25, 1);
+        full.color.full_range = true;
+        assert!(matches!(TrackEncoder::new(full), Err(VideoError::Unsupported(_))));
+
+        let mut cfg = TrackEncoderConfig::new(CodecId::Dnxhd, 64, 64, 25, 1);
+        cfg.color.matrix = 9;
+        let mut enc = TrackEncoder::new(cfg).unwrap();
+        let packets = enc.encode(&test_ycbcr_frame(64, 64), 0).unwrap();
+        let hdr = crate::dnx::probe(&packets[0].data).unwrap();
+        assert_eq!(hdr.color_volume, crate::dnx::ColorVolume::Bt2020Ncl);
     }
 }
