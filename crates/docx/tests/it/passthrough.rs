@@ -384,6 +384,25 @@ fn kept_extensions_mark_ignorable_under_another_prefix_a_namespace_whose_prefix_
     }
 }
 
+/// As above, with `alias` declared only on markup inside the `extLst`: the kept element declares
+/// the namespace itself and marks it ignorable, under `alias` or, when the comment element binds
+/// `alias` to something else, under a prefix of its own, through a save and a second round trip.
+#[test]
+fn kept_extensions_mark_ignorable_a_namespace_only_their_inner_markup_names() {
+    for comment_alias in ["", r#"xmlns:alias="urn:c""#] {
+        let cex = format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:old" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:q="urn:b" {comment_alias}><x:extLst><r:reactions xmlns:alias="urn:old" mc:ProcessContent="alias:note"><alias:note/></r:reactions></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        );
+        for (ext, markup) in kept_markup(&cex) {
+            let ignorable = ignorable_namespaces(&ext);
+            assert!(ignorable.contains(&"urn:old"), "{markup}");
+            assert!(!ignorable.contains(&"urn:b") && !ignorable.contains(&"urn:c"), "{markup}");
+            let inner = ext.find("r:reactions").unwrap_or_else(|| panic!("{markup}"));
+            assert!(inner.ns_decls().any(|d| d == ("alias", "urn:old")), "{markup}");
+        }
+    }
+}
+
 const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 /// The extension kept from commentsExtensible.xml `cex`, as read and after a save and a second

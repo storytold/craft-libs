@@ -423,19 +423,31 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
     let mut ext_scope = scope.clone();
     declare(&mut ext_scope, ext);
     // A marked namespace keeps the prefix that marked it while that prefix still names it, and
-    // otherwise takes another prefix that does; with none, nothing in `ext` can name it.
-    let ignorable: Vec<&str> =
-        marked
-            .iter()
-            .filter_map(|&(p, uri)| {
-                if ext_scope.contains(&(p, uri)) { Some(p) } else { ext_scope.iter().find(|(o, u)| *u == uri && !o.is_empty()).map(|(o, _)| *o) }
-            })
-            .collect();
+    // otherwise takes another prefix that does. When only markup inside `ext` names it, `ext`
+    // declares it under a prefix free there, so the mark still reaches that markup; with none,
+    // nothing in `ext` can name it.
+    let inner: Vec<(&str, &str)> = ext.descendants().flat_map(craft_xml::El::ns_decls).collect();
+    let mut ignorable: Vec<String> = Vec::new();
+    let mut fresh: Vec<(String, &str)> = Vec::new();
+    for &(p, uri) in &marked {
+        let bound = if ext_scope.contains(&(p, uri)) { Some(p) } else { ext_scope.iter().find(|(o, u)| *u == uri && !o.is_empty()).map(|(o, _)| *o) };
+        if let Some(o) = bound {
+            ignorable.push(o.to_string());
+            needed.push(o);
+        } else if let Some(&(o, _)) = inner.iter().find(|(o, u)| *u == uri && !o.is_empty()) {
+            let name = free_prefix(o, uri, &ext_scope, &inner, &fresh);
+            ignorable.push(name.clone());
+            fresh.push((name, uri));
+        }
+    }
+    for (name, uri) in &fresh {
+        el.attrs.push((format!("xmlns:{name}"), (*uri).to_string()));
+    }
     if !ignorable.is_empty() {
         match el.attrs.iter_mut().find(|(k, _)| is_ignorable(k, &ext_scope)) {
             Some((_, v)) => {
                 let mut tokens: Vec<&str> = v.split_whitespace().collect();
-                tokens.extend(ignorable.iter().filter(|t| !v.split_whitespace().any(|o| o == **t)));
+                tokens.extend(ignorable.iter().map(String::as_str).filter(|t| !v.split_whitespace().any(|o| o == *t)));
                 *v = tokens.join(" ");
             }
             None => match ext_scope.iter().find(|(p, u)| *u == MCE && !p.is_empty()).map(|(p, _)| *p) {
@@ -446,13 +458,12 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
                 // `ext` binds every prefix that named Markup Compatibility to something else, so
                 // it gets a prefix of its own for it.
                 None => {
-                    let free = (1..).map(|i| format!("mc{i}")).find(|p| ext_scope.iter().all(|(s, _)| s != p)).unwrap_or_default();
+                    let free = free_prefix("mc", MCE, &ext_scope, &inner, &fresh);
                     el.attrs.push((format!("xmlns:{free}"), MCE.to_string()));
                     el.attrs.push((format!("{free}:Ignorable"), ignorable.join(" ")));
                 }
             },
         }
-        needed.extend(ignorable);
     }
     for (prefix, uri) in scope.iter().filter(|(p, _)| needed.contains(p) && !own.contains(p)) {
         let key = if prefix.is_empty() { "xmlns".to_string() } else { format!("xmlns:{prefix}") };
@@ -461,6 +472,14 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
         }
     }
     Some(el.to_xml())
+}
+
+/// A prefix for `uri` that a kept element can declare without changing what any of its names
+/// mean: `base`, or the first of `base1`, `base2`, ... that names nothing in `scope`, isn't
+/// already taken by `fresh`, and isn't declared inside the markup (`inner`) for another namespace.
+fn free_prefix(base: &str, uri: &str, scope: &[(&str, &str)], inner: &[(&str, &str)], fresh: &[(String, &str)]) -> String {
+    let taken = |p: &str| scope.iter().any(|(s, _)| *s == p) || fresh.iter().any(|(f, _)| f == p) || inner.iter().any(|(i, u)| *i == p && *u != uri);
+    std::iter::once(base.to_string()).chain((1..).map(|i| format!("{base}{i}"))).find(|p| !taken(p)).unwrap_or_default()
 }
 
 /// `e`'s namespace declarations added to `scope`, each replacing what its prefix named before.
