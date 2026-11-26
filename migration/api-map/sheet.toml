@@ -1,0 +1,186 @@
+# API map of the "Sheet" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Sheet"
+new_module = "craft_table::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "CellGrid"
+old = "craft_table::ui::CellGrid"
+new = "craft_table::ui::CellGrid"
+status = "replaced"
+note = "A collection `Component` over `Collection`. `CellGrid::new(label, &model, &mut state)` replaces `CellGrid::new(id_salt, &model, &mut state)`; `.show(ui)` returns `GridOutput`. The legacy `CellGridResponse` is `GridOutput`: `response` is `collection.response`, `selection_changed` is read from the state, `edits` and `geometry` keep their names. `GridState.scroll` and `GridState.editing` are gone: the collection keeps the scroll, the grid owns the in-cell editor."
+
+[[type]]
+name = "CellGridResponse"
+old = "craft_table::ui::CellGridResponse"
+new = ""
+status = "removed"
+note = "Replaced by `GridOutput`."
+
+[[type]]
+name = "GridOutput"
+old = ""
+new = "craft_table::ui::GridOutput"
+status = "replaced"
+note = "New: the output of `CellGrid::show`. Adds `committed`, `draft`, `fill_swapped`, `filter`, `fix` and `outline` to the legacy response's `geometry` and `edits`."
+
+[[type]]
+name = "GridModel"
+old = "craft_table::ui::GridModel"
+new = "craft_table::ui::GridModel"
+status = "same"
+note = "`merges` returns `&[CellRange<u32>]`; `paint_cell(&self, ui: &mut PaintUi<'_>, rect, cell: CellAt<u32>, zoom)` replaces the `&egui::Painter` form. `rows()` and `columns()` return `craft_behavior::LineIndex`."
+
+[[type]]
+name = "GridState"
+old = "craft_table::ui::GridState"
+new = "craft_table::ui::GridState"
+status = "same"
+note = "Fields are `selection: CellSelection<u32>` and `zoom: f32`; `Default` selects A1."
+
+[[type]]
+name = "GridEdit"
+old = "craft_table::ui::GridEdit"
+new = "craft_table::ui::GridEdit"
+status = "same"
+note = "Cell fields are `CellAt<u32>` and `CellRange<u32>`; `Fill` carries `EditEvent<CellRange<u32>>`."
+
+[[type]]
+name = "GridMenuTarget"
+old = "craft_table::ui::GridMenuTarget"
+new = "craft_table::ui::GridMenuTarget"
+status = "same"
+
+[[type]]
+name = "GridLayout"
+old = "craft_table::ui::GridLayout"
+new = "craft_table::ui::GridLayout"
+status = "same"
+note = "`#[non_exhaustive]`: built with `GridLayout::new(rect, rows, columns)` and the setters `zoom`, `frozen`, `scroll`, `headings`, `bands`, `right_to_left`, `digits`."
+
+[[type]]
+name = "SheetGeometry"
+old = "craft_table::ui::SheetGeometry"
+new = "craft_table::ui::SheetGeometry"
+status = "same"
+note = "`SheetGeometry::new(layout, SheetMetrics)` replaces `new(layout, &SheetStyle)`. Cell types are `CellAt<u32>` and `CellRange<u32>` (`range_rect` takes `&CellRange<u32>`)."
+
+[[type]]
+name = "SheetMetrics"
+old = ""
+new = "craft_table::ui::SheetMetrics"
+status = "replaced"
+note = "New: the header sizes geometry reads, taken from the grid's style. Replaces `SheetStyle` in geometry."
+
+[[type]]
+name = "ColumnFilter"
+old = ""
+new = "craft_table::ui::ColumnFilter"
+status = "replaced"
+note = "New: a column that shows a filter button in its header; `CellGrid::filters(&[ColumnFilter])`."
+
+[[type]]
+name = "CellProblem"
+old = ""
+new = "craft_table::ui::CellProblem"
+status = "replaced"
+note = "New: the cell with an error tag and its fixes; `CellGrid::error_tag(Some(CellProblem))`."
+
+[[type]]
+name = "CellEdit"
+old = ""
+new = "craft_table::ui::CellEdit"
+status = "replaced"
+note = "New: the draft the in-cell editor committed, in `GridOutput::committed`."
+
+[[type]]
+name = "LineIndex"
+old = "craft_table::ui::LineIndex"
+new = "craft_behavior::LineIndex"
+status = "moved"
+note = "The one per-line index; `craft_table::ui` re-exports it."
+
+[[type]]
+name = "CellRef"
+old = "craft_table::ui::CellRef"
+new = ""
+status = "removed"
+note = "Replaced by `craft_behavior::CellAt<u32>`: `row` and `column` are public fields; `CellAt::new(row, column)`."
+
+[[type]]
+name = "absolute_reference"
+old = "craft_table::ui::absolute_reference"
+new = "craft_table::ui::absolute_reference"
+status = "same"
+note = "Takes `CellAt<u32>`."
+
+[[type]]
+name = "absolute_range_reference"
+old = "craft_table::ui::absolute_range_reference"
+new = "craft_table::ui::absolute_range_reference"
+status = "same"
+note = "Takes `CellRange<u32>` by value."
+
+[[type]]
+name = "column_letters"
+old = "craft_table::ui::column_letters"
+new = "craft_table::ui::column_letters"
+status = "same"
+
+[[type]]
+name = "SHEET_ROWS"
+old = "craft_table::ui::SHEET_ROWS"
+new = "craft_table::ui::SHEET_ROWS"
+status = "same"
+
+[[type]]
+name = "SHEET_COLUMNS"
+old = "craft_table::ui::SHEET_COLUMNS"
+new = "craft_table::ui::SHEET_COLUMNS"
+status = "same"
+
+[[type]]
+name = "HEADER_MIN_ZOOM"
+old = "craft_table::ui::HEADER_MIN_ZOOM"
+new = "craft_table::ui::HEADER_MIN_ZOOM"
+status = "same"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[setter]]
+type = "CellGrid"
+old = "new(id_salt, model, state)"
+new = "new(label, model, state)"
+note = "The first argument is the accessible name; `.id_salt(..)` from `Props` salts the id."
+
+[[setter]]
+type = "CellGrid"
+old = "copy_mark"
+new = "copy_mark"
+note = "Takes `&[CellRange<u32>]`."
+
+[[setter]]
+type = "CellGrid"
+old = "outline_levels"
+new = "outline"
+note = "`outline(&OutlineAxis, &OutlineAxis)` reserves the bands and shows one `OutlineBand` over them."
+
+[[setter]]
+type = "CellGrid"
+old = "headings"
+new = "headings"
+
+[[setter]]
+type = "CellGrid"
+old = "right_to_left"
+new = ""
+note = "Removed: the direction comes from `Env`."
+
+[[setter]]
+type = "GridModel"
+old = "paint_cell(&Painter, ..)"
+new = "paint_cell(&mut PaintUi<'_>, ..)"
+note = "Paint through `ui.draw()`."

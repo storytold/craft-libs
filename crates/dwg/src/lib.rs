@@ -958,7 +958,7 @@ mod native {
     /// differently by version: read as R2000, an AC1032 file's mental ray render settings came out
     /// a class version too high, for which the ODA rejects the whole DWG, and a field lost its
     /// cached value. So the DXF is read as `kept` declares; the formats of the DXF's own pre-2007
-    /// fields, which the reader skips then, are restored ([`legacy_field_formats`]). A `kept`
+    /// fields, which the reader skips then, are restored. A `kept`
     /// version that is unknown, or not newer than the DXF's own, changes nothing.
     pub fn dxf_to_dwg_kept_as(dxf: &[u8], version: &str, kept: &str) -> Result<Vec<u8>, String> {
         dxf_to_dwg_kept_noted(dxf, version, kept).map(|(dwg, _)| dwg)

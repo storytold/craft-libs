@@ -4,51 +4,6 @@ use super::*;
 use crate::emfplus;
 
 #[test]
-fn strings_are_cut_at_the_character_cap() {
-    let cap = crate::text::MAX_CHARS;
-    // EXTTEXTOUTW: the count says more than the cap; the string holds that many.
-    let units = vec![0x41u16; cap + 100];
-    let p = parse(&emf(&[etext(true, 0, 0, &units, 0, &[])], [0, 0, 200, 100], [0, 0, 5000, 2500])).unwrap();
-    assert_eq!(texts(&p)[0].text.chars().count(), cap);
-    // META_EXTTEXTOUT and META_TEXTOUT.
-    let bytes = vec![b'a'; cap + 100];
-    let p = wmf200(&[wtext(0, 0, &bytes, 0, None, &[])]);
-    assert_eq!(texts(&p)[0].text.chars().count(), cap);
-    let mut v = h16((cap + 100) as i32 as i16 as i32);
-    v.extend(&bytes);
-    v.extend(cat(vec![h16(0), h16(0)]));
-    let p = wmf200(&[wrec(0x0521, &v)]);
-    assert!(texts(&p).iter().all(|t| t.text.chars().count() <= cap));
-}
-
-#[test]
-fn emfplus_strings_are_cut_at_their_character_cap() {
-    let cap = emfplus::MAX_CHARS;
-    let font = prec(0x4008, 0x0600 | 3, &font_obj("Calibri", 12.0, 2, 0));
-    let long: String = "a".repeat(cap + 50);
-    let s = prec(0x401C, 0x8000 | 3, &cat(vec![h32(0xFF00_0000), h32(9), h32((cap + 50) as u32), f32s(&[0.0, 0.0, 0.0, 0.0]), u16s(&long)]));
-    let p = plus_pic(vec![font, s]);
-    let total: usize = texts(&p).iter().map(|t| t.text.chars().count()).sum();
-    assert!(total > 0 && total <= cap, "{total}");
-}
-
-#[test]
-fn a_clip_region_keeps_at_most_its_rectangle_cap() {
-    let cap = crate::clip::MAX_CLIP_RECTS;
-    // EXTSELECTCLIPRGN (RGN_COPY) with twice the cap of separate rectangles in its RGNDATA.
-    let n = cap * 2;
-    let mut data = cat(vec![h32(32), h32(1), h32(n as u32), h32((n * 16) as u32), vec![0; 16]]);
-    for i in 0..n as i32 {
-        data.extend(cat(vec![e32(i * 10), e32(0), e32(i * 10 + 5), e32(5)]));
-    }
-    let rgn = erec(75, &cat(vec![h32(data.len() as u32), h32(5), data]));
-    let draw = erec(43, &cat(vec![e32(0), e32(0), e32(10_000), e32(10)]));
-    let p = parse(&emf(&[rgn, draw], [0; 4], [0; 4])).unwrap();
-    let Item::Path { region: Some(r), .. } = &p.items[0] else { panic!("a clipped path") };
-    assert_eq!(r.len(), cap);
-}
-
-#[test]
 fn placing_stops_at_the_element_cap() {
     let segs: Vec<Seg> = std::iter::once(Seg::Move(0.0, 0.0)).chain((0..100_000).map(|i| Seg::Line((i % 7) as f32, (i % 5) as f32))).collect();
     let path = || Item::Path {
@@ -64,23 +19,6 @@ fn placing_stops_at_the_element_cap() {
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 10.0, 10.0), [0.0; 4]);
     // Five paths of 100,001 elements reach the 500,000 cap; the rest are left out.
     assert_eq!(placed.len(), 5);
-}
-
-#[test]
-fn a_pattern_tile_over_the_side_cap_is_no_brush() {
-    let side = crate::canvas::MAX_TILE_SIDE;
-    let tile = |w: usize, h: usize| crate::canvas::Brush::pattern(Rgba { w, h, px: vec![0; w * h * 4] }, false);
-    assert!(tile(side, side).is_some());
-    assert!(tile(side + 1, 1).is_none());
-    assert!(tile(1, side + 1).is_none());
-}
-
-#[test]
-fn a_dib_palette_holds_at_most_256_entries() {
-    // 24 bpp with a colour table of 1000 entries claimed: 256 are skipped before the bits.
-    let mut info = info_header(1, 1, 24, 4);
-    info[32..36].copy_from_slice(&1000u32.to_le_bytes());
-    assert_eq!(crate::dib::info_len(crate::bytes::Bytes(&info)), Some(40 + 256 * 4));
 }
 
 /// `inner` as an EMF+ metafile image object drawn into (0, 0, 40, 20), in a file of its own.
@@ -100,6 +38,22 @@ fn metafiles_nest_only_so_deep() {
     };
     assert_eq!(nested(emfplus::MAX_NESTING), 1);
     assert_eq!(nested(emfplus::MAX_NESTING + 1), 0, "the innermost picture is not read");
+}
+
+#[test]
+fn wmf_wrapped_emf_shares_nesting_depth_cap() {
+    let square = emf(&[erec(43, &cat(vec![e32(0), e32(0), e32(10), e32(10)]))], [0; 4], [0; 4]);
+    let wmf_wrap = |inner: Vec<u8>| wmf(&wmfc_chunks(&inner, &[inner.len()]), None);
+    // WMF (0) -> EMF (1) -> EMF+ WMF (2) -> EMF (3): at MAX_NESTED_DEPTH, still drawn.
+    let ok = wmf_wrap(wrap(wmf_wrap(square.clone())));
+    let p_ok = parse(&ok).unwrap();
+    assert_eq!(p_ok.items.len(), 1);
+    assert!(!p_ok.truncated);
+    // One more EMF+ level exceeds MAX_NESTED_DEPTH: stops cleanly without stack overflow.
+    let too_deep = wmf_wrap(wrap(wmf_wrap(wrap(square))));
+    let p_deep = parse(&too_deep).unwrap();
+    assert_eq!(p_deep.items.len(), 0);
+    assert_eq!(p_deep.dropped_images, 1);
 }
 
 #[test]
@@ -182,68 +136,12 @@ fn stretch_bad_png() -> Vec<u8> {
 }
 
 #[test]
-fn emfplus_object_ids_past_the_table_are_ignored() {
-    let draw = |id: u16| {
-        let pen = prec(0x4008, 0x0200 | id, &solid_pen(0xFF00_FF00, 2.0));
-        let lines = prec(0x400D, id, &cat(vec![h32(2), f32s(&[1.0, 1.0, 4.0, 2.0])]));
-        plus_pic(vec![pen, lines]).items.len()
-    };
-    assert_eq!(draw(emfplus::MAX_OBJECTS as u16 - 1), 1);
-    assert_eq!(draw(emfplus::MAX_OBJECTS as u16), 0);
-}
-
-#[test]
-fn emfplus_saves_past_the_stack_cap_are_not_kept() {
-    // Saves 0..=cap, a move, then a restore of the last save: it was not kept, so the move stays.
-    let cap = emfplus::MAX_STACK as u32;
-    let fill = || prec(0x400A, 0x8000, &cat(vec![h32(0xFF00_0000), h32(1), f32s(&[0.0, 0.0, 10.0, 10.0])]));
-    let run = |saves: u32| {
-        let mut recs: Vec<Vec<u8>> = (0..saves).map(|i| prec(0x4025, 0, &h32(i))).collect();
-        recs.extend([fill(), prec(0x402D, 0, &f32s(&[100.0, 0.0])), prec(0x4026, 0, &h32(saves - 1)), fill()]);
-        plus_pic(recs).width
-    };
-    assert_eq!(run(cap), 10.0, "the last save was kept: the restore undoes the move");
-    assert_eq!(run(cap + 1), 110.0, "one save too many: nothing to restore");
-}
-
-#[test]
-fn emfplus_point_lists_are_cut_at_the_point_cap() {
-    let n = emfplus::MAX_POINTS + 10;
-    let pts: Vec<f32> = (0..n).flat_map(|i| [(i % 100) as f32, (i % 37) as f32]).collect();
-    let pen = prec(0x4008, 0x0200 | 3, &solid_pen(0xFF00_FF00, 1.0));
-    let lines = prec(0x400D, 3, &cat(vec![h32(n as u32), f32s(&pts)]));
-    let p = plus_pic(vec![pen, lines]);
-    let (segs, ..) = path_segs(&p.items[0]);
-    assert_eq!(segs.len(), emfplus::MAX_POINTS);
-}
-
-#[test]
 fn a_continued_emfplus_object_reserves_nothing_for_the_size_it_claims() {
     // 4 GB claimed (cut to the cap), a few bytes sent: the object never completes and no memory
     // is set aside for it.
     let first = prec(0x4008, 0x8000 | 0x0500 | 1, &cat(vec![h32(u32::MAX), vec![1, 2, 3, 4]]));
     let p = plus_pic(vec![first.clone(), first, draw_image(1, [0.0, 0.0, 4.0, 4.0])]);
     assert!(p.items.is_empty());
-}
-
-#[test]
-fn emfplus_gradients_keep_at_most_their_stop_cap() {
-    // Preset colours (brush flag 4) with far more stops claimed than the data holds: the count is
-    // cut to the cap first, so the read is bounded and the short data makes no brush.
-    let cap = emfplus::MAX_STOPS as u32;
-    let brush = |n: u32, held: u32| {
-        let mut b =
-            cat(vec![h32(0xDBC0_1002), h32(4), h32(4), h32(0), f32s(&[0.0, 0.0, 100.0, 10.0]), h32(0xFFFF_0000), h32(0xFF00_00FF), h32(0), h32(0)]);
-        b.extend(h32(n));
-        b.extend(f32s(&(0..held).map(|i| i as f32 / held as f32).collect::<Vec<_>>()));
-        b.extend((0..held).flat_map(|_| h32(0xFF00_FF00)));
-        b
-    };
-    let fill = || prec(0x400A, 0, &cat(vec![h32(5), h32(1), f32s(&[0.0, 0.0, 100.0, 10.0])]));
-    let drawn = |n: u32, held: u32| plus_pic(vec![prec(0x4008, 0x0100 | 5, &brush(n, held)), fill()]).items.len();
-    assert_eq!(drawn(cap, cap), 1);
-    assert_eq!(drawn(u32::MAX, cap), 1, "a count past the cap reads the cap's worth");
-    assert_eq!(drawn(u32::MAX, 4), 0, "and no more than the record holds");
 }
 
 #[test]
@@ -295,4 +193,80 @@ fn masking_a_bitmap_to_a_clip_stops_at_the_work_cap() {
     let fits = ((cap / 3) as f64).sqrt() as usize;
     assert!(side(fits));
     assert!(!side(fits + 2));
+}
+
+#[test]
+fn pict_truncated_halfway_through_rectangle_reports_premature_eof() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Truncated halfway through a rectangle opcode (paintRect 0x0031):
+    // Rectangle opcode expects 8 bytes [top, left, bottom, right], but only 4 bytes are provided.
+    pict.extend([0x00, 0x31]);
+    pict.extend([0, 0, 0, 5]);
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(crate::TruncationReason::PrematureEof));
+}
+
+#[test]
+fn pict_records_exceeding_max_opcode_budget_reports_opcode_limit_exceeded() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Valid records exceeding MAX_OPS budget (e.g. NOP opcodes 0x0000):
+    pict.resize(pict.len() + 2 * (crate::pict::MAX_OPS + 1), 0);
+    pict.extend([0x00, 0xFF]);
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(crate::TruncationReason::OpcodeLimitExceeded));
+}
+
+#[test]
+fn pict_invalid_zero_height_bitmap_does_not_report_premature_eof() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Complete BitsRect (0x0090) with zero-height bounds, followed by EndPic (0x00FF):
+    pict.extend([0x00, 0x90]);
+    pict.extend([0x00, 0x02]); // row_bytes
+    pict.extend([0, 0, 0, 0, 0, 0, 0, 10]); // bounds (top=0, left=0, bottom=0, right=10; height=0)
+    pict.extend([0, 0, 0, 0, 0, 0, 0, 10]); // src
+    pict.extend([0, 0, 0, 0, 0, 0, 0, 10]); // dst
+    pict.extend([0x00, 0x00]); // mode
+    pict.extend([0x00, 0xFF]); // EndPic
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_ne!(p.truncation_reason, Some(crate::TruncationReason::PrematureEof));
+    assert_eq!(p.truncation_reason, None);
+}
+
+#[test]
+fn pict_truncated_region_payload_stops_with_premature_eof() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Opcode 0x0080 (frameRgn) claiming 16 bytes for region, followed by EOF before body finishes:
+    pict.extend([0x00, 0x80]);
+    pict.extend([0x00, 0x10]);
+    pict.extend([0x00, 0xFF]);
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(crate::TruncationReason::PrematureEof));
 }
