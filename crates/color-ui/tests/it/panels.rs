@@ -595,6 +595,30 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
 }
 
+/// A group with an empty name holds the swatches outside every group: they show at the top with no header, so no
+/// heading or disclosure button of the panel is left without a name, and a named group keeps its header.
+#[trial]
+fn swatches_outside_every_group_show_without_a_header() {
+    let entry = |name: &str, rgb: [f32; 3]| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb(rgb));
+    let groups = vec![
+        SwatchGroup { name: String::new(), entries: vec![entry("Red", [1.0, 0.0, 0.0]), entry("Blue", [0.0, 0.0, 1.0])] },
+        SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Green", [0.0, 1.0, 0.0])] },
+    ];
+    let (fixture, _) = swatches_rig(groups, SwatchesState::default());
+    let tree = fixture.tree();
+    let unnamed: Vec<_> = tree
+        .keys()
+        .into_iter()
+        .filter(|&key| matches!(tree.role_of(key), Some(Role::HEADING | Role::BUTTON)))
+        .filter(|&key| tree.name_of(key).is_none_or(|name| name.is_empty() || name.starts_with(',')))
+        .map(|key| (tree.role_of(key), tree.name_of(key), tree.bounds_of(key)))
+        .collect();
+    assert!(unnamed.is_empty(), "every heading and button is named, starting with a label: {unnamed:?}");
+    assert!(fixture.by_label("Red, #ff0000").is_some(), "the ungrouped swatches show");
+    let headings: Vec<_> = tree.with_role(Role::HEADING).into_iter().filter_map(|key| tree.name_of(key)).collect();
+    assert!(headings.iter().any(|name| name.starts_with("Other")), "a named group keeps its header: {headings:?}");
+}
+
 /// Tb-8 (5): a click uses any swatch, as production applied every one: a colour swatch reports its colour, and a
 /// gradient, pattern or None swatch reports where it is with no colour, for the host to apply its paint. The panel
 /// reported only colour swatches.
