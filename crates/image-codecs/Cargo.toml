@@ -25,6 +25,9 @@ jxl = ["dep:craft-jxl"]
 # AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a
 # decoder panic aborts instead of becoming an error), so wasm32 builds leave AVIF unreadable.
 avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
+# JPEG 2000 decode via hayro-jpeg2000. Off by default so a crate that only reads SVG or raster
+# pixels does not carry a JPEG 2000 decoder (a PDF reader family) into its graph.
+jp2 = ["dep:hayro-jpeg2000"]
 
 [dependencies]
 craft-dds = { workspace = true }
@@ -50,7 +53,7 @@ craft-jxl = { workspace = true, optional = true, features = ["decode"] }
 ravif = { version = "0.13", default-features = false, optional = true }
 rav1e = { version = "0.8", default-features = false, optional = true }
 avif-serialize = { version = "0.8", optional = true }
-hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
+hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # DDS encodes rows of blocks on several threads, as the other parallel codecs here do on native targets.

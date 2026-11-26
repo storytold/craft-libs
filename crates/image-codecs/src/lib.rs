@@ -78,11 +78,13 @@ pub use crate::resolution_probe::file_resolution;
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
+#[cfg(feature = "jp2")]
+use crate::codecs::jp2;
 #[cfg(feature = "sgi")]
 use crate::codecs::sgi;
 #[cfg(feature = "sunraster")]
 use crate::codecs::sunraster;
-use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -103,7 +105,7 @@ pub fn decode_as(format: Format, bytes: &[u8]) -> Result<Image, CodecError> {
 /// Decode as a specific format.
 pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecError> {
     // HEIF without the `heif` feature: its decoder stub says what is missing from this build.
-    if !caps(format).read && !matches!(format, Format::Heif | Format::Jxl) {
+    if !caps(format).read && !matches!(format, Format::Heif | Format::Jxl | Format::Jp2) {
         return Err(CodecError::unsupported(format, "decoding is not available for this format"));
     }
     let l = &opts.limits;
@@ -144,7 +146,16 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
-        Format::Jp2 => jp2::decode(bytes, l),
+        Format::Jp2 => {
+            #[cfg(feature = "jp2")]
+            {
+                jp2::decode(bytes, l)
+            }
+            #[cfg(not(feature = "jp2"))]
+            {
+                Err(CodecError::unsupported(format, "JPEG 2000 support requires the jp2 feature"))
+            }
+        }
         Format::Jxl => jxl::decode(bytes, l),
         #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
         Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
