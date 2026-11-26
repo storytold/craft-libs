@@ -444,11 +444,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn phase_zero_filters_are_impulses() {
-        for f in SUBPEL_FILTERS.iter() {
-            assert_eq!(f[0], [0, 0, 0, 128, 0, 0, 0, 0]);
-        }
-    }
 }

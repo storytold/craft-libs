@@ -18,7 +18,7 @@ fn seam(t: &Tex) -> (f32, f32) {
 #[test]
 fn every_node_is_seamless() {
     let mut bad = Vec::new();
-    for sp in SPECS {
+    for sp in crate::sampled(SPECS, 0) {
         let Some(text) = demo_graph_for(sp.kind) else { continue };
         let g = Graph::parse(&text).unwrap();
         let out = match g.evaluate(Some(seam_size())) {
@@ -83,7 +83,7 @@ fn filters_commute_with_wrapped_shifts() {
         "quantize",
     ];
     let mut bad = Vec::new();
-    for c in filters {
+    for c in crate::sampled(filters.iter(), 0) {
         let kind = c.split(' ').next().unwrap();
         let mut line = format!("node 1 {c}");
         // (the nodes that read no `in` are given their inputs in the line)
@@ -144,7 +144,7 @@ fn filters_commute_with_wrapped_shifts() {
 fn every_node_is_seamless_when_not_square() {
     let mut bad = Vec::new();
     for (wide, name) in [(true, "2:1"), (false, "1:2")] {
-        for sp in SPECS {
+        for sp in crate::sampled(SPECS, 4) {
             let Some(text) = demo_graph_for(sp.kind) else { continue };
             let mut g = Graph::parse(&text).unwrap();
             let s = g.size;

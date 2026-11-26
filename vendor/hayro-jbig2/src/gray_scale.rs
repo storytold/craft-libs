@@ -33,17 +33,9 @@ pub(crate) struct GrayScaleParams<'a> {
 ///
 /// Returns `GSVALS`: the decoded gray-scale image array, GSW × GSH pixels.
 #[inline(always)]
-pub(crate) fn decode_gray_scale_image(
-    data: &[u8],
-    params: &GrayScaleParams<'_>,
-    ctx: &mut ScratchBuffers,
-) -> Result<Vec<u32>> {
+pub(crate) fn decode_gray_scale_image(data: &[u8], params: &GrayScaleParams<'_>, ctx: &mut ScratchBuffers) -> Result<Vec<u32>> {
     // Table C.1: "GSMMR specifies whether MMR is used."
-    if params.use_mmr {
-        decode_mmr(data, params)
-    } else {
-        decode_arithmetic(data, params, ctx)
-    }
+    if params.use_mmr { decode_mmr(data, params) } else { decode_arithmetic(data, params, ctx) }
 }
 
 /// The gray-scale image decoding procedure using MMR (Annex C, C.5).
@@ -70,11 +62,7 @@ fn decode_mmr(data: &[u8], params: &GrayScaleParams<'_>) -> Result<Vec<u32>> {
 /// The gray-scale image decoding procedure using arithmetic coding (Annex C, C.5).
 ///
 /// Table C.4: "GBTEMPLATE = GSTEMPLATE, TPGDON = 0, USESKIP = GSUSESKIP, SKIP = GSKIP"
-fn decode_arithmetic(
-    data: &[u8],
-    params: &GrayScaleParams<'_>,
-    ctx: &mut ScratchBuffers,
-) -> Result<Vec<u32>> {
+fn decode_arithmetic(data: &[u8], params: &GrayScaleParams<'_>, ctx: &mut ScratchBuffers) -> Result<Vec<u32>> {
     // `GSW` - The width of the gray-scale image.
     let width = params.width;
     // `GSH` - The height of the gray-scale image.
@@ -123,10 +111,7 @@ fn decode_arithmetic(
 
     let mut decoder = ArithmeticDecoder::new(data);
     ctx.contexts.clear();
-    ctx.contexts.resize(
-        1 << template.context_bits(),
-        ArithmeticDecoderContext::default(),
-    );
+    ctx.contexts.resize(1 << template.context_bits(), ArithmeticDecoderContext::default());
 
     macro_rules! gs_decode_loop {
         ($gather:expr) => {
@@ -177,13 +162,7 @@ fn decode_arithmetic(
 ///
 /// The closure `decode_next` is called for each bitplane, receiving the bitplane
 /// index (`GSBPP`-1 down to 0) and a zeroed bitmap to decode into.
-fn decode_bitplanes<F>(
-    width: u32,
-    height: u32,
-    stride: u32,
-    bits_per_pixel: u32,
-    mut decode_next: F,
-) -> Result<Vec<u32>>
+fn decode_bitplanes<F>(width: u32, height: u32, stride: u32, bits_per_pixel: u32, mut decode_next: F) -> Result<Vec<u32>>
 where
     F: FnMut(u32, &mut Bitmap) -> Result<()>,
 {
@@ -234,15 +213,7 @@ fn xor_planes<S: Simd>(simd: S, plane: &mut [u32], prev: &[u32]) {
 }
 
 #[inline(always)]
-fn extract_bits<S: Simd>(
-    simd: S,
-    data: &[u32],
-    values: &mut [u32],
-    width: u32,
-    height: u32,
-    stride: u32,
-    j: u32,
-) {
+fn extract_bits<S: Simd>(simd: S, data: &[u32], values: &mut [u32], width: u32, height: u32, stride: u32, j: u32) {
     /// Bit masks for extracting individual bits from a packed u32 word (MSB-first).
     /// `BIT_MASKS[i] = 1 << (31 - i)`.
     const BIT_MASKS: [u32; 32] = {
@@ -269,8 +240,7 @@ fn extract_bits<S: Simd>(
             let bit_offset = x % 32;
 
             let splatted = u32x8::splat(simd, word);
-            let masks =
-                u32x8::from_slice(simd, &BIT_MASKS[bit_offset..bit_offset + simd::SIMD_WIDTH]);
+            let masks = u32x8::from_slice(simd, &BIT_MASKS[bit_offset..bit_offset + simd::SIMD_WIDTH]);
             let extracted = splatted & masks;
             let nonzero = extracted.simd_gt(zero);
             let contribution = nonzero.select(bit_value, zero);
@@ -301,22 +271,11 @@ mod pdfcraft_limit_tests {
     #[test]
     fn a_gray_scale_image_past_its_bounds_is_refused_by_a_limit() {
         let decode = |width, height| {
-            let params = GrayScaleParams {
-                use_mmr: false,
-                bits_per_pixel: 1,
-                width,
-                height,
-                template: Template::Template0,
-                skip_mask: None,
-            };
+            let params = GrayScaleParams { use_mmr: false, bits_per_pixel: 1, width, height, template: Template::Template0, skip_mask: None };
             decode_gray_scale_image(&[], &params, &mut ScratchBuffers::default()).map(|_| ())
         };
         let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
         assert_eq!(decode(MAX_DIMENSION + 1, 1), limit, "a side");
-        assert_eq!(
-            decode(1 << 13, (1 << 12) + 1),
-            limit,
-            "the cells, each side within its bound"
-        );
+        assert_eq!(decode(1 << 13, (1 << 12) + 1), limit, "the cells, each side within its bound");
     }
 }
