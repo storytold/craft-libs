@@ -200,6 +200,9 @@ impl Chart {
 /// its own, the chart type's data labels.
 pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb], budget: &mut usize) -> Vec<Series> {
     let kind = Kind::of(&ty.name).unwrap_or(Kind::Bar);
+    // A line chart shows markers on its series when it says so (`c:marker` of the chart type):
+    // a series that names no symbol of its own gets its automatic marker.
+    let type_markers = kind == Kind::Line && ty.child("c:marker").is_some_and(|m| m.attr("val").is_none_or(truthy));
     let type_labels = show_values(ty.child("c:dLbls"));
     let type_fmt = label_format(ty.child("c:dLbls"));
     let mut series = Vec::new();
@@ -210,6 +213,10 @@ pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb], budget: &mut us
         let mut s = Series::parse(ser, scatter, theme, (*budget).min(MAX_POINTS));
         *budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
         s.kind = kind;
+        if type_markers && s.markers.is_none() {
+            s.markers = Some(true);
+            s.symbol = Symbol::auto(s.idx.unwrap_or(series.len()));
+        }
         s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
         // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
         if s.label_fmt.is_none() {
@@ -330,7 +337,12 @@ impl Series {
         // series show markers unless the file says not; line series only when it says so.
         let symbol = ser.child("c:marker").and_then(|m| m.child("c:symbol")).and_then(|s| s.attr("val")).map(str::to_string);
         let markers = symbol.as_deref().map(|s| s != "none").or_else(|| scatter.then_some(true));
-        let symbol = symbol.as_deref().map_or(Symbol::Circle, Symbol::parse);
+        // `auto` is the series' automatic marker, picked by its index.
+        let symbol = match symbol.as_deref() {
+            Some("auto") => Symbol::auto(idx.unwrap_or(0)),
+            Some(s) => Symbol::parse(s),
+            None => Symbol::Circle,
+        };
         let marker_size = ser
             .child("c:marker")
             .and_then(|m| m.child("c:size"))

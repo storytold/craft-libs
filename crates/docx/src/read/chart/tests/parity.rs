@@ -190,3 +190,45 @@ fn a_percent_stacked_combination_scales_its_axis_to_the_line() {
         "the axis reaches the line's 20 (2000%): {ticks:?}"
     );
 }
+
+/// A line chart that shows markers (`c:marker val="1"` of the chart type) draws one per point in
+/// the series' marker colour, the automatic marker where the series names no symbol; a series
+/// whose symbol is `none` draws none.
+#[test]
+fn line_markers_are_drawn_unless_the_series_turns_them_off() {
+    let marked = |symbol: &str| {
+        let ser = format!(
+            r#"<c:ser><c:idx val="1"/><c:order val="0"/><c:spPr><a:ln><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></a:ln></c:spPr><c:marker>{symbol}<c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="8EA9DB"/></a:solidFill></c:spPr></c:marker><c:cat><c:strRef><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt><c:pt idx="2"><c:v>C</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>3</c:v></c:pt><c:pt idx="2"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#
+        );
+        let plot = format!(
+            r#"<c:plotArea><c:lineChart><c:grouping val="standard"/>{ser}<c:marker val="1"/><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#
+        );
+        let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+        items
+            .iter()
+            .filter(
+                |it| matches!(it, GraphicItem::Path { fill: Some(c), .. } | GraphicItem::Shape { fill: Some(c), .. } if *c == Rgb(0x8E, 0xA9, 0xDB)),
+            )
+            .count()
+    };
+    assert_eq!(marked(""), 3, "an automatic marker on each point");
+    assert_eq!(marked(r#"<c:symbol val="square"/>"#), 3);
+    assert_eq!(marked(r#"<c:symbol val="none"/>"#), 0);
+}
+
+/// `c:symbol val="auto"` asks for the series' automatic marker, as a series naming no symbol in
+/// a chart that shows markers gets: the series with index 0 a diamond, index 2 a triangle.
+#[test]
+fn an_auto_marker_symbol_takes_the_series_automatic_marker() {
+    let symbol = |idx: usize, symbol: &str| {
+        let x = format!(
+            r#"<c:lineChart {NS}><c:ser><c:idx val="{idx}"/><c:order val="{idx}"/><c:marker>{symbol}</c:marker><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:marker val="1"/></c:lineChart>"#
+        );
+        let ty = crate::xml::parse(x.as_bytes()).unwrap();
+        read_series(&ty, false, &theme(), &mut { MAX_CELLS }).first().map(|s| (s.markers, s.symbol))
+    };
+    assert_eq!(symbol(0, r#"<c:symbol val="auto"/>"#), Some((Some(true), model::Symbol::Diamond)));
+    assert_eq!(symbol(2, r#"<c:symbol val="auto"/>"#), Some((Some(true), model::Symbol::Triangle)));
+    assert_eq!(symbol(2, ""), Some((Some(true), model::Symbol::Triangle)));
+    assert_eq!(symbol(2, r#"<c:symbol val="square"/>"#), Some((Some(true), model::Symbol::Square)));
+}

@@ -133,6 +133,20 @@ impl Symbol {
             _ => Symbol::Circle,
         }
     }
+
+    /// The automatic marker of the series with index `idx`: diamond, square, triangle, x, star,
+    /// circle and plus, in turn.
+    pub(super) fn auto(idx: usize) -> Symbol {
+        match idx % 7 {
+            0 => Symbol::Diamond,
+            1 => Symbol::Square,
+            2 => Symbol::Triangle,
+            3 => Symbol::X,
+            4 => Symbol::Star,
+            5 => Symbol::Circle,
+            _ => Symbol::Plus,
+        }
+    }
 }
 
 pub(super) struct Series {
