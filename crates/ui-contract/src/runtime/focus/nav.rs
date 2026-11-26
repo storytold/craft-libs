@@ -406,7 +406,7 @@ impl State {
     /// A Tab move. In a dialog's trap with `dialog_tab` at `Fields`, only text stops are entries, whatever the
     /// window's rule: a roving group whose arrival member holds no text is skipped too.
     pub(super) fn tab(&mut self, forward: bool, all_controls: bool, dialog_tab: TabReach) -> Vec<Act> {
-        let (current, entries) = self.tab_entries(all_controls, dialog_tab);
+        let (current, entries) = self.tab_entries(forward, all_controls, dialog_tab);
         let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
         let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
@@ -415,8 +415,9 @@ impl State {
 
     /// The Tab entries this pass moves over, from the stop the focus is on (a row's child tabs on from its collection,
     /// a dropdown's content from its anchor). They are last pass's entries: what `tab` cycles, and what a Tab that
-    /// landed on a stop this pass does not show goes on through.
-    fn tab_entries(&self, all_controls: bool, dialog_tab: TabReach) -> (Option<StopRec>, Vec<Entry>) {
+    /// landed on a stop this pass does not show goes on through. `forward` is the direction the Tab goes, which decides
+    /// the side of a `tab_exits` menu's opener the entries keep.
+    fn tab_entries(&self, forward: bool, all_controls: bool, dialog_tab: TabReach) -> (Option<StopRec>, Vec<Entry>) {
         let current = self.stop_of_focus().map(|rec| {
             let owner = rec.stop.group.and_then(|group| self.group(group)).filter(|group| group.row).and_then(|group| self.row_owner(&group));
             let rec = owner.unwrap_or(rec);
@@ -458,10 +459,7 @@ impl State {
                 entries.truncate(at.min(entries.len()));
             }
         }
-        let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
-        let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
-        let arrival = entries[next].arrival().clone();
-        self.focus_stop(arrival)
+        (current, entries)
     }
 
     /// The menu around `scope` that Tab leaves (`Menu::tab_exits`): a menu scope that traps nothing. The walk stops at a
@@ -728,7 +726,7 @@ impl State {
         if !arrived {
             return None;
         }
-        let (current, entries) = self.tab_entries(self.tab_all_controls, self.dialog_tab);
+        let (current, entries) = self.tab_entries(forward, self.tab_all_controls, self.dialog_tab);
         let current = current?;
         let top = current.stop.group.map(|group| self.last().outermost(group));
         let at = entries.iter().position(|entry| entry.holds(&current, top))?;
