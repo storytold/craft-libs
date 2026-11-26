@@ -175,6 +175,9 @@ impl CanvasView {
     /// The transform a canvas body is shown through when this view only scales and moves the document: unturned,
     /// unmirrored and square. `None` for any other view; its controls register parts in screen space through
     /// [`to_screen`](Self::to_screen) instead.
+    ///
+    /// The offset is measured from the body origin, `rect.min`, because a body transform applies from the body's
+    /// min: a document point `p` shown through it lands at [`to_screen(p)`](Self::to_screen).
     pub fn layer_transform(&self) -> Option<CanvasTransform> {
         let (cos, sin) = self.sincos();
         let upright = cos == 1.0 && sin == 0.0 && !self.flip_x && self.sx() == 1.0;
@@ -182,8 +185,8 @@ impl CanvasView {
             return None;
         }
         let zoom = self.zoom as f32;
-        let center = self.rect.center();
-        let offset = vec2(center.x - self.center.x as f32 * zoom, center.y - self.center.y as f32 * zoom);
+        let from_min = self.rect.center() - self.rect.min;
+        let offset = vec2(from_min.x - self.center.x as f32 * zoom, from_min.y - self.center.y as f32 * zoom);
         Some(CanvasTransform::new(zoom, offset))
     }
 

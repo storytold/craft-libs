@@ -212,7 +212,7 @@ impl<'a> FullWindowCanvas<'a> {
             // flow; the canvas itself has no content size, so a content-sized column around it (a preview pane in a
             // side column) sizes from its other content instead of taking the whole room the canvas is offered.
             let rect = ui.available_rect_before_wrap();
-            let scheme = Env::of_root(ui.ctx()).view().get::<craft_behavior::ZoomScheme>();
+            let scheme = Env::of(ui).view().get::<craft_behavior::ZoomScheme>();
             let shown = given.settled(rect, size, ppp, &scheme);
             // What the tool host did; none in a measuring run, where it does not run.
             let mut hosted = None;

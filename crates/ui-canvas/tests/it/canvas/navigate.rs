@@ -2,21 +2,24 @@
 
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, ZoomScheme};
+use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, PixelSize, ZoomFloor, ZoomScheme};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleAutoscrollFeel, MiddleButton, Momentary, MomentaryCommands, MomentaryTool,
-    NavigationOptions, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
+    NavigationOptions, PixelRect, RasterSource, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewCommands, ViewRequest, WheelNavigation,
+    WheelScheme, tool_pass,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use craft_ui::primitives::Draw;
+use craft_ui::dialog::{FullWindowCanvas, FullWindowView};
+use craft_ui::primitives::{Draw, Revision};
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{self, AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, FirePhase, FireSource, Scope};
+use craft_ui::runtime::env::with_env;
 use craft_ui::runtime::frame;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::NumberField;
-use egui::{Key, Modifiers, Pos2, TouchPhase, Vec2};
+use egui::{Color32, ColorImage, Key, Modifiers, Pos2, TouchPhase, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -1548,4 +1551,218 @@ fn the_wheel_scrolls_during_a_tool_drag_and_the_drag_follows_the_new_view() {
     assert!((last - after.to_doc(next)).hypot() < 1e-3, "the drag's point is read through the scrolled view: {last:?}");
     assert!((last - before.to_doc(next)).hypot() > 1.0, "not through the view before the wheel");
     fixture.release_at(next);
+}
+
+/// The left canvas's scheme in the scheme trial: 50 % to 150 %.
+const NARROW: ZoomScheme = ZoomScheme::new(&[0.5, 1.0, 1.5], ZoomFloor::Fixed(0.5), 1.5);
+
+/// The right canvas's scheme: 25 % to 300 %.
+const WIDE: ZoomScheme = ZoomScheme::new(&[0.25, 0.5, 1.0, 2.0, 3.0], ZoomFloor::Fixed(0.25), 3.0);
+
+/// An image larger than the window, for the full-window canvas.
+struct Flat;
+
+impl RasterSource for Flat {
+    fn size(&self) -> PixelSize {
+        PixelSize::new(1600, 1200)
+    }
+
+    fn revision(&self) -> Revision {
+        Revision::new(1)
+    }
+
+    fn damage(&self, _: Revision) -> Option<PixelRect> {
+        Some(PixelRect::default())
+    }
+
+    fn read(&self, _: PixelRect, _: u32, out: &mut ColorImage) {
+        out.pixels.fill(Color32::from_rgb(0x80, 0x80, 0x80));
+    }
+}
+
+#[trial]
+fn a_canvas_takes_the_zoom_scheme_of_its_env() {
+    const DOCUMENT: Size = Size::new(4000.0, 4000.0);
+    let views = Rc::new([
+        Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)),
+        Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)),
+    ]);
+    let shown = Rc::clone(&views);
+    let mut fixture = Fixture::new(move |ui| {
+        for (left, label, scheme, view) in [(0.0_f32, "Left", NARROW, &shown[0]), (200.0, "Right", WIDE, &shown[1])] {
+            let room = egui::Rect::from_min_size(Pos2::new(left, 0.0), Vec2::new(200.0, 300.0));
+            craft_ui::testing::layout::in_region(ui, room, |ui| {
+                with_env(
+                    ui,
+                    |scope| {
+                        scope.values.set(scheme);
+                    },
+                    |ui| {
+                        let mut given = view.get();
+                        given.rect = ui.available_rect_before_wrap();
+                        let canvas = Canvas::new(label).document(DOCUMENT).view(given).show(ui, |_, _| {});
+                        view.set(canvas.output.view.unwrap_or(given));
+                    },
+                );
+            });
+        }
+    });
+    fixture.settle();
+    let ppp = fixture.ctx().pixels_per_point();
+    // Alt + wheel lines over one canvas, enough to pass either end of any of the schemes.
+    let turn = |fixture: &mut Fixture, view: &Cell<CanvasView>, dy: f32| {
+        fixture.advance(GESTURE_GAP);
+        for _ in 0..40 {
+            wheel_line(fixture, view, dy, Modifiers::ALT);
+        }
+        zoom::device(&view.get(), ppp)
+    };
+    let mut ends = Vec::new();
+    for (side, view, scheme) in [("left", &views[0], NARROW), ("right", &views[1], WIDE)] {
+        let most = turn(&mut fixture, view, 1.0);
+        let least = turn(&mut fixture, view, -1.0);
+        assert!(most <= scheme.max_device() + 1e-9, "the {side} canvas zooms in no further than its env's scheme: {most}");
+        assert!(least >= scheme.min(DOCUMENT) - 1e-9, "the {side} canvas zooms out no further than its env's scheme: {least}");
+        ends.push((least, most));
+    }
+    assert!(ends[1].1 > ends[0].1 && ends[1].0 < ends[0].0, "each canvas keeps the range of its own env: {ends:?}");
+
+    // A full-window canvas settles its view by the scheme of the env it is shown in.
+    const DOUBLED: ZoomScheme = WIDE.with_hundred(2.0);
+    let held = Rc::new(RefCell::new(FullWindowView::new()));
+    let kept = Rc::clone(&held);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut view = kept.borrow_mut();
+        with_env(
+            ui,
+            |scope| {
+                scope.values.set(DOUBLED);
+            },
+            |ui| {
+                let _ = FullWindowCanvas::new(Bind::bound(&mut *view), &Flat).show(ui);
+            },
+        );
+    });
+    fixture.settle();
+    let view = held.borrow();
+    let device = view.device_zoom();
+    assert!(device > 0.0, "the full-window view settled: {device}");
+    assert!(
+        (view.zoom_percent() - DOUBLED.percent(device)).abs() < 1e-9 && (view.zoom_percent() - ZoomScheme::PHOTOSHOP.percent(device)).abs() > 1e-6,
+        "the full-window view reads its percent by the env's scheme: {}",
+        view.zoom_percent()
+    );
+}
+
+#[trial]
+fn a_wheel_navigates_but_a_queued_request_does_not() {
+    let mut options = NavigationOptions::default();
+    // So no edge clamp undoes the moves the trial makes on the fitted document.
+    options.overscroll = true;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let passes = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let queue = Rc::new(RefCell::new(Vec::<ViewRequest>::new()));
+    let rerun = Rc::new(Cell::new(false));
+    let (shown, seen, asked, again) = (Rc::clone(&view), Rc::clone(&passes), Rc::clone(&queue), Rc::clone(&rerun));
+    let mut fixture = Fixture::new(move |ui| {
+        // Never given a rect, the view opens fitted in the first pass that has room.
+        let given = shown.get();
+        let commands = asked.borrow().clone();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).queued(&commands).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+        seen.borrow_mut().push(canvas.output.navigated);
+        asked.borrow_mut().clear();
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs the frame twice");
+        }
+    });
+    fixture.settle();
+    assert!(view.get().zoom < 1.0, "the first show fitted the large document: {:?}", view.get());
+    assert!(!passes.borrow().iter().any(|navigated| *navigated), "the first-show fit is not the user's move");
+
+    // Whether any pass of `run` navigated, and whether the view moved.
+    let step = |fixture: &mut Fixture, run: &dyn Fn(&mut Fixture)| {
+        passes.borrow_mut().clear();
+        let before = view.get();
+        run(fixture);
+        (passes.borrow().iter().any(|navigated| *navigated), view.get() != before)
+    };
+    let at = view.get().rect.center();
+    let zoomed = step(&mut fixture, &|fixture| {
+        fixture.frame(vec![pointer::moved(at)]);
+        fixture.frame(vec![line_event(1.0, Modifiers::ALT)]);
+    });
+    assert_eq!(zoomed, (true, true), "a wheel zoom navigates");
+    let panned = step(&mut fixture, &|fixture| {
+        fixture.frame(vec![line_event(-1.0, Modifiers::NONE)]);
+    });
+    assert_eq!(panned, (true, true), "a wheel pan navigates");
+    let dragged = step(&mut fixture, &|fixture| {
+        fixture.frame(vec![pointer::middle(at, true)]);
+        for moved in 1..=4 {
+            fixture.frame(vec![pointer::moved(at + Vec2::new(20.0 * moved as f32, 0.0))]);
+        }
+        fixture.frame(vec![pointer::middle(at + Vec2::new(80.0, 0.0), false)]);
+    });
+    assert_eq!(dragged, (true, true), "a middle pan navigates");
+
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    let fired = step(&mut fixture, &|fixture| {
+        assert!(commands::fire(fixture.ctx(), ViewCommands::ZoomIn, FireSource::Menu), "a menu row fires the canvas's command");
+        fixture.frame(vec![]);
+    });
+    assert_eq!(fired, (true, true), "a fired view command navigates");
+
+    let asked = step(&mut fixture, &|fixture| {
+        queue.borrow_mut().push(ViewRequest::Command(ViewCommands::ZoomOut));
+        fixture.frame(vec![]);
+    });
+    assert_eq!(asked, (false, true), "a queued command moves the view and is not the user's move");
+    let placed = step(&mut fixture, &|fixture| {
+        queue.borrow_mut().push(ViewRequest::Place(ViewCommands::FitOnScreen));
+        fixture.frame(vec![]);
+    });
+    assert_eq!(placed, (false, true), "a queued placement is not the user's move");
+
+    // A frame of two passes: the wheel is the first pass's input, so only that pass navigates.
+    passes.borrow_mut().clear();
+    rerun.set(true);
+    fixture.frame(vec![line_event(-1.0, Modifiers::NONE)]);
+    rerun.set(false);
+    assert_eq!(fixture.passes(), 2, "the frame ran twice");
+    assert_eq!(*passes.borrow(), [true, false], "the second pass has no wheel of its own");
+}
+
+/// The zoom ratio and the centre's move of a canvas over the wheel `events` (one frame each) at its middle, under
+/// `options` with Invert Wheel Zoom set to `inverted`.
+fn inverted_after(mut options: NavigationOptions, inverted: bool, events: &[egui::Event]) -> (f64, Point) {
+    options.invert_wheel_zoom = inverted;
+    let frames: Vec<Vec<egui::Event>> = events.iter().map(|event| vec![event.clone()]).collect();
+    let (before, after) = views_after(options, 0.0, false, Modifiers::NONE, &|_| frames.clone());
+    (after.zoom / before.zoom, Point::new(after.center.x - before.center.x, after.center.y - before.center.y))
+}
+
+#[trial]
+fn a_wheel_zoom_runs_the_other_way_under_invert_wheel_zoom() {
+    let mut zooming = navigation(true, false, false);
+    zooming.wheel = WheelScheme::Zoom;
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    for (case, options, events) in [
+        ("a plain line in the Zoom scheme", zooming, vec![line_event(1.0, Modifiers::NONE)]),
+        ("a Shift ladder step", zooming, vec![line_event(1.0, shift)]),
+        ("a pinch", navigation(true, false, false), vec![egui::Event::Zoom(1.2)]),
+        ("Alt + a line in the Scroll scheme", navigation(true, false, false), vec![line_event(1.0, Modifiers::ALT)]),
+    ] {
+        let (upright, _) = inverted_after(options, false, &events);
+        let (flipped, _) = inverted_after(options, true, &events);
+        assert!(upright > 1.0, "{case} zooms in without the option: {upright}");
+        assert!(flipped < 1.0, "{case} zooms out with it: {flipped}");
+    }
+    // A pan is never flipped.
+    let scrolling = navigation(true, false, false);
+    let line = [line_event(-1.0, Modifiers::NONE)];
+    let (_, upright) = inverted_after(scrolling, false, &line);
+    let (_, flipped) = inverted_after(scrolling, true, &line);
+    assert!(upright.y > 0.0 && flipped == upright, "a plain line pans the same way: {upright:?} and {flipped:?}");
 }

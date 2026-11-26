@@ -111,7 +111,7 @@ fn frame_view(ui: &Ui, view: &mut FullWindowView, framing: &mut PreviewFraming, 
     let ppp = ui.pixels_per_point();
     let device_room = |side: f32| f64::from(side) * f64::from(ppp);
     let fit = (device_room(room.width()) / frame.width().max(1.0)).min(device_room(room.height()) / frame.height().max(1.0));
-    let device = Env::of_root(ui.ctx()).view().get::<ZoomScheme>().clamp(fit, Size::new(f64::from(size.width), f64::from(size.height)));
+    let device = Env::of(ui).view().get::<ZoomScheme>().clamp(fit, Size::new(f64::from(size.width), f64::from(size.height)));
     let center = Point::new((frame.x0 + frame.x1) / 2.0, (frame.y0 + frame.y1) / 2.0);
     let mut next = current;
     next.center = center;

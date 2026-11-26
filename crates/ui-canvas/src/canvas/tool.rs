@@ -754,8 +754,9 @@ pub trait CanvasTool {
         Cursor::System(CursorIcon::Default)
     }
 
-    /// A wheel share over a canvas without a view, flipped by `invert_wheel_zoom`; true when the tool used it.
-    /// Default: `false`.
+    /// A wheel share over a canvas without a view, at `pointer` in the canvas's space, its scroll and zoom flipped
+    /// under `NavigationOptions::invert_wheel_zoom`; true when the tool used it. A canvas with a view moves its view
+    /// with the wheel and never calls this. Default: `false`.
     fn wheel(&mut self, wheel: &craft_behavior::Wheel, pointer: Pos2, cx: &mut ToolContext<'_>) -> bool {
         let _ = (wheel, pointer, cx);
         false
@@ -763,8 +764,9 @@ pub trait CanvasTool {
 
     /// Whether a press of `button` with `mods` held starts a gesture with this tool. A gesture keeps its button
     /// until that button comes up. A brush takes the primary button, and the secondary while Alt is held (the
-    /// resize chord). The middle button never reaches `takes`: the canvas turns every middle press into a pan before
-    /// the host asks. Default: the primary button.
+    /// resize chord). On a canvas with a view the middle button never reaches `takes`: the canvas turns every middle
+    /// press into a pan or an autoscroll before the host asks. On a canvas without a view a middle press is a tool
+    /// press and reaches `takes` like any other. Default: the primary button.
     fn takes(&self, button: PointerButton, _mods: Mods) -> bool {
         button == PointerButton::Primary
     }

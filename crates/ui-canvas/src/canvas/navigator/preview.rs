@@ -15,7 +15,7 @@ use crate::primitives::PaintShape;
 use crate::primitives::textures::CachedTexture;
 use crate::runtime::access::Numeric;
 use crate::runtime::commands;
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx, UiTokens};
 use craft_behavior::canvas::zoom;
@@ -354,7 +354,7 @@ impl Component for Navigator<'_> {
                 }
             }
         }
-        let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
+        let scheme = cx.env.get::<ZoomScheme>();
         // The view the zoom rectangle asks for at its release.
         let mut boxed = None;
         if held.active {

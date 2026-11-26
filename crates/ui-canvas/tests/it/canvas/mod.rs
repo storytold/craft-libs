@@ -10,6 +10,8 @@ pub(crate) mod navigate;
 
 pub(crate) mod navigator;
 
+pub(crate) mod node_graph;
+
 pub(crate) mod opacity_keys;
 
 pub(crate) mod press_focus;

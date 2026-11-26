@@ -52,6 +52,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// The rows in view and the positions the pass builds: the rows in view (out-of-view content runs nowhere,
     /// `runtime::lazy`), then the rows kept alive while scrolled out (the lead, the anchor, the renaming row and the
     /// grabbed row).
+    ///
+    /// `xf` is the body transform the rows are shown through: the layout culls in item space, so the screen viewport
+    /// is mapped into it and its moved min folded into the scroll offset.
     pub(super) fn built(
         &self,
         layout: &C::ItemLayout,
@@ -59,9 +62,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         offset: ScrollPos,
         xf: Option<crate::runtime::egui::areas::LayerMap>,
     ) -> (Vec<usize>, Vec<usize>) {
-        let _ = xf; // P3(graph-w1): ge.C8
+        let (offset, size) = match xf {
+            Some(map) => {
+                let seen = Rect::from_two_pos(map.to_layer(view.min), map.to_layer(view.max));
+                let moved = seen.min - view.min;
+                (ScrollPos { x: offset.x + f64::from(moved.x), y: offset.y + f64::from(moved.y) }, seen.size())
+            }
+            None => (offset, view.size()),
+        };
         let mut shown = Vec::new();
-        layout.visible(offset, view.size(), &mut shown);
+        layout.visible(offset, size, &mut shown);
         let mut order = shown.clone();
         let keep = [self.lead.key.as_ref(), self.selection.anchor(), self.renaming.key.as_ref(), self.drags.grabbed.as_ref()];
         // An item of a closed group has no rect: it is never built.

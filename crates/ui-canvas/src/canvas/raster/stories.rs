@@ -158,6 +158,34 @@ fn tiled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     })
 }
 
+/// The side of the small tile the uncapped story repeats, in pixels: at 100 percent a canvas holds far more than 31
+/// copies of it along each axis.
+const SMALL_TILE: u32 = 12;
+
+/// A small seamless tile: a dark diagonal on a light ground, so every copy shows where it starts.
+fn small_tile_pixel(p: Point) -> Color32 {
+    if (p.x - p.y).abs() < 2.0 { Color32::from_rgb(40, 60, 120) } else { Color32::from_rgb(200, 210, 230) }
+}
+
+/// A small tile repeated over the whole view by texture wrap, as a 2D view tiles its texture: far more copies along
+/// each axis than the capped run's 31, and every visible cell shows the tile.
+#[story(RasterDisplay<'static>, covers = [Default], drive = Drive::Never)]
+fn tiled_uncapped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let zoom = *data.ranged("zoom", 100.0, 10.0..=800.0);
+    let center = Point::new(f64::from(SMALL_TILE) / 2.0, f64::from(SMALL_TILE) / 2.0);
+    let view = move |room, ppp| story_view(room, ppp, center, zoom);
+    let checker = checker_of(data);
+    on_canvas_view(ui, view, None, |ui, at, _| {
+        let source = StoryPicture::new(SMALL_TILE, SMALL_TILE, small_tile_pixel);
+        let display = RasterDisplay::new("Picture", &source).outlined().extent(Extent::Tiled).uncapped(true);
+        match checker {
+            Some(checker) => display.checkerboard(checker),
+            None => display,
+        }
+        .show_at(ui, at)
+    })
+}
+
 /// Where the disc past the document's right edge lies, and its radius, in document pixels.
 const DISC: (Point, f64) = (Point::new(640.0, 300.0), 160.0);
 

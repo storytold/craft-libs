@@ -106,7 +106,7 @@ use crate::contract::{
 };
 use crate::primitives::{EditorPurpose, ImeStamp};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::Label;
 use crate::runtime::focus::{EditSet, KeyUse, NudgeMods};
 use crate::runtime::frame;
 use crate::runtime::lock_keys;
@@ -238,6 +238,9 @@ pub struct Canvas<'a> {
     editor_command_keys: bool,
     /// The editor part's inputs of this pass, taken once in `update`: `tool_pass` is built from a shared `Cx`.
     editor_input: Arc<[EditorInput]>,
+    /// The wheel share of a canvas without a view, taken once in `update` for its tool ([`CanvasTool::wheel`]), as
+    /// `editor_input` is.
+    tool_wheel: Option<Wheel>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
     /// The zero point of the rulers given to `with_rulers`, which the space publishes in `rulers`.
@@ -310,6 +313,8 @@ struct Settled {
     swallowing: bool,
     /// The screen point a wheel or pinch zoom of this pass kept still ([`CanvasSpace::zoom_anchor`]).
     zoom_anchor: Option<Pos2>,
+    /// The user moved the view this pass ([`CanvasOutput::navigated`]).
+    navigated: bool,
 }
 
 impl<'a> Canvas<'a> {
@@ -335,6 +340,7 @@ impl<'a> Canvas<'a> {
             inactive_edits: EditSet::NONE,
             editor_command_keys: false,
             editor_input: Arc::from([]),
+            tool_wheel: None,
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
             rulers: None,
@@ -365,7 +371,8 @@ impl<'a> Canvas<'a> {
     /// zoom that eases. Its controls register parts in the canvas root's screen space through
     /// `CanvasView::to_screen`. The view sets no body transform: a body of components that keep canvas-space geometry
     /// (a node graph) also sets `transform(view.layer_transform())`, which exists for an unrotated, unmirrored,
-    /// square view only.
+    /// square view only. That transform applies from the body's min, so a document point shown through it lands at
+    /// `to_screen` of the point, and a collection in the body builds the items the transformed viewport shows.
     ///
     /// A canvas with a view is its body's scroll owner: the page keys a control focused in it leaves scroll the view
     /// as the canvas's own do, and focus arriving at a control off the view brings the control into view.
@@ -403,11 +410,12 @@ impl<'a> Canvas<'a> {
     }
 
     /// Publishes the view commands' state for this canvas and applies the ones the app queued, then the ones routed to
-    /// it, in order, to `view`: the view they ask for, and how the pass moves to it.
-    fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, CommandMotion)> {
+    /// it, in order, to `view`: the view they ask for, how the pass moves to it, and whether a fired command (the
+    /// user's, by key or button) changed it.
+    fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, CommandMotion, bool)> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
-        let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
+        let scheme = cx.env.get::<ZoomScheme>();
         let target = view.zip(self.document);
         for command in ViewCommands::ALL {
             let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point, &scheme));
@@ -424,8 +432,11 @@ impl<'a> Canvas<'a> {
                 ViewRequest::Place(_) => placed |= changed,
             }
         }
+        let mut fired = false;
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
-            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point, &scheme) && command.zooms();
+            let changed = command.apply(&mut next, &document, self.layer_bounds, pixels_per_point, &scheme);
+            fired |= changed;
+            zoomed |= changed && command.zooms();
         }
         let motion = if placed {
             CommandMotion::Jump
@@ -434,12 +445,13 @@ impl<'a> Canvas<'a> {
         } else {
             CommandMotion::Keep
         };
-        (next != view).then_some((next, motion))
+        (next != view).then_some((next, motion, fired))
     }
 
-    /// The document's size, from the target the app gave.
+    /// The document's size, from the target the app gave; `None` for a document with no edges
+    /// ([`ViewTarget::unbounded`]), so nothing clamps the view to edges and no page key pages it.
     fn document_size(&self) -> Option<Size> {
-        self.document.map(|target| target.document)
+        self.document.filter(|target| !target.is_unbounded()).map(|target| target.document)
     }
 
     /// The view of this pass from the app's `given` view: this pass's rect, the first fit, the wheel with its ease and
@@ -451,7 +463,7 @@ impl<'a> Canvas<'a> {
         let mut motion = ViewMotion::take(&ctx, id);
         let pixels_per_point = cx.env.scale().0;
         let size = self.document_size().unwrap_or(Size::ZERO);
-        let scheme = Env::of_root(&ctx).view().get::<ZoomScheme>();
+        let scheme = cx.env.get::<ZoomScheme>();
         let mut view = given;
         let area = cx.content_rect;
         if area.width() > 0.0 && area.height() > 0.0 {
@@ -531,6 +543,11 @@ impl<'a> Canvas<'a> {
             motion.scrolled_in = motion.autoscroll.mark().map(|_| frame_nr);
         }
         let auto_scrolling = motion.autoscroll.mark().is_some() || held_pan;
+        // The user's moves so far (the wheel, its ease and glide, a middle pan or autoscroll); the first fit is in
+        // `at_start`, and a reveal for focus is not the user's move. A later pass of the frame takes no wheel and no
+        // press and steps the clock by zero, so it navigates only by its own input. A tool's hand pan is not counted
+        // here: it is reported on `ToolHostResponse::pan`.
+        let mut navigated = view != at_start;
         // As its body's scroll owner the canvas shows a control focus arrives at, and applies the page keys a focused
         // control leaves as its own.
         if let Some(by) = cx.take_reveal(area) {
@@ -554,7 +571,9 @@ impl<'a> Canvas<'a> {
             if to_body {
                 keys.page = Some((step, mods));
             } else if let (Some(document), Some(key)) = (self.document_size(), PageKey::of(step, mods, area.size())) {
-                jumped |= key.apply(&mut view, document);
+                let paged = key.apply(&mut view, document);
+                jumped |= paged;
+                navigated |= paged;
             }
         }
         // A pan or a scroll takes over from an ease, here or in a tool.
@@ -567,7 +586,8 @@ impl<'a> Canvas<'a> {
             steer = Some(Steer::Stop);
         }
         let before = view;
-        if let Some((next, motion)) = self.view_commands(cx, Some(view)) {
+        if let Some((next, motion, fired)) = self.view_commands(cx, Some(view)) {
+            navigated |= fired;
             // A view command's zoom keeps its own point (the centre), not the wheel's.
             if next.zoom != view.zoom {
                 zoom_anchor = None;
@@ -587,6 +607,8 @@ impl<'a> Canvas<'a> {
             }
         }
         let target = clamped(view, self.document_size(), &self.navigation);
+        // The clamp settles the user's move; a move the clamp undid moved nothing.
+        let navigated = navigated && target != at_start;
         if glide != Vec2::ZERO {
             motion.glide.moved(target != before_glide);
         }
@@ -614,7 +636,7 @@ impl<'a> Canvas<'a> {
         let easing = motion.animation.running();
         let mark = motion.autoscroll.mark();
         motion.restore(&ctx, id);
-        Settled { target, shown, easing, keys, wheel, auto_scrolling, mark, swallowing, zoom_anchor }
+        Settled { target, shown, easing, keys, wheel, auto_scrolling, mark, swallowing, zoom_anchor, navigated }
     }
 
     /// One pass's wheel on `view`: a pan the eased wheel pays out later, or a pan, zoom or turn applied now, and the
@@ -641,7 +663,7 @@ impl<'a> Canvas<'a> {
                     // its body covers it.
                     let at = wheel.at.unwrap_or_else(|| view.rect.center());
                     let (anchor, zoom) = (WheelNavigation::zoom_anchor(view, action, at, size), view.zoom);
-                    let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
+                    let scheme = cx.env.get::<ZoomScheme>();
                     read.jumped |= WheelNavigation::apply(view, action, at, size, pixels_per_point, &scheme);
                     if view.zoom != zoom {
                         read.zoom_anchor = anchor;
@@ -799,18 +821,21 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Whether a middle drag of a press on the background, or on a tool region when `on_region`, pans the view: under
-    /// [`MiddleButton::AutoScroll`] a press away from the tool regions belongs to the autoscroll instead.
+    /// Whether a middle drag of a press on the background, or on a tool region when `on_region`, pans the view of a
+    /// canvas with a view: under [`MiddleButton::AutoScroll`] a press away from the tool regions belongs to the
+    /// autoscroll instead. Only `settle` asks, which runs for a canvas with a view only, so a canvas without one
+    /// never pans and never starts an autoscroll.
     fn middle_pans(&self, on_region: bool) -> bool {
         on_region || self.navigation.middle_button != MiddleButton::AutoScroll
     }
 
     /// The press on the background part, or on the tool region that holds it, as the canvas reports it, and the pan of a
-    /// middle-button drag: a middle press pans the view ([`middle_pans`](Self::middle_pans)), or belongs to the
-    /// autoscroll, and is never a tool press. Under Invert Middle the drag pans the other way, as the autoscroll does.
+    /// middle-button drag: on a canvas with a view a middle press pans the view ([`middle_pans`](Self::middle_pans)),
+    /// or belongs to the autoscroll, and is never a tool press. On a canvas without a view there is nothing to pan:
+    /// a middle press is a tool press. Under Invert Middle the drag pans the other way, as the autoscroll does.
     fn background_press(&self, cx: &Cx<'_, Self>) -> (PressState, Option<Vec2>) {
         let (press, on_region) = self.pressed(cx);
-        let middle = press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
+        let middle = self.view.is_some() && press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
         let pans = self.middle_pans(on_region);
         let sign = if self.navigation.invert_middle { -1.0 } else { 1.0 };
         match press.phase {
@@ -826,7 +851,7 @@ impl<'a> Canvas<'a> {
         // A press that stopped an autoscroll is the autoscroll's until its release.
         let press = if self.settled.is_some_and(|settled| settled.swallowing) { PressState::IDLE } else { self.background_press(cx).0 };
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
-        let scheme = Env::of_root(&cx.response.ctx).view().get::<ZoomScheme>();
+        let scheme = cx.env.get::<ZoomScheme>();
         let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock, scheme);
         ToolPass {
             id: cx.response.id,
@@ -837,7 +862,7 @@ impl<'a> Canvas<'a> {
             snap: self.snapped(cx.env.shell().os),
             document: self.document_size(),
             navigation: self.navigation,
-            wheel: None,
+            wheel: self.tool_wheel,
             editor_input: self.editor_input.clone(),
             editor: cx.editor_handle(),
         }
@@ -857,8 +882,9 @@ impl<'a> Canvas<'a> {
 pub struct CanvasOutput {
     /// The canvas's response.
     pub response: Response,
-    /// The press on the background part: a press no canvas control claimed. A middle-button press pans the view and
-    /// is never a tool press, so this is idle while one runs.
+    /// The press on the background part: a press no canvas control claimed. On a canvas with a view a middle-button
+    /// press pans the view and is never a tool press, so this is idle while one runs; on a canvas without a view it
+    /// is reported as any other press.
     pub press: PressState,
     /// The view on screen and the interface scale, for a canvas given a view.
     pub space: Option<CanvasSpace>,
@@ -911,8 +937,8 @@ pub struct ToolPass {
     pub view: Option<CanvasView>,
     pub(crate) snap: Option<Snap>,
     pub(crate) document: Option<Size>,
-    #[allow(dead_code)] // P3(graph-w1): vw.F11
-    pub(crate) wheel: Option<craft_behavior::Wheel>,
+    /// The wheel share of a canvas without a view, which the host offers its tool ([`CanvasTool::wheel`]).
+    pub(crate) wheel: Option<Wheel>,
     pub(crate) navigation: NavigationOptions,
     /// The editor part's inputs of this pass, in the order they arrived; the body applies them to its own document.
     pub editor_input: Arc<[EditorInput]>,
@@ -1054,6 +1080,8 @@ impl Component for Canvas<'_> {
             Some(settled)
         } else {
             self.view_commands(cx, None);
+            // With a view `settle` takes the wheel; without one it is the tool's, taken once here as `editor_input` is.
+            self.tool_wheel = cx.take_wheel().map(|wheel| tool_wheel(wheel, &self.navigation));
             None
         };
     }
@@ -1115,9 +1143,23 @@ impl Component for Canvas<'_> {
             auto_scrolling,
             autoscroll,
             rulers: self.ruler_output,
-            navigated: Default::default(),
+            navigated: self.settled.is_some_and(|settled| settled.navigated),
         }
     }
+}
+
+/// The wheel share a canvas without a view hands its tool: under [`NavigationOptions::invert_wheel_zoom`] the scroll
+/// and the lines run the other way and both pinch factors are inverted, so a tool that zooms by the wheel follows the
+/// option as a canvas with a view does.
+fn tool_wheel(mut wheel: Wheel, navigation: &NavigationOptions) -> Wheel {
+    if navigation.invert_wheel_zoom {
+        let invert = |factor: f32| if factor.is_finite() && factor > 0.0 { 1.0 / factor } else { factor };
+        wheel.scroll = -wheel.scroll;
+        wheel.lines = -wheel.lines;
+        wheel.zoom = invert(wheel.zoom);
+        wheel.touch_zoom = invert(wheel.touch_zoom);
+    }
+    wheel
 }
 
 impl Container for Canvas<'_> {}

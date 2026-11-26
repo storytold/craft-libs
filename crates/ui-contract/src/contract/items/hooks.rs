@@ -193,7 +193,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let width = if self.content_sized(comp) || self.from_content.0 {
             size.x
         } else {
-            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true, 1.0) // P3(graph-w1): vw.F2
+            let weight = comp.common(Internal::new()).fill_weight.unwrap_or(1.0);
+            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true, weight)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
             (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
@@ -204,13 +205,15 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Vec2::new(width, height)
     }
 
-    fn geometry(&mut self, _: &C, mcx: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
+    fn geometry(&mut self, comp: &C, mcx: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
         let view = self.below_header(content);
         let clear = self.clear_of_bar(view, scroll_bar_look(mcx.tokens).thickness, rtl);
         let offset = ScrollPos { x: self.offset_x, y: self.offset.clamp(0.0, self.max_offset(view.height())) };
         let mut layout = self.layout.take()?;
         Arc::make_mut(&mut layout).set_view(view.size(), offset);
-        let (_, order) = self.built(&layout, view, offset, None); // P3(graph-w1): ge.C8
+        // `self.xf` is set later, in `updated`; the transform is read from the props here.
+        let xf = comp.props(Internal::new()).transform.map(|zoom| areas::body_map(view.min, zoom.scale, zoom.offset));
+        let (_, order) = self.built(&layout, view, offset, xf);
         let rects = order.into_iter().map(|at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
         self.layout = Some(layout);
         Some(Rc::new(Rows { rects, offset, view: clear }))
@@ -389,7 +392,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             None => (0..layout.column_count() as u64).collect(),
         };
         let grid = layout.grid().map(|grid| self.grid_screen(&layout, grid, rect, rtl));
-        let (shown, order) = self.built(&layout, rect, offset, None); // P3(graph-w1): ge.C8
+        let (shown, order) = self.built(&layout, rect, offset, self.xf);
         self.visible = shown.first().copied().unwrap_or(0)..shown.last().map_or(0, |last| last + 1);
         let command_scope = comp.props(Internal::new()).command_scope;
         if let Some(scope) = command_scope {

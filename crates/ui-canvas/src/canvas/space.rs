@@ -455,8 +455,10 @@ pub(super) fn publish(values: &mut AppValues, space: Option<CanvasSpace>) {
 /// A canvas control registers its parts in the canvas root's screen space: it maps document geometry with
 /// `space.view.to_screen` (and screen positions back with `to_doc`) and shows itself at the canvas rect, so it works
 /// under any rotation, flip or aspect. The body's layer transform exists only for an unrotated, unmirrored,
-/// square view (`CanvasView::layer_transform`), for bodies of node-graph components that keep canvas-space geometry;
-/// a control that registers in screen space must not also read through it.
+/// square view (`CanvasView::layer_transform`), for bodies of node-graph components that keep canvas-space geometry:
+/// it applies from the body's min, so a document point shown through it lands where `to_screen` puts it, and a
+/// collection shown through it builds the items its transformed viewport shows. A control that registers in screen
+/// space must not also read through it.
 pub fn canvas_space(env: &EnvView<'_>) -> Option<CanvasSpace> {
     env.get::<InCanvas>().0
 }

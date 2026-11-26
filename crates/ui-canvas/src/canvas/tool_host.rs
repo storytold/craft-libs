@@ -9,7 +9,9 @@
 //!    part never reaches the tool. One pass carries one phase; a click inside one pass reaches the tool as `press` then
 //!    `release`, and a press that moved past slop before it came up as `press`, `drag` and `release`: the tool decides
 //!    a drag from whether `drag` was called.
-//! 2. `takes(button, mods)` decides whether a button starts a gesture. A middle-button pan belongs to the canvas.
+//! 2. `takes(button, mods)` decides whether a button starts a gesture. On a canvas with a view a middle-button pan
+//!    belongs to the canvas; on a canvas without one the middle press is a tool press, and the canvas's wheel share
+//!    reaches [`CanvasTool::wheel`] before the pointer events.
 //! 3. Escape during a drag arrives as a cancelled press ([`PressCancel`]) and calls `cancel` once.
 //! 4. Keys the canvas holds as intents (arrows, Enter, Escape) go to `key` while the canvas has focus; a text part
 //!    inside the canvas takes its own keys before they are routed here. Enter and Escape carry Alt and Shift
@@ -617,6 +619,12 @@ impl<'m> ToolHost<'m> {
             run.cancel(CancelReason::Dismissed);
             run.state.spent |= pass.press.phase.is_press();
         } else {
+            // A canvas without a view hands its wheel share to the tool, before the pointer events of the pass. The
+            // canvas took the share, so nothing else reads it: a tool that answers false leaves it unused.
+            if let Some(wheel) = pass.wheel {
+                let pointer = wheel.at.unwrap_or_else(|| rect.center());
+                run.call(None, |tool, cx| tool.wheel(&wheel, pointer, cx));
+            }
             run.phase(&pass.press, &input);
             run.hover_outside(pass.id, &pass.press, &input);
             run.keys(&ctx, pass.id, env.direction.is_rtl());

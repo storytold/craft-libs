@@ -24,6 +24,17 @@ pub enum WheelAction {
     Pan(Vec2),
 }
 
+impl WheelAction {
+    /// The zoom the other way; a pan unchanged.
+    fn inverted(self) -> Self {
+        match self {
+            WheelAction::Zoom(factor) => WheelAction::Zoom(1.0 / factor),
+            WheelAction::SnapZoom(steps) => WheelAction::SnapZoom(-steps),
+            pan @ WheelAction::Pan(_) => pan,
+        }
+    }
+}
+
 /// One pass of wheel input over the canvas: the wheel share without the service's bookkeeping.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -135,8 +146,16 @@ impl WheelNavigation {
         mods.alt && (!mods.cmd || (!os.is_mac() && !mods.shift))
     }
 
-    /// The view change for one pass of `input` under `options`, if any.
+    /// The view change for one pass of `input` under `options`, if any. Under
+    /// [`invert_wheel_zoom`](NavigationOptions::invert_wheel_zoom) every zoom (the pinch, a line's factor and the
+    /// ladder steps) runs the other way; a pan never does.
     pub fn classify(&mut self, input: WheelInput, options: &NavigationOptions) -> Option<WheelAction> {
+        let action = self.classify_upright(input, options);
+        if options.invert_wheel_zoom { action.map(WheelAction::inverted) } else { action }
+    }
+
+    /// [`classify`](Self::classify) before `invert_wheel_zoom`.
+    fn classify_upright(&mut self, input: WheelInput, options: &NavigationOptions) -> Option<WheelAction> {
         let notch = if input.notch.is_finite() && input.notch > 0.0 { input.notch } else { 1.0 };
         // The fingers' pinch counts only with Enable Gestures; the trackpad's whatever it says.
         let factor = input.zoom * if options.touch_gestures { input.touch_zoom } else { 1.0 };

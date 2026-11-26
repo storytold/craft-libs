@@ -54,7 +54,7 @@ pub struct ViewTarget {
     /// The highest device zoom Fit on Screen reaches (1 = 100 %). Default: 1, so a document window never opens a small
     /// document magnified; a full-window dialog magnifies a small image to fill its canvas.
     pub fit_ceiling: f64,
-    #[allow(dead_code)] // P3(graph-w1): ge.C4
+    /// The rect Fit on Screen frames on a document with no edges; `None` for a document of [`document`](Self::document).
     extent: Option<Rect>,
 }
 
@@ -67,8 +67,12 @@ impl ViewTarget {
     /// A document with no edges: Fit on Screen fits `extent`, a never-shown view opens fitted to it, and overscroll
     /// never clamps. Fit Artboard and Print Size are unavailable.
     pub fn unbounded(extent: Rect) -> ViewTarget {
-        let _ = extent;
-        todo!("ge.C4")
+        ViewTarget { extent: Some(extent), ..Self::new(Size::ZERO) }
+    }
+
+    /// Whether the document has no edges ([`unbounded`](Self::unbounded)).
+    pub(crate) fn is_unbounded(&self) -> bool {
+        self.extent.is_some()
     }
 
     /// The artboard Fit Artboard on Screen shows.
@@ -211,10 +215,20 @@ impl ViewCommands {
             ViewCommands::ZoomOut => {
                 zoom::step(view, -1, size, pixels_per_point, scheme);
             }
-            ViewCommands::FitOnScreen => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN, scheme),
+            ViewCommands::FitOnScreen => match target.extent {
+                Some(extent) => {
+                    if let Some(extent) = with_area(Some(extent)) {
+                        let margin = Vec2::new(FIT_MARGIN, FIT_MARGIN);
+                        zoom::fit_rect_up_to(view, extent, size, pixels_per_point, target.fit_ceiling, margin, scheme);
+                    }
+                }
+                None => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN, scheme),
+            },
             ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point, scheme),
             ViewCommands::ActualPixels => zoom_about_centre(view, scheme.hundred),
             ViewCommands::TwoHundredPercent => zoom_about_centre(view, 2.0 * scheme.hundred),
+            // A document with no edges has no print size and no artboard.
+            ViewCommands::PrintSize | ViewCommands::FitArtboard if target.is_unbounded() => {}
             ViewCommands::PrintSize => {
                 if let Some(device) = target.print_zoom() {
                     zoom_about_centre(view, device);
@@ -227,7 +241,10 @@ impl ViewCommands {
             }
             ViewCommands::FitLayers => {
                 if let Some(bounds) = with_area(layers.and_then(|layers| layers())) {
-                    zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN, scheme);
+                    // A graph's layers are capped by the fit ceiling: the scheme's greatest zoom would let one node
+                    // fill the canvas.
+                    let ceiling = if target.is_unbounded() { target.fit_ceiling } else { scheme.max_device() };
+                    zoom::fit_rect_up_to(view, bounds, size, pixels_per_point, ceiling, LAYERS_MARGIN, scheme);
                 }
             }
             ViewCommands::RotateClockwise => view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(ROTATE_STEP_DEG, view.flip_x)),
@@ -252,8 +269,8 @@ impl ViewCommands {
     ) -> bool {
         match self {
             ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, None, pixels_per_point, scheme),
-            ViewCommands::PrintSize => target.print_zoom().is_some(),
-            ViewCommands::FitArtboard => with_area(target.artboard).is_some(),
+            ViewCommands::PrintSize => !target.is_unbounded() && target.print_zoom().is_some(),
+            ViewCommands::FitArtboard => !target.is_unbounded() && with_area(target.artboard).is_some(),
             ViewCommands::FitLayers => layers.is_some(),
             _ => true,
         }

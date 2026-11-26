@@ -35,7 +35,7 @@ use craft_behavior::kurbo::{Point as Point64, Rect as Rect64};
 use craft_behavior::{CanvasView, Metrics, PixelSize};
 use detail::{texel_extent, texel_origin};
 use egui::epaint::{Mesh, Vertex};
-use egui::{Color32, ColorImage, Context, Id, Pos2, Response, Shape, TextureFilter, TextureOptions, Vec2, pos2};
+use egui::{Color32, ColorImage, Context, Id, Pos2, Response, Shape, TextureFilter, TextureOptions, TextureWrapMode, Vec2, pos2};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 
@@ -59,7 +59,7 @@ pub enum Extent {
     /// the region; the edge stays at the document's edge.
     Region(PixelRect),
     /// Copies of the document a whole document size apart, filling the canvas around it (Pattern Preview), at most
-    /// 31 along each axis, centred on the view. A [mapped](RasterDisplay::mapped) picture repeats its area instead, a
+    /// 31 along each axis, centred on the view, or the whole view with [`uncapped`](RasterDisplay::uncapped). A [mapped](RasterDisplay::mapped) picture repeats its area instead, a
     /// whole area apart. A source picture draws its textures again for each copy; a painted picture is
     /// called once per copy with the view shifted by the copy's offset. The checkerboard covers the copies; the edge
     /// stays at the document's edge.
@@ -212,6 +212,8 @@ struct Shown {
     /// The document, or the region of [`Extent::Region`] around it.
     bounds: PixelRect,
     tiles: Tiles,
+    /// The document area an uncapped tiled display covers with its wrapping base texture: the whole view.
+    wrap: Option<Rect64>,
     textures: Option<Textures>,
 }
 
@@ -291,7 +293,7 @@ pub struct RasterDisplay<'a> {
     read: PixelRect,
     shown: Option<Shown>,
     mapping: Option<Mapping>,
-    #[allow(dead_code)] // P3(graph-w1): vw.F18
+    /// A tiled source picture covers the whole view by texture wrap ([`uncapped`](Self::uncapped)).
     uncapped: bool,
 }
 
@@ -386,20 +388,30 @@ impl<'a> RasterDisplay<'a> {
         self
     }
 
-    /// With `uncapped` and [`Extent::Tiled`] the display tiles the whole view by texture wrap, with no limit on copies;
-    /// by default the copies per axis stay capped.
+    /// With `uncapped` and [`Extent::Tiled`] the display tiles the whole view by texture wrap, with no limit on copies:
+    /// the document's texture is drawn once over the whole view, repeating, so the cost does not grow with the copies.
+    /// By default the copies per axis stay capped at 31. A painted or [mapped](Self::mapped) picture keeps the cap: each
+    /// of its copies is a paint or a mesh of its own.
     #[must_use]
-    pub fn uncapped(self, uncapped: bool) -> Self {
-        let _ = uncapped;
-        todo!("vw.F18")
+    pub fn uncapped(mut self, uncapped: bool) -> Self {
+        self.uncapped = uncapped;
+        self
     }
 
     /// The store that holds this display's textures of one sampling. A texture is sharp (nearest) from 100 percent
-    /// up, which is when one texel is one document pixel; a reduced texture holds averages and stays filtered.
-    fn store(ctx: &Context, id: Id, sharp: bool) -> TextureStore<Level> {
+    /// up, which is when one texel is one document pixel; a reduced texture holds averages and stays filtered. A
+    /// `wrap` texture repeats past its edges, for an uncapped tiled display; the others clamp, so the document's edge
+    /// never blends with its opposite edge.
+    fn store(ctx: &Context, id: Id, sharp: bool, wrap: bool) -> TextureStore<Level> {
         let magnification = if sharp { TextureFilter::Nearest } else { TextureFilter::Linear };
-        let filter = TextureOptions { magnification, ..TextureOptions::LINEAR };
-        TextureStore::in_context(ctx, (id, sharp), TextureStoreOptions::pages().filter(filter))
+        let wrap_mode = if wrap { TextureWrapMode::Repeat } else { TextureOptions::LINEAR.wrap_mode };
+        let filter = TextureOptions { magnification, wrap_mode, ..TextureOptions::LINEAR };
+        TextureStore::in_context(ctx, (id, sharp, wrap), TextureStoreOptions::pages().filter(filter))
+    }
+
+    /// Every sampling a display's textures can have: sharp or filtered, wrapping or not.
+    fn samplings() -> impl Iterator<Item = (bool, bool)> {
+        [(true, false), (false, false), (true, true), (false, true)].into_iter()
     }
 
     fn read_region(source: &dyn RasterSource, region: PixelRect, factor: u32) -> ColorImage {
@@ -414,6 +426,8 @@ impl<'a> RasterDisplay<'a> {
     /// - A texture of an older revision is updated with what the source reports damaged since then: that part is
     ///   read again alone, and damage elsewhere moves the texture to the revision without a read.
     /// - Anything else (no texture, another size, damage the source cannot tell) is read whole.
+    ///
+    /// `wrap` keeps it in the store whose textures repeat ([`store`](Self::store)).
     fn bring_up_to_date(
         source: &dyn RasterSource,
         ctx: &Context,
@@ -421,12 +435,14 @@ impl<'a> RasterDisplay<'a> {
         held: &mut Held,
         level: Level,
         region: PixelRect,
-        factor: u32,
+        (factor, wrap): (u32, bool),
     ) -> (CachedTexture, PixelRect) {
         let sharp = factor == 1;
-        // A key never lives in both samplings: the other store's copy is from before the factor changed.
-        Self::store(ctx, id, !sharp).forget(ctx, &level);
-        let store = Self::store(ctx, id, sharp);
+        // A key never lives in two samplings: another store's copy is from before the factor or the wrap changed.
+        for (other_sharp, other_wrap) in Self::samplings().filter(|&sampling| sampling != (sharp, wrap)) {
+            Self::store(ctx, id, other_sharp, other_wrap).forget(ctx, &level);
+        }
+        let store = Self::store(ctx, id, sharp, wrap);
         let revision = source.revision();
         let origin = [region.x0, region.y0];
         let expected = texel_extent(region, factor);
@@ -458,8 +474,8 @@ impl<'a> RasterDisplay<'a> {
 
     /// Drops every texture of this display.
     fn release(ctx: &Context, id: Id) {
-        for sharp in [true, false] {
-            Self::store(ctx, id, sharp).clear(ctx);
+        for (sharp, wrap) in Self::samplings() {
+            Self::store(ctx, id, sharp, wrap).clear(ctx);
         }
     }
 
@@ -469,8 +485,8 @@ impl<'a> RasterDisplay<'a> {
             Level::Base(kept) => *kept == bounds,
             Level::Detail(kept) => Some(*kept) == plan,
         };
-        for sharp in [true, false] {
-            Self::store(ctx, id, sharp).retain(ctx, kept);
+        for (sharp, wrap) in Self::samplings() {
+            Self::store(ctx, id, sharp, wrap).retain(ctx, kept);
         }
         held.0.retain(|level, _| kept(level));
     }
@@ -520,24 +536,34 @@ impl Component for RasterDisplay<'_> {
             _ => {
                 Self::release(&ctx, id);
                 if !document.is_empty() {
-                    self.shown = Some(Shown { view: space.view, size, bounds, tiles, textures: None });
+                    self.shown = Some(Shown { view: space.view, size, bounds, tiles, wrap: None, textures: None });
                 }
                 return;
             }
         };
         let side = texture_side(&ctx);
-        let factor = texture_factor(bounds.size(), side);
-        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base(bounds), bounds, factor);
+        let mut factor = texture_factor(bounds.size(), side);
+        // An uncapped tiled source covers the whole view with one wrapping quad of its base texture. The texture repeats
+        // at its texel extent, so it must read at a factor that divides the document; a document with none that fits
+        // the side keeps the capped copies.
+        let wrap = (self.uncapped && self.extent == Extent::Tiled && self.mapping.is_none())
+            .then(|| (factor..=size.width.min(size.height)).find(|f| size.width % f == 0 && size.height % f == 0))
+            .flatten()
+            .map(|divisor| {
+                factor = divisor;
+                space.view.visible()
+            });
+        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base(bounds), bounds, (factor, wrap.is_some()));
         let plan = DetailPlan::in_view(&space.view, bounds, side, space.pixels_per_point).filter(|_| self.mapping.is_none());
         let detail = plan.map(|plan| {
-            let (texture, read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Detail(plan), plan.region, plan.factor);
+            let (texture, read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Detail(plan), plan.region, (plan.factor, false));
             self.read = self.read.union(&read);
             (texture, plan)
         });
         Self::retain(&ctx, id, &mut held, bounds, plan);
         *cx.keep::<Held>() = held;
         self.read = self.read.union(&base_read);
-        self.shown = Some(Shown { view: space.view, size, bounds, tiles, textures: Some(Textures { base: (base, factor), detail }) });
+        self.shown = Some(Shown { view: space.view, size, bounds, tiles, wrap, textures: Some(Textures { base: (base, factor), detail }) });
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -561,6 +587,8 @@ impl Component for RasterDisplay<'_> {
             let tiled = self.mapping.and_then(|mapping| mapping.area()).filter(|_| !shown.tiles.is_single());
             let areas = match (self.mapping, tiled) {
                 (Some(_), None) => [corners, None],
+                // The wrapping copies cover the whole view.
+                _ if shown.wrap.is_some() => [shown.wrap.map(|area| shown.view.quad(area)), None],
                 (_, area) => {
                     let mut areas = checker_areas(area.unwrap_or(bounds), shown.tiles.run()).map(|area| shown.view.quad(area));
                     [areas.next(), areas.next()]
@@ -580,14 +608,24 @@ impl Component for RasterDisplay<'_> {
                 painter.painter.add(Shape::convex_polygon(shown.view.quad(band).to_vec(), fill, egui::Stroke::NONE));
             }
         }
-        match (&mut self.picture, &shown.textures, &self.mapping) {
-            (Picture::Source(_), Some(textures), Some(mapping)) => {
+        match (&mut self.picture, &shown.textures, &self.mapping, shown.wrap) {
+            (Picture::Source(_), Some(textures), Some(mapping), _) => {
                 let (texture, factor) = textures.base;
                 for offset in shown.tiles.offsets() {
                     painter.painter.add(mapped_mesh(&shifted(shown.view, offset), texture, factor, shown.size, mapping));
                 }
             }
-            (picture, textures, _) => {
+            (Picture::Source(_), Some(textures), None, Some(area)) => {
+                let (texture, _) = textures.base;
+                painter.painter.add(wrapped_quad(&shown.view, texture, shown.size, area));
+                // The detail texture holds only the part of the document in view, at the zoom where few copies show.
+                if let Some((texture, plan)) = textures.detail {
+                    for offset in shown.tiles.offsets() {
+                        painter.painter.add(textured_quad(&shifted(shown.view, offset), texture, plan.factor, plan.region));
+                    }
+                }
+            }
+            (picture, textures, _, _) => {
                 for offset in shown.tiles.offsets() {
                     let view = shifted(shown.view, offset);
                     match (&mut *picture, textures) {
@@ -649,6 +687,23 @@ fn textured_quad(view: &CanvasView, texture: CachedTexture, factor: u32, region:
     let (u, v) = (region.width() as f32 / texels_x, region.height() as f32 / texels_y);
     let corners = view.quad(Rect64::new(f64::from(region.x0), f64::from(region.y0), f64::from(region.x1), f64::from(region.y1)));
     let uv = [pos2(0.0, 0.0), pos2(u, 0.0), pos2(u, v), pos2(0.0, v)];
+    let mut mesh = Mesh::with_texture(texture.id);
+    mesh.vertices.extend(corners.iter().zip(uv).map(|(pos, uv)| Vertex { pos: *pos, uv, color: UNTINTED }));
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    Shape::mesh(mesh)
+}
+
+/// `texture`, the whole document of `size` pixels in a store whose textures repeat, as one quad over the document area
+/// `area` of the view: one repeat of the texture per document size, so the copies lie a whole document apart. The
+/// texture is read at a factor that divides the document, so its texel extent is the document.
+fn wrapped_quad(view: &CanvasView, texture: CachedTexture, size: PixelSize, area: Rect64) -> Shape {
+    let (width, height) = (f64::from(size.width.max(1)), f64::from(size.height.max(1)));
+    // Counted from the copy at the area's top left, so the coordinates stay small however far the view is panned.
+    let (first_x, first_y) = ((area.x0 / width).floor(), (area.y0 / height).floor());
+    let u = |x: f64| (x / width - first_x) as f32;
+    let v = |y: f64| (y / height - first_y) as f32;
+    let corners = view.quad(area);
+    let uv = [pos2(u(area.x0), v(area.y0)), pos2(u(area.x1), v(area.y0)), pos2(u(area.x1), v(area.y1)), pos2(u(area.x0), v(area.y1))];
     let mut mesh = Mesh::with_texture(texture.id);
     mesh.vertices.extend(corners.iter().zip(uv).map(|(pos, uv)| Vertex { pos: *pos, uv, color: UNTINTED }));
     mesh.indices.extend([0, 1, 2, 0, 2, 3]);

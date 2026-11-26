@@ -2147,3 +2147,128 @@ fn the_picture_of_a_pass_shows_that_passes_press_and_moves() {
         assert_eq!(drawn.get(), points, "the picture of the frame holds every point the tool took in it");
     }
 }
+
+/// A tool that takes the primary and the middle button and every wheel share, as a 3D view's orbit does, and records
+/// them.
+#[derive(Default)]
+struct Orbit {
+    /// The vertical travel of each wheel share it was given.
+    wheels: Vec<f32>,
+    /// The button of each press.
+    presses: Vec<PointerButton>,
+    drags: usize,
+    releases: usize,
+}
+
+impl CanvasTool for Orbit {
+    fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.presses.push(pointer.button);
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.drags += 1;
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.releases += 1;
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn takes(&self, button: PointerButton, _: Mods) -> bool {
+        matches!(button, PointerButton::Primary | PointerButton::Middle)
+    }
+
+    fn wheel(&mut self, wheel: &craft_behavior::Wheel, _: Pos2, _: &mut ToolContext<'_>) -> bool {
+        self.wheels.push(wheel.scroll.y + wheel.lines.y);
+        true
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the orbit only follows the pointer")
+    }
+}
+
+type OrbitRig = (Fixture, Rc<RefCell<Orbit>>, Rc<Cell<CanvasView>>, Rc<Cell<bool>>);
+
+/// A canvas running an [`Orbit`], given a view over a document when `with_view`, whose wheel zooms (the Zoom scheme)
+/// with Invert Wheel Zoom set to `inverted`: the fixture, the tool, the view and whether the next frame runs twice.
+fn orbit_rig(with_view: bool, inverted: bool) -> OrbitRig {
+    let mut options = NavigationOptions::default();
+    options.wheel = craft_ui::canvas::WheelScheme::Zoom;
+    options.invert_wheel_zoom = inverted;
+    let tool = Rc::new(RefCell::new(Orbit::default()));
+    let view = Rc::new(Cell::new(CanvasView::new(Rect::ZERO, Point::new(600.0, 450.0), 1.0)));
+    let rerun = Rc::new(Cell::new(false));
+    let (shown_tool, shown, again) = (Rc::clone(&tool), Rc::clone(&view), Rc::clone(&rerun));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Surface").navigation(options);
+        let canvas = if with_view { canvas.document(DOCUMENT).view(given) } else { canvas };
+        let canvas = canvas.show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *shown_tool.borrow_mut());
+            }
+        });
+        shown.set(canvas.output.view.unwrap_or(given));
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs the frame twice");
+        }
+    });
+    fixture.settle();
+    (fixture, tool, view, rerun)
+}
+
+/// A middle drag of `by` from `at`: hover, press, four moves, release.
+fn middle_drag(fixture: &mut Fixture, at: Pos2, by: Vec2) {
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::middle(at, true)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(at + by * (step as f32 / 4.0))]);
+    }
+    fixture.frame(vec![pointer::middle(at + by, false)]);
+    fixture.frame(Vec::new());
+}
+
+#[trial]
+fn a_canvas_without_a_view_gives_its_tool_the_wheel_and_the_middle_button() {
+    let mut travel = Vec::new();
+    for inverted in [false, true] {
+        let (mut fixture, tool, _, rerun) = orbit_rig(false, inverted);
+        let at = fixture.by_role(Role::CANVAS)[0].center();
+        fixture.frame(vec![pointer::moved(at)]);
+        // The notch arrives in the first pass of a frame of two; the second has no wheel of its own.
+        rerun.set(true);
+        fixture.frame(vec![pointer::wheel_lines(1.0)]);
+        rerun.set(false);
+        assert_eq!(fixture.passes(), 2, "the frame ran twice");
+        let wheels = tool.borrow().wheels.clone();
+        assert_eq!(wheels.len(), 1, "one notch reaches the tool once: {wheels:?}");
+        assert_ne!(wheels[0], 0.0, "the share carries the notch");
+        travel.push(wheels[0]);
+
+        middle_drag(&mut fixture, at, BY);
+        let tool = tool.borrow();
+        assert_eq!(tool.presses, [PointerButton::Middle], "a middle press is the tool's");
+        assert!(tool.drags >= 1, "its moves reach the tool");
+        assert_eq!(tool.releases, 1, "and its release");
+    }
+    assert!(travel[0] * travel[1] < 0.0, "Invert Wheel Zoom turns the tool's share the other way: {travel:?}");
+
+    // With a view the wheel zooms the view and the middle button pans it; neither reaches the tool.
+    let (mut fixture, tool, view, _) = orbit_rig(true, false);
+    let before = view.get();
+    let at = before.rect.center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    let zoomed = view.get();
+    assert!(zoomed.zoom != before.zoom, "the wheel zooms the view: {before:?} -> {zoomed:?}");
+    middle_drag(&mut fixture, at, BY);
+    assert!(view.get().center != zoomed.center, "the middle drag pans the view");
+    let tool = tool.borrow();
+    assert!(tool.wheels.is_empty() && tool.presses.is_empty(), "the tool got neither: {:?} {:?}", tool.wheels, tool.presses);
+}

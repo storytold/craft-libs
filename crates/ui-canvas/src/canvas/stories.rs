@@ -1,23 +1,27 @@
 //! Stories of the canvas family.
 
 use super::{
-    Canvas, CanvasTool, ContextSource, CropOverlay, MiddleButton, NavigationOptions, NoTool, ToolAction, ToolContext, ToolHost, ToolPath,
-    ToolPointer, WheelScheme, tool_pass,
+    BACKGROUND, Canvas, CanvasSpace, CanvasTool, ContextSource, CropOverlay, MiddleButton, NavigationOptions, NoTool, RasterDisplay, ToolAction,
+    ToolContext, ToolHost, ToolPath, ToolPointer, ViewTarget, WheelScheme, canvas_space, tool_pass, with_canvas_space,
 };
 use crate::buttons::Button;
-use crate::canvas::testing::canvas_story::{StoryDocument, show_document};
-use crate::contract::{Bind, BodyCx, CanvasGesture, Gap, Sampler as _, Show as _, ShowContainer as _, clicked, tooltip};
+use crate::canvas::testing::canvas_story::{StoryDocument, StoryPicture, StoryShape, accent, paint_shapes, show_document};
+use crate::canvas_controls::CanvasGrid;
+use crate::contract::{
+    Bind, BodyCx, CanvasGesture, Gap, Props as _, Sampler as _, Show as _, ShowCollection as _, ShowContainer as _, clicked, tooltip,
+};
 use crate::dialog::Dialog;
 use crate::display::Text;
+use crate::graph::{Node, NodeGraph, NodeId, NodeKind, PortDirection, PortRef, Wire};
 use crate::layout_components::Stack;
 use crate::primitives::{Draw, EditorPurpose, EditorState};
 use crate::runtime::access::Role;
 use crate::runtime::env::Env;
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, stage, story};
+use crate::testing::{Drive, Fixture, Grip, StoryData, StoryOutput, pointer, stage, story};
 use craft_behavior::geometry::CropBox;
-use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{CancelReason, EditorInput, TextPos};
-use egui::{Key, Modifiers, Rect, Ui, vec2};
+use craft_behavior::kurbo::{Affine, Point, Rect as DocRect, Shape as _};
+use craft_behavior::{CancelReason, CanvasView, EditorInput, TextPos, Wheel, keyed};
+use egui::{Color32, Key, Modifiers, Pos2, Rect, Ui, Vec2, pos2, vec2};
 
 /// The zoomed story's zoom, in percent of one device pixel per document pixel.
 const ZOOMED: f64 = 200.0;
@@ -45,6 +49,184 @@ fn zoomed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
         CropOverlay::new("Crop", Bind::given(crop())).show_at(ui, body.rect)
     });
+    shown.output.into()
+}
+
+/// The node graph story's nodes, in document units: a row near the origin and one far off at negative points, so the
+/// view opens fitted to all of them and a pan finds the far one.
+const GRAPH_NODES: [Rect; 4] = [
+    Rect::from_min_max(pos2(0.0, 0.0), pos2(140.0, 72.0)),
+    Rect::from_min_max(pos2(200.0, 60.0), pos2(340.0, 132.0)),
+    Rect::from_min_max(pos2(400.0, 0.0), pos2(540.0, 72.0)),
+    Rect::from_min_max(pos2(-600.0, -400.0), pos2(-460.0, -328.0)),
+];
+
+/// The node graph story's grid step, in document units.
+const GRID_STEP: f32 = 40.0;
+
+/// The story's node: an input on the left, an output on the right.
+struct StoryNode;
+
+impl NodeKind for StoryNode {
+    fn title(&self) -> &str {
+        "Node"
+    }
+
+    fn port_count(&self) -> usize {
+        2
+    }
+
+    fn port_name(&self, port: usize) -> String {
+        if port == 0 { "Input" } else { "Output" }.to_owned()
+    }
+
+    fn port_direction(&self, port: usize) -> PortDirection {
+        if port == 0 { PortDirection::Input } else { PortDirection::Output }
+    }
+
+    fn port_offset(&self, port: usize, size: Vec2) -> Vec2 {
+        Vec2::new(if port == 0 { 0.0 } else { size.x }, size.y / 2.0)
+    }
+}
+
+/// The rect of every node of the story, which Fit on Screen frames.
+fn graph_extent() -> DocRect {
+    GRAPH_NODES.iter().fold(DocRect::new(0.0, 0.0, 0.0, 0.0), |all, node| {
+        all.union(DocRect::new(f64::from(node.min.x), f64::from(node.min.y), f64::from(node.max.x), f64::from(node.max.y)))
+    })
+}
+
+/// A node graph on a canvas of a document with no edges: the view opens fitted to the nodes, the wheel zooms about
+/// the pointer and a middle drag pans past any edge, and the nodes follow the view through its layer transform over
+/// the canvas grid.
+#[story(Canvas, covers = [Default])]
+fn node_graph_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let room = stage(ui);
+    let (view, view_at) = data.value_at("view", CanvasView::new(Rect::NOTHING, Point::ZERO, 1.0));
+    let kinds: Vec<&dyn NodeKind> = vec![&StoryNode; GRAPH_NODES.len()];
+    let ids: Vec<NodeId> = (0..GRAPH_NODES.len() as u32).map(NodeId).collect();
+    let wires = [Wire::new(0, PortRef::new(NodeId(0), 1), PortRef::new(NodeId(1), 0)), Wire::new(1, PortRef::new(NodeId(1), 1), PortRef::new(NodeId(2), 0))];
+    let source = keyed(&ids, |id| *id);
+    Canvas::new("Graph")
+        .document(ViewTarget::unbounded(graph_extent()))
+        .view(view_at.bind(&mut *view))
+        .show_at(ui, room, |ui, body| {
+            let Some(space) = canvas_space(&body.env) else { return };
+            let mut graph = NodeGraph::new(&GRAPH_NODES, &kinds, &wires).label("Nodes");
+            if let Some(zoom) = space.view.layer_transform() {
+                graph = graph.zoom(zoom);
+            }
+            let _ = graph.show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
+            // In the picture slot, under the nodes.
+            let _ = CanvasGrid::new("Grid").spacing((GRID_STEP, GRID_STEP).into()).picture().show_at(ui, body.rect);
+        })
+        .output
+        .into()
+}
+
+/// The side of the surface story's marker picture, in pixels.
+const MARKER_SIDE: u32 = 160;
+
+/// The surface story's tool, as a 3D view's orbit: a drag turns the marker by its sideways travel and the wheel
+/// scales it. The canvas has no view, so the wheel and the press are the tool's.
+struct TurnTool {
+    /// The marker's turn, in degrees.
+    turn: f64,
+    /// The marker's scale.
+    scale: f64,
+    /// The pointer at the last press or drag of a running gesture.
+    last: Option<Point>,
+    /// The turn when the gesture began, which a cancel restores.
+    pressed_turn: f64,
+}
+
+/// Degrees the marker turns per point of sideways travel.
+const TURN_PER_POINT: f64 = 0.5;
+
+impl CanvasTool for TurnTool {
+    fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.last = Some(Point::new(f64::from(pointer.pos.x), f64::from(pointer.pos.y)));
+        self.pressed_turn = self.turn;
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
+        let at = Point::new(f64::from(pointer.pos.x), f64::from(pointer.pos.y));
+        if let Some(last) = self.last {
+            self.turn += (at.x - last.x) * TURN_PER_POINT;
+        }
+        self.last = Some(at);
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.last = None;
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {
+        self.turn = self.pressed_turn;
+        self.last = None;
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn wheel(&mut self, wheel: &Wheel, _: Pos2, _: &mut ToolContext<'_>) -> bool {
+        // A wheel line is a notch; a device that scrolls in points takes one every 50 of them.
+        let notches = if wheel.lines.y != 0.0 { wheel.lines.y } else { wheel.scroll.y / 50.0 };
+        let factor = 1.1_f64.powf(f64::from(notches)) * f64::from(wheel.zoom);
+        if !(factor.is_finite() && factor > 0.0) || factor == 1.0 {
+            return false;
+        }
+        self.scale = (self.scale * factor).clamp(0.25, 4.0);
+        true
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the marker turns by dragging only")
+    }
+}
+
+/// Shows the marker turned and scaled at the middle of `at`: a square with a bar from its centre to one edge, so the
+/// turn shows.
+fn show_marker(ui: &mut Ui, at: Rect, tool: &TurnTool) {
+    let middle = f64::from(MARKER_SIDE) / 2.0;
+    let place = Affine::translate((middle, middle)) * Affine::rotate(tool.turn.to_radians()) * Affine::scale(tool.scale);
+    let ink = accent(ui, 1.0);
+    let shapes = [
+        StoryShape::filled(&(place * DocRect::new(-30.0, -30.0, 30.0, 30.0).to_path(0.1)), ink.gamma_multiply(0.4)).outlined(2.0, ink),
+        StoryShape::filled(&(place * DocRect::new(0.0, -4.0, 30.0, 4.0).to_path(0.1)), ink),
+    ];
+    // A new revision for every turn and scale, so the display reads the picture again.
+    let revision = (tool.turn.to_bits() ^ tool.scale.to_bits().rotate_left(17)).max(1);
+    let picture = StoryPicture::new(MARKER_SIDE, MARKER_SIDE, |p| paint_shapes(&shapes, Color32::TRANSPARENT, p)).revision(revision);
+    // The marker is a picture of its own, shown 1:1 in a space of its own: the canvas has no view to show it through.
+    let view = CanvasView::new(at, Point::new(middle, middle), 1.0);
+    let space = CanvasSpace::new(view, ui.pixels_per_point());
+    with_canvas_space(ui, space, |ui| {
+        let _ = RasterDisplay::new("Marker", &picture).show_at(ui, at);
+    });
+}
+
+/// A canvas without a view, as a 3D view uses one: no pan and no zoom of its own, so a drag reaches the tool, which
+/// turns the marker, and the wheel reaches the tool, which scales it ([`CanvasTool::wheel`]).
+#[story(Canvas, covers = [Default], drive = Drive::Drag(Grip::new(BACKGROUND)))]
+fn a_surface_without_a_view(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let room = stage(ui);
+    let mut tool = TurnTool {
+        turn: *data.value("turn", 0.0),
+        scale: *data.value("scale", 1.0),
+        last: *data.value::<Option<Point>>("last", None),
+        pressed_turn: *data.value("pressed turn", 0.0),
+    };
+    let shown = Canvas::new("Surface").show_at(ui, room, |ui, body| {
+        if let Some(pass) = tool_pass(&body.env) {
+            let _ = ToolHost::new().run(ui, &pass, &mut tool);
+        }
+        show_marker(ui, body.rect, &tool);
+    });
+    *data.value("turn", 0.0) = tool.turn;
+    *data.value("scale", 1.0) = tool.scale;
+    *data.value::<Option<Point>>("last", None) = tool.last;
+    *data.value("pressed turn", 0.0) = tool.pressed_turn;
     shown.output.into()
 }
 
