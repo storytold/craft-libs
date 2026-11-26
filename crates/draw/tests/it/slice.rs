@@ -4,11 +4,15 @@
 use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_draw::ui::slice::{SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceRefusal, SliceTool, SliceToolSettings};
-use craft_ui::contract::{CommandSet, Show as _};
+use craft_draw::ui::slice::{
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceRefusal, SliceTool,
+    SliceToolSettings,
+};
+use craft_ui::contract::{CommandSet, Role, Show as _};
+use craft_ui::dialog::DialogHost;
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::frame::take_output;
-use craft_ui::testing::{ToolFixture, trial};
+use craft_ui::testing::{Fixture, ToolFixture, access, trial};
 use egui::{Key, Modifiers, Pos2, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -200,6 +204,40 @@ fn delete_takes_the_key_for_the_selected_slice() {
             let ran = take_output(fixture.fixture().ctx()).fired.iter().filter(|fired| fired.command == CommandRef::from(app)).count();
             let reaches_the_app = usize::from(mode == SliceMode::Slice);
             assert_eq!(ran, reaches_the_app, "{name}, {key:?}: the app's {app:?} runs only when the tool leaves the key");
+        }
+    }
+}
+
+/// The names a screen reader reads for the nodes of `role` in the shown Divide Slice dialog, in tree order.
+fn divide_names(divide: DivideSlices, role: Role) -> Vec<String> {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    host.borrow_mut().open(DivideSlicesDialog::new(divide));
+    fixture.idle(10);
+    let tree = fixture.tree();
+    fixture.by_role(role).iter().map(|target| access::name(tree, target.node).unwrap_or_default().to_owned()).collect()
+}
+
+/// Divide Slice's two axes show the same Divide By choice and value rows; each axis's radio group and value field
+/// name their axis by its caption after their visible label, so a screen reader tells the rows from the columns.
+#[trial]
+fn divide_slice_names_each_axis_control_by_its_axis() {
+    let by_count = DivideSlices::new(Some(DivideBy::Count(2)), Some(DivideBy::Count(3)));
+    let by_size = DivideSlices::new(Some(DivideBy::Size(72.0)), Some(DivideBy::Size(36.0)));
+    let cases = [
+        ("the Divide By groups", by_count, Role::RADIO_GROUP, "Divide By"),
+        ("the count fields", by_count, Role::SPIN_BUTTON, "slices, evenly spaced"),
+        ("the size fields", by_size, Role::SPIN_BUTTON, "per slice"),
+    ];
+    for (what, divide, role, label) in cases {
+        let names = divide_names(divide, role);
+        let [rows, columns] = names.as_slice() else { panic!("{what}: one for each axis, got {names:?}") };
+        assert_ne!(rows, columns, "{what} have different names");
+        for (name, axis) in [(rows, "Divide Horizontally Into"), (columns, "Divide Vertically Into")] {
+            assert!(name.starts_with(label), "{what}: {name:?} starts with the visible label {label:?}");
+            assert!(name.contains(axis), "{what}: {name:?} names its axis {axis:?}");
         }
     }
 }

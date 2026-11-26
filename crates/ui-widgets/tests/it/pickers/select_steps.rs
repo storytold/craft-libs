@@ -2,10 +2,13 @@
 //! offers both steps, and a step forward lands on the first stop and a step back on the last.
 
 use craft_ui::contract::{Bind, Entry, Role, Show as _};
+use craft_ui::list::ThumbAspect;
 use craft_ui::pickers::Select;
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Key, Modifiers, Ui};
+use egui::{Key, Modifiers, Rect, Ui};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Entries 1 to 4; 2 and 4 are reached from the open list only.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -48,6 +51,44 @@ fn the_closed_face_shows_an_entrys_closed_label_and_the_accessible_value_keeps_i
     assert!(!texts.iter().any(|text| text == "1 Dots"), "and not the list text");
     let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
     assert_eq!(fixture.tree().value_of(node), Some("1 Dots"), "the accessible value is the full label");
+}
+
+/// The rects a select's picture is painted into: on the closed face, then while the list is open (its rows and the
+/// face), with the picture `aspect` times as wide as high, or with no aspect set.
+fn picture_rects(aspect: Option<ThumbAspect>) -> (Vec<Rect>, Vec<Rect>) {
+    let painted = Rc::new(RefCell::new(Vec::new()));
+    let into = Rc::clone(&painted);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "Uniform"), Entry::new(2u8, "Taper")];
+        let into = Rc::clone(&into);
+        let select = Select::new("Profile", Bind::given(1u8), &entries).picture(move |_, _, rect| into.borrow_mut().push(rect)).picture_only();
+        let select = match aspect {
+            Some(aspect) => select.picture_aspect(aspect),
+            None => select,
+        };
+        select.show(ui);
+    });
+    fixture.settle();
+    let face = painted.take();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(!fixture.by_role(Role::LIST_BOX).is_empty(), "Alt+Down opens the list");
+    (face, painted.take())
+}
+
+/// A picture aspect widens the picture on the face and in every row of the list; without one the picture is square.
+#[trial]
+fn a_picture_aspect_sets_the_pictures_width_on_the_face_and_in_the_rows() {
+    let wide = |rect: &Rect| rect.height() > 0.0 && rect.width() > 3.5 * rect.height();
+    let square = |rect: &Rect| rect.height() > 0.0 && (rect.width() - rect.height()).abs() < 0.5;
+    let (face, rows) = picture_rects(Some(ThumbAspect::new(4, 1)));
+    assert!(!face.is_empty() && face.iter().all(wide), "the face's picture is four times as wide as high: {face:?}");
+    assert!(rows.len() >= 3 && rows.iter().all(wide), "each row's picture is four times as wide as high: {rows:?}");
+    let (face, rows) = picture_rects(None);
+    assert!(!face.is_empty() && face.iter().all(square), "without an aspect the face's picture is square: {face:?}");
+    assert!(rows.len() >= 3 && rows.iter().all(square), "without an aspect each row's picture is square: {rows:?}");
 }
 
 /// A value that names no entry shows the placeholder on the face, and the field reads it as its value, as the face
