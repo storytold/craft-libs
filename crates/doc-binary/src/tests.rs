@@ -1697,6 +1697,56 @@ fn bookmarks_become_objects() {
     assert_eq!(p0.text, "\u{FFFC}Hello\u{FFFC} world");
 }
 
+/// The bookmark boundaries in `blocks`: `+name` for a start, `-name` for an end.
+fn bookmark_marks(blocks: &[std::sync::Arc<craft_wordmodel::Block>]) -> std::collections::BTreeSet<String> {
+    use craft_wordmodel::para::InlineObject;
+    blocks
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| &p.objects)
+        .filter_map(|o| match o {
+            InlineObject::BookmarkStart { name } => Some(format!("+{name}")),
+            InlineObject::BookmarkEnd { name } => Some(format!("-{name}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Bookmarks in a header and a footnote land in those parts (#1818): their CPs are in the whole
+/// document's CP space, past the main text. One ending at the footnote's last CP, which is also
+/// the header's first, does not put its end into the header.
+#[test]
+fn bookmarks_in_headers_and_notes_land_in_their_parts() {
+    // CPs: main text 0..10, footnote subdocument 10..20, header subdocument 20..33.
+    let text = "See\u{2} here\r";
+    let ccp = text.chars().count() as u32;
+    let names = ["body", "note", "tail", "head"];
+    let (starts, ends) = ([5, 10, 14, 20], [9, 14, 20, 26]);
+    let limit = 34;
+    let spec = StructSpec {
+        text,
+        note_stories: vec!["Note body\r"],
+        header_stories: vec!["Header text\r\r"],
+        extra_pairs: vec![
+            (2, plc(&[3, ccp], &1u16.to_le_bytes())),
+            (3, plc(&[0, 10], &[])),
+            (21, sttbf_bkmk(&names)),
+            (22, plc(&[starts.as_slice(), &[limit]].concat(), &[0; 16])),
+            (23, plc(&[ends.as_slice(), &[limit]].concat(), &[0; 8])),
+        ],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let body = bookmark_marks(&doc.body);
+    let header = bookmark_marks(&doc.parts.get(&doc.last_section.headers.default.expect("odd header part")).expect("header part").blocks);
+    let note = doc.parts.values().find(|p| p.kind == craft_wordmodel::PartKind::Footnote).expect("footnote part");
+    let note = bookmark_marks(&note.blocks);
+    let set = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(body, set(&["+body", "-body"]), "the main text keeps its own bookmark only");
+    assert_eq!(note, set(&["+note", "-note", "+tail"]), "the footnote's bookmarks are read");
+    assert_eq!(header, set(&["+head", "-head"]), "the header's bookmark is read, and no end of the footnote's");
+}
+
 #[test]
 fn inline_png_picture() {
     let text = "Pic\u{1}!\r";

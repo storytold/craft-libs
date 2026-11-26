@@ -310,6 +310,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let work = Work::new(MAX_WORK);
     let revs = rmark::Revisions::new(&table, &fib);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
+    // Bookmark CPs are in the whole document's CP space, so every story walk gets them and
+    // emits those in its own range: a header's bookmarks lie in the header subdocument.
+    let marks = notes::parse_bookmarks(&table, &fib);
 
     let ctx = WalkCtx {
         word: &word,
@@ -321,7 +324,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         raw_styles: &raw_styles,
         sheet: &sheet,
         notes: &[],
-        marks: &[],
+        marks: &marks,
         drawn: &[],
         sect_ends: &[],
         budget: &budget,
@@ -400,10 +403,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     }
     // Sorted so the main walk finds each reference by binary search.
     note_links.sort_by_key(|(cp, _, _)| *cp);
-    let marks = notes::parse_bookmarks(&table, &fib);
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
-    let ctx = WalkCtx { notes: &note_links, marks: &marks, sect_ends: &sect_ends, ..ctx };
+    let ctx = WalkCtx { notes: &note_links, sect_ends: &sect_ends, ..ctx };
 
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
@@ -569,7 +571,7 @@ struct WalkCtx<'a> {
     sheet: &'a StyleSheet,
     /// (reference CP in the main document, kind, part id) for notes.
     notes: &'a [(u32, NoteKind, u32)],
-    /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
+    /// Bookmark boundaries (CPs in the whole document, every story), sorted for a sequential walk.
     marks: &'a [(u32, notes::Mark)],
     /// Floating shapes and pictures by anchor CP (absolute), sorted.
     drawn: &'a [(u32, InlineObject)],
@@ -658,6 +660,44 @@ impl ParaBuild {
     }
 }
 
+/// One story walk's bookmark boundaries: only those in its own range, since the CPs are in the
+/// whole document's CP space and those before the range belong to earlier stories.
+struct MarkWalk<'a> {
+    marks: std::iter::Peekable<std::slice::Iter<'a, (u32, notes::Mark)>>,
+    /// Bookmarks this walk started and has not ended, by name. A story's last CP is the next
+    /// one's first, so an end found there closes a bookmark of the story before and is left out.
+    open: std::collections::HashMap<&'a str, usize>,
+}
+
+impl<'a> MarkWalk<'a> {
+    fn new(marks: &'a [(u32, notes::Mark)], cp_start: u32) -> Self {
+        let first = marks.partition_point(|(mcp, _)| *mcp < cp_start);
+        MarkWalk { marks: marks[first..].iter().peekable(), open: std::collections::HashMap::new() }
+    }
+
+    /// Emit the boundaries up to `cp` as inline objects. `<=` so a boundary inside a skipped
+    /// stretch is still emitted (late) rather than blocking every later one.
+    fn emit_through(&mut self, cp: u32, pb: &mut ParaBuild) {
+        while let Some((_, m)) = self.marks.next_if(|(mcp, _)| *mcp <= cp) {
+            let obj = match m {
+                notes::Mark::Start(name) => {
+                    *self.open.entry(name.as_str()).or_default() += 1;
+                    InlineObject::BookmarkStart { name: name.clone() }
+                }
+                notes::Mark::End(name) => match self.open.get_mut(name.as_str()) {
+                    Some(n) if *n > 0 => {
+                        *n -= 1;
+                        InlineObject::BookmarkEnd { name: name.clone() }
+                    }
+                    _ => continue,
+                },
+            };
+            pb.push('\u{FFFC}', CharProps::default());
+            pb.objects.push(obj);
+        }
+    }
+}
+
 /// Walk a CP range, splitting paragraphs at 0x0D/0x07 marks, applying the direct character
 /// formatting of each CP and the paragraph formatting of each mark. Works for the main
 /// document and for any subdocument range (headers, footers, notes…). Field characters,
@@ -672,26 +712,13 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     let mut out = Vec::new();
     let mut pb = ParaBuild::default();
     let mut cp = cp_start;
-    let mut marks = ctx.marks.iter().peekable();
+    let mut marks = MarkWalk::new(ctx.marks, cp_start);
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
     let mut fmt = FmtState::default();
     while cp < cp_end {
-        // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
-        // an empty table and `cp` never matches the main-document CPs).
-        // `<=` so a boundary inside a skipped stretch is still emitted (late) rather than
-        // blocking every later one.
-        while marks.peek().is_some_and(|&(mcp, _)| *mcp <= cp) {
-            if let Some((_, m)) = marks.next() {
-                let obj = match m {
-                    notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
-                    notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
-                };
-                pb.push('\u{FFFC}', CharProps::default());
-                pb.objects.push(obj);
-            }
-        }
+        marks.emit_through(cp, &mut pb);
         let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
             Ok(found) => found,
             Err(next) => {
