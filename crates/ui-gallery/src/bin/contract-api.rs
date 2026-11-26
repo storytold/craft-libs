@@ -110,19 +110,34 @@ fn doc_lines(attrs: &[Attribute]) -> Vec<String> {
 /// The words a doc line may end with without ending its sentence.
 const ABBREVIATIONS: [&str; 6] = ["e.g.", "i.e.", "cf.", "vs.", "etc.", "approx."];
 
-/// Whether `line` ends the summary: its sentence's full stop, or the colon that introduces a list below it.
-fn ends_summary(line: &str) -> bool {
-    let line = line.trim_end();
-    let Some(last) = line.chars().last() else { return true };
-    if last == ':' {
-        return true;
+/// Where `line`'s first sentence ends: just past a full stop, question or exclamation mark that ends the line or that
+/// a space and a capital letter follow, and never inside `e.g.` and the other short forms above it.
+fn sentence_end(line: &str) -> Option<usize> {
+    for (index, character) in line.char_indices() {
+        if !matches!(character, '.' | '!' | '?') {
+            continue;
+        }
+        // A run of dots is an ellipsis inside the sentence, not its end: "the run (LRI ... PDI) for ...".
+        if line[..index].ends_with('.') {
+            continue;
+        }
+        let after = index + character.len_utf8();
+        let rest = &line[after..];
+        let ends = match rest.chars().next() {
+            None => true,
+            Some(' ') => rest[1..].chars().next().is_some_and(char::is_uppercase),
+            Some(_) => false,
+        };
+        if ends && !ABBREVIATIONS.iter().any(|short| line[..after].ends_with(short)) {
+            return Some(after);
+        }
     }
-    matches!(last, '.' | '!' | '?') && !ABBREVIATIONS.iter().any(|short| line.ends_with(short))
+    None
 }
 
 /// The summary shown for an item: the first sentence of its doc comment's first paragraph. Source doc comments are
-/// wrapped by hand, so a line that does not end its sentence continues on the next one; the summary carries those
-/// lines to the end of the sentence, and stops at a colon that introduces a list.
+/// wrapped by hand, so the sentence starts on the first line and may continue on the next ones: the summary carries
+/// them until the sentence ends inside a line, and stops at a colon that introduces a list below.
 fn doc_summary(attrs: &[Attribute]) -> String {
     let mut summary = String::new();
     let paragraph = doc_lines(attrs).into_iter().skip_while(String::is_empty).take_while(|line| !line.is_empty());
@@ -130,9 +145,16 @@ fn doc_summary(attrs: &[Attribute]) -> String {
         if !summary.is_empty() {
             summary.push(' ');
         }
-        summary.push_str(&line);
-        if ends_summary(&summary) {
-            break;
+        match sentence_end(&line) {
+            Some(end) => {
+                summary.push_str(&line[..end]);
+                break;
+            }
+            None if line.ends_with(':') => {
+                summary.push_str(&line);
+                break;
+            }
+            None => summary.push_str(&line),
         }
     }
     summary
