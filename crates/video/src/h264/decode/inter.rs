@@ -1,4 +1,7 @@
-//! Inter prediction sample interpolation (8.4.2.2) and weighted sample prediction (8.4.2.3).
+//! Inter prediction sample interpolation (8.4.2.2) and weighted sample prediction (8.4.2.3), for
+//! 8-bit (`u8`) and wider (`u16`) samples; `max` is the plane's largest sample value (Clip1).
+
+use crate::h264::decode::picture::Sample;
 
 /// A reference plane (used by the plane-based helpers in tests).
 #[cfg(test)]
@@ -45,66 +48,49 @@ fn tap6(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32 {
     a - 5 * b + 20 * c + 20 * d - 5 * e + f
 }
 
+#[cfg(test)]
 #[inline(always)]
 fn clip1(v: i32) -> u8 {
     v.clamp(0, 255) as u8
 }
 
-/// Copy `n` bytes with a fixed-size move for the common block widths.
+/// Copy `n` samples with a fixed-size move for the common block widths.
 #[inline(always)]
-fn copy_n(dst: &mut [u8], src: &[u8], n: usize) {
-    fn fixed<const N: usize>(dst: &mut [u8], src: &[u8]) {
+fn copy_n<S: Sample>(dst: &mut [S], src: &[S], n: usize) {
+    fn fixed<S: Sample, const N: usize>(dst: &mut [S], src: &[S]) {
         if let (Some(d), Some(s)) = (dst.first_chunk_mut::<N>(), src.first_chunk::<N>()) {
             *d = *s;
         }
     }
     match n {
-        16 => fixed::<16>(dst, src),
-        8 => fixed::<8>(dst, src),
-        4 => fixed::<4>(dst, src),
-        2 => fixed::<2>(dst, src),
+        16 => fixed::<S, 16>(dst, src),
+        8 => fixed::<S, 8>(dst, src),
+        4 => fixed::<S, 4>(dst, src),
+        2 => fixed::<S, 2>(dst, src),
         _ => dst[..n].copy_from_slice(&src[..n]),
     }
 }
 
-#[inline(always)]
-fn avg(a: u8, b: u8) -> u8 {
-    ((a as u16 + b as u16 + 1) >> 1) as u8
-}
-
-/// 6-tap filter in i16: the unclipped result of a first pass lies in -2550..=10710.
-#[inline(always)]
-fn tap6_16(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> i16 {
-    let [a, b, c, d, e, f] = [a, b, c, d, e, f].map(i16::from);
-    a - 5 * b + 20 * c + 20 * d - 5 * e + f
-}
-
-/// Round and clip a first-pass value: Clip1((v + 16) >> 5).
-#[inline(always)]
-fn round5(v: i16) -> u8 {
-    ((v + 16) >> 5).clamp(0, 255) as u8
-}
-
 /// Horizontal 6-tap (unclipped) for `BW` outputs: out[c] uses row[c..c + 6].
 #[inline(always)]
-fn htap_row<const BW: usize>(row: &[u8], out: &mut [i16; 16]) {
+fn htap_row<S: Sample, const BW: usize>(row: &[S], out: &mut [S::Tap; 16]) {
     let row = &row[..BW + 5];
     for c in 0..BW {
-        out[c] = tap6_16(row[c], row[c + 1], row[c + 2], row[c + 3], row[c + 4], row[c + 5]);
+        out[c] = S::tap6([row[c], row[c + 1], row[c + 2], row[c + 3], row[c + 4], row[c + 5]]);
     }
 }
 
 /// Vertical 6-tap (unclipped) over six rows at columns 0..BW.
 #[inline(always)]
-fn vtap_row<const BW: usize>(rows: [&[u8]; 6], out: &mut [i16; 16]) {
+fn vtap_row<S: Sample, const BW: usize>(rows: [&[S]; 6], out: &mut [S::Tap; 16]) {
     let [a, b, c, d, e, f] = rows.map(|r| &r[..BW]);
     for i in 0..BW {
-        out[i] = tap6_16(a[i], b[i], c[i], d[i], e[i], f[i]);
+        out[i] = S::tap6([a[i], b[i], c[i], d[i], e[i], f[i]]);
     }
 }
 
 #[inline(always)]
-fn copy_fixed<const BW: usize>(dst: &mut [u8], src: &[u8]) {
+fn copy_fixed<S: Sample, const BW: usize>(dst: &mut [S], src: &[S]) {
     if let (Some(d), Some(s)) = (dst.first_chunk_mut::<BW>(), src.first_chunk::<BW>()) {
         *d = *s;
     }
@@ -124,37 +110,39 @@ pub fn mc_luma(p: PlaneRef, x: i32, y: i32, blk: McBlock, out: &mut [u8], os: us
         fetch_window(p, x, y, bw, bh, &mut win);
         (&win[..], WIN)
     };
-    mc_luma_win(src, ss, blk, out, os);
+    mc_luma_win(src, ss, blk, out, os, 255);
 }
 
 /// Luma interpolation from a prepared window: `src[0]` is the sample at (x - 2, y - 2) and `ss` the
 /// window stride; the window covers (bw + 5) x (bh + 5) samples. `bw` is 4, 8 or 16.
-pub fn mc_luma_win(src: &[u8], ss: usize, blk: McBlock, out: &mut [u8], os: usize) {
+pub fn mc_luma_win<S: Sample>(src: &[S], ss: usize, blk: McBlock, out: &mut [S], os: usize, max: i32) {
     let McBlock { fx, fy, bw, bh } = blk;
     match bw {
-        16 => luma_win::<16>(src, ss, fx, fy, bh, out, os),
-        8 => luma_win::<8>(src, ss, fx, fy, bh, out, os),
-        _ => luma_win::<4>(src, ss, fx, fy, bh, out, os),
+        16 => luma_win::<S, 16>(src, ss, (fx, fy), bh, out, os, max),
+        8 => luma_win::<S, 8>(src, ss, (fx, fy), bh, out, os, max),
+        _ => luma_win::<S, 4>(src, ss, (fx, fy), bh, out, os, max),
     }
 }
 
 #[inline(always)]
-fn luma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usize, out: &mut [u8], os: usize) {
+fn luma_win<S: Sample, const BW: usize>(src: &[S], ss: usize, (fx, fy): (u32, u32), bh: usize, out: &mut [S], os: usize, max: i32) {
+    let avg = S::avg;
+    let round5 = |t: S::Tap| S::round5(t, max);
     // window row r (0..bh+5) starts at src[r * ss]; sample G of block (r, c) is at window (r + 2, c + 2)
     let wrow = |r: usize| &src[r * ss..r * ss + BW + 5];
     let rows6 = |r: usize, off: usize| [wrow(r), wrow(r + 1), wrow(r + 2), wrow(r + 3), wrow(r + 4), wrow(r + 5)].map(|x| &x[off..]);
-    let mut t = [0i16; 16];
+    let mut t = [S::Tap::default(); 16];
     match (fx, fy) {
         (0, 0) => {
             for r in 0..bh {
-                copy_fixed::<BW>(&mut out[r * os..], &wrow(r + 2)[2..]);
+                copy_fixed::<S, BW>(&mut out[r * os..], &wrow(r + 2)[2..]);
             }
         }
         (_, 0) => {
             let g = if fx == 1 { 2 } else { 3 };
             for r in 0..bh {
                 let row = wrow(r + 2);
-                htap_row::<BW>(row, &mut t);
+                htap_row::<S, BW>(row, &mut t);
                 let o = &mut out[r * os..r * os + BW];
                 if fx == 2 {
                     for c in 0..BW {
@@ -171,7 +159,7 @@ fn luma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usize,
         (0, _) => {
             for r in 0..bh {
                 let rows = rows6(r, 2);
-                vtap_row::<BW>(rows, &mut t);
+                vtap_row::<S, BW>(rows, &mut t);
                 let o = &mut out[r * os..r * os + BW];
                 if fy == 2 {
                     for c in 0..BW {
@@ -187,18 +175,18 @@ fn luma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usize,
         }
         (2, _) | (_, 2) => {
             // unclipped horizontal half samples b1 for window rows 0..bh+5
-            let mut b1 = [[0i16; 16]; WIN];
+            let mut b1 = [[S::Tap::default(); 16]; WIN];
             for (r, bt) in b1.iter_mut().enumerate().take(bh + 5) {
-                htap_row::<BW>(wrow(r), bt);
+                htap_row::<S, BW>(wrow(r), bt);
             }
-            let mut j = [0u8; 16];
-            let mut v = [0i16; 16];
+            let mut j = [S::default(); 16];
+            let mut v = [S::Tap::default(); 16];
             for r in 0..bh {
                 let o = &mut out[r * os..r * os + BW];
                 let [b0, b1r, b2, b3, b4, b5] = [&b1[r], &b1[r + 1], &b1[r + 2], &b1[r + 3], &b1[r + 4], &b1[r + 5]];
                 for c in 0..BW {
-                    let [a, b, cc, d, e, f] = [b0[c], b1r[c], b2[c], b3[c], b4[c], b5[c]].map(i32::from);
-                    j[c] = clip1((tap6(a, b, cc, d, e, f) + 512) >> 10);
+                    let [a, b, cc, d, e, f] = [b0[c], b1r[c], b2[c], b3[c], b4[c], b5[c]].map(S::tap_i32);
+                    j[c] = S::clip((tap6(a, b, cc, d, e, f) + 512) >> 10, max);
                 }
                 match (fx, fy) {
                     (2, 2) => o.copy_from_slice(&j[..BW]),
@@ -209,7 +197,7 @@ fn luma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usize,
                         }
                     }
                     _ => {
-                        vtap_row::<BW>(rows6(r, if fx == 1 { 2 } else { 3 }), &mut v);
+                        vtap_row::<S, BW>(rows6(r, if fx == 1 { 2 } else { 3 }), &mut v);
                         for c in 0..BW {
                             o[c] = avg(round5(v[c]), j[c]);
                         }
@@ -221,10 +209,10 @@ fn luma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usize,
             // e, g, p, r: average of a horizontal half sample (row r or r + 1) and a vertical one (col c or c + 1)
             let hoff = if fy == 1 { 2 } else { 3 };
             let voff = if fx == 1 { 2 } else { 3 };
-            let mut v = [0i16; 16];
+            let mut v = [S::Tap::default(); 16];
             for r in 0..bh {
-                htap_row::<BW>(wrow(r + hoff), &mut t);
-                vtap_row::<BW>(rows6(r, voff), &mut v);
+                htap_row::<S, BW>(wrow(r + hoff), &mut t);
+                vtap_row::<S, BW>(rows6(r, voff), &mut v);
                 let o = &mut out[r * os..r * os + BW];
                 for c in 0..BW {
                     o[c] = avg(round5(t[c]), round5(v[c]));
@@ -255,25 +243,25 @@ pub fn mc_chroma(p: PlaneRef, x: i32, y: i32, blk: McBlock, out: &mut [u8], os: 
         }
         (&win[..], 9)
     };
-    mc_chroma_win(src, ss, blk, out, os);
+    mc_chroma_win::<u8>(src, ss, blk, out, os);
 }
 
 /// Chroma interpolation from a prepared (bw + 1) x (bh + 1) window whose first sample is the integer
 /// position of the block. `bw` is 2, 4 or 8.
-pub fn mc_chroma_win(src: &[u8], ss: usize, blk: McBlock, out: &mut [u8], os: usize) {
+pub fn mc_chroma_win<S: Sample>(src: &[S], ss: usize, blk: McBlock, out: &mut [S], os: usize) {
     let McBlock { fx, fy, bw, bh } = blk;
     match bw {
-        8 => chroma_win::<8>(src, ss, fx, fy, bh, out, os),
-        4 => chroma_win::<4>(src, ss, fx, fy, bh, out, os),
-        _ => chroma_win::<2>(src, ss, fx, fy, bh, out, os),
+        8 => chroma_win::<S, 8>(src, ss, fx, fy, bh, out, os),
+        4 => chroma_win::<S, 4>(src, ss, fx, fy, bh, out, os),
+        _ => chroma_win::<S, 2>(src, ss, fx, fy, bh, out, os),
     }
 }
 
 #[inline(always)]
-fn chroma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usize, out: &mut [u8], os: usize) {
+fn chroma_win<S: Sample, const BW: usize>(src: &[S], ss: usize, fx: u32, fy: u32, bh: usize, out: &mut [S], os: usize) {
     if fx == 0 && fy == 0 {
         for r in 0..bh {
-            copy_fixed::<BW>(&mut out[r * os..], &src[r * ss..]);
+            copy_fixed::<S, BW>(&mut out[r * os..], &src[r * ss..]);
         }
         return;
     }
@@ -284,8 +272,7 @@ fn chroma_win<const BW: usize>(src: &[u8], ss: usize, fx: u32, fy: u32, bh: usiz
         let r1 = &src[(r + 1) * ss..(r + 1) * ss + BW + 1];
         let o = &mut out[r * os..r * os + BW];
         for c in 0..BW {
-            let v = w00 * r0[c] as u16 + w10 * r0[c + 1] as u16 + w01 * r1[c] as u16 + w11 * r1[c + 1] as u16;
-            o[c] = ((v + 32) >> 6) as u8;
+            o[c] = S::bilin([w00, w10, w01, w11], [r0[c], r0[c + 1], r1[c], r1[c + 1]]);
         }
     }
 }
@@ -309,7 +296,15 @@ pub enum Weight {
 }
 
 /// Combine prediction(s) into `dst` (stride `ds`). `p0`/`p1` have stride `ps`.
-pub fn weighted_store(dst: &mut [u8], ds: usize, p0: Option<&[u8]>, p1: Option<&[u8]>, ps: usize, (bw, bh): (usize, usize), w: Weight) {
+pub fn weighted_store<S: Sample>(
+    dst: &mut [S],
+    ds: usize,
+    (p0, p1): (Option<&[S]>, Option<&[S]>),
+    ps: usize,
+    (bw, bh): (usize, usize),
+    w: Weight,
+    max: i32,
+) {
     // equal weights 1 << logWD with no offset (implicit 32/32) reduce exactly to the rounded average
     let w = match w {
         Weight::Weighted { log_wd, w0, w1, o0, o1 } if p0.is_some() && p1.is_some() && w0 == w1 && w0 == 1 << log_wd && (o0 + o1 + 1) >> 1 == 0 => {
@@ -324,7 +319,7 @@ pub fn weighted_store(dst: &mut [u8], ds: usize, p0: Option<&[u8]>, p1: Option<&
                 let ra = &a[r * ps..r * ps + bw];
                 let rb = &b[r * ps..r * ps + bw];
                 for ((d, &x), &y) in d.iter_mut().zip(ra).zip(rb) {
-                    *d = ((x as u32 + y as u32 + 1) >> 1) as u8;
+                    *d = S::avg(x, y);
                 }
             }
         }
@@ -337,7 +332,7 @@ pub fn weighted_store(dst: &mut [u8], ds: usize, p0: Option<&[u8]>, p1: Option<&
                 let ra = &a[r * ps..r * ps + bw];
                 let rb = &b[r * ps..r * ps + bw];
                 for ((d, &x), &y) in d.iter_mut().zip(ra).zip(rb) {
-                    *d = clip1(((x as i32 * w0 + y as i32 * w1 + round) >> sh) + off);
+                    *d = S::clip(((x.to_i32() * w0 + y.to_i32() * w1 + round) >> sh) + off, max);
                 }
             }
         }
@@ -357,7 +352,7 @@ pub fn weighted_store(dst: &mut [u8], ds: usize, p0: Option<&[u8]>, p1: Option<&
                 let d = &mut dst[r * ds..r * ds + bw];
                 let ra = &a[r * ps..r * ps + bw];
                 for (d, &x) in d.iter_mut().zip(ra) {
-                    *d = clip1(((x as i32 * wt + round) >> log_wd) + o);
+                    *d = S::clip(((x.to_i32() * wt + round) >> log_wd) + o, max);
                 }
             }
         }
@@ -557,7 +552,7 @@ mod tests {
                 for fx in 0..8 {
                     for fy in 0..8 {
                         let mut out = [0u8; 64];
-                        mc_chroma_win(&src, 9, McBlock { fx, fy, bw, bh }, &mut out, 8);
+                        mc_chroma_win::<u8>(&src, 9, McBlock { fx, fy, bw, bh }, &mut out, 8);
                         for r in 0..bh {
                             for c in 0..bw {
                                 let s = |dr: usize, dc: usize| src[(r + dr) * 9 + c + dc] as u32;
@@ -577,9 +572,9 @@ mod tests {
         let a = [100u8; 4];
         let b = [50u8; 4];
         let mut d = [0u8; 4];
-        weighted_store(&mut d, 4, Some(&a), Some(&b), 4, (4, 1), Weight::Default);
+        weighted_store(&mut d, 4, (Some(&a), Some(&b)), 4, (4, 1), Weight::Default, 255);
         assert_eq!(d, [75; 4]);
-        weighted_store(&mut d, 4, Some(&a), None, 4, (4, 1), Weight::Weighted { log_wd: 5, w0: 16, w1: 0, o0: 3, o1: 0 });
+        weighted_store(&mut d, 4, (Some(&a), None), 4, (4, 1), Weight::Weighted { log_wd: 5, w0: 16, w1: 0, o0: 3, o1: 0 }, 255);
         assert_eq!(d, [53; 4]);
     }
 
@@ -590,7 +585,7 @@ mod tests {
         for (log_wd, o0, o1) in [(5, 0, 0), (0, 0, 0), (7, 0, 0), (3, 1, -2), (2, -1, 0)] {
             let w0 = 1 << log_wd;
             let mut fast = [0u8; 256];
-            weighted_store(&mut fast, 16, Some(&a), Some(&b), 16, (16, 16), Weight::Weighted { log_wd, w0, w1: w0, o0, o1 });
+            weighted_store(&mut fast, 16, (Some(&a[..]), Some(&b[..])), 16, (16, 16), Weight::Weighted { log_wd, w0, w1: w0, o0, o1 }, 255);
             let mut want = [0u8; 256];
             for i in 0..256 {
                 want[i] = clip1(((a[i] as i32 * w0 + b[i] as i32 * w0 + (1 << log_wd)) >> (log_wd + 1)) + ((o0 + o1 + 1) >> 1));

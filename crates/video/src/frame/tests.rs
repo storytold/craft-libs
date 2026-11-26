@@ -77,6 +77,12 @@ fn h264_picture(y_len: usize) -> crate::h264::decode::Picture {
         y: vec![16; y_len],
         u: vec![128; 2],
         v: vec![128; 2],
+        y16: Vec::new(),
+        u16: Vec::new(),
+        v16: Vec::new(),
+        bit_depth: 8,
+        bit_depth_chroma: 8,
+        chroma422: false,
         y_stride: 4,
         uv_stride: 2,
         pts: 7,
@@ -106,6 +112,38 @@ fn h264_picture_converts() {
 #[test]
 fn h264_picture_with_a_short_buffer_is_an_error() {
     assert_eq!(VideoFrame::try_from(h264_picture(7)), Err(FrameError::Plane("buffer is shorter than the plane")));
+}
+
+/// High 10 and High 4:2:2 pictures come in the 16-bit planes and convert with their own
+/// subsampling and depths; 8-bit 4:2:2 stays in 8-bit storage.
+#[cfg(feature = "h264-decode")]
+#[test]
+fn deep_and_422_h264_pictures_convert() {
+    let deep = crate::h264::decode::Picture {
+        chroma_height: 2,
+        y: Vec::new(),
+        u: Vec::new(),
+        v: Vec::new(),
+        y16: vec![64; 8],
+        u16: vec![512; 4],
+        v16: vec![512; 4],
+        bit_depth: 10,
+        bit_depth_chroma: 10,
+        chroma422: true,
+        ..h264_picture(8)
+    };
+    let f = VideoFrame::try_from(deep.clone()).unwrap();
+    assert_eq!((f.subsampling(), f.bit_depth()), (Subsampling::S422, 10));
+    assert_eq!(f.planes()[2].row_u16(1), Some(&[512, 512][..]));
+
+    // 8-bit luma with 10-bit chroma is deep too: all three planes are `u16`, each with its depth
+    let mixed = VideoFrame::try_from(crate::h264::decode::Picture { bit_depth: 8, y16: vec![16; 8], ..deep }).unwrap();
+    assert_eq!(mixed.planes().iter().map(Plane::bit_depth).collect::<Vec<_>>(), [8, 10, 10]);
+    assert_eq!(mixed.planes()[0].row_u16(0), Some(&[16, 16, 16, 16][..]));
+
+    let c422 = crate::h264::decode::Picture { chroma_height: 2, u: vec![128; 4], v: vec![128; 4], chroma422: true, ..h264_picture(8) };
+    let f = VideoFrame::try_from(c422).unwrap();
+    assert_eq!((f.subsampling(), f.bit_depth()), (Subsampling::S422, 8));
 }
 
 #[cfg(feature = "hevc-decode")]

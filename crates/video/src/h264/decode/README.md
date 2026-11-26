@@ -19,20 +19,29 @@ oracles and fixture generators.
 - Slice header: all fields incl. reference list modification, prediction weight table and
   decoded reference picture marking. POC types 0, 1, 2. `frame_num` gap handling ("non-existing"
   frames).
-- Entropy coding: CAVLC and CABAC (all syntax elements needed for frame coding, 4:2:0).
+- Profiles: Baseline (without FMO), Main, High, High 10 and High 4:2:2 (progressive): chroma
+  formats 4:2:0 and 4:2:2, 8 to 10 bits per sample, luma and chroma depths independent.
+- Entropy coding: CAVLC and CABAC (all syntax elements needed for frame coding, 4:2:0 and 4:2:2).
 - Macroblocks: I (Intra 4x4 / 8x8 / 16x16, I_PCM), P (all partitions, P_8x8ref0, P_Skip),
   B (all partitions and sub-partitions, B_Skip, B_Direct_16x16, B_Direct_8x8), spatial and temporal
   direct prediction with/without `direct_8x8_inference`, constrained intra prediction.
-- Transforms / quantisation: 4x4, 8x8, Intra16x16 DC Hadamard, 2x2 chroma DC; flat and custom
-  scaling matrices (SPS and PPS level).
-- Inter prediction: quarter-sample 6-tap luma, eighth-sample chroma, explicit and implicit weighted
-  prediction, multiple reference frames, long-term references.
+- Transforms / quantisation: 4x4, 8x8, Intra16x16 DC Hadamard, 2x2 (4:2:0) and 2x4 (4:2:2,
+  scaled at QP'c + 3) chroma DC; flat and custom scaling matrices (SPS and PPS level);
+  `QpBdOffsetY/C` (negative QPs down to -12 at 10 bits, `mb_qp_delta` wrapping in
+  -QpBdOffsetY..=51).
+- Inter prediction: quarter-sample 6-tap luma, eighth-sample chroma (vertical quarter samples in
+  4:2:2), explicit and implicit weighted prediction (offsets scaled to the bit depth), multiple
+  reference frames, long-term references.
 - DPB: sliding window, all MMCOs (1-6), IDR / `no_output_of_prior_pics`, bumping with DPB size from
   the level (or VUI `max_dec_frame_buffering`) and `max_num_reorder_frames`.
 - Deblocking filter: full bS derivation, `disable_deblocking_filter_idc` 0/1/2, slice offsets,
-  8x8-transform edges.
-- Output: cropped 8-bit planar 4:2:0 pictures in output order with the caller's `pts`, POC, key
-  flag, VUI colour description (range, primaries, transfer, matrix) and sample aspect ratio.
+  8x8-transform edges, alpha / beta / tC0 scaled to the bit depth, the four horizontal chroma
+  edges of 4:2:2 (they use the bS of luma edges 0-3, also with the 8x8 transform).
+- Output: cropped planar pictures in output order with the caller's `pts`, POC, key flag, VUI
+  colour description (range, primaries, transfer, matrix) and sample aspect ratio. 8-bit
+  pictures fill `Picture::y/u/v`; a picture with either component deeper than 8 bits
+  (`Picture::is_deep`) fills `Picture::y16/u16/v16` for all three planes (`bit_depth`,
+  `bit_depth_chroma`); 4:2:2 pictures set `chroma422` and have full-height chroma planes.
 - Frame-level multithreading (see below).
 - Draft mode for reduced-resolution playback (off by default): non-reference pictures skip the
   deblocking filter and are flagged `Picture::draft`; every other picture stays bit-exact.
@@ -46,7 +55,9 @@ let mut dec = Decoder::new(); // or Decoder::with_threads(n), Decoder::from_avcc
 // dec.threads(): worker threads in use; dec.set_draft(true): draft mode (playback only)
 for (pts, access_unit) in access_units {
     for pic in dec.decode(access_unit, pts)? {
-        // pic.width / pic.height (cropped), pic.y / pic.u / pic.v, pic.y_stride / pic.uv_stride,
+        // pic.width / pic.height (cropped), pic.y / pic.u / pic.v (8-bit) or pic.y16 / pic.u16 /
+        // pic.v16 (pic.is_deep(): luma or chroma deeper than 8 bits), pic.chroma422,
+        // pic.y_stride / pic.uv_stride,
         // pic.pts, pic.poc, pic.key, pic.color, pic.sar
     }
 }
@@ -131,6 +142,13 @@ with ffmpeg + libx264; tests print a message and skip when `/opt/homebrew/bin/ff
 - Vectorised kernels against their straightforward forms on random input: the deblocking edge
   filter against the per-line filter, the 4x4 / 8x8 inverse transforms against the per-column
   formulation.
+- High 10 and High 4:2:2 (`hbd_tests.rs`): libx264 streams (`yuv420p10le` High 10,
+  `yuv422p` / `yuv422p10le` High 4:2:2) compared sample for sample with ffmpeg's decode, at 1
+  and 4 threads: CABAC and CAVLC with I/P/B pictures, intra 8x8, B pyramids with weighted
+  prediction and strong deblocking (QP 40-46), low and negative QPs (SliceQPY -12..-8), and
+  adaptive quantisation at a bitrate target. Hand-built I_PCM pictures with 9- and 10-bit
+  samples (4:2:0 and 4:2:2, equal and different luma / chroma depths) decode exactly, and
+  truncated ones fail without a panic.
 
 ### Fixture matrix (all bit-exact, single- and multi-threaded)
 
@@ -216,7 +234,7 @@ file; `H264_BENCH_ITERS=n` (and `H264_THREADS=t`, `H264_DRAFT=1`) turns it into 
 
 - Interlaced coding (field pictures, PAFF, MBAFF): streams with `frame_mbs_only_flag = 0` return
   `Error::Unsupported`.
-- Only 8-bit 4:2:0. High 10 / 4:2:2 / 4:4:4 / monochrome and lossless
+- 4:2:0 and 4:2:2 at 8 to 10 bits only. 4:4:4, monochrome, bit depths above 10 and lossless
   (`qpprime_y_zero_transform_bypass`) return `Error::Unsupported`.
 - FMO (slice groups), SP/SI slices, data partitioning (Extended profile), MVC/SVC NAL units.
 - Error concealment is minimal: undecodable slices leave the prediction/previous content; missing
@@ -224,13 +242,12 @@ file; `H264_BENCH_ITERS=n` (and `H264_THREADS=t`, `H264_DRAFT=1`) turns it into 
 - No SIMD intrinsics (the hot loops are written to auto-vectorise); CABAC residual decoding is
   inherently serial and now dominates.
 
-### Extending to High 10 and 4:2:2
+### Sample types
 
-The chroma format and bit depth are isolated behind `Sps::check_supported`. The parts that are
-format-specific today: `Planes`/`FrameRow` sample type (`u8`; a `u16` variant or a generic sample
-type is needed for bit depths > 8, together with `Clip1` ranges, `QpBdOffset` in the QP
-derivations and the scaled tC0/alpha/beta in deblocking), chroma block geometry (`MbWidthC` /
-`MbHeightC` = 8x8 in `slicedec`, `intra::pred_chroma`, the chroma DC transform and the CABAC/CAVLC
-chroma DC parsing — the 2x4 total_zeros tables and ctxBlockCat 3 `NumC8x8` handling are already in
-place), chroma motion-vector vertical scaling and the chroma deblocking edges (4:2:2 has four
-horizontal chroma edges).
+Samples are stored as `u8` for 8-bit pictures and `u16` above (`picture::Sample`): planes, rows,
+prediction and the residual kernels are generic over it, so the 8-bit path compiles to the same
+code as before. Every write clips to the plane's `max` (Clip1Y / Clip1C); the `u8` versions
+ignore it (it is always 255 there). The first 6-tap luma pass is kept in `i16` for 8-bit samples
+and `i32` above; the deblocking lanes stay `i16` (enough up to 12 bits). A frame's rows are
+stored in one sample type (`picture::Rows`); a stream whose bit depth or chroma format changes
+flushes the DPB first, so references always match the picture being decoded.

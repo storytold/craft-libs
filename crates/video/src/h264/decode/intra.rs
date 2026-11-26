@@ -1,4 +1,13 @@
 //! Intra prediction (8.3): Intra_4x4, Intra_8x8 (with reference filtering), Intra_16x16 and chroma.
+//! `max` is the plane's largest sample value: unavailable neighbours predict (max + 1) / 2.
+
+use crate::h264::decode::picture::Sample;
+
+/// A value already within the sample range (an average of samples) in the storage type.
+#[inline(always)]
+fn sv<S: Sample>(v: i32) -> S {
+    S::from_i32(v)
+}
 
 /// Neighbouring sample availability for one block.
 #[derive(Clone, Copy, Debug, Default)]
@@ -12,11 +21,11 @@ pub struct Avail {
 /// Neighbouring samples of an NxN block in one line: p[-1, y] at `O - 1 - y` (y = 0..N-1),
 /// p[-1, -1] at `O`, p[x, -1] at `O + 1 + x` (x = 0..2N-1). The sample past each end repeats
 /// the last one, so the end cases of the three-tap formulas need no special handling.
-type Edge = [u8; 32];
+type Edge<S> = [S; 32];
 const O: usize = 9;
 
-fn load_edge<const N: usize>(plane: &[u8], stride: usize, x: usize, y: usize, a: Avail) -> Edge {
-    let mut e = [128u8; 32];
+fn load_edge<S: Sample, const N: usize>(plane: &[S], stride: usize, x: usize, y: usize, a: Avail, max: i32) -> Edge<S> {
+    let mut e = [sv::<S>((max + 1) >> 1); 32];
     if a.top {
         let row = &plane[(y - 1) * stride + x..];
         if a.top_right {
@@ -42,65 +51,65 @@ fn load_edge<const N: usize>(plane: &[u8], stride: usize, x: usize, y: usize, a:
 }
 
 #[inline(always)]
-fn row_mut<const N: usize>(out: &mut [u8], stride: usize, y: usize) -> &mut [u8] {
+fn row_mut<S: Sample, const N: usize>(out: &mut [S], stride: usize, y: usize) -> &mut [S] {
     &mut out[y * stride..y * stride + N]
 }
 
 #[inline(always)]
-fn tap3(e: &Edge, c: usize) -> u8 {
-    ((e[c - 1] as u16 + 2 * e[c] as u16 + e[c + 1] as u16 + 2) >> 2) as u8
+fn tap3<S: Sample>(e: &Edge<S>, c: usize) -> S {
+    sv((e[c - 1].to_i32() + 2 * e[c].to_i32() + e[c + 1].to_i32() + 2) >> 2)
 }
 
 /// Directional / DC prediction shared by Intra_4x4 and Intra_8x8 (8.3.1.2.x, 8.3.2.2.x). Every
 /// directional sample is a two-tap (`f2`) or three-tap (`f3`) average along the edge line.
-fn pred_nxn<const N: usize>(mode: u8, e: &Edge, a: Avail, out: &mut [u8], stride: usize) {
+fn pred_nxn<S: Sample, const N: usize>(mode: u8, e: &Edge<S>, a: Avail, out: &mut [S], stride: usize, max: i32) {
     match mode {
         0 => {
             for y in 0..N {
-                row_mut::<N>(out, stride, y).copy_from_slice(&e[O + 1..O + 1 + N]);
+                row_mut::<S, N>(out, stride, y).copy_from_slice(&e[O + 1..O + 1 + N]);
             }
         }
         1 => {
             for y in 0..N {
-                row_mut::<N>(out, stride, y).fill(e[O - 1 - y]);
+                row_mut::<S, N>(out, stride, y).fill(e[O - 1 - y]);
             }
         }
         2 => {
             let n = N as u32;
             let shift = if N == 4 { 2 } else { 3 };
-            let st: u32 = e[O + 1..O + 1 + N].iter().map(|&v| v as u32).sum();
-            let sl: u32 = e[O - N..O].iter().map(|&v| v as u32).sum();
-            let dc = match (a.top, a.left) {
+            let st: u32 = e[O + 1..O + 1 + N].iter().map(|&v| v.to_i32() as u32).sum();
+            let sl: u32 = e[O - N..O].iter().map(|&v| v.to_i32() as u32).sum();
+            let dc = sv::<S>(match (a.top, a.left) {
                 (true, true) => (st + sl + n) >> (shift + 1),
                 (false, true) => (sl + (n >> 1)) >> shift,
                 (true, false) => (st + (n >> 1)) >> shift,
-                _ => 128,
-            } as u8;
+                _ => ((max + 1) >> 1) as u32,
+            } as i32);
             for y in 0..N {
-                row_mut::<N>(out, stride, y).fill(dc);
+                row_mut::<S, N>(out, stride, y).fill(dc);
             }
         }
         _ => {
-            let mut f2 = [0u8; 32];
-            let mut f3 = [0u8; 32];
+            let mut f2 = [S::default(); 32];
+            let mut f3 = [S::default(); 32];
             for c in 1..31 {
-                f2[c] = ((e[c] as u16 + e[c + 1] as u16 + 1) >> 1) as u8;
+                f2[c] = S::avg(e[c], e[c + 1]);
                 f3[c] = tap3(e, c);
             }
             match mode {
                 3 => {
                     for y in 0..N {
-                        row_mut::<N>(out, stride, y).copy_from_slice(&f3[O + 2 + y..O + 2 + y + N]);
+                        row_mut::<S, N>(out, stride, y).copy_from_slice(&f3[O + 2 + y..O + 2 + y + N]);
                     }
                 }
                 4 => {
                     for y in 0..N {
-                        row_mut::<N>(out, stride, y).copy_from_slice(&f3[O - y..O - y + N]);
+                        row_mut::<S, N>(out, stride, y).copy_from_slice(&f3[O - y..O - y + N]);
                     }
                 }
                 5 => {
                     for y in 0..N {
-                        let r = row_mut::<N>(out, stride, y);
+                        let r = row_mut::<S, N>(out, stride, y);
                         for x in 0..N {
                             let z = 2 * x as isize - y as isize;
                             let i = O + x - (y >> 1);
@@ -116,7 +125,7 @@ fn pred_nxn<const N: usize>(mode: u8, e: &Edge, a: Avail, out: &mut [u8], stride
                 }
                 6 => {
                     for y in 0..N {
-                        let r = row_mut::<N>(out, stride, y);
+                        let r = row_mut::<S, N>(out, stride, y);
                         for x in 0..N {
                             let z = 2 * y as isize - x as isize;
                             let i = O + (x >> 1) - y;
@@ -133,12 +142,12 @@ fn pred_nxn<const N: usize>(mode: u8, e: &Edge, a: Avail, out: &mut [u8], stride
                 7 => {
                     for y in 0..N {
                         let s = if y % 2 == 0 { &f2[O + 1 + (y >> 1)..] } else { &f3[O + 2 + (y >> 1)..] };
-                        row_mut::<N>(out, stride, y).copy_from_slice(&s[..N]);
+                        row_mut::<S, N>(out, stride, y).copy_from_slice(&s[..N]);
                     }
                 }
                 _ => {
                     for y in 0..N {
-                        let r = row_mut::<N>(out, stride, y);
+                        let r = row_mut::<S, N>(out, stride, y);
                         for x in 0..N {
                             let z = x + 2 * y;
                             r[x] = if z > 2 * N - 3 {
@@ -156,30 +165,30 @@ fn pred_nxn<const N: usize>(mode: u8, e: &Edge, a: Avail, out: &mut [u8], stride
 }
 
 /// Intra_4x4 prediction written into `plane` at (x, y).
-pub fn pred4x4(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a: Avail) {
-    let e = load_edge::<4>(plane, stride, x, y, a);
-    pred_nxn::<4>(mode, &e, a, &mut plane[y * stride + x..], stride);
+pub fn pred4x4<S: Sample>(plane: &mut [S], stride: usize, (x, y): (usize, usize), mode: u8, a: Avail, max: i32) {
+    let e = load_edge::<S, 4>(plane, stride, x, y, a, max);
+    pred_nxn::<S, 4>(mode, &e, a, &mut plane[y * stride + x..], stride, max);
 }
 
 /// Intra_8x8 prediction (with reference sample filtering) written into `plane` at (x, y).
-pub fn pred8x8(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a: Avail) {
-    let p = load_edge::<8>(plane, stride, x, y, a);
+pub fn pred8x8<S: Sample>(plane: &mut [S], stride: usize, (x, y): (usize, usize), mode: u8, a: Avail, max: i32) {
+    let p = load_edge::<S, 8>(plane, stride, x, y, a, max);
     let mut f = p;
-    let (tl, t0, t1, l0, l1) = (p[O] as u16, p[O + 1] as u16, p[O + 2] as u16, p[O - 1] as u16, p[O - 2] as u16);
+    let (tl, t0, t1, l0, l1) = (p[O].to_i32(), p[O + 1].to_i32(), p[O + 2].to_i32(), p[O - 1].to_i32(), p[O - 2].to_i32());
     if a.top {
         for c in O + 1..O + 17 {
             f[c] = tap3(&p, c);
         }
         if !a.top_left {
-            f[O + 1] = ((3 * t0 + t1 + 2) >> 2) as u8;
+            f[O + 1] = sv((3 * t0 + t1 + 2) >> 2);
         }
         f[O + 17] = f[O + 16];
     }
     if a.top_left {
         f[O] = match (a.top, a.left) {
             (true, true) => tap3(&p, O),
-            (true, false) => ((3 * tl + t0 + 2) >> 2) as u8,
-            (false, true) => ((3 * tl + l0 + 2) >> 2) as u8,
+            (true, false) => sv((3 * tl + t0 + 2) >> 2),
+            (false, true) => sv((3 * tl + l0 + 2) >> 2),
             _ => p[O],
         };
     }
@@ -188,43 +197,40 @@ pub fn pred8x8(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a:
             f[c] = tap3(&p, c);
         }
         if !a.top_left {
-            f[O - 1] = ((3 * l0 + l1 + 2) >> 2) as u8;
+            f[O - 1] = sv((3 * l0 + l1 + 2) >> 2);
         }
         f[O - 9] = f[O - 8];
     }
-    pred_nxn::<8>(mode, &f, a, &mut plane[y * stride + x..], stride);
-}
-
-#[inline(always)]
-fn clip(v: i32) -> u8 {
-    v.clamp(0, 255) as u8
+    pred_nxn::<S, 8>(mode, &f, a, &mut plane[y * stride + x..], stride, max);
 }
 
 /// Intra_16x16 prediction (8.3.3) for the macroblock at luma (x, y).
-pub fn pred16x16(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a: Avail) {
+pub fn pred16x16<S: Sample>(plane: &mut [S], stride: usize, (x, y): (usize, usize), mode: u8, a: Avail, max: i32) {
+    let clip = |v: i32| S::clip(v, max);
+    let mid = (max + 1) >> 1;
     let mut top = [0i32; 16];
     let mut left = [0i32; 16];
     if a.top {
         for i in 0..16 {
-            top[i] = plane[(y - 1) * stride + x + i] as i32;
+            top[i] = plane[(y - 1) * stride + x + i].to_i32();
         }
     }
     if a.left {
         for i in 0..16 {
-            left[i] = plane[(y + i) * stride + x - 1] as i32;
+            left[i] = plane[(y + i) * stride + x - 1].to_i32();
         }
     }
     let base = y * stride + x;
     match mode {
         0 => {
-            let t: [u8; 16] = top.map(|v| v as u8);
+            let t: [S; 16] = top.map(sv);
             for r in 0..16 {
-                row_mut::<16>(&mut plane[base..], stride, r).copy_from_slice(&t);
+                row_mut::<S, 16>(&mut plane[base..], stride, r).copy_from_slice(&t);
             }
         }
         1 => {
             for r in 0..16 {
-                plane[base + r * stride..base + r * stride + 16].fill(left[r] as u8);
+                plane[base + r * stride..base + r * stride + 16].fill(sv(left[r]));
             }
         }
         2 => {
@@ -234,14 +240,14 @@ pub fn pred16x16(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, 
                 (true, true) => (st + sl + 16) >> 5,
                 (false, true) => (sl + 8) >> 4,
                 (true, false) => (st + 8) >> 4,
-                _ => 128,
-            } as u8;
+                _ => mid,
+            };
             for r in 0..16 {
-                plane[base + r * stride..base + r * stride + 16].fill(dc);
+                plane[base + r * stride..base + r * stride + 16].fill(sv(dc));
             }
         }
         _ => {
-            let tl = if a.top_left { plane[(y - 1) * stride + x - 1] as i32 } else { 128 };
+            let tl = if a.top_left { plane[(y - 1) * stride + x - 1].to_i32() } else { mid };
             let t = |i: i32| if i < 0 { tl } else { top[i as usize] };
             let l = |i: i32| if i < 0 { tl } else { left[i as usize] };
             let mut h = 0;
@@ -254,7 +260,7 @@ pub fn pred16x16(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, 
             let b = (5 * h + 32) >> 6;
             let c = (5 * v + 32) >> 6;
             for r in 0..16 {
-                let row = row_mut::<16>(&mut plane[base..], stride, r);
+                let row = row_mut::<S, 16>(&mut plane[base..], stride, r);
                 for (cc, v) in row.iter_mut().enumerate() {
                     *v = clip((aa + b * (cc as i32 - 7) + c * (r as i32 - 7) + 16) >> 5);
                 }
@@ -265,19 +271,27 @@ pub fn pred16x16(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, 
 
 /// Chroma intra prediction for a 4:2:0 macroblock (8x8 block at chroma (x, y)), 8.3.4.
 /// Modes: 0 DC, 1 horizontal, 2 vertical, 3 plane.
-pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8, a: Avail) {
+/// Intra chroma prediction of the MB at (x, y): `h` = MbHeightC (8 for 4:2:0, 16 for 4:2:2).
+pub fn pred_chroma<S: Sample>(plane: &mut [S], stride: usize, (x, y): (usize, usize), h: usize, mode: u8, a: Avail, max: i32) {
+    if h == 16 { pred_chroma_n::<S, 16>(plane, stride, (x, y), mode, a, max) } else { pred_chroma_n::<S, 8>(plane, stride, (x, y), mode, a, max) }
+}
+
+fn pred_chroma_n<S: Sample, const H: usize>(plane: &mut [S], stride: usize, (x, y): (usize, usize), mode: u8, a: Avail, max: i32) {
     const W: usize = 8;
-    const H: usize = 8;
+    let clip = |v: i32| S::clip(v, max);
+    let mid = (max + 1) >> 1;
+    // plane prediction offset for the taller 4:2:2 block (yCF, 8.3.4.4)
+    let ycf: i32 = if H == 16 { 4 } else { 0 };
     let mut top = [0i32; W];
     let mut left = [0i32; H];
     if a.top {
         for i in 0..W {
-            top[i] = plane[(y - 1) * stride + x + i] as i32;
+            top[i] = plane[(y - 1) * stride + x + i].to_i32();
         }
     }
     if a.left {
         for i in 0..H {
-            left[i] = plane[(y + i) * stride + x - 1] as i32;
+            left[i] = plane[(y + i) * stride + x - 1].to_i32();
         }
     }
     let base = y * stride + x;
@@ -292,7 +306,7 @@ pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8
                             (true, true) => (st + sl + 4) >> 3,
                             (false, true) => (sl + 2) >> 2,
                             (true, false) => (st + 2) >> 2,
-                            _ => 128,
+                            _ => mid,
                         }
                     } else if bx > 0 {
                         if a.top {
@@ -300,50 +314,52 @@ pub fn pred_chroma(plane: &mut [u8], stride: usize, x: usize, y: usize, mode: u8
                         } else if a.left {
                             (sl + 2) >> 2
                         } else {
-                            128
+                            mid
                         }
                     } else if a.left {
                         (sl + 2) >> 2
                     } else if a.top {
                         (st + 2) >> 2
                     } else {
-                        128
+                        mid
                     };
                     for r in 0..4 {
                         let o = base + (by * 4 + r) * stride + bx * 4;
-                        plane[o..o + 4].fill(dc as u8);
+                        plane[o..o + 4].fill(sv(dc));
                     }
                 }
             }
         }
         1 => {
             for r in 0..H {
-                plane[base + r * stride..base + r * stride + W].fill(left[r] as u8);
+                plane[base + r * stride..base + r * stride + W].fill(sv(left[r]));
             }
         }
         2 => {
-            let t: [u8; W] = top.map(|v| v as u8);
+            let t: [S; W] = top.map(sv);
             for r in 0..H {
-                row_mut::<W>(&mut plane[base..], stride, r).copy_from_slice(&t);
+                row_mut::<S, W>(&mut plane[base..], stride, r).copy_from_slice(&t);
             }
         }
         _ => {
-            let tl = if a.top_left { plane[(y - 1) * stride + x - 1] as i32 } else { 128 };
+            let tl = if a.top_left { plane[(y - 1) * stride + x - 1].to_i32() } else { mid };
             let t = |i: i32| if i < 0 { tl } else { top[i as usize] };
             let l = |i: i32| if i < 0 { tl } else { left[i as usize] };
             let mut h = 0;
             let mut v = 0;
             for k in 0..4 {
                 h += (k + 1) * (t(4 + k) - t(2 - k));
-                v += (k + 1) * (l(4 + k) - l(2 - k));
+            }
+            for k in 0..4 + ycf {
+                v += (k + 1) * (l(4 + ycf + k) - l(2 + ycf - k));
             }
             let aa = 16 * (left[H - 1] + top[W - 1]);
             let b = (34 * h + 32) >> 6;
-            let c = (34 * v + 32) >> 6;
+            let c = ((34 - 29 * (ycf != 0) as i32) * v + 32) >> 6;
             for r in 0..H {
-                let row = row_mut::<W>(&mut plane[base..], stride, r);
+                let row = row_mut::<S, W>(&mut plane[base..], stride, r);
                 for (cc, v) in row.iter_mut().enumerate() {
-                    *v = clip((aa + b * (cc as i32 - 3) + c * (r as i32 - 3) + 16) >> 5);
+                    *v = clip((aa + b * (cc as i32 - 3) + c * (r as i32 - 3 - ycf) + 16) >> 5);
                 }
             }
         }
@@ -589,10 +605,10 @@ mod tests {
             for mode in 0..9 {
                 let (mut got, mut want) = (base.clone(), base.clone());
                 if iter % 2 == 0 {
-                    pred4x4(&mut got, s, 8, 8, mode, a);
+                    pred4x4(&mut got, s, (8, 8), mode, a, 255);
                     reference::pred4x4(&mut want, s, 8, 8, mode, a);
                 } else {
-                    pred8x8(&mut got, s, 8, 8, mode, a);
+                    pred8x8(&mut got, s, (8, 8), mode, a, 255);
                     reference::pred8x8(&mut want, s, 8, 8, mode, a);
                 }
                 assert_eq!(got, want, "iteration {iter}: mode {mode} {a:?}");
@@ -603,12 +619,12 @@ mod tests {
     #[test]
     fn i4_vertical_horizontal_dc() {
         let (mut p, s) = setup();
-        pred4x4(&mut p, s, 4, 4, 0, ALL);
+        pred4x4(&mut p, s, (4, 4), 0, ALL, 255);
         assert_eq!(&p[4 * s + 4..4 * s + 8], &[10, 20, 30, 40]);
         assert_eq!(&p[7 * s + 4..7 * s + 8], &[10, 20, 30, 40]);
-        pred4x4(&mut p, s, 4, 4, 1, ALL);
+        pred4x4(&mut p, s, (4, 4), 1, ALL, 255);
         assert_eq!(&p[5 * s + 4..5 * s + 8], &[2, 2, 2, 2]);
-        pred4x4(&mut p, s, 4, 4, 2, ALL);
+        pred4x4(&mut p, s, (4, 4), 2, ALL, 255);
         // (10+20+30+40 + 1+2+3+4 + 4) >> 3 = 114 >> 3 = 14
         assert_eq!(p[4 * s + 4], 14);
     }
@@ -616,7 +632,7 @@ mod tests {
     #[test]
     fn i4_diag_down_left_hand_computed() {
         let (mut p, s) = setup();
-        pred4x4(&mut p, s, 4, 4, 3, ALL);
+        pred4x4(&mut p, s, (4, 4), 3, ALL, 255);
         // pred[0,0] = (t0 + 2 t1 + t2 + 2) >> 2 = (10 + 40 + 30 + 2) >> 2 = 20
         assert_eq!(p[4 * s + 4], 20);
         // pred[3,3] = (t6 + 3 t7 + 2) >> 2 = (70 + 240 + 2) >> 2 = 78
@@ -626,7 +642,7 @@ mod tests {
     #[test]
     fn i4_diag_down_right_hand_computed() {
         let (mut p, s) = setup();
-        pred4x4(&mut p, s, 4, 4, 4, ALL);
+        pred4x4(&mut p, s, (4, 4), 4, ALL, 255);
         // x==y: (t0 + 2 tl + l0 + 2) >> 2 = (10 + 10 + 1 + 2) >> 2 = 5
         assert_eq!(p[4 * s + 4], 5);
         // x=1,y=0: (tl + 2 t0 + t1 + 2)>>2 = (5 + 20 + 20 + 2) >> 2 = 11
@@ -639,7 +655,7 @@ mod tests {
     fn i4_top_right_substitution() {
         let (mut p, s) = setup();
         let a = Avail { top_right: false, ..ALL };
-        pred4x4(&mut p, s, 4, 4, 3, a);
+        pred4x4(&mut p, s, (4, 4), 3, a, 255);
         // top-right replaced by t3 = 40: pred[3,3] = (40 + 120 + 2) >> 2 = 40
         assert_eq!(p[7 * s + 7], 40);
     }
@@ -648,7 +664,7 @@ mod tests {
     fn i16_plane_flat_is_flat() {
         let s = 32;
         let mut p = vec![77u8; s * 32];
-        pred16x16(&mut p, s, 8, 8, 3, ALL);
+        pred16x16(&mut p, s, (8, 8), 3, ALL, 255);
         assert!(p[8 * s + 8..8 * s + 24].iter().all(|&v| v == 77));
     }
 
@@ -660,7 +676,7 @@ mod tests {
             p[3 * s + 4 + i] = if i < 4 { 40 } else { 80 };
             p[(4 + i) * s + 3] = if i < 4 { 8 } else { 16 };
         }
-        pred_chroma(&mut p, s, 4, 4, 0, ALL);
+        pred_chroma(&mut p, s, (4, 4), 8, 0, ALL, 255);
         assert_eq!(p[4 * s + 4], (160 + 32 + 4) >> 3); // top-left block: both
         assert_eq!(p[4 * s + 8], 80); // top-right block: top only
         assert_eq!(p[8 * s + 4], 16); // bottom-left: left only

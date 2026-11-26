@@ -4,7 +4,7 @@
 use crate::h264::decode::cabac::Cabac;
 use crate::h264::decode::error::{Result, ensure, invalid};
 use crate::h264::decode::mbtypes::{MbTypeInfo, Part, SubMbInfo, b_mb_type, b_sub_mb_type, intra_mb_type, p_mb_type, p_sub_mb_type};
-use crate::h264::decode::picture::MbKind;
+use crate::h264::decode::picture::{MbKind, Sample};
 use crate::h264::decode::slice::SliceType;
 use crate::h264::decode::slicedec::{MbCur, SliceDecoder};
 use crate::h264::decode::tables::{ZIGZAG4, ZIGZAG8};
@@ -34,11 +34,14 @@ const IDENT_CTX: [u8; 64] = {
 };
 /// ctxIdxInc = Min(levelListIdx / NumC8x8, 2) for 4:2:0 chroma DC (ctxBlockCat 3).
 const CHROMA_DC_CTX: [u8; 4] = [0, 1, 2, 2];
+/// The same for 4:2:2 chroma DC (NumC8x8 = 2), decoded as "ctxBlockCat 6" here: cat 3 contexts
+/// over 8 coefficients.
+const CHROMA_DC422_CTX: [u8; 8] = [0, 0, 1, 1, 2, 2, 2, 2];
 
 /// Table 9-40 ctxIdxBlockCatOffset for ctxBlockCat 0..=5: (coded_block_flag, significant/last, abs level).
 const CAT_OFFSET: [(usize, usize, usize); 6] = [(0, 0, 0), (4, 15, 10), (8, 29, 20), (12, 44, 30), (16, 47, 39), (0, 0, 0)];
 
-impl SliceDecoder<'_> {
+impl<S: Sample> SliceDecoder<'_, S> {
     /// Decode slice_data() with CABAC. `rbsp` is the whole slice RBSP.
     pub fn decode_cabac(&mut self, rbsp: &[u8]) -> Result<()> {
         let start = self.sh.header_bits.div_ceil(8) * 8;
@@ -374,7 +377,8 @@ impl SliceDecoder<'_> {
         let n = if bx < 0 { self.nb[0] } else { self.nb[1] };
         let Some(m) = n else { return intra_cur as usize };
         let st = &self.pic.mbs[m];
-        let (x, y) = if bx < 0 { (1, by as usize) } else { (bx as usize, 1) };
+        let bottom = self.pic.planes.mbhc() / 4 - 1;
+        let (x, y) = if bx < 0 { (1, by as usize) } else { (bx as usize, bottom) };
         (st.nnz_c[comp][y * 2 + x] != 0) as usize
     }
 
@@ -382,14 +386,17 @@ impl SliceDecoder<'_> {
     /// `put` as (index in the coefficient list, level); the others are zero. `cbf_inc` is the
     /// coded_block_flag ctxIdxInc (ignored for cat 5). Returns the number of non-zero coefficients.
     fn residual_block_cabac<const CAT: usize>(c: &mut Cabac, cbf_inc: usize, mut put: impl FnMut(usize, i32)) -> u8 {
-        if CAT != 5 && c.decode_decision(85 + CAT_OFFSET[CAT].0 + cbf_inc) == 0 {
+        // 6: 4:2:2 chroma DC, which uses the ctxBlockCat 3 contexts
+        let cat = if CAT == 6 { 3 } else { CAT };
+        if cat != 5 && c.decode_decision(85 + CAT_OFFSET[cat].0 + cbf_inc) == 0 {
             return 0;
         }
-        let max_num = [16, 15, 16, 4, 15, 64][CAT];
+        let max_num = [16, 15, 16, 4, 15, 64, 8][CAT];
         let (sig_base, last_base, abs_base) =
-            if CAT == 5 { (402, 417, 426) } else { (105 + CAT_OFFSET[CAT].1, 166 + CAT_OFFSET[CAT].1, 227 + CAT_OFFSET[CAT].2) };
+            if cat == 5 { (402, 417, 426) } else { (105 + CAT_OFFSET[cat].1, 166 + CAT_OFFSET[cat].1, 227 + CAT_OFFSET[cat].2) };
         let (sig_tab, last_tab): (&[u8], &[u8]) = match CAT {
             3 => (&CHROMA_DC_CTX, &CHROMA_DC_CTX),
+            6 => (&CHROMA_DC422_CTX, &CHROMA_DC422_CTX),
             5 => (&SIG8_FRAME, &LAST8),
             _ => (&IDENT_CTX, &IDENT_CTX),
         };
@@ -414,7 +421,7 @@ impl SliceDecoder<'_> {
         }
         let mut eq1 = 0usize;
         let mut gt1 = 0usize;
-        let gt1_cap = if CAT == 3 { 3 } else { 4 };
+        let gt1_cap = if cat == 3 { 3 } else { 4 };
         for &p in pos[..n].iter().rev() {
             let inc0 = if gt1 != 0 { 0 } else { (1 + eq1).min(4) };
             let mut abs = 1i32;
@@ -512,16 +519,22 @@ impl SliceDecoder<'_> {
             for comp in 0..2 {
                 let bit = 1 + comp as u8;
                 let inc = self.cbf_dc_cond(self.nb[0], bit, intra) + 2 * self.cbf_dc_cond(self.nb[1], bit, intra);
-                let mut lv = [0i32; 4];
-                if Self::residual_block_cabac::<3>(c, inc, |k, v| lv[k] = v) > 0 {
+                let mut lv = [0i32; 8];
+                let n = if self.pic.planes.c422() {
+                    Self::residual_block_cabac::<6>(c, inc, |k, v| lv[k] = v)
+                } else {
+                    Self::residual_block_cabac::<3>(c, inc, |k, v| lv[k] = v)
+                };
+                if n > 0 {
                     self.mb_mut().cbf_dc |= 1 << bit;
                     self.put_chroma_dc(comp, &lv);
                 }
             }
         }
         if cbp_c == 2 {
+            let nbc = self.pic.planes.mbhc() / 2;
             for comp in 0..2 {
-                for b in 0..4 {
+                for b in 0..nbc {
                     let (bx, by) = ((b & 1) as i32, (b >> 1) as i32);
                     let inc = self.cbf_chroma_ac_cond(comp, bx - 1, by, intra) + 2 * self.cbf_chroma_ac_cond(comp, bx, by - 1, intra);
                     let (blk, ls, dq) = self.chroma_ac_dst(comp, b);
@@ -546,12 +559,10 @@ impl SliceDecoder<'_> {
         if info.kind == MbKind::IPcm {
             // pcm alignment + samples, then re-initialise the arithmetic decoder
             let pos = c.bit_pos().div_ceil(8);
-            let data = c.data();
-            ensure!(data.len() >= pos + 384, "truncated I_PCM macroblock");
-            let Some(&samples) = data.get(pos..).and_then(|d| d.first_chunk::<384>()) else {
+            let Some((samples, bytes)) = self.read_pcm(c.data(), pos) else {
                 return invalid("truncated I_PCM macroblock");
             };
-            c.set_bit_pos((pos + 384) * 8);
+            c.set_bit_pos((pos + bytes) * 8);
             c.init_engine()?;
             self.finish_pcm();
             self.write_pcm(&samples);
