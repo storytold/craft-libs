@@ -2,6 +2,31 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
+## v1.0.9
+
+- **Release Notes:** [GitHub Release v1.0.9](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.9)
+
+### 2026-11-27 - Upstream Merge (`next`), and the macOS Menu Exemption Registered Once
+
+- **Merged `storytold/craft-libs` into the fork's `next`:** `next` at `ea14416aa`, 39 upstream
+  commits over `e17227177` (merged in two steps as upstream moved), with the fork's own crates, their
+  trials and its Space rule kept.
+- **The macOS menu driver's exemption is upstream's, registered once.** Upstream `76322b729` keeps
+  `std::time::Instant` behind a `contract/motion` marker and lists the site in
+  `design/exceptions/craft-menu/crate.toml`; the fork's own entry named the same site, so
+  `design/exceptions/craft-menu/mac.toml` is removed. With both, the lint reported
+  `exception/stale` for each file; with one, it reports 28 passed.
+- **`Prompt::layer_role` carries upstream's visibility.** `#[prop(vis = "pub(super)")]` includes the
+  fork's plain `#[prop]`, and the hand-written setter stays gone.
+- **The single suite failure is upstream's own, measured.** `craft-xlsx xlsb::formula::tests::a_long_chain_of_strings_stays_within_the_depth_bound`
+  builds a 256 KiB thread for 4,096 chained strings; it aborted in 2 of 5 `cargo nextest run` runs
+  here, passed 5 of 5 under `cargo test`, and passed 5 of 5 with the stack raised to 2 MiB in a probe
+  that was reverted. The fork holds no change to `crates/xlsx`, and upstream's own Workspace runs on
+  `next` (`45864885952`, `5d2c8bdcf`) are red as well.
+- **Suites**: the workspace runs **18,723 passed / 1 failed (the test above) / 63 skipped**; the
+  design lint reports 28 passed, and clippy and format exit 0.
+- See [Release Notes v1.0.9](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.9) for details.
+
 ## v1.0.8
 
 - **Release Notes:** [GitHub Release v1.0.8](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.8)
