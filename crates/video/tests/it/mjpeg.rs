@@ -250,11 +250,11 @@ fn adobe_transform_zero_keeps_numeric_id_components_as_rgb() {
 }
 
 /// libjpeg-turbo's test images, kept with `craft-jpeg` (`crates/jpeg/tests/data/SOURCE.md`).
-const TESTORIG: &[u8] = include_bytes!("../../jpeg/tests/data/testorig.jpg");
-const TESTORIG_PROGRESSIVE: &[u8] = include_bytes!("../../jpeg/tests/data/testorig-huffman-progressive.jpg");
-const TESTORIG12: &[u8] = include_bytes!("../../jpeg/tests/data/testorig12.jpg");
+const TESTORIG: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig.jpg");
+const TESTORIG_PROGRESSIVE: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig-huffman-progressive.jpg");
+const TESTORIG12: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig12.jpg");
 /// libjpeg-turbo's decode of `testorig12.jpg`: binary PPM, maxval 4095.
-const TESTORIG12_PPM: &[u8] = include_bytes!("../../jpeg/tests/data/testorig12.ppm");
+const TESTORIG12_PPM: &[u8] = include_bytes!("../../../jpeg/tests/data/testorig12.ppm");
 
 /// A byte the padding of a row starts as, to see that `decode_into` leaves it alone.
 const PAD: u8 = 0xA5;
