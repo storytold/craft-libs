@@ -183,45 +183,21 @@ pub struct ChannelRow<'a> {
     checker: bool,
     unit: ChannelUnit,
     marks: &'a [f64],
-    /// Whether a units cell follows the number field.
-    units_cell: bool,
 }
 
-/// What a [`ChannelRow`] reports.
+/// What [`ChannelRow::show_with_units`] reports.
 #[non_exhaustive]
 pub struct ChannelRowOutput {
     /// The edit of the slider or the field, `None` when the row did not run.
     pub edit: Option<EditResponse<f64>>,
-    /// The units cell ([`ChannelRow::units_cell`]) was double-clicked in this pass: the host switches the units the
-    /// row counts in.
+    /// The units cell was double-clicked in this pass: the host switches the units the row counts in.
     pub units_double_clicked: bool,
 }
 
 impl<'a> ChannelRow<'a> {
     /// A row named `label` over `value`, ruled by `rule`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, f64>, rule: ChannelRule) -> Self {
-        ChannelRow {
-            label: label.into(),
-            short: None,
-            value,
-            rule,
-            track: None,
-            checker: false,
-            unit: ChannelUnit::None,
-            marks: &[],
-            units_cell: false,
-        }
-    }
-
-    /// A blank cell after the number field whose double click reports
-    /// [`units_double_clicked`](ChannelRowOutput::units_double_clicked), for a row whose host can switch the units the
-    /// value counts in. The cell is highlighted under the pointer and takes no keyboard focus, so the host offers the
-    /// same switch as a command; in a disabled container it does not report a double click. The slider gives up the
-    /// cell's width, so the row keeps its width.
-    #[must_use]
-    pub fn units_cell(mut self, on: bool) -> Self {
-        self.units_cell = on;
-        self
+        ChannelRow { label: label.into(), short: None, value, rule, track: None, checker: false, unit: ChannelUnit::None, marks: &[] }
     }
 
     /// Shows `short` at the line's start in place of the label, which stays the row's name.
@@ -256,9 +232,22 @@ impl<'a> ChannelRow<'a> {
         self
     }
 
-    /// Shows the row: the edit of the slider or the field, and a double click on the units cell.
-    pub fn show(self, ui: &mut Ui) -> ChannelRowOutput {
-        let ChannelRow { label, short, mut value, rule, track, checker, unit, marks, units_cell } = self;
+    /// Shows the row; the edit of the slider or the field, `None` when the row did not run.
+    pub fn show(self, ui: &mut Ui) -> Option<EditResponse<f64>> {
+        self.show_row(ui, false).edit
+    }
+
+    /// Shows the row with a blank units cell after the number field, for a row whose host can switch the units the
+    /// value counts in: the edit of the slider or the field, and whether the cell was double-clicked. The cell is
+    /// highlighted under the pointer and takes no keyboard focus, so the host offers the same switch as a command; in
+    /// a disabled container it does not report a double click. The slider gives up the cell's width, so the row keeps
+    /// its width.
+    pub fn show_with_units(self, ui: &mut Ui) -> ChannelRowOutput {
+        self.show_row(ui, true)
+    }
+
+    fn show_row(self, ui: &mut Ui, units_cell: bool) -> ChannelRowOutput {
+        let ChannelRow { label, short, mut value, rule, track, checker, unit, marks } = self;
         let side = match short {
             Some(short) => SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(short)))),
             None => SideLabel::new(),
@@ -303,7 +292,7 @@ pub struct UnitsCellStyle {
     size: Vec2,
 }
 
-/// The blank cell after a channel row's number field ([`ChannelRow::units_cell`]): highlighted under the pointer, it
+/// The blank cell after a channel row's number field ([`ChannelRow::show_with_units`]): highlighted under the pointer, it
 /// reports a double click. It has no keyboard stop and no node: the host's command that switches the units is its
 /// keyboard path.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]

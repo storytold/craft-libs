@@ -1152,16 +1152,17 @@ impl Body<'_> {
             // The field shows the channel's places, as Photoshop's; the edits start from the unrounded values.
             let places = 10f64.powi(i32::from(rule.decimals));
             let shown = (f64::from(current.values[i]) * scale * places).round() / places;
-            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule)
-                .short(ch.label)
-                .unit(unit)
-                .track(track)
-                .units_cell(rgb && self.rgb_units)
-                .show(ui);
-            if row.units_double_clicked {
-                self.now.rgb_percent = !rgb_percent;
-            }
-            for event in row.edit.into_iter().flat_map(|row| row.events) {
+            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track);
+            let edit = if rgb && self.rgb_units {
+                let row = row.show_with_units(ui);
+                if row.units_double_clicked {
+                    self.now.rgb_percent = !rgb_percent;
+                }
+                row.edit
+            } else {
+                row.show(ui)
+            };
+            for event in edit.into_iter().flat_map(|row| row.events) {
                 self.channel_event(model, current, i, event.map(|x| x / scale));
             }
         }

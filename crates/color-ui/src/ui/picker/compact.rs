@@ -67,7 +67,7 @@ impl<'a> Body<'a> {
                     if self.dynamic_tracks {
                         row = row.track(model.track(i, &values));
                     }
-                    if let Some(edit) = row.show(ui).edit {
+                    if let Some(edit) = row.show(ui) {
                         got.adopt(edit, pass.shown, |v, mine| *mine = mine.with_channel(model, i, *v, &pass.rules));
                     }
                 }
@@ -122,7 +122,7 @@ impl<'a> Body<'a> {
             .unit(ChannelUnit::Percent)
             .track(vec![opaque.with_alpha(0.0), opaque])
             .checker(true);
-        if let Some(edit) = row.show(ui).edit {
+        if let Some(edit) = row.show(ui) {
             got.adopt(edit, pass.shown, |v, mine| *mine = mine.with_alpha(*v, &pass.rules));
         }
     }

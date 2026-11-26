@@ -231,7 +231,7 @@ impl<'a> HarmonyWheel<'a> {
             let value = (f64::from(level) * 100.0).round();
             let rule = ChannelRule { range: 0.0..=100.0, step: 1.0, decimals: 0 };
             Stack::new().enabled(selected.is_some()).show(ui, |ui, _| {
-                let row = ChannelRow::new(slider_name.clone(), Bind::given(value), rule.clone()).track(track.clone()).show(ui).edit;
+                let row = ChannelRow::new(slider_name.clone(), Bind::given(value), rule.clone()).track(track.clone()).show(ui);
                 if let (Some(i), Some(row)) = (selected, row) {
                     for event in row.events {
                         edits.push((
