@@ -1,29 +1,32 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs` and `docs/sweep.typ`.
-
-Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes each local patch.
+holds `upstream_revision`. `local_patches` describes each local change.
+The changed files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/curve/mod.rs`,
+`src/curve/line.rs` and `docs/sweep.typ`.
 
-## Local patches
+## Local changes
 
-| File | Change |
-|---|---|
-| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
-| `src/curve/mod.rs` | When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN. The `short_curve_chord_with_huge_x` test fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307. Code comments label the change `Craft patch (huge chord)`. |
-| `src/curve/line.rs` | `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height. The `subnormal_x` test checks that line and a line from x = -1.5e-323 to 1.5e-323. Code comments label the change `Craft patch (subnormal x)`. |
-| `docs/sweep.typ` | The intersection scan to the left compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)`. |
-| `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
-| `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
-| `src/sweep/sweep_line.rs`, `src/topology.rs` | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. Code comments label the change `Craft patch (clippy lints)`. |
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | None (doc comment only) |
+| `Topology` allocates one output segment for each run of coincident horizontal pieces between two points instead of one per piece, and none for a run whose winding numbers cancel. n overlapping rectangles that share their top and bottom edges give 6n - 2 output segments instead of 2n² + 2n. The contours do not change. `has_normal_contours` and `is_disjoint_tags` read the winding numbers on either side of a run, not the ones between its pieces. | `Craft patch (coincident horizontals)` | `src/topology.rs` | `topology::tests::coincident_horizontals_get_one_output_segment_per_run` |
+| The intersection scan to the left in `docs/sweep.typ` compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)`. | None | `docs/sweep.typ` | None (documentation only) |
+| Two typos in `docs/sweep.typ` are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. | None | `docs/sweep.typ` | None (documentation only) |
+| The lemma for the intersection scan to the left in `docs/sweep.typ` asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. | None | `docs/sweep.typ` | None (documentation only) |
+| When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN. | `Craft patch (huge chord)` | `src/curve/mod.rs` | `short_curve_chord_with_huge_x` fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307 |
+| `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height. | `Craft patch (subnormal x)` | `src/curve/line.rs` | `subnormal_x` checks that line and a line from x = -1.5e-323 to 1.5e-323 |
+| Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. | `Craft patch (clippy lints)` | `src/sweep/sweep_line.rs`, `src/topology.rs` | None (lint changes only) |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
