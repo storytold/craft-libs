@@ -229,6 +229,7 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-officeart = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -668,6 +669,8 @@ odf-text = ["odf", "craft-odf/text"]
 ods = ["dep:craft-ods"]
 
 offcrypto = ["dep:craft-offcrypto"]
+
+officeart = ["dep:craft-officeart"]
 
 opc = ["dep:craft-opc"]
 opc-test-support = ["opc", "craft-opc/test-support"]
