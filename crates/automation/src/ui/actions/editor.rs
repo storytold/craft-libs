@@ -283,3 +283,61 @@ impl<'a> ActionEditor<'a> {
         ActionEditorOutput { response: shown.output, changed: !sizing && *value != before, step_moves, events }
     }
 }
+
+#[cfg(feature = "screen-testing")]
+mod stories {
+    use super::*;
+    use crate::actions::ActionColor;
+    use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
+    use serde_json::json;
+
+    struct Host;
+
+    impl ActionEditorHost for Host {
+        fn step_label(&self, step: &ActionStep) -> String {
+            step.command.clone()
+        }
+
+        fn step_summary(&self, step: &ActionStep) -> Option<String> {
+            Some(format!("Settings: {}", step.params))
+        }
+
+        fn can_edit_step(&self, _: &ActionStep) -> bool {
+            true
+        }
+    }
+
+    fn draft() -> ActionEditorValue {
+        let mut action = Action::new(
+            "Retouch draft",
+            ["Levels", "Curves", "Blur"].into_iter().map(|name| ActionStep::new(name, json!({"amount": 2}))).collect(),
+        );
+        action.description = "Adjust the tonal range.\nThen soften the result.".to_owned();
+        action.color = ActionColor::Teal;
+        action.disabled.insert(1);
+        action.dialogs.insert(2);
+        action.options.insert("imported-option".to_owned(), json!({"kept": true}));
+        ActionEditorValue::new(action, "Shift+F2")
+    }
+
+    /// A persistent unpublished draft; the story reports host requests without starting app effects.
+    #[story(ActionEditor<'static>, covers = [Default], drive = Drive::Never)]
+    fn action_editor_draft(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+        // StoryData lends one slot at a time, so copy the value out and write it back after showing.
+        let mut value = data.value("draft", draft()).clone();
+        let state = data.note(
+            "editor-state",
+            ActionEditorState { selected: Some(0), expanded: [0].into_iter().collect(), ..ActionEditorState::default() },
+        );
+        let output = ActionEditor::new(state, &mut value).host(&Host).show(ui);
+        *data.value("draft", draft()) = value;
+        if output.changed || !output.step_moves.is_empty() || !output.events.is_empty() {
+            *data.note("last-request", String::new()) = format!(
+                "Draft changed: {}. Step moves: {:?}. Host requests awaiting acknowledgement: {:?}.",
+                output.changed, output.step_moves, output.events
+            );
+        }
+        let readout = data.note("last-request", "Unpublished draft; host requests are shown here, not performed.".to_owned()).clone();
+        StoryOutput::from(output).readout(readout)
+    }
+}
