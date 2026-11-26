@@ -18,4 +18,5 @@ log = "0.4"
 serde = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 serde_json = { workspace = true }

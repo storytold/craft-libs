@@ -172,16 +172,20 @@ pub fn geometry(shape_type: u16, props: &Props) -> Geom {
     }
     if let Some(name) = preset_name(shape_type).filter(|n| craft_drawingml::preset::build(n, 100.0, 100.0, &[]).is_some()) {
         let mut adj = vec![];
-        // A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the
-        // shorter side in DrawingML.
         if shape_type == 2
             && let Some(v) = props.get(prop::ADJUST_VALUE)
         {
-            adj.push(f64::from(v as i32).clamp(0.0, 10800.0) / 21600.0 * 100_000.0);
+            adj.push(round_rect_adjust(v as i32));
         }
         return Geom::Preset { name: name.into(), adj };
     }
     custom_path(props).map(|paths| Geom::Custom { paths }).unwrap_or_default()
+}
+
+/// A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the shorter
+/// side in DrawingML.
+pub(crate) fn round_rect_adjust(v: i32) -> f64 {
+    f64::from(v).clamp(0.0, 10800.0) / 21600.0 * 100_000.0
 }
 
 /// `msosptTrapezoid`. It has no preset: DrawingML's `trapezoid` is wide at the bottom, OfficeArt's
@@ -192,7 +196,7 @@ const TRAPEZOID: u16 = 8;
 /// bottom edge inset by `adjust` (5400 unless the file says otherwise) at each end. PowerPoint
 /// writes the shape the same way when it saves a `.ppt` trapezoid as `.pptx`. A preset flipped
 /// upright would turn the shape's text upside down.
-fn trapezoid(adjust: Option<u32>) -> Geom {
+pub(crate) fn trapezoid(adjust: Option<u32>) -> Geom {
     let a = adjust.map_or(5400, |v| (v as i32).clamp(0, 10800));
     let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
     Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }

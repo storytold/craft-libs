@@ -179,6 +179,133 @@ fn decoded_display_part_rejects_kept_subsampled_channels() {
     assert!(matches!(decode_display_part(&bytes, 0, &|name| name == "R", &|_| 0.0, &Limits::default()), Err(Error::Unsupported(_))));
 }
 
+#[test]
+fn a_flat_chunk_s_packed_length_is_checked_before_the_crate_reads_it() {
+    // One 9 × 7 tile of a 1024 × 1024 tile size: the crate would reserve up to the nominal tile
+    // (1024 × 1024 pixels of three f32 channels, 12 MiB) for the chunk's declared length.
+    let list = ["B", "G", "R"].iter().map(|n| AnyChannel::new(*n, FlatSamples::F32(ramp(63, 1.0)))).collect();
+    let encoding = Encoding {
+        compression: exr::prelude::Compression::Uncompressed,
+        blocks: Blocks::Tiles(exr::math::Vec2(1024, 1024)),
+        line_order: LineOrder::Increasing,
+    };
+    let mut bytes = file(vec![Layer::new((9, 7), LayerAttributes::default(), encoding, AnyChannels::sort(list))], (9, 7));
+    assert_eq!(decode_part(&bytes, 0, &all, &Limits::default()).unwrap().channels.len(), 3);
+    let mut cursor = std::io::Cursor::new(&bytes[..]);
+    exr::meta::MetaData::read_from_buffered(&mut cursor, false).unwrap();
+    let table = cursor.position() as usize;
+    let chunk = u64::from_le_bytes(bytes[table..table + 8].try_into().unwrap()) as usize;
+    // The packed length follows the four tile coordinates.
+    let size_at = chunk + 16;
+    bytes.extend_from_slice(&[0; 2000]);
+    let limits = Limits { max_bytes: 1000, ..Limits::default() };
+    let r = |name: &str| name == "R";
+    // More bytes than the file has left after the length.
+    bytes[size_at..size_at + 4].copy_from_slice(&i32::MAX.to_le_bytes());
+    assert!(matches!(decode_part(&bytes, 0, &all, &limits), Err(Error::Malformed(m)) if m.contains("remain in the file")));
+    assert!(matches!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &limits), Err(Error::Malformed(m)) if m.contains("remain in the file")));
+    // Inside the file, but over the byte budget.
+    bytes[size_at..size_at + 4].copy_from_slice(&1001i32.to_le_bytes());
+    assert!(matches!(decode_part(&bytes, 0, &all, &limits), Err(Error::LimitExceeded(_))));
+    assert!(matches!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
+    // A decode that keeps no channel reads no chunk.
+    let none = |_: &str| false;
+    assert!(decode_part(&bytes, 0, &none, &limits).unwrap().channels.is_empty());
+    assert!(decode_display_part(&bytes, 0, &none, &|_| 0.0, &limits).unwrap().channels.is_empty());
+}
+
+#[test]
+fn a_skipped_flat_chunk_s_packed_length_is_not_held_to_the_budget() {
+    use exr::math::RoundingMode;
+    use exr::prelude::Levels;
+    // 9 × 7 in 4 × 4 tiles with mip levels. The reader reads only the six tiles of level 0, so a
+    // smaller level's chunk may declare more than the budget while it fits in the file.
+    let sizes: Vec<usize> = exr::meta::mip_map_levels(RoundingMode::Down, exr::math::Vec2(9, 7)).map(|(_, size)| size.area()).collect();
+    let levels = Levels::Mip { rounding_mode: RoundingMode::Down, level_data: sizes.iter().map(|n| FlatSamples::F32(ramp(*n, 1.0))).collect() };
+    let encoding = Encoding {
+        compression: exr::prelude::Compression::Uncompressed,
+        blocks: Blocks::Tiles(exr::math::Vec2(4, 4)),
+        line_order: LineOrder::Increasing,
+    };
+    let channels = AnyChannels::sort(vec![AnyChannel::new("R", levels)].into());
+    let layers = vec![Layer::new((9, 7), LayerAttributes::default(), encoding, channels)];
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (9, 7))), layers);
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write().to_buffered(&mut out).unwrap();
+    let mut bytes = out.into_inner();
+    let mut cursor = std::io::Cursor::new(&bytes[..]);
+    let meta = exr::meta::MetaData::read_from_buffered(&mut cursor, false).unwrap();
+    let table = cursor.position() as usize;
+    let count = meta.headers[0].chunk_count;
+    assert!(count > 6, "the part has chunks beyond level 0");
+    // The last chunk in the table holds the smallest level: its tile coordinates, then its level.
+    let last = table + (count - 1) * 8;
+    let chunk = u64::from_le_bytes(bytes[last..last + 8].try_into().unwrap()) as usize;
+    let level_x = i32::from_le_bytes(bytes[chunk + 8..chunk + 12].try_into().unwrap());
+    let level_y = i32::from_le_bytes(bytes[chunk + 12..chunk + 16].try_into().unwrap());
+    assert_ne!((level_x, level_y), (0, 0));
+    bytes.extend_from_slice(&[0; 2000]);
+    bytes[chunk + 16..chunk + 20].copy_from_slice(&1500i32.to_le_bytes());
+    let limits = Limits { max_bytes: 1000, ..Limits::default() };
+    let r = |name: &str| name == "R";
+    assert_eq!(decode_part(&bytes, 0, &all, &limits).unwrap().channels.len(), 1);
+    assert_eq!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &limits).unwrap().channels.len(), 1);
+    // The reader picks chunks by their place in the table, so a level-0 entry that points at the
+    // smaller level's chunk is read, and that chunk's length is held to the budget.
+    let entry = bytes[last..last + 8].to_vec();
+    bytes[table..table + 8].copy_from_slice(&entry);
+    assert!(matches!(decode_part(&bytes, 0, &all, &limits), Err(Error::LimitExceeded(_))));
+    assert!(matches!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
+}
+
+#[test]
+fn the_packed_length_check_finds_the_end_of_level_0_among_many_small_tiles() {
+    use exr::math::RoundingMode;
+    use exr::prelude::Levels;
+    // 64 × 48 in 1 × 1 tiles with mip levels: the 3,072 tiles of level 0 fill the first places of
+    // the offset table, and the smaller levels follow.
+    let (w, h) = (64, 48);
+    let sizes: Vec<usize> = exr::meta::mip_map_levels(RoundingMode::Down, exr::math::Vec2(w, h)).map(|(_, size)| size.area()).collect();
+    let levels = Levels::Mip { rounding_mode: RoundingMode::Down, level_data: sizes.iter().map(|n| FlatSamples::F32(ramp(*n, 1.0))).collect() };
+    let encoding = Encoding {
+        compression: exr::prelude::Compression::Uncompressed,
+        blocks: Blocks::Tiles(exr::math::Vec2(1, 1)),
+        line_order: LineOrder::Increasing,
+    };
+    let channels = AnyChannels::sort(vec![AnyChannel::new("R", levels)].into());
+    let layers = vec![Layer::new((w, h), LayerAttributes::default(), encoding, channels)];
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (w, h))), layers);
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write().to_buffered(&mut out).unwrap();
+    let mut bytes = out.into_inner();
+    let mut cursor = std::io::Cursor::new(&bytes[..]);
+    let meta = exr::meta::MetaData::read_from_buffered(&mut cursor, false).unwrap();
+    let table = cursor.position() as usize;
+    let level_0 = w * h;
+    assert!(meta.headers[0].chunk_count > level_0, "the part has chunks beyond level 0");
+    let chunk_at = |bytes: &[u8], place: usize| u64::from_le_bytes(bytes[table + place * 8..table + place * 8 + 8].try_into().unwrap()) as usize;
+    let level_of = |bytes: &[u8], chunk: usize| {
+        let x = i32::from_le_bytes(bytes[chunk + 8..chunk + 12].try_into().unwrap());
+        let y = i32::from_le_bytes(bytes[chunk + 12..chunk + 16].try_into().unwrap());
+        (x, y)
+    };
+    let (last_read, first_skipped) = (chunk_at(&bytes, level_0 - 1), chunk_at(&bytes, level_0));
+    assert_eq!(level_of(&bytes, last_read), (0, 0));
+    assert_ne!(level_of(&bytes, first_skipped), (0, 0));
+    // The decoded part takes 12,288 bytes, inside the budget; a declared length of 30,000 is not.
+    bytes.extend_from_slice(&[0; 40_000]);
+    let limits = Limits { max_bytes: 20_000, ..Limits::default() };
+    let r = |name: &str| name == "R";
+    // The first chunk past level 0 is not read, so its length is not held to the budget.
+    bytes[first_skipped + 16..first_skipped + 20].copy_from_slice(&30_000i32.to_le_bytes());
+    assert_eq!(decode_part(&bytes, 0, &all, &limits).unwrap().channels.len(), 1);
+    assert_eq!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &limits).unwrap().channels.len(), 1);
+    // The last chunk of level 0 is read, so its length is.
+    bytes[last_read + 16..last_read + 20].copy_from_slice(&30_000i32.to_le_bytes());
+    assert!(matches!(decode_part(&bytes, 0, &all, &limits), Err(Error::LimitExceeded(_))));
+    assert!(matches!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
+}
+
 /// A 2x2 single-part file whose layer carries a 2x1 preview.
 fn with_preview() -> Vec<u8> {
     let mut attrs = LayerAttributes::named("rgb");
@@ -243,11 +370,13 @@ fn hostile_files_never_panic() {
         (5, 3),
     );
     let limits = Limits { max_bytes: 1 << 24, ..Limits::default() };
-    for n in 0..good.len() {
+    // The gate runs every divisor-th truncation and byte; nightly runs every one.
+    let step = craft_testkit::hostile::divisor();
+    for n in (0..good.len()).step_by(step) {
         let _ = parts(&good[..n], &limits);
         let _ = decode_part(&good[..n], 1, &all, &limits);
     }
-    for i in 0..good.len() {
+    for i in (0..good.len()).step_by(step) {
         for v in [0u8, 1, 0x7F, 0xFF] {
             let mut b = good.clone();
             b[i] = v;
