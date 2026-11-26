@@ -22,8 +22,19 @@
 //! distribution D is the one section B.3.2 writes
 //! (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specular-brdf>).
 //! Samples are importance-sampled from Hammersley points and read from a box-filtered pyramid
-//! of the source at a level chosen from each sample's density. The environment BRDF term of the
-//! split sum is not in this crate.
+//! of the source at a level chosen from each sample's density. [`try_environment_brdf`] gives
+//! the other term of the split sum, the scale and bias of `f0`.
+//!
+//! [`Material`] holds a glTF 2.0 metallic-roughness material, and [`Material::try_direct`]
+//! evaluates its BRDF for one light in the final form of section B.3.5
+//! (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metal-brdf-and-dielectric-brdf>),
+//! with the Smith-Schlick geometry term Karis gives for analytic lights by default. [`Visibility`]
+//! selects section B.3.2's separable Smith form or the height-correlated Smith form instead.
+//! [`default_environment`]
+//! is a small studio environment for an environment light without an image.
+//!
+//! [`SHADE_WGSL`] is the WGSL text of the same shading functions for an app's own shaders, and
+//! [`GpuMaterial`] and [`GpuSh9`] lay out the values it reads.
 //!
 //! The diffuse coefficients are the nine real SH coefficients of the radiance, convolved with the
 //! clamped cosine lobe (band factors `π`, `2π/3` and `π/4`, Ramamoorthi and Hanrahan 2001,
@@ -39,19 +50,23 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod brdf;
 mod environment;
 mod prefilter;
 mod sh;
 mod vec3;
+mod wgsl;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-pub use environment::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, MAX_RADIANCE, dir_of, uv_of};
+pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, Visibility, try_environment_brdf};
+pub use environment::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, MAX_RADIANCE, default_environment, dir_of, uv_of};
 pub use prefilter::{PrefilterOptions, ggx_distribution, ggx_distribution_between, hammersley, try_prefilter};
 pub use sh::{irradiance, sh_basis, try_sh9};
+pub use wgsl::{GpuMaterial, GpuSh9, SHADE_WGSL};
 
-/// Why an environment could not be made, filtered or read.
+/// Why an environment could not be made, filtered or read, or a material could not be shaded.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PbrError {
@@ -74,6 +89,9 @@ pub enum PbrError {
     /// An option is out of its range; the text names it.
     #[error("{0}")]
     BadOption(&'static str),
+    /// A material value is not a number or is out of its range; the text names it.
+    #[error("{0}")]
+    BadMaterial(&'static str),
     /// The filtering would take more sample evaluations than [`Limits::max_work`].
     #[error("the filtering needs {needed} sample evaluations, over the limit of {limit}")]
     TooMuchWork { needed: u64, limit: u64 },

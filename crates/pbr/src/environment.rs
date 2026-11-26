@@ -328,3 +328,27 @@ impl Environment {
         Ok(EnvImage { width, height, data })
     }
 }
+
+/// A dim studio environment of 8 × 4 pixels for an environment light that has no image: a gray
+/// gradient whose radiance in direction `d` is proportional to `0.15 + 1.2 max(0, d·key)`, with
+/// the key direction `(0.66, 0.75, 0)` up and toward +X. It is scaled so that the mean of its
+/// pixels, each weighted by `sin θ` at its center, is 0.3.
+pub fn default_environment() -> Result<EnvImage, PbrError> {
+    let key = V3::new(0.66, 0.75, 0.0);
+    let (w, h) = (8usize, 4usize);
+    let mut data = try_pixels(w * h)?;
+    let (mut mean, mut weight) = (0.0f32, 0.0f32);
+    for (i, px) in data.iter_mut().enumerate() {
+        let (x, y) = (i % w, i / w);
+        let sa = ((y as f32 + 0.5) / h as f32 * PI).sin();
+        let l = 0.15 + 1.2 * pixel_dir(x, y, w, h).dot(key).max(0.0);
+        *px = [l; 3];
+        mean += l * sa;
+        weight += sa;
+    }
+    let k = if mean.is_finite() && mean > 1e-6 { 0.3 * weight / mean } else { 1.0 };
+    for px in &mut data {
+        *px = px.map(|c| c * k);
+    }
+    Ok(EnvImage { width: w as u32, height: h as u32, data })
+}

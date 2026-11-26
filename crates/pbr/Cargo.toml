@@ -1,6 +1,6 @@
 [package]
 name = "craft-pbr"
-description = "Image-based lighting for physically based rendering: equirect environments, a GGX-prefiltered specular chain and SH9 diffuse irradiance"
+description = "Image-based lighting for physically based rendering: equirect environments, a GGX-prefiltered specular chain, SH9 diffuse irradiance and the metallic-roughness BRDF"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -23,4 +23,6 @@ thiserror = { workspace = true }
 craft-pbr = { path = ".", features = ["parallel"] }
 # The differential tests run verbatim copies of the apps' previous code, which uses glam and rayon.
 glam = "0.30"
+# Parses and validates the WGSL text of `SHADE_WGSL`.
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 rayon = { workspace = true }
