@@ -7,6 +7,8 @@ use craft_i18n::select::{Locale, LocaleRules, Message, RowKind, check_message};
 use craft_i18n::{Arg, I18n, Lang};
 use craft_testkit::hostile::{HammerConfig, hammer};
 
+use crate::common::open_controls;
+
 const CODES: [&str; 4] = ["de", "ar", "pl", "ja"];
 
 /// Rows of every kind this crate reads, each in a form that passes.
@@ -59,6 +61,7 @@ fn lookups(i18n: &I18n) {
             for context in ["", "@msg", "menu"] {
                 let shown = i18n.tm(lang, context, source, &args);
                 assert!(shown.chars().count() <= MAX_OUTPUT_CHARS, "{} characters", shown.chars().count());
+                assert_eq!(open_controls(&shown), Vec::<char>::new(), "a typed message leaves a bidi control open");
             }
         }
     }
@@ -106,6 +109,7 @@ fn message_case(bytes: &[u8]) {
             let args = [("n", Arg::Count(1)), ("item", Arg::Noun("page")), ("k", Arg::number(2.0, 0))];
             let shown = i18n.tm(lang, "", "K {n :number} {item :noun} {k :integer}", &args);
             assert!(shown.chars().count() <= MAX_OUTPUT_CHARS);
+            assert_eq!(open_controls(&shown), Vec::<char>::new(), "a typed message leaves a bidi control open");
         }
     }
 }

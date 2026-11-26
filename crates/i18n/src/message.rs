@@ -197,9 +197,11 @@ use crate::limits::MAX_OUTPUT_CHARS;
 use crate::select::{self, Arg, Env};
 use crate::{Lang, Locale, Row, assemble, split};
 
-/// A message's pieces joined (isolating values as [`crate::fmt`] does) and cut to [`MAX_OUTPUT_CHARS`] characters.
+/// A message's pieces joined (isolating values as [`crate::fmt`] does) and cut to [`MAX_OUTPUT_CHARS`] characters, balanced: a cut
+/// never leaves an isolate, embedding or override open for what follows the message to be reordered by, nor does a translation
+/// that opens one of its own.
 fn finish(pieces: Vec<(Cow<'_, str>, bool)>) -> String {
-    select::cap_chars(&assemble(pieces, true, 64), MAX_OUTPUT_CHARS).into_owned()
+    crate::bidi::cap_balanced(&assemble(pieces, true, 64), MAX_OUTPUT_CHARS)
 }
 
 impl crate::I18n {

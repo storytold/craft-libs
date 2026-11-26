@@ -1,13 +1,30 @@
 #![no_main]
 
 //! Any bytes as a catalog, shared and as the app's, in four languages: parsing under the caps, the rules, and every lookup
-//! with values of every type. No panic, and a typed message never longer than its cap.
+//! with values of every type. No panic, and a typed message neither longer than its cap nor left with a bidi control open.
 
 use craft_i18n::limits::MAX_OUTPUT_CHARS;
 use craft_i18n::{Arg, I18n};
 use libfuzzer_sys::fuzz_target;
 
 const CODES: [&str; 4] = ["de", "ar", "pl", "ja"];
+
+/// Whether `text` leaves a bidi embedding, override or isolate open (a PDI closes what is open inside its isolate).
+fn left_open(text: &str) -> bool {
+    let mut open: Vec<bool> = Vec::new();
+    for c in text.chars() {
+        match c {
+            '\u{2066}' | '\u{2067}' | '\u{2068}' => open.push(true),
+            '\u{202A}' | '\u{202B}' | '\u{202D}' | '\u{202E}' => open.push(false),
+            '\u{202C}' if open.last() == Some(&false) => {
+                open.pop();
+            }
+            '\u{2069}' if open.contains(&true) => while open.pop() == Some(false) {},
+            _ => {}
+        }
+    }
+    !open.is_empty()
+}
 
 fuzz_target!(|data: &[u8]| {
     let text = String::from_utf8_lossy(data).into_owned();
@@ -28,7 +45,9 @@ fuzz_target!(|data: &[u8]| {
         let _ = i18n.trn_decimal(lang, 1.5, 2, "{n} shape", "{n} shapes");
         for source in ["Delete this {item :noun}?", "Copy {n :number} of {name}", "K {n :number} {item :noun} {k :integer}"] {
             for context in ["", "@msg", "menu"] {
-                assert!(i18n.tm(lang, context, source, &args).chars().count() <= MAX_OUTPUT_CHARS);
+                let shown = i18n.tm(lang, context, source, &args);
+                assert!(shown.chars().count() <= MAX_OUTPUT_CHARS);
+                assert!(!left_open(&shown), "a typed message leaves a bidi control open");
             }
         }
     }

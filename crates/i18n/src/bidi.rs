@@ -114,6 +114,70 @@ pub(super) fn wrap(initiator: char, value: &str) -> String {
     out
 }
 
+/// The initiators `text` leaves open, outermost first: true for an isolate, false for an embedding or override. A PDF closes only an
+/// embedding at the top, a PDI closes the innermost isolate and what is open inside it, and a stray one closes nothing.
+fn open_initiators(text: &str) -> Vec<bool> {
+    let mut open: Vec<bool> = Vec::new();
+    let mut isolates = 0usize;
+    for c in text.chars() {
+        step(&mut open, &mut isolates, c);
+    }
+    open
+}
+
+/// One character of the stack logic of [`wrap`], [`open_initiators`] and [`cap_balanced`].
+fn step(open: &mut Vec<bool>, isolates: &mut usize, c: char) {
+    match c {
+        LRI | RLI | FSI => {
+            open.push(true);
+            *isolates += 1;
+        }
+        LRE | RLE | LRO | RLO => open.push(false),
+        PDF if open.last() == Some(&false) => {
+            open.pop();
+        }
+        PDI if *isolates > 0 => {
+            while open.pop() == Some(false) {}
+            *isolates -= 1;
+        }
+        _ => {}
+    }
+}
+
+/// `text` closed, and cut to `max` characters: whatever it opens (an embedding, an override, an isolate) is closed before it
+/// ends, so what follows it in a window is not reordered by it. When it is longer than `max`, it ends with `…` and the closers
+/// of what is open at the cut, all within `max` characters; a cut never leaves an isolate open, whatever it falls inside.
+pub(super) fn cap_balanced(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    // The most characters kept: the prefix, then `…` unless all of it is kept, then one closer for each initiator open there.
+    let fits = |kept: usize, depth: usize| kept + usize::from(kept < total) + depth <= max;
+    if !fits(0, 0) {
+        // Not even `…` fits.
+        return String::new();
+    }
+    let mut open: Vec<bool> = Vec::new();
+    let mut isolates = 0usize;
+    let mut keep = 0usize;
+    for (i, c) in text.chars().enumerate() {
+        step(&mut open, &mut isolates, c);
+        if fits(i + 1, open.len()) {
+            keep = i + 1;
+        }
+    }
+    let kept: String = text.chars().take(keep).collect();
+    let mut out = String::with_capacity(kept.len() + 4);
+    out.push_str(&kept);
+    if keep < total {
+        out.push('…');
+    }
+    // What is open at the cut, innermost closed first.
+    let mut open = open_initiators(&kept);
+    while let Some(isolate) = open.pop() {
+        out.push(if isolate { PDI } else { PDF });
+    }
+    out
+}
+
 /// Whether `value`, without its own isolate, has a bidi control: an embedding, override,
 /// isolate or mark that could reorder the text around it unless it is contained.
 pub(super) fn has_bidi_control(value: &str) -> bool {
@@ -154,4 +218,53 @@ pub(super) fn is_one_isolate(value: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open(text: &str) -> usize {
+        open_initiators(text).len()
+    }
+
+    // Uncut, a message that opens nothing is the message; one that opens something is closed, innermost first.
+    #[test]
+    fn a_message_is_closed_at_its_end() {
+        assert_eq!(cap_balanced("plain text", 100), "plain text");
+        assert_eq!(cap_balanced("a\u{202B}b\u{2067}c", 100), "a\u{202B}b\u{2067}c\u{2069}\u{202C}");
+        assert_eq!(cap_balanced("\u{2068}x\u{2069}", 100), "\u{2068}x\u{2069}");
+        // A stray closer closes nothing and is left as it is.
+        assert_eq!(cap_balanced("x\u{2069}\u{202C}y", 100), "x\u{2069}\u{202C}y");
+    }
+
+    // A cut ends with `…`, then the closers of what the kept text left open, in a total of at most `max`.
+    #[test]
+    fn a_cut_closes_what_it_leaves_open_within_the_cap() {
+        let text = format!("\u{2068}{}\u{2069}", "ا".repeat(50));
+        for max in 3..60 {
+            let shown = cap_balanced(&text, max);
+            assert!(shown.chars().count() <= max, "{max}: {}", shown.chars().count());
+            assert_eq!(open(&shown), 0, "{max}");
+        }
+        let shown = cap_balanced(&text, 10);
+        assert_eq!(shown, format!("\u{2068}{}…\u{2069}", "ا".repeat(7)));
+        // Nested initiators are closed in order: the embedding first, then its isolate.
+        let nested = format!("\u{2068}\u{202B}{}", "x".repeat(20));
+        assert_eq!(cap_balanced(&nested, 8), "\u{2068}\u{202B}xxx…\u{202C}\u{2069}");
+    }
+
+    // Closers that do not fit leave a shorter prefix, down to `…` alone; a cap too small for even that keeps nothing.
+    #[test]
+    fn deep_nesting_shortens_the_prefix_and_not_the_closers() {
+        let deep = "\u{202B}".repeat(50);
+        for max in 0..120 {
+            let shown = cap_balanced(&deep, max);
+            assert!(shown.chars().count() <= max, "{max}");
+            assert_eq!(open(&shown), 0, "{max}");
+        }
+        assert_eq!(cap_balanced(&deep, 0), "");
+        assert_eq!(cap_balanced(&deep, 1), "…");
+        assert_eq!(cap_balanced("abc", 0), "");
+    }
 }
