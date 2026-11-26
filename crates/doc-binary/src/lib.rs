@@ -75,9 +75,10 @@ const MAX_TOTAL_CHARS: u64 = 64 << 20;
 const MAX_PARAGRAPHS: usize = 2_000_000;
 /// Bytes of repeated work per document beyond the text itself: piece Prm grpprls (Prcs, up
 /// to 64 KB each) interpreted (#3692), hyperlink targets (#3708), picture alt text (#3709)
-/// and floating objects (#3710) copied into every run or anchor. Past it Prms are skipped,
-/// copied strings left empty and floating objects dropped, each kind logged once a document
-/// ([`Work::log`]).
+/// and floating objects (#3710) copied into every run or anchor, and bookmarks copied into
+/// every walk of their story (#1818; a header is walked once per section). Past it Prms are
+/// skipped, copied strings left empty and floating objects and bookmarks dropped, each kind
+/// logged once a document ([`Work::log`]).
 const MAX_WORK: u64 = 64 << 20;
 
 /// What the [`MAX_WORK`] budget pays for, and leaves out once it is spent.
@@ -91,10 +92,13 @@ enum Cost {
     AltText,
     /// A floating object copied into its anchor: past it the object is left out.
     FloatingObject,
+    /// A bookmark's start and end copied into a story walk: past it the bookmark is left out
+    /// and its text kept.
+    Bookmark,
 }
 
 impl Cost {
-    const ALL: [Cost; 4] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject];
+    const ALL: [Cost; 5] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject, Cost::Bookmark];
 
     /// What is left out, for the log.
     fn left_out(self) -> &'static str {
@@ -103,6 +107,7 @@ impl Cost {
             Cost::LinkTarget => "some hyperlinks' text is kept without its link",
             Cost::AltText => "some pictures are left without their alt text",
             Cost::FloatingObject => "some floating shapes and pictures are left out",
+            Cost::Bookmark => "some bookmarks are left out",
         }
     }
 }
@@ -111,12 +116,12 @@ impl Cost {
 /// the document has been read, [`Work::log`]).
 struct Work {
     left: std::cell::Cell<u64>,
-    dropped: std::cell::Cell<[bool; 4]>,
+    dropped: std::cell::Cell<[bool; Cost::ALL.len()]>,
 }
 
 impl Work {
     fn new(budget: u64) -> Self {
-        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 4]) }
+        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; Cost::ALL.len()]) }
     }
 
     /// Spends `cost` bytes on `what`: false (and `what` noted as left out) when they aren't left.
@@ -667,20 +672,29 @@ struct MarkWalk<'a> {
     /// Bookmarks this walk started and has not ended, by name. A story's last CP is the next
     /// one's first, so an end found there closes a bookmark of the story before and is left out.
     open: std::collections::HashMap<&'a str, usize>,
+    /// Pays for each bookmark copied ([`Cost::Bookmark`]).
+    work: &'a Work,
 }
 
 impl<'a> MarkWalk<'a> {
-    fn new(marks: &'a [(u32, notes::Mark)], cp_start: u32) -> Self {
+    fn new(marks: &'a [(u32, notes::Mark)], cp_start: u32, work: &'a Work) -> Self {
         let first = marks.partition_point(|(mcp, _)| *mcp < cp_start);
-        MarkWalk { marks: marks[first..].iter().peekable(), open: std::collections::HashMap::new() }
+        MarkWalk { marks: marks[first..].iter().peekable(), open: std::collections::HashMap::new(), work }
     }
 
     /// Emit the boundaries up to `cp` as inline objects. `<=` so a boundary inside a skipped
     /// stretch is still emitted (late) rather than blocking every later one.
+    ///
+    /// A start is charged for itself and its end together, so a start emitted always has its
+    /// end paid for; a start the budget refuses is not opened, and its end is then left out too.
     fn emit_through(&mut self, cp: u32, pb: &mut ParaBuild) {
         while let Some((_, m)) = self.marks.next_if(|(mcp, _)| *mcp <= cp) {
             let obj = match m {
                 notes::Mark::Start(name) => {
+                    let pair = 2 * (std::mem::size_of::<InlineObject>() + name.len()) as u64;
+                    if !self.work.charge(pair, Cost::Bookmark) {
+                        continue;
+                    }
                     *self.open.entry(name.as_str()).or_default() += 1;
                     InlineObject::BookmarkStart { name: name.clone() }
                 }
@@ -712,7 +726,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     let mut out = Vec::new();
     let mut pb = ParaBuild::default();
     let mut cp = cp_start;
-    let mut marks = MarkWalk::new(ctx.marks, cp_start);
+    let mut marks = MarkWalk::new(ctx.marks, cp_start, ctx.work);
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;

@@ -1747,6 +1747,36 @@ fn bookmarks_in_headers_and_notes_land_in_their_parts() {
     assert_eq!(header, set(&["+head", "-head"]), "the header's bookmark is read, and no end of the footnote's");
 }
 
+/// #3600 review: a header is walked once per section, so its bookmarks are copied again each
+/// time. The copies are paid from the work budget: once it is spent, later bookmarks are left
+/// out whole (no start without its end) and noted, and the walk goes on.
+#[test]
+fn bookmarks_past_the_work_budget_are_left_out_whole() {
+    use super::notes::Mark;
+    let marks: Vec<(u32, Mark)> = ["a", "b", "c"]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, n)| [(2 * i as u32, Mark::Start(n.to_string())), (2 * i as u32 + 1, Mark::End(n.to_string()))])
+        .collect();
+    let pair = 2 * (std::mem::size_of::<super::InlineObject>() + 1) as u64;
+    let work = super::Work::new(pair);
+    let mut walk = super::MarkWalk::new(&marks, 0, &work);
+    let mut pb = super::ParaBuild::default();
+    walk.emit_through(u32::MAX, &mut pb);
+    let (mut starts, mut ends) = (Vec::new(), Vec::new());
+    for o in &pb.objects {
+        match o {
+            super::InlineObject::BookmarkStart { name } => starts.push(name.clone()),
+            super::InlineObject::BookmarkEnd { name } => ends.push(name.clone()),
+            _ => {}
+        }
+    }
+    assert!(!starts.is_empty(), "the budget paid for a bookmark");
+    assert!(starts.len() < marks.len() / 2, "bookmarks past the budget are left out: {starts:?}");
+    assert_eq!(starts, ends, "every bookmark kept has its end");
+    assert_eq!(work.dropped(), [super::Cost::Bookmark], "the left-out bookmarks are noted, to be logged");
+}
+
 #[test]
 fn inline_png_picture() {
     let text = "Pic\u{1}!\r";
