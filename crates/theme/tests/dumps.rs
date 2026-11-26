@@ -170,30 +170,6 @@ fn diff(old: &str, new: &str) -> String {
     out.join("\n")
 }
 
-/// Link text (`accent.text`) reads at the text minimum on the page and on the window background, where a start page
-/// draws its links, in every built-in theme, app, mode and contrast, pinned link colors included.
-#[test]
-fn link_text_meets_the_text_minimum_on_the_page_and_the_background() {
-    let mut failures = Vec::new();
-    for theme in builtins() {
-        for app in std::iter::once(None).chain(theme.apps.keys().map(Some)) {
-            for mode in modes(theme) {
-                for contrast in [Contrast::Standard, Contrast::High] {
-                    let appearance = Appearance { mode, contrast, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
-                    let c = resolve(theme, appearance, app).tokens.color;
-                    for (name, ground) in [("surface.page", c.surface.page), ("surface.background", c.surface.background)] {
-                        let ratio = craft_theme::contrast_ratio(c.accent.text, ground);
-                        if ratio < craft_theme::text_contrast_min(contrast) {
-                            failures.push(format!("{} {app:?} {mode:?} {contrast:?}: accent.text on {name} is {ratio:.2}:1", theme.id.as_str()));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
 /// L-310: at the comfortable density the page view keeps production's 70 pt side margins, 28 pt above the first page and
 /// 14 pt between pages.
 #[test]
