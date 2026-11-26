@@ -42,17 +42,24 @@ fn x_at_t(line: Line, t: f64) -> f64 {
 /// The two line segments must both be increasing in `y`, and their `y` ranges
 /// must overlap.
 pub fn intersect_lines(l0: Line, l1: Line, tolerance: f64) -> CurveOrder {
-    // The x differences below, and the difference of two of them, overflow for
-    // x coordinates near f64::MAX. When an x coordinate or the tolerance is
-    // above 2^1019, compare the x coordinates and the tolerance times 1/16.
-    // Multiplying by a power of two is exact for normal numbers, and the
-    // heights do not change.
     const SCALE_ABOVE: f64 = f64::from_bits((1023 + 1019) << 52);
     const SCALE: f64 = 1.0 / 16.0;
     let max_x = [l0.p0, l0.p1, l1.p0, l1.p1]
         .iter()
         .fold(tolerance.abs(), |m, p| m.max(p.x.abs()));
     if max_x > SCALE_ABOVE {
+        let y0 = l0.p0.y.max(l1.p0.y);
+        let y1 = l0.p1.y.min(l1.p1.y);
+        let (l0x0, l0x1) = line_at_ys(l0, y0, y1);
+        let (l1x0, l1x1) = line_at_ys(l1, y0, y1);
+        let dx0 = l1x0 - l0x0;
+        let dx1 = l1x1 - l0x1;
+        if [dx0, dx1, dx0 - dx1, dx0 + tolerance, dx0 - tolerance]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return intersect_lines_unscaled(l0, l1, tolerance);
+        }
         let scale = Affine::scale_non_uniform(SCALE, 1.0);
         return intersect_lines_unscaled(scale * l0, scale * l1, tolerance * SCALE);
     }
@@ -197,6 +204,20 @@ mod tests {
             assert_eq!(order.cmps.len(), 1, "x = {x}");
             assert_eq!(order.cmps[0].order, Order::Left, "x = {x}");
             assert_eq!(order.cmps[0].end, 1.0, "x = {x}");
+        }
+    }
+
+    #[test]
+    fn overlap_preserves_a_subnormal_gap_beside_a_distant_endpoint() {
+        let unit = f64::from_bits(1);
+        let left = Line::new((1e308, 0.0), (0.0, 1.0));
+        let right = Line::new((2.0 * unit, 1.0), (2.0 * unit, 2.0));
+        for (a, b, expected) in [(left, right, Order::Left), (right, left, Order::Right)] {
+            let order = intersect_lines(a, b, unit);
+            assert_eq!(order.start, 1.0);
+            assert_eq!(order.cmps.len(), 1);
+            assert_eq!(order.cmps[0].end, 1.0);
+            assert_eq!(order.cmps[0].order, expected);
         }
     }
 
