@@ -666,6 +666,11 @@ pub(crate) fn record_body_layer(ctx: &Context, layer: Layer, parent: Layer, root
     });
 }
 
+/// Whether `layer` showed the transformed body of the root `root` on `parent` in the last pass.
+pub(crate) fn is_body_of(ctx: &Context, layer: Layer, root: Id, parent: Layer) -> bool {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.last_bodies.get(&layer) == Some(&(root, parent)))
+}
+
 /// Records the egui widgets that stand for the root at `root` (`click` when they sense a click): the root's own at
 /// step 8, and the `over` widgets of its members after their bodies.
 pub(crate) fn record_widgets(ctx: &Context, layer: Layer, root: Id, widgets: &[Id], click: bool) {
@@ -883,6 +888,8 @@ pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
 pub(crate) struct PressWinners {
     pub click: Option<(Winner<Id>, Id)>,
     pub drag: Option<(Winner<Id>, Id)>,
+    /// The topmost of the two: the one the top shape under the point won.
+    top: Option<(Winner<Id>, Id)>,
 }
 
 impl PressWinners {
@@ -901,6 +908,12 @@ impl PressWinners {
     /// The shape of `root` a press goes to: its click's, else its drag's.
     pub(crate) fn hit_of(&self, root: Id) -> Option<Winner<Id>> {
         [self.click, self.drag].into_iter().flatten().find(|(_, owner)| *owner == root).map(|(winner, _)| winner)
+    }
+
+    /// The shape of `root` that hovers: its topmost winner, so a member's drag-only shape over its root's own click
+    /// shape (a node over its graph) hovers though the click is the root's; else `hit_of`.
+    pub(crate) fn hover_of(&self, root: Id) -> Option<Winner<Id>> {
+        self.top.filter(|(_, owner)| *owner == root).map(|(winner, _)| winner).or_else(|| self.hit_of(root))
     }
 }
 
@@ -1140,6 +1153,7 @@ fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
         match (winners.click.is_some(), winners.drag.is_some()) {
             // The top root takes what its shape senses; one that takes both kinds takes the whole press.
             (false, false) => {
+                winners.top = (clicks || drags).then_some((winner, root));
                 winners.click = clicks.then_some((winner, root));
                 winners.drag = drags.then_some((winner, root));
                 if clicks && drags {

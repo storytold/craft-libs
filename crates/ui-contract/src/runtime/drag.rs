@@ -796,7 +796,9 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
             None => areas::layer_at(ctx, screen),
         }
     };
-    if moves_viewport(ctx) || !zone.rect.contains(at) || top != Some(zone.layer) {
+    // The owner's own transformed body over the zone is the zone's.
+    let own = top.is_some_and(|top| top == zone.layer || crate::runtime::pointer::is_body_of(ctx, top, owner, zone.layer));
+    if moves_viewport(ctx) || !zone.rect.contains(at) || !own {
         return None;
     }
     let op = current_operation(ctx, target.copy_keys());

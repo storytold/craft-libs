@@ -162,6 +162,15 @@ pub(crate) fn body_layer(parent: LayerId, root: Id) -> LayerId {
     LayerId::new(parent.order, crate::runtime::memory::sub(root, "body_layer"))
 }
 
+/// `rect`, given in `layer`'s space, in the space of the layer `layer` is a transformed sublayer of (a transformed
+/// body's parent), where it shows; `rect` itself on any other layer. Access nodes report where a component shows.
+pub(crate) fn out_of_sublayer(ctx: &Context, layer: LayerId, rect: Rect) -> Rect {
+    let Some(parent) = ctx.memory(|memory| memory.areas().parent_layer(layer)) else { return rect };
+    let Some(map) = layer_map(ctx, layer) else { return rect };
+    let screen = Rect::from_two_pos(map.to_screen(rect.min), map.to_screen(rect.max));
+    layer_map(ctx, parent).map_or(screen, |parent| Rect::from_two_pos(parent.to_layer(screen.min), parent.to_layer(screen.max)))
+}
+
 /// What a transformed body's forwarding widget carries: the root it stands for, the root's sense and interact rect, in
 /// screen space.
 pub(crate) struct Forward {

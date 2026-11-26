@@ -2235,7 +2235,18 @@ pub(crate) fn begin(ctx: &Context) {
     // A binding whose command is disabled where the press lands (a window command with no floating window, a canvas's
     // view command it does not offer) is passed over: the press runs the next binding of its chord, in an outer scope,
     // or of its next chord candidate, as if the disabled one were unbound.
+    // An app catalog's panel-scope binding works only while the keyboard is inside a container of its scope (sh.C9):
+    // elsewhere the keymap's panel fallthrough would run it, so it counts as unbound there.
+    let reached = |command: &CommandRef| {
+        with(ctx, |board| {
+            let scope = board.scope_of(command);
+            !board.from_catalog(command) || board.to_app(scope) || keys.scopes.contains(&scope)
+        })
+    };
     let enabled = |command: &CommandRef| {
+        if !reached(command) {
+            return false;
+        }
         let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
         resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
     };
@@ -2294,7 +2305,7 @@ pub(crate) fn begin(ctx: &Context) {
                     // A chord that binds only disabled commands runs nothing; the app hears of the first one, to say
                     // why it did not run as a menu row's hint does, and may receive it as declined.
                     (None, None) => {
-                        if let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, None) {
+                        if let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, None).filter(|hit| reached(&hit.command)) {
                             let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
                             let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
                             decline(ctx, hit.clone(), app, &resolved, time);

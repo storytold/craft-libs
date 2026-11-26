@@ -441,7 +441,8 @@ fn a_press_on_a_declared_part_moves_the_selection_when_the_collection_says_so() 
 /// the rows' space.
 #[trial]
 fn a_body_part_is_hit_where_the_transform_shows_it_after_a_pan_and_a_zoom() {
-    let pad = Rect::from_min_size(Pos2::new(200.0, 20.0), Vec2::new(40.0, 20.0));
+    // Near the origin, so each transform below still shows it inside the board, which clips its body.
+    let pad = Rect::from_min_size(Pos2::new(100.0, 20.0), Vec2::new(40.0, 20.0));
     let transform = Rc::new(Cell::new(CanvasTransform::new(2.0, Vec2::new(30.0, 20.0))));
     let (shown, pressed) = (Rc::new(Shown::default()), Rc::new(Cell::new(None::<Pos2>)));
     let mut fixture = Fixture::new({

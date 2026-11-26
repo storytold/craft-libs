@@ -189,7 +189,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         id,
         component: facts.name,
         role,
-        rect: core.rect,
+        rect: crate::runtime::egui::areas::out_of_sublayer(ctx, core.response.layer_id, core.rect),
         label: resolved.label,
         names_nothing: access.value.is_none() && carried.as_deref() == Some(resolved.label),
         tooltip,
@@ -295,8 +295,12 @@ fn report_sub(core: &CxCore<'_>, decls: &Decls, node: &SubNode, face: Option<&Fa
     let mut node = node.clone();
     node.flags |= result.map_or(Flags::empty(), |result| result.flags);
     let rect = result.map_or(core.rect, |result| result.rect);
-    let rect =
-        if declared.is_some_and(|(decl, _)| decl.body) { crate::primitives::sensing::body_rect_in_root(&core.ctx, core.id, rect) } else { rect };
+    let rect = if declared.is_some_and(|(decl, _)| decl.body) {
+        crate::primitives::sensing::body_rect_in_root(&core.ctx, core.id, rect)
+    } else {
+        crate::runtime::egui::areas::out_of_sublayer(&core.ctx, core.response.layer_id, rect)
+    };
+    node.bounds = node.bounds.map(|bounds| crate::runtime::egui::areas::out_of_sublayer(&core.ctx, core.response.layer_id, bounds));
     let decl = SubDecl {
         owner: core.id,
         component: "",

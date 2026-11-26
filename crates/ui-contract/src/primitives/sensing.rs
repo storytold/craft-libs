@@ -1108,7 +1108,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     // would go.
     let (under, contains, captured) = pointer::with_hover(ctx, read.viewport, |under, captured| {
         let hovered = under.map_or(Hovered::default(), |under| Hovered {
-            press: under.press.hit_of(arena.0).map(Hit::from),
+            press: under.press.hover_of(arena.0).map(Hit::from),
             only: under.hover_top_of(arena.0).map(Hit::from),
         });
         (hovered, under.is_some_and(|under| under.contains(arena.0)), captured)

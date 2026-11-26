@@ -298,7 +298,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         {
             crate::runtime::keys::register_hover_delete(&cx.core.ctx, cx.core.id);
         }
-        let Some(layout) = self.layout.take() else { return };
+        // A clone, not a take: the steps below read `self.layout` too (a free layout's picks add without a range).
+        let Some(layout) = self.layout.clone() else { return };
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         let at = Placement { rect, offset, rtl };
         // A press lands on the rows the user saw: the offset of the last pass, before this pass's wheel share (8.3).
@@ -346,7 +347,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
         }
-        self.layout = Some(layout);
     }
 
     fn apply(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
