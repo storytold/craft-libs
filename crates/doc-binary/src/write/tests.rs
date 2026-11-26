@@ -322,6 +322,10 @@ fn inline_pictures_round_trip() {
             crop: [0.0; 4],
             ole: None,
             fx: Default::default(),
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -448,6 +452,10 @@ fn tracked_object_anchors_round_trip() {
         crop: [0.0; 4],
         ole: None,
         fx: Default::default(),
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let page = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
     let note = InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() };
