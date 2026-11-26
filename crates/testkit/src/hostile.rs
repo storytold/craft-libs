@@ -11,7 +11,10 @@
 //! mutations, one case after another on a worker thread, with a time limit for each case. It fails
 //! the test, naming the case and the input length, when the parser panics or does not finish in
 //! time. The number of rounds is a count the caller gives, multiplied by a variable the caller
-//! names. [`hammer`] and [`HammerConfig`] are not built for `wasm32`.
+//! names. [`DIVISOR_VARIABLE`] (`CRAFT_HOSTILE_DIVISOR`) runs a fraction of every sweep for quick
+//! runs such as pull requests: every N-th truncation and 1/N of the rounds; [`divisor`] reads it
+//! for sweeps written without [`hammer`]. [`hammer`], [`HammerConfig`] and [`divisor`] are not
+//! built for `wasm32`.
 
 use std::fmt::Write as _;
 
@@ -39,6 +42,12 @@ const WORKER_NAME: &str = "craft-testkit hostile";
 /// The variable that multiplies a [`HammerConfig`]'s rounds unless
 /// [`HammerConfig::with_multiplier_variable`] names another.
 pub const DEFAULT_MULTIPLIER_VARIABLE: &str = "CRAFT_HOSTILE_MULT";
+
+/// The variable that divides every hostile-input sweep: with `N`, [`hammer`] runs the unmodified
+/// seed, every N-th truncation (lengths 0, N, 2N, ...) and 1/N of its rounds, rounded up. Unset, or
+/// 1, runs everything. The Workspace gate sets it and the nightly full run leaves it unset; a
+/// failing case is found again with the same value.
+pub const DIVISOR_VARIABLE: &str = "CRAFT_HOSTILE_DIVISOR";
 
 /// The default limit for one case of [`hammer`]. The limit's variable, `CRAFT_TEST_TIMEOUT_SECS`
 /// unless [`HammerConfig::with_timeout`] names another, replaces it.
@@ -339,6 +348,36 @@ fn parse_multiplier(value: &str) -> Result<usize, &'static str> {
     }
 }
 
+/// The value of [`DIVISOR_VARIABLE`], or 1 when it is not set, for a sweep written without
+/// [`hammer`]: run the cases whose index plus an offset is a multiple of it, and give each input of
+/// the sweep a different offset so that together they still reach every index. Panics, naming the
+/// variable, when the value is not a whole number above zero.
+///
+/// ```
+/// let step = craft_testkit::hostile::divisor();
+/// let positions: Vec<usize> = (0..64).filter(|i| (i + 3) % step == 0).collect();
+/// assert!(!positions.is_empty());
+/// ```
+// Failing the calling test is what this function is for.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::panic)]
+#[track_caller]
+pub fn divisor() -> usize {
+    match divisor_with(read_variable) {
+        Ok(divisor) => divisor,
+        Err(error) => panic!("{error}"),
+    }
+}
+
+/// [`divisor`] with the variable lookup passed in.
+#[cfg(not(target_arch = "wasm32"))]
+fn divisor_with(lookup: impl FnOnce(&str) -> Option<OsString>) -> Result<usize, HammerError> {
+    let Some(raw) = lookup(DIVISOR_VARIABLE) else { return Ok(1) };
+    let variable = DIVISOR_VARIABLE.to_owned();
+    let value = raw.into_string().map_err(|_| HammerError::NotUnicode { variable: variable.clone() })?;
+    parse_multiplier(&value).map_err(|reason| HammerError::BadValue { variable, value, reason })
+}
+
 /// Reads the variable `name` from the process environment.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_variable(name: &str) -> Option<OsString> {
@@ -388,15 +427,16 @@ where
 {
     let label = config.label;
     let rounds = config.rounds_with(&lookup).map_err(|error| format!("{label}: {error}"))?;
-    let rounds = if seed.is_empty() { 0 } else { rounds };
-    let cases = 1 + seed.len() as u128 + rounds as u128;
+    let divisor = divisor_with(&lookup).map_err(|error| format!("{label}: {error}"))?;
+    let rounds = if seed.is_empty() { 0 } else { rounds.div_ceil(divisor) };
+    let cases = 1 + seed.len().div_ceil(divisor) as u128 + rounds as u128;
     if cases > MAX_CASES as u128 {
         return Err(format!("{label}: {}", HammerError::TooManyCases { cases }));
     }
     let start = Instant::now();
     let limit = resolve(&config.timeout, &lookup, start).map(Limit::from).map_err(|error| format!("{label}: {error}"))?;
     let clock: Clock = Arc::new(move || start.elapsed());
-    run_cases(label.to_owned(), limit, Arc::from(seed), rounds, parse, clock)
+    run_cases(label.to_owned(), limit, Arc::from(seed), rounds, divisor, parse, clock)
 }
 
 /// A clock that returns the time since a [`hammer`] call started.
@@ -467,7 +507,7 @@ impl Drop for Report {
 /// Starts the worker that runs every case, then waits for it, failing when a case runs past the
 /// limit.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_cases<F>(label: String, limit: Limit, seed: Arc<[u8]>, rounds: usize, parse: F, clock: Clock) -> Result<(), String>
+fn run_cases<F>(label: String, limit: Limit, seed: Arc<[u8]>, rounds: usize, divisor: usize, parse: F, clock: Clock) -> Result<(), String>
 where
     F: Fn(&[u8]) + Send + Sync + 'static,
 {
@@ -480,7 +520,7 @@ where
         .name(WORKER_NAME.to_owned())
         .spawn(move || {
             let mut report = Report { watch: worker_watch, outcome: Err(format!("{worker_label}: the worker thread stopped without a result")) };
-            report.outcome = run_all(&report.watch, &worker_clock, &worker_label, &worker_limit, &seed, rounds, &parse);
+            report.outcome = run_all(&report.watch, &worker_clock, &worker_label, &worker_limit, &seed, rounds, divisor, &parse);
         })
         .map_err(|error| format!("{label}: could not start the worker thread: {error}"))?;
     let mut state = watch.lock();
@@ -498,11 +538,21 @@ where
     }
 }
 
-/// Runs the unmodified seed, its truncations and its mutations in order, stopping at the first
-/// failure.
+/// Runs the unmodified seed, every `divisor`-th truncation and its mutations in order, stopping at
+/// the first failure.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_all<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, limit: &Limit, seed: &[u8], rounds: usize, parse: &F) -> Result<(), String> {
-    for n in std::iter::once(seed.len()).chain(0..seed.len()) {
+#[allow(clippy::too_many_arguments)]
+fn run_all<F: Fn(&[u8])>(
+    watch: &Watch,
+    clock: &Clock,
+    label: &str,
+    limit: &Limit,
+    seed: &[u8],
+    rounds: usize,
+    divisor: usize,
+    parse: &F,
+) -> Result<(), String> {
+    for n in std::iter::once(seed.len()).chain((0..seed.len()).step_by(divisor)) {
         let case = if n == seed.len() { "the unmodified seed".to_owned() } else { format!("truncation to {n}") };
         run_one(watch, clock, label, limit, case, seed.get(..n).unwrap_or_default(), parse)?;
     }
@@ -675,7 +725,7 @@ mod tests {
             Duration::ZERO
         });
         let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
-        assert_eq!(run_cases("late start".to_owned(), limit, Arc::from(&[1u8][..]), 0, |_: &[u8]| {}, clock), Ok(()));
+        assert_eq!(run_cases("late start".to_owned(), limit, Arc::from(&[1u8][..]), 0, 1, |_: &[u8]| {}, clock), Ok(()));
     }
 
     #[test]
@@ -740,6 +790,29 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), 24);
         assert_eq!(HammerConfig::new("default", 7).multiplier_variable(), "CRAFT_HOSTILE_MULT");
         assert_eq!(config.rounds_with(unset), Ok(7));
+    }
+
+    #[test]
+    fn divisor_runs_every_nth_truncation_and_a_fraction_of_the_rounds() {
+        let lookup = |name: &str| (name == DIVISOR_VARIABLE).then(|| OsString::from("4"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        hammer_with(&config("divided", 10), &[0; 10], move |d| record.lock().unwrap().push(d.len()), lookup).unwrap();
+        let lengths = seen.lock().unwrap().clone();
+        // The seed, truncations to 0, 4 and 8, then 10 / 4 = 3 rounds rounded up.
+        assert_eq!(lengths.len(), 7, "{lengths:?}");
+        assert_eq!(lengths[..4], [10, 0, 4, 8]);
+        assert_eq!(divisor_with(unset), Ok(1));
+    }
+
+    #[test]
+    fn invalid_divisor_fails_before_any_parse() {
+        let called = Arc::new(Mutex::new(false));
+        let flag = Arc::clone(&called);
+        let lookup = |name: &str| (name == DIVISOR_VARIABLE).then(|| OsString::from("0"));
+        let message = hammer_with(&config("bad divisor", 3), &[1, 2], move |_| *flag.lock().unwrap() = true, lookup).unwrap_err();
+        assert_eq!(message, r#"bad divisor: CRAFT_HOSTILE_DIVISOR="0" is zero; set it to a whole number above zero"#);
+        assert!(!*called.lock().unwrap());
     }
 
     #[test]
