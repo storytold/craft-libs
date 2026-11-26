@@ -14,6 +14,16 @@ all-features = true
 [lints]
 workspace = true
 
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/jpeg/tests/data/testorig-huffman-progressive.jpg",
+    "crates/jpeg/tests/data/testorig.jpg",
+    "crates/jpeg/tests/data/testorig12.jpg",
+    "crates/jpeg/tests/data/testorig12.ppm",
+]
+
 [features]
 # FLV codec 3 / SWF Screen Video key frames.
 screen-video = ["dep:miniz_oxide"]
