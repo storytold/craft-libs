@@ -21,6 +21,7 @@ that codec crates use to describe a file and configure a decoder.
 | `matroska` | `craft_media::matroska` | none |
 | `ogg` | `craft_media::ogg` | none |
 | `avi` | `craft_media::avi` | none |
+| `bink` | `craft_media::bink` | none |
 | `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
 | `vmd` | `craft_media::vmd` | none |
@@ -29,7 +30,7 @@ that codec crates use to describe a file and configure a decoder.
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `bink`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -473,6 +474,41 @@ packets, granule positions, BOS/EOS, CRC-32), puts each header packet on pages o
 audio pages at a byte or packet target, and can replace the final granule position for Ogg Opus
 end trimming. `opus_tags` and `vorbis_comment` build the comment headers; tag names that are not
 valid field names (Vorbis I §5.2.1) are left out.
+
+## `bink`
+
+A clean-room Bink 1 (`.bik`) demuxer. Bink has no published specification: the layout follows the
+public description of the container on the MultimediaWiki (`wiki.multimedia.cx`, "Bink Container")
+and was checked against ffprobe on real files. No FFmpeg or other Bink implementation was read;
+ffprobe is a test oracle only. No muxer.
+
+```rust
+use craft_media::bink::open;
+
+let file = open(&bytes)?; // any ByteSource
+let video = file.video_params(); // CodecId::BinkVideo, signature as tag, size, flags as extradata
+for i in 0..file.frames.len() {
+    let frame = file.read_frame(&bytes, i)?;
+    let packets = file.split_frame(&frame)?; // one optional packet per audio track, then video
+}
+```
+
+| Part | |
+|---|---|
+| Header | signature and revision letter, frame count, picture size, frame rate, video flags (alpha, grayscale, scaling) |
+| Audio tracks | sample rate, stereo flag, RDFT or DCT form (`CodecId::BinkAudioRdft` / `BinkAudioDct`), track ID |
+| Index | one offset per frame; bit 0 marks a key frame |
+| Frames | per audio track a length, decoded size and packet; the video packet is the rest |
+| Damage | a truncated file opens with the frames that are whole |
+
+Limits, each with a test: at most 256 audio tracks and a picture of at most 32767 by 32767 (more
+is refused), and a frame table bounded by the index entries the file could hold. Bink 2 files
+(`KB2`) are refused with `Error::Bink2`.
+
+Tests: hand-built files, truncation, invalid headers and random damage (never a panic).
+`tests/oracle_bink.rs` compares the stream, size and key flag of every packet with ffprobe's for the `.bik` files
+under `CRAFT_BINK_SAMPLES`, and is skipped when that is not set: no tool here writes Bink
+files, and existing ones are not ours to commit.
 
 ## `avi`
 
