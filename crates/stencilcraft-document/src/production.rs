@@ -165,6 +165,10 @@ pub struct ShapeProduction {
     pub hidden_contours: Vec<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<Box<SourceGroup>>,
+    /// Line weight in millimetres (Silhouette Studio's line width): how thick the line draws
+    /// and prints, and the width Outline Stroke outlines at. `None` is a hairline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_width_mm: Option<f64>,
 }
 
 impl ShapeProduction {

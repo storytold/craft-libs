@@ -12,6 +12,10 @@ use crate::{Board, DocError, Document, Shape};
 pub const MAX_PAGES: usize = 100;
 /// Most ruler guides a document may hold.
 pub const MAX_GUIDES: usize = 1000;
+/// Widest line weight a shape may have, millimetres.
+pub const MAX_STROKE_MM: f64 = 100.0;
+/// Widest text wrap width, millimetres (a 10 m roll).
+pub const MAX_WRAP_MM: f64 = 10_000.0;
 /// Most groups a document may hold.
 pub const MAX_GROUPS: usize = 100_000;
 /// Deepest group nesting accepted.
@@ -162,11 +166,14 @@ pub struct Grid {
     pub subdivisions: u32,
     #[serde(default)]
     pub visible: bool,
+    /// Isometric lines (at 30° and 150°, plus verticals) instead of a square grid.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub isometric: bool,
 }
 
 impl Default for Grid {
     fn default() -> Self {
-        Self { spacing_mm: 10.0, subdivisions: 1, visible: false }
+        Self { spacing_mm: 10.0, subdivisions: 1, visible: false, isometric: false }
     }
 }
 
@@ -322,6 +329,14 @@ impl Document {
         for layer in &self.layers {
             check_name(&layer.name, "layer name")?;
             check_color(layer.color.as_deref(), "layer colour")?;
+            for shape in &layer.shapes {
+                if shape.production.stroke_width_mm.is_some_and(|w| !(w.is_finite() && (0.0..=MAX_STROKE_MM).contains(&w))) {
+                    return bad(format!("shape {}: line width must be 0-{MAX_STROKE_MM} mm", shape.id));
+                }
+                if shape.text.as_ref().and_then(|t| t.wrap_width_mm).is_some_and(|w| !(w.is_finite() && w > 0.0 && w <= MAX_WRAP_MM)) {
+                    return bad(format!("shape {}: text wrap width must be above 0 and at most {MAX_WRAP_MM} mm", shape.id));
+                }
+            }
         }
         check_name(&self.meta.title, "title")?;
         if self.meta.notes.len() > MAX_NOTES_BYTES {
