@@ -417,16 +417,20 @@ fn color_table_section(ui: &mut Ui, kit: &Kit<'_>, live: &mut Live, asked: &mut 
         if !deleted.is_empty() {
             asked.table.push(ColorTableEvent { edit: ColorTableEdit::Delete, colors: deleted });
         }
+        let web_shifted = marks.and_then(|marks| marks.web_shifted.as_deref());
+        let unshift = !selected.is_empty() && web_shifted.is_some_and(|shifted| selected.iter().all(|color| shifted.contains(color)));
+        let (web_icon, web_label, web_edit) =
+            if unshift { ("undo", &words.unshift, ColorTableEdit::Unshift) } else { ("web_colors", &words.web_shift, ColorTableEdit::WebShift) };
         let tools = [
-            ("web_colors", &words.web_shift, ColorTableEdit::WebShift),
-            ("undo", &words.unshift, ColorTableEdit::Unshift),
-            ("lock", &words.lock, ColorTableEdit::Lock),
-            ("grid", &words.make_transparent, ColorTableEdit::Transparent),
-            ("trash", &words.delete_color, ColorTableEdit::Delete),
+            Some(("web_colors", web_icon, web_label, web_edit)),
+            web_shifted.is_none().then_some(("undo", "undo", &words.unshift, ColorTableEdit::Unshift)),
+            Some(("lock", "lock", &words.lock, ColorTableEdit::Lock)),
+            Some(("grid", "grid", &words.make_transparent, ColorTableEdit::Transparent)),
+            Some(("trash", "trash", &words.delete_color, ColorTableEdit::Delete)),
         ];
         Row::new().id_salt("table-tools").show(ui, |ui, _| {
-            for (icon, label, edit) in &tools {
-                let button = IconButton::new(IconId::new(icon)).label((*label).clone()).enabled(!selected.is_empty()).id_salt(*icon).show(ui);
+            for (id, icon, label, edit) in tools.iter().flatten() {
+                let button = IconButton::new(IconId::new(icon)).label((*label).clone()).enabled(!selected.is_empty()).id_salt(*id).show(ui);
                 if clicked(&button) {
                     asked.table.push(ColorTableEvent { edit: edit.clone(), colors: selected.clone() });
                 }
