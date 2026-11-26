@@ -50,6 +50,39 @@ fn a_press_arms_a_gated_taker_until_the_pointer_leaves() {
     assert_eq!(read.get(), (scroll, None), "once the pointer leaves, the panel takes it again");
 }
 
+#[trial]
+fn pointer_scoped_field_wheel_scrolls_the_panel_outside_the_focused_field() {
+    let panel = Id::unique("pointer_scoped_wheel_panel");
+    let field = Cell::new(Id::NULL);
+    let field_rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 20.0));
+    let panel_rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0));
+    let seen = RefCell::new(Seen::default());
+    let read = Cell::new((false, false));
+    let mut show_frame = |ui: &mut Ui| {
+        field.set(Probe::new(&seen).size(field_rect.size()).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui).id);
+        register(ui.ctx(), WheelTaker::new(panel, panel_rect).vertical(true).scrolls(true));
+        register(ui.ctx(), WheelTaker::new(field.get(), field_rect).vertical(true).value(true).field(true).gated(true));
+        let moved = |owner| take_share(ui.ctx(), owner).is_some_and(|share| share.scroll.y != 0.0);
+        read.set((moved(panel), moved(field.get())));
+    };
+    let mut frames = Frames::new();
+    frames.root(RootEnv::default().pointer_scoped_field_wheel(true));
+    frames.idle(2, &mut show_frame);
+    let on_field = field_rect.center();
+    frames.frame(vec![pointer::moved(on_field)], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (true, false), "an unfocused field leaves the wheel with its panel");
+
+    pointer::click(&mut frames, on_field, &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (false, true), "the wheel steps the focused field under the pointer");
+
+    frames.advance(GESTURE_GAP);
+    frames.frame(vec![pointer::moved(Pos2::new(300.0, 300.0))], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    assert_eq!(read.get(), (true, false), "the panel scrolls when the pointer is outside the focused field");
+}
+
 /// A wheel event of `delta` in `unit` with `modifiers`, in device phase `phase`.
 fn wheel_event(unit: MouseWheelUnit, delta: Vec2, phase: TouchPhase, modifiers: Modifiers) -> Event {
     Event::MouseWheel { unit, delta, phase, modifiers, source: MouseWheelSource::Wheel }
