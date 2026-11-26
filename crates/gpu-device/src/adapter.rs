@@ -158,12 +158,12 @@ pub fn native_descriptor() -> wgpu::InstanceDescriptor {
     desc
 }
 
-/// The index of the adapter to draw with for `power`: [`wgpu_choice`], or the entry exposing the
+/// The index of the adapter to draw with for `power`: the preferred adapter, or the entry exposing the
 /// most features among those that are the same GPU listed by the same driver (the first of them
 /// when several expose as many), repeated until the entry is its own newest version. For an Intel
 /// Gen 9 to Gen 11 GPU on Intel's Windows Vulkan driver it is the same GPU's DirectX 12 entry, or
 /// without one the best other usable adapter. `None` without a usable adapter, and when that
-/// Intel Vulkan entry is the only one. The result is never an entry [`avoided`] excludes.
+/// Intel Vulkan entry is the only one. The result excludes adapters with known driver problems.
 pub fn choose(candidates: &[Candidate], power: PowerPreference) -> Option<usize> {
     let first = wgpu_choice(candidates, power)?;
     let index = settled(candidates, first);
