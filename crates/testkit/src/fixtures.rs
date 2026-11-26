@@ -398,7 +398,8 @@ fn skip_or_fail<T>(rule: Option<&str>, reason: &str) -> Option<T> {
 /// [`publish`] the result.
 ///
 /// `make` returns `true` when it finished; publication still checks that it wrote a nonempty regular
-/// file. A generator that fails, panics or writes nothing leaves no temporary file behind. When it
+/// file. A generator that fails, panics, writes nothing or makes `out` name its temporary file leaves
+/// no temporary file behind, and that `out` is not returned. When it
 /// fails and another process has published a complete `out` in the meantime, that file is returned.
 /// Otherwise generation is skipped with `None` unless `required_var` (default [`REQUIRE_VAR`]) is
 /// exactly `1`. An `out` whose file name ends with `.fixture-lock` is skipped the same way without
@@ -442,14 +443,16 @@ fn generate_inner(out: &Path, rule: Option<&str>, make: impl FnOnce(&Path) -> bo
         Err(e) => return skip_or_fail(rule, &format!("cannot claim a temporary file beside {}: {e}", out.display())),
     };
     let mut owned = OwnedTemp { path: &tmp, armed: true };
-    let reason = if make(&tmp) {
+    let reason = if !make(&tmp) {
+        format!("fixture generator failed for {}", out.display())
+    } else if same_entry(&tmp, out) {
+        format!("fixture generator made {} name its temporary file {}", out.display(), tmp.display())
+    } else {
         owned.armed = false;
         match publish(&tmp, out) {
             Ok(()) => return Some(out.to_path_buf()),
             Err(e) => format!("could not publish {}: {e}", out.display()),
         }
-    } else {
-        format!("fixture generator failed for {}", out.display())
     };
     drop(owned);
     if complete_file(out) {
@@ -1000,6 +1003,23 @@ mod tests {
             assert!(complete_file(path), "{} was returned without a complete file behind it", path.display());
         }
         assert_eq!(std::fs::read(folder.join("child.bin")).unwrap(), b"payload");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_output_that_links_to_the_temporary_file_is_not_returned() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("fixture.bin");
+        let mut temporary = None;
+        let result = generate_with(&out, false, |tmp| {
+            temporary = Some(tmp.to_path_buf());
+            std::fs::write(tmp, b"payload").unwrap();
+            std::os::unix::fs::symlink(tmp, &out).unwrap();
+            true
+        });
+        assert_eq!(result, None);
+        assert!(std::fs::symlink_metadata(temporary.unwrap()).is_err(), "the temporary file was left behind");
+        assert!(!complete_file(&out));
     }
 
     #[test]
