@@ -2845,6 +2845,34 @@ fn seven() { let _ = "seven"; }
         scan(Path::new("."), &same, &fits).unwrap();
     }
 
+    #[test]
+    fn relative_base_stays_fixed_when_enumeration_changes_the_working_directory() {
+        const CHILD_ROOT: &str = "CRAFT_NAMES_SCAN_DIRECTORY_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            fn change_directory(_: &Path) -> bool {
+                let root = PathBuf::from(std::env::var_os(CHILD_ROOT).unwrap());
+                std::env::set_current_dir(root.join("switched")).unwrap();
+                false
+            }
+            let policy = Policy { skip: change_directory, ..POLICY };
+            let found = scan(Path::new("."), &[Input::rust(Path::new("src"))], &policy).unwrap();
+            assert_eq!(hits(&found), [("src/a.rs".to_owned(), 1, "AzureKit")]);
+            assert_eq!(std::env::current_dir().unwrap(), PathBuf::from(root).join("switched"));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "original/src/a.rs", "\"AzureKit\"");
+        write(dir.path(), "switched/src/a.rs", "\"BlueCore\"");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "names::tests::relative_base_stays_fixed_when_enumeration_changes_the_working_directory", "--nocapture"])
+            .env(CHILD_ROOT, dir.path())
+            .current_dir(dir.path().join("original"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
     #[cfg(windows)]
     #[test]
     fn aliases_under_a_drive_relative_base_are_read_once() {

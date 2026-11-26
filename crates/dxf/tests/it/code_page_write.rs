@@ -43,7 +43,7 @@ fn text_is_written_in_the_code_page() {
     ];
     for (cp, text, raw) in cases {
         let tags = file(cp, text);
-        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp), "binary")] {
+        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp).unwrap(), "binary")] {
             assert!(contains(&bytes, raw), "{cp} {what}: {:?}", String::from_utf8_lossy(&bytes));
             assert_eq!(parse(&bytes).unwrap()[10].str(), text, "{cp} {what}");
         }
@@ -60,7 +60,7 @@ fn unknown_ascii_and_utf8_code_pages_are_pure_ascii() {
         assert!(bytes.is_ascii(), "{cp}");
         assert_eq!(bytes, write_ascii(&tags).into_bytes(), "{cp}");
         assert!(contains(&bytes, b"A\\U+00E7\\U+00E3o  fim"), "{cp}");
-        assert!(write_binary_in(&tags, cp).iter().all(u8::is_ascii), "{cp} binary");
+        assert!(write_binary_in(&tags, cp).unwrap().iter().all(u8::is_ascii), "{cp} binary");
     }
 }
 
@@ -74,7 +74,7 @@ fn code_page_bytes_that_are_valid_utf8_are_escaped_in_ascii() {
     assert!(ascii.is_ascii(), "{:?}", String::from_utf8_lossy(&ascii));
     assert!(contains(&ascii, b"\\U+0421\\U+0406"));
     assert_eq!(parse(&ascii).unwrap()[10].str(), "СІ");
-    let binary = write_binary_in(&tags, "ANSI_1251");
+    let binary = write_binary_in(&tags, "ANSI_1251").unwrap();
     assert!(contains(&binary, b"\xD1\xB2"));
     assert_eq!(parse(&binary).unwrap()[10].str(), "СІ");
     // Bytes that are not valid UTF-8 stay as they are.
@@ -111,7 +111,7 @@ fn literal_escapes_survive_code_page_text() {
         [("ANSI_1252", "Ação \\U+00E9 \\M+183A4F"), ("ANSI_1251", "Слой \\U+0041"), ("ANSI_1251", "СІ \\U+0041"), ("ANSI_932", "表 \\M+1")]
     {
         let tags = file(cp, text);
-        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp), "binary")] {
+        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp).unwrap(), "binary")] {
             assert!(contains(&bytes, b"\\U+005C"), "{cp} {what}: {:?}", String::from_utf8_lossy(&bytes));
             assert_eq!(parse(&bytes).unwrap()[10].str(), text, "{cp} {what}");
         }
@@ -132,7 +132,7 @@ fn a_trail_byte_backslash_never_starts_an_escape() {
     ];
     for (cp, text, written, never) in cases {
         let tags = file(cp, text);
-        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp), "binary")] {
+        for (bytes, what) in [(write_ascii_in(&tags, cp), "ASCII"), (write_binary_in(&tags, cp).unwrap(), "binary")] {
             assert!(contains(&bytes, written), "{cp} {what}: {:?}", String::from_utf8_lossy(&bytes));
             assert!(!contains(&bytes, never), "{cp} {what}: a trail byte starts an escape");
             assert_eq!(parse(&bytes).unwrap()[10].str(), text, "{cp} {what}");
