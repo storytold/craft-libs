@@ -246,7 +246,8 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
-    if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
+    // An arena member's focus is its own node; a folded child's is its owner's, set above.
+    if inner_of.is_none() && core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);
     }
     let facts = core.env.facts_of(id);
