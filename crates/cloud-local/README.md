@@ -37,3 +37,16 @@ write never truncates its target in place. It writes a new sibling file and rena
 over the target, so the target's directory entry is replaced rather than its bytes being
 overwritten. A rename only ever changes one name; it does not reach through to any other name,
 inside the root or out, that happens to point at the same inode.
+
+## Concurrent saves
+
+A `Job::Write` checks the file's etag again just before the rename, and holds one lock for this
+process from that check until the rename is done. Within one process, when two saves are made
+from the same etag, the second gets `Fault::Conflict`, unless the first save left the file with an
+unchanged etag (see the next paragraph). A second process writing the same folder does not take
+that lock, so its save can still land between the check and the rename. A deployment that needs
+the guarantee across processes needs a backend whose provider offers a conditional write.
+
+The etag is the file's length and modification time. On a filesystem whose timestamps are coarser
+than the time between two saves, two saves of the same length can leave the same etag, and the
+second save is then not refused.
