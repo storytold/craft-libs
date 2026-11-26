@@ -60,12 +60,14 @@ impl Mesh {
         self.positions.len()
     }
 
-    /// Axis-aligned bounds (zero box for an empty mesh).
+    /// Axis-aligned bounds of the finite positions (zero box when there are none). Non-finite
+    /// positions are left out, so one cannot turn the box into NaN.
     pub fn bounds(&self) -> (Vec3, Vec3) {
-        if self.positions.is_empty() {
+        let mut finite = self.positions.iter().filter(|p| p.is_finite()).peekable();
+        if finite.peek().is_none() {
             return (Vec3::ZERO, Vec3::ZERO);
         }
-        self.positions.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
+        finite.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
     }
 
     /// Bounding-sphere radius around the bounds center (at least a small epsilon).
@@ -164,7 +166,7 @@ impl Mesh {
         self.submeshes.iter().filter(move |s| s.material == m).flat_map(|s| (s.start / 3) as usize..((s.start + s.count) / 3) as usize)
     }
 
-    /// Check that attribute arrays agree and every index is in range.
+    /// Check that attribute arrays agree, every value is finite and every index is in range.
     pub fn validate(&self) -> Result<()> {
         let n = self.positions.len();
         if self.normals.len() != n || self.uvs.len() != n || self.tangents.len() != n {
@@ -190,6 +192,13 @@ impl Mesh {
         }
         if self.positions.iter().any(|p| !p.is_finite()) {
             return Err(GeomError::Invalid("mesh has non-finite positions".into()));
+        }
+        if self.normals.iter().any(|v| !v.is_finite())
+            || self.uvs.iter().any(|v| !v.is_finite())
+            || self.tangents.iter().any(|v| !v.is_finite())
+            || self.colors.iter().any(|v| !v.is_finite())
+        {
+            return Err(GeomError::Invalid("mesh has non-finite normals, UVs, tangents or colors".into()));
         }
         for s in &self.submeshes {
             if s.start as usize + s.count as usize > self.indices.len() || s.material >= self.materials.len().max(1) {
@@ -599,6 +608,33 @@ mod tests {
         let mut m = quad();
         m.uvs.pop();
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_non_finite_attributes() {
+        let mut m = quad();
+        m.normals[1].x = f32::NAN;
+        assert!(m.validate().is_err());
+        let mut m = quad();
+        m.uvs[2].y = f32::INFINITY;
+        assert!(m.validate().is_err());
+        let mut m = quad();
+        m.tangents[0].w = f32::NAN;
+        assert!(m.validate().is_err());
+        let mut m = quad();
+        m.colors = vec![Vec4::ONE; 4];
+        m.colors[3].z = f32::NEG_INFINITY;
+        assert!(m.validate().is_err());
+        quad().validate().unwrap();
+    }
+
+    #[test]
+    fn bounds_leave_out_non_finite_positions() {
+        let mut m = quad();
+        m.positions[1] = Vec3::new(f32::NAN, 5.0, f32::NAN);
+        assert_eq!(m.bounds(), (Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0)));
+        m.positions = vec![Vec3::NAN; 4];
+        assert_eq!(m.bounds(), (Vec3::ZERO, Vec3::ZERO));
     }
 
     #[test]
