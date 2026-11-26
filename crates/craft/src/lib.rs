@@ -247,6 +247,8 @@ pub use craft_media_source as media_source;
 pub use craft_menu as menu;
 #[cfg(feature = "mesh")]
 pub use craft_mesh as mesh;
+#[cfg(feature = "mesh-ops")]
+pub use craft_mesh_ops as mesh_ops;
 #[cfg(feature = "metadata")]
 pub use craft_metadata as metadata;
 #[cfg(feature = "metafile")]
