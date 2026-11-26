@@ -139,7 +139,7 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
     });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     let colour = chart_text_colour(space, theme);
-    if let Some(t) = title_of(chart, &read_series(ty, false, theme)) {
+    if let Some(t) = title_of(chart, &read_series(ty, false, theme, &mut { MAX_CELLS })) {
         let title = chart.child("c:title");
         let title_colour = title.and_then(|t| element_text_colour(t, theme)).unwrap_or(colour);
         let title_bold = title.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true);

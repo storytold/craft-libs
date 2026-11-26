@@ -13,7 +13,25 @@ impl Chart {
         let kind = Kind::of(&ty.name)?;
         let scatter = kind == Kind::Scatter;
         let date1904 = space.child("c:date1904").is_some_and(|d| d.attr("val").is_none_or(truthy));
-        let mut series = read_series(ty, scatter, theme);
+        let horizontal = kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar");
+        // One cell budget for the whole chart, shared by every chart type of a combination.
+        let mut budget = MAX_CELLS;
+        let mut series = read_series(ty, scatter, theme, &mut budget);
+        // Bar spacing comes from the bar chart type, wherever it is in a combination.
+        let mut bar_ty = ty;
+        if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
+            for other in combined_types(plot, ty) {
+                // Past the series limit or the cell budget a chart type is not parsed: each would
+                // cost a pass over series that are dropped.
+                let room = MAX_SERIES.saturating_sub(series.len());
+                if room > 0 && budget > 0 {
+                    series.extend(read_series(other, false, theme, &mut budget).into_iter().take(room));
+                }
+                if bar_ty.name != "c:barChart" && other.name == "c:barChart" {
+                    bar_ty = other;
+                }
+            }
+        }
         if series.is_empty() {
             return None;
         }
@@ -40,22 +58,15 @@ impl Chart {
         let mut cats = cats;
         cats.resize(n, String::new());
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
-        let type_labels = show_values(ty.child("c:dLbls"));
-        let type_fmt = label_format(ty.child("c:dLbls"));
         for s in &mut series {
             s.values.resize(n, None);
             s.xs.resize(n, None);
-            s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
-            // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
-            if s.label_fmt.is_none() {
-                s.label_fmt.clone_from(&type_fmt);
-            }
             if s.labels == Some(true) {
                 s.raw = s.values.clone();
             }
         }
         if grouping == Grouping::Percent {
-            to_percent(&mut series, n);
+            to_percent(&mut series, n, kind);
         }
         let (cat, val) = chart_axes(plot, scatter, theme);
         let text_colour = chart_text_colour(space, theme);
@@ -67,12 +78,13 @@ impl Chart {
             val.fmt.clone().or_else(|| series.iter().find_map(|s| s.fmt.clone())).unwrap_or_else(|| "General".to_string())
         };
         let num = |n: &str| ty.child(n).and_then(|g| g.attr("val")).and_then(int);
+        let bar_num = |n: &str| bar_ty.child(n).and_then(|g| g.attr("val")).and_then(int);
         Some(Chart {
             kind,
-            horizontal: kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar"),
+            horizontal,
             grouping,
-            gap: num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
-            overlap: num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
+            gap: bar_num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
+            overlap: bar_num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
             hole: num("c:holeSize").unwrap_or(50).clamp(10, 90) as f32 / 100.0,
             first_angle: num("c:firstSliceAng").unwrap_or(0).clamp(0, 360) as f64,
             radar_fill: radar_style == Some("filled"),
@@ -123,6 +135,22 @@ impl Chart {
         self.grouping != Grouping::Clustered
     }
 
+    /// Whether the series of chart type `kind` stack: only the first chart type's grouping counts
+    /// in a combination chart.
+    pub(super) fn stacks(&self, kind: Kind) -> bool {
+        self.stacked() && self.kind == kind
+    }
+
+    /// Whether any series is drawn as `kind`.
+    pub(super) fn has(&self, kind: Kind) -> bool {
+        self.series.iter().any(|s| s.kind == kind)
+    }
+
+    /// Whether the chart combines chart types (columns and a line…).
+    pub(super) fn combined(&self) -> bool {
+        self.series.iter().any(|s| s.kind != self.kind)
+    }
+
     fn accent(&self, i: usize) -> Rgb {
         self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK)
     }
@@ -167,23 +195,55 @@ impl Chart {
     }
 }
 
-/// The series of a chart type element, within the chart's cell budget.
-pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb]) -> Vec<Series> {
-    let mut budget = MAX_CELLS;
+/// The series of a chart type element, within what is left of the chart's cell `budget`; parsing
+/// stops once it is spent. Each series takes the chart type's kind and, where it says nothing of
+/// its own, the chart type's data labels.
+pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb], budget: &mut usize) -> Vec<Series> {
+    let kind = Kind::of(&ty.name).unwrap_or(Kind::Bar);
+    let type_labels = show_values(ty.child("c:dLbls"));
+    let type_fmt = label_format(ty.child("c:dLbls"));
     let mut series = Vec::new();
     for ser in ty.children("c:ser").take(MAX_SERIES) {
-        let s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
-        budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        if *budget == 0 {
+            break;
+        }
+        let mut s = Series::parse(ser, scatter, theme, (*budget).min(MAX_POINTS));
+        *budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        s.kind = kind;
+        s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
+        // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
+        if s.label_fmt.is_none() {
+            s.label_fmt.clone_from(&type_fmt);
+        }
         series.push(s);
     }
     series
 }
 
-/// Values as their share of each category's total (100% stacked charts).
-fn to_percent(series: &mut [Series], n: usize) {
+/// The axis ids a chart type is plotted on.
+fn axis_ids(ty: &El) -> Vec<&str> {
+    ty.children("c:axId").take(4).filter_map(|a| a.attr("val")).collect()
+}
+
+/// The other chart types a combination chart draws with `ty`: the column, line and area types on
+/// the same axes. Types on other axes (a secondary axis) and horizontal bars are left out.
+fn combined_types<'a>(plot: &'a El, ty: &El) -> Vec<&'a El> {
+    let axes = axis_ids(ty);
+    plot.els()
+        .filter(|e| !std::ptr::eq(*e, ty))
+        .filter(|e| matches!(Kind::of(&e.name), Some(Kind::Bar | Kind::Line | Kind::Area)))
+        .filter(|e| e.child("c:barDir").and_then(|d| d.attr("val")) != Some("bar"))
+        .filter(|e| axis_ids(e) == axes)
+        .take(MAX_SERIES)
+        .collect()
+}
+
+/// Values as their share of each category's total (100% stacked charts). Only the series of the
+/// stacked chart type `kind` count: the other types of a combination keep their values.
+fn to_percent(series: &mut [Series], n: usize, kind: Kind) {
     for i in 0..n {
-        let total: f64 = series.iter().map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();
-        for s in series.iter_mut() {
+        let total: f64 = series.iter().filter(|s| s.kind == kind).map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();
+        for s in series.iter_mut().filter(|s| s.kind == kind) {
             if let Some(Some(v)) = s.values.get_mut(i) {
                 *v = if total > 0.0 { *v / total } else { 0.0 };
             }
@@ -316,6 +376,7 @@ impl Series {
             label_pos,
             marker_color,
             raw: Vec::new(),
+            kind: Kind::Bar,
         }
     }
 }

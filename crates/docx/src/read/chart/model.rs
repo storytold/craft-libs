@@ -176,4 +176,6 @@ pub(super) struct Series {
     /// The values as the file has them, for data labels (`values` become shares in a 100%
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,
+    /// The chart type the series is drawn as: a combination chart has more than one.
+    pub(super) kind: Kind,
 }

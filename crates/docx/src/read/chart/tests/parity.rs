@@ -3,6 +3,17 @@
 
 use super::*;
 
+/// The texts a chart draws, with their rectangles and turn (degrees clockwise).
+pub(super) fn chart_texts(items: &[GraphicItem]) -> Vec<(String, [f32; 4], f32)> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Text { text, rect, angle, .. } => Some((text.clone(), *rect, *angle)),
+            _ => None,
+        })
+        .collect()
+}
+
 pub(super) fn whole_chart(chart: &str) -> El {
     let x = format!(r#"<c:chartSpace {NS}><c:chart>{chart}</c:chart></c:chartSpace>"#);
     crate::xml::parse(x.as_bytes()).unwrap()
@@ -90,4 +101,92 @@ fn the_title_takes_its_stated_size() {
     };
     let (default, big, small) = (title(""), title(r#"sz="2400""#), title(r#"sz="1000""#));
     assert!(big > default && small < default, "{small:?} < {default:?} < {big:?}");
+}
+
+/// A combination chart: columns and a line in one plot area, on the same axes (Word's "Clustered
+/// Column - Line"). Both are drawn, and the value axis takes in the line's values too. Only the
+/// first chart type used to be drawn.
+#[test]
+fn a_combination_chart_draws_its_columns_and_its_line_on_the_shared_axes() {
+    let cats = ["A", "B", "C"];
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Costs", Some("FF0000"), &cats, &["1", "2", "3"]),
+        ser(1, "Benefits", Some("00FF00"), &cats, &["2", "2", "2"]),
+        ser(2, "Total", Some("0000FF"), &cats, &["3", "7", "12"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    assert_eq!(filled(&items).len(), 6, "two column series of three");
+    let blue_line = items.iter().any(|it| matches!(it, GraphicItem::Path { fill: None, stroke: Some(c), .. } if *c == Rgb(0, 0, 0xFF)));
+    assert!(blue_line, "the line series is drawn");
+    let ticks: Vec<f64> = chart_texts(&items).iter().filter_map(|(t, _, _)| t.parse().ok()).collect();
+    assert!(ticks.iter().any(|t| *t >= 12.0), "the value axis reaches the line's 12: {ticks:?}");
+}
+
+/// A combination's chart types share one cell budget: once the first type has spent it, the
+/// next one's series are not parsed at all.
+#[test]
+fn combination_chart_types_share_one_cell_budget() {
+    let sers: String = (0..20)
+        .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:val><c:numRef><c:numCache><c:ptCount val="10000"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#))
+        .collect();
+    let ty = |name: &str| crate::xml::parse(format!(r#"<c:{name} {NS}>{sers}</c:{name}>"#).as_bytes()).unwrap();
+    let mut budget = MAX_CELLS;
+    let bars = read_series(&ty("barChart"), false, &theme(), &mut budget);
+    assert!(bars.len() < 20, "the first type stops at the budget: {}", bars.len());
+    assert_eq!(budget, 0);
+    assert!(read_series(&ty("lineChart"), false, &theme(), &mut budget).is_empty(), "nothing is left for the line");
+}
+
+/// A 100% stacked column chart combined with a line: only the columns become shares of their
+/// category's total; the line keeps its values and doesn't count in the totals.
+#[test]
+fn only_the_stacked_chart_type_becomes_percentages() {
+    let cats = ["A", "B"];
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Left", None, &cats, &["1", "3"]),
+        ser(1, "Right", None, &cats, &["3", "1"]),
+        ser(2, "Trend", None, &cats, &["10", "20"]),
+    );
+    let chart = Chart::parse(&whole_chart(&plot), &theme()).expect("a chart");
+    let values = |j: usize| chart.series[j].values.clone();
+    assert_eq!(values(0), vec![Some(0.25), Some(0.75)], "column shares of the columns' totals");
+    assert_eq!(values(1), vec![Some(0.75), Some(0.25)]);
+    assert_eq!(values(2), vec![Some(10.0), Some(20.0)], "the line keeps its values");
+}
+
+/// A 100% stacked column chart combined with a line on the same axes: the line keeps its values,
+/// so the value axis takes them in rather than stopping at 100%, and the line is drawn at them,
+/// not pinned to the top of the plot.
+#[test]
+fn a_percent_stacked_combination_scales_its_axis_to_the_line() {
+    let cats = ["A", "B"];
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Left", Some("FF0000"), &cats, &["1", "3"]),
+        ser(1, "Right", Some("00FF00"), &cats, &["3", "1"]),
+        ser(2, "Trend", Some("0000FF"), &cats, &["10", "20"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let line_ys: Vec<f32> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, fill: None, stroke: Some(c), .. } if *c == Rgb(0, 0, 0xFF) => Some(segs),
+            _ => None,
+        })
+        .flat_map(|segs| {
+            segs.iter().filter_map(|s| match s {
+                PathSeg::Move(_, y) | PathSeg::Line(_, y) => Some(*y),
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(line_ys.len(), 2, "two line points: {line_ys:?}");
+    assert!((line_ys[0] - line_ys[1]).abs() > 10.0, "10 and 20 at different heights, not both at the top: {line_ys:?}");
+    let ticks: Vec<String> = chart_texts(&items).into_iter().map(|(t, _, _)| t).filter(|t| t.ends_with('%')).collect();
+    assert!(
+        ticks.iter().any(|t| t.trim_end_matches('%').parse::<f64>().is_ok_and(|v| v >= 2000.0)),
+        "the axis reaches the line's 20 (2000%): {ticks:?}"
+    );
 }

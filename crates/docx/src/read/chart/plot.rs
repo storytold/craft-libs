@@ -126,7 +126,10 @@ pub(super) struct Axes {
 impl Axes {
     pub(super) fn of(c: &Chart) -> Axes {
         let (dlo, dhi) = extent(c);
-        let (vmin, vmax) = if c.grouping == Grouping::Percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
+        // A 100% stacked chart's axis runs 0..100%, unless other chart types share it: they keep
+        // their own values, so the axis takes them in too (the stacked shares stay within 0..1).
+        let percent = c.grouping == Grouping::Percent && !c.combined();
+        let (vmin, vmax) = if percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
         // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale).
         let zero = !matches!(c.kind, Kind::Line | Kind::Scatter) || !narrow(dlo, dhi);
         let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
@@ -247,11 +250,20 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     }
     let mut labels = Vec::new();
     match c.kind {
-        Kind::Bar => bars(out, c, &g, &mut labels),
-        Kind::Line => lines(out, c, &g, &mut labels),
-        Kind::Area => areas(out, c, &g, &mut labels),
         Kind::Scatter => draw_scatter(out, c, &g, &mut labels),
         Kind::Pie | Kind::Doughnut | Kind::Radar => {}
+        // A combination chart draws its areas, then its columns, then its lines over them.
+        Kind::Bar | Kind::Line | Kind::Area => {
+            if c.has(Kind::Area) {
+                areas(out, c, &g, &mut labels);
+            }
+            if c.has(Kind::Bar) {
+                bars(out, c, &g, &mut labels);
+            }
+            if c.has(Kind::Line) {
+                lines(out, c, &g, &mut labels);
+            }
+        }
     }
     draw_axes(out, c, &g);
     draw_data_labels(out, &labels, c.text_size, g.horiz && c.kind == Kind::Bar);
@@ -411,7 +423,7 @@ fn extent(c: &Chart) -> (f64, f64) {
     if c.stacked() {
         for i in 0..c.n {
             let (mut p, mut q) = (0.0, 0.0);
-            for s in &c.series {
+            for s in c.series.iter().filter(|s| s.kind == c.kind) {
                 match s.values.get(i).copied().flatten() {
                     Some(v) if v >= 0.0 => p += v,
                     Some(v) => q += v,
@@ -421,6 +433,8 @@ fn extent(c: &Chart) -> (f64, f64) {
             pts.push(p);
             pts.push(q);
         }
+        // The other chart types of a combination chart don't stack.
+        pts.extend(c.series.iter().filter(|s| s.kind != c.kind).flat_map(|s| s.values.iter().flatten().copied()));
     } else {
         pts.extend(c.series.iter().flat_map(|s| s.values.iter().flatten().copied()));
     }
@@ -438,8 +452,9 @@ fn x_extent(c: &Chart) -> (f64, f64) {
 }
 
 fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
-    let stacked = c.stacked();
-    let slots = if stacked { 1 } else { c.series.len().max(1) };
+    let stacked = c.stacks(Kind::Bar);
+    let bar_series: Vec<(usize, &Series)> = c.series.iter().enumerate().filter(|(_, s)| s.kind == Kind::Bar).collect();
+    let slots = if stacked { 1 } else { bar_series.len().max(1) };
     let ov = if stacked { 0.0 } else { c.overlap };
     let ns = slots as f32;
     let band = g.band();
@@ -447,8 +462,8 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
     let group = thick * (ns - (ns - 1.0) * ov);
     let mut pos = vec![0.0f64; g.n];
     let mut neg = vec![0.0f64; g.n];
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
-        let slot = if stacked { 0 } else { j };
+    for (k, &(j, s)) in bar_series.iter().enumerate().filter(|(_, (_, s))| has_values(s)) {
+        let slot = if stacked { 0 } else { k };
         let slot = (if g.horiz { slots.saturating_sub(1 + slot) } else { slot }) as f32;
         for i in 0..g.n {
             let Some(v) = s.values.get(i).copied().flatten() else { continue };
@@ -498,13 +513,14 @@ pub(super) fn has_values(s: &Series) -> bool {
 
 /// Line series; stacked ones are drawn at the running total of the series up to them.
 fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
+    let stacked = c.stacks(Kind::Line);
     let mut total = vec![0.0f64; g.n];
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
+    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| s.kind == Kind::Line && has_values(s)) {
         let pts: Vec<Option<(f32, f32)>> = (0..g.n)
             .map(|i| {
                 let v = s.values.get(i).copied().flatten()?;
                 let y = match total.get_mut(i) {
-                    Some(t) if c.stacked() => {
+                    Some(t) if stacked => {
                         *t += v;
                         *t
                     }
@@ -619,8 +635,9 @@ fn curve(pts: impl Iterator<Item = Option<(f32, f32)>>, smooth: bool) -> Vec<Pat
 }
 
 fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
+    let stacked = c.stacks(Kind::Area);
     let mut base = vec![0.0f64; g.n];
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
+    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| s.kind == Kind::Area && has_values(s)) {
         let vals = (0..g.n).map(|i| s.values.get(i).copied().flatten().unwrap_or(0.0));
         let top: Vec<f64> = base.iter().zip(vals).map(|(b, v)| b + v).collect();
         let mut segs = Vec::with_capacity(2 * g.n + 1);
@@ -640,7 +657,7 @@ fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                 labels.push(DataLabel { x: g.cat_x(i), y: g.val((t + b) / 2.0), text, inside: true, pos: LabelPos::Above, off: 0.0 });
             }
         }
-        if c.stacked() {
+        if stacked {
             base = top;
         }
     }
