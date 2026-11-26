@@ -593,6 +593,19 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
             && p.kind == Kind::Normal
         {
             p.kind = Kind::Quote;
+            // A quoted list item's further paragraph: the writers keep only plain paragraphs in
+            // an item, so it joins the item's last paragraph with a line break, as a block in an
+            // item does, and the list goes on after it.
+            if p.item.is_some() {
+                p.item = None;
+                if let Some(FBlock::Para(prev)) = out.last_mut()
+                    && prev.list.is_some()
+                {
+                    prev.push_text("\n", &Fmt::default());
+                    prev.inlines.append(&mut p.inlines);
+                    continue;
+                }
+            }
         }
         out.push(block);
     }
@@ -682,21 +695,31 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         }
         for b in inner {
             match b {
-                FBlock::Para(mut p) if p.list.is_none() => {
+                FBlock::Para(mut p) if p.list.is_none() && p.item.is_none() => {
                     if !placed {
                         p.list = Some(li);
                         placed = true;
-                        out.push(FBlock::Para(p));
+                    } else if p.kind == Kind::Normal {
+                        // The item's further paragraph: one with no number, at the item's text.
+                        p.item = Some(li.level);
+                        p.spacing.left = Some((f32::from(li.level) + 1.0) * 36.0);
+                        p.spacing.first = Some(0.0);
                     } else if let Some(FBlock::Para(prev)) = out.last_mut()
-                        && prev.list.is_some_and(|x| x.level == li.level)
+                        && (prev.list.is_some_and(|x| x.level >= li.level) || prev.item.is_some_and(|l| l >= li.level))
                     {
-                        // A continuation paragraph joins the item with a line break.
+                        // A code block, quote or heading in the item joins the item's last
+                        // paragraph, a sublist's included, with a line break: it is no item of
+                        // its own, and only a plain paragraph is read as a further one.
                         prev.push_text("\n", &Fmt::default());
                         prev.inlines.extend(p.inlines);
+                        continue;
                     } else {
-                        p.list = Some(li);
-                        out.push(FBlock::Para(p));
+                        // One after a table: no number either, at the item's text.
+                        p.item = Some(li.level);
+                        p.spacing.left = Some((f32::from(li.level) + 1.0) * 36.0);
+                        p.spacing.first = Some(0.0);
                     }
+                    out.push(FBlock::Para(p));
                 }
                 FBlock::Para(p) => {
                     if !placed {

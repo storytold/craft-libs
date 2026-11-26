@@ -8,7 +8,10 @@
 //!
 //! Every record layout the reader relies on is listed in `PROVENANCE.md` with its public source
 //! and status; code cites the row ids (R1 ...). Reading is bounded by [`Limits`], never recurses and does not
-//! panic. Nothing here writes `.cdr` or `.cmx` files.
+//! panic.
+//!
+//! [`write()`] writes a [`Drawing`] as a `.cdr` file of version 15, laying out each record as the
+//! reader reads it. Nothing here writes `.cmx` files.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -32,11 +35,13 @@ pub mod synth;
 #[cfg(any(test, feature = "synth"))]
 pub mod synth_cmx;
 mod wl;
+mod write;
 mod zip;
 
 pub use limits::Limits;
 pub use model::{Drawing, Warning};
 pub use preview::{Preview, PreviewFormat, preview};
+pub use write::{WRITTEN_VERSION, WriteError, write};
 
 /// Does `bytes` look like a `.cdr` drawing: a RIFF file, a ZIP package holding one, or a `WL` file
 /// of version 1 or 2 whose header offsets fit the file?
