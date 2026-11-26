@@ -92,8 +92,9 @@ A craft-libs patch, labeled `Craft patch (hard edges)` in code comments, adds
 `RenderSettings::hard_edges` and `RenderSettings::output_pixel` to hayro. With `hard_edges`, the
 page's renderer, its tiling cells and its ink passes draw fills, strokes, glyph outlines and clips
 through vello_cpu's aliasing threshold (a pixel at least half covered is covered), so shapes that
-share an edge leave no anti-aliasing seam; images and soft masks are drawn as before, and the
-image path restores the renderer's threshold instead of clearing it. `output_pixel` scales the thinnest-stroke floor for a caller
+share an edge leave no anti-aliasing seam (three or more meeting inside one pixel can leave it
+uncovered); images and soft masks are drawn as before, and the image path restores the renderer's
+threshold instead of clearing it. `output_pixel` scales the thinnest-stroke floor for a caller
 that reduces the render, in soft masks as on the page. Both default to the unpatched
 behaviour. `craft_pdf::raster::render_supersampled_into` uses them; its tests are in
 `crates/pdf/tests/hard_edges.rs`.

@@ -901,6 +901,8 @@ impl Edges {
 
     /// Coverage of at least half a pixel covers it: two shapes that share an edge cover every
     /// pixel along it at least once between them, and neither grows by more than half a pixel.
+    /// Three or more shapes meeting inside a pixel can each cover less than half of it and leave
+    /// it uncovered; vello_cpu's coverage is an area, so no threshold tiles every junction.
     const HARD_THRESHOLD: u8 = 128;
 
     /// The edges `hard` asks for, with `output_pixel` device pixels per output pixel (a value

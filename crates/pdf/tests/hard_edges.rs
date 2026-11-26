@@ -171,6 +171,39 @@ fn a_hairline_on_a_pixel_boundary_doubles_with_hard_edges() {
     assert!((192..320).contains(&smooth), "about one pixel: {smooth}");
 }
 
+/// Four black boxes on a 20 × 20 page, one in each quadrant around (`x`, `y`).
+fn junction(x: f32, y: f32) -> String {
+    format!("0 0 {x} {y} re f {x} 0 {} {y} re f 0 {y} {x} {} re f {x} {y} {} {} re f", 20.0 - x, 20.0 - y, 20.0 - x, 20.0 - y)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn four_shapes_meeting_at_a_pixel_centre_leave_a_hole_with_hard_edges() {
+    // A known limit: each box covers a quarter of the pixel the four share, below the threshold,
+    // so none draws it. Any junction of three or more shapes can do this at factor 1.
+    let page = render(20, 20, &junction(10.5, 10.5), Options::default(), 1).unwrap();
+    assert_eq!(page[(9 * 20 + 10) * 4], 255, "the shared pixel is left white");
+    assert_eq!(lightest(&page, 20, 0..20, 0..9), 0);
+    assert_eq!(lightest(&page, 20, 0..20, 10..20), 0);
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_supersampled_render_bounds_a_junction_hole_to_one_fine_pixel() {
+    // The hole is one fine pixel, a sixteenth of the output pixel at factor 4. Swept over junction
+    // positions a sixteenth of a pixel apart, the lightest pixel anywhere is at most that sixteenth
+    // (16 of 255), and a hole does show.
+    let mut worst = 0;
+    for i in 0..16 {
+        for j in 0..16 {
+            let (x, y) = (10.0 + i as f32 / 16.0, 10.0 + j as f32 / 16.0);
+            let page = render(20, 20, &junction(x, y), Options::default(), 4).unwrap();
+            worst = worst.max(lightest(&page, 20, 0..20, 0..20));
+        }
+    }
+    assert!((1..=16).contains(&worst), "worst junction pixel: {worst}");
+}
+
 /// Draws a 20 × 4 page black through a soft mask of type `kind` whose group draws `group`.
 fn through_mask(kind: &str, group: &str, factor: u32) -> Vec<u8> {
     let form = ("/Type /XObject /Subtype /Form /BBox [0 0 20 4] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>", group);
