@@ -75,12 +75,21 @@ pub struct DocumentCard<S> {
     pub settings: S,
     /// Where the card comes from.
     pub source: CardSource,
+    /// The name of the picture the card shows in place of its page outline.
+    pub picture: Option<String>,
 }
 
 impl<S> DocumentCard<S> {
     /// A card titled `title` with the second `line`, applying `settings`.
     pub fn new(title: impl Into<Label>, line: impl Into<String>, settings: S, source: CardSource) -> Self {
-        DocumentCard { title: title.into(), line: line.into(), tooltip: None, settings, source }
+        DocumentCard { title: title.into(), line: line.into(), tooltip: None, settings, source, picture: None }
+    }
+
+    /// The picture the card shows, named for the dialog's thumbnails.
+    #[must_use]
+    pub fn picture(mut self, key: impl Into<String>) -> Self {
+        let _ = (&mut self, key);
+        todo!("sh.C8")
     }
 
     /// The card's hover text.

@@ -41,7 +41,7 @@ pub use hosted::{AdjustDialogCx, EditPhase, HostedAdjustDialog};
 pub use hue_saturation::{AdjustedFn, HueRangeValue, HueSaturation, HueSaturationEditor, HueSaturationOutput};
 pub use kinds::AdjustmentKind;
 pub use labels::AdjustWords;
-pub use levels_editor::{Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsWords};
+pub use levels_editor::{Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsPart, LevelsWords};
 pub use levels_panel::{LevelsPanel, LevelsPanelOutput};
 pub use mixers::{
     BlackWhite, BlackWhiteEditor, BlackWhiteOutput, ChannelMixer, ChannelMixerEditor, SelectiveColor, SelectiveColorEditor, SelectiveColorOutput,

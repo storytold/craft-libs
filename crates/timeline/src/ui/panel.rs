@@ -602,14 +602,21 @@ impl<M: TimelineModel> Timeline<'_, M> {
                     show_pane(ui, *side, indices);
                 }
                 if both {
-                    let split = SplitArea::pair(words.tracks.clone(), Axis::Y, (Side::Upper, Side::Lower), share, rules)
-                        .divider_label(words.divider.clone())
-                        .show(ui, |ui, body| {
-                            for (side, rect) in body.group_frames::<Side>() {
-                                let Some((_, indices)) = panes.iter().find(|(pane, _)| *pane == side) else { continue };
-                                Stack::new().show_at(ui, rect, |ui, _| show_pane(ui, side, indices));
-                            }
-                        });
+                    // P3(panels-w1): pn.C5
+                    let split = SplitArea::pair(
+                        words.tracks.clone(),
+                        Axis::Y,
+                        (Side::Upper, Side::Lower),
+                        craft_behavior::dock::SplitSize::Ratio(share),
+                        rules,
+                    )
+                    .divider_label(words.divider.clone())
+                    .show(ui, |ui, body| {
+                        for (side, rect) in body.group_frames::<Side>() {
+                            let Some((_, indices)) = panes.iter().find(|(pane, _)| *pane == side) else { continue };
+                            Stack::new().show_at(ui, rect, |ui, _| show_pane(ui, side, indices));
+                        }
+                    });
                     edits.extend(split.output.share().into_iter().map(TimelineEdit::Divider));
                 }
                 let placed = placed_rows(&panes, &tracks, &reports.shown);

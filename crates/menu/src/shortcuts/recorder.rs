@@ -27,7 +27,7 @@ const ESCAPE: &[Chord] = &[Chord::plain(Key::Escape)];
 /// What the recorder reports in one pass.
 #[derive(Debug)]
 #[non_exhaustive]
-pub(crate) struct RecorderOutput {
+pub struct RecorderOutput {
     /// The field's response.
     pub response: Response,
     /// The chords pressed this pass while recording, in order.
@@ -142,7 +142,7 @@ impl Component for Recorder {
 
 /// The field that records: its accessible name, whether it records now and the text it shows (the recording
 /// prompt, or the chord).
-pub(crate) struct ChordRecorder {
+pub struct ChordRecorder {
     label: Label,
     recording: bool,
     shown: Label,
@@ -151,13 +151,13 @@ pub(crate) struct ChordRecorder {
 
 impl ChordRecorder {
     /// A recorder named `label` showing `shown`.
-    pub(crate) fn new(label: impl Into<Label>, recording: bool, shown: impl Into<Label>) -> Self {
+    pub fn new(label: impl Into<Label>, recording: bool, shown: impl Into<Label>) -> Self {
         ChordRecorder { label: label.into(), recording, shown: shown.into(), salt: None }
     }
 
     /// Salts the field's id.
     #[must_use]
-    pub(crate) fn id_salt(mut self, salt: &'static str) -> Self {
+    pub fn id_salt(mut self, salt: &'static str) -> Self {
         self.salt = Some(salt);
         self
     }
@@ -168,7 +168,7 @@ impl ChordRecorder {
     }
 
     /// Shows the field.
-    pub(crate) fn show(self, ui: &mut Ui) -> RecorderOutput {
+    pub fn show(self, ui: &mut Ui) -> RecorderOutput {
         let (mut field, salt) = self.component();
         if let Some(salt) = salt {
             field = field.id_salt(salt);

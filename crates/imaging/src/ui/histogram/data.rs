@@ -106,6 +106,8 @@ pub enum HistogramScale {
     Peak,
     /// Camera Raw's: the 95th-percentile column at two thirds of the height; taller spikes run off the top.
     Typical,
+    /// The square root of the [`Peak`](HistogramScale::Peak) heights, which lifts the small bins.
+    Sqrt,
 }
 
 /// How a [`HistogramData`] is drawn by [`paint_bins`](super::paint_bins).

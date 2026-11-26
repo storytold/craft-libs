@@ -10,7 +10,7 @@ pub(crate) mod stories;
 
 use super::form::{read_bind, write_bind};
 use super::{FormCx, FormDialog, HostRequests};
-use crate::contract::{Bind, NoValue, Outcome, Remember as _, SaveKey, Scroll, ShowContainer as _};
+use crate::contract::{Bind, MemoProps, NoValue, Outcome, Remember as _, SaveKey, Scroll, ShowContainer as _};
 use crate::runtime::requests::{ColorRequest, HostAnswer};
 
 use crate::dialog::{
@@ -27,8 +27,9 @@ use crate::runtime::env::{Env, Label, Units};
 use crate::runtime::overlay::CloseReason;
 use craft_behavior::{ColumnWidth, PixelSize};
 
+use crate::primitives::{ContentPainterCx, TextureKey, ThumbSource, Thumbnails};
 use craft_theme::Srgba;
-use egui::{Context, Response, Ui};
+use egui::{Context, Rect, Response, Ui};
 use std::cell::RefCell;
 
 pub use cards::PresetCardLook;
@@ -450,6 +451,17 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
     true
 }
 
+/// Which tabs the dialog shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, MemoProps)]
+#[non_exhaustive]
+pub enum DocumentTabs {
+    /// Recent, the category tabs and Saved, with Save Document Preset.
+    #[default]
+    RecentPresetsSaved,
+    /// Only the category tabs: no Recent, no Saved, no Save Document Preset. The first tab is the first category.
+    Presets,
+}
+
 /// File > New: category tabs over a grid of preset cards, a details column and Create and Close.
 ///
 /// - Tabs: Recent, the categories and Saved. Recent lists the clipboard's image size first when the app gives one,
@@ -528,6 +540,15 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     /// The resolution screen presets open at, in pixels per inch, over the setup's.
     #[prop(quantity = "resolution in pixels per inch")]
     screen_resolution: Option<f64>,
+    /// Which tabs the dialog shows.
+    #[prop]
+    tabs: DocumentTabs,
+    /// The dialog's title, in place of the word `newDocument.title`.
+    #[prop]
+    title: Option<Label>,
+    /// Paints a card's picture from the borrowed thumbnail store; see [`NewDocumentDialog::thumbnails`].
+    #[allow(dead_code)] // P3(shell-w2): sh.C8
+    pictures: Option<Box<dyn Fn(&str, &ContentPainterCx<'_>, Rect) + 'a>>,
 }
 
 impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
@@ -548,7 +569,18 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             setup: S::Setup::default(),
             print_resolution: None,
             screen_resolution: None,
+            tabs: DocumentTabs::default(),
+            title: None,
+            pictures: None,
         }
+    }
+
+    /// Paints the picture of each card that has one (`DocumentCard::picture`) from `thumbnails`, which loads it from
+    /// `source` under the key `key` maps the picture's name to. A card without a picture, or a dialog without
+    /// thumbnails, keeps its `PresetCardLook`.
+    pub fn thumbnails<K: TextureKey>(mut self, thumbnails: &'a Thumbnails<K>, source: &'a dyn ThumbSource<K>, key: impl Fn(&str) -> K + 'a) -> Self {
+        let _ = (&mut self, thumbnails, source, key);
+        todo!("sh.C8")
     }
 }
 
@@ -618,6 +650,9 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             mut setup,
             print_resolution,
             screen_resolution,
+            tabs: _,
+            title: _,
+            pictures: _,
         } = self;
         S::set_resolutions(&mut setup, print_resolution, screen_resolution);
         let recent_is_bound = recent_bound.is_some();

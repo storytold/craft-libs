@@ -204,6 +204,15 @@ pub struct Histogram<'a> {
     /// The mark that says the data is older than the image.
     #[prop]
     stale: Option<StaleMark>,
+    /// A line over the bars through these heights (`0..=1` of the plot), evenly spaced from the first bin to the last.
+    #[prop]
+    transfer: Option<&'a [f32]>,
+    /// Bins outside this range get the scrim.
+    #[prop]
+    kept: Option<LevelRange>,
+    /// Bins before and after this range are hatched: the bins the data uses.
+    #[prop]
+    used: Option<LevelRange>,
     /// The edge round the plot. The Histogram panel has none; a levels editor turns it on.
     #[prop(flag)]
     bordered: bool,
@@ -234,6 +243,9 @@ impl<'a> Histogram<'a> {
             markers: &[],
             selection: None,
             stale: None,
+            transfer: None,
+            kept: None,
+            used: None,
             bordered: false,
             height: PlotHeight::Standard,
             ribbons: data.is_ribbons(),

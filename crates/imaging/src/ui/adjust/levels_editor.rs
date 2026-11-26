@@ -94,6 +94,31 @@ impl Levels {
     }
 }
 
+impl Levels {
+    /// The output for the input `x`: `x` is normalised to the input ends and clamped, raised to `1/gamma` and mapped to
+    /// the output ends.
+    pub fn transfer_at(&self, x: f64) -> f64 {
+        let _ = x;
+        todo!("pn.C18")
+    }
+}
+
+/// One of the five values of [`Levels`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum LevelsPart {
+    /// The input black point.
+    InBlack,
+    /// The midtone gamma.
+    Gamma,
+    /// The input white point.
+    InWhite,
+    /// The output black point.
+    OutBlack,
+    /// The output white point.
+    OutWhite,
+}
+
 /// Which input end an Alt (Option) drag is moving, for the host's clipping view
 /// ([`LevelsEditorOutput::clipping`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -251,6 +276,16 @@ pub struct LevelsEditor<'a> {
     /// Whether the "Input Levels" and "Output Levels" captions show.
     #[prop]
     captions: bool,
+    /// Whether the number fields show.
+    #[prop]
+    fields: bool,
+    /// Hands the editor's histogram the kept band and the transfer line.
+    #[prop(flag)]
+    transfer: bool,
+    /// The locked parts, in the order of [`LevelsPart`]; set through [`LevelsEditor::locked`].
+    #[allow(dead_code)] // P3(panels-w3): pn.C15
+    #[prop(name = "locks", vis = "pub(crate)")]
+    locks: [bool; 5],
     clip: Option<LevelsClip>,
     /// The width of a levels field and of the gamma field, as the fields measure themselves (`measure`).
     field_widths: [f32; 2],
@@ -271,10 +306,20 @@ impl<'a> LevelsEditor<'a> {
             histogram: None,
             stale: false,
             captions: true,
+            fields: true,
+            transfer: false,
+            locks: [false; 5],
             clip: None,
             field_widths: [0.0; 2],
         }
         .label(label)
+    }
+
+    /// Locks `part`'s thumb and disables its number field; repeated calls lock more parts.
+    #[must_use]
+    pub fn locked(mut self, part: LevelsPart) -> Self {
+        let _ = (&mut self, part);
+        todo!("pn.C15")
     }
 
     fn ends(&self) -> (f64, f64) {
