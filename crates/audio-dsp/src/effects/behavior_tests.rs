@@ -147,7 +147,7 @@ fn latency_is_where_the_impulse_lands() {
     // settings (FFT filter / convolution / existing STFT effects). The click remover repairs a
     // lone impulse in silence as a click, so its latency is checked on noise by
     // `neutral_settings_are_delayed_identity`.
-    for (id, p) in [("fft_filter", vec![]), ("convolution_reverb", vec![("mix", 0.0)])] {
+    for (id, p) in [("fft_filter", vec![]), ("convolution_reverb", vec![("mix", 0.0)]), ("voice_pitch", vec![])] {
         let mut e = fx(id, &p);
         let lat = e.latency();
         assert!(lat > 0, "{id}");
@@ -976,6 +976,7 @@ fn direct_constructors_cap_the_channel_count() {
         channel::Amplify,
         filters::FullParametricEq,
         pitch::PitchShifter,
+        voice::VoicePitch,
     );
 }
 
