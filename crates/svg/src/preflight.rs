@@ -23,6 +23,8 @@ pub struct Limits {
     pub attribute_work: usize,
     /// Maximum XML nodes after entity expansion.
     pub xml_nodes: u32,
+    /// Accept a document type declaration; `false` refuses any `<!DOCTYPE`.
+    pub allow_dtd: bool,
 }
 
 impl Default for Limits {
@@ -35,6 +37,7 @@ impl Default for Limits {
             attributes: crate::guard::MAX_ATTRIBUTES,
             attribute_work: crate::guard::MAX_ATTRIBUTE_WORK,
             xml_nodes: 4_000_000,
+            allow_dtd: true,
         }
     }
 }
@@ -93,7 +96,7 @@ pub fn parse_text_with_depth<'a>(svg: &'a str, limits: &Limits) -> Result<(roxml
     if prescan.too_deep {
         return Err(Error::TooDeep(limits.depth));
     }
-    let options = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: limits.xml_nodes, ..Default::default() };
+    let options = roxmltree::ParsingOptions { allow_dtd: limits.allow_dtd, nodes_limit: limits.xml_nodes, ..Default::default() };
     let xml = roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))?;
     Ok((xml, prescan.depth, prescan.open_depth))
 }
@@ -122,5 +125,12 @@ mod tests {
 
         let normal = Limits::default();
         assert!(matches!(parse_text_with_depth("<svg><g></svg>", &normal), Err(Error::Xml(_))));
+    }
+
+    #[test]
+    fn a_document_type_is_refused_only_when_the_limits_say_so() {
+        let svg = r#"<!DOCTYPE svg [<!ENTITY a "x">]><svg>&a;</svg>"#;
+        assert!(parse_text(svg, &Limits::default()).is_ok());
+        assert!(matches!(parse_text(svg, &Limits { allow_dtd: false, ..Default::default() }), Err(Error::Xml(_))));
     }
 }

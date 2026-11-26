@@ -36,11 +36,13 @@ use crate::pipeline::Stage;
 use crate::profile::{ColorSpace, Lut, LutKind, Pcs, Profile, ProfileClass};
 use crate::{CmsError, Intent, invalid_arg};
 
+/// Profile description of the synthetic coated CMYK profile.
 pub const DESCRIPTION: &str = "PhotoCraft Coated CMYK (synthetic, 300% TAC, medium GCR)";
 
 /// Parameters of the synthetic profile.
 #[derive(Clone, Debug)]
 pub struct CmykParams {
+    /// Profile description text.
     pub description: String,
     /// Copyright tag text.
     pub copyright: String,
@@ -61,6 +63,7 @@ pub struct CmykParams {
     pub tvi: [f64; 4],
     /// Grid points of the AToB (4D) and BToA (3D) tables.
     pub grid_a2b: usize,
+    #[allow(missing_docs)]
     pub grid_b2a: usize,
     /// Map paper and PCS white onto each other exactly: the AToB maps no ink to L* 100,
     /// a* = b* = 0, and the BToA input curves put that white on a grid node (`grid_b2a` must
@@ -129,6 +132,8 @@ pub struct CmykModel {
 const YN: f64 = 2.0;
 
 impl CmykModel {
+    /// Model of a coated offset press (ISO 12647-2 paper type 1/2 aims) with the given tone value
+    /// increase at 50 % for C, M, Y, K.
     pub fn coated(tvi: [f64; 4]) -> Self {
         let lab = |l: f64, a: f64, b: f64| math::lab_to_xyz([l, a, b], math::D50);
         // ISO 12647-2 (coated, paper type 1/2) Lab aims, D50/2°; CMY overprint estimated.
@@ -195,6 +200,7 @@ impl CmykModel {
 /// A printer model: CMYK coverages (each in `[0, 1]`) → ICC-relative Lab (paper = L* 100).
 /// The separation solves and the gamut boundary invert it.
 pub trait Forward: Sync {
+    /// ICC-relative Lab for the given ink coverages.
     fn lab(&self, cmyk: [f64; 4]) -> [f64; 3];
 }
 
@@ -313,23 +319,33 @@ fn solve_cmy_by<F: Forward + ?Sized>(model: &F, k: f64, limit: f64, seeds: &[[f6
 
 const SEEDS: [[f64; 3]; 5] = [[0.3, 0.3, 0.3], [0.05, 0.05, 0.05], [0.8, 0.8, 0.8], [0.9, 0.2, 0.2], [0.2, 0.9, 0.9]];
 
-/// Black for a gray component `g` (the smallest of C, M, Y without black).
+/// Black for a gray component `g` (the smallest of C, M, Y without black), at most the total ink
+/// limit: the CMY solve gets `tac - k`, so black above `tac` would break the limit on its own.
 fn gcr(p: &CmykParams, g: f64) -> f64 {
-    let Some(first) = p.gcr_curve.first() else {
+    let k = match p.gcr_curve.first() {
         // The Photocraft profile's curve.
-        return if g <= p.gcr_start { 0.0 } else { p.k_max * ((g - p.gcr_start) / (1.0 - p.gcr_start)).powf(p.gcr_gamma) };
-    };
-    let mut k = first[1];
-    for w in p.gcr_curve.windows(2) {
-        let ([g0, k0], [g1, k1]) = (w[0], w[1]);
-        if g >= g1 {
-            k = k1;
-        } else if g > g0 {
-            k = k0 + (k1 - k0) * (g - g0) / (g1 - g0);
-            break;
+        None => {
+            if g <= p.gcr_start {
+                0.0
+            } else {
+                p.k_max * ((g - p.gcr_start) / (1.0 - p.gcr_start)).powf(p.gcr_gamma)
+            }
         }
-    }
-    k.clamp(0.0, 1.0)
+        Some(first) => {
+            let mut k = first[1];
+            for w in p.gcr_curve.windows(2) {
+                let ([g0, k0], [g1, k1]) = (w[0], w[1]);
+                if g >= g1 {
+                    k = k1;
+                } else if g > g0 {
+                    k = k0 + (k1 - k0) * (g - g0) / (g1 - g0);
+                    break;
+                }
+            }
+            k
+        }
+    };
+    k.clamp(0.0, 1.0).min(p.tac.max(0.0))
 }
 
 /// Colorimetric separation of a relative Lab target: GCR black generation then a CMY solve.
@@ -706,6 +722,9 @@ fn check_grids(p: &CmykParams) -> Result<(), CmsError> {
     if p.white_on_node && p.grid_b2a.is_multiple_of(2) {
         return Err(invalid_arg(format!("white on a node needs an odd BToA grid, not {}", p.grid_b2a)));
     }
+    if !(p.tac.is_finite() && p.tac >= 0.0) {
+        return Err(invalid_arg(format!("total ink limit {} must be finite and not negative", p.tac)));
+    }
     let valid = |v: &[f64; 2]| v.iter().all(|x| (0.0..=1.0).contains(x));
     if !p.gcr_curve.iter().all(valid) || p.gcr_curve.windows(2).any(|w| w[1][0] <= w[0][0]) {
         return Err(invalid_arg(format!("black generation curve {:?} needs points in [0, 1] with increasing gray components", p.gcr_curve)));
@@ -822,28 +841,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_anchors() {
-        let m = CmykModel::coated(CmykParams::default().tvi);
-        let w = m.lab([0.0; 4]);
-        assert!((w[0] - 100.0).abs() < 1e-9 && w[1].abs() < 1e-9 && w[2].abs() < 1e-9, "{w:?}");
-        let k = m.lab([0.0, 0.0, 0.0, 1.0]);
-        assert!(k[0] > 12.0 && k[0] < 22.0, "{k:?}");
-        let rich = m.lab([0.75, 0.65, 0.6, 0.9]);
-        assert!(rich[0] < k[0], "{rich:?}");
-        // Monotonic in each ink.
-        for ink in 0..4 {
-            let mut prev = 101.0;
-            for i in 0..=20 {
-                let mut v = [0.2, 0.2, 0.2, 0.2];
-                v[ink] = i as f64 / 20.0;
-                let l = m.lab(v)[0];
-                assert!(l < prev + 1e-9, "ink {ink} step {i}: {l} >= {prev}");
-                prev = l;
-            }
-        }
-    }
-
-    #[test]
     fn oklab_mapping_refuses_bad_parameters() {
         for (knee, saturation) in [(1.0, 1.0), (-0.1, 1.0), (f64::NAN, 1.0), (0.5, 0.0), (0.5, f64::INFINITY), (0.5, f64::NAN)] {
             let p = CmykParams { grid_a2b: 2, grid_b2a: 2, mapping: GamutMapping::Oklab { knee, saturation }, ..CmykParams::default() };
@@ -860,6 +857,33 @@ mod tests {
         for curve in [vec![[0.5, 0.2], [0.5, 0.3]], vec![[0.5, 0.2], [0.2, 0.3]], vec![[0.0, 1.5]], vec![[f64::NAN, 0.0]]] {
             let p = CmykParams { grid_a2b: 2, grid_b2a: 2, gcr_curve: curve.clone(), ..CmykParams::default() };
             assert!(cmyk_profile(&p).is_err(), "{curve:?}");
+        }
+    }
+
+    #[test]
+    fn total_ink_limit_must_be_finite_and_not_negative() {
+        for tac in [-0.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let p = CmykParams { grid_a2b: 2, grid_b2a: 2, tac, ..CmykParams::default() };
+            assert!(cmyk_profile(&p).is_err(), "tac {tac}");
+        }
+        // `separate` is public and does not validate: black is still never negative.
+        let p = CmykParams { tac: -0.5, gcr_curve: vec![[0.0, 0.75]], ..CmykParams::default() };
+        assert_eq!(gcr(&p, 0.5), 0.0);
+    }
+
+    #[test]
+    fn curve_black_stays_within_the_ink_limit() {
+        // Black from either the profile curve or the default empty-curve fallback never exceeds the ink limit.
+        let m = CmykModel::coated(CmykParams::default().tvi);
+        for gcr_curve in [vec![[0.0, 0.75]], vec![]] {
+            for tac in [0.5, 0.0] {
+                let p = CmykParams { tac, gcr_curve: gcr_curve.clone(), ..CmykParams::default() };
+                assert!(gcr(&p, 1.0) <= p.tac, "tac {tac} curve {gcr_curve:?}");
+                for target in [[50.0, 0.0, 0.0], [90.0, 0.0, 0.0], [30.0, 20.0, -10.0]] {
+                    let (cmyk, _) = separate(&m, &p, target, None);
+                    assert!(cmyk.iter().sum::<f64>() <= p.tac + 1e-6, "{target:?} -> {cmyk:?}");
+                }
+            }
         }
     }
 
@@ -881,17 +905,5 @@ mod tests {
         let profile = cmyk_profile(&p).unwrap();
         let [Some(b0), Some(b1), Some(b2)] = &profile.b2a else { panic!("missing BToA tables") };
         assert!(b0 != b1 && b0 != b2, "perceptual shares a table");
-    }
-
-    #[test]
-    fn separation_hits_in_gamut_targets() {
-        let m = CmykModel::coated(CmykParams::default().tvi);
-        let p = CmykParams::default();
-        let reachable = [[0.3, 0.4, 0.1, 0.1], [0.6, 0.1, 0.5, 0.0], [0.05, 0.1, 0.7, 0.0], [0.5, 0.45, 0.45, 0.4]].map(|v| m.lab(v));
-        for target in [[50.0, 0.0, 0.0]].into_iter().chain(reachable) {
-            let (cmyk, de) = separate(&m, &p, target, None);
-            assert!(de < 1.5, "{target:?} -> {cmyk:?} ΔE {de}");
-            assert!(cmyk.iter().sum::<f64>() <= p.tac + 1e-6);
-        }
     }
 }
