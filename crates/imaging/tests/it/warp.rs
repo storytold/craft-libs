@@ -2,7 +2,7 @@
 
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_imaging::ui::warp::{CylinderValues, CylinderWarp, GUIDE_LINES_MAX, WarpEdit, WarpGrid, WarpGuides, WarpMesh, WarpSplit};
+use craft_imaging::ui::warp::{CylinderValues, CylinderWarp, GUIDE_LINES_MAX, WarpEdit, WarpGrid, WarpGuides, WarpGuidesShow, WarpMesh, WarpSplit};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -42,10 +42,10 @@ struct Harness {
 }
 
 fn harness(mesh: WarpMesh) -> Harness {
-    harness_in(mesh, 0.0, false)
+    harness_in(mesh, 0.0, false, None)
 }
 
-fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
+fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool, guides: Option<WarpGuides>) -> Harness {
     let id = Rc::new(Cell::new(Id::NULL));
     let mesh = Rc::new(RefCell::new(mesh));
     let view = Rc::new(Cell::new(None));
@@ -61,7 +61,11 @@ fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
         view.set(Some(shown_view));
         let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
             let mut held = mesh.borrow_mut();
-            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+            let mut grid = WarpGrid::new("Warp", Bind::bound(&mut *held), RECT);
+            if let Some(guides) = guides {
+                grid = grid.guides(guides);
+            }
+            grid.show_at(ui, body.rect)
         });
         if let Some(output) = canvas.inner {
             id.set(output.mesh.response.id);
@@ -132,7 +136,7 @@ impl Harness {
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
     let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
-        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
+        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true, None);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
         let anchor = h.screen(Point::new(RECT.x1, RECT.y1));
         let out = (anchor - h.screen(RECT.center())).normalized();
@@ -421,9 +425,9 @@ fn density(lines: usize) -> Option<WarpGuides> {
     Some(WarpGuides { density: Some(lines), ..WarpGuides::default() })
 }
 
-/// The settings that ask for the thin lines to be hidden: what is left is the mesh's boundaries.
+/// The guide settings that ask for the thin lines to be hidden: what is left is the mesh's boundaries.
 fn hidden() -> Option<WarpGuides> {
-    Some(WarpGuides { visible: false, ..WarpGuides::default() })
+    Some(WarpGuides { show: WarpGuidesShow::Never, ..WarpGuides::default() })
 }
 
 /// The thin guide curves a pass drew: its open paths that the pass with the lines hidden does not have.
@@ -472,6 +476,39 @@ fn guides_the_host_hides_leave_the_boundaries_and_anchors() {
     let off = guide_shapes(one, hidden());
     assert_eq!(shown.len() - off.len(), 4, "the host's request hides the pair each way and nothing else");
     assert!(off.iter().all(|edge| shown.contains(edge)), "every boundary of the hidden pass is still drawn");
+}
+
+#[trial]
+fn the_while_dragging_show_mode_draws_the_lines_only_while_a_press_drags() {
+    // The Auto row of photocraft #12501: at rest, and with the pointer hovering the middle of the
+    // mesh, no thin line shows; the grid's own press brings the lines up; its release puts them away.
+    // One curve each way, so the pass counts stay plain.
+    let guides = WarpGuides { show: WarpGuidesShow::WhileDragging, density: Some(1), ..WarpGuides::default() };
+    let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 0.0, false, Some(guides));
+    let open = |h: &mut Harness| -> Vec<(f32, egui::Color32, Vec<Pos2>)> {
+        h.fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Path(path) if !path.closed => match path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => Some((path.stroke.width, color, path.points.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    let at = h.screen(RECT.center());
+    h.fixture.frame(vec![pointer::moved(at)]);
+    assert_eq!(open(&mut h).len(), 4, "at rest and under a hover: the boundaries only");
+    let to = at + shift(10.0, 5.0);
+    h.fixture.frame(vec![pointer::press(at)]);
+    h.fixture.frame(vec![pointer::moved(at + shift(4.0, 2.0))]);
+    h.fixture.frame(vec![pointer::moved(to)]);
+    assert_eq!(open(&mut h).len(), 6, "mid-drag: one guide curve each way over the boundaries");
+    h.fixture.frame(vec![pointer::release(to)]);
+    h.fixture.frame(Vec::new());
+    assert_eq!(open(&mut h).len(), 4, "the release hides them again, on the mesh the drag left behind");
 }
 
 #[trial]

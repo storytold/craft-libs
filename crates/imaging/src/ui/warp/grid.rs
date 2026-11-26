@@ -89,8 +89,22 @@ pub struct WarpGridStyle {
 /// of one paint; a host's own maximum is its business.
 pub const GUIDE_LINES_MAX: usize = 32;
 
+/// When the thin guide lines inside the cells draw: as the grid always did, never, or only while a
+/// press drags the mesh (the Auto row a host's popup gives).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WarpGuidesShow {
+    /// The lines draw at rest, under a hovering pointer and during a drag.
+    #[default]
+    Always,
+    /// The lines draw only while the grid has a press running that drags the mesh: none at rest or
+    /// under a hover, and none again once the press releases.
+    WhileDragging,
+    /// The lines never draw. The patch boundaries and the anchors do, as ever.
+    Never,
+}
+
 /// The thin guide lines inside the cells of a [`WarpGrid`], as the host wants them: their colour, how
-/// much of their alpha shows, how many there are in a cell and whether they show at all. Set through
+/// much of their alpha shows, how many there are in a cell and when they show at all. Set through
 /// [`WarpGrid::guides`]; no `guides` at all paints the grid's own rule, and so does every field left
 /// at its default here.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -104,13 +118,13 @@ pub struct WarpGuides {
     /// How many thin lines to draw inside every cell, each way. `None` keeps the grid's own rule
     /// ([`WarpMesh::own_guide_count`]); a number is taken as 1 to [`GUIDE_LINES_MAX`].
     pub density: Option<usize>,
-    /// Whether the thin lines draw at all. The patch boundaries and the anchors always do.
-    pub visible: bool,
+    /// When the thin lines draw. The patch boundaries and the anchors always do.
+    pub show: WarpGuidesShow,
 }
 
 impl Default for WarpGuides {
     fn default() -> Self {
-        WarpGuides { line: None, share: 1.0, density: None, visible: true }
+        WarpGuides { line: None, share: 1.0, density: None, show: WarpGuidesShow::Always }
     }
 }
 
@@ -145,6 +159,9 @@ struct Slot {
     picked: Option<usize>,
     /// The anchor or handle being dragged.
     dragging: Option<usize>,
+    /// A press that drags the mesh - an anchor or the surface - is down: between its down and its
+    /// release or cancel. What `WarpGuidesShow::WhileDragging` asks for.
+    press_open: bool,
     hover: Option<Pos2>,
     preview: Option<SplitAt>,
 }
@@ -161,7 +178,7 @@ struct Report {
 ///
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`, and the thin guide lines inside each cell
 ///   under them: the one-patch mesh's rule-of-thirds lines, or the colour, share, density and
-///   visibility of [`guides`](Self::guides). Anchors always show; a handle and its arm only near the
+///   show-mode of [`guides`](Self::guides). Anchors always show; a handle and its arm only near the
 ///   pointer, while its anchor or one of its handles is dragged, or while one of its anchor's parts is
 ///   picked and the grid has the keyboard.
 /// - Pointer: the nearest anchor or handle within the hit reach drags that point; elsewhere on the
@@ -260,6 +277,7 @@ impl<'a> WarpGrid<'a> {
                     slot.picked = Some(index);
                     slot.dragging = Some(index);
                 }
+                cx.memory::<Slot>().press_open = matches!(target, Some(Target::Point(_)) | Some(Target::Surface(..)));
                 *cx.press_slot::<Press>() = target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none() });
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
@@ -267,7 +285,9 @@ impl<'a> WarpGrid<'a> {
                 // The host replaced the mesh under the press (a split, a style pick). A begun press was cancelled by the
                 // framework (`HostChanged`); this only drops the press.
                 if mesh.us != held.mesh.us || mesh.vs != held.mesh.vs {
-                    cx.memory::<Slot>().dragging = None;
+                    let slot = cx.memory::<Slot>();
+                    slot.dragging = None;
+                    slot.press_open = false;
                     *cx.press_slot::<Press>() = None;
                     return;
                 }
@@ -286,7 +306,9 @@ impl<'a> WarpGrid<'a> {
                 self.report.edit = Some(edit);
             }
             PressPhase::Release { start, pos, .. } if start.button == PointerButton::Primary => {
-                cx.memory::<Slot>().dragging = None;
+                let slot = cx.memory::<Slot>();
+                slot.dragging = None;
+                slot.press_open = false;
                 let Some(held) = cx.press_slot::<Press>().take() else { return };
                 match held.target {
                     Target::Split => {
@@ -307,7 +329,9 @@ impl<'a> WarpGrid<'a> {
 
     /// Ends the running press without a result: reports the cancel when the drag began and clears the press slot.
     fn end_press(cx: &mut Cx<'_, Self>) {
-        cx.memory::<Slot>().dragging = None;
+        let slot = cx.memory::<Slot>();
+        slot.dragging = None;
+        slot.press_open = false;
         if cx.press_slot::<Press>().take().is_some_and(|held| held.began) {
             cx.cancel(CancelReason::Escape);
         }
@@ -506,8 +530,18 @@ impl Component for WarpGrid<'_> {
             }
         };
         // The thin guide lines inside the cells, under the patch boundaries: the grid's own rule when no
-        // host rule is set, and the host's colour, share, density and visibility when it sets them.
-        if self.guides.is_none_or(|guides| guides.visible) {
+        // host rule is set, and the host's colour, share, density and show-mode when it sets them. A
+        // `WhileDragging` host gets its lines only while a press of the grid's own runs.
+        let slot = cx.recall::<Slot>();
+        let drawn = match self.guides {
+            None => true,
+            Some(guides) => match guides.show {
+                WarpGuidesShow::Always => true,
+                WarpGuidesShow::WhileDragging => slot.press_open,
+                WarpGuidesShow::Never => false,
+            },
+        };
+        if drawn {
             let paths = match self.guides.and_then(|guides| guides.density) {
                 None => mesh.own_guides(),
                 Some(lines) => mesh.guide_paths(lines.clamp(1, GUIDE_LINES_MAX)),
@@ -531,7 +565,6 @@ impl Component for WarpGrid<'_> {
         if self.lines_only {
             return;
         }
-        let slot = cx.recall::<Slot>();
         let screen = |index: usize| view.to_screen(mesh.points[index]);
         let near = |p: Pos2| slot.hover.is_some_and(|hover| hover.distance(p) <= cx.style.reveal);
         let kept = [slot.dragging, slot.picked.filter(|_| cx.focus_visible())].map(|index| index.and_then(|index| mesh.anchor_of(index)));
