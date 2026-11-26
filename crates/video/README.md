@@ -56,6 +56,56 @@ comes with its codec's feature):
 The constructors check that every plane's buffer, stride and size fit the frame, so a picture
 with inconsistent fields is an error, not an out-of-bounds read.
 
+## Preparing encoder input
+
+`frame::encode` adapts `VideoFrame` to the existing encoder APIs. It does not encode packets
+or choose encoder settings. It preserves sample values: no colour-space conversion, chroma
+resampling, range conversion or significant-bit-depth scaling is performed.
+
+| Encoder | Conversion / input |
+|---|---|
+| H.264 | `Planar8` then `.h264()` for 8-bit 4:2:0; `Planar16` and `.h264()` for 9/10-bit |
+| HEVC, AV1 | `Planar16::try_from(&frame)?`, then `.hevc()` / `.av1()` for 8/10-bit 4:2:0 |
+| MPEG-2 | `Planar8` then `.mpeg2()` for 4:2:0 or 4:2:2 |
+| MPEG-4 Part 2 | `Planar8` then `.mpeg4()` for 4:2:0 |
+| VP9 | `Planar8` then `.vp9()` gives packed `(y, u, v)` slices for `encode_frame` |
+| ProRes, DNx, APV, FFV1 | `codec::Frame::try_from(&frame)` gives an owned input frame |
+| Motion JPEG | `mjpeg::Frame::try_from(&frame)` interleaves 8-bit RGB or gray; alpha is rejected |
+| Hap, VP8 | `Rgba8::try_from(&frame)` interleaves 8-bit RGB/gray and optional alpha for `encode_rgba` |
+
+`Planar8`, `Planar16` and `Rgba8` are in `craft_video::frame::encode` and are built with no
+features. Each codec-specific method/conversion requires its encoder feature. Keep the planar
+adapter alive while using a native view:
+
+```rust,ignore
+use craft_video::frame::encode::Planar16;
+let input = Planar16::try_from(&frame)?;
+let native = input.hevc()?;
+let packet = encoder.encode(&native)?;
+```
+
+Packed planes of the requested storage width are borrowed. Padded rows (including different
+Cb/Cr strides) are packed; `u8` ↔ `u16` storage changes preserve values. Owned codec frames copy
+the planes. DNx RGB input is reordered from R/G/B to its G/B/R layout. Conversion allocations
+are checked against the shared picture memory budget and allocation failures return `FrameError`.
+
+Conversions reject zero dimensions, interlaced frames, mixed plane depths, out-of-range active
+samples, and formats a destination cannot represent. Padding and trailing samples are ignored.
+ProRes accepts limited-range YCbCr 4:2:2/4:4:4 (alpha only at 4:4:4); DNx accepts YCbCr 4:2:2/4:4:4
+or RGB without alpha; APV accepts gray or YCbCr 4:2:2/4:4:4, with alpha only at 4:4:4; FFV1 keeps
+all supported families, alpha and chroma shifts. Interleaved adapters do not convert YCbCr to RGB.
+VP8's encoder discards RGBA alpha, and opaque Hap variants do too: choose the codec/variant
+accordingly. The RGBA adapter itself preserves alpha and synthesizes 255 only when absent.
+
+Set encoder dimensions, bit depth, chroma, colour tags, aspect ratio, frame rate and alpha options
+from the source and export settings. Native input views do not configure the encoder. ProRes/DNx
+frame metadata does not override their encoder configuration. Owned conversions copy fields
+that exist in their input type, but profile IDs, frame-rate codes and HDR metadata absent from
+`VideoFrame` remain unset. ProRes rejects an unrepresentable sample aspect ratio; DNx reduces it
+and checks that it fits its 16-bit fields. Timestamps and the draft flag remain with the source;
+pass timestamps separately to encoders that take them or to the container. Encoder profile and
+size restrictions still apply at encoder construction/encoding.
+
 ## Decoding a track
 
 `TrackDecoder` is the counterpart of `craft_audio::TrackDecoder` for an app with its own demuxer.
