@@ -69,7 +69,8 @@ pub struct ParamRowsOutput {
     /// A binding that writes through has them already; a given one applies them.
     pub values: Option<DialogFields>,
     /// The colour parameter whose button was pressed this pass: the host opens its colour picker for the request and
-    /// writes the answer into the request's key as a [`FieldValue::Color`].
+    /// writes the answer into the request's key as a [`FieldValue::Color`], or with `set_color_field`, which keeps a
+    /// row's opacity in a [`FieldValue::Rgba`].
     pub pick_color: Option<ColorRequest>,
     /// The Browse button pressed this pass: the host picks a path and writes it into the request's key as a
     /// [`FieldValue::Text`].
@@ -1305,7 +1306,14 @@ impl<'p> Pass<'p> {
     /// A colour row: a swatch that asks the host's picker (mixed while the row has no colour), and the eyedropper
     /// toggle when the row has one.
     fn color(&mut self, ui: &mut Ui, line: &Line<'_>) {
-        let color = self.work.color(line.key);
+        let alpha = match line.param.kind {
+            ParamKind::Color { alpha, .. } => alpha,
+            _ => None,
+        };
+        let color = match alpha {
+            Some(_) => self.work.rgba(line.key),
+            None => self.work.color(line.key).map(|[r, g, b]| [r, g, b, 1.0]),
+        };
         let option = line.param.option();
         if option.eyedropper() && self.memo.declared.insert(line.key.to_owned(), option.armed()) != Some(option.armed()) {
             if option.armed() {
@@ -1316,15 +1324,31 @@ impl<'p> Pass<'p> {
         }
         let armed = self.memo.armed.as_deref() == Some(line.key);
         let previewed = self.previews.iter().find(|(key, _)| key == line.key).map(|(_, color)| *color);
+        // A previewed color shows at the row's opacity: the picker sets the color, and the opacity field sets the alpha.
+        let opacity = color.map_or(alpha.unwrap_or(1.0), |[_, _, _, a]| a);
         let shown = match previewed {
+            Some(color) if alpha.is_some() => Mixed::Same(Srgba { a: opacity, ..color }),
             Some(color) => Mixed::Same(color),
-            None => color.map_or(Mixed::Mixed, |rgb| Mixed::Same(Srgba::from_rgb_array(rgb))),
+            None => color.map_or(Mixed::Mixed, |rgba| Mixed::Same(Srgba::from_array(rgba))),
         };
         line.show(ui, |ui| {
             beside(ui, |ui| {
                 let swatch = Swatch::new(line.name.clone(), shown).picker(line.key).id_salt("choose").show(ui);
                 if let Some(request) = swatch.pick_color {
                     self.color = Some(request);
+                }
+                if alpha.is_some() {
+                    let name = Label::from(self.words.opacity.fill(&[("name", line.name.as_str())]));
+                    let percent = color.map(|[_, _, _, a]| (f64::from(a) * 100.0).round());
+                    let field = number_field(self.units, name, percent, WHOLE, Some(UnitKind::Percent), false)
+                        .range(PERCENT)
+                        .enabled(color.is_some())
+                        .id_salt("opacity");
+                    let shown = field.show(ui);
+                    self.alert(shown.out_of_range);
+                    if let (Some([r, g, b, _]), Some(percent)) = (color, shown.edit.value().cloned().flatten()) {
+                        self.work.set(line.key, FieldValue::Rgba([r, g, b, (percent / 100.0) as f32]));
+                    }
                 }
                 if option.eyedropper() {
                     let toggle = ToggleButton::new(self.words.eyedropper.clone(), Bind::given(armed))
