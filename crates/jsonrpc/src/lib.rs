@@ -51,6 +51,28 @@ impl std::fmt::Display for ParseError {
 }
 impl std::error::Error for ParseError {}
 
+impl ParseError {
+    /// The JSON-RPC error for this failure: `-32700` for input that is not JSON, and `-32600` for
+    /// a message or batch over its limit, which the server did not read as a request.
+    pub fn rpc_error(self) -> RpcError {
+        match self {
+            Self::InvalidJson => RpcError::new(-32700, "Parse error"),
+            Self::MessageTooLarge | Self::BatchTooLarge => RpcError::new(-32600, self.to_string()),
+        }
+    }
+
+    /// Build the error response for this failure. The ID is null because no request ID was read.
+    pub fn error_response(self) -> Value {
+        error_response(Value::Null, self.rpc_error())
+    }
+}
+
+impl From<ParseError> for RpcError {
+    fn from(error: ParseError) -> Self {
+        error.rpc_error()
+    }
+}
+
 /// Error reading a newline-delimited message. After `TooLong`, close or otherwise discard the
 /// remaining input line before reading another message.
 #[derive(Debug)]
