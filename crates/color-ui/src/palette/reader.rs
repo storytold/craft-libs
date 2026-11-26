@@ -75,8 +75,10 @@ pub(super) fn stem_of(file_name: &str) -> String {
     if stem.is_empty() { "Imported Swatches".into() } else { stem }
 }
 
+/// The swatches a file can carry: those with a colour. Gradient, pattern and None swatches are not counted, so a
+/// library of them alone is empty to every writer.
 pub(super) fn count_swatches(groups: &[SwatchGroup]) -> usize {
-    groups.iter().map(|g| g.entries.len()).sum()
+    groups.iter().map(|g| g.entries.iter().filter(|e| e.color().is_some()).count()).sum()
 }
 
 /// Whole UTF-16 scalar values of `name` that fit in `max` units.
@@ -94,7 +96,7 @@ pub(super) fn utf16_units(name: &str, max: usize) -> Vec<u16> {
 
 pub(super) fn names_cut(groups: &[SwatchGroup], include_groups: bool) -> usize {
     let cut = |name: &str| name.encode_utf16().count() > MAX_NAME_UNITS;
-    let swatches = groups.iter().flat_map(|g| g.entries.iter()).filter(|e| cut(&e.name)).count();
+    let swatches = groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.color().is_some() && cut(&e.name)).count();
     swatches + if include_groups { groups.iter().filter(|g| cut(&g.name)).count() } else { 0 }
 }
 
@@ -167,7 +169,8 @@ pub(super) fn rgb_colors(groups: &[SwatchGroup]) -> (Vec<Vec<RgbSwatch>>, usize,
             g.entries
                 .iter()
                 .filter_map(|e| {
-                    match e.color {
+                    let color = e.color()?;
+                    match color {
                         SwatchColor::Book { .. } => {
                             books += 1;
                             return None;
@@ -175,7 +178,7 @@ pub(super) fn rgb_colors(groups: &[SwatchGroup]) -> (Vec<Vec<RgbSwatch>>, usize,
                         SwatchColor::Cmyk(_) | SwatchColor::Lab(_) | SwatchColor::Gray(_) => converted += 1,
                         SwatchColor::Rgb(_) | SwatchColor::Hsb(_) => {}
                     }
-                    Some((e.name.clone(), rgb8(e.color.to_srgb(CmykConverter::coated()).to_rgb_array()), e.kind == SwatchKind::Spot))
+                    Some((e.name.clone(), rgb8(color.to_srgb(CmykConverter::coated()).to_rgb_array()), e.kind == SwatchKind::Spot))
                 })
                 .collect()
         })

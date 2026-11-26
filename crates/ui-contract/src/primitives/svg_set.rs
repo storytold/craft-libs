@@ -18,12 +18,20 @@ pub struct AppIcons {
     pub stroke_width: Option<f32>,
     /// Each icon's name and SVG document.
     pub icons: &'static [(&'static str, &'static [u8])],
+    /// For each icon name, an SVG document drawn under the icon in a fixed sRGBA colour; the icon itself stays tinted.
+    pub fills: &'static [(&'static str, &'static [u8], [u8; 4])],
 }
 
 impl AppIcons {
     /// The set `name` of `icons`, each an icon name and its SVG document, drawn with `stroke_width` when it is `Some`.
     pub const fn new(name: &'static str, stroke_width: Option<f32>, icons: &'static [(&'static str, &'static [u8])]) -> Self {
-        Self { name, stroke_width, icons }
+        Self { name, stroke_width, icons, fills: &[] }
+    }
+
+    /// The set with `fills`: for each icon name, an SVG drawn under the icon in a fixed sRGBA colour.
+    pub const fn with_fills(mut self, fills: &'static [(&'static str, &'static [u8], [u8; 4])]) -> Self {
+        self.fills = fills;
+        self
     }
 }
 
@@ -89,6 +97,22 @@ fn app_icon(set: usize, icon: usize) -> (&'static str, &'static [u8], Option<f32
     let set = registry.sets[set];
     let (name, svg) = set.icons[icon];
     (name, svg, set.stroke_width)
+}
+
+/// The fill drawn under an app icon: its SVG document and fixed sRGBA colour. `None` for a catalog entry and for an icon
+/// its set gives no fill.
+pub(crate) fn fill_of(entry: Entry) -> Option<(&'static [u8], [u8; 4])> {
+    let Entry::App { set, icon } = entry else { return None };
+    let registry = APPS.read().unwrap_or_else(PoisonError::into_inner);
+    let set = registry.sets[set];
+    let name = set.icons[icon].0;
+    set.fills.iter().find(|(fill, ..)| *fill == name).map(|&(_, svg, color)| (svg, color))
+}
+
+/// A fill document in white at `px` x `px` physical pixels, drawn as drawn and never mirrored: no app icon is
+/// directional.
+pub(crate) fn rasterise_fill(svg: &[u8], px: u32) -> ColorImage {
+    image(draw(svg, None, None, px, 0.0, false), px, false, || "app icon fill".to_owned())
 }
 
 /// The position of the icon called `name` in the catalog.

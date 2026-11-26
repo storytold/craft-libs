@@ -97,8 +97,8 @@ pub(crate) type TakeBack = Box<dyn FnOnce(&Context) + Send + Sync>;
 #[derive(Clone, Debug, PartialEq)]
 enum Recorded {
     Measured(Measured),
-    /// The width a row's shrink step gave a unit, as a measure, and whether the unit dropped out of the row.
-    Shrink(Measured, bool),
+    /// The width a row's shrink step gave a unit, as a measure, and whether it narrowed the unit or dropped it.
+    Shrink(Measured, ShrinkGiven),
     Text(Option<Arc<str>>),
 }
 
@@ -244,9 +244,11 @@ pub(crate) struct Entries {
     replaying: Vec<(Arc<Transcript>, Id, usize)>,
     /// The drafts open, innermost last.
     drafts: Vec<Draft>,
+    /// This pass asked for the frame's discard pass; the end hook requests it.
     ask: bool,
     /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
     asks: u64,
+    /// The frame whose one discard pass the end hook requested.
     asked: Option<u64>,
 }
 
@@ -499,10 +501,18 @@ pub(crate) fn emit_record(ctx: &Context, id: Id, measured: Measured) {
     emit(ctx, id, Recorded::Measured(measured));
 }
 
-/// Hands forward what a row's shrink step gave a unit under `id`: its width as `measured` and whether it `dropped`
-/// out of the row. It serves as [`emit_record`]'s measure does.
-pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, dropped: bool) {
-    emit(ctx, id, Recorded::Shrink(measured, dropped));
+/// Whether a row's shrink step narrowed a unit below what it asks for in no room, and whether it dropped the unit out
+/// of the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShrinkGiven {
+    pub dropped: bool,
+    pub narrowed: bool,
+}
+
+/// Hands forward what a row's shrink step gave a unit under `id`: its width as `measured` and what else it `given`.
+/// It serves as [`emit_record`]'s measure does.
+pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, given: ShrinkGiven) {
+    emit(ctx, id, Recorded::Shrink(measured, given));
 }
 
 /// Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
@@ -565,7 +575,7 @@ fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Opti
     };
     let differs = match (was, now) {
         (Recorded::Measured(was), Recorded::Measured(now)) => measures(was, now, false),
-        (Recorded::Shrink(was, was_dropped), Recorded::Shrink(now, now_dropped)) => measures(was, now, was_dropped != now_dropped),
+        (Recorded::Shrink(was, was_given), Recorded::Shrink(now, now_given)) => measures(was, now, was_given != now_given),
         (was, now) => was != now,
     };
     if *at != pass || !differs {
@@ -922,12 +932,12 @@ pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
 }
 
 /// What a row's shrink step of this pass gave the unit under `id` ([`emit_shrink`]): its width as a measure and
-/// whether it dropped out of the row.
-pub(crate) fn shrink(ctx: &Context, id: Id) -> Option<(Measured, bool)> {
+/// whether it narrowed or dropped the unit.
+pub(crate) fn shrink(ctx: &Context, id: Id) -> Option<(Measured, ShrinkGiven)> {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
     with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
-        Some(Found { recorded: Recorded::Shrink(measured, dropped), .. }) => Some((*measured, *dropped)),
+        Some(Found { recorded: Recorded::Shrink(measured, given), .. }) => Some((*measured, *given)),
         _ => None,
     })
 }
@@ -1167,6 +1177,13 @@ pub(crate) fn ask_discard(ctx: &Context) {
     with(ctx, &moment, Entries::ask_discard);
 }
 
+/// Whether this pass asked for the frame's discard pass and the end hook will request it from egui: no earlier pass of
+/// the frame got it, and egui can still run this one again.
+pub(crate) fn discard_pending(ctx: &Context) -> bool {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.ask && memory.asked != Some(moment.frame)) && sizing::discardable(ctx)
+}
+
 /// Keeps the entries and kept transcripts of `ids` through this frame, for a replayed run that kept them
 /// (`replay::note_layout_keep`): the replay does not reach them, and an entry no pass touched in a frame is dropped.
 pub(crate) fn keep(ctx: &Context, ids: &[Id]) {
@@ -1236,9 +1253,11 @@ pub(crate) mod guard {
         ("layout::column_group::Open", "column groups: frames the run opens and closes; reports go through contribute"),
         ("access::scope::Stack", "label and merge scopes: opened and closed by the run; control minimums go through contribute"),
         ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
-        ("layout::body::HeldWidths", "held widths: opened and closed by the column's own first sweep"),
+        ("layout::body::ViewFills", "view fills: opened and closed by the memoized view's own run"),
+        ("layout::body::HeldWidths", "held children: opened by the column's own first sweep and closed after its last"),
         ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
         ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
+        ("layout::body::WrapRows", "wrapping rows' lines: opened by each sweep of the row and closed after it; the lines go through emit_record"),
         (
             "layout::body::FlowStarts",
             "flow starts: opened by each sweep of the body and closed by its first child in flow; a child reads its body's at its own start, and its measure key holds what it read",
@@ -1247,6 +1266,8 @@ pub(crate) mod guard {
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
         ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),
+        ("layout::body::FillLeasts", "fill leasts: opened and closed by the row's own first sweep; the sum goes through contribute"),
+        ("layout::body::RowShortfalls", "shortfalls: asked and taken by the container around the row in the same measuring sweep"),
         ("runtime::reads::Runs", "measuring runs of the read record: opened and closed by each run; reads go through contribute"),
         ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),
         // Read in measuring runs; written by real runs, the frame hooks or the host.
@@ -1277,9 +1298,17 @@ pub(crate) mod guard {
         ),
         ("runtime::derived::Store", "derived values: a pure function of their key, so a value a measuring run builds is the one a real run builds"),
         ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
+        (
+            "contract::items::request::RenameRequests",
+            "rename requests: peeked by the items read so the renamed row stays in the view; taken in real runs only",
+        ),
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
+        (
+            "runtime::memory::FactRecord<craft_ui_contract::runtime::commands::ShownFact>",
+            "where commands were shown: last pass's, read; registered by real runs only (a measuring run is not parted)",
+        ),
         (
             "shell::app_shell::dialogs::Hosts",
             "dialog hosts: one handle per window, made on first use; dialogs open on clicks, which only real runs sense",
@@ -1316,7 +1345,9 @@ pub(crate) mod guard {
         ("primitives::textures::loader::Pools", "texture loaders: cache; one per salt, made on first use, and the store's uploads"),
         ("primitives::textures::thumbnails::Hubs", "thumbnails: cache; one per salt, made on first use, and its per-frame render budget"),
         ("fonts::document::Registry", "document faces: cache; a face loads the same whichever run asks, and its repaint request is harmless"),
+        ("runtime::egui::fonts::Providers", "font providers and the served faces: cache; a face is served the same whichever run asks"),
         ("runtime::egui::fonts::Steps", "fonts plugin begin-pass steps: cache; a step added twice runs once"),
+        ("runtime::env::InstalledJobs", "the jobs install was given: set once at install, only read after"),
         // Testing logs.
         ("runtime::measure::", "measuring-run counts and the skipped-effect log (testing)"),
         ("runtime::pass_state::Parked", "pass state between passes: moved into the thread and back, not read"),

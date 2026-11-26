@@ -177,7 +177,7 @@ name = "TileLayout"
 old = "craft_ui::list::tiles::TileLayout"
 new = ""
 status = "replaced"
-note = "`TileGrid::justified()` for `Justified`; cards are the default with `.aspect(w / h)`. The size is `.zoom(factor)`, a multiple of the medium thumbnail side that the app's `ThumbnailSlider` binds; `Cards { caption }` is `.caption(CaptionPlace::Below)`, or `.captionless()`. `Tiling` holds the sizes in points for `arrange`."
+note = "`TileGrid::justified()` for `Justified`; cards are the default with `.aspect(w / h)`. The size is `.zoom(GridZoom::Fixed(factor))`, an f64 multiple of the medium thumbnail side the app holds, or `.zoom(GridZoom::Bound(bind, TileZoom))`, the value the app's `ThumbnailSlider` binds, which the grid steps itself with Cmd/Ctrl + / - / 0 and the zoom wheel; `Cards { caption }` is `.caption(CaptionPlace::Below)`, or `.captionless()`. `Tiling` holds the sizes in points for `arrange`."
 
 [[type]]
 name = "TileArrangement"
@@ -290,7 +290,7 @@ note = "The source goes to `show_items`; the id salt is the label's id."
 [[setter]]
 type = "TileGrid"
 old = "layout(TileLayout)"
-new = "justified() / aspect(f32) / zoom(f32) / caption(CaptionPlace) / captionless()"
+new = "justified() / aspect(f32) / zoom(GridZoom::Fixed(f64) | GridZoom::Bound(Bind<f64>, TileZoom)) / caption(CaptionPlace) / captionless()"
 note = "See `TileLayout`."
 
 [[setter]]

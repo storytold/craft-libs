@@ -8,8 +8,9 @@
 use craft_cms::ColorSpace;
 use craft_cms::profile::Profile;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, Prompt, StackDialog, dialog_id};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -39,6 +40,7 @@ craft_ui::words! {
         discard: "profile.discard" = "Discard the embedded profile (don't color manage)";
         leave: "profile.leave" = "Leave as is (don't color manage)";
         assign_working: "profile.assignWorking" = "Assign working space";
+        assign_profile: "profile.assignProfile" = "Assign profile:";
         remember: "profile.remember" = "Remember this choice for future images";
         remember_tip: "profile.rememberTip" = "Turn the prompt back on with Ask On Mismatch in Edit \u{203a} Color Settings.";
         rgb: "profile.rgb" = "RGB";
@@ -181,15 +183,19 @@ pub enum ProfileAction {
     LeaveAsIs,
     /// Missing: tag it with the working space.
     AssignWorking,
+    /// Missing: tag it with the profile picked from the list the dialog was given.
+    AssignProfile,
 }
 
 /// The answer to a [`ProfileMismatchDialog`]: the action, and whether to remember it for this
 /// mode (the app sets its policy and turns Ask On Mismatch off).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ProfileAnswer {
     /// What the user chose.
     pub action: ProfileAction,
+    /// The profile's name for `AssignProfile`, else `None`.
+    pub profile: Option<String>,
     /// Whether to apply the choice to later files of the same mode without asking.
     pub remember: bool,
 }
@@ -216,6 +222,8 @@ pub struct ProfileMismatchDialog {
     action: ProfileAction,
     rememberable: bool,
     remember: bool,
+    profiles: Vec<String>,
+    chosen: usize,
     open: bool,
 }
 
@@ -234,6 +242,8 @@ impl ProfileMismatchDialog {
             action,
             rememberable: false,
             remember: false,
+            profiles: Vec::new(),
+            chosen: 0,
             open: true,
         }
     }
@@ -245,6 +255,15 @@ impl ProfileMismatchDialog {
         self
     }
 
+    /// The profiles the Assign profile `Select` lists under its radio row, a Missing Profile prompt only; it starts on
+    /// the first name.
+    #[must_use]
+    pub fn profiles(mut self, names: Vec<String>) -> ProfileMismatchDialog {
+        self.profiles = names;
+        self.chosen = 0;
+        self
+    }
+
     /// Offers "Remember this choice"; only for a mismatch (ignored for a missing profile).
     #[must_use]
     pub fn rememberable(mut self, on: bool) -> ProfileMismatchDialog {
@@ -252,12 +271,29 @@ impl ProfileMismatchDialog {
         self
     }
 
+    /// Whether Assign profile is offered: a missing profile and a list of profiles to assign.
+    fn offers_profile(&self) -> bool {
+        !self.profiles.is_empty() && matches!(self.question, ProfileQuestion::Missing { .. })
+    }
+
     /// The actions the question offers, in radio order.
-    fn offered(&self) -> &'static [ProfileAction] {
+    fn offered(&self) -> Vec<ProfileAction> {
         match self.question {
-            ProfileQuestion::Mismatch { .. } => &[ProfileAction::UseEmbedded, ProfileAction::ConvertToWorking, ProfileAction::Discard],
-            ProfileQuestion::Missing { .. } => &[ProfileAction::LeaveAsIs, ProfileAction::AssignWorking],
+            ProfileQuestion::Mismatch { .. } => vec![ProfileAction::UseEmbedded, ProfileAction::ConvertToWorking, ProfileAction::Discard],
+            ProfileQuestion::Missing { .. } => {
+                let mut offered = vec![ProfileAction::LeaveAsIs, ProfileAction::AssignWorking];
+                if self.offers_profile() {
+                    offered.push(ProfileAction::AssignProfile);
+                }
+                offered
+            }
         }
+    }
+
+    /// The answer the dialog's state gives: the profile's name only for Assign profile.
+    fn answer(&self) -> ProfileAnswer {
+        let profile = if self.action == ProfileAction::AssignProfile { self.profiles.get(self.chosen).cloned() } else { None };
+        ProfileAnswer { action: self.action, profile, remember: self.remember && self.can_remember() }
     }
 
     /// Whether "Remember this choice" shows: a mismatch the app made rememberable.
@@ -274,6 +310,7 @@ fn action_name(action: ProfileAction) -> &'static str {
         ProfileAction::Discard => "discard",
         ProfileAction::LeaveAsIs => "leaveAsIs",
         ProfileAction::AssignWorking => "assignWorking",
+        ProfileAction::AssignProfile => "assignProfile",
     }
 }
 
@@ -286,12 +323,16 @@ impl StackDialog for ProfileMismatchDialog {
 
     /// The chosen action, as OK gives it; `None` for an action the question does not offer.
     fn confirm(&mut self, _: &Context) -> Option<ProfileAnswer> {
-        self.offered().contains(&self.action).then(|| ProfileAnswer { action: self.action, remember: self.remember && self.can_remember() })
+        self.offered().contains(&self.action).then(|| self.answer())
     }
 
-    /// `action`, the chosen one of the question's actions, and `remember` while the box shows.
+    /// `action`, the chosen one of the question's actions, `profile` while Assign profile is offered, and `remember`
+    /// while the box shows.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut fields = json!({ "action": action_name(self.action) });
+        if self.offers_profile() {
+            fields["profile"] = Value::String(self.profiles.get(self.chosen).cloned().unwrap_or_default());
+        }
         if self.can_remember() {
             fields["remember"] = Value::Bool(self.remember);
         }
@@ -305,6 +346,11 @@ impl StackDialog for ProfileMismatchDialog {
                 let Some(picked) = picked else { return Err(FieldRefusal::Rejects(&value).message(field)) };
                 self.action = picked;
             }
+            "profile" if self.offers_profile() => {
+                let at = value.as_str().and_then(|name| self.profiles.iter().position(|profile| profile == name));
+                let Some(at) = at else { return Err(FieldRefusal::Rejects(&value).message(field)) };
+                self.chosen = at;
+            }
             "remember" if self.can_remember() => match value.as_bool() {
                 Some(on) => self.remember = on,
                 None => return Err(FieldRefusal::Rejects(&value).message(field)),
@@ -317,8 +363,10 @@ impl StackDialog for ProfileMismatchDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ProfileAnswer>> {
         let env = Env::of(ui);
         let (words, common) = (env.words::<ProfileWords>(), env.words::<CommonWords>());
-        let (offered, can_remember) = (self.offered(), self.can_remember());
-        let Self { file_name, mode, question, action, remember, open, .. } = self;
+        let (offered, can_remember, offers_profile) = (self.offered(), self.can_remember(), self.offers_profile());
+        let entries: Vec<Entry<usize>> =
+            if offers_profile { self.profiles.iter().enumerate().map(|(at, name)| Entry::new(at, name.clone())).collect() } else { Vec::new() };
+        let Self { file_name, mode, question, action, remember, chosen, open, .. } = self;
         let mode_word = mode.word(&words);
         let name = file_name.as_str();
         let (title, message, embedded, working) = match &*question {
@@ -341,15 +389,18 @@ impl StackDialog for ProfileMismatchDialog {
                     ProfileAction::Discard => words.discard.clone(),
                     ProfileAction::LeaveAsIs => words.leave.clone(),
                     ProfileAction::AssignWorking => words.assign_working.clone(),
+                    ProfileAction::AssignProfile => words.assign_profile.clone(),
                 };
                 (choice, text)
             })
             .collect();
         let group_label = title.clone();
+        let select_label = words.assign_profile.clone();
         let (remember_label, remember_tip) = (words.remember.clone(), words.remember_tip.clone());
         let answers = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
         let held = &mut *action;
         let ticked = &mut *remember;
+        let picked_profile = &mut *chosen;
         let shown = Prompt::new(title, message)
             .answers(answers)
             .extras(move |ui| {
@@ -358,6 +409,11 @@ impl StackDialog for ProfileMismatchDialog {
                         Radio::new(value).label(text).show(ui);
                     }
                 });
+                if offers_profile {
+                    Select::new(select_label.clone(), Bind::bound(&mut *picked_profile), &entries)
+                        .enabled(*held == ProfileAction::AssignProfile)
+                        .show(ui);
+                }
                 if can_remember {
                     Checkbox::new(Bind::bound(&mut *ticked)).label(remember_label.clone()).tooltip(remember_tip.clone()).show(ui);
                 }
@@ -365,7 +421,7 @@ impl StackDialog for ProfileMismatchDialog {
             .opened(Bind::bound(open))
             .show(ui);
         match shown.picked {
-            Some(0) => Some(DialogResult::Ok(ProfileAnswer { action: *action, remember: *remember && can_remember })),
+            Some(0) => Some(DialogResult::Ok(self.answer())),
             Some(_) => Some(DialogResult::Cancel),
             None => None,
         }

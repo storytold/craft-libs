@@ -6,12 +6,13 @@ use craft_behavior::EditEvent;
 use craft_behavior::{Cursor, CursorBadge, CursorIcon, PaintedCursor, SelectionChange};
 use craft_layers::testing;
 use craft_layers::ui::mock::FakeLayers;
-use craft_layers::ui::panel::{LayerDrop, LayerSelect, LayersDrag, LayersEvent, LayersPanel, MaskMove};
+use craft_layers::ui::panel::{LayerDrop, LayerPosition, LayerSelect, LayersDrag, LayersEvent, LayersPanel, MaskMove};
 use craft_layers::ui::tree::{LayerPart, LayerRowKey, LayerTree as _};
 use craft_theme::LabelColor;
-use craft_ui::contract::{Entry, Tracked};
+use craft_ui::contract::{Entry, ListDrag, Tracked};
+use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
-use egui::{Modifiers, Pos2, Vec2};
+use egui::{Modifiers, Pos2, Rect, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -32,7 +33,7 @@ fn rig() -> (Fixture, Seen, Asked) {
         let out = LayersPanel::new(&tree)
             .row_menu(|target| {
                 menus.borrow_mut().push(target.row.clone());
-                vec![Entry::new(String::from("rename"), "Rename Layer…")]
+                vec![Entry::new(String::from("rename"), "Rename Layer…").into()]
             })
             .show(ui);
         sink.borrow_mut().extend(out.events);
@@ -76,10 +77,26 @@ fn mask_thumb(fixture: &Fixture, id: u32) -> Pos2 {
     thumb(fixture, id, LayerPart::LayerMask)
 }
 
+/// Drags from `from` and releases at `to`.
+fn drag_to(fixture: &mut Fixture, from: Pos2, to: Pos2) {
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+}
+
 /// Drags from `from` and releases on the middle of the row named `onto`.
 fn drag_onto(fixture: &mut Fixture, from: Pos2, onto: &str) {
     let to = node(fixture, onto).center();
-    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    drag_to(fixture, from, to);
+}
+
+/// The host payload drops among the events reported since the last call: the layer, the place and the copy flag.
+fn host_drops(seen: &Seen) -> Vec<(u32, LayerPosition, bool)> {
+    seen.borrow_mut()
+        .drain(..)
+        .filter_map(|event| match event {
+            LayersEvent::HostDrop { target, position, copy, .. } => Some((target, position, copy)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The mask drops among the events reported since the last call.
@@ -118,6 +135,40 @@ fn a_mask_thumbnail_dropped_on_another_layer_moves_the_mask_there() {
     assert_eq!(mask_drops(&seen), [MaskMove::new(MASKED, LayerPart::LayerMask, 4, true)], "Alt copies");
     drag_onto(&mut fixture, from, "Levels 1");
     assert_eq!(mask_drops(&seen), [], "Levels 1 has a layer mask already");
+}
+
+/// A drag from another panel's row, whose `ListDrag` the target panel takes as the host's payload, is reported with the
+/// place `LayerMove` encodes: onto the group `Into` it, between two sibling rows `Before` the lower; onto a layer the
+/// host's `accepts` refuses it is not reported.
+#[trial]
+fn a_host_payload_dropped_onto_and_between_rows_reports_its_place() {
+    const GROUP: u32 = 1;
+    let seen: Seen = Rc::default();
+    let sink = Rc::clone(&seen);
+    let (target, source) = (Tracked::new(FakeLayers::sample()), Tracked::new(FakeLayers::flat(1)));
+    let mut fixture = Fixture::new(move |ui| {
+        let origin = ui.max_rect().min;
+        in_region(ui, Rect::from_min_size(origin, PANEL), |ui| {
+            let out = LayersPanel::new(&target)
+                .document(1)
+                .takes_drop(|_: &ListDrag<LayerRowKey<u32>>, layer: &u32, position| position != LayerPosition::Into || *layer == GROUP)
+                .show(ui);
+            sink.borrow_mut().extend(out.events);
+        });
+        in_region(ui, Rect::from_min_size(origin + Vec2::new(PANEL.x, 0.0), PANEL), |ui| {
+            let _ = LayersPanel::new(&source).document(2).show(ui);
+        });
+    });
+    fixture.room(Vec2::new(PANEL.x * 2.0, PANEL.y));
+    fixture.settle();
+    let from = node(&fixture, "Layer 1").center();
+    drag_onto(&mut fixture, from, "Group 1");
+    assert_eq!(host_drops(&seen), [(GROUP, LayerPosition::Into, false)], "onto the group");
+    drag_onto(&mut fixture, from, "Title");
+    assert_eq!(host_drops(&seen), [], "Into a layer that is no group is refused");
+    let gap = node(&fixture, "Levels 1").rect.min + Vec2::new(10.0, 2.0);
+    drag_to(&mut fixture, from, gap);
+    assert_eq!(host_drops(&seen), [(5, LayerPosition::Before, false)], "between Title and Levels 1");
 }
 
 /// While layer rows are dragged, the drag session carries their layers for the app's targets outside the panel (a

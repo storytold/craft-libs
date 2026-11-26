@@ -260,6 +260,10 @@ fn a_lossless_jpeg_larger_than_its_tile_is_refused_before_decoding_it_all() {
 
 #[test]
 fn short_lossy_jpeg_strips_are_charged_their_own_rows() {
+    // A 33-megapixel image next to the aggregate decode budget: nightly only.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     // 8192 x 4096 RGB (below MAX_SAMPLES) in 16-row lossy JPEG strips: each strip's JPEG is exactly
     // 16 rows, so the decode budget charges 16 rows, not the 32 of the MCU padding allowance (which
     // would put the image over the aggregate budget and refuse it)

@@ -1,6 +1,6 @@
 //! Stories of the text frame marks.
 
-use super::{FrameExtras, HiddenMark, PlacedMark, TextFrameMarks};
+use super::{FrameExtras, HiddenMark, MarkAnchor, PlacedMark, TextFrameMarks};
 use crate::ui::fixtures::PAPER;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Rect};
@@ -25,11 +25,16 @@ fn hidden_characters_and_extras(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         FrameExtras::new(Rect::new(140.0, 0.0, 200.0, 80.0)).threaded_in(true).overset(true),
     ];
     let marks = [
-        PlacedMark::new(HiddenMark::Space, Point::new(20.0, 30.0), true, ASCENT),
-        PlacedMark::new(HiddenMark::Tab, Point::new(30.0, 30.0), false, ASCENT),
-        PlacedMark::new(HiddenMark::LineBreak, Point::new(60.0, 30.0), false, ASCENT),
-        PlacedMark::new(HiddenMark::ParagraphEnd, Point::new(80.0, 30.0), false, ASCENT),
-        PlacedMark::new(HiddenMark::StoryEnd, Point::new(100.0, 30.0), false, ASCENT),
+        PlacedMark::new(HiddenMark::Space, Point::new(20.0, 30.0), MarkAnchor::Centre, ASCENT),
+        PlacedMark::new(HiddenMark::Tab, Point::new(30.0, 30.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::LineBreak, Point::new(60.0, 30.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::ParagraphEnd, Point::new(80.0, 30.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::StoryEnd, Point::new(100.0, 30.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::NarrowNoBreakSpace, Point::new(20.0, 50.0), MarkAnchor::Centre, ASCENT),
+        PlacedMark::new(HiddenMark::FixedSpace, Point::new(40.0, 50.0), MarkAnchor::Centre, ASCENT),
+        PlacedMark::new(HiddenMark::DiscretionaryHyphen, Point::new(60.0, 50.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::LineBreak, Point::new(100.0, 50.0), MarkAnchor::End, ASCENT),
+        PlacedMark::new(HiddenMark::ParagraphEnd, Point::new(110.0, 55.0), MarkAnchor::Top, ASCENT),
     ];
     Canvas::new("Frames")
         .view(view)

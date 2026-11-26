@@ -11,7 +11,7 @@ pub(crate) mod live;
 pub(crate) mod scope;
 pub(crate) mod text;
 
-use crate::runtime::egui::access::{self as adapter, NodeRole, RunLink};
+use crate::runtime::egui::access::{self as adapter, NodeRole};
 use crate::runtime::env::Label;
 use craft_behavior::PartRef;
 use craft_theme::{Flags, Srgba, variant::Tone};
@@ -19,13 +19,16 @@ use egui::Id;
 use std::ops::RangeInclusive;
 
 pub use crate::runtime::egui::access::bounds;
+pub use crate::runtime::egui::access::focused_node;
 #[doc(hidden)]
 pub use emit::SubDecl;
+#[doc(hidden)]
+pub use emit::layer_root;
 #[doc(hidden)]
 pub use emit::report_sub;
 #[doc(hidden)]
 pub use emit::sub_node_id;
-pub(crate) use emit::{FaceFacts, Own, PopupShown, report, report_layer};
+pub(crate) use emit::{FaceFacts, Own, PopupShown, hide_exiting_content, report, report_layer, report_modal};
 pub use live::announce;
 pub(crate) use live::{begin_pass as begin_live_pass, end_pass as end_live_pass};
 pub use scope::{FieldLabel, FieldLabelRole};
@@ -287,6 +290,7 @@ pub struct Access {
     pub(crate) description: Option<String>,
     pub(crate) placeholder: Option<String>,
     pub(crate) value: Option<String>,
+    pub(crate) unit: Option<String>,
     pub(crate) color: Option<Srgba>,
     pub(crate) numeric: Option<Numeric>,
     pub(crate) expanded: Option<bool>,
@@ -337,6 +341,13 @@ impl Access {
     /// The text value of a text component.
     pub fn value(&mut self, text: impl Into<String>) -> &mut Self {
         self.value = Some(text.into());
+        self
+    }
+
+    /// The unit a text component draws after its text: the node's value reads it after the text ("160 pt"), while
+    /// the text runs stay the editable text.
+    pub fn unit(&mut self, unit: impl Into<String>) -> &mut Self {
+        self.unit = Some(unit.into());
         self
     }
 
@@ -541,7 +552,6 @@ pub struct SubNode {
     pub(crate) steps: bool,
     pub(crate) bounds: Option<egui::Rect>,
     pub(crate) run: Option<RunFacts>,
-    pub(crate) run_links: Vec<RunLink>,
 }
 
 impl SubNode {
@@ -573,7 +583,6 @@ impl SubNode {
             steps: false,
             bounds: None,
             run: None,
-            run_links: Vec::new(),
         }
     }
 
@@ -590,14 +599,6 @@ impl SubNode {
     /// a valid end of [`Access::text_selection`].
     pub fn text_run(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, rtl: bool) -> &mut Self {
         self.run = Some(RunFacts { text: text.into(), positions, widths, rtl });
-        self
-    }
-
-    /// Marks characters `chars` of a [text run](Self::text_run) as a link to `target`: the run node gets a `Link`
-    /// child named by those characters, bounded by their extent on the line. Indices count characters, as
-    /// `positions` and `widths` do. A link on a node that is not a run is not emitted.
-    pub fn run_link(&mut self, chars: std::ops::Range<usize>, target: impl Into<String>) -> &mut Self {
-        self.run_links.push(RunLink { chars, target: target.into() });
         self
     }
 

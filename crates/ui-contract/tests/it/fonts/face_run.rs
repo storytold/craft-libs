@@ -102,9 +102,8 @@ fn first_baseline(galley: &Galley) -> f32 {
 #[trial]
 fn a_face_run_draws_in_its_face_at_its_size_on_its_baseline() {
     let (mut frames, loads) = (Frames::new(), Arc::default());
-    let first = frame(&mut frames, "Typed", 30.0, &loads);
-    assert_eq!(font_of(&first).family, FontFamily::Proportional, "until its face is installed the run is in the interface face");
-    let shape = until_in_face(&mut frames, "Typed", 30.0, &loads);
+    // The app holds the face's bytes, so the run is drawn in its face in the pass that registers it.
+    let shape = frame(&mut frames, "Typed", 30.0, &loads);
     let font = font_of(&shape);
     assert!(matches!(font.family, FontFamily::Name(_)), "the face's own family: {:?}", font.family);
     assert_eq!(font.size, 30.0, "the run's own size");

@@ -2,6 +2,7 @@
 
 /// A contour point, input and output in 0..=1.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 pub struct ContourPoint {
     /// Input value, 0..=1 (the horizontal axis).
     pub input: f32,
@@ -15,6 +16,7 @@ pub struct ContourPoint {
 /// Built-in presets carry their preset name; an edited preset is named "Custom"; imported
 /// contours keep their own name and points.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 pub struct Contour {
     #[allow(missing_docs)]
     pub name: String,
