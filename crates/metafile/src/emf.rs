@@ -30,7 +30,7 @@ pub(crate) fn is_emf(b: Bytes) -> bool {
 
 /// The picture frame: `rclFrame` (0.01 mm) mapped to device units through `szlDevice` and
 /// `szlMillimeters`, sized in points. Without a usable frame, the device bounds stand in (1 unit = 1 point).
-pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
+pub(crate) fn parse(input: Bytes, depth: u8) -> Result<(Canvas, Option<Frame>), Error> {
     if !is_emf(input) {
         return Err(Error::BadHeader);
     }
@@ -45,7 +45,7 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
     if let Some(px_mm) = device_px_per_mm(input) {
         cv.set_device_mm(px_mm);
     }
-    let mut plus = crate::emfplus::Plus::new();
+    let mut plus = crate::emfplus::Plus::new(depth);
     plus.frame = frame.as_ref().map(|f| f.rect);
     let mut parsed = 0usize;
     let mut pos = hsize.max(88);
@@ -77,22 +77,15 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
 }
 
 /// Device pixels per millimetre on each axis, from `szlDevice` (72) and the device's size:
-/// `szlMicrometers` (100) when the header has that extension (a header of 108 bytes or more) and
+/// `szlMicrometers` (100) when the fixed header includes that extension and
 /// it is set, which is a thousand times finer, else `szlMillimeters` (80).
 fn device_px_per_mm(input: Bytes) -> Option<(f64, f64)> {
-    let (dw, dh) = (input.i32(72)?, input.i32(76)?);
-    if dw <= 0 || dh <= 0 {
-        return None;
-    }
-    if input.u32(4)? >= 108
-        && let (Some(uw), Some(uh)) = (input.u32(100), input.u32(104))
-        && uw > 0
-        && uh > 0
-    {
-        return Some((f64::from(dw) * 1000.0 / f64::from(uw), f64::from(dh) * 1000.0 / f64::from(uh)));
-    }
-    let (mw, mh) = (input.i32(80)?, input.i32(84)?);
-    (mw > 0 && mh > 0).then(|| (f64::from(dw) / f64::from(mw), f64::from(dh) / f64::from(mh)))
+    let facts = crate::units::emf_device(input)?;
+    let (dw, dh) = (f64::from(facts.pixels.0), f64::from(facts.pixels.1));
+    Some(match facts.physical_size {
+        crate::EmfPhysicalSize::Micrometres(w, h) => (dw * 1000.0 / f64::from(w), dh * 1000.0 / f64::from(h)),
+        crate::EmfPhysicalSize::Millimetres(w, h) => (dw / f64::from(w), dh / f64::from(h)),
+    })
 }
 
 /// The frame from `rclFrame` (offset 24), `szlDevice` (72) and `szlMillimeters` (80) in the header.
