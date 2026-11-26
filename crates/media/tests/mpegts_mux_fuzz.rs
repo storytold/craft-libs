@@ -4,7 +4,7 @@
 // Test code: a failed unwrap is a failed test.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod mpegts_mux;
+use super::mpegts_mux;
 
 use craft_media::mpegts;
 use craft_media::mpegts::mux::{Av1Config, Codec, Config, Error, Frame, MAX_PCR_DELAY, MAX_PCR_INTERVAL, Muxer, OpusMapping, OpusTrim, Stream};

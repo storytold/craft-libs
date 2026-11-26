@@ -1,15 +1,17 @@
 //! FCPXML: a hand-written document (from the public FCPXML element reference) with connected
 //! clips, a transition, a retimed clip, a gap and a compound clip; plus export → import round trips.
 
-use crate::support;
+use super::support;
 
-use craft_timeline::model::{
+use craft_timeline::interchange::{
     BinEntry, ClipId, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaRef, Param, ParamValue, Project, Sequence, TrackKind,
     TransitionAlign,
 };
-use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick};
 use craft_timeline::{ExportOptions, FcpxmlVersion, Format, Report, detect_text as detect};
+use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
+use craft_ui::testing::trial;
 use proptest::prelude::*;
+#[allow(clippy::wildcard_imports, reason = "tests use most of the module under test and its helpers")]
 use support::*;
 
 /// Frame `n` at 23.976 as an FCPXML time, offset by `base` frames.
@@ -100,7 +102,7 @@ fn doc() -> String {
     )
 }
 
-#[test]
+#[trial]
 fn self_referencing_compound_media_is_ignored_without_recursing() {
     let xml = r#"<fcpxml version="1.10">
       <resources>
@@ -118,7 +120,7 @@ fn self_referencing_compound_media_is_ignored_without_recursing() {
     assert!(report.mentions("recursive FCPXML media"), "{report:?}");
 }
 
-#[test]
+#[trial]
 fn golden_connected_clips() {
     let d = doc();
     assert_eq!(detect(d.as_bytes(), Some("fcpxml")), Some(Format::Fcpxml));
@@ -198,7 +200,7 @@ fn assert_connected_audio_markers_and_bins(p: &Project, s: &Sequence, r: FrameRa
     assert!(matches!(&m.media, MediaRef::File { path } if path == "/proj/boats.mov"));
 }
 
-#[test]
+#[trial]
 fn hostile_lane_numbers_do_not_create_sparse_tracks() {
     let d = doc().replace("lane=\"-1\"", "lane=\"-2147483648\"").replace("lane=\"1\"", "lane=\"2147483647\"");
     let (imp, rep) = import(d.as_bytes(), Format::Fcpxml, Some("/proj")).unwrap();
@@ -209,7 +211,7 @@ fn hostile_lane_numbers_do_not_create_sparse_tracks() {
 }
 
 /// Final Cut writes slideshow stills directly as video elements, including zero-duration assets.
-#[test]
+#[trial]
 fn standalone_video_stills_keep_timing_paths_and_transitions() {
     let xml = r#"<fcpxml version="1.11"><resources>
       <format id="f" frameDuration="1/30s" width="1920" height="1080"/>
@@ -248,7 +250,7 @@ fn standalone_video_stills_keep_timing_paths_and_transitions() {
 }
 
 /// A video element selects only picture from an AV asset, including on connected lanes.
-#[test]
+#[trial]
 fn standalone_video_uses_only_video_and_preserves_connected_placement() {
     let xml = doc().replace("<asset-clip ref=\"r2\"", "<video ref=\"r2\"");
     // The first r2 occurrence has children; the connected r2 occurrence does too.
@@ -271,7 +273,7 @@ fn standalone_video_uses_only_video_and_preserves_connected_placement() {
 }
 
 /// Unsupported generators, unresolved references and alternate sources keep an actionable warning.
-#[test]
+#[trial]
 fn standalone_video_invalid_sources_are_reported_without_panicking() {
     for attrs in ["", "ref=\"missing\"", "ref=\"effect\"", "ref=\"audio\"", "ref=\"picture\" srcID=\"2\""] {
         let xml = format!(
@@ -354,7 +356,7 @@ fn project() -> (Project, ItemId) {
     (p, s)
 }
 
-#[test]
+#[trial]
 fn roundtrip_all_versions() {
     for v in [FcpxmlVersion::V1_9, FcpxmlVersion::V1_10, FcpxmlVersion::V1_11] {
         let (p, s) = project();
@@ -422,80 +424,106 @@ fn gen_clip() -> impl Strategy<Value = G> {
     )
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
-    #[test]
-    fn fcpxml_roundtrip(clips in prop::collection::vec(gen_clip(), 1..20), ri in 0usize..5) {
-        let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
-        let mut p = Project::new("P");
-        let ms = [media(&mut p, "/x/one.mov", true, true, rate), media(&mut p, "/x/two.mov", true, true, rate), media(&mut p, "/y/three four.mxf", true, true, rate)];
-        let wav = media(&mut p, "/y/vo.wav", false, true, rate);
-        let s = sequence(&mut p, "S", rate, false);
-        let mut ends = [0i64; 3];
-        let mut prev: [Option<ClipId>; 3] = [None; 3];
-        let mut aends = [0i64; 3];
-        for g in &clips {
-            let t = ends[g.track] + g.gap;
-            let v = clip(&mut p, s, TrackKind::Video, g.track, ms[g.media], t..t + (g.dur), g.src);
-            {
-                let q = p.sequence_mut(s).unwrap();
-                let (_, it) = q.find_item_mut(v).unwrap();
-                it.enabled = g.enabled;
-                match g.speed {
-                    1 => it.speed = 2.0,
-                    2 => it.speed = 0.5,
-                    3 => it.reverse = true,
-                    _ => {}
+#[trial]
+fn fcpxml_roundtrip() {
+    let mut config = ProptestConfig::with_cases(48);
+    config.source_file = Some(file!());
+    let mut runner = proptest::test_runner::TestRunner::new(config);
+    runner
+        .run(&(prop::collection::vec(gen_clip(), 1..20), 0usize..5), |(clips, ri)| {
+            let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
+            let mut p = Project::new("P");
+            let ms = [
+                media(&mut p, "/x/one.mov", true, true, rate),
+                media(&mut p, "/x/two.mov", true, true, rate),
+                media(&mut p, "/y/three four.mxf", true, true, rate),
+            ];
+            let wav = media(&mut p, "/y/vo.wav", false, true, rate);
+            let s = sequence(&mut p, "S", rate, false);
+            let mut ends = [0i64; 3];
+            let mut prev: [Option<ClipId>; 3] = [None; 3];
+            let mut aends = [0i64; 3];
+            for g in &clips {
+                let t = ends[g.track] + g.gap;
+                let v = clip(&mut p, s, TrackKind::Video, g.track, ms[g.media], t..t + (g.dur), g.src);
+                {
+                    let q = p.sequence_mut(s).unwrap();
+                    let (_, it) = q.find_item_mut(v).unwrap();
+                    it.enabled = g.enabled;
+                    match g.speed {
+                        1 => it.speed = 2.0,
+                        2 => it.speed = 0.5,
+                        3 => it.reverse = true,
+                        _ => {}
+                    }
                 }
-            }
-            let d = g.tr_len;
-            let adjacent = g.gap == 0 && prev[g.track].is_some();
-            if g.track == 0 {
-                match g.tr {
-                    0 if adjacent && d >= 2 => transition(&mut p, s, (TrackKind::Video, 0), "cross_dissolve", (prev[0], Some(v)), t - d / 2..t - d / 2 + (d), TransitionAlign::CenterAtCut),
-                    1 if adjacent => transition(&mut p, s, (TrackKind::Video, 0), "dip_to_white", (prev[0], Some(v)), t..t + (d), TransitionAlign::StartAtCut),
-                    2 if adjacent => transition(&mut p, s, (TrackKind::Video, 0), "push", (prev[0], Some(v)), t - d..t - d + (d), TransitionAlign::EndAtCut),
-                    3 if !adjacent => transition(&mut p, s, (TrackKind::Video, 0), "cross_dissolve", (None, Some(v)), t..t + (d), TransitionAlign::StartAtCut),
-                    _ => {}
-                }
-            }
-            if aends[g.track] <= t {
-                match g.audio {
-                    // linked, same-numbered audio track, identical timing
-                    1 => {
-                        let a = clip(&mut p, s, TrackKind::Audio, g.track, ms[g.media], t..t + (g.dur), g.src);
-                        {
-                            let q = p.sequence_mut(s).unwrap();
-                            let (sp, rv, en) = { let (_, it) = q.find_item(v).unwrap(); (it.speed, it.reverse, it.enabled) };
-                            let (_, ai) = q.find_item_mut(a).unwrap();
-                            ai.speed = sp;
-                            ai.reverse = rv;
-                            ai.enabled = en;
+                let d = g.tr_len;
+                let adjacent = g.gap == 0 && prev[g.track].is_some();
+                if g.track == 0 {
+                    match g.tr {
+                        0 if adjacent && d >= 2 => transition(
+                            &mut p,
+                            s,
+                            (TrackKind::Video, 0),
+                            "cross_dissolve",
+                            (prev[0], Some(v)),
+                            t - d / 2..t - d / 2 + (d),
+                            TransitionAlign::CenterAtCut,
+                        ),
+                        1 if adjacent => {
+                            transition(&mut p, s, (TrackKind::Video, 0), "dip_to_white", (prev[0], Some(v)), t..t + (d), TransitionAlign::StartAtCut)
                         }
-                        link(&mut p, s, &[v, a]);
-                        aends[g.track] = t + g.dur;
+                        2 if adjacent => {
+                            transition(&mut p, s, (TrackKind::Video, 0), "push", (prev[0], Some(v)), t - d..t - d + (d), TransitionAlign::EndAtCut)
+                        }
+                        3 if !adjacent => {
+                            transition(&mut p, s, (TrackKind::Video, 0), "cross_dissolve", (None, Some(v)), t..t + (d), TransitionAlign::StartAtCut)
+                        }
+                        _ => {}
                     }
-                    // independent audio-only clip
-                    2 => {
-                        clip(&mut p, s, TrackKind::Audio, g.track, wav, t..t + (g.dur), g.src);
-                        aends[g.track] = t + g.dur;
-                    }
-                    _ => {}
                 }
+                if aends[g.track] <= t {
+                    match g.audio {
+                        // linked, same-numbered audio track, identical timing
+                        1 => {
+                            let a = clip(&mut p, s, TrackKind::Audio, g.track, ms[g.media], t..t + (g.dur), g.src);
+                            {
+                                let q = p.sequence_mut(s).unwrap();
+                                let (sp, rv, en) = {
+                                    let (_, it) = q.find_item(v).unwrap();
+                                    (it.speed, it.reverse, it.enabled)
+                                };
+                                let (_, ai) = q.find_item_mut(a).unwrap();
+                                ai.speed = sp;
+                                ai.reverse = rv;
+                                ai.enabled = en;
+                            }
+                            link(&mut p, s, &[v, a]);
+                            aends[g.track] = t + g.dur;
+                        }
+                        // independent audio-only clip
+                        2 => {
+                            clip(&mut p, s, TrackKind::Audio, g.track, wav, t..t + (g.dur), g.src);
+                            aends[g.track] = t + g.dur;
+                        }
+                        _ => {}
+                    }
+                }
+                ends[g.track] = t + g.dur;
+                prev[g.track] = Some(v);
             }
-            ends[g.track] = t + g.dur;
-            prev[g.track] = Some(v);
-        }
-        let (imp, text, _) = roundtrip(&p, s, Format::Fcpxml, &xopts());
-        let si = only_seq(&imp);
-        prop_assert_eq!(structure(&imp.project, si, TrackKind::Video), structure(&p, s, TrackKind::Video), "{}", text);
-        prop_assert_eq!(structure(&imp.project, si, TrackKind::Audio), structure(&p, s, TrackKind::Audio), "{}", text);
-        prop_assert_eq!(links(&imp.project, si), links(&p, s));
-    }
+            let (imp, text, _) = roundtrip(&p, s, Format::Fcpxml, &xopts());
+            let si = only_seq(&imp);
+            prop_assert_eq!(structure(&imp.project, si, TrackKind::Video), structure(&p, s, TrackKind::Video), "{}", text);
+            prop_assert_eq!(structure(&imp.project, si, TrackKind::Audio), structure(&p, s, TrackKind::Audio), "{}", text);
+            prop_assert_eq!(links(&imp.project, si), links(&p, s));
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// filmcraft#2195: a relative `src` is a URL like an absolute one: `boats%20b.mov` is the file `boats b.mov`.
-#[test]
+#[trial]
 fn relative_media_urls_are_percent_decoded() {
     let d = doc().replace(r#"src="boats.mov""#, r#"src="media/boats%20b.mov""#);
     let (imp, _) = import(d.as_bytes(), Format::Fcpxml, Some("/proj")).unwrap();
@@ -505,7 +533,7 @@ fn relative_media_urls_are_percent_decoded() {
 }
 
 // Parity regressions from FilmCraft e6df318 (including #4799), adapted to the neutral model.
-#[test]
+#[trial]
 fn media_cut_off_by_the_depth_limit_is_complete_when_reached_higher_up() {
     // m0 … m64 nest one inside the next. Project A reaches m63 at the depth limit, so m64 is left
     // out of it; project B refers to m63 directly, where m64 fits, and must not get the cut-off copy.
@@ -530,7 +558,7 @@ fn media_cut_off_by_the_depth_limit_is_complete_when_reached_higher_up() {
     assert_eq!(m63.video_tracks[0].items.len(), 1, "M63 keeps its nested M64");
 }
 
-#[test]
+#[trial]
 fn media_cut_off_by_xml_layout_is_complete_when_revisited_at_the_same_media_depth() {
     // Both references have media-chain depth zero, but the first is reached through connected
     // clips. Its resource must not remain cached as complete after the XML-layout guard fires.
@@ -561,7 +589,7 @@ fn media_cut_off_by_xml_layout_is_complete_when_revisited_at_the_same_media_dept
     }
 }
 
-#[test]
+#[trial]
 fn flat_resource_chain_is_bounded_even_when_xml_is_shallow() {
     let mut media = String::new();
     for i in 0..512 {
@@ -578,7 +606,7 @@ fn flat_resource_chain_is_bounded_even_when_xml_is_shallow() {
     assert!(imp.project.items.len() <= 65, "the flat resource graph is not expanded beyond the semantic limit");
 }
 
-#[test]
+#[trial]
 fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
     let mut media = String::new();
     for i in 0..64 {

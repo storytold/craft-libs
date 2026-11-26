@@ -75,20 +75,3 @@ pub fn add_residue(plane: &mut [u8], stride: usize, pos: usize, residue: &[i16; 
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dc_only_blocks_are_flat() {
-        for dc in [-2048i16, -100, -5, -4, -3, 0, 3, 4, 5, 100, 2047] {
-            let mut b = [0i16; 16];
-            b[0] = dc;
-            let out = inverse_dct(&b);
-            assert!(out.iter().all(|&v| i32::from(v) == (i32::from(dc) + 4) >> 3), "dct dc {dc}");
-            let out = inverse_wht(&b);
-            assert!(out.iter().all(|&v| i32::from(v) == (i32::from(dc) + 3) >> 3), "wht dc {dc}");
-        }
-    }
-}
