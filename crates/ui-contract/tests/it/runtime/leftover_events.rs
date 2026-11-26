@@ -2,7 +2,10 @@
 //! a window's input.
 
 use craft_keymap::Overrides;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, Scope};
+use craft_ui::contract::Tracked;
+use craft_ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, CommandStates, EditCommands, Scope, Trigger,
+};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::keys::leftover_events;
 use craft_ui::testing::focus::key_release;
@@ -172,4 +175,36 @@ fn a_clip_keeps_its_place_beside_equal_events_a_widget_took() {
         matches!(events.as_slice(), [Event::Paste(pasted), Event::Text(typed)] if pasted == "p" && typed == "x"),
         "the paste stays before the text that followed it: {events:?}"
     );
+}
+
+/// A key whose only binding is a hold of a disabled command runs nothing on a quick press and release: the press and its
+/// release are the host's, and the app still hears of the disabled hold the dispatcher passed over.
+#[trial]
+fn a_disabled_hold_leaves_the_press_and_its_release_to_the_host() {
+    const HELD: &str = "leftoverTrial.disabledHold";
+    let mut frames = Frames::new();
+    let chord = Binding::parse("X").expect("the trial's chord parses").trigger.chord;
+    let held = CommandDef::new(HELD, "Hold", Scope::app()).with_default(Binding::new(Trigger::hold(chord)));
+    let mut states = Tracked::new(CommandStates::new());
+    states.set(CommandRef::new(HELD), CommandState::new().enabled(false));
+    let input = CommandInput::new().catalog(AppCatalog::new(vec![held], 1).expect("the trial's catalog is valid")).states(&states).holds(Some(0.5));
+    frames.commands(input);
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+
+    frames.frame(vec![key_press(Key::X, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::X, Modifiers::NONE)], &mut show);
+    let output = take_output(&frames.ctx);
+    assert!(output.fired.is_empty(), "the disabled hold fires nothing: {:?}", output.fired);
+    assert_eq!(
+        output.declined.iter().map(|declined| declined.command.id.as_str()).collect::<Vec<_>>(),
+        [HELD],
+        "the app hears of the disabled hold it passed over, as a disabled menu row's hint tells it"
+    );
+    assert_eq!(key_events(left.take()), [(Key::X, true), (Key::X, false)], "the press and its release are left over to the host");
 }
