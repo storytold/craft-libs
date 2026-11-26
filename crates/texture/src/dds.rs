@@ -31,9 +31,11 @@ pub struct Surface {
     pub source_precision_is_f32: bool,
 }
 
-struct Bc3Prepared {
-    bytes: Vec<u8>,
-    restore_rgb: Vec<(usize, usize)>,
+fn bc3_blocks(size: ::dds::Size) -> Option<(usize, usize, usize)> {
+    let blocks_x = (size.width as usize).div_ceil(4);
+    let blocks_y = (size.height as usize).div_ceil(4);
+    let bytes = blocks_x.checked_mul(blocks_y)?.checked_mul(16)?;
+    Some((blocks_x, blocks_y, bytes))
 }
 
 /// Make dds 0.2 decode BC3 colour in the four-colour mode required by the format. Microsoft's
@@ -43,18 +45,16 @@ struct Bc3Prepared {
 /// Reversed endpoints can be exchanged while swapping indices 0↔1 and 2↔3 without changing the
 /// four-colour table. Equal endpoints need index 3 restored from an endpoint-colour texel after
 /// decoding. Only the bounded first surface is copied; alpha bytes are never changed.
-fn bc3_four_colour_surface(bytes: &[u8], payload_start: usize, size: ::dds::Size) -> Option<Bc3Prepared> {
-    let width = size.width as usize;
-    let height = size.height as usize;
-    let blocks_x = width.div_ceil(4);
-    let blocks_y = height.div_ceil(4);
-    let surface_bytes = blocks_x.checked_mul(blocks_y)?.checked_mul(16)?;
-    let end = payload_start.checked_add(surface_bytes)?;
+fn bc3_four_colour_surface(bytes: &[u8], payload_start: usize, size: ::dds::Size) -> Result<Option<Vec<u8>>, ImageError> {
+    let (width, height) = (size.width as usize, size.height as usize);
+    let Some((blocks_x, blocks_y, surface_bytes)) = bc3_blocks(size) else { return Ok(None) };
+    let Some(end) = payload_start.checked_add(surface_bytes) else { return Ok(None) };
     if end > bytes.len() {
-        return None;
+        return Ok(None);
     }
-    let mut transformed = bytes[..end].to_vec();
-    let mut repairs = Vec::new();
+    let mut transformed = Vec::new();
+    transformed.try_reserve_exact(end).map_err(|_| ImageError::OutOfMemory(size.width, size.height))?;
+    transformed.extend_from_slice(&bytes[..end]);
     for by in 0..blocks_y {
         for bx in 0..blocks_x {
             let block_start = payload_start + (by * blocks_x + bx) * 16;
@@ -72,8 +72,50 @@ fn bc3_four_colour_surface(bytes: &[u8], payload_start: usize, size: ::dds::Size
             if color0 > color1 {
                 continue;
             }
+            let mut has_endpoint_texel = false;
+            let mut first_index3 = None;
+            for ly in 0..4 {
+                for lx in 0..4 {
+                    let (x, y) = (bx * 4 + lx, by * 4 + ly);
+                    if x >= width || y >= height {
+                        continue;
+                    }
+                    let texel = ly * 4 + lx;
+                    let index = (block[12 + texel / 4] >> (2 * (texel % 4))) & 3;
+                    if index == 3 {
+                        first_index3.get_or_insert(texel);
+                    } else {
+                        has_endpoint_texel = true;
+                    }
+                }
+            }
+            if !has_endpoint_texel && let Some(texel) = first_index3 {
+                // Every valid texel used index 3. Decode one as index 0 instead; all four
+                // choices have the same endpoint colour, and its alpha is independent.
+                block[12 + texel / 4] &= !(3 << (2 * (texel % 4)));
+            }
+        }
+    }
+    Ok(Some(transformed))
+}
+
+/// Restore index-3 RGB for equal-endpoint blocks by rereading their original selectors. This
+/// avoids a repair list whose size could otherwise approach one entry per output pixel.
+fn restore_bc3_equal_endpoint_rgb(original: &[u8], payload_start: usize, size: ::dds::Size, rgba: &mut [f32]) {
+    let (width, height) = (size.width as usize, size.height as usize);
+    let Some((blocks_x, blocks_y, surface_bytes)) = bc3_blocks(size) else { return };
+    if payload_start.checked_add(surface_bytes).is_none_or(|end| end > original.len()) {
+        return;
+    }
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let start = payload_start + (by * blocks_x + bx) * 16;
+            let block = &original[start..start + 16];
+            if block[8..10] != block[10..12] {
+                continue;
+            }
             let mut source = None;
-            let mut targets = Vec::new();
+            let mut targets = 0_u16;
             for ly in 0..4 {
                 for lx in 0..4 {
                     let (x, y) = (bx * 4 + lx, by * 4 + ly);
@@ -84,28 +126,37 @@ fn bc3_four_colour_surface(bytes: &[u8], payload_start: usize, size: ::dds::Size
                     let index = (block[12 + texel / 4] >> (2 * (texel % 4))) & 3;
                     let output = y * width + x;
                     if index == 3 {
-                        targets.push(output);
+                        targets |= 1 << texel;
                     } else if source.is_none() {
                         source = Some(output);
                     }
                 }
             }
-            if targets.is_empty() {
+            if targets == 0 {
                 continue;
             }
-            let source = source.unwrap_or_else(|| {
-                // Every valid texel used index 3. Decode one as index 0 instead; all four
-                // choices have the same endpoint colour, and its alpha is independent.
-                let first = targets[0];
-                let (x, y) = (first % width, first / width);
-                let texel = (y % 4) * 4 + x % 4;
-                block[12 + texel / 4] &= !(3 << (2 * (texel % 4)));
-                first
+            let source = source.or_else(|| {
+                let texel = targets.trailing_zeros() as usize;
+                let (x, y) = (bx * 4 + texel % 4, by * 4 + texel / 4);
+                Some(y * width + x)
             });
-            repairs.extend(targets.into_iter().map(|target| (source, target)));
+            let rgb = source.and_then(|source| rgba.get(source * 4..source * 4 + 3)).and_then(|samples| <[f32; 3]>::try_from(samples).ok());
+            let Some(rgb) = rgb else { continue };
+            for ly in 0..4 {
+                for lx in 0..4 {
+                    let texel = ly * 4 + lx;
+                    let (x, y) = (bx * 4 + lx, by * 4 + ly);
+                    if targets & (1 << texel) == 0 || x >= width || y >= height {
+                        continue;
+                    }
+                    let target = (y * width + x) * 4;
+                    if let Some(samples) = rgba.get_mut(target..target + 3) {
+                        samples.copy_from_slice(&rgb);
+                    }
+                }
+            }
         }
     }
-    Some(Bc3Prepared { bytes: transformed, restore_rgb: repairs })
 }
 
 /// Decode the first surface after validating dimensions, pixels and output-byte limits.
@@ -118,15 +169,13 @@ pub fn decode_first(bytes: &[u8], limits: &Limits) -> Result<Surface, DecodeErro
     let mut rgba = Vec::new();
     rgba.try_reserve_exact(len).map_err(|_| ImageError::OutOfMemory(size.width, size.height))?;
     rgba.resize(len, 0.0_f32);
-    let mut repairs = Vec::new();
+    let mut payload_start = 0;
     let mut transformed: Option<Vec<u8>> = None;
     if decoder.format() == ::dds::Format::BC3_UNORM {
         let mut header_reader = std::io::Cursor::new(bytes);
         let _ = ::dds::header::Header::read(&mut header_reader, &Default::default()).map_err(|e| DecodeError::Decode(e.to_string()))?;
-        if let Some(prepared) = bc3_four_colour_surface(bytes, header_reader.position() as usize, size) {
-            repairs = prepared.restore_rgb;
-            transformed = Some(prepared.bytes);
-        }
+        payload_start = header_reader.position() as usize;
+        transformed = bc3_four_colour_surface(bytes, payload_start, size)?;
     }
     if let Some(data) = transformed.as_deref() {
         let mut reader = std::io::Cursor::new(data);
@@ -136,11 +185,8 @@ pub fn decode_first(bytes: &[u8], limits: &Limits) -> Result<Surface, DecodeErro
     let view = ::dds::ImageViewMut::new(bytemuck::cast_slice_mut(&mut rgba), size, ::dds::ColorFormat::RGBA_F32)
         .ok_or_else(|| DecodeError::Decode("invalid DDS output dimensions".into()))?;
     decoder.read_surface(view).map_err(error)?;
-    for (source, target) in repairs {
-        let rgb = rgba.get(source * 4..source * 4 + 3).and_then(|samples| <[f32; 3]>::try_from(samples).ok());
-        if let (Some(rgb), Some(target)) = (rgb, rgba.get_mut(target * 4..target * 4 + 3)) {
-            target.copy_from_slice(&rgb);
-        }
+    if transformed.is_some() {
+        restore_bc3_equal_endpoint_rgb(bytes, payload_start, size, &mut rgba);
     }
     Ok(Surface { width: size.width, height: size.height, rgba, source_precision_is_f32: decoder.format().precision() == ::dds::Precision::F32 })
 }
