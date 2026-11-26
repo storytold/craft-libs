@@ -368,13 +368,17 @@ fn new_uid(salt: &[u8]) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    #[cfg(not(target_arch = "wasm32"))]
+    let now_nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    #[cfg(target_arch = "wasm32")]
+    let now_nanos = 0u128;
     let half = |tag: u8| {
         // `RandomState` is seeded randomly per instance, so each half is unpredictable.
         let mut h = std::collections::hash_map::RandomState::new().build_hasher();
         h.write_u8(tag);
         h.write_u64(count);
         h.write(salt);
-        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+        h.write_u128(now_nanos);
         h.finish()
     };
     let value = (u128::from(half(0)) << 64) | u128::from(half(1));
@@ -463,6 +467,7 @@ pub(crate) fn encode(src: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
     write_empty(&mut out, 0x0020, 0x0010, b"SH"); // Study ID
     write_empty(&mut out, 0x0020, 0x0011, b"IS"); // Series Number
     write_empty(&mut out, 0x0020, 0x0013, b"IS"); // Instance Number
+    write_empty(&mut out, 0x0020, 0x0020, b"CS"); // Patient Orientation
 
     // Group 0028 Image Pixel Module
     write_us(&mut out, 0x0028, 0x0002, samples);
@@ -765,6 +770,7 @@ mod tests {
         for required in [(0x0008, 0x0016), (0x0008, 0x0018), (0x0008, 0x0064), (0x0020, 0x000D), (0x0020, 0x000E)] {
             assert!(find(required.0, required.1).is_some_and(|v| !v.is_empty()), "{required:?}");
         }
+        assert_eq!(find(0x0020, 0x0020), Some(Vec::new()), "Patient Orientation (0020,0020) present");
         assert_eq!(find(0x0002, 0x0003), find(0x0008, 0x0018), "meta and dataset name the same instance");
         assert_eq!(find(0x0028, 0x0004).unwrap(), b"RGB ", "CS pads with SPACE");
 
