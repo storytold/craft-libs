@@ -152,6 +152,16 @@ pub enum TrackKind {
     Data,
 }
 
+impl TrackKind {
+    fn matches_element(self, number: [u8; 4]) -> bool {
+        match self {
+            Self::Picture => matches!(number[0], 0x05 | 0x15),
+            Self::Sound => matches!(number[0], 0x06 | 0x16),
+            Self::Data => matches!(number[0], 0x07 | 0x17),
+        }
+    }
+}
+
 /// Frame wrapping (one element per edit unit) or clip wrapping (one element for the whole clip).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wrapping {
@@ -822,7 +832,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
         // essence. An unmatched material reference cannot supply its timing or identity.
         let mut candidate_numbers = HashMap::<u32, usize>::new();
         for pkg in &sources {
-            if pkg.reference(tag::SOURCE_PACKAGE_DESCRIPTOR).is_none() || (partial && umid_of(pkg, tag::PACKAGE_UID).is_some()) {
+            if pkg.reference(tag::SOURCE_PACKAGE_DESCRIPTOR).is_none() {
                 continue;
             }
             // A package that names one track many times would otherwise build (and retain) its sample tables per mention.
@@ -835,6 +845,18 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                 }
                 if let Some(mut tr) = file_track(pkg, None, Some(id), 0, None, None) {
                     if partial {
+                        if !tr.kind.matches_element(tr.track_number.to_be_bytes()) {
+                            continue;
+                        }
+                        // Only a local EssenceContainerData link can establish a package ID
+                        // independently of the broken material reference.
+                        if let Some(uid) = tr.file_package_uid {
+                            match sids.get(&uid) {
+                                Some((0, _)) => continue, // External essence.
+                                None => tr.file_package_uid = None,
+                                Some(_) => {}
+                            }
+                        }
                         tr.require_unclaimed_element = true;
                         *candidate_numbers.entry(tr.track_number).or_default() += 1;
                     }
@@ -901,12 +923,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
         if key4.is_none() {
             // Track number missing or not matching (some OP-Atom writers): the only unclaimed
             // element stream of the right kind.
-            let kind_items: &[u8] = match r.kind {
-                TrackKind::Picture => &[0x05, 0x15],
-                TrackKind::Sound => &[0x06, 0x16],
-                TrackKind::Data => &[0x07, 0x17],
-            };
-            let cands: Vec<[u8; 4]> = all_numbers.iter().filter(|n| kind_items.contains(&n[0]) && !claimed.contains(n)).copied().collect();
+            let cands: Vec<[u8; 4]> = all_numbers.iter().filter(|n| r.kind.matches_element(**n) && !claimed.contains(n)).copied().collect();
             if cands.len() == 1 {
                 key4 = Some(cands[0]);
             }
@@ -915,8 +932,17 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
             warnings.push(format!("no essence in this file for track {} (number {:08x})", r.track_id, r.track_number));
             continue;
         };
+        let mut elements: Vec<Element> = w.elements.iter().filter(|e| e.key.0[12..16] == key4).copied().collect();
+        if r.require_unclaimed_element && r.body_sid != 0 {
+            elements.retain(|e| {
+                let end = w.partitions.partition_point(|p| p.offset < e.value_offset);
+                w.partitions[..end].last().is_some_and(|p| p.body_sid == r.body_sid)
+            });
+            if elements.is_empty() {
+                continue;
+            }
+        }
         claimed.push(key4);
-        let elements: Vec<Element> = w.elements.iter().filter(|e| e.key.0[12..16] == key4).copied().collect();
         tracks.push(build_track(src, r, &elements, key4, &w.index, &mut warnings)?);
     }
     if tracks.is_empty() {

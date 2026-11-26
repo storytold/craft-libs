@@ -521,3 +521,51 @@ fn an_unidentified_package_cannot_guess_a_stream_or_claim_the_resolved_picture()
         assert_eq!(file.tracks[0].file_package_uid, Some(umid(3)));
     }
 }
+
+#[test]
+fn partial_recovery_keeps_local_sound_when_its_material_reference_is_empty() {
+    let uid = umid(2);
+    let mut bytes = build_with_packages(2, prores_like, &[], &[], Some(&uid), true);
+    let original = source_clip(32, SOUND_DEF, 2, uid, 3);
+    let at = bytes.windows(original.len()).position(|v| v == original).unwrap();
+    bytes[at..at + original.len()].copy_from_slice(&source_clip(32, SOUND_DEF, 2, [0; 32], 3));
+    let file = open(&bytes).unwrap();
+    let sound = file.track_of_kind(TrackKind::Sound).expect("stored sound is independently readable");
+    assert_eq!(file.tracks[sound].file_package_uid, Some(uid));
+    assert_eq!(file.tracks[sound].material_duration, None);
+    assert!(file.read_pcm(&bytes, sound, 0, 8).unwrap()[0][7] > 0.0);
+    assert_eq!(file.tracks.len(), 2);
+
+    // Even an exact track number cannot identify an external or different body.
+    let mut ecd = LocalSet::new(5);
+    ecd.p(0x2701, &uid).p(0x3F07, &1u32.to_be_bytes()).p(0x3F06, &2u32.to_be_bytes());
+    let at = bytes.windows(ecd.0.len()).position(|v| v == ecd.0).unwrap();
+    for sid in [0u32, 2] {
+        let mut other = LocalSet::new(5);
+        other.p(0x2701, &uid).p(0x3F07, &sid.to_be_bytes()).p(0x3F06, &2u32.to_be_bytes());
+        bytes[at..at + other.0.len()].copy_from_slice(&other.0);
+        assert!(open(&bytes).unwrap().track_of_kind(TrackKind::Sound).is_none());
+    }
+    // Missing container linkage still permits local reading, without a relink identity.
+    let mut unrelated = LocalSet::new(5);
+    unrelated.p(0x2701, &umid(99)).p(0x3F07, &1u32.to_be_bytes()).p(0x3F06, &2u32.to_be_bytes());
+    bytes[at..at + unrelated.0.len()].copy_from_slice(&unrelated.0);
+    let file = open(&bytes).unwrap();
+    assert_eq!(file.tracks[file.track_of_kind(TrackKind::Sound).unwrap()].file_package_uid, None);
+}
+
+#[test]
+fn partial_recovery_refuses_sound_metadata_that_points_at_an_unclaimed_picture_element() {
+    let mut bytes = build_with_packages(2, prores_like, &[], &[], None, true);
+    let original = track(14, 3, 0x1601_0300, 24);
+    let at = bytes.windows(original.len()).position(|v| v == original).unwrap();
+    bytes[at..at + original.len()].copy_from_slice(&track(14, 3, 0x1501_0501, 24));
+    let mut extra_key = PIC_KEY;
+    extra_key[15] = 1;
+    for at in bytes.windows(16).enumerate().filter_map(|(i, k)| (k == SND_KEY).then_some(i)).collect::<Vec<_>>() {
+        bytes[at..at + 16].copy_from_slice(&extra_key);
+    }
+    let file = open(&bytes).unwrap();
+    assert!(file.track_of_kind(TrackKind::Picture).is_some());
+    assert!(file.track_of_kind(TrackKind::Sound).is_none());
+}
