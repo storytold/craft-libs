@@ -18,6 +18,7 @@ pub(crate) mod popup_surface;
 
 pub(crate) mod rails;
 pub(crate) mod sections;
+pub(crate) mod story_shapes;
 
 craft_ui::registry!();
 

@@ -5,7 +5,7 @@ use crate::contract::{
     Animate as _, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Role, Styled as _, spec,
 };
 use crate::primitives::{Glyph, PaintShape, StrokeWidth};
-use crate::style::{ComponentStyle, IconLook, StyleCx, UiTokens, ink_color, rgba_color};
+use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, UiTokens, ink_color, rgba_color};
 use craft_behavior::{Metrics, Sense};
 use craft_i18n::Direction;
 use egui::emath::GuiRounding as _;
@@ -190,6 +190,8 @@ impl Glyph for DisclosureGlyph {
 pub struct DisclosureStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The triangle.
     #[style(icon)]
     glyph: IconLook,
@@ -223,7 +225,7 @@ impl Component for Disclosure<'_> {
 
     fn style(cx: &StyleCx<'_>, _: DisclosureStyleKey) -> DisclosureStyle {
         let side = cx.control().icon;
-        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), glyph: IconLook::new(side, cx.quiet_ink()) }
+        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), focus: cx.focus_look(), glyph: IconLook::new(side, cx.quiet_ink()) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

@@ -1,6 +1,6 @@
 //! Stories of `Select`.
 
-use super::Select;
+use super::{Select, SelectLook};
 use crate::contract::LabelScheme;
 use crate::contract::{Bind, Entry, Props, Role, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::form::{Field, FieldGroup};
@@ -86,6 +86,13 @@ fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn select_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
     Select::new("Blend mode", data.bind("first", 0u8), &entries).show(ui).into()
+}
+
+/// A filled select (`SelectLook::Filled`, VectorCraft's status bar): `surface.control` with no edge until it has focus.
+#[story(Select<'static, u8>, covers = [], drive = Drive::Never)]
+fn select_filled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = modes();
+    Select::new("Blend mode", data.bind("filled", 0u8), &entries).look(SelectLook::Filled).show(ui).into()
 }
 
 #[story(Select<'static, u8>, covers = [Mixed], drive = Drive::Never)]

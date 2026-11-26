@@ -8,18 +8,19 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowContainer as _};
+use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowCollection as _, ShowContainer as _};
 use crate::display::Text;
 use crate::layout::GridFit;
 use crate::layout_components::Grid;
 use crate::layout_components::Row;
+use crate::list::{List, ListRow};
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
 use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, off_foot, same_column};
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
-use craft_behavior::ColumnWidth;
+use craft_behavior::{ColumnWidth, keyed};
 use craft_quit::{CloseAnswer, CloseScope};
 use egui::{Key, Modifiers, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -285,7 +286,42 @@ fn a_dialog_opens_on_its_first_field_else_its_default_button() {
     };
     assert_eq!(focus_on_open(true, true), Some("Name"), "the first field takes the focus though a check box comes first");
     assert_eq!(focus_on_open(false, true), Some("OK"), "without a field the default button takes it");
-    assert_eq!(focus_on_open(false, false), None, "without either nothing takes it");
+    assert_eq!(focus_on_open(false, false), Some("Snap"), "without either the first control takes it");
+}
+
+/// A dialog that holds a list and two buttons, with no field and no default button, opens with a control inside it
+/// focused, and Escape gives the focus back to the button that opened it.
+#[trial]
+fn a_dialog_with_no_field_or_default_takes_the_focus_and_escape_returns_it_to_the_opener() {
+    const ROWS: [&str; 2] = ["First", "Second"];
+    let open = Rc::new(Cell::new(false));
+    let opener = Rc::new(Cell::new(egui::Id::NULL));
+    let (seen, shown) = (Rc::clone(&open), Rc::clone(&opener));
+    let mut fixture = Fixture::new(move |ui| {
+        shown.set(Button::new("Open Presets").show(ui).response.id);
+        let mut now = seen.get();
+        Dialog::new("Presets").opened(Bind::bound(&mut now)).show(ui, |ui, _| {
+            List::new("Presets list").natural_height(true).show_items(ui, &keyed(&ROWS, |row| *row), &mut |key, _| ListRow::new(key.to_string()));
+            Row::new().show(ui, |ui, _| {
+                Button::new("New").show(ui);
+                Button::new("Delete").show(ui);
+            });
+        });
+        seen.set(now);
+    });
+    fixture.settle();
+    crate::runtime::focus::request(fixture.ctx(), crate::runtime::focus::FocusTarget::Id(opener.get()));
+    fixture.settle();
+    assert!(crate::testing::focus::is_focused(fixture.ctx(), opener.get()), "the opener has the focus");
+    open.set(true);
+    fixture.settle();
+    let focused = crate::testing::access::focused_key(fixture.tree());
+    let inside = ["Presets list", "First", "Second", "New", "Delete"];
+    let on = inside.into_iter().find(|label| fixture.by_label(label).is_some_and(|target| target.node == focused));
+    assert!(on.is_some(), "a control inside the dialog has the focus");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(!open.get(), "Escape closed the dialog");
+    assert!(crate::testing::focus::is_focused(fixture.ctx(), opener.get()), "the focus is back on the opener");
 }
 
 /// A dialog host showing `dialog` in a fixture, once the dialog settled.

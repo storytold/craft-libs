@@ -172,8 +172,9 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// The floating window holding the panel takes over the held primary press in this pass, with the pointer at the
     /// grab point inside the window ([`FloatingGroup::continue_move`]): the window follows the pointer and docks where it
     /// would dock on release. A request of the pass: a host that floats a panel from a rail's `torn_off` keeps it for
-    /// the one pass after, when the window shows. Without a held press, or when no window holds the panel, it does
-    /// nothing.
+    /// the one pass after, when the window shows. Where the dock opens OS windows (`DockConfig::native_windows`), the
+    /// window shows in the app window until the press ends, and then opens its OS window where it was released. Without
+    /// a held press, when no window holds the panel, or when the window has shown in an OS window, it does nothing.
     #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
     /// Moves key focus to the group that shows the panel, as a press on the group's body does, and picks its tab, as a
@@ -315,9 +316,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
 }
 
 /// The sizes a dock area lays out with: the dock's style, with its docked columns as cards when `config` shows them
-/// ([`DockConfig::column_cards`]).
+/// ([`DockConfig::column_cards`]) and no gap beside a flush dock ([`DockConfig::flush_docks`]).
 fn area_sizes(mut sizes: DockSizes, config: &DockConfig) -> DockSizes {
     sizes.column_cards = config.column_cards;
+    if config.flush_docks {
+        sizes.dock_gap = 0.0;
+    }
     sizes
 }
 
@@ -863,7 +867,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let limits = |panel: &P| scene.spec(panel).limits;
     let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
     let stripless = |panel: &P| scene.spec(panel).canvas;
-    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless);
+    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(scene.sizes.dock_gap);
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
     let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
     let area = SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
@@ -1332,6 +1336,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         };
         let tabs = output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(kind_of(*key)?, *rect, *node)));
         self.report.sources.extend(tabs);
+        if let Some((rect, node)) = output.overflow {
+            self.report.sources.push(DockSource::new(SourceKind::Overflow(anchor.clone()), rect, node));
+        }
         if let Some((rect, node)) = output.grip {
             self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));
         }
@@ -1430,7 +1437,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
             // tall as its content.
             self.report.placed.push((first.clone(), cell));
-            let card = scene.sizes.card_place(at);
+            let card = scene.sizes.card_place(at, column, &|panel: &P| scene.spec(panel));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone(), card };
             self.column(ui, body, column, at);
         }
@@ -1544,7 +1551,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .bar(bar)
                     .within(within)
                     .auto_collapse(scene.auto_collapse)
-                    .mode(mode);
+                    .mode(mode)
+                    .tab_look(scene.config.tab_look)
+                    .framed(scene.config.flush_docks && !in_window);
                 let shown = match card {
                     Some(place) => shown.card(place),
                     None => shown,
@@ -1603,7 +1612,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
-                .auto_collapse(scene.auto_collapse);
+                .auto_collapse(scene.auto_collapse)
+                .tab_look(scene.config.tab_look);
             let shown = match card {
                 Some(place) => shown.card(place),
                 None => shown,
@@ -1716,7 +1726,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
-            let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
+            let continued = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)).map(|(_, grab)| grab);
+            let opening = native::opening(&ctx, scene.config, window, &specs, group_id, continued.is_some());
             // An OS window lays out at its own monitor's scale, which sizes its chrome; one in the app window at the
             // main window's.
             let scale = opening
@@ -1782,7 +1793,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if scene.focus.is_some_and(|focus| window.panels().any(|held| held == focus)) {
                 group = group.raise();
             }
-            if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
+            if let Some(grab) = continued {
                 group = group.continue_move(grab);
             }
             if scene.raise.is_some_and(|raised| window.panels().any(|held| held == raised)) {
@@ -1818,6 +1829,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             });
             self.dock = area_dock;
             let output = shown.output;
+            native::waited(&ctx, &opening, &output);
             // The window's grips, then everything it drew, in the OS window it shows in, if it has one.
             let grips = output.grip.map(|(rect, node)| DockSource::new(SourceKind::WindowGrip(anchor.clone()), rect, node));
             let resize =

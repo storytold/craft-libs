@@ -507,6 +507,82 @@ fn hosted_fields_take_their_own_height_up_to_the_row() {
     }
 }
 
+/// A hosted component with no node of its own that shows a button from `paint`, beside a side label when `labelled`.
+#[derive(craft_ui::contract::Component)]
+struct Cells {
+    #[common]
+    common: craft_ui::contract::Common,
+    button: String,
+    labelled: bool,
+}
+
+impl craft_ui::contract::Component for Cells {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::None;
+    const SHOWS_LABEL: bool = false;
+    type Style = super::label::kit::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: CellsStyleKey) -> super::label::kit::PlainStyle {
+        super::label::kit::PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(60.0, 20.0)
+    }
+
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut craft_ui::contract::PaintUi<'_>, cx: &craft_ui::contract::Cx<'_, Self>) {
+        let text = std::mem::take(&mut self.button);
+        let label = format!("Side of {text}");
+        let button = craft_ui::buttons::Button::new(text);
+        if self.labelled {
+            let side = craft_ui::contract::SideLabel::new().role(craft_ui::contract::FieldLabelRole::Describes);
+            ui.labelled("button", cx.content_rect, label.into(), side, button);
+        } else {
+            ui.child("button", cx.content_rect, button);
+        }
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// A button that a row's hosted component without a node shows from its `paint`, alone or with a side label, sits
+/// under that row's node with the label, as a hosted button does.
+#[trial]
+fn a_button_painted_by_a_hosted_component_without_a_node_sits_under_its_row() {
+    use craft_ui::buttons::Button;
+    let row = |key: usize| {
+        let cells = |button: String, labelled| Cells { common: craft_ui::contract::Common::new(), button, labelled };
+        ListRow::new(NAMES[key])
+            .trailing_field(Button::new(format!("Plain {key}")), |_| {})
+            .trailing_field(cells(format!("Painted {key}"), false), |_| {})
+            .trailing_field(cells(format!("Labelled {key}"), true), |_| {})
+    };
+    let (fixture, _) = rows_rig(Vec2::new(800.0, 200.0), row);
+    let tree = fixture.tree();
+    let above = |name: &str| {
+        let mut nodes = Vec::new();
+        let mut at = fixture.by_label(name).unwrap_or_else(|| panic!("{name} shows")).node;
+        while let Some(parent) = tree.parent_of_key(at) {
+            nodes.push(parent);
+            at = parent;
+        }
+        nodes
+    };
+    for (key, row) in NAMES.iter().enumerate() {
+        let row = fixture.by_label(row).expect("the row shows").node;
+        for name in [format!("Plain {key}"), format!("Painted {key}"), format!("Labelled {key}"), format!("Side of Labelled {key}")] {
+            let nodes = above(&name);
+            assert!(nodes.contains(&row), "{name} is under row {key}: {nodes:?}");
+        }
+    }
+}
+
 /// A list sized to its content makes room for each row's optional item and shows its label whole, whether the label
 /// is shorter or longer than its least width.
 #[trial]
@@ -1704,6 +1780,33 @@ fn a_filter_matches_any_of_a_rows_texts_and_keeps_the_ancestors_of_a_match() {
     }
 }
 
+/// A group row's triangle is named after the row as a screen reader hears it: a row drawn "March" whose accessible
+/// name is "March 2025" has the triangle "Expand March 2025", so two rows with one caption are told apart. A row
+/// without an accessible name keeps naming its triangle after its label.
+#[trial]
+fn a_triangle_is_named_after_the_rows_accessible_name() {
+    const MONTHS: [(&str, Option<&str>); 3] = [("March", Some("March 2025")), ("March", Some("March 2026")), ("April", None)];
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let list = List::new("Months").tree(true);
+        let _ = list.show_items(ui, &source, &mut |key, _| {
+            let (title, name) = MONTHS[*key];
+            let row = ListRow::new(title).depth(0).group(false);
+            match name {
+                Some(name) => row.accessible_name(name),
+                None => row,
+            }
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    assert!(fixture.by_label("Expand March 2025").is_some(), "the first March's triangle names its year");
+    assert!(fixture.by_label("Expand March 2026").is_some(), "the second March's triangle names its year");
+    assert!(fixture.by_label("Expand March").is_none(), "no triangle is named by the drawn caption alone");
+    assert!(fixture.by_label("Expand April").is_some(), "a row without an accessible name names its triangle after its label");
+}
+
 /// A row that a rename request names stays listed while its rename runs, though the query excludes it, and goes when
 /// the rename ends.
 #[trial]
@@ -1899,4 +2002,28 @@ fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
     assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), segment.node, "the first row's segment took the focus");
     fixture.key(Key::PageDown, Modifiers::NONE).settle();
     assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
+}
+
+/// The height of a thumbnail row and how far a nested row's label starts after a top-level one's, under `rows`.
+fn thumb_row_geometry(rows: craft_ui::list::ThumbRows) -> (f32, f32) {
+    use craft_ui::list::ThumbSize;
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]).depth(*key).thumb(ThumbSize::Medium, |_, _| {}));
+    });
+    fixture.root_value(rows).room(Vec2::new(300.0, 200.0)).settle();
+    let label_x = |name: &str| fixture.texts().iter().find(|text| text.text == name).expect("the row paints its label").rect.left();
+    let height = fixture.by_label(NAMES[0]).expect("the top-level row").rect.height();
+    (height, label_x(NAMES[1]) - label_x(NAMES[0]))
+}
+
+/// A list under `ThumbRows::Tight` (VectorCraft's Layers panel) stands its thumbnail rows lower, the thumbnail with a
+/// tight gap and no control-and-padding floor, and indents a level by less than an icon slot.
+#[trial]
+fn tight_thumbnail_rows_stand_lower_and_indent_less() {
+    use craft_ui::list::ThumbRows;
+    let ((roomy_height, roomy_indent), (tight_height, tight_indent)) = (thumb_row_geometry(ThumbRows::Roomy), thumb_row_geometry(ThumbRows::Tight));
+    assert!(tight_height < roomy_height, "the tight row ({tight_height}) is lower than the roomy one ({roomy_height})");
+    assert!(0.0 < tight_indent && tight_indent < roomy_indent, "a level indents less ({tight_indent}) than an icon slot ({roomy_indent})");
 }
