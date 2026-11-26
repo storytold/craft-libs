@@ -445,6 +445,11 @@ fn a_host_density_draws_that_many_guide_curves_in_every_cell_each_way() {
         assert_eq!(drawn_guides(&one, density(lines)).len(), want, "{lines} curves each way in the single cell");
     }
     assert_eq!(drawn_guides(&cut, density(2)).len(), 4 * 2 * 2, "two curves each way in every one of four cells");
+    // Asking for no lines at all still leaves one each way in every cell, and the boundaries whole.
+    assert_eq!(drawn_guides(&one, density(0)), drawn_guides(&one, density(1)), "zero asks for the same lines as one");
+    assert_eq!(drawn_guides(&cut, density(0)).len(), 4 * 2, "one curve each way in every one of four cells");
+    let zero = guide_shapes(one.clone(), density(0));
+    assert!(guide_shapes(one.clone(), hidden()).iter().all(|edge| zero.contains(edge)), "the boundaries are the same lines as ever");
     // Asking for more lines than the framework will draw still paints a mesh, and its boundaries.
     let wild = WarpGuides { density: Some(10_000), ..WarpGuides::default() };
     assert_eq!(guide_shapes(cut.clone(), Some(wild)).len() - edges(&cut), 2 * GUIDE_LINES_MAX * 4, "the work stays bounded");
@@ -494,8 +499,19 @@ fn a_host_colour_and_share_paint_the_guide_curves_alone() {
         "at a quarter of the alpha: {:?}",
         thinned.iter().map(|(_, color, _)| *color).collect::<Vec<_>>()
     );
-    let kept = guide_shapes(one, Some(shared));
+    let kept = guide_shapes(one.clone(), Some(shared));
     assert!(kept.iter().filter(|path| !thinned.contains(path)).all(|(_, color, _)| *color == edge_color), "the boundaries are untouched");
+    // A share of nothing leaves the guide curves drawn with no alpha, and the boundaries whole.
+    let bare = WarpGuides { share: 0.0, ..WarpGuides::default() };
+    let faded = drawn_guides(&one, Some(bare));
+    assert_eq!(faded.len(), 4, "the same four curves");
+    assert!(
+        faded.iter().all(|(_, color, _)| color.a() == 0),
+        "at no alpha at all: {:?}",
+        faded.iter().map(|(_, color, _)| *color).collect::<Vec<_>>()
+    );
+    let after = guide_shapes(one, Some(bare));
+    assert!(after.iter().filter(|path| !faded.contains(path)).all(|(_, color, _)| *color == edge_color), "the boundaries keep their colour whole");
 }
 
 #[trial]
