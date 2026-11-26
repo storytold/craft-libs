@@ -24,7 +24,7 @@ that codec crates use to describe a file and configure a decoder.
 | `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
 | `vmd` | `craft_media::vmd` | none |
-| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
+| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource`, `craft_media::interleave` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
@@ -1017,6 +1017,39 @@ always built, so a crate that uses only `bitstream` can name it too. `isobmff::B
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.
+
+## Interleaving live streams
+
+`craft_media::interleave::Interleaver` (always built) merges the packets of several live streams,
+such as a video and an audio encoder, into the time order that `matroska::MkvWriter` and
+`mpegts::mux` take. Each stream's packets are pushed with a non-decreasing `order` (a time shared
+by every stream, for example the decoding time in nanoseconds), and `pop` releases them sorted by
+`(order, stream)`. A packet waits only while a stream that has not ended could still send one that
+sorts before it.
+
+```rust
+use craft_media::interleave::{InterleaveError, Interleaver};
+use std::num::NonZeroUsize;
+
+const MAX_HELD: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+let mut il = Interleaver::new(2, 2_000_000_000).with_max_held(MAX_HELD); // 2 s of lag
+il.push(0, video_dts_ns, video_packet)?;
+il.push(1, audio_dts_ns, audio_packet)?;
+loop {
+    match il.pop() {
+        Ok(Some(p)) => { /* write p.value to stream p.stream */ }
+        Ok(None) => break,                             // wait for more packets
+        Err(InterleaveError::Behind(stream)) => { /* that encoder is too slow: stop */ break }
+        Err(e) => return Err(e.into()),
+    }
+}
+il.end_all(); // at the end, pop releases every held packet in order
+```
+
+When the held packets span more than the lag limit, or reach the packet limit, while a stream has
+nothing queued, `pop` returns `Behind` with that stream and keeps every packet. `push` refuses a
+packet beyond the packet limit (`Full`), on an ended or unknown stream, or with an `order` earlier
+than the stream's previous packet.
 
 ## Tests
 
