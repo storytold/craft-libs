@@ -118,8 +118,7 @@ impl UserWords {
 impl Dictionary {
     /// The bundled US English dictionary (SCOWL 50), decoded once.
     // pc: crates/text/src/spell.rs:39 `english`. The asset is
-    // `assets/spell/en-us-scowl-50.txt.deflate` (raw deflate, as `hyphen::Dictionary`'s data;
-    // PhotoCraft ships gzip), decoded with `miniz_oxide::inflate::decompress_to_vec`.
+    // `assets/spell/en-us-scowl-50.txt.deflate` (raw deflate; PhotoCraft ships gzip), decoded with `miniz_oxide::inflate::decompress_to_vec`.
     pub fn english() -> &'static Dictionary {
         static D: OnceLock<Dictionary> = OnceLock::new();
         D.get_or_init(|| {
