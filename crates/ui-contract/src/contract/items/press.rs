@@ -166,7 +166,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 }
             } else {
                 if primary && start.clicks == 2 {
-                    self.events.push(CollectionEvent::EmptyActivated { at: start.origin }); // P3(graph-w2): ge.C9
+                    self.events.push(CollectionEvent::EmptyActivated { at: start.origin });
                 }
                 if primary
                     && props.allow_empty

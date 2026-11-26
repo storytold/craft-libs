@@ -675,6 +675,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         (rect, offset, rtl): (Rect, ScrollPos, bool),
         place: DropPlace,
         at: Pos2,
+        spot_side: f32,
     ) -> Option<(DropAt<C::Key>, DropMark)> {
         match place {
             DropPlace::Between if self.source.is_empty() => {
@@ -683,7 +684,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             DropPlace::Between => self
                 .spot(layout, rect, offset, rtl, None, at)
                 .map(|spot| (DropAt::Gap { key: Some(self.source.key(spot.over)), insert: spot.insert }, spot.mark)),
-            DropPlace::Spot => todo!("ge.C10"),
+            // A point means something only where items sit at points; a flow layout takes no `Spot` drop. No bound on
+            // `at`: zoomed out, the items' space reaches past `rect`, and the target lies only over the shown body.
+            DropPlace::Spot if !matches!(layout.nav(), NavShape::Spatial) => None,
+            DropPlace::Spot => {
+                let over = layout
+                    .hit(Self::logical(layout, rect, rtl, at), offset)
+                    .filter(|&over| self.source.enabled(over))
+                    .map(|over| self.source.key(over));
+                let mark = Rect::from_center_size(self.on_screen(at), Vec2::splat(spot_side));
+                Some((DropAt::Spot { over, at }, DropMark::Into(mark)))
+            }
             DropPlace::Onto => {
                 let over = (at.y >= rect.min.y).then(|| layout.hit(Self::logical(layout, rect, rtl, at), offset)).flatten()?;
                 if !self.source.enabled(over) {
@@ -714,6 +725,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool), own: bool) {
         let xf = self.xf;
         let (rect, _, rtl) = place;
+        let spot_side = cx.core.env.shared_tokens().size.handle.sm;
         let drops = comp.drops();
         for kind in drops {
             if own && !matches!(kind.place(), DropPlace::Onto) {
@@ -725,7 +737,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if matches!(kind.place(), DropPlace::Between) && onto_too() && self.over_middle(layout, place, point) {
                 continue;
             }
-            let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), point).filter(|(at, _)| kind.accepts(&*payload, at)) else {
+            let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), point, spot_side).filter(|(at, _)| kind.accepts(&*payload, at)) else {
                 continue;
             };
             if !own {
@@ -741,7 +753,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// Step 9: sweeps, row drags, drops and the free-layout move, from the collection's own press and the drag session.
+    /// The press of the part of the collection that holds the pointer's press, when the collection moves the selection
+    /// from it (`Collection::moves_from_part`). That press is the part's own, never the collection's: its phase drives
+    /// the move, its release commits it and its cancel cancels it.
+    fn moving_part_press(comp: &C, cx: &Cx<'_, C>) -> Option<PressPhase> {
+        let part = crate::runtime::pointer::pressed_part(&cx.core.ctx, cx.core.id).filter(|&part| comp.moves_from_part(part))?;
+        Some(cx.part_if_declared(part)?.press.phase).filter(PressPhase::is_press)
+    }
+
+    /// Step 9: sweeps, row drags, drops and the free-layout move, from the collection's own press (or the press of a
+    /// part it moves from) and the drag session.
     pub(super) fn drag_step(
         &mut self,
         comp: &C,
@@ -752,14 +773,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     ) {
         self.drags.pending = None;
         let free = matches!(layout.nav(), NavShape::Spatial);
-        let phase = cx.core.press.phase;
-        if phase.is_press() && !matches!(phase, PressPhase::Cancel { .. }) {
+        let part_phase = if free { Self::moving_part_press(comp, cx) } else { None };
+        let from_part = part_phase.is_some();
+        let phase = part_phase.unwrap_or(cx.core.press.phase);
+        if !from_part && phase.is_press() && !matches!(phase, PressPhase::Cancel { .. }) {
             self.sweep_to(cx, layout, Placement { rect, offset, rtl }, phase);
         }
         // The pointer comes in screen space; the rows and a move's offset are in the rows' own space.
         let xf = self.xf;
         let layer = |point: Pos2| xf.map_or(point, |map| map.to_layer(point));
         match phase {
+            // A sweep opens only from the collection's own press, so none runs beside a part's move.
+            PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary && from_part => {
+                self.free_move(cx, layer(start.origin), layer(pos));
+            }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                 let origin = layer(start.origin);
                 let hit = (origin.y >= rect.min.y)

@@ -59,7 +59,9 @@ pub(super) fn record_lead(ctx: &Context, collection: Id, at: Option<usize>) {
     crate::runtime::memory::adopt::<LeadFact>(ctx, collection, slot);
 }
 
-/// The position of the lead of `collection` after its last item step, `None` while it has none.
+/// The position in display order of the lead of collection `collection` after its last item step, `None` while it has
+/// none. It reads what the collection recorded, so code outside a pass (an inspector, an automation query) reads it
+/// too.
 pub fn lead_position(ctx: &Context, collection: Id) -> Option<usize> {
     store::peek_clone::<LeadFact>(ctx, lead_slot(collection)).and_then(|fact| fact.0)
 }

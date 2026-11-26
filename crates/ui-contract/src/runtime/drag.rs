@@ -267,6 +267,8 @@ struct Session {
     hovering_next: Vec<OsFile>,
     /// The root frame the session started in, the only one in which [`amend`] changes its payload.
     began: u64,
+    /// The last pointer position the source viewport saw, where a release outside that window is placed.
+    last_pointer: Option<Pos2>,
 }
 
 /// The mark of the target that would take a drop, with the viewport that registered it and the tokens of the region
@@ -278,13 +280,16 @@ struct ShownMark {
     tokens: Arc<UiTokens>,
 }
 
-/// A drop a target took: the source's `drag_ended` reads it in the next frame.
+/// How a session ended at a release, a drop a target took or a release no target took: the source's `drag_ended`
+/// reads it in the next frame. A cancel records none.
 struct Ended {
     source: Id,
-    payload: TypeId,
-    /// The payload of that type the session carried.
-    value: Option<Arc<dyn Any + Send + Sync>>,
-    op: DropOperation,
+    /// The payloads a reader of their type sees: the one the target took, or every payload of a drag nobody took.
+    values: Vec<Arc<dyn Any + Send + Sync>>,
+    /// `None` when no target took the drop.
+    op: Option<DropOperation>,
+    /// The release point, in screen space.
+    at: Pos2,
     frame: u64,
 }
 
@@ -374,6 +379,7 @@ pub fn start(
                 dropped_at: None,
                 hovering_next: Vec::new(),
                 began,
+                last_pointer: None,
             });
             board.ended = None;
             board.started += 1;
@@ -581,6 +587,7 @@ fn os_session(files: Vec<OsFile>, viewport: ViewportId, frame: u64) -> Session {
         dropped_at: None,
         hovering_next: Vec::new(),
         began: frame,
+        last_pointer: None,
     }
 }
 
@@ -746,14 +753,22 @@ pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperatio
         return false;
     }
     let frame = pass::root_frame_nr(ctx);
+    let viewport = pass::current_viewport(ctx);
+    let source = source_viewport(ctx);
+    // A drop taken in another window lies in that window's space; the source reads it in its own.
+    let pointer = pointer::frame_raw(ctx).pos.map(|pos| match source {
+        Some(source) if source != viewport => WindowHost::of(ctx).offset_between(viewport, source).map_or(pos, |by| pos + by),
+        _ => pos,
+    });
     board(ctx, |board| {
         let Some(session) = board.session.as_mut() else { return false };
         if session.taken || board.ended.as_ref().is_some_and(|ended| ended.frame == frame) {
             return false;
         }
         session.taken = true;
-        let value = std::iter::once(&session.payload).chain(&session.also).find(|value| (***value).type_id() == payload).cloned();
-        board.ended = Some(Ended { source: session.source, payload, value, op, frame });
+        let values = std::iter::once(&session.payload).chain(&session.also).filter(|value| (***value).type_id() == payload).cloned().collect();
+        let at = session.dropped_at.or(pointer).unwrap_or_default();
+        board.ended = Some(Ended { source: session.source, values, op: Some(op), at, frame });
         true
     })
 }
@@ -828,27 +843,14 @@ impl<P: 'static, T: DropTarget<P>> DropTarget<dyn Any + Send + Sync> for Typed<'
     }
 }
 
-/// The operation of the drop of `source`'s payload of type `P` that the previous frame took.
-pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperation> {
+/// How the drag of `source`'s payload of type `P` ended at a release in the previous frame: the operation of the drop
+/// (`None` when no target took it), the release point in screen space and the payload. `None` after a cancel.
+pub(crate) fn ended<P: Clone + 'static>(ctx: &Context, source: Id) -> Option<(Option<DropOperation>, Pos2, P)> {
     let frame = pass::root_frame_nr(ctx);
     board(ctx, |board| {
-        board
-            .ended
-            .as_ref()
-            .filter(|ended| ended.source == source && ended.payload == TypeId::of::<P>() && ended.frame + 1 == frame)
-            .map(|ended| ended.op)
-    })
-}
-
-/// The payload of the drop of `source`'s payload of type `P` that the previous frame took.
-pub(crate) fn ended_payload<P: Clone + 'static>(ctx: &Context, source: Id) -> Option<P> {
-    let frame = pass::root_frame_nr(ctx);
-    board(ctx, |board| {
-        board
-            .ended
-            .as_ref()
-            .filter(|ended| ended.source == source && ended.payload == TypeId::of::<P>() && ended.frame + 1 == frame)
-            .and_then(|ended| ended.value.as_ref()?.downcast_ref::<P>().cloned())
+        let ended = board.ended.as_ref().filter(|ended| ended.source == source && ended.frame + 1 == frame)?;
+        let payload = ended.values.iter().find_map(|value| value.downcast_ref::<P>().cloned())?;
+        Some((ended.op, ended.at, payload))
     })
 }
 
@@ -903,11 +905,21 @@ pub(crate) fn end_pass(ctx: &Context) {
     }
     let elsewhere = is_source && held_elsewhere(ctx);
     let foreign_target = is_source && !held && (elsewhere || foreign_winner(ctx, viewport));
+    let release = pointer::frame_raw(ctx).pos;
     let running = board(ctx, |board| {
         if let Some(session) = &mut board.session {
+            if is_source {
+                session.last_pointer = release.or(session.last_pointer);
+            }
             let expired = session.released.is_some_and(|released| frame > released + 1);
             let ended_here = is_source && !held && session.released.is_none();
             if expired || (ended_here && !foreign_target) {
+                // A release no target took: the source reads it as a drag that ended where it was let go.
+                if !session.taken && !session.os {
+                    let values = std::iter::once(&session.payload).chain(&session.also).cloned().collect();
+                    board.ended =
+                        Some(Ended { source: session.source, values, op: None, at: release.or(session.last_pointer).unwrap_or_default(), frame });
+                }
                 let next = std::mem::take(&mut session.hovering_next);
                 board.session = (!next.is_empty()).then(|| os_session(next, viewport, frame));
                 board.started += u64::from(board.session.is_some());

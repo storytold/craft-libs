@@ -1274,7 +1274,8 @@ fn part_press_in(
     };
     let captured = won.is_some() && outcome.dragging && phase.is_drag();
     let context = aside_at(outcome, |hit| is_known && mine(hit));
-    let press = PressState::new(phase).mods(mods).sample(sample).captured(captured).context(context);
+    let dragged = won.is_some() && outcome.dragging && !matches!(phase, PressPhase::Release { .. });
+    let press = PressState::new(phase).mods(mods).sample(sample).captured(captured).context(context).with_dragged(dragged);
     PartPress { press, hovered, hover_pos }
 }
 
@@ -1297,7 +1298,8 @@ fn shape_press_in(outcome: &Outcome, mods: Mods, sample: Option<PointerSample>, 
     };
     let captured = won.is_some() && phase.is_drag();
     let context = aside_at(outcome, |hit| hit.owner == owner && hit.part.is_none());
-    PressState::new(phase).mods(mods).sample(sample).captured(captured).context(context)
+    let dragged = won.is_some() && outcome.dragging && !matches!(phase, PressPhase::Release { .. });
+    PressState::new(phase).mods(mods).sample(sample).captured(captured).context(context).with_dragged(dragged)
 }
 
 /// The cursor a hovered part of `decls` declares, if any: the sensing core's request for the cursor service.

@@ -10,7 +10,7 @@ use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::drag;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{gone, moved, press, release};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::windows::{FilesOver, Windows};
@@ -44,7 +44,8 @@ struct Payload(u32);
 #[derive(Default)]
 struct Seen {
     dropped: Vec<(u32, DropOperation)>,
-    ended: Vec<DropOperation>,
+    /// How each drag the chip started ended: the operation (`None` with no taker) and the release point.
+    ended: Vec<(Option<DropOperation>, Pos2)>,
     /// Drops a window-wide target took.
     caught: usize,
 }
@@ -80,8 +81,7 @@ impl Component for Chip<'_> {
             cx.start_drag(Payload(7), self.preview.clone());
         }
         if let Some(end) = cx.drag_ended::<Payload>() {
-            // P3(graph-w2): q118
-            self.seen.borrow_mut().ended.push(end.op.unwrap_or(DropOperation::Move));
+            self.seen.borrow_mut().ended.push((end.op, end.at));
         }
     }
 
@@ -234,7 +234,81 @@ fn a_drag_crosses_windows_and_the_target_in_the_other_window_takes_the_drop() {
     }
     let seen = seen.borrow();
     assert_eq!(seen.dropped, vec![(7, DropOperation::Move)], "the other window's target took the drop once");
-    assert_eq!(seen.ended, vec![DropOperation::Move], "the source saw the operation once");
+    let ops: Vec<_> = seen.ended.iter().map(|(op, _)| *op).collect();
+    assert_eq!(ops, vec![Some(DropOperation::Move)], "the source saw the operation once");
+}
+
+/// The chip and the slot, the chip dragged from its centre to `to` over four frames.
+fn drag_chip_to(frames: &mut Frames, to: Pos2, show: &mut impl FnMut(&mut Ui)) {
+    let from = CHIP.center();
+    frames.frame(vec![moved(from)], &mut *show);
+    frames.frame(vec![press(from)], &mut *show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(from + (to - from) * (step as f32 / 4.0))], &mut *show);
+    }
+}
+
+/// q118: a drag released where no target takes it ends with no operation, at the point the button went up, in the
+/// source's layer space; the source reads it once.
+#[trial]
+fn a_drag_released_with_no_taker_ends_at_its_release_point() {
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        Chip { common: Common::new(), seen: &seen, preview: DragPreview::None }.id_salt("chip").show_at(ui, CHIP);
+        Slot { common: Common::new(), seen: &seen, mark: DropMark::region(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+    };
+    let mut frames = Frames::new();
+    let open = Pos2::new(120.0, 200.0);
+    assert!(!SLOT.contains(open) && !CHIP.contains(open));
+    drag_chip_to(&mut frames, open, &mut show);
+    frames.frame(vec![release(open)], &mut show);
+    frames.idle(2, &mut show);
+    let seen = seen.borrow();
+    assert!(seen.dropped.is_empty(), "no target took the drop");
+    assert_eq!(seen.ended.len(), 1, "the source saw the end once: {:?}", seen.ended);
+    let (op, at) = seen.ended[0];
+    assert_eq!(op, None, "no taker means no operation");
+    assert!((at - open).length() < 0.5, "the end is where the button went up: {at:?}");
+}
+
+/// A drag let go with the pointer outside the window ends where the pointer last was in it, never at the origin.
+#[trial]
+fn a_drag_released_outside_the_window_ends_at_the_last_pointer_place() {
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        Chip { common: Common::new(), seen: &seen, preview: DragPreview::None }.id_salt("chip").show_at(ui, CHIP);
+        Slot { common: Common::new(), seen: &seen, mark: DropMark::region(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+    };
+    let mut frames = Frames::new();
+    let open = Pos2::new(120.0, 200.0);
+    drag_chip_to(&mut frames, open, &mut show);
+    frames.frame(vec![gone(), release(open)], &mut show);
+    frames.idle(2, &mut show);
+    let seen = seen.borrow();
+    assert_eq!(seen.ended.len(), 1, "the source saw the end once: {:?}", seen.ended);
+    let (op, at) = seen.ended[0];
+    assert_eq!(op, None);
+    assert!((at - open).length() < 0.5, "the end is the last place the pointer was in the window: {at:?}");
+}
+
+/// q118: a drag cancelled with Escape reports no end, and the release that follows reports none either.
+#[trial]
+fn a_cancelled_drag_reports_no_end() {
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        Chip { common: Common::new(), seen: &seen, preview: DragPreview::None }.id_salt("chip").show_at(ui, CHIP);
+        Slot { common: Common::new(), seen: &seen, mark: DropMark::region(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+    };
+    let mut frames = Frames::new();
+    drag_chip_to(&mut frames, SLOT.center(), &mut show);
+    frames.idle(1, &mut show);
+    assert!(drag::mark(&frames.ctx).is_some(), "the slot would take the drop");
+    frames.frame(vec![craft_ui::testing::input::key_press(egui::Key::Escape, egui::Modifiers::NONE)], &mut show);
+    frames.frame(vec![release(SLOT.center())], &mut show);
+    frames.idle(2, &mut show);
+    let seen = seen.borrow();
+    assert!(seen.dropped.is_empty(), "the cancelled drag drops nothing");
+    assert!(seen.ended.is_empty(), "a cancel is no end: {:?}", seen.ended);
 }
 
 /// Sb-9 (3): a drag out of an OS window whose window-wide target (a tab strip's tear-off) takes what no other target

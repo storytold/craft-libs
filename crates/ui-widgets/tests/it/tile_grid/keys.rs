@@ -162,13 +162,11 @@ fn a_double_click_on_the_background_activates_the_empty_space() {
         seen.borrow().collection.iter().filter(|event| of(event)).count()
     };
     fixture.click_at(empty_space).click_at(empty_space).idle(1);
-    // P3(graph-w2): ge.C9
     assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::EmptyActivated { .. })), 1, "the background's double click is reported once");
     assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::Activate(_))), 0, "no tile activates");
     fixture.advance(1.0).idle(1);
     fixture.click_at(tile.center()).click_at(tile.center()).idle(1);
     assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::Activate(1))), 1, "a double click on a tile activates it");
-    // P3(graph-w2): ge.C9
     assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::EmptyActivated { .. })), 1, "and is no background double click");
 }
 

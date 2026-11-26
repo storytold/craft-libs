@@ -17,7 +17,7 @@ use crate::runtime::egui::{pass, repaint, scale, stack, style};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
 use crate::style::{EnvKey, GlyphRole, Ink, SurfaceKind, UiTokens};
-use craft_behavior::{CanvasTransform, MotionMode};
+use craft_behavior::MotionMode;
 use craft_host::target::{Os, ShellInfo};
 use craft_host::{Host, Jobs};
 pub use craft_i18n::Direction;
@@ -136,10 +136,7 @@ pub struct Scoped {
     /// The roving group of the innermost body with `ContainerProps.roving`: components shown under it put
     /// their stops in it instead of the scope's Tab order.
     pub(crate) roving: Option<Id>,
-    /// From `ContainerProps.transform`.
-    pub transform: Option<CanvasTransform>,
     /// The product of the `ContainerProps::transform` scales around the scope, 1.0 outside them.
-    #[allow(dead_code)] // P3(graph-w2): ge.C12
     pub(crate) view_scale: f32,
     /// The `Grid` or spread `Row` body whose cursor places the children in flow.
     pub(crate) grid: Option<Id>,
@@ -441,7 +438,6 @@ impl Scoped {
         self.measure = None;
         self.arena = None;
         self.roving = None;
-        self.transform = None;
         self.view_scale = 1.0;
         self.scroll_owner = None;
         self.fallback_collection = None;
@@ -551,7 +547,7 @@ impl Scoped {
 
     /// The key of everything a memoized view shown in this scope inherits beyond `key` and `flow` (the style inputs and
     /// the flow facts, which its place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface,
-    /// wheel, directions), the containers around it (arena, roving group, transform, collection item and row, inside
+    /// wheel, directions), the containers around it (arena, roving group, view scale, collection item and row, inside
     /// label, footer slot, line length, scroll owner), the command chain, motion, the host's formats and date, and every
     /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then.
     pub(crate) fn scope_key(&self) -> u128 {
@@ -561,7 +557,8 @@ impl Scoped {
             key.feed_hash(&(self.enabled, self.read_only, self.size, self.glyphs, self.ink, self.surface, self.wheel));
             key.feed_hash(&(self.direction, self.text_direction, self.ids_stable));
             key.feed_hash(&(self.arena, self.roving, self.item, self.row, self.scroll_owner.map(|owner| (owner.id, owner.view))));
-            self.transform.map(|transform| (transform.scale, transform.offset)).key(&mut key);
+            // The scale only: a zoom re-measures, a pan moves the settled region, which the layer's transform places.
+            key.feed_hash(&self.view_scale.to_bits());
             self.footer_slot.map(|slot| (slot.owner, slot.size)).key(&mut key);
             self.measure.key(&mut key);
             // State a key cannot follow, rebuilt each pass: a view under it runs in every pass.
@@ -726,7 +723,6 @@ impl Env {
                 ids_stable: true,
                 arena: None,
                 roving: None,
-                transform: None,
                 view_scale: 1.0,
                 grid: None,
                 grid_top: false,
@@ -877,7 +873,7 @@ impl Env {
     }
 
     /// A child entry that changes layer-local fields only (arena, item, row, roving, grid, scroll owner,
-    /// transform, ink): the key carries over, because none of its inputs change.
+    /// view scale, ink): the key carries over, because none of its inputs change.
     pub(crate) fn derive_local(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);

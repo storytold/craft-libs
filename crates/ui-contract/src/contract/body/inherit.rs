@@ -134,7 +134,8 @@ impl BodyHooks<'_> {
         } else if props.label.is_some() {
             scoped.bracket = None;
         }
-        scoped.transform = props.transform;
+        // `scoped` starts as the enclosing scope's: nested zooms multiply.
+        scoped.view_scale *= props.transform.map_or(1.0, |transform| transform.scale);
         scoped.content_column = content_column;
         scoped.given_column = !content_column && matches!(props.layout, crate::layout::BodyLayout::Stack);
         scoped.row_room = None;

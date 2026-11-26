@@ -216,10 +216,9 @@ impl Pointer for CxCore<'_> {
     }
 
     fn drag_ended<P: Clone + Send + Sync + 'static>(&self) -> Option<DragEnd<P>> {
-        // P3(graph-w2): q118: the release point and the no-taker case are not recorded yet.
-        let op = drag::ended::<P>(&self.ctx, self.id)?;
-        let payload = drag::ended_payload::<P>(&self.ctx, self.id)?;
-        Some(DragEnd { op: Some(op), at: Pos2::ZERO, payload })
+        let (op, at, payload) = drag::ended::<P>(&self.ctx, self.id)?;
+        let at = areas::layer_map(&self.ctx, self.response.layer_id).map_or(at, |map| map.to_layer(at));
+        Some(DragEnd { op, at, payload })
     }
 
     fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>> {

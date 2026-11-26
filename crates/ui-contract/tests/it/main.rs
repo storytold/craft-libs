@@ -11,6 +11,7 @@ pub(crate) mod contract;
 pub(crate) mod drag;
 pub(crate) mod egui_surface;
 pub(crate) mod fonts;
+pub(crate) mod free_layout_selection;
 pub(crate) mod icon_ids;
 pub(crate) mod keys_consumed;
 pub(crate) mod layout;
@@ -23,6 +24,7 @@ pub(crate) mod story_command_subsets;
 pub(crate) mod style;
 pub(crate) mod text;
 pub(crate) mod textures;
+pub(crate) mod view_scale;
 
 craft_ui::registry!();
 

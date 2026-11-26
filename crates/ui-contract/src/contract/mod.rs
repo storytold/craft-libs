@@ -119,7 +119,7 @@ use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Flags, StyleCx, StyleKey};
 pub use craft_behavior::Input;
-use craft_behavior::{CellSpace, ItemLayout, ItemSource, Proposal, ScrollPos, SelectionModel, Sense};
+use craft_behavior::{CellSpace, ItemLayout, ItemSource, PartRef, Proposal, ScrollPos, SelectionModel, Sense};
 use egui::{Id, IdSalt, Pos2, Rect, Ui, Vec2};
 use run::ShowAt;
 use std::hash::Hash;
@@ -728,7 +728,7 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
 
     /// Whether a primary drag pressed on the part `part` of the collection moves the selection, as a drag from an item
     /// does, in a spatial layout. The default keeps every collection as it is.
-    fn moves_from_part(&self, _part: craft_behavior::PartRef) -> bool {
+    fn moves_from_part(&self, _part: PartRef) -> bool {
         false
     }
 

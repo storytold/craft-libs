@@ -311,6 +311,7 @@ pub struct PressState {
     /// Where a secondary press made during another open press came up on this part in this pass
     /// ([`PressStep::aside`]): a context request beside the running phase, which goes on.
     pub context: Option<Pos2>,
+    dragged: bool,
 }
 
 impl PressState {
@@ -319,7 +320,19 @@ impl PressState {
 
     /// A state in `phase` with no modifiers, sample, capture or aside context request.
     pub const fn new(phase: PressPhase) -> Self {
-        PressState { phase, mods: Mods::NONE, sample: None, captured: false, context: None }
+        PressState { phase, mods: Mods::NONE, sample: None, captured: false, context: None, dragged: false }
+    }
+
+    /// Whether the press has passed slop as a drag.
+    pub const fn with_dragged(mut self, dragged: bool) -> Self {
+        self.dragged = dragged;
+        self
+    }
+
+    /// Whether the press passed slop and began a drag: true from the drag's start until the press ends, a `Cancel`
+    /// of a press that dragged included, so a cancel reader tells it from a press that never moved.
+    pub const fn dragged(&self) -> bool {
+        self.dragged
     }
 
     /// The aside secondary press that came up on the part at `at` in this pass.
@@ -668,7 +681,7 @@ impl<T: Copy> PressMachine<T> {
         let mut pos = input.pos;
         // The press released or cancelled in this pass, and whether it was silent: one that ends silent reports nothing.
         let mut released: Option<(T, PressStart, Pos2, bool, bool, bool)> = None;
-        let mut cancelled: Option<(T, PressStart, PressCancel, bool)> = None;
+        let mut cancelled: Option<(T, PressStart, PressCancel, bool, bool)> = None;
         let mut aside: Option<PressAside<T>> = None;
         // A press passed in the last pass that no shape took is abandoned; that pass reported its `Down`.
         if let Some(open) = &mut self.open
@@ -686,7 +699,7 @@ impl<T: Copy> PressMachine<T> {
             self.open = None;
         }
         if let (Some(reason), Some(open)) = (input.cancel, self.open) {
-            cancelled = Some((open.target, open.start, reason, open.silent));
+            cancelled = Some((open.target, open.start, reason, open.silent, open.dragging));
             self.open = None;
         }
         for event in input.events {
@@ -807,12 +820,12 @@ impl<T: Copy> PressMachine<T> {
             self.aside = None;
         }
         let quiet = PressStep { aside, ..PressStep::default() };
-        if let Some((target, start, reason, silent)) = cancelled {
+        if let Some((target, start, reason, silent, dragged)) = cancelled {
             if silent {
                 return quiet;
             }
             let phase = PressPhase::Cancel { start, reason };
-            return PressStep { target: Some(target), phase: Some(phase), ..quiet };
+            return PressStep { target: Some(target), phase: Some(phase), dragging: dragged, ..quiet };
         }
         if let Some((target, start, at, was_dragging, click, silent)) = released {
             if silent {
@@ -957,6 +970,28 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// A cancelled press reports whether it had begun a drag, so a cancel reader tells a drag that is abandoned from a
+    /// press that never moved.
+    #[test]
+    fn a_cancel_reports_whether_the_press_had_dragged() {
+        let cancel = |moved: bool| {
+            let mut machine = PressMachine::new();
+            let at = pos2(0.0, 0.0);
+            let mut step = |events: &[PointerEvent], cancel| {
+                let input = PassInput::new(events, SLOP, at, true).cancel(cancel);
+                machine.step(input, |_, _| Some(PressPick::new(1u8, Sense::DRAG)))
+            };
+            step(&[press(0.0, 1.0)], None);
+            if moved {
+                step(&[PointerEvent::Moved { at: pos2(40.0, 0.0), sample: None }], None);
+            }
+            step(&[], Some(PressCancel::Escape))
+        };
+        let (dragged, still) = (cancel(true), cancel(false));
+        assert!(matches!(dragged.phase, Some(PressPhase::Cancel { .. })) && dragged.dragging);
+        assert!(matches!(still.phase, Some(PressPhase::Cancel { .. })) && !still.dragging);
     }
 
     /// A press of the held button, where nothing takes a press (a modal opened over the drag's target), leaves the open

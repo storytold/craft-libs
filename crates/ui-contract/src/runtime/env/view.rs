@@ -14,17 +14,18 @@ use craft_theme::Mode;
 use egui::Id;
 use std::sync::Arc;
 
-/// What component code sees: everything in `Env` except tokens, size, enabled, read-only, arena, transform
-/// and `ids_stable`.
+/// What component code sees: everything in `Env` except tokens, size, enabled, read-only, arena and `ids_stable`. Of
+/// the transforms around it, it sees only their scale (`view_scale`), so it measures for the zoom it shows at.
 #[derive(Clone, Copy)]
 pub struct EnvView<'a> {
     pub(super) scoped: &'a Scoped,
 }
 
 impl<'a> EnvView<'a> {
-    /// The product of the `ContainerProps::transform` scales around the scope, 1.0 outside them.
+    /// The product of the `ContainerProps::transform` scales around the scope, 1.0 outside them and in a layer opened
+    /// inside them.
     pub fn view_scale(&self) -> f32 {
-        todo!("ge.C12")
+        self.scoped.view_scale
     }
 
     /// The footer a `FooterSlot` under this scope places, if a container offers one.

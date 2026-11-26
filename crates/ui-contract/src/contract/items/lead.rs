@@ -5,7 +5,7 @@ use crate::contract::collection::{CollectionEvent, HoverLead, LeadOnOpen, LeadSo
 use crate::contract::{Collection, Cx};
 use crate::runtime::memory::sub;
 use crate::runtime::{drag, pointer};
-use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel, Sense};
+use craft_behavior::{Flow, ItemLayout, NavShape, PointerEvent, SelectionChange, SelectionModel, Sense};
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::any::TypeId;
@@ -141,7 +141,17 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 // With nothing picked, the current item counts as picked: a modified click adds to it, as a file
                 // manager's or a page grid's does.
                 let seed = if extend || toggle { self.current_when_unpicked(comp) } else { None };
-                if extend && toggle {
+                // Items at points have no order a range could follow: Shift adds, Cmd (with or without Shift) toggles.
+                let spatial = self.layout.as_ref().is_some_and(|layout| matches!(layout.nav(), NavShape::Spatial));
+                if spatial && toggle {
+                    self.change_by(SelectionChange::Toggle(key), by);
+                } else if spatial && extend {
+                    if !self.holds(at) {
+                        let mut keys = self.selected_keys(&self.selection);
+                        keys.push(key);
+                        self.change_by(SelectionChange::Set(keys), by);
+                    }
+                } else if extend && toggle {
                     self.add_range(at);
                 } else if extend {
                     let anchor = self.selection.anchor().and_then(|key| self.index_of(key)).or(seed).unwrap_or(self.lead.at);
