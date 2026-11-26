@@ -18,8 +18,10 @@
 //! The noise power the gains are computed from falls at once and rises by at most 10 dB a
 //! second, so a vowel or a note held for longer than the search window keeps its level for a few
 //! seconds more, and a noise floor that rises by 12 dB is suppressed again within 3 s.
-//! After a reset the floor moves from 0 dB to `reduction` over the first search window of sound,
-//! so a voice that starts at once is not taken for the noise.
+//! After a reset the gain floor moves from 0 dB toward the attenuation set by `reduction` over
+//! the first search window of sound. This protection lasts for that startup window. Continuous
+//! voiced or tonal audio present from startup can enter the noise estimate and be attenuated
+//! afterward.
 
 use super::stft::{Pairing, Plan, Spectral, StftChannel, stream};
 use crate::{AudioEffect, ParamSpec, ParamValues, Unit, block_len, db_to_gain, flush32, param_plumbing};
@@ -249,8 +251,9 @@ impl Bins {
 }
 
 /// Noise suppression for a live voice: lowers steady background noise (fans, hiss, room tone) by
-/// up to `reduction` dB and keeps the voice, with no step that learns the noise first. Its latency
-/// is the STFT size, 256 samples (5.3 ms) at 48 kHz.
+/// up to `reduction` dB, with no step that learns the noise first. Its latency is the STFT size,
+/// 256 samples (5.3 ms) at 48 kHz. Continuous voiced or tonal audio present from startup can
+/// enter the noise estimate and be attenuated after the initial search window.
 pub struct NoiseSuppression {
     pv: ParamValues,
     n: usize,
