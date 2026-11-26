@@ -238,7 +238,7 @@ fn version(rest: &[&str]) -> Result<(), String> {
   `cargo update --workspace --offline` in the root and, when that fails, `cargo update --workspace`,
   and prints `version: OLD -> NEW`. It also moves the `version` of each path dependency in
   `[workspace.dependencies]` whose requirement is `"OLD"` or `"=OLD"`; registry dependencies and path
-  dependencies at other versions keep theirs.
+  dependencies at other versions keep theirs. Trailing ASCII spaces in a matching requirement are retained.
 - A version is `MAJOR.MINOR.PATCH` with an optional `-pre.release`: no leading zeros, numbers up to
   `u64::MAX`, and no build metadata (`+...`).
 - When both updates fail, `Cargo.toml` and `Cargo.lock` are put back as they were (a lock file that did

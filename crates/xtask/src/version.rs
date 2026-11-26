@@ -12,8 +12,8 @@
 //! line endings included. The root version may be written in any TOML form
 //! (`[workspace.package]` with `version = "…"`, a dotted key, an inline table), with double or
 //! single quotes, and keeps its quotes. A pin may also be a multi-line string and keeps its
-//! delimiters. A manifest that is not valid TOML (a duplicate key
-//! included), a version that is not a one-line string, or a current version that is not valid
+//! delimiters. Trailing ASCII spaces in a pin are retained. A manifest that is not valid TOML
+//! (a duplicate key included), a version that is not a one-line string, or a current version that is not valid
 //! returns an error before anything is written.
 
 use std::ffi::OsStr;
@@ -69,8 +69,8 @@ pub fn read(manifest: &str) -> Result<String, String> {
 
 /// `manifest` with the workspace version set to `new`, and every path dependency in
 /// `[workspace.dependencies]` whose `version` is the old version (`"OLD"` or `"=OLD"`) moved with
-/// it. Registry dependencies and path dependencies at other versions keep their requirement, and
-/// every other byte is unchanged.
+/// it. Registry dependencies and path dependencies at other versions keep their requirement.
+/// Trailing ASCII spaces in a pin are retained. Every other byte is unchanged.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
     let doc = parse(manifest)?;
@@ -78,8 +78,8 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(&old).map_err(|e| format!("the current [workspace.package] version is not valid: {e}"))?;
     let root = doc.get("workspace").and_then(|w| w.get("package")).and_then(|p| p.get("version")).and_then(as_string);
     let mut edits = vec![(root.ok_or(NO_VERSION)?, new.to_owned())];
-    for (pin, prefix) in path_pins(&doc, &old) {
-        edits.push((pin, format!("{prefix}{new}")));
+    for (pin, prefix, suffix) in path_pins(&doc, &old) {
+        edits.push((pin, format!("{prefix}{new}{suffix}")));
     }
     let mut spans = Vec::with_capacity(edits.len());
     for (string, text) in edits {
@@ -406,8 +406,8 @@ fn root_version(doc: &Document<String>) -> Result<String, String> {
 
 /// The `version` strings of the path dependencies in `[workspace.dependencies]` that require `old`
 /// (single-line or multi-line strings, matched by their decoded value), each with the operator in
-/// front of the version (`""` or `"="`).
-fn path_pins<'a>(doc: &'a Table, old: &str) -> Vec<(&'a Formatted<String>, String)> {
+/// front of the version (`""` or `"="`) and any trailing ASCII spaces.
+fn path_pins<'a>(doc: &'a Table, old: &str) -> Vec<(&'a Formatted<String>, String, String)> {
     let Some(deps) = doc.get("workspace").and_then(|w| w.get("dependencies")).and_then(Item::as_table_like) else {
         return Vec::new();
     };
@@ -416,8 +416,10 @@ fn path_pins<'a>(doc: &'a Table, old: &str) -> Vec<(&'a Formatted<String>, Strin
             let dep = dep.as_table_like()?;
             dep.get("path")?;
             let version = dep.get("version").and_then(as_string)?;
-            let prefix = version.value().strip_suffix(old)?;
-            matches!(prefix.trim(), "" | "=").then(|| (version, prefix.to_owned()))
+            let requirement = version.value().trim_end_matches(' ');
+            let prefix = requirement.strip_suffix(old)?;
+            let suffix = &version.value()[requirement.len()..];
+            matches!(prefix.trim(), "" | "=").then(|| (version, prefix.to_owned(), suffix.to_owned()))
         })
         .collect()
 }
@@ -624,6 +626,19 @@ mod tests {
         assert!(out.contains("b = { path = \"b\", version = '''0.2.0''' }"), "{out}");
         assert_eq!(read(&out).unwrap(), "0.2.0");
         assert_eq!(out.matches("0.1.0").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn moves_path_pins_with_trailing_ascii_spaces() {
+        for delimiter in ["\"", "'", "\"\"\"", "'''"] {
+            for requirement in ["0.1.0 ", "=0.1.0  ", " = 0.1.0 "] {
+                let manifest = format!(
+                    "[workspace.package]\nversion = \"0.1.0\"\n[workspace.dependencies]\n\
+                     a = {{ path = \"a\", version = {delimiter}{requirement}{delimiter} }} # pin\n"
+                );
+                assert_eq!(replace(&manifest, "0.2.0").unwrap(), manifest.replace("0.1.0", "0.2.0"));
+            }
+        }
     }
 
     #[test]
