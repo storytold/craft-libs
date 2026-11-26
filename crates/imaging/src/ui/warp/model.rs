@@ -345,12 +345,6 @@ impl WarpMesh {
         out
     }
 
-    /// How many thin guide lines the mesh's own rule draws inside a cell, each way: the two
-    /// rule-of-thirds curves of a one-patch mesh, none in a mesh that is already cut.
-    pub fn own_guide_count(&self) -> usize {
-        if self.columns() == 1 && self.rows() == 1 { 2 } else { 0 }
-    }
-
     /// The thin guide lines of the mesh's own rule: [`thirds`](Self::thirds) for a one-patch mesh,
     /// none once the mesh is cut.
     pub(crate) fn own_guides(&self) -> Vec<BezPath> {

@@ -115,8 +115,9 @@ pub struct WarpGuides {
     /// The share of that colour's alpha, 0 to 1: 1 shows the colour whole, 0.5 half as strong. A share
     /// that is not a number shows the colour whole.
     pub share: f32,
-    /// How many thin lines to draw inside every cell, each way. `None` keeps the grid's own rule
-    /// ([`WarpMesh::own_guide_count`]); a number is taken as 1 to [`GUIDE_LINES_MAX`].
+    /// How many thin lines to draw inside every cell, each way. `None` keeps the grid's own rule:
+    /// the two rule-of-thirds curves of a one-patch mesh, none once it is cut. A number is taken
+    /// as 1 to [`GUIDE_LINES_MAX`].
     pub density: Option<usize>,
     /// When the thin lines draw. The patch boundaries and the anchors always do.
     pub show: WarpGuidesShow,
