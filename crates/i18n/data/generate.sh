@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Regenerates the number, plural and date data in this directory from Unicode CLDR, for every CLDR
-# locale: 10 KB of numbers (CLDR's modern-coverage locales alone would be 7 KB) and 340 KB of
-# dates. Lookups fall back at run time, so a locale whose data matches its parent's is left out.
+# Regenerates the number, plural (cardinal and ordinal) and date data in this directory from Unicode
+# CLDR, for every CLDR locale: 11 KB of numbers and plural rules and 427 KB of dates. Lookups fall
+# back at run time, so a locale whose data matches its parent's is left out.
 #
 # Needs `cargo install icu4x-datagen --version 2.4.0 --locked` (the ICU4X minor version in Cargo.toml,
 # which the script checks) and python3. Downloads CLDR's JSON release once into $CACHE. The releases
@@ -24,7 +24,7 @@ mkdir -p "$CACHE"
 
 TMPDIR=$CACHE icu4x-datagen --format blob --overwrite \
     --cldr-tag "$CLDR" \
-    --markers DecimalSymbolsV1 DecimalDigitsV1 PluralsCardinalV1 \
+    --markers DecimalSymbolsV1 DecimalDigitsV1 PluralsCardinalV1 PluralsOrdinalV1 \
     --locales full --deduplication maximal \
     --out "$HERE/numbers.postcard"
 

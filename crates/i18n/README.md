@@ -117,7 +117,7 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   after `I18n::reset_format`. A count in `trn` is therefore grouped and in the region's digits
   (`1.234 Dateien`, `١٬٢٣٤ ملفًا`); for names written into documents or files (`Copy 1234`), use
   `trn_plain`, which writes `0`–`9` without grouping or isolate marks.
-- **CLDR data:** decimal symbols, digits and plural rules (`data/numbers.postcard`, about 9 KB),
+- **CLDR data:** decimal symbols, digits and plural rules, cardinal and ordinal (`data/numbers.postcard`, about 11 KB),
   percent patterns (`data/locales.rs`) and date data (`data/dates.postcard`, about 427 KB) cover
   every CLDR locale; `data/generate.sh` rebuilds all three from CLDR 49.0.0 with `icu4x-datagen`
   2.4.0, and writes both releases to `data/source.txt` for a table built from the same CLDR to read.
