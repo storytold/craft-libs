@@ -84,13 +84,14 @@ impl<C: Component> MeasureCx<'_, C> {
     }
 
     /// The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
-    /// the room it is offered, down to `least` and up to `most`. At its least, where the width is unbounded, and in a
-    /// measuring run of a column that sizes its width from its content (which offers no room), it is `least`: a
-    /// picture needs no width of its own, so it never sets that column's width, and the real run shows it across the
-    /// width the column settles on.
+    /// the room it is offered, up to `most`. At its least, where the width is unbounded, and in a measuring run of a
+    /// column that sizes its width from its content (which offers no room), it is `least`: a picture needs no width of
+    /// its own, so it never sets that column's width, and the real run shows it across the width the column settles
+    /// on. Offered less room than `least` (a panel at its narrowest width), it takes that room, down to the plot's
+    /// least height (`size.plot.height`, or `least` when that is smaller), so it stays inside its container.
     pub fn picture_width(&self, least: f32, most: f32) -> f32 {
         match self.room.filter(|_| self.proposal != Proposal::Min) {
-            Some(room) => room.clamp(least, most.max(least)),
+            Some(room) => room.clamp(least.min(self.tokens.size.plot.height), most.max(least)),
             None => least,
         }
     }

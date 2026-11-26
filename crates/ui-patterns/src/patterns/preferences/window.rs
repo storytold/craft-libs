@@ -10,7 +10,7 @@ use super::model::{Closed, PreferencesDraft, PreferencesOutput};
 use super::page::{PreferencesLayout, PreferencesPage};
 use super::words::PreferencesWords;
 use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
 use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::StageAccess;
@@ -32,6 +32,8 @@ pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
 const CARDS_SIZE: Vec2 = vec2(640.0, 720.0);
 /// The least size a window of cards may be resized to.
 const CARDS_MIN_SIZE: Vec2 = vec2(420.0, 320.0);
+/// The size a [`PreferencesLayout::Classic`] window opens at: a desktop preferences dialog's.
+const CLASSIC_SIZE: Vec2 = vec2(1030.0, 660.0);
 
 /// When preferences changes are applied.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -121,10 +123,31 @@ struct Session<'h, 'b, H: ?Sized> {
     before: PreferencesState,
     work: PreferencesState,
     page: Option<String>,
+    /// The pages the body listed this pass, in order, for Prev and Next.
+    pages: Vec<String>,
     applied: bool,
 }
 
 impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
+    /// Shows the page `step` places from the shown one among the listed pages, wrapping at either end; the first
+    /// listed page when none is shown.
+    fn step_page(&mut self, cx: &mut impl StageAccess, step: isize) {
+        let count = self.pages.len();
+        if count == 0 {
+            return;
+        }
+        let at = self.page.as_ref().and_then(|page| self.pages.iter().position(|id| id == page));
+        let to = match at {
+            Some(at) => (at as isize + step).rem_euclid(count as isize) as usize,
+            None => 0,
+        };
+        if let Some(id) = self.pages.get(to) {
+            self.work.selected = id.clone();
+            self.page = Some(id.clone());
+        }
+        self.commit(cx);
+    }
+
     /// Reads the state at the start of the body. The page clears the search and the error of a window that has just
     /// opened.
     fn begin(&mut self, cx: &mut impl StageAccess) {
@@ -189,13 +212,27 @@ impl<'a> PreferencesWindow<'a> {
         if !can_ok {
             ok = ok.disabled_reason(words.cannot_ok.clone());
         }
-        let apply = FooterButton::new(words.apply.clone(), DialogRole::Other).enabled(differs).stays_open(true);
-        let buttons =
-            if mode == PreferencesMode::Live { vec![ok] } else { vec![ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)] };
+        let classic = layout == PreferencesLayout::Classic;
+        let cancel = FooterButton::new(common.cancel.clone(), DialogRole::Cancel);
+        let buttons = if classic {
+            // A desktop preferences dialog steps through its pages instead of applying in place.
+            let step = |label: &Label| FooterButton::new(label.clone(), DialogRole::Other).enabled(!nested).stays_open(true);
+            let mut buttons = vec![ok];
+            if mode == PreferencesMode::Staged {
+                buttons.push(cancel);
+            }
+            buttons.extend([step(&words.prev), step(&words.next)]);
+            buttons
+        } else if mode == PreferencesMode::Live {
+            vec![ok]
+        } else {
+            vec![ok, FooterButton::new(words.apply.clone(), DialogRole::Other).enabled(differs).stays_open(true), cancel]
+        };
 
         let (size, least) = match layout {
             PreferencesLayout::Paged => (DEFAULT_SIZE, MIN_SIZE),
             PreferencesLayout::Cards => (CARDS_SIZE, CARDS_MIN_SIZE),
+            PreferencesLayout::Classic => (CLASSIC_SIZE, MIN_SIZE),
         };
         let mut open = true;
         // Filed by a swatch press in this pass.
@@ -207,6 +244,7 @@ impl<'a> PreferencesWindow<'a> {
             before: PreferencesState::default(),
             work: PreferencesState::default(),
             page: None,
+            pages: Vec::new(),
             applied: false,
         });
         let mut dialog = Dialog::new(title.clone())
@@ -216,11 +254,22 @@ impl<'a> PreferencesWindow<'a> {
             .close_on_enter(can_ok)
             .escape_keeps_typing(escape_keeps_typing)
             .on_pick(|button, cx| {
-                if button.role() == DialogRole::Other && !nested {
-                    session.borrow_mut().apply(cx);
+                if button.role() != DialogRole::Other || nested {
+                    return;
+                }
+                let mut session = session.borrow_mut();
+                if !classic {
+                    session.apply(cx);
+                } else if button.label() == &words.prev {
+                    session.step_page(cx, -1);
+                } else if button.label() == &words.next {
+                    session.step_page(cx, 1);
                 }
             })
             .close_guard(|button, cx| mode == PreferencesMode::Live || button.role() != DialogRole::Accept || session.borrow_mut().apply(cx));
+        if classic {
+            dialog = dialog.button_place(ButtonPlace::Side);
+        }
         if !embedded {
             dialog = dialog.viewport();
         }
@@ -250,6 +299,7 @@ impl<'a> PreferencesWindow<'a> {
                     session.apply(cx);
                 }
                 session.page = shown.page;
+                session.pages = shown.pages;
                 session.commit(cx);
             });
 

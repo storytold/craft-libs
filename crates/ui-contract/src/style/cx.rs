@@ -38,6 +38,9 @@ pub enum GlyphRole {
     ToolRail,
     /// A list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
     PanelRail,
+    /// A stack of small arrow buttons (a gallery's scroll arrows): `size.icon.glyph_sm` whatever the control size, and
+    /// a ribbon's small icon side does not widen it.
+    Compact,
 }
 
 /// What `fn style` gets. Tokens are read here and nowhere else.
@@ -207,12 +210,12 @@ impl<'a> StyleCx<'a> {
         f(&StyleCx::of_env(ctx, &env))
     }
 
-    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
-    /// not `enabled`.
+    /// The one link look: body role, underlined, `accent.text`, `text.disabled` when not `enabled`.
+    ///
+    /// The theme holds `accent.text` to the text minimum on the panel, raised and sunken surfaces at every contrast.
     pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
         let colors = &self.tokens.color;
-        let accent = if self.contrast() == Contrast::High { colors.accent.text } else { colors.accent.solid };
-        let (ink, off) = (self.color(accent), self.color(colors.text.disabled));
+        let (ink, off) = (self.color(colors.accent.text), self.color(colors.text.disabled));
         let rest = if enabled { ink } else { off };
         super::look::TextLook::new(craft_theme::TypeRole::Body, Stateful::new(rest).off(States::new(rest, rest, rest, off)))
     }

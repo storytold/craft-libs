@@ -12,6 +12,7 @@ pub mod kit;
 pub(crate) mod link;
 pub(crate) mod reach;
 pub(crate) mod reset;
+pub(crate) mod row_least;
 pub(crate) mod scheme;
 pub(crate) mod scrub_drags;
 pub(crate) mod short;
