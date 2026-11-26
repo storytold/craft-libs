@@ -22,6 +22,30 @@ struct OpenerOpen {
     by: Option<(Id, Trigger, Opening)>,
 }
 
+/// The note a replay of the container's run re-issues: its first opener, so the slot's last-shown frame is the replay's
+/// pass ([`refresh_seen`]). An id does not move: a replay at another place keeps it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SeenNote(Id);
+
+impl crate::runtime::shift::Shift for SeenNote {
+    fn shifted(&self, _: &egui::RecordShift) -> Self {
+        *self
+    }
+
+    fn snapped(&self, _: &Self, _: f32) -> Self {
+        *self
+    }
+}
+
+/// The container `note` names ran in this pass: its opener slot's last-shown frame becomes the replay's, so the next real
+/// run finds no gap (`opener_open`).
+fn refresh_seen(ctx: &egui::Context, note: &SeenNote) {
+    let frame = crate::runtime::egui::pass::root_frame_nr(ctx);
+    let mut own = MemoryStage::open_after(ctx, note.0, note.0);
+    own.session::<OpenerOpen>(sub(note.0, "opens")).seen = frame;
+    own.write_back();
+}
+
 /// The open state of a container with no binding: the slot of its first opener, with the triggers of every opener
 /// applied once for the frame. A container with no opener keeps its own slot.
 pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
@@ -46,6 +70,9 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     }
     if real {
         slot.seen = frame;
+        // A memoized view holding this container replays it without running it (nothing in it changed), so the replay
+        // re-issues this note: the container does not read as gone in the pass it runs again and close a menu it shows.
+        crate::runtime::replay::journal(&ctx, || SeenNote(first.id), refresh_seen);
     }
     if let Some(opener) = first.all().find(|opener| opener.fired) {
         if slot.applied != frame {
