@@ -2372,10 +2372,8 @@ mod streamed_tests {
             for row in pixels.chunks_exact_mut(stride).skip(h as usize / 2) {
                 row[0] ^= 0x5a;
             }
-            let img = Image::from_raw(w, h, layout, sample, pixels)
-                .unwrap()
-                .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
-                .with_meta(meta);
+            let img =
+                Image::from_raw(w, h, layout, sample, pixels).unwrap().with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect())).with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
                 let one_band = [h];
