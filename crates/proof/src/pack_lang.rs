@@ -4,7 +4,7 @@
 //! the spelling tuning and conservative typography in [`crate::fr`] without a separate cache.
 //!
 //! The loaded dictionaries share a memory budget ([`MAX_LOADED_BYTES`], estimated from their
-//! files); the one used least recently goes first, but never one used during the current
+//! files, with the pairs registered as bytes, [`crate::register_dictionary`]); the one used least recently goes first, but never one used during the current
 //! [`in_one_check`] call, so a paragraph in many languages loads each dictionary once. Locales
 //! with no dictionary are remembered apart and take no room.
 //!
@@ -24,7 +24,7 @@ use crate::lang::PackLocale;
 /// The memory budget of the loaded dictionaries, in estimated bytes.
 pub(crate) const MAX_LOADED_BYTES: u64 = 256 << 20;
 /// Estimated memory per byte of `.aff` and `.dic` file.
-const BYTES_PER_FILE_BYTE: u64 = 6;
+pub(crate) const BYTES_PER_FILE_BYTE: u64 = 6;
 /// Most locales remembered as having no dictionary (the oldest is forgotten first when full).
 const MAX_MISSING: usize = 256;
 
@@ -167,6 +167,11 @@ pub(crate) fn set_budget(bytes: u64) {
     BUDGET.store(bytes, Ordering::Relaxed);
 }
 
+/// The memory budget in force, in estimated bytes.
+pub(crate) fn budget() -> u64 {
+    BUDGET.load(Ordering::Relaxed)
+}
+
 /// Hunspell file names for `locale`, best first: `fr-fr` → `fr_FR`, `fr-FR`, `fr`;
 /// `sr-latn` → `sr_Latn`, `sr-Latn` (never plain `sr`, which is Cyrillic); `sr-cyrl-rs` →
 /// `sr_Cyrl_RS`, `sr-Cyrl-RS`, `sr_Cyrl`, `sr-Cyrl`, `sr_RS`, `sr-RS`, `sr` (Cyrillic is Serbian's
@@ -278,7 +283,8 @@ fn get_with_scripts(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, Arc
     LOADS.fetch_add(1, Ordering::Relaxed);
     let budget = BUDGET.load(Ordering::Relaxed);
     let pinned_from = CHECK_FROM.with(Cell::get).unwrap_or(u64::MAX);
-    let mut total: u64 = c.loaded.iter().map(|l| l.bytes).sum();
+    // The registered pairs are charged to the same budget and never evicted.
+    let mut total: u64 = c.loaded.iter().map(|l| l.bytes).fold(crate::registered::bytes(), u64::saturating_add);
     while total.saturating_add(bytes) > budget {
         // The least recently used dictionary not used during this check.
         let Some(oldest) = c.loaded.iter().enumerate().filter(|(_, l)| l.used < pinned_from).min_by_key(|(_, l)| l.used).map(|(i, _)| i) else {
@@ -292,14 +298,27 @@ fn get_with_scripts(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, Arc
     (dict, file, scripts)
 }
 
-/// Load `locale`'s dictionary, with its estimated memory.
+/// Load `locale`'s dictionary, with its estimated memory (none for a registered pair: it is
+/// charged to the budget as it is registered).
 fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     let names = names(locale);
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let key = names.first().map_or("", String::as_str);
-    let Some((aff, dic)) = crate::hunspell::find(&refs) else {
-        crate::hunspell::clear_load_error(key);
-        return (Arc::default(), None, 0);
+    let (aff, dic) = match crate::registered::locate(&refs) {
+        crate::registered::Located::File(aff, dic) => (aff, dic),
+        crate::registered::Located::Registered(pair) => {
+            return match crate::hunspell::note_load(key, &pair.label, AffixDict::from_hunspell(&pair.aff, &pair.dic, &[])) {
+                Ok(d) => (Arc::new(d), None, 0),
+                Err(e) => {
+                    log::warn!("{locale} spelling: {e}");
+                    (Arc::default(), None, 0)
+                }
+            };
+        }
+        crate::registered::Located::Missing => {
+            crate::hunspell::clear_load_error(key);
+            return (Arc::default(), None, 0);
+        }
     };
     let size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
     let bytes = size(&aff).saturating_add(size(&dic)).saturating_mul(BYTES_PER_FILE_BYTE).max(1);

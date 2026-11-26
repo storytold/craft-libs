@@ -91,6 +91,7 @@ pub mod packs;
 pub mod patterns;
 pub mod pl;
 pub mod pt;
+mod registered;
 pub mod ru;
 pub mod scowl;
 mod slot;
@@ -128,6 +129,7 @@ pub use hunspell::{HostFolders, app_folders};
 pub use lang::{PackLocale, ProofLang};
 pub use languages::{dictionary_load_error, english_source, installed_dictionaries, pack_dictionary_file, set_dictionaries_folder, set_host_folders};
 pub(crate) use languages::{language, reload_dictionaries};
+pub use registered::{MAX_FILE_BYTES, MAX_REGISTERED, RegisterError, register_dictionary, registered_dictionaries, unregister_dictionary};
 pub(crate) use user_dict::in_user_dictionary;
 pub use user_dict::{
     MAX_CUSTOM_WORD_CHARS, add_word, custom_word, ignore_word, load_user_dictionary, remove_word, save_user_dictionary, user_dictionary,

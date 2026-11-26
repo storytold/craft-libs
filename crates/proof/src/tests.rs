@@ -81,7 +81,7 @@ fn unreadable_english_dictionary_is_reported_and_skipped() {
 }
 
 /// The test dictionaries' folder the dictionaries-folder tests leave set for the rest of the run.
-fn shared_test_folder() -> std::path::PathBuf {
+pub(crate) fn shared_test_folder() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("wc-proof-dictionaries-{}", std::process::id()));
     write_test_dictionaries(&dir);
     dir

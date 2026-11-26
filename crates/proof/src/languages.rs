@@ -185,8 +185,9 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
 
 /// Where the spelling of an English `lang` comes from now (`None` for other languages), in this
 /// order: a Hunspell dictionary of its own (`en_US`, `en_GB`, `en_CA`) in the dictionaries
-/// folder, the SCOWL dictionary embedded at build time, one of its own on the system, else the
-/// Moby word list built into the crate. Another English's dictionary is never used. Reads the
+/// folder, a dictionary registered as bytes ([`crate::register_dictionary`]), the SCOWL
+/// dictionary embedded at build time, one of its own on the system, else the Moby word list
+/// built into the crate. Another English's dictionary is never used. Reads the
 /// Hunspell dictionary once (it is cached afterwards).
 pub fn english_source(lang: ProofLang) -> Option<EnglishSource> {
     lang.is_english().then(|| english::source(lang))

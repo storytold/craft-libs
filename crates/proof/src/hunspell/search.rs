@@ -237,6 +237,26 @@ pub fn candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     ordered(names, &dirs, &region_packs, &system, &other_packs)
 }
 
+/// An `.aff` and a `.dic` file.
+type Pair = (PathBuf, PathBuf);
+
+/// Pairs in the dictionaries folders, and the others ([`candidate_tiers`]).
+pub(crate) type Tiers = (Vec<Pair>, Vec<Pair>);
+
+/// [`candidates`] in two parts, order kept: the pairs in the dictionaries folders ([`user_dirs`]),
+/// and the rest (installed packs, the system's folders). A registered pair
+/// ([`crate::register_dictionary`]) ranks between them.
+pub(crate) fn candidate_tiers(names: &[&str]) -> Tiers {
+    split_user_tier(candidates(names))
+}
+
+/// `found` split in the pairs whose `.dic` is in one of the dictionaries folders ([`user_dirs`]),
+/// and the others, each in the order given.
+pub(crate) fn split_user_tier(found: Vec<Pair>) -> Tiers {
+    let user = user_dirs();
+    found.into_iter().partition(|(_, dic)| dic.parent().is_some_and(|dir| user.iter().any(|u| u == dir)))
+}
+
 /// [`candidates`] over the given folders.
 pub(crate) fn ordered(
     names: &[&str],

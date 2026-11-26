@@ -26,6 +26,7 @@ pub use search::{
 };
 #[cfg(test)]
 pub(crate) use search::{Os, app_folders_for, first_tier, ordered};
+pub(crate) use search::{candidate_tiers, split_user_tier};
 
 /// Largest `.aff` or `.dic` file read (real ones are a few MB).
 pub(crate) const MAX_FILE: u64 = 64 << 20;
