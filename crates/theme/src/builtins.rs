@@ -1,4 +1,4 @@
-//! The built-in themes: twelve `craft-design-theme` files in `crates/theme/themes/`, embedded in
+//! The built-in themes: thirteen `craft-design-theme` files in `crates/theme/themes/`, embedded in
 //! the binary and parsed once.
 
 use std::sync::LazyLock;
@@ -8,7 +8,7 @@ use super::format;
 use crate::SUITE_DEFAULT;
 
 /// Each built-in's file name (without `.json`) and its text.
-pub(super) const SOURCES: [(&str, &str); 12] = [
+pub(super) const SOURCES: [(&str, &str); 13] = [
     ("artcraft", include_str!("../themes/artcraft.json")),
     ("pro", include_str!("../themes/pro.json")),
     ("pro-light-gray", include_str!("../themes/pro-light-gray.json")),
@@ -21,6 +21,7 @@ pub(super) const SOURCES: [(&str, &str); 12] = [
     ("soft", include_str!("../themes/soft.json")),
     ("vectorcraft-modern", include_str!("../themes/vectorcraft-modern.json")),
     ("vectorcraft-modern-medium", include_str!("../themes/vectorcraft-modern-medium.json")),
+    ("nord", include_str!("../themes/nord.json")),
 ];
 
 // An invalid embedded file is a build defect that the built-in tests catch.

@@ -39,6 +39,7 @@ author, source and license. Library code and original assets are under the repos
 | `crates/font-subset/tests/data/{abeezee,abel,bbhbartle,librefranklin,orbitron,sarabun}/` (unmodified; each with its `OFL.txt`) | The ABeeZee, Abel, BBH, Libre Franklin, Orbitron and Sarabun Project Authors | [google/fonts@e7db6ca `ofl/`](https://github.com/google/fonts/tree/e7db6ca/ofl) | OFL-1.1 |
 | `crates/font-subset/tests/data/ubuntu/Ubuntu-Regular.ttf` (unmodified; with `LICENCE.txt`) | Canonical Ltd. (Dalton Maag) | [google/fonts@e7db6ca `ufl/ubuntu`](https://github.com/google/fonts/tree/e7db6ca/ufl/ubuntu) | Ubuntu-font-1.0 |
 | `crates/font-subset/tests/data/notosanscjk/NotoSansCJKsc-test.otf` (subset to the test strings; with `OFL.txt`) | The Noto Project Authors (Adobe, Google) | [notofonts/noto-cjk@f8d1575 `Sans/OTF/SimplifiedChinese`](https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese), via storytold/font-preview-service | OFL-1.1 |
+| `crates/theme/themes/nord.json` (Nord; the palette's hex values, assigned to theme seeds and pins by craft-libs contributors: Polar Night backgrounds, Snow Storm text, Frost accent, Aurora status; dark mode only; no other file content taken) | Sven Greb | [nordtheme/nord@1cef716 `src/nord.css`](https://github.com/nordtheme/nord/blob/1cef71605416a222e57225b544540ce0fcec18d4/src/nord.css), `--nord0` to `--nord15` | MIT (`license` at that commit, "Copyright (c) 2016-present Sven Greb") |
 
 Original assets are covered by the repository licence.
 

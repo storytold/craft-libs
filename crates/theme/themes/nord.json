@@ -1,0 +1,42 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.nord",
+  "name": "Nord",
+  "version": 1,
+  "variants": "dark",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#88c0d0",
+    "neutral": "#3b4252",
+    "status": {
+      "bad": "#bf616a",
+      "good": "#a3be8c",
+      "info": "#81a1c1",
+      "warn": "#ebcb8b"
+    }
+  },
+  "shape": null,
+  "dark": {
+    "accent.border": "#88c0d078",
+    "accent.soft": "#88c0d02e",
+    "accent.solid": "#88c0d0",
+    "caption.close_hover": "#bf616a",
+    "caption.close_text": "#eceff4",
+    "data.scope": "#2e3440",
+    "line.border": "#2e3440",
+    "line.control_edge": "#4c566a",
+    "line.divider": "#2e3440",
+    "state.hover": "#434c5e",
+    "state.pressed": "#4c566a",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#2e3440",
+    "surface.canvas": "#2e3440",
+    "surface.panel": "#3b4252",
+    "surface.sunken": "#2e3440",
+    "text.faint": "#d8dee9",
+    "text.muted": "#e5e9f0",
+    "text.normal": "#eceff4"
+  }
+}
