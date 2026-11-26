@@ -1737,7 +1737,11 @@ impl SegmentOrder {
                 }
 
                 let order = cmp.compare_non_horizontal_segments(segments, segi, segj);
-                if order.order_at(y) == Order::Right {
+                // A zero-height touch includes its boundary.
+                let touches_here = order.iter().any(|(start, end, relation)| {
+                    relation == Order::Ish && start <= y && y <= end
+                });
+                if order.order_at(y) == Order::Right && !touches_here {
                     return Some((segi, segj));
                 }
             }
@@ -2452,6 +2456,11 @@ mod tests {
         assert!(check_order(crossing, 0.0, eps).is_none());
         assert!(check_order(crossing, 0.5, eps).is_none());
         assert_eq!(check_order(crossing, 0.99, eps), Some((0, 1)));
+
+        let reversed_crossing = &[(1.0, -1.0), (-1.0, 1.0)];
+        assert_eq!(check_order(reversed_crossing, 0.49, 0.0), Some((0, 1)));
+        assert_eq!(check_order(reversed_crossing, 0.5, 0.0), None);
+        assert_eq!(check_order(reversed_crossing, 0.51, 0.0), None);
 
         let not_quite_crossing = &[(-0.5 * eps, 0.5 * eps), (0.5 * eps, -0.5 * eps)];
         assert!(check_order(not_quite_crossing, 0.0, eps).is_none());
@@ -3347,8 +3356,11 @@ mod tests {
             assert!(sweep.work_limit_exceeded());
             total
         };
-        let (small, large) = (work(2000), work(4000));
-        assert!(large < small * 5 / 2, "{small} units for 2,000 rectangles, {large} for 4,000");
+        // `slow-asserts` checks all pairs after each insertion.
+        let small_n = if cfg!(feature = "slow-asserts") { 100 } else { 2000 };
+        let large_n = 2 * small_n;
+        let (small, large) = (work(small_n), work(large_n));
+        assert!(large < small * 5 / 2, "{small} units for {small_n} rectangles, {large} for {large_n}");
     }
 
     // Craft patch (work limit). The circles are stacked, so the first sweep

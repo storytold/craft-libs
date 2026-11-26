@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | Sweep-order checks accept an `Ish` interval at its boundary, including a zero-height touch. The `invalid_order` test checks a reversed crossing before, at and after that boundary. `work_limit_counts_position_searches_by_their_probes` uses 100 and 200 rectangles with `slow-asserts`, and 2,000 and 4,000 otherwise. Both configurations check the same work-count growth and work-limit behavior. |
 | `src/sweep/sweep_line.rs` | `SegmentOrder::position` finds a segment by binary search over a key on each sweep-line entry. Code comments label it `Craft patch (sweep position)`. Tests: `position_after_edits`, `position_after_repeated_insertion`, `position_after_insertion_next_to_the_extreme_keys`, `position_after_moving_a_contour_continuation`, `position_on_a_wide_sweep_line`. |
 | `src/order.rs`, `src/curve/mod.rs` | `ComparisonCache` skips the curve comparison for segments whose horizontal bounds are far apart. Code comments label it `Craft patch (far-apart comparison)`. Tests: `far_apart_order`, `far_apart_curves_compare_like_the_full_comparison`, `far_apart_steep_curves_never_reverse`, `far_apart_steep_curves_skip_the_full_comparison`. |
 | `src/curve/mod.rs` | `Metrics::entries` holds two entries inline, as a `SmallVec`. Code comments label it `Craft patch (inline metrics)`. Tests: `cargo check --locked --example curve_metrics --features metrics`. |
