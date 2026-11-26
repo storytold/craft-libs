@@ -80,5 +80,9 @@ mod hevc;
 #[path = "av1/main.rs"]
 mod av1;
 
+#[cfg(feature = "theora")]
+#[path = "theora.rs"]
+mod theora;
+
 #[path = "track/main.rs"]
 mod track;
