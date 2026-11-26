@@ -93,6 +93,30 @@ craft_ui::words! {
         preview_large: "fontPicker.previewLarge" = "Large";
         /// The dropdown of the host's sample texts, beside the preview size.
         sample_text: "fontPicker.sampleText" = "Sample Text";
+        /// The heading of the property rows.
+        font_properties: "fontPicker.fontProperties" = "Font Properties";
+        /// The choice of a property row that filters nothing.
+        any_property: "fontPicker.anyProperty" = "Any";
+        weight: "fontPicker.weight" = "Weight";
+        weight_light: "fontPicker.weightLight" = "Light";
+        weight_regular: "fontPicker.weightRegular" = "Regular";
+        weight_heavy: "fontPicker.weightHeavy" = "Heavy";
+        width: "fontPicker.width" = "Width";
+        width_narrow: "fontPicker.widthNarrow" = "Narrow";
+        width_normal: "fontPicker.widthNormal" = "Normal";
+        width_wide: "fontPicker.widthWide" = "Wide";
+        /// The x-height row.
+        height: "fontPicker.height" = "Height";
+        contrast: "fontPicker.contrast" = "Contrast";
+        grade_low: "fontPicker.gradeLow" = "Low";
+        grade_medium: "fontPicker.gradeMedium" = "Medium";
+        grade_high: "fontPicker.gradeHigh" = "High";
+        case: "fontPicker.case" = "Case";
+        case_standard: "fontPicker.caseStandard" = "Standard";
+        case_caps_only: "fontPicker.caseCapsOnly" = "Caps Only";
+        figures: "fontPicker.figures" = "Figures";
+        figures_lining: "fontPicker.figuresLining" = "Lining";
+        figures_oldstyle: "fontPicker.figuresOldstyle" = "Oldstyle";
         /// The similar-fonts chip, with `{family}` for the reference family.
         similar_to: template "fontPicker.similarTo" = "≈ {family}";
         clear_similar: "fontPicker.clearSimilar" = "Clear Similar Fonts";
@@ -221,6 +245,85 @@ impl FontScript {
     pub const ALL: [FontScript; 3] = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
 }
 
+/// A grade of a font property, from least to most: for weight light, regular and heavy; for width narrow, normal and
+/// wide; for height and contrast low, medium and high.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Grade {
+    /// The least: light, narrow or low.
+    Low,
+    /// The middle: regular, normal or medium.
+    Medium,
+    /// The most: heavy, wide or high.
+    High,
+}
+
+/// Whether a face has small letters of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontCase {
+    /// Capitals and small letters.
+    Standard,
+    /// Capitals only: each small letter is missing or draws as its capital.
+    CapsOnly,
+}
+
+/// The style of a face's default figures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontFigures {
+    /// Figures as tall as the capitals.
+    Lining,
+    /// Figures near the x-height, some rising or falling past it.
+    Oldstyle,
+}
+
+/// The Font Properties filter: each property chosen keeps only the families that have it, and the chosen properties
+/// combine. Nothing chosen keeps every family. The grades are the picker's own thresholds:
+///
+/// - weight: a family has a grade when any of its faces does; light below 350, regular 350 to 549, heavy 550 and up;
+/// - width: a family has a grade when any of its faces does; narrow below 97.5% of normal, normal up to 102.5%, wide
+///   above;
+/// - height: the regular face's x-height (`OS/2` `sxHeight`, else the top of `x`) per em; low below 0.45, medium below
+///   0.52, high from 0.52;
+/// - contrast: the regular face's thickest stroke of `o` over its thinnest, from the boxes of its outer and inner
+///   contours; low below 1.5, medium below 3, high from 3; without a measurable `o`, the PANOSE contrast digit of a
+///   Latin text face (2 to 4 low, 5 to 7 medium, 8 and 9 high);
+/// - case: caps only when every capital A to Z is mapped and every small letter is missing, maps to its capital's
+///   glyph or draws its capital's box; standard otherwise;
+/// - figures: oldstyle when the top of `0` is below halfway between the x-height and the cap height (`sCapHeight`,
+///   else the top of `H`), lining otherwise.
+///
+/// A family the property cannot be read for is left out while the property is chosen.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct FontProperties {
+    /// Only families with a face of this weight.
+    pub weight: Option<Grade>,
+    /// Only families with a face of this width.
+    pub width: Option<Grade>,
+    /// Only families of this x-height.
+    pub height: Option<Grade>,
+    /// Only families of this stroke contrast.
+    pub contrast: Option<Grade>,
+    /// Only families of this case.
+    pub case: Option<FontCase>,
+    /// Only families with these default figures.
+    pub figures: Option<FontFigures>,
+}
+
+impl FontProperties {
+    /// Whether any property is chosen.
+    pub fn any(&self) -> bool {
+        self.weight.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
+            || self.contrast.is_some()
+            || self.case.is_some()
+            || self.figures.is_some()
+    }
+}
+
 /// A family set the host gives (VectorCraft: Document, Recently Added), one filter toggle each. An `ordered` set that
 /// is on lists in its own order. A disabled set's toggle is off and dimmed, with its hint as the reason.
 pub struct FamilySet<'a> {
@@ -291,12 +394,20 @@ pub struct FontFilters {
     pub script: Option<FontScript>,
     /// Keys of the host family sets that are on; each keeps only its families.
     pub sets: Vec<String>,
+    /// The Font Properties filter.
+    pub properties: FontProperties,
 }
 
 impl FontFilters {
     /// Whether any filter narrows the list (Clear All is enabled).
     pub fn any(&self) -> bool {
-        self.class.is_some() || self.favorites || self.variable || self.similar.is_some() || self.script.is_some() || !self.sets.is_empty()
+        self.class.is_some()
+            || self.favorites
+            || self.variable
+            || self.similar.is_some()
+            || self.script.is_some()
+            || !self.sets.is_empty()
+            || self.properties.any()
     }
 
     /// Clear All: every filter off.
@@ -647,6 +758,8 @@ struct Typing {
     /// The pointer was over the open list's rows in the last pass.
     over_rows: bool,
     hide_classes: bool,
+    /// The `Chips` layout's Font Properties chip is on, so the property dropdowns show.
+    properties_open: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
     focused: bool,
@@ -741,6 +854,11 @@ pub struct FontPicker<'a> {
     /// The scripts the script row offers (with All Scripts first); empty: no script row.
     #[prop]
     scripts: &'a [FontScript],
+    /// Offers the Font Properties dropdowns (weight, width, height, contrast, case and figures): under the toggle row in
+    /// the `Toolbar` layout, and in the `Chips` layout behind a Font Properties chip after Font Technology, which
+    /// clears them when turned off. Off: no dropdowns, and only properties already in the bound filters narrow the list.
+    #[prop]
+    properties: bool,
     /// Picks the layout of the filter area.
     #[prop]
     filter_layout: FilterLayout,
@@ -806,6 +924,7 @@ impl<'a> FontPicker<'a> {
             served: &[],
             sets: &[],
             scripts: &[],
+            properties: false,
             filter_layout: FilterLayout::default(),
             kind: FontPickerKind::default(),
             actions: &[],
