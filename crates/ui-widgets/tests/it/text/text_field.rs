@@ -345,7 +345,9 @@ fn the_wheel_over_a_focused_text_field_scrolls_the_form_around_it() {
     let field = fixture.by_label("Size").expect("the Size field");
     fixture.click(&field).settle();
     fixture.frame(vec![pointer::moved(field.center())]);
-    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    // A downward wheel, the way that scrolls a form still at its top: a form that took it would move, so staying put
+    // says the number field kept the wheel for its own step.
+    fixture.frame(vec![pointer::wheel_lines(-1.0)]);
     fixture.idle(3);
     assert_ne!(value.get(), Some(10.0), "the wheel steps the focused number field");
     let still = fixture.by_label("Size").expect("the Size field").rect;
@@ -394,7 +396,9 @@ fn the_wheel_over_a_focused_check_box_scrolls_the_form_and_a_focused_range_steps
     assert!(fixture.focused_stop().is_some_and(|(_, part)| part.is_some()), "the click focuses a thumb");
     assert_eq!(range.get(), start, "the click moves neither thumb");
     fixture.frame(vec![pointer::moved(slider.center())]);
-    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    // A downward wheel, the way that scrolls a form still at its top: a form that took it would move, so staying put
+    // says the focused range kept the wheel for its own step.
+    fixture.frame(vec![pointer::wheel_lines(-1.0)]);
     fixture.idle(3);
     assert_ne!(range.get(), start, "the wheel steps the focused thumb");
     assert!((rect.get().top() - slider.top()).abs() <= SNAP, "and the form stays put: {slider:?} to {:?}", rect.get());

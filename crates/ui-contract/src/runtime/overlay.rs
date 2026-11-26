@@ -302,9 +302,9 @@ pub(crate) struct Persist {
     stack: Vec<Id>,
     /// A press the modal drop removed, for the window host to raise the modal's window.
     dropped_press: bool,
-    /// The screen rects a press may land in without closing the top menu family: its live layers and their anchors,
-    /// without the window or modal card that hosts the menus (`absorb_zone`). `None` when the top layer does not absorb outside
-    /// presses.
+    /// The screen rects a press may land in without closing the top menu family: its live layers inside the window or
+    /// modal card that hosts the menus, with their anchors (`absorb_zone`). `None` when the top layer does not absorb
+    /// outside presses.
     absorb_zone: Option<Vec<Rect>>,
     /// An outside press the input hook recorded for the running pass (and removed, for a primary one).
     outside_press: Option<Pos2>,
@@ -734,9 +734,9 @@ pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
     with_pass(ctx, |pass| pass.activated.iter().any(|(component, closes)| closes.contains(&id) && !pass.claimed.contains(component)))
 }
 
-/// The input hook: keeps the first press of any button that lands outside the top menu family, its anchors and its
-/// parents short of the window or modal card that hosts it (`absorb_zone`) for the layers' dismissal, and removes the primary ones,
-/// so nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a
+/// The input hook: keeps the first press of any button that lands outside the top menu family and its anchors, in the
+/// window or modal card that hosts it (`absorb_zone`), for the layers' dismissal, and removes the primary ones, so
+/// nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a
 /// right-click on another part closes the menu and opens that part's menu. The record is for the layers open when the
 /// press was made: a layer that appears in this pass was not, and its dismissal reads none of it (`opening`). Returns
 /// whether it removed one.
@@ -902,20 +902,21 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
 }
 
 /// The screen rects a press may land in without closing `top`, the top layer of the family `members` (parent first),
-/// which absorbs outside presses: the rect, anchor and peers of each live member of the family, less the layers that
-/// host it. The host is the nearest of `top`'s parents a press outside stops at (`stops_presses`: a window, a floating
-/// window or panel, a modal layer, or the entry of an OS window mount), outside every menu of the family; the layers it
-/// was opened from host the family with it. The menus show over their host and are not part of it, so a press elsewhere
-/// in that host is outside them, as one beside them in the main window is. A window opened from a menu (a menu's
+/// which absorbs outside presses: the rect, anchor and peers of each live member of the family inside its host. The host
+/// is the nearest of `top`'s parents a press outside stops at (`stops_presses`: a window, a floating window or panel, a
+/// modal layer, or the entry of an OS window mount), outside every menu of the family; the layers it was opened from
+/// host the family with it. The menus show over their host and are not part of it, so a press elsewhere in that host is
+/// outside them, as one beside them in the main window is. Nor is anything beside the host: a sibling layer that overlaps
+/// the host's card is outside the menus just the same, so its overlap closes them. A window opened from a menu (a menu's
 /// companion bar) is part of the menu, not its host. A member fading out takes no input, so a press on it, or on its
 /// anchor, is outside: the press that reopens a menu still fading out closes its open sibling.
 fn absorb_zone(members: &[OpenEntry], top: &OpenEntry) -> Vec<Rect> {
     let in_menu = |entry: &OpenEntry| parents(members, entry).any(|parent| parent.rank == Rank::Popup);
     let host = parents(members, top).find(|entry| stops_presses(entry) && !in_menu(entry));
-    let hosts: Vec<Id> = host.into_iter().flat_map(|host| std::iter::once(host).chain(parents(members, host))).map(|entry| entry.id).collect();
+    let inside = |member: &OpenEntry| host.is_none_or(|host| parents(members, member).any(|parent| parent.id == host.id));
     members
         .iter()
-        .filter(|member| !member.exiting && !hosts.contains(&member.id))
+        .filter(|member| !member.exiting && inside(member))
         .flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied()))
         .collect()
 }
@@ -1196,4 +1197,72 @@ pub(crate) fn modal_drawing(ctx: &Context) -> Option<Id> {
             .map(|(id, _)| *id)
             .find(|id| pass.current.iter().chain(&pass.last).any(|entry| entry.id == *id && entry.rank.is_modal()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::LayerId;
+
+    /// A live layer called `name` of `rank` at `rect`, opened from nothing.
+    fn layer(name: &str, rank: Rank, rect: Rect) -> OpenEntry {
+        let id = Id::unique(name);
+        OpenEntry::new(id, rank, OwnerClass::Popup, rect, LayerId::new(egui::Order::Middle, id))
+    }
+
+    fn at(x: f32, y: f32) -> Pos2 {
+        Pos2::new(x, y)
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(at(x, y), egui::vec2(w, h))
+    }
+
+    fn covers(zone: &[Rect], point: Pos2) -> bool {
+        zone.iter().any(|rect| rect.contains(point))
+    }
+
+    /// The zone is what lies inside the host: the menus opened there, their anchors and peers. The host's own card is
+    /// not in it, so a press beside the menu on that card closes it, and neither is a sibling of the host that overlaps
+    /// the card: a press on that overlap is outside the menu, as one beside it in the card is.
+    #[test]
+    fn the_press_zone_is_what_lies_inside_the_host() {
+        let window = layer("window", Rank::Window, rect(0.0, 0.0, 400.0, 400.0));
+        let mut card = layer("card", Rank::modal(Backdrop::None), rect(20.0, 20.0, 200.0, 200.0));
+        let mut sibling = layer("sibling", Rank::Window, rect(150.0, 150.0, 100.0, 100.0));
+        let mut menu = layer("menu", Rank::Popup, rect(60.0, 80.0, 20.0, 40.0));
+        card.parent = Some(window.id);
+        sibling.parent = Some(window.id);
+        menu.parent = Some(card.id);
+        menu.anchor = Some(rect(60.0, 60.0, 20.0, 20.0));
+        let members = vec![window, card, sibling, menu];
+        let zone = absorb_zone(&members, &members[3]);
+        assert!(covers(&zone, members[3].rect.center()), "the menu is in its own zone");
+        assert!(covers(&zone, at(70.0, 65.0)), "so is the anchor it hangs from");
+        assert!(!covers(&zone, at(50.0, 50.0)), "the card that hosts the menu is not");
+        assert!(!covers(&zone, at(10.0, 10.0)), "nor the window that hosts the card");
+        assert!(
+            !covers(&zone, at(160.0, 160.0)),
+            "a sibling window of the card that overlaps it is outside the menu, so its overlap closes the menu"
+        );
+    }
+
+    /// A family with no host has no layer to leave out: every live member's rect, anchor and peers are its zone, and a
+    /// member fading out is not, nor is its anchor.
+    #[test]
+    fn without_a_host_the_zone_is_every_live_member() {
+        let parent = layer("parent", Rank::Popup, rect(0.0, 0.0, 50.0, 50.0));
+        let mut child = layer("child", Rank::Popup, rect(50.0, 0.0, 50.0, 50.0));
+        let mut leaving = layer("leaving", Rank::Popup, rect(100.0, 0.0, 50.0, 50.0));
+        child.parent = Some(parent.id);
+        child.anchor = Some(rect(45.0, 0.0, 10.0, 10.0));
+        leaving.parent = Some(parent.id);
+        leaving.exiting = true;
+        let members = vec![parent, child, leaving];
+        let zone = absorb_zone(&members, &members[2]);
+        assert!(covers(&zone, at(10.0, 10.0)), "the popup the family hangs from is in the zone");
+        assert!(covers(&zone, at(75.0, 25.0)), "so is the popup open beside it");
+        assert!(covers(&zone, at(45.0, 5.0)), "and its anchor");
+        assert!(!covers(&zone, at(125.0, 25.0)), "a member fading out is no part of the zone");
+    }
 }

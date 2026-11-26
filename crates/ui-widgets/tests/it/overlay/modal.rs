@@ -443,3 +443,202 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
     assert!(any_open(&frames.ctx, OpenFilter::Modal), "the dialog is still the open modal:\n{}", trace.join("\n"));
     assert_eq!(below.borrow().presses, 0, "the press outside the dialog reaches nothing below it:\n{}", trace.join("\n"));
 }
+
+/// The modeless window a family hangs from, sized so the dialog opened inside it and the window beside it both fit.
+fn frame_window() -> Overlay {
+    let mut overlay = Overlay::dialog().modeless();
+    overlay.size = Some(Vec2::new(560.0, 460.0));
+    overlay
+}
+
+/// The modeless window opened beside the dialog in the same frame: centred like the card, so the two overlap.
+fn sibling_window() -> Overlay {
+    let mut overlay = Overlay::dialog().modeless();
+    overlay.size = Some(Vec2::new(260.0, 180.0));
+    overlay
+}
+
+/// A window that holds a dialog and, opened from the same window, a modeless window beside it: the dialog's card (its
+/// button, its menu and its body) and the sibling window are layers of one family. Each real pass of the card leaves a
+/// line for a failing assertion's report, as [`CardMenu`] does.
+#[derive(Component)]
+#[component(overlay)]
+struct WindowFamily<'a> {
+    #[common]
+    common: Common,
+    /// The window itself is open.
+    frame: bool,
+    /// The dialog inside it is asked to open.
+    dialog: bool,
+    /// The modeless window beside the dialog is opened.
+    sibling: bool,
+    frame_shown: &'a Opened,
+    sibling_shown: &'a Opened,
+    /// What reached the sibling window's own body.
+    sibling_content: &'a RefCell<Seen>,
+    /// The dialog's card, field for field as [`CardMenu`] takes them.
+    card_dialog: &'a Opened,
+    card_target: &'a RefCell<Option<Rect>>,
+    card_inside: &'a RefCell<Seen>,
+    card_body: &'a Cell<Option<Id>>,
+    card_menus: &'a RefCell<Vec<CloseReason>>,
+    card_runs: &'a RefCell<Vec<String>>,
+}
+
+impl Component for WindowFamily<'_> {
+    const ROLE: Role = Role::BUTTON;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: WindowFamilyStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(80.0, 20.0)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::FOCUS
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup("frame");
+        popup.trigger(Trigger::Manual, cx);
+        if self.frame {
+            popup.open(cx);
+        }
+    }
+
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup("frame");
+        let (frame_shown, sibling_shown, sibling_content) = (self.frame_shown, self.sibling_shown, self.sibling_content);
+        let (dialog, sibling) = (self.dialog, self.sibling);
+        let (dialog_shown, target, inside, body, menus, runs) =
+            (self.card_dialog, self.card_target, self.card_inside, self.card_body, self.card_menus, self.card_runs);
+        let shown = ui.show(popup, frame_window(), |ui, _| {
+            // The window beside the dialog is drawn first, so the dialog and the menu it opens stand above it in the
+            // family: the menu is the layer that judges the presses.
+            Opener::new(sibling_shown, sibling_content, Trigger::Manual, sibling_window).open(sibling).id_salt("sibling").show(ui);
+            let card = CardMenu { common: Common::new(), open: dialog, dialog: dialog_shown, target, inside, body, menus, runs };
+            card.id_salt("card").show(ui);
+        });
+        if shown.is_some() {
+            frame_shown.shown.set(true);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A sibling window in the same window as a modal dialog overlaps the dialog's card. A press on that overlap, outside
+/// the menu the card opened, is outside the menu: it closes the menu, and the dialog and the sibling stay as they were.
+#[trial]
+fn a_press_on_a_sibling_windows_overlap_of_the_card_closes_the_menu() {
+    let mut frames = Frames::new();
+    let (frame_shown, sibling_shown) = (Opened::default(), Opened::default());
+    let sibling_content = RefCell::new(Seen::default());
+    let (dialog, inside) = (Opened::default(), RefCell::new(Seen::default()));
+    let (target, body, menus) = (RefCell::new(None), Cell::new(None), RefCell::new(Vec::new()));
+    let judged = RefCell::new(PressJudgement::default());
+    let runs: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut trace: Vec<String> = Vec::new();
+    let open = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        frame_shown.shown.set(false);
+        sibling_shown.shown.set(false);
+        let family = WindowFamily {
+            common: Common::new(),
+            frame: true,
+            dialog: open.get(),
+            sibling: true,
+            frame_shown: &frame_shown,
+            sibling_shown: &sibling_shown,
+            sibling_content: &sibling_content,
+            card_dialog: &dialog,
+            card_target: &target,
+            card_inside: &inside,
+            card_body: &body,
+            card_menus: &menus,
+            card_runs: &runs,
+        };
+        family.id_salt("family").show_at(ui, OPENER);
+        if !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx()) {
+            *judged.borrow_mut() = press_judgement(ui.ctx());
+        }
+    };
+    frames.idle(3, &mut show);
+    assert!(frame_shown.shown.get(), "the window shows");
+    frames.idle(20, &mut show);
+    open.set(true);
+    frames.frame(vec![], &mut show);
+    open.set(false);
+    frames.idle(30, &mut show);
+    assert!(dialog.shown.get(), "the dialog shows");
+    assert!(sibling_shown.shown.get(), "the window beside the dialog shows");
+    // A right click on the button in the card opens the card's menu.
+    let button = (*target.borrow()).expect("the button in the card shows");
+    let right_click = |at: Pos2, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), runs: &RefCell<Vec<String>>, trace: &mut Vec<String>| {
+        traced(vec![moved(at)], frames, &mut *show, runs, trace);
+        traced(vec![secondary(at, true)], frames, &mut *show, runs, trace);
+        traced(vec![secondary(at, false)], frames, &mut *show, runs, trace);
+        for _ in 0..10 {
+            traced(vec![], frames, &mut *show, runs, trace);
+        }
+    };
+    right_click(button.center(), &mut frames, &mut show, &runs, &mut trace);
+    assert!(menus.borrow().is_empty(), "the click that opened the menu leaves it open:\n{}", trace.join("\n"));
+    let judged_now = {
+        let judged = judged.borrow();
+        (*judged).clone()
+    };
+    let card_rect = judged_now
+        .layers
+        .iter()
+        .find(|entry| matches!(entry.rank, Rank::Modal { .. }))
+        .map(|entry| entry.rect)
+        .expect("the dialog's card is a modal layer");
+    let sibling = judged_now
+        .layers
+        .iter()
+        .find(|entry| entry.rank == Rank::Window && entry.parent.is_some())
+        .map(|entry| entry.rect)
+        .expect("the window beside the dialog is a window layer of the family");
+    let menu =
+        judged_now.layers.iter().find(|entry| matches!(entry.rank, Rank::Popup)).map(|entry| entry.rect).expect("the card's menu is a popup layer");
+    let overlap = card_rect.intersect(sibling);
+    assert!(
+        overlap.width() > 8.0 && overlap.height() > 8.0,
+        "the window beside the dialog {sibling:?} overlaps the card {card_rect:?}:\n{}",
+        trace.join("\n")
+    );
+    // The overlap's bottom left corner: inside both layers, away from the menu and the button it hangs from.
+    let at = Pos2::new(overlap.left() + 8.0, overlap.bottom() - 8.0);
+    assert!(
+        card_rect.contains(at) && sibling.contains(at) && !menu.contains(at),
+        "the press at {at:?} lands on the card and the window beside it, beside the menu {menu:?}:\n{}",
+        trace.join("\n")
+    );
+    assert!(
+        judged_now.layers.iter().filter_map(|entry| entry.anchor).all(|anchor| !anchor.contains(at)),
+        "the press at {at:?} lands away from the menu's anchor:\n{}",
+        trace.join("\n")
+    );
+    assert!(
+        judged_now.zone.as_ref().is_some_and(|zone| zone.iter().all(|rect| !rect.contains(at))),
+        "a press on the window beside the dialog is outside the menu's press zone {:?}:\n{}",
+        judged_now.zone,
+        trace.join("\n")
+    );
+    traced(vec![moved(at)], &mut frames, &mut show, &runs, &mut trace);
+    traced(vec![press(at)], &mut frames, &mut show, &runs, &mut trace);
+    traced(vec![release(at)], &mut frames, &mut show, &runs, &mut trace);
+    for _ in 0..10 {
+        traced(vec![], &mut frames, &mut show, &runs, &mut trace);
+    }
+    assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press on the overlap closes the menu:\n{}", trace.join("\n"));
+    assert!(dialog.shown.get(), "the dialog stays open:\n{}", trace.join("\n"));
+    assert_eq!(sibling_content.borrow().presses, 0, "the menu takes the press that closes it:\n{}", trace.join("\n"));
+}
