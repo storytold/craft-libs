@@ -36,6 +36,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             self.drags.rename = Some(key);
         } else if activates {
             self.activation_clicks = press.clicks.min(u8::MAX as u32) as u8;
+            self.activation_mods = press.mods;
             self.events.push(CollectionEvent::Activate(key));
         } else if on_release {
             self.drags.activate = Some(key);
@@ -161,7 +162,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         layout,
                         key,
                         at,
-                        RowPress { primary, clicks: start.clicks, origin: local(start.origin), offset },
+                        RowPress { primary, clicks: start.clicks, mods, origin: local(start.origin), offset },
                     );
                 }
             } else {
@@ -279,6 +280,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && self.index_of(&key).is_some()
                 {
                     self.activation_clicks = start.clicks.min(u8::MAX as u32) as u8;
+                    self.activation_mods = mods_now;
                     self.events.push(CollectionEvent::Activate(key));
                 }
                 if let Some(key) = self.drags.collapse.take()

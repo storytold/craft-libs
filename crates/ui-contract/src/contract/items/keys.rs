@@ -168,6 +168,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             let key = self.source.key(row);
             self.keyed_activation = Some(key.clone());
+            self.activation_mods = Self::mods_at_activation(cx);
             self.events.push(CollectionEvent::Activate(key));
         }
     }
@@ -213,11 +214,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.events.push(CollectionEvent::Delete(self.keys_at(&self.acted_on(row))));
     }
 
+    /// The modifiers held at a keyed activation: the activation's, else the pass's.
+    fn mods_at_activation(cx: &Cx<'_, C>) -> craft_keymap::Mods {
+        cx.core.activation.map_or_else(|| crate::runtime::pointer::frame_raw(&cx.core.ctx).mods, |activation| activation.mods)
+    }
+
     /// Space on the lead row `row`, as `CollectionProps.space` says.
     fn space_key(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, row: usize) {
         match props.space {
             SpaceAction::Activate => match Self::select_mode(comp) {
-                SelectMode::None => self.events.push(CollectionEvent::Activate(self.source.key(row))),
+                SelectMode::None => {
+                    self.activation_mods = Self::mods_at_activation(cx);
+                    self.events.push(CollectionEvent::Activate(self.source.key(row)));
+                }
                 mode => self.pick_by(comp, row, false, mode != SelectMode::Single, PickBy::Keys),
             },
             SpaceAction::ToggleCell => self.toggle_by_key(cx, row),

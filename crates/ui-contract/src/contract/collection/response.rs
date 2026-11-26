@@ -28,6 +28,10 @@ pub struct CollectionResponse<K, E> {
     /// The click count of the press behind this pass's `Activate`: 2 for the second click of a double click, 0 when a
     /// key or no pointer activated.
     pub activation_clicks: u8,
+    /// The modifiers held at this pass's `Activate`: with the click for a pointer activation, with the key for a keyed
+    /// one, including a modified Enter a driving field hands on (`TextField::drives_modified_enter`). `Mods::NONE` for
+    /// an AccessKit activation and when nothing activated.
+    pub activation_mods: craft_keymap::Mods,
     /// While a drag is over the collection, the drop its release would make; `None` when the collection would take
     /// none. An app previews it (a layer move on the canvas); the drop itself comes as its event.
     pub pending_drop: Option<PendingDrop<K>>,
@@ -55,7 +59,7 @@ pub enum PendingDrop<K> {
 impl<K, E> CollectionResponse<K, E> {
     pub(crate) fn new(
         response: Response,
-        ItemsOut { events, shown, activation_clicks, pending_drop, hovered, menu, auto_scrolling }: ItemsOut<K, E>,
+        ItemsOut { events, shown, activation_clicks, activation_mods, pending_drop, hovered, menu, auto_scrolling }: ItemsOut<K, E>,
         visible: Range<usize>,
         gestures: Gestures,
     ) -> Self {
@@ -68,6 +72,7 @@ impl<K, E> CollectionResponse<K, E> {
             rename: gestures.rename,
             reorder: gestures.reorder,
             activation_clicks,
+            activation_mods,
             pending_drop,
             hovered,
             menu,
@@ -87,6 +92,7 @@ pub(crate) struct ItemsOut<K, E> {
     pub(crate) events: Vec<CollectionEvent<K, E>>,
     pub(crate) shown: Vec<ShownRow<K>>,
     pub(crate) activation_clicks: u8,
+    pub(crate) activation_mods: craft_keymap::Mods,
     pub(crate) pending_drop: Option<PendingDrop<K>>,
     pub(crate) hovered: Option<K>,
     pub(crate) menu: Option<ContextMenuRequest<K>>,
@@ -95,7 +101,16 @@ pub(crate) struct ItemsOut<K, E> {
 
 impl<K, E> Default for ItemsOut<K, E> {
     fn default() -> Self {
-        ItemsOut { events: Vec::new(), shown: Vec::new(), activation_clicks: 0, pending_drop: None, hovered: None, menu: None, auto_scrolling: false }
+        ItemsOut {
+            events: Vec::new(),
+            shown: Vec::new(),
+            activation_clicks: 0,
+            activation_mods: craft_keymap::Mods::NONE,
+            pending_drop: None,
+            hovered: None,
+            menu: None,
+            auto_scrolling: false,
+        }
     }
 }
 

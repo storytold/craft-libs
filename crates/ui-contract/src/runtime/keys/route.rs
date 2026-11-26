@@ -612,6 +612,9 @@ struct Driven {
     tree: bool,
     /// Enter goes to the list; off, a text opener keeps it (its layer's `FocusPolicy::list_enter`).
     enter: bool,
+    /// The modified Enter chords that go to the list as an activation of its lead, as `Drive::enter_mods` holds them;
+    /// none outside a field that drives a list (`TextField::drives_modified_enter`).
+    enter_mods: u16,
 }
 
 /// The collection a text stop inside an open `KeepAnchor` dropdown layer (a search field) or a text field that drives
@@ -636,10 +639,11 @@ fn list_of_field(ctx: &Context, rec: &StopRec) -> Option<Driven> {
             ends: drive.empty,
             tree: drive.empty && focus::registration::is_tree(ctx, drive.list),
             enter: true,
+            enter_mods: drive.enter_mods,
         }),
         (None, Some((_, opener))) => {
             let (layer, list, _) = focus::registration::dropdown_target(ctx, opener)?;
-            Some(Driven { layer: Some(layer), list, text: false, ends: true, tree: false, enter: true })
+            Some(Driven { layer: Some(layer), list, text: false, ends: true, tree: false, enter: true, enter_mods: 0 })
         }
         (None, None) => None,
     }
@@ -652,7 +656,12 @@ impl Driven {
     fn of(ctx: &Context, opener: &StopRec) -> Option<Driven> {
         let (layer, list, policy) = focus::registration::dropdown_target(ctx, opener.stop.key())?;
         let text = matches!(opener.stop.keys.owner, OwnerClass::Text);
-        Some(Driven { layer: Some(layer), list, text, ends: !text, tree: false, enter: !text || policy.list_enter })
+        Some(Driven { layer: Some(layer), list, text, ends: !text, tree: false, enter: !text || policy.list_enter, enter_mods: 0 })
+    }
+
+    /// Whether Enter with `mods` held, some of them, goes to the list as an activation of its lead.
+    fn takes_enter(self, mods: Mods) -> bool {
+        !mods.is_none() && self.enter_mods & focus::registration::enter_bit(mods) != 0
     }
 
     /// The intent a claimed chord of the opener becomes for the list.
@@ -711,6 +720,15 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         && let Some(intent) = driven.intent(press.key)
     {
         return PressRoute::List(driven.list, intent);
+    }
+    // A modified Enter the field hands on activates the list's lead, and the list reports the modifiers, as it does
+    // with the list focused; a chord a scoped command binds is that command's there, and here too.
+    if let Some(driven) = driven
+        && press.key == Key::Enter
+        && driven.takes_enter(press.mods)
+        && !commands::binds_scoped(ctx, &Chord { mods: press.mods, key: press.key })
+    {
+        return PressRoute::List(driven.list, Intent::Activate);
     }
     if matches!(stop.keys.owner, OwnerClass::Recorder) {
         // A recorder reads every press as a chord; no intent of the key table applies to it.

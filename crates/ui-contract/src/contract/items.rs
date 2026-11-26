@@ -236,6 +236,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     events: Vec<CollectionEvent<C::Key, C::ItemEvent>>,
     /// The click count of the press behind this pass's pointer activation, 0 when no pointer activated.
     activation_clicks: u8,
+    /// The modifiers held at this pass's activation, `Mods::NONE` when nothing or AccessKit activated.
+    activation_mods: craft_keymap::Mods,
     /// The row the activation key activated this pass, which reads it as `RowState::activated_by_key`.
     keyed_activation: Option<C::Key>,
     visible: Range<usize>,
@@ -280,6 +282,7 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
 struct RowPress {
     primary: bool,
     clicks: u32,
+    mods: craft_keymap::Mods,
     origin: Pos2,
     offset: ScrollPos,
 }
@@ -313,6 +316,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             selection_at_read: C::Selection::default(),
             events: Vec::new(),
             activation_clicks: 0,
+            activation_mods: craft_keymap::Mods::NONE,
             keyed_activation: None,
             visible: 0..0,
             shown: Vec::new(),

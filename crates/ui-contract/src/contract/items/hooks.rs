@@ -796,6 +796,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             events: std::mem::take(&mut self.events),
             shown: std::mem::take(&mut self.shown),
             activation_clicks: self.activation_clicks,
+            activation_mods: self.activation_mods,
             pending_drop: self.drags.pending.clone(),
             hovered: self.hovered.take(),
             menu: self.drags.menu.clone().filter(|request| self.index_of(&request.key).is_some()),

@@ -232,18 +232,29 @@ pub(crate) struct Drive {
     pub(crate) list: Id,
     /// The field holds no text, so Home, End and, for a tree, Left and Right leave the caret and go to the collection.
     pub(crate) empty: bool,
+    /// The modified Enter chords the field hands on to the collection as an activation of its lead, one bit per
+    /// combination of modifiers (`enter_bit`); plain Enter goes to it in any case.
+    pub(crate) enter_mods: u16,
     pass: u64,
+}
+
+/// The bit of a combination of modifiers in `Drive::enter_mods`.
+pub(crate) fn enter_bit(mods: craft_keymap::Mods) -> u16 {
+    let at = u16::from(mods.cmd) | u16::from(mods.ctrl) << 1 | u16::from(mods.alt) << 2 | u16::from(mods.shift) << 3;
+    1 << at
 }
 
 fn drive_slot(field: Id) -> Id {
     sub(field, "drives")
 }
 
-/// Records that the text field `field` drives the collection `list` in this pass.
+/// Records that the text field `field` drives the collection `list` in this pass, and hands it the modified Enter
+/// chords `enter_mods` lists as well as plain Enter.
 #[doc(hidden)]
-pub fn drive(ctx: &Context, field: Id, list: Id, empty: bool) {
+pub fn drive(ctx: &Context, field: Id, list: Id, empty: bool, enter_mods: &[craft_keymap::Mods]) {
     let slot = drive_slot(field);
-    store::put(ctx, slot, Drive { list, empty, pass: crate::runtime::pointer::pass_of(ctx) });
+    let enter_mods = enter_mods.iter().filter(|mods| !mods.is_none()).fold(0, |set, mods| set | enter_bit(*mods));
+    store::put(ctx, slot, Drive { list, empty, enter_mods, pass: crate::runtime::pointer::pass_of(ctx) });
     crate::runtime::memory::adopt::<Drive>(ctx, field, slot);
 }
 
