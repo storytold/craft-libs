@@ -41,8 +41,8 @@ pub struct Workspace<P> {
     /// goes back.
     #[serde(default)]
     hidden: Vec<(P, Location<P>)>,
-    /// Floating panels with the docked location each one left, so Dock Panel can return it. Saved with the
-    /// workspace.
+    /// Floating panels, and closed panels that were floating, with the docked location each one left, so Dock Panel
+    /// can return it. A closed panel's record lives as long as its `hidden` record. Saved with the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     floated: Vec<(P, Location<P>)>,
     /// Counts the replacements of this live workspace. Not saved, and not part of equality.
@@ -105,7 +105,7 @@ impl<P> Workspace<P> {
         &self.hidden
     }
 
-    /// The floating panels with the docked location each one left.
+    /// The floating panels, and the closed panels that were floating, with the docked location each one left.
     pub fn floated(&self) -> &[(P, Location<P>)] {
         &self.floated
     }
@@ -409,11 +409,12 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         }
     }
 
-    /// Update the floated records after an action that turned `before` into the current layout: drop the records of
-    /// panels that no longer float, and record the docked place of each panel that floats now and did not before.
+    /// Update the floated records after an action that turned `before` into the current layout: drop the stale
+    /// records ([`Self::drop_stale_floated`]), and record the docked place of each panel that floats now and did not
+    /// before.
     fn track_floated(&mut self, before: &Layout<P>) {
+        self.drop_stale_floated();
         let layout = &self.layout;
-        self.floated.retain(|(p, _)| floats(layout, p));
         let fresh: Vec<(P, Location<P>)> = layout
             .panels()
             .into_iter()
@@ -421,6 +422,13 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             .filter_map(|p| before.location(p).ok().map(|location| (p.clone(), location)))
             .collect();
         self.floated.extend(fresh);
+    }
+
+    /// Drop the floated records of panels that neither float nor are hidden: a panel that closed while floating keeps
+    /// its record as long as its hidden record, so it docks back to its place after it reopens floating.
+    fn drop_stale_floated(&mut self) {
+        let (layout, hidden) = (&self.layout, &self.hidden);
+        self.floated.retain(|(p, _)| floats(layout, p) || hidden.iter().any(|(q, _)| q == p));
     }
 
     /// Restore `panel` where the chain of hidden anchors from its location ends, else at the
@@ -492,7 +500,6 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             self.layout.take(panel);
         }
         self.hidden.extend(locations);
-        self.floated.retain(|(p, _)| registered(p));
         let known: HashSet<P> = self.layout.panels().into_iter().chain(self.hidden.iter().map(|(p, _)| p)).cloned().collect();
         let mut missing: Vec<(P, Location<P>)> = Vec::new();
         for panel in default.layout.panels() {
@@ -536,6 +543,7 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             !drop
         });
         self.hidden.truncate(MAX_PANELS);
+        self.drop_stale_floated();
     }
 }
 

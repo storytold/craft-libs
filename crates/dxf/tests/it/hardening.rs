@@ -13,15 +13,34 @@ fn bin_with(f: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
 }
 
 #[test]
-fn binary_reals_that_are_not_finite_become_zero() {
+fn binary_reals_that_are_not_finite_become_invalid() {
     for bits in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let b = bin_with(|b| {
             b.extend_from_slice(&10i16.to_le_bytes());
             b.extend_from_slice(&bits.to_le_bytes());
         });
         let tags = parse(&b).unwrap();
-        assert_eq!(tags[0], Tag::f(10, 0.0), "{bits}");
+        assert_eq!(tags[0], Tag::invalid(10, bits.to_string()), "{bits}");
+        assert_eq!(tags[0].f64(), 0.0, "backward compatibility for f64: {bits}");
+        assert_eq!(tags[0].i64(), 0, "backward compatibility for i64: {bits}");
+        assert!(tags[0].is_invalid());
     }
+}
+
+#[test]
+fn malformed_path_coordinates_are_invalid_and_do_not_silently_snap_to_origin() {
+    // Malformed line entity coordinates (groups 10, 20, 11, 21)
+    let dxf = b"0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n100.0\n20\nNaN\n11\ncorrupted\n21\n200.0\n0\nENDSEC\n0\nEOF\n";
+    let tags = parse(dxf).unwrap();
+    let y0 = tags.iter().find(|t| t.code == 20).unwrap();
+    let x1 = tags.iter().find(|t| t.code == 11).unwrap();
+    assert_eq!(y0.value, Value::Invalid("NaN".into()));
+    assert_eq!(x1.value, Value::Invalid("corrupted".into()));
+    assert!(y0.is_invalid());
+    assert!(x1.is_invalid());
+    // Legacy callers still get 0.0
+    assert_eq!(y0.f64(), 0.0);
+    assert_eq!(x1.f64(), 0.0);
 }
 
 #[test]
@@ -107,17 +126,66 @@ fn trailing_spaces_keep_sections_and_eof() {
 #[test]
 fn integer_groups_reject_non_finite_and_clamp() {
     let t = parse(b"70\ninf\n70\nNaN\n70\n1e30\n70\n-1e30\n90\n1e30\n160\n1e30\n160\n-inf\n62\n12.0\n0\nEOF\n").unwrap();
-    assert_eq!(t[0], Tag::i(70, 0));
-    assert_eq!(t[1], Tag::i(70, 0));
+    assert_eq!(t[0], Tag::invalid(70, "inf"));
+    assert_eq!(t[0].i64(), 0);
+    assert_eq!(t[1], Tag::invalid(70, "NaN"));
+    assert_eq!(t[1].i64(), 0);
     // Clamped to what the group's width holds, unsigned values included (the binary writer
     // keeps up to 65535 and 4294967295 as their bit patterns).
     assert_eq!(t[2], Tag::i(70, i64::from(u16::MAX)));
     assert_eq!(t[3], Tag::i(70, i64::from(i16::MIN)));
     assert_eq!(t[4], Tag::i(90, i64::from(u32::MAX)));
     assert_eq!(t[5], Tag::i(160, i64::MAX));
-    assert_eq!(t[6], Tag::i(160, 0));
+    assert_eq!(t[6], Tag::invalid(160, "-inf"));
+    assert_eq!(t[6].i64(), 0);
     assert_eq!(t[7], Tag::i(62, 12));
     assert_eq!(Value::Str("inf".into()).as_i64(), 0);
+}
+
+#[test]
+fn tag_f_non_finite_creates_invalid() {
+    let nan_tag = Tag::f(10, f64::NAN);
+    assert!(nan_tag.is_invalid());
+    assert_eq!(nan_tag.f64(), 0.0);
+    assert_eq!(nan_tag.checked_f64(), None);
+    assert_eq!(nan_tag.checked_i64(), None);
+    assert_eq!(nan_tag.invalid_str(), Some("NaN"));
+
+    let inf_tag = Tag::f(20, f64::INFINITY);
+    assert!(inf_tag.is_invalid());
+    assert_eq!(inf_tag.f64(), 0.0);
+    assert_eq!(inf_tag.checked_f64(), None);
+    assert_eq!(inf_tag.checked_i64(), None);
+    assert_eq!(inf_tag.invalid_str(), Some("inf"));
+}
+
+#[test]
+fn invalid_numbers_with_dxf_escapes_roundtrip_through_ascii_write_and_parse() {
+    let tags =
+        vec![Tag::invalid(10, "12.34\\U+0020xyz"), Tag::invalid(20, "bad\\U+005Cpath"), Tag::invalid(70, "corrupted\\U+0041"), Tag::s(0, "EOF")];
+    let ascii_out = write_ascii(&tags);
+    let back = parse(ascii_out.as_bytes()).unwrap();
+    assert_eq!(back[0], Tag::invalid(10, "12.34\\U+0020xyz"));
+    assert_eq!(back[1], Tag::invalid(20, "bad\\U+005Cpath"));
+    assert_eq!(back[2], Tag::invalid(70, "corrupted\\U+0041"));
+}
+
+#[test]
+fn binary_integer_writer_reports_error_unless_lossy_normalized() {
+    let invalid_int_tag = Tag::invalid(70, "corrupted");
+    assert!(invalid_int_tag.is_invalid());
+    assert_eq!(invalid_int_tag.checked_i64(), None);
+    assert_eq!(invalid_int_tag.i64(), 0);
+
+    // Binary DXF integer groups have no NaN marker, so write_binary reports conversion error
+    let res = write_binary(&[invalid_int_tag.clone(), Tag::s(0, "EOF")], true);
+    assert!(matches!(res, Err(craft_dxf::DxfError::InvalidInteger { code: 70, .. })));
+
+    // Explicit write_binary_lossy normalizes invalid integer to 0
+    let lossy_bin = craft_dxf::write_binary_lossy(&[invalid_int_tag, Tag::s(0, "EOF")], true);
+    let back = parse(&lossy_bin).unwrap();
+    assert_eq!(back[0], Tag::i(70, 0));
+    assert_eq!(back[0].checked_i64(), Some(0));
 }
 
 /// An unsigned value spelled as a float reads as the same spelled as an integer (#1026 review):
@@ -139,7 +207,7 @@ fn hex_groups_pad_odd_digits_and_drop_junk() {
     assert_eq!(t[2].value, Value::Hex(String::new()));
     assert_eq!(t[3].value, Value::Hex("0aF0".into()));
     // The binary writer agrees with the reader: the odd digit is padded, nothing shifts.
-    let back = parse(&write_binary(&[Tag::new(310, Value::Hex("ABC".into())), Tag::s(0, "EOF")], true)).unwrap();
+    let back = parse(&write_binary(&[Tag::new(310, Value::Hex("ABC".into())), Tag::s(0, "EOF")], true).unwrap()).unwrap();
     assert_eq!(back[0].value, Value::Hex("ABC0".into()));
 }
 
@@ -171,7 +239,7 @@ fn binary_sixteen_and_thirty_two_bit_values_wrap_in_range_and_clamp_outside() {
         Tag::i(90, -(1 << 40)),
         Tag::s(0, "EOF"),
     ];
-    let back = parse(&write_binary(&tags, true)).unwrap();
+    let back = parse(&write_binary(&tags, true).unwrap()).unwrap();
     assert_eq!(back[0], Tag::i(70, -1));
     assert_eq!(back[1], Tag::i(70, 40000 - 65536));
     assert_eq!(back[2], Tag::i(70, i64::from(i16::MAX)));

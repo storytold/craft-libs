@@ -268,9 +268,7 @@ fn extreme_inputs_stay_decodable() {
                 let (enc, packets) = encode(OpusEncoder::with_mode(c as u8, rate * c as u32, mode, bw).unwrap(), &planar);
                 assert!(packets.iter().all(|p| p.len() >= 3 && p.len() <= 1276), "{name} {mode:?}: packet sizes");
                 let dec = decode(&enc.opus_head(), &packets);
-                let peak = dec.iter().flatten().fold(0f32, |m, v| m.max(v.abs()));
-                let snr = if name == "nan" { f64::NAN } else { snr_search(&planar[0], &dec[0], 2).0 };
-                eprintln!("{name} {mode:?}/{bw:?} {c} ch: peak {peak:.2}, SNR {snr:.1} dB, {:.1} kb/s", bitrate(&packets) / 1000.0);
+                assert_eq!(dec.len(), c, "{name} {mode:?}/{bw:?} {c} ch: decoded channels");
                 assert!(dec.iter().all(|ch| ch.iter().all(|v| v.is_finite() && v.abs() <= 4.0)), "{name} {mode:?}/{bw:?} {c} ch: bad output");
             }
         }

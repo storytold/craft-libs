@@ -27,7 +27,7 @@ fn binary_converts_values_to_their_codes_kind() {
     // A number held as text at a numeric code, an out-of-range 16-bit value, a long chunk.
     let long = "AB".repeat(300);
     let tags = vec![Tag::s(70, "12"), Tag::i(62, 1 << 20), Tag::new(310, Value::Hex(long)), Tag::s(0, "EOF")];
-    let back = parse(&write_binary(&tags, true)).unwrap();
+    let back = parse(&write_binary(&tags, true).unwrap()).unwrap();
     assert_eq!(back[0], Tag::i(70, 12));
     assert_eq!(back[1], Tag::i(62, i64::from(i16::MAX)));
     let sizes: Vec<usize> = back.iter().filter(|t| t.code == 310).map(|t| t.str().len()).collect();
@@ -36,7 +36,7 @@ fn binary_converts_values_to_their_codes_kind() {
 
 #[test]
 fn hostile_binary_input_never_panics() {
-    let good = write_binary(&sample(), true);
+    let good = write_binary(&sample(), true).unwrap();
     // Every truncation, and every single-byte corruption of the body.
     for n in 0..good.len() {
         let _ = parse(good.get(..n).unwrap());
