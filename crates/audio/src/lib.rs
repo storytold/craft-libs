@@ -49,6 +49,8 @@ pub mod alac;
 mod buffer;
 #[cfg(feature = "dsd")]
 pub mod dsd;
+#[cfg(any(feature = "flac-decode", feature = "symphonia"))]
+mod flac_layout;
 #[cfg(feature = "g722")]
 pub mod g722;
 #[cfg(feature = "g726")]
@@ -62,7 +64,14 @@ pub mod mp3;
 pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
@@ -72,7 +81,14 @@ pub mod qoa;
 mod read;
 #[cfg(feature = "sbc")]
 pub mod sbc;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 mod track;
 #[cfg(feature = "vmd-decode")]
 pub mod vmd;
@@ -150,7 +166,14 @@ pub use read::{
 };
 #[cfg(feature = "decode-native")]
 pub use read::{RawPcm, aiff_pcm, wav_pcm};
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(any(
     feature = "pcm-encode",
@@ -785,6 +808,13 @@ impl Default for EncodeOptions {
         Self::new(EncodeFormat::Wav)
     }
 }
+
+#[cfg(test)]
+extern crate self as craft_audio;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;
 
 // An encoder refusing its settings is an encode error, not damaged input.
 #[cfg(all(test, feature = "aac-encode"))]
