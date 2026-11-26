@@ -240,6 +240,19 @@ pub fn store_entries(bstore: &[u8]) -> impl Iterator<Item = &[u8]> {
     crate::record::Records::new(bstore).filter(|r| r.kind == rt::FBSE).map(|r| r.data).take(MAX_ENTRIES)
 }
 
+/// The BLIP record of a `.ppt` store entry: embedded when bytes follow the FBSE's name, and in the
+/// delay stream only when none do, so an embedded BLIP that can't be read is no picture (unlike
+/// [`fbse_record`], `.doc`'s rule, which then looks in the delay stream).
+fn entry_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<Rec<'a>> {
+    // btWin32, btMacOS, rgbUid[16], tag, size, cRef, foDelay, unused, cbName, unused×2.
+    if u32_at(fbse, 20)? == 0 {
+        return None;
+    }
+    let fo_delay = u32_at(fbse, 28)? as usize;
+    let at = 36usize.checked_add(*fbse.get(33)? as usize)?;
+    if fbse.len() > at { Rec::at(fbse, at) } else { Rec::at(delay, fo_delay) }
+}
+
 /// The BLIP store: each entry's BLIP record, decoded only when a shape first asks for it, every
 /// entry at most once, and all of them together within a budget.
 pub struct Store<'a> {
@@ -252,7 +265,12 @@ impl<'a> Store<'a> {
     /// `Pictures` stream) and its budget.
     pub fn new(dgg: Option<Rec<'a>>, delay: &'a [u8], budget: usize) -> Self {
         let entries = match dgg.and_then(|d| d.child(rt::BSTORE_CONTAINER)) {
-            Some(bstore) => store_entries(bstore.data).map(|fbse| fbse_record(fbse, delay).map(|(r, _)| r)).collect(),
+            // One slot per child, so a record that isn't an FBSE keeps its `pib` and the ones
+            // after it don't shift.
+            Some(bstore) => crate::record::Records::new(bstore.data)
+                .take(MAX_ENTRIES)
+                .map(|r| if r.kind == rt::FBSE { entry_record(r.data, delay) } else { None })
+                .collect(),
             None => vec![],
         };
         Store { entries, work: Decode::new(budget) }

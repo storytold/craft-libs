@@ -336,6 +336,33 @@ fn a_blip_inside_its_fbse_is_read() {
     assert!(store.take(1).is_none(), "an entry of size 0");
 }
 
+/// A store child that isn't an FBSE (a BLIP stored directly) still takes a slot, so the `pib`s
+/// of the entries after it don't shift onto the wrong picture.
+#[test]
+fn a_child_that_isnt_an_fbse_keeps_its_slot() {
+    let png = |tag: &[u8]| atom(rt::BLIP_PNG, 0x6E0, &[&[0u8; 17][..], b"\x89PNG", tag].concat());
+    let (first, second) = (png(b"1"), png(b"2"));
+    let delay = [&first[..], &second[..]].concat();
+    let entries = [fbse_at(0, first.len() as u32), png(b"direct"), fbse_at(first.len() as u32, second.len() as u32)];
+    let mut store = store_of(&entries, &delay, usize::MAX);
+    assert!(store.take(1).is_none(), "the direct BLIP isn't decoded here");
+    assert_eq!(store.take(2).map(|p| p.data), Some(b"\x89PNG2".to_vec()));
+    assert_eq!(store.take(0).map(|p| p.data), Some(b"\x89PNG1".to_vec()));
+}
+
+/// An FBSE with bytes after its name holds its BLIP there; when those bytes aren't a record, the
+/// entry is no picture, rather than whatever its `foDelay` points at in the delay stream.
+#[test]
+fn an_unreadable_embedded_blip_is_not_looked_for_in_the_delay_stream() {
+    let blip = atom(rt::BLIP_PNG, 0x6E0, &[&[0u8; 17][..], b"\x89PNG"].concat());
+    let mut fbse = [0u8; 36];
+    fbse[20..24].copy_from_slice(&(blip.len() as u32).to_le_bytes());
+    let entry = atom(rt::FBSE, 2, &[&fbse[..], &[1, 2, 3]].concat());
+    let mut store = store_of(&[entry, fbse_at(0, blip.len() as u32)], &blip, usize::MAX);
+    assert!(store.take(0).is_none());
+    assert!(store.take(1).is_some(), "the same delay stream offset, pointed at without embedded bytes");
+}
+
 /// The store reads at most [`MAX_ENTRIES`] entries.
 #[test]
 fn the_store_holds_at_most_max_entries() {
