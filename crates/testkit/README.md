@@ -281,6 +281,63 @@ A missing program prints a `SKIPPED (oracle)` line and returns from the test. Wh
 
 The tests use channel handshakes and contain no sleeps or time limits.
 
+## skip
+
+The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
+(a program, a corpus file, the craft-fonts faces) skips or fails under one rule:
+
+The variable is read only when something is missing.
+
+| Value | Result |
+|---|---|
+| Not set or empty | The helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`. |
+| `1` | The test fails. No skip line is printed. |
+| Any other value, such as `0`, `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
+| Not Unicode | The test fails with the reason and the variable's name. No skip line is printed. |
+
+A variable name that is empty or holds `=` or a NUL character also fails the test, before the
+environment is read.
+
+`skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
+or a `RequiredError` that names the variable.
+
+The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
+`CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
+`skip::REQUIRED_VAR` (`CRAFT_TEST_REQUIRED`) is the default name.
+
+```rust
+use craft_testkit::skip::{REQUIRED_VAR, craft_fonts, skip};
+
+#[test]
+fn renders_with_qpdf() {
+    let qpdf = craft_testkit::or_skip!(find_qpdf(), REQUIRED_VAR);
+    // ...
+}
+
+#[test]
+fn draws_japanese() {
+    if !craft_fonts(HAS_CRAFT_FONTS, CRAFT_FONTS_REQUIRED) {
+        return;
+    }
+    // ...
+}
+```
+
+`or_skip!` evaluates a `Result` once, binds the `Ok` value, and on `Err` skips with the error's
+`Display` text as the reason. The two-argument form returns `()`; a test that returns a `Result`
+passes the value to return as the third argument, for example `Ok(())`.
+
+`craft_fonts(present, required)` takes both values from the caller's build: a build constant, an
+`option_env!` value, or the table `craft-fonts-build` generates. A required failure names
+`CRAFT_FONTS_REQUIRED=1`.
+
+`craft_fonts_cover(text, faces)` returns `true` when one face maps every character of `text` that
+is not whitespace. Each face is font data with its index in a collection (`0` for a single font). A
+face that does not parse covers nothing, and coverage is not combined across faces.
+
+The module does not change the process environment. Its tests that read a real variable run the
+test binary again as a child process with that variable set.
+
 ## Origin
 
 ### serial
@@ -336,6 +393,16 @@ PhotoCraft and DeckCraft. `holders_take_turns` waits on channels where the copie
 | `rng` (`XorShift64`) | storytold/filmcraft | `crates/dnx/tests/it/fuzz_hostile.rs:9-20` | `0a881266` |
 | `rng` (`XorShift64`) | storytold/craft-libs | `crates/video/tests/dnx/fuzz_hostile.rs:9-20` | `9f10d434` |
 | `rng` (`XorShift64Star`) | storytold/craft-libs | `crates/jpeg/tests/mutation.rs:28-46` | `97c83dc9` |
+
+### skip
+
+| Code | Repository | Path | Commit |
+|---|---|---|---|
+| `skip!`, `record` | storytold/lightcraft | `crates/testkit/src/lib.rs` | `7ebbb17a82` |
+| `or_skip!`, `REQUIRED_VAR` | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `ee9bf28126` |
+| `require_*!`, `skip` | storytold/filmcraft | `crates/testkit/src/lib.rs`, `crates/testkit/src/oracle.rs` | `cff7e1442e` |
+| `skip`, `skip_with` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
+| `craft_fonts_cover` | storytold/gridcraft | `crates/ui-egui/src/theme.rs` | `06c2b1440b` |
 
 ## Migration
 
@@ -400,3 +467,19 @@ Each adoption keeps the variable names the repository uses today. A repository w
 | DeckCraft | `serial` | No |
 | EffectCraft | `serial` | No |
 | PdfCraft | `serial` | No |
+
+### skip
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| LightCraft | `lightcraft-testkit`'s `skip!`, which keeps its JSON skip log on top of `skip` | Not started |
+| PdfCraft | `pdfcraft-oracle`'s `or_skip!`, which reads any value of `PDFCRAFT_ORACLES_REQUIRED` | Not started |
+| FilmCraft | `filmcraft-testkit`'s `require_*!` and `skip`, which accept `1`, `true`, `yes` and `on` | Not started |
+| GridCraft | `craft_fonts_cover`, which reads GridCraft's embedded face table | Not started |
+| craft-libs `craft-media-testkit` | `skip` and `skip_with`, which accept `1`, `true`, `yes` and `on` | Not started |
+| craft-libs `pdf` tests | `or_skip!` in `crates/pdf/tests/cos/oracle.rs`, which reads any value of `CRAFT_PDF_ORACLES_REQUIRED` | Not started |
+
+After an adoption, an app that reads any value as required skips on an empty value, and fails as
+a configuration error on every other value except `1`, `0` included. An app that accepts `true`, `yes`
+and `on` fails on those values as a configuration error.
+Each adoption says which values change and keeps the variable name.

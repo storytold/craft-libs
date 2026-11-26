@@ -32,10 +32,15 @@
 //! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
 //! different lock can run at the same time as one that takes this one.
 //!
+//! [`skip`] decides what a test does when something it needs is missing (a program, a corpus,
+//! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
+//! variable the caller names is `1`. A value other than unset, empty or `1` fails the test as a
+//! configuration error. It is not built for `wasm32`.
+//!
 //! `oracle` finds external oracle programs such as ffmpeg and qpdf, probes their version under a
 //! byte limit and a timeout, and caches the result for the process. Its `require_oracle!`,
-//! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test when a program is
-//! missing. It is not built for `wasm32`.
+//! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test through [`skip`]
+//! when a program is missing. It is not built for `wasm32`.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
@@ -57,6 +62,8 @@ pub mod rng;
 pub mod sample_damage;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod skip;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};
