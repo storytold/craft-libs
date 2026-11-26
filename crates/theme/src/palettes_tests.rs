@@ -39,7 +39,8 @@ fn palette_corners_preserve_the_hosts_other_size_overrides() {
         let mut sizes = original.clone();
         apply_corners(scheme, &mut sizes);
         for size in [Size::Compact, Size::Comfortable] {
-            let appearance = Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size, text_size: TextSize::default(), reduced_motion: false };
+            let appearance =
+                Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size, text_size: TextSize::default(), reduced_motion: false };
             let before = resolve_sized(&theme, appearance, None, &original).tokens;
             let after = resolve_sized(&theme, appearance, None, &sizes).tokens;
             assert_eq!(after.size, before.size, "{scheme:?} {size:?}");

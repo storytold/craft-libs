@@ -5,9 +5,7 @@
 //! The original theme ids are retained. Applications choose, register and persist the schemes;
 //! these definitions neither change the suite default nor supply application-specific metrics.
 
-use crate::{
-    AppSizes, ColorToken, ContrastIntent, EdgeSeed, ModePins, Pins, Rgba, Seeds, ShapeSeed, SizeValue, Status, ThemeDef, ThemeId, Variants,
-};
+use crate::{AppSizes, ColorToken, ContrastIntent, EdgeSeed, ModePins, Pins, Rgba, Seeds, ShapeSeed, SizeValue, Status, ThemeDef, ThemeId, Variants};
 use std::sync::{Arc, LazyLock};
 
 /// An opt-in palette and corner scale.
