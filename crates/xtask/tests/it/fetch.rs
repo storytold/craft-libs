@@ -1,5 +1,3 @@
-#![cfg(feature = "fetch")]
-
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
@@ -221,6 +219,9 @@ fn bad_pins_are_refused_before_any_download() {
     // `Σ`, `σ` and `ς` are one letter in different case, though `ς` is not the lowercase of `Σ`.
     cases.push(vec![pin("\u{3a3}.png", &sha), pin("\u{3c2}.png", &sha)]);
     cases.push(vec![pin("\u{3c2}/a.png", &sha), pin("\u{3a3}/b.png", &sha)]);
+    // A composed `é` and `e` followed by a combining acute accent are one name on macOS.
+    cases.push(vec![pin("\u{e9}.png", &sha), pin("e\u{301}.png", &sha)]);
+    cases.push(vec![pin("\u{e9}/a.png", &sha), pin("E\u{301}/b.png", &sha)]);
     cases.push(vec![Pin { url: "file:///etc/passwd", ..pin("a.png", &sha) }]);
     cases.push(vec![Pin { url: "http://example.com/a.png", ..pin("a.png", &sha) }]);
     cases.push(vec![Pin { url: "https:///a.png", ..pin("a.png", &sha) }]);
@@ -365,7 +366,7 @@ fn an_archive_with_the_wrong_hash_or_size_writes_nothing() {
 
 #[test]
 fn unsafe_archive_entries_write_nothing() {
-    let cases: [&[(&str, u8, &[u8])]; 17] = [
+    let cases: [&[(&str, u8, &[u8])]; 19] = [
         &[("ok.png", b'0', b"1"), ("foo\\bar.png", b'0', b"2")],
         &[("ok.png", b'0', b"1"), ("foo//", b'5', b"")],
         &[("ok.png", b'0', b"1"), ("foo//bar.png", b'0', b"2")],
@@ -383,6 +384,8 @@ fn unsafe_archive_entries_write_nothing() {
         &[("\u{3a3}.txt", b'0', b"1"), ("\u{3c2}.txt", b'0', b"2")],
         &[("\u{3a3}/", b'5', b""), ("\u{3c2}/", b'5', b"")],
         &[("\u{3c3}/a.txt", b'0', b"1"), ("\u{3c2}/b.txt", b'0', b"2")],
+        &[("\u{e9}.txt", b'0', b"1"), ("e\u{301}.txt", b'0', b"2")],
+        &[("e\u{301}/a.txt", b'0', b"1"), ("\u{c9}/b.txt", b'0', b"2")],
     ];
     for entries in cases {
         let dir = Scratch::new("unsafe");

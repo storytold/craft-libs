@@ -17,7 +17,7 @@ lock = ["dep:libc"]
 # The per-step JSON report, replaced atomically.
 report = ["dep:serde_json", "dep:craft-atomic"]
 # Downloads named in a pinned list, checked against SHA-256, and bounded tar extraction.
-fetch = ["dep:craft-atomic", "dep:flate2", "dep:sha2", "dep:tar"]
+fetch = ["dep:craft-atomic", "dep:flate2", "dep:sha2", "dep:tar", "dep:unicode-normalization"]
 # `cargo xtask stats`: files, lines and tests of Rust per workspace crate, read from `cargo metadata`.
 stats = ["dep:serde_json"]
 
@@ -27,6 +27,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"],
 serde_json = { workspace = true, optional = true }
 sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
 tar = { version = "0.4", default-features = false, optional = true }
+unicode-normalization = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK and O_NOFOLLOW for lock and owner opens that must not wait on a FIFO or follow a symlink. Constants only.

@@ -9,8 +9,8 @@
 //! [`fetch_archive`] downloads one pinned tar archive (plain or gzip-compressed), checks its
 //! SHA-256, reads it in memory under [`ExtractOptions`], and writes its regular files and folders
 //! under the destination. Every entry is checked before the first file is written: links, devices
-//! and other special entries, absolute paths, `..`, names that differ only in case, and names that
-//! Windows cannot hold are refused.
+//! and other special entries, absolute paths, `..`, names that differ only in case or in Unicode
+//! normalization, and names that Windows cannot hold are refused.
 //!
 //! The pinned list and the destination come from the caller. Only `https://` addresses are
 //! accepted. [`Curl`] runs the system `curl`, limited to HTTPS for the address and every redirect;
@@ -31,6 +31,7 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 use tar::EntryType;
+use unicode_normalization::UnicodeNormalization;
 
 /// Default for [`ExtractOptions::max_entries`].
 pub const DEFAULT_MAX_ENTRIES: usize = 1000;
@@ -220,7 +221,8 @@ pub fn fetch_pinned(dest: &Path, pins: &[Pin<'_>]) -> Result<FetchSummary, Fetch
 /// through `transport`.
 ///
 /// Every pin is checked before anything is read or written: its name is a relative path of
-/// portable parts that no other pin repeats (ignoring case) or uses as a folder, its address
+/// portable parts that no other pin repeats (ignoring case and Unicode normalization) or uses as a
+/// folder, its address
 /// starts with `https://`, its SHA-256 has 64 hexadecimal digits and its `max_bytes` is not 0.
 /// `dest` and the folders the names need are created. The files are then handled in order, and
 /// the first failure stops the fetch; files handled before it stay in place.
@@ -263,7 +265,8 @@ pub fn fetch_archive_with(dest: &Path, archive: &Pin<'_>, options: &ExtractOptio
 ///
 /// The whole archive is read and checked before anything is written: an entry count, file size
 /// or total over `options`, a link, device or other special entry, a path that is absolute,
-/// holds `..`, is not UTF-8 or is not portable, a file name repeated ignoring case, and a name
+/// holds `..`, is not UTF-8 or is not portable, a file name repeated ignoring case and Unicode
+/// normalization, and a name
 /// used for both a file and a folder each stop it with nothing written. Each file is then written
 /// through a temporary file and a rename; an existing file at that name is replaced. Files are
 /// written one at a time, so a write error after the checks leaves the files written before it in
@@ -393,12 +396,14 @@ fn check_part(part: &str) -> Result<(), String> {
 }
 
 /// File and folder names seen so far, so that names differing only in case, which are one file or
-/// folder on macOS and Windows, are refused. Names are compared by their [`fold`] key.
+/// folder on macOS and Windows, or only in Unicode normalization, which are one name on macOS, are
+/// refused. Names are compared by their [`fold`] key.
 ///
 /// Each folder is kept once, as its last part under the number of the folder that holds it, and
-/// each file as its last part under its folder's number. A key is at most three times as long as
-/// its part, so the text kept is at most four times the length of the names added, however deep
-/// they are: for an archive, at most `4 × max_entries × 4096` bytes.
+/// each file as its last part under its folder's number. Case mapping makes a key at most three
+/// times as long as its part and normalization at most three times longer again, so the text kept
+/// is at most ten times the length of the names added, however deep they are: for an archive, at
+/// most `10 × max_entries × 4096` bytes.
 #[derive(Default)]
 struct Names {
     /// Each file by its folder's number (0 for the destination) and its last part's key.
@@ -419,7 +424,7 @@ impl Names {
             return Err("the name is also used as a folder".into());
         }
         if !self.files.insert(key) {
-            return Err("the name appears twice (names are compared ignoring case)".into());
+            return Err("the name appears twice (names are compared ignoring case and Unicode normalization)".into());
         }
         Ok(())
     }
@@ -451,7 +456,7 @@ impl Names {
     }
 
     /// Records the folder `parts[..=i]` under `key` and returns its number. The same folder
-    /// written with other letter case is refused.
+    /// written with other letter case or another Unicode normalization is refused.
     fn insert_folder<S: AsRef<str>>(&mut self, key: (usize, String), parts: &[S], i: usize) -> Result<usize, String> {
         let part = parts.get(i).map_or("", AsRef::as_ref);
         let number = self.folders.len() + 1;
@@ -464,7 +469,7 @@ impl Names {
                 let above = join(parts.get(..i).unwrap_or_default());
                 let seen = if above.is_empty() { first.clone() } else { format!("{above}/{first}") };
                 let exact = join(parts.get(..=i).unwrap_or_default());
-                Err(format!("the folder {exact:?} is also written {seen:?} (names are compared ignoring case)"))
+                Err(format!("the folder {exact:?} is also written {seen:?} (names are compared ignoring case and Unicode normalization)"))
             }
             Entry::Vacant(slot) => {
                 slot.insert((number, part.to_string()));
@@ -487,9 +492,11 @@ fn join<S: AsRef<str>>(parts: &[S]) -> String {
 /// The key under which [`Names`] compares a part: the lowercase of its uppercase. The forms of one
 /// letter then get one key even when one is not the lowercase of another (`Σ`, `σ` and `ς`). A
 /// letter whose uppercase is longer gets the key of that spelling (`ß` and `ss`), so such pairs are
-/// refused even on a file system that keeps them apart.
+/// refused even on a file system that keeps them apart. The key is then put in Unicode
+/// Normalization Form C, so a composed `é` and an `e` followed by a combining acute accent, which
+/// are one name on macOS, get one key.
 fn fold(part: &str) -> String {
-    part.to_uppercase().to_lowercase()
+    part.to_uppercase().to_lowercase().nfc().collect()
 }
 
 /// Creates `dest` when it is missing and checks that it is a folder and not a link.

@@ -14,7 +14,8 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `stats` | `stats` | `run`, `collect` and `write_table`: files, lines and tests of Rust per workspace crate (`cargo xtask stats`) |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `stats` adds
-`serde_json`. `fetch` adds `craft-atomic`, `sha2`, `tar` and `flate2`, and runs the system `curl`.
+`serde_json`. `fetch` adds `craft-atomic`, `sha2`, `tar`, `flate2` and
+`unicode-normalization`, and runs the system `curl`.
 
 ## Use
 
@@ -197,7 +198,8 @@ Every pin is checked before anything is downloaded. A name is a relative path wi
 folders; it may not be empty or absolute, hold an empty, `.` or `..` part, a backslash, a control
 character or a character Windows does not allow in names (`:`, `<`, `>`, `"`, `|`, `?`, `*`), end a
 part with a dot or a space, or use a Windows device name (`CON`, `NUL`, `COM1` and the rest). Two
-pins may not name the same file ignoring case, and a file name may not also be used as a folder. The
+pins may not name the same file ignoring case and Unicode normalization (a composed `é` and `e`
+followed by a combining accent are one name), and a file name may not also be used as a folder. The
 address starts with `https://`, the SHA-256 has 64 hexadecimal digits, and `max_bytes` is at
 least 1.
 
@@ -213,7 +215,7 @@ are followed like any other path, links included.
 The archive is held in memory, so the pin's `max_bytes` also bounds its memory. Before anything is
 written, every entry is checked: a symbolic or hard link, a device, a FIFO or any other special
 entry, a path that is absolute, holds `..`, is not UTF-8 or fails the name rules above, and a file
-name repeated ignoring case each stop the extraction. `ExtractOptions` holds the limits:
+name repeated ignoring case and Unicode normalization each stop the extraction. `ExtractOptions` holds the limits:
 
 | Field | Default |
 |---|---|
