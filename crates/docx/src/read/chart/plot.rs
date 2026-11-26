@@ -831,10 +831,10 @@ pub(super) struct Bubble {
 /// isn't drawn, nor a negative one unless `c:showNegBubbles` is on (then at its magnitude). Points
 /// without a size, an x or a y are skipped, and don't count towards the largest (Word, measured
 /// with a size-64 point missing its x or its y). A series with no `c:bubbleSize` at all sizes every
-/// point 1 (not checked against Word).
+/// point 1 (not checked against Word); one whose `c:bubbleSize` has no cached values draws none.
 fn bubble_list(c: &Chart, area: Rect) -> Vec<Bubble> {
     let Some(opts) = c.bubble else { return Vec::new() };
-    let size = |s: &Series, i: usize| if s.sizes.is_empty() { Some(1.0) } else { s.sizes.get(i).copied().flatten() };
+    let size = |s: &Series, i: usize| s.sizes.as_ref().map_or(Some(1.0), |v| v.get(i).copied().flatten());
     let shown = |v: f64| v > 0.0 || (opts.negative && v < 0.0);
     let mut out = Vec::new();
     for (j, s) in c.series.iter().enumerate() {
@@ -891,18 +891,14 @@ fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, bubbles: &[Bub
         let Some(s) = c.series.get(b.j) else { continue };
         let (cx, cy, d) = (g.scat_x(b.x), g.val(b.y), b.d);
         let line = s.outlines.get(b.i).copied().flatten();
-        let (fill, stroke) = if b.v < 0.0 { (Rgb::WHITE, Some(line.unwrap_or(Rgb::BLACK))) } else { (c.point_colour(b.j, b.i), line) };
+        // A series with `a:noFill` leaves its bubbles hollow, but for points with a fill of their own.
+        let filled = !s.no_fill || s.points.get(b.i).is_some_and(|p| p.fill.is_some());
+        let (fill, stroke) =
+            if b.v < 0.0 { (Some(Rgb::WHITE), Some(line.unwrap_or(Rgb::BLACK))) } else { (filled.then(|| c.point_colour(b.j, b.i)), line) };
         let r = d / 2.0;
         if cx - r >= plot.x && cy - r >= plot.y && cx + r <= plot.right() && cy + r <= plot.bottom() {
             let stroke_width = if stroke.is_some() { BUBBLE_OUTLINE } else { 0.0 };
-            out.push(GraphicItem::Shape {
-                rect: [cx - r, cy - r, d, d],
-                kind: ShapeKind::Ellipse,
-                fill: Some(fill),
-                stroke,
-                stroke_width,
-                alpha: 1.0,
-            });
+            out.push(GraphicItem::Shape { rect: [cx - r, cy - r, d, d], kind: ShapeKind::Ellipse, fill, stroke, stroke_width, alpha: 1.0 });
         } else {
             let ring = circle(cx, cy, r);
             corners += ring.len();
@@ -913,7 +909,9 @@ fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, bubbles: &[Bub
             if cut.len() < 3 {
                 continue;
             }
-            fill_poly(out, &cut, fill);
+            if let Some(fill) = fill {
+                fill_poly(out, &cut, fill);
+            }
             if let Some(col) = stroke {
                 super::canvas::stroke(out, clip_ring(&ring, plot), col, BUBBLE_OUTLINE);
             }

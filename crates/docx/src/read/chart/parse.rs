@@ -224,7 +224,7 @@ pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb]) -> Vec<Series> 
     let mut series = Vec::new();
     for ser in ty.children("c:ser").take(MAX_SERIES) {
         let s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
-        budget = budget.saturating_sub(s.values.len().max(s.xs.len()).max(s.sizes.len()));
+        budget = budget.saturating_sub(s.values.len().max(s.xs.len()).max(s.sizes.as_ref().map_or(0, Vec::len)));
         series.push(s);
     }
     series
@@ -353,24 +353,23 @@ impl Series {
         if scatter && xs.is_empty() {
             xs = (1..=values.len()).map(|i| Some(i as f64)).collect();
         }
-        // Only bubble series have `c:bubbleSize`.
-        let (sizes, _) = if scatter { numbers(ser.child("c:bubbleSize"), cap) } else { (Vec::new(), None) };
+        // Only bubble series have `c:bubbleSize`. One without cached values sizes no point.
+        let sizes = ser.child("c:bubbleSize").filter(|_| scatter).map(|b| numbers(Some(b), cap).0);
         let mut points = vec![PointFmt::default(); values.len()];
         // A visible line's colour (`fill_colour` is `None` for `a:noFill`).
         let outline = ln.and_then(|l| fill_colour(l, theme));
         let mut outlines = vec![outline; values.len()];
         for dpt in ser.children("c:dPt") {
             let i = dpt.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok());
-            // The point's own `a:ln`, even `a:noFill`, replaces the series line (bubble outlines).
-            if let (Some(l), Some(slot)) = (dpt.child("c:spPr").and_then(|p| p.child("a:ln")), i.and_then(|i| outlines.get_mut(i))) {
-                *slot = fill_colour(l, theme);
-            }
-            let Some(slot) = i.and_then(|i| points.get_mut(i)) else { continue };
+            let (Some(slot), Some(own_outline)) = (i.and_then(|i| points.get_mut(i)), i.and_then(|i| outlines.get_mut(i))) else { continue };
             // A later `c:dPt` for the same point replaces only what it has, its `c:spPr` (fill and
             // line) and its `c:marker` each as a whole, as Word reads it.
             if let Some(sp) = dpt.child("c:spPr") {
                 slot.fill = fill_colour(sp, theme);
                 slot.line = sp.child("a:ln").and_then(|l| fill_colour(l, theme));
+                // The point's own `a:ln`, even `a:noFill`, replaces the series line (bubble
+                // outlines); without one the point has the series line.
+                *own_outline = sp.child("a:ln").map_or(outline, |l| fill_colour(l, theme));
             }
             if let Some(m) = dpt.child("c:marker") {
                 slot.marker = m.child("c:spPr").and_then(|p| fill_colour(p, theme));

@@ -581,7 +581,7 @@ fn one_series_varies_by_point_when_vary_colors_is_on_or_absent() {
         assert_eq!(bars, varied, "{vary:?}");
     }
     let off = filled(&chart_items(&space(&column_chart(r#"<c:varyColors val="0"/>"#, &one)), &theme(), 300.0, 200.0));
-    assert!(off.iter().all(|b| b.0 == accent(0)), "{off:?}");
+    assert!(off.len() == CATS.len() && off.iter().all(|b| b.0 == accent(0)), "{off:?}");
 }
 
 #[test]
@@ -589,7 +589,8 @@ fn an_explicit_series_colour_wins_over_vary_colors() {
     let red = Rgb(0xFF, 0, 0);
     let plot = column_chart(r#"<c:varyColors val="1"/>"#, &[ser(0, "S", Some("FF0000"), &CATS, &["1", "2", "3"])]);
     let items = with_legend(&plot, "r", 300.0, 200.0);
-    assert!(filled(&items).iter().all(|b| b.0 == red), "{:?}", filled(&items));
+    let bars = filled(&items);
+    assert!(bars.len() == CATS.len() && bars.iter().all(|b| b.0 == red), "{bars:?}");
     // The legend still lists the categories, each in the series colour.
     assert_eq!(swatch_colours(&items), vec![red; 3]);
     // Pie too.
@@ -1128,6 +1129,44 @@ fn bubble_points_take_their_own_colour() {
     let s = three().concat().replacen("<c:xVal>", dpt, 1);
     let items = bubble_chart(&[s], "", 432.0, 252.0);
     assert_eq!((bubbles(&items, RED).len(), bubbles(&items, BLUE).len()), (2, 1), "{items:?}");
+}
+
+#[test]
+fn a_bubble_size_reference_without_cached_values_draws_no_bubbles() {
+    // No `c:bubbleSize` at all sizes every point alike; one with a reference but no cache has
+    // no sizes to draw.
+    let bare = bser(0, "FF0000", &["1", "2", "3"], &["2", "2", "2"], None);
+    assert_eq!(bubbles(&bubble_chart(std::slice::from_ref(&bare), "", 432.0, 252.0), RED).len(), 3);
+    let uncached = bare.replacen("</c:ser>", "<c:bubbleSize><c:numRef><c:f>Sheet1!$C$2:$C$4</c:f></c:numRef></c:bubbleSize></c:ser>", 1);
+    let items = bubble_chart(&[uncached], "", 432.0, 252.0);
+    assert!(bubble_paint(&items).is_empty(), "{items:?}");
+}
+
+#[test]
+fn a_later_point_shape_without_a_line_gives_the_bubble_the_series_line_back() {
+    let ser = with_series_line(&three().concat(), "CC2222");
+    let fill_only = r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>"#;
+    let points = format!("{}{fill_only}<c:xVal>", dpt_line(0, Some("202060")));
+    let b = bubble_paint(&bubble_chart(&[ser.replacen("<c:xVal>", &points, 1)], "", 432.0, 252.0));
+    assert_eq!(b.len(), 3, "{b:?}");
+    assert!(b[0].2.is_some() && b[0].2 == b[2].2, "point 0 has the series line again: {b:?}");
+}
+
+#[test]
+fn bubbles_of_a_series_without_a_fill_are_hollow() {
+    let hollow = r#"<c:spPr><a:noFill/><a:ln w="19050"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln></c:spPr>"#;
+    let ser = three().concat().replacen(r#"<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr>"#, hollow, 1);
+    // Point 1 has a fill of its own.
+    let ser = ser.replacen(
+        "<c:xVal>",
+        r#"<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt><c:xVal>"#,
+        1,
+    );
+    let b = bubble_paint(&bubble_chart(&[ser], "", 432.0, 252.0));
+    assert_eq!(b.len(), 3, "{b:?}");
+    assert!(b[0].1.is_none() && b[2].1.is_none(), "unfilled: {b:?}");
+    assert!(b[0].2 == Some(BLUE) && b[2].2 == Some(BLUE), "outlined in the series line: {b:?}");
+    assert_eq!(b[1].1, Some(RED), "a point's own fill still shows: {b:?}");
 }
 
 #[test]

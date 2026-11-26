@@ -192,8 +192,9 @@ pub(super) struct Series {
     pub(super) values: Vec<Option<f64>>,
     /// Scatter x values (index + 1 when the file has none).
     pub(super) xs: Vec<Option<f64>>,
-    /// Bubble sizes (`c:bubbleSize`); empty for other chart types, or when the file has none.
-    pub(super) sizes: Vec<Option<f64>>,
+    /// Bubble sizes (`c:bubbleSize`): `None` for other chart types or when the series has no
+    /// `c:bubbleSize`, empty when it has one with no cached values.
+    pub(super) sizes: Option<Vec<Option<f64>>>,
     /// Per-point colours from `c:dPt`.
     pub(super) points: Vec<PointFmt>,
     /// Outline colour of each point (bubbles): its `c:dPt`'s `a:ln` when it has one, else the
