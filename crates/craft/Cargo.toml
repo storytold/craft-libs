@@ -1,0 +1,1054 @@
+[package]
+autotests = false
+name = "craft"
+description = "The craft libraries in one dependency: one feature per crate, `ui` for their egui side"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-behavior = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true }
+craft-theme = { workspace = true }
+egui = { workspace = true, optional = true }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+craft-ai-core = { workspace = true, optional = true }
+craft-atomic = { workspace = true, optional = true }
+craft-audio = { workspace = true, optional = true }
+craft-automation = { workspace = true, optional = true }
+craft-browse = { workspace = true, optional = true }
+craft-cms = { workspace = true, optional = true }
+craft-color = { workspace = true, optional = true }
+craft-color-ui = { workspace = true, optional = true }
+craft-crw = { workspace = true, optional = true }
+craft-dialogs = { workspace = true, optional = true }
+craft-doc = { workspace = true, optional = true }
+craft-docpath = { workspace = true, optional = true }
+craft-draw = { workspace = true, optional = true }
+craft-ecproj-format = { workspace = true, optional = true }
+craft-font-catalog = { workspace = true, optional = true }
+craft-font-manager = { workspace = true, optional = true }
+craft-font-os-windows = { workspace = true, optional = true }
+craft-font-store = { workspace = true, optional = true }
+craft-font-subset = { workspace = true, optional = true }
+craft-imaging = { workspace = true, optional = true }
+craft-jpeg = { workspace = true, optional = true }
+craft-keymap = { workspace = true, optional = true }
+craft-layers = { workspace = true, optional = true }
+craft-media = { workspace = true, optional = true }
+craft-menu = { workspace = true, optional = true }
+craft-pcraft-format = { workspace = true, optional = true }
+craft-pdf = { workspace = true, optional = true }
+craft-platform = { workspace = true, optional = true }
+craft-prepress = { workspace = true, optional = true }
+craft-pages = { workspace = true, optional = true }
+craft-print = { workspace = true, optional = true }
+craft-proof = { workspace = true, optional = true }
+craft-quit = { workspace = true, optional = true }
+craft-settings = { workspace = true, optional = true }
+craft-review = { workspace = true, optional = true }
+craft-table = { workspace = true, optional = true }
+craft-text = { workspace = true, optional = true }
+craft-timeline = { workspace = true, optional = true }
+craft-theme-editor = { workspace = true, optional = true }
+craft-theme-store = { workspace = true, optional = true }
+craft-update = { workspace = true, optional = true }
+craft-vectorcraft-format = { workspace = true, optional = true }
+craft-web-api = { workspace = true, optional = true }
+craft-web-host = { workspace = true, optional = true }
+craft-window = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+craft-aaf = { workspace = true, optional = true }
+craft-aep = { workspace = true, optional = true }
+craft-affinity = { workspace = true, optional = true }
+craft-android-res = { workspace = true, optional = true }
+craft-assuan = { workspace = true, optional = true }
+craft-captions = { workspace = true, optional = true }
+craft-cdr = { workspace = true, optional = true }
+craft-cfb = { workspace = true, optional = true }
+craft-codepage = { workspace = true, optional = true }
+craft-crs = { workspace = true, optional = true }
+craft-csv = { workspace = true, optional = true }
+craft-dav = { workspace = true, optional = true }
+craft-designcraft-format = { workspace = true, optional = true }
+craft-doc-binary = { workspace = true, optional = true }
+craft-document-bundle = { workspace = true, optional = true }
+craft-docx = { workspace = true, optional = true }
+craft-dpx = { workspace = true, optional = true }
+craft-drawingml = { workspace = true, optional = true }
+craft-dwg = { workspace = true, optional = true }
+craft-dxf = { workspace = true, optional = true }
+craft-eps = { workspace = true, optional = true }
+craft-epub = { workspace = true, optional = true }
+craft-ews = { workspace = true, optional = true }
+craft-exr = { workspace = true, optional = true }
+craft-fig = { workspace = true, optional = true }
+craft-figcraft-format = { workspace = true, optional = true }
+craft-figma-rest = { workspace = true, optional = true }
+craft-file-formats = { workspace = true, optional = true }
+craft-file-import = { workspace = true, optional = true }
+craft-flags = { workspace = true, optional = true }
+craft-flow = { workspace = true, optional = true }
+craft-gainmap = { workspace = true, optional = true }
+craft-gcode = { workspace = true, optional = true }
+craft-gif = { workspace = true, optional = true }
+craft-hdr = { workspace = true, optional = true }
+craft-heif = { workspace = true, optional = true }
+craft-html = { workspace = true, optional = true }
+craft-ical = { workspace = true, optional = true }
+craft-idml = { workspace = true, optional = true }
+craft-indd = { workspace = true, optional = true }
+craft-jmap = { workspace = true, optional = true }
+craft-kiwi = { workspace = true, optional = true }
+craft-kra = { workspace = true, optional = true }
+craft-latex = { workspace = true, optional = true }
+craft-lottie = { workspace = true, optional = true }
+craft-markdown = { workspace = true, optional = true }
+craft-material-graph = { workspace = true, optional = true }
+craft-materialx = { workspace = true, optional = true }
+craft-math = { workspace = true, optional = true }
+craft-mesh = { workspace = true, optional = true }
+craft-metadata = { workspace = true, optional = true }
+craft-metafile = { workspace = true, optional = true }
+craft-midi = { workspace = true, optional = true }
+craft-mime = { workspace = true, optional = true }
+craft-odf = { workspace = true, optional = true }
+craft-ods = { workspace = true, optional = true }
+craft-offcrypto = { workspace = true, optional = true }
+craft-opc = { workspace = true, optional = true }
+craft-openpgp = { workspace = true, optional = true }
+craft-ora = { workspace = true, optional = true }
+craft-pcraft-bundle = { workspace = true, optional = true }
+craft-pdn = { workspace = true, optional = true }
+craft-penpot = { workspace = true, optional = true }
+craft-pkcs7 = { workspace = true, optional = true }
+craft-plotter = { workspace = true, optional = true }
+craft-png = { workspace = true, optional = true }
+craft-pptx = { workspace = true, optional = true }
+craft-prc = { workspace = true, optional = true }
+craft-psd = { workspace = true, optional = true }
+craft-pst = { workspace = true, optional = true }
+craft-raster-codecs = { workspace = true, optional = true }
+craft-raw = { workspace = true, optional = true }
+craft-rtf = { workspace = true, optional = true }
+craft-scraft-format = { workspace = true, optional = true }
+craft-sf2 = { workspace = true, optional = true }
+craft-sheet = { workspace = true, optional = true }
+craft-silhouette-studio = { workspace = true, optional = true }
+craft-sketch = { workspace = true, optional = true }
+craft-stencilcraft-document = { workspace = true, optional = true }
+craft-stencilcraft-format = { workspace = true, optional = true }
+craft-stream-codecs = { workspace = true, optional = true }
+craft-svg = { workspace = true, optional = true }
+craft-tga = { workspace = true, optional = true }
+craft-tiff = { workspace = true, optional = true }
+craft-tracked = { workspace = true, optional = true }
+craft-time = { workspace = true, optional = true }
+craft-vcard = { workspace = true, optional = true }
+craft-vectordrawable = { workspace = true, optional = true }
+craft-video = { workspace = true, optional = true }
+craft-webp = { workspace = true, optional = true }
+craft-wordmodel = { workspace = true, optional = true }
+craft-xcf = { workspace = true, optional = true }
+craft-xls = { workspace = true, optional = true }
+craft-xlsx = { workspace = true, optional = true }
+craft-xml = { workspace = true, optional = true }
+craft-y4m = { workspace = true, optional = true }
+craft-zip = { workspace = true, optional = true }
+craft-anicraft-format = { workspace = true, optional = true }
+craft-ber = { workspace = true, optional = true }
+craft-control-protocol = { workspace = true, optional = true }
+craft-deckcraft-format = { workspace = true, optional = true }
+craft-fcproj-format = { workspace = true, optional = true }
+craft-gridcraft-format = { workspace = true, optional = true }
+craft-gzip = { workspace = true, optional = true }
+craft-http-url = { workspace = true, optional = true }
+craft-image-codecs = { workspace = true, optional = true }
+craft-jsonrpc = { workspace = true, optional = true }
+craft-jxl = { workspace = true, optional = true }
+craft-mcmat = { workspace = true, optional = true }
+craft-mcp = { workspace = true, optional = true }
+craft-plist = { workspace = true, optional = true }
+craft-proto = { workspace = true, optional = true }
+craft-ps = { workspace = true, optional = true }
+craft-shx = { workspace = true, optional = true }
+craft-smime = { workspace = true, optional = true }
+craft-tcraft = { workspace = true, optional = true }
+craft-texture = { workspace = true, optional = true }
+craft-usd = { workspace = true, optional = true }
+craft-xfl = { workspace = true, optional = true }
+craft-elf = { workspace = true, optional = true }
+craft-format = { workspace = true, optional = true }
+craft-macho = { workspace = true, optional = true }
+craft-mcp-server = { workspace = true, optional = true }
+craft-pe = { workspace = true, optional = true }
+craft-sniff = { workspace = true, optional = true }
+craft-tar = { workspace = true, optional = true }
+craft-ai = { workspace = true, optional = true }
+craft-control = { workspace = true, optional = true }
+craft-dds = { workspace = true, optional = true }
+craft-frame = { workspace = true, optional = true }
+craft-ipc = { workspace = true, optional = true }
+craft-media-source = { workspace = true, optional = true }
+craft-palette = { workspace = true, optional = true }
+craft-press-print = { workspace = true, optional = true }
+craft-score = { workspace = true, optional = true }
+craft-ssip = { workspace = true, optional = true }
+craft-cloud = { workspace = true, optional = true }
+craft-cloud-local = { workspace = true, optional = true }
+craft-cloud-ui = { workspace = true, optional = true }
+craft-har = { workspace = true, optional = true }
+craft-java-class = { workspace = true, optional = true }
+craft-jsonc = { workspace = true, optional = true }
+craft-pcap = { workspace = true, optional = true }
+craft-sourcemap = { workspace = true, optional = true }
+craft-wasm = { workspace = true, optional = true }
+craft-wayland = { workspace = true, optional = true }
+craft-xfdf = { workspace = true, optional = true }
+craft-color-transform = { workspace = true, optional = true }
+craft-develop = { workspace = true, optional = true }
+craft-develop-model = { workspace = true, optional = true }
+craft-dex = { workspace = true, optional = true }
+craft-esign = { workspace = true, optional = true }
+craft-evm = { workspace = true, optional = true }
+craft-geom = { workspace = true, optional = true }
+craft-suite-account = { workspace = true, optional = true }
+craft-xfa = { workspace = true, optional = true }
+craft-gpu = { workspace = true, optional = true }
+craft-gpu-null = { workspace = true, optional = true }
+craft-gpu-providers = { workspace = true, optional = true }
+craft-gpu-wgpu = { workspace = true, optional = true }
+craft-ipp = { workspace = true, optional = true }
+craft-ppt-binary = { workspace = true, optional = true }
+craft-sqlite = { workspace = true, optional = true }
+craft-audio-dsp = { workspace = true, optional = true }
+craft-sbs = { workspace = true, optional = true }
+craft-ease = { workspace = true, optional = true }
+craft-i18n-build = { workspace = true, optional = true }
+craft-pbr = { workspace = true, optional = true }
+
+[features]
+ui = [
+    "dep:craft-ui",
+    "dep:egui",
+    "craft-automation?/ui",
+    "craft-browse?/ui",
+    "craft-color-ui?/ui",
+    "craft-dialogs?/ui",
+    "craft-draw?/ui",
+    "craft-font-manager?/ui",
+    "craft-host/ui",
+    "craft-imaging?/ui",
+    "craft-pages?/ui",
+    "craft-print?/ui",
+    "craft-quit?/ui",
+    "craft-review?/ui",
+    "craft-table?/ui",
+    "craft-text?/ui",
+    "craft-theme-store?/ui",
+    "craft-timeline?/ui",
+    "craft-update?/ui",
+    "craft-window?/ui",
+]
+screen-testing = [
+    "ui",
+    "craft-ui/testing",
+    "craft-automation?/screen-testing",
+    "craft-browse?/screen-testing",
+    "craft-color-ui?/screen-testing",
+    "craft-dialogs?/screen-testing",
+    "craft-draw?/screen-testing",
+    "craft-font-manager?/screen-testing",
+    "craft-imaging?/screen-testing",
+    "craft-layers?/screen-testing",
+    "craft-menu?/screen-testing",
+    "craft-pages?/screen-testing",
+    "craft-print?/screen-testing",
+    "craft-review?/screen-testing",
+    "craft-table?/screen-testing",
+    "craft-text?/screen-testing",
+    "craft-theme-editor?/screen-testing",
+    "craft-theme-store?/screen-testing",
+    "craft-timeline?/screen-testing",
+    "craft-update?/screen-testing",
+]
+suite = [
+    "screen-testing",
+    "craft-ui/suite",
+    "craft-automation?/suite",
+    "craft-browse?/suite",
+    "craft-color-ui?/suite",
+    "craft-dialogs?/suite",
+    "craft-draw?/suite",
+    "craft-font-manager?/suite",
+    "craft-imaging?/suite",
+    "craft-layers?/suite",
+    "craft-menu?/suite",
+    "craft-pages?/suite",
+    "craft-print?/suite",
+    "craft-review?/suite",
+    "craft-table?/suite",
+    "craft-text?/suite",
+    "craft-theme-editor?/suite",
+    "craft-theme-store?/suite",
+    "craft-timeline?/suite",
+    "craft-update?/suite",
+]
+aaf = ["dep:craft-aaf"]
+
+aep = ["dep:craft-aep"]
+
+affinity = ["dep:craft-affinity"]
+affinity-synth = ["affinity", "craft-affinity/synth"]
+
+ai = ["dep:craft-ai"]
+ai-local = ["ai", "craft-ai/local"]
+
+ai-core = ["dep:craft-ai-core"]
+
+android-res = ["dep:craft-android-res"]
+
+anicraft-format = ["dep:craft-anicraft-format"]
+
+assuan = ["dep:craft-assuan"]
+
+atomic = ["dep:craft-atomic"]
+
+audio = ["dep:craft-audio"]
+audio-aac-decode = ["audio", "craft-audio/aac-decode"]
+audio-aac-encode = ["audio", "craft-audio/aac-encode"]
+audio-ac3-decode = ["audio", "craft-audio/ac3-decode"]
+audio-ac3-encode = ["audio", "craft-audio/ac3-encode"]
+audio-adpcm = ["audio", "craft-audio/adpcm"]
+audio-alac-decode = ["audio", "craft-audio/alac-decode"]
+audio-alac-encode = ["audio", "craft-audio/alac-encode"]
+audio-decode = ["audio", "craft-audio/decode"]
+audio-decode-native = ["audio", "craft-audio/decode-native"]
+audio-dsd = ["audio", "craft-audio/dsd"]
+audio-eac3-encode = ["audio", "craft-audio/eac3-encode"]
+audio-encode = ["audio", "craft-audio/encode"]
+audio-flac-decode = ["audio", "craft-audio/flac-decode"]
+audio-flac-encode = ["audio", "craft-audio/flac-encode"]
+audio-g722 = ["audio", "craft-audio/g722"]
+audio-g726 = ["audio", "craft-audio/g726"]
+audio-gsm = ["audio", "craft-audio/gsm"]
+audio-gsm-decode = ["audio", "craft-audio/gsm-decode"]
+audio-gsm-encode = ["audio", "craft-audio/gsm-encode"]
+audio-lossless-encode = ["audio", "craft-audio/lossless-encode"]
+audio-mp3-decode = ["audio", "craft-audio/mp3-decode"]
+audio-mp3-encode = ["audio", "craft-audio/mp3-encode"]
+audio-mpa-decode = ["audio", "craft-audio/mpa-decode"]
+audio-mpa-encode = ["audio", "craft-audio/mpa-encode"]
+audio-opus-decode = ["audio", "craft-audio/opus-decode"]
+audio-opus-encode = ["audio", "craft-audio/opus-encode"]
+audio-pcm-encode = ["audio", "craft-audio/pcm-encode"]
+audio-peaks = ["audio", "craft-audio/peaks"]
+audio-qoa = ["audio", "craft-audio/qoa"]
+audio-qoa-decode = ["audio", "craft-audio/qoa-decode"]
+audio-qoa-encode = ["audio", "craft-audio/qoa-encode"]
+audio-rayon = ["audio", "craft-audio/rayon"]
+audio-s302m = ["audio", "craft-audio/s302m"]
+audio-sbc = ["audio", "craft-audio/sbc"]
+audio-serde = ["audio", "craft-audio/serde"]
+audio-symphonia = ["audio", "craft-audio/symphonia"]
+audio-vmd-decode = ["audio", "craft-audio/vmd-decode"]
+audio-vorbis-decode = ["audio", "craft-audio/vorbis-decode"]
+audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
+
+audio-dsp = ["dep:craft-audio-dsp"]
+
+automation = ["dep:craft-automation", "keymap"]
+automation-agents = ["automation", "craft-automation/agents"]
+
+ber = ["dep:craft-ber"]
+
+browse = ["dep:craft-browse"]
+
+captions = ["dep:craft-captions"]
+captions-mov-text = ["captions", "craft-captions/mov-text"]
+
+cdr = ["dep:craft-cdr"]
+cdr-synth = ["cdr", "craft-cdr/synth"]
+
+cfb = ["dep:craft-cfb"]
+
+cloud = ["dep:craft-cloud"]
+
+cloud-local = ["dep:craft-cloud-local"]
+
+cloud-ui = ["dep:craft-cloud-ui"]
+cloud-ui-cloud = ["cloud-ui", "craft-cloud-ui/cloud"]
+cloud-ui-esign = ["cloud-ui", "craft-cloud-ui/esign"]
+cloud-ui-share = ["cloud-ui", "craft-cloud-ui/share"]
+
+cms = ["dep:craft-cms"]
+
+codepage = ["dep:craft-codepage"]
+
+color = ["dep:craft-color"]
+
+color-transform = ["dep:craft-color-transform"]
+
+color-ui = ["dep:craft-color-ui", "keymap", "settings", "window", "platform"]
+
+control = ["dep:craft-control"]
+control-agents = ["control", "craft-control/agents"]
+
+control-protocol = ["dep:craft-control-protocol"]
+
+crs = ["dep:craft-crs"]
+
+crw = ["dep:craft-crw"]
+
+csv = ["dep:craft-csv"]
+
+dav = ["dep:craft-dav"]
+
+dds = ["dep:craft-dds"]
+dds-parallel = ["dds", "craft-dds/parallel"]
+
+deckcraft-format = ["dep:craft-deckcraft-format"]
+
+designcraft-format = ["dep:craft-designcraft-format"]
+
+develop = ["dep:craft-develop"]
+
+develop-model = ["dep:craft-develop-model"]
+
+dex = ["dep:craft-dex"]
+
+dialogs = ["dep:craft-dialogs", "browse"] # native only: rfd's folder picker and file paths
+
+doc = ["dep:craft-doc"]
+doc-pcraft-pixels = ["doc", "craft-doc/pcraft-pixels"]
+
+doc-binary = ["dep:craft-doc-binary"]
+
+docpath = ["dep:craft-docpath"]
+
+document-bundle = ["dep:craft-document-bundle"]
+
+docx = ["dep:craft-docx"]
+
+dpx = ["dep:craft-dpx"]
+
+draw = ["dep:craft-draw", "keymap", "color-ui", "settings"]
+
+drawingml = ["dep:craft-drawingml"]
+
+dwg = ["dep:craft-dwg"]
+
+dxf = ["dep:craft-dxf"]
+
+ease = ["dep:craft-ease"]
+ease-serde = ["ease", "craft-ease/serde"]
+
+ecproj-format = ["dep:craft-ecproj-format"]
+
+elf = ["dep:craft-elf"]
+elf-serde = ["elf", "craft-elf/serde"]
+
+eps = ["dep:craft-eps"]
+eps-paths = ["eps", "craft-eps/paths"]
+
+epub = ["dep:craft-epub"]
+
+esign = ["dep:craft-esign"]
+
+evm = ["dep:craft-evm"]
+
+ews = ["dep:craft-ews"]
+
+exr = ["dep:craft-exr"]
+exr-decode = ["exr", "craft-exr/decode"]
+exr-zlib-inflate = ["exr", "craft-exr/zlib-inflate"]
+
+fcproj-format = ["dep:craft-fcproj-format"]
+
+fig = ["dep:craft-fig"]
+
+figcraft-format = ["dep:craft-figcraft-format"]
+
+figma-rest = ["dep:craft-figma-rest"]
+
+file-formats = ["dep:craft-file-formats"]
+file-formats-affinity = ["file-formats", "craft-file-formats/affinity"]
+file-formats-ase = ["file-formats", "craft-file-formats/ase"]
+file-formats-avif = ["file-formats", "craft-file-formats/avif"]
+file-formats-designcraft = ["file-formats", "craft-file-formats/designcraft"]
+file-formats-heif = ["file-formats", "craft-file-formats/heif"]
+file-formats-kra = ["file-formats", "craft-file-formats/kra"]
+file-formats-office = ["file-formats", "craft-file-formats/office"]
+file-formats-ora = ["file-formats", "craft-file-formats/ora"]
+file-formats-pcraft = ["file-formats", "craft-file-formats/pcraft"]
+file-formats-pdf = ["file-formats", "craft-file-formats/pdf"]
+file-formats-pdn = ["file-formats", "craft-file-formats/pdn"]
+file-formats-plotter = ["file-formats", "craft-file-formats/plotter"]
+file-formats-psd = ["file-formats", "craft-file-formats/psd"]
+file-formats-raster-codecs = ["file-formats", "craft-file-formats/raster-codecs"]
+file-formats-raw = ["file-formats", "craft-file-formats/raw"]
+file-formats-stencilcraft = ["file-formats", "craft-file-formats/stencilcraft"]
+file-formats-svg = ["file-formats", "craft-file-formats/svg"]
+file-formats-xcf = ["file-formats", "craft-file-formats/xcf"]
+
+file-import = ["dep:craft-file-import"]
+
+flags = ["dep:craft-flags"]
+
+flow = ["dep:craft-flow"]
+
+font-catalog = ["dep:craft-font-catalog"]
+font-catalog-system = ["font-catalog", "craft-font-catalog/system"]
+
+font-manager = ["dep:craft-font-manager"]
+
+font-os-windows = ["dep:craft-font-os-windows"]
+
+font-store = ["dep:craft-font-store"]
+font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
+
+font-subset = ["dep:craft-font-subset"] # native only: HarfBuzz's C++ builds with the target's C++ compiler
+
+format = ["dep:craft-format"]
+
+frame = ["dep:craft-frame"]
+
+gainmap = ["dep:craft-gainmap"]
+
+gcode = ["dep:craft-gcode"]
+
+geom = ["dep:craft-geom"]
+
+gif = ["dep:craft-gif"]
+gif-frames = ["gif", "craft-gif/frames"]
+
+gpu = ["dep:craft-gpu"]
+gpu-startup = ["gpu", "craft-gpu/startup"]
+
+gpu-null = ["dep:craft-gpu-null"]
+
+gpu-providers = ["dep:craft-gpu-providers"]
+
+gpu-wgpu = ["dep:craft-gpu-wgpu"]
+gpu-wgpu-adapter-probe = ["gpu-wgpu", "craft-gpu-wgpu/adapter-probe"]
+gpu-wgpu-native-dx12 = ["gpu-wgpu", "craft-gpu-wgpu/native-dx12"]
+gpu-wgpu-native-gles = ["gpu-wgpu", "craft-gpu-wgpu/native-gles"]
+gpu-wgpu-native-metal = ["gpu-wgpu", "craft-gpu-wgpu/native-metal"]
+gpu-wgpu-native-vulkan = ["gpu-wgpu", "craft-gpu-wgpu/native-vulkan"]
+
+gridcraft-format = ["dep:craft-gridcraft-format"]
+
+gzip = ["dep:craft-gzip"]
+
+har = ["dep:craft-har"]
+
+hdr = ["dep:craft-hdr"]
+
+heif = ["dep:craft-heif"]
+heif-decode = ["heif", "craft-heif/decode"]
+heif-metadata = ["heif", "craft-heif/metadata"]
+heif-test-support = ["heif", "craft-heif/test-support"]
+heif-testdata = ["heif", "craft-heif/testdata"]
+
+html = ["dep:craft-html"]
+html-flow = ["html", "craft-html/flow"]
+html-standalone = ["html", "craft-html/standalone"]
+
+http-url = ["dep:craft-http-url"]
+
+i18n-collate = ["craft-i18n/collate"]
+
+i18n-build = ["dep:craft-i18n-build"]
+
+ical = ["dep:craft-ical"]
+
+idml = ["dep:craft-idml"]
+
+image-codecs = ["dep:craft-image-codecs"]
+image-codecs-avif = ["image-codecs", "craft-image-codecs/avif"]
+image-codecs-avif-decode = ["image-codecs", "craft-image-codecs/avif-decode"]
+image-codecs-cms = ["image-codecs", "craft-image-codecs/cms"]
+image-codecs-corpus = ["image-codecs", "craft-image-codecs/corpus"]
+image-codecs-heif = ["image-codecs", "craft-image-codecs/heif"]
+image-codecs-jxl = ["image-codecs", "craft-image-codecs/jxl"]
+image-codecs-sgi = ["image-codecs", "craft-image-codecs/sgi"]
+image-codecs-sunraster = ["image-codecs", "craft-image-codecs/sunraster"]
+image-codecs-threads = ["image-codecs", "craft-image-codecs/threads"]
+
+imaging = ["dep:craft-imaging", "color-ui", "keymap"]
+
+indd = ["dep:craft-indd"]
+
+ipc = ["dep:craft-ipc"]
+
+ipp = ["dep:craft-ipp"]
+
+java-class = ["dep:craft-java-class"]
+
+jmap = ["dep:craft-jmap"]
+
+jpeg = ["dep:craft-jpeg"]
+jpeg-parallel = ["jpeg", "craft-jpeg/parallel"]
+
+jsonc = ["dep:craft-jsonc"]
+
+jsonrpc = ["dep:craft-jsonrpc"]
+jsonrpc-async-lines = ["jsonrpc", "craft-jsonrpc/async-lines"]
+
+jxl = ["dep:craft-jxl"]
+jxl-decode = ["jxl", "craft-jxl/decode"]
+jxl-encode = ["jxl", "craft-jxl/encode"]
+
+keymap = ["dep:craft-keymap"]
+keymap-egui = ["keymap", "craft-keymap/egui"]
+
+kiwi = ["dep:craft-kiwi"]
+
+kra = ["dep:craft-kra"]
+
+latex = ["dep:craft-latex"]
+
+layers = ["dep:craft-layers"]
+
+lottie = ["dep:craft-lottie"]
+
+macho = ["dep:craft-macho"]
+macho-serde = ["macho", "craft-macho/serde"]
+
+markdown = ["dep:craft-markdown"]
+
+material-graph = ["dep:craft-material-graph"]
+
+materialx = ["dep:craft-materialx"]
+
+math = ["dep:craft-math"]
+
+mcmat = ["dep:craft-mcmat"]
+
+mcp = ["dep:craft-mcp"]
+
+mcp-server = ["dep:craft-mcp-server"]
+
+media = ["dep:craft-media"]
+media-avi = ["media", "craft-media/avi"]
+media-bink = ["media", "craft-media/bink"]
+media-bitstream = ["media", "craft-media/bitstream"]
+media-isobmff = ["media", "craft-media/isobmff"]
+media-matroska = ["media", "craft-media/matroska"]
+media-mpegts = ["media", "craft-media/mpegts"]
+media-mxf = ["media", "craft-media/mxf"]
+media-ogg = ["media", "craft-media/ogg"]
+media-serde = ["media", "craft-media/serde"]
+media-vmd = ["media", "craft-media/vmd"]
+
+media-source = ["dep:craft-media-source"]
+media-source-y4m = ["media-source", "craft-media-source/y4m"]
+
+menu = ["dep:craft-menu"]
+
+mesh = ["dep:craft-mesh"]
+mesh-abc = ["mesh", "craft-mesh/abc"]
+mesh-dae = ["mesh", "craft-mesh/dae"]
+mesh-fbx = ["mesh", "craft-mesh/fbx"]
+mesh-gltf = ["mesh", "craft-mesh/gltf"]
+mesh-obj = ["mesh", "craft-mesh/obj"]
+mesh-ply = ["mesh", "craft-mesh/ply"]
+mesh-stl = ["mesh", "craft-mesh/stl"]
+mesh-threemf = ["mesh", "craft-mesh/threemf"]
+
+metadata = ["dep:craft-metadata"]
+
+metafile = ["dep:craft-metafile"]
+metafile-write = ["metafile", "craft-metafile/write"]
+
+midi = ["dep:craft-midi"]
+midi-serde = ["midi", "craft-midi/serde"]
+
+mime = ["dep:craft-mime"]
+mime-detect = ["mime", "craft-mime/detect"]
+
+odf = ["dep:craft-odf"]
+odf-text = ["odf", "craft-odf/text"]
+
+ods = ["dep:craft-ods"]
+ods-test-support = ["ods", "craft-ods/test-support"]
+
+offcrypto = ["dep:craft-offcrypto"]
+
+opc = ["dep:craft-opc"]
+opc-test-support = ["opc", "craft-opc/test-support"]
+
+openpgp = ["dep:craft-openpgp"]
+
+ora = ["dep:craft-ora"]
+
+pages = ["dep:craft-pages", "keymap", "text"]
+
+palette = ["dep:craft-palette"]
+
+pbr = ["dep:craft-pbr"]
+pbr-parallel = ["pbr", "craft-pbr/parallel"]
+
+pcap = ["dep:craft-pcap"]
+
+pcraft-bundle = ["dep:craft-pcraft-bundle"]
+
+pcraft-format = ["dep:craft-pcraft-format"]
+
+pdf = ["dep:craft-pdf"]
+pdf-content = ["pdf", "craft-pdf/content"]
+pdf-cos = ["pdf", "craft-pdf/cos"]
+pdf-crypt = ["pdf", "craft-pdf/crypt"]
+pdf-filters = ["pdf", "craft-pdf/filters"]
+pdf-fonts = ["pdf", "craft-pdf/fonts"]
+pdf-interpret = ["pdf", "craft-pdf/interpret"]
+pdf-paths = ["pdf", "craft-pdf/paths"]
+pdf-raster = ["pdf", "craft-pdf/raster"]
+pdf-read = ["pdf", "craft-pdf/read"]
+pdf-test-support = ["pdf", "craft-pdf/test-support"]
+pdf-write = ["pdf", "craft-pdf/write"]
+pdf-write-pdf = ["pdf", "craft-pdf/write-pdf"]
+pdf-write-raster = ["pdf", "craft-pdf/write-raster"]
+pdf-write-simple-text = ["pdf", "craft-pdf/write-simple-text"]
+pdf-write-svg = ["pdf", "craft-pdf/write-svg"]
+
+pdn = ["dep:craft-pdn"]
+
+pe = ["dep:craft-pe"]
+pe-serde = ["pe", "craft-pe/serde"]
+
+penpot = ["dep:craft-penpot"]
+
+pkcs7 = ["dep:craft-pkcs7"]
+
+platform = ["dep:craft-platform"]
+platform-appearance = ["platform", "craft-platform/appearance"]
+platform-apple-events = ["platform", "craft-platform/apple-events"]
+platform-browser = ["platform", "craft-platform/browser"]
+platform-clipboard = ["platform", "craft-platform/clipboard"]
+platform-clipboard-system = ["platform", "craft-platform/clipboard-system"]
+platform-pointer = ["platform", "craft-platform/pointer"]
+platform-screen = ["platform", "craft-platform/screen"]
+platform-testing = ["platform", "craft-platform/testing"]
+platform-usage = ["platform", "craft-platform/usage"]
+
+plist = ["dep:craft-plist"]
+
+plotter = ["dep:craft-plotter"]
+plotter-serde = ["plotter", "craft-plotter/serde"]
+
+png = ["dep:craft-png"]
+
+ppt-binary = ["dep:craft-ppt-binary"]
+
+pptx = ["dep:craft-pptx"]
+
+prc = ["dep:craft-prc"]
+
+prepress = ["dep:craft-prepress"]
+prepress-flatten = ["prepress", "craft-prepress/flatten"]
+
+press-print = ["dep:craft-press-print"]
+
+print = ["dep:craft-print"]
+
+proof = ["dep:craft-proof"]
+
+proto = ["dep:craft-proto"]
+
+ps = ["dep:craft-ps"]
+ps-read = ["ps", "craft-ps/read"]
+ps-write = ["ps", "craft-ps/write"]
+
+psd = ["dep:craft-psd"]
+psd-corpus = ["psd", "craft-psd/corpus"]
+psd-serde = ["psd", "craft-psd/serde"]
+psd-test-support = ["psd", "craft-psd/test-support"]
+psd-testgen = ["psd", "craft-psd/testgen"]
+
+pst = ["dep:craft-pst"]
+pst-test-support = ["pst", "craft-pst/test-support"]
+pst-test-writer = ["pst", "craft-pst/test-writer"]
+
+quit = ["dep:craft-quit"]
+
+raster-codecs = ["dep:craft-raster-codecs"]
+
+raw = ["dep:craft-raw"]
+raw-arw = ["raw", "craft-raw/arw"]
+raw-cr2 = ["raw", "craft-raw/cr2"]
+raw-cr3 = ["raw", "craft-raw/cr3"]
+raw-crw = ["raw", "craft-raw/crw"]
+raw-dng = ["raw", "craft-raw/dng"]
+raw-erf = ["raw", "craft-raw/erf"]
+raw-hasselblad = ["raw", "craft-raw/hasselblad"]
+raw-jxl = ["raw", "craft-raw/jxl"]
+raw-kodak = ["raw", "craft-raw/kodak"]
+raw-line-dng = ["raw", "craft-raw/line-dng"]
+raw-line-dng-threads = ["raw", "craft-raw/line-dng-threads"]
+raw-mef = ["raw", "craft-raw/mef"]
+raw-mrw = ["raw", "craft-raw/mrw"]
+raw-nef = ["raw", "craft-raw/nef"]
+raw-orf = ["raw", "craft-raw/orf"]
+raw-pef = ["raw", "craft-raw/pef"]
+raw-raf = ["raw", "craft-raw/raf"]
+raw-rw2 = ["raw", "craft-raw/rw2"]
+raw-srw = ["raw", "craft-raw/srw"]
+
+review = ["dep:craft-review", "keymap", "pages"]
+
+rtf = ["dep:craft-rtf"]
+rtf-doc = ["rtf", "craft-rtf/doc"]
+rtf-outlook = ["rtf", "craft-rtf/outlook"]
+
+sbs = ["dep:craft-sbs"]
+
+score = ["dep:craft-score"]
+
+scraft-format = ["dep:craft-scraft-format"]
+
+settings = ["dep:craft-settings"]
+settings-testing = ["settings", "craft-settings/testing"]
+
+sf2 = ["dep:craft-sf2"]
+sf2-test-support = ["sf2", "craft-sf2/test-support"]
+
+sheet = ["dep:craft-sheet"]
+
+shx = ["dep:craft-shx"]
+
+silhouette-studio = ["dep:craft-silhouette-studio"]
+
+sketch = ["dep:craft-sketch"]
+
+smime = ["dep:craft-smime"]
+
+sniff = ["dep:craft-sniff"]
+
+sourcemap = ["dep:craft-sourcemap"]
+
+sqlite = ["dep:craft-sqlite"]
+
+ssip = ["dep:craft-ssip"]
+
+stencilcraft-document = ["dep:craft-stencilcraft-document"]
+
+stencilcraft-format = ["dep:craft-stencilcraft-format"]
+
+stream-codecs = ["dep:craft-stream-codecs"]
+
+suite-account = ["dep:craft-suite-account"]
+
+svg = ["dep:craft-svg"]
+svg-draw = ["svg", "craft-svg/draw"]
+svg-paths = ["svg", "craft-svg/paths"]
+svg-tree = ["svg", "craft-svg/tree"]
+svg-tree-core = ["svg", "craft-svg/tree-core"]
+svg-tree-render = ["svg", "craft-svg/tree-render"]
+svg-tree-render-system-fonts = ["svg", "craft-svg/tree-render-system-fonts"]
+svg-tree-system-fonts = ["svg", "craft-svg/tree-system-fonts"]
+svg-tree-text = ["svg", "craft-svg/tree-text"]
+
+table = ["dep:craft-table", "keymap"]
+
+tar = ["dep:craft-tar"]
+tar-serde = ["tar", "craft-tar/serde"]
+
+tcraft = ["dep:craft-tcraft"]
+
+text = ["dep:craft-text", "keymap"]
+text-afrikaans = ["text", "craft-text/afrikaans"]
+text-albanian = ["text", "craft-text/albanian"]
+text-all-languages = ["text", "craft-text/all-languages"]
+text-assamese = ["text", "craft-text/assamese"]
+text-belarusian = ["text", "craft-text/belarusian"]
+text-bengali = ["text", "craft-text/bengali"]
+text-bidi = ["text", "craft-text/bidi"]
+text-bulgarian = ["text", "craft-text/bulgarian"]
+text-burmese = ["text", "craft-text/burmese"]
+text-catalan = ["text", "craft-text/catalan"]
+text-croatian = ["text", "craft-text/croatian"]
+text-czech = ["text", "craft-text/czech"]
+text-danish = ["text", "craft-text/danish"]
+text-dutch = ["text", "craft-text/dutch"]
+text-estonian = ["text", "craft-text/estonian"]
+text-find = ["text", "craft-text/find"]
+text-finnish = ["text", "craft-text/finnish"]
+text-font-picker = ["text", "craft-text/font-picker"]
+text-french = ["text", "craft-text/french"]
+text-galician = ["text", "craft-text/galician"]
+text-generator = ["text", "craft-text/generator"]
+text-georgian = ["text", "craft-text/georgian"]
+text-german = ["text", "craft-text/german"]
+text-greek = ["text", "craft-text/greek"]
+text-gujarati = ["text", "craft-text/gujarati"]
+text-hindi = ["text", "craft-text/hindi"]
+text-hungarian = ["text", "craft-text/hungarian"]
+text-hyphen = ["text", "craft-text/hyphen"]
+text-icelandic = ["text", "craft-text/icelandic"]
+text-italian = ["text", "craft-text/italian"]
+text-kannada = ["text", "craft-text/kannada"]
+text-khmer = ["text", "craft-text/khmer"]
+text-kurmanji = ["text", "craft-text/kurmanji"]
+text-lao = ["text", "craft-text/lao"]
+text-latin = ["text", "craft-text/latin"]
+text-lithuanian = ["text", "craft-text/lithuanian"]
+text-lstm = ["text", "craft-text/lstm"]
+text-malayalam = ["text", "craft-text/malayalam"]
+text-marathi = ["text", "craft-text/marathi"]
+text-mongolian = ["text", "craft-text/mongolian"]
+text-norwegian = ["text", "craft-text/norwegian"]
+text-oriya = ["text", "craft-text/oriya"]
+text-panjabi = ["text", "craft-text/panjabi"]
+text-polish = ["text", "craft-text/polish"]
+text-portuguese = ["text", "craft-text/portuguese"]
+text-positioned = ["text", "craft-text/positioned"]
+text-russian = ["text", "craft-text/russian"]
+text-sanskrit = ["text", "craft-text/sanskrit"]
+text-segment = ["text", "craft-text/segment"]
+text-serbian = ["text", "craft-text/serbian"]
+text-slovak-gpl = ["text", "craft-text/slovak-gpl"]
+text-slovenian = ["text", "craft-text/slovenian"]
+text-spanish = ["text", "craft-text/spanish"]
+text-spell = ["text", "craft-text/spell"]
+text-swedish = ["text", "craft-text/swedish"]
+text-tamil = ["text", "craft-text/tamil"]
+text-telugu = ["text", "craft-text/telugu"]
+text-thai = ["text", "craft-text/thai"]
+text-turkish = ["text", "craft-text/turkish"]
+text-turkmen = ["text", "craft-text/turkmen"]
+text-ukrainian = ["text", "craft-text/ukrainian"]
+
+texture = ["dep:craft-texture"]
+texture-dds = ["texture", "craft-texture/dds"]
+texture-parallel = ["texture", "craft-texture/parallel"]
+
+tga = ["dep:craft-tga"]
+
+theme-editor = ["dep:craft-theme-editor"]
+
+theme-store = ["dep:craft-theme-store"]
+
+tiff = ["dep:craft-tiff"]
+tiff-plain-rgba16 = ["tiff", "craft-tiff/plain-rgba16"]
+
+time = ["dep:craft-time"]
+
+timeline = ["dep:craft-timeline", "keymap"]
+timeline-otio = ["timeline", "craft-timeline/otio"]
+timeline-xml = ["timeline", "craft-timeline/xml"]
+
+tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
+
+ui-app = ["ui", "craft-ui/app"]
+ui-cloud = ["ui", "craft-ui/cloud"]
+ui-color_fonts = ["ui", "craft-ui/color_fonts"]
+ui-esign = ["ui", "craft-ui/esign"]
+ui-share = ["ui", "craft-ui/share"]
+ui-snapshot = ["ui", "craft-ui/snapshot"]
+ui-system_fonts = ["ui", "craft-ui/system_fonts"]
+ui-testing = ["ui", "craft-ui/testing"]
+
+update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
+update-local-mirror = ["update", "craft-update/local-mirror"]
+update-oci_migration = ["update", "craft-update/oci_migration"]
+
+usd = ["dep:craft-usd"]
+
+vcard = ["dep:craft-vcard"]
+
+vectorcraft-format = ["dep:craft-vectorcraft-format"]
+
+vectordrawable = ["dep:craft-vectordrawable"]
+
+video = ["dep:craft-video"]
+video-apv = ["video", "craft-video/apv"]
+video-apv-decode = ["video", "craft-video/apv-decode"]
+video-apv-encode = ["video", "craft-video/apv-encode"]
+video-av1 = ["video", "craft-video/av1"]
+video-av1-decode = ["video", "craft-video/av1-decode"]
+video-av1-encode = ["video", "craft-video/av1-encode"]
+video-av1-large-encode = ["video", "craft-video/av1-large-encode"]
+video-bink = ["video", "craft-video/bink"]
+video-bink-decode = ["video", "craft-video/bink-decode"]
+video-dnx = ["video", "craft-video/dnx"]
+video-ffv1 = ["video", "craft-video/ffv1"]
+video-h264 = ["video", "craft-video/h264"]
+video-h264-decode = ["video", "craft-video/h264-decode"]
+video-h264-encode = ["video", "craft-video/h264-encode"]
+video-hap = ["video", "craft-video/hap"]
+video-hevc = ["video", "craft-video/hevc"]
+video-hevc-decode = ["video", "craft-video/hevc-decode"]
+video-hevc-encode = ["video", "craft-video/hevc-encode"]
+video-mjpeg = ["video", "craft-video/mjpeg"]
+video-mpeg2 = ["video", "craft-video/mpeg2"]
+video-mpeg2-decode = ["video", "craft-video/mpeg2-decode"]
+video-mpeg2-encode = ["video", "craft-video/mpeg2-encode"]
+video-mpeg4 = ["video", "craft-video/mpeg4"]
+video-mpeg4-encode = ["video", "craft-video/mpeg4-encode"]
+video-prores = ["video", "craft-video/prores"]
+video-rawvideo = ["video", "craft-video/rawvideo"]
+video-screen-video = ["video", "craft-video/screen-video"]
+video-theora = ["video", "craft-video/theora"]
+video-theora-decode = ["video", "craft-video/theora-decode"]
+video-theora-encode = ["video", "craft-video/theora-encode"]
+video-threads = ["video", "craft-video/threads"]
+video-vmd = ["video", "craft-video/vmd"]
+video-vmd-decode = ["video", "craft-video/vmd-decode"]
+video-vp8 = ["video", "craft-video/vp8"]
+video-vp8-decode = ["video", "craft-video/vp8-decode"]
+video-vp8-encode = ["video", "craft-video/vp8-encode"]
+video-vp9 = ["video", "craft-video/vp9"]
+video-vp9-decode = ["video", "craft-video/vp9-decode"]
+video-vp9-encode = ["video", "craft-video/vp9-encode"]
+
+wasm = ["dep:craft-wasm"]
+
+wayland = ["dep:craft-wayland"]
+
+web-api = ["dep:craft-web-api"]
+
+web-host = ["dep:craft-web-host"]
+
+webp = ["dep:craft-webp"]
+webp-frames = ["webp", "craft-webp/frames"]
+webp-vp8 = ["webp", "craft-webp/vp8"]
+
+window = ["dep:craft-window"]
+window-appkit = ["window", "craft-window/appkit"]
+
+wordmodel = ["dep:craft-wordmodel"]
+wordmodel-test-support = ["wordmodel", "craft-wordmodel/test-support"]
+
+xcf = ["dep:craft-xcf"]
+
+xfa = ["dep:craft-xfa"]
+
+xfdf = ["dep:craft-xfdf"]
+
+xfl = ["dep:craft-xfl"]
+
+xls = ["dep:craft-xls"]
+xls-test-support = ["xls", "craft-xls/test-support"]
+
+xlsx = ["dep:craft-xlsx"]
+xlsx-test-support = ["xlsx", "craft-xlsx/test-support"]
+
+xml = ["dep:craft-xml"]
+
+y4m = ["dep:craft-y4m"]
+
+zip = ["dep:craft-zip"]
+zip-lenient = ["zip", "craft-zip/lenient"]
+zip-lenient-bzip2 = ["zip", "craft-zip/lenient-bzip2"]
+zip-lenient-lzma = ["zip", "craft-zip/lenient-lzma"]
+zip-lenient-zstd = ["zip", "craft-zip/lenient-zstd"]
+zip-serde = ["zip", "craft-zip/serde"]
+zip-test-support = ["zip", "craft-zip/test-support"]

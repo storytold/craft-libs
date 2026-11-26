@@ -40,9 +40,9 @@ pub fn write<T: Serialize>(workbook: &T) -> Result<Vec<u8>, Error> {
     serde_json::to_vec_pretty(workbook).map_err(Error::Write)
 }
 
-/// [`write`], with `kept` appended to the top-level list `field` (made if absent): entries a
+/// [`fn@write`], with `kept` appended to the top-level list `field` (made if absent): entries a
 /// newer version wrote that this build kept without reading. With nothing kept this is exactly
-/// [`write`]. Otherwise the workbook goes through a [`Value`] first, so its object keys are
+/// [`fn@write`]. Otherwise the workbook goes through a [`Value`] first, so its object keys are
 /// written in `serde_json`'s map order.
 pub fn write_with_kept<T: Serialize>(workbook: &T, field: &str, kept: &[Value]) -> Result<Vec<u8>, Error> {
     if kept.is_empty() {

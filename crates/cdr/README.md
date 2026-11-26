@@ -1,10 +1,12 @@
 # craft-cdr
 
-A bounded Rust reader for `.cdr` drawings of versions 1 to 27 (and `.cdt` templates).
+A bounded Rust reader for `.cdr` drawings of versions 1 to 27 (and `.cdt` templates), and a
+writer of version 15 drawings.
 It reads the `WL` files of versions 1 and 2, the RIFF chunk tree of versions 3 and later with its
 compressed lists, the ZIP packages that versions 14 and later save (with the data streams of
 versions 16 and later) and the records listed below, and hands the engine a drawing in points,
-with each object's transform. It does not write `.cdr` files.
+with each object's transform. `write` writes a drawing back out as a `.cdr` file of version 15
+(see [Writing](#writing)).
 
 ## What is read
 
@@ -57,6 +59,24 @@ reports version 1 for the marker `e` and version 2 for the other two. A RIFF fil
 a version before 3 is refused, and so is the version 4 template form type `CDST`, which reads as
 not a `.cdr` drawing.
 
+## Previews
+
+`preview` returns the picture a `.cdr` file keeps of its drawing without reading the drawing (rows
+R75 and R76). In versions 4 to 13 the picture is the `DISP` chunk, returned as a BMP file. In versions
+14 to 16 it is the package member `metadata/thumbnails/thumbnail.bmp`, and from version 17 on it
+is `previews/thumbnail.png`. The package's drawing stream is not read, so a package that holds
+both members gives the PNG. Files of versions 1 and 3 keep no picture. A version 2 file keeps a
+1-bit picture (R40) that `preview` does not read, so it refuses the file. `preview` does not check
+the drawing's version, so a RIFF file that `read` refuses for its version, such as one that names a
+version before 3, still gives its `DISP` picture.
+
+A `DISP` bitmap must start with the 4 bytes `08 00 00 00`, have a 40-byte info header and be
+uncompressed (compression 0, or 3 with color masks at 16 or 32 bits). A `DISP` chunk of another
+kind, or a bitmap with another header length or compression, is passed over without checking the
+rest of its bytes, and a file with no other `DISP` chunk is refused. A RIFF file without a `DISP` bitmap is refused as damaged when its last chunk does not end
+where the form's length says the form ends, which includes a file cut short. The bytes are returned
+still encoded, so the caller decodes them within its own image limits.
+
 ## `.cmx` files
 
 `read_cmx` reads `.cmx` exchange files with 32-bit coordinates (rows R53 to R63) into the same
@@ -77,9 +97,68 @@ arrowheads and lenses are not read; the drawing's `warnings` name each kind it h
 path is left out and the objects it clips are read without it. Files in big-endian byte order and
 files with 16-bit coordinates are refused.
 
+## Writing
+
+`write` writes a drawing as a `.cdr` file of version 15: a ZIP package whose first member,
+`mimetype`, names the format and whose member `content/riffData.cdr` holds the RIFF file. Each
+record is laid out as the reader reads it, by the `PROVENANCE.md` rows it cites. The reader reads
+the written file back as the drawing it was written from, to the precision the file stores
+(1/254000 inch for coordinates, 1/255 for color components), with the changes listed below the
+table.
+
+| In the drawing | Written as |
+|---|---|
+| Pages and their sizes; the drawing's page size | pages with a page size argument; `mcfg` |
+| The master page's layers and the drawing's guidelines | the master page, with a guides, a desktop and a grid layer |
+| Layers: name, kind, hidden and locked | layers with their flags and their kind as the object type |
+| Guidelines of a layer | guideline objects in that layer |
+| Groups, and clipping containers with the objects they clip | `LIST grp ` lists; containers naming groups of the document's `LIST clpt` |
+| Paths, rectangles with each corner's radius, ellipses | curves, rectangles of the version 15 layout, ellipses |
+| Uniform fills and outlines (width, color, caps, joins, dashes, behind the fill, scaled with the shape) | fill and outline records, one for each different fill or outline |
+| RGB, CMYK, gray, registration and spot colors | color models 5, 3, 9 and 20; a spot color as its look with its tint and its name |
+| The nonzero fill rule, opacity and blend modes | the winding argument and the uniform transparency argument |
+
+Opacity is written as the reader reads argument 8000 (R47), and the fill rule as the reader reads
+argument 14001 (R52). The uniform transparency of every public sample R47 cites is 50%, and the
+specifications R52 cites do not say which fill rule each winding value means, so the direction of
+the opacity value and the value written for nonzero rest on the reader's own reading. Each layer
+gets an id (argument 40050), and every other page names the master page's guides, desktop and grid
+layers by those ids (R70); the master page's drawing layers are not named from the other pages.
+
+The drawing's version and warnings are not written. A group that holds no shape or container is
+left out, a clipping container whose objects hold none is written as a plain shape, a subpath
+without segments is left out, as the reader leaves it out, and a drawing without pages gets one
+empty page. A closed subpath whose last segment ends away from its start gets a closing line to
+its start, as the file closes subpaths with an explicit point. A drawing without a page size of
+its own is written without `mcfg`. Guidelines on the master page's layers read back as the
+drawing's guidelines. An empty layer of a page other than a drawing layer, and an empty layer of
+the master page, are written and read back left out, as the reader leaves out such layers in any
+file. A guideline on a hidden layer reads back hidden, and a guideline angle past the field's
+range is written as the same angle within one turn. Hidden groups and objects carry the same hide
+bit as hidden layers (R19); the specification's notes date that bit on groups and objects to a
+later program release than version 15 files, so a program of that version may show them. A spot
+color without a look is written with a black look. Dash lengths are written to whole outline
+widths and spot color tints to whole percent, as the file stores them.
+
+Writing refuses a drawing that the reader would not read whole within the same `Limits`
+(objects, coordinates, dashes, arguments, chunks, clipped chunks, nesting depth, clip nesting,
+members and sizes), and groups nested deeper than the nesting depth, groups that hold nothing
+included. It also refuses what the file cannot hold or the reader would read back otherwise
+changed: a coordinate past 32 bits of 1/254000 inch, a number that is not finite, a page width or
+height that rounds to less than one coordinate unit, a negative outline width or a positive one
+that rounds to 0, a corner radius below 0 or more than a billionth past half the rectangle's
+shorter side (a radius within that is written as half), a color value, tint or opacity outside 0
+to 1, more than 10 dash lengths, a negative one or one that rounds past 65,535, a pattern whose
+lengths all round to 0, a name longer than 256 UTF-16 units or holding a NUL, a spot color without
+a name, at a tint that rounds to 0 percent or at a tint too low for its look to read back within
+one step of 1/255, objects on the master page's grid layer, and a guideline at the edge of the
+coordinate range with no room for a second point on it whose rounded coordinates lie within 1
+degree of its angle.
+
 ## Provenance
 
-`PROVENANCE.md` lists every record layout the reader relies on, with its public source and status.
+`PROVENANCE.md` lists every record layout the reader relies on, and the rows only the writer
+needs, with their public sources and status.
 Code cites the rows by id (`R1` ...), and `tests/it/provenance.rs` fails when a cited id has no row.
 The test inputs are synthetic drawings built by `src/synth.rs` and `src/synth_cmx.rs` (the
 `synth` feature); no third-party file is committed.
