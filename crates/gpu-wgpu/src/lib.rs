@@ -5,7 +5,8 @@
 //! (its adapter choice for `Preference::Auto`, its driver corrections and its fallback order) and
 //! builds [`DeviceCaps`] from what that device actually enabled (`Device::limits()` /
 //! `Device::features()`), never from the adapter's advertised maximum.
-//! [`WgpuContext::from_opened`] and [`WgpuContext::with_device`] take a device the caller opened.
+//! With the native `adapter-probe` feature, `WgpuContext::from_opened` and `WgpuContext::with_device`
+//! take a device the caller opened.
 //! A loss is read from the device's `craft_gpu_device::DeviceHealth`, which owns the device's
 //! device-lost callback. Without a usable adapter (`adapter-probe` is off, no GPU is present,
 //! or on `wasm32` where real device creation needs the async worker-init path noted in
