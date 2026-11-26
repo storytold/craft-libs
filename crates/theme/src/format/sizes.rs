@@ -18,8 +18,9 @@ pub const SIZES_SCHEMA: &str = "craft-design-sizes";
 /// The size set file format this crate reads and writes.
 pub const SIZES_SCHEMA_VERSION: u64 = 1;
 
-const FONT: &str = "\"ui\", \"ui_semibold\" or \"mono\"";
-const FONTS: [(&str, FontSlot); 3] = [("ui", FontSlot::Ui), ("ui_semibold", FontSlot::UiSemibold), ("mono", FontSlot::Mono)];
+const FONT: &str = "\"ui\", \"ui_semibold\", \"mono\" or \"ui_condensed\"";
+const FONTS: [(&str, FontSlot); 4] =
+    [("ui", FontSlot::Ui), ("ui_semibold", FontSlot::UiSemibold), ("mono", FontSlot::Mono), ("ui_condensed", FontSlot::UiCondensed)];
 const TOP_ORDER: [&str; 5] = ["schema", "schema_version", "id", "name", "base"];
 
 /// A parsed size set file: the set and the JSON it came from, so that [`write_sizes`] keeps

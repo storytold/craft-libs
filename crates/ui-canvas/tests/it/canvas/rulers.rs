@@ -4,8 +4,8 @@ use craft_behavior::geometry::{SnapOptions, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CancelReason, CanvasView, RulerUnits, TickLabels, Ticks};
 use craft_ui::canvas::{
-    Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap, StepLadder, TickRule,
-    ToolAction, ToolContext, ToolPath, ToolPointer,
+    CENTIMETRE_LABEL_STEP_MIN, Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap,
+    StepLadder, TickRule, ToolAction, ToolContext, ToolPath, ToolPointer,
 };
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::TickRank;
@@ -58,6 +58,24 @@ fn labelled_ticks_never_touch_at_any_zoom() {
             assert!(gap >= f64::from(ladder.label_gap) - 1e-9, "the step ladder at zoom {zoom}: labels {gap} points apart");
         }
     }
+}
+
+/// A document ruler labels every whole centimetre at 100% (28.35 points each), and thins the labels out when zoomed
+/// out so they never touch.
+#[trial]
+fn a_centimetre_document_ruler_labels_each_centimetre_and_thins_out_zoomed_out() {
+    let centimetres = RulerUnits::new(2.54 / 72.0, Ticks::decimal(false));
+    let rule = TickRule::of_unit(UnitKind::Centimetres);
+    let at_full = least_label_gap(&centimetres, rule, 1.0);
+    assert!(at_full < f64::from(LABEL_STEP_MIN), "labels at 100% are closer than the generic metric step: {at_full}");
+    let one_cm = 72.0 / 2.54;
+    assert!((at_full - one_cm).abs() < 1e-6, "labels at 100% are one centimetre apart: {at_full}");
+    let least = f64::from(CENTIMETRE_LABEL_STEP_MIN) - 1e-9;
+    for zoom in ZOOMS {
+        let gap = least_label_gap(&centimetres, rule, zoom);
+        assert!(gap >= least, "centimetre labels at zoom {zoom}: {gap} points apart");
+    }
+    assert!(least_label_gap(&centimetres, rule, 0.25) > at_full, "labels thin out when zoomed out");
 }
 
 /// A vertical label stacks its characters one label-role size apart; the longest label the metric rule gives at the

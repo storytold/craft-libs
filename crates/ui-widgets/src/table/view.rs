@@ -13,7 +13,7 @@ use crate::display::Divider;
 use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
 use crate::menu::{Menu, MenuItem};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::{ColumnKey, ItemSource, Metrics, Selection, SpanLayout};
 use egui::{Rect, Ui};
 use std::hash::Hash;
@@ -21,12 +21,14 @@ use std::hash::Hash;
 /// The header menu's popup.
 const HEADER_MENU: &str = "header_menu";
 
-/// The style of the table: it has no look of its own beyond its container's surface.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// The style of the table: the focus ring of its header cells, and no other look beyond its container's surface.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TableStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// A table: one Tab stop, a header row over the columns, the selection rules of the collection contract, type-ahead on
@@ -134,8 +136,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Table<'_, K> {
     type Style = TableStyle;
     type Output = CollectionResponse<K, RowEvent>;
 
-    fn style(_: &StyleCx<'_>, _: TableStyleKey<K>) -> TableStyle {
-        TableStyle::default()
+    fn style(cx: &StyleCx<'_>, _: TableStyleKey<K>) -> TableStyle {
+        TableStyle { metrics: Metrics::default(), focus: cx.focus_look() }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

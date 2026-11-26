@@ -247,6 +247,35 @@ fn a_floated_panel_keeps_where_it_was_docked_until_it_docks() {
     assert!(!floats(workspace.layout(), 3) && workspace.floated().is_empty(), "docking back drops the record");
 }
 
+/// A closed panel that floats by itself records the place it would reopen at, as opening it first records, and its old
+/// group keeps its front tab; docking it then returns it to that group at its old index.
+#[test]
+fn a_closed_panel_that_floats_keeps_its_docked_place_and_its_old_group_keeps_its_front_tab() {
+    let float = Action::float(2, rect(10.0, 10.0, 200.0, 200.0));
+    let mut opened = Workspace::new(docked());
+    opened.apply(Action::close(2), false, allow).unwrap();
+    opened.apply_all([Action::open(2, None), float.clone()], false, allow).unwrap();
+
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::close(2), false, allow).unwrap();
+    workspace.apply(float, false, allow).unwrap();
+    let layout = workspace.layout();
+    assert!(matches!(layout.place(&2), Some(PanelPlace::Floating { .. })));
+    assert_eq!(group_members(layout, 3), [3]);
+    assert_eq!(front(layout, 3), 3, "the old group keeps its front tab");
+    assert_eq!(workspace.floated(), opened.floated(), "the record matches the one opening it first gives");
+
+    let [(_, location)] = workspace.floated() else { panic!("one record: {:?}", workspace.floated()) };
+    let back = Action::move_beside(2, location.anchor.unwrap(), location.placement.clone());
+    workspace.apply(back, false, allow).unwrap();
+    assert_eq!(end_dock(workspace.layout())[0].groups[0].panels, [2, 3], "Dock Panel returns it to its old index");
+
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::close(6), false, allow).unwrap();
+    workspace.apply(Action::float(6, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    assert!(workspace.floated().is_empty(), "a panel closed from a floating window has no docked place");
+}
+
 /// Canvas 1; an end dock with an expanded column [2] and a collapsed column [3], [4]; a floating window [6].
 fn columns() -> Layout<u32> {
     let dock = Node::dock(DockEdge::End, vec![Column::new(vec![g(&[2], 0)]), Column::new(vec![g(&[3], 0), g(&[4], 0)]).with_iconic(true)]);
