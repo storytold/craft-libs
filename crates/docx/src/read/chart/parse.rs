@@ -1,7 +1,9 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
 use super::model::{Axis, Grouping, Kind, LabelPos, Pos, Series, Symbol};
 use super::plot::label;
-use super::{Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
+use super::{
+    Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure, slot,
+};
 
 impl Chart {
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
@@ -55,7 +57,10 @@ impl Chart {
         if grouping == Grouping::Percent {
             to_percent(&mut series, n);
         }
-        let (cat, val) = chart_axes(plot, scatter);
+        let (cat, val) = chart_axes(plot, scatter, theme);
+        let text_colour = chart_text_colour(space, theme);
+        let title_el = chart.child("c:title");
+        let legend_el = chart.child("c:legend");
         let val_fmt = if grouping == Grouping::Percent {
             "0%".to_string()
         } else {
@@ -85,7 +90,33 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            title_bold: title_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true),
+            title_size: title_el.and_then(element_size).unwrap_or(TITLE_SIZE),
+            legend_bold: legend_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(false),
+            text_bold: chart_bold(space).unwrap_or(false),
+            title_colour: title_el.and_then(|t| element_text_colour(t, theme)).unwrap_or(text_colour),
+            legend_colour: legend_el.and_then(|l| element_text_colour(l, theme)).unwrap_or(text_colour),
+            text_colour,
         })
+    }
+
+    /// Colour of the category (scatter: x) axis labels.
+    pub(super) fn cat_colour(&self) -> Rgb {
+        self.cat.text.unwrap_or(self.text_colour)
+    }
+
+    /// Colour of the value axis labels.
+    pub(super) fn val_colour(&self) -> Rgb {
+        self.val.text.unwrap_or(self.text_colour)
+    }
+
+    /// Whether the category and value axis labels are bold.
+    pub(super) fn cat_bold(&self) -> bool {
+        self.cat.bold.unwrap_or(self.text_bold)
+    }
+
+    pub(super) fn val_bold(&self) -> bool {
+        self.val.bold.unwrap_or(self.text_bold)
     }
 
     pub(super) fn stacked(&self) -> bool {
@@ -160,8 +191,9 @@ fn to_percent(series: &mut [Series], n: usize) {
     }
 }
 
-/// The category axis (scatter: the horizontal value axis) and the value axis of a plot area.
-pub(crate) fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
+/// The category axis (scatter: the horizontal value axis) and the value axis of a plot area;
+/// `theme` resolves their text colours.
+pub(crate) fn chart_axes(plot: &El, scatter: bool, theme: &[Rgb]) -> (Axis, Axis) {
     let vals_ax: Vec<&El> = plot.children("c:valAx").collect();
     let horiz_pos = |a: &&El| matches!(a.child("c:axPos").and_then(|p| p.attr("val")), Some("b" | "t"));
     let (val_el, x_el) = if scatter {
@@ -172,7 +204,7 @@ pub(crate) fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
         (vals_ax.first().copied(), None)
     };
     let cat_el = plot.els().find(|e| matches!(e.name.as_str(), "c:catAx" | "c:dateAx"));
-    (axis(if scatter { x_el } else { cat_el }), axis(val_el))
+    (axis(if scatter { x_el } else { cat_el }, theme), axis(val_el, theme))
 }
 
 /// The chart's title. An empty `c:title` shows the series name (Word's automatic title of a
@@ -350,7 +382,7 @@ fn pts(cache: &El, cap: usize) -> Vec<Option<String>> {
     out
 }
 
-pub(super) fn axis(a: Option<&El>) -> Axis {
+pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
     let Some(a) = a else { return Axis { deleted: true, labels: true, line: true, ..Default::default() } };
     let scaling = a.child("c:scaling");
     let num =
@@ -376,7 +408,56 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
             .and_then(|v| v.trim().parse::<i64>().ok())
             .map(|v| (v as f64 / 60_000.0).clamp(-360.0, 360.0) as f32),
         labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),
+        text: element_text_colour(a, theme),
+        bold: element_bold(a),
     }
+}
+
+/// A chart element's text size, points, when its rich text's first run, its default run
+/// properties or its `c:txPr` state one (`sz`, hundredths of a point).
+pub(super) fn element_size(e: &El) -> Option<f32> {
+    let sz = |r: &El| r.attr("sz").and_then(int).map(|v| (v as f32 / 100.0).clamp(6.0, 72.0));
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(sz)
+        .or_else(|| rich.and_then(|r| r.find("a:defRPr")).and_then(sz))
+        .or_else(|| e.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(sz))
+}
+
+/// Whether a chart element's text is bold, when its rich text's first run, its default run
+/// properties or its `c:txPr` say (`b`).
+pub(super) fn element_bold(e: &El) -> Option<bool> {
+    let b = |r: &El| r.attr("b").map(truthy);
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(b)
+        .or_else(|| rich.and_then(|r| r.find("a:defRPr")).and_then(b))
+        .or_else(|| e.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(b))
+}
+
+/// The text colour a chart element (title, legend, axis) states for itself: its rich text's
+/// first run, else the default run properties of its rich text or `c:txPr`.
+pub(super) fn element_text_colour(e: &El, theme: &[Rgb]) -> Option<Rgb> {
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(|r| fill_colour(r, theme))
+        .or_else(|| rich.and_then(|r| run_defaults_colour(r, theme)))
+        .or_else(|| e.child("c:txPr").and_then(|t| run_defaults_colour(t, theme)))
+}
+
+/// The colour of a text body's default run properties (`a:defRPr`).
+fn run_defaults_colour(body: &El, theme: &[Rgb]) -> Option<Rgb> {
+    body.find("a:defRPr").and_then(|d| fill_colour(d, theme))
+}
+
+/// Whether the chart's own text properties (`c:txPr`) make its text bold.
+pub(super) fn chart_bold(space: &El) -> Option<bool> {
+    space.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(|d| d.attr("b")).map(truthy)
+}
+
+/// The chart's own text colour (its `c:txPr`), the grey Word's default style uses without one.
+pub(super) fn chart_text_colour(space: &El, theme: &[Rgb]) -> Rgb {
+    space.child("c:txPr").and_then(|t| run_defaults_colour(t, theme)).unwrap_or(TEXT)
 }
 
 fn title_text(t: &El) -> Option<String> {

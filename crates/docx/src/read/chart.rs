@@ -34,7 +34,7 @@ use model::{Grouping, Kind, Pos, Series};
 pub(crate) use parse::chart_axes;
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
-use parse::{read_series, text_size, title_of};
+use parse::{chart_bold, chart_text_colour, element_bold, element_size, element_text_colour, read_series, text_size, title_of};
 #[cfg(test)]
 use plot::{Scale, narrow, nice_scale};
 use plot::{backdrop, cartesian, label};
@@ -89,7 +89,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     backdrop(&mut out, space, theme, w, h);
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     if let Some(t) = &chart.title {
-        area = title_block(&mut out, t, area);
+        area = title_block(&mut out, t, area, chart.title_colour, chart.title_bold, chart.title_size);
     }
     if let Some(pos) = chart.legend {
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
@@ -100,7 +100,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
         if reverse {
             entries.reverse();
         }
-        area = legend(&mut out, &entries, pos, area, chart.text_size);
+        area = legend(&mut out, &entries, pos, area, chart.text_size, (chart.legend_colour, chart.legend_bold));
     }
     match chart.kind {
         Kind::Pie | Kind::Doughnut => pie(&mut out, &chart, area),
@@ -110,10 +110,10 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     out
 }
 
-/// The title at the top of `area`; returns the room left under it.
-fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect) -> Rect {
-    let lh = TITLE_SIZE * LINE;
-    text(out, Rect { x: area.x, y: area.y, w: area.w, h: lh }, t, TITLE_SIZE, TextAlign::Center, true);
+/// The title at the top of `area`, in its colour, weight and size; returns the room left under it.
+fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect, color: Rgb, bold: bool, size: f32) -> Rect {
+    let lh = size * LINE;
+    text(out, Rect { x: area.x, y: area.y, w: area.w, h: lh }, t, size, TextAlign::Center, bold, color);
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
@@ -138,14 +138,19 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
         alpha: 1.0,
     });
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
+    let colour = chart_text_colour(space, theme);
     if let Some(t) = title_of(chart, &read_series(ty, false, theme)) {
-        area = title_block(out, &t, area);
+        let title = chart.child("c:title");
+        let title_colour = title.and_then(|t| element_text_colour(t, theme)).unwrap_or(colour);
+        let title_bold = title.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true);
+        let title_size = title.and_then(element_size).unwrap_or(TITLE_SIZE);
+        area = title_block(out, &t, area, title_colour, title_bold, title_size);
     }
     let size = text_size(space);
     let lh = size * LINE;
     let msg = format!("{} (not supported yet)", unsupported_name(&ty.name));
     let line = Rect { x: area.x, y: area.y + ((area.h - lh) / 2.0).max(0.0), w: area.w, h: lh };
-    text(out, line, &clip_text(&msg, area.w, size), size, TextAlign::Center, false);
+    text(out, line, &clip_text(&msg, area.w, size), size, TextAlign::Center, false, colour);
 }
 
 /// Items for an Office 2016 chart (`cx:chartSpace`: waterfall, funnel, treemap…), sized `w` x `h`
@@ -174,14 +179,14 @@ pub(crate) fn chartex_items(space: Option<&El>, w: f32, h: f32) -> Vec<GraphicIt
         (!s.is_empty()).then_some(s)
     });
     if let Some(t) = title {
-        area = title_block(&mut out, &t, area);
+        area = title_block(&mut out, &t, area, TEXT, true, TITLE_SIZE);
     }
     let kind = chart.and_then(|c| c.find("cx:series")).and_then(|s| s.attr("layoutId")).unwrap_or("");
     let size = FONT;
     let lh = size * LINE;
     let msg = format!("{} (not supported yet)", chartex_name(kind));
     let line = Rect { x: area.x, y: area.y + ((area.h - lh) / 2.0).max(0.0), w: area.w, h: lh };
-    text(&mut out, line, &clip_text(&msg, area.w, size), size, TextAlign::Center, false);
+    text(&mut out, line, &clip_text(&msg, area.w, size), size, TextAlign::Center, false, TEXT);
     out
 }
 
@@ -247,6 +252,16 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// Bold title, legend and other text, as their text properties say (a title is bold by
+    /// default), and the title's size.
+    title_bold: bool,
+    title_size: f32,
+    legend_bold: bool,
+    text_bold: bool,
+    /// Text colour of the title, the legend, and any text that states none of its own.
+    title_colour: Rgb,
+    legend_colour: Rgb,
+    text_colour: Rgb,
 }
 
 #[cfg(test)]

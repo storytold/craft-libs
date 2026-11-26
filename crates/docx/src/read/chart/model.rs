@@ -94,6 +94,10 @@ pub(crate) struct Axis {
     /// The title's `a:bodyPr/@rot` in degrees clockwise (`-5400000` is 90° counter-clockwise),
     /// when the file gives one.
     pub(crate) title_rot: Option<f32>,
+    /// Colour of the tick labels, when the axis's `c:txPr` states one.
+    pub(crate) text: Option<Rgb>,
+    /// Bold tick labels, when its text properties say.
+    pub(crate) bold: Option<bool>,
     /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
     /// them, as Word does).
     pub(crate) labels: bool,

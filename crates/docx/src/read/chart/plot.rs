@@ -284,19 +284,19 @@ fn draw_axis_titles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect
         let top = g.plot.y + g.plot.h / 2.0 - lines.len() as f32 * lh / 2.0;
         for (k, l) in lines.iter().enumerate() {
             let l = clip_text(l, strip, c.text_size);
-            text_angle(out, Rect { x: area.x, y: top + k as f32 * lh, w: strip, h: lh }, &l, c.text_size, TextAlign::Center, false, 0.0);
+            text_angle(out, Rect { x: area.x, y: top + k as f32 * lh, w: strip, h: lh }, &l, c.text_size, false, c.text_colour, 0.0);
         }
     } else if !left.deleted
         && let Some(t) = &left.title
     {
         let t = clip_text(t, g.plot.h, c.text_size);
-        text_angle(out, Rect { x: area.x, y: g.plot.y, w: lh, h: g.plot.h }, &t, c.text_size, TextAlign::Center, false, up);
+        text_angle(out, Rect { x: area.x, y: g.plot.y, w: lh, h: g.plot.h }, &t, c.text_size, false, c.text_colour, up);
     }
     if !bottom.deleted
         && let Some(t) = &bottom.title
     {
         let t = clip_text(t, g.plot.w, c.text_size);
-        text_angle(out, Rect { x: g.plot.x, y: area.bottom() - lh, w: g.plot.w, h: lh }, &t, c.text_size, TextAlign::Center, false, 0.0);
+        text_angle(out, Rect { x: g.plot.x, y: area.bottom() - lh, w: g.plot.w, h: lh }, &t, c.text_size, false, c.text_colour, 0.0);
     }
 }
 
@@ -358,9 +358,9 @@ fn draw_value_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, ticks: &[
     for (t, s) in ticks {
         let p = g.val(*t);
         if g.horiz {
-            text_at(out, p, g.plot.bottom() + GAP / 2.0, s, fs);
+            text_at(out, p, g.plot.bottom() + GAP / 2.0, s, fs, c.val_colour(), c.val_bold());
         } else {
-            text(out, Rect { x: margin.x, y: p - lh / 2.0, w: margin.w - GAP, h: lh }, s, fs, TextAlign::Right, false);
+            text(out, Rect { x: margin.x, y: p - lh / 2.0, w: margin.w - GAP, h: lh }, s, fs, TextAlign::Right, c.val_bold(), c.val_colour());
         }
     }
 }
@@ -372,13 +372,14 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
     let plot = g.plot;
     if c.kind == Kind::Scatter {
         for (t, s) in xticks {
-            text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs);
+            text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs, c.cat_colour(), c.cat_bold());
         }
     } else if g.horiz {
         for (i, lines) in m.wrapped.iter().enumerate() {
             let top = g.band_start(i) + g.band() / 2.0 - lines.len() as f32 * lh / 2.0;
             for (k, s) in lines.iter().enumerate() {
-                text(out, Rect { x: area.x + m.title, y: top + k as f32 * lh, w: m.left - m.title - GAP, h: lh }, s, fs, TextAlign::Right, false);
+                let r = Rect { x: area.x + m.title, y: top + k as f32 * lh, w: m.left - m.title - GAP, h: lh };
+                text(out, r, s, fs, TextAlign::Right, c.cat_bold(), c.cat_colour());
             }
         }
     } else {
@@ -386,7 +387,7 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
         for (i, lines) in m.wrapped.iter().enumerate().filter(|(i, _)| i % m.skip == 0) {
             for (k, s) in lines.iter().enumerate() {
                 let y = plot.bottom() + GAP / 2.0 + k as f32 * lh;
-                text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, false);
+                text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, c.cat_bold(), c.cat_colour());
             }
         }
     }

@@ -1,6 +1,8 @@
 use super::*;
 use craft_wordmodel::THEME_COLORS;
 
+mod parity;
+
 const NS: &str =
     r#"xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#;
 
@@ -385,7 +387,7 @@ fn value_format_code_length_is_capped() {
 fn axis_format_code_length_is_capped() {
     let fmt = |code: &str| -> Option<String> {
         let x = format!(r#"<c:valAx {NS}><c:numFmt formatCode="{code}" sourceLinked="0"/></c:valAx>"#);
-        axis(Some(&crate::xml::parse(x.as_bytes()).unwrap())).fmt
+        axis(Some(&crate::xml::parse(x.as_bytes()).unwrap()), &[]).fmt
     };
     use craft_wordmodel::chart::MAX_FMT;
     // The limit is the model's, counted in characters (a CJK character is one).
