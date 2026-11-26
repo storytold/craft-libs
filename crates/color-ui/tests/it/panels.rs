@@ -7,8 +7,9 @@ use std::rc::Rc;
 use craft_behavior::{EditEvent, Mixed, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
-    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyWheel, PanelTarget, PickedColor, SwatchEdit, SwatchKey,
-    SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
+    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyPanel, HarmonyPanelState, HarmonyPicked, HarmonyWheel,
+    PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
+    SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
 use craft_theme::{ColorModel as _, HsbModel, Srgba};
@@ -767,4 +768,20 @@ fn a_click_on_a_harmony_wheel_marker_reports_it() {
     let marker = fixture.by_label(&colors[1].to_hex()).expect("the second marker is in the tree");
     fixture.click(&marker).idle(1);
     assert_eq!(clicked.get(), Some(Some(1)), "the click names the second marker");
+}
+
+/// The Color Guide's variation end labels sit at the two sides of the grid: Shades at its left edge and Tints at its
+/// right edge.
+#[trial]
+fn the_color_guide_end_labels_sit_at_the_two_sides_of_the_grid() {
+    let mut fixture = Fixture::new(|ui| {
+        let (mut state, mut picked) = (HarmonyPanelState::default(), HarmonyPicked::default());
+        let _ = HarmonyPanel::new(Bind::bound(&mut state), Bind::bound(&mut picked), RED).show(ui);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let grid = fixture.by_label("Variations").expect("the variations grid").rect;
+    let run = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect).unwrap_or_else(|| panic!("{text} is painted"));
+    let (shades, tints) = (run("Shades"), run("Tints"));
+    assert!(shades.left() <= grid.left() + 1.0 && shades.right() < grid.center().x, "Shades {shades:?} starts at the left edge of {grid:?}");
+    assert!(tints.right() >= grid.right() - 1.0 && tints.left() > grid.center().x, "Tints {tints:?} ends at the right edge of {grid:?}");
 }
