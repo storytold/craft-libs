@@ -7,15 +7,17 @@ use std::rc::Rc;
 use craft_behavior::{EditEvent, Mixed, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
-    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyWheel, PanelTarget, PickedColor, SwatchEdit, SwatchKey,
-    SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
+    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyPanel, HarmonyPanelState, HarmonyPicked, HarmonyWheel,
+    PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
+    SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
 use craft_theme::{ColorModel as _, HsbModel, Srgba};
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::testing::focus::AccessActionKind;
@@ -254,6 +256,36 @@ fn the_fill_stroke_spectrums_tooltip_names_the_shown_mode_and_shift_click_cycles
     assert!(edits.borrow().is_empty(), "a Shift click picks nothing: {:?}", edits.borrow());
 }
 
+/// In a host sized by its content (a floating Color panel) the FillStroke spectrum is as tall as its end boxes stacked,
+/// each at least as tall as it is wide, not a thin band; in a short group it keeps that height and the body scrolls.
+#[trial]
+fn a_fill_stroke_spectrum_keeps_its_end_boxes_square_in_a_content_sized_host() {
+    for (room, content_sized) in [(COLOR_ROOM, true), (Vec2::new(280.0, 96.0), false)] {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let show = |ui: &mut egui::Ui, state: &mut ColorPanelState| {
+                let _ = ColorPanel::new(Bind::bound(state), [RED, BLUE]).layout(ColorPanelLayout::FillStroke).show(ui);
+            };
+            if content_sized {
+                let _ = Stack::new().show(ui, |ui, _| show(ui, &mut state));
+            } else {
+                show(ui, &mut state);
+            }
+        });
+        fixture.room(room).settle();
+        let bar = fixture.by_label("Color Ramp").expect("the spectrum").rect;
+        let ends: Vec<_> = fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .filter(|button| button.rect.left() >= bar.right() - 0.5 && button.rect.y_range().intersects(bar.y_range()))
+            .collect();
+        assert_eq!(ends.len(), 2, "{room:?}: the white and black boxes beside the bar ({bar:?})");
+        for end in ends {
+            assert!(end.rect.height() >= end.rect.width() - 0.5, "{room:?}: an end box at least square ({:?} beside {bar:?})", end.rect);
+        }
+    }
+}
+
 const SWATCHES: [(&str, [f32; 3]); 6] = [
     ("Red", [0.90, 0.28, 0.30]),
     ("Orange", [0.97, 0.42, 0.08]),
@@ -406,6 +438,28 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
     let taken = std::mem::take(&mut *reports.borrow_mut());
     assert!(taken.edits.is_empty(), "a click on the bound colour changes nothing: {:?}", taken.edits);
     assert_eq!(taken.picked.iter().map(|c| c.to_rgba()).collect::<Vec<_>>(), [swatch("Violet").to_rgba()], "and still reports the pick");
+}
+
+/// The FillStroke layout shows its Recent Colors caption while the host's list is empty, as it does with colors in
+/// it; a host that gives no recent colors gets no row.
+#[trial]
+fn a_fill_stroke_panel_shows_its_recent_colors_row_while_the_list_is_empty() {
+    let caption = |recent: Option<&'static [Srgba]>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let panel = ColorPanel::new(Bind::bound(&mut state), [RED, BLUE]).layout(ColorPanelLayout::FillStroke);
+            let _ = match recent {
+                Some(colors) => panel.recent(colors),
+                None => panel,
+            }
+            .show(ui);
+        });
+        fixture.room(COLOR_ROOM).settle();
+        fixture.texts().iter().any(|run| run.text == "Recent Colors")
+    };
+    assert!(caption(Some(&[])), "an empty list shows the row's caption");
+    assert!(caption(Some(&RECENT)), "a list with a color shows it");
+    assert!(!caption(None), "a host with no recent colors shows no row");
 }
 
 /// A palette over a colour that may be none, bound to no colour: no swatch is selected and Tab enters on the first;
@@ -767,4 +821,20 @@ fn a_click_on_a_harmony_wheel_marker_reports_it() {
     let marker = fixture.by_label(&colors[1].to_hex()).expect("the second marker is in the tree");
     fixture.click(&marker).idle(1);
     assert_eq!(clicked.get(), Some(Some(1)), "the click names the second marker");
+}
+
+/// The Color Guide's variation end labels sit at the two sides of the grid: Shades at its left edge and Tints at its
+/// right edge.
+#[trial]
+fn the_color_guide_end_labels_sit_at_the_two_sides_of_the_grid() {
+    let mut fixture = Fixture::new(|ui| {
+        let (mut state, mut picked) = (HarmonyPanelState::default(), HarmonyPicked::default());
+        let _ = HarmonyPanel::new(Bind::bound(&mut state), Bind::bound(&mut picked), RED).show(ui);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let grid = fixture.by_label("Variations").expect("the variations grid").rect;
+    let run = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect).unwrap_or_else(|| panic!("{text} is painted"));
+    let (shades, tints) = (run("Shades"), run("Tints"));
+    assert!(shades.left() <= grid.left() + 1.0 && shades.right() < grid.center().x, "Shades {shades:?} starts at the left edge of {grid:?}");
+    assert!(tints.right() >= grid.right() - 1.0 && tints.left() > grid.center().x, "Tints {tints:?} ends at the right edge of {grid:?}");
 }

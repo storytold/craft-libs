@@ -38,6 +38,9 @@ pub enum GlyphRole {
     ToolRail,
     /// A list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
     PanelRail,
+    /// A stack of small arrow buttons (a gallery's scroll arrows): `size.icon.glyph_sm` whatever the control size, and
+    /// a ribbon's small icon side does not widen it.
+    Compact,
 }
 
 /// What `fn style` gets. Tokens are read here and nowhere else.
@@ -287,6 +290,19 @@ impl<'a> StyleCx<'a> {
             text.normal
         };
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
+    }
+
+    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::non_text_contrast_min(self.contrast())))
     }
 
     /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text

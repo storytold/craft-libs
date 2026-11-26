@@ -932,6 +932,96 @@ fn focus_given_to_a_canvas_before_its_declaration_is_the_canvas_s() {
     assert_eq!(egui_focused(&frames.ctx), Some(canvas), "egui keeps the focus on the canvas over its Escape");
 }
 
+/// A window of the app's own document canvas, declared while `declared` holds, beside the app's field of `host_window`, a
+/// button and an area of the app's own that take no focus, and the component `probe`, which takes it.
+struct CanvasWindow {
+    declared: Rc<Cell<bool>>,
+    host: Rc<RefCell<Host>>,
+    /// egui's focus in each pass, at its start and after the canvas was drawn.
+    in_pass: Rc<RefCell<Vec<Option<Id>>>>,
+}
+
+impl CanvasWindow {
+    const BUTTON: Rect = Rect { min: Pos2::new(300.0, 100.0), max: Pos2::new(380.0, 130.0) };
+    const AREA: Rect = Rect { min: Pos2::new(300.0, 200.0), max: Pos2::new(380.0, 230.0) };
+    const PROBE: Rect = Rect { min: Pos2::new(300.0, 300.0), max: Pos2::new(380.0, 330.0) };
+    const CANVAS: Rect = Rect { min: Pos2::new(100.0, 400.0), max: Pos2::new(180.0, 430.0) };
+    const EMPTY: Pos2 = Pos2::new(500.0, 450.0);
+
+    fn new() -> (Self, impl FnMut(&mut Ui)) {
+        let (host, mut base) = host_window();
+        let window = Self { declared: Rc::new(Cell::new(true)), host, in_pass: Rc::default() };
+        let (declared, in_pass) = (Rc::clone(&window.declared), Rc::clone(&window.in_pass));
+        let show = move |ui: &mut Ui| {
+            in_pass.borrow_mut().push(egui_focused(ui.ctx()));
+            base(ui);
+            fixture::host_button(ui, named_id("app button"), Self::BUTTON);
+            fixture::host_unfocusable_area(ui, named_id("app area"), Self::AREA);
+            sensing::show(ui, &[ProbeRoot::new("probe", Self::PROBE, Sense::CLICK | Sense::TAKE_FOCUS)]);
+            register_stop(ui.ctx(), Stop::new(ProbeRoot::id("probe"), KeyUse::of(Input::Pointer)));
+            fixture::host_button(ui, Self::canvas(), Self::CANVAS);
+            if declared.get() {
+                host_canvas(ui.ctx(), Self::canvas(), KeyUse::CANVAS);
+            }
+            in_pass.borrow_mut().push(egui_focused(ui.ctx()));
+        };
+        (window, show)
+    }
+
+    fn canvas() -> Id {
+        named_id("host canvas")
+    }
+
+    /// Gives the canvas the focus, by the app's own request or the framework's.
+    fn focus(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), app: bool) {
+        if app {
+            fixture::host_focus(&frames.ctx, Self::canvas());
+        } else {
+            request(&frames.ctx, FocusTarget::Id(Self::canvas()));
+        }
+        frames.idle(2, &mut *show);
+        assert_eq!(egui_focused(&frames.ctx), Some(Self::canvas()));
+    }
+}
+
+/// A click that nothing takes leaves the app's document canvas focused in every pass, whoever gave it the focus: by the
+/// framework's press rule and by egui's. A canvas the app no longer declares follows egui's rule.
+#[trial]
+fn a_click_nothing_takes_leaves_the_app_s_canvas_focused() {
+    for app in [true, false] {
+        let (window, mut show) = CanvasWindow::new();
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show);
+        CanvasWindow::focus(&mut frames, &mut show, app);
+        window.in_pass.take();
+        for at in [CanvasWindow::BUTTON.center(), CanvasWindow::AREA.center(), CanvasWindow::EMPTY] {
+            click_focus(&mut frames, &mut show, at);
+            let passes = window.in_pass.take();
+            assert!(!passes.is_empty() && passes.iter().all(|focused| *focused == Some(CanvasWindow::canvas())), "app {app}, {at:?}: {passes:?}");
+        }
+        window.declared.set(false);
+        frames.idle(2, &mut show);
+        let (pressed, clicked) = click_focus(&mut frames, &mut show, CanvasWindow::EMPTY);
+        assert_eq!((pressed, clicked), (Some(CanvasWindow::canvas()), None), "app {app}: an app's plain widget loses it at the click");
+    }
+}
+
+/// A press on a component that takes focus, or on the app's own field, takes it from the app's document canvas.
+#[trial]
+fn a_press_that_takes_focus_takes_it_from_the_app_s_canvas() {
+    for app in [true, false] {
+        let (window, mut show) = CanvasWindow::new();
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show);
+        CanvasWindow::focus(&mut frames, &mut show, app);
+        let probe = Some(ProbeRoot::id("probe"));
+        assert_eq!(click_focus(&mut frames, &mut show, CanvasWindow::PROBE.center()), (probe, probe), "app {app}: the component");
+        CanvasWindow::focus(&mut frames, &mut show, app);
+        let at = window.host.borrow().rect.center();
+        assert_eq!(click_focus(&mut frames, &mut show, at).1, Some(field()), "app {app}: the app's field");
+    }
+}
+
 /// Where Tab reaches only text fields (the Mac's default), it reaches the app's own text field and skips the app's
 /// own buttons, as it skips the framework's.
 #[trial]

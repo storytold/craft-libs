@@ -734,6 +734,11 @@ impl State {
     }
 }
 
+/// Whether `id` is the app's document canvas, as the pass that registered `stops` declared it (`host_canvas`).
+pub(super) fn declared_canvas(stops: &[StopRec], id: Id) -> bool {
+    stops.iter().any(|rec| rec.stop.host && !rec.stop.automatic() && rec.stop.root == id)
+}
+
 /// Focus on the egui widget of `stop`, with the key filter its keys ask for.
 pub(super) fn focus_act(stop: &Stop) -> Act {
     let roving = stop.group.is_some();

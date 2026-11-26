@@ -21,6 +21,8 @@ suite = ["screen-testing", "craft-ui/suite"]
 # Opt-in migration of first party Flatpak bundles to the ArtCraft OCI remote.
 oci_migration = []
 default = []
+# Developer builds only: downloads from a mirror on loopback, and plain HTTP from remote hosts. No other feature turns it on.
+local-mirror = []
 ui = ["dep:egui", "dep:image", "dep:craft-ui", "dep:craft-host", "dep:craft-theme"]
 # The dialog stories, the updater's test seams and the integration binary `tests/it`.
 screen-testing = ["ui", "craft-ui/testing"]
