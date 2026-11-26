@@ -613,6 +613,64 @@ pub fn format_feet_frames(frame: i64, per_foot: i64) -> String {
     format!("{sign}{:04}+{:0width$}", frames / per_foot, frames % per_foot)
 }
 
+/// Part of a second that [`format_clock`] prints after the seconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ClockFraction {
+    /// No fraction (`0:01:05`).
+    #[default]
+    None,
+    /// One digit (`0:01:05.2`).
+    Tenths,
+    /// Two digits (`0:01:05.25`).
+    Hundredths,
+    /// Three digits (`0:01:05.250`).
+    Milliseconds,
+}
+
+impl ClockFraction {
+    /// Number of digits printed after the seconds.
+    pub fn digits(self) -> u32 {
+        match self {
+            ClockFraction::None => 0,
+            ClockFraction::Tenths => 1,
+            ClockFraction::Hundredths => 2,
+            ClockFraction::Milliseconds => 3,
+        }
+    }
+}
+
+/// Layout of an elapsed-time clock from [`format_clock`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ClockStyle {
+    /// Pad the hours to two digits (`00:01:05`) instead of printing them unpadded (`0:01:05`).
+    pub pad_hours: bool,
+    /// Part of a second printed after the seconds.
+    pub fraction: ClockFraction,
+}
+
+/// Format a tick as an elapsed-time clock, `H:MM:SS` with an optional fraction of a second, for
+/// recording timers and other readouts that count time rather than frames or samples.
+///
+/// The value is truncated toward zero at the last printed digit, so a second shows only once it
+/// has fully passed. Hours do not wrap. A negative value starts with `-`, except a value that
+/// truncates to zero, which prints without a sign.
+pub fn format_clock(t: Tick, style: ClockStyle) -> String {
+    let digits = style.fraction.digits();
+    let per_second = TICKS_PER_SECOND as u64;
+    let abs_ticks = t.0.unsigned_abs();
+    let total_secs = abs_ticks / per_second;
+    let fraction = (abs_ticks % per_second) * 10u64.pow(digits) / per_second;
+    let sign = if t.0 < 0 && (total_secs > 0 || fraction > 0) { "-" } else { "" };
+    let (h, m, s) = (total_secs / 3600, (total_secs / 60) % 60, total_secs % 60);
+    let hw = if style.pad_hours { 2 } else { 1 };
+    if digits == 0 {
+        format!("{sign}{h:0hw$}:{m:02}:{s:02}")
+    } else {
+        let fw = digits as usize;
+        format!("{sign}{h:0hw$}:{m:02}:{s:02}.{fraction:0fw$}")
+    }
+}
+
 /// Error from timecode parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError(pub String);
@@ -975,6 +1033,47 @@ mod tests {
         assert!(parse_timecode("00:-30:00:00", r, false, 0).is_err());
         assert!(parse_timecode("01:+5:00:00", r, false, 0).is_err());
         assert!(parse_timecode("00:00:-01:00", r, false, 0).is_err());
+    }
+
+    #[test]
+    fn clock_counts_whole_seconds_and_keeps_its_width() {
+        let style = ClockStyle { pad_hours: true, fraction: ClockFraction::None };
+        let just_short = Tick(TICKS_PER_SECOND - 1);
+        assert_eq!(format_clock(just_short, style), format_clock(Tick::ZERO, style));
+        assert_ne!(format_clock(Tick(TICKS_PER_SECOND), style), format_clock(just_short, style));
+        let width = format_clock(Tick::ZERO, style).len();
+        for secs in [1, 59, 60, 3599, 3600, 86_399, 99 * 3600] {
+            assert_eq!(format_clock(Tick(secs * TICKS_PER_SECOND), style).len(), width, "{secs} s");
+        }
+        assert_eq!(format_clock(Tick(3661 * TICKS_PER_SECOND), style), "01:01:01");
+        assert_eq!(format_clock(Tick(3661 * TICKS_PER_SECOND), ClockStyle::default()), "1:01:01");
+        // Hours keep counting past a day and past two digits.
+        assert!(format_clock(Tick(100 * 3600 * TICKS_PER_SECOND), style).starts_with("100:"));
+    }
+
+    #[test]
+    fn clock_fraction_truncates_at_its_last_digit() {
+        let ms = |n: i64| Tick(n * (TICKS_PER_SECOND / 1000));
+        let three = ClockStyle { pad_hours: false, fraction: ClockFraction::Milliseconds };
+        assert_eq!(format_clock(ms(65_250), three), "0:01:05.250");
+        assert_eq!(format_clock(Tick(ms(65_250).0 - 1), three), "0:01:05.249");
+        let one = ClockStyle { pad_hours: false, fraction: ClockFraction::Tenths };
+        assert_eq!(format_clock(ms(65_999), one), "0:01:05.9");
+        let two = ClockStyle { pad_hours: false, fraction: ClockFraction::Hundredths };
+        assert_eq!(format_clock(ms(65_999), two), "0:01:05.99");
+    }
+
+    #[test]
+    fn clock_signs_only_values_it_shows_as_nonzero() {
+        let style = ClockStyle { pad_hours: true, fraction: ClockFraction::None };
+        assert_eq!(format_clock(Tick(-1), style), format_clock(Tick::ZERO, style));
+        let one_second = format_clock(Tick(TICKS_PER_SECOND), style);
+        assert_eq!(format_clock(Tick(-TICKS_PER_SECOND), style), format!("-{one_second}"));
+        let ms = ClockStyle { pad_hours: true, fraction: ClockFraction::Milliseconds };
+        assert!(format_clock(Tick(-TICKS_PER_SECOND / 1000), ms).starts_with('-'));
+        for t in [Tick(i64::MIN), Tick(i64::MAX), Tick::MIN, Tick::MAX] {
+            assert!(format_clock(t, ms).contains(':'));
+        }
     }
 
     #[test]
