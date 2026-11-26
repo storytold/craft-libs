@@ -7,7 +7,8 @@ repository, same name).
 The catalogs are a fully optional build input. An app's `build.rs` embeds them from
 `CRAFT_I18N_DIR` as a static `CRAFT_I18N: &[(locale, shared catalog, app catalog)]`, empty when the
 variable is unset; the recipe is in craft-i18n's
-[`docs/integration.md`](https://github.com/benandez/craft-i18n/blob/main/docs/integration.md).
+[`docs/integration.md`](https://github.com/benandez/craft-i18n/blob/main/docs/integration.md),
+and [`craft-i18n-build`](../i18n-build/README.md) writes that static from `build.rs`.
 This crate never reads files.
 
 ## Wiring an app
