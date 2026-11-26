@@ -386,15 +386,34 @@ fn checks_turned_off_never_ask_the_network() {
     assert_eq!(asked.load(Ordering::SeqCst), 1);
 }
 
+/// The first check's request is under way when checks are turned off: the test waits until its
+/// thread is inside the source, turns checks off, lets the source answer with a release and waits
+/// for the thread to finish before checking that the release was not offered.
 #[trial]
 fn turning_checks_off_drops_a_running_check() {
     let ctx = egui::Context::default();
-    let mut u = updater(Ok(Some(newer())));
+    let (entered_tx, entered) = channel();
+    let (release, release_rx) = channel::<()>();
+    let (entered_tx, release_rx) = (Mutex::new(entered_tx), Mutex::new(release_rx));
+    let mut u = Updater::new(&PHOTOCRAFT, "0.1.0")
+        .with_source(Arc::new(move || {
+            let _ = entered_tx.lock().unwrap_or_else(PoisonError::into_inner).send(());
+            let _ = release_rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            Ok(Some(newer()))
+        }))
+        .with_pins_path(no_pins());
     u.check_now();
     assert_eq!(u.status(), &Status::Checking);
+    entered.recv().expect("the check's thread enters the source");
+    // The test keeps the thread's channel to learn when it has finished; the updater drops a stand-in.
+    let answer = u.check.take().expect("the check is running");
+    let (_stand_in_tx, stand_in) = channel();
+    u.check = Some(stand_in);
     u.set_checks_enabled(false);
     assert!(u.check.is_none());
     assert_eq!(u.status(), &Status::Off);
+    release.send(()).expect("the source waits");
+    assert!(matches!(answer.recv(), Ok(Ok(Some(_)))), "the request finishes with a release");
     u.tick(&ctx);
     assert!(!u.prompt_open());
     assert_eq!(u.status(), &Status::Off);

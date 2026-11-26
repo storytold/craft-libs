@@ -25,6 +25,8 @@ use crate::updater::Status;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
+#[cfg(test)]
+pub(crate) mod tests;
 
 const PROMPT_KEY: &str = "updateDialog.prompt";
 const CHECK_KEY: &str = "updateDialog.check";
@@ -458,14 +460,20 @@ impl UpdateCheckDialog {
         self.chosen = Some(choice);
     }
 
+    /// The release the available state shows. While checks are off ([`Status::Off`]) the dialog
+    /// shows that message with OK instead, even when the updater still holds a release.
+    fn shown_release(&self) -> Option<&Release> {
+        self.available.as_ref().filter(|_| self.status != Status::Off)
+    }
+
     /// The release page the available state links to, when it is a safe web link.
     fn notes_url(&self) -> Option<&str> {
-        self.available.as_ref().map(|release| release.html_url.as_str()).filter(|url| safe_web_link(url))
+        self.shown_release().map(|release| release.html_url.as_str()).filter(|url| safe_web_link(url))
     }
 
     /// The choices the current state offers with their roles, the default first.
     fn offered(&self, self_updating: bool) -> Vec<(CheckChoice, DialogRole)> {
-        if self.available.is_some() {
+        if self.shown_release().is_some() {
             let install = if self_updating { CheckChoice::Update } else { CheckChoice::Download };
             return vec![(install, DialogRole::Accept), (CheckChoice::CheckAgain, DialogRole::Other)];
         }
@@ -481,7 +489,9 @@ impl UpdateCheckDialog {
 
     /// Whether `choice` can be answered now: the available state's buttons wait for a running install.
     fn answerable(&self, choice: CheckChoice) -> bool {
-        !(self.installing && self.available.is_some() && matches!(choice, CheckChoice::Update | CheckChoice::Download | CheckChoice::CheckAgain))
+        !(self.installing
+            && self.shown_release().is_some()
+            && matches!(choice, CheckChoice::Update | CheckChoice::Download | CheckChoice::CheckAgain))
     }
 
     /// Shows one pass. The choices are the footer buttons' meanings, in the order of the dialog's `picked`.
@@ -491,7 +501,7 @@ impl UpdateCheckDialog {
         let ok = env.words::<CommonWords>().ok.clone();
         let subject = Subject::of(&env);
         let self_updating = *self.self_updating.get_or_insert_with(|| subject.app.is_some_and(self_update::is_self_updating));
-        self.release_installs = match (subject.app, &self.available) {
+        self.release_installs = match (subject.app, self.shown_release()) {
             (Some(app), Some(release)) => self_update::release_installs(app, release),
             _ => true,
         };
@@ -515,7 +525,7 @@ impl UpdateCheckDialog {
         let enter = offered.first().is_some_and(|(choice, _)| self.answerable(*choice));
         let initial = if enter { Initial::Default } else { Initial::Keep };
         let notes = self.notes_url().map(str::to_owned);
-        let version = self.available.as_ref().map(Release::version_label);
+        let version = self.shown_release().map(Release::version_label);
         let (status, running, message, installing, icon) = (&self.status, &self.running_version, &self.message, self.installing, &self.icon);
         let installing_label = words.installing.clone();
         // What the last update came to is a notice that leaves the app usable behind it.
