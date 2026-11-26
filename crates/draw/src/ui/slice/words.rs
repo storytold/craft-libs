@@ -72,5 +72,8 @@ craft_ui::words! {
         count: "slice.count" = "slices, evenly spaced";
         size: "slice.size" = "per slice";
         divide_value: "slice.divideValue" = "Value";
+        /// The name a screen reader reads for one axis's Divide By group and value field: `{control}` the row's
+        /// visible label, `{axis}` the axis's caption.
+        axis_control: template "slice.axisControl" = "{control}, {axis}";
     }
 }

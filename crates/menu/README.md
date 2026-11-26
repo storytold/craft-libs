@@ -227,7 +227,8 @@ While a menu is open, a click or Escape in the window closes it and does not rea
 canvas gesture, no tool action); pointer moves pass through. Only one click is kept this way
 until the menu reports closed, so a menu wrongly reported open costs one click. Menu updates wait
 until the menu closes; the end of tracking wakes egui, and that frame applies them. A rebuild that
-fails keeps the menus as they were.
+fails keeps the menus as they were, and the same menus are tried once more a second later, with no
+input needed (`RebuildRetry`). When that fails too, the next change to the menus tries again.
 
 AppKit's `NSMenuDidBeginTracking` and `NSMenuDidEndTracking` notifications say whether a menu is
 open (`craft_window::native_menu::menu_tracking()`, safe from any thread). Each begin comes back

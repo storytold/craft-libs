@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use egui::{Context, FontDefinitions, FontFamily, FontProvider};
 
-use super::{SEMIBOLD, Stack, SystemFonts};
+use super::{SEMIBOLD, Stack, SystemFonts, TAB_TITLE};
 use crate::fonts::faces::{Installed, on_baseline};
 use crate::fonts::served::loader;
 use crate::fonts::system::installed_system_font_provider;
@@ -40,6 +40,8 @@ pub(crate) struct StackFacts {
     pub system_ui: bool,
     /// Whether the semibold family ([`SEMIBOLD`]) exists.
     pub semibold: bool,
+    /// Whether the tab-title family ([`TAB_TITLE`]) exists.
+    pub tab_title: bool,
     /// The line height per point of text of the face that leads the proportional family; 0 before a stack installs.
     pub line_ratio: f32,
 }
@@ -56,6 +58,7 @@ pub(in crate::fonts) fn record_facts(ctx: &Context, definitions: &FontDefinition
     let facts = StackFacts {
         system_ui: proportional.iter().any(|name| name == SYSTEM_UI_REGULAR) && definitions.font_data.contains_key(SYSTEM_UI_REGULAR),
         semibold: definitions.families.contains_key(&FontFamily::Name(SEMIBOLD.into())),
+        tab_title: definitions.families.contains_key(&FontFamily::Name(TAB_TITLE.into())),
         line_ratio: GlyphProbe::new(definitions.clone(), providers).row_height(&FontRef::proportional(), LINE_PROBE_SIZE) / LINE_PROBE_SIZE,
     };
     memory::with::<State, _>(ctx, |state| state.facts = facts);
