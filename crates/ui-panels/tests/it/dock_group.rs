@@ -83,7 +83,7 @@ fn the_panel_menu_button_stands_level_with_pill_and_block_tabs() {
         (tab.rect.center().y, menu.rect)
     };
     let (_, plain) = middles(PanelTabLook::Plain);
-    for look in [PanelTabLook::Pill, PanelTabLook::Block] {
+    for look in [PanelTabLook::Pill, PanelTabLook::PillCaption, PanelTabLook::Block] {
         let (tab, menu) = middles(look);
         assert!((menu.center().y - tab).abs() <= 0.5, "beside {look:?} tabs the menu button {menu:?} is level with the tab's middle {tab}");
         assert!(menu.top() > plain.top() + 0.5, "beside plain tabs the button {plain:?} keeps to the strip's top, above {menu:?}");

@@ -78,5 +78,25 @@
     "text.faint": "#626b7a",
     "text.muted": "#99a2b2",
     "text.normal": "#e4e9f1"
+  },
+  "apps": {
+    "materialcraft": {
+      "light": {
+        "accent.soft": "#e8eff3",
+        "accent.solid": "#0e7489",
+        "accent.text": "#0e7489",
+        "state.pressed": "#a4c0cb",
+        "state.selected": "#acc4cf",
+        "state.text_selection": "#0e74898c"
+      },
+      "dark": {
+        "accent.soft": "#24444f",
+        "accent.solid": "#4cc6de",
+        "accent.text": "#4cc6de",
+        "state.pressed": "#325a68",
+        "state.selected": "#30515e",
+        "state.text_selection": "#4cc6de8c"
+      }
+    }
   }
 }

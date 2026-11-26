@@ -23,6 +23,8 @@ craft_ui::words! {
         repeated: template "eventLog.repeated" = "{message}  (\u{d7}{count})";
         /// A row's accessible name, which starts with the message the row shows: `{message}`, `{level}` and `{age}`.
         row_name: template "eventLog.rowName" = "{message}, {level}, {age}";
+        /// A console row's accessible name, which starts with the message the row shows: `{message}` and `{level}`.
+        console_row_name: template "eventLog.consoleRowName" = "{message}, {level}";
         /// The details line over the selected event's message: `{level}`, `{source}` and `{time}`.
         details: template "eventLog.details" = "{level} \u{b7} {source} \u{b7} {time}";
         none: "eventLog.none" = "No events.";

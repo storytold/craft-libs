@@ -2,8 +2,8 @@
 
 use super::view_words::{EventWords, FindingsWords, UndoWords};
 use super::{
-    EventLevel, EventList, EventLog, EventLogState, Finding, Findings, FindingsList, FindingsSummary, List, ListRow, LogEvent, OpenSet, RowEvent,
-    RowInk, Severity, ThumbSize, ThumbTarget, ToggleCell, UndoList, UndoMark, UndoRows, footer_text,
+    EventLevel, EventList, EventListLayout, EventLog, EventLogState, Finding, Findings, FindingsList, FindingsSummary, List, ListRow, LogEvent,
+    OpenSet, RowEvent, RowInk, Severity, ThumbSize, ThumbTarget, ToggleCell, UndoList, UndoMark, UndoRows, footer_text,
 };
 use crate::buttons::Button;
 use crate::contract::{
@@ -600,6 +600,20 @@ fn event_list(ui: &mut Ui, count: usize) -> StoryOutput {
 #[story(EventList<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn event_list_many(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     event_list(ui, 12)
+}
+
+/// The console layout: one mono line per event, oldest first, in the level's tone, following the newest line.
+#[story(EventList<'static>, covers = [], drive = Drive::Never)]
+fn event_list_console(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let events = events(12);
+    let log = EventLog::new(&events, &EventLogState::default()).oldest_first();
+    EventList::new("Console")
+        .layout(EventListLayout::Console)
+        .show_items(ui, &log, &mut |_, icx| {
+            let Some(event) = log.event(icx.at) else { return ListRow::spacer() };
+            event.console_row(&icx.words::<EventWords>(), icx.format())
+        })
+        .into()
 }
 
 #[story(EventList<'static>, covers = [One], drive = Drive::Never)]

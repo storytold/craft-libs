@@ -133,7 +133,8 @@ pub struct TabStyle {
     indicator: Option<StyleColor>,
     /// A divider at the tab's trailing edge.
     divider: bool,
-    /// The pill a panel tab in [`PanelTabLook::Pill`] shows under its label in place of the surface.
+    /// The pill a panel tab in [`PanelTabLook::Pill`] or [`PanelTabLook::PillCaption`] shows under its label in place
+    /// of the surface.
     pill: Option<Pill>,
     close_side: CloseSide,
     /// The close glyph's side and its ink at rest and under the pointer under [`TabCloseLook::Glyph`]; none for the icon
@@ -154,8 +155,8 @@ pub struct TabStyle {
     marker_edge: StyleColor,
 }
 
-/// The pill of a panel tab in [`PanelTabLook::Pill`]: its fill in each state, its corners and its height, in the
-/// middle of the tab's height.
+/// The pill of a panel tab in [`PanelTabLook::Pill`] or [`PanelTabLook::PillCaption`]: its fill in each state, its
+/// corners and its height, in the middle of the tab's height.
 #[derive(Clone, Debug, PartialEq)]
 struct Pill {
     fill: Stateful<StyleColor>,
@@ -394,6 +395,8 @@ impl Component for Tab<'_> {
             TypeRole::BodyStrong
         } else if text_only || key.large {
             TypeRole::Body
+        } else if key.kind == TabKind::Panel && key.panel_look == PanelTabLook::PillCaption {
+            TypeRole::SectionCaption
         } else {
             TypeRole::Label
         };
@@ -432,7 +435,7 @@ impl Component for Tab<'_> {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
         // A pill panel tab shows its fill as the pill instead of the surface.
-        let pill = (key.kind == TabKind::Panel && key.panel_look == PanelTabLook::Pill).then(|| {
+        let pill = (key.kind == TabKind::Panel && matches!(key.panel_look, PanelTabLook::Pill | PanelTabLook::PillCaption)).then(|| {
             let control = c(colors.surface.control);
             Pill {
                 fill: Stateful::new(c(clear))

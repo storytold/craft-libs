@@ -45,12 +45,13 @@ pub enum PanelTabLook {
     /// small control high in the middle of the strip; a tab under the pointer shows the pill too. A dock group's panel
     /// menu button stands in the strip's middle with them.
     Pill,
+    /// Pill's surfaces, shapes, strip and menu button, with the tab label set in `TypeRole::SectionCaption`: upper case
+    /// at the caption size.
+    PillCaption,
     /// VectorCraft 0.24's tabs: the shown tab a square `surface.control` block as tall as the strip, a tab under the
     /// pointer `state.hover`. A dock group's strip lies on `surface.canvas`, and its panel menu button stands in the
     /// strip's middle.
     Block,
-    /// Pill's surfaces, shapes, strip and menu button, with the tab label set in `TypeRole::SectionCaption`.
-    PillCaption,
 }
 
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.

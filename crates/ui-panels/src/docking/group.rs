@@ -474,7 +474,8 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     }
 
     /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)). [`PanelTabLook::Block`] tabs
-    /// lie on a strip of `surface.canvas`, the others on the window's background.
+    /// lie on a strip of `surface.canvas`, the others ([`PanelTabLook::Plain`], [`PanelTabLook::Pill`] and
+    /// [`PanelTabLook::PillCaption`]) on the window's background.
     #[must_use]
     pub fn tab_look(mut self, look: PanelTabLook) -> Self {
         self.props = self.props.header(HeaderRegion::new().fill(strip_surface(look)));
@@ -515,7 +516,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     /// The band the group is dragged by and the panel menu button, at the end of the header: the band first. The
     /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
-    /// [`PanelTabLook::Pill`] and [`PanelTabLook::Block`] tabs, in the strip's middle.
+    /// [`PanelTabLook::Pill`], [`PanelTabLook::PillCaption`] and [`PanelTabLook::Block`] tabs, in the strip's middle.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();

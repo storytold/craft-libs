@@ -106,8 +106,8 @@ pub struct DockConfig {
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
     /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), on a
-    /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
-    /// ([`PanelTabLook::Block`]).
+    /// filled rounded pill ([`PanelTabLook::Pill`]), on that pill with an upper-case caption label
+    /// ([`PanelTabLook::PillCaption`]), or a square filled block on a canvas strip ([`PanelTabLook::Block`]).
     pub tab_look: PanelTabLook,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and

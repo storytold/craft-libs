@@ -101,6 +101,13 @@ fn tab_strip_panel_pill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::Pill), &TITLES, 4, TabKind::Panel)
 }
 
+/// Panel tabs in the pill caption look (`PanelTabLook::PillCaption`): the pill look with each label in the section
+/// caption role, upper case at the caption size.
+#[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
+fn tab_strip_panel_pill_caption(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::PillCaption), &TITLES, 4, TabKind::Panel)
+}
+
 /// Panel tabs in the block look (`PanelTabLook::Block`, a dock's `DockConfig::tab_look`): the shown tab a square
 /// `surface.control` block as tall as the strip, the others bare until the pointer rests on one.
 #[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]

@@ -63,7 +63,7 @@ impl Cancel {
     /// The job's own cancel flag, the one [`is_cancelled`](Cancel::is_cancelled) reads, for engine and render steps
     /// that poll an `AtomicBool`.
     pub fn flag(&self) -> &AtomicBool {
-        todo!("sh.C3")
+        &self.0
     }
 
     /// Sets the flag.

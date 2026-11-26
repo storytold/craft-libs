@@ -1,17 +1,19 @@
-//! `EventLog`, the warnings and errors of commands and background work as an item source, and `EventList`: the log's
-//! rows, newest first, each a `ListRow` with a level icon, the message and its age.
+//! `EventLog`, the warnings and errors of commands and background work as an item source, and `EventList`, in one of
+//! two layouts: the log's rows, newest first, each a `ListRow` with a level icon, the message and its age; or the
+//! console's lines, oldest first, each the message in the mono role and the level's tone, following the newest line.
 
 use super::view_words::EventWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _, Role, RowState, SelectMode,
-    Sizing,
+    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _, Role, RowState, ScrollAnchor,
+    SelectMode, Sizing,
 };
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Label, WordSet as _};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Metrics, Selection, SpanLayout};
 use craft_i18n::Format;
+use craft_theme::TypeRole;
 use craft_theme::variant::Tone;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -102,8 +104,9 @@ impl LogEvent {
     /// The event as one console line: its message with the repeat count in the level's tone and the mono role, with no
     /// icon and no age.
     pub fn console_row(&self, words: &EventWords, format: &Format) -> ListRow<'static> {
-        let _ = (words, format);
-        todo!("sh.C2")
+        let message = self.message_with_count(words, format);
+        let name = words.console_row_name.fill(&[("level", self.level.word(words)), ("message", message.as_str())]);
+        ListRow::new(message).accessible_name(name).role(TypeRole::Mono).tone(self.level.tone())
     }
 
     /// The event as a list row: its level icon, its message with the repeat count and, at the end, `age` in the
@@ -158,8 +161,9 @@ impl<'a> EventLog<'a> {
 
     /// The shown events oldest first, as the console lists them.
     #[must_use]
-    pub fn oldest_first(self) -> Self {
-        todo!("sh.C2")
+    pub fn oldest_first(mut self) -> Self {
+        self.shown.reverse();
+        self
     }
 
     /// How many events of each level the whole log holds, shown or not.
@@ -211,9 +215,6 @@ pub struct EventList<'a> {
     /// The selection the caller owns.
     #[prop]
     selection: Option<Bind<'a, Selection<u64>>>,
-    /// How the events are laid out ([`EventListLayout::Log`] by default).
-    #[prop]
-    layout: EventListLayout,
 }
 
 impl<'a> EventList<'a> {
@@ -228,9 +229,20 @@ impl<'a> EventList<'a> {
                 .allow_empty(true)
                 .empty(EventWords::word(NONE).map_or(Label::Empty, Label::Word)),
             selection: None,
-            layout: EventListLayout::default(),
         }
         .label(label)
+    }
+
+    /// How the events are laid out ([`EventListLayout::Log`] by default). The console selects nothing, has no
+    /// stripes and follows the newest line while the user left the scroll at the end; the caller gives it
+    /// [`EventLog::oldest_first`] and [`LogEvent::console_row`] rows.
+    // The collection step reads `CollectionProps` before `finish`, so the layout writes them here.
+    #[must_use]
+    pub fn layout(mut self, layout: EventListLayout) -> Self {
+        let console = layout == EventListLayout::Console;
+        self.items = self.items.select(if console { SelectMode::None } else { SelectMode::Single }).striped(!console);
+        self.items.scroll_anchor = if console { ScrollAnchor::End } else { ScrollAnchor::default() };
+        self
     }
 }
 
