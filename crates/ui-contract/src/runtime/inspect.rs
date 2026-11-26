@@ -167,6 +167,11 @@ pub struct HitArea {
     pub owner: Id,
     /// The part, `None` for the component's own area.
     pub part: Option<PartRef>,
+    /// The sensing shape's original bounds, before minimum-hit-size expansion, in the points
+    /// of the region's layer. Pointer-only parts are included even without an access node or
+    /// Tab stop. This is geometry, not a promise that every point is interactable: the shape,
+    /// clipping and layer ownership still decide the hit.
+    pub bounds: Rect,
     /// The area at its least size across, in the points of the region's layer.
     pub rect: Rect,
 }
@@ -188,7 +193,7 @@ impl crate::runtime::Shift for Arc<Recorded> {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         let elements =
             self.elements.iter().map(|element| Element { rect: by.rect(element.rect), content: by.rect(element.content), ..element.clone() });
-        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), ..hit.clone() });
+        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), bounds: by.rect(hit.bounds), ..hit.clone() });
         Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
     }
 
@@ -201,7 +206,11 @@ impl crate::runtime::Shift for Arc<Recorded> {
             content: element.content.snapped(&to.content, within),
             ..element.clone()
         });
-        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea { rect: hit.rect.snapped(&to.rect, within), ..hit.clone() });
+        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea {
+            rect: hit.rect.snapped(&to.rect, within),
+            bounds: hit.bounds.snapped(&to.bounds, within),
+            ..hit.clone()
+        });
         Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
     }
 }
@@ -362,7 +371,7 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
     }
     let mut hits: Vec<HitArea> = pointer::hit_areas(ctx, |owner| ids.contains(&owner))
         .into_iter()
-        .map(|(owner, part, rect)| HitArea { owner, part, rect: from_screen * rect })
+        .map(|(owner, part, bounds, rect)| HitArea { owner, part, bounds: from_screen * bounds, rect: from_screen * rect })
         .collect();
     // Keep the first occurrence, matching the tree-order lookup when an id appears more than once.
     let mut index = std::collections::HashMap::new();

@@ -62,12 +62,47 @@ pub struct Rating<'a> {
     #[style_key]
     #[prop]
     compact: bool,
+    /// The colour of the stars the rating covers, in place of the host's ink: an app's own star colour (gold). It
+    /// holds in a face too; a disabled rating still shows the disabled text colour, an invalid one the failure tone.
+    #[style_key]
+    #[prop(into)]
+    lit: Option<Rgba>,
+    /// The size of each star and of the cell it sits in, in place of the control's icon size and height (or, compact,
+    /// the small glyph and the tight gap).
+    #[style_key]
+    #[prop]
+    star_size: Option<StarSize>,
+}
+
+/// The side of a rating's star and of the square cell it is centred in, in points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StarSize {
+    side: u32,
+    cell: u32,
+}
+
+impl StarSize {
+    /// A star `side` points across in a cell `cell` points across; the cell is never smaller than the star.
+    pub fn new(side: f32, cell: f32) -> Self {
+        let side = side.max(0.0);
+        StarSize { side: side.to_bits(), cell: cell.max(side).to_bits() }
+    }
+
+    /// The star's side.
+    pub fn side(self) -> f32 {
+        f32::from_bits(self.side)
+    }
+
+    /// The cell's side.
+    pub fn cell(self) -> f32 {
+        f32::from_bits(self.cell)
+    }
 }
 
 impl<'a> Rating<'a> {
     /// A rating of `value` with `max` stars.
     pub fn new(value: Bind<'a, u8>, max: u8) -> Self {
-        Rating { common: Common::new(), value, max, compact: false }
+        Rating { common: Common::new(), value, max, compact: false, lit: None, star_size: None }
     }
 
     fn current(&self, shown: Option<&u8>) -> u8 {
@@ -99,11 +134,14 @@ impl Component for Rating<'_> {
 
     fn style(cx: &StyleCx<'_>, key: RatingStyleKey) -> RatingStyle {
         let control = cx.control();
-        let (side, cell, metrics) = if key.compact {
-            let side = cx.tokens.size.icon.glyph_sm;
-            (side, side + cx.tokens.space.gap.tight, Metrics::new())
-        } else {
-            (control.icon, control.height, Metrics::new().min_size(Vec2::splat(control.height)))
+        let (side, cell, metrics) = match (key.star_size, key.compact) {
+            (Some(size), true) => (size.side(), size.cell(), Metrics::new()),
+            (Some(size), false) => (size.side(), size.cell(), Metrics::new().min_size(Vec2::splat(size.cell()))),
+            (None, true) => {
+                let side = cx.tokens.size.icon.glyph_sm;
+                (side, side + cx.tokens.space.gap.tight, Metrics::new())
+            }
+            (None, false) => (control.icon, control.height, Metrics::new().min_size(Vec2::splat(control.height))),
         };
         let text = &cx.tokens.color.text;
         let bad = cx.tone(Tone::Bad);
@@ -113,7 +151,7 @@ impl Component for Rating<'_> {
             metrics,
             surface: Some(SurfaceLook::new(tint).radius(cx.surface(SurfaceKind::Well).radius)),
             focus: cx.focus_look(),
-            lit: IconLook::new(side, cx.host_ink(ink(cx.ink(Ink::OnPanel)))),
+            lit: IconLook::new(side, key.lit.map_or_else(|| cx.host_ink(ink(cx.ink(Ink::OnPanel))), |lit| ink(cx.color(lit)))),
             unlit: IconLook::new(side, ink(cx.color(text.muted))),
             cell,
         }
