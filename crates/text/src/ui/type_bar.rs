@@ -113,9 +113,11 @@ pub struct TypeBar<'a> {
     /// Warp Text is available.
     #[prop]
     can_warp: bool,
-    /// The glyph the colour well shows in place of a colour, because the host's target has no colour to change: while
-    /// a Type Mask is edited PhotoCraft names a question mark. Default `None`, which shows the colour as the bar always
-    /// has. A placeholder well still files its `ColorRequest` when it is clicked: the host decides what to make of it.
+    /// The glyph the colour well shows in place of a colour, because the host's target has no colour to change: a host
+    /// whose type target takes no colour will name the suite's `question_mark`, as PhotoCraft's bar will for a Type Mask
+    /// edit. Default `None`, which shows the colour as the bar always has. A placeholder well carries the mixed fill with
+    /// its glyph painted on the empty sunken well, and reports no colour value; it still files its `ColorRequest` when it
+    /// is clicked, and that request carries no colour, so what the host makes of the answer is the host's decision.
     #[prop(into)]
     color_placeholder: Option<IconId>,
     /// The family field is craft-font-manager's font picker over `source`.

@@ -59,6 +59,8 @@ fn the_well_of_a_host_that_names_no_glyph_shows_the_colour() {
 }
 
 /// A host that names a glyph for a target with no colour: the well shows that glyph, so it reports no colour value.
+/// The glyph here is a stand-in borrowed from the catalogue (`text_cursor`); what this trial pins is the well's state,
+/// not the shape of any drawing.
 #[trial]
 fn a_well_named_a_glyph_shows_no_colour() {
     let (mut fixture, _) = bar(Some(INK), None);
@@ -72,7 +74,7 @@ fn a_well_named_a_glyph_shows_no_colour() {
 }
 
 /// The placeholder well is still the bar's own well: its click files its request, which carries no colour, and the
-/// host decides what a pick does.
+/// host decides what a pick does. Again the glyph is the borrowed stand-in, not a claim about the mark's shape.
 #[trial]
 fn a_well_named_a_glyph_still_files_its_request() {
     let (mut fixture, asked) = bar(Some(INK), Some(IconId::new("text_cursor")));
@@ -81,6 +83,19 @@ fn a_well_named_a_glyph_still_files_its_request() {
     let asked = asked.borrow();
     assert_eq!(asked.len(), 1, "the click of a placeholder well files one request");
     assert_eq!(asked[0].color, None, "and it carries no colour, because the well shows none");
+}
+
+/// The suite's own placeholder mark is in the catalogue - an id outside it paints nothing and only logs - and a well
+/// named with it reaches the same state: this pins that a catalogued name resolves and reaches the well, not what the
+/// drawing looks like.
+#[trial]
+fn the_suites_own_placeholder_mark_reaches_the_well() {
+    assert!(craft_ui::primitives::has_icon(&IconId::new("question_mark")), "the catalogue holds `question_mark`");
+    let (mut fixture, asked) = bar(Some(INK), Some(IconId::new("question_mark")));
+    let target = well(&mut fixture);
+    assert_eq!(fixture.tree().value_of(target.node), None, "the well named with the suite's mark shows no colour value");
+    fixture.click(&target).idle(4);
+    assert_eq!(asked.borrow().len(), 1, "and its click still files its request");
 }
 
 /// A mixed selection keeps its mixed well and its request when the host names no glyph, as before.
