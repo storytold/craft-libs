@@ -14,8 +14,11 @@ const TIP_HEADER: usize = 6 + 1 + 4 + 4;
 /// Decoded grayscale samples. Eight-bit samples expand losslessly by multiplication by 257.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tip {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Row-major grayscale samples, `width * height` of them.
     pub data: Vec<u16>,
 }
 
