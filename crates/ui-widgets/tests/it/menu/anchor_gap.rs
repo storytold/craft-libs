@@ -99,3 +99,20 @@ fn a_menu_open_when_its_opener_stopped_showing_is_closed_when_the_opener_returns
         }
     }
 }
+
+/// An opener clicked on the pass its container returns to after an absence toggles from the state the gap left: the menu
+/// opens, and the pass measures what it shows (a peek and the real run read one open state).
+#[trial]
+fn an_opener_clicked_on_the_pass_its_container_returns_opens_the_menu() {
+    let (mut fixture, shown) = rig(Opener::Click, Gone::Opener);
+    fixture.settle();
+    open(&mut fixture, Opener::Click);
+    assert!(menu_open(&fixture), "the menu opens");
+    let at = fixture.by_label("Options").expect("the opener shows").center();
+    shown.set(false);
+    fixture.frame(vec![]);
+    shown.set(true);
+    fixture.click_at(at);
+    fixture.settle();
+    assert!(menu_open(&fixture), "the click opens the menu from the closed state the gap left");
+}

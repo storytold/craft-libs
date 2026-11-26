@@ -80,9 +80,11 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     let slot = stage.session::<OpenerOpen>(sub(first.id, "opens"));
     // A layer does not outlive its anchor's absence: one that was open when the container stopped running (its opener
     // left with the row it acts on, or the panel holding both stopped drawing) never ran its anchor-gone close, so it
-    // reads closed when it runs again after a gap, unless something opened it since.
+    // reads closed when it runs again after a gap, unless something opened it since. A peek reads it too, and expires the
+    // same state: a peek's stage is a copy, so what this pass measures is what its real run will read, even where the
+    // opener is clicked in the pass the container returns.
+    mark_shown(slot, frame);
     if real {
-        mark_shown(slot, frame);
         // A memoized view holding this container replays it without running it (nothing in it changed), so the replay
         // re-issues this note: the container does not read as gone in the pass it runs again and close a menu it shows.
         crate::runtime::replay::journal(&ctx, || SeenNote(first.id), refresh_seen);
