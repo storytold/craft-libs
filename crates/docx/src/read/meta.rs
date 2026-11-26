@@ -423,9 +423,9 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
     let mut ext_scope = scope.clone();
     declare(&mut ext_scope, ext);
     // A marked namespace keeps the prefix that marked it while that prefix still names it, and
-    // otherwise takes another prefix that does. When only markup inside `ext` names it, `ext`
-    // declares it under a prefix free there, so the mark still reaches that markup; with none,
-    // nothing in `ext` can name it.
+    // otherwise takes another prefix that does. When only a default namespace or markup inside
+    // `ext` names it, `ext` declares it under a prefix free there, so the mark still reaches that
+    // markup; with none, nothing in `ext` can name it.
     let inner: Vec<(&str, &str)> = ext.descendants().flat_map(craft_xml::El::ns_decls).collect();
     let mut ignorable: Vec<String> = Vec::new();
     let mut fresh: Vec<(String, &str)> = Vec::new();
@@ -434,8 +434,9 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
         if let Some(o) = bound {
             ignorable.push(o.to_string());
             needed.push(o);
-        } else if let Some(&(o, _)) = inner.iter().find(|(o, u)| *u == uri && !o.is_empty()) {
-            let name = free_prefix(o, uri, &ext_scope, &inner, &fresh);
+        } else if let Some(&(o, _)) = ext_scope.iter().chain(&inner).find(|(_, u)| *u == uri) {
+            // `Ignorable` lists prefixes, so a default namespace gets one.
+            let name = free_prefix(if o.is_empty() { "ns" } else { o }, uri, &ext_scope, &inner, &fresh);
             ignorable.push(name.clone());
             fresh.push((name, uri));
         }

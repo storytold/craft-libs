@@ -403,6 +403,26 @@ fn kept_extensions_mark_ignorable_a_namespace_only_their_inner_markup_names() {
     }
 }
 
+/// As above, with only a default namespace naming it, on the `extLst` or on markup inside it:
+/// the kept element declares the namespace under a prefix and marks it ignorable, through a save
+/// and a second round trip.
+#[test]
+fn kept_extensions_mark_ignorable_a_namespace_only_a_default_namespace_names() {
+    let inside = r#"<x:extLst><r:reactions><note xmlns="urn:old"/></r:reactions></x:extLst>"#;
+    let on_ext = r#"<x:extLst xmlns="urn:old"><note/></x:extLst>"#;
+    for ext in [inside, on_ext] {
+        let cex = format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:old" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:q="urn:b">{ext}</x:commentExtensible></x:commentsExtensible>"#
+        );
+        for (kept, markup) in kept_markup(&cex) {
+            let ignorable = ignorable_namespaces(&kept);
+            assert!(ignorable.contains(&"urn:old") && !ignorable.contains(&"urn:b"), "{markup}");
+            let default = kept.ns_decls().chain(kept.descendants().flat_map(craft_xml::El::ns_decls)).find(|(p, _)| p.is_empty());
+            assert_eq!(default, Some(("", "urn:old")), "the note stays in urn:old: {markup}");
+        }
+    }
+}
+
 const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 /// The extension kept from commentsExtensible.xml `cex`, as read and after a save and a second
