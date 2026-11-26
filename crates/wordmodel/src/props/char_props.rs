@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::color::{Rgb, TextColor};
 use super::para_props::Border;
 use super::{Deserialize, Serialize};
@@ -430,6 +432,9 @@ pub struct CharProps {
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Optional ScreenTip for the hyperlink. Runs from one link can share its text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_tooltip: Option<Arc<str>>,
     /// Tracked insertion: index into `Document::revisions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ins: Option<u32>,
@@ -566,6 +571,7 @@ impl CharProps {
         if c.link.take().is_some() && c.style.as_deref() == Some("Hyperlink") {
             c.style = None;
         }
+        c.link_tooltip = None;
         c
     }
 
@@ -626,7 +632,11 @@ impl CharProps {
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; link, ins, del, ligatures);
+        if self.link == base.link && self.link_tooltip == base.link_tooltip {
+            self.link = None;
+            self.link_tooltip = None;
+        }
+        drop_same_fields!(self, base; ins, del, ligatures);
     }
 
     /// Apply every `Some` field of `patch` on top of `self`.
@@ -676,7 +686,11 @@ impl CharProps {
     }
 
     fn overlay_document_marks(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; link, ins, del, fmt_change, ligatures);
+        if let Some(link) = &patch.link {
+            self.link = Some(link.clone());
+            self.link_tooltip = patch.link_tooltip.clone();
+        }
+        overlay_fields!(self, patch; ins, del, fmt_change, ligatures);
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
         self.overlay(patch);
@@ -701,6 +715,7 @@ impl CharProps {
     pub fn cleared(&self) -> CharProps {
         CharProps {
             link: self.link.clone(),
+            link_tooltip: self.link_tooltip.clone(),
             ins: self.ins,
             del: self.del,
             fmt_change: self.fmt_change.clone(),
@@ -711,6 +726,6 @@ impl CharProps {
     }
     /// Just the formatting: without the link, revision marks and tracked formatting change.
     pub fn formatting(&self) -> CharProps {
-        CharProps { link: None, ins: None, del: None, fmt_change: None, ..self.clone() }
+        CharProps { link: None, link_tooltip: None, ins: None, del: None, fmt_change: None, ..self.clone() }
     }
 }
