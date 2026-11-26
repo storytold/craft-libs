@@ -241,8 +241,8 @@ impl RootEnv {
         self
     }
 
-    /// Sets whether painted cursor images scale with the interface zoom (the Scale Cursor Proportional to UI
-    /// preference). On by default.
+    /// Sets whether painted pointers grow with the interface zoom (the Scale Cursor Proportional to UI preference).
+    /// Off, they keep the size they have at zoom 1; a brush tip follows the canvas either way. On by default.
     pub fn cursor_follows_zoom(mut self, on: bool) -> Self {
         self.cursor_follows_zoom = on;
         self
