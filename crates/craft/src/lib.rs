@@ -109,6 +109,8 @@ pub use craft_ease as ease;
 pub use craft_ecproj_format as ecproj_format;
 #[cfg(feature = "elf")]
 pub use craft_elf as elf;
+#[cfg(feature = "embroidery")]
+pub use craft_embroidery as embroidery;
 #[cfg(feature = "eps")]
 pub use craft_eps as eps;
 #[cfg(feature = "epub")]

@@ -232,6 +232,7 @@ craft-sbs = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
+craft-embroidery = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -452,6 +453,8 @@ ecproj-format = ["dep:craft-ecproj-format"]
 
 elf = ["dep:craft-elf"]
 elf-serde = ["elf", "craft-elf/serde"]
+
+embroidery = ["dep:craft-embroidery"]
 
 eps = ["dep:craft-eps"]
 eps-paths = ["eps", "craft-eps/paths"]
