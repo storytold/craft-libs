@@ -197,6 +197,12 @@ fn pumped(app: &mut Notebook, ctx: &egui::Context) {
     ctx.end_pass().textures_delta.clear();
 }
 
+/// Puts an answer in the channel as a worker for the current session would.
+fn deliver(app: &Notebook, event: Event) {
+    let issued = app.cloud.account_generation.load(Ordering::Relaxed);
+    app.cloud.events.0.send((issued, event)).unwrap();
+}
+
 fn wired() -> (Notebook, Arc<Mutex<Vec<Job>>>, egui::Context) {
     let mut app = Notebook::new();
     let jobs = Arc::new(Mutex::new(Vec::new()));
@@ -339,7 +345,7 @@ fn a_refused_save_is_put_to_the_user_and_never_retried() {
     pumped(&mut app, &ctx);
     jobs.lock().unwrap().clear();
     // What a service answers when somebody else saved first.
-    app.cloud.events.0.send(Event::Saved { uid: 1, entry: Err(Fault::Conflict) }).unwrap();
+    deliver(&app, Event::Saved { uid: 1, entry: Err(Fault::Conflict) });
     pumped(&mut app, &ctx);
     assert_eq!(report(&app)["conflict"]["name"], "Minutes.note", "the user is told, and asked what to do");
     assert_eq!(app.did().dropped, vec![1], "the version that did not land is forgotten");
@@ -349,7 +355,7 @@ fn a_refused_save_is_put_to_the_user_and_never_retried() {
 #[test]
 fn no_account_yet_is_an_offer_to_link_and_never_an_error() {
     let (mut app, _jobs, ctx) = wired();
-    app.cloud.events.0.send(Event::Account(Err(Fault::NotLinked))).unwrap();
+    deliver(&app, Event::Account(Err(Fault::NotLinked)));
     pumped(&mut app, &ctx);
     assert_eq!(report(&app)["link"], "offered");
     assert_eq!(report(&app)["accountError"], serde_json::Value::Null, "not having linked an account yet is not a failure");
@@ -359,7 +365,7 @@ fn no_account_yet_is_an_offer_to_link_and_never_an_error() {
 #[test]
 fn a_browser_round_trip_is_polled_until_the_user_is_done() {
     let (mut app, jobs, ctx) = wired();
-    app.cloud.events.0.send(Event::Browser { url: "https://cloud.example/link/abc".to_owned(), handle: Some("abc".to_owned()) }).unwrap();
+    deliver(&app, Event::Browser { url: "https://cloud.example/link/abc".to_owned(), handle: Some("abc".to_owned()) });
     pumped(&mut app, &ctx);
     assert_eq!(app.did().urls, vec!["https://cloud.example/link/abc".to_owned()], "the browser is opened for them");
     assert_eq!(report(&app)["link"]["waiting"], "https://cloud.example/link/abc");
@@ -403,11 +409,10 @@ fn working_together_needs_somewhere_for_the_room_to_be_keyed_on() {
 #[test]
 fn a_conversation_uses_the_hosts_chat_opener() {
     let (mut app, _, ctx) = wired();
-    app.cloud
-        .events
-        .0
-        .send(Event::Conversation(Ok(craft_cloud::Conversation { url: "https://cloud.example.net/call/room".to_owned(), name: "Talk".to_owned() })))
-        .unwrap();
+    deliver(
+        &app,
+        Event::Conversation(Ok(craft_cloud::Conversation { url: "https://cloud.example.net/call/room".to_owned(), name: "Talk".to_owned() })),
+    );
 
     pumped(&mut app, &ctx);
 
@@ -428,6 +433,75 @@ fn signing_out_forgets_everything_this_window_knew() {
     assert_eq!(state["origin"], serde_json::Value::Null);
     assert_eq!(state["entries"], serde_json::json!([]));
     assert!(jobs.lock().unwrap().iter().any(|j| matches!(j, Job::SignOut)), "the service is told, so the saved token goes too");
+}
+
+#[test]
+fn an_answer_queued_before_the_session_changed_is_dropped() {
+    let (mut app, _jobs, ctx) = wired();
+    let old = Account { display: "Ada Lovelace".to_owned(), capabilities: vec![Capability::Files], provider_linked: true };
+
+    // A worker answers, and the answers wait in the channel while the user
+    // signs out in the same frame.
+    let post = Post::new(app.cloud.events.0.clone(), app.cloud.account_generation.clone());
+    post.send(Event::Account(Ok(old)));
+    post.dup().send(Event::Listed { path: String::new(), entries: Ok(vec![file("/Minutes.note")]) });
+    sign_out(&mut app);
+    pumped(&mut app, &ctx);
+    let state = report(&app);
+    assert_eq!(state["account"], serde_json::Value::Null, "the previous session's account must not come back");
+    assert_eq!(state["entries"], serde_json::json!([]), "nor its files");
+
+    // The same across a new sign-in.
+    let post = Post::new(app.cloud.events.0.clone(), app.cloud.account_generation.clone());
+    post.send(Event::Listed { path: String::new(), entries: Ok(vec![file("/Stale.note")]) });
+    sign_in(&mut app);
+    pumped(&mut app, &ctx);
+    assert_eq!(report(&app)["entries"], serde_json::json!([]), "a listing for the signed-out session is not shown to the new one");
+}
+
+#[test]
+fn a_sign_in_that_drops_a_listing_leaves_no_folder_loading() {
+    let (mut app, _jobs, ctx) = wired();
+
+    // Both listings are asked for, and the answer to the first waits in the
+    // channel while the user signs in again. The shared one never answers.
+    browse(&mut app, "");
+    load_shared(&mut app);
+    sign_in(&mut app);
+    pumped(&mut app, &ctx);
+    assert!(!app.cloud.mine.loading, "a dropped listing must not leave the folder loading forever");
+    assert!(!app.cloud.shared.loading, "nor the shared one, which would then never be asked for again");
+
+    // A listing the new session asks for still completes.
+    browse(&mut app, "");
+    pumped(&mut app, &ctx);
+    assert!(app.cloud.mine.loaded);
+    assert_eq!(report(&app)["entries"], serde_json::json!(["Minutes.note", "Archive"]));
+}
+
+#[test]
+fn a_listing_asked_for_before_the_sign_in_answers_is_not_sent() {
+    let (mut app, jobs, ctx) = wired();
+    sign_in(&mut app);
+    jobs.lock().unwrap().clear();
+
+    // Asked for after the sign-in and before its answer. A listing sent now
+    // could answer after the account does, and its files may be the previous
+    // account's.
+    browse(&mut app, "");
+    load_shared(&mut app);
+    assert!(
+        !jobs.lock().unwrap().iter().any(|j| matches!(j, Job::List(_) | Job::SharedWithMe)),
+        "no listing goes out while the sign-in is outstanding"
+    );
+    pumped(&mut app, &ctx);
+    assert!(!app.cloud.mine.loaded && !app.cloud.mine.loading, "the folder waits to be listed for the new account");
+    assert!(!app.cloud.shared.loaded && !app.cloud.shared.loading, "and so does the shared one");
+
+    // Once the sign-in has answered, a listing goes through.
+    browse(&mut app, "");
+    pumped(&mut app, &ctx);
+    assert!(app.cloud.mine.loaded);
 }
 
 #[test]
