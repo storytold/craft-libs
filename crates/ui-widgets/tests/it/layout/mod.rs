@@ -6,6 +6,7 @@ pub(crate) mod fill_share;
 pub(crate) mod fonts;
 pub(crate) mod grid_labels;
 pub(crate) mod grid_least;
+pub(crate) mod kept_children;
 pub(crate) mod nested;
 pub(crate) mod room_height;
 pub(crate) mod row_line;
