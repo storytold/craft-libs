@@ -659,10 +659,11 @@ mesh-dae = ["mesh", "craft-mesh/dae"]
 mesh-fbx = ["mesh", "craft-mesh/fbx"]
 mesh-gltf = ["mesh", "craft-mesh/gltf"]
 mesh-obj = ["mesh", "craft-mesh/obj"]
-mesh-ops = ["dep:craft-mesh-ops"]
 mesh-ply = ["mesh", "craft-mesh/ply"]
 mesh-stl = ["mesh", "craft-mesh/stl"]
 mesh-threemf = ["mesh", "craft-mesh/threemf"]
+
+mesh-ops = ["dep:craft-mesh-ops"]
 
 metadata = ["dep:craft-metadata"]
 
