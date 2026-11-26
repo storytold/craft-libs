@@ -160,8 +160,11 @@ pub(crate) struct State {
     pub(crate) scope_order: Vec<Id>,
     pub(crate) last_scope_order: Vec<Id>,
     pub(super) open: Vec<(Id, usize)>,
-    /// Where a scope's body begins in `stops`; the header's stops come before it, the footer's after the body's.
-    pub(super) body_from: FastMap<Id, usize>,
+    /// Where a scope's body begins in `stops`, and the container whose body it is; the header's stops come before it,
+    /// the footer's after the body's.
+    pub(super) body_from: FastMap<Id, (usize, Id)>,
+    /// Where the body of the container that marked a scope's body ends in `stops`: its end region and footer follow.
+    pub(super) body_end: FastMap<Id, usize>,
     pub(crate) groups: FastMap<Id, Group>,
     pub(crate) last_groups: FastMap<Id, Group>,
     pub(crate) row_sets: Vec<RowGroups>,
@@ -581,13 +584,28 @@ pub(crate) fn focus_in(ctx: &Context, range: std::ops::Range<usize>) -> bool {
 
 /// Marks the stops registered from here on in the innermost open scope as its body's: they come first in Tab
 /// order, then the footer's, then the header's, and initial focus goes to the first of them, not to the title
-/// row's close action. The first mark of a pass stands.
-pub(crate) fn begin_body(ctx: &Context) {
+/// row's close action. The first mark of a pass stands; `container` is the container whose body it is.
+pub(crate) fn begin_body(ctx: &Context, container: Id) {
     take_app_widgets(ctx, None);
     with(ctx, |state| {
         if let Some((scope, _)) = state.open.last().copied() {
             let at = state.stops.len();
-            state.body_from.entry(scope).or_insert(at);
+            state.body_from.entry(scope).or_insert((at, container));
+        }
+    });
+}
+
+/// Ends the body that `container` marked in the innermost open scope (`begin_body`): the stops registered from here on
+/// are its end region's and footer's. A dialog with no field and no default stop starts on its first body stop, never
+/// on one of theirs. A container nested in the body ends nothing.
+pub(crate) fn end_body(ctx: &Context, container: Id) {
+    take_app_widgets(ctx, None);
+    with(ctx, |state| {
+        if let Some((scope, _)) = state.open.last().copied()
+            && state.body_from.get(&scope).is_some_and(|(_, owner)| *owner == container)
+        {
+            let at = state.stops.len();
+            state.body_end.entry(scope).or_insert(at);
         }
     });
 }
@@ -682,8 +700,8 @@ pub(crate) fn pop_scope(ctx: &Context) {
     take_app_widgets(ctx, None);
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx));
     let acts = with(ctx, |state| {
-        nav::order_regions(state);
-        nav::initial_focus(state, frame)
+        let body = nav::order_regions(state);
+        nav::initial_focus(state, frame, body)
     });
     apply(ctx, acts);
 }
