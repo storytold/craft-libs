@@ -1,0 +1,34 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.dracula",
+  "name": "Dracula",
+  "version": 1,
+  "variants": "dark",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#bd93f9",
+    "neutral": "#282a36",
+    "status": {
+      "bad": "#ff5555",
+      "good": "#50fa7b",
+      "info": "#8be9fd",
+      "warn": "#f1fa8c"
+    }
+  },
+  "shape": null,
+  "dark": {
+    "accent.border": "#bd93f978",
+    "accent.soft": "#bd93f92e",
+    "accent.solid": "#bd93f9",
+    "caption.close_hover": "#ff5555",
+    "caption.close_text": "#282a36",
+    "data.scope": "#282a36",
+    "line.control_edge": "#44475a",
+    "state.hover": "#44475a",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.panel": "#282a36",
+    "text.normal": "#f8f8f2"
+  }
+}

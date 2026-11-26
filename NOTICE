@@ -464,3 +464,8 @@ The Y4M range-backed source in crates/media-source/src/y4m.rs adapts FilmCraft's
 original implementation (3f137a7ed420cac79b32145f5243b7f98b31f71c), licensed
 MIT OR Apache-2.0. Source notice retained:
 Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+
+crates/theme/themes/dracula.json (the craft.dracula built-in theme) takes its colour values
+from the Dracula palette, https://github.com/dracula/dracula-theme at
+8d33e5492b56740c4857c5ebe7c5d5ab4040caf1 (README.md), under the MIT License: Copyright (c) 2023
+Dracula Theme. The licence text is the MIT text in LICENSE-MIT.
