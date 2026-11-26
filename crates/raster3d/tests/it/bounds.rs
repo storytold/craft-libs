@@ -1216,6 +1216,8 @@ fn a_light_falloff_other_than_0_to_2_is_rejected() {
     let mut s = lit_scene((16, 12), 1, false);
     s.lights[1].falloff = 3;
     assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(1)));
+    let message = RenderError::BadLight(1).to_string();
+    assert!(message.contains("a falloff other than 0 (none), 1 (smooth) or 2 (inverse square)"), "{message}");
     for falloff in 0..=2 {
         let mut s = lit_scene((16, 12), 1, false);
         s.lights[1].falloff = falloff;

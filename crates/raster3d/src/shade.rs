@@ -380,15 +380,16 @@ fn shadow_factor(m: &ShadowMap, cube: Option<&[ShadowMap]>, texels: &[f32], p: [
     };
     // 1 where texel (xi, yi) does not occlude the receiver plane at the texel's center. The
     // perspective compare runs on 1/depth, which is linear across the map; a plane whose inverse
-    // depth reaches 0 is behind the light and cannot be occluded.
+    // depth reaches 0 is behind the light and cannot be occluded. A finite depth whose product
+    // with the focal length overflows f32 is compared in f64, so the plane's slope is kept.
     let (iz, iq) = (1.0 / z, 1.0 / (m.focal * z));
+    let wide = z.is_finite() && !(m.focal * z).is_finite();
     let open = |xi: i64, yi: i64| -> f32 {
         let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
         let outside = xi < 0 || yi < 0 || xi >= size || yi >= size;
         let lit = if m.ortho {
             z - g * texel <= at(xi, yi) + bias
         } else {
-            let inv = iz + g * iq;
             // Past a cube face's edge, the adjacent face's depth along the texel's ray is converted
             // to this face's depth, where the receiver plane and the bias are.
             let d = match cube {
@@ -398,7 +399,14 @@ fn shadow_factor(m: &ShadowMap, cube: Option<&[ShadowMap]>, texels: &[f32], p: [
                 }
                 _ => at(xi, yi),
             };
-            inv <= 0.0 || inv * (d + bias) >= 1.0
+            if wide {
+                let z = f64::from(z);
+                let inv = 1.0 / z + f64::from(g) / (f64::from(m.focal) * z);
+                inv <= 0.0 || inv * (f64::from(d) + f64::from(bias)) >= 1.0
+            } else {
+                let inv = iz + g * iq;
+                inv <= 0.0 || inv * (d + bias) >= 1.0
+            }
         };
         if lit { 1.0 } else { 0.0 }
     };
@@ -712,7 +720,7 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrdfSurface, attenuation, brdf, light_shadow, mip_levels, shadow_coord, to_light};
+    use super::{BrdfSurface, attenuation, brdf, light_shadow, mip_levels, shadow_coord, shadow_factor, to_light};
     use crate::scene::{Light, ShadowMap};
 
     #[test]
@@ -883,5 +891,20 @@ mod tests {
         let m = ShadowMap { view, focal: 400.0, ortho: false, size: 512, offset: 0, bias: 1.5, radius: 1.0 };
         let (u, v, z) = shadow_coord(&m, [1e37, 0.0, 1e38]).unwrap_or((f32::NAN, f32::NAN, f32::NAN));
         assert!((u - 296.0).abs() < 1e-3 && v == 256.0 && z == 1e38, "{u} {v} {z}");
+    }
+
+    #[test]
+    fn a_sloped_receiver_whose_focal_depth_product_overflows_f32_keeps_its_slope() {
+        // A receiver plane with the normal [1, 0, −1] / √2 at 40 texels from the center, behind
+        // texels 1.003 times its depth there. The plane's depth passes the stored depth about one
+        // texel to the right, so part of the filter is blocked. The same scene scaled by 1e35 puts
+        // the receiver's depth at 1e38, where 400 × 1e38 overflows f32.
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let m = ShadowMap { view, focal: 400.0, ortho: false, size: 512, offset: 0, bias: 0.0, radius: 1.0 };
+        let ng = [std::f32::consts::FRAC_1_SQRT_2, 0.0, -std::f32::consts::FRAC_1_SQRT_2];
+        let near = shadow_factor(&m, None, &vec![1003.0; 512 * 512], [100.0, 0.0, 1000.0], ng, 1.0);
+        let far = shadow_factor(&m, None, &vec![1.003e38; 512 * 512], [1e37, 0.0, 1e38], ng, 1.0);
+        assert!(near < 0.99, "{near}");
+        assert!((far - near).abs() < 0.05, "{far} vs {near}");
     }
 }
