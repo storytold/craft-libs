@@ -423,28 +423,25 @@ impl Mesh {
     /// Uniformly scale and translate so the mesh is centered with the given bounding radius. A
     /// radius that is not a finite positive number, or is so large that a corner of the bounds
     /// would pass `f32::MAX`, leaves the mesh unchanged.
+    /// Centering, radius calculation, and scaling use `f64` before storing the resulting positions.
     pub fn normalize_to(&mut self, radius: f32) {
         if !(radius.is_finite() && radius > 0.0) {
             return;
         }
         let (lo, hi) = self.bounds();
-        // Offsets from the low corner, halved only when the span passes f32::MAX, and a divided
-        // length keep every intermediate value finite near f32::MAX and nonzero for a mesh far
-        // smaller than the floor of `Mesh::radius`.
-        let k = if (hi - lo).is_finite() { 1.0 } else { 0.5 };
-        let offset = |p: Vec3| p * k - lo * k;
-        let w = offset(hi);
-        let largest = w.abs().max_element();
-        if largest == 0.0 {
-            // Every position is the center.
+        let lo = lo.as_dvec3();
+        let hi = hi.as_dvec3();
+        let center = lo * 0.5 + hi * 0.5;
+        let geometric_radius = (hi - lo).length() * 0.5;
+        if geometric_radius == 0.0 {
             for p in &mut self.positions {
-                *p = offset(*p);
+                *p = (p.as_dvec3() - center).as_vec3();
             }
             return;
         }
-        let s = radius / (w / largest).length();
-        let moved = |p: Vec3| (offset(p) / largest * 2.0 - w / largest) * s;
-        if !(moved(lo).is_finite() && moved(hi).is_finite()) {
+        let scale = f64::from(radius) / geometric_radius;
+        let moved = |p: Vec3| ((p.as_dvec3() - center) * scale).as_vec3();
+        if !(moved(lo.as_vec3()).is_finite() && moved(hi.as_vec3()).is_finite()) {
             return;
         }
         for p in &mut self.positions {
@@ -515,6 +512,19 @@ impl mikktspace::Geometry for Mikk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalization_preserves_small_coordinates_near_the_center() {
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            for extent in [1.0, f32::MAX] {
+                let near = axis * 1e-8;
+                let mut mesh = Mesh { positions: vec![-axis * extent, axis * extent, Vec3::ZERO, near], ..Mesh::default() };
+                mesh.normalize_to(extent);
+                assert_eq!(mesh.positions[2], Vec3::ZERO);
+                assert_eq!(mesh.positions[3], near, "axis {axis:?}, extent {extent}");
+            }
+        }
+    }
 
     fn quad() -> Mesh {
         Mesh::from_parts(
