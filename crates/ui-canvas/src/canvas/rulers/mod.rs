@@ -147,6 +147,10 @@ pub struct RulersStyle {
     shade: StyleColor,
     label: TextLook,
     marker: StyleColor,
+    /// The zero point's cross hairs over the view.
+    cross: StyleColor,
+    /// The halo under the cross hairs, so they read on the paper, the pasteboard and any art.
+    halo: StyleColor,
 }
 
 /// The type role of the tick labels.
@@ -382,6 +386,8 @@ impl Component for Rulers<'_> {
             shade: cx.color(c.surface.canvas),
             label: TextLook::new(LABEL_ROLE, Stateful::new(cx.color(c.text.muted))),
             marker: cx.color(c.text.normal),
+            cross: cx.color(c.overlay.stroke),
+            halo: cx.color(c.overlay.halo),
         }
     }
 
@@ -526,7 +532,9 @@ impl Component for Rulers<'_> {
             for (from, to) in
                 [(Point::new(zero.x, visible.y0), Point::new(zero.x, visible.y1)), (Point::new(visible.x0, zero.y), Point::new(visible.x1, zero.y))]
             {
-                draw.stroke(&PaintShape::Path(vec![space.view.to_screen(from), space.view.to_screen(to)]), StrokeWidth::Thin, style.marker);
+                let path = PaintShape::Path(vec![space.view.to_screen(from), space.view.to_screen(to)]);
+                draw.stroke(&path, StrokeWidth::Thick, style.halo);
+                draw.stroke(&path, StrokeWidth::Thin, style.cross);
             }
             if let Some(at) = crate::runtime::pointer::frame(&cx.core.ctx).pos {
                 let numbers = cx.env.units();
