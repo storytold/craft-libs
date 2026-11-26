@@ -5,7 +5,7 @@ use super::{NodeGraph, NodeGraphStyle};
 use crate::contract::{Bind, Cx, PaintUi, PartsCx, Pointer as _, Role, Styled as _};
 use crate::fonts::FontRef;
 use crate::primitives::{DocRun, DocText, Draw, IconSpec, PaintShape, StrokeWidth, TextRun};
-use crate::style::{DataColor, Flags, StyleColor, UiTokens};
+use crate::style::{DataColor, Flags, StyleColor};
 use craft_behavior::{
     CancelReason, CanvasTransform, EditEvent, GestureId, HitLevel, HitPriority, IconId, Mixed, PartKey, PointerButton, PressPhase, PressStart,
     PressState, Selection, Sense,
@@ -143,24 +143,10 @@ pub enum AnnotationEvent {
     },
 }
 
-/// The sizes the layers draw at this pass: the type roles' sizes through the zoom, as the nodes' own text scales, and
-/// the pin at the theme's icon size, which a zoom leaves alone.
-struct Sizes {
-    title: f32,
-    text: f32,
-    icon: f32,
-}
-
-impl Sizes {
-    fn of(tokens: &UiTokens, style: &NodeGraphStyle, zoom: CanvasTransform) -> Self {
-        let size = |role| tokens.typography.get(role).size * zoom.scale;
-        Sizes { title: size(style.title_role), text: size(style.text_role), icon: tokens.size.icon.md }
-    }
-}
-
-/// `rect`, in document units, on screen: through the zoom from the graph's top left at `origin`, as the wires' ends.
-fn on_screen(zoom: CanvasTransform, origin: Pos2, rect: Rect) -> Rect {
-    Rect::from_min_max(origin + zoom.to_layer(rect.min).to_vec2(), origin + zoom.to_layer(rect.max).to_vec2())
+/// `rect`, in document units, in the rows' space: from the graph's top left at `origin`, where the nodes lie. The
+/// body's transform zooms it with the nodes.
+fn in_body(origin: Pos2, rect: Rect) -> Rect {
+    rect.translate(origin.to_vec2())
 }
 
 /// The grip of a backdrop shown at `frame`: a square of `side` in its bottom-right corner.
@@ -178,7 +164,7 @@ fn note_rect(frame: Rect, text_height: f32) -> Rect {
     Rect::from_min_size(frame.min, Vec2::new(frame.width(), frame.height().max(text_height)))
 }
 
-/// The pin of a marker pointing at `at` on screen: a square of `side` whose bottom middle is the pin's tip.
+/// The pin of a marker pointing at `at` in the rows' space: a square of `side` whose bottom middle is the pin's tip.
 fn pin_rect(at: Pos2, side: f32) -> Rect {
     Rect::from_min_size(at - Vec2::new(side / 2.0, side), Vec2::splat(side))
 }
@@ -190,21 +176,14 @@ fn label_rect(pin: Rect, label: Vec2) -> Rect {
 
 /// Paints the backdrop `backdrop` shown at `frame`: its fill, its edge (wider when selected), the description wrapped
 /// and clipped inside, and the grip. The title above is the caller's, which lays it out to place it.
-fn paint_backdrop(
-    draw: &Draw<'_>,
-    frame: Rect,
-    backdrop: &Backdrop<'_>,
-    sizes: &Sizes,
-    style: &NodeGraphStyle,
-    look: (StyleColor, StyleColor, bool),
-) {
+fn paint_backdrop(draw: &Draw<'_>, frame: Rect, backdrop: &Backdrop<'_>, text: f32, style: &NodeGraphStyle, look: (StyleColor, StyleColor, bool)) {
     let (edge, ink, selected) = look;
     let shape = PaintShape::Rect(frame, CornerRadius::ZERO);
     draw.data_fill(&shape, backdrop.fill);
     draw.stroke(&shape, if selected { StrokeWidth::Medium } else { StrokeWidth::Thin }, edge);
     if !backdrop.description.is_empty() {
         let inner = frame.shrink(style.grip_side);
-        let runs = run(backdrop.description, sizes.text, ink);
+        let runs = run(backdrop.description, text, ink);
         let text = DocText { wrap: Some(inner.width()), ..DocText::new(&runs) };
         draw.clipped(inner, |draw| {
             draw.doc(inner, &text);
@@ -215,8 +194,8 @@ fn paint_backdrop(
 }
 
 /// Paints the note `note` shown at `frame`: its text wrapped to the rect's width, in `ink`.
-fn paint_note(draw: &Draw<'_>, frame: Rect, note: &Note<'_>, sizes: &Sizes, ink: StyleColor) {
-    let runs = run(note.text, sizes.text, ink);
+fn paint_note(draw: &Draw<'_>, frame: Rect, note: &Note<'_>, text: f32, ink: StyleColor) {
+    let runs = run(note.text, text, ink);
     draw.doc(frame, &DocText { wrap: Some(frame.width()), ..DocText::new(&runs) });
 }
 
@@ -259,24 +238,25 @@ impl<'a> Layers<'a> {
         if self.selected == Some(key) { Flags::SELECTED } else { Flags::empty() }
     }
 
-    /// The parts of the layers: `BACKDROP`, `BACKDROP_GRIP`, `NOTE` and `MARKER`, each at the annotation's id.
+    /// The parts of the layers: `BACKDROP`, `BACKDROP_GRIP`, `NOTE` and `MARKER`, each at the annotation's id, in the
+    /// rows' space from the graph's top left at `origin`, so they follow the nodes through the zoom.
     ///
-    /// The backdrops are the graph's own parts, under its nodes, so a press on a node inside a backdrop takes the
-    /// node; a later backdrop stacks over an earlier one, so the smaller frame the app sorts after a larger one takes
-    /// a press inside both. Notes and markers are `over` parts, above the nodes, and a marker ranks one sub-level over
-    /// a note where they overlap.
-    pub(super) fn parts<E: 'static>(&self, zoom: CanvasTransform, origin: Pos2, cx: &mut PartsCx<'_, NodeGraph<'_, E>>) {
-        let sizes = Sizes::of(cx.tokens, cx.style, zoom);
+    /// The backdrops lie under the nodes, so a press on a node inside a backdrop takes the node; a later backdrop
+    /// stacks over an earlier one, so the smaller frame the app sorts after a larger one takes a press inside both.
+    /// Notes and markers are `over` parts, above the nodes, and a marker ranks one sub-level over a note where they
+    /// overlap.
+    pub(super) fn parts<E: 'static>(&self, origin: Pos2, cx: &mut PartsCx<'_, NodeGraph<'_, E>>) {
         let (grip_side, text_role) = (cx.style.grip_side, cx.style.text_role);
+        let (text, icon) = (cx.tokens.typography.get(text_role).size, cx.tokens.size.icon.md);
         for (order, backdrop) in self.backdrops.iter().enumerate() {
-            let frame = on_screen(zoom, origin, backdrop.rect);
+            let frame = in_body(origin, backdrop.rect);
             let key = AnnotationKey::Backdrop(backdrop.id);
             let stacking = u32::try_from(order).unwrap_or(u32::MAX);
-            let body = cx.part(BACKDROP.at(backdrop.id), frame).sense(SENSE).stacking(stacking).flags(self.flags(key));
+            let body = cx.in_body(BACKDROP.at(backdrop.id), frame).sense(SENSE).stacking(stacking).flags(self.flags(key));
             if let Some(title) = backdrop.title {
                 body.node(Role::GROUP, title);
             }
-            cx.part(BACKDROP_GRIP.at(backdrop.id), grip_rect(frame, grip_side))
+            cx.in_body(BACKDROP_GRIP.at(backdrop.id), grip_rect(frame, grip_side))
                 .sense(SENSE)
                 .priority(HitPriority::new(HitLevel::Body, 1))
                 .stacking(stacking)
@@ -285,11 +265,11 @@ impl<'a> Layers<'a> {
                 .pointer_only("a backdrop's size is set by the app's annotation commands");
         }
         for note in self.notes {
-            let frame = on_screen(zoom, origin, note.rect);
-            let runs = run(note.text, sizes.text, StyleColor(egui::Color32::PLACEHOLDER));
+            let frame = in_body(origin, note.rect);
+            let runs = run(note.text, text, StyleColor(egui::Color32::PLACEHOLDER));
             let height = cx.layout_doc(&DocText { wrap: Some(frame.width()), ..DocText::new(&runs) }).size().y;
             let key = AnnotationKey::Note(note.id);
-            cx.part(NOTE.at(note.id), note_rect(frame, height))
+            cx.in_body(NOTE.at(note.id), note_rect(frame, height))
                 .sense(SENSE)
                 .priority(HitPriority::new(HitLevel::Body, 0))
                 .over()
@@ -297,10 +277,10 @@ impl<'a> Layers<'a> {
                 .node(Role::PARAGRAPH, note.text);
         }
         for marker in self.markers {
-            let pin = pin_rect(origin + zoom.to_layer(marker.at).to_vec2(), sizes.icon);
+            let pin = pin_rect(origin + marker.at.to_vec2(), icon);
             let label = cx.layout(&TextRun::new(marker.label).role(text_role)).size();
             let key = AnnotationKey::Marker(marker.id);
-            cx.part(MARKER.at(marker.id), pin.union(label_rect(pin, label)))
+            cx.in_body(MARKER.at(marker.id), pin.union(label_rect(pin, label)))
                 .sense(SENSE)
                 .priority(HitPriority::new(HitLevel::Body, 1))
                 .over()
@@ -309,19 +289,22 @@ impl<'a> Layers<'a> {
         }
     }
 
-    /// Paints the backdrops, under the items, in slice order.
-    pub(super) fn paint_under<E: 'static>(&self, zoom: CanvasTransform, origin: Pos2, ui: &mut PaintUi<'_>, cx: &Cx<'_, NodeGraph<'_, E>>) {
+    /// Paints the backdrops in the rows' space under the items, in slice order.
+    pub(super) fn paint_under<E: 'static>(&self, origin: Pos2, ui: &mut PaintUi<'_>, cx: &Cx<'_, NodeGraph<'_, E>>) {
         let style = cx.style;
-        let sizes = ui.with_style(cx.resolved.variant, |scx| Sizes::of(scx.tokens, style, zoom));
+        let (title_size, text) = ui.with_style(cx.resolved.variant, |scx| {
+            let size = |role| scx.tokens.typography.get(role).size;
+            (size(style.title_role), size(style.text_role))
+        });
         let ink = cx.resolve(&style.note_text);
         let draw = ui.draw();
         for backdrop in self.backdrops {
-            let frame = on_screen(zoom, origin, backdrop.rect);
+            let frame = in_body(origin, backdrop.rect);
             let part = BACKDROP.at(backdrop.id);
             let selected = self.selected == Some(AnnotationKey::Backdrop(backdrop.id));
-            paint_backdrop(&draw, frame, backdrop, &sizes, style, (cx.resolve_part(part, &style.backdrop_edge), ink, selected));
+            paint_backdrop(&draw, frame, backdrop, text, style, (cx.resolve_part(part, &style.backdrop_edge), ink, selected));
             if let Some(title) = backdrop.title {
-                let runs = run(title, sizes.title, ink);
+                let runs = run(title, title_size, ink);
                 let text = DocText { wrap: Some(frame.width()), ..DocText::new(&runs) }.elide();
                 let height = cx.layout_doc(&text).size().y;
                 draw.doc(Rect::from_min_size(Pos2::new(frame.left(), frame.top() - height), Vec2::new(frame.width(), height)), &text);
@@ -329,17 +312,17 @@ impl<'a> Layers<'a> {
         }
     }
 
-    /// Paints the notes and the markers, over the parts: every note, then every marker, so a marker shows over a note
-    /// as it takes the press there.
-    pub(super) fn paint_over<E: 'static>(&self, zoom: CanvasTransform, origin: Pos2, ui: &mut PaintUi<'_>, cx: &Cx<'_, NodeGraph<'_, E>>) {
+    /// Paints the notes and the markers in the rows' space over the items: every note, then every marker, so a marker
+    /// shows over a note as it takes the press there.
+    pub(super) fn paint_over<E: 'static>(&self, origin: Pos2, ui: &mut PaintUi<'_>, cx: &Cx<'_, NodeGraph<'_, E>>) {
         let style = cx.style;
-        let sizes = ui.with_style(cx.resolved.variant, |scx| Sizes::of(scx.tokens, style, zoom));
+        let (text, icon) = ui.with_style(cx.resolved.variant, |scx| (scx.tokens.typography.get(style.text_role).size, scx.tokens.size.icon.md));
         let draw = ui.draw();
         for note in self.notes {
-            paint_note(&draw, on_screen(zoom, origin, note.rect), note, &sizes, cx.resolve_part(NOTE.at(note.id), &style.note_text));
+            paint_note(&draw, in_body(origin, note.rect), note, text, cx.resolve_part(NOTE.at(note.id), &style.note_text));
         }
         for marker in self.markers {
-            let pin = pin_rect(origin + zoom.to_layer(marker.at).to_vec2(), sizes.icon);
+            let pin = pin_rect(origin + marker.at.to_vec2(), icon);
             let selected =
                 (self.selected == Some(AnnotationKey::Marker(marker.id))).then(|| cx.resolve_part(MARKER.at(marker.id), &style.backdrop_edge));
             paint_marker(&draw, pin, marker, style, selected);
@@ -355,8 +338,7 @@ impl<'a> Layers<'a> {
     pub(super) fn update<E: 'static>(
         &self,
         zoom: CanvasTransform,
-        // The parts' phases are already in the graph's layer space, and an offset is a difference of two of them.
-        _origin: Pos2,
+        origin: Pos2,
         cx: &mut Cx<'_, NodeGraph<'_, E>>,
         annotations: Option<&mut Bind<'_, Option<AnnotationKey>>>,
         nodes: Option<&mut Bind<'_, Selection<NodeId>>>,
@@ -382,7 +364,7 @@ impl<'a> Layers<'a> {
             {
                 pressed = Some(key);
             }
-            self.gesture(press, key, resize, (zoom, min), cx, &mut events);
+            self.gesture(press, key, resize, (zoom, origin, min), cx, &mut events);
         }
         let current = annotations.as_ref().map_or(self.selected, |bind| bind.value().copied().flatten());
         // The collection's own press: a press on a node or on empty space, not one on a wire or on a control over the graph.
@@ -414,18 +396,18 @@ impl<'a> Layers<'a> {
     /// What `press` on the part of `key` adds to `events`: a drag runs a `Move`, or a `Resize` of the backdrop at
     /// `resize`, as Begin, Update, then Commit or Cancel, in document units; a secondary click asks for the menu at the
     /// release point, in the graph's layer space, which is its parent's. A press that comes up where it went down
-    /// changes nothing.
+    /// changes nothing. The parts' phases read in the rows' space, document units from the graph's top left at
+    /// `origin`, so an offset is a difference of two of them and the menu's point goes through `zoom` to the layer.
     fn gesture<E: 'static>(
         &self,
         press: PressState,
         key: AnnotationKey,
         resize: Option<Rect>,
-        (zoom, min): (CanvasTransform, Vec2),
+        (zoom, origin, min): (CanvasTransform, Pos2, Vec2),
         cx: &Cx<'_, NodeGraph<'_, E>>,
         events: &mut Vec<AnnotationEvent>,
     ) {
-        let scale = zoom.scale.max(f32::EPSILON);
-        let offset = |start: PressStart, pos: Pos2| (pos - start.origin) / scale;
+        let offset = |start: PressStart, pos: Pos2| pos - start.origin;
         let report = |edit: EditEvent<Vec2>| match resize {
             None => AnnotationEvent::Move { key, edit },
             // No movement leaves the rect as the app gave it, under the least size or not.
@@ -454,7 +436,7 @@ impl<'a> Layers<'a> {
                 events.push(report(edit));
             }
             PressPhase::Release { start, pos, click: true, .. } if start.button == PointerButton::Secondary => {
-                events.push(AnnotationEvent::ContextMenu { key, at: pos });
+                events.push(AnnotationEvent::ContextMenu { key, at: origin + zoom.to_layer((pos - origin).to_pos2()).to_vec2() });
             }
             // Only a press that passed the slop began a gesture.
             PressPhase::Cancel { start, reason, .. } if start.button == PointerButton::Primary && press.dragged() => {

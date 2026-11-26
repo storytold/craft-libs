@@ -205,7 +205,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Vec2::new(width, height)
     }
 
-    fn geometry(&mut self, comp: &C, mcx: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
+    fn geometry(
+        &mut self,
+        comp: &C,
+        mcx: &crate::contract::MeasureCx<'_, C>,
+        (_, content): (Rect, Rect),
+        rtl: bool,
+    ) -> Option<Rc<dyn std::any::Any>> {
         let view = self.below_header(content);
         let clear = self.clear_of_bar(view, scroll_bar_look(mcx.tokens).thickness, rtl);
         let offset = ScrollPos { x: self.offset_x, y: self.offset.clamp(0.0, self.max_offset(view.height())) };
@@ -445,6 +451,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let mut fit_widest = 0.0_f32;
         let aligns = self.header.aligns();
         let place_rows = |ui: &mut Ui| {
+            // The body parts and paint under the rows, in the rows' space: before the rows, so the rows stack over them.
+            crate::primitives::sensing::place_body_parts(ui, id, false);
+            comp.paint_body_under(&mut crate::contract::run::paint_ui(ui, env, &*cx.core, cx.style), &*cx);
             // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
             let members_ui = C::MEMBERS.then(|| {
                 let builder = UiBuilder::new().max_rect(rect).layout(child::column_layout(rtl)).scope_id(sub(id, "members"));
@@ -657,6 +666,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 self.show_members(comp, &mut members_ui, cx, (base, &base_env), members, &mut shown_rows);
                 Env::restore(&ctx, installed);
             }
+            crate::primitives::sensing::place_body_parts(ui, id, true);
+            comp.paint_body_over(&mut crate::contract::run::paint_ui(ui, env, &*cx.core, cx.style), &*cx);
         };
         match transform {
             Some(transform) => {

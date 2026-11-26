@@ -124,6 +124,9 @@ pub(crate) struct PartDecl {
     pub cursor: Option<Cursor>,
     /// Drawn by `paint_over`: stacks above the body members.
     pub over: bool,
+    /// A collection's part in its rows' space (`PartsCx::in_body`): the item step records it with the rows, under
+    /// them or, when `over`, above them.
+    pub body: bool,
     pub flags: Flags,
     /// The part paints with the Disabled state and its data colours take the theme's disabled fill. It keeps sensing.
     pub inactive: bool,
@@ -147,6 +150,7 @@ impl PartDecl {
             priority: HitPriority::BODY,
             cursor: None,
             over: false,
+            body: false,
             flags: Flags::default(),
             inactive: false,
             held: false,
@@ -278,6 +282,8 @@ struct ArenaState {
     /// The root takes its members' senses: it was enabled at its step 8 this pass.
     widens: bool,
     layer: Option<Layer>,
+    /// The transformed body's layer this pass's body parts lie in (`place_body`); none when they lie in the root's.
+    body_parts_in: Option<Layer>,
     /// The layer the root's widgets had at its last step 8, for `sense_early`.
     last_layer: Option<Layer>,
     /// The pass whose outcome `sense_early` stepped before the root's step 8.
@@ -330,6 +336,7 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
         std::mem::swap(&mut state.previous_own, &mut state.own);
         state.own.clear();
         state.own_over_at = u32::MAX;
+        state.body_parts_in = None;
         state.union_sense = Sense::empty();
         state.widens = false;
         state.pass = pass_nr;
@@ -344,14 +351,14 @@ fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shap
     shape
 }
 
-/// The root's own parts but the `over` ones, at position 0.
+/// The root's own parts but the `over` and the body ones, at position 0.
 fn own_shapes(own: &[PartDecl], root: Id, target: f32) -> impl Iterator<Item = Shape<Id>> + '_ {
-    own.iter().filter(|part| !part.over).map(move |part| own_part_shape(part, root, 0, target))
+    own.iter().filter(|part| !part.over && !part.body).map(move |part| own_part_shape(part, root, 0, target))
 }
 
-/// The root's own `over` parts, at the position the owner left them.
+/// The root's own `over` parts but the body ones, at the position the owner left them.
 fn own_over_shapes(own: &[PartDecl], root: Id, position: u32, target: f32) -> Vec<Shape<Id>> {
-    own.iter().filter(|part| part.over).map(|part| own_part_shape(part, root, position, target)).collect()
+    own.iter().filter(|part| part.over && !part.body).map(|part| own_part_shape(part, root, position, target)).collect()
 }
 
 /// The stack position of the member at `index` in show order. Members take the even positions from 2, so the
@@ -817,15 +824,89 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     }
 }
 
-/// The `over` parts that take a press: above the body's members and nested roots (8.3).
+/// The `over` parts that take a press: above the body's members and nested roots (8.3). The body ones are the rows'
+/// (`place_body_parts`).
 fn over_parts(own: &[PartDecl]) -> impl Iterator<Item = &PartDecl> {
-    own.iter().filter(|part| part.over && part.sense.takes_press())
+    own.iter().filter(|part| part.over && !part.body && part.sense.takes_press())
 }
 
-/// Whether a root's own `part` is an edge or handle part, not `over`, that reaches outside the root's `rect`: it gets
-/// an egui widget of its own, so egui's hit test names the root there and not a raw egui widget beneath.
+/// Whether a root's own `part` is an edge or handle part, not `over` nor in the body, that reaches outside the root's
+/// `rect`: it gets an egui widget of its own, so egui's hit test names the root there and not a raw egui widget beneath.
 fn reaches_out(rect: Rect, part: &PartDecl) -> bool {
-    !part.over && part.priority.level >= HitLevel::Edge && !rect.contains_rect(part.shape.bounds())
+    !part.over && !part.body && part.priority.level >= HitLevel::Edge && !rect.contains_rect(part.shape.bounds())
+}
+
+/// Records the body parts (`PartsCx::in_body`) of the collection `id` on the layer of `ui`, the one its rows show in:
+/// the parts that are not `over` before the item step shows the rows (`over` false), under them in paint order, and
+/// the `over` ones after (`over` true), above them, each `over` one with an egui widget there, so egui's hit test
+/// names the collection over its rows. On a transformed body's layer the shapes lie in the layer's space, as its
+/// members' do, so the press and hover of a body part read in that space.
+pub(crate) fn place_body_parts(ui: &Ui, id: Id, over: bool) {
+    let (ctx, clip, layer) = (ui.ctx(), ui.clip_rect(), ui.layer_id());
+    let arena = ArenaId::new(id);
+    place_body(ctx, (arena, over, layer, clip));
+    if !over {
+        return;
+    }
+    let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
+    let parts: Vec<PartDecl> = with_arena(ctx, arena, pass_nr, |state| {
+        state.own.iter().filter(|part| part.body && part.over && part.sense.takes_press()).cloned().collect()
+    });
+    let widgets: Vec<Id> = parts
+        .iter()
+        .map(|part| {
+            let widget = over_widget(id, part);
+            response::widget(ui, widget, part.shape.bounds(), part.sense);
+            crate::runtime::egui::access::hide(ctx, widget);
+            widget
+        })
+        .collect();
+    if !widgets.is_empty() {
+        pointer::record_widgets(ctx, layer, id, &widgets, parts.iter().any(|part| part.sense.contains(Sense::CLICK)));
+    }
+}
+
+/// Records the shapes of the body parts of `arena`'s root on `layer` through `clip`: under the rows (`over` false) at
+/// the bottom of the stack, above them at the position after the members joined so far. Journaled, so a replay
+/// records them in the replaying pass's order.
+fn place_body(ctx: &Context, (arena, over, layer, clip): (ArenaId, bool, Layer, Rect)) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (arena, over, layer, crate::runtime::Clip::new(clip)),
+        |ctx, &(arena, over, layer, clip)| place_body(ctx, (arena, over, layer, clip.rect())),
+    );
+    let read = PassRead::of(ctx);
+    let shapes: Vec<Shape<Id>> = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
+        rotate(state, read.pass_nr);
+        let local = state.layer == Some(layer);
+        state.body_parts_in = local.then_some(layer);
+        let position = if over { over_position(state.members.len()) } else { 0 };
+        let shapes: Vec<Shape<Id>> = state
+            .own
+            .iter()
+            .filter(|part| part.body && part.over == over)
+            .map(|part| own_part_shape(part, arena.0, position, read.target()).local(local))
+            .collect();
+        // The forwarding widget of a transformed body takes their senses, as it takes its members' (`widen_root`).
+        state.union_sense |= shapes.iter().fold(Sense::empty(), |sense, shape| sense | shape.sense);
+        shapes
+    });
+    if !shapes.is_empty() {
+        pointer::add_shapes_in(ctx, read.viewport, layer, arena.0, clip, shapes);
+    }
+}
+
+/// `rect`, a body part's of the root `id` as its part result gives it, in the root's layer space: through the
+/// transformed body's layer when this pass's body parts lie in one, as an access node reports it.
+pub(crate) fn body_rect_in_root(ctx: &Context, id: Id, rect: Rect) -> Rect {
+    let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
+    let (body, root) = with_arena(ctx, ArenaId::new(id), pass_nr, |state| (state.body_parts_in, state.last_layer));
+    let Some(body) = body.and_then(|layer| areas::layer_map(ctx, layer)) else { return rect };
+    let screen = Rect::from_two_pos(body.to_screen(rect.min), body.to_screen(rect.max));
+    match root.and_then(|layer| areas::layer_map(ctx, layer)) {
+        Some(map) => Rect::from_two_pos(map.to_layer(screen.min), map.to_layer(screen.max)),
+        None => screen,
+    }
 }
 
 fn over_widget(root: Id, part: &PartDecl) -> Id {

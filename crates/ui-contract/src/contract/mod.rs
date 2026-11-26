@@ -775,6 +775,13 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         self.items().empty.as_ref().map_or(0.0, |text| items::empty_text::height(ui, cx.tokens, text, width))
     }
 
+    /// Paints in the rows' space under the rows, where the `PartsCx::in_body` parts that are not `over` lie: on a
+    /// transformed collection, inside its body's layer, so the paint follows the rows through the transform.
+    fn paint_body_under(&mut self, _ui: &mut PaintUi<'_>, _cx: &Cx<'_, Self>) {}
+
+    /// Paints in the rows' space over the rows, where the `over` body parts lie, as `paint_body_under` paints under them.
+    fn paint_body_over(&mut self, _ui: &mut PaintUi<'_>, _cx: &Cx<'_, Self>) {}
+
     /// The empty state at the rect the item step placed. The default shows `CollectionProps::empty`.
     fn empty(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         if let Some(text) = self.items().empty.clone() {

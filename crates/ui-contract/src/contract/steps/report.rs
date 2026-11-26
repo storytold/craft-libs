@@ -294,11 +294,14 @@ fn report_sub(core: &CxCore<'_>, decls: &Decls, node: &SubNode, face: Option<&Fa
     let declared = decls.iter().find(|(decl, _)| (decl.key, decl.index) == key);
     let mut node = node.clone();
     node.flags |= result.map_or(Flags::empty(), |result| result.flags);
+    let rect = result.map_or(core.rect, |result| result.rect);
+    let rect =
+        if declared.is_some_and(|(decl, _)| decl.body) { crate::primitives::sensing::body_rect_in_root(&core.ctx, core.id, rect) } else { rect };
     let decl = SubDecl {
         owner: core.id,
         component: "",
         node: &node,
-        rect: result.map_or(core.rect, |result| result.rect),
+        rect,
         enabled: core.resolved.enabled && face.is_none_or(|face| face.enabled),
         focusable: takes_focus(core.resolved) && declared.is_some_and(|(_, extras)| extras.focusable),
         clickable: core.resolved.enabled && declared.is_some_and(|(decl, extras)| decl.sense.contains(Sense::CLICK) && !extras.no_access_click),

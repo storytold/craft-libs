@@ -19,7 +19,7 @@ use crate::runtime::access::Role;
 use crate::runtime::env::Env;
 use crate::testing::{Drive, Fixture, Grip, StoryData, StoryOutput, pointer, stage, story};
 use craft_behavior::geometry::CropBox;
-use craft_behavior::kurbo::{Affine, Point, Rect as DocRect, Shape as _};
+use craft_behavior::kurbo::{Affine, Point, Rect as DocRect, Shape as _, Vec2 as DocVec};
 use craft_behavior::{CancelReason, CanvasView, EditorInput, TextPos, Wheel, keyed};
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Ui, Vec2, pos2, vec2};
 
@@ -62,7 +62,7 @@ const GRAPH_NODES: [Rect; 4] = [
 ];
 
 /// The node graph story's grid step, in document units.
-const GRID_STEP: f32 = 40.0;
+const GRID_STEP: f64 = 40.0;
 
 /// The story's node: an input on the left, an output on the right.
 struct StoryNode;
@@ -104,8 +104,11 @@ fn node_graph_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     let (view, view_at) = data.value_at("view", CanvasView::new(Rect::NOTHING, Point::ZERO, 1.0));
     let kinds: Vec<&dyn NodeKind> = vec![&StoryNode; GRAPH_NODES.len()];
-    let ids: Vec<NodeId> = (0..GRAPH_NODES.len() as u32).map(NodeId).collect();
-    let wires = [Wire::new(0, PortRef::new(NodeId(0), 1), PortRef::new(NodeId(1), 0)), Wire::new(1, PortRef::new(NodeId(1), 1), PortRef::new(NodeId(2), 0))];
+    let ids: Vec<NodeId> = (0..GRAPH_NODES.len() as u32).map(NodeId::new).collect();
+    let wires = [
+        Wire::new(0, PortRef::new(NodeId::new(0), 1), PortRef::new(NodeId::new(1), 0)),
+        Wire::new(1, PortRef::new(NodeId::new(1), 1), PortRef::new(NodeId::new(2), 0)),
+    ];
     let source = keyed(&ids, |id| *id);
     Canvas::new("Graph")
         .document(ViewTarget::unbounded(graph_extent()))
@@ -118,7 +121,7 @@ fn node_graph_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             }
             let _ = graph.show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
             // In the picture slot, under the nodes.
-            let _ = CanvasGrid::new("Grid").spacing((GRID_STEP, GRID_STEP).into()).picture().show_at(ui, body.rect);
+            let _ = CanvasGrid::new("Grid").spacing(DocVec::new(GRID_STEP, GRID_STEP)).picture().show_at(ui, body.rect);
         })
         .output
         .into()

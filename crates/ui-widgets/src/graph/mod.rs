@@ -378,7 +378,7 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
     /// wire, which sits under the nodes. A wire in `wire_selection` carries `Flags::SELECTED`, so it resolves to its
     /// on look.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        self.layers().parts(self.zoom, rect.min, cx);
+        self.layers().parts(rect.min, cx);
         let selected = self.wire_selection.as_ref().and_then(Bind::value);
         for wire in self.wires {
             let Some(points) = self.wire_curve(rect.min, wire) else { continue };
@@ -435,10 +435,9 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
         self.annotation_events = layers.update(self.zoom, origin, cx, self.annotation_selection.as_mut(), self.selection.as_mut());
     }
 
-    /// The backdrops, then the wires, under the nodes. A selected wire is its on look and a hovered one its hover
-    /// look, both thick; a wire that only touches a selected node is `hot`; the wire a drag detaches is not drawn.
+    /// The wires, under the nodes. A selected wire is its on look and a hovered one its hover look, both thick; a wire
+    /// that only touches a selected node is `hot`; the wire a drag detaches is not drawn.
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        self.layers().paint_under(self.zoom, cx.rect.min, ui, cx);
         let detached = cx.dragging::<WireDrag>().and_then(|(drag, _)| drag.detached);
         let selected = self.wire_selection.as_ref().and_then(Bind::value);
         let nodes = self.selection.as_ref().and_then(Bind::value);
@@ -454,10 +453,9 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
         }
     }
 
-    /// The notes and markers over the nodes, then the loose wire from the port a drag started on to the pointer. Its
-    /// free end enters by the side facing the start port's.
+    /// The loose wire from the port a drag started on to the pointer. Its free end enters by the side facing the start
+    /// port's.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        self.layers().paint_over(self.zoom, cx.rect.min, ui, cx);
         let Some((wire, at)) = cx.dragging::<WireDrag>() else { return };
         if let (Some(from), Some(side)) = (self.port_point(cx.rect.min, wire.from), self.port_side(wire.from)) {
             let points = sampled(wire_controls(from, side, at, opposite(side)));
@@ -497,6 +495,16 @@ impl<E: 'static> Collection for NodeGraph<'_, E> {
             }
         }
         node.in_graph(fed, self.port_labels).placed(place)
+    }
+
+    /// The backdrops, under the nodes and through the zoom with them.
+    fn paint_body_under(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        self.layers().paint_under(cx.rect.min, ui, cx);
+    }
+
+    /// The notes and markers, over the nodes and through the zoom with them.
+    fn paint_body_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        self.layers().paint_over(cx.rect.min, ui, cx);
     }
 
     fn drops(&self) -> &[DropKind<'_, NodeId>] {

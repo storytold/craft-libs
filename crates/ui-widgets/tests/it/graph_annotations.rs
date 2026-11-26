@@ -34,10 +34,8 @@ impl NodeKind<()> for Plain {
 const PLAIN: Plain = Plain;
 
 /// Node 0 sits inside the backdrop; node 1 lies under the note and the marker.
-const NODES: [Rect; 2] = [
-    Rect { min: Pos2::new(40.0, 40.0), max: Pos2::new(180.0, 110.0) },
-    Rect { min: Pos2::new(240.0, 40.0), max: Pos2::new(380.0, 110.0) },
-];
+const NODES: [Rect; 2] =
+    [Rect { min: Pos2::new(40.0, 40.0), max: Pos2::new(180.0, 110.0) }, Rect { min: Pos2::new(240.0, 40.0), max: Pos2::new(380.0, 110.0) }];
 /// Around node 0, with room below it that no node covers.
 const FRAME: Rect = Rect { min: Pos2::new(20.0, 20.0), max: Pos2::new(200.0, 160.0) };
 const NOTES: [Note<'static>; 1] = [Note::new(1, Rect { min: Pos2::new(240.0, 50.0), max: Pos2::new(370.0, 100.0) }, "Check the blend")];
@@ -58,7 +56,7 @@ fn graph(seen: &Rc<RefCell<Seen>>, zoom: f32) -> Fixture {
     let held = Rc::clone(seen);
     let mut fixture = Fixture::new(move |ui| {
         let kinds: [&dyn NodeKind<()>; 2] = [&PLAIN, &PLAIN];
-        let ids = [NodeId(0), NodeId(1)];
+        let ids = [NodeId::new(0), NodeId::new(1)];
         let source = keyed(&ids, |id: &NodeId| *id);
         let backdrops = [Backdrop::new(0, FRAME, DataColor::new(Color32::from_rgba_premultiplied(40, 80, 48, 96))).title("Group")];
         let mut seen = held.borrow_mut();
@@ -94,7 +92,7 @@ fn backdrop_only(fixture: &Fixture) -> Pos2 {
 
 #[trial]
 fn annotations_stack_under_and_over_nodes_and_share_one_selection() {
-    let seen = Rc::new(RefCell::new(Seen { nodes: Selection::single(NodeId(1)), ..Seen::default() }));
+    let seen = Rc::new(RefCell::new(Seen { nodes: Selection::single(NodeId::new(1)), ..Seen::default() }));
     let mut fixture = graph(&seen, 1.0);
 
     fixture.click_at(rect_of(&fixture, "Check the blend").center());
@@ -115,7 +113,7 @@ fn annotations_stack_under_and_over_nodes_and_share_one_selection() {
     assert!(rect_of(&fixture, "Group").contains(node.center()), "the trial presses the node inside the backdrop");
     fixture.click(&node);
     let seen = seen.borrow();
-    assert_eq!(seen.nodes.items, [NodeId(0)], "the node inside the backdrop takes the press");
+    assert_eq!(seen.nodes.items, [NodeId::new(0)], "the node inside the backdrop takes the press");
     assert_eq!(seen.annotation, None, "pressing a node clears the annotation selection");
     let cleared = seen.events.iter().filter(|event| **event == AnnotationEvent::Selected(None)).count();
     assert_eq!(cleared, 1, "the cleared selection is reported once, though every pass ran twice");

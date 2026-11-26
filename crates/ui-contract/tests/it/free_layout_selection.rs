@@ -7,7 +7,7 @@ use crate::collection::kit::{Count, Dismissed, List, Row, Words};
 use craft_behavior::{CanvasTransform, EditEvent, FreeLayout, HitLevel, HitPriority, ItemSource, PartKey, PartRef, Selection};
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropAt, DropKind,
-    DropPlace, ListDrag, PartsCx, Props as _, Role, SelectMode, ShowCollection as _,
+    DropPlace, ListDrag, PartsCx, Pointer as _, Props as _, Role, SelectMode, ShowCollection as _,
 };
 use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::in_region;
@@ -23,6 +23,9 @@ const GRIP: PartKey = PartKey::new("grip");
 
 /// A part the board does not move from.
 const KNOB: PartKey = PartKey::new("knob");
+
+/// A part in the rows' space (`PartsCx::in_body`).
+const PAD: PartKey = PartKey::new("pad");
 
 /// Places that differ by less are the same place: the rounding of the layout.
 const SAME: f32 = 0.5;
@@ -43,6 +46,8 @@ struct Board<'a> {
     drops: Vec<DropKind<'a, usize>>,
     /// Declares `GRIP` and `KNOB` at these rects, in the board's own space from its top left.
     grips: Option<(Rect, Rect)>,
+    /// Declares `PAD` in the rows' space at this rect from the board's top left, and notes where a press on it begins.
+    pad: Option<(Rect, &'a Cell<Option<Pos2>>)>,
 }
 
 impl<'a> Board<'a> {
@@ -55,7 +60,13 @@ impl<'a> Board<'a> {
             selection: None,
             drops: Vec::new(),
             grips: None,
+            pad: None,
         }
+    }
+
+    fn with_body_part(mut self, pad: Rect, pressed: &'a Cell<Option<Pos2>>) -> Self {
+        self.pad = Some((pad, pressed));
+        self
     }
 
     fn selection(mut self, selection: Bind<'a, Selection<usize>>) -> Self {
@@ -97,6 +108,18 @@ impl Component for Board<'_> {
                     .priority(HitPriority::new(HitLevel::Edge, 0))
                     .pointer_only("the part is dragged with the pointer");
             }
+        }
+        if let Some((pad, _)) = self.pad {
+            cx.in_body(PAD, pad.translate(rect.min.to_vec2())).sense(craft_behavior::Sense::CLICK).pointer_only("the trial presses the part");
+        }
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some((_, pressed)) = self.pad
+            && let Some(result) = cx.part_if_declared(PAD)
+            && let craft_behavior::PressPhase::Down { start, .. } = result.press.phase
+        {
+            pressed.set(Some(start.origin));
         }
     }
 
@@ -275,7 +298,11 @@ fn a_drop_in_a_free_layout_reports_its_spot_and_the_empty_space_its_screen_point
         frames.idle(2, &mut *show);
     };
     let drops = |events: &RefCell<Events>| -> Vec<DropAt<usize>> {
-        let taken = events.borrow().iter().filter_map(|event| if let CollectionEvent::Dropped { at, .. } = event { Some(at.clone()) } else { None }).collect();
+        let taken = events
+            .borrow()
+            .iter()
+            .filter_map(|event| if let CollectionEvent::Dropped { at, .. } = event { Some(at.clone()) } else { None })
+            .collect();
         events.borrow_mut().clear();
         taken
     };
@@ -350,7 +377,8 @@ fn moves(events: &RefCell<Events>) -> Moves {
 /// part the board does not move from reports no move.
 #[trial]
 fn a_press_on_a_declared_part_moves_the_selection_when_the_collection_says_so() {
-    let (grip, knob) = (Rect::from_min_size(Pos2::new(200.0, 20.0), Vec2::new(40.0, 20.0)), Rect::from_min_size(Pos2::new(200.0, 80.0), Vec2::new(40.0, 20.0)));
+    let (grip, knob) =
+        (Rect::from_min_size(Pos2::new(200.0, 20.0), Vec2::new(40.0, 20.0)), Rect::from_min_size(Pos2::new(200.0, 80.0), Vec2::new(40.0, 20.0)));
     let selection = Rc::new(RefCell::new(Selection::<usize>::default()));
     let (shown, events, discard) = (Rc::new(Shown::default()), Rc::new(RefCell::new(Events::new())), Rc::new(Cell::new(false)));
     let mut fixture = Fixture::new({
@@ -406,4 +434,41 @@ fn a_press_on_a_declared_part_moves_the_selection_when_the_collection_says_so() 
     fixture.advance(1.0).drag_at(knob_at, by);
     assert_eq!(moves(&events), Moves::default(), "a part the board does not move from moves nothing");
     assert_eq!(sorted(&selection), [0], "the selection is as it was");
+}
+
+/// q131: a collection's body part (`PartsCx::in_body`) lies in its rows' space. A press finds it where the body's
+/// transform shows it, after a pan and after a zoom, and not where it would sit untransformed, and the press reads in
+/// the rows' space.
+#[trial]
+fn a_body_part_is_hit_where_the_transform_shows_it_after_a_pan_and_a_zoom() {
+    let pad = Rect::from_min_size(Pos2::new(200.0, 20.0), Vec2::new(40.0, 20.0));
+    let transform = Rc::new(Cell::new(CanvasTransform::new(2.0, Vec2::new(30.0, 20.0))));
+    let (shown, pressed) = (Rc::new(Shown::default()), Rc::new(Cell::new(None::<Pos2>)));
+    let mut fixture = Fixture::new({
+        let (transform, shown, pressed) = (transform.clone(), shown.clone(), pressed.clone());
+        move |ui: &mut Ui| {
+            let board = Board::new(three_items()).with_body_part(pad, &pressed).transformed(transform.get());
+            let _ = board.id_salt("board").show_items(ui, &Count(3), &mut |key, cx| {
+                shown.note(*key, cx.rect);
+                Row::new()
+            });
+        }
+    });
+    fixture.idle(3);
+    // The rows' space starts at the first item; the transform scales about it and moves by its offset.
+    let origin = shown.rect(0).min;
+    let (own, inside) = (origin + pad.center().to_vec2(), pad.translate(origin.to_vec2()));
+    let panned = CanvasTransform::new(2.0, Vec2::new(-40.0, 35.0));
+    for (at, what) in [(transform.get(), "as shown"), (panned, "after a pan"), (CanvasTransform::new(0.75, panned.offset), "after a zoom")] {
+        transform.set(at);
+        fixture.advance(1.0).idle(2);
+        let screen = origin + (own - origin) * at.scale + at.offset;
+        assert!((screen - own).length() > 10.0, "{what}: the transform moves the part, so a forgotten mapping shows");
+        pressed.set(None);
+        fixture.click_at(own).advance(1.0).idle(1);
+        assert_eq!(pressed.get(), None, "{what}: no press where the part would sit untransformed");
+        fixture.click_at(screen).advance(1.0).idle(1);
+        let got = pressed.get();
+        assert!(got.is_some_and(|got| inside.contains(got)), "{what}: the press takes the part, read in the rows' space: {got:?}");
+    }
 }

@@ -328,6 +328,16 @@ impl<C: crate::contract::Container> PartsCx<'_, C> {
 }
 
 impl<C: crate::contract::Collection> PartsCx<'_, C> {
+    /// Declares a part in the rows' space, the one the item step lays rows out in: on a transformed collection it
+    /// follows the rows through the transform (`ContainerProps::transform`), as `Collection::paint_body_under` and
+    /// `paint_body_over` paint. It stacks under the rows, or above them when `over`. Its press, hover and result rect
+    /// read in that space; its access node reports where it shows.
+    pub fn in_body(&mut self, part: impl Into<PartRef>, shape: impl Into<HitShape>) -> PartBuilder<'_> {
+        let builder = self.part(part, shape);
+        builder.decl.body = true;
+        builder
+    }
+
     /// The rect of the item `key` this pass, in the coordinates the item step lays rows out in (a transformed
     /// collection's, before the transform). `None` for an item the step does not build: neither in view nor kept.
     pub fn rect_of(&self, key: &C::Key) -> Option<Rect> {

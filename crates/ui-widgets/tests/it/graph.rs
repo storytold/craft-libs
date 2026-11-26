@@ -228,22 +228,22 @@ fn a_wire_from_an_input_connects_to_an_output_and_detaches_when_connected() {
     let kinds = vec![Kind::new("A", ["A in", "A out"]), Kind::new("B", ["B in", "B out"]), many];
     let places = vec![Pos2::new(40.0, 40.0), Pos2::new(240.0, 40.0), Pos2::new(40.0, 180.0)];
     let wires = vec![Wire::new(7, port(0, 1), port(1, 0)), Wire::new(8, port(0, 1), port(2, 0))];
-    let mut rig = rig(Setup { wires: wires.clone(), ..Setup::cards(kinds.clone(), places.clone()) });
+    let mut graph = rig(Setup { wires: wires.clone(), ..Setup::cards(kinds.clone(), places.clone()) });
 
-    rig.drag(rig.at("A in"), rig.at("B out"));
-    assert_eq!(rig.wired(), [(port(1, 1), port(0, 0), None)], "a reverse wire connects output end first");
+    graph.drag(graph.at("A in"), graph.at("B out"));
+    assert_eq!(graph.wired(), [(port(1, 1), port(0, 0), None)], "a reverse wire connects output end first");
 
-    rig.drag(rig.at("B in"), rig.at("C in"));
-    assert_eq!(rig.wired(), [(port(0, 1), port(2, 0), Some(7))], "a fed input gives its wire up to the drag, from its source");
-    assert!(rig.ended().iter().all(|(from, detached, _)| *from == port(0, 1) && *detached == Some(7)), "{:?}", rig.ended());
+    graph.drag(graph.at("B in"), graph.at("C in"));
+    assert_eq!(graph.wired(), [(port(0, 1), port(2, 0), Some(7))], "a fed input gives its wire up to the drag, from its source");
+    assert!(graph.ended().iter().all(|(from, detached, _)| *from == port(0, 1) && *detached == Some(7)), "{:?}", graph.ended());
 
-    rig.drag(rig.at("C in"), rig.at("B out"));
-    assert_eq!(rig.wired(), [(port(1, 1), port(2, 0), None)], "an input that takes many keeps its wires and starts a reverse wire");
+    graph.drag(graph.at("C in"), graph.at("B out"));
+    assert_eq!(graph.wired(), [(port(1, 1), port(2, 0), None)], "an input that takes many keeps its wires and starts a reverse wire");
 
     for (to, why) in [("A out", "a port of the same node"), ("B in", "a port of the drag's own direction")] {
-        rig.drag(rig.at("A in"), rig.at(to));
-        assert!(rig.wired().is_empty(), "{why} refuses the wire: {:?}", rig.wired());
-        assert!(matches!(rig.ended().as_slice(), [(_, None, Some(_))]), "{why}: the release is loose: {:?}", rig.ended());
+        graph.drag(graph.at("A in"), graph.at(to));
+        assert!(graph.wired().is_empty(), "{why} refuses the wire: {:?}", graph.wired());
+        assert!(matches!(graph.ended().as_slice(), [(_, None, Some(_))]), "{why}: the release is loose: {:?}", graph.ended());
     }
 
     // The output of A sits at (140, 70) in the document; the release lands (60, 60) document units past it.
