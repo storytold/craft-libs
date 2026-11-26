@@ -458,6 +458,16 @@ fn pts(cache: &El, cap: usize) -> Vec<Option<String>> {
 pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
     let Some(a) = a else { return Axis { deleted: true, labels: true, line: true, ..Default::default() } };
     let scaling = a.child("c:scaling");
+    let du = a.child("c:dispUnits");
+    let units = du.and_then(|d| {
+        if let Some(b) = d.child("c:builtInUnit") {
+            return builtin_unit(b.attr("val").unwrap_or("thousands"));
+        }
+        // A custom unit is any positive number; one far outside what a chart could count in is
+        // taken as the nearest end of a sane range.
+        let v = d.child("c:custUnit")?.attr("val")?.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+        Some((v.clamp(1e-6, 1e18), ""))
+    });
     let num =
         |n: &str| scaling.and_then(|s| s.child(n)).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
     Axis {
@@ -483,7 +493,28 @@ pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
         labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),
         text: element_text_colour(a, theme),
         bold: element_bold(a),
+        unit: units.map(|(u, _)| u),
+        unit_label: units.and_then(|(_, name)| {
+            let l = du?.child("c:dispUnitsLbl")?;
+            Some((title_text(l).unwrap_or_else(|| name.to_string()), element_text_colour(l, theme), element_bold(l).unwrap_or(false)))
+        }),
     }
+}
+
+/// A built-in display unit (`c:builtInUnit`): what it divides by, and its label.
+fn builtin_unit(name: &str) -> Option<(f64, &'static str)> {
+    Some(match name {
+        "hundreds" => (1e2, "Hundreds"),
+        "thousands" => (1e3, "Thousands"),
+        "tenThousands" => (1e4, "10000"),
+        "hundredThousands" => (1e5, "100000"),
+        "millions" => (1e6, "Millions"),
+        "tenMillions" => (1e7, "10000000"),
+        "hundredMillions" => (1e8, "100000000"),
+        "billions" => (1e9, "Billions"),
+        "trillions" => (1e12, "Trillions"),
+        _ => return None,
+    })
 }
 
 /// A chart element's text size, points, when its rich text's first run, its default run

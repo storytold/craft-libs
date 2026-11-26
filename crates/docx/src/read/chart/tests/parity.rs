@@ -232,3 +232,49 @@ fn an_auto_marker_symbol_takes_the_series_automatic_marker() {
     assert_eq!(symbol(2, ""), Some((Some(true), model::Symbol::Triangle)));
     assert_eq!(symbol(2, r#"<c:symbol val="square"/>"#), Some((Some(true), model::Symbol::Square)));
 }
+
+/// Display units (`c:dispUnits`): the value axis labels count thousands, and the unit's name
+/// stands turned beside the axis, in its own weight.
+#[test]
+fn display_units_divide_the_axis_labels_and_name_the_unit() {
+    let units = |label: &str| {
+        let plot = format!(
+            r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/><c:dispUnits><c:builtInUnit val="thousands"/>{label}</c:dispUnits></c:valAx></c:plotArea>"#,
+            ser(0, "S", None, &["A", "B"], &["4000", "8000"]),
+        );
+        chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0)
+    };
+    let items = units("<c:dispUnitsLbl/>");
+    let texts = chart_texts(&items);
+    let ticks: Vec<&str> = texts.iter().map(|(t, _, _)| t.as_str()).collect();
+    assert!(ticks.contains(&"8") && !ticks.contains(&"8000"), "labels in thousands: {ticks:?}");
+    let (_, rect, angle) = texts.iter().find(|(t, _, _)| t == "Thousands").expect("the unit's name");
+    assert!(*angle != 0.0, "the unit's name is turned");
+    let label_left = texts.iter().filter(|(t, _, _)| t == "8").map(|(_, r, _)| r[0]).next().unwrap();
+    assert!(rect[0] + rect[2] <= label_left + 0.01, "left of the value labels, apart from them: {rect:?} {label_left}");
+    let bold = |items: &[GraphicItem]| {
+        items.iter().find_map(|it| match it {
+            GraphicItem::Text { text, bold, .. } if text == "Thousands" => Some(*bold),
+            _ => None,
+        })
+    };
+    assert_eq!(bold(&items), Some(false));
+    let bold_label = units(r#"<c:dispUnitsLbl><c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr b="1"/></a:pPr></a:p></c:txPr></c:dispUnitsLbl>"#);
+    assert_eq!(bold(&bold_label), Some(true), "a bold display-units label");
+    // Without a label, the values are still counted in thousands.
+    let quiet = chart_texts(&units(""));
+    assert!(quiet.iter().any(|(t, _, _)| t == "8") && !quiet.iter().any(|(t, _, _)| t == "Thousands"), "{quiet:?}");
+}
+
+/// A custom display unit from a hostile file (tiny, huge) draws finite labels and never panics.
+#[test]
+fn hostile_display_units_never_panic() {
+    for unit in ["1e-300", "1e300", "0", "-5", "NaN", "inf", "x"] {
+        let plot = format!(
+            r#"<c:plotArea><c:barChart><c:barDir val="col"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/><c:dispUnits><c:custUnit val="{unit}"/><c:dispUnitsLbl/></c:dispUnits></c:valAx></c:plotArea>"#,
+            ser(0, "S", None, &["A", "B"], &["1e308", "-1e308"]),
+        );
+        let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+        assert!(!items.is_empty(), "{unit}");
+    }
+}

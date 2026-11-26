@@ -98,6 +98,11 @@ pub(crate) struct Axis {
     pub(crate) text: Option<Rgb>,
     /// Bold tick labels, when its text properties say.
     pub(crate) bold: Option<bool>,
+    /// The display unit the tick labels count in (`c:dispUnits`): 1000 for thousands; `None`
+    /// for the values themselves.
+    pub(crate) unit: Option<f64>,
+    /// The display unit's label, when the axis shows one: its text, colour and weight.
+    pub(crate) unit_label: Option<(String, Option<Rgb>, bool)>,
     /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
     /// them, as Word does).
     pub(crate) labels: bool,

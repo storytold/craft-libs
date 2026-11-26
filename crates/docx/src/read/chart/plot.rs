@@ -1,4 +1,4 @@
-use super::canvas::{Rect, clip_text, fill, rect_segs, runs, seg, stroke, text, text_angle, text_at, text_w, widest, wrap};
+use super::canvas::{Rect, clip_text, fill, rect_segs, runs, seg, stroke, text, text_angle, text_at, text_w, vertical_text, widest, wrap};
 use super::format::format_value;
 use super::model::{DataLabel, Grouping, Kind, LabelPos, Series, Symbol};
 use super::parse::category_text;
@@ -133,7 +133,10 @@ impl Axes {
         // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale).
         let zero = !matches!(c.kind, Kind::Line | Kind::Scatter) || !narrow(dlo, dhi);
         let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
-        let vticks = vs.ticks().into_iter().map(|t| (t, format_value(t, &c.val_fmt, vs.step))).collect();
+        // In display units the labels count thousands (or millions…) of the values.
+        let unit = c.val.unit.unwrap_or(1.0);
+        let per_unit = |v: f64| Some(v / unit).filter(|d| d.is_finite()).unwrap_or(v);
+        let vticks = vs.ticks().into_iter().map(|t| (t, format_value(per_unit(t), &c.val_fmt, per_unit(vs.step)))).collect();
         let xs = (c.kind == Kind::Scatter).then(|| {
             let (xl, xh) = x_extent(c);
             nice_scale(xl, xh, false, c.cat.min, c.cat.max)
@@ -168,10 +171,12 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let (cat_on, val_on) = (!c.cat.deleted, !c.val.deleted);
     let (cat_labels, val_labels) = (cat_on && c.cat.labels, val_on && c.val.labels);
     let title = title_left(c, cat_on, val_on, area.w);
+    // A display-units label stands turned left of the value labels (under them for bars).
+    let unit_room = if val_labels && c.val.unit_label.is_some() { lh + GAP } else { 0.0 };
     let left = if c.horizontal {
         if cat_labels { widest(&c.cats, fs).min(area.w * 0.4) + GAP } else { 0.0 }
     } else if val_labels {
-        ax.vticks.iter().map(|(_, s)| text_w(s, fs)).fold(0.0, f32::max) + GAP
+        ax.vticks.iter().map(|(_, s)| text_w(s, fs)).fold(0.0, f32::max) + GAP + unit_room
     } else {
         0.0
     } + title;
@@ -188,7 +193,7 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let bottom = (if cat_labels && !c.horizontal {
         if scatter { lh + GAP } else { label_lines * lh + GAP }
     } else if c.horizontal && val_labels {
-        lh + GAP
+        lh + GAP + unit_room
     } else {
         0.0
     }) + title_bottom(c, cat_on, val_on, lh);
@@ -269,7 +274,19 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     draw_data_labels(out, &labels, c.text_size, g.horiz && c.kind == Kind::Bar);
     if !c.val.deleted && c.val.labels {
         let room = title_left(c, !c.cat.deleted, true, area.w);
-        draw_value_labels(out, c, &g, &ax.vticks, Rect { x: area.x + room, w: m.left - room, ..area });
+        let (fs, lh) = (c.text_size, c.text_size * LINE);
+        // A display-units label takes a strip of its own between the title and the labels.
+        let unit_room = if c.val.unit_label.is_some() && !g.horiz { lh + GAP } else { 0.0 };
+        draw_value_labels(out, c, &g, &ax.vticks, Rect { x: area.x + room + unit_room, w: m.left - room - unit_room, ..area });
+        if let Some((label, colour, bold)) = &c.val.unit_label {
+            let colour = colour.unwrap_or_else(|| c.val_colour());
+            if g.horiz {
+                text_at(out, plot.x + plot.w / 2.0, plot.bottom() + GAP / 2.0 + lh, label, fs, colour, *bold);
+            } else {
+                let label = clip_text(label, plot.h, fs);
+                vertical_text(out, Rect { x: area.x + room, y: plot.y, w: lh, h: plot.h }, &label, fs, colour, *bold);
+            }
+        }
     }
     if !c.cat.deleted && c.cat.labels {
         draw_category_labels(out, c, &g, &ax.xticks, &m, area);

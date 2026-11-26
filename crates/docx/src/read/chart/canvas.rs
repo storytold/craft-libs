@@ -51,6 +51,11 @@ pub(super) fn text_angle(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: 
     out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color, bold, align: TextAlign::Center, font: None, angle });
 }
 
+/// Text turned to read bottom to top, centred along the tall `rect`.
+pub(super) fn vertical_text(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, color: Rgb, bold: bool) {
+    text_angle(out, rect, s, size, bold, color, -90.0);
+}
+
 /// Text centred on `cx` with its top at `y`.
 pub(super) fn text_at(out: &mut Vec<GraphicItem>, cx: f32, y: f32, s: &str, size: f32, color: Rgb, bold: bool) {
     let w = text_w(s, size) + 4.0;
