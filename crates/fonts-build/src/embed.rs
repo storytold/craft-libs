@@ -243,7 +243,7 @@ impl Embed {
                 .select(dir, cargo)
                 // A required (release) build reads every file: a copy that keeps the size and the
                 // modification time would get past the cache.
-                .and_then(|faces| check_hashes(dir, faces, (!required).then(|| out.parent().unwrap_or(Path::new("")))))
+                .and_then(|faces| check_hashes(dir, faces, (!required).then_some(out.as_path())))
                 .and_then(|faces| if required { self.check_required(dir, faces) } else { Ok(faces) }),
         };
         let mut selected = selected;
@@ -517,17 +517,15 @@ impl Embed {
     }
 }
 
-/// The file, beside the generated table, that keeps each checked font file's SHA-256 with its size
-/// and modification time, so a rerun of a build that is not required does not hash unchanged files
-/// again.
-const HASH_CACHE: &str = "craft-fonts-sha256.txt";
+/// Each generated table has a cache file with this additional extension.
+const HASH_CACHE: &str = "sha256.txt";
 
 /// Check each face's file against the SHA-256 its manifest line gives: a mismatch is an
 /// [`Error::HashMismatch`]. A line whose hash field is not 64 hex digits is not checked. Faces of
-/// one collection share a file, which is hashed once. With `cache_dir`, a file whose size and
-/// modification time match its [`HASH_CACHE`] line there is not read again.
-fn check_hashes(dir: &Path, faces: Vec<Face>, cache_dir: Option<&Path>) -> Result<Vec<Face>, Error> {
-    let cache_file = cache_dir.map(|cache_dir| cache_dir.join(HASH_CACHE));
+/// one collection share a file, which is hashed once. With `out_file`, a file whose size and
+/// modification time match its line in that table's [`HASH_CACHE`] cache is not read again.
+fn check_hashes(dir: &Path, faces: Vec<Face>, out_file: Option<&Path>) -> Result<Vec<Face>, Error> {
+    let cache_file = out_file.map(|out_file| out_file.with_added_extension(HASH_CACHE));
     let old_text = cache_file.as_ref().and_then(|cache_file| read_text_bounded(cache_file, MAX_MANIFEST_BYTES).ok());
     let old = old_text.as_deref().map(parse_hash_cache).unwrap_or_default();
     let mut new: Vec<(String, u64, u128, String)> = Vec::new();

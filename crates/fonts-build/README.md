@@ -209,6 +209,6 @@ after the ninth are ignored.
 Each selected font file is hashed and compared with the line's `sha256` field, in either letter
 case; a field that is not 64 hex digits is not checked. A mismatch is `Error::HashMismatch`, treated
 like a missing font file: a build error with `CRAFT_FONTS_REQUIRED=1`, and a `cargo::warning` with an
-empty table otherwise. Without `CRAFT_FONTS_REQUIRED=1`, the hashes are kept in
-`craft-fonts-sha256.txt` beside the generated table, with each file's size and modification time,
-and a file is hashed again only when one of those changes. A required build hashes every file.
+empty table otherwise. Without `CRAFT_FONTS_REQUIRED=1`, `Embed` caches hashes at the generated
+table's path with `.sha256.txt` appended. Each entry records the font file's size and modification
+time, and a file is hashed again only when one of those changes. A required build hashes every file.

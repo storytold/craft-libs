@@ -459,7 +459,7 @@ fn the_hash_cache_is_used_only_while_the_file_is_unchanged_and_not_when_required
         (faces, warned)
     };
     assert_eq!(run_in(None), (Some(1), None));
-    let cache = out.join("craft-fonts-sha256.txt");
+    let cache = out.join("craft_fonts.rs.sha256.txt");
     let text = std::fs::read_to_string(&cache).unwrap();
     assert!(text.starts_with(&format!("{}\t10\t", hex(font))), "{text}");
 
@@ -477,4 +477,40 @@ fn the_hash_cache_is_used_only_while_the_file_is_unchanged_and_not_when_required
     std::fs::write(dir.join("fonts/a.ttf"), font).unwrap();
     std::fs::write(&cache, "not a cache line\n").unwrap();
     assert_eq!(run_in(None), (Some(1), None));
+}
+
+#[test]
+fn separate_generated_tables_keep_their_hash_cache() {
+    use crate::sha256::hex;
+    let scratch = Scratch::new("hash-cache-tables");
+    let font = b"first font bytes";
+    let dir = hashed_checkout(&scratch, font, &hex(font));
+    std::fs::write(dir.join("fonts/b.ttf"), b"second font bytes").unwrap();
+    let manifest = format!(
+        "Sans | Regular | fonts/a.ttf | Latn | OFL-1.1 | fonts/OFL.txt | {} | src\nMono | Regular | fonts/b.ttf | Latn | OFL-1.1 | fonts/OFL.txt | {} | src\n",
+        hex(font),
+        hex(b"second font bytes")
+    );
+    std::fs::write(dir.join("fonts/manifest.txt"), manifest).unwrap();
+    let out = scratch.0.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let run_in = |family: &str, table: &str| {
+        let env = Env { dir: Some(dir.clone().into()), required: None, out_dir: Some(out.clone().into()) };
+        let mut cargo = Vec::new();
+        let faces = Embed::documents(&[family]).run(&env, Path::new(table), &mut cargo).unwrap();
+        (faces.len(), cargo)
+    };
+    assert_eq!(run_in("Sans", "faces.rs").0, 1);
+    let cache = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| std::fs::read_to_string(path).is_ok_and(|text| text.starts_with(&format!("{}\t", hex(font)))))
+        .unwrap();
+    let cached = std::fs::read_to_string(&cache).unwrap();
+    let wrong = hex(b"cached first font");
+    std::fs::write(&cache, cached.replacen(&hex(font), &wrong, 1)).unwrap();
+    assert_eq!(run_in("Mono", "faces.inc").0, 1);
+    let (faces, cargo) = run_in("Sans", "faces.rs");
+    assert_eq!(faces, 0, "the first table's cached hash was discarded");
+    assert!(cargo.iter().any(|line| line.contains(&wrong)), "{cargo:?}");
 }
