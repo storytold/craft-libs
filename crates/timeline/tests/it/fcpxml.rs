@@ -874,11 +874,40 @@ fn deferred_audio_export_keeps_unmerged_nested_sound_on_its_own_lane() {
     deferred_audio_pair(seq, "Restored");
     assert_eq!(seq.audio_tracks[1].items[0].name, "Restored", "the collision must leave picture and sound on different lanes");
     let expected = deferred_audio_lanes(seq);
-    let (reopened, _, report) = roundtrip(&imported.project, id, Format::Fcpxml, &xopts());
+    let original = [
+        seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Restored").unwrap().clone(),
+        seq.audio_tracks[1].items[0].clone(),
+    ];
+    let (reopened, text, report) = roundtrip(&imported.project, id, Format::Fcpxml, &xopts());
     assert!(!report.mentions("track import limit"), "{report}");
+    // Separate source selections carry the two lanes; FCPXML ref-clip has no cross-reference
+    // for the model's internal LinkId (Apple's FCPXML 1.10 DTD, ref-clip/clip_attrs).
+    let xml = craft_xml::parse(text.as_bytes()).unwrap();
+    let spine = xml.child("library").unwrap().child("event").unwrap().child("project").unwrap().child("sequence").unwrap().child("spine").unwrap();
+    let refs = spine.find_all("ref-clip").filter(|e| e.attr("name") == Some("Restored")).collect::<Vec<_>>();
+    assert_eq!(refs.len(), 2, "exactly one picture ref and one sound ref must be exported");
+    let picture = refs.iter().find(|e| e.attr("lane").is_none()).unwrap();
+    let sound = refs.iter().find(|e| e.attr("lane") == Some("-2")).unwrap();
+    assert_eq!(picture.attr("srcEnable"), Some("video"), "an unmerged nested picture must not reintroduce its sound");
+    assert_eq!(sound.attr("srcEnable"), Some("audio"));
+    assert!(picture.attr("ref").is_some());
+    assert_eq!(picture.attr("ref"), sound.attr("ref"), "both selections must still reference the same nested resource");
     let again = reopened.project.sequence(only_seq(&reopened)).unwrap();
     assert_eq!(deferred_audio_lanes(again), expected, "the unmerged picture must not create a second audio reference");
-    deferred_audio_pair(again, "Restored");
+    let picture = again.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Restored").unwrap();
+    let sound = again.audio_tracks[1].items.iter().find(|i| i.name == "Restored").unwrap();
+    assert_eq!(picture.item, sound.item);
+    // Reimporting separate video-only and audio-only refs does not invent a shared LinkId.
+    // Preserve all other clip state, normalizing only IDs local to the newly imported project.
+    for (before, after) in original.iter().zip([picture, sound]) {
+        assert!(after.link.is_none());
+        assert_eq!(reopened.project.item(after.item).unwrap().name, imported.project.item(before.item).unwrap().name);
+        let mut expected = before.clone();
+        expected.id = after.id;
+        expected.item = after.item;
+        expected.link = None;
+        assert_eq!(after, &expected, "split source selections must retain their timing and state");
+    }
     let neighbour = again.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Neighbour").unwrap();
     assert_eq!((neighbour.start, neighbour.duration), (Tick(6 * TICKS_PER_SECOND), Tick(TICKS_PER_SECOND)));
 }
