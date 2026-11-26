@@ -410,9 +410,13 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>, jpeg_only: bool) -> Opt
         .or(largest)
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    // ORF capability must not remove the scan fallback for unsupported modes and damaged preview pointers.
+    // Container capability must not remove the scan fallback for unsupported modes and damaged preview pointers.
     let best = best.or_else(|| {
-        format.filter(|f| !f.is_supported() || matches!(f, crate::RawFormat::Erf | crate::RawFormat::Orf)).and_then(|_| scan_for_jpeg(bytes))
+        format
+            .filter(|f| {
+                !f.is_supported() || matches!(f, crate::RawFormat::Erf | crate::RawFormat::Orf | crate::RawFormat::Cr2 | crate::RawFormat::Dng)
+            })
+            .and_then(|_| scan_for_jpeg(bytes))
     });
     // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
     #[cfg(feature = "hasselblad")]
@@ -465,8 +469,8 @@ pub struct PreviewRange {
 /// [`embedded_preview_from_range`], which returns exactly what [`embedded_preview`] returns for the
 /// whole file.
 ///
-/// Pass a prefix that actually covers the pointer's range (read [`Self::offset`] +
-/// [`Self::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
+/// Pass a prefix that actually covers the pointer's range (read [`PreviewRange::offset`] +
+/// [`PreviewRange::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
 /// `raf::header` clamps a slice to the buffer it was given, so a prefix that stops
 /// inside the declared extent yields a shorter `window_len` than the file really holds.
 pub fn bounded_preview(bytes: &[u8]) -> Option<PreviewRange> {

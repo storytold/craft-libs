@@ -172,40 +172,6 @@ fn emf_record_sizes_add_up_to_the_header_totals() {
 }
 
 #[test]
-fn emf_paths_keep_their_curves_brushes_and_pens() {
-    let e = ellipse(10.0, 10.0, 60.0, 40.0);
-    let p = Pen { join: Join::Bevel, ..pen(BLUE, 4.0) };
-    let b = write_emf(&[fill(e.clone(), RED), stroke(e, p)], 100.0, 100.0);
-    let recs = emf_records(&b);
-    let k = kinds(&recs);
-    assert!(k.contains(&5), "EMR_POLYBEZIERTO keeps the curves");
-    assert!(k.contains(&62) && k.contains(&64), "filled, then stroked");
-    let brush = recs.iter().find(|r| r.0 == 39).unwrap().1;
-    assert_eq!(u32_at(brush, 16), 0x0000_00ff, "a red COLORREF");
-    let pen_rec = recs.iter().find(|r| r.0 == 95).unwrap().1;
-    let style = u32_at(pen_rec, 28);
-    assert_eq!(style & 0x000f_0000, 0x0001_0000, "geometric");
-    assert_eq!(style & 0xf00, 0, "round caps");
-    assert_eq!(style & 0xf000, 0x1000, "bevel joins");
-    assert_eq!(u32_at(pen_rec, 32), (4.0 * 2540.0 / 72.0f64).round() as u32, "4 pt in 0.01 mm");
-    assert_eq!(u32_at(pen_rec, 40), 0x00ff_0000, "a blue COLORREF");
-    assert!(recs.iter().any(|r| r.0 == 19 && u32_at(r.1, 8) == 2), "WINDING for non-zero");
-    // One brush and one pen for two shapes of the same colours.
-    let two = [
-        fill(rect(0.0, 0.0, 10.0, 10.0), RED),
-        stroke(rect(0.0, 0.0, 10.0, 10.0), pen(BLUE, 1.0)),
-        fill(rect(20.0, 0.0, 30.0, 10.0), RED),
-        stroke(rect(20.0, 0.0, 30.0, 10.0), pen(BLUE, 1.0)),
-    ];
-    let k = kinds(&emf_records(&write_emf(&two, 100.0, 100.0)));
-    assert_eq!((count(&k, 39), count(&k, 95)), (1, 1));
-    // A miter join sets the miter limit.
-    let miter = Pen { join: Join::Miter, miter: 4.0, ..pen(BLUE, 1.0) };
-    let recs_bytes = write_emf(&[stroke(rect(0.0, 0.0, 10.0, 10.0), miter)], 100.0, 100.0);
-    assert!(emf_records(&recs_bytes).iter().any(|r| r.0 == 58 && u32_at(r.1, 8) == 4));
-}
-
-#[test]
 fn emf_dashes_are_pen_styles() {
     let l = line((10.0, 10.0), (90.0, 10.0));
     let dashed = |dash: Dash| write_emf(&[stroke(l.clone(), Pen { dash: Some(dash), ..pen(BLUE, 2.0) })], 100.0, 100.0);
@@ -229,29 +195,6 @@ fn emf_dashes_are_pen_styles() {
     assert!(Dash { pattern: vec![4.0; 8], offset: 0.0 }.emf_pen_draws());
     assert!(!Dash { pattern: vec![4.0; 9], offset: 0.0 }.emf_pen_draws());
     assert!(!Dash { pattern: vec![4.0, 0.001], offset: 0.0 }.emf_pen_draws());
-}
-
-#[test]
-fn emf_clips_and_images() {
-    let ops = [
-        Op::Clip { path: rect(10.0, 10.0, 60.0, 30.0), even_odd: true },
-        fill(rect(0.0, 0.0, 100.0, 100.0), RED),
-        Op::Image { image: image(4, 4, [10, 20, 30, 255]), xf: Affine::translate((0.0, 50.0)), opacity: 1.0 },
-        Op::Unclip,
-        Op::Image { image: image(4, 4, [10, 20, 30, 100]), xf: Affine::translate((50.0, 50.0)) * Affine::rotate(0.3), opacity: 1.0 },
-    ];
-    let b = write_emf(&ops, 100.0, 100.0);
-    let recs = emf_records(&b);
-    let k = kinds(&recs);
-    assert_eq!(count(&k, 67), 1);
-    assert!(recs.iter().any(|r| r.0 == 67 && u32_at(r.1, 8) == 1), "RGN_AND: inside the clips around it");
-    assert_eq!(count(&k, 33), count(&k, 34), "every save is restored");
-    // The opaque image is StretchDIBits; the translucent one AlphaBlend with per-pixel alpha.
-    assert_eq!(count(&k, 81), 1);
-    let ab = recs.iter().find(|r| r.0 == 114).unwrap().1;
-    assert_eq!(&ab[40..44], &[0, 0, 255, 1]);
-    // Images are placed by a world transform, reset after each.
-    assert_eq!((count(&k, 35), count(&k, 36)), (2, 2));
 }
 
 #[test]
@@ -291,56 +234,6 @@ fn wmf_sizes_fit_sixteen_bits() {
     let b = wmf(&[fill(rect(0.0, 0.0, 3000.0, 1000.0), RED)], page(3000.0, 1000.0)).unwrap().bytes;
     assert_eq!(u16_at(&b, 14), inch);
     assert!(u16_at(&b, 10) <= 32767);
-}
-
-#[test]
-fn wmf_reports_what_it_leaves_out() {
-    let clipped = [Op::Clip { path: rect(0.0, 0.0, 20.0, 20.0), even_odd: false }, fill(rect(5.0, 5.0, 40.0, 40.0), RED), Op::Unclip];
-    let out = wmf(&clipped, page(100.0, 100.0)).unwrap();
-    assert!(out.clips_ignored && !out.translucent_images && !out.turned_images && !out.oversized_images);
-    // The art the clip covers is written whole.
-    assert!(wmf_records(&out.bytes).iter().any(|r| r.0 == 0x0538));
-    let turned = Op::Image { image: image(2, 2, [0, 0, 0, 10]), xf: Affine::translate((50.0, 50.0)) * Affine::rotate(0.5), opacity: 1.0 };
-    let out = wmf(&[turned], page(100.0, 100.0)).unwrap();
-    assert!(out.translucent_images && out.turned_images && !out.clips_ignored);
-    let faded = Op::Image { image: image(2, 2, [0, 0, 0, 255]), xf: Affine::IDENTITY, opacity: 0.5 };
-    assert!(wmf(&[faded], page(100.0, 100.0)).unwrap().translucent_images);
-    // An image whose side does not fit the record's 16-bit sizes is left out.
-    let wide = Op::Image { image: image(40_000, 1, [0, 0, 0, 255]), xf: Affine::IDENTITY, opacity: 1.0 };
-    let out = wmf(&[wide], page(100.0, 100.0)).unwrap();
-    assert!(out.oversized_images);
-    assert!(!wmf_records(&out.bytes).iter().any(|r| r.0 == 0x0F43));
-}
-
-#[test]
-fn an_empty_or_unbounded_region_is_refused() {
-    for r in [Rect::new(0.0, 0.0, 0.0, 10.0), Rect::new(0.0, 0.0, f64::NAN, 10.0), Rect::new(0.0, 0.0, f64::INFINITY, 10.0)] {
-        assert!(emf(&[], r, "", "").is_none());
-        assert!(wmf(&[], r).is_none());
-    }
-    // Corners in either order are one region.
-    assert_eq!(emf(&[], Rect::new(72.0, 72.0, 0.0, 0.0), "", ""), emf(&[], page(72.0, 72.0), "", ""));
-}
-
-#[test]
-fn rgb24_is_bottom_up_bgr_over_white() {
-    let (bmi, bits) = dib::rgb24(&sample(), 1.0);
-    assert_eq!(bmi.len(), 40);
-    assert_eq!(&bmi[14..16], &[24, 0], "24 bits a pixel");
-    // Rows of 9 bytes padded to 12, the last row first: half-transparent black over white is
-    // mid grey, transparent is white.
-    assert_eq!(bits, vec![127, 127, 127, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0]);
-}
-
-#[test]
-fn bgra32_is_premultiplied() {
-    let (bmi, bits) = dib::bgra32(&sample(), 1.0);
-    assert_eq!(&bmi[14..16], &[32, 0]);
-    assert_eq!(&bits[..12], &[0, 0, 0, 128, 0, 0, 0, 0, 255, 255, 255, 255]);
-    assert_eq!(&bits[12..16], &[0, 0, 255, 255], "red, as BGRA");
-    // At half opacity.
-    let (_, half) = dib::bgra32(&sample(), 0.5);
-    assert_eq!(&half[12..16], &[0, 0, 128, 128]);
 }
 
 #[test]

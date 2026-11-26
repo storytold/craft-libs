@@ -1,0 +1,310 @@
+//! Drag and drop: what a reorder of the list means for layers, effects and Smart Filters, the
+//! payload that footer buttons accept, and the stacking commands.
+
+use craft_behavior::{Cursor, DropOperation, EditEvent, IconId, Mixed, PaintedCursor};
+use craft_keymap::Mods;
+use craft_ui::contract::{DropAt, ListDrag, ReorderMove};
+use std::sync::Arc;
+
+use super::LayersPanelCommands;
+use super::events::{LayerDrop, LayerMove, LayerPosition, LayersEvent, MaskMove, RowTransfer, SubRowMove};
+use crate::ui::tree::{LayerKind, LayerRowKey, LayerTree, SubRowGroup};
+
+/// What a drag from the Layers panel carries for the drop targets outside its rows: the footer buttons, the rows
+/// that take a mask, and the app's own targets (a document tab that copies the dragged layers into its document).
+///
+/// An app reads it from the drag session: `craft_ui::runtime::drag::active::<LayersDrag<Id>>(ctx)` while it is held,
+/// or a collection's `DropKind::new::<LayersDrag<Id>>` for the drop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayersDrag<K> {
+    /// The list the drag started in.
+    pub(super) list: egui::Id,
+    /// The dragged rows, or the one mask thumbnail.
+    pub(super) keys: Vec<LayerRowKey<K>>,
+    /// The hash of the document the panel showed when the drag started ([`document_hash`]).
+    document: Option<u64>,
+}
+
+/// The one hash of a document key: [`LayersPanel::document`](super::LayersPanel::document) stores it and
+/// [`LayersDrag::document`] returns it, so an app compares a drag's source document with its own key.
+pub fn document_hash(key: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl<K> LayersDrag<K> {
+    /// The hash ([`document_hash`]) of the document the drag started in; `None` when the panel was given no
+    /// [`LayersPanel::document`](super::LayersPanel::document).
+    pub fn document(&self) -> Option<u64> {
+        self.document
+    }
+
+    /// The dragged layers, top first; empty when the drag carries effects, Smart Filter rows or a mask.
+    pub fn layers(&self) -> Vec<&K> {
+        if self.keys.iter().all(LayerRowKey::is_layer) { self.keys.iter().map(LayerRowKey::layer).collect() } else { Vec::new() }
+    }
+
+    pub(super) fn new(list: egui::Id, document: Option<u64>, keys: Vec<LayerRowKey<K>>) -> Self {
+        Self { list, keys, document }
+    }
+
+    /// The payload a row drag carries.
+    pub(super) fn of_rows(drag: &ListDrag<LayerRowKey<K>>, document: Option<u64>) -> Self
+    where
+        K: Clone,
+    {
+        Self { list: drag.list, keys: drag.keys.clone(), document }
+    }
+}
+
+fn sub_row_group<K>(key: &LayerRowKey<K>) -> Option<SubRowGroup> {
+    match key {
+        LayerRowKey::Effects(..) => Some(SubRowGroup::Effects),
+        LayerRowKey::Filters(..) => Some(SubRowGroup::SmartFilters),
+        LayerRowKey::Layer(_) | LayerRowKey::Mask(..) => None,
+    }
+}
+
+/// The rows of `order` that stay once the rows `mv` moves are taken out, and the position `mv` lands at among them.
+fn landing<'o, K: PartialEq>(order: &'o [LayerRowKey<K>], mv: &ReorderMove<LayerRowKey<K>>) -> (Vec<&'o LayerRowKey<K>>, usize) {
+    let remaining: Vec<&LayerRowKey<K>> = order.iter().filter(|key| !mv.keys.contains(key)).collect();
+    let to = mv.to.min(remaining.len());
+    (remaining, to)
+}
+
+/// The layer and the place a move of layers means on the displayed rows: the one encoding every layer drop reports,
+/// as a target and a position. A place is reported one way: into a group at its first slot, else before the next
+/// sibling, else after the last sibling. `None` for a place no layer names.
+pub(super) fn host_place<K: Clone + PartialEq>(
+    mv: &ReorderMove<LayerRowKey<K>>,
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    relaxed: bool,
+) -> Option<(K, LayerPosition)> {
+    let (remaining, to) = landing(order, mv);
+    let parent = mv.parent.as_ref().map(|key| key.layer().clone());
+    // A place beside a layer's effects or Smart Filter rows is below that layer. The list lays those rows under the
+    // layer as its children, so the place has the layer as `parent` when it is above or between them.
+    let sub_row_owner = [to.checked_sub(1).and_then(|at| remaining.get(at)), remaining.get(to)]
+        .into_iter()
+        .flatten()
+        .find(|key| sub_row_group(key).is_some())
+        .map(|key| key.layer());
+    if let Some(owner) = sub_row_owner
+        .filter(|owner| (parent.as_ref() == Some(*owner) || parent == parent_of(owner)) && !mv.keys.contains(&LayerRowKey::Layer((*owner).clone())))
+    {
+        return Some((owner.clone(), LayerPosition::After));
+    }
+    if let Some(group) = parent.clone().filter(|group| to > 0 && matches!(remaining[to - 1], LayerRowKey::Layer(id) if id == group)) {
+        return Some((group, LayerPosition::Into));
+    }
+    let fits = |id: &K| relaxed || parent_of(id) == parent;
+    let next = remaining.get(to).copied().and_then(|key| match key {
+        LayerRowKey::Layer(id) if fits(id) => Some(id.clone()),
+        _ => None,
+    });
+    let previous = remaining[..to].iter().rev().find_map(|key| match key {
+        LayerRowKey::Layer(id) if fits(id) => Some(id.clone()),
+        _ => None,
+    });
+    match (next, previous, parent) {
+        (Some(next), _, _) => Some((next, LayerPosition::Before)),
+        (None, Some(previous), _) => Some((previous, LayerPosition::After)),
+        (None, None, Some(parent)) => Some((parent, LayerPosition::Into)),
+        (None, None, None) => None,
+    }
+}
+
+/// The layer and the position a host payload dropped at `at` means: onto a layer row is `Into` it; a gap goes through
+/// [`host_place`] as a move of no rows, matched by neighbours alone because the gap names no group. `None` onto an
+/// effects or Smart Filter row and where no layer is near.
+pub(super) fn host_drop_place<K: Clone + PartialEq>(
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    at: &DropAt<LayerRowKey<K>>,
+) -> Option<(K, LayerPosition)> {
+    match at {
+        DropAt::Onto(LayerRowKey::Layer(id)) => Some((id.clone(), LayerPosition::Into)),
+        DropAt::Gap { key: Some(key), insert, .. } => host_place(&ReorderMove::new(key.clone(), Vec::new(), *insert, false), order, parent_of, true),
+        _ => None,
+    }
+}
+
+/// What a reorder of the displayed rows means. `order` is the display order the move was made in and
+/// `parent_of` the tree's parent of a layer. A filtered view shows every layer at the top level, so
+/// it matches the landing place by neighbours alone (`relaxed`).
+pub(super) fn layer_drop<K: Clone + PartialEq>(
+    mv: &ReorderMove<LayerRowKey<K>>,
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    relaxed: bool,
+) -> Option<LayerDrop<K>> {
+    if mv.keys.is_empty() {
+        return None;
+    }
+    if mv.keys.iter().all(LayerRowKey::is_layer) {
+        let layers: Vec<K> = mv.keys.iter().map(|key| key.layer().clone()).collect();
+        let (target, position) = host_place(mv, order, parent_of, relaxed)?;
+        return Some(LayerDrop::Layers(LayerMove::new(layers, target, position, mv.copy)));
+    }
+    let (remaining, to) = landing(order, mv);
+    // Sub-rows: all of one layer and one group.
+    let owner = mv.keys[0].layer();
+    let group = sub_row_group(&mv.keys[0])?;
+    if mv.keys.iter().any(|key| key.layer() != owner || sub_row_group(key) != Some(group)) {
+        return None;
+    }
+    let landing = remaining[..to].iter().rev().find_map(|key| match key {
+        LayerRowKey::Layer(id) => Some(id),
+        _ => None,
+    });
+    if let Some(landing) = landing.filter(|landing| *landing != owner) {
+        return Some(LayerDrop::Transfer(RowTransfer { rows: mv.keys.clone(), to: landing.clone(), copy: mv.copy }));
+    }
+    if group != SubRowGroup::SmartFilters {
+        return None;
+    }
+    let [LayerRowKey::Filters(_, Some(from))] = mv.keys.as_slice() else { return None };
+    let header = remaining.iter().position(|key| matches!(key, LayerRowKey::Filters(on, None) if on == owner))?;
+    if to <= header {
+        return None;
+    }
+    let slot = remaining[..to].iter().filter(|key| matches!(key, LayerRowKey::Filters(on, Some(_)) if on == owner)).count();
+    (slot != *from || mv.copy).then(|| LayerDrop::SubRows(SubRowMove { layer: owner.clone(), group, from: *from, to: slot, copy: mv.copy }))
+}
+
+/// Whether the dragged rows may land before position `insert` of the display order, with the
+/// modifiers held during the hover (Alt copies, as the list's reorder rule does).
+pub(super) fn accepts_drop<T: LayerTree>(
+    tree: &T,
+    drag: &ListDrag<LayerRowKey<T::Id>>,
+    order: &[LayerRowKey<T::Id>],
+    insert: usize,
+    mods: Mods,
+) -> bool {
+    let moved_before = order[..insert.min(order.len())].iter().filter(|key| drag.keys.contains(key)).count();
+    let mv = ReorderMove::new(drag.grabbed.clone(), drag.keys.clone(), insert.saturating_sub(moved_before), mods.alt);
+    let parent_of = |id: &T::Id| tree.parent(id);
+    match layer_drop(&mv, order, &parent_of, true) {
+        Some(LayerDrop::Layers(layers)) => {
+            let parent = match layers.position {
+                LayerPosition::Into => Some(layers.target.clone()),
+                LayerPosition::Before | LayerPosition::After => tree.parent(&layers.target),
+            };
+            tree.accepts_drop(&mv.in_group(parent.map(LayerRowKey::Layer)), mods)
+        }
+        // Smart Filters go only onto a smart object; Photoshop takes no others.
+        Some(LayerDrop::Transfer(transfer)) => {
+            transfer.rows.iter().all(|row| !matches!(row, LayerRowKey::Filters(..))) || tree.info(&transfer.to).kind == LayerKind::SmartObject
+        }
+        Some(LayerDrop::SubRows(_)) => true,
+        Some(LayerDrop::Mask(_)) | None => false,
+    }
+}
+
+/// What a drag of the panel's own part (a mask thumbnail, the `fx` badge) means over the row `at`: the drop it makes
+/// there, `None` unless the row is another layer's and the drag started in `list`.
+fn part_drop<K: Clone + PartialEq>(list: egui::Id, drag: &LayersDrag<K>, at: &DropAt<LayerRowKey<K>>, copy: bool) -> Option<LayerDrop<K>> {
+    let DropAt::Onto(LayerRowKey::Layer(to)) = at else { return None };
+    if drag.list != list {
+        return None;
+    }
+    match drag.keys.as_slice() {
+        [LayerRowKey::Mask(from, part)] if from != to => Some(LayerDrop::Mask(MaskMove::new(from.clone(), *part, to.clone(), copy))),
+        [effects @ LayerRowKey::Effects(from, None)] if from != to => {
+            Some(LayerDrop::Transfer(RowTransfer { rows: vec![effects.clone()], to: to.clone(), copy }))
+        }
+        _ => None,
+    }
+}
+
+/// Whether the row under the pointer takes a drag of the rows' list `list` that is not a row drag: a mask thumbnail
+/// where the tree takes the mask, the `fx` badge on any other layer.
+pub(super) fn accepts_part_drop<T: LayerTree>(tree: &T, list: egui::Id, drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>) -> bool {
+    match part_drop(list, drag, at, false) {
+        Some(LayerDrop::Mask(mv)) => tree.accepts_mask_drop(&mv.layer, mv.part, &mv.to),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// The drop a mask thumbnail or the `fx` badge makes on the row it was released over, one `Set` named `label`.
+pub(super) fn part_drop_event<K: Clone + PartialEq>(
+    list: egui::Id,
+    drag: &LayersDrag<K>,
+    at: &DropAt<LayerRowKey<K>>,
+    op: DropOperation,
+    label: Arc<str>,
+) -> Option<LayersEvent<K>> {
+    let drop = part_drop(list, drag, at, op == DropOperation::Copy)?;
+    Some(LayersEvent::Drop(EditEvent::set(Mixed::Mixed, drop, label, None)))
+}
+
+/// The cursor of the line between the rows `above` and `below` while Alt is held, where a click there clips the upper
+/// layer to the lower or releases it: both are layers of one parent, next to each other in its stack, so the line is
+/// not inside an open group, under a group's last layer or across layers a filter hides. `None` elsewhere.
+pub(super) fn clip_cursor<T: LayerTree>(tree: &T, above: &LayerRowKey<T::Id>, below: &LayerRowKey<T::Id>) -> Option<Cursor> {
+    let (LayerRowKey::Layer(upper), LayerRowKey::Layer(lower)) = (above, below) else { return None };
+    let parent = tree.parent(upper);
+    if tree.parent(lower) != parent {
+        return None;
+    }
+    let siblings = tree.children(parent.as_ref());
+    let at = siblings.iter().position(|id| id == upper)?;
+    if siblings.get(at + 1) != Some(lower) {
+        return None;
+    }
+    let icon = if tree.info(upper).clipped { "clip_release" } else { "clip_below" };
+    Some(Cursor::Painted(PaintedCursor::tool(IconId::new(icon), egui::Vec2::from(CLIP_HOTSPOT), None)))
+}
+
+/// The tip of the clip cursors' arrow in their 24-unit icon box.
+const CLIP_HOTSPOT: [f32; 2] = [15.0, 16.0];
+
+/// The reorder event of the list as the panel reports it: one `Set` per drop.
+pub(super) fn drop_event<K: Clone + PartialEq>(
+    edit: EditEvent<ReorderMove<LayerRowKey<K>>>,
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    relaxed: bool,
+) -> Option<LayersEvent<K>> {
+    match edit {
+        EditEvent::Set { after, label, .. } => {
+            let drop = layer_drop(&after, order, parent_of, relaxed)?;
+            Some(LayersEvent::Drop(EditEvent::set(Mixed::Mixed, drop, label, None)))
+        }
+        _ => None,
+    }
+}
+
+/// The drop a stacking command makes of the selected layers, `None` when they cannot move that way
+/// or do not share a parent. `label` names the undo step.
+pub(super) fn stacking_event<T: LayerTree>(tree: &T, command: LayersPanelCommands, label: Arc<str>) -> Option<LayersEvent<T::Id>> {
+    let selected = tree.selection().layers;
+    let first = selected.first()?;
+    let parent = tree.parent(first);
+    if selected.iter().any(|id| tree.parent(id) != parent) {
+        return None;
+    }
+    let siblings = tree.children(parent.as_ref());
+    let places: Vec<usize> = siblings.iter().enumerate().filter(|(_, id)| selected.contains(id)).map(|(at, _)| at).collect();
+    let (lowest, highest) = (*places.first()?, *places.last()?);
+    let block = places.len();
+    let (target, position) = match command {
+        LayersPanelCommands::MoveUp if lowest > 0 => (siblings[lowest - 1].clone(), LayerPosition::Before),
+        LayersPanelCommands::MoveDown if highest + 1 < siblings.len() => (siblings[highest + 1].clone(), LayerPosition::After),
+        LayersPanelCommands::MoveToTop if !(lowest == 0 && highest + 1 == block) => (siblings[0].clone(), LayerPosition::Before),
+        LayersPanelCommands::MoveToBottom if !(highest + 1 == siblings.len() && lowest + block == siblings.len()) => {
+            (siblings[siblings.len() - 1].clone(), LayerPosition::After)
+        }
+        _ => return None,
+    };
+    let layers: Vec<T::Id> = places.iter().map(|&at| siblings[at].clone()).collect();
+    if layers.contains(&target) {
+        return None;
+    }
+    let drop = LayerDrop::Layers(LayerMove::new(layers, target, position, false));
+    Some(LayersEvent::Drop(EditEvent::set(Mixed::Mixed, drop, label, None)))
+}
