@@ -50,6 +50,46 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   `{n}` filled), `get` (one context along the locale chain, so `pt-br` can return a `pt` row, but never the plain row
   or English: a key cap's name under `key`, or "is there a translation?"), and `fmt` for `{name}`
   placeholders, filled in one pass.
+- **Ordinals:** `tord(lang, n, [one, two, few, other])` is the wording of an ordinal from the `@ordinal` row keyed by the four
+  English forms (`Move to the {n}st place|…nd…|…rd…|…th place`: 1st, 2nd, 3rd, 4th, but 11th, 12th, 13th and 21st). A translation
+  lists the forms of its locale's ordinal categories in CLDR order, counted from the CLDR data (one for German, Polish, Arabic,
+  Japanese, Spanish and Chinese, two for French: `one` against `other`), or is a selector message. English's own rule is the
+  fallback, and needs no data.
+- **Typed messages and selector messages:** `tm(lang, context, "Delete this {item :noun}?", &[("item", Arg::Noun("page"))])`
+  fills a message from typed values: `Arg::Text`, `Arg::Name` (a person's text, cut at 1,024 characters), `Arg::Count`,
+  `Arg::Number { value, decimals }`, `Arg::Noun` and, with `dates`, `Arg::Date`. A placeholder in the source may carry its type
+  (`{n :number}`, `{n :integer}`, `{when :date}`, `{item :noun}`; English shows it without the annotation). The row is the
+  (context, source) of the catalogs along the locale chain, else the plain row; its translation is plain text with `{name}`
+  placeholders, or **a selector message**, a small subset of MessageFormat 2 that begins with `.input`, `.local` or `.match`
+  and chooses its words by a number, an ordinal or a noun's gender (`select`, below). `trn`, `trn_decimal` and `tord` take a
+  selector message as their row's translation too, with `$n` the count. A message the language cannot show (a noun it has no row
+  for, a value of the wrong type) shows in English, whole.
+- **Nouns:** `@grammar ⇥ genders ⇥ masculine feminine neuter` and `@grammar ⇥ forms ⇥ accusative genitive` declare what a language
+  has (from either of its catalogs, in any order); `@noun ⇥ page ⇥ feminine: strona; accusative=stronę` gives a noun's
+  translation, gender and named forms (a language without gender writes the word alone). `{$item}` is the base form,
+  `{$item :noun form=accusative}` a named form, and a form a noun does not list is its base form. A plain row's `{item}` takes
+  the base form. The nouns are looked up in the locale that holds the row.
+- **Select (`craft_i18n::select`):** `Message::parse` reads the subset: declarations `.input {$x :number}`, `:integer`,
+  `:number select=ordinal`, `:noun` and `.local $y = {$x :noun form=genitive}`; one `.match` of one to three declared variables;
+  variants (a key for each selector: a plural or ordinal category, an exact whole number, a gender, or `*`, then a quoted pattern
+  `{{…}}`); patterns of text, `{$x}`, `{$x :noun form=<name>}` and the escapes `\{`, `\}`, `\|`, `\\`. No markup, no other
+  function, no option beyond `select` and `form`. An exact number is the best match for that number, then its category, then
+  `*`. `check_message(kind, source, translation, locale)` applies the rules a translation must meet, which the runtime applies
+  to every row it reads and a checker can apply to a file: variables are placeholders of the source or declared, a selector's
+  function fits the source's type, keys are the language's categories or genders, a variant of only `*` exists, **every
+  category whole numbers 0 to 1,000 reach (other than `other`) has a variant of its own** (a Polish message without `many` is an
+  error, not a wrong form), every placeholder is in every variant (a selector's own number may be left out for an exact number
+  or a category that holds exactly one such number: Arabic `zero`, `one` and `two`, Polish `one`, English `one`, so a
+  translation can say "one shape" in words), forms are declared, a trailing `…` agrees with the source, and no bidi embedding or
+  override is in the text (the runtime adds the isolates; a left-to-right or right-to-left mark only in a right-to-left
+  language). `LocaleRules::for_locale(code)` gives the categories and the single-valued ones from the same CLDR data, so a
+  checker and the runtime cannot disagree.
+- **Caps (`craft_i18n::limits`):** a catalog file is at most 2 MiB (`MAX_CATALOG_BYTES`), 20,000 rows (`MAX_ROWS`; the rest are
+  skipped) of 16 KiB each (`MAX_ROW_BYTES`); a selector message at most 4 KiB, 3 selectors, 64 variants, 8 declarations and 64
+  parts in a pattern; 2,000 nouns a locale and 16 forms a noun; a person's text 1,024 characters and a filled message 4,096
+  (cut, ending with `…`); 64 locales; a language tag 35 bytes and 16 preferred languages. Past a cap the row, the rest of the
+  file, or the file is skipped and reported (`check_all`), and the English shows. Work is linear in a catalog's bytes and a
+  message's parts.
 - **Isolation:** when a message or a value inserted into it has a right-to-left letter (bidi
   class R or AL), or a value has a bidi control (LRE, RLE, PDF, LRO, RLO, LRI, RLI, FSI, PDI,
   LRM, RLM, ALM), `fmt` wraps each inserted value in a first-strong isolate (FSI…PDI), and `trn`,
@@ -61,8 +101,8 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   without marks, as if `fmt` didn't isolate at all. egui draws the marks as nothing. For text
   that leaves the interface (file names, logs, terminals, text parsed later), use `fmt_plain` or
   `strip_isolates`.
-- **Bad rows** (malformed, an unknown `@` context, a wrong plural form count, a row defined twice,
-  of which the first is kept) and bad locales (`en`, `pseudo`, a code embedded twice in any case)
+- **Bad rows** (malformed, an unknown `@` context, a wrong plural or ordinal form count, a selector message that breaks a rule of
+  `select`, a noun that breaks its language's `@grammar`, a row defined twice, of which the first is kept) and bad locales (`en`, `pseudo`, a code embedded twice in any case)
   are skipped; craft-i18n's CI rejects them before they ship. `I18n::new` parses nothing: it
   returns the bad locales, and each locale's rows are parsed (and its bad rows logged with
   `log::warn!`) on the first lookup that reaches it, including as a fallback. `I18n::check_all()`
@@ -156,10 +196,11 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   carry `-u-ms-`, `-u-hc-`, `-u-rg-` and `-u-nu-` (Apple's `@numbers=`), and a chosen digit
   system stays in the number locale.
   Ported from WordCraft's `Region`.
-- **Pseudo locale** (`pseudo`, debug builds only, never in `languages()`): every lookup, `get`
+- **Pseudo locales** (`pseudo` and `pseudo-long`, debug builds only, never in `languages()`): every lookup, `get`
   included, comes back as `⟦…⟧`, line by line, so text drawn without the marks never went through
-  translation. `looked_up()` lists the source texts looked up so far, for an audit against a
-  complete catalog.
+  translation; `pseudo-long` also accents the letters and makes the text 40% longer (`⟦Ṕáğé Šéţúṕ····⟧`), leaving `{name}`
+  placeholders alone, so a layout that only just fits English is found. Counts, ordinals and typed messages are marked too.
+  `looked_up()` lists the source texts looked up so far (plain lookups only), for an audit against a complete catalog.
 - **Search** (`Folder`): `Folder::new(locale).fold(text)` gives a key for case- and
   accent-insensitive matching (`keep_accents()` makes accents count) and a map back to the original
   text, so `Folded::find` returns the byte range to highlight. Compatibility forms fold to their

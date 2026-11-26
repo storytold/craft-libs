@@ -1,5 +1,6 @@
 //! Locale candidate negotiation from tags and the environment, and plural rules.
 
+use super::limits::MAX_TAG_BYTES;
 use super::{Cow, IcuLocale, Locale, OnceLock, PluralCategory, PluralRules, data, scripts};
 
 /// Codes to try for a locale tag, most specific first: `zh_TW.UTF-8` → `zh-tw`, `zh-hant`, `zh`.
@@ -11,16 +12,11 @@ use super::{Cow, IcuLocale, Locale, OnceLock, PluralCategory, PluralRules, data,
 /// `pa-PK` → `pa-pk`, `pa-arab-pk`, `pa-arab`.
 pub(super) fn candidates(tag: &str) -> Vec<String> {
     let tag = tag.trim();
-    if tag.len() > MAX_TAG_LEN {
+    if tag.len() > MAX_TAG_BYTES {
         return Vec::new();
     }
     candidates_unchecked(tag)
 }
-
-/// A locale tag is no longer than this: a language, script, region and a few variants or a
-/// glibc encoding and modifier fit with room to spare. A longer one is no locale, and isn't
-/// split into a fallback for every subtag.
-const MAX_TAG_LEN: usize = 128;
 
 /// `candidates` without the length check: the implied-script recursion may push a tag just past the limit.
 fn candidates_unchecked(tag: &str) -> Vec<String> {
@@ -76,11 +72,6 @@ pub(super) fn posix_env_tags(var: impl Fn(&str) -> Option<String>) -> Vec<String
     tags
 }
 
-/// `⟦text⟧`, each line marked on its own, since multi-line labels are often drawn a line at a time.
-pub(super) fn marked(text: &str) -> String {
-    format!("⟦{}⟧", text.replace('\n', "⟧\n⟦"))
-}
-
 /// The script a code without one means, for languages written in more than one (CLDR likely
 /// subtags). Any other language is taken to have one script.
 // ponytail: the multi-script languages a Craft app could plausibly ship; add a row with the locale.
@@ -107,10 +98,12 @@ pub(super) fn bare(code: &str) -> Locale {
         shared: Cow::Borrowed(""),
         app: Cow::Borrowed(""),
         forms: 1,
+        ordinal_forms: 1,
         parsed: OnceLock::new(),
         name: OnceLock::new(),
         chain: Vec::new(),
         plural: None,
+        ordinal: None,
         offered: false,
     }
 }
@@ -121,6 +114,18 @@ pub(super) fn bare(code: &str) -> Locale {
 /// `other`. CLDR's `pt` is Brazilian (0 is singular), so Portuguese other than `pt-br` takes
 /// `pt-PT`'s. `None` for a language CLDR has no plural rules for.
 pub(super) fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategory>)> {
+    rules(code, false)
+}
+
+/// `code`'s CLDR ordinal rules and the categories whole numbers 0..=1000 reach, in CLDR order: one
+/// `@ordinal` form each (English `one`, `two`, `few`, `other`; French `one`, `other`; German,
+/// Polish, Arabic, Japanese, Spanish and Chinese `other` alone). The language is chosen as for the
+/// cardinal rules.
+pub(super) fn ordinal_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategory>)> {
+    rules(code, true)
+}
+
+fn rules(code: &str, ordinal: bool) -> Option<(PluralRules, Vec<PluralCategory>)> {
     let id = IcuLocale::try_from_str(code).ok()?.id;
     let language = id.language.as_str();
     if !data::PLURAL_LANGUAGES.contains(&language) {
@@ -128,7 +133,12 @@ pub(super) fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategor
     }
     let brazil = id.region.is_some_and(|r| r.as_str() == "BR");
     let locale = IcuLocale::try_from_str(if language == "pt" && !brazil { "pt-PT" } else { language }).ok()?;
-    let rules = PluralRules::try_new_cardinal_with_buffer_provider(data::provider()?, (&locale).into()).ok()?;
+    let provider = data::provider()?;
+    let rules = if ordinal {
+        PluralRules::try_new_ordinal_with_buffer_provider(provider, (&locale).into()).ok()?
+    } else {
+        PluralRules::try_new_cardinal_with_buffer_provider(provider, (&locale).into()).ok()?
+    };
     let mut categories = Vec::new();
     for n in 0..=1000_u32 {
         let c = rules.category_for(n);
