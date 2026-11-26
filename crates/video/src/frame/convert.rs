@@ -302,6 +302,39 @@ impl TryFrom<crate::vp8::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "rawvideo")]
+impl TryFrom<crate::rawvideo::Frame> for VideoFrame {
+    type Error = FrameError;
+
+    /// A 4:2:2 YCbCr or an RGB frame at 8 or 10 bits, in 16-bit storage. Raw video carries no colour
+    /// description, so YCbCr leaves everything unspecified; RGB gets the identity matrix and full
+    /// range, as for every codec.
+    fn try_from(p: crate::rawvideo::Frame) -> Result<Self, FrameError> {
+        use crate::rawvideo::Kind;
+        let (w, h, bits) = (p.width, p.height, p.bit_depth);
+        let [a, b, c] = p.planes;
+        let (family, sub) = match p.kind {
+            Kind::Yuv422 => (ColorFamily::YCbCr, Subsampling::S422),
+            Kind::Rgb => (ColorFamily::Rgb, Subsampling::S444),
+        };
+        let max_val = if bits < 16 { (1u16 << bits) - 1 } else { u16::MAX };
+        if a.iter().any(|&s| s > max_val) || b.iter().any(|&s| s > max_val) || c.iter().any(|&s| s > max_val) {
+            return Err(FrameError::Plane("sample value exceeds bit depth"));
+        }
+        let (cw, ch) = sub.chroma_size(w, h);
+        let planes = vec![
+            Plane::packed(w, h, bits, Samples::U16(a))?,
+            Plane::packed(cw, ch, bits, Samples::U16(b))?,
+            Plane::packed(cw, ch, bits, Samples::U16(c))?,
+        ];
+        let mut f = VideoFrame::new(w, h, family, sub, planes, None)?;
+        if family == ColorFamily::Rgb {
+            f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        }
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "prores")]
 impl TryFrom<crate::prores::Frame> for VideoFrame {
     type Error = FrameError;

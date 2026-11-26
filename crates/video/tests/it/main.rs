@@ -60,6 +60,10 @@ mod mpeg2;
 #[path = "ffv1.rs"]
 mod ffv1;
 
+#[cfg(feature = "rawvideo")]
+#[path = "rawvideo.rs"]
+mod rawvideo;
+
 #[cfg(feature = "prores")]
 #[path = "prores/main.rs"]
 mod prores;
