@@ -7,6 +7,11 @@ message or a digital ID file is made of.
   keeps its exact encoding, so a signed structure is verified over the bytes that were signed.
   Reading is strict DER; `parse_ber` also takes indefinite lengths and segmented strings, which
   PKCS #12 files from Windows use. Nesting is bounded.
+- **`inspection`**: borrowed definite-length cursors without child-list allocations and borrowed X.509 wire fields.
+  Each sibling list is bounded to 4,096 elements and child cursors to depth 32; callers must
+  separately bound whole-document traversal. Redundant lengths are flagged. Optional and
+  trailing fields remain explicitly uninspected until their cursors are consumed. This is
+  evidence extraction, not a complete certificate validator or a signature/trust verdict.
 - **`x509`**: certificates (RFC 5280): names, validity, key, the extensions that matter for
   signing (basic constraints, key usage, extended key usage, key identifiers, OCSP and CRL
   locations), `build_chain` / `build_chain_noted` (issuers that may issue, path length, validity,
@@ -42,3 +47,7 @@ Weak algorithms are read, not refused, because old signed documents use them:
 `DigestAlg::weakness` and `PublicKey::weakness` say when one is weak, and the caller decides.
 
 Moved from PdfCraft's `pdfcraft-sign`.
+
+The inspection profile follows Craft Anything’s bounded reader and Afloat’s raw-certificate
+and non-minimal-length contributions (craft-anything #1131, #1514, #1646). Existing verification
+and trust APIs are unchanged; high-level CMS/metadata adapters remain separate work.

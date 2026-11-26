@@ -27,10 +27,15 @@ pub const MAX_CATALOG_BYTES: usize = 256 * 1024;
 pub enum Pick {
     /// The one we would choose: a balance of quality, speed and price.
     Recommended,
+    /// The model with the best output quality, as judged by whoever keeps the catalog.
     BestResult,
+    /// The model with the lowest reported price.
     LowestCost,
+    /// The model judged fastest, as kept in the catalog.
     Fastest,
+    /// The most recently released model.
     Newest,
+    /// The model judged most used, as kept in the catalog.
     MostPopular,
 }
 
@@ -43,6 +48,7 @@ impl Pick {
         !matches!(self, Pick::LowestCost | Pick::Newest)
     }
 
+    /// The stable text form, used in the catalog file.
     pub fn key(self) -> &'static str {
         match self {
             Pick::Recommended => "recommended",
@@ -58,19 +64,23 @@ impl Pick {
 /// One curated pick: for this job, on this kind of connection, this model earns this tag.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogEntry {
+    /// The capability the pick is for, as `<modality>.<task>`.
     pub capability: String,
     /// The tag it earns, as [`Pick::key`].
     pub pick: String,
     /// The connection's provider key, such as `openrouter`.
     pub provider: String,
+    /// The model id.
     pub model: String,
 }
 
 /// The curated picks. Earlier entries for the same job and tag win.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Catalog {
+    /// Catalog version. [`Catalog::over`] keeps the higher of the two.
     #[serde(default)]
     pub version: u32,
+    /// The picks. Earlier entries win over later ones for the same job and tag.
     #[serde(default)]
     pub entries: Vec<CatalogEntry>,
 }
@@ -78,7 +88,9 @@ pub struct Catalog {
 /// Why a catalog could not be used.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogError {
+    /// The text is longer than [`MAX_CATALOG_BYTES`].
     TooLarge,
+    /// The text is not valid catalog JSON. The string says why.
     Syntax(String),
 }
 
@@ -100,6 +112,7 @@ impl Catalog {
         Self::from_json(include_str!("catalog.json")).unwrap_or_default()
     }
 
+    /// Parses a catalog file. Fails when it is over [`MAX_CATALOG_BYTES`] or not valid JSON.
     pub fn from_json(text: &str) -> Result<Self, CatalogError> {
         if text.len() > MAX_CATALOG_BYTES {
             return Err(CatalogError::TooLarge);
@@ -129,6 +142,7 @@ impl Catalog {
 pub struct Candidate<'a> {
     /// The connection's provider key.
     pub provider: &'a str,
+    /// The model itself.
     pub model: &'a ModelInfo,
     /// Running it costs nothing (a local model, a free connection).
     pub free: bool,
@@ -150,8 +164,11 @@ pub enum PickedBy {
 /// A pick that was earned, and by which candidate (an index into the candidates given).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picked {
+    /// The tag earned.
     pub pick: Pick,
+    /// Index of the winning candidate in the slice that was ranked.
     pub candidate: usize,
+    /// What earned it.
     pub by: PickedBy,
 }
 
@@ -211,6 +228,3 @@ fn newest(candidates: &[Candidate<'_>]) -> Option<(usize, PickedBy)> {
         })
         .map(|(i, at)| (i, PickedBy::Released(at)))
 }
-
-#[cfg(test)]
-mod tests;

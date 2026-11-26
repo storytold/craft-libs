@@ -144,7 +144,9 @@ impl Reader<'_> {
             // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
             let frac = |k: &str| img.attr(k).and_then(crate::units::vml_number);
             let fx = craft_wordmodel::picfx::PicFx::from_vml(frac("gain").unwrap_or(1.0), frac("blacklevel").unwrap_or(0.0));
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None });
+            let crop =
+                ["cropleft", "croptop", "cropright", "cropbottom"].map(|key| img.attr(key).and_then(vml_fraction).unwrap_or(0.0).clamp(0.0, 1.0));
+            return Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.
@@ -616,8 +618,11 @@ fn vml_float(shape: &El, style: &str, in_hf: bool) -> Float {
         dist_bottom: dist("mso-wrap-distance-bottom"),
         hidden,
         // Word for Mac draws a VML shape anchored in a header table cell on the page whatever
-        // `o:allowincell` says (user-checked), as for Word's picture and text watermarks.
-        outside_cell: in_hf,
+        // `o:allowincell` says (user-checked), as for Word's picture and text watermarks. In the
+        // body, Layout in table cell off (`o:allowincell="f"`) places the shape outside its cell,
+        // and the cell's text doesn't wrap around it (user-checked in Word for Windows); without
+        // the attribute the shape is laid out in its cell.
+        outside_cell: in_hf || shape.attr("o:allowincell").is_some_and(|v| matches!(v.trim(), "f" | "false" | "0")),
         ..Float::default()
     };
     f.set_spin(vml_spin(style));
