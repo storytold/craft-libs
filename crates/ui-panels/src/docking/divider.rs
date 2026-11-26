@@ -2,7 +2,7 @@
 //! its accessibility node. A container describes each divider as a [`Divider`] in reading order and applies the
 //! coordinate the drag or the keys ask for; this module owns everything that is the same for all of them, including
 //! the mirroring for right-to-left. A component that draws its own dividers (a column bar, a margin handle) calls
-//! [`declare`] in its parts, `pointer` and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
+//! [`declare_focusing`] in its parts, `pointer` and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
 
 use crate::contract::{Access, Component, Cx, Focus as _, Name, Numeric, PartBuilder, PartsCx, Pointer as _, Role};
 use craft_behavior::dock::DockEdge;
@@ -93,16 +93,24 @@ fn along_y(mv: NavMove) -> NavMove {
 }
 
 /// Declares the part `key.at(index)` for `divider`: an edge part above the panes that takes drags and is its own Tab
-/// stop. `rect` is the container's rect, which the bar is mirrored across for right-to-left. The part is returned for
-/// what a caller adds (a tooltip that names the edge).
+/// stop. A press on it leaves key focus where it is (`Sense::KEEP_FOCUS`), so a pointer drag does not make the divider
+/// the key target: the arrow keys after it still reach whatever held them, and only a divider reached by Tab takes
+/// them to resize. `rect` is the container's rect, which the bar is mirrored across for right-to-left. The part is
+/// returned for what a caller adds (a tooltip that names the edge).
 pub fn declare<'a, C: Component>(cx: &'a mut PartsCx<'_, C>, rect: Rect, key: PartKey, index: u64, divider: &Divider) -> PartBuilder<'a> {
     let bar = Flow::new(rect, cx.flow.is_rtl()).to_physical(divider.bar);
     cx.part(key.at(index), bar)
-        .sense(Sense::DRAG | Sense::TAKE_FOCUS)
+        .sense(Sense::DRAG | Sense::KEEP_FOCUS)
         .priority(HitPriority::new(HitLevel::Edge, 0))
         .cursor(divider.cursor())
         .focusable()
         .over()
+}
+
+/// [`declare`] for a value control drawn with dividers (a column bar, a margin handle) rather than a splitter between
+/// panes: a press on the divider takes key focus, so the arrow keys after a click step it.
+pub fn declare_focusing<'a, C: Component>(cx: &'a mut PartsCx<'_, C>, rect: Rect, key: PartKey, index: u64, divider: &Divider) -> PartBuilder<'a> {
+    declare(cx, rect, key, index, divider).sense(Sense::DRAG | Sense::TAKE_FOCUS)
 }
 
 /// What the pointer did to the divider `key.at(index)` this pass.

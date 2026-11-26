@@ -73,7 +73,7 @@ pub(crate) struct Reader<'p> {
     file_orders: craft_wordmodel::para::FileOrders,
     pub doc: Document,
     pub pc: PropCtx,
-    revs: HashMap<(u8, String, String, Option<String>), u32>,
+    revs: HashMap<(u8, String, String, Option<String>, Option<String>), u32>,
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,

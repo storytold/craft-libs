@@ -90,12 +90,23 @@ mod native {
     /// `new_without_display_handle` because this context never has a window (no surface is ever
     /// requested); FilmCraft's own off-screen export device uses the same constructor for the
     /// same reason (`filmcraft-gpu`'s `export_renderer.rs`, see `docs/gpu-backends.md`).
+    ///
+    /// The process holds one instance, made on the first call and returned by every later one,
+    /// so `WGPU_BACKEND` is read once. Every context and every probe requests its adapter from
+    /// it. An instance per context loads and unloads every installed Vulkan driver each time, and
+    /// on Linux with Ubuntu's `mesa-vulkan-drivers` installed, contexts opened that way from
+    /// several threads at once crash with SIGSEGV while a lavapipe device is in use.
     pub(crate) fn instance() -> wgpu::Instance {
-        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        if let Some(backends) = wgpu::Backends::from_env() {
-            desc.backends = backends;
-        }
-        wgpu::Instance::new(desc)
+        static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| {
+                let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+                if let Some(backends) = wgpu::Backends::from_env() {
+                    desc.backends = backends;
+                }
+                wgpu::Instance::new(desc)
+            })
+            .clone()
     }
 
     /// Request a real device. `None` on the defined no-adapter path (no usable adapter): the
