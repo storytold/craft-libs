@@ -294,6 +294,47 @@ fn a_layer_opened_inside_an_ltr_axis_flows_in_the_interface_direction() {
     assert!(first.center().x > second.center().x, "the popover flows from the right: {first:?} {second:?}");
 }
 
+/// Under a right-to-left interface, a start-aligned popover lines its right edge up with its anchor's right edge, and
+/// one opened from inside a container whose axis keeps its left-to-right order (`ltr_axis`) is placed the same way.
+#[trial]
+fn a_layer_opened_inside_an_ltr_axis_aligns_to_its_anchor_in_the_interface_direction() {
+    let anchor = Rect::from_min_size(Pos2::new(200.0, 120.0), Vec2::new(40.0, 20.0));
+    let placed = |inside: bool| {
+        let log = RefCell::new(Vec::new());
+        let rect = Cell::new(Rect::NOTHING);
+        let seen = RefCell::new(Seen::default());
+        let popover = |ui: &mut Ui| {
+            let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start));
+            let props = ContainerProps::new().mount(Mount::Layer(overlay)).layout(BodyLayout::row()).sizing(Sizing::Content);
+            let out = Pane { common: Common::new(), props, log: &log }.id_salt("popover").show(ui, |ui, _| {
+                Probe::new(&seen).size(Vec2::new(120.0, 30.0)).show(ui);
+            });
+            rect.set(out.output.rect);
+        };
+        let mut show = |ui: &mut Ui| {
+            with_env(
+                ui,
+                |o| o.direction = Some(Direction::Rtl),
+                |ui| {
+                    if inside {
+                        let axis = ContainerProps::new().layout(BodyLayout::row()).sizing(Sizing::Content);
+                        Pane { common: Common::new(), props: axis, log: &log }.ltr_axis().id_salt("axis").show(ui, |ui, _| popover(ui));
+                    } else {
+                        popover(ui);
+                    }
+                },
+            );
+        };
+        let mut frames = Frames::new();
+        frames.idle(4, &mut show);
+        rect.get()
+    };
+    let (outside, inside) = (placed(false), placed(true));
+    assert!(outside.is_positive() && inside.is_positive(), "both popovers show: {outside:?} {inside:?}");
+    assert!((outside.right() - anchor.right()).abs() < SLACK, "the popover's right edge is the anchor's: {outside:?} {anchor:?}");
+    assert!(near(inside, outside), "the popover opened inside the axis is placed as the one outside it: {inside:?} {outside:?}");
+}
+
 /// A float placed by its right-top corner has that corner at the position, its width reaching back from it; near the
 /// start edge of its bounds, where the corner's place would put the layer outside them, it is kept inside.
 #[trial]

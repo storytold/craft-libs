@@ -847,7 +847,7 @@ impl BodyHooks<'_> {
         let handle = grip_band(pcx.tokens);
         let corner = 2.0 * handle;
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
-        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
+        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.text_direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         let grip_name = props.resize_name.as_ref().map(|name| pcx.env.resolve(name).as_str().to_owned());
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
