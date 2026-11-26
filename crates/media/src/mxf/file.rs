@@ -187,8 +187,10 @@ pub struct Chunk {
 /// package.
 #[derive(Clone, Debug)]
 pub struct EssenceTrack {
-    /// Source package owning this essence track (canonical MXF byte order).
-    pub file_package_uid: [u8; 32],
+    /// MXF File Package PackageID (ST 377-1, tag 0x4401), in stored byte order.
+    /// Available across MXF dialects. Missing, wrong-length and all-zero values
+    /// yield `None`; a readable track alone establishes no package identity.
+    pub file_package_uid: Option<[u8; 32]>,
     pub track_id: u32,
     pub track_number: u32,
     pub kind: TrackKind,
@@ -671,7 +673,7 @@ fn sound_info(d: &Set) -> SoundInfo {
 
 /// Resolved track before the sample tables are built.
 struct TrackRef {
-    file_package_uid: [u8; 32],
+    file_package_uid: Option<[u8; 32]>,
     track_id: u32,
     track_number: u32,
     kind: TrackKind,
@@ -689,7 +691,8 @@ struct TrackRef {
 }
 
 fn umid_of(s: &Set, t: u16) -> Option<[u8; 32]> {
-    s.get(t).and_then(|v| v.get(..32)).map(|b| b.try_into().unwrap_or([0; 32]))
+    let uid = <[u8; 32]>::try_from(s.get(t)?).ok()?;
+    (uid != [0; 32]).then_some(uid)
 }
 
 /// Material package tracks → file package tracks with descriptors.
@@ -717,7 +720,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
     let name = material.and_then(|m| m.string(tag::PACKAGE_NAME));
     let mut file_track =
         |pkg: &Set, kind: Option<TrackKind>, id: Option<u32>, start: i64, duration: Option<i64>, name: Option<String>| -> Option<TrackRef> {
-            let umid = umid_of(pkg, tag::PACKAGE_UID).unwrap_or([0; 32]);
+            let umid = umid_of(pkg, tag::PACKAGE_UID);
             for r in pkg.references(tag::PACKAGE_TRACKS) {
                 let Some(t) = md.get(&r) else { continue };
                 let tid = t.u(tag::TRACK_ID).unwrap_or(0) as u32;
@@ -747,7 +750,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                             .collect()
                     })
                     .unwrap_or_default();
-                let (body_sid, index_sid) = sids.get(&umid).copied().unwrap_or((0, 0));
+                let (body_sid, index_sid) = umid.and_then(|id| sids.get(&id)).copied().unwrap_or((0, 0));
                 return Some(TrackRef {
                     file_package_uid: umid,
                     material_edit_rate: None,
@@ -1318,7 +1321,7 @@ mod aes3_read_tests {
         }
         let samples = (data.len() as u64 - 4) / 32;
         let track = EssenceTrack {
-            file_package_uid: [0; 32],
+            file_package_uid: None,
             track_id: 1,
             track_number: 0,
             kind: TrackKind::Sound,

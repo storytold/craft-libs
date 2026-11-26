@@ -116,6 +116,10 @@ fn source_clip(uid: u8, def: [u8; 16], dur: i64, pkg: [u8; 32], track: u32) -> V
 /// 16-bit stereo sound element of 1920 frames (sample k of the file = k, -k on the channels);
 /// a footer index with temporal offsets `to` and flags `flags`.
 fn build(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], flags: &[u8]) -> Vec<u8> {
+    build_with_package_uid(n, pic, to, flags, Some(&umid(2)))
+}
+
+fn build_with_package_uid(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], flags: &[u8], file_package_uid: Option<&[u8]>) -> Vec<u8> {
     let mut md = Vec::new();
     // primer: no dynamic tags
     klv(&mut md, ul(&[0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0D, 0x01, 0x02, 0x01, 0x01, 0x05, 0x01, 0x00]), &batch(&[]));
@@ -143,7 +147,10 @@ fn build(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], flags: &[u8]) -> V
     klv(&mut md, set_key(0x11), &source_clip(32, SOUND_DEF, d, umid(2), 3));
     // file package
     let mut fp = LocalSet::new(4);
-    fp.p(0x4401, &umid(2)).p(0x4403, &batch(&[&uuid(13), &uuid(14)])).p(0x4701, &uuid(40));
+    if let Some(uid) = file_package_uid {
+        fp.p(0x4401, uid);
+    }
+    fp.p(0x4403, &batch(&[&uuid(13), &uuid(14)])).p(0x4701, &uuid(40));
     klv(&mut md, set_key(0x37), &fp.0);
     klv(&mut md, set_key(0x3B), &track(13, 2, 0x1501_0500, 23));
     klv(&mut md, set_key(0x0F), &sequence(23, PICTURE_DEF, d, 33));
@@ -453,8 +460,21 @@ fn material_clock_and_duration_survive_file_unit_conversion() {
     let sound = &file.tracks[file.track_of_kind(TrackKind::Sound).unwrap()];
     assert_eq!(sound.edit_rate, Rational::new(48000, 1));
     assert_eq!(sound.duration, Some(13440));
-    assert_eq!(sound.file_package_uid, umid(2));
+    assert_eq!(sound.file_package_uid, Some(umid(2)));
     assert_eq!(sound.material_edit_rate, Some(Rational::new(25, 1)));
     assert_eq!(sound.material_duration, Some(7));
     assert_eq!(sound.stored_sample_frames(), 13440);
+}
+
+#[test]
+fn readable_essence_without_a_usable_file_package_id_has_no_relink_identity() {
+    for uid in [None, Some(&[0; 32][..]), Some(&[7; 31][..]), Some(&[7; 33][..])] {
+        let bytes = build_with_package_uid(2, prores_like, &[], &[], uid);
+        let mxf = open(&bytes).unwrap();
+        let audio = mxf.track_of_kind(TrackKind::Sound).unwrap();
+        assert_eq!(mxf.tracks[audio].file_package_uid, None);
+        let pcm = mxf.read_pcm(&bytes, audio, 0, 8).unwrap();
+        assert_eq!(pcm[0].len(), 8);
+        assert!(pcm[0][7] > 0.0);
+    }
 }
