@@ -2,7 +2,8 @@
 //! `.studio3` (header `silhouette05;`).
 //!
 //! It reads every object's outline (open and closed paths, lines and Bézier curves, compound
-//! paths, text as outlines), each outline's line colour and the page size. Coordinates are
+//! paths, text as outlines), each outline's line colour, each text object's characters, font
+//! and size, and the page size. Coordinates are
 //! millimetres from the page's top-left corner, y down, as the file stores them. Fills, layers
 //! and cut settings are not read.
 //!
@@ -67,6 +68,22 @@ pub struct Shape {
     pub path: BezPath,
     /// The object's line colour (R, G, B), when its style record was found.
     pub line_color: Option<[u8; 3]>,
+    /// When the outline is a letter of a text object: an index into [`Imported::texts`].
+    pub text: Option<usize>,
+}
+
+/// A text object as typed: its characters, font and size, and where it starts. Its letters
+/// are also read as outlines (shapes whose [`Shape::text`] points here).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Text {
+    pub text: String,
+    /// The font family's name, when its record was found.
+    pub font: Option<String>,
+    /// The font size in millimetres (25.4 for 72 pt).
+    pub size_mm: f64,
+    /// The text's origin in page millimetres.
+    pub x_mm: f64,
+    pub y_mm: f64,
 }
 
 /// A document's shapes in file order, plus notes about what was skipped.
@@ -76,6 +93,8 @@ pub struct Imported {
     /// Page width and height in millimetres; `None` when the page record is not as expected.
     pub page_mm: Option<(f64, f64)>,
     pub shapes: Vec<Shape>,
+    /// Text objects in file order.
+    pub texts: Vec<Text>,
     pub warnings: Vec<String>,
 }
 
@@ -117,6 +136,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     let mut warnings = Vec::new();
     let root = block(body, MAGIC_LEN).ok_or_else(|| bad("root record is truncated"))?;
     let mut shapes = Vec::new();
+    let mut starts = Vec::new();
     let mut points_total = 0usize;
     let mut cursor = root.start;
     // An object's style record comes before its outline: search from the last outline.
@@ -139,13 +159,112 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
             warnings.push(format!("skipped a path at byte {at}: coordinates out of range"));
             continue;
         }
-        shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at) });
+        shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at), text: None });
+        starts.push((style_from, at));
         style_from = path.end;
     }
     if budget.get() == 0 {
         return Err(bad("too much data that only looks like outlines"));
     }
-    Ok(Imported { version, page_mm: page_size(body, &root), shapes, warnings })
+    let records = glyph_records(body, &root);
+    let (texts, owners) = build_texts(body, &records);
+    for (shape, &(from, at)) in shapes.iter_mut().zip(&starts) {
+        // The letter's record comes just before its outline.
+        shape.text = records
+            .iter()
+            .zip(&owners)
+            .rev()
+            .find(|(r, _)| r.at >= from && r.at < at)
+            .and_then(|(r, owner)| (r.code != 0).then_some(*owner).flatten());
+    }
+    Ok(Imported { version, page_mm: page_size(body, &root), shapes, texts, warnings })
+}
+
+/// The most glyph records read from one document.
+const MAX_GLYPHS: usize = 1_000_000;
+
+/// One record of a text object: a u32 code (0 for the text object itself, else a letter's
+/// Unicode scalar), then a 2 × 3 transform as six f32 (size, 0, x, 0, size, y), after the
+/// marker bytes `01 00 00 00 01` and 16 zero bytes. Found by saving "Hello", "Hellp" and "A B" in
+/// Silhouette Studio 5.0.556 and comparing the bytes; a space has a record but no outline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GlyphRecord {
+    at: usize,
+    code: u32,
+    size_mm: f32,
+    x_mm: f32,
+    y_mm: f32,
+}
+
+fn glyph_records(d: &[u8], root: &Block) -> Vec<GlyphRecord> {
+    const LEAD: [u8; 21] = [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut out = Vec::new();
+    let end = root.end.min(d.len());
+    let mut at = root.start + LEAD.len();
+    while at + 28 <= end && out.len() < MAX_GLYPHS {
+        if d.get(at - LEAD.len()..at) == Some(LEAD.as_slice())
+            && let (Some(code), Some(size), Some(zero), Some(x), Some(zero2), Some(size2), Some(y)) =
+                (u32_at(d, at), f32_at(d, at + 4), f32_at(d, at + 8), f32_at(d, at + 12), f32_at(d, at + 16), f32_at(d, at + 20), f32_at(d, at + 24))
+        {
+            let limit = MAX_COORD_MM;
+            let plausible = (0.01..=1000.0).contains(&size)
+                && size2 == size
+                && zero == 0.0
+                && zero2 == 0.0
+                && x.is_finite()
+                && y.is_finite()
+                && x.abs() <= limit
+                && y.abs() <= limit
+                && (code == 0 || char::from_u32(code).is_some_and(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t')));
+            if plausible {
+                out.push(GlyphRecord { at, code, size_mm: size, x_mm: x, y_mm: y });
+                at += 28;
+                continue;
+            }
+        }
+        at += 1;
+    }
+    out
+}
+
+/// Text objects from their records: each object's record (code 0) starts one, its letters
+/// follow. Returns the texts and, per record, the text it belongs to.
+fn build_texts(d: &[u8], records: &[GlyphRecord]) -> (Vec<Text>, Vec<Option<usize>>) {
+    let mut texts: Vec<Text> = Vec::new();
+    let mut owners = Vec::with_capacity(records.len());
+    for r in records {
+        if r.code == 0 {
+            texts.push(Text {
+                text: String::new(),
+                font: font_name_before(d, r.at),
+                size_mm: f64::from(r.size_mm),
+                x_mm: f64::from(r.x_mm),
+                y_mm: f64::from(r.y_mm),
+            });
+            owners.push(texts.len().checked_sub(1));
+            continue;
+        }
+        let owner = texts.len().checked_sub(1);
+        if let (Some(i), Some(c)) = (owner, char::from_u32(r.code))
+            && let Some(text) = texts.get_mut(i)
+        {
+            text.text.push(c);
+        }
+        owners.push(owner);
+    }
+    (texts, owners)
+}
+
+/// The nearest length-prefixed name (1–64 printable bytes) ending within 160 bytes before
+/// `at`: a text object's font family ("Arial"), stored just ahead of its record.
+fn font_name_before(d: &[u8], at: usize) -> Option<String> {
+    let from = at.saturating_sub(160);
+    (from..at.saturating_sub(5)).rev().find_map(|p| {
+        let n = usize::try_from(u32_at(d, p)?).ok()?;
+        let name = d.get(p + 4..p + 4 + n)?;
+        ((1..=64).contains(&n) && p + 4 + n <= at && name.iter().all(|b| (0x20..0x7f).contains(b)) && name.iter().any(u8::is_ascii_alphabetic))
+            .then(|| String::from_utf8_lossy(name).into_owned())
+    })
 }
 
 /// `.studio3`: the header is a table of little-endian u64 section lengths; the
@@ -396,6 +515,42 @@ fn f32_at(d: &[u8], at: usize) -> Option<f32> {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    fn glyph(code: u32, size: f32, x: f32, y: f32) -> Vec<u8> {
+        let mut out = vec![1, 0, 0, 0, 1];
+        out.extend_from_slice(&[0; 16]);
+        out.extend_from_slice(&code.to_le_bytes());
+        for v in [size, 0.0, x, 0.0, size, y] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn text_objects_are_read_from_their_letter_records() {
+        let mut payload = 5u32.to_le_bytes().to_vec();
+        payload.extend_from_slice(b"Arial");
+        payload.extend_from_slice(&[0; 8]);
+        payload.extend(glyph(0, 25.4, 67.9, 91.5));
+        for (c, x) in [('A', 67.9), (' ', 83.5), ('B', 90.5)] {
+            payload.extend(glyph(c as u32, 25.4, x, 91.5));
+        }
+        // A record whose two sizes differ is not a letter.
+        let mut bad = glyph('C' as u32, 25.4, 1.0, 1.0);
+        bad[41..45].copy_from_slice(&3.0f32.to_le_bytes());
+        payload.extend(bad);
+        let mut d = b"silhouette04;".to_vec();
+        d.extend(block(&payload));
+        let root = super::block(&d, MAGIC_LEN).unwrap();
+        let records = glyph_records(&d, &root);
+        assert_eq!(records.len(), 4);
+        let (texts, owners) = build_texts(&d, &records);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].text, "A B");
+        assert_eq!(texts[0].font.as_deref(), Some("Arial"));
+        assert!((texts[0].size_mm - 25.4).abs() < 1e-4 && (texts[0].x_mm - 67.9).abs() < 1e-4);
+        assert_eq!(owners, [Some(0); 4]);
+    }
 
     fn block(payload: &[u8]) -> Vec<u8> {
         let mut out = vec![1];
