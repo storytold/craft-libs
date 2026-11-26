@@ -315,7 +315,7 @@ impl AudioEffect for Bitcrusher {
                     // The held input is rounded at the current step, so a change of Bits also
                     // applies to the hold in progress.
                     let crushed = ((f64::from(*held) / step).round() * step).clamp(-limit, limit);
-                    channels[ch][i] = (dry + mix * (crushed - dry)) as f32;
+                    channels[ch][i] = blend(dry, crushed, mix) as f32;
                 }
             }
         }
@@ -640,6 +640,14 @@ mod tests {
             assert_eq!(changes(&y), expected, "divide {divide}");
             assert!(expected.iter().all(|&i| y[i] == x[i]), "divide {divide}: a hold does not start with the input");
         }
+    }
+
+    #[test]
+    fn full_mix_keeps_a_small_wet_sample_beside_a_huge_dry_one() {
+        let mut c = crush(&[("mix", 100.0), ("bits", 16.0), ("rate_divide", 4.0)], 1);
+        let mut y = vec![0.5, f32::MAX, f32::MAX, f32::MAX, 0.25];
+        c.process(&mut [&mut y]);
+        assert_eq!(y[1], 0.5, "the held sample was lost at full mix: {y:?}");
     }
 
     /// A shorter rate divide cuts the hold in progress short, and the holds after it have the new

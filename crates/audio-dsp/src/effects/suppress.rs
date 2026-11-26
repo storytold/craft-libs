@@ -105,6 +105,10 @@ struct Bins {
     /// Total power of each waiting frame, and whether it may enter the estimate.
     queue_total: [f32; OVERLAP],
     queue_ok: [bool; OVERLAP],
+    /// Whether a mute began between a waiting frame and the one before it.
+    queue_cut: [bool; OVERLAP],
+    /// Whether a mute began since the last frame was queued.
+    cut_pending: bool,
     head: usize,
     queued: usize,
     /// Whether a frame has entered the estimate since the last reset.
@@ -144,6 +148,8 @@ impl Bins {
             queue: vec![0.0; bins * OVERLAP],
             queue_total: [0.0; OVERLAP],
             queue_ok: [false; OVERLAP],
+            queue_cut: [false; OVERLAP],
+            cut_pending: false,
             head: 0,
             queued: 0,
             started: false,
@@ -170,6 +176,7 @@ impl Bins {
         self.frames = 0;
         self.head = 0;
         self.queued = 0;
+        self.cut_pending = false;
         self.started = false;
         self.heard = 0;
         self.since_zero = 1;
@@ -196,7 +203,7 @@ impl Bins {
             if self.queued > 0 && self.since_frame < hop {
                 self.queue_ok[(self.head + self.queued - 1) % OVERLAP] = false;
             }
-            self.quiet_run = 0;
+            self.cut_pending = true;
         }
         self.since_mute = 0;
     }
@@ -214,6 +221,9 @@ impl Bins {
         let at = self.head;
         self.head = (at + 1) % OVERLAP;
         self.queued -= 1;
+        if self.queue_cut[at] {
+            self.quiet_run = 0;
+        }
         if !self.queue_ok[at] {
             return;
         }
@@ -260,6 +270,7 @@ impl Bins {
                 // next `OVERLAP - 1` frames, or the next `OVERLAP` when the silence ends between
                 // two hops. A quiet run ends here too.
                 self.queued = 0;
+                self.cut_pending = false;
                 self.since_zero = 0;
                 self.quiet_run = 0;
             } else {
@@ -272,6 +283,7 @@ impl Bins {
                     self.queue[at * bins + k] = re[k] * re[k] + im[k] * im[k];
                 }
                 self.queue_total[at] = total;
+                self.queue_cut[at] = std::mem::take(&mut self.cut_pending);
                 // A frame holds the last STFT size of samples, `2 * (bins - 1)`.
                 self.queue_ok[at] = self.since_zero > OVERLAP && self.since_mute >= 2 * (bins - 1);
                 self.queued += 1;
@@ -498,6 +510,7 @@ mod tests {
         let mut out = [vec![0.0f32; speech.len()], vec![0.0f32; speech.len()], vec![0.0f32; speech.len()]];
         for i in 0..speech.len() {
             let x = [speech[i] + noise[i], speech[i], noise[i]];
+            bins.sample(x[0], hop);
             for (lane, (st, o)) in lanes.iter_mut().zip(out.iter_mut()).enumerate() {
                 o[i] = st.tick(x[lane], hop, &mut |input, frame_out| {
                     spec.analyze(input);
@@ -774,6 +787,29 @@ mod tests {
         assert!(kept > -6.0, "after two quiet stretches split by a mute the estimate fell by {:.1} dB", -kept);
         let fell = feed(&x[split..]);
         assert!(fell < -20.0, "after a search window of quiet the estimate fell by only {:.1} dB", -fell);
+    }
+
+    #[test]
+    fn a_short_mute_ends_the_queued_quiet_run() {
+        for offset in [0, 17] {
+            let mut s = suppressor(24.0);
+            let (n, hop) = (s.n, s.hop);
+            let mut loud = white(47, SR as usize * 2, 0.05);
+            s.process(&mut [&mut loud]);
+            let mut quiet = white(51, 20 * hop + offset, 0.0005);
+            s.process(&mut [&mut quiet]);
+            assert!(s.bins[0].quiet_run > 0);
+            let mute_end = loud.len() + quiet.len() + hop;
+            let first_clean_frame = (mute_end + n).div_ceil(hop);
+            let commit_end = (first_clean_frame + OVERLAP) * hop;
+            let mut after = white(53, commit_end - loud.len() - quiet.len(), 0.0005);
+            after[..hop].fill(0.0);
+            let before_mute = s.bins[0].quiet_run;
+            s.process(&mut [&mut after[..hop]]);
+            assert_eq!(s.bins[0].quiet_run, before_mute + 1, "offset {offset}: queued pre-mute frames lost their quiet run");
+            s.process(&mut [&mut after[hop..]]);
+            assert_eq!(s.bins[0].quiet_run, 1, "offset {offset}: pre-mute quiet frames contributed to the new run");
+        }
     }
 
     /// A voice that starts with the stream keeps its level within 3 dB over its first 0.25 s and
