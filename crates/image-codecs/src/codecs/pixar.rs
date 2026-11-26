@@ -47,12 +47,15 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     if b.len() < HEADER {
         return Err(bad("the header is truncated"));
     }
-    // Photoshop 2.5/3.0 and KDE samples write version 1. Version 0 is the synthetic layout.
+    // Version 0 is the channel-bitmask layout the synthetic tests write. Version 1 stores a
+    // picture type instead. Published notes describe the file as an uncompressed 1986 raster,
+    // grey or RGB at 8 bits, beginning 80 E8 (Wolfram Language PXR reference; Just Solve the
+    // File Format Problem, "Pixar picture"). They do not give these field positions. The positions
+    // are the layout this reader implements, and the tests write it. No third-party sample is committed.
     let version = le16(b, 4).ok_or_else(|| bad("format version"))?;
     if version > 1 {
         return Err(unsupported("an unknown Pixar format version"));
     }
-    // Header offsets match Pillow PixarImagePlugin and KDE kimageformats pxr.cpp:
     // height 416, width 418, tile size 420/422, storage 424, sample encoding 426.
     let height = u32::from(le16(b, 416).ok_or_else(|| bad("picture height"))?);
     let width = u32::from(le16(b, 418).ok_or_else(|| bad("picture width"))?);
@@ -63,8 +66,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     if width == 0 || height == 0 || tile_w == 0 || tile_h == 0 {
         return Err(bad("zero-sized picture or tile"));
     }
-    // Real files store a PIC type (8 = grey, 14 = RGB) with depth 2 (8-bit). Synthetic files
-    // use a channel bitmask in the low nibble: R=1, G=2, B=4, A=8.
+    // Version 1 stores a picture type (8 = grey, 14 = RGB) with sample encoding 2 (8-bit).
+    // Version 0 uses a channel bitmask in the low nibble: R=1, G=2, B=4, A=8.
     let (layout, color) = match (storage, depth) {
         (8, 2) => (ChannelLayout::Gray, 1),
         (14, 2) => (ChannelLayout::Rgb, 3),
@@ -150,6 +153,14 @@ mod tests {
         b
     }
 
+    /// Version 1: picture type in `storage` (8 grey, 14 RGB) and sample encoding 2 (8-bit).
+    fn pxr_v1(width: u16, height: u16, tile_w: u16, tile_h: u16, storage: u16, tiles: &[Vec<u8>]) -> Vec<u8> {
+        let mut b = pxr(width, height, tile_w, tile_h, storage, tiles);
+        b[4..6].copy_from_slice(&1u16.to_le_bytes());
+        b[426..428].copy_from_slice(&2u16.to_le_bytes());
+        b
+    }
+
     #[test]
     fn reads_a_single_tile_rgb() {
         // 2×1 RGB: red then green.
@@ -198,14 +209,14 @@ mod tests {
     }
 
     #[test]
-    fn reads_a_real_pixar_grey_file() {
-        // KDE kimageformats autotests/read/pxr/testcard_gray.pxr (LGPL-2.0-or-later).
-        let b = include_bytes!("testdata/pixar_testcard_gray.pxr");
-        assert!(looks_like_pixar(b));
-        let img = decode(b, &Limits::default()).unwrap();
-        assert_eq!((img.width(), img.height(), img.layout()), (256, 256, ChannelLayout::Gray));
-        let d = img.data();
-        assert_eq!(d[0], 255);
-        assert_eq!(d[8], 0);
+    fn reads_version1_grey_and_rgb_tiles() {
+        let grey = pxr_v1(3, 1, 3, 1, 8, &[vec![0, 128, 255]]);
+        let img = decode(&grey, &Limits::default()).unwrap();
+        assert_eq!((img.layout(), img.data()), (ChannelLayout::Gray, &[0u8, 128, 255][..]));
+
+        let rgb = pxr_v1(2, 1, 2, 1, 14, &[vec![255, 0, 0, 0, 255, 0]]);
+        let img = decode(&rgb, &Limits::default()).unwrap();
+        assert_eq!((img.width(), img.height(), img.layout()), (2, 1, ChannelLayout::Rgb));
+        assert_eq!(img.data(), &[255, 0, 0, 0, 255, 0]);
     }
 }
