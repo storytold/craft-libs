@@ -172,6 +172,8 @@ pub struct NumberCodec {
     /// A lone percentage is that share of the start value ([`NumberCodec::share_of_start`]).
     share: bool,
     signed_zoom: bool,
+    /// A positive value is written with its `+` ([`NumberCodec::explicit_plus`]).
+    plus: bool,
 }
 
 impl fmt::Debug for NumberCodec {
@@ -183,6 +185,7 @@ impl fmt::Debug for NumberCodec {
             .field("zoom", &self.zoom)
             .field("share", &self.share)
             .field("signed_zoom", &self.signed_zoom)
+            .field("plus", &self.plus)
             .field("custom", &self.custom.is_some())
             .field("primary", &self.primary.is_some())
             .finish()
@@ -207,6 +210,7 @@ impl PartialEq for NumberCodec {
             && self.zoom == other.zoom
             && self.share == other.share
             && self.signed_zoom == other.signed_zoom
+            && self.plus == other.plus
             && same_custom
             && same_primary
     }
@@ -242,7 +246,16 @@ const NUMBER_SAMPLE: &str = "0000.00";
 impl NumberCodec {
     /// A codec reading with `reader` and writing at most `decimals` decimal places.
     pub fn new(reader: Reader, decimals: usize) -> Self {
-        NumberCodec { reader, decimals, fixed: false, custom: None, primary: None, zoom: false, share: false, signed_zoom: false }
+        NumberCodec { reader, decimals, fixed: false, custom: None, primary: None, zoom: false, share: false, signed_zoom: false, plus: false }
+    }
+
+    /// The same codec writing a positive value with its sign ("+2.50"), as an angle or an offset from a neutral value
+    /// reads; a value that rounds to zero at the codec's decimals stays unsigned ("0.00"). A leading `+` in typed text
+    /// is then the number's sign, as the field writes it, not the relative `+` of a plain field (which adds to the
+    /// value the edit started from).
+    pub fn explicit_plus(mut self) -> Self {
+        self.plus = true;
+        self
     }
 
     /// The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
@@ -322,6 +335,36 @@ impl NumberCodec {
         self
     }
 
+    /// [`parse_tagged`](Self::parse_tagged), reading a share of the start value only when `share` and the codec both say
+    /// so: the number after an explicit `+` is absolute, so `+50%` in a share field is 50, not half the start again.
+    fn parse_tagged_with(&self, text: &str, start: &Option<f64>, share: bool) -> Result<(Option<f64>, ParseNote), NotAValue> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok((None, ParseNote::default()));
+        }
+        if self.zoom {
+            return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
+        }
+        // The `+` an explicit-plus field writes is the number's sign when it is typed back, not a relative edit. The
+        // digit may follow a space ("+ 2.50"), and the signed number is absolute: it re-enters neither the reader's
+        // relative `+` nor the share of the start value.
+        if self.plus
+            && let Some(rest) = trimmed.strip_prefix('+')
+            && rest.trim_start().starts_with(|c: char| crate::quantity::digit(c).is_some() || c == self.reader.decimal_separator())
+        {
+            return self.parse_tagged_with(rest.trim_start(), &None, false);
+        }
+        if share && let Some(share_of_start) = self.reader.share(trimmed) {
+            return start.map(|start| (Some(start * share_of_start), ParseNote::default())).ok_or(NotAValue);
+        }
+        match self.reader.read_tagged(text, *start) {
+            Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
+            Err(rejected) => {
+                self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
+            }
+        }
+    }
+
     /// The widest text the codec writes for a number in `range`: the longest of each end and the number one place of
     /// the last decimal inside it ("100" and "99.9" over 0 to 100 at one decimal), so a field over the range is sized
     /// for any value it shows in it.
@@ -345,6 +388,12 @@ impl NumberCodec {
     /// The reader the codec parses with.
     pub fn reader(&self) -> &Reader {
         &self.reader
+    }
+
+    /// Whether the codec writes a positive value with its `+` ([`NumberCodec::explicit_plus`]): its own text then
+    /// starts with a sign that is the number's, not a relative edit.
+    pub fn writes_sign(&self) -> bool {
+        self.plus
     }
 }
 
@@ -372,7 +421,9 @@ impl Codec for NumberCodec {
         } else {
             fixed
         };
-        trimmed.replace('.', &self.reader.decimal_separator().to_string())
+        let shown = trimmed.replace('.', &self.reader.decimal_separator().to_string());
+        let zero = trimmed.bytes().all(|byte| matches!(byte, b'0' | b'.'));
+        if self.plus && !trimmed.starts_with('-') && !zero { format!("+{shown}") } else { shown }
     }
 
     fn parse(&self, text: &str, start: &Option<f64>) -> Result<Option<f64>, NotAValue> {
@@ -382,27 +433,15 @@ impl Codec for NumberCodec {
     /// The note's unit is the tag of the unit the text named; `None` when it named no tagged unit or a custom parser
     /// read it. With zoom typing the note's `cut` says a second decimal separator cut the text.
     fn parse_tagged(&self, text: &str, start: &Option<f64>) -> Result<(Option<f64>, ParseNote), NotAValue> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Ok((None, ParseNote::default()));
-        }
+        // An authoritative reader owns the whole input, as its doc says: it runs before zoom, the explicit plus and a
+        // share of the start value.
         if let Some(parse) = &self.primary {
-            return parse(trimmed).filter(|number| number.is_finite()).map(|number| (Some(number), ParseNote::default())).ok_or(NotAValue);
-        }
-        if self.zoom {
-            return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
-        }
-        if self.share
-            && let Some(share) = self.reader.share(trimmed)
-        {
-            return start.map(|start| (Some(start * share), ParseNote::default())).ok_or(NotAValue);
-        }
-        match self.reader.read_tagged(text, *start) {
-            Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
-            Err(rejected) => {
-                self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return parse(trimmed).filter(|number| number.is_finite()).map(|number| (Some(number), ParseNote::default())).ok_or(NotAValue);
             }
         }
+        self.parse_tagged_with(text, start, self.share)
     }
 
     /// Zoom typing takes ASCII digits, `/` and the decimal separator, with an optional minus; other fields take every character.
@@ -426,5 +465,60 @@ mod tests {
         assert_eq!(one.format(&Some(-0.04)), "0");
         assert_eq!(one.format(&Some(-0.06)), "-0.1");
         assert_eq!(NumberCodec::new(Reader::new(), 1).fixed().format(&Some(-0.04)), "0.0");
+    }
+
+    #[test]
+    fn an_explicit_plus_codec_writes_the_sign_of_a_positive_value() {
+        let angle = NumberCodec::new(Reader::new(), 2).fixed().explicit_plus();
+        assert_eq!(angle.format(&Some(2.5)), "+2.50");
+        assert_eq!(angle.format(&Some(-3.25)), "-3.25");
+        assert_eq!(angle.format(&Some(0.0)), "0.00", "zero is unsigned");
+        assert_eq!(angle.format(&Some(0.004)), "0.00", "a value that rounds to zero is unsigned");
+        assert_eq!(angle.format(&Some(-0.004)), "0.00");
+        assert_eq!(angle.format(&None), "");
+        assert_eq!(NumberCodec::new(Reader::new(), 2).explicit_plus().format(&Some(1.5)), "+1.5", "trimmed decimals keep the sign");
+        assert_eq!(NumberCodec::new(Reader::new(), 2).fixed().format(&Some(2.5)), "2.50", "without it a positive value has no sign");
+    }
+
+    #[test]
+    fn an_explicit_plus_codec_reads_a_leading_plus_as_the_sign() {
+        let angle = NumberCodec::new(Reader::new(), 2).fixed().explicit_plus();
+        assert_eq!(angle.parse("+2.50", &Some(10.0)).ok(), Some(Some(2.5)), "the written text reads back as itself, not added to the start");
+        assert_eq!(angle.parse(&angle.format(&Some(7.25)), &Some(-1.0)).ok(), Some(Some(7.25)));
+        assert_eq!(angle.parse("-3.25", &Some(10.0)).ok(), Some(Some(-3.25)));
+        assert_eq!(angle.parse("4", &None).ok(), Some(Some(4.0)));
+        assert!(angle.parse("+", &Some(1.0)).is_err(), "a lone plus is no number");
+        let plain = NumberCodec::new(Reader::new(), 2);
+        assert_eq!(plain.parse("+2", &Some(10.0)).ok(), Some(Some(12.0)), "a plain field's leading plus still adds to the start");
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    /// The `+` a field writes may be typed back with a space after it: "+ 2.50" is the number 2.5, not the relative
+    /// "+ 2.50" added to the start value.
+    #[test]
+    fn an_explicit_plus_codec_reads_the_space_after_the_sign() {
+        let angle = NumberCodec::new(Reader::new(), 2).fixed().explicit_plus();
+        assert_eq!(angle.parse("+ 2.50", &Some(10.0)).ok(), Some(Some(2.5)), "a space after the sign keeps it the number's own");
+        assert_eq!(angle.parse("+\t7", &Some(10.0)).ok(), Some(Some(7.0)));
+        assert!(angle.parse("+", &Some(10.0)).is_err(), "a lone plus stays no number");
+        let plain = NumberCodec::new(Reader::new(), 2);
+        assert_eq!(plain.parse("+ 2", &Some(10.0)).ok(), Some(Some(12.0)), "a plain field's plus still adds to the start");
+        // The digit after the sign may be written in any script the reader reads: Arabic-Indic ٣ is 3.
+        assert_eq!(angle.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "a sign before an Arabic-Indic digit is still the number's");
+        assert_eq!(angle.parse("\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "and the reader reads that digit as before");
+        assert_eq!(plain.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(13.0)), "a plain field still adds it to the start");
+    }
+
+    /// A share field's signed percentage is that number, not a share of the start value again.
+    #[test]
+    fn an_explicit_plus_share_codec_reads_a_signed_percentage_as_the_number() {
+        let share = NumberCodec::new(Reader::new().unit("%", 1.0), 0).share_of_start().explicit_plus();
+        assert_eq!(share.parse("+50%", &Some(10.0)).ok(), Some(Some(50.0)), "a signed percentage is absolute");
+        assert_eq!(share.parse("50%", &Some(10.0)).ok(), Some(Some(5.0)), "an unsigned one is the share of the start");
+        assert_eq!(share.parse("+50", &Some(10.0)).ok(), Some(Some(50.0)), "and a signed number is absolute too");
     }
 }
