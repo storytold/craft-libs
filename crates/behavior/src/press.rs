@@ -609,18 +609,37 @@ pub struct PressMachine<T> {
     open: Option<Open<T>>,
     /// The secondary press held beside the open primary press, with its target and start.
     aside: Option<(T, PressStart)>,
+    /// A press [`remove`](Self::remove) ended, with whether it had dragged: the next pass reports its `Cancel`.
+    removed: Option<(T, PressStart, bool)>,
 }
 
 impl<T> Default for PressMachine<T> {
     fn default() -> Self {
-        PressMachine { open: None, aside: None }
+        PressMachine { open: None, aside: None, removed: None }
     }
 }
 
 impl<T: Copy> PressMachine<T> {
     /// A machine with no press.
     pub const fn new() -> Self {
-        PressMachine { open: None, aside: None }
+        PressMachine { open: None, aside: None, removed: None }
+    }
+
+    /// Ends the open press because its owner was not shown for a pass: it holds the pointer no more, and the next
+    /// [`step`](Self::step), when the owner is shown again, reports its `Cancel` with [`PressCancel::Removed`] once, so
+    /// the owner ends what the press began. A silent press reports nothing.
+    pub fn remove(&mut self) {
+        if let Some(open) = self.open.take()
+            && !open.silent
+        {
+            self.removed = Some((open.target, open.start, open.dragging));
+        }
+        self.aside = None;
+    }
+
+    /// Whether a press [`remove`](Self::remove) ended still waits to report its `Cancel`.
+    pub fn removal_pending(&self) -> bool {
+        self.removed.is_some()
     }
 
     /// The target of the open press.
@@ -698,7 +717,9 @@ impl<T: Copy> PressMachine<T> {
             released = Some((open.target, open.start, at, open.dragging, click, open.silent));
             self.open = None;
         }
-        if let (Some(reason), Some(open)) = (input.cancel, self.open) {
+        if let Some((target, start, dragging)) = self.removed.take() {
+            cancelled = Some((target, start, PressCancel::Removed, false, dragging));
+        } else if let (Some(reason), Some(open)) = (input.cancel, self.open) {
             cancelled = Some((open.target, open.start, reason, open.silent, open.dragging));
             self.open = None;
         }

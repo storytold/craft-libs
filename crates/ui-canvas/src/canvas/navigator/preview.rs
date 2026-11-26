@@ -21,8 +21,8 @@ use crate::style::{ComponentStyle, FocusLook, StyleCx, UiTokens};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{
-    AccessAction, AccessData, CancelReason, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey,
-    PressCancel, PressPhase, Sense, ZoomScheme,
+    AccessAction, AccessData, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense,
+    ZoomScheme,
 };
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
@@ -396,7 +396,7 @@ impl Component for Navigator<'_> {
                 }
                 PressPhase::Cancel { reason, .. } => {
                     if !zooming {
-                        cx.cancel(if reason == PressCancel::Escape { CancelReason::Escape } else { CancelReason::Blur });
+                        cx.cancel(reason.into());
                     }
                     held.active = false;
                 }

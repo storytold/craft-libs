@@ -96,6 +96,53 @@ fn active_part_survives_a_drag_outside_its_shape() {
     assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), None);
 }
 
+/// The press phases and activations a root reports after a press on it, a pass in which it is not shown, and a release
+/// that comes while it is shown again (`back`) or while it is still away, followed by a pass that shows it.
+fn removed_press(back: bool) -> (Vec<PressPhase>, usize, bool) {
+    let area = rect(100.0, 100.0, 80.0, 80.0);
+    let (mut show_root, log) = scene(vec![ProbeRoot::new("removed", area, Sense::CLICK | Sense::DRAG)]);
+    let hidden = Rc::new(std::cell::Cell::new(false));
+    let away = hidden.clone();
+    let mut show_frame = move |ui: &mut Ui| {
+        if !away.get() {
+            show_root(ui);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    let at = area.center();
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show_frame);
+    log.borrow_mut().clear();
+    hidden.set(true);
+    frames.idle(1, &mut show_frame);
+    let captured = pointer::press_captured(&frames.ctx);
+    hidden.set(!back);
+    frames.idle(1, &mut show_frame);
+    frames.frame(vec![pointer::release(at)], &mut show_frame);
+    hidden.set(false);
+    frames.idle(2, &mut show_frame);
+    let log = log.borrow();
+    (log.root_phases(0, None), log.root_activations(0), captured)
+}
+
+/// q136: a press whose root was not shown for a pass holds the pointer no more, and its root reads one `Cancel` with
+/// `PressCancel::Removed` when it is shown again before the release; a root that comes back only after the release
+/// reads nothing of the press. Neither release clicks.
+#[trial]
+fn a_press_whose_root_was_not_shown_ends_with_one_removed_cancel() {
+    let (phases, activations, captured) = removed_press(true);
+    assert!(!captured, "the removed press holds the pointer no more");
+    assert!(
+        matches!(phases.as_slice(), [PressPhase::Cancel { reason: craft_behavior::PressCancel::Removed, .. }]),
+        "the root shown again reads one removed cancel and no release: {phases:?}"
+    );
+    assert_eq!(activations, 0, "the release after the cancel does not click");
+    let (phases, activations, captured) = removed_press(false);
+    assert!(!captured);
+    assert!(phases.is_empty(), "the root back after the release reads nothing of the press: {phases:?}");
+    assert_eq!(activations, 0);
+}
+
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h))
 }

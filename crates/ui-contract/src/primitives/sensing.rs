@@ -325,7 +325,7 @@ fn with_arena_in<R>(ctx: &Context, viewport: ViewportId, arena: ArenaId, pass_nr
         }
         if arenas.swept != pass_nr {
             arenas.swept = pass_nr;
-            arenas.by_root.retain(|_, state| state.pass + 2 >= pass_nr);
+            arenas.by_root.retain(|_, state| state.pass + 2 >= pass_nr || state.machine.removal_pending());
         }
         f(arenas.by_root.entry(arena.0).or_default())
     })
@@ -1221,10 +1221,19 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
 }
 
 /// The end hook's sweep: a press whose root, or whose member owner, was not drawn in the pass ends, so a removed
-/// owner never keeps the pointer captured. egui's own drag ends at the next begin hook.
+/// owner never keeps the pointer captured; the arena's next run reports its `Cancel` with `PressCancel::Removed`
+/// (`PressMachine::remove`). A root still not shown once the button is up has had its release: the cancel it was owed
+/// went with it. egui's own drag ends at the next begin hook.
 fn sweep_undrawn(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
+    let held = pointer::with_pass_raw(ctx, |pointer| {
+        pointer.primary_down
+            || pointer
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.buttons.intersects(craft_behavior::Buttons::MIDDLE | craft_behavior::Buttons::SECONDARY))
+    });
     let gone = PerViewport::<Arenas>::with(ctx, viewport, |arenas| {
         let mut gone = false;
         for state in arenas.by_root.values_mut() {
@@ -1235,9 +1244,12 @@ fn sweep_undrawn(ctx: &Context) {
                 })
             };
             if orphaned(state) {
-                state.machine = PressMachine::default();
+                state.machine.remove();
                 state.host_cancel = false;
                 gone = true;
+            }
+            if state.pass != pass_nr && !held && state.machine.removal_pending() {
+                state.machine = PressMachine::default();
             }
         }
         gone
