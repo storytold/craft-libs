@@ -14,10 +14,11 @@ struct OpenerOpen {
     open: bool,
     /// The root frame an opener's trigger was last applied in: a frame's passes apply it once.
     applied: u64,
-    /// The last root frame a real run of the container read the slot: the layer ran, shown or closed.
-    seen: u64,
+    /// The last root frame a real run of the container read the slot: the layer ran, shown or closed. `None` until a
+    /// real run reads it, which a programmatic open before the container ever ran leaves.
+    seen: Option<u64>,
     /// The last root frame something opened or closed the slot (a trigger, a hold, `Popup`, the layer's own close).
-    written: u64,
+    written: Option<u64>,
     /// The opener that opened the layer by id and trigger, and how it fired.
     by: Option<(Id, Trigger, Opening)>,
 }
@@ -42,8 +43,24 @@ impl crate::runtime::shift::Shift for SeenNote {
 fn refresh_seen(ctx: &egui::Context, note: &SeenNote) {
     let frame = crate::runtime::egui::pass::root_frame_nr(ctx);
     let mut own = MemoryStage::open_after(ctx, note.0, note.0);
-    own.session::<OpenerOpen>(sub(note.0, "opens")).seen = frame;
+    mark_shown(own.session::<OpenerOpen>(sub(note.0, "opens")), frame);
     own.write_back();
+}
+
+/// The container was shown in `frame`, by a real run or by a replay of one. A slot still open after a frame the
+/// container did not run, with nothing having opened it since, reads closed (see `opener_open`), and the slot's
+/// last-shown frame becomes this pass's. A replay applies it too: a view that was absent and shows again must not keep
+/// a layer its absence left open.
+fn mark_shown(slot: &mut OpenerOpen, frame: u64) {
+    if slot.open
+        && let Some(seen) = slot.seen
+        && seen.saturating_add(1) < frame
+        && slot.written.is_none_or(|written| written <= seen)
+    {
+        slot.open = false;
+        slot.by = None;
+    }
+    slot.seen = Some(frame);
 }
 
 /// The open state of a container with no binding: the slot of its first opener, with the triggers of every opener
@@ -64,12 +81,8 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     // A layer does not outlive its anchor's absence: one that was open when the container stopped running (its opener
     // left with the row it acts on, or the panel holding both stopped drawing) never ran its anchor-gone close, so it
     // reads closed when it runs again after a gap, unless something opened it since.
-    if real && slot.open && slot.seen != 0 && slot.seen.saturating_add(1) < frame && slot.written <= slot.seen {
-        slot.open = false;
-        slot.by = None;
-    }
     if real {
-        slot.seen = frame;
+        mark_shown(slot, frame);
         // A memoized view holding this container replays it without running it (nothing in it changed), so the replay
         // re-issues this note: the container does not read as gone in the pass it runs again and close a menu it shows.
         crate::runtime::replay::journal(&ctx, || SeenNote(first.id), refresh_seen);
@@ -79,7 +92,7 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
             // A context request opens, also over the open layer: a new right-click moves it to the pointer.
             slot.open = opener.trigger == Trigger::Context || !slot.open;
             slot.by = Some((opener.id, opener.trigger, opener.opening));
-            slot.written = frame;
+            slot.written = Some(frame);
         }
         slot.applied = frame;
         overlay::claim_activation(&ctx, opener.id);
@@ -88,7 +101,7 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     {
         slot.open = true;
         slot.by = Some((opener.id, opener.trigger, Opening::Plain));
-        slot.written = frame;
+        slot.written = Some(frame);
     }
     for opener in first.all().filter(|opener| opener.clicked) {
         overlay::claim_activation(&ctx, opener.id);
@@ -118,7 +131,7 @@ pub(crate) fn set_opener_open(stage: &mut MemoryStage, opener: &Opener, open: bo
     let frame = crate::runtime::egui::pass::root_frame_nr(stage.ctx());
     let slot = stage.session::<OpenerOpen>(sub(opener.id, "opens"));
     slot.open = open;
-    slot.written = frame;
+    slot.written = Some(frame);
 }
 
 /// The open state of a container's layer that has an opener and no binding, driven from the opener's side.
@@ -145,7 +158,7 @@ impl Popup {
         let slot = cx.core.memory.session::<OpenerOpen>(sub(opener, "opens"));
         slot.open = to.unwrap_or(!slot.open);
         slot.by = None;
-        slot.written = frame;
+        slot.written = Some(frame);
         overlay::claim_activation(&cx.core.ctx, opener);
         frame::request_repaint(&cx.core.ctx);
     }

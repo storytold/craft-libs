@@ -55,3 +55,29 @@ fn a_menu_in_a_memoized_view_stays_open_when_the_view_runs_again_after_replays()
     fixture.settle();
     assert!(fixture.by_label("Invert").is_some(), "the menu stays open in the pass the view runs again");
 }
+
+#[trial]
+fn a_menu_is_closed_when_its_memoized_view_shows_again_after_an_absence() {
+    let version = Rc::new(Cell::new(0u32));
+    let shown = Rc::new(Cell::new(true));
+    let (key, showing) = (Rc::clone(&version), Rc::clone(&shown));
+    let mut fixture = Fixture::new(move |ui| {
+        if showing.get() {
+            let _ = MemoView::new("bar", Bar { version: key.get() }, bar).show(ui);
+        }
+    });
+    fixture.settle();
+    let opener = OPENER.with(|opener| opener.borrow().expect("the opener ran"));
+    focus::request(fixture.ctx(), FocusTarget::Id(opener));
+    fixture.settle();
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Invert").is_some(), "Enter on the opener opens the menu");
+    shown.set(false);
+    fixture.frame(vec![]);
+    fixture.frame(vec![]);
+    shown.set(true);
+    fixture.frame(vec![]);
+    fixture.settle();
+    assert!(fixture.by_label("Invert").is_none(), "the menu does not survive the view's absence");
+}
