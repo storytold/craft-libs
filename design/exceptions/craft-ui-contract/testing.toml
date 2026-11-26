@@ -1,0 +1,25 @@
+config_version = 1
+
+[[exception]]
+name = "icon-trial-fixed-tint"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/ui-contract/src/testing/icon_trials.rs"
+reason = "A fixed layer keeps the colours it is drawn in: the trials expect the white tint that leaves them unchanged, and an icon's fill keeps its colour under it."
+count = 4
+
+[[exception]]
+name = "face-runs-text-size"
+kind = "probe"
+rule = "probe/exempt/text-size"
+path = "crates/ui-contract/src/testing/face_runs.rs"
+reason = "The 4,000-point run is drawn at the font atlas's cap, which is in device pixels: at twice the scale the cap, and the card, are half as many points."
+count = 1
+
+[[exception]]
+name = "host-key-trial-app-text-edit"
+kind = "marker"
+rule = "contract/egui-widget"
+path = "crates/ui-contract/src/testing/host_key_trials.rs"
+reason = "The trial reads the caret of the app's own egui TextEdit, which is what it checks."
+count = 1

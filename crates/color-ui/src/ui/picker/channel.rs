@@ -1,0 +1,244 @@
+//! The channel row: on one line, a label that scrubs, a slider whose track shows the channel's colours, and a number
+//! field after it. Shared with the panels that show channels.
+
+use std::ops::RangeInclusive;
+
+use craft_behavior::{Axis, Sense};
+use craft_theme::{Channel, ColorModel, Srgba};
+use craft_ui::contract::{
+    Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
+};
+use craft_ui::form::{Field, SliderField, SliderFieldLayout};
+use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::runtime::env::{Label, UnitKind};
+use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
+use craft_ui::value_drag::{SliderThumb, TrackFace};
+use egui::{Color32, CornerRadius, Ui, Vec2};
+
+/// How a channel's value steps and settles: a channel's or the alpha's.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ChannelRule {
+    /// The values the channel takes, from its least to its greatest.
+    pub range: RangeInclusive<f64>,
+    /// One arrow key's step.
+    pub step: f64,
+    /// The decimals the number field shows.
+    pub decimals: u8,
+}
+
+impl ChannelRule {
+    /// The alpha row's rule: 0 to 100 %, whole percents.
+    pub const ALPHA: ChannelRule = ChannelRule { range: RangeInclusive::new(0.0, 100.0), step: 1.0, decimals: 0 };
+
+    /// The rule of `channel`.
+    pub fn of(channel: &Channel) -> ChannelRule {
+        ChannelRule { range: f64::from(channel.min)..=f64::from(channel.max), step: f64::from(channel.step), decimals: channel.decimals }
+    }
+}
+
+/// What a channel's number counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChannelUnit {
+    /// No unit.
+    None,
+    /// Percent.
+    Percent,
+    /// Degrees.
+    Degrees,
+    /// Any other unit text a model declares.
+    Text(&'static str),
+}
+
+impl ChannelUnit {
+    /// The unit a model declares as text.
+    pub fn of(unit: &'static str) -> ChannelUnit {
+        match unit {
+            "" => ChannelUnit::None,
+            "%" => ChannelUnit::Percent,
+            "°" => ChannelUnit::Degrees,
+            other => ChannelUnit::Text(other),
+        }
+    }
+}
+
+/// Channel `channel` of `model`'s accessible name: the channel's name, or its qualified name ("OKLCH hue") when
+/// another of the `visible` models has a channel of that name.
+pub(crate) fn channel_name(model: &dyn ColorModel, channel: usize, visible: &[&dyn ColorModel]) -> Label {
+    let ch = model.channels()[channel];
+    let clash = visible.iter().any(|m| m.id() != model.id() && m.channels().iter().any(|other| other.name == ch.name));
+    Label::from(if clash { ch.qualified } else { ch.name })
+}
+
+/// The style of a track ramp: the line round its edge.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct TrackRampStyle {
+    #[style(metrics)]
+    metrics: craft_behavior::Metrics,
+    edge: StyleColor,
+    /// The ramp's own size when nothing sets it: a value track's length and groove.
+    length: f32,
+    thickness: f32,
+}
+
+/// The look of a slider's track that shows colours: stops spread evenly from the start to the end, over the
+/// transparency checkerboard where `checker` is set.
+#[derive(Clone, craft_ui::contract::Component)]
+#[component(content_painter)]
+pub struct TrackRamp {
+    #[common]
+    common: Common,
+    stops: Vec<Srgba>,
+    checker: bool,
+}
+
+impl TrackRamp {
+    /// A ramp through `stops`, over the checkerboard where `checker` is set.
+    pub fn new(stops: Vec<Srgba>, checker: bool) -> Self {
+        TrackRamp { common: Common::new(), stops, checker }
+    }
+}
+
+impl Component for TrackRamp {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
+    const ROLE: Role = Role::IMAGE;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = TrackRampStyle;
+    type Output = egui::Response;
+
+    fn style(cx: &StyleCx<'_>, _: TrackRampStyleKey) -> TrackRampStyle {
+        TrackRampStyle {
+            metrics: craft_behavior::Metrics::new(),
+            edge: cx.color(cx.tokens.color.line.control_edge),
+            length: cx.tokens.size.length.track,
+            thickness: cx.tokens.size.ramp.bar,
+        }
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(cx.style.length, cx.style.thickness)
+    }
+
+    fn paint(&mut self, ui: &mut craft_ui::contract::PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let rect = cx.rect;
+        let painter = ui.content_painter(cx);
+        if self.checker {
+            painter.checker(rect);
+        }
+        let last = self.stops.len().saturating_sub(1).max(1) as f32;
+        let stops: Vec<(f32, DataColor)> =
+            self.stops.iter().enumerate().map(|(i, color)| (i as f32 / last, DataColor::new(Color32::from(*color)))).collect();
+        painter.ramp(rect, egui::CornerRadius::ZERO, &stops, Axis::X);
+        ui.draw().stroke(&PaintShape::Rect(rect, CornerRadius::ZERO), StrokeWidth::Thin, cx.style.edge);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// The slider and number field of a channel, over `value`, with `track` colours on the groove.
+pub(crate) fn channel_slider<'a>(
+    name: Label,
+    value: Bind<'a, f64>,
+    rule: &ChannelRule,
+    unit: ChannelUnit,
+    track: Option<(Vec<Srgba>, bool)>,
+) -> SliderField<'a> {
+    let field = SliderField::new(name, value, rule.range.clone()).step(rule.step);
+    let field = match unit {
+        ChannelUnit::None => field,
+        ChannelUnit::Percent => field.unit_kind(UnitKind::Percent),
+        ChannelUnit::Degrees => field.unit_kind(UnitKind::Degrees),
+        ChannelUnit::Text(text) => field.unit(Label::from(text)),
+    };
+    match track {
+        Some((stops, checker)) => field.track_face(TrackFace::new(TrackRamp::new(stops, checker))),
+        None => field,
+    }
+}
+
+/// One channel on one line, as Photoshop's Color panel draws it: the label at the start (the channel's short label
+/// where one is given, "C"), which scrubs the value, the slider over the channel's colours with the pointer under its
+/// track, and the number field with its unit at the end, as wide as its widest value.
+#[derive(craft_ui::contract::Pattern)]
+pub struct ChannelRow<'a> {
+    label: Label,
+    /// The text shown in place of the label: the channel's short label.
+    short: Option<&'static str>,
+    value: Bind<'a, f64>,
+    rule: ChannelRule,
+    track: Option<Vec<Srgba>>,
+    /// Whether the track shows over the transparency checkerboard.
+    checker: bool,
+    unit: ChannelUnit,
+    marks: &'a [f64],
+}
+
+impl<'a> ChannelRow<'a> {
+    /// A row named `label` over `value`, ruled by `rule`.
+    pub fn new(label: impl Into<Label>, value: Bind<'a, f64>, rule: ChannelRule) -> Self {
+        ChannelRow { label: label.into(), short: None, value, rule, track: None, checker: false, unit: ChannelUnit::None, marks: &[] }
+    }
+
+    /// Shows `short` at the line's start in place of the label, which stays the row's name.
+    pub fn short(mut self, short: &'static str) -> Self {
+        self.short = Some(short).filter(|short| !short.is_empty());
+        self
+    }
+
+    /// The colours of the track, from the channel's start to its end.
+    pub fn track(mut self, stops: Vec<Srgba>) -> Self {
+        self.track = Some(stops);
+        self
+    }
+
+    /// The track over the transparency checkerboard, for the colours that carry alpha.
+    pub fn checker(mut self, on: bool) -> Self {
+        self.checker = on;
+        self
+    }
+
+    /// What the number counts.
+    pub fn unit(mut self, unit: ChannelUnit) -> Self {
+        self.unit = unit;
+        self
+    }
+
+    /// The ticks under the track, passed to `SliderField::marks`; not the labelled form, whose caption line has no room
+    /// in a channel row.
+    #[must_use]
+    pub fn marks(mut self, marks: &'a [f64]) -> Self {
+        self.marks = marks;
+        self
+    }
+
+    /// Shows the row; the edit of the slider or the field, `None` when the row did not run.
+    pub fn show(self, ui: &mut Ui) -> Option<EditResponse<f64>> {
+        let ChannelRow { label, short, mut value, rule, track, checker, unit, marks } = self;
+        let side = match short {
+            Some(short) => SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(short)))),
+            None => SideLabel::new(),
+        };
+        Field::new(label.clone())
+            .side(side.scrub(true))
+            .show(ui, |ui, _| {
+                channel_slider(label.clone(), value.reborrowed(), &rule, unit, track.clone().map(|stops| (stops, checker)))
+                    .marks(marks)
+                    .layout(SliderFieldLayout::Inline)
+                    .field_sizing(Sizing::Content)
+                    .thumb(SliderThumb::Triangle)
+                    .show(ui)
+                    .edit
+            })
+            .inner
+    }
+}

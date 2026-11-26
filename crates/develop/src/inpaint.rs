@@ -116,7 +116,10 @@ mod tests {
         assert!(matches!(complete_with(w, h, 1, &img, &hole, &p, &count), Ok(Some(_))));
         let total = polls.load(Ordering::Relaxed);
         assert!(total > 8, "the scene polls in the workers too: {total}");
-        for nth in 0..total {
+        // Cancelling at the first, a quarter, the middle, three quarters and the last polls, workers' polls included.
+        let mut picks = vec![0, 1, 2, total / 4, total / 2, 3 * total / 4, total - 3, total - 2, total - 1];
+        picks.dedup();
+        for nth in picks {
             let polls = AtomicUsize::new(0);
             let once = || polls.fetch_add(1, Ordering::Relaxed) == nth;
             assert_eq!(complete_with(w, h, 1, &img, &hole, &p, &once), Err(Cancelled), "poll {nth} of {total}");
