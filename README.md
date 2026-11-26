@@ -219,6 +219,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-i18n-build`](crates/i18n-build/README.md): embeds the optional craft-i18n catalogs
+  from an app's `build.rs` (`CRAFT_I18N_DIR`, `CRAFT_I18N_REQUIRED`) as the table `craft-i18n`
+  reads, with each regional locale's parent and the app's own catalogs merged in. No
+  dependencies.
 - [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,

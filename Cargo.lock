@@ -3021,6 +3021,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-i18n-build"
+version = "0.1.0"
+dependencies = [
+ "craft-i18n",
+ "craft-i18n-build-consumer",
+]
+
+[[package]]
+name = "craft-i18n-build-consumer"
+version = "0.1.0"
+dependencies = [
+ "craft-i18n-build",
+]
+
+[[package]]
 name = "craft-ical"
 version = "0.1.0"
 dependencies = [
