@@ -319,6 +319,7 @@ mod row_prediction {
                 ImageColorspace::Cmyk => Some("DeviceCMYK"),
                 ImageColorspace::DeviceN => None,
             };
+            assert!(name.is_some(), "{}: DeviceN fixture needs the colorant ColorSpace check", row.name);
             assert_eq!(dict.get::<Name<'_>>(b"ColorSpace").unwrap().as_str(), name.unwrap());
         }
         if let Some(alpha) = &row.samples.alpha {
