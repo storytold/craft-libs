@@ -1,0 +1,29 @@
+//! The screen tests of craft-imaging, folded into the lib's test target.
+
+pub(crate) mod adjust_editors;
+pub(crate) mod adjust_tone;
+pub(crate) mod blur_pins;
+pub(crate) mod channels_delete;
+pub(crate) mod channels_memo;
+pub(crate) mod color_range;
+pub(crate) mod contour_field;
+pub(crate) mod curve;
+pub(crate) mod fill;
+pub(crate) mod filter_gallery;
+pub(crate) mod histogram;
+pub(crate) mod hosted_dialogs;
+pub(crate) mod layer_style;
+pub(crate) mod liquify;
+pub(crate) mod live_preview;
+pub(crate) mod perspective_warp;
+pub(crate) mod pin_warp;
+pub(crate) mod raw_develop;
+pub(crate) mod scopes;
+pub(crate) mod select;
+pub(crate) mod select_mask;
+pub(crate) mod selection;
+pub(crate) mod threshold;
+pub(crate) mod transform_preview;
+pub(crate) mod vanishing_point;
+pub(crate) mod warp;
+pub(crate) mod wide_angle;

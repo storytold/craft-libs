@@ -144,7 +144,7 @@ impl Embed {
     /// The cut keeps the catalogs' characters from U+2E80 up (CJK and later blocks, without emoji,
     /// variation selectors and tags), plus CJK punctuation (U+3000–303F), kana (U+3040–30FF,
     /// U+31F0–31FF) and full-width forms (U+FF00–FFEF), with every layout feature. The same inputs
-    /// give the same bytes. A face with CFF outlines is an [`Error::NotTrueType`].
+    /// give the same bytes. TrueType and CFF faces both cut, with craft-font-subset.
     ///
     /// The catalogs are also checked as by [`Embed::check_text`]. Relative paths are under the
     /// package directory; an unreadable catalog is a `cargo::warning`.
@@ -378,22 +378,22 @@ impl Embed {
         let mut chars = BTreeSet::new();
         // An unreadable catalog adds nothing here; `check_coverage` reports it.
         for text in catalogs.iter().filter_map(|path| std::fs::read_to_string(path).ok()) {
-            chars.extend(text.chars().filter(|&c| needs_glyph(c)));
+            chars.extend(text.chars().filter(|&c| needs_glyph(c)).map(u32::from));
         }
         for (start, end) in UI_RANGES {
-            chars.extend(start..=end);
+            chars.extend((start..=end).map(u32::from));
         }
         let dir = out_dir.join("craft-fonts-ui");
         std::fs::create_dir_all(&dir).map_err(|source| Error::Write { path: dir.clone(), source })?;
         for face in faces.iter_mut().filter(|face| face.cut) {
             let source = read_bounded(&face.path, MAX_FILE_BYTES).map_err(|source| Error::Read { path: face.path.clone(), source })?;
-            let bytes = crate::subset::subset(&source, face.index, &chars).map_err(|failure| match failure {
-                crate::subset::Failure::NotTrueType => Error::NotTrueType { path: face.path.clone() },
-                crate::subset::Failure::Other(reason) => Error::Subset { path: face.path.clone(), reason },
-            })?;
+            let bytes = craft_font_subset::cut_face(&source, face.index, &chars)
+                .map_err(|e| Error::Subset { path: face.path.clone(), reason: e.to_string() })?;
             let name: String =
                 format!("{}-{}", face.entry.family, face.entry.style).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-            let out = dir.join(format!("{name}.ttf"));
+            // A cut keeps its source's outline format, so it keeps its extension.
+            let extension = face.path.extension().and_then(|e| e.to_str()).unwrap_or("ttf");
+            let out = dir.join(format!("{name}.{extension}"));
             // Rewriting identical bytes would make Cargo rebuild the crate that embeds them.
             if std::fs::read(&out).ok().as_deref() != Some(&bytes[..]) {
                 std::fs::write(&out, &bytes).map_err(|source| Error::Write { path: out.clone(), source })?;
@@ -538,12 +538,13 @@ fn table(faces: &[Face]) -> Result<String, Error> {
         let scripts: Vec<String> = entry.scripts.iter().map(|s| format!("{s:?}")).collect();
         let _ = writeln!(
             src,
-            "    EmbeddedFace {{ family: {:?}, style: {:?}, scripts: &[{}], index: {}, bytes: include_bytes!({:?}) }},",
+            "    EmbeddedFace {{ family: {:?}, style: {:?}, scripts: &[{}], index: {}, bytes: include_bytes!({:?}), role: {:?} }},",
             entry.family,
             entry.style,
             scripts.join(", "),
             index,
             file,
+            entry.role.as_deref(),
         );
     }
     src.push_str("]\n");
@@ -725,31 +726,75 @@ pub enum Error {
     /// `CRAFT_FONTS_REQUIRED=1` but `CRAFT_FONTS_DIR` is unset or empty.
     NotSet,
     /// The manifest or a font file it lists can't be read.
-    Read { path: PathBuf, source: io::Error },
+    Read {
+        /// The file that failed.
+        path: PathBuf,
+        /// The I/O error.
+        source: io::Error,
+    },
     /// The manifest has a malformed line.
-    Parse { manifest: PathBuf, error: ParseError },
+    Parse {
+        /// The manifest.
+        manifest: PathBuf,
+        /// The malformed line.
+        error: ParseError,
+    },
     /// Required, but no face in the manifest was selected.
-    NoFaces { manifest: PathBuf },
+    NoFaces {
+        /// The manifest.
+        manifest: PathBuf,
+    },
     /// Required, but no face in the manifest has these requested script tags.
-    MissingScripts { manifest: PathBuf, scripts: Vec<String> },
+    MissingScripts {
+        /// The manifest.
+        manifest: PathBuf,
+        /// The requested script tags no face has.
+        scripts: Vec<String>,
+    },
     /// The generated table can't be written.
-    Write { path: PathBuf, source: io::Error },
+    Write {
+        /// The file that could not be written.
+        path: PathBuf,
+        /// The I/O error.
+        source: io::Error,
+    },
     /// `out_file` is relative and `OUT_DIR` is unset (not running as a build script).
     NoOutDir,
-    /// An interface face has CFF outlines, which can't be cut correctly; it must be TrueType.
-    NotTrueType { path: PathBuf },
     /// An interface face can't be cut.
-    Subset { path: PathBuf, reason: String },
+    Subset {
+        /// The face's file.
+        path: PathBuf,
+        /// Why cutting failed.
+        reason: String,
+    },
     /// [`Embed::documents`] names families the manifest lacks; `known` lists the manifest's.
-    UnknownFamilies { manifest: PathBuf, families: Vec<String>, known: Vec<String> },
+    UnknownFamilies {
+        /// The manifest.
+        manifest: PathBuf,
+        /// The families the manifest lacks.
+        families: Vec<String>,
+        /// The families the manifest has.
+        known: Vec<String>,
+    },
     /// A face to embed has a path that isn't UTF-8, which `include_bytes!` can't name.
-    NonUtf8Path { path: PathBuf },
+    NonUtf8Path {
+        #[allow(missing_docs)]
+        path: PathBuf,
+    },
     /// A manifest font or licence path is absolute, climbs out with `..`, or resolves (through a
     /// symlink) to a file outside the checkout.
-    OutsideCheckout { manifest: PathBuf, file: String },
+    OutsideCheckout {
+        #[allow(missing_docs)]
+        manifest: PathBuf,
+        #[allow(missing_docs)]
+        file: String,
+    },
     /// A path that goes into a `cargo::rerun-if-changed` line has a line break, which would start
     /// another cargo instruction.
-    LineBreakInPath { path: PathBuf },
+    LineBreakInPath {
+        /// The path.
+        path: PathBuf,
+    },
 }
 
 impl fmt::Display for Error {
@@ -768,11 +813,6 @@ impl fmt::Display for Error {
             }
             Self::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             Self::NoOutDir => write!(f, "OUT_DIR is not set: call craft-fonts-build from a build script, or pass an absolute out_file"),
-            Self::NotTrueType { path } => write!(
-                f,
-                "{} has CFF outlines, which craft-fonts-build can't subset correctly: an interface face (role ui) must be a TrueType (glyf) font",
-                path.display()
-            ),
             Self::Subset { path, reason } => write!(f, "cannot subset {}: {reason}", path.display()),
             Self::UnknownFamilies { manifest, families, known } => write!(
                 f,

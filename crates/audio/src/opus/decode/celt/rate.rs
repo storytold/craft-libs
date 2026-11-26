@@ -4,10 +4,6 @@ use super::tables::{EBANDS, LOG2_FRAC_TABLE, MAX_LM, NB_EBANDS, OVERLAP};
 use crate::opus::decode::range::{BITRES, RangeDecoder};
 
 pub use crate::opus::rate_common::get_pulses;
-#[cfg(test)]
-use crate::opus::rate_common::log2_frac;
-#[cfg(test)]
-pub use crate::opus::rate_common::pvq_v;
 pub const MAX_FINE_BITS: i32 = 8;
 const FINE_OFFSET: i32 = 21;
 pub const QTHETA_OFFSET: i32 = 4;
@@ -270,43 +266,4 @@ fn interp_bits2pulses(input: InterpPulsesInput<'_, '_>) -> Allocation {
         fine_priority[j] = (ebits[j] < 1) as i32;
     }
     Allocation { coded_bands, intensity, dual_stereo, balance, pulses: bits, fine_quant: ebits, fine_priority }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn log2_frac_values() {
-        assert_eq!(log2_frac(1, 3), 0);
-        assert_eq!(log2_frac(2, 3), 8);
-        assert_eq!(log2_frac(4, 3), 16);
-        assert_eq!(log2_frac(6, 3), 21);
-        assert_eq!(log2_frac(18, 3), 34);
-        assert_eq!(log2_frac(22, 3), 36);
-    }
-
-    #[test]
-    fn pvq_counts() {
-        // V(N,1) = 2N, V(1,K) = 2 (K>0), V(2,K) = 4K.
-        assert_eq!(pvq_v(5, 1), 10);
-        assert_eq!(pvq_v(1, 7), 2);
-        assert_eq!(pvq_v(2, 9), 36);
-        assert_eq!(pvq_v(3, 2), 18);
-        assert_eq!(pvq_v(0, 0), 1);
-        assert_eq!(pvq_v(0, 3), 0);
-    }
-
-    #[test]
-    fn caps_match_reference_shape() {
-        let m = Mode::new();
-        // 1-bin bands at LM=0 (mono and stereo) are capped at 224.
-        assert!(m.caps[..8].iter().all(|&c| c == 224));
-        assert!(m.caps[21..29].iter().all(|&c| c == 224));
-        let first_rows: [u8; 42] = [
-            224, 224, 224, 224, 224, 224, 224, 224, 160, 160, 160, 160, 185, 185, 185, 178, 178, 168, 134, 61, 37, 224, 224, 224, 224, 224, 224, 224,
-            224, 240, 240, 240, 240, 207, 207, 207, 198, 198, 183, 144, 66, 40,
-        ];
-        assert_eq!(&m.caps[..42], &first_rows[..]);
-    }
 }

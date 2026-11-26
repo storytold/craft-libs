@@ -1,0 +1,23 @@
+[package]
+name = "craft-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The shared services of a Craft app (identity, language, settings sections, commands, jobs), installed once and read by every library feature"
+
+[lints]
+workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+craft-i18n = { workspace = true }
+egui = { workspace = true, optional = true }
+serde = { workspace = true }
+web-time = "1.1"
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+
+[features]
+# `Host::install` and `Host::of`: the Host as an egui context plugin. Never craft-ui.
+ui = ["dep:egui"]

@@ -173,7 +173,7 @@ pub struct EvalContext {
     /// Where files the graph names but does not carry are read from.
     pub files: Files,
     /// Counts the graph's own nodes as they finish (not those inside subgraphs), for a host showing a render's progress
-    /// against [`crate::Graph::work_nodes`]; `None` counts nothing. Nothing computed depends on it.
+    /// against [`crate::graph::Graph::work_nodes`]; `None` counts nothing. Nothing computed depends on it.
     pub nodes_done: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
