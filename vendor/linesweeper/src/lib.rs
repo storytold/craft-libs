@@ -278,8 +278,14 @@ fn subpath_bounding_boxes(path: &kurbo::BezPath) -> Vec<kurbo::Rect> {
 /// The accuracy parameter `eps` bounds how much they can differ.
 ///
 /// Returns [`Error::InvalidEps`] when `eps` is NaN, infinite, zero or
-/// negative. An `eps` below `64 * f64::EPSILON` times the largest coordinate
-/// magnitude is raised to that value.
+/// negative. A positive `eps` below `64 * f64::EPSILON` times the largest
+/// coordinate magnitude is raised to that value.
+///
+/// The [`Topology`] constructors and [`sweep::Sweeper::new_with_correctness`]
+/// handle an invalid `eps` differently: they return no error for it and use
+/// that floor in its place. Call this function when an invalid `eps` should be
+/// reported as an error, and a [`Topology`] constructor or the [`sweep::Sweeper`]
+/// when it should be replaced.
 ///
 /// `eps` is one absolute tolerance for every segment, so a part of the input
 /// narrower than about `eps`, or a gap narrower than about `eps`, can be
