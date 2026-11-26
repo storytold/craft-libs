@@ -15,7 +15,7 @@ fn each_default_layout_is_valid_and_holds_exactly_its_workspaces_panels() {
         let layout = default_for(workspace);
         assert_eq!(layout.validate(), Ok(()));
         for panel in COMPONENTS.iter().chain(&THEME) {
-            assert_eq!(layout.layout.contains(panel), panels.contains(panel), "{workspace:?} {panel:?}");
+            assert_eq!(layout.layout().contains(panel), panels.contains(panel), "{workspace:?} {panel:?}");
         }
     }
 }
@@ -59,7 +59,7 @@ fn the_overview_is_pinned_and_a_component_tab_is_not() {
     let tab = PanelId::component("craft_ui::buttons::link::Link");
     let mut dock = default_for(Workspace::Components);
     let _ = dock.set_visible(tab.clone(), true, Some(PanelId::Overview), false, |panel| panel.permissions());
-    assert!(dock.layout.contains(&tab), "the component tab opens beside the Overview");
+    assert!(dock.layout().contains(&tab), "the component tab opens beside the Overview");
     let refused = [
         Action::float(PanelId::Overview, rect),
         Action::close(PanelId::Overview),

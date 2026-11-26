@@ -3,8 +3,8 @@
 //! The pattern puts a `TextField::search` over a `TileGrid`. The field drives the grid: Up and Down move into the
 //! tiles, Enter picks the active tile, and focus stays in the field. A click on a tile picks it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::PickerWords;
 use crate::contract::{
@@ -205,7 +205,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
                 .shown(category)
                 .show_items(ui, &source, &mut |key, _| Tab::new(tabs[*key].1.clone()));
             for event in &strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.last()
                 {
                     category = (*key).min(groups.len());

@@ -30,7 +30,9 @@ pub mod stats;
 /// The registrations of the table widgets' stories and trials.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 pub use chart::{ChartPrimitive, HAlign, VAlign, paint_chart};
@@ -46,8 +48,8 @@ pub use fields::{
 pub use filter::{FilterButton, FilterButtonEvent, FilterButtonOutput, FilterButtonStyle, FilterButtonWords};
 pub use grid::{
     CellAdvance, CellAt, CellDirection, CellEdit, CellGrid, CellGridStyle, CellGridWords, CellProblem, CellRange, CellSelection, CellSpace,
-    ColumnFilter, GridEdit, GridLayout, GridMenuTarget, GridModel, GridOutput, GridRow, GridState, HEADER_MIN_ZOOM, LineIndex, Positions,
-    SHEET_COLUMNS, SHEET_ROWS, SHEET_ZOOM, SheetGeometry, SheetMetrics, absolute_range_reference, absolute_reference, column_letters,
+    ColumnEdges, ColumnFilter, GridEdit, GridLayout, GridMenuTarget, GridModel, GridOutput, GridRow, GridState, HEADER_MIN_ZOOM, LineIndex,
+    Positions, SHEET_COLUMNS, SHEET_ROWS, SHEET_ZOOM, SheetGeometry, SheetMetrics, absolute_range_reference, absolute_reference, column_letters,
 };
 pub use outline::{OutlineAction, OutlineAxis, OutlineBand, OutlineBandOutput, OutlineBandStyle, OutlineBandWords, OutlineGroup};
 pub use refpick::ReferencePicker;

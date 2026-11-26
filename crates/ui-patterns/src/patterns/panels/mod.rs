@@ -4,21 +4,21 @@
 mod words;
 
 // Inspector.
-mod inspector;
+pub(crate) mod inspector;
 
 pub use inspector::Inspector;
 
 // History and modifier keys.
-mod history;
-mod modifier_keys;
+pub(crate) mod history;
+pub(crate) mod modifier_keys;
 
 pub use history::{HistoryEvent, HistoryFooter, HistoryKey, HistoryPanel, HistoryPanelOutput, HistoryRow};
 pub use modifier_keys::ModifierKeysPanel;
 
 // CommandPalette and Tour.
-mod palette;
-mod tour;
+pub(crate) mod palette;
+pub(crate) mod tour;
 
-pub use palette::{CommandPalette, PaletteFace, PaletteOutput};
+pub use palette::{CommandPalette, PaletteFace, PaletteOutput, RESULTS};
 pub use tour::{Tour, TourEvent, TourOutput, TourStep};
 pub use words::PanelWords;

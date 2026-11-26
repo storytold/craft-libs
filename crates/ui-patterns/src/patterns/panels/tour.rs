@@ -19,8 +19,8 @@ use craft_theme::variant::Variant;
 use egui::{Rect, Ui};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The keys of a tour: Right goes to the next step and Left back (the keymap mirrors them in a right-to-left
 /// interface). They belong to the tour that holds the focus.
@@ -186,7 +186,7 @@ impl<'a> Tour<'a> {
 
 /// The card's layer: a popup beside `anchor` (the step's target with a panel's padding around it, clear of its mark),
 /// else in the middle of the window. It blocks nothing and dims nothing; a press outside leaves it open.
-fn layer(anchor: Option<Rect>) -> Overlay {
+pub(super) fn layer(anchor: Option<Rect>) -> Overlay {
     let mut overlay = Overlay::popover().dismiss(Dismiss::new().outside(Outside::Keep));
     overlay.fit = OverlayFit::ContentCapped(CARD_SHARE);
     overlay.place = match anchor {

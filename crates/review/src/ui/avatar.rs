@@ -9,8 +9,8 @@ use egui::{Color32, Rect, Response, Vec2};
 
 use crate::collab::initials;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Paints a round face filling `rect`: `fill` with the initials of `name` centred on it, in the ink that reads on `fill`.
 pub fn paint_avatar(ui: &PaintUi<'_>, rect: Rect, name: &str, fill: DataColor) {

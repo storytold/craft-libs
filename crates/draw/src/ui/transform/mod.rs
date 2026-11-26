@@ -2,10 +2,10 @@
 //! the open session around them ([`TransformSession`], [`TransformOverlay`], [`TransformTool`], [`TransformBar`]).
 
 mod session;
-mod session_bar;
-mod session_overlay;
-mod transform_box;
-mod transform_fields;
+pub(crate) mod session_bar;
+pub(crate) mod session_overlay;
+pub(crate) mod transform_box;
+pub(crate) mod transform_fields;
 
 pub use session::{
     Interpolation, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformPreset, TransformRequest, TransformResult,
@@ -17,4 +17,7 @@ pub use transform_box::{
     ApplyBy, BOX, LineEnd, LineEndDrag, LineEnds, LineLook, RotateZone, TransformBox, TransformBoxOutput, TransformBoxStyle, TransformBoxWords,
     TransformReach,
 };
-pub use transform_fields::{SizeUnit, TransformField, TransformFieldWords, TransformFields, TransformFieldsOutput, TransformGroups, TransformRow};
+pub use transform_fields::{
+    FieldArrangement, SizeUnit, TransformField, TransformFieldWords, TransformFields, TransformFieldsOutput, TransformGroups, TransformRow,
+    TransformSource,
+};

@@ -3,8 +3,8 @@
 //! The window's shell shows its queue through `ToastHost`, at the end-bottom corner of its body, and tells it which
 //! cards the pointer or focus holds; an embedded shell shows its own queue inside its own body. A card's timer runs only
 //! while nothing holds it, and starts over with its whole timeout when the hold ends. Each new toast is announced once,
-//! when it is first shown. At most `MAX_CARDS` cards are queued per window; a toast's end (an action taken, a
-//! dismissal, the timer, a drop by the cap) is read once with `end`.
+//! when it is first shown. At most `MAX_CARDS` cards are queued per window unless progress cards fill it; a toast's end
+//! (an action taken, a dismissal, the timer, a drop by the cap) is read once with `end`.
 
 use crate::runtime::access::{self, Politeness};
 use crate::runtime::egui::{pass, repaint};
@@ -17,7 +17,9 @@ use egui::{Context, ViewportId};
 pub const TIMEOUT: f32 = 6.0;
 
 /// Most cards queued at once per window. Posting past it keeps the new card and drops the oldest earlier card that
-/// would leave by itself (no action, a timeout), else the oldest earlier card; `end` reports the drop as `Dropped`.
+/// would leave by itself (no action, a timeout), else the oldest earlier card without progress; `end` reports the drop
+/// as `Dropped`. A progress card is never dropped: when only progress cards are earlier, the new card is queued past
+/// the cap.
 pub const MAX_CARDS: usize = 3;
 
 /// Ended toasts whose end nobody has read yet; the oldest report goes first.
@@ -69,6 +71,8 @@ pub struct Toast {
     pub lines: Vec<Label>,
     /// The actions after the message, in reading order.
     pub actions: Vec<ToastAction>,
+    /// The fraction done, `0..=1`; a card with progress has no timer and is never the one the cap drops.
+    pub progress: Option<f32>,
 }
 
 impl Toast {
@@ -82,6 +86,7 @@ impl Toast {
             title: None,
             lines: Vec::new(),
             actions: Vec::new(),
+            progress: None,
         }
     }
 
@@ -119,6 +124,43 @@ impl Toast {
     pub fn politeness(mut self, politeness: Politeness) -> Self {
         self.politeness = politeness;
         self
+    }
+
+    /// Sets the fraction done, clamped to `0..=1`; the card then has no timer.
+    pub fn progress(mut self, fraction: f32) -> Self {
+        self.progress = Some(clamp_fraction(fraction));
+        self.timeout = None;
+        self
+    }
+}
+
+/// `fraction` clamped to `0..=1`, and 0 when it is not a number.
+fn clamp_fraction(fraction: f32) -> f32 {
+    if fraction.is_nan() { 0.0 } else { fraction.clamp(0.0, 1.0) }
+}
+
+/// Sets the fraction done of the toast `id` and, when given, its message, in whichever viewport holds it; the card
+/// keeps no timer from then on. A toast that is gone is left alone, and a measuring run changes nothing.
+pub fn set_progress(ctx: &Context, id: ToastId, fraction: f32, message: Option<Label>) {
+    if !crate::runtime::measure::effect(ctx, "toast::set_progress") {
+        return;
+    }
+    let fraction = clamp_fraction(fraction);
+    for viewport in pass::live_viewports(ctx) {
+        let found = PerViewport::<Queue>::with(ctx, viewport, |queue| {
+            let Some(live) = queue.live().find(|live| live.card.id == id) else { return false };
+            let toast = &mut live.card.toast;
+            toast.progress = Some(fraction);
+            toast.timeout = None;
+            if let Some(message) = message.clone() {
+                toast.message = message;
+            }
+            live.remaining = None;
+            true
+        });
+        if found {
+            repaint::request_of(ctx, viewport);
+        }
     }
 }
 
@@ -218,9 +260,11 @@ pub fn post_to(ctx: &Context, viewport: ViewportId, window: &WindowKey, toast: T
         let live = queue.window(window);
         live.push(Live { card: Card { id, toast }, shown: false, remaining, held: false, fresh: false });
         while live.len() > MAX_CARDS {
-            // The new card is last and never the one dropped; a kept card has no timer, so it counts as sticky.
-            let earlier = live.len() - 1;
-            let at = live.iter().take(earlier).position(Live::leaves_by_itself).unwrap_or(0);
+            // The new card is last and never the one dropped; a kept card has no timer, so it counts as sticky. A
+            // progress card stands for a running job and is never dropped.
+            let earlier = &live[..live.len() - 1];
+            let at = earlier.iter().position(Live::leaves_by_itself).or_else(|| earlier.iter().position(|live| live.card.toast.progress.is_none()));
+            let Some(at) = at else { break };
             dropped.push(live.remove(at).card.id);
         }
         for dropped in dropped {
@@ -285,11 +329,19 @@ pub fn keep(ctx: &Context, id: ToastId) {
     }
 }
 
-/// The cards of the window `window` in the running viewport, oldest first.
+/// The cards of the window `window` in the running viewport, oldest first. A tracked input (`Input::Toasts`).
 pub fn cards(ctx: &Context, window: &WindowKey) -> Vec<Card> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Toasts);
     PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
         let cards = queue.windows.iter().find(|(key, _)| key == window);
         cards.map_or_else(Vec::new, |(_, live)| live.iter().map(|live| live.card.clone()).collect())
+    })
+}
+
+/// The ids of the cards each window of the running viewport queues: what `Input::Toasts` observes.
+pub(crate) fn queued(ctx: &Context) -> Vec<(WindowKey, Vec<ToastId>)> {
+    PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
+        queue.windows.iter().map(|(key, live)| (key.clone(), live.iter().map(|live| live.card.id).collect())).collect()
     })
 }
 

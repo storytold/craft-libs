@@ -4,7 +4,7 @@ use serde_json::{Map, Number, Value};
 
 use super::{FormatErrors, SCHEMA, SCHEMA_VERSION, ThemeFile};
 use crate::scale::Radius;
-use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
+use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, GripSeed, LocatorSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
 use crate::tokens::{KnobShape, WellShape};
 
 /// Top-level keys in the order a file lists them; other keys follow, sorted.
@@ -151,6 +151,73 @@ fn update_shape(shape: &mut Map<String, Value>, s: &ShapeSeed) {
         }
         Some(w) => {
             shape.insert("wells".to_owned(), Value::String(if w == WellShape::Square { "square" } else { "round" }.to_owned()));
+        }
+    }
+    match s.grip {
+        None => {
+            shape.remove("grip");
+        }
+        Some(g) => {
+            // The file's own object is updated in place, so its unknown keys stay.
+            let mut obj = match shape.remove("grip") {
+                Some(Value::Object(m)) => m,
+                _ => Map::new(),
+            };
+            grip(&mut obj, &g);
+            shape.insert("grip".to_owned(), Value::Object(obj));
+        }
+    }
+    match s.locator {
+        None => {
+            shape.remove("locator");
+        }
+        Some(l) => {
+            let mut obj = match shape.remove("locator") {
+                Some(Value::Object(m)) => m,
+                _ => Map::new(),
+            };
+            locator(&mut obj, &l);
+            shape.insert("locator".to_owned(), Value::Object(obj));
+        }
+    }
+}
+
+/// Updates the `shape.grip` object `out` to the values the theme sets: a set value is written, an unset one removed.
+fn grip(out: &mut Map<String, Value>, g: &GripSeed) {
+    match g.mark {
+        Some(mark) => {
+            out.insert("mark".to_owned(), Value::String(mark.name().to_owned()));
+        }
+        None => {
+            out.remove("mark");
+        }
+    }
+    match g.count {
+        Some(count) => {
+            out.insert("count".to_owned(), Value::Number(Number::from(count)));
+        }
+        None => {
+            out.remove("count");
+        }
+    }
+    numbers(out, &[("length", g.length), ("width", g.width), ("gap", g.gap)]);
+}
+
+/// Updates the `shape.locator` object `out` to the values the theme sets: a set value is written, an unset one removed.
+fn locator(out: &mut Map<String, Value>, l: &LocatorSeed) {
+    numbers(out, &[("cell", l.cell), ("square", l.square)]);
+}
+
+/// Writes each set number of `values` into `out` and removes each unset one.
+fn numbers(out: &mut Map<String, Value>, values: &[(&str, Option<f32>)]) {
+    for (key, v) in values {
+        match v.and_then(|v| Number::from_f64(f64::from(v))) {
+            Some(n) => {
+                out.insert((*key).to_owned(), Value::Number(n));
+            }
+            None => {
+                out.remove(*key);
+            }
         }
     }
 }

@@ -9,8 +9,8 @@
 //! [`PreviewMode`]: crate::selection::PreviewMode
 //! [`QuickMaskLook`]: crate::selection::QuickMaskLook
 
-mod overlay;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod overlay;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub use overlay::{OutlineSource, PointMap, SelectionOverlay, SelectionOverlayOutput, SelectionWords};

@@ -1,24 +1,32 @@
 //! `Menu` and `MenuItem`: the columns of an inline menu's rows.
 
-mod bar;
+pub(crate) mod bar;
 
-mod closed;
+pub(crate) mod closed;
 
-mod companion;
+pub(crate) mod context_capture;
+pub(crate) mod context_capture_guards;
+pub(crate) mod context_capture_nested;
+pub(crate) mod context_capture_text_native;
 
-mod native;
+pub(crate) mod companion;
 
-mod openers;
+pub(crate) mod icon_row;
 
-mod overflow;
+pub(crate) mod native;
 
-mod pick_focus;
+pub(crate) mod openers;
 
-mod rows;
+pub(crate) mod overflow;
 
-mod search;
+pub(crate) mod pick_focus;
 
-mod submenus;
+pub(crate) mod rows;
+
+pub(crate) mod runs_per_row;
+pub(crate) mod search;
+
+pub(crate) mod submenus;
 
 use craft_behavior::IconId;
 use craft_ui::contract::{Show as _, ShowContainer as _};
@@ -53,4 +61,48 @@ fn rows_of_an_inline_menu_shown_from_its_container_record_take_the_columns_of_la
         assert_eq!(x(&fixture, "History"), x(&fixture, "Swatches"), "frame {frame}: an iconed row takes the mark column");
         fixture.frame(vec![]);
     }
+}
+
+/// A text-only row shows no icon and reserves no icon column, even with an icon set: its menu's labels start where a
+/// menu with no icons at all starts them.
+#[trial]
+fn a_row_with_no_icon_takes_no_icon_column() {
+    let redo_left = |with_icon: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            Stack::new().show(ui, |ui, _| {
+                Menu::inline("Edit").show(ui, |ui, _| {
+                    let undo = MenuItem::new("Undo");
+                    if with_icon {
+                        undo.icon(IconSpec::svg(IconId::new("history"))).no_icon(true).show(ui);
+                    } else {
+                        undo.show(ui);
+                    }
+                    MenuItem::new("Redo").show(ui);
+                });
+            });
+        });
+        fixture.settle();
+        fixture.texts().iter().find(|text| text.text == "Redo").map(|text| text.rect.left() - fixture.shown().left())
+    };
+    assert_eq!(redo_left(true), redo_left(false), "the iconless row reserves no icon column");
+}
+
+/// A compact row is its label's line tall, not a control's height: the rows of a dense classic menu stand closer.
+#[trial]
+fn a_compact_row_is_shorter_than_a_control_row() {
+    let pitch = |compact: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            Stack::new().show(ui, |ui, _| {
+                Menu::inline("Edit").show(ui, |ui, _| {
+                    MenuItem::new("Undo").compact(compact).show(ui);
+                    MenuItem::new("Redo").compact(compact).show(ui);
+                });
+            });
+        });
+        fixture.settle();
+        let top = |name: &str| fixture.texts().iter().find(|text| text.text == name).map(|text| text.rect.top());
+        top("Redo").zip(top("Undo")).map(|(redo, undo)| redo - undo)
+    };
+    let (control, compact) = (pitch(false), pitch(true));
+    assert!(compact < control, "compact rows stand closer: {compact:?} against {control:?}");
 }

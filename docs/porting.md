@@ -65,9 +65,9 @@ Before marking a part `missing component`, walk this ladder and stop at the firs
 
 1. **An existing component as is.** Search components-index.md by purpose and by shape, and look at the component's stories in the gallery.
 2. **An existing component with a new story or variant.** If the component already does the job and only lacks a shown state, add the story (authoring.md, "Stories"). A story is a state of an existing type, not a new type.
-3. **A builder option on an existing component.** A structural difference gets a new option on the component, not a new component (craft-framework.md 4.6, step 4).
-4. **Density, size overrides or component tokens.** Visual differences an app needs are tokens and size overrides, never component-specific theme values (craft-framework.md 4.6, steps 1–3).
-5. **Per-app colour overrides** in the theme file (craft-framework.md 4.6, step 5).
+3. **A builder option on an existing component.** A structural difference gets a new option on the component, not a new component (craft-framework.md 4.6, step 3).
+4. **Density or size overrides.** Visual differences an app needs are tokens and size overrides, never a theme value for one component (craft-framework.md 4.6, steps 1–2).
+5. **Per-app colour overrides** in the theme file (craft-framework.md 4.6, step 4).
 6. **A family component** in the crate that owns the document concept, when the part names one (layer, colour model, path): craft-framework.md 4.3.
 7. **A new library component**, when its inputs are general data and no existing component fits. Place it in the lowest crate of its layer (craft-framework.md 4.3).
 8. **A one-off app component**, built from shared pieces, as a last resort.
@@ -130,9 +130,10 @@ The old app is the visual reference, but not automatically right: judge each dif
 | Command-line values | `args::ControlOptions`, `EnvNames` | Parses its own flags and calls `ControlOptions::resolve` |
 | Transport | `server::listen`, `server::serve`, `ControlClient` | Calls `listen` (or `serve` on a listener it bound earlier), keeps the `Listening` and owns the `ControlChannel` |
 | Request queue, replies | `ControlChannel`, `Reply`, `result_reply` | Runs each request and returns a `Reply` |
-| Input methods | `synthetic::Click`, `KeyPress`, `move_from_params`: the checked parameters of `ui.click`, `ui.key`, `ui.move` | Dispatches the method names to them |
+| Input methods | `synthetic::input_method`, or one by one `synthetic::Click` (a point, or a node of the access tree by `id` or `label` as its `target`), `Focus`, `KeyPress`, `Move::from_params`, `Drag`: the checked parameters of `ui.click`, `ui.focus`, `ui.key`, `ui.move`, `ui.drag` and the other input methods | Dispatches the method names to them and replies `Reply::AfterInput` |
+| Widget tree | `access::inspect` (`ui.inspect`'s widget list), `access::resolve` (the one node an `id` or `label` names), read from the tree `server::serve` has the window host keep | Adds its own fields to `ui.inspect`'s reply |
 | Dialog methods | `dialogs`: `ui.dialog.set`, `ui.dialog.confirm`, `ui.dialog.cancel` and the dialog list | Dispatches them; may add `ui.dialog.open` for its own dialog kinds |
-| Screenshots | `Captures` (the bounded queue), `screenshot_reply`, PNG encoding | Allocates a token for `ui.screenshot`, drives the queue each frame, supplies the file writer |
+| Screenshots | `ScreenshotParams` (`ui.screenshot {path?, region?}`), `Captures` (the bounded queue), `screenshot_reply` (the crop to the region, PNG encoding) | Allocates a token for `ui.screenshot`, drives the queue each frame, supplies the file writer |
 | View and window state | nothing | Methods such as `ui.set` (tool, panels, theme), `ui.resize`, `engine.execute` |
 
 Not provided yet, so the porter supplies each today:
@@ -171,8 +172,9 @@ Each frame, in the logic phase, the app runs the queued requests. In the UI phas
 
 ```rust
 use craft_automation::control::{Reply, result_reply};
-use craft_automation::screenshot::{CaptureGeometry, settle_ms};
+use craft_automation::screenshot::{CaptureGeometry, ScreenshotParams, settle_ms};
 use craft_ui::runtime::motion;
+use egui::ViewportId;
 
 // Logic phase.
 let Some(mut channel) = self.control.take() else { return };
@@ -187,7 +189,10 @@ channel.finish_captures(finished, &mut |path, bytes| self.write_automation_file(
 let settle = settle_ms(ctx.global_style().animation_time);
 while let Some(req) = channel.next_request() {
     let reply = match req.method.as_str() {
-        "ui.screenshot" => Reply::screenshot(self.next_capture_token(), path_param(&req.params), viewport),
+        "ui.screenshot" => match ScreenshotParams::from_params(&req.params) {
+            Ok(params) => Reply::screenshot(self.next_capture_token(), params, viewport),
+            Err(e) => Reply::from_result(Err(e)),
+        },
         "ui.resize" => { /* send ViewportCommand::InnerSize */ Reply::from_result(Ok(json!(null))) }
         "ui.set" => Reply::from_result(self.ui_set(&req.params)),
         other => Reply::from_result(Err(format!("unknown method {other}"))),
@@ -201,7 +206,9 @@ channel.captures.note_pass();
 let finished = channel.captures.issue(&WindowHost::of(ctx), motion::now(), document);
 ```
 
-`write_automation_file` is the app's file authority: it must refuse paths outside the folder the app lets automation write to. A `ui.screenshot` without a `path` returns the PNG as base64 in the reply.
+`write_automation_file` is the app's file authority: it must refuse paths outside the folder the app lets automation write to. A `ui.screenshot` without a `path` returns the PNG as base64 in the reply. A `region` (`[x0, y0, x1, y1]` in points) crops the picture; one outside the window is refused. Both replies carry the window's `pixels_per_point`.
+
+On the web there is no server: the app feeds `ControlChannel::new(rx)` from the request closure of `craft_web_api::page::PageApi`, sending each page request as a `ControlRequest::new(method, params)` and answering the page from its reply receiver. The channel, `Reply` and the screenshot queue are the same as on the desktop.
 
 #### States file
 

@@ -4,8 +4,8 @@
 mod words;
 
 // Guides and smart guides.
-mod guides;
-mod smart_guides;
+pub(crate) mod guides;
+pub(crate) mod smart_guides;
 pub(crate) use smart_guides::paint_lines;
 
 pub use guides::{GuideCommands, GuideStyle, Guides, GuidesOutput, reading};
@@ -14,12 +14,12 @@ pub use words::CanvasControlWords;
 
 // Selection outlines, grids and previews (canvas-controls-b).
 mod bands;
-mod grid;
-mod line_preview;
-mod marquee;
-mod outline;
-mod pixel_grid;
-mod task_bar;
+pub(crate) mod grid;
+pub(crate) mod line_preview;
+pub(crate) mod marquee;
+pub(crate) mod outline;
+pub(crate) mod pixel_grid;
+pub(crate) mod task_bar;
 
 pub use bands::{range_bands, rect_around};
 pub use grid::{CanvasGrid, GridAxis, GridCrowding, GridLine, GridLines, GridStyle, MAX_LINES};
@@ -27,7 +27,7 @@ pub use line_preview::{LineGuideStyle, StraightLinePreview};
 pub use marquee::{Marquee, MarqueeLook, MarqueeShape, MarqueeStyle, Run};
 pub use outline::{HoverMask, HoverOutline, HoverShape, OutlineStyle, SelectionOutline, SelectionOutlineLook, path_runs};
 pub use pixel_grid::{GridSegment, PixelGrid, PixelGridStyle};
-pub use task_bar::{TaskBar, TaskBarCx, TaskBarDismiss, TaskBarKind, TaskBarOutput, TaskBarPlace};
+pub use task_bar::{TaskBar, TaskBarCx, TaskBarDismiss, TaskBarGrip, TaskBarHang, TaskBarKind, TaskBarOutput, TaskBarPlace};
 // End of canvas-controls-b.
 
 // Brush overlays.

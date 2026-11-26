@@ -1,18 +1,19 @@
 //! The details sheet: a family's every style in its own face, its facts and languages, and
 //! installing or removing it whole or a style at a time.
 
-mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod rows;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use craft_behavior::ColumnWidth;
 use craft_host::Host;
 use craft_theme::variant::{Emphasis, Tone};
-use craft_ui::buttons::Button;
+use craft_ui::buttons::{Button, Link, SplitButton};
 use craft_ui::contract::overlay::Outside;
-use craft_ui::contract::{Bind, CollectionEvent, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::{Badge, Progress, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
@@ -23,7 +24,9 @@ use egui::{Response, Ui};
 
 use self::rows::{Action, Lines, StyleLine, StyleList, StyleRow};
 use crate::index::{Family, FontFile, Index, script_name, source_label};
-use crate::panel::app::{Detail, FontsPanel, FontsPanelWords, Pending, category_label, family_key, regular, source_name, style_count, style_name};
+use crate::panel::app::{
+    Detail, FontsPanel, FontsPanelWords, NotCopied, Pending, category_label, family_key, regular, source_name, style_count, style_name,
+};
 use crate::panel::faces::Owner;
 use crate::panel::jobs::Kind;
 use crate::panel::specimen::{FontSample, SampleFace};
@@ -51,9 +54,25 @@ craft_ui::words! {
         installing: "fontDetails.installing" = "Installing";
         removing: "fontDetails.removing" = "Removing";
         downloading: "fontDetails.downloading" = "Downloading";
+        updating_system_fonts: "fontDetails.updatingSystemFonts" = "Updating system fonts";
         installed: "fontDetails.installed" = "Installed";
         installed_on_system: "fontDetails.installedOnSystem" = "Installed on this system";
         install_all: "fontDetails.installAll" = "Install all";
+        install_all_options: "fontDetails.installAllOptions" = "More install all options";
+        install_all_apps: "fontDetails.installAllApps" = "Install for all apps";
+        install_craft_apps: "fontDetails.installCraftApps" = "Install for Craft apps only";
+        /// `{reason}`.
+        only_craft_apps: template "fontDetails.onlyCraftApps" = "Only in Craft apps: {reason}";
+        available_to_all: "fontDetails.availableToAll" = "Available to all apps";
+        kept_in_craft_apps: "fontDetails.keptInCraftApps" = "Kept in Craft apps only";
+        make_available: "fontDetails.makeAvailable" = "Make available to all apps";
+        keep_in_craft_apps: "fontDetails.keepInCraftApps" = "Keep in Craft apps only";
+        /// `{error}`.
+        copy_failed: template "fontDetails.copyFailed" = "Couldn't copy to your system's fonts folder: {error}";
+        /// `{file}` and `{name}`.
+        copy_name_taken: template "fontDetails.copyNameTaken" = "Not copied to your system's fonts folder: {file} already has the font name {name}";
+        /// `{file}`.
+        copy_in_the_way: template "fontDetails.copyInTheWay" = "Not copied to your system's fonts folder: {file} is in the way";
         remove_all: "fontDetails.removeAll" = "Remove all";
         preview: "fontDetails.preview" = "Preview";
         install: "fontDetails.install" = "Install";
@@ -72,6 +91,7 @@ craft_ui::words! {
         couldnt_install: "fontDetails.couldntInstall" = "Couldn't install";
         couldnt_remove: "fontDetails.couldntRemove" = "Couldn't remove";
         couldnt_download: "fontDetails.couldntDownload" = "Couldn't download";
+        couldnt_update_system_fonts: "fontDetails.couldntUpdateSystemFonts" = "Couldn't update system fonts";
         retry: "fontDetails.retry" = "Retry";
         system_fonts_note: "fontDetails.systemFontsNote" = "System fonts are removed with your system's own font tools.";
         system_fonts_removal: "fontDetails.systemFontsRemoval" = "Removed with your system's font tools";
@@ -151,6 +171,7 @@ fn file_of<'a>(family: &'a Family, face: &FaceInfo) -> Option<&'a FontFile> {
 enum Do {
     Ask(Pending),
     Remove { faces: Vec<FaceInfo>, whole: bool },
+    AvailableToAll { files: Vec<PathBuf>, on: bool },
 }
 
 /// The job running for the whole family, as the header shows it.
@@ -176,6 +197,69 @@ struct Failed {
     retry: Option<Pending>,
 }
 
+/// Whether the family's store fonts are in the OS user font folder for all apps, or why not.
+struct SystemFonts {
+    text: Label,
+    tone: Option<Tone>,
+    /// The store files.
+    files: Vec<PathBuf>,
+    /// What the line's action sets; none while it can't change.
+    switch: Option<bool>,
+}
+
+impl SystemFonts {
+    /// The line of the family named `family`; none when `faces` has no store font.
+    fn read(panel: &FontsPanel, words: &DetailsWords, family: &str, faces: &[FaceInfo]) -> Option<SystemFonts> {
+        let files: Vec<PathBuf> = faces.iter().filter(|f| f.source == Source::Store).filter_map(|f| f.path.clone()).collect();
+        if files.is_empty() {
+            return None;
+        }
+        let not_here = panel.installer.available_to_all_unsupported();
+        let available = not_here.is_none() && panel.installer.is_available_to_all(family, &files);
+        let (text, tone) = if let Some(reason) = not_here {
+            (Label::from(words.only_craft_apps.fill(&[("reason", &reason)])), None)
+        } else if available {
+            (words.available_to_all.clone(), Some(Tone::Good))
+        } else if let Some(not_copied) = panel.not_copied.get(&family.to_lowercase()) {
+            (Label::from(not_copied_text(words, not_copied)), Some(Tone::Warn))
+        } else {
+            (words.kept_in_craft_apps.clone(), None)
+        };
+        let switch = (panel.installer.available_to_all_supported() && panel.jobs.of("", family).is_none()).then_some(!available);
+        Some(SystemFonts { text, tone, files, switch })
+    }
+
+    fn show(&self, ui: &mut Ui, words: &DetailsWords, todo: &mut Vec<Do>) {
+        Row::new().wrap(true).show(ui, |ui, _| {
+            let text = Text::new(self.text.clone());
+            match self.tone {
+                Some(tone) => text.tone(tone),
+                None => text.shade(Shade::Muted),
+            }
+            .show(ui);
+            if let Some(on) = self.switch {
+                let action = if on { &words.make_available } else { &words.keep_in_craft_apps };
+                if clicked(&Link::new(action.clone()).show(ui)) {
+                    todo.push(Do::AvailableToAll { files: self.files.clone(), on });
+                }
+            }
+        });
+    }
+}
+
+/// What the sheet says about a family an install couldn't copy into the OS user font folder.
+fn not_copied_text(words: &DetailsWords, not_copied: &NotCopied) -> String {
+    let conflict = match not_copied {
+        NotCopied::Failed(error) => return words.copy_failed.fill(&[("error", error)]),
+        NotCopied::Refused(conflicts) => conflicts.first(),
+    };
+    let file = conflict.map(|c| c.path.display().to_string()).unwrap_or_default();
+    match conflict.and_then(|c| c.postscript.as_deref()) {
+        Some(name) => words.copy_name_taken.fill(&[("file", &file), ("name", name)]),
+        None => words.copy_in_the_way.fill(&[("file", &file)]),
+    }
+}
+
 /// Everything the sheet shows, read from the panel before the pass draws it.
 struct Sheet {
     eyebrow: String,
@@ -184,11 +268,15 @@ struct Sheet {
     hero: Option<(Owner, FaceInfo)>,
     run: Option<Run>,
     badge: Option<Label>,
-    install_all: Option<Pending>,
+    /// The family's position in the index when it can be installed whole.
+    install_all: Option<usize>,
+    /// Whether Install all's menu offers installing for all apps or for Craft apps only.
+    destinations: bool,
     removal: Removal,
     store: Vec<FaceInfo>,
     preview: Option<Pending>,
     size_line: Option<String>,
+    system_fonts: Option<SystemFonts>,
     preview_note: Option<String>,
     uncurated: Option<String>,
     failure: Option<Failed>,
@@ -266,6 +354,7 @@ impl<'a> DetailsSheet<'a> {
             match action {
                 Do::Ask(pending) => panel.ask(host.as_ref(), pending),
                 Do::Remove { faces, whole } => panel.remove(host.as_ref(), &sheet.title, &faces, whole),
+                Do::AvailableToAll { files, on } => panel.set_available_to_all(host.as_ref(), &sheet.title, files, on),
             }
         }
         DetailsOutput { response: shown.output.response, closed }
@@ -325,11 +414,13 @@ impl Sheet {
             hero,
             run,
             badge: all_installed.then(|| installed_word.clone()),
-            install_all: (!all_installed).then_some(Pending::Install(i)),
+            install_all: (!all_installed).then_some(i),
+            destinations: panel.installer.available_to_all_supported(),
             removal: if store.is_empty() { Removal::None } else { Removal::Allowed },
             store,
             preview: unseen.then_some(Pending::Preview(i)),
             size_line: Some(words.download_size_line.fill(&[("size", &size)])),
+            system_fonts: SystemFonts::read(panel, words, &family.family, &installed),
             preview_note: unseen.then(|| words.preview_note.fill(&[("size", &size)])),
             uncurated,
             failure,
@@ -378,10 +469,12 @@ impl Sheet {
             run,
             badge: None,
             install_all: None,
+            destinations: false,
             removal: if family.removable() { Removal::Allowed } else { Removal::System },
             store: family.faces.clone(),
             preview: None,
             size_line: None,
+            system_fonts: SystemFonts::read(panel, words, &family.name, &family.faces),
             preview_note: None,
             uncurated: None,
             failure: None,
@@ -414,6 +507,7 @@ impl Sheet {
                     Kind::Install => &words.installing,
                     Kind::Remove => &words.removing,
                     Kind::Preview => &words.downloading,
+                    Kind::SystemFonts => &words.updating_system_fonts,
                 };
                 progress(ui, env, words, what, run.fraction);
                 return;
@@ -421,10 +515,10 @@ impl Sheet {
             if let Some(badge) = &self.badge {
                 Badge::new(badge.clone()).variant(Variant::look(Emphasis::Soft, Tone::Good)).show(ui);
             }
-            if let Some(pending) = &self.install_all
-                && clicked(&Button::new(words.install_all.clone()).variant(Variant::PRIMARY).show(ui))
+            if let Some(i) = self.install_all
+                && let Some(share) = self.install_button(ui, words)
             {
-                todo.push(Do::Ask(pending.clone()));
+                todo.push(Do::Ask(Pending::Install(i, share)));
             }
             match self.removal {
                 Removal::Allowed => {
@@ -447,6 +541,9 @@ impl Sheet {
                 Text::new(line.clone()).shade(Shade::Faint).show(ui);
             }
         });
+        if let Some(system_fonts) = &self.system_fonts {
+            system_fonts.show(ui, words, todo);
+        }
         if let Some(note) = &self.preview_note {
             Text::new(note.clone()).shade(Shade::Muted).show(ui);
         }
@@ -458,6 +555,7 @@ impl Sheet {
                 Kind::Install => &words.couldnt_install,
                 Kind::Remove => &words.couldnt_remove,
                 Kind::Preview => &words.couldnt_download,
+                Kind::SystemFonts => &words.couldnt_update_system_fonts,
             };
             let mut notice = Notice::new(Tone::Bad, failure.error.clone()).title(what.clone());
             if failure.retry.is_some() {
@@ -470,6 +568,19 @@ impl Sheet {
                 todo.push(Do::Ask(pending.clone()));
             }
         }
+    }
+
+    /// Install all, with a menu that chooses where the fonts go when they can be copied into the OS user font folder.
+    /// `None` when not pressed; `Some(None)` for the button itself (the family's choice, else the setting), else the
+    /// choice.
+    fn install_button(&self, ui: &mut Ui, words: &DetailsWords) -> Option<Option<bool>> {
+        if !self.destinations {
+            return clicked(&Button::new(words.install_all.clone()).variant(Variant::PRIMARY).show(ui)).then_some(None);
+        }
+        let entries = [Entry::new(true, words.install_all_apps.clone()), Entry::new(false, words.install_craft_apps.clone())];
+        let out =
+            SplitButton::new(words.install_all.clone(), &entries).arrow_label(words.install_all_options.clone()).variant(Variant::PRIMARY).show(ui);
+        out.chosen.map(Some).or_else(|| out.activated.then_some(None))
     }
 
     /// The styles, and beside them (or below, when narrow) the facts and the languages.
@@ -497,7 +608,7 @@ impl Sheet {
                     };
                     SampleFace::Face { catalog, owner: *owner, face }
                 }
-                None => SampleFace::Interface,
+                None => SampleFace::Missing,
             };
             StyleRow::new(line, &self.title, &self.sample, points, face, words)
         });

@@ -31,7 +31,7 @@ pub trait Focus {
     fn is_focused(&self) -> bool;
     /// The component holds focus and shows it.
     fn focus_visible(&self) -> bool;
-    /// Asks the nearest scroll owner to bring `rect` into view.
+    /// Asks the scroll owner around the component to bring `rect` into view.
     fn reveal(&mut self, rect: Rect);
     /// For a container that is its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`): the
     /// page and end moves its focused children left untaken, with their modifiers, in the order they arrived.

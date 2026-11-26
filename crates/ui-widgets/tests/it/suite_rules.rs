@@ -11,8 +11,11 @@ use egui::{Ui, vec2};
 
 fn probe_of<T: 'static>() -> &'static Probe {
     let name = std::any::type_name::<T>();
-    craft_ui::contract::registrations()
-        .into_iter()
+    static REGISTRY: std::sync::OnceLock<craft_ui::testing::Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| craft_ui::testing::Registry::of(&[crate::register, craft_ui::testing::register]))
+        .registrations()
+        .iter()
         .filter_map(Registration::probe)
         .find(|probe| probe.type_name() == name)
         .expect("the type is registered")

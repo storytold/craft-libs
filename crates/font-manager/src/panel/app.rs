@@ -1,17 +1,18 @@
 //! The panel's model, what the host calls, and the view: the tabs and search across the top, the filters at the
 //! reading start, the family cards, the details sheet and the download consent.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::craft_font_catalog::{FontEnv, Limits, Os};
 use crate::filter::{Query, Search};
 use crate::index::{Category, Family, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
-use crate::store::{Installer, RemoveRequest, StoreError};
+use crate::store::{Conflict, Installer, MadeAvailable, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
 use craft_behavior::ColumnWidth;
 use craft_host::{Host, Section, Wake};
@@ -63,6 +64,8 @@ craft_ui::words! {
         styles: count "fontsPanel.styles" = "{n} style" | "{n} styles";
         families: count "fontsPanel.families" = "{n} family" | "{n} families";
         setting_failed: template "fontsPanel.settingFailed" = "The download setting couldn't be saved: {error}";
+        craft_apps_only_failed: template "fontsPanel.craftAppsOnlyFailed" = "The Craft apps only setting couldn't be applied: {error}";
+        system_fonts_failed: template "fontsPanel.systemFontsFailed" = "Your system's fonts folder couldn't be updated: {error}";
         consent_title: template "fontsPanel.consentTitle" = "Download from {source}?";
         consent_text: template "fontsPanel.consentText" = "Craft Font Manager downloads {family} ({size}) from {source}, and checks every file before using it.";
         consent_text_host: template "fontsPanel.consentTextHost" = "Craft Font Manager downloads {family} ({size}) from {host}, the server of {source}, a source you added, and checks every file before using it.";
@@ -175,7 +178,8 @@ impl Options {
 /// A download, waiting for the user's consent or to be tried again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Pending {
-    Install(usize),
+    /// A family, and whether to copy it into the OS user font folder ([`Request::Install`]).
+    Install(usize, Option<bool>),
     /// One file of a family, by its path in the index.
     InstallFile(usize, String),
     Preview(usize),
@@ -184,7 +188,7 @@ pub(crate) enum Pending {
 impl Pending {
     pub(crate) fn family(&self) -> usize {
         match self {
-            Pending::Install(i) | Pending::InstallFile(i, _) | Pending::Preview(i) => *i,
+            Pending::Install(i, _) | Pending::InstallFile(i, _) | Pending::Preview(i) => *i,
         }
     }
 }
@@ -196,6 +200,37 @@ pub(crate) enum Detail {
     Family(usize),
     /// An installed family, by name and source.
     Installed(String, Source),
+}
+
+/// Why a family installed here isn't in the OS user font folder.
+#[derive(Clone, Debug)]
+pub(crate) enum NotCopied {
+    /// Fonts already there have its PostScript names, or sit where its copies would go.
+    Refused(Vec<Conflict>),
+    Failed(String),
+}
+
+/// A problem that belongs to no family, with the error reported.
+#[derive(Clone, Debug)]
+pub(crate) enum Problem {
+    /// The download setting couldn't be saved.
+    DownloadSetting(String),
+    /// "Keep fonts in Craft apps only" couldn't be saved.
+    CraftAppsOnly(String),
+    /// A family couldn't be copied to or withdrawn from the OS user font folder.
+    SystemFonts(String),
+}
+
+impl Problem {
+    /// What the panel says about it.
+    pub(crate) fn text(&self, words: &FontsPanelWords) -> String {
+        let (template, error) = match self {
+            Problem::DownloadSetting(error) => (&words.setting_failed, error),
+            Problem::CraftAppsOnly(error) => (&words.craft_apps_only_failed, error),
+            Problem::SystemFonts(error) => (&words.system_fonts_failed, error),
+        };
+        template.fill(&[("error", error.as_str())])
+    }
 }
 
 /// Why the last job for a family failed, and what Retry runs.
@@ -258,8 +293,14 @@ pub struct FontsPanel {
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
     pub(crate) failed: HashMap<String, Failure>,
-    /// A problem that belongs to no family: why the download setting couldn't be saved.
-    pub(crate) notice: Option<String>,
+    /// The last problem that belongs to no family.
+    pub(crate) notice: Option<Problem>,
+    /// Families an install couldn't copy into the OS user font folder, by lower-case name.
+    pub(crate) not_copied: HashMap<String, NotCopied>,
+    /// "Keep fonts in Craft apps only" as last read or set.
+    pub(crate) craft_apps_only: bool,
+    /// Whether the start-up copy of families whose choice is the OS user font folder was queued.
+    shared_at_start: bool,
     /// The window had OS focus on the last pass.
     window_active: bool,
     /// The download consent as last read.
@@ -323,7 +364,9 @@ impl FontsPanel {
             tab: Tab::Catalogue,
             downloads_switch: true,
             catalog: options.catalog,
+            craft_apps_only: options.installer.craft_apps_only(),
             installer: options.installer,
+            shared_at_start: false,
             catalogue,
             query: Query::default(),
             show: Show::All,
@@ -350,6 +393,7 @@ impl FontsPanel {
             asking: None,
             failed: HashMap::new(),
             notice: None,
+            not_copied: HashMap::new(),
             window_active: true,
             consent: None,
         }
@@ -468,7 +512,7 @@ impl FontsPanel {
     pub fn set_downloads_allowed(&mut self, allowed: bool) -> Result<(), StoreError> {
         let result = self.installer.allow_downloads(allowed);
         self.consent = None;
-        self.notice = result.as_ref().err().map(|e| e.0.clone());
+        self.notice = result.as_ref().err().map(|e| Problem::DownloadSetting(e.0.clone()));
         result
     }
 
@@ -482,6 +526,7 @@ impl FontsPanel {
     /// (read again when the window regains focus) and the results of the search.
     fn prepare(&mut self, host: Option<&Arc<Host>>, window_active: bool) {
         self.load_settings(host);
+        self.share_installed_at_start(host);
         self.poll_jobs();
         if window_active && !self.window_active {
             if self.catalog.is_ready() {
@@ -519,9 +564,19 @@ impl FontsPanel {
         for (job, result) in self.jobs.poll() {
             let key = family_key(&job.source, &job.family);
             match result {
-                Ok(Finished::Installed | Finished::Removed) => {
+                Ok(Finished::Installed(copied)) => {
                     self.failed.remove(&key);
+                    self.record_copy(&job.family, copied);
                 }
+                Ok(Finished::Removed) => {
+                    self.failed.remove(&key);
+                    self.not_copied.remove(&job.family.to_lowercase());
+                }
+                Ok(Finished::Switched(copied)) => self.record_copy(&job.family, copied.map(Ok)),
+                Ok(Finished::SharedAtStart(refused)) => {
+                    self.not_copied.extend(refused.into_iter().map(|(f, c)| (f.to_lowercase(), NotCopied::Refused(c))));
+                }
+                Err(e) if job.kind == Kind::SystemFonts => self.notice = Some(Problem::SystemFonts(e.0)),
                 Ok(Finished::Previewed(files)) => {
                     self.failed.remove(&key);
                     let mut faces = Vec::new();
@@ -539,9 +594,9 @@ impl FontsPanel {
                             c.index.families().iter().position(|f| f.source == job.source && f.family.eq_ignore_ascii_case(&job.family))
                         });
                     let retry = position.and_then(|i| match job.kind {
-                        Kind::Install => Some(job.file.clone().map_or(Pending::Install(i), |path| Pending::InstallFile(i, path))),
+                        Kind::Install => Some(job.file.clone().map_or(Pending::Install(i, job.share), |path| Pending::InstallFile(i, path))),
                         Kind::Preview => Some(Pending::Preview(i)),
-                        Kind::Remove => None,
+                        Kind::Remove | Kind::SystemFonts => None,
                     });
                     log::warn!("{} ({:?}): {e}", job.family, job.kind);
                     self.failed.insert(key, Failure { kind: job.kind, error: e.0, retry });
@@ -549,6 +604,44 @@ impl FontsPanel {
             }
         }
         self.poll_sources();
+    }
+
+    fn record_copy(&mut self, family: &str, copied: Option<Result<MadeAvailable, StoreError>>) {
+        let not_copied = match copied {
+            Some(Ok(MadeAvailable::Refused(conflicts))) => NotCopied::Refused(conflicts),
+            Some(Err(e)) => NotCopied::Failed(e.0),
+            Some(Ok(MadeAvailable::Done)) | None => {
+                self.not_copied.remove(&family.to_lowercase());
+                return;
+            }
+        };
+        self.not_copied.insert(family.to_lowercase(), not_copied);
+    }
+
+    /// Sets "Keep fonts in Craft apps only": what a plain Install does from now on. Installed families keep their
+    /// choice.
+    pub(crate) fn set_craft_apps_only(&mut self, on: bool) {
+        self.notice = self.installer.set_craft_apps_only(on).err().map(|e| Problem::CraftAppsOnly(e.0));
+        self.craft_apps_only = self.installer.craft_apps_only();
+    }
+
+    /// Makes a store family available to all apps or keeps it in Craft apps only, as a job, and records that as its
+    /// choice.
+    pub(crate) fn set_available_to_all(&mut self, host: Option<&Arc<Host>>, family: &str, files: Vec<PathBuf>, on: bool) {
+        self.notice = None;
+        let request = Request::AvailableToAll(family.to_owned(), files, on);
+        self.jobs.start(host, Arc::clone(&self.installer), Arc::clone(&self.catalog), request);
+    }
+
+    /// Once per start, copies the store families whose choice is the OS user font folder and that aren't all there
+    /// yet (installed before installs copied, say), as a job.
+    fn share_installed_at_start(&mut self, host: Option<&Arc<Host>>) {
+        if std::mem::replace(&mut self.shared_at_start, true) {
+            return;
+        }
+        if self.installer.available_to_all_supported() {
+            self.jobs.start(host, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::ShareAtStart);
+        }
     }
 
     fn refresh_installed(&mut self) {
@@ -672,7 +765,7 @@ impl FontsPanel {
             self.failed.remove(&family_key(&f.source, &f.family));
         }
         let request = match pending {
-            Pending::Install(i) => Request::Install(index, i),
+            Pending::Install(i, share) => Request::Install(index, i, share),
             Pending::InstallFile(i, path) => Request::InstallFile(index, i, path),
             Pending::Preview(i) => Request::Preview(index, i),
         };

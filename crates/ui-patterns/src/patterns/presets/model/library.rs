@@ -7,7 +7,7 @@ use super::PresetRow;
 /// A group or folder by its names from the top group down: `["Brushes", "Dry Media"]`. The empty
 /// path is the library's root, which holds the ungrouped presets and the top groups. Names are
 /// unique among siblings, so a path names one group.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[serde(transparent)]
 pub struct GroupPath(Vec<String>);
 
@@ -55,7 +55,7 @@ impl GroupPath {
 /// key never collide (PhotoCraft's `"group:{name}"` strings, the private key of
 /// `SwatchesPanel`). `I` is the preset's id: [`PresetId`] in a [`PresetLibrary`]; PhotoCraft's
 /// engine library uses the preset's name (`PresetKey<String>`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PresetKey<I> {
     /// A group or folder.
@@ -77,7 +77,7 @@ impl<I> PresetKey<I> {
 }
 
 /// One preset of a [`PresetLibrary`], unique by id; ids are never reused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[serde(transparent)]
 pub struct PresetId(u64);
 
@@ -196,6 +196,8 @@ pub enum PresetError {
     /// A rename to the name the preset or group already has (the same letters): nothing changes,
     /// so the app saves nothing. [`PresetLibrary::apply`] returns no change for it.
     Unchanged,
+    /// The host's naming rule refuses the name (too long, control characters, a reserved name).
+    InvalidName,
 }
 
 impl std::fmt::Display for PresetError {
@@ -207,6 +209,7 @@ impl std::fmt::Display for PresetError {
             PresetError::NoPreset => "no preset has that id",
             PresetError::TooDeep => "the group would be nested too deep",
             PresetError::Unchanged => "the name is the current name",
+            PresetError::InvalidName => "the name can't be used",
         })
     }
 }

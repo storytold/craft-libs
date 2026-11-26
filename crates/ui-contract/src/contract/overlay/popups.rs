@@ -224,6 +224,9 @@ impl PopupHandle {
         let core = &mut cx.core;
         let ctx = core.ctx.clone();
         let resting = core.response.hovered() || core.focus.visible;
+        if trigger == Trigger::Context {
+            crate::runtime::egui::access::offer_context_menu(&ctx, core.id);
+        }
         let toggled = match trigger {
             Trigger::Click => core.activation.is_some(),
             Trigger::Press => {

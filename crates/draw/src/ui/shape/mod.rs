@@ -10,14 +10,14 @@ use crate::stroke::StrokeStyle;
 
 use super::shape_drag::{BoxConstraints, ShapeDragOptions, ShapeKind};
 
-mod arrowheads;
-mod bar;
-mod gear;
-mod mode_select;
-mod panel;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod arrowheads;
+pub(crate) mod bar;
+pub(crate) mod gear;
+pub(crate) mod mode_select;
+pub(crate) mod panel;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
-mod stroke_cells;
+pub(crate) mod stroke_cells;
 mod words;
 
 pub use arrowheads::{ArrowheadsOutput, ArrowheadsPopover};

@@ -1,16 +1,16 @@
 //! `PreferencesWindow`: the preferences body in an app-modal `Dialog` that opens in its own OS window where windows
 //! exist.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 #[cfg(doc)]
 use super::model::PreferencesModel;
 use super::model::{Closed, PreferencesDraft, PreferencesOutput};
-use super::page::PreferencesPage;
+use super::page::{PreferencesLayout, PreferencesPage};
 use super::words::PreferencesWords;
 use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
 use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::StageAccess;
@@ -23,10 +23,28 @@ use egui::{Ui, Vec2, vec2};
 use std::cell::RefCell;
 use std::sync::Arc;
 
-/// The size the window opens at until the user resizes it.
-pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0); // design: allow[literal-size/vec2](the window's own opening size in points)
+/// The size the window opens at until the user resizes it, with the page list ([`PreferencesLayout::Paged`]).
+pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0);
 /// The least size the window may be resized to.
-pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0); // design: allow[literal-size/vec2](the window's own least size in points)
+pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
+/// The size a window of cards ([`PreferencesLayout::Cards`]) opens at: one column of cards needs no room for a page
+/// list.
+const CARDS_SIZE: Vec2 = vec2(640.0, 720.0);
+/// The least size a window of cards may be resized to.
+const CARDS_MIN_SIZE: Vec2 = vec2(420.0, 320.0);
+/// The size a [`PreferencesLayout::Classic`] window opens at: a desktop preferences dialog's.
+const CLASSIC_SIZE: Vec2 = vec2(1030.0, 660.0);
+
+/// When preferences changes are applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PreferencesMode {
+    /// Keep a draft until OK or Apply.
+    #[default]
+    Staged,
+    /// Apply changes as they happen; OK closes the window.
+    Live,
+}
 
 /// What the window keeps between passes; the host owns it and binds it with [`PreferencesWindow::new`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -37,6 +55,8 @@ pub struct PreferencesState {
     pub selected: String,
     /// The text in the search field. Empty lists every page.
     pub search: String,
+    /// The page the view last scrolled to for `selected`, so a page the host names is brought into view once.
+    pub scrolled_to: String,
     /// The message of a failed Apply, shown in the footer until the next edit or Apply.
     pub error: Option<String>,
 }
@@ -55,8 +75,14 @@ pub struct PreferencesState {
 /// - **Buttons.** OK applies and closes, Apply applies and stays (enabled while the draft differs), Cancel drops the
 ///   draft. A failed apply keeps the window open and shows its message in the footer. Enter activates OK and Escape
 ///   cancels, once the search text, a field's own gesture and a popup have had them.
+/// - **Layout.** [`layout`](PreferencesWindow::layout) passes a [`PreferencesLayout`] to the page:
+///   [`PreferencesLayout::Cards`] shows one scrolling column of cards with the search's match count, and the window
+///   opens narrower, as it needs no room for a page list.
+/// - **Live mode.** [`PreferencesMode::Live`] applies changes as they occur and shows only OK, which closes without
+///   applying again. Closing the window does not cancel changes. A failed apply shows its message until another edit.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
-///   close; [`PreferencesModel::nested`] draws the nested dialogs inside the window's own viewport.
+///   close; [`PreferencesModel::nested`] draws the nested dialogs with the body's `Ui`, inside the window's own
+///   viewport.
 /// - **App-modal.** While the window is open the app's other windows take no input, show the blocked cursor and
 ///   refuse to close, and a press on one raises the window.
 /// - **Placement.** The window opens in its own OS window where there are any, else as a modal dialog layer
@@ -75,6 +101,16 @@ pub struct PreferencesWindow<'a> {
     /// Keeps the window's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
+    /// Selects whether changes are staged or applied while the window is open.
+    #[prop]
+    mode: PreferencesMode,
+    /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
+    #[prop]
+    layout: PreferencesLayout,
+    /// Escape keeps the typing in the focused field ([`Dialog::escape_keeps_typing`]): in [`PreferencesMode::Live`]
+    /// the typed value stays applied when Escape closes the window. Off by default: Escape cancels the typing.
+    #[prop(flag)]
+    escape_keeps_typing: bool,
 }
 
 /// What the body, the footer and the buttons' guard share during one pass: the host, the window's state as the pass
@@ -87,10 +123,31 @@ struct Session<'h, 'b, H: ?Sized> {
     before: PreferencesState,
     work: PreferencesState,
     page: Option<String>,
+    /// The pages the body listed this pass, in order, for Prev and Next.
+    pages: Vec<String>,
     applied: bool,
 }
 
 impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
+    /// Shows the page `step` places from the shown one among the listed pages, wrapping at either end; the first
+    /// listed page when none is shown.
+    fn step_page(&mut self, cx: &mut impl StageAccess, step: isize) {
+        let count = self.pages.len();
+        if count == 0 {
+            return;
+        }
+        let at = self.page.as_ref().and_then(|page| self.pages.iter().position(|id| id == page));
+        let to = match at {
+            Some(at) => (at as isize + step).rem_euclid(count as isize) as usize,
+            None => 0,
+        };
+        if let Some(id) = self.pages.get(to) {
+            self.work.selected = id.clone();
+            self.page = Some(id.clone());
+        }
+        self.commit(cx);
+    }
+
     /// Reads the state at the start of the body. The page clears the search and the error of a window that has just
     /// opened.
     fn begin(&mut self, cx: &mut impl StageAccess) {
@@ -129,12 +186,20 @@ impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
 impl<'a> PreferencesWindow<'a> {
     /// A window over the host's `state`.
     pub fn new(state: Bind<'a, PreferencesState>) -> Self {
-        PreferencesWindow { state, title: None, embedded: false, remember: None }
+        PreferencesWindow {
+            state,
+            title: None,
+            embedded: false,
+            remember: None,
+            mode: PreferencesMode::Staged,
+            layout: PreferencesLayout::Paged,
+            escape_keeps_typing: false,
+        }
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
     pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember } = self;
+        let PreferencesWindow { state, title, embedded, remember, mode, layout, escape_keeps_typing } = self;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
@@ -147,9 +212,28 @@ impl<'a> PreferencesWindow<'a> {
         if !can_ok {
             ok = ok.disabled_reason(words.cannot_ok.clone());
         }
-        let apply = FooterButton::new(words.apply.clone(), DialogRole::Other).enabled(differs).stays_open(true);
-        let buttons = [ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let classic = layout == PreferencesLayout::Classic;
+        let cancel = FooterButton::new(common.cancel.clone(), DialogRole::Cancel);
+        let buttons = if classic {
+            // A desktop preferences dialog steps through its pages instead of applying in place.
+            let step = |label: &Label| FooterButton::new(label.clone(), DialogRole::Other).enabled(!nested).stays_open(true);
+            let mut buttons = vec![ok];
+            if mode == PreferencesMode::Staged {
+                buttons.push(cancel);
+            }
+            buttons.extend([step(&words.prev), step(&words.next)]);
+            buttons
+        } else if mode == PreferencesMode::Live {
+            vec![ok]
+        } else {
+            vec![ok, FooterButton::new(words.apply.clone(), DialogRole::Other).enabled(differs).stays_open(true), cancel]
+        };
 
+        let (size, least) = match layout {
+            PreferencesLayout::Paged => (DEFAULT_SIZE, MIN_SIZE),
+            PreferencesLayout::Cards => (CARDS_SIZE, CARDS_MIN_SIZE),
+            PreferencesLayout::Classic => (CLASSIC_SIZE, MIN_SIZE),
+        };
         let mut open = true;
         // Filed by a swatch press in this pass.
         let mut pick_color = None;
@@ -160,19 +244,32 @@ impl<'a> PreferencesWindow<'a> {
             before: PreferencesState::default(),
             work: PreferencesState::default(),
             page: None,
+            pages: Vec::new(),
             applied: false,
         });
         let mut dialog = Dialog::new(title.clone())
             .collection_body()
             .resizable(true)
-            .overlay(|overlay| overlay.size(DEFAULT_SIZE).min_size(MIN_SIZE))
+            .overlay(|overlay| overlay.size(size).min_size(least))
             .close_on_enter(can_ok)
+            .escape_keeps_typing(escape_keeps_typing)
             .on_pick(|button, cx| {
-                if button.role() == DialogRole::Other && !nested {
-                    session.borrow_mut().apply(cx);
+                if button.role() != DialogRole::Other || nested {
+                    return;
+                }
+                let mut session = session.borrow_mut();
+                if !classic {
+                    session.apply(cx);
+                } else if button.label() == &words.prev {
+                    session.step_page(cx, -1);
+                } else if button.label() == &words.next {
+                    session.step_page(cx, 1);
                 }
             })
-            .close_guard(|button, cx| button.role() != DialogRole::Accept || session.borrow_mut().apply(cx));
+            .close_guard(|button, cx| mode == PreferencesMode::Live || button.role() != DialogRole::Accept || session.borrow_mut().apply(cx));
+        if classic {
+            dialog = dialog.button_place(ButtonPlace::Side);
+        }
         if !embedded {
             dialog = dialog.viewport();
         }
@@ -193,12 +290,16 @@ impl<'a> PreferencesWindow<'a> {
                 let mut guard = session.borrow_mut();
                 let session = &mut *guard;
                 session.begin(cx);
-                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).show(ui, &mut *session.host);
+                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).layout(layout).show(ui, &mut *session.host);
                 if let Some(request) = shown.pick_color {
                     pick_color = Some(request);
                 }
-                session.host.nested(ui.ctx());
+                session.host.nested(ui);
+                if mode == PreferencesMode::Live && session.work.error.is_none() && session.host.differs() {
+                    session.apply(cx);
+                }
                 session.page = shown.page;
+                session.pages = shown.pages;
                 session.commit(cx);
             });
 
@@ -211,7 +312,9 @@ impl<'a> PreferencesWindow<'a> {
         match closed.filter(|_| !nested) {
             Some(CloseReason::Activated) => result.closed = Some(Closed::Ok),
             Some(_) => {
-                host.cancel();
+                if mode == PreferencesMode::Staged {
+                    host.cancel();
+                }
                 result.closed = Some(Closed::Cancel);
             }
             None => {}

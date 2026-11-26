@@ -11,6 +11,15 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/cms/profiles/craft-coated-fogra39.icc",
+    "crates/cms/profiles/photocraft-coated-cmyk.icc",
+    "crates/fonts-build/tests/fixture/subset/Tiny-glyf.ttf",
+]
+
 [features]
 default = []
 read = ["dep:hayro-syntax", "dep:thiserror"]
@@ -74,6 +83,7 @@ ttf-parser = "=0.25.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = { workspace = true }
+craft-testkit = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

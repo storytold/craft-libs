@@ -20,7 +20,7 @@ mod model;
 mod player;
 mod recording;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use file::{ActionsFile, ActionsFileError};
 pub use list::{ActionList, ActionListError, LibraryEdit, MergedFile, moved_index};

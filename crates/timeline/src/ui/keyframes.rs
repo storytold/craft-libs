@@ -1,7 +1,7 @@
 //! Keyframe lanes, the keyframe navigator and the animation toggle (N1.04).
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

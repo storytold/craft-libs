@@ -15,7 +15,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::text::TextField;
 use egui::Ui;
 
-use super::{ContourAction, ContourRequest, ContourWords, SharedSampler, from_curve, to_curve};
+use super::{ContourAction, ContourRequest, ContourSampler, ContourWords, from_curve, to_curve};
 use crate::layer_style::Contour;
 use crate::ui::curve::CurveEditor;
 
@@ -49,7 +49,7 @@ pub struct ContourEditorDialog {
     key: String,
     initial: Contour,
     draft: Draft,
-    sampler: Option<SharedSampler>,
+    sampler: Option<ContourSampler>,
     changed: bool,
     action: Option<ContourAction>,
     focus_name: bool,
@@ -72,8 +72,8 @@ impl ContourEditorDialog {
 
     /// The interpolation of the points, as the engine does it. Without it the curve is a monotone cubic.
     #[must_use]
-    pub fn sampler(mut self, sampler: impl Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync + 'static) -> Self {
-        self.sampler = Some(std::sync::Arc::new(sampler));
+    pub fn sampler(mut self, sampler: ContourSampler) -> Self {
+        self.sampler = Some(sampler);
         self
     }
 
@@ -121,7 +121,7 @@ impl StackDialog for ContourEditorDialog {
         let extras = [(Extra::Load, &words.load), (Extra::Save, &words.save), (Extra::New, &words.new)];
         let named = Cell::new(false);
         let focus_name = std::mem::take(&mut self.focus_name);
-        let sampler = self.sampler.clone();
+        let sampler = self.sampler;
         let shown = FormDialog::new(words.editor.clone(), Bind::bound(&mut self.draft))
             .outer_gesture(true)
             .history(true)
@@ -171,8 +171,8 @@ impl StackDialog for ContourEditorDialog {
                     .percent()
                     .corners()
                     .between(between);
-                if let Some(sampler) = sampler.clone() {
-                    editor = editor.sampler(move |points| sampler(points));
+                if let Some(sampler) = sampler {
+                    editor = editor.sampler(sampler);
                 }
                 let edit = editor.show(ui);
                 if let Some(next) = edit.events.value().and_then(|curve| from_curve(curve, &draft.contour.name)) {

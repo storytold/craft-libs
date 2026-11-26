@@ -11,17 +11,24 @@ use std::hash::Hash;
 use craft_behavior::IconId;
 use craft_keymap::Mods;
 use craft_theme::LabelColor;
-use craft_ui::contract::{Entry, ReorderMove};
-use craft_ui::list::ThumbTarget;
+use craft_ui::contract::{Entry, PlainData, ReorderMove};
+use craft_ui::list::{LabelUnderline, ThumbTarget};
+use craft_ui::style::DataColor;
 
 use super::filter::{EffectKind, LayerFilter, SmartSource};
 use super::panel::MenuTarget;
 
-/// The app's view of its layers, built per pass over its document (no copies of the layers).
+/// The app's model of its layers, held in a [`Tracked`](craft_ui::contract::Tracked) the panel reads
+/// (`LayersPanel::new(&Tracked<T>)`). It is plain data, so every edit moves the tracked revision, which keys what
+/// the panel derives from the tree.
 ///
 /// ```ignore
-/// struct PhotoLayers<'a> { doc: &'a Document, ui: &'a UiState }
-/// impl LayerTree for PhotoLayers<'_> {
+/// #[derive(Clone, PartialEq, Eq, Hash, Debug, PlainData)]
+/// struct LayerId(u64);
+///
+/// #[derive(PlainData)]
+/// struct PhotoLayers { layers: LayerIndex, open: HashSet<LayerId> }
+/// impl LayerTree for PhotoLayers {
 ///     type Id = LayerId;
 ///     fn children(&self, parent: Option<&LayerId>) -> Vec<LayerId> { /* top of the stack first */ }
 ///     /* … */
@@ -30,11 +37,15 @@ use super::panel::MenuTarget;
 ///
 /// The panel calls [`info`](Self::info) only for the rows it draws (the rows in view and one
 /// above and below), so a tree of 10,000 layers costs what its visible rows cost.
-/// [`children`](Self::children) and [`is_open`](Self::is_open) are walked once per pass to build
-/// the display order, unless [`revision`](Self::revision) says nothing changed.
-pub trait LayerTree {
-    /// The app's layer id: the key of a row, of its thumbnails and of every event.
-    type Id: Clone + Eq + Hash + Debug + Send + Sync + 'static;
+/// [`children`](Self::children) and [`is_open`](Self::is_open) are walked to build the display order, and only when the
+/// tracked revision, the filter or a reveal's opens changed.
+pub trait LayerTree: PlainData {
+    /// The app's layer id: the key of a row, of its thumbnails and of every event. It is plain model data
+    /// (`#[derive(PlainData)]`), so the panel keys it by its `Hash`, including in the memo key of the display order
+    /// when a reveal opens groups. Its `Hash` must tell distinct ids apart (as `#[memo_props(hash)]` requires):
+    /// two unequal ids that feed the same bytes would share a cached display order. Derived `Hash` on an integer or a
+    /// tuple of integers does.
+    type Id: Clone + Eq + Hash + Debug + Send + Sync + PlainData + 'static;
 
     /// Children of `parent` (`None`: the top level), topmost first. The app leaves out what the
     /// panel never shows: layers outside an Isolate Layers set, a Type Mask session's working text.
@@ -77,7 +88,9 @@ pub trait LayerTree {
     fn blend_modes(&self, group: bool, current: &str) -> Vec<Entry<String>>;
 
     /// What the footer shows: the mask and delete wording, what is enabled, the two menus.
-    fn footer(&self) -> LayersFooterState;
+    fn footer(&self) -> LayersFooterState {
+        LayersFooterState::new("")
+    }
 
     /// Whether a drag of rows may drop here. A drop the app refuses shows no marker and takes
     /// nothing (PhotoCraft: nothing goes below the Background; a multi-selection is not copied
@@ -107,18 +120,10 @@ pub trait LayerTree {
     fn hovered(&self) -> Option<Self::Id> {
         None
     }
-
-    /// A number that changes whenever rows are added, removed, moved, opened or closed, or an
-    /// effects or Smart Filters row is added or removed; with it
-    /// the panel keeps its display order between passes instead of walking the tree each pass.
-    /// `None` (the default) walks every pass.
-    fn revision(&self) -> Option<u64> {
-        None
-    }
 }
 
 /// What one layer row shows. Build it with [`LayerInfo::new`] and set the fields that differ.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, PlainData)]
 #[non_exhaustive]
 pub struct LayerInfo {
     /// The layer's name, shown on one line with an ellipsis.
@@ -175,6 +180,33 @@ pub struct LayerInfo {
     pub thumb_badge: Option<ThumbBadge>,
     /// The app's own words, added to the row's description for a screen reader.
     pub description: Option<String>,
+    /// The layer's colour, shown by `LayerRowLook::ColorBar`.
+    pub color: Option<DataColor>,
+    /// The eye cell's glyph while the layer is on.
+    pub view: LayerView,
+    /// The row's glyph in place of its kind's, in the kind tile and as the icon of a row without a thumbnail.
+    pub icon: Option<IconId>,
+    /// The row's label is italic.
+    pub italic: bool,
+    /// The line under the row's label.
+    pub underline: LabelUnderline,
+    /// Whether the row shows a thumbnail; false shows the kind glyph (or `icon`) where it would be and keeps the
+    /// thumbnail row's height.
+    pub thumbnail: bool,
+}
+
+/// What the eye cell of a layer row shows while the layer is on: `eye`, `eye_outline` or `layer_template`. Off is
+/// `eye_off` in every view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
+#[non_exhaustive]
+pub enum LayerView {
+    /// The layer is shown as it is.
+    #[default]
+    Preview,
+    /// The layer is shown as an outline.
+    Outline,
+    /// The layer is shown as a template.
+    Template,
 }
 
 impl LayerInfo {
@@ -205,6 +237,12 @@ impl LayerInfo {
             thumb_loads_selection: true,
             thumb_badge: None,
             description: None,
+            color: None,
+            view: LayerView::default(),
+            icon: None,
+            italic: false,
+            underline: LabelUnderline::default(),
+            thumbnail: true,
         }
     }
 
@@ -240,7 +278,7 @@ impl LayerInfo {
 
 /// The mark in a layer thumbnail's corner ([`LayerInfo::thumb_badge`]), in the badge box the mask
 /// badges use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PlainData)]
 #[non_exhaustive]
 pub enum ThumbBadge {
     /// A smart object: a window glyph.
@@ -250,7 +288,7 @@ pub enum ThumbBadge {
 }
 
 /// What a layer is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
 #[non_exhaustive]
 pub enum LayerKind {
     /// Pixels (PhotoCraft's raster layer).
@@ -281,10 +319,16 @@ pub enum LayerKind {
     /// ([`LayerPart::FrameShape`]) and its content ([`LayerPart::FrameContent`]); targeting
     /// [`LayerPart::Pixels`] targets both. The app lists no children under it.
     Frame,
+    /// A VectorCraft layer or sublayer: the `folder` glyph.
+    Layer,
+    /// A ruler guide: the `ruler` glyph in place of a thumbnail at every size, with its own eye and lock.
+    Guide,
+    /// A blend's spine: the `spline` glyph in place of a thumbnail, no toggle cells and no drag start.
+    Spine,
 }
 
 /// The part of a layer edits go to, and the thumbnail that stands for it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
 #[non_exhaustive]
 pub enum LayerPart {
     /// The layer's own pixels; a frame as a whole, its shape and content together.
@@ -303,7 +347,7 @@ pub enum LayerPart {
 }
 
 /// One mask of a layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PlainData)]
 #[non_exhaustive]
 pub struct MaskInfo {
     /// [`LayerPart::LayerMask`] or [`LayerPart::VectorMask`].
@@ -316,7 +360,7 @@ pub struct MaskInfo {
 }
 
 /// A layer's locks. Start from `LayerLocks::default()` (nothing locked) and set the fields that are on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PlainData)]
 #[non_exhaustive]
 pub struct LayerLocks {
     /// Lock transparent pixels.
@@ -378,7 +422,7 @@ impl LockKind {
 }
 
 /// The selection as the app keeps it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PlainData)]
 #[non_exhaustive]
 pub struct LayerSelection<Id> {
     /// The selected layers, in the order they were selected.
@@ -406,7 +450,7 @@ impl<Id> Default for LayerSelection<Id> {
 }
 
 /// The key of one row of the panel, and of what a drag carries.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PlainData)]
 #[non_exhaustive]
 pub enum LayerRowKey<Id> {
     /// A layer's row.
@@ -446,7 +490,7 @@ pub enum SubRowGroup {
 }
 
 /// The effects or Smart Filter rows of a layer: a header row, then the items, top first.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, PlainData)]
 #[non_exhaustive]
 pub struct SubRows {
     /// The "Effects" or "Smart Filters" row; its eye shows or hides them all.
@@ -463,7 +507,7 @@ impl SubRows {
 }
 
 /// One effects or Smart Filter row.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, PlainData)]
 #[non_exhaustive]
 pub struct SubRow {
     /// The row's text: "Effects", "Drop Shadow", "Gaussian Blur".

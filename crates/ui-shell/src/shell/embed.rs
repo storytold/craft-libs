@@ -6,7 +6,7 @@
 //! [`crate::runtime::keys::with_window_intents`], last in the app's UI.
 
 use crate::fonts::{Stack, UiFonts};
-#[cfg(feature = "app")]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::egui::memory;
 use crate::runtime::frame::{FrameInput, FrameOutput, set_input, take_output};
 use crate::runtime::windows;
@@ -54,23 +54,25 @@ pub fn logic(ctx: &Context, close_requested: impl FnOnce() -> CloseDecision) {
 }
 
 /// Each pass of the root window, from eframe's `App::ui`, before the app's UI: hands the runtime the root's native
-/// window where the runtime drives it (Windows), and fits the root window to its monitor once the monitor is known.
-#[cfg(feature = "app")]
-pub fn before_ui(ctx: &Context, frame: &eframe::Frame) {
+/// window (`window`, eframe's `Frame`) where the runtime drives it (Windows), and fits the root window to its monitor
+/// once the monitor is known. Native only: in the browser the page owns the canvas's size and there is no native
+/// window.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn before_ui(ctx: &Context, window: &impl raw_window_handle::HasWindowHandle) {
     #[cfg(windows)]
-    windows::route_root(ctx, || craft_window::native::NativeWindow::of_handle(frame));
+    windows::route_root(ctx, || craft_window::native::NativeWindow::of_handle(window));
     #[cfg(not(windows))]
-    let _ = frame;
+    let _ = window;
     fit_once(ctx);
 }
 
 /// Whether the fit has run for this context.
-#[cfg(feature = "app")]
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct Fitted(bool);
 
 /// Runs [`fit_first`] from the first passes until its monitor is known, then never again for this context.
-#[cfg(feature = "app")]
+#[cfg(not(target_arch = "wasm32"))]
 fn fit_once(ctx: &Context) {
     if memory::with::<Fitted, _>(ctx, |fitted| fitted.0) {
         return;
@@ -84,7 +86,7 @@ fn fit_once(ctx: &Context) {
 /// opens maximized on a small display). Never on macOS, which keeps new windows inside the screen's visible frame
 /// itself, and never for a window that is already maximized or in full screen. Returns whether the monitor was
 /// known, which is when the fit has run.
-#[cfg(feature = "app")]
+#[cfg(not(target_arch = "wasm32"))]
 fn fit_first(ctx: &Context) -> bool {
     use crate::runtime::windows::{WindowAction, WindowHost};
     use craft_host::target::{Os, WindowState};

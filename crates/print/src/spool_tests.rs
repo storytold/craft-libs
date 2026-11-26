@@ -199,13 +199,18 @@ fn stand_in_print_helper() {
 }
 
 /// Launches [`stand_in_print_helper`] over `directory` in `mode`, marking its stages in `marks`.
-fn helper_command(directory: &Path, marks: &Path, mode: &str) -> std::io::Result<Command> {
+fn helper_command(directory: &Path, marks: &Path, mode: &str, may_be_killed: bool) -> std::io::Result<Command> {
     let mut command = Command::new(std::env::current_exe()?);
     command
         .args(["--exact", "spool_tests::stand_in_print_helper", "--nocapture", "--"])
         .env(PRINT_DIR, directory)
         .env(PRINT_MARKS, marks)
         .env(PRINT_MODE, mode);
+    // A force-killed child can leave a partial LLVM profile; keep it in this trial's
+    // temporary directory while normally exiting children retain their coverage.
+    if may_be_killed && std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        command.env("LLVM_PROFILE_FILE", marks.join("killed-%p-%m.profraw"));
+    }
     Ok(command)
 }
 
@@ -224,14 +229,19 @@ fn wait_for(path: &Path) {
 }
 
 /// Runs `submission` on a thread with the child in `mode`; the receiver gets its input folder.
-fn submit_in(submission: &Submission, marks: &Path, mode: &'static str) -> (std::thread::JoinHandle<Result<String, String>>, Receiver<PathBuf>) {
+fn submit_in(
+    submission: &Submission,
+    marks: &Path,
+    mode: &'static str,
+    may_be_killed: bool,
+) -> (std::thread::JoinHandle<Result<String, String>>, Receiver<PathBuf>) {
     let worker = submission.clone();
     let marks = marks.to_path_buf();
     let (folder, folders) = channel();
     let running = std::thread::spawn(move || {
         worker.submit_with(PDF, &job(), |directory| {
             folder.send(directory.to_path_buf()).unwrap();
-            helper_command(directory, &marks, mode)
+            helper_command(directory, &marks, mode, may_be_killed)
         })
     });
     (running, folders)
@@ -261,7 +271,7 @@ fn a_cancel_during_startup_never_starts_the_driver() {
         worker.submit_with(PDF, &job(), |directory| {
             started.send(directory.to_path_buf()).unwrap();
             wait.recv().unwrap();
-            helper_command(directory, &held, "held")
+            helper_command(directory, &held, "held", true)
         })
     });
     let directory = starting.recv_timeout(LIMIT).unwrap();
@@ -272,7 +282,7 @@ fn a_cancel_during_startup_never_starts_the_driver() {
 
     // Cancelled while the child is waking and has not acknowledged anything.
     let submission = Submission::new();
-    let (running, folders) = submit_in(&submission, marks.path(), "waking");
+    let (running, folders) = submit_in(&submission, marks.path(), "waking", true);
     let directory = folders.recv_timeout(LIMIT).unwrap();
     wait_for(&marks.path().join("waking"));
     assert!(submission.cancel(), "a process without a start grant cannot send anything");
@@ -286,7 +296,7 @@ fn a_cancel_during_startup_never_starts_the_driver() {
 fn a_refusal_while_sending_keeps_the_job() {
     let marks = tempfile::tempdir().unwrap();
     let submission = Submission::new();
-    let (running, folders) = submit_in(&submission, marks.path(), "sending");
+    let (running, folders) = submit_in(&submission, marks.path(), "sending", false);
     let directory = folders.recv_timeout(LIMIT).unwrap();
     wait_for(&marks.path().join("sending"));
     assert!(!submission.cancel(), "a sending job refuses cancellation");
@@ -303,7 +313,7 @@ fn a_refusal_while_sending_keeps_the_job() {
 fn a_cancelled_driver_does_not_block_the_next_job() {
     let marks = tempfile::tempdir().unwrap();
     let submission = Submission::new();
-    let (running, folders) = submit_in(&submission, marks.path(), "held");
+    let (running, folders) = submit_in(&submission, marks.path(), "held", true);
     let directory = folders.recv_timeout(LIMIT).unwrap();
     wait_for(&marks.path().join("driver"));
     assert!(!directory.join("input.pdf").exists(), "the stalled driver retains no plaintext PDF");
@@ -311,7 +321,7 @@ fn a_cancelled_driver_does_not_block_the_next_job() {
     assert!(submission.cancel(), "a stalled driver still acknowledges cancellation");
     let next_marks = tempfile::tempdir().unwrap();
     let next = Submission::new();
-    assert_eq!(next.submit_with(PDF, &job(), |dir| helper_command(dir, next_marks.path(), "ready")), Ok("spooled synthetic job".into()));
+    assert_eq!(next.submit_with(PDF, &job(), |dir| helper_command(dir, next_marks.path(), "ready", false)), Ok("spooled synthetic job".into()));
     assert_eq!(running.join().unwrap(), Err(CANCELLED.into()));
     assert!(!directory.exists(), "the reaped helper's PDF and settings were removed");
     assert!(!next.cancel(), "a completed job keeps its receipt");
@@ -328,7 +338,7 @@ fn helper_crashes_are_errors_and_inputs_are_bounded() {
         Submission::new()
             .submit_with(PDF, &job(), |dir| {
                 inputs = Some(dir.to_path_buf());
-                helper_command(dir, marks.path(), "crash")
+                helper_command(dir, marks.path(), "crash", false)
             })
             .is_err()
     );
@@ -353,7 +363,7 @@ fn helper_crashes_are_errors_and_inputs_are_bounded() {
     let folder = tempfile::tempdir().unwrap();
     std::fs::write(folder.path().join("job.json"), serde_json::to_vec(&Request::from_job(&job())).unwrap()).unwrap();
     std::fs::write(folder.path().join("input.pdf"), PDF).unwrap();
-    let mut child = helper_command(folder.path(), marks.path(), "held")
+    let mut child = helper_command(folder.path(), marks.path(), "held", false)
         .unwrap()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

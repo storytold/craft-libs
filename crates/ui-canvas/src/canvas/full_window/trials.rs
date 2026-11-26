@@ -36,13 +36,14 @@ fn a_footer_letter_activates_its_button_in_a_full_window_dialog() {
 }
 
 /// The sample workspace on a dialog host, run once per frame.
-mod hosting {
+pub(crate) mod hosting {
     use super::super::HostedWorkspace;
     use super::super::stories::{BrushChanged, BrushWorkspace, Flat};
     use crate::contract::Role;
     use crate::dialog::{DialogHost, DialogResult, FieldRefusal, HeldOk, StackDialog};
     use crate::runtime::env::Label;
     use crate::testing::access::AccessTree;
+    use crate::testing::focus::key_release;
     use crate::testing::input::key_press;
     use crate::testing::pointer::{click, moved, press, release};
     use crate::testing::{Frames, trial};
@@ -109,7 +110,8 @@ mod hosting {
             host.borrow_mut().open(workspace());
             frames.idle(10, &mut ui);
             assert!(dialog_bounds(&mut frames).is_some(), "a reopened workspace shows");
-            frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut ui);
+            // Each round releases its Escape: a second press with no release between is a repeat.
+            frames.frame(vec![key_press(Key::Escape, Modifiers::NONE), key_release(Key::Escape, Modifiers::NONE)], &mut ui);
             frames.idle(2, &mut ui);
             assert_eq!(host.borrow_mut().take::<Hosted>(), Some(DialogResult::Cancel), "Escape cancels");
         }

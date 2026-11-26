@@ -35,8 +35,12 @@ pub(crate) struct Spec<'a> {
     pub resizable: bool,
     /// Whether the window has a taskbar or Dock entry.
     pub taskbar: bool,
-    /// Whether the window opens hidden; [`show`] reveals it.
+    /// Whether the window opens hidden; [`set_visible`] reveals it.
     pub hidden: bool,
+    /// Whether the window takes OS focus when it opens.
+    pub active: bool,
+    /// Whether pointer input passes through the window.
+    pub passes_pointer: bool,
     /// The app id the OS window carries (dock icon, Wayland compositor rules); empty carries none.
     pub app_id: &'a str,
 }
@@ -47,6 +51,12 @@ pub(crate) fn show_immediate<T>(ctx: &Context, id: ViewportId, spec: &Spec<'_>, 
         ViewportBuilder::default().with_title(spec.title).with_resizable(spec.resizable).with_taskbar(spec.taskbar).with_window_level(spec.level);
     if spec.hidden {
         builder = builder.with_visible(false);
+    }
+    if !spec.active {
+        builder = builder.with_active(false);
+    }
+    if spec.passes_pointer {
+        builder = builder.with_mouse_passthrough(true);
     }
     if !spec.app_id.is_empty() {
         builder = builder.with_app_id(spec.app_id);
@@ -74,9 +84,9 @@ pub(crate) fn show_immediate<T>(ctx: &Context, id: ViewportId, spec: &Spec<'_>, 
     ctx.show_viewport_immediate(id, builder, |ui, _| body(ui))
 }
 
-/// Makes the hidden viewport `id` visible.
-pub(crate) fn show(ctx: &Context, id: ViewportId) {
-    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
+/// Shows or hides the window of viewport `id`.
+pub(crate) fn set_visible(ctx: &Context, id: ViewportId, visible: bool) {
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(visible));
 }
 
 /// The viewport id of the container `id`.
@@ -165,6 +175,16 @@ pub(crate) fn raise(ctx: &Context, viewport: ViewportId) {
     } else {
         command(ctx, viewport, ViewportCommand::Focus);
     }
+    ctx.request_repaint_of(viewport);
+}
+
+/// Brings `viewport`'s window in front of the app's other windows without giving it focus, by standing it above every
+/// window and then back at `level`, its own level. egui-winit ignores `Focus` for a window that has focus, and the
+/// window holding a modal usually has it; on Windows the level change also puts the window in front of the ordinary
+/// windows that were made ordinary before it. A Wayland compositor gives clients no stacking control.
+pub(crate) fn raise_above(ctx: &Context, viewport: ViewportId, level: WindowLevel) {
+    command(ctx, viewport, ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+    command(ctx, viewport, ViewportCommand::WindowLevel(level));
     ctx.request_repaint_of(viewport);
 }
 

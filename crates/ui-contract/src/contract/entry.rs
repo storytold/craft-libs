@@ -10,19 +10,20 @@ const NO_LABEL: Label = Label::Empty;
 
 /// A row of entries: an item that reports its value when picked, a heading over a group of items, or a separator
 /// between groups of items.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct Entry<T> {
     row: Row<T>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 enum Row<T> {
-    Item(Item<T>),
+    // Boxed: an item's labels make it far larger than a heading or a separator.
+    Item(Box<Item<T>>),
     Heading(Label),
     Separator,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 struct Item<T> {
     value: T,
     label: Label,
@@ -30,6 +31,7 @@ struct Item<T> {
     icon: Option<IconSpec<'static>>,
     enabled: bool,
     reason: Option<Label>,
+    description: Option<Label>,
     checked: bool,
     stepped: bool,
 }
@@ -38,7 +40,17 @@ impl<T> Entry<T> {
     /// An entry reporting `value` when picked, shown as `label`: enabled and unchecked, without an icon.
     pub fn new(value: T, label: impl Into<Label>) -> Self {
         Entry {
-            row: Row::Item(Item { value, label: label.into(), closed: None, icon: None, enabled: true, reason: None, checked: false, stepped: true }),
+            row: Row::Item(Box::new(Item {
+                value,
+                label: label.into(),
+                closed: None,
+                icon: None,
+                enabled: true,
+                reason: None,
+                description: None,
+                checked: false,
+                stepped: true,
+            })),
         }
     }
 
@@ -145,7 +157,7 @@ impl<T> Entry<T> {
     /// The text a closed control shows for the entry: its closed label, else its label.
     pub fn face_label(&self) -> &Label {
         match &self.row {
-            Row::Item(Item { closed: Some(closed), .. }) => closed,
+            Row::Item(item) => item.closed.as_ref().unwrap_or(&item.label),
             _ => self.label(),
         }
     }
@@ -166,6 +178,24 @@ impl<T> Entry<T> {
     /// Whether a step over the closed control stops on the entry: an enabled, stepped item.
     pub fn is_stepped(&self) -> bool {
         matches!(&self.row, Row::Item(item) if item.enabled && item.stepped)
+    }
+
+    /// An enabled entry's hover text and accessible description, beside the reason a disabled entry shows.
+    #[must_use]
+    pub fn description(mut self, text: impl Into<Label>) -> Self {
+        if let Row::Item(item) = &mut self.row {
+            item.description = Some(text.into());
+        }
+        self
+    }
+
+    /// The entry's description, when it has one, whether the entry is enabled or not: a disabled entry shows
+    /// [`Entry::why_disabled`] first. A heading or separator has none.
+    pub fn description_text(&self) -> Option<&Label> {
+        match &self.row {
+            Row::Item(item) => item.description.as_ref(),
+            Row::Heading(_) | Row::Separator => None,
+        }
     }
 
     /// Why the entry is disabled, while it is.

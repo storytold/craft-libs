@@ -55,7 +55,7 @@ mod lasso;
 mod magnetic;
 mod marquee;
 mod polygon;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub mod operations;

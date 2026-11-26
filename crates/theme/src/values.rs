@@ -98,6 +98,9 @@ pub enum ColorSource {
         to: ColorToken,
         /// The text the fill moves away from.
         away_from: ColorToken,
+        /// The least OKLCH lightness distance from `base`, so a variant under a seed whose ramp
+        /// steps lie close together (a light dark-mode accent) still shows.
+        min: f64,
     },
     /// White or black, whichever has the higher lowest contrast on all of these tokens.
     OnSolid(&'static [ColorToken]),
@@ -137,6 +140,11 @@ const SOLID_HOVER: usize = 10;
 /// `status.<s>.solid_pressed`).
 const SOLID_PRESSED: (usize, usize, f64) = (10, 11, 0.5);
 
+/// The least OKLCH lightness a hovered `accent.strong` moves from rest, and a pressed one. The
+/// dark ramp's steps 9 and 10 lie 0.01 apart for a light seed, which hides the hover.
+const STRONG_HOVER_MIN: f64 = 0.06;
+const STRONG_PRESSED_MIN: f64 = 0.10;
+
 /// How far a bevel's lit edge (`edge.light`) lies above `surface.panel` in OKLCH lightness, in
 /// either mode. Windows 2000's #d4d0c8 face (L 0.86) has a white lit edge.
 pub const BEVEL_LIT: f64 = 0.15;
@@ -160,6 +168,19 @@ pub(super) fn panel_step(mode: Mode) -> usize {
     }
 }
 
+/// Whether `token`'s default in `mode` comes from the accent ramp, directly or through the tokens it derives from (the
+/// text on an accent fill, a faded accent).
+pub(super) fn follows_accent(token: ColorToken, mode: Mode) -> bool {
+    match source(token, mode) {
+        ColorSource::Accent(_) | ColorSource::AccentMix { .. } => true,
+        ColorSource::Same(other) | ColorSource::Faded(other, _) | ColorSource::SolidFrom(other) | ColorSource::ShiftedFrom { base: other, .. } => {
+            follows_accent(other, mode)
+        }
+        ColorSource::OnSolid(solids) => solids.iter().any(|&solid| follows_accent(solid, mode)),
+        _ => false,
+    }
+}
+
 /// The default source of `token` in `mode`.
 pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
     use ColorSource::{
@@ -176,13 +197,19 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::SurfaceBackground => Anchored(pick(2, 3)),
         T::SurfaceCanvas => Same(T::SurfaceBackground),
         T::SurfaceCanvasPattern => Same(T::SurfaceCanvas),
+        T::SurfacePage => Same(T::SurfaceCanvas),
         T::SurfacePanel => Neutral(panel_step(mode)),
         T::SurfaceChrome => Same(T::SurfacePanel),
         T::SurfaceRaised => Anchored(pick(4, 1)),
         T::SurfaceSunken => Anchored(1),
+        // A filled tile rests on the theme's own hover fill, so the pointer adds only its edge.
+        T::SurfaceControl => Same(T::StateHover),
         // Near white in both modes (dark: about 236/255), as macOS, GNOME and PhotoCraft knobs. A
         // knob face is not a background grey, so it stays on the curve.
         T::SurfaceKnob => Neutral(pick(12, 1)),
+        // The opposite of the panel: a light card on a dark theme, a dark one on a light theme. Step 12 of the ramp
+        // is the text colour's step, so the surface has the contrast text has in either mode.
+        T::SurfaceInverse => Neutral(12),
         T::SurfaceScrim => Fixed(Rgba::BLACK.with_alpha(alpha(pickf(0.5, 0.35)))),
         T::SurfaceShadow => Fixed(Rgba::BLACK.with_alpha(pick(SHADOW_ALPHA.1, SHADOW_ALPHA.0) as u8)),
         T::TextNormal => Neutral(12),
@@ -194,9 +221,12 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::TextOnStatus => OnSolid(STATUS_SOLIDS),
         // `text.normal`'s step, so neutral selections look like the rest of the text.
         T::TextOnSelected => Neutral(12),
+        // Step 1 is the far end of the ramp from the inverse surface's step 12 in either mode.
+        T::TextOnInverse => Neutral(1),
         T::LineDivider => Anchored(6),
         T::LineBorder => Anchored(7),
         T::LineControlEdge => Anchored(8),
+        T::LineOutline => Same(T::TextMuted),
         // A light knob needs an outline on a light panel (PhotoCraft's `text_dim`); on a dark one
         // its face is the edge. The Pro themes pin PhotoCraft's dark ring.
         T::LineKnobEdge => {
@@ -217,13 +247,20 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         }
         // The contrast pass moves it to the non-text minimum on the control surfaces.
         T::LineMark => Neutral(8),
+        // Two steps from the panel, whatever panel the theme pins: lighter in dark mode, darker in light mode, so a grip
+        // is seen without standing out like an icon (photocraft#16406).
+        T::LineGrip => Anchored(pick(5, 4)),
         T::LineFocus => Accent(9),
         T::AccentSolid => Accent(9),
         T::AccentHover => Accent(SOLID_HOVER),
         T::AccentPressed => AccentMix { from: pressed_from, to: pressed_to, t: pressed_t },
         T::AccentStrong => SolidFrom(T::AccentSolid),
-        T::AccentStrongHover => ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentHover, away_from: T::TextOnStrong },
-        T::AccentStrongPressed => ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentPressed, away_from: T::TextOnStrong },
+        T::AccentStrongHover => {
+            ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentHover, away_from: T::TextOnStrong, min: STRONG_HOVER_MIN }
+        }
+        T::AccentStrongPressed => {
+            ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentPressed, away_from: T::TextOnStrong, min: STRONG_PRESSED_MIN }
+        }
         T::AccentSoft => Accent(pick(4, 3)),
         T::AccentBorder => Same(T::AccentSolid),
         T::AccentText => Accent(11),
@@ -352,6 +389,7 @@ const TEXT_BGS: &[Bg] = &[
     Token(T::SurfaceChrome),
     Token(T::SurfaceRaised),
     Token(T::SurfaceSunken),
+    Token(T::SurfaceControl),
     Token(T::StateHover),
     Token(T::StatePressed),
 ];
@@ -379,6 +417,7 @@ pub(super) const RULES: &[PairRule] = &[
     // A canvas scroll bar's thumb is a boundary on its track: Standard keeps the theme's own greys.
     rule(&[T::TextFaint, T::TextMuted], &[Token(T::SurfaceChrome)], CONTROL_EDGE_MIN.0, CONTROL_EDGE_MIN.1),
     rule(&[T::TextOnSelected], SELECTED_BGS, TEXT_MIN.0, TEXT_MIN.1),
+    rule(&[T::TextOnInverse], &[Token(T::SurfaceInverse)], TEXT_MIN.0, TEXT_MIN.1),
     rule(&[T::AccentText], CONTROL_BGS, TEXT_MIN.0, TEXT_MIN.1),
     // After `accent.text`, which it starts from.
     rule(&[T::AccentOnSoft], &[Token(T::AccentSoft)], TEXT_MIN.0, TEXT_MIN.1),

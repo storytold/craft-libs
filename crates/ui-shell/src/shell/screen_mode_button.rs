@@ -7,8 +7,8 @@ use crate::rails::{FlyoutButton, RailTool};
 use crate::runtime::env::Env;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A flyout button over the screen modes of the shell's set, with `mode` marked: a click, Enter or Space cycles; a
 /// hold, a drag away or a right click lists the modes without cycling. The face is the Cycle command's icon and tooltip; disabled

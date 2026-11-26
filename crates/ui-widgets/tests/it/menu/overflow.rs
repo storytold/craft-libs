@@ -1,10 +1,12 @@
 //! A menu taller than its room: it stays inside the room at the width of its rows, scrolls by the strips above and
 //! below its rows and by the wheel, and reopens at its first row; one that fits shows no strips. A tall submenu of a
-//! low row opens upward.
+//! low row opens upward. A context menu that fits on neither side of the pointer, or of the control a key asked it
+//! for, but fits the window covers its anchor instead of scrolling; a tooltip at the pointer never covers the pointer.
 
 use craft_host::target::Os;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Entry, Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::tooltip::DELAY;
+use craft_ui::contract::{Bind, Entry, Props as _, Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, TooltipAt, TooltipSpec, Trigger};
 use craft_ui::menu::bar::{MenuBar, MenuTitle};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::Select;
@@ -54,13 +56,23 @@ fn menu_rect(fixture: &Fixture) -> Rect {
     fixture.by_role(Role::MENU).first().expect("the menu is open").rect
 }
 
+/// The clock a frame resting on a strip moves on beyond its own: a strip scrolls by the pass's elapsed time, taken up
+/// to a tenth of a second, so each frame takes the longest step a strip takes.
+const STRIP_STEP: f64 = 0.1;
+
 /// Runs frames until `done` holds, at most `frames` of them; whether it held.
 fn until(fixture: &mut Fixture, frames: usize, events: impl Fn() -> Vec<egui::Event>, done: impl Fn(&Fixture) -> bool) -> bool {
-    for _ in 0..frames {
+    until_stepped(fixture, frames, 0.0, events, done)
+}
+
+/// [`until`] with the clock moved on by `step` before each frame, beyond the frame's own.
+fn until_stepped(fixture: &mut Fixture, frames: usize, step: f64, events: impl Fn() -> Vec<egui::Event>, done: impl Fn(&Fixture) -> bool) -> bool {
+    for frame in 0..frames {
         if done(fixture) {
+            eprintln!("DIAG overflow until: held after {frame} frames");
             return true;
         }
-        fixture.frame(events());
+        fixture.advance(step).frame(events());
     }
     done(fixture)
 }
@@ -80,13 +92,16 @@ fn a_menu_taller_than_its_room_scrolls_by_its_strips_and_the_wheel_at_the_width_
     assert!(in_view(&fixture, menu, 0) && !in_view(&fixture, menu, ROWS - 1));
 
     let rest_on = |at: Rect| move || vec![pointer::moved(at.center())];
-    assert!(until(&mut fixture, 400, rest_on(forward), |f| in_view(f, menu, ROWS - 1)), "resting on the lower strip reaches the last row");
+    assert!(
+        until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(forward), |f| in_view(f, menu, ROWS - 1)),
+        "resting on the lower strip reaches the last row"
+    );
     assert!(!in_view(&fixture, menu, 0));
-    assert!(until(&mut fixture, 400, rest_on(back), |f| in_view(f, menu, 0)), "resting on the upper strip reaches the first row");
+    assert!(until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(back), |f| in_view(f, menu, 0)), "resting on the upper strip reaches the first row");
 
     let middle = Rect::from_min_max(back.center(), forward.center()).center();
     assert!(
-        until(&mut fixture, 200, || vec![pointer::moved(middle), pointer::wheel(-60.0)], |f| in_view(f, menu, ROWS - 1)),
+        until(&mut fixture, 200, || vec![pointer::moved(middle), pointer::wheel(-240.0)], |f| in_view(f, menu, ROWS - 1)),
         "the wheel reaches the last row"
     );
     assert!((menu_rect(&fixture).width() - width).abs() < 0.5, "scrolling keeps the width");
@@ -106,6 +121,84 @@ fn a_menu_that_fits_shows_no_strips_and_hugs_its_rows() {
     let rect = menu_rect(&fixture);
     let (first, last) = (fixture.by_label(&row(0)).expect("the first row").rect, fixture.by_label(&row(ROWS - 1)).expect("the last row").rect);
     assert!(((first.top() - rect.top()) - (rect.bottom() - last.bottom())).abs() < 0.5, "as tall as its rows: {rect:?}, rows {first:?} to {last:?}");
+}
+
+/// A context menu of `rows` rows on a target `top` down the fixture's 800 x 600 window, right-clicked at the target's
+/// centre: the fixture, the menu's id and the pointer.
+fn context_menu(top: f32, rows: usize) -> (Fixture, Id, egui::Pos2) {
+    let menu = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&menu);
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(top);
+        let target = Button::new("Target").show(ui);
+        let shown = Menu::context("Target menu", &target).show(ui, |ui, _| {
+            for at in 0..rows {
+                MenuItem::new(row(at)).show(ui);
+            }
+        });
+        seen.set(Some(shown.output.response.id));
+    });
+    fixture.settle();
+    let at = fixture.by_label("Target").expect("the target").center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]);
+    fixture.settle();
+    (fixture, menu.get().expect("the menu's id"), at)
+}
+
+#[trial]
+fn a_context_menu_too_tall_for_either_side_of_the_pointer_covers_it_and_shows_every_row_without_strips() {
+    let rows = 18;
+    let (fixture, menu, at) = context_menu(290.0, rows);
+    let room = fixture.ctx().content_rect();
+    let rect = menu_rect(&fixture);
+    assert!(strips(&fixture, menu).is_none(), "the menu {rect:?} fits the window {room:?}: no strips");
+    let (first, last) = (fixture.by_label(&row(0)).expect("the first row").rect, fixture.by_label(&row(rows - 1)).expect("the last row").rect);
+    let tall = last.bottom() - first.top();
+    assert!(tall > at.y - room.top() && tall > room.bottom() - at.y, "the rows ({tall}) fit on neither side of the pointer at {at:?}");
+    assert!(room.contains_rect(rect), "the menu {rect:?} stays inside the window {room:?}");
+    assert!(rect.contains_rect(first) && rect.contains_rect(last), "every row shows: {first:?} to {last:?} in {rect:?}");
+}
+
+/// The same menu asked for with Shift+F10 on the focused target: it hangs from the target's rect, which it covers.
+#[trial]
+fn a_context_menu_a_key_asked_for_covers_its_target_when_it_fits_neither_side() {
+    let rows = 18;
+    let (mut fixture, menu, _) = context_menu(290.0, rows);
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_role(Role::MENU).is_empty(), "Escape closes the menu the pointer opened");
+    let target = fixture.by_label("Target").expect("the target").rect;
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::F10, Modifiers::SHIFT).settle();
+    let room = fixture.ctx().content_rect();
+    let rect = menu_rect(&fixture);
+    assert!(strips(&fixture, menu).is_none(), "the menu {rect:?} fits the window {room:?}: no strips");
+    let (first, last) = (fixture.by_label(&row(0)).expect("the first row").rect, fixture.by_label(&row(rows - 1)).expect("the last row").rect);
+    assert!(rect.contains_rect(first) && rect.contains_rect(last), "every row shows: {first:?} to {last:?} in {rect:?}");
+    assert!(rect.intersects(target), "the menu {rect:?} covers its target {target:?}");
+}
+
+/// A tooltip at the pointer too tall for either side of it stays off the pointer: it opens on its preferred side,
+/// below, where the room is larger, and does not slide up over the pointer as a menu does.
+#[trial]
+fn a_tooltip_at_the_pointer_too_tall_for_either_side_does_not_cover_the_pointer() {
+    let text = (0..40).map(|line| format!("Line {line}")).collect::<Vec<_>>().join("\n");
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(200.0);
+        Button::new("Target").tooltip(TooltipSpec::new(text.clone()).at(TooltipAt::Pointer)).show(ui);
+    });
+    fixture.settle();
+    let at = fixture.by_label("Target").expect("the target").center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    let tips = fixture.by_role(Role::TOOLTIP);
+    let tip = tips.first().expect("the tooltip shows").rect;
+    let room = fixture.ctx().content_rect();
+    let lines = fixture.texts().iter().filter(|run| run.text.starts_with("Line ")).fold(Rect::NOTHING, |all, run| all.union(run.rect));
+    assert!(lines.height() > at.y - room.top() && lines.height() > room.bottom() - at.y, "the text ({lines:?}) fits on neither side of {at:?}");
+    assert!(tip.top() >= at.y, "the tooltip {tip:?} opens below the pointer at {at:?} and does not cover it");
 }
 
 /// A menu of `above` rows over a submenu row whose submenu has `rows` rows, in the fixture's 800 x 600 window.
@@ -255,4 +348,16 @@ fn a_dropdown_in_a_menu_bar_menu_keeps_its_cap() {
     let list = fixture.by_role(Role::LIST_BOX).first().expect("the list is open").rect;
     let window = fixture.ctx().content_rect();
     assert!(list.height() <= window.height() * 0.5, "the list {list:?} keeps the dropdown's share of the window {window:?}");
+}
+
+#[trial]
+fn a_long_menu_and_its_submenu_keep_their_rects_from_frame_to_frame() {
+    let mut fixture = low_submenu(18, 8);
+    let rects = |fixture: &Fixture| fixture.by_role(Role::MENU).iter().map(|menu| menu.rect).collect::<Vec<_>>();
+    let settled = rects(&fixture);
+    assert!(settled.len() >= 2, "the menu and its submenu are open: {settled:?}");
+    for frame in 0..3 {
+        fixture.frame(vec![]);
+        assert_eq!(rects(&fixture), settled, "frame {frame}: the menu and its submenu keep their rects");
+    }
 }

@@ -33,6 +33,36 @@ pub struct TocStyleValues {
     pub entries: Vec<TocStyleEntryValues>,
 }
 
+impl TocStyleValues {
+    /// Emits a `TOCStyle` element and its `TOCStyleEntry` children.
+    pub fn to_el(&self, name: &str, mut fresh: impl FnMut() -> String) -> El {
+        let mut el = El::new("TOCStyle")
+            .with_attr("Self", self.self_id.as_deref().unwrap_or("TOCStyle/Table of Contents"))
+            .with_attr("Name", name)
+            .with_attr("Title", self.title.as_deref().unwrap_or(""))
+            .with_attr("TitleStyle", self.title_style.as_deref().unwrap_or("ParagraphStyle/$ID/NormalParagraphStyle"))
+            .with_attr("RunIn", "false")
+            .with_attr("IncludeHidden", "false")
+            .with_attr("IncludeBookDocuments", "false")
+            .with_attr("CreateBookmarks", bool_str(self.create_bookmarks.unwrap_or(false)));
+        for entry in &self.entries {
+            el.push(
+                El::new("TOCStyleEntry")
+                    .with_attr("Self", fresh())
+                    .with_attr("Name", entry.style.as_deref().unwrap_or(""))
+                    .with_attr("FormatStyle", entry.entry_style.as_deref().unwrap_or(""))
+                    .with_attr("Level", entry.level.unwrap_or(1).to_string())
+                    .with_attr("PageNumberPosition", entry.page_number_position.as_deref().unwrap_or("AfterEntry"))
+                    .with_attr("Separator", entry.separator.as_deref().unwrap_or("\t"))
+                    .with_attr("PageNumberStyle", entry.page_number_style.as_deref().unwrap_or("CharacterStyle/$ID/[No character style]"))
+                    .with_attr("SeparatorStyle", entry.separator_style.as_deref().unwrap_or("CharacterStyle/$ID/[No character style]"))
+                    .with_attr("Sort", bool_str(entry.sort.unwrap_or(false))),
+            );
+        }
+        el
+    }
+}
+
 /// Date-based IDML text variable kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextDateKind {
@@ -259,6 +289,54 @@ impl CellStyleValues {
             edge_strokes: ["TopEdge", "LeftEdge", "BottomEdge", "RightEdge"].map(|edge| values.stroke_values(edge)),
         }
     }
+
+    /// Emits a `CellStyle` element from these values.
+    pub fn to_el(&self) -> El {
+        let mut el = El::new("CellStyle");
+        if let Some(self_id) = &self.self_id {
+            el.attrs.push(("Self".into(), self_id.clone()));
+        }
+        if let Some(name) = &self.name {
+            el.attrs.push(("Name".into(), name.clone()));
+        }
+        if let Some(fill) = &self.fill {
+            el.attrs.push(("FillColor".into(), fill.clone()));
+        }
+        if let Some(tint) = self.fill_tint {
+            el.attrs.push(("FillTint".into(), num(tint)));
+        }
+        for ((text, legacy), value) in
+            [("TextTopInset", "TopInset"), ("TextLeftInset", "LeftInset"), ("TextBottomInset", "BottomInset"), ("TextRightInset", "RightInset")]
+                .iter()
+                .zip(self.insets)
+        {
+            if let Some(value) = value {
+                let s = num(value);
+                el.attrs.push(((*text).into(), s.clone()));
+                el.attrs.push(((*legacy).into(), s));
+            }
+        }
+        if let Some(vj) = &self.vertical_justification {
+            el.attrs.push(("VerticalJustification".into(), vj.clone()));
+        }
+        if let Some(fb) = &self.first_baseline {
+            el.attrs.push(("FirstBaselineOffset".into(), fb.clone()));
+        }
+        if let Some(min) = self.first_baseline_min {
+            el.attrs.push(("MinimumFirstBaselineOffset".into(), num(min)));
+        }
+        for (side, stroke) in ["TopEdge", "LeftEdge", "BottomEdge", "RightEdge"].iter().zip(&self.edge_strokes) {
+            stroke.push_prefixed_attrs(&mut el, side, false);
+        }
+        if let Some(ps) = &self.paragraph_style {
+            el.attrs.push(("AppliedParagraphStyle".into(), ps.clone()));
+        }
+        let based_on = match &self.based_on {
+            Some(base) if base != "$ID/[None]" => prop("BasedOn", "object", base.clone()),
+            _ => prop("BasedOn", "string", "$ID/[None]"),
+        };
+        with_props(el, vec![based_on])
+    }
 }
 
 /// Parsed table-style assignments that are independent of DesignCraft's style resolution.
@@ -309,6 +387,57 @@ impl TableStyleValues {
             column_strokes: values.alternating_stroke_values("Column"),
         }
     }
+
+    /// Emits a `TableStyle` element from these values.
+    pub fn to_el(&self, self_id: &str) -> El {
+        let mut el = El::new("TableStyle").with_attr("Self", self_id);
+        if let Some(name) = &self.name {
+            el.attrs.push(("Name".into(), name.clone()));
+        }
+        for (key, value) in [
+            ("HeaderRegionCellStyle", &self.header_cell_style),
+            ("BodyRegionCellStyle", &self.body_cell_style),
+            ("FooterRegionCellStyle", &self.footer_cell_style),
+            ("LeftColumnRegionCellStyle", &self.left_column_cell_style),
+            ("RightColumnRegionCellStyle", &self.right_column_cell_style),
+        ] {
+            if let Some(value) = value {
+                el.attrs.push((key.into(), value.clone()));
+            }
+        }
+        for (key, value) in [
+            ("HeaderRegionSameAsBodyRegion", self.header_same_as_body),
+            ("FooterRegionSameAsBodyRegion", self.footer_same_as_body),
+            ("LeftColumnRegionSameAsBodyRegion", self.left_column_same_as_body),
+            ("RightColumnRegionSameAsBodyRegion", self.right_column_same_as_body),
+        ] {
+            if let Some(value) = value {
+                el.attrs.push((key.into(), bool_str(value).into()));
+            }
+        }
+        for (side, stroke) in ["TopBorder", "LeftBorder", "BottomBorder", "RightBorder"].iter().zip(&self.border_strokes) {
+            stroke.push_prefixed_attrs(&mut el, side, false);
+        }
+        self.row_fills.push_attrs(&mut el, "Row");
+        self.column_fills.push_attrs(&mut el, "Column");
+        self.row_strokes.push_attrs(&mut el, "Row");
+        self.column_strokes.push_attrs(&mut el, "Column");
+        if let Some(value) = self.space_before {
+            el.attrs.push(("SpaceBefore".into(), num(value)));
+        }
+        if let Some(value) = self.space_after {
+            el.attrs.push(("SpaceAfter".into(), num(value)));
+        }
+        let mut props = Vec::new();
+        if let Some(base) = &self.based_on {
+            props.push(if base == "$ID/[No table style]" {
+                prop("BasedOn", "string", "$ID/[No table style]")
+            } else {
+                prop("BasedOn", "object", base.clone())
+            });
+        }
+        with_props(el, props)
+    }
 }
 
 impl NumberingListValues {
@@ -341,6 +470,13 @@ impl EpubSplitValues {
     pub fn from_el(el: &El) -> Self {
         let values = Values::of(el);
         Self { break_document: values.boolean("BreakDocument") == Some(true), paragraph_style: values.get("ParagraphStyleName").map(str::to_owned) }
+    }
+
+    /// Emits an `EPubExportPreference` element.
+    pub fn to_el(&self) -> El {
+        El::new("EPubExportPreference")
+            .with_attr("BreakDocument", bool_str(self.break_document))
+            .with_attr("ParagraphStyleName", self.paragraph_style.as_deref().unwrap_or(""))
     }
 }
 

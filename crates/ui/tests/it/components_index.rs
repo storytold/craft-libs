@@ -11,8 +11,10 @@ use std::path::Path;
 fn the_committed_components_index_is_what_the_registrations_give() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let committed = std::fs::read_to_string(root.join("docs/components-index.md")).unwrap_or_default();
+    let registry = library_registrations();
+    let registrations: Vec<_> = registry.registrations().iter().collect();
     assert!(
-        committed == components_index(&root, &library_registrations()),
+        committed == components_index(&root, &registrations),
         "docs/components-index.md is stale; run `cargo run -p craft-ui-gallery --bin components-index`"
     );
 }
@@ -21,6 +23,7 @@ fn the_committed_components_index_is_what_the_registrations_give() {
 /// together only here.
 #[trial]
 fn the_level_tables_name_only_registered_types_and_story_groups() {
-    let stale = stale_table_rows(&library_registrations());
+    let registry = library_registrations();
+    let stale = stale_table_rows(&registry);
     assert!(stale.is_empty(), "stale level table rows: {stale:#?}");
 }

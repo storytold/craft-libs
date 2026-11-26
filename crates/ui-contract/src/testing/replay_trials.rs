@@ -120,9 +120,37 @@ fn replayed_focus_stops_keep_their_own_target() {
         let ctx = ui.ctx();
         let from = focus::stop_count(ctx);
         focus::replay(ctx, &recorded.focus);
-        assert_eq!(focus::first_stop_inside(ctx, parent, from), Some(focus::FocusTarget::Id(child)));
-        assert_eq!(focus::first_stop_inside(ctx, child, from), None);
+        assert_eq!(focus::first_stop_inside(ctx, parent, from, None), Some(focus::FocusTarget::Id(child)));
+        assert_eq!(focus::first_stop_inside(ctx, child, from, None), None);
     });
+}
+
+// The app's own egui widgets drawn inside a recorded view are stops of its transcript, and none drawn before it; the
+// replay registers each once, where the view shows, after the widgets drawn before it.
+#[trial]
+fn a_recorded_view_holds_the_app_s_widgets_drawn_in_it_and_its_replay_registers_them_once() {
+    let mut frames = Frames::new();
+    let [before, inside] = [fixture::named_id("app before"), fixture::named_id("app inside")];
+    let rect = |x: f32| Rect::from_min_size(Pos2::new(x, 100.0), Vec2::new(80.0, 30.0));
+    let mut recorded = None;
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx().clone();
+        fixture::host_button(ui, before, rect(20.0));
+        replay::open(&ctx);
+        fixture::host_button(ui, inside, rect(120.0));
+        recorded = Some(replay::close(&ctx, fixture::layer_of(ui)));
+    });
+    let recorded = recorded.expect("the frame ran");
+    assert_eq!(recorded.focus.stop_ids().collect::<Vec<_>>(), [inside], "the transcript holds the widget drawn in the view alone");
+    let mut order = Vec::new();
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx();
+        fixture::host_button(ui, before, rect(20.0));
+        focus::replay(ctx, &recorded.focus);
+        focus::stop_count(ctx);
+        order = focus::tab_order(ctx, |_| true).into_iter().map(|(id, _)| id).collect();
+    });
+    assert_eq!(order, [before, inside], "the replay registers the view's widget once, after the one drawn before it");
 }
 
 /// Records `stops` run inside a record, with `entering` the first-pass flag of the layer scope it pushes, inside the

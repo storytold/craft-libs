@@ -13,16 +13,16 @@ use craft_ui::canvas::{
     tool_pass,
 };
 use craft_ui::canvas_controls::{Guides, Marquee};
-use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
-use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
+use craft_ui::contract::{SizeLimits, Tracked};
+use craft_ui::docking::{DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::list::{ListRow, ToggleCell};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::primitives::textures::Revision;
-use craft_ui::rails::{LastUsed, ToolRail};
+use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::shell::CanvasPanel;
 use craft_ui::table::Table;
@@ -45,20 +45,23 @@ pub(super) struct Panels<'a> {
     pub(super) tool: Tool,
     pub(super) tools: &'a mut Tools,
     /// The tool each toolbar slot showed last; the toolbar writes it.
-    pub(super) last_used: &'a mut LastUsed<Tool>,
+    pub(super) last_used: &'a mut Tracked<LastUsed<Tool>>,
+    /// The toolbar's slots.
+    pub(super) slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
     /// The tool the toolbar picked in this pass.
     pub(super) picked: Option<Tool>,
-    /// The context the toolbar's grid is measured in.
-    pub(super) ctx: &'a egui::Context,
 }
+
+/// The dock's panel specs: fixed for the mock's four panels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::PlainData)]
+pub struct MockSpecs;
 
 impl Panels<'_> {
     /// The toolbar's rail in the rect the dock gives it, or its height at a width: as many tool columns as the width
     /// holds. The rail's own padding surrounds the buttons, so no group padding applies.
     fn toolbar(&mut self, ui: &mut Ui, at: GroupAt) -> f32 {
-        let slots = Tool::slots();
-        let (current, last_used) = (self.tool, self.last_used.clone());
-        let rail = ToolRail::new("Tools", &slots, &current, &last_used);
+        let current = self.tool;
+        let rail = ToolRail::new("Tools", self.slots, &current, self.last_used);
         match at {
             GroupAt::Measure(width) => rail.measure_rail(ui, width, |_, _| {}).y,
             GroupAt::Show(rect) => {
@@ -67,7 +70,7 @@ impl Panels<'_> {
                     self.picked = output.select;
                 }
                 if let Some(next) = output.last_used {
-                    *self.last_used = next;
+                    **self.last_used = next;
                 }
                 rect.height()
             }
@@ -92,13 +95,13 @@ fn name(panel: Panel) -> &'static str {
     }
 }
 
-impl DockPanels<Panel> for Panels<'_> {
+impl PanelSpecs<Panel> for MockSpecs {
     fn spec(&self, panel: &Panel) -> PanelSpec {
         let spec = PanelSpec::new(name(*panel)).limits(SizeLimits::default());
         match panel {
             Panel::Canvas => spec.canvas(),
             // The toolbar's column is whole tool columns wide.
-            Panel::Tools => spec.grid(ToolRail::<Tool>::dock_grid(self.ctx, Tool::slots().len())),
+            Panel::Tools => spec.grid(DockGrid::rail(Tool::slots().len())),
             _ => spec,
         }
     }
@@ -111,7 +114,9 @@ impl DockPanels<Panel> for Panels<'_> {
             _ => Permissions::ALL,
         }
     }
+}
 
+impl DockPanels<Panel> for Panels<'_> {
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         match panel {
             Panel::Navigator => {
@@ -221,10 +226,8 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
         Canvas::new("Document").id(canvas_id).view(view).document(page.size()).with_rulers(strips).rulers(units, units).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
             let Document { guides, guide, .. } = &mut *document;
-            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
-            if let Some(selected) = *guide {
-                controls = controls.selected_guide(selected);
-            }
+            let selected = *guide;
+            let controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing).selected_guides(selected.as_slice());
             if let Some(select) = controls.show_at(ui, body.rect).select {
                 *guide = select;
             }

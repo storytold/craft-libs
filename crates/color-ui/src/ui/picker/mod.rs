@@ -2,12 +2,12 @@
 //! host adds. A container: its body lays the parts out with the form layouts, the "Field shows" choice is a
 //! `RadioGroup` and the channel rows share one label column.
 
-mod channel;
+pub(crate) mod channel;
 mod compact;
 mod full;
-mod screen_pick;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod screen_pick;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod value;
 
 use std::sync::Arc;
@@ -20,7 +20,9 @@ use craft_ui::runtime::env::Label;
 use egui::{Pos2, Response, Ui};
 
 use super::{AreaMode, ColorWarning};
-pub(crate) use channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
+pub(crate) use channel::channel_name;
+pub use channel::{ChannelRow, ChannelRule, ChannelUnit, TrackRamp};
+pub(crate) use full::TWO_COLUMNS;
 pub use value::ColorConstraint;
 use value::Rules;
 

@@ -5,8 +5,8 @@
 //!
 //! The notes are the app's; [`NotesText`] is the shape the editor reads and writes.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 mod text;
 
@@ -193,7 +193,7 @@ impl NotesEditor<'_> {
         };
         match input {
             EditorInput::Text(text) => insert(plain, cursor, &text),
-            EditorInput::Newline => insert(plain, cursor, "\n"),
+            EditorInput::Newline { .. } => insert(plain, cursor, "\n"),
             EditorInput::Tab => insert(plain, cursor, "\t"),
             EditorInput::Edit(EditCommand::Paste) => clip.is_some_and(|text| insert(plain, cursor, text)),
             EditorInput::Edit(EditCommand::Cut) if !selected.is_empty() => insert(plain, cursor, ""),

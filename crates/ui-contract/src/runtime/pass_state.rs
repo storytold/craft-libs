@@ -91,11 +91,18 @@ pass_state! {
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,
+        fill_leasts: crate::layout::body::FillLeasts,
+        row_shortfalls: crate::layout::body::RowShortfalls,
         bar_rules: crate::contract::BarRules,
+        surface_frames: crate::primitives::SurfaceFrames,
         fill_counts: crate::layout::body::FillCounts,
+        view_fills: crate::layout::body::ViewFills,
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
+        wrap_rows: crate::layout::body::WrapRows,
+        flow_starts: crate::layout::body::FlowStarts,
+        brackets: crate::layout::body::Brackets,
         cursors: crate::layout::body::Cursors,
         footer_slots: crate::contract::footer_slot::Slots,
         column_groups: crate::layout::column_group::Open,
@@ -119,6 +126,8 @@ pass_state! {
         memo_log: crate::runtime::measure::MemoLog,
         #[cfg(feature = "testing")]
         pass_totals: crate::runtime::measure::PassTotals,
+        #[cfg(feature = "testing")]
+        derived_builds: crate::runtime::measure::DerivedBuilds,
     }
     records {
         focus: crate::runtime::focus::State,
@@ -126,6 +135,7 @@ pass_state! {
         cursor: crate::runtime::cursor::State,
         layout: crate::runtime::layout_memory::Entries,
         lazy: crate::runtime::lazy::Store,
+        derived: crate::runtime::derived::Store,
         arenas: crate::primitives::sensing::Arenas,
         envs: crate::runtime::env::ViewportEnvs,
         pointer: crate::runtime::pointer::Memory,
@@ -145,6 +155,7 @@ pass_state! {
         pass_pointer: Arc<crate::runtime::pointer::PassPointer>,
         overlay_pass: crate::runtime::overlay::Pass,
         shown_ids: IdSet,
+        edge_step_taken: crate::contract::reorder::EdgeStepTaken,
     }
 }
 
@@ -321,8 +332,8 @@ fn park(held: Held) {
     Service::<Parked>::run(&held.ctx, |parked| parked.0 = Some(held.state));
 }
 
-#[cfg(feature = "testing")]
-mod binding_tests {
+#[cfg(all(feature = "testing", any(test, feature = "suite")))]
+pub(crate) mod binding_tests {
     use super::{PassState, bound, hold, in_component_tree, visit, with_component_tree};
     use crate::testing::trial;
     use egui::Context;
