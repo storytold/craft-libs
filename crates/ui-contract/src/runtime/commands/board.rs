@@ -2301,7 +2301,8 @@ pub(crate) fn begin(ctx: &Context) {
                     }
                     // A chord that binds only disabled commands runs nothing; the app hears of the first one, to say
                     // why it did not run as a menu row's hint does, and may receive it as declined. A key whose only
-                    // binding is a disabled hold hears of that hold, as it heard of it when the wait settled.
+                    // binding is a disabled hold hears of that hold at its press, as of a disabled press binding, where
+                    // before only a press held past the delay was declined.
                     (None, None) => {
                         if let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, None).or(disabled) {
                             let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
