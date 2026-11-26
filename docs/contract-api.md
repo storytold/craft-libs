@@ -68,6 +68,8 @@ Pure UI behaviours (layer 1): press lifecycle, `ValueDrag`, navigation, item lay
 - `craft_behavior::DisplayOrder`: re-export of `craft_behavior::item_source::DisplayOrder`.
 - `craft_behavior::DocKey`: re-export of `craft_behavior::doc_key::DocKey`.
 - `craft_behavior::DockSide`: re-export of `craft_behavior::dock::DockSide`.
+- `craft_behavior::DragModifier`: re-export of `craft_behavior::value_drag::DragModifier`.
+- `craft_behavior::DragModifiers`: re-export of `craft_behavior::value_drag::DragModifiers`.
 - `craft_behavior::DragWarp`: re-export of `craft_behavior::value_drag::DragWarp`.
 - `craft_behavior::DropOperation`: re-export of `craft_behavior::keys::DropOperation`.
 - `craft_behavior::EditCommand`: re-export of `craft_behavior::intent::EditCommand`.
@@ -393,17 +395,20 @@ Zoom rules as pure functions on a [`CanvasView`]: the zoom scheme's range and Zo
   - `fn caret_on_focus(&self, _text: &str) -> Caret`. Where the caret goes when the part takes focus with this text.
   - `fn sample(&self, current: &Self::Value) -> Cow<'_, str>`. The widest typical text, for the field's ideal width. Codecs with bounded text only; `PlainText` returns
 - `craft_behavior::codec::NotAValue`: `pub struct NotAValue`. The text is not a value of the codec's type.
-- `craft_behavior::codec::NumberCodec`: `pub struct NumberCodec`. An optional number: empty text is `None`; anything else reads through a [`Reader`].
+- `craft_behavior::codec::NumberCodec`: `pub struct NumberCodec`. An optional number: empty text is `None`; anything else reads through a [`Reader`] unless overridden with [`NumberCodec::parse_with`].
   - `pub fn new(reader: Reader, decimals: usize) -> Self`. A codec reading with `reader` and writing at most `decimals` decimal places.
+  - `pub fn explicit_plus(mut self) -> Self`. The same codec writing a positive value with its sign ("+2.50"), as an angle or an offset from a neutral value
   - `pub fn fixed(mut self) -> Self`. The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
   - `pub fn zoom_typing(mut self) -> Self`. The same codec with the typing rules of a zoom field: digits, `/` and the decimal separator, `a/b` as the
   - `pub fn signed_zoom(mut self) -> Self`. Allow a leading minus in zoom input so the field can reject negative values instead of discarding the sign.
   - `pub fn share_of_start(mut self) -> Self`. The same codec reading a lone percentage (`50%`, [`Reader::share`]) as that share of the value the edit
   - `pub fn at_most(mut self, decimals: usize) -> Self`. The same codec writing at most `decimals` decimal places.
   - `pub fn or_parse(mut self, parse: impl Fn(&str) -> Option<f64> + Send + Sync + 'static) -> Self`. The same codec with `parse` as a second reader: it runs when the reader rejects the text, so words of the
+  - `pub fn parse_with(mut self, parse: impl Fn(&str) -> Option<f64> + Send + Sync + 'static) -> Self`. The same codec with an authoritative reader for the complete, trimmed, non-empty input. It replaces the
   - `pub fn widest(&self, range: &RangeInclusive<f64>) -> String`. The widest text the codec writes for a number in `range`: the longest of each end and the number one place of
   - `pub fn decimals(&self) -> usize`. The most decimal places the codec writes.
   - `pub fn reader(&self) -> &Reader`. The reader the codec parses with.
+  - `pub fn writes_sign(&self) -> bool`. Whether the codec writes a positive value with its `+` ([`NumberCodec::explicit_plus`]): its own text then
 - `craft_behavior::codec::ParseNote`: `pub struct ParseNote { pub unit: Option<u32>, pub held: Option<f64>, pub cut: bool }`. What a parse learned beside the value.
 - `craft_behavior::codec::PlainText`: `pub struct PlainText`. Plain text: every draft is a value.
 - `craft_behavior::codec::decimals_for_step`: `pub fn decimals_for_step(step: f64) -> usize`. The decimal places a step needs to be written exactly: 2 for 0.25, 3 for 0.001, 0 for a whole step. A step with
@@ -504,7 +509,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
 - `craft_behavior::dock::DockSide`: `pub enum DockSide { Start, End, Top, Bottom, Center }`. The side of a group a dropped panel docks on, in reading order: `Start` is the left half in a left-to-right
   - `pub const fn axis(self) -> Option<Axis>`. The axis the side splits along; `None` for `Center`.
   - `pub fn area(self, group: Rect) -> Rect`. The part of `group` a panel docked on this side takes: the half on that side, or the whole group.
-- `craft_behavior::dock::Action`: `pub enum Action<P> { Move { panel: P, anchor: P, placement: DockPlacement<P> }, Float { panel: P, rect: Rect }, Close { panel: P }, Activate { panel: P }, Open { panel: P, anchor: Option<P> }, OpenAt { panel: P, anchor: P, placement: DockPlacement<P> }, MoveFloating { panel: P, rect: Rect, edge: Option<DockEdge> }, ResizeSplit { path: Vec<bool>, size: SplitSize }, SetStackOpen { panel: P, open: bool }, ResizeStack { panel: P, height: Option<f32> }, MoveGroup { panel: P, to: Target<P> }, StepGroup { panel: P, up: bool }, MoveColumn { panel: P, to: Target<P> }, MoveWindow { panel: P, to: Target<P> }, CloseGroup { panel: P }, CloseWindow { panel: P }, CloseOthers { panel: P }, SetMinimized { panel: P, minimized: bool }, SetIconic { panel: P, iconic: bool }, ResizeColumn { panel: P, width: f32 }, SetColumnSteps { panel: P, steps: u16 }, ResizeGroup { panel: P, height: Option<f32> }, ResizeFlyoutWidth { panel: P, width: Option<f32> }, MoveFlyoutTop { panel: P, offset: Option<f32> }, ResizeIconic { panel: P, width: Option<f32> }, SetNative { panel: P, placement: Option<Placement> }, MovePanel { panel: P, to: Target<P> } }`. Groups, columns and floating windows are named by a panel they contain.
+- `craft_behavior::dock::Action`: `pub enum Action<P> { Move { panel: P, anchor: P, placement: DockPlacement<P> }, Float { panel: P, rect: Rect }, Close { panel: P }, Activate { panel: P }, Open { panel: P, anchor: Option<P> }, OpenAt { panel: P, anchor: P, placement: DockPlacement<P> }, MoveFloating { panel: P, rect: Rect, edge: Option<DockEdge> }, ResizeSplit { path: Vec<bool>, size: SplitSize }, SetStackOpen { panel: P, open: bool }, ResizeStack { panel: P, height: Option<f32> }, MoveGroup { panel: P, to: Target<P> }, StepGroup { panel: P, up: bool }, MoveColumn { panel: P, to: Target<P> }, MoveWindow { panel: P, to: Target<P> }, CloseGroup { panel: P }, CloseWindow { panel: P }, CloseOthers { panel: P }, SetMinimized { panel: P, minimized: bool }, SetIconic { panel: P, iconic: bool }, ResizeColumn { panel: P, width: f32 }, SetColumnSteps { panel: P, steps: u16 }, ResizeGroup { panel: P, height: Option<f32> }, ResizeFlyoutWidth { panel: P, width: Option<f32> }, MoveFlyoutTop { panel: P, offset: Option<f32> }, ResizeIconic { panel: P, width: Option<f32> }, SetNative { panel: P, placement: Option<Placement> }, MovePanel { panel: P, to: Target<P> }, Restore { panel: P, location: Location<P> } }`. Groups, columns and floating windows are named by a panel they contain.
   - `pub fn move_beside(panel: P, anchor: P, placement: DockPlacement<P>) -> Self`. Builds [`Action::Move`].
   - `pub fn float(panel: P, rect: Rect) -> Self`. Builds [`Action::Float`].
   - `pub fn close(panel: P) -> Self`. Builds [`Action::Close`].
@@ -533,6 +538,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn resize_iconic(panel: P, width: Option<f32>) -> Self`. Builds [`Action::ResizeIconic`].
   - `pub fn set_native(panel: P, placement: Option<Placement>) -> Self`. Builds [`Action::SetNative`].
   - `pub fn move_panel(panel: P, to: Target<P>) -> Self`. Builds [`Action::MovePanel`].
+  - `pub fn restore(panel: P, location: Location<P>) -> Self`. Builds [`Action::Restore`].
 - `craft_behavior::dock::Arrangement`: `pub enum Arrangement { TileAllVertically, TileAllHorizontally, TwoUpVertical, TwoUpHorizontal, ThreeUpVertical, ThreeUpHorizontal, ThreeUpStacked, FourUp, SixUp, ConsolidateAllToTabs, Cascade, Tile, FloatInWindow, FloatAllInWindows, NewWindowForDocument, MatchZoom, MatchLocation, MatchRotation, MatchAll }`. One Window › Arrange entry. The n-up entries split the document area into that many
   - `pub fn group_count(self, documents: usize) -> Option<usize>`. How many document groups an n-up or tile arrangement wants, `None` for the window and
   - `pub fn enabled(self, documents: usize, groups: usize, floating: usize) -> bool`. Whether the entry is enabled with `documents` open and `floating` floating windows:
@@ -633,7 +639,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn version(&self) -> u32`. The format version the workspace was read with.
   - `pub fn layout(&self) -> &Layout<P>`. The current arrangement.
   - `pub fn hidden(&self) -> &[(P, Location<P>)]`. The closed panels, and panels the application does not register now, with where each one goes back.
-  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels with the docked location each one left.
+  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels, and the closed panels that were floating, with the docked location each one left.
   - `pub fn revision(&self) -> Revision`. The revision of this workspace value: it moves with every write, and no other value has it.
   - `pub fn generation(&self) -> u64`. The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
   - `pub fn raise_window_floor(&mut self, floor: u64)`. Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
@@ -1808,6 +1814,9 @@ The value core of chapter 10: the bound every value type meets, `Mixed`, edit ev
 
 `ValueDrag`: the drag maths of sliders, dials, scrubbing number fields and rulers, written once (8.7).
 
+- `craft_behavior::value_drag::DragModifier`: `pub enum DragModifier { Alt, Shift, Control, Command }`. A modifier that changes continuous pointer-drag sensitivity. It does not remap input or keys.
+- `craft_behavior::value_drag::DragModifiers`: `pub struct DragModifiers`. The pointer-only fine/coarse bindings of a continuous drag. Fine wins when both bindings match.
+  - `pub const fn new(fine: Option<DragModifier>, coarse: Option<DragModifier>) -> Self`. Selects the fine and coarse bindings; `None` disables that binding.
 - `craft_behavior::value_drag::DragWarp`: `pub struct DragWarp`. The pointer warps of one drag. The OS reports the pointer at its new place a frame after a warp, so a warp
   - `pub fn shift(&mut self, pos: Pos2) -> Vec2`. The total warp so far, given the pointer `pos` of this pass. Pass it to [`ValueDrag::value_shifted`].
   - `pub const fn pending(&self) -> bool`. Whether a warp waits for the pointer to show up at its new place: no second warp starts before it does.
@@ -1818,6 +1827,7 @@ The value core of chapter 10: the bound every value type meets, `Mixed`, edit ev
   - `pub const fn axis(mut self, axis: Axis) -> Self`. The axis the pointer travels on; the default is horizontal.
   - `pub const fn fine(mut self, factor: f64) -> Self`. The factor Alt (Option) applies to travel.
   - `pub const fn coarse(mut self, factor: f64) -> Self`. The factor Shift applies to travel. A drag sets none by default: on an absolute drag such as a slider's a
+  - `pub const fn modifiers(mut self, modifiers: DragModifiers) -> Self`. Selects pointer fine/coarse bindings without changing keyboard or wheel behavior.
   - `pub const fn warp(mut self, on: bool) -> Self`. Warps the pointer to the other side of the window when the drag reaches an edge, so the drag has no end
   - `pub const fn hide_cursor(mut self, on: bool) -> Self`. Hides the pointer while the drag runs, as a scrub does that warps the pointer.
   - `pub const fn warps(&self) -> bool`. Whether the pointer warps at a window edge.
@@ -1861,7 +1871,7 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
   - `pub const fn new(positive: Vec2, negative: Vec2) -> Self`. A room of `positive` and `negative` points.
 - `craft_behavior::wheel::WheelSource`: `pub enum WheelSource { Unknown, Wheel, Trackpad, Momentum }`. The device a wheel event came from, where the system says (egui reports it on macOS only).
   - `pub const fn fingers(self) -> bool`. Whether fingers drive the scroll: a trackpad or its momentum.
-- `craft_behavior::wheel::WheelTaker`: `pub struct WheelTaker<O> { pub owner: O, pub rect: Rect, pub horizontal: bool, pub vertical: bool, pub zoom: bool, pub gated: bool, pub scrolls: bool, pub notch: WheelNotch, pub room: Option<WheelRoom>, pub zooms_view: bool, pub field: bool, pub value: bool }`. A component that takes wheel input, as registered last pass.
+- `craft_behavior::wheel::WheelTaker`: `pub struct WheelTaker<O> { pub owner: O, pub rect: Rect, pub horizontal: bool, pub vertical: bool, pub zoom: bool, pub gated: bool, pub directional: bool, pub scrolls: bool, pub notch: WheelNotch, pub room: Option<WheelRoom>, pub zooms_view: bool, pub field: bool, pub value: bool }`. A component that takes wheel input, as registered last pass.
   - `pub const fn new(owner: O, rect: Rect) -> Self`. A taker over `rect` that takes no axis yet.
   - `pub fn for_sense(owner: O, rect: Rect, sense: Sense) -> Option<Self>`. The taker a shape with `sense` registers, `None` when `sense` has no wheel bit: `WHEEL` takes both scroll
   - `pub const fn zooms_view(mut self, on: bool) -> Self`. Whether it is a zoom zone (`WheelTaker::zooms_view`).
@@ -1871,6 +1881,7 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
   - `pub const fn vertical(mut self, on: bool) -> Self`. Whether it takes vertical scroll.
   - `pub const fn zoom(mut self, on: bool) -> Self`. Whether it takes zoom.
   - `pub const fn gated(mut self, on: bool) -> Self`. Whether every axis needs focus or arming.
+  - `pub const fn directional(mut self, on: bool) -> Self`. Opts a value control into directional editing, without changing the default focus gate.
   - `pub const fn notch(mut self, notch: WheelNotch) -> Self`. The distance of one wheel line.
   - `pub const fn scrolls(mut self, on: bool) -> Self`. The taker is a scroll region (`WheelTaker::scrolls`).
   - `pub const fn room(mut self, room: WheelRoom) -> Self`. The taker's scroll room: it passes a wheel on an axis it has no room left for to the next enclosing taker.
@@ -2271,6 +2282,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn value(&self) -> Option<&T>`. The latest value the pass's events carry: a proposal, a commit or a set; `None` when nothing was edited or no
   - `pub fn map<U>(self, f: impl Fn(T) -> U) -> EditResponse<U>`. The response of a child component's edit as the response of the edit of a value built from it: the events, the
 - `craft_ui::contract::EditorHandle`: `pub struct EditorHandle`. The editor part's widget, rect, purpose, focus and read-only state of this pass, which a body that runs inside a
+  - `pub fn focused(&self) -> bool`. Whether the editor part holds the key focus this pass, whether or not its window has the system's.
   - `pub fn report(&self, ctx: &egui::Context, state: EditorState<'_>)`. Reports the caret and composition to the input-method engine and puts the text facts in the running pass's
   - `pub fn ime_receipt(&self, ctx: &egui::Context, before: ImeStamp, after: ImeStamp) -> bool`. Notes the input-method receipt between the stamps `before` and `after` for this editor part; true when the
   - `pub fn ime_application_change(&self, ctx: &egui::Context)`. Notes an application change of this editor part's committed text.
@@ -2815,11 +2827,12 @@ The ghost layer's content (8.4, 8.5): the running drag's preview beside the poin
 Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the overlay host.
 
 - `craft_ui::contract::overlay::Anchor`: `pub enum Anchor { Rect(Rect), Response, Point(Pos2), Pointer, Corner(Rect, Align2), Parent }`. Where an overlay hangs from.
-- `craft_ui::contract::overlay::Dismiss`: `pub struct Dismiss { pub outside: Outside, pub enter: bool, pub focus_left: bool, pub on_activate: bool, pub anchor_gone: bool, pub commands: bool, pub timeout: Option<f32> }`. When a layer closes by itself. Escape goes through the focus policy's `CancelRule`.
+- `craft_ui::contract::overlay::Dismiss`: `pub struct Dismiss { pub outside: Outside, pub enter: bool, pub focus_left: bool, pub opener_escape: OpenerEscape, pub on_activate: bool, pub anchor_gone: bool, pub commands: bool, pub timeout: Option<f32> }`. When a layer closes by itself. Escape goes through the focus policy's `CancelRule`.
   - `pub const fn new() -> Self`. An outside press or a command closes; nothing else does.
   - `pub const fn outside(mut self, outside: Outside) -> Self`. Sets what an outside press does.
   - `pub const fn enter(mut self, on: bool) -> Self`. Closes on an untaken Enter.
   - `pub const fn focus_left(mut self, on: bool) -> Self`. Closes when focus leaves the scope.
+  - `pub const fn opener_escape(mut self, policy: OpenerEscape) -> Self`. Chooses what an untaken Escape at a popup's explicit registered opener does, independently of traversal
   - `pub const fn on_activate(mut self, on: bool) -> Self`. Closes when a component inside is activated, except an opener toggling its popup.
   - `pub const fn commands(mut self, on: bool) -> Self`. Closes when a key, a native menu pick or the palette runs a command from outside it; off for a layer its host
   - `pub const fn timeout(mut self, seconds: Option<f32>) -> Self`. Closes after `seconds`.
@@ -2832,6 +2845,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::LayerRole`: re-export of `craft_ui::runtime::overlay::LayerRole`.
 - `craft_ui::contract::overlay::OpenFilter`: re-export of `craft_ui::runtime::overlay::OpenFilter`.
 - `craft_ui::contract::overlay::Opener`: `pub struct Opener { pub id: Id, pub rect: Rect, pub layer: areas::Layer, pub trigger: Trigger, pub enabled: bool, pub anchor: Option<Anchor>, pub others: Vec<Opener> }`. A component that opens a free-standing popup, and how. A layer with several openers keeps the first as its
+- `craft_ui::contract::overlay::OpenerEscape`: `pub enum OpenerEscape { Default, Close, CloseAndBlur }`. What an untaken Escape at a popup's explicit registered opener does. This does not make the opener a member
 - `craft_ui::contract::overlay::Outside`: `pub enum Outside { Close, Keep, Absorb }`. What a press outside the layer and its anchor does.
 - `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub drag_bounds: DragBounds, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool, pub continue_move: Option<Vec2>, pub role: LayerRole, pub among_windows: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
@@ -4113,7 +4127,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn length_scale(&self, lengths: LengthUnits) -> Option<f64>`. How many `lengths.shown` make one `lengths.stored`; `None` when either is not a pixel or length unit or the
   - `pub fn length_reader(&self, lengths: LengthUnits) -> Reader`. A reader for lengths shown in `lengths.shown`: the spellings of every length unit and of pixels convert to it,
   - `pub fn document_reader(&self, ruler: UnitKind, extent: f64, pixels_per_inch: f64, points_per_inch: f64) -> Reader`. A reader for the numbers of a document measured in `ruler`: the unit spellings of every pixel and length unit
-- `craft_ui::runtime::env::WheelScope`: `pub enum WheelScope { Plain, Free, Gated }`. How the wheel takers of a scope take the wheel.
+- `craft_ui::runtime::env::WheelScope`: `pub enum WheelScope { Plain, Free, Gated, Directional }`. How the wheel takers of a scope take the wheel.
 - `craft_ui::runtime::env::WheelSpeed`: `pub struct WheelSpeed { pub line: f32, pub point: f32 }`. The user's wheel multipliers: `line` for notches, `point` for touchpad deltas. Distinct from
   - `pub const fn new(line: f32, point: f32) -> Self`. The multipliers for line (notch) and point (touchpad) scrolling.
 - `craft_ui::runtime::env::WindowKey`: `pub struct WindowKey`. The key of a window. It equals the placement `SaveKey` of the window, so two windows of one app need different keys.
@@ -4277,7 +4291,7 @@ Decision records and findings. Inspected regions ([`record`]) collect pipeline s
 - `craft_ui::runtime::inspect::Element`: `pub struct Element { pub id: Id, pub part: Option<PartRef>, pub component: &'static str, pub depth: usize, pub rect: Rect, pub content: Rect, pub facts: Option<Facts>, pub stop: Option<usize>, pub command: Option<CommandRef> }`. One element an inspected region showed: a component, or a part of one with a node, a hit area or a focus stop.
   - `pub fn node(&self) -> Id`. The id of the access node the element stands for: the component's own id, or the sub-node of its part. A
 - `craft_ui::runtime::inspect::Facts`: `pub struct Facts { pub role: String, pub name: Option<String>, pub labelled_by: Vec<Id>, pub value: Option<String>, pub actions: Vec<&'static str>, pub disabled: bool, pub interactive: bool }`. What a node says, as step 16 reported it.
-- `craft_ui::runtime::inspect::HitArea`: `pub struct HitArea { pub owner: Id, pub part: Option<PartRef>, pub rect: Rect }`. A hit area the sensing core registered for a component of the region.
+- `craft_ui::runtime::inspect::HitArea`: `pub struct HitArea { pub owner: Id, pub part: Option<PartRef>, pub bounds: Rect, pub rect: Rect }`. A hit area the sensing core registered for a component of the region.
 - `craft_ui::runtime::inspect::Recorded`: `pub struct Recorded { pub layer: areas::LayerKey, pub elements: Vec<Element>, pub hits: Vec<HitArea> }`. What an inspected region showed in a pass.
   - `pub fn stop_rect(&self, index: usize) -> Option<Rect>`. The rect of the element at `index` where Tab stops on it: its hit area when it has one, else its box.
   - `pub fn rect_in(&self, ctx: &Context, index: usize, target: areas::LayerKey) -> Option<Rect>`. The stop rect of the element at `index` (as [`Recorded::stop_rect`]) mapped into the layer `target`.
@@ -4334,6 +4348,15 @@ The key stage (spec 9.1, 9.2, 9.3, 9.7): the input hook strips the keys the runt
 - `craft_ui::runtime::keys::MoveMods`: re-export of `craft_behavior::intent::MoveMods`.
 - `craft_ui::runtime::keys::NavMove`: re-export of `craft_behavior::intent::NavMove`.
 - `craft_ui::runtime::keys::PartRef`: re-export of `craft_behavior::part::PartRef`.
+- `craft_ui::runtime::keys::ScalarKeyPolicy`: `pub struct ScalarKeyPolicy`. Opt-in additive model-unit vertical-key and accessibility nudges.
+  - `pub const fn new(nudge: f64) -> Self`. A focused-row policy, with Shift multiplying the additive nudge by five.
+  - `pub const fn trigger(mut self, trigger: ScalarKeyTrigger) -> Self`. Chooses whether whole-row hover also makes a row eligible. This never changes focus.
+  - `pub const fn shift_factor(mut self, factor: f64) -> Self`. Sets the multiplier used by Shift. This does not change any global or wheel step multiplier.
+  - `pub const fn model_step(mut self, step: f64) -> Self`. Selects an explicit zero-origin model grid for scalar keys and accessibility actions only.
+  - `pub fn is_valid(self) -> bool`. Whether the amounts and any selected model step describe usable, finite positive changes.
+  - `pub fn amount(self) -> Option<f64>`. The unmodified model-unit accessibility increment.
+  - `pub fn offset(self, movement: NavMove, modifiers: MoveMods) -> Option<f64>`. An additive offset for vertical keys or accessibility increment/decrement (Forward/Back).
+- `craft_ui::runtime::keys::ScalarKeyTrigger`: `pub enum ScalarKeyTrigger { Focused, HoveredOrFocused }`. Which real scalar row can take a vertical arrow, without moving keyboard focus.
 - `craft_ui::runtime::keys::escape_mods`: `pub fn escape_mods(ctx: &Context) -> Option<Mods>`. The Alt and Shift held at the press of the pass's last Escape that became a `Cancel`; `None` when the pass had none.
 - `craft_ui::runtime::keys::focus_holds`: `pub fn focus_holds(ctx: &Context, chord: Chord) -> bool`. Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:
 - `craft_ui::runtime::keys::held`: `pub fn held(ctx: &Context) -> Vec<Key>`. The keys down in the running viewport this pass: the key stage's `down` (withheld presses included), plus each key
@@ -5242,6 +5265,14 @@ The memory services the trials check: a stage fixture that implements `Remember`
 - `craft_ui::testing::memory::scoped`: `pub fn scoped<R>(ui: &mut Ui, f: impl FnOnce(&mut Ui) -> R) -> R`. Runs `f` on a child `Ui` of `ui`.
 - `craft_ui::testing::memory::scoped_by`: `pub fn scoped_by<R>(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, f: impl FnOnce(&mut Ui) -> R) -> R`. Runs `f` on a child `Ui` of `ui` with its own id scope named by `salt`.
 - `craft_ui::testing::memory::sub`: `pub fn sub(base: Id, tag: impl Hash + Debug) -> Id`. The runtime sub-id of `base` for `tag`.
+
+## `craft_ui::testing::overlay`
+
+The layer stack's test hooks: what a window's stack judges presses by, for a trial's failure report.
+
+- `craft_ui::testing::overlay::PressJudgement`: `pub struct PressJudgement { pub zone: Option<Vec<Rect>>, pub absorbed: Option<Pos2>, pub layers: Vec<OpenEntry> }`. What the layer stack of the running viewport judges the presses of this pass by.
+- `craft_ui::testing::overlay::layer_pointer_at`: `pub fn layer_pointer_at(ctx: &Context, id: Id) -> Option<Pos2>`. Where the pointer was when the layer `id` first appeared, as the layer remembers it while shown (what
+- `craft_ui::testing::overlay::press_judgement`: `pub fn press_judgement(ctx: &Context) -> PressJudgement`. What the running viewport's layer stack judges this pass's presses by. Read it in the pass (a panel's body): it
 
 ## `craft_ui::testing::pictures`
 
