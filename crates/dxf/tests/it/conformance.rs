@@ -42,7 +42,7 @@ fn writes_independently_specified_ascii_and_binary_bytes() {
         for utf8 in [false, true] {
             let tags = std::slice::from_ref(&tag);
             assert_eq!(write_ascii_as(tags, utf8).as_bytes(), ascii, "ASCII code {}", tag.code);
-            assert_eq!(write_binary(tags, utf8), [SENTINEL, binary].concat(), "binary code {}", tag.code);
+            assert_eq!(write_binary(tags, utf8).unwrap(), [SENTINEL, binary].concat(), "binary code {}", tag.code);
         }
     }
 }
@@ -66,7 +66,7 @@ fn integer_code_ranges_have_independent_binary_widths() {
                 let expected = [SENTINEL, &code_bytes, &value_bytes[..width]].concat();
                 let tags = [Tag::i(code, value)];
                 for utf8 in [false, true] {
-                    assert_eq!(write_binary(&tags, utf8), expected, "code={code} value={value} utf8={utf8}");
+                    assert_eq!(write_binary(&tags, utf8).unwrap(), expected, "code={code} value={value} utf8={utf8}");
                 }
                 assert_eq!(parse(&expected).unwrap(), tags, "code={code} value={value}");
             }
@@ -83,7 +83,7 @@ fn text_encoding_has_independent_wire_expectations() {
         let ascii = [b"  1\r\n".as_slice(), text, b"\r\n"].concat();
         let binary = [SENTINEL, b"\x01\0", text, b"\0"].concat();
         assert_eq!(write_ascii_as(&tags, unicode).as_bytes(), ascii, "utf8={unicode}");
-        assert_eq!(write_binary(&tags, unicode), binary, "utf8={unicode}");
+        assert_eq!(write_binary(&tags, unicode).unwrap(), binary, "utf8={unicode}");
         assert_eq!(parse(&ascii).unwrap(), tags);
         assert_eq!(parse(&binary).unwrap(), tags);
     }
