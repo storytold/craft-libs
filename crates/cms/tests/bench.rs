@@ -1,4 +1,4 @@
-//! Throughput check: `cargo test -p craft-cms --release --test bench -- --ignored --nocapture`.
+//! Throughput check: `cargo test -p craft-cms --release -- integration::bench --ignored --nocapture`.
 
 use craft_cms::{Builtin, Intent, Transform};
 

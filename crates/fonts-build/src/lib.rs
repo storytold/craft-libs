@@ -50,6 +50,7 @@
 //! Web builds can serve the faces beside the wasm instead: [`Embed::serve`] copies the selected
 //! files into a directory and writes a table of [`ServedFace`]s, which carry a URL in place of the
 //! bytes, for the app to fetch the faces it needs at run time.
+#![warn(missing_docs)]
 
 mod cmap;
 pub mod coverage;
@@ -57,13 +58,11 @@ mod embed;
 mod manifest;
 #[cfg(feature = "subset")]
 mod sha256;
-#[cfg(feature = "subset")]
-mod subset;
 #[cfg(test)]
 mod tests;
 
 pub use embed::{Embed, Error, target_is_wasm};
-pub use manifest::{CJK_SCRIPTS, ManifestEntry, ParseError, UI_ROLE, parse_manifest};
+pub use manifest::{CJK_SCRIPTS, MONO_ROLE, ManifestEntry, ParseError, SIGNATURE_ROLE, UI_ROLE, parse_manifest};
 
 /// A craft-fonts face embedded by [`Embed`]: one line of `fonts/manifest.txt`.
 ///
@@ -79,13 +78,18 @@ pub struct EmbeddedFace {
     pub scripts: &'static [&'static str],
     /// Face index in a font collection (`.ttc`); `0` for a single font.
     pub index: u32,
+    /// The font file's bytes, from `include_bytes!`.
     pub bytes: &'static [u8],
+    /// The manifest line's `role`: `Some("ui")` for an interface face ([`UI_ROLE`]), `Some("mono")` for the
+    /// monospace face ([`MONO_ROLE`]), `Some("signature")` for the signature face ([`SIGNATURE_ROLE`]), `None` for a
+    /// line without one.
+    pub role: Option<&'static str>,
 }
 
 impl EmbeddedFace {
-    /// A face at index 0 of `bytes`, for tests and for tables written by hand. Code that builds
-    /// faces with `new` keeps compiling when a field with a default is added; a struct literal
-    /// does not.
+    /// A face at index 0 of `bytes` with no `role`, for tests and for tables written by hand. Code
+    /// that builds faces with `new` keeps compiling when a field with a default is added; a struct
+    /// literal does not.
     ///
     /// ```
     /// use craft_fonts_build::EmbeddedFace;
@@ -94,7 +98,7 @@ impl EmbeddedFace {
     /// assert_eq!((FACE.name().as_str(), FACE.index), ("Sans Bold", 2));
     /// ```
     pub const fn new(family: &'static str, style: &'static str, scripts: &'static [&'static str], bytes: &'static [u8]) -> Self {
-        Self { family, style, scripts, index: 0, bytes }
+        Self { family, style, scripts, index: 0, bytes, role: None }
     }
 
     /// The same face at `index` in a font collection (`.ttc`).
@@ -195,7 +199,15 @@ impl std::fmt::Debug for EmbeddedFace {
             .field("style", &self.style)
             .field("scripts", &self.scripts)
             .field("index", &self.index)
+            .field("role", &self.role)
             .field("bytes", &format_args!("[{} bytes]", self.bytes.len()))
             .finish()
     }
 }
+
+#[cfg(test)]
+extern crate self as craft_fonts_build;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

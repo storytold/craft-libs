@@ -206,23 +206,25 @@ fn expansion_bounds_stop_small_repeat_bombs() {
         r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="1048576"><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#,
     );
     assert!(matches!(open(&cells), Err(Error::TooLarge(_))));
+    // Text limits are set small so the files stay small: 1 MiB of text over all sheets, 64 KiB a cell.
+    let tight = Options { max_text: 1 << 20, max_cell_text: 64 << 10, ..Options::default() };
     let text = format!(
-        r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="100000"><table:table-cell office:value-type="string" office:string-value="{}"/></table:table-row></table:table>"#,
+        r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="2000"><table:table-cell office:value-type="string" office:string-value="{}"/></table:table-row></table:table>"#,
         "x".repeat(1024)
     );
-    assert!(matches!(open(&ods(&text)), Err(Error::TooLarge(_))));
-    // One row of cells each just under the 1 MiB cell limit, past 64 MiB in all: refused while
+    assert!(matches!(read(&ods(&text), &tight), Err(Error::TooLarge(_))));
+    // One row of cells each just under the cell limit, past the text limit in all: refused while
     // the row is read. The row's end is never reached.
-    let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(1024 * 1024 - 1));
-    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65))).as_bytes()).unwrap();
-    assert!(matches!(open(&cells), Err(Error::TooLarge(_))));
+    let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(64 * 1024 - 1));
+    let cells = package(content(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(17))).as_bytes()).unwrap();
+    assert!(matches!(read(&cells, &tight), Err(Error::TooLarge(_))));
     // A row repeated once more than its cells' text allows is refused, and one that fits reads.
     let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
     let rows = |n: u32| {
         ods(&format!(r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="{n}">{cell}</table:table-row></table:table>"#))
     };
-    assert!(open(&rows(65_536)).is_ok());
-    assert!(matches!(open(&rows(65_537)), Err(Error::TooLarge(_))));
+    assert!(read(&rows(1024), &tight).is_ok());
+    assert!(matches!(read(&rows(1025), &tight), Err(Error::TooLarge(_))));
     // An attribute over the cell text limit.
     let small = Options { max_cell_text: 10, ..Options::default() };
     assert!(matches!(

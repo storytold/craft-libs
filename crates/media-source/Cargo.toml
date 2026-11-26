@@ -10,14 +10,21 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+y4m = ["dep:craft-y4m"]
+
 [dependencies]
 craft-audio = { workspace = true }
 craft-color = { workspace = true }
 craft-frame = { workspace = true }
 craft-media = { workspace = true }
 craft-time = { workspace = true }
+craft-video = { workspace = true }
+craft-y4m = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# FFV1 round trips for the decoded-picture conversion's tests.
+craft-video = { workspace = true, features = ["ffv1"] }
 serde_json = { workspace = true }
