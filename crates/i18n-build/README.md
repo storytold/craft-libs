@@ -14,6 +14,7 @@ build. The build reads a local checkout named by `CRAFT_I18N_DIR` instead, follo
 | `CRAFT_I18N_DIR` = a craft-i18n checkout | Every locale with the app's catalog, with its `common.tsv`, and the locale each regional one falls back to. |
 | `CRAFT_I18N_DIR` relative, without `locales/`, or with a catalog that can't be read | `cargo::warning`; the checkout is not used. |
 | `CRAFT_I18N_REQUIRED=1` (exactly `1`; other values are ignored) | Error instead when the checkout is unset or can't be used. |
+| `checkout(path)` in `build.rs` | The checkout is that folder of the app's own repository, whatever the variable says; a folder or a catalog that can't be used is always an error. |
 
 Give `CRAFT_I18N_DIR` as an absolute path: Cargo runs build scripts in the package's directory,
 and `include_str!` resolves a relative path against the generated file.
@@ -80,10 +81,18 @@ name, lowercase letters, digits and `-`. The builder takes:
   checkout has the same locale's app catalog, the two are merged into one file under `OUT_DIR`:
   the rows here, then the checkout's rows whose context and source text are not defined here by
   a row that craft-i18n accepts. A row here that craft-i18n skips (a trailing `…` or placeholders
-  that differ from the source text, an `@plural` row with another number of forms than the
-  checkout's) leaves the checkout's row in place. Comments and blank lines are left out of the
+  that differ from the source text, an `@plural` or `@ordinal` row with another number of forms than the
+  checkout's) leaves the checkout's row in place. A selector message (a translation that begins with `.input`, `.local` or
+  `.match`, in a plain, `@plural` or `@ordinal` row) and the `@grammar` and `@noun` rows count as accepted: craft-i18n checks them
+  against the language when it reads them. Comments and blank lines are left out of the
   merged file, so a problem `check_all` reports in it gives that file's line numbers. A relative
   path is under the package directory. A catalog here that can't be read is always an error.
+- `checkout(path)`: a folder in the craft-i18n layout (`<path>/locales/<locale>/common.tsv` and `<app>.tsv`) that the app keeps
+  in its own repository: the shared rows it has copied from a craft-i18n revision, and its own. It takes the place of the
+  checkout `CRAFT_I18N_DIR` names, which is neither read nor required, so the embedded catalogs are the same whether or not the
+  variable is set (a build may set it for other data of craft-i18n's, such as dictionaries). A relative path is under the
+  package directory. The folder is the app's own, so a folder without `locales/` or a catalog that can't be read is an error, as
+  for `app_dir`. `app_dir` still merges the app's catalogs over it. `dir(path)` is not read when `checkout` is given.
 - `dir(path)` and `required(bool)` override the two environment variables.
 
 `write` returns the embedded `Locale`s (`code`, `shared`, `app`, `offered()`, `files()`).

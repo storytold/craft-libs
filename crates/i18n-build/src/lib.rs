@@ -15,6 +15,9 @@
 //!   `cargo::warning`, and the checkout is not used.
 //! - **`CRAFT_I18N_REQUIRED=1`** (release builds; any other value is ignored): an unset, relative
 //!   or unreadable checkout is an [`Error`].
+//! - **[`Catalogs::checkout`]**: a checkout-shaped folder the app keeps in its own repository (shared rows it has copied, and its
+//!   own) instead of `CRAFT_I18N_DIR`'s, which is then neither read nor required; relative to the package, and always an
+//!   [`Error`] when it can't be used.
 //!
 //! Add this crate as a build-dependency. In `build.rs`'s `main`:
 //!
@@ -60,6 +63,7 @@ pub const MAX_CATALOG_BYTES: u64 = 8 << 20;
 pub struct Catalogs {
     app: String,
     app_dir: Option<PathBuf>,
+    checkout: Option<PathBuf>,
     dir: Option<PathBuf>,
     required: Option<bool>,
 }
@@ -108,7 +112,7 @@ impl Catalogs {
     /// The catalogs of the app named `app` (the `<app>.tsv` file name: lowercase letters, digits
     /// and `-`), from `CRAFT_I18N_DIR`, required when `CRAFT_I18N_REQUIRED=1`.
     pub fn new(app: &str) -> Self {
-        Self { app: app.to_owned(), app_dir: None, dir: None, required: None }
+        Self { app: app.to_owned(), app_dir: None, checkout: None, dir: None, required: None }
     }
 
     /// Also embed the app's own catalogs, `<dir>/<locale>/<app>.tsv`, for an app that keeps some
@@ -120,6 +124,18 @@ impl Catalogs {
     /// read is always an [`Error`].
     pub fn app_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.app_dir = Some(dir.into());
+        self
+    }
+
+    /// Read the catalogs from `dir`, a folder in the craft-i18n layout (`<dir>/locales/<locale>/common.tsv` and
+    /// `<app>.tsv`) that the app keeps in its own repository: shared rows it has copied from a craft-i18n revision, and its own.
+    /// It takes the place of the checkout `CRAFT_I18N_DIR` names, which is not read and not required, so the embedded catalogs
+    /// are the same whether or not the variable is set (a build may set it for other data of craft-i18n's). A relative `dir` is
+    /// under the package directory. Unlike that checkout, it is the app's own: a folder without `locales/`, or a catalog in it
+    /// that can't be read, is always an [`Error`]. [`Catalogs::app_dir`] still merges the app's catalogs over it, and
+    /// [`Catalogs::dir`] is not read when this is set.
+    pub fn checkout(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.checkout = Some(dir.into());
         self
     }
 
@@ -195,6 +211,15 @@ impl Catalogs {
         let required = self.required.unwrap_or_else(|| env.required.as_ref().is_some_and(|v| v == "1"));
         let dir = self.dir.clone().or_else(|| env.dir.clone().filter(|d| !d.is_empty()).map(PathBuf::from));
         let checkout = match dir {
+            // The app's own checkout is used, whatever the variable says.
+            _ if self.checkout.is_some() => {
+                let dir = self.checkout.clone().unwrap_or_default();
+                let dir = match (dir.is_absolute(), &env.manifest_dir) {
+                    (false, Some(manifest)) => Path::new(manifest).join(dir),
+                    _ => dir,
+                };
+                checkout_locales(&dir, &app_file, cargo)?
+            }
             None if required => return Err(Error::NotSet),
             None => BTreeMap::new(),
             Some(dir) => {
@@ -314,7 +339,8 @@ fn accepted(line: &str) -> Option<((&str, &str), Option<usize>)> {
             let Some((name, after)) = after.split_once('}') else {
                 break;
             };
-            names.push(name);
+            // A typed placeholder (`{n :number}`) is its name.
+            names.push(name.split_whitespace().next().unwrap_or(name));
             rest = after;
         }
         names.sort_unstable();
@@ -329,31 +355,38 @@ fn accepted(line: &str) -> Option<((&str, &str), Option<usize>)> {
     if ![context, source, translation].into_iter().all(escapes_valid) || source.is_empty() || translation.is_empty() {
         return None;
     }
+    // A selector message (a translation that begins with `.input`, `.local` or `.match`) is checked against the source's
+    // placeholders and the locale's categories when it is read, which the build cannot do: it counts as a row craft-i18n accepts.
+    let complex = [".input", ".local", ".match"].iter().any(|keyword| translation.trim_start().starts_with(keyword));
     // Escapes never produce `{`, `}` or `…`, so the checks below read the columns as written.
     let valid = match context {
+        // A selector message belongs in a plain row, an `@plural` row or an `@ordinal` row, and in no other.
+        "@id" | "@msg" | "@msgplural" if complex => false,
         "@id" => true,
-        "@plural" => {
+        "@plural" | "@ordinal" => {
             let english: Vec<&str> = source.split('|').collect();
             let translated: Vec<&str> = translation.split('|').collect();
-            match english[..] {
-                [one, other] => {
-                    !one.is_empty()
-                        && !other.is_empty()
-                        && placeholders(one) == placeholders(other)
-                        && translated.iter().all(|f| !f.is_empty() && placeholders(f) == placeholders(other))
+            let sources = if context == "@plural" { 2 } else { 4 };
+            match english.last() {
+                Some(other) if english.len() == sources => {
+                    english.iter().all(|f| !f.is_empty() && placeholders(f) == placeholders(other))
+                        && (complex || translated.iter().all(|f| !f.is_empty() && placeholders(f) == placeholders(other)))
                 }
                 _ => false,
             }
         }
+        "@grammar" | "@noun" => !complex,
         c if c.starts_with('@') && c != "@msg" => false,
-        _ => placeholders(source) == placeholders(translation) && source.ends_with('…') == translation.ends_with('…'),
+        _ => complex || (placeholders(source) == placeholders(translation) && source.ends_with('…') == translation.ends_with('…')),
     };
     valid.then(|| ((context, source), plural_forms(context, translation)))
 }
 
-/// The number of plural forms of an `@plural` row's translation, `None` for other rows.
+/// The number of forms of an `@plural` or `@ordinal` row's translation, `None` for other rows and for a selector message (which
+/// has no count to compare).
 fn plural_forms(context: &str, translation: &str) -> Option<usize> {
-    (context == "@plural").then(|| translation.split('|').count())
+    let complex = [".input", ".local", ".match"].iter().any(|keyword| translation.trim_start().starts_with(keyword));
+    (matches!(context, "@plural" | "@ordinal") && !complex).then(|| translation.split('|').count())
 }
 
 /// The locale folders of `locales`, by lowercase code, without `en` (the source text), `pseudo`
