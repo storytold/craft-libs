@@ -191,10 +191,12 @@ mod tests {
         let p = Plates { inks, unseparated: Vec::new(), width: 2, height: 1, dpi: 72.0, conversion: Conversion::DeviceFormulas, planes };
         let output = Output::new(fogra39(), fogra39(), Intent::RelativeColorimetric, false).unwrap();
         let cmyk = p.composite_to(&[], &output);
-        // Magenta's round trip through the profile adds a little yellow.
-        assert!(near(&cmyk[0..4], &[255, 255, 8, 0], 8), "spot over cyan: {:?}", &cmyk[0..4]);
-        assert!(near(&cmyk[4..8], &[0, 255, 8, 0], 8), "spot alone: {:?}", &cmyk[4..8]);
-        assert!(near(&p.composite_to(&[true, true, true, true, false], &output)[0..4], &[255, 0, 0, 0], 6), "spot hidden");
+        // The press profile's round trip: its BToA tables generate their own black, so a
+        // full-tone ink comes back a little short with a trace of black, as a printer would
+        // separate it. The tolerance is the profile's own round trip, not an exchange total.
+        assert!(near(&cmyk[0..4], &[250, 247, 17, 2], 8), "spot over cyan: {:?}", &cmyk[0..4]);
+        assert!(near(&cmyk[4..8], &[8, 247, 11, 1], 8), "spot alone: {:?}", &cmyk[4..8]);
+        assert!(near(&p.composite_to(&[true, true, true, true, false], &output)[0..4], &[250, 7, 6, 1], 8), "spot hidden");
     }
 
     #[test]

@@ -781,7 +781,8 @@ mod tests {
     #[test]
     fn a_mesh_that_makes_every_triangle_cover_the_output_is_refused() {
         // A 48×48 custom mesh whose patch corners scatter over the four corners of the
-        // content, so most of the 4608 triangles span the whole 2048² output.
+        // content, so most of the 4608 triangles span the whole output (the work budget grows with
+        // the output's pixels, so the size only sets how much is filled before it runs out).
         let (cols, rows) = (48usize, 48usize);
         let stride = cols * 3 + 1;
         let mut mesh = vec![[0.0, 0.0]; stride * (rows * 3 + 1)];
@@ -794,9 +795,9 @@ mod tests {
             }
         }
         let warp = crate::smart::Warp { style: "warpCustom".into(), bounds: [0.0, 0.0, 16.0, 16.0], cols, rows, mesh, ..Default::default() };
-        let s = so([[0.0, 0.0], [2048.0, 0.0], [2048.0, 2048.0], [0.0, 2048.0]], Some(warp));
+        let s = so([[0.0, 0.0], [512.0, 0.0], [512.0, 512.0], [0.0, 512.0]], Some(warp));
         let content = FloatImage { width: 16, height: 16, data: vec![[1.0, 0.0, 0.0, 1.0]; 256] };
-        assert!(s.render_placed(&content, 1.0, Some((2048, 2048))).is_none());
+        assert!(s.render_placed(&content, 1.0, Some((512, 512))).is_none());
     }
 
     #[test]

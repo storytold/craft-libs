@@ -107,7 +107,8 @@ fn the_fallback_keeps_order_visibility_and_direction() {
     // is copied into the outer one's text, so it comes after it).
     let tb = xml.find(r#"<v:textbox style="layout-flow:vertical;mso-layout-flow-alt:bottom-to-top">"#).expect("the outer box's text, turned");
     let rect = &xml[xml[..tb].rfind("<v:rect ").expect("its v:rect")..tb];
-    assert!(rect.contains("z-index:10;"), "{rect}");
+    // Its anchor's `relativeHeight`: the stored order, one less (see `Float::z`).
+    assert!(rect.contains("z-index:9;"), "{rect}");
     assert!(rect.contains("visibility:hidden"), "{rect}");
 }
 
@@ -134,7 +135,8 @@ fn behind_text_shapes_keep_their_order() {
         .collect();
     got.sort_unstable();
     let low = -(1i64 << 31);
-    assert_eq!(got, vec![low + 10, low + 20, -1], "{xml}");
+    // The anchors' `relativeHeight`s (one less than `z`), the top one past `i32::MAX` kept at -1.
+    assert_eq!(got, vec![low + 9, low + 19, -1], "{xml}");
 }
 
 /// A shape VML has no simple form for stays a bare `wps:wsp`: guarded without a fallback, an old
