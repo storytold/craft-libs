@@ -331,7 +331,7 @@ impl NumberCodec {
         // relative `+` nor the share of the start value.
         if self.plus
             && let Some(rest) = trimmed.strip_prefix('+')
-            && rest.trim_start().starts_with(|c: char| c.is_ascii_digit() || c == self.reader.decimal_separator())
+            && rest.trim_start().starts_with(|c: char| crate::quantity::digit(c).is_some() || c == self.reader.decimal_separator())
         {
             return self.parse_tagged_with(rest.trim_start(), &None, false);
         }
@@ -480,6 +480,10 @@ mod review_tests {
         assert!(angle.parse("+", &Some(10.0)).is_err(), "a lone plus stays no number");
         let plain = NumberCodec::new(Reader::new(), 2);
         assert_eq!(plain.parse("+ 2", &Some(10.0)).ok(), Some(Some(12.0)), "a plain field's plus still adds to the start");
+        // The digit after the sign may be written in any script the reader reads: Arabic-Indic ٣ is 3.
+        assert_eq!(angle.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "a sign before an Arabic-Indic digit is still the number's");
+        assert_eq!(angle.parse("\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "and the reader reads that digit as before");
+        assert_eq!(plain.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(13.0)), "a plain field still adds it to the start");
     }
 
     /// A share field's signed percentage is that number, not a share of the start value again.

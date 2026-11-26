@@ -7,7 +7,7 @@ use crate::codec::NotAValue;
 const DIGIT_BLOCKS: [u32; 5] = [0x30, 0x660, 0x6F0, 0x966, 0xFF10];
 
 /// The value of a decimal digit of any supported script.
-fn digit(c: char) -> Option<u32> {
+pub(crate) fn digit(c: char) -> Option<u32> {
     DIGIT_BLOCKS.iter().find_map(|&zero| (zero..zero + 10).contains(&(c as u32)).then(|| c as u32 - zero))
 }
 
