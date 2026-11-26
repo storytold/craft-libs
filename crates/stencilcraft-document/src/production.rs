@@ -169,6 +169,34 @@ pub struct ShapeProduction {
     /// fill). Printed and shown; the cut follows the path as always.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_pattern: Option<Box<FillPattern>>,
+    /// A two-colour linear gradient instead of a plain fill (Silhouette's gradient fill).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_gradient: Option<Box<FillGradient>>,
+}
+
+/// A gradient fill: `from` blends into `to` across the shape along `angle_deg` (0 runs left
+/// to right, 90 bottom to top).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FillGradient {
+    /// Canonical `#rrggbb` colours at the start and end.
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub angle_deg: f64,
+}
+
+impl FillGradient {
+    /// Both colours are `#rrggbb` and the angle is finite.
+    pub fn validate(&self) -> Result<(), crate::DocError> {
+        let hex = |c: &str| c.len() == 7 && c.starts_with('#') && c.get(1..).is_some_and(|d| d.bytes().all(|b| b.is_ascii_hexdigit()));
+        if !hex(&self.from) || !hex(&self.to) {
+            return Err(crate::DocError::Model("gradient fill: colours must be #rrggbb".to_string()));
+        }
+        if !self.angle_deg.is_finite() {
+            return Err(crate::DocError::Model("gradient fill: angle must be a number".to_string()));
+        }
+        Ok(())
+    }
 }
 
 /// A pattern fill: a picture tiled across the shape.

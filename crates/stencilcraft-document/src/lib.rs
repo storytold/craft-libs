@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod production;
 pub use metadata::{LibraryIndex, LibraryTrashEntry, MAX_RECENT_FILES, RecentFiles};
-pub use production::{CombineOp, FillPattern, GroupKind, MAX_PATTERN_DATA, Operation, PATTERN_TILE_MM, SendAssign, ShapeProduction, SourceGroup};
+pub use production::{CombineOp, FillGradient, FillPattern, GroupKind, MAX_PATTERN_DATA, Operation, PATTERN_TILE_MM, SendAssign, ShapeProduction, SourceGroup};
 
 /// Native format identity and supported version, defined by the shared wire-format crate.
 pub use craft_stencilcraft_format::{FORMAT_NAME, FORMAT_VERSION};
@@ -515,6 +515,11 @@ impl Document {
             .flat_map(|layer| &layer.shapes)
             .filter_map(|shape| shape.production.fill_pattern.as_deref())
             .try_for_each(FillPattern::validate)?;
+        self.layers
+            .iter()
+            .flat_map(|layer| &layer.shapes)
+            .filter_map(|shape| shape.production.fill_gradient.as_deref())
+            .try_for_each(FillGradient::validate)?;
         self.validate_canvas()
     }
 
@@ -617,6 +622,19 @@ mod tests {
             FillPattern { png_base64: "".into(), ..pattern.clone() },
         ] {
             doc.get_shape_mut(id).unwrap().production.fill_pattern = Some(Box::new(bad));
+            assert!(doc.validate().is_err());
+        }
+        doc.get_shape_mut(id).unwrap().production.fill_pattern = None;
+        let gradient = FillGradient { from: "#ff0000".into(), to: "#0000ff".into(), angle_deg: 90.0 };
+        doc.get_shape_mut(id).unwrap().production.fill_gradient = Some(Box::new(gradient.clone()));
+        let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
+        assert_eq!(back.get_shape(id).unwrap().production.fill_gradient.as_deref(), Some(&gradient));
+        for bad in [
+            FillGradient { from: "red".into(), ..gradient.clone() },
+            FillGradient { to: "#12345g".into(), ..gradient.clone() },
+            FillGradient { angle_deg: f64::NAN, ..gradient.clone() },
+        ] {
+            doc.get_shape_mut(id).unwrap().production.fill_gradient = Some(Box::new(bad));
             assert!(doc.validate().is_err());
         }
     }
