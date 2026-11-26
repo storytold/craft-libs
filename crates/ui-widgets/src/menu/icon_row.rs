@@ -70,12 +70,14 @@ pub struct MenuIconRow<'a> {
     common: Common,
     icons: &'a [MenuIcon<'a>],
     picked: Option<usize>,
+    /// The row took a key activation it does not run: the first key in a menu the pointer opened (`RowInput::of`).
+    withheld: bool,
 }
 
 impl<'a> MenuIconRow<'a> {
     /// A row named `label` of `icons`.
     pub fn new(label: impl Into<Label>, icons: &'a [MenuIcon<'a>]) -> Self {
-        MenuIconRow { common: Common::new(), icons, picked: None }.label(label)
+        MenuIconRow { common: Common::new(), icons, picked: None, withheld: false }.label(label)
     }
 
     fn part(at: usize) -> PartRef {
@@ -160,8 +162,11 @@ impl Component for MenuIconRow<'_> {
         let runs = self.runs(enabled);
         let input = RowInput::of(cx, &level);
         let (moving, hovered) = (input.moving, input.hovered);
-        // As a menu item: the pointer moving over the row, or the keyboard landing on it, makes it the active row.
+        // As a menu item: the pointer moving over the row, or the keyboard landing on it, makes it the active row. The
+        // first key in a menu the pointer opened picks no icon of a row the pointer did not light: `RowInput::of` runs
+        // the lit row instead, or closes the menu.
         input.activate(&ctx, cx.id, &level, runs);
+        self.withheld = input.withheld;
         // The pointer on the row closes another row's open submenu, unless it is on its way into it.
         if hovered && moving && !level.aimed(cx.id) && level.clear_submenu() {
             frame::request_repaint(&ctx);
@@ -177,12 +182,17 @@ impl Component for MenuIconRow<'_> {
         self.picked = icons
             .iter()
             .enumerate()
-            .filter(|(_, icon)| runs && icon.enabled)
+            .filter(|(_, icon)| runs && !input.withheld && icon.enabled)
             .map(|(at, _)| at)
             .find(|at| cx.part_activated(Self::part(*at)).is_some());
         if self.picked.is_some() {
             close_on_pick(&ctx);
         }
+    }
+
+    /// A key activation the row withheld does not activate it.
+    fn activated(&self, cx: &Cx<'_, Self>) -> bool {
+        !self.withheld && cx.activation().is_some()
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

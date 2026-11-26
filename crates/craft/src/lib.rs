@@ -139,6 +139,8 @@ pub use craft_flow as flow;
 pub use craft_font_catalog as font_catalog;
 #[cfg(feature = "font-manager")]
 pub use craft_font_manager as font_manager;
+#[cfg(feature = "font-os-windows")]
+pub use craft_font_os_windows as font_os_windows;
 #[cfg(feature = "font-store")]
 pub use craft_font_store as font_store;
 #[cfg(feature = "font-subset")]
@@ -331,6 +333,8 @@ pub use craft_scraft_format as scraft_format;
 pub use craft_settings as settings;
 #[cfg(feature = "sf2")]
 pub use craft_sf2 as sf2;
+#[cfg(feature = "shared-vec")]
+pub use craft_shared_vec as shared_vec;
 #[cfg(feature = "sheet")]
 pub use craft_sheet as sheet;
 #[cfg(feature = "shx")]

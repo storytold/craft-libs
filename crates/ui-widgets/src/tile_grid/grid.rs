@@ -24,7 +24,7 @@ use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth};
 use crate::runtime::access::Name;
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, RuleKind, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, RuleKind, StyleColor, StyleCx};
 use craft_behavior::{
     ColumnKey, ColumnWidth, EditEvent, HitLevel, HitPriority, Intent, ItemLayout as _, ItemSource, Metrics, Mixed, NavShape, PartKey, PointerButton,
     PressPhase, Roving, Selection, Sense,
@@ -154,6 +154,8 @@ impl<K> Outcome for TileGridOutput<K> {
 pub struct TileGridStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// A header pinned over its group's tiles.
     pinned: StyleColor,
     /// The look of a group header: a heading row, which places the disclosure the grid declares.
@@ -271,7 +273,7 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
     thumb_size: Option<ThumbSize>,
-    /// Cards are as large as the largest tile measures (an icon tile measures its icon), instead of the zoomed
+    /// Cards are as large as the largest tile measures (a non-card icon tile measures its icon), instead of the zoomed
     /// thumbnail side; `zoom` and `thumb_size` do not apply.
     #[prop(flag)]
     content_cells: bool,
@@ -668,6 +670,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
     fn style(cx: &StyleCx<'_>, _: TileGridStyleKey<K>) -> TileGridStyle {
         TileGridStyle {
             metrics: Metrics::new(),
+            focus: cx.focus_look(),
             pinned: cx.color(cx.tokens.color.surface.panel),
             header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()),
             insert: cx.color(cx.tokens.color.accent.solid),

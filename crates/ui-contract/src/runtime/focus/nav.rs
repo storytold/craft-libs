@@ -1,7 +1,7 @@
 //! Focus movement: Tab and F6, roving groups, initial focus, restore, programmatic requests and focus after
 //! removal. Every movement reads last pass's registrations and returns the egui changes to apply.
 
-use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
+use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, Stop, StopKey, StopRec, TabReach};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use craft_behavior::nav::step;
@@ -192,9 +192,11 @@ impl State {
         self.last_docs = std::mem::take(&mut self.docs);
         self.open.clear();
         self.body_from.clear();
+        self.body_end.clear();
         self.entered = false;
         self.asked = false;
         self.candidates_seen = 0;
+        self.host_canvases.clear();
     }
 
     /// The registrations of last pass, which Tab and the arrows move over.
@@ -264,24 +266,13 @@ impl State {
     fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         self.note_entry(&rec);
         let stop = &rec.stop;
-        let roving = stop.group.is_some();
-        let keys = stop.keys;
-        // An app's own widget (`Stop::host`) reads its Escape from egui, as a stop that claims it does: egui keeps its
-        // focus on it.
-        let escape = stop.host || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
-        let filter = egui_focus::filter(
-            keys.keep == super::KeepKeys::Tab,
-            roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),
-            roving || keys.keep == super::KeepKeys::BlockArrows,
-            escape,
-        );
         let moved = self.focus_now != Some(stop.root) || self.focused.get(&stop.root) != Some(&stop.key());
         if moved {
             self.arrived = Some((self.frame, stop.key(), origin));
         }
         self.focused.insert(stop.root, stop.key());
         self.focus_now = Some(stop.root);
-        vec![Act::Focus(stop.root, filter)]
+        vec![focus_act(stop)]
     }
 
     /// Focus moving to `rec` from outside a scope that traps nothing and restores focus (a layer that Tab reaches, such as
@@ -744,6 +735,27 @@ impl State {
     }
 }
 
+/// Whether `id` is the app's document canvas, as the pass that registered `stops` declared it (`host_canvas`).
+pub(super) fn declared_canvas(stops: &[StopRec], id: Id) -> bool {
+    stops.iter().any(|rec| rec.stop.host && !rec.stop.automatic() && rec.stop.root == id)
+}
+
+/// Focus on the egui widget of `stop`, with the key filter its keys ask for.
+pub(super) fn focus_act(stop: &Stop) -> Act {
+    let roving = stop.group.is_some();
+    let keys = stop.keys;
+    // The app's canvas (`host_canvas`) reads its Escape from egui, as a stop that claims it does: egui keeps its focus
+    // on it. Every other widget of the app's own keeps Escape by its own egui filter.
+    let escape = (stop.host && !stop.automatic()) || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
+    let filter = egui_focus::filter(
+        keys.keep == super::KeepKeys::Tab,
+        roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),
+        roving || keys.keep == super::KeepKeys::BlockArrows,
+        escape,
+    );
+    Act::Focus(stop.root, filter)
+}
+
 fn cycle(entries: &[Entry], current: Option<&StopRec>, top: Option<Id>, forward: bool) -> Option<usize> {
     if entries.is_empty() {
         return None;
@@ -758,17 +770,22 @@ fn cycle(entries: &[Entry], current: Option<&StopRec>, top: Option<Id>, forward:
 }
 
 /// Puts the stops of the innermost open scope in Tab order: the body's, then the footer's, then the header's.
-/// Inner scopes closed already and lie within one region, so they move with it.
-pub(super) fn order_regions(state: &mut State) {
-    let Some((scope, first)) = state.open.last().copied() else { return };
-    let Some(body) = state.body_from.remove(&scope) else { return };
+/// Inner scopes closed already and lie within one region, so they move with it. Returns how many stops the body holds,
+/// now the scope's first ones; `None` when the scope marked no body.
+pub(super) fn order_regions(state: &mut State) -> Option<usize> {
+    let (scope, first) = state.open.last().copied()?;
+    let body_end = state.body_end.remove(&scope);
+    let (body, _) = state.body_from.remove(&scope)?;
     let end = state.stops.len();
     let first = first.min(end);
-    state.stops[first..end].rotate_left(body.clamp(first, end) - first);
+    let body = body.clamp(first, end);
+    state.stops[first..end].rotate_left(body - first);
+    Some(body_end.map_or(end, |body_end| body_end.clamp(body, end)) - body)
 }
 
-/// Closes the innermost open scope; a scope shown for the first time moves focus to its initial stop.
-pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
+/// Closes the innermost open scope; a scope shown for the first time moves focus to its initial stop. `body` is how
+/// many of the scope's first stops are its body's (`order_regions`), `None` for all of them.
+pub(super) fn initial_focus(state: &mut State, frame: u64, body: Option<usize>) -> Vec<Act> {
     let Some((scope, first)) = state.open.pop() else { return Vec::new() };
     let Some((policy, entering)) = state.scopes.get(&scope).map(|rec| (rec.policy, rec.entering)) else { return Vec::new() };
     let new = match entering {
@@ -793,10 +810,18 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
             .and_then(|group| lists.arrival(&group))
             .unwrap_or_else(|| rec.clone())
     });
+    // The body's first Tab entry, at its arrival member. The footer's and the header's buttons with no default take no
+    // focus, so Enter does not answer one that was never chosen.
+    let in_body = (policy.initial == Initial::FirstField)
+        .then(|| {
+            let body = Lists { stops: &stops[..body.unwrap_or(stops.len()).min(stops.len())], ..lists };
+            body.entries(|_| true, true).into_iter().next().map(|entry| entry.arrival().clone())
+        })
+        .flatten();
     let pick = match policy.initial {
         Initial::First => entry.as_ref(),
         Initial::Default => stops.iter().find(|rec| rec.stop.default).or(entry.as_ref()),
-        Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)),
+        Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)).or(in_body.as_ref()),
         Initial::Key(name) => stops.iter().find(|rec| rec.stop.name == Some(name)),
         _ => None,
     };

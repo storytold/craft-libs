@@ -505,7 +505,7 @@ impl<'a> ListManager<'a> {
         buttons.push(FooterButton::new(cancel_label.unwrap_or_else(|| common.cancel.clone()), DialogRole::Cancel));
         let settled = Rc::clone(&name_box);
         let mut dialog =
-            Dialog::new(title.clone()).collection_body().close_on_enter(false).button_place(ButtonPlace::Side).buttons(buttons).settle_buttons(
+            Dialog::new(title.clone()).collection_body().close_on_enter(true).button_place(ButtonPlace::Side).buttons(buttons).settle_buttons(
                 move |cx, buttons| {
                     let folder = cx.env.folder();
                     let typed = text_of(&mut settled.borrow_mut(), cx);
@@ -586,7 +586,10 @@ impl<'a> ListManager<'a> {
                     for event in events {
                         match event {
                             CollectionEvent::Activate(at) => {
-                                text.clone_from(&entries[at].name);
+                                // A lead row left unpicked by a name typed after it runs the first action on that name.
+                                if picked == Some(at) {
+                                    text.clone_from(&entries[at].name);
+                                }
                                 let first = actions.first().filter(|action| is_enabled(action, entries, &folder, &text, name_check));
                                 activated.set(first.map(|_| 0));
                             }
