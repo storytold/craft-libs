@@ -13,7 +13,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **UV unwrapping.** `unwrap::auto_unwrap` makes a non-overlapping layout per material, splitting
   vertices where charts meet. It checks the mesh against its size limits and its attribute data
   first and returns an error without changing the mesh when a check fails. Charts are projected
-  and packed in `f64`.
+  and packed in `f64`. Overlapping projected interiors get separate charts. Padding uses the
+  requested resolution, with a minimum resolution of 16. A layout that cannot fit returns an
+  error without changing the mesh.
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle
   and barycentrics under the texel center; `surface_at` turns them into a position, normal and
   tangent frame.
