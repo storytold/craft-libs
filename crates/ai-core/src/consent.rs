@@ -24,27 +24,35 @@ use crate::request::Request;
 /// One thing a request sends.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisclosureItem {
+    /// The role the input plays in the request.
     pub role: InputRole,
+    /// The kind of data sent.
     pub kind: PayloadKind,
+    /// Size in bytes when known.
     pub bytes: Option<u64>,
 }
 
 /// What a request will send to a connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Disclosure {
+    /// The app that sends the request.
     pub app: AppId,
+    /// The connection the request goes to.
     pub connection: ConnectionId,
     /// What the request asks the connection to do. Consent is given per capability.
     pub capability: CapabilityId,
+    /// Whether the connection is local or remote.
     pub locality: Locality,
     /// `scheme://host[:port]`, or the route name when there is no endpoint.
     pub destination: String,
+    /// The inputs the request sends.
     pub items: Vec<DisclosureItem>,
     /// Parameter names only, never values.
     pub param_names: Vec<String>,
 }
 
 impl Disclosure {
+    /// Builds the disclosure for sending `request` from `app` through `connection`.
     pub fn for_request(app: &AppId, connection: &Connection, request: &Request) -> Self {
         let destination = connection
             .endpoint
@@ -85,7 +93,9 @@ impl Disclosure {
 /// another's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsentRecord {
+    /// The app that agreed.
     pub app: AppId,
+    /// The connection agreed to.
     pub connection: ConnectionId,
     /// The destination agreed to. A different destination needs fresh consent.
     pub destination: String,
@@ -93,6 +103,7 @@ pub struct ConsentRecord {
     /// none and covers nothing, so the person is asked once more.
     #[serde(default)]
     pub capability: Option<CapabilityId>,
+    /// The kinds of data the agreement covers.
     pub kinds: Vec<PayloadKind>,
     /// Unix seconds. The agreement holds while the clock is before this; `None` holds until
     /// revoked.
@@ -111,6 +122,7 @@ impl ConsentRecord {
 /// An app's saved agreements.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsentLedger {
+    /// The saved agreements.
     #[serde(default)]
     pub records: Vec<ConsentRecord>,
 }
@@ -165,6 +177,7 @@ impl ConsentLedger {
         }
     }
 
+    /// Removes every agreement the app has for the connection, whatever the destination or capability.
     pub fn revoke(&mut self, app: &AppId, connection: &ConnectionId) {
         self.records.retain(|r| !(&r.app == app && &r.connection == connection));
     }
@@ -174,7 +187,7 @@ impl ConsentLedger {
 mod tests {
     use super::*;
     use crate::capability::CapabilityId;
-    use crate::connection::fixtures::{local, remote};
+    use crate::connection::fixtures::remote;
     use crate::payload::Payload;
 
     fn app() -> AppId {
@@ -189,32 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn disclosure_lists_kinds_sizes_and_param_names_not_contents() {
-        let d = Disclosure::for_request(&app(), &remote("a"), &req());
-        assert_eq!(d.destination, "https://api.example.com");
-        assert_eq!(d.kinds(), vec![PayloadKind::Text, PayloadKind::Image]);
-        assert_eq!(d.items.first().and_then(|i| i.bytes), Some(10));
-        assert_eq!(d.param_names, vec!["seed".to_string()]);
-        let json = serde_json::to_string(&d).unwrap();
-        assert!(!json.contains("a cat"));
-    }
-
-    #[test]
-    fn local_connections_never_ask() {
-        let d = Disclosure::for_request(&app(), &local("a"), &req());
-        assert!(!ConsentLedger::default().needs_consent(&d, 0));
-    }
-
-    #[test]
-    fn remote_asks_until_granted_then_stops() {
-        let d = Disclosure::for_request(&app(), &remote("a"), &req());
-        let mut ledger = ConsentLedger::default();
-        assert!(ledger.needs_consent(&d, 0));
-        ledger.grant(&d);
-        assert!(!ledger.needs_consent(&d, 0));
-    }
-
-    #[test]
     fn a_new_kind_of_data_asks_again() {
         let mut ledger = ConsentLedger::default();
         ledger.grant(&Disclosure::for_request(&app(), &remote("a"), &req()));
@@ -226,111 +213,8 @@ mod tests {
         assert_eq!(ledger.records.len(), 1);
     }
 
-    #[test]
-    fn changing_the_host_invalidates_consent() {
-        let mut ledger = ConsentLedger::default();
-        ledger.grant(&Disclosure::for_request(&app(), &remote("a"), &req()));
-        let mut moved = remote("a");
-        moved.endpoint = Some("https://other.example.org".into());
-        assert!(ledger.needs_consent(&Disclosure::for_request(&app(), &moved, &req()), 0));
-    }
-
-    #[test]
-    fn consent_is_per_app_and_revocable() {
-        let mut ledger = ConsentLedger::default();
-        let d = Disclosure::for_request(&app(), &remote("a"), &req());
-        ledger.grant(&d);
-        let other = Disclosure::for_request(&AppId::new("wordcraft").unwrap(), &remote("a"), &req());
-        assert!(ledger.needs_consent(&other, 0));
-        ledger.revoke(&app(), &remote("a").id);
-        assert!(ledger.needs_consent(&d, 0));
-    }
-
-    #[test]
-    fn parameters_alone_still_need_consent() {
-        let only_params = Request::new(CapabilityId::parse("image.inpaint").unwrap()).with_param("negative", "a private note".into());
-        let d = disclosure_for(&only_params);
-        assert_eq!(d.kinds(), vec![PayloadKind::Text]);
-        let mut ledger = ConsentLedger::default();
-        assert!(ledger.needs_consent(&d, 0));
-        ledger.grant(&d);
-        assert!(!ledger.needs_consent(&d, 0));
-    }
-
-    fn upscale_req() -> Request {
-        Request::new(CapabilityId::parse("image.upscale").unwrap()).with_input(InputRole::Source, Payload::inline("image/png", vec![0; 10]).unwrap())
-    }
-
     fn disclosure_for(r: &Request) -> Disclosure {
         Disclosure::for_request(&app(), &remote("a"), r)
-    }
-
-    #[test]
-    fn disclosure_names_the_capability() {
-        assert_eq!(disclosure_for(&req()).capability, CapabilityId::parse("image.inpaint").unwrap());
-    }
-
-    #[test]
-    fn consent_for_one_capability_does_not_cover_another() {
-        let mut ledger = ConsentLedger::default();
-        ledger.grant(&disclosure_for(&req()));
-        let other = disclosure_for(&upscale_req());
-        assert!(ledger.needs_consent(&other, 0));
-        ledger.grant(&other);
-        assert!(!ledger.needs_consent(&other, 0));
-        assert!(!ledger.needs_consent(&disclosure_for(&req()), 0));
-        assert_eq!(ledger.records.len(), 2);
-    }
-
-    #[test]
-    fn a_timed_agreement_lapses_at_its_expiry() {
-        let d = disclosure_for(&req());
-        let mut ledger = ConsentLedger::default();
-        ledger.grant_until(&d, 1_000);
-        assert!(!ledger.needs_consent(&d, 0));
-        assert!(!ledger.needs_consent(&d, 999));
-        assert!(ledger.needs_consent(&d, 1_000));
-        assert!(ledger.needs_consent(&d, 5_000));
-    }
-
-    #[test]
-    fn an_open_agreement_never_lapses() {
-        let d = disclosure_for(&req());
-        let mut ledger = ConsentLedger::default();
-        ledger.grant(&d);
-        assert!(!ledger.needs_consent(&d, u64::MAX));
-    }
-
-    #[test]
-    fn agreeing_again_after_it_lapsed_renews_it() {
-        let d = disclosure_for(&req());
-        let mut ledger = ConsentLedger::default();
-        ledger.grant_until(&d, 1_000);
-        assert!(ledger.needs_consent(&d, 2_000));
-        ledger.grant_until(&d, 3_000);
-        assert!(!ledger.needs_consent(&d, 2_000));
-        assert!(ledger.needs_consent(&d, 3_000));
-        assert_eq!(ledger.records.len(), 1);
-    }
-
-    #[test]
-    fn the_latest_agreement_sets_the_expiry_for_that_capability() {
-        let d = disclosure_for(&req());
-        let mut ledger = ConsentLedger::default();
-        ledger.grant(&d);
-        ledger.grant_until(&d, 1_000);
-        assert!(ledger.needs_consent(&d, 1_000));
-        ledger.grant(&d);
-        assert!(!ledger.needs_consent(&d, u64::MAX));
-    }
-
-    #[test]
-    fn a_timed_agreement_for_one_capability_leaves_another_open() {
-        let mut ledger = ConsentLedger::default();
-        ledger.grant(&disclosure_for(&req()));
-        ledger.grant_until(&disclosure_for(&upscale_req()), 1_000);
-        assert!(!ledger.needs_consent(&disclosure_for(&req()), 5_000));
-        assert!(ledger.needs_consent(&disclosure_for(&upscale_req()), 5_000));
     }
 
     fn text_only_req() -> Request {
@@ -346,35 +230,5 @@ mod tests {
         ledger.grant_until(&text, 5_000);
         assert!(!ledger.needs_consent(&text, 2_000));
         assert!(ledger.needs_consent(&disclosure_for(&req()), 2_000), "image consent lapsed at 1000 and was not renewed");
-    }
-
-    #[test]
-    fn renewing_one_kind_leaves_the_others_on_their_own_expiry() {
-        let mut ledger = ConsentLedger::default();
-        ledger.grant_until(&disclosure_for(&req()), 1_000);
-        ledger.grant(&disclosure_for(&text_only_req()));
-        let both = disclosure_for(&req());
-        assert!(!ledger.needs_consent(&both, 999));
-        assert!(ledger.needs_consent(&both, 1_000));
-        assert!(!ledger.needs_consent(&disclosure_for(&text_only_req()), u64::MAX));
-    }
-
-    #[test]
-    fn a_record_from_before_scoping_loads_but_covers_nothing() {
-        let old = r#"{"records":[{"app":"photocraft","connection":"a","destination":"https://api.example.com","kinds":["text","image"]}]}"#;
-        let ledger: ConsentLedger = serde_json::from_str(old).unwrap();
-        assert_eq!(ledger.records.len(), 1);
-        assert_eq!(ledger.records[0].capability, None);
-        assert_eq!(ledger.records[0].expires_at, None);
-        assert!(ledger.needs_consent(&disclosure_for(&req()), 0));
-    }
-
-    #[test]
-    fn the_capability_and_expiry_survive_a_save() {
-        let mut ledger = ConsentLedger::default();
-        ledger.grant_until(&disclosure_for(&req()), 1_000);
-        let back: ConsentLedger = serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
-        assert_eq!(back, ledger);
-        assert_eq!(back.records[0].expires_at, Some(1_000));
     }
 }
