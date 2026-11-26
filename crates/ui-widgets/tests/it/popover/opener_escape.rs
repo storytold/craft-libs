@@ -41,6 +41,8 @@ fn choices(ui: &mut Ui, open: &Cell<bool>, opener: &Cell<Option<Id>>, rule: Open
 struct Rig {
     fixture: Fixture,
     open: Rc<Cell<bool>>,
+    /// The outer popover's open state, kept outside the fixture: a settle pass cannot reopen it and hide a wrong close.
+    outer: Rc<Cell<bool>>,
     opener: Rc<Cell<Option<Id>>>,
 }
 
@@ -48,15 +50,17 @@ struct Rig {
 fn rig(rule: OpenerEscape, nested: bool) -> Rig {
     let open = Rc::new(Cell::new(false));
     let opener = Rc::new(Cell::new(None));
-    let (shown_open, shown_opener) = (open.clone(), opener.clone());
+    let outer_open = Rc::new(Cell::new(true));
+    let (shown_open, shown_opener, shown_outer) = (open.clone(), opener.clone(), outer_open.clone());
     let mut fixture = Fixture::new(move |ui| {
         let save = Button::new("Save effect").show(ui);
         if nested {
-            let mut outer = true;
+            let mut outer = shown_outer.get();
             Popover::new("Save effect", Bind::bound(&mut outer)).opened_by(&save).show(ui, |ui, _| {
                 Button::new("Name").show(ui);
                 choices(ui, &shown_open, &shown_opener, rule);
             });
+            shown_outer.set(outer);
         } else {
             choices(ui, &shown_open, &shown_opener, rule);
         }
@@ -70,7 +74,7 @@ fn rig(rule: OpenerEscape, nested: bool) -> Rig {
     assert!(open.get(), "Enter on the focused opener opens the popover");
     assert!(fixture.by_label("Portraits").is_some(), "the popover shows its choices");
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(id), "the opener keeps the focus (Initial::Keep)");
-    Rig { fixture, open, opener }
+    Rig { fixture, open, outer: outer_open, opener }
 }
 
 impl Rig {
@@ -84,7 +88,7 @@ impl Rig {
     }
 
     fn outer_open(&self) -> bool {
-        self.fixture.by_label("Name").is_some()
+        self.outer.get() && self.fixture.by_label("Name").is_some()
     }
 }
 
