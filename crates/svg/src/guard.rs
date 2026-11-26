@@ -487,7 +487,10 @@ mod tests {
 
     #[test]
     fn a_repeated_large_entity_is_too_large_and_a_namespace_entity_is_not() {
-        let big = "x".repeat(1 << 20);
+        // (the limit is passed in: the same arithmetic as `MAX_ENTITY_EXPANSION` over entities 256 times smaller, which
+        // only expand to 16 references' worth, so the strings the test builds and scans stay small)
+        let big = "x".repeat(1 << 16);
+        let expansion_too_large = |svg: &str| entities_expand_past(svg, 16 << 16);
         let refs = "&a;".repeat(20);
         let bomb = format!("<!DOCTYPE svg [<!ENTITY a \"{big}\">]><svg xmlns=\"http://www.w3.org/2000/svg\" id=\"{refs}\"/>");
         assert!(expansion_too_large(&bomb));
@@ -500,6 +503,7 @@ mod tests {
         let ampersands = format!("<!DOCTYPE svg [<!ENTITY a \"x\">]><svg id=\"{}\"/>", "&".repeat(1 << 20));
         let start = std::time::Instant::now();
         assert!(!expansion_too_large(&ampersands));
+        eprintln!("DIAG svg ampersand run read in {:?}", start.elapsed());
         // A quadratic read would take hours; the bound is loose for a loaded machine.
         assert!(start.elapsed() < std::time::Duration::from_secs(120), "{:?}", start.elapsed());
     }

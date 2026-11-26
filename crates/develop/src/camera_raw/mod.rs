@@ -67,10 +67,10 @@ mod whites_blacks;
 
 pub use local_tone::{LocalTone, ToneKind, TonePass};
 pub use per_pixel::{
-    CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, WhitesBlacksModel, per_pixel, spatial, white_black_points,
-    whites_blacks_model,
+    CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, WhitesBlacksModel, per_pixel, spatial, spatial_tone,
+    white_black_points, whites_blacks_model,
 };
-pub use spatial::{Clarity, Dehaze, Texture};
+pub use spatial::{Clarity, Dehaze, Detail, Texture};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.
@@ -243,6 +243,7 @@ fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
 }
 
 /// Approximate Gaussian (three box passes).
+#[cfg(test)]
 fn gauss(v: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     box_means(v, w, h, &spatial::gauss_radii(sigma))
 }
@@ -422,11 +423,19 @@ pub fn band_weights(h: f32) -> [f32; 8] {
     let mut w = [0.0f32; 8];
     for k in 0..8 {
         let (c, prev, next) = (HSL_BANDS[k], HSL_BANDS[(k + 7) % 8], HSL_BANDS[(k + 1) % 8]);
-        let diff = ((h - c + 540.0) % 360.0) - 180.0;
+        let diff = (h - c + 540.0).rem_euclid(360.0) - 180.0;
         let span = if diff >= 0.0 { (next - c).rem_euclid(360.0) } else { (c - prev).rem_euclid(360.0) };
         w[k] = (1.0 - diff.abs() / span.max(1e-3)).max(0.0);
     }
     w
+}
+
+#[cfg(test)]
+#[test]
+fn band_weights_wrap_equivalent_hues_in_both_directions() {
+    let weights = band_weights(320.0);
+    assert_eq!(band_weights(-400.0), weights);
+    assert_eq!(band_weights(680.0), weights);
 }
 
 /// Contrast, Highlights, Shadows, Texture and Clarity (the luminance stage) at rest.
@@ -476,7 +485,6 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     if px.is_empty() || p.is_identity() {
         return;
     }
-    let ps = inputs.pixel_scale.clamp(0.01, 1.0);
     // 1. White balance + exposure in linear light.
     if let Some(g) = per_pixel::gains(p) {
         par_rows(px, w, 1, |_, row| {
@@ -621,8 +629,8 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
         });
     }
     // 8. Detail.
-    if p.noise_luminance > 0.0 || p.noise_color > 0.0 || p.sharpen_amount > 0.0 {
-        detail(px, w, h, p, ps);
+    if let Some(d) = Detail::new(p, inputs) {
+        detail(px, w, h, &d);
     }
     // 9. Effects.
     if p.vignette_amount != 0.0 {
@@ -687,7 +695,18 @@ fn balance(mut q: [f32; 4], g: [f32; 3]) -> [f32; 4] {
 /// The index of the `q` quantile (0 … 1) among `len` sorted values, as every percentile in the
 /// develop picks it.
 pub fn quantile_rank(len: usize, q: f32) -> usize {
-    (len.saturating_sub(1) as f32 * q).round() as usize
+    let last = len.saturating_sub(1);
+    ((last as f32 * q).round() as usize).min(last)
+}
+
+#[cfg(test)]
+#[test]
+fn quantile_rank_keeps_the_upper_endpoint_inside_the_sample() {
+    // This last index rounds up when cast to f32.
+    let len = 16_777_220;
+    assert_eq!(quantile_rank(len, 1.0), len - 1);
+    assert_eq!(quantile_rank(4, 0.5), 2);
+    assert_eq!(quantile_rank(0, 1.0), 0);
 }
 
 /// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
@@ -819,54 +838,46 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     });
 }
 
-fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
-    // The controls' documented 0..=100 range: raw values drive the filter radii below.
-    let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
+fn sharpening_detail(detail: f32) -> f32 {
+    let detail = if detail.is_nan() { CameraRaw::default().sharpen_detail } else { detail.clamp(0.0, 100.0) };
+    detail / 100.0
+}
+
+fn detail(px: &mut [[f32; 4]], w: usize, h: usize, d: &Detail) {
     // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
     let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
     let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
     let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
-    if nl > 0.0 {
-        let n = nl / 100.0;
-        let r = ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize;
-        let smooth = guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6);
-        let keep = nld / 100.0 * 0.5;
+    if let Some(n) = &d.luminance {
+        let smooth = guided(&y, &y, w, h, n.radius, n.eps);
         for i in 0..w * h {
-            y[i] = smooth[i] + (y[i] - smooth[i]) * keep;
+            y[i] = smooth[i] + (y[i] - smooth[i]) * n.keep;
         }
     }
-    if nc > 0.0 {
-        let sigma = (nc / 100.0 * 6.0 * ps).max(0.3);
-        let (bcb, bcr) = (gauss(&cb, w, h, sigma), gauss(&cr, w, h, sigma));
-        let keep = ncd / 100.0 * 0.3;
+    if let Some(c) = &d.color {
+        let (bcb, bcr) = (box_means(&cb, w, h, &c.radii), box_means(&cr, w, h, &c.radii));
         for i in 0..w * h {
-            cb[i] = bcb[i] + (cb[i] - bcb[i]) * keep;
-            cr[i] = bcr[i] + (cr[i] - bcr[i]) * keep;
+            cb[i] = bcb[i] + (cb[i] - bcb[i]) * c.keep;
+            cr[i] = bcr[i] + (cr[i] - bcr[i]) * c.keep;
         }
     }
-    if p.sharpen_amount > 0.0 {
-        let sigma = (p.sharpen_radius.clamp(0.5, 3.0) * ps).max(0.3);
-        let blur = gauss(&y, w, h, sigma);
+    if let Some(s) = &d.sharpen {
+        let blur = box_means(&y, w, h, &s.radii);
         // Masking: an edge mask from the gradient of a smoothed luminance.
-        let mask: Option<Vec<f32>> = (p.sharpen_masking > 0.0).then(|| {
-            let s = gauss(&y, w, h, 1.0 * ps.max(0.5));
-            let t = p.sharpen_masking / 100.0 * 0.08;
+        let mask: Option<Vec<f32>> = s.mask.as_ref().map(|(radii, [e0, e1])| {
+            let s = box_means(&y, w, h, radii);
             util::par_map(w * h, |i| {
                 let (x, yy) = (i % w, i / w);
                 let gx = s[yy * w + (x + 1).min(w - 1)] - s[yy * w + x.saturating_sub(1)];
                 let gy = s[(yy + 1).min(h - 1) * w + x] - s[yy.saturating_sub(1) * w + x];
-                smoothstep(t * 0.5, t + 1e-4, gx.hypot(gy))
+                smoothstep(*e0, *e1, gx.hypot(gy))
             })
         });
-        let amt = p.sharpen_amount / 100.0 * 1.2;
-        let det = p.sharpen_detail / 100.0;
         for i in 0..w * h {
-            let hp = y[i] - blur[i];
             // Low Detail damps large (halo-producing) differences.
-            let limit = 0.03 + det * 0.3;
-            let hp = hp.clamp(-limit, limit) * (0.5 + 0.5 * det);
+            let hp = (y[i] - blur[i]).clamp(-s.limit, s.limit) * s.scale;
             let m = mask.as_ref().map_or(1.0, |m| m[i]);
-            y[i] += amt * hp * m;
+            y[i] += s.amount * hp * m;
         }
     }
     for i in 0..w * h {
@@ -947,6 +958,18 @@ mod tests {
     /// [`super::per_pixel`] with the default inputs.
     fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
         super::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
+    }
+
+    #[test]
+    fn sharpening_detail_stays_in_range_at_the_shared_entry_point() {
+        for value in [0.0_f32, 25.0, 37.5, 100.0] {
+            assert_eq!(sharpening_detail(value).to_bits(), (value / 100.0).to_bits());
+        }
+        assert_eq!(sharpening_detail(-1.0), 0.0);
+        assert_eq!(sharpening_detail(101.0), 1.0);
+        assert_eq!(sharpening_detail(f32::NAN), sharpening_detail(CameraRaw::default().sharpen_detail));
+        assert_eq!(sharpening_detail(f32::NEG_INFINITY), 0.0);
+        assert_eq!(sharpening_detail(f32::INFINITY), 1.0);
     }
 
     /// #9273: Dehaze clears the haze evenly over a sky, right up to a dark building, instead of
@@ -1166,6 +1189,23 @@ mod tests {
             assert!(per_pixel(&p, 2, 2, false, Some((0.0, 1.0))).is_none(), "{p:?}");
         }
         assert!(per_pixel(&cr! { exposure: 0.5}, 2, 2, false, None).is_some());
+    }
+
+    #[test]
+    fn detail_reaches_the_per_pixel_stages_after_measured_whites_and_blacks() {
+        // Detail runs after Whites and Blacks, so another implementation can take its parameters
+        // and still measure the points on the per-pixel image.
+        let sharpened = cr! { sharpen_amount: 60.0, noise_luminance: 30.0, whites: 20.0};
+        let stages = per_pixel(&sharpened, 8, 8, false, Some((0.05, 0.9))).expect("Detail alone stays on the per-pixel stages");
+        assert_eq!(stages.detail, Detail::new(&sharpened, &DevelopInputs::default()));
+        assert!(stages.detail.is_some() && stages.whites_blacks.is_some() && stages.measure_whites_blacks.is_none());
+        let px = vec![[0.4f32, 0.5, 0.6, 1.0]; 64];
+        assert!(white_black_points(&px, 8, 8, &sharpened, &DevelopInputs::default()).is_some());
+        // A stage before Whites and Blacks still leaves the measuring to whatever runs it.
+        let clarified = cr!(sharpened.clone() => clarity: 30.0);
+        assert!(white_black_points(&px, 8, 8, &clarified, &DevelopInputs::default()).is_none());
+        assert!(per_pixel(&clarified, 8, 8, false, None).is_some_and(|s| s.measure_whites_blacks.is_some()));
+        assert!(spatial(&sharpened) && !spatial_tone(&sharpened) && spatial_tone(&clarified));
     }
 
     #[test]
