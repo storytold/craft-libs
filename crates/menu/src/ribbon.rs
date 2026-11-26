@@ -317,7 +317,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             // The pad insets the row from the body's rules; it sits outside the slide so it never scrolls sideways.
             // `add_space` adds the body's gap before and after each pad as well, so the gap goes for the pad's span:
             // the row takes the pad alone, and a look with no pad keeps the framework's own edge.
-            let gap = ui.spacing().item_spacing.y;
+            let item_spacing = ui.spacing().item_spacing.y;
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(pad);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
@@ -336,7 +336,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
                 })
                 .inner;
             ui.add_space(pad);
-            ui.spacing_mut().item_spacing.y = gap;
+            ui.spacing_mut().item_spacing.y = item_spacing;
             if let Some((owner, view, groups)) = shown {
                 chevrons(ui, owner, view, &groups, chevron, lead);
             }
