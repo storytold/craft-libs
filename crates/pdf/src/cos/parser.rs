@@ -976,7 +976,9 @@ mod tests {
     fn one_object_has_a_node_budget() {
         fn capped(data: &[u8], max: usize) -> Lexer<'_> {
             let mut lx = Lexer::new(data, 0);
-            lx.max_nodes = max;
+            if max != MAX_NODES {
+                lx.max_nodes = max;
+            }
             lx
         }
 
