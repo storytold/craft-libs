@@ -12,7 +12,8 @@ Atomic writes come from [`craft-atomic`](../atomic/README.md).
 
 - Never crashes: every error comes back in a `LoadReport`, `TickResult` or `Result`; the crate
   denies `unwrap`, `expect`, `panic` and friends, and the workspace forbids `unsafe`.
-- No application code: it depends only on `craft-atomic`, `serde`, `toml_edit` and `dirs`, and
+- No application code: it depends only on `craft-atomic`, `serde`, `toml_edit`, `web-time`,
+  `log`, `dirs` (native) and `web-sys` (browser), and
   knows nothing about any app's settings, defaults, UI or file formats. Apps supply their type
   and their own parsers for older files.
 - No UI: it reports; the application decides what to show.
@@ -73,14 +74,19 @@ let scale = store.get().appearance.ui_scale;
 // On change: only marks the store dirty if the value actually changed.
 store.update(|p| p.appearance.theme = "dark".into());
 
+// Values read from another file at startup (a custom dictionary's words) count as loaded: no save is
+// scheduled, and a later save does not write them over another instance's edit.
+store.update_loaded(|p| p.spelling.words = words);
+
 // Every frame: saves 500 ms after the last change, retries failures with backoff.
-let tick = store.tick(std::time::Instant::now());
+// `web_time::Instant` is `std::time::Instant` on native targets and also works in a browser.
+let tick = store.tick(web_time::Instant::now());
 if let SaveStatus::Failed(err) = &tick.status {
     // show it; the store keeps retrying
 }
 if let Some(deadline) = tick.next_deadline {
     // eframe only repaints on input, so ask for one at the deadline or an idle app never saves:
-    ctx.request_repaint_after(deadline.saturating_duration_since(std::time::Instant::now()));
+    ctx.request_repaint_after(deadline.saturating_duration_since(web_time::Instant::now()));
 }
 
 // On exit.
@@ -109,8 +115,12 @@ import, a different debounce, and a `Probe` for tests.
    const PORTABLE_MARKERS: &'static [&'static str] = &["portable.txt", "PhotoCraft.portable"];
    const PORTABLE_DIR: &'static str = "PhotoCraftData";
    ```
+
+   If the portable folder cannot be created or written, the platform folder is used and
+   `LoadReport::warning` says why.
 4. The platform config folder: `$XDG_CONFIG_HOME/<app>/` or `~/.config/<app>/` on Linux,
-   `~/Library/Application Support/<app>/` on macOS, `%APPDATA%\<app>\` on Windows.
+   `~/Library/Application Support/<app>/` on macOS, `%APPDATA%\<app>\` on Windows. `Settings::FOLDER_NAME` renames `<app>` (default `APP_ID`)
+   for an app whose existing folder is spelled differently, such as `Photocraft`.
 
 With no folder (isolated or `Location::Memory`), `store.dir()` and `store.path()` are `None`,
 `is_persistent()` is false, legacy files are not imported, and `flush()` returns `Ok`.
@@ -146,6 +156,30 @@ Values are merged into the document that was loaded: tables merge key by key, ar
 scalars are replaced whole, comments, key order, unknown keys and each replaced line's trailing
 comment stay. Each write goes through `craft-atomic`, so a failed save leaves the old file intact.
 
+When another process changed the file since this store last read or wrote it, only this store's
+own changes are merged into the file on disk, item by item. `Settings::merge_rule(path)` names
+the rule for each key path; the default is `MergeRule::ByKey`:
+
+| Rule | When both processes changed the item |
+|---|---|
+| `ByKey` | A table merges key by key, each key by its own rule; an array or a scalar takes this store's value. |
+| `Whole` | This store's value replaces the other's whole, so a window's place and size never come from two processes. |
+| `Recent { cap, key }` | A most-recently-used list: entries this store added or used again lead, entries it removed stay removed, the other's follow in their order, cut to `cap`. |
+| `Entries { key }` | A list of user entries: additions from both are kept, removals from both hold, an entry both changed takes this store's version, and an added entry follows the entry before it. |
+
+`key` names a list entry; an entry it answers `None` for is dropped, so a value the settings type
+cannot read is not carried into the merged list.
+
+```rust,ignore
+fn merge_rule(path: &[&str]) -> MergeRule {
+    match path {
+        ["recent"] => MergeRule::Recent { cap: 10, key: |v| v.as_str().map(str::to_owned) },
+        ["window"] => MergeRule::Whole,
+        _ => MergeRule::ByKey,
+    }
+}
+```
+
 Just before each write the store reads the file and compares its **contents** (not its mtime,
 which can stay the same on FAT, HFS+ or network shares) with what it last read or wrote:
 
@@ -159,12 +193,14 @@ which can stay the same on FAT, HFS+ or network shares) with what it last read o
 
 ### Concurrency contract
 
-Saving is **best effort, last writer wins**, not multi-process locking. Hand edits and a
-second instance's unknown keys and comments are preserved as above, but two processes saving
-within the same moment can still race: the later write wins on known keys. Settings are small
-and change rarely, so this is the contract apps should assume. An app that needs strict
-coordination between processes (for example a launcher writing another app's settings) should
-add its own lock around `flush()`.
+Each save holds an advisory lock, `.config.toml.lock` beside the file
+(`SettingsFiles::lock`), from the disk check to the write, so two processes saving at the same
+moment (logging out closes every window together) take turns: the later one sees and merges what
+the earlier one wrote. A save waits at most 2 seconds for the lock; past that, or when the lock
+file cannot be opened, it logs a warning and saves without it, so a stuck process never stops
+another from saving. Hand edits and a second instance's unknown keys and comments are preserved
+as above. A read (`SettingsStore::read`) takes no lock and writes nothing. Files with nothing to
+lock, such as browser storage, keep the default `lock`, which holds none.
 
 ## Validation
 
@@ -177,6 +213,21 @@ cargo test --workspace
 cargo check --target wasm32-unknown-unknown -p craft-settings
 ```
 
-The tests in `tests/` write only to temporary folders and never touch the real config folder.
+The native tests in `tests/` write only to temporary folders and never touch the real config
+folder. `tests/local_storage.rs` runs only in a browser: `cargo test -p craft-settings --target
+wasm32-unknown-unknown` with a matching `wasm-bindgen-test-runner` as the target's runner.
 
-On `wasm32` only the `Settings` trait, the document helpers and the error types are available.
+On `wasm32` the whole store is available: `SettingsStore`, `OpenOptions`, `SharedSettings`,
+`paths` (`Location`, `Probe`, `Resolved`), `migrate` and `LegacyFile`, the `Settings` trait, the
+document helpers, the error types, `Remembered`, `presets` (`PresetFolder`, with entries kept in
+the app's settings sections) and `recovery::backup_path`. Native only: `DiskFiles`, `profiles`,
+the rest of `recovery` and `testing`.
+
+In a browser `OpenOptions::default()` stores files in localStorage through
+`LocalStorageFiles::new(4 << 20)`: each file is one item keyed by its path, so
+`Location::Dir(dir)` names the key prefix, and `Location::Auto` keeps settings in memory, as a
+browser has no folders. A stored item over the cap reads as absent (the store uses defaults and
+the next save replaces it); a write over the cap fails and leaves the old item. A damaged item is
+moved aside to `config.aside-<n>.toml`, as `std::time::SystemTime` does not work in a browser
+to give the native timestamp name. A `LegacyFile` is read through the same files, so an app's old localStorage item imports
+into a fresh store.

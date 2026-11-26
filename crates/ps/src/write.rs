@@ -602,10 +602,13 @@ mod tests {
 
     #[test]
     fn numbers_match_base_formatter() {
-        let values = number_samples();
-        let mut integer_path = 0usize;
+        // The gate walks every `divisor()`-th value (offset by `places` so the places differ); nightly walks all.
+        let step = craft_testkit::hostile::divisor();
+        let (mut integer_path, mut visited) = (0usize, 0usize);
+        let samples = number_samples();
         for places in 0..=10 {
-            for &v in &values {
+            for v in samples.iter().copied().skip(places as usize % step).step_by(step) {
+                visited += 1;
                 let mut expected = String::from("x ");
                 base_push_num_places(&mut expected, v, places);
                 let mut got = String::from("x ");
@@ -617,7 +620,8 @@ mod tests {
             }
         }
         // The comparison covers the integer path, not only the fallback.
-        assert!(integer_path > 200_000, "{integer_path} values took the integer path");
+        eprintln!("DIAG numbers_match_base_formatter: visited {visited}, integer path {integer_path}");
+        assert!(integer_path * 20 > visited, "{integer_path} of {visited} values took the integer path");
     }
 
     #[test]

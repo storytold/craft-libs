@@ -6,8 +6,30 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "System PDF print spooler for the Craft apps: CUPS and Windows"
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[features]
+suite = ["screen-testing", "craft-ui/suite"]
+default = []
+# The printer and job settings widgets (`craft_print::ui`).
+ui = ["dep:craft-behavior", "dep:craft-theme", "dep:craft-ui", "dep:egui"]
+# The stories and the integration binary of the print panel.
+screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
+craft-behavior = { workspace = true, optional = true }
+craft-host = { workspace = true }
+# `Tone` for the dialog's refusal notice; craft-ui does not re-export it.
+craft-theme = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+egui = { workspace = true, optional = true }
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
 # Keep the public rgb re-export at main's GDI revision: a different Git rev gives
 # downstream GDI values a different Rust type identity even when the code is unchanged.
@@ -47,7 +69,15 @@ roxmltree = "0.21"
 # Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs).
 miniz_oxide = "0.9"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser's print dialog (src/browser.rs): the PDF as an object URL in a hidden iframe
+# (MIT OR Apache-2.0).
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlElement", "Element", "Node", "Document", "Window", "CssStyleDeclaration"] }
+
 [dev-dependencies]
+craft-ui = { workspace = true, features = ["suite"] }
 tempfile = "3"
 roxmltree = "0.21"
 miniz_oxide = "0.9"
