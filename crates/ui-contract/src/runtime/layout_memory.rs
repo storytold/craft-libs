@@ -1266,6 +1266,7 @@ pub(crate) mod guard {
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
         ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),
+        ("layout::body::FillLeasts", "fill leasts: opened and closed by the row's own first sweep; the sum goes through contribute"),
         ("layout::body::RowShortfalls", "shortfalls: asked and taken by the container around the row in the same measuring sweep"),
         ("runtime::reads::Runs", "measuring runs of the read record: opened and closed by each run; reads go through contribute"),
         ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),

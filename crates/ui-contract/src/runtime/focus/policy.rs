@@ -12,7 +12,8 @@ pub enum Initial {
     Keep,
     /// The scope's first stop.
     First,
-    /// The scope's first text or number field, else its default stop, else nothing: a dialog's default.
+    /// The scope's first text or number field, else its default stop, else the first stop of its body, else nothing:
+    /// a dialog's default. A footer's or a header's buttons are not taken by the last rule.
     FirstField,
     /// The stop registered as the default.
     Default,

@@ -93,6 +93,40 @@ fn a_canvas_editor_takes_focus_on_a_background_press_and_hands_its_inputs_to_the
     );
 }
 
+/// One pass's editor inputs and pasted text, as the body read them from its `ToolPass`.
+type PassPaste = (Vec<EditorInput>, Option<String>);
+
+/// A paste event's text reaches the body with the editor part's paste in that pass's `ToolPass`, and in no later pass:
+/// the framework takes the event out of egui's input, and the body can't read the installed clipboard where it can't
+/// be opened.
+#[trial]
+fn a_paste_events_text_reaches_the_body_with_the_editors_paste() {
+    let seen: Rc<RefCell<Vec<PassPaste>>> = Rc::default();
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let view = CanvasView::new(room, Point::new(PAGE.width / 2.0, PAGE.height / 2.0), 1.0);
+        let _ = canvas(view).show_at(ui, room, |_, body| {
+            let Some(pass) = tool_pass(&body.env) else { return };
+            shown.borrow_mut().push((pass.editor_input.to_vec(), pass.pasted.as_deref().map(str::to_owned)));
+        });
+    });
+    fixture.room(ROOM);
+    fixture.settle();
+    fixture.click_at((ROOM / 2.0).to_pos2());
+    seen.borrow_mut().clear();
+    fixture.frame(vec![Event::Paste("from the platform".into())]);
+    fixture.frame(vec![]);
+    let passes = seen.take();
+    let pasted: Vec<&PassPaste> = passes.iter().filter(|(_, text)| text.is_some()).collect();
+    assert!(!pasted.is_empty(), "a pass carries the paste's text: {passes:?}");
+    for (inputs, text) in &pasted {
+        assert_eq!(text.as_deref(), Some("from the platform"));
+        assert!(inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))), "with the editor's paste: {inputs:?}");
+    }
+    assert!(passes.last().is_some_and(|(_, text)| text.is_none()), "a later pass carries none: {passes:?}");
+}
+
 /// Guards `EditorHandle::report` for an editor whose view describes its text (a page editor): its report has no lines,
 /// so its caret reaches the input method and no empty text is announced on the canvas's node.
 #[trial]
