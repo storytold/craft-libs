@@ -114,11 +114,13 @@ fn decrypt_document(stream: &[u8], session: &Session, key: &Key) -> Vec<u8> {
     let mut bounds: Vec<usize> = objects.iter().map(|o| o.0).chain(session.plain.iter().copied()).chain([session.at, stream.len()]).collect();
     bounds.sort_unstable();
     bounds.dedup();
+    let mut plain = session.plain.clone();
+    plain.sort_unstable();
     for &(at, id) in &objects {
-        if at == session.at || session.plain.contains(&at) || at >= stream.len() {
+        if at == session.at || plain.binary_search(&at).is_ok() || at >= stream.len() {
             continue;
         }
-        let next = bounds.iter().copied().find(|&b| b > at).unwrap_or(stream.len());
+        let next = bounds.get(bounds.partition_point(|&b| b <= at)).copied().unwrap_or(stream.len());
         let Some(object) = out.get_mut(at..next) else { continue };
         // The header says how long the object is; the keystream runs on into its body.
         let mut rc4 = key.cipher(id);
