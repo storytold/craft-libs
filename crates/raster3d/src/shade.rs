@@ -453,11 +453,10 @@ fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f32) -> f32 {
             }
         }
         2 if l.kind != 0 => {
-            if dist <= l.radius || (l.radius <= 0.0 && dist <= 1.0) {
-                1.0
-            } else {
-                (l.radius.max(1.0) / dist).powi(2)
-            }
+            // The plateau and the inverse square use the same radius, at least 1, so the
+            // factor never exceeds 1.
+            let r = l.radius.max(1.0);
+            if dist <= r { 1.0 } else { (r / dist).powi(2) }
         }
         _ => 1.0,
     };

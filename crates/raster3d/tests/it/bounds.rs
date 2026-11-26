@@ -1296,6 +1296,28 @@ fn a_point_light_whose_squared_distance_overflows_f32_still_lights() {
 }
 
 #[test]
+fn inverse_square_falloff_with_a_radius_below_one_never_brightens_the_light() {
+    // A clamped inverse-square point light 0.75 units from the pixel center (4.5, 4.5) of a quad.
+    // With a radius of 0.5 it lights the pixel as fully as a radius of 1 does, and past 1 unit
+    // both fall off the same.
+    let mut s = quad_scene(8, 8, &[([0.0, 0.0, 8.0, 8.0], 500.0, WHITE)]);
+    s.materials[0].unlit = false;
+    let mut point = spot([4.5, 4.5, 499.25], [0.0, 0.0, 1.0], 1.0, 1.0);
+    (point.kind, point.falloff, point.shadow) = (2, 2, -1);
+    s.lights = vec![point];
+    let px = 4 * 8 + 4;
+    for z in [499.25, 497.0] {
+        s.lights[0].pos[2] = z;
+        s.lights[0].radius = 1.0;
+        let (one, _) = try_render_cpu(&s, &Limits::default()).unwrap();
+        s.lights[0].radius = 0.5;
+        let (half, _) = try_render_cpu(&s, &Limits::default()).unwrap();
+        assert!(one.data[px][0] > 0.1, "{z}: {:?}", one.data[px]);
+        assert_eq!(bits4(&half.data), bits4(&one.data), "{z}");
+    }
+}
+
+#[test]
 fn coordinates_from_two_to_the_twenty_third_texels_keep_the_half_texel_shift() {
     let texels = [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
     // Repeated, 2^23 across two texels is a whole period, so it samples as at 0: halfway between

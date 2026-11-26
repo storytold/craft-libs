@@ -72,7 +72,8 @@ app.
   <https://de45xmedrsdbp.cloudfront.net/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf>).
   Roughness is shaded as at least 0.03. Light colors are the irradiance on a surface facing the
   light, so π is folded into the light intensity. Parallel, spot and point lights have no falloff,
-  a smooth falloff or a clamped inverse-square falloff. The environment light reads an irradiance
+  a smooth falloff or a clamped inverse-square falloff. The inverse-square falloff is 1 up to `r`, the
+  larger of the light's radius and 1 unit, and (`r` / distance)² past it. The environment light reads an irradiance
   map for diffuse light and a chain of radiance levels by roughness for specular light, with
   Karis's analytic environment BRDF for mobile
   (<https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile>). Materials take a
@@ -174,7 +175,8 @@ through the changes listed below, for example where triangles leave the guard ba
 far plane, where depth-range crossings lie within 1/4096 of an edge from its inside corner, where
 texture coordinates times the texture's width or height reach 2^23 in magnitude, where normals'
 squared lengths, squared distances from fragments to point and spot lights, or casters'
-light-space coordinates times a map's focal length overflow `f32`, where shadow-casting spot
+light-space coordinates times a map's focal length overflow `f32`, where a clipped corner's `1/w`
+overflows `f32`, where clamped inverse-square lights have a radius between 0 and 1, where shadow-casting spot
 lights' outer cones are over 1.40 radians wide, where resolve blocks hold more than 2^24
 subsamples, where shadows-only materials do not receive shadows, where fragments under discarded
 opaque pixels leave the depth range, where blended casters have no base texture, where
@@ -185,8 +187,9 @@ texture is sampled between large finite texels of opposite signs. Halfway betwee
 overflows `f32`.
 Changes from those files:
 
-- Scenes, resolve factors and pixels are checked, and sizes, triangles, lights and coverage work
-  are bounded, before anything is allocated. EffectCraft panicked on an index or a material
+- Scenes, resolve factors and pixels are checked, and sizes, triangles and lights are bounded,
+  before anything is allocated. Coverage work is bounded before the render target is allocated;
+  `try_render` holds the clipped positions and screen triangles while it counts it. EffectCraft panicked on an index or a material
   reference that did not exist, an alpha-masked caster whose texture did not exist, an environment
   level range that overflowed, a zero raster width and a resolve factor of 0. It returned a cropped
   image for a factor that did not divide the size, NaN or infinite pixels for values that were not
@@ -224,6 +227,9 @@ Changes from those files:
 - A negative color is encoded on the sRGB curve with its magnitude choosing the segment and its
   sign kept, as CSS Color 4's conversion code does. EffectCraft put every negative value on the
   linear segment, so red −0.25 encoded to −3.23 instead of about −0.537.
+- A clamped inverse-square light with a radius between 0 and 1 lights fully up to 1 unit.
+  EffectCraft lit fully up to the radius and then used (1 / distance)², so the light was up to
+  1 / radius² times brighter between the radius and 1 unit.
 - A normal whose squared length overflows `f32`, and the direction to a point or spot light whose
   squared distance overflows `f32`, are normalized in `f64`. EffectCraft divided them by an
   infinite length, so the surface took no direct light.
