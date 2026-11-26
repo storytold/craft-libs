@@ -2,7 +2,7 @@
 //! `.studio3` (header `silhouette05;`).
 //!
 //! It reads every object's outline (open and closed paths, lines and Bézier curves, compound
-//! paths, text as outlines), each outline's line colour and the page size. Coordinates are
+//! paths, text as outlines), each outline's line colour, the groups objects belong to and the page size. Coordinates are
 //! millimetres from the page's top-left corner, y down, as the file stores them. Fills, layers
 //! and cut settings are not read.
 //!
@@ -67,6 +67,8 @@ pub struct Shape {
     pub path: BezPath,
     /// The object's line colour (R, G, B), when its style record was found.
     pub line_color: Option<[u8; 3]>,
+    /// The innermost group holding the object: an index into [`Imported::group_parents`].
+    pub group: Option<usize>,
 }
 
 /// A document's shapes in file order, plus notes about what was skipped.
@@ -76,6 +78,8 @@ pub struct Imported {
     /// Page width and height in millimetres; `None` when the page record is not as expected.
     pub page_mm: Option<(f64, f64)>,
     pub shapes: Vec<Shape>,
+    /// One entry per group, outermost first: the group holding it, if any.
+    pub group_parents: Vec<Option<usize>>,
     pub warnings: Vec<String>,
 }
 
@@ -117,6 +121,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     let mut warnings = Vec::new();
     let root = block(body, MAGIC_LEN).ok_or_else(|| bad("root record is truncated"))?;
     let mut shapes = Vec::new();
+    let mut starts = Vec::new();
     let mut points_total = 0usize;
     let mut cursor = root.start;
     // An object's style record comes before its outline: search from the last outline.
@@ -139,13 +144,69 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
             warnings.push(format!("skipped a path at byte {at}: coordinates out of range"));
             continue;
         }
-        shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at) });
+        shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at), group: None });
+        starts.push(at);
         style_from = path.end;
     }
     if budget.get() == 0 {
         return Err(bad("too much data that only looks like outlines"));
     }
-    Ok(Imported { version, page_mm: page_size(body, &root), shapes, warnings })
+    let spans = group_spans(body, &root);
+    for (shape, &at) in shapes.iter_mut().zip(&starts) {
+        shape.group = enclosing(&spans, (at, at + 1), None);
+    }
+    let group_parents = spans.iter().enumerate().map(|(i, &span)| enclosing(&spans, span, Some(i))).collect();
+    Ok(Imported { version, page_mm: page_size(body, &root), shapes, group_parents, warnings })
+}
+
+/// The most groups read from one document.
+const MAX_GROUPS: usize = 100_000;
+/// How many bytes the group search may look back over in all.
+const GROUP_SEARCH_BUDGET: usize = 64 * 1024 * 1024;
+
+/// Group objects as byte spans, outermost first. A group's record (marker `0x01`, a u32 length
+/// counting itself) holds its members' records and ends shortly after its type name,
+/// length-prefixed "Group". Found by saving the same two rectangles ungrouped and grouped in
+/// Silhouette Studio 5.0.556 and comparing the bytes.
+fn group_spans(d: &[u8], root: &Block) -> Vec<(usize, usize)> {
+    const NAME: &[u8] = b"\x05\x00\x00\x00Group";
+    let window = d.get(root.start..root.end).unwrap_or_default();
+    let mut spans = Vec::new();
+    let mut budget = GROUP_SEARCH_BUDGET;
+    let mut offset = 0;
+    while let Some(rel) = window.get(offset..).and_then(|w| w.windows(NAME.len()).position(|w| w == NAME)) {
+        let name = root.start + offset + rel;
+        offset += rel + 1;
+        if spans.len() >= MAX_GROUPS || budget == 0 {
+            break;
+        }
+        // The nearest record start before the name whose record ends just after it.
+        let mut start = name;
+        while start > root.start && budget > 0 {
+            start -= 1;
+            budget -= 1;
+            if let Some(b) = block(d, start)
+                && b.end > name
+                && b.end <= name.saturating_add(512)
+                && b.end <= root.end
+            {
+                spans.push((start, b.end));
+                break;
+            }
+        }
+    }
+    spans.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    spans
+}
+
+/// The smallest span, other than `skip`, that holds `start..end` and is not that span itself.
+fn enclosing(spans: &[(usize, usize)], (start, end): (usize, usize), skip: Option<usize>) -> Option<usize> {
+    spans
+        .iter()
+        .enumerate()
+        .filter(|&(i, &(s, e))| Some(i) != skip && s <= start && end <= e && (s, e) != (start, end))
+        .min_by_key(|&(_, &(s, e))| e - s)
+        .map(|(i, _)| i)
 }
 
 /// `.studio3`: the header is a table of little-endian u64 section lengths; the
@@ -396,6 +457,29 @@ fn f32_at(d: &[u8], at: usize) -> Option<f32> {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_are_the_records_named_group_that_hold_outlines() {
+        // Root payload: a group record (a member outline, then its "Group" name) and an
+        // outline outside it.
+        let square: &[(f32, f32)] = &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)];
+        let mut inner = path_record(&[(true, square)]);
+        inner.extend_from_slice(&5u32.to_le_bytes());
+        inner.extend_from_slice(b"Group");
+        let group = block(&inner);
+        let mut root_payload = group.clone();
+        root_payload.extend(path_record(&[(true, square)]));
+        let mut d = b"silhouette04;".to_vec();
+        d.extend(block(&root_payload));
+        let root = super::block(&d, MAGIC_LEN).unwrap();
+        let spans = group_spans(&d, &root);
+        assert_eq!(spans.len(), 1);
+        let (s, e) = spans[0];
+        assert_eq!(e - s, group.len());
+        assert_eq!(enclosing(&spans, (s + 6, s + 7), None), Some(0));
+        assert_eq!(enclosing(&spans, (e + 1, e + 2), None), None);
+        assert_eq!(enclosing(&spans, (s, e), Some(0)), None, "a group is not its own parent");
+    }
 
     fn block(payload: &[u8]) -> Vec<u8> {
         let mut out = vec![1];
