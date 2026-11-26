@@ -390,3 +390,56 @@ mod icc_profile_cache {
         }
     }
 }
+
+/// PdfCraft #4800: a stencil mask (`/ImageMask true`, no `/Interpolate`) drawn inside a Type 3
+/// glyph and shrunk below its resolution keeps strokes thinner than the shrink factor, as a
+/// page-level stencil already does, instead of nearest-neighbour keeping one sample in N.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn shrunk_type3_glyph_stencil_keeps_thin_strokes() {
+    // One painted sample (a 0 bit) out of eight, drawn 2:1 into a 4-pixel-wide page.
+    let mask: [u8; 1] = [0b1101_1111];
+    let glyph = "0 0 0 0 4 1 d1 4 0 0 1 0 0 cm /Im0 Do";
+    let objects = format!(
+        "5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 4 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [4]\n\
+         /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+         6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true /BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj",
+        glyph.len(),
+        hex(&mask).len() + 1,
+        hex(&mask)
+    );
+    let page =
+        render(&one_page("/MediaBox [0 0 4 1] /Resources << /Font << /F1 5 0 R >> >>", b"BT 0 g /F1 1 Tf 0 0 Td (A) Tj ET", objects.as_bytes()));
+    assert_eq!((page.width, page.height), (4, 1));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    // The stroke covers half of device pixel 1, so it is a mid-tone; the far side stays white.
+    assert!((32..=223).contains(&grays[1]), "the stroke is lost or not smoothed: {grays:?}");
+    assert_eq!(grays[3], 255, "{grays:?}");
+}
+
+/// PdfCraft #4800: a glyph stencil wider than the interpolating filter's side cap keeps the
+/// bounded nearest-neighbour path rather than being skipped.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn type3_glyph_stencil_past_the_resampling_bound_still_draws() {
+    let samples: u32 = (1 << 20) + 8;
+    let bytes = (samples / 8) as usize;
+    let glyph = "0 0 0 0 4 1 d1 4 0 0 1 0 0 cm /Im0 Do";
+    let mut objects = format!(
+        "5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 4 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [4]\n\
+         /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+         6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width {samples} /Height 1 /ImageMask true /BitsPerComponent 1 /Length {bytes} >> stream\n",
+        glyph.len()
+    )
+    .into_bytes();
+    // The left half paints (0 bits), the right half does not.
+    objects.extend(std::iter::repeat_n(0u8, bytes / 2));
+    objects.extend(std::iter::repeat_n(0xFFu8, bytes - bytes / 2));
+    objects.extend_from_slice(b"\nendstream endobj");
+    let page = render(&one_page("/MediaBox [0 0 4 1] /Resources << /Font << /F1 5 0 R >> >>", b"BT 0 g /F1 1 Tf 0 0 Td (A) Tj ET", &objects));
+    assert_eq!((page.width, page.height), (4, 1));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert!(grays[0] < grays[3], "the painted half is darker than the unpainted half: {grays:?}");
+}
