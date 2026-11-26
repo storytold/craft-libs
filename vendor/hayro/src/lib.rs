@@ -33,7 +33,7 @@ This crate has one optional feature:
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use crate::renderer::Renderer;
+use crate::renderer::{Edges, Renderer};
 use hayro_interpret::Device;
 use hayro_interpret::FillRule;
 use hayro_interpret::InterpreterCache;
@@ -167,6 +167,15 @@ pub struct RenderSettings {
     /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
     /// as a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
+    /// Craft patch (hard edges): fills, strokes, glyph outlines and clips are drawn with hard
+    /// edges, each pixel covered or not, instead of anti-aliased, so shapes that share an edge
+    /// leave no seam. Images and soft masks are drawn as before. `false` renders as without the
+    /// patch.
+    pub hard_edges: bool,
+    /// Craft patch (hard edges): device pixels per output pixel, for a caller that reduces the
+    /// render (draws at `k`× and box-averages); the thinnest-stroke floor is one output pixel.
+    /// A value that is not finite or below 1 counts as 1, the unpatched floor.
+    pub output_pixel: f32,
 }
 
 impl Default for RenderSettings {
@@ -181,6 +190,8 @@ impl Default for RenderSettings {
             y_offset: 0.0,
             color_replacement: None,
             max_coverage: None,
+            hard_edges: false,
+            output_pixel: 1.0,
         }
     }
 }
@@ -263,6 +274,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        Edges::new(render_settings.hard_edges, render_settings.output_pixel),
     );
 
     if let Some(max) = render_settings.max_coverage {

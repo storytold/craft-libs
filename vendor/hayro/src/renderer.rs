@@ -873,6 +873,48 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// Craft patch (hard edges): how vector edges are drawn (see [`Edges`]).
+    edges: Edges,
+}
+
+/// Craft patch (hard edges): how this renderer draws the edges of fills, strokes, glyph outlines
+/// and clips. Anti-aliased edges are composited one shape at a time, so two shapes that meet
+/// partway across a pixel each cover part of it and the backdrop shows through the join (a grey
+/// seam between two black boxes). Hard edges tile exactly; a caller that renders at `k`× and
+/// box-averages the result gets smooth edges with no seam.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Edges {
+    /// vello_cpu's aliasing threshold: a pixel whose coverage reaches it is covered, any other
+    /// is not. `None` anti-aliases.
+    threshold: Option<u8>,
+    /// Device pixels per output pixel, so the thinnest-stroke floor stays one output pixel when
+    /// the caller reduces the render.
+    output_pixel: f32,
+}
+
+impl Edges {
+    /// As without the patch.
+    pub(crate) const ANTIALIASED: Self = Self {
+        threshold: None,
+        output_pixel: 1.0,
+    };
+
+    /// Coverage of at least half a pixel covers it: two shapes that share an edge cover every
+    /// pixel along it at least once between them, and neither grows by more than half a pixel.
+    const HARD_THRESHOLD: u8 = 128;
+
+    /// The edges `hard` asks for, with `output_pixel` device pixels per output pixel (a value
+    /// that is not finite or below one counts as one).
+    pub(crate) fn new(hard: bool, output_pixel: f32) -> Self {
+        Self {
+            threshold: hard.then_some(Self::HARD_THRESHOLD),
+            output_pixel: if output_pixel.is_finite() && output_pixel > 1.0 {
+                output_pixel
+            } else {
+                1.0
+            },
+        }
+    }
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -996,9 +1038,12 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        edges: Edges,
     ) -> Self {
+        let mut ctx = RenderContext::new_with(width, height, settings);
+        ctx.set_aliasing_threshold(edges.threshold);
         Self {
-            ctx: RenderContext::new_with(width, height, settings),
+            ctx,
             color_replacement,
             in_annotations: false,
             knockout: Vec::new(),
@@ -1015,6 +1060,7 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            edges,
         }
     }
 
@@ -1025,7 +1071,9 @@ impl Renderer {
         is_text: bool,
         path: &BezPath,
     ) -> f64 {
-        let threshold = if is_text { 0.25 } else { 1.0 };
+        // Craft patch (hard edges): the floor is in output pixels, so a render the caller reduces
+        // keeps its hairlines one output pixel wide.
+        let threshold = (if is_text { 0.25 } else { 1.0 }) * self.edges.output_pixel;
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
         // specification. If we are stroking text, we reduce the threshold as it will otherwise
@@ -1122,6 +1170,9 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                // Craft patch (hard edges): an image's alpha mask is drawn as an image, which keeps
+                // anti-aliased edges (and draws no strokes).
+                edges: Edges::ANTIALIASED,
             };
             let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1662,7 +1713,9 @@ impl Renderer {
             preview: self.preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            edges: self.edges,
         };
+        renderer.ctx.set_aliasing_threshold(self.edges.threshold);
         t.interpret(&mut renderer, initial_transform, is_stroke);
         let mut pix = offscreen_pixmap(size.0, size.1, true);
         renderer.ctx.flush();
@@ -1731,11 +1784,13 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            edges: self.edges,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
             knockout_passes: Vec::new(),
         };
+        renderer.ctx.set_aliasing_threshold(self.edges.threshold);
         // The pass draws inside a layer of its own. On the bare canvas, vello_cpu fills a tile
         // that a paint covers completely without the blend mode, so the middle of a group wider
         // than about two tiles lost its blend (#3777).
@@ -2453,7 +2508,8 @@ impl<'a> Device<'a> for Renderer {
             }
         }
 
-        self.ctx.set_aliasing_threshold(None);
+        // Craft patch (hard edges): back to this renderer's edges.
+        self.ctx.set_aliasing_threshold(self.edges.threshold);
     }
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
@@ -2899,6 +2955,10 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        // Craft patch (hard edges): a soft mask keeps anti-aliased edges and a stroke floor of one
+        // device pixel, which in a supersampled render is one fine pixel: a stroke inside the mask
+        // comes out lighter than the same stroke on the page.
+        edges: Edges::ANTIALIASED,
     }
 }
 

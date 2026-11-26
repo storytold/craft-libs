@@ -36,11 +36,20 @@ pub struct Options {
     /// omitted while preserving what already fitted, and `Diagnostics::content_truncated` is set
     /// alongside `InterpreterWarning::ContentTruncated`. `None` keeps up to `2^31` values.
     pub max_coverage: Option<usize>,
+    /// Draw fills, strokes, glyph outlines and clips with hard edges, each pixel covered or not,
+    /// instead of anti-aliased. Anti-aliased shapes that meet partway across a pixel each cover
+    /// part of it, so the background shows through the join; hard-edged ones tile exactly.
+    /// Images and soft masks are drawn as before. [`render_supersampled_into`] sets it.
+    ///
+    /// Edges are rounded to whole pixels, so thin shapes change width: a hairline centred on a
+    /// pixel boundary covers half of two pixels and is drawn two pixels wide, and a fill narrower
+    /// than half a pixel can vanish. [`render_supersampled_into`] keeps them at their width.
+    pub hard_edges: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { scale: [1.0, 1.0], size: None, offset: [0.0, 0.0], background: [0; 4], color_replacement: None, max_coverage: None }
+        Self { scale: [1.0, 1.0], size: None, offset: [0.0, 0.0], background: [0; 4], color_replacement: None, max_coverage: None, hard_edges: false }
     }
 }
 
@@ -122,6 +131,19 @@ pub fn render_into<'a>(
     options: &Options,
     buffer: &mut [u8],
 ) -> Result<Diagnostics, Error> {
+    render_scaled_into(page, cache, settings, options, 1, buffer)
+}
+
+/// [`render_into`] for a raster `output_pixel` times the size of the one the caller keeps, so the
+/// thinnest-stroke floor is one kept pixel.
+fn render_scaled_into<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    settings: &InterpreterSettings,
+    options: &Options,
+    output_pixel: u32,
+    buffer: &mut [u8],
+) -> Result<Diagnostics, Error> {
     let [width, height] = dimensions(page, options)?;
     let expected = u64::from(width) * u64::from(height) * 4;
     if u64::try_from(buffer.len()).ok() != Some(expected) {
@@ -149,6 +171,8 @@ pub fn render_into<'a>(
     let rs = hayro::RenderSettings {
         color_replacement: options.color_replacement,
         max_coverage: options.max_coverage,
+        hard_edges: options.hard_edges,
+        output_pixel: output_pixel as f32,
         x_scale: options.scale[0],
         y_scale: options.scale[1],
         width: Some(width as u16),
@@ -168,6 +192,84 @@ pub fn render_into<'a>(
     }
     let bits = warnings.load(Ordering::Relaxed);
     Ok(Diagnostics { image_decode_failed: bits & 1 != 0, unsupported_font: bits & 2 != 0, content_truncated: bits & 4 != 0 })
+}
+
+/// Largest supersampling factor [`render_supersampled_into`] accepts.
+pub const MAX_SUPERSAMPLE: u32 = 8;
+
+/// [`render_into`] with smooth edges and no seams where shapes meet: the page is drawn with
+/// [`Options::hard_edges`] at `factor`× the resolution, and each output pixel is the mean of
+/// its `factor × factor` block. The mean of premultiplied samples is the coverage-weighted mix,
+/// so an edge is as smooth as `factor` allows while shapes that share an edge still tile.
+///
+/// `factor` is 1 to [`MAX_SUPERSAMPLE`]; 1 renders hard-edged at the output size. The fine raster
+/// must itself fit [`MAX_SIDE`] and [`MAX_PIXELS`], or the render fails with
+/// [`Error::OutputLimit`]: render a large page in tiles (`size` and `offset`). It is allocated
+/// for the call, `factor²` times the output, and failing that is [`Error::Allocation`].
+/// `max_coverage` counts the fine raster's coverage values. The thinnest stroke stays one output
+/// pixel wide. Fails as [`render_into`] does otherwise, with [`Error::InvalidOptions`] for a
+/// `factor` out of range.
+pub fn render_supersampled_into<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    settings: &InterpreterSettings,
+    options: &Options,
+    factor: u32,
+    buffer: &mut [u8],
+) -> Result<Diagnostics, Error> {
+    if !(1..=MAX_SUPERSAMPLE).contains(&factor) {
+        return Err(Error::InvalidOptions);
+    }
+    let [width, height] = dimensions(page, options)?;
+    if u64::try_from(buffer.len()).ok() != Some(u64::from(width) * u64::from(height) * 4) {
+        return Err(Error::BufferLength);
+    }
+    let hard = Options { hard_edges: true, ..*options };
+    if factor == 1 {
+        return render_into(page, cache, settings, &hard, buffer);
+    }
+    let k = factor as f32;
+    let (Some(fine_width), Some(fine_height)) = (width.checked_mul(factor), height.checked_mul(factor)) else {
+        return Err(Error::OutputLimit);
+    };
+    let fine = Options { scale: options.scale.map(|s| s * k), size: Some([fine_width, fine_height]), offset: options.offset.map(|o| o * k), ..hard };
+    dimensions(page, &fine)?;
+    let len = usize::try_from(u64::from(fine_width) * u64::from(fine_height) * 4).map_err(|_| Error::OutputLimit)?;
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(len).map_err(|_| Error::Allocation)?;
+    samples.resize(len, 0u8);
+    let diagnostics = render_scaled_into(page, cache, settings, &fine, factor, &mut samples)?;
+    box_average(&samples, factor as usize, width as usize, buffer);
+    Ok(diagnostics)
+}
+
+/// Each `k × k` block of `fine`, an RGBA8 raster `k` times as large as `out` on both axes whose
+/// rows are `width × k` pixels, averaged into its pixel of `out`.
+fn box_average(fine: &[u8], k: usize, width: usize, out: &mut [u8]) {
+    let fine_row = width.saturating_mul(k).saturating_mul(4);
+    let block_row = k.saturating_mul(4);
+    let area = k.saturating_mul(k).max(1);
+    // At most `MAX_SIDE` entries: `width` is an output width.
+    let mut sums = vec![[0usize; 4]; width];
+    for (oy, row) in out.chunks_exact_mut(width.saturating_mul(4).max(1)).enumerate() {
+        sums.fill([0; 4]);
+        let rows = fine.chunks_exact(fine_row.max(1)).skip(oy.saturating_mul(k)).take(k);
+        for fine_line in rows {
+            for (sum, block) in sums.iter_mut().zip(fine_line.chunks_exact(block_row.max(1))) {
+                for sample in block.as_chunks::<4>().0 {
+                    for (acc, v) in sum.iter_mut().zip(sample) {
+                        *acc = acc.saturating_add(usize::from(*v));
+                    }
+                }
+            }
+        }
+        for (px, sum) in row.as_chunks_mut::<4>().0.iter_mut().zip(&sums) {
+            for (dst, acc) in px.iter_mut().zip(*sum) {
+                // A mean of bytes, rounded, is at most 255.
+                *dst = u8::try_from(acc.saturating_add(area / 2) / area).unwrap_or(u8::MAX);
+            }
+        }
+    }
 }
 
 /// Pixel-word aligned premultiplied RGBA8 output; no GUI or image encoding dependency.

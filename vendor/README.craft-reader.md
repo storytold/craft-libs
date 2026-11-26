@@ -88,6 +88,16 @@ colorants paint through their alternate space (`Plate::spots_as_process`) and no
 overprints. Masks in other color spaces are unchanged. A test in
 `crates/pdf/tests/plates.rs` checks process, spot, RGB and backdrop colors.
 
+A craft-libs patch, labeled `Craft patch (hard edges)` in code comments, adds
+`RenderSettings::hard_edges` and `RenderSettings::output_pixel` to hayro. With `hard_edges`, the
+page's renderer, its tiling cells and its ink passes draw fills, strokes, glyph outlines and clips
+through vello_cpu's aliasing threshold (a pixel at least half covered is covered), so shapes that
+share an edge leave no anti-aliasing seam; images and soft masks are drawn as before, and the
+image path restores the renderer's threshold instead of clearing it. `output_pixel` scales the
+thinnest-stroke floor for a caller that reduces the render. Both default to the unpatched
+behaviour. `craft_pdf::raster::render_supersampled_into` uses them; its tests are in
+`crates/pdf/tests/hard_edges.rs`.
+
 The output-intent conversion of patch 36 goes through a `color::CmykConversion` trait, so
 that callers can convert with their own color management. `CmykSimulation::new` keeps
 #2770's moxcms conversion as the default, and `CmykSimulation::with_conversion` takes a
