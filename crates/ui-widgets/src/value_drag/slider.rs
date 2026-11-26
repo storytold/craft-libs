@@ -325,10 +325,9 @@ impl Component for Slider<'_> {
         let pick = along.pick(false);
         let marks = &self.marks;
         let at = |position: f64| {
-            if let Some(next) = self
-                .pointer_model_step
-                .and_then(|step| model_grid_landing(marks.snapped(&scale, length, position).unwrap_or_else(|| scale.at_position(position)), step, bounds))
-            {
+            if let Some(next) = self.pointer_model_step.and_then(|step| {
+                model_grid_landing(marks.snapped(&scale, length, position).unwrap_or_else(|| scale.at_position(position)), step, bounds)
+            }) {
                 return next;
             }
             marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)))
