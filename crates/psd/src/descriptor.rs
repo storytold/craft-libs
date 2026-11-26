@@ -7,6 +7,7 @@
 use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt, read_unicode_units, write_unicode_units};
 
+pub mod borrowed;
 mod lookup;
 
 /// Maximum nesting depth accepted when parsing (fuzz safety).
@@ -322,7 +323,7 @@ impl Descriptor {
 
     /// Parses a descriptor at the start of `data`, returning it and the number of bytes consumed
     /// (trailing data is allowed). Mid-stream reads of layer effects, fill and adjustment
-    /// descriptors use this; [`from_bytes`] still requires the slice to be fully consumed.
+    /// descriptors use this; [`Self::from_bytes`] still requires the slice to be fully consumed.
     pub fn parse_prefix(data: &[u8]) -> Result<(Self, usize)> {
         let mut r = Reader::new(data);
         let d = Self::read(&mut r)?;

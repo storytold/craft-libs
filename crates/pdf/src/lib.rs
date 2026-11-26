@@ -13,6 +13,7 @@ pub mod filters;
 #[cfg(feature = "interpret")]
 pub use hayro_interpret as interpret;
 mod link;
+pub mod settings;
 #[cfg(feature = "read")]
 pub use hayro_syntax as syntax;
 pub use link::safe_url;
@@ -35,3 +36,13 @@ pub mod write_raster;
 
 /// Low-level, direct-to-output framing of new classic-xref PDF files.
 pub mod classic;
+/// PDF single-byte encodings (ISO 32000-2 Annex D), WinAnsi/Unicode CMap helpers, and Standard-14 metrics.
+#[cfg(feature = "fonts")]
+pub mod fonts;
+
+#[cfg(test)]
+extern crate self as craft_pdf;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

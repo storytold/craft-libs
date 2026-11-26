@@ -1,0 +1,216 @@
+{
+  "schema": "craft-design-sizes",
+  "schema_version": 1,
+  "id": "compact",
+  "name": "Compact",
+  "base": {
+    "edge": "flat",
+    "radius": {
+      "button": "full",
+      "control": 3.0,
+      "panel": 0.0,
+      "pill": "full",
+      "surface": 4.0,
+      "window": 6.0
+    },
+    "size": {
+      "bar": {
+        "column": 20.0,
+        "options": 36.0,
+        "options_narrow": 28.0,
+        "status": 24.0,
+        "tab": 26.0,
+        "tab_large": 32.0,
+        "title": 32.0
+      },
+      "button": 24.0,
+      "checker": 4.0,
+      "control": {
+        "md": 24.0,
+        "sm": 20.0
+      },
+      "dialog": {
+        "button": 84.0,
+        "button_height": 24.0,
+        "least": 380.0,
+        "side_button": 96.0,
+        "wrap": 440.0
+      },
+      "dock": {
+        "column": 340.0
+      },
+      "float": {
+        "height": 240.0,
+        "width": 192.0
+      },
+      "groove": 3.0,
+      "handle": {
+        "md": 8.0,
+        "ring": 18.0,
+        "sm": 6.0
+      },
+      "hit": {
+        "edge": 32.0,
+        "slop": 3.0,
+        "target": 8.0
+      },
+      "icon": {
+        "glyph_md": 12.0,
+        "glyph_sm": 10.0,
+        "lg": 20.0,
+        "md": 16.0,
+        "sm": 12.0
+      },
+      "length": {
+        "field": {
+          "md": 192.0,
+          "sm": 160.0
+        },
+        "number": {
+          "md": 72.0,
+          "sm": 60.0
+        },
+        "short": 96.0,
+        "track": 128.0
+      },
+      "page": {
+        "action": 24.0,
+        "button": 24.0,
+        "button_side": 0.0,
+        "column": 820.0,
+        "gap": {
+          "actions": 6.0,
+          "heading": 6.0,
+          "lead": 12.0,
+          "link": 6.0,
+          "section": 12.0,
+          "title": 2.0
+        },
+        "link": 0.0,
+        "margin": 40.0
+      },
+      "pane": {
+        "least": 40.0
+      },
+      "panel_header": 28.0,
+      "plot": {
+        "height": 144.0,
+        "width": 240.0
+      },
+      "pointer_tip": {
+        "x": 20.0,
+        "y": 22.0
+      },
+      "popup_min": 192.0,
+      "rail": {
+        "button": 30.0,
+        "width": 40.0
+      },
+      "ramp": {
+        "bar": 10.0,
+        "groove": 5.0
+      },
+      "row": {
+        "menu": 24.0,
+        "text": 18.0
+      },
+      "thumb": {
+        "card": 128.0,
+        "lg": 48.0,
+        "md": 24.0,
+        "sample": {
+          "lg": 96.0,
+          "md": 48.0,
+          "sm": 36.0
+        },
+        "sm": 18.0
+      },
+      "window": {
+        "cascade": 32.0
+      }
+    },
+    "space": {
+      "gap": {
+        "card_column": 12.0,
+        "card_row": 18.0,
+        "inline": 4.0,
+        "item": 8.0,
+        "row": 4.0,
+        "section": 12.0,
+        "stack": 6.0,
+        "tight": 2.0
+      },
+      "inset": {
+        "page_gap": 12.0,
+        "page_margin": 24.0,
+        "page_side": 56.0,
+        "screen": 16.0
+      },
+      "pad": {
+        "chip": 4.0,
+        "control": 6.0,
+        "dialog": 8.0,
+        "regular": 8.0,
+        "roomy": 16.0,
+        "segment": 10.0
+      }
+    },
+    "stroke": {
+      "dash": 4.0,
+      "dash_gap": 3.0,
+      "focus": 2.0,
+      "heavy": 3.0,
+      "icon": 0.0729,
+      "medium": 1.5,
+      "thick": 2.0,
+      "thin": 1.0
+    },
+    "typography": {
+      "body": {
+        "font": "ui",
+        "line_height": 16.0,
+        "size": 12.0
+      },
+      "body_large": {
+        "font": "ui",
+        "line_height": 20.0,
+        "size": 15.0
+      },
+      "body_strong": {
+        "font": "ui_semibold",
+        "line_height": 16.0,
+        "size": 12.0
+      },
+      "caption": {
+        "font": "ui",
+        "line_height": 14.0,
+        "size": 10.5
+      },
+      "display": {
+        "font": "ui_semibold",
+        "line_height": 46.0,
+        "size": 38.0
+      },
+      "heading": {
+        "font": "ui_semibold",
+        "line_height": 20.0,
+        "size": 15.0
+      },
+      "label": {
+        "font": "ui",
+        "line_height": 16.0,
+        "size": 11.5
+      },
+      "mono": {
+        "font": "mono",
+        "line_height": 16.0,
+        "size": 11.5
+      },
+      "title": {
+        "font": "ui_semibold",
+        "line_height": 18.0,
+        "size": 13.0
+      }
+    }
+  }
+}

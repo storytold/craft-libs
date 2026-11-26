@@ -1,0 +1,26 @@
+config_version = 1
+
+[[module]]
+path = "runtime"
+layer = 2
+
+[[module]]
+path = "contract"
+layer = 4
+
+[[module]]
+path = "buttons"
+layer = 5
+
+[[module]]
+path = "prelude"
+layer = 7
+
+[[module]]
+path = "shell"
+layer = 7
+
+[[module]]
+path = "internal_sense"
+layer = 3
+internal = [2, 4]
