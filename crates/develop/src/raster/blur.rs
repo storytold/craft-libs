@@ -33,7 +33,15 @@ pub fn box_sigma(sigma: f32) -> f32 {
     if sigma.is_nan() || sigma <= 0.3 {
         return 0.0;
     }
-    box_radii(sigma).iter().map(|&r| (((2 * r + 1) * (2 * r + 1) - 1) as f32) / 12.0).sum::<f32>().sqrt()
+    box_radii(sigma)
+        .iter()
+        .map(|&r| {
+            // Square the bounded width independently of the target's pointer size.
+            let width = 2 * r as u64 + 1;
+            ((width * width - 1) as f32) / 12.0
+        })
+        .sum::<f32>()
+        .sqrt()
 }
 
 /// One horizontal box pass over `row` (clamped edges), using `tmp` as scratch.
@@ -281,6 +289,14 @@ mod tests {
             let var: f32 = b.data.iter().enumerate().map(|(i, v)| v * ((i as f32 - 100.0).powi(2))).sum();
             assert!((var.sqrt() - box_sigma(sigma)).abs() < 1e-3, "{sigma}: {} vs {}", var.sqrt(), box_sigma(sigma));
         }
+    }
+
+    #[test]
+    fn box_sigma_stays_close_to_the_supported_maximum() {
+        // No image allocation is needed to exercise the largest supported box.
+        let actual = box_sigma(MAX_SIGMA);
+        assert!((actual - MAX_SIGMA).abs() <= 1.0, "{actual}");
+        assert_eq!(box_sigma(f32::INFINITY), actual);
     }
 
     #[test]

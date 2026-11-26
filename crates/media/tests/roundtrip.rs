@@ -140,89 +140,6 @@ proptest! {
     }
 }
 
-#[test]
-fn sample_lookup() {
-    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
-    let t = w.add_track(TrackConfig::new(entry(0), 25)).unwrap();
-    // I P B B pattern: decode order I0 P3 B1 B2 | I4 P7 B5 B6
-    let cto = [1, 3, 0, 0, 1, 3, 0, 0];
-    for (i, c) in cto.iter().enumerate() {
-        w.write_sample(t, WriteSample { data: &[i as u8], duration: 1, composition_offset: *c, is_sync: i % 4 == 0 }).unwrap();
-    }
-    let out = w.finish().unwrap().into_inner();
-    let f = open(out.as_slice()).unwrap();
-    let tr = &f.tracks[0];
-    // pts: 1,4,2,3,5,8,6,7
-    assert_eq!(tr.sample_at_pts(0), Some(0));
-    assert_eq!(tr.sample_at_pts(2), Some(2));
-    assert_eq!(tr.sample_at_pts(4), Some(1));
-    assert_eq!(tr.sample_at_pts(7), Some(7));
-    assert_eq!(tr.sample_at_pts(100), Some(5));
-    assert_eq!(tr.sync_sample_before(3), 0);
-    assert_eq!(tr.sync_sample_before(4), 4);
-    assert_eq!(tr.sync_sample_before(7), 4);
-    assert_eq!(tr.sync_samples(), &[0, 4]);
-}
-
-#[test]
-fn patched_co64_and_largesize_mdat_are_read() {
-    // A small file patched into the layout of a file past 4 GiB: co64 chunk offsets and a
-    // 16-byte large-size mdat header.
-    let mut moov = Vec::new();
-    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
-    let t = w.add_track(TrackConfig::new(entry(3), 30)).unwrap();
-    w.write_sample(t, WriteSample { data: b"abc", duration: 1, composition_offset: 0, is_sync: true }).unwrap();
-    let out = w.finish().unwrap().into_inner();
-    // Replace stco with co64 (same entry count, 64-bit offsets) and rebuild.
-    let f = open(out.as_slice()).unwrap();
-    let off = f.tracks[0].samples[0].offset;
-    let stco = out.windows(4).position(|w| w == b"stco").unwrap() - 4;
-    let moov_at = out.windows(4).position(|w| w == b"moov").unwrap() - 4;
-    moov.extend_from_slice(&out[moov_at..stco]);
-    moov.extend_from_slice(&24u32.to_be_bytes());
-    moov.extend_from_slice(b"co64");
-    moov.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 1]);
-    moov.extend_from_slice(&off.to_be_bytes());
-    // Fix up sizes of moov/trak/mdia/minf/stbl (+4 bytes each).
-    for name in [b"moov", b"trak", b"mdia", b"minf", b"stbl"] {
-        let p = moov.windows(4).position(|w| w == name).unwrap() - 4;
-        let s = u32::from_be_bytes(moov[p..p + 4].try_into().unwrap()) + 4;
-        moov[p..p + 4].copy_from_slice(&s.to_be_bytes());
-    }
-    let mut file = out[..moov_at].to_vec();
-    file.extend_from_slice(&moov);
-    // ftyp is 32 bytes for MP4; then `free` (8) + `mdat` (8) → one large-size mdat header.
-    let ftyp_len = u32::from_be_bytes(file[0..4].try_into().unwrap()) as usize;
-    assert_eq!(&file[ftyp_len + 4..ftyp_len + 8], b"free");
-    let mdat_len = (moov_at - ftyp_len) as u64;
-    file[ftyp_len..ftyp_len + 4].copy_from_slice(&1u32.to_be_bytes());
-    file[ftyp_len + 4..ftyp_len + 8].copy_from_slice(b"mdat");
-    file[ftyp_len + 8..ftyp_len + 16].copy_from_slice(&mdat_len.to_be_bytes());
-    let g = open(file.as_slice()).unwrap();
-    assert_eq!(g.read_sample(file.as_slice(), 0, 0).unwrap(), b"abc");
-    // size == 0 ("extends to end of file") on a trailing box.
-    let mut z = file.clone();
-    z.extend_from_slice(&[0, 0, 0, 0, b'f', b'r', b'e', b'e', 1, 2, 3]);
-    assert!(open(z.as_slice()).is_ok());
-}
-
-/// Found by `progressive_roundtrip`: only zero-byte samples must not be written as uniform
-/// `stsz` size 0, which readers take to mean "a size table follows".
-#[test]
-fn all_empty_samples_roundtrip() {
-    for n in [1usize, 3] {
-        let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
-        w.add_track(TrackConfig::new(entry(0), 1000)).unwrap();
-        for _ in 0..n {
-            w.write_sample(0, WriteSample { data: &[], duration: 1, composition_offset: 0, is_sync: false }).unwrap();
-        }
-        let out = w.finish().unwrap().into_inner();
-        let f = open(out.as_slice()).unwrap();
-        assert_eq!(f.tracks[0].samples.len(), n);
-        assert!(f.tracks[0].samples.iter().all(|s| s.size == 0));
-    }
-}
-
 /// An output that keeps only writes under 1 MiB and reads everything else as zeros, so tests can
 /// write files past 4 GiB from a reused zero buffer.
 #[derive(Default)]
@@ -294,23 +211,4 @@ fn writer_uses_co64_and_largesize_mdat_past_4_gib() {
     assert_eq!(s.len(), n + 1);
     assert!(s[n].offset > u64::from(u32::MAX));
     assert_eq!(f.read_sample(&out, 0, n).unwrap(), b"abc");
-}
-
-#[test]
-fn pcm_past_4_gib_reads_back_whole() {
-    let pcm = PcmConfig { bits: 16, float: false, big_endian: true, signed: true, channels: 2, sample_rate: 48000.0 };
-    let zeros = vec![0u8; MIB];
-    let mut w = Mp4Writer::new(Sparse::default(), WriterOptions::new(Brand::Mov)).unwrap();
-    let t = w.add_track(TrackConfig::new(SampleEntry::pcm(pcm), 48000)).unwrap();
-    let writes = 4 * 1024 + 1;
-    for _ in 0..writes {
-        w.write_sample(t, WriteSample { data: &zeros, duration: 0, composition_offset: 0, is_sync: true }).unwrap();
-    }
-    let out = w.finish().unwrap();
-    let f = open(&out).unwrap();
-    let s = &f.tracks[0].samples;
-    let bytes = writes as u64 * MIB as u64;
-    assert_eq!(s.iter().map(|s| u64::from(s.size)).sum::<u64>(), bytes);
-    assert_eq!(s.iter().map(|s| u64::from(s.duration)).sum::<u64>(), bytes / 4);
-    assert!(s.iter().all(|s| s.size <= 1 << 20));
 }

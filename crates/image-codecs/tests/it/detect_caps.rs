@@ -109,6 +109,34 @@ fn detect_heif_brands() {
 }
 
 #[test]
+fn ftyp_brands_respect_prefix_and_declared_bounds() {
+    let mut prefix = *b"\0\0\0\x1cftypisomavifavismif1xx";
+    for end in 0..12 {
+        assert!(ftyp_brands(&prefix[..end]).next().is_none(), "prefix length {end}");
+    }
+    assert!(ftyp_brands(b"\0\0\0\x0cmdatheic").next().is_none());
+    assert!(ftyp_brands(&prefix).eq([b"isom", b"avis", b"mif1"]));
+    assert!(ftyp_brands(&prefix[..18]).eq([b"isom"]));
+
+    prefix[..4].copy_from_slice(&20u32.to_be_bytes());
+    assert!(ftyp_brands(&prefix).eq([b"isom", b"avis"]));
+    prefix[..4].copy_from_slice(&8u32.to_be_bytes());
+    assert!(ftyp_brands(&prefix).eq([b"isom"]));
+}
+
+#[test]
+fn detect_ftyp_keeps_its_short_brand_scan() {
+    let mut prefix = [0; 68];
+    prefix[..12].copy_from_slice(b"\0\0\0\x44ftypheic");
+    prefix[64..68].copy_from_slice(b"avif");
+    assert!(ftyp_brands(&prefix).any(|brand| brand == b"avif"));
+    assert_eq!(detect(&prefix), Some(Format::Heif));
+
+    prefix[60..64].copy_from_slice(b"avif");
+    assert_eq!(detect(&prefix), Some(Format::Avif));
+}
+
+#[test]
 fn caps_are_internally_consistent() {
     for f in Format::ALL {
         let c = caps(f);
@@ -333,6 +361,7 @@ fn a_cut_off_jpeg_asks_for_more_bytes() {
     assert_eq!(detect_prefix(&bytes[..5]), Detection::NeedBytes(6));
     assert_eq!(detect_prefix(&bytes[..3]), Detection::NeedBytes(4));
     assert_eq!(detect_prefix(&[0xFF, 0xD8]), Detection::NeedBytes(4));
+    assert_eq!(detect(&[0xFF, 0xD8]), None);
     assert_eq!(detect(&bytes[..50]), Some(Format::Jpeg));
     assert!(decode_as(Format::JpegLs, &bytes[..50]).is_err());
     // A byte that is not a marker where one should be ends the walk: no frame header follows.
@@ -366,7 +395,12 @@ fn a_restart_interval_before_the_frame_header_is_jpeg_ls() {
         bytes.extend(std::iter::repeat_n(0, size));
         bytes.extend_from_slice(&plain[2..]);
         assert_eq!(detect(&bytes), Some(Format::JpegLs));
-        assert_eq!(decode(&bytes).is_ok(), ok, "{size} interval bytes");
+        let decoded = decode(&bytes);
+        if ok {
+            assert_eq!(decoded.unwrap().data(), img.data(), "{size} interval bytes");
+        } else {
+            assert!(matches!(decoded, Err(CodecError::Malformed { .. })), "{size} interval bytes: {decoded:?}");
+        }
     }
 }
 
@@ -397,6 +431,28 @@ fn the_restart_interval_in_effect_at_the_scan_decides_decoding() {
 }
 
 #[test]
+fn each_component_scan_uses_the_restart_interval_in_effect_at_it() {
+    // The 5x3 RGB file codes each component in its own scan.
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
+    let plain = encode(&img, Format::JpegLs, &EncodeOptions::default()).unwrap();
+    let scans: Vec<usize> = plain.windows(2).enumerate().filter(|(_, w)| *w == [0xFF, 0xDA]).map(|(i, _)| i).collect();
+    assert_eq!(scans.len(), 3);
+    // A DRI segment with `first` before the first scan and one with `second` before the second.
+    let with_dri = |first: u16, second: u16| {
+        let mut bytes = plain[..scans[0]].to_vec();
+        for (interval, part) in [(first, &plain[scans[0]..scans[1]]), (second, &plain[scans[1]..])] {
+            bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
+            bytes.extend_from_slice(&interval.to_be_bytes());
+            bytes.extend_from_slice(part);
+        }
+        bytes
+    };
+    assert_eq!(decode(&with_dri(3, 3)).unwrap().data(), img.data());
+    assert_eq!(decode(&with_dri(3, 0)).unwrap().data(), img.data());
+    assert!(matches!(decode(&with_dri(3, 2)), Err(CodecError::Unsupported { .. })));
+}
+
+#[test]
 fn a_restart_marker_after_a_scan_of_one_interval_is_an_error() {
     // With an interval of 3 lines the 5x3 scan is one interval, which no restart marker follows.
     let (img, plain) = jpeg_ls_file();
@@ -412,6 +468,27 @@ fn a_restart_marker_after_a_scan_of_one_interval_is_an_error() {
     // Fill bytes before the restart marker do not hide it.
     bytes.splice(eoi..eoi, [0xFF, 0xFF, 0xFF, 0xD3]);
     assert!(decode(&bytes).is_err());
+}
+
+#[test]
+fn a_restart_marker_after_a_comment_is_an_error_while_an_interval_is_set() {
+    let (img, plain) = jpeg_ls_file();
+    let eoi = plain.len() - 2;
+    // `after` goes between the scan data and the EOI of the 5x3 file with an interval of `dri`.
+    let with = |dri: u8, after: &[u8]| {
+        let mut bytes = plain[..15].to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, dri]);
+        bytes.extend_from_slice(&plain[15..eoi]);
+        bytes.extend_from_slice(after);
+        bytes.extend_from_slice(&plain[eoi..]);
+        bytes
+    };
+    const COMMENT: [u8; 4] = [0xFF, 0xFE, 0, 2];
+    assert_eq!(decode(&with(3, &COMMENT)).unwrap().data(), img.data());
+    let decoded = decode(&with(3, &[COMMENT.as_slice(), &[0xFF, 0xD0]].concat()));
+    assert!(matches!(decoded, Err(CodecError::Malformed { .. })), "{decoded:?}");
+    // With restarts off, a stray restart marker is skipped as before.
+    assert_eq!(decode(&with(0, &[COMMENT.as_slice(), &[0xFF, 0xD0]].concat())).unwrap().data(), img.data());
 }
 
 #[test]
