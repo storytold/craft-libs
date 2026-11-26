@@ -239,6 +239,8 @@ pub(crate) struct ToolRequests {
     pub(crate) autoscroll_at: Option<Pos2>,
     /// The pan's scroll-all-windows choice, from [`ToolContext::pan_view`].
     pub(crate) pan: Option<bool>,
+    /// A valid discrete Zoom click, including a source view that is already at its limit.
+    pub(crate) zoom_step: Option<super::ViewZoomStep>,
     /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
     pub(crate) hud: Option<Vec<(Label, String)>>,
     /// The content a tool handed to a drag session, from [`ToolContext::start_drag`].
@@ -429,6 +431,11 @@ impl<'a> ToolContext<'a> {
     pub fn ease_view(&mut self, view: CanvasView, anchor: Option<(Point, Pos2)>) {
         self.set_view(view);
         self.requests.ease = Some(ViewEase { anchor });
+    }
+
+    /// Records a valid discrete click of the built-in Zoom tool, including an unchanged bounded view.
+    pub(crate) fn zoom_step(&mut self, out: bool) {
+        self.requests.zoom_step = Some(super::ViewZoomStep { out });
     }
 
     /// Paints marching ants along `points` (closed when `closed`) in a paint call; it paints nothing in any other.
