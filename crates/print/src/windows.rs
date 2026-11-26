@@ -358,7 +358,7 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
                 let xml = std::str::from_utf8(ticket.get_xml()).map_err(spool_error)?;
                 ticket::verify_job_options(xml, &single, count, offered)?;
                 // Two-sided as the driver will print it, the queue's default included.
-                let copies = job.copies.clamp(1, 999);
+                let copies = job.copies.clamp(1, crate::MOST_COPIES);
                 match ticket::one_job_sides(xml) {
                     Some(two_sided) => repeat = Some(sheets::Repeat { copies, two_sided }),
                     None => jobs = copies,
