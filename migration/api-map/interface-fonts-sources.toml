@@ -1,0 +1,136 @@
+# API map of the "Interface fonts: sources" family: font tweaks and providers, installed system fonts, the OS interface face,
+# on-demand faces and egui's deflated default fonts. The stack (`UiFonts`, `Stack`) is the "Interface fonts: stack" family.
+
+family = "Interface fonts: sources"
+new_module = "craft_ui::fonts"
+
+[[type]]
+name = "set_weight"
+old = "craft_ui::fonts::set_weight"
+new = "craft_ui::fonts::set_weight"
+status = "same"
+
+[[type]]
+name = "RegularWeight"
+old = "craft_ui::fonts::RegularWeight"
+new = "craft_ui::fonts::RegularWeight"
+status = "same"
+
+[[type]]
+name = "FaceList"
+old = "craft_ui::fonts::FaceList"
+new = "craft_ui::fonts::FaceList"
+status = "same"
+
+[[type]]
+name = "system_font_provider"
+old = "craft_ui::fonts::system_font_provider"
+new = "craft_ui::fonts::system_font_provider"
+status = "same"
+
+[[type]]
+name = "SystemUiFace"
+old = "craft_ui::fonts::SystemUiFace"
+new = "craft_ui::fonts::SystemUiFace"
+status = "same"
+
+[[type]]
+name = "system_ui_face"
+old = "craft_ui::fonts::system_ui_face"
+new = "craft_ui::fonts::system_ui_face"
+status = "same"
+
+[[type]]
+name = "poll_system_ui_face"
+old = "craft_ui::fonts::poll_system_ui_face"
+new = "craft_ui::fonts::poll_system_ui_face"
+status = "same"
+
+[[type]]
+name = "SYSTEM_UI_OPTICAL_SIZE"
+old = "craft_ui::fonts::SYSTEM_UI_OPTICAL_SIZE"
+new = "craft_ui::fonts::SYSTEM_UI_OPTICAL_SIZE"
+status = "same"
+
+[[type]]
+name = "SYSTEM_UI_REGULAR"
+old = "craft_ui::fonts::SYSTEM_UI_REGULAR"
+new = "craft_ui::fonts::SYSTEM_UI_REGULAR"
+status = "same"
+
+[[type]]
+name = "SYSTEM_UI_SEMIBOLD"
+old = "craft_ui::fonts::SYSTEM_UI_SEMIBOLD"
+new = "craft_ui::fonts::SYSTEM_UI_SEMIBOLD"
+status = "same"
+
+[[type]]
+name = "FontCandidates"
+old = "craft_ui::fonts::FontCandidates"
+new = "craft_ui::fonts::FontCandidates"
+status = "same"
+
+[[type]]
+name = "SystemCandidates"
+old = "craft_ui::fonts::SystemCandidates"
+new = "craft_ui::fonts::SystemCandidates"
+status = "same"
+
+[[type]]
+name = "NoCandidates"
+old = "craft_ui::fonts::NoCandidates"
+new = "craft_ui::fonts::NoCandidates"
+status = "same"
+
+[[type]]
+name = "MAX_SCRIPT_READS"
+old = "craft_ui::fonts::MAX_SCRIPT_READS"
+new = "craft_ui::fonts::MAX_SCRIPT_READS"
+status = "same"
+
+[[type]]
+name = "OnDemandFonts"
+old = "craft_ui::fonts::OnDemandFonts"
+new = "craft_ui::fonts::OnDemandFonts"
+status = "same"
+
+[[type]]
+name = "han_for_locale"
+old = "craft_ui::fonts::han_for_locale"
+new = "craft_ui::fonts::han_for_locale"
+status = "same"
+
+[[type]]
+name = "deflated_default_definitions"
+old = "craft_ui::fonts::deflated_default_definitions"
+new = "craft_ui::fonts::deflated_default_definitions"
+status = "same"
+
+[[type]]
+name = "Han"
+old = "craft_ui::fonts::Han"
+new = ""
+status = "removed"
+note = "`craft_i18n::Han`: the one path of the regional Han forms; `craft_ui::fonts` does not re-export it."
+
+[[setter]]
+type = "RegularWeight"
+old = "with_weight(FontFamily, u16)"
+new = "with_weight(FontRef, u16)"
+note = "The family is a `FontRef`: `FontRef::proportional()`, `FontRef::monospace()` or `FontRef::named(name)`."
+
+[[setter]]
+type = "FaceList"
+old = "chain(&FontFamily)"
+new = "chain(&FontRef)"
+
+[[setter]]
+type = "FaceList"
+old = "set_chain(FontFamily, Vec<String>)"
+new = "set_chain(FontRef, Vec<String>)"
+
+[[setter]]
+type = "OnDemandFonts"
+old = "registered()"
+new = "fonts::on_demand_registered(ctx)"
+note = "The loader lives in the context's runtime store, not in an egui plugin value: ask the context for its registered faces."
