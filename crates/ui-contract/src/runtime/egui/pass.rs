@@ -39,9 +39,15 @@ pub(crate) fn content_rect(ctx: &Context) -> egui::Rect {
     ctx.content_rect()
 }
 
-/// The viewports egui reports for the running pass.
+/// The viewports egui reports for the running pass: the windows open when its frame began, so one that opens in the
+/// frame joins the list in the next, and one that closes in it leaves it there.
 pub(crate) fn live_viewports(ctx: &Context) -> Vec<ViewportId> {
     ctx.input(|input| input.raw.viewports.keys().copied().collect())
+}
+
+/// Whether the running pass is the first of its frame: not one that repeats a discarded pass.
+pub(crate) fn first_of_frame(ctx: &Context) -> bool {
+    ctx.current_pass_index() == 0
 }
 
 /// The pass's time in seconds.
