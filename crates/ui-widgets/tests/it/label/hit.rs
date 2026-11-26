@@ -1,0 +1,227 @@
+//! A control that draws only its mark (a check box, a radio button) takes its label into its own hit target: a
+//! press on the label is a press on the control, in the same pass.
+
+use craft_ui::choice::{Checkbox, Radio, RadioGroup};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
+use craft_ui::testing::layout::in_region;
+use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::{Frames, trial};
+use egui::{Rect, Shape, Ui, pos2, vec2};
+use std::cell::Cell;
+
+const REGION: Rect = Rect { min: pos2(0.0, 0.0), max: pos2(300.0, 200.0) };
+
+/// The rect `text` was painted in, last frame.
+fn text_rect(frames: &Frames, text: &str) -> Rect {
+    frames.texts().iter().find(|painted| painted.text == text).unwrap_or_else(|| panic!("no {text} painted")).rect
+}
+
+/// The fill colours painted inside `within`.
+fn fills(shapes: &[Shape], within: Rect) -> Vec<egui::Color32> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::Rect(rect) if rect.fill.a() > 0 && within.contains_rect(rect.rect) => Some(rect.fill),
+            _ => None,
+        })
+        .collect()
+}
+
+#[trial]
+fn a_click_on_a_check_box_label_toggles_it_in_that_pass_and_a_press_there_shows_on_the_box() {
+    let mut frames = Frames::new();
+    let on = Cell::new(false);
+    let shown = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        let mut value = on.get();
+        shown.set(in_region(ui, REGION, |ui| Checkbox::new(Bind::bound(&mut value)).label("Snap to grid").show(ui).response.rect));
+        on.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    let label = text_rect(&frames, "Snap to grid");
+    let rest = frames.frame_shapes(&mut show);
+    let mark = shown.get();
+    assert!(label.left() > mark.right(), "the label follows the box");
+    frames.frame(vec![moved(label.center())], &mut show);
+    frames.frame(vec![press(label.center())], &mut show);
+    let pressed = frames.frame_shapes(&mut show);
+    assert_ne!(fills(&pressed, mark), fills(&rest, mark), "a press on the label shows on the box");
+    frames.frame(vec![release(label.center())], &mut show);
+    assert!(on.get(), "the release on the label toggles the box in its own pass");
+    let gap = pos2((mark.right() + label.left()) / 2.0, label.center().y);
+    for event in [moved(gap), press(gap), release(gap)] {
+        frames.frame(vec![event], &mut show);
+    }
+    assert!(!on.get(), "a click in the gap between box and label toggles it too");
+}
+
+#[trial]
+fn a_click_on_a_radio_label_picks_it_in_that_pass() {
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, REGION, |ui| {
+            RadioGroup::new("Size", Bind::bound(&mut value)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    for (at, label) in [(1u8, "Small"), (2, "Medium"), (3, "Large")] {
+                        Radio::new(at).label(label).show(ui);
+                    }
+                });
+            })
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    let medium = text_rect(&frames, "Medium").center();
+    frames.frame(vec![moved(medium)], &mut show);
+    frames.frame(vec![press(medium)], &mut show);
+    frames.frame(vec![release(medium)], &mut show);
+    assert_eq!(picked.get(), 2, "the release on Medium's label picks it in its own pass");
+}
+
+/// A radio's detail line follows its label and is part of its hit area: a click on it picks the radio.
+#[trial]
+fn a_radio_detail_follows_its_label_and_a_click_on_it_picks_the_radio() {
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, REGION, |ui| {
+            RadioGroup::new("Quality", Bind::bound(&mut value)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Radio::new(1u8).label("Fast").detail("Smaller file").show(ui);
+                    Radio::new(2u8).label("Best").detail("Largest file").show(ui);
+                });
+            })
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    let (label, detail) = (text_rect(&frames, "Best"), text_rect(&frames, "Largest file"));
+    let follows = detail.left() >= label.right() || detail.top() >= label.bottom();
+    assert!(follows, "the detail follows the label: {detail:?} after {label:?}");
+    for event in [moved(detail.center()), press(detail.center()), release(detail.center())] {
+        frames.frame(vec![event], &mut show);
+    }
+    assert_eq!(picked.get(), 2, "a click on the detail picks its radio");
+}
+
+#[trial]
+fn a_long_label_after_its_box_wraps_with_the_box_on_its_first_line() {
+    const LONG: &str = "Show the transform controls on the selected layer whenever the move tool is active";
+    let mut frames = Frames::new();
+    let shown = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(160.0, 200.0));
+        shown.set(in_region(ui, narrow, |ui| Checkbox::new(Bind::given(false)).label(LONG).show(ui).response.rect));
+    };
+    frames.frame(vec![], &mut show);
+    frames.frame(vec![], &mut show);
+    let painted = frames.texts().iter().find(|painted| painted.text == LONG).unwrap_or_else(|| panic!("no long label painted"));
+    let mark = shown.get();
+    assert!(!painted.elided, "the label wraps instead of eliding");
+    assert!(painted.rect.height() > mark.height() * 1.5, "the label runs over more than one line");
+    assert!(painted.rect.right() <= 160.0, "the label stays inside its room");
+    assert!(mark.center().y < painted.rect.center().y && mark.top() < painted.rect.top() + mark.height(), "the box sits on the first line");
+}
+
+#[trial]
+fn the_pointer_over_a_check_box_or_its_label_is_a_pointing_hand_unless_it_is_disabled() {
+    for enabled in [true, false] {
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            in_region(ui, REGION, |ui| Checkbox::new(Bind::given(false)).label("Snap to grid").enabled(enabled).show(ui));
+        };
+        frames.frame(vec![], &mut show);
+        let label = text_rect(&frames, "Snap to grid");
+        frames.frame(vec![moved(label.center())], &mut show);
+        frames.frame(vec![], &mut show);
+        let expected = if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default };
+        assert_eq!(frames.cursor_icon(), expected, "the cursor over the label (enabled: {enabled})");
+    }
+}
+
+#[trial]
+fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
+    use craft_ui::testing::input::key_press;
+    use egui::{Key, Modifiers};
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, REGION, |ui| {
+            RadioGroup::new("Size", Bind::bound(&mut value)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    for (at, label) in [(1u8, "Small"), (2, "Medium"), (3, "Large")] {
+                        Radio::new(at).label(label).show(ui);
+                    }
+                });
+            })
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    for key in [Key::Tab, Key::ArrowDown] {
+        frames.frame(vec![key_press(key, Modifiers::NONE)], &mut show);
+        frames.frame(vec![], &mut show);
+    }
+    assert_eq!(picked.get(), 1, "the arrow moves focus without picking");
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.frame(vec![], &mut show);
+    assert_eq!(picked.get(), 2, "Enter picks the focused radio");
+}
+
+/// A quiet check box (a thumbnail tile's) is a smaller box than the standard one.
+#[trial]
+fn a_quiet_check_box_is_smaller_than_the_standard_one() {
+    let side = |quiet: bool| {
+        let mut frames = Frames::new();
+        let shown = Cell::new(Rect::NOTHING);
+        let mut show = |ui: &mut Ui| {
+            shown.set(in_region(ui, REGION, |ui| Checkbox::new(Bind::given(false)).quiet(quiet).show(ui).response.rect));
+        };
+        frames.frame(vec![], &mut show);
+        frames.frame(vec![], &mut show);
+        shown.get().height()
+    };
+    assert!(side(true) < side(false), "quiet {} against standard {}", side(true), side(false));
+}
+
+/// A click on a field's label focuses its one control when the control sits in an unlabelled row beside text that
+/// takes no focus (a unit after a number field). The row makes its node by its type's role but reports none, so the
+/// label scope must still see the number field. Before that, the scope saw no control and the click did nothing.
+#[trial]
+fn a_click_on_a_label_focuses_its_control_inside_an_unlabelled_row() {
+    use craft_ui::display::Text;
+    use craft_ui::form::Field;
+    use craft_ui::layout_components::Row;
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::access::NodeKey;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::text::{NumberField, UnitPlacement};
+    use std::rc::Rc;
+
+    let field = Rc::new(Cell::new(egui::Id::NULL));
+    let seen = field.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Field::new("Turn").id_salt("turn").show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                let mut value = Some(90.0);
+                let out = NumberField::new("Angle", Bind::bound(&mut value)).unit_placement(UnitPlacement::After).show(ui);
+                seen.set(out.response.id);
+                Text::new("deg").show(ui);
+            });
+        });
+    });
+    fixture.settle();
+    let control = NodeKey::of(field.get());
+    let tree = fixture.tree();
+    // The field's group is named "Turn" too and is labelled by the label: the label is the "Turn" node that no other
+    // node labels. Picking the first "Turn" node clicked the group whenever the tree listed it first.
+    let label = tree.keys().into_iter().find(|key| *key != control && tree.name_of(*key) == Some("Turn") && tree.labelled_by_key(*key).is_empty());
+    let label = label.and_then(|key| fixture.target(key)).expect("the field's label node");
+    fixture.access(AccessActionKind::Click, &label).settle();
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(field.get()), "the click on the label focuses the number field");
+}

@@ -1,5 +1,5 @@
-//! Release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher.
-
+//! Native only (it downloads and installs through ureq): release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod app;
@@ -11,8 +11,8 @@ pub mod http;
 pub mod install;
 pub mod manifest;
 pub mod msi_context;
-mod msi_copy;
-mod msi_migrate;
+pub(crate) mod msi_copy;
+pub(crate) mod msi_migrate;
 pub mod packages;
 pub mod paths;
 pub mod pins;
@@ -32,9 +32,9 @@ pub mod time;
 pub mod translate;
 pub mod version;
 
-#[cfg(feature = "egui")]
-pub mod dialog;
-#[cfg(feature = "egui")]
+#[cfg(feature = "ui")]
+pub mod stack_dialogs;
+#[cfg(feature = "ui")]
 pub mod updater;
 
 pub use app::App;
@@ -48,32 +48,68 @@ pub use suite::SUITE;
 pub use time::parse_rfc3339;
 pub use version::{Version, is_newer, parse as parse_version};
 
-#[cfg(feature = "egui")]
-pub use dialog::{CheckResultDialog, CheckResultResponse, StartupPrompt, StartupPromptResponse};
+#[cfg(feature = "screen-testing")]
+/// The registrations of this package for the integration binary.
+pub mod testing {
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
+}
+
+/// Why a check for an update failed. [`RateLimited`](Self::RateLimited) is a typed reason, so the app
+/// words it in the interface language ([`stack_dialogs::UpdateWords`] has the crate's wording); the text
+/// of [`Failed`](Self::Failed) is data (GitHub's, the network's, or the crate's English) and stays as it came.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckError {
+    /// GitHub refused the request because its quota is used up.
+    RateLimited,
+    /// Any other failure, with its English reason.
+    Failed(String),
+}
+
+impl std::fmt::Display for CheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited => f.write_str("GitHub's request limit was reached"),
+            Self::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+impl From<String> for CheckError {
+    fn from(why: String) -> Self {
+        Self::Failed(why)
+    }
+}
+
+impl From<&str> for CheckError {
+    fn from(why: &str) -> Self {
+        Self::Failed(why.to_owned())
+    }
+}
 
 /// Checks for an update against GitHub releases for the given app.
 ///
 /// Returns an error when GitHub does not find the repository (renamed, deleted or private).
-pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, String> {
+pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
+    check_releases_at(&format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo), app, http, current_version)
+}
+
+/// [`check_for_update`] against the release list at `url` (a loopback server in tests).
+fn check_releases_at(url: &str, app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
     let version = self_update::current_version(app, current_version).map(|v| v.to_string());
     let current_version = version.as_deref().unwrap_or(current_version);
-    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo);
-    checked_release(http.get_api(&url, None)?, app.repo, current_version)
+    match http.get_api(url, None)? {
+        crate::http::Fetched::Body { text, .. } => Ok(offered_release(&text, app.repo, current_version)?),
+        crate::http::Fetched::RateLimited { .. } => Err(CheckError::RateLimited),
+        crate::http::Fetched::NotFound => Err(CheckError::Failed(format!("GitHub has no repository {}, or it is private", app.repo))),
+        crate::http::Fetched::NotModified => Ok(None),
+    }
 }
 
 /// Unix seconds now.
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
-
-/// The answer of [`check_for_update`] for what GitHub's release list request `fetched`.
-fn checked_release(fetched: crate::http::Fetched, repo: &str, current_version: &str) -> Result<Option<Release>, String> {
-    match fetched {
-        crate::http::Fetched::Body { text, .. } => offered_release(&text, repo, current_version),
-        crate::http::Fetched::RateLimited { .. } => Err("GitHub's request limit was reached".into()),
-        crate::http::Fetched::NotFound => Err(format!("GitHub has no repository {repo}, or it is private")),
-        crate::http::Fetched::NotModified => Ok(None),
-    }
 }
 
 /// The release in GitHub's release list `json` to offer a copy running `current_version`, if any:
@@ -90,35 +126,16 @@ fn offered_release(json: &str, repo: &str, current_version: &str) -> Result<Opti
 pub(crate) const TEST_AGENT: &str = "ArtCraft-Launcher-Test/0.0";
 
 #[cfg(test)]
-mod offer_tests {
-    use super::{checked_release, offered_release};
-    use crate::http::Fetched;
+extern crate self as craft_update;
+#[cfg(test)]
+#[path = "../tests/https_only.rs"]
+pub(crate) mod https_only;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+pub(crate) mod integration;
 
-    const REPO: &str = "storytold/photocraft";
-    const LIST: &str = r#"[{"tag_name":"v0.17.0","prerelease":false,"draft":false,"assets":[]},
-        {"tag_name":"v0.16.4","prerelease":false,"draft":false,"assets":[]}]"#;
-
-    fn offered(running: &str) -> Option<String> {
-        offered_release(LIST, REPO, running).unwrap().map(|release| release.tag)
-    }
-
-    #[test]
-    fn a_build_from_main_is_not_offered_the_release_it_already_contains() {
-        assert_eq!(offered("0.17.0-integration.20261029.f5b3f123"), None);
-        assert_eq!(offered("0.16.5-dev"), Some("v0.17.0".into()));
-    }
-
-    #[test]
-    fn releases_and_release_candidates_are_offered_as_before() {
-        assert_eq!(offered("0.17.0-rc.2"), Some("v0.17.0".into()));
-        assert_eq!(offered("0.16.4"), Some("v0.17.0".into()));
-        assert_eq!(offered("0.17.0"), None);
-        assert_eq!(offered("not a version"), None);
-    }
-
-    #[test]
-    fn a_repository_github_does_not_find_is_an_error_not_up_to_date() {
-        let why = checked_release(Fetched::NotFound, REPO, "0.16.4").unwrap_err();
-        assert!(why.contains(REPO), "the reason names the repository: {why}");
-    }
+#[cfg(test)]
+fn main() {
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }
