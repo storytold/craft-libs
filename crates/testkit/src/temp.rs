@@ -5,7 +5,8 @@
 //! name that is already taken is skipped. A folder this module did not make is never emptied or
 //! reused. On Unix the folder is made with mode 0o700, and before [`TempDir::new`] returns it checks
 //! that the folder is a real folder, not a link, with no access for other users, and owned by the
-//! user running the test. The checks apply to the created folder only, so a temporary directory
+//! user running the test. The access check reads the mode bits only; it does not read POSIX or NFSv4
+//! access control lists, so an entry that grants another user access is not detected. The checks apply to the created folder only, so a temporary directory
 //! reached through a link (`/var` on macOS links to `/private/var`) works. On Windows the folder
 //! gets the inheritable access entries of the temporary directory, which is the user's own
 //! `%LOCALAPPDATA%\Temp` by default, and no access check is made. When `TMP` or `TEMP` names a
