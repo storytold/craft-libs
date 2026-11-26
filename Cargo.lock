@@ -2275,6 +2275,7 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-agents",
  "craft-atomic",
+ "craft-control-protocol",
  "craft-flags",
  "dirs",
  "getrandom 0.3.4",

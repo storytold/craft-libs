@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use craft_control_protocol::ReadFailure;
 use serde_json::{Value, json};
 
 use crate::Effect;
@@ -215,54 +216,19 @@ pub fn new_token() -> Option<String> {
     Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// One line without its newline (and a `\r` before it), or `None` at the end of the stream. A
-/// line of more than `max` bytes, not counting its `\r\n` or `\n`, is refused with `InvalidData`.
-/// A client that sends gigabytes with no newline would otherwise make this thread allocate until
-/// the process is killed, so a line with no newline yet is refused once it holds more than
-/// `max + 1` bytes. A read interrupted by a signal is tried again, and a read that times out (the
-/// token deadline) fails with `TimedOut`.
+/// One line without its newline (and a `\r` before it), or `None` at the end of the stream, read
+/// with [`craft_control_protocol::read_bounded_line`]. A line of more than `max` bytes, not
+/// counting its `\r\n` or `\n`, is refused with `InvalidData`, and at most `max + 2` bytes of it
+/// are buffered, so a client that sends gigabytes with no newline cannot make this thread
+/// allocate until the process is killed. A read that times out (the token deadline) fails with
+/// `TimedOut`.
 fn read_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<Vec<u8>>> {
-    let too_long = || std::io::Error::new(std::io::ErrorKind::InvalidData, format!("request line longer than {max} bytes; closing the connection"));
     let mut line = Vec::new();
-    loop {
-        let (done, used) = {
-            let available = match r.fill_buf() {
-                Ok(available) => available,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(std::io::ErrorKind::TimedOut.into()),
-                Err(e) => return Err(e),
-            };
-            if available.is_empty() {
-                if line.len() > max {
-                    return Err(too_long());
-                }
-                return Ok((!line.is_empty()).then_some(line));
-            }
-            match available.iter().position(|b| *b == b'\n') {
-                Some(i) => {
-                    line.extend_from_slice(available.get(..i).unwrap_or(&[]));
-                    (true, i + 1)
-                }
-                None => {
-                    line.extend_from_slice(available);
-                    (false, available.len())
-                }
-            }
-        };
-        r.consume(used);
-        if done {
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            if line.len() > max {
-                return Err(too_long());
-            }
-            return Ok(Some(line));
-        }
-        // One byte past `max` may be the `\r` of a `\r\n` whose `\n` has not arrived yet.
-        if line.len() > max.saturating_add(1) {
-            return Err(too_long());
-        }
+    match craft_control_protocol::read_bounded_line(r, &mut line, max) {
+        Ok(true) => Ok(Some(line)),
+        Ok(false) => Ok(None),
+        Err(ReadFailure::Timeout) => Err(std::io::ErrorKind::TimedOut.into()),
+        Err(ReadFailure::Rejected(e)) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
     }
 }
 
