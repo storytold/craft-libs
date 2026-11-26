@@ -194,6 +194,29 @@ fn a_negative_start_discards_leading_samples() {
 }
 
 #[test]
+fn packets_that_are_not_audio_do_not_shrink_the_leading_discard() {
+    let t = VorbisTiming::of(&stream(&[(&[0xFF, SHORT, LONG], 476), (&[LONG, SHORT], 2076)])).unwrap();
+    assert_eq!(&t.durations[..3], [0, 0, 576]);
+    assert_eq!(t.starts[2], -100);
+    assert_eq!((t.skip, t.first, t.total), (100, 0, 2076));
+}
+
+#[test]
+fn a_packet_too_short_for_its_window_flags_returns_nothing() {
+    // 64 modes: six bits of mode number, so a long block's two window flags reach the second byte
+    let mut modes = vec![false; 64];
+    modes[1] = true;
+    let mut s = stream(&[(&[SHORT, LONG, SHORT], 1000)]);
+    s.headers[2] = setup(&modes);
+    s.packets[1].size = 1;
+    let t = VorbisTiming::of(&s).unwrap();
+    assert_eq!(t.durations, [0, 0, 128], "the cut long packet is skipped and the next one follows the first");
+    s.packets[1].size = 2;
+    let t = VorbisTiming::of(&s).unwrap();
+    assert_eq!(t.durations, [0, 64 + 512, 512 + 64]);
+}
+
+#[test]
 fn a_positive_start_is_a_time_offset() {
     let t = VorbisTiming::of(&stream(&[(&[SHORT, LONG], 44_676), (&[LONG, SHORT], 46_276)])).unwrap();
     assert_eq!((t.skip, t.first), (0, 44_100));

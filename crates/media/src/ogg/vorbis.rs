@@ -48,12 +48,27 @@ impl VorbisModes {
     /// the mode number in `ilog(modes - 1)` bits); `None` for a packet that is not audio or names a
     /// mode the setup header does not have.
     pub fn blocksize(&self, first: u8) -> Option<u32> {
+        self.mode(first).map(|(_, long)| self.blocksizes[usize::from(long)])
+    }
+
+    /// The block size of an audio packet of `size` bytes starting with `prefix`; `None` also when
+    /// the packet ends inside its header, whose long blocks carry the previous and next window
+    /// flags after the mode number (§4.3.1), since a decoder drops such a packet.
+    fn packet_blocksize(&self, prefix: [u8; 2], size: u32) -> Option<u32> {
+        let (bits, long) = self.mode(prefix[0])?;
+        let header = 1 + bits + if long { 2 } else { 0 };
+        (u64::from(size) * 8 >= u64::from(header)).then(|| self.blocksizes[usize::from(long)])
+    }
+
+    /// The width of the mode number and the block flag of the mode an audio packet's first byte
+    /// names.
+    fn mode(&self, first: u8) -> Option<(u32, bool)> {
         if first & 1 != 0 {
             return None;
         }
         let bits = ilog(self.long.len().saturating_sub(1) as u32);
         let mode = usize::from(first >> 1) & ((1usize << bits) - 1);
-        self.long.get(mode).map(|&l| self.blocksizes[usize::from(l)])
+        self.long.get(mode).map(|&l| (bits, l))
     }
 }
 
@@ -69,8 +84,8 @@ pub struct VorbisTiming {
     /// packet's block size plus a quarter of its own.
     pub durations: Vec<u32>,
     /// Samples to discard at the start: the first page's granule position states fewer samples
-    /// than its packets return (a negative starting position, at most the first two packets'
-    /// overlap).
+    /// than its packets return (a negative starting position, at most the first two audio
+    /// packets' overlap).
     pub skip: u32,
     /// Granule position of the first sample to play: 0, or the positive start offset of a stream
     /// that does not begin at time zero.
@@ -95,13 +110,20 @@ impl VorbisTiming {
     pub fn with_modes(stream: &Stream, modes: &VorbisModes) -> VorbisTiming {
         // Granule positions come straight from the file, so the arithmetic saturates.
         let mut previous: Option<u32> = None;
+        // samples the first two audio packets return, the most a negative start can discard
+        let mut overlap = 0i64;
+        let mut audio = 0u8;
         let durations: Vec<u32> = stream
             .packets
             .iter()
             .map(|p| {
-                let Some(size) = (p.size > 0).then(|| modes.blocksize(p.prefix[0])).flatten() else { return 0 };
+                let Some(size) = modes.packet_blocksize(p.prefix, p.size) else { return 0 };
                 let n = previous.map_or(0, |prev| prev / 4 + size / 4);
                 previous = Some(size);
+                if audio < 2 {
+                    audio += 1;
+                    overlap = overlap.saturating_add(i64::from(n));
+                }
                 n
             })
             .collect();
@@ -161,8 +183,7 @@ impl VorbisTiming {
         }
         let starts: Vec<i64> = ends.iter().zip(&durations).map(|(e, &d)| e.saturating_sub(i64::from(d))).collect();
         let origin = start.unwrap_or(0);
-        // a negative start discards samples, never more than the first two packets overlap
-        let overlap = durations.iter().take(2).fold(0i64, |a, &d| a.saturating_add(i64::from(d)));
+        // a negative start discards samples, never more than the first two audio packets overlap
         let skip = origin.saturating_neg().clamp(0, overlap);
         let first = origin.saturating_add(skip).max(0);
         let end = trimmed_end.or(cursor).unwrap_or(0);
