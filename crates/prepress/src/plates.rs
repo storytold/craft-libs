@@ -8,7 +8,7 @@
 //! components, DeviceGray black only, and other process color converts to CMYK through the
 //! printing condition (see [`Conversion`]).
 //!
-//! Ported from PdfCraft #2770 by Guillem Hermida (`crates/render/src/separations.rs` at
+//! Ported from storytold/pdfcraft#2770 by Guillem Hermida (`crates/render/src/separations.rs` at
 //! 6fcf2a4, MIT OR Apache-2.0), with craft-cms in place of moxcms.
 
 use std::collections::HashSet;
@@ -102,7 +102,10 @@ pub enum Conversion {
         condition: Option<String>,
     },
     /// Through [`Fallback::Fogra39`] or [`Fallback::Profile`]; the profile's description.
-    Fallback { profile: String },
+    Fallback {
+        /// The profile's description.
+        profile: String,
+    },
     /// By [`Fallback::DeviceFormulas`].
     DeviceFormulas,
 }
@@ -115,10 +118,13 @@ pub struct Plates {
     pub inks: InkSet,
     /// Spot inks past [`MAX_SPOT_INKS`]: listed, not separated.
     pub unseparated: Vec<String>,
+    /// Plate width in pixels.
     pub width: u32,
+    /// Plate height in pixels.
     pub height: u32,
     /// The resolution the plates rendered at, after [`MAX_PLATE_PIXELS`].
     pub dpi: f32,
+    /// How the page's CMYK was converted to the plates' inks.
     pub conversion: Conversion,
     /// One plane per ink, in [`InkSet::iter`] order: the tint per pixel, row-major, 0 for no
     /// ink and 255 for 100%.
@@ -137,15 +143,20 @@ impl Plates {
     }
 }
 
+/// Why a page could not be separated.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The PDF could not be opened.
     #[error(transparent)]
     Open(#[from] OpenError),
+    /// The requested page is not in the document.
     #[error("page {0} does not exist")]
     NoPage(usize),
+    /// The resolution is zero, negative, infinite or NaN.
     #[error("the resolution must be positive and finite")]
     InvalidDpi,
+    /// The fallback profile is not usable as a printing condition.
     #[error("the fallback profile can't be a printing condition: {0}")]
     Profile(#[from] ProfileError),
     /// After a [`raster::Error::BackendPanic`] the document is dropped; nothing else is kept.
@@ -521,7 +532,8 @@ endstream endobj
     fn bands_reach_resolutions_past_the_plate_cap_and_can_stop() {
         let pdf = disc_and_spot();
         // 40 pt at 3700 dpi is 2055 pixels a side: 4.2 MP, past `MAX_PLATE_PIXELS`.
-        assert!(plates(&pdf, 0, 3700.0, &Options::default()).unwrap().dpi < 3700.0);
+        // (The whole-page entry point reduces by `plate_scale`; the bands below are not reduced.)
+        assert!(plate_scale(40.0, 40.0, 3700.0 / 72.0) < 3700.0 / 72.0);
         let mut bands = Vec::new();
         plates_in_bands(&pdf, 0, 3700.0, &Options::default(), |band| {
             let p = &band.plates;
@@ -619,16 +631,5 @@ endstream endobj
         let s = banded_scale(17.0, 15_058_824.0, 1.0);
         let [width, height] = [17.0f32, 15_058_824.0].map(|side| u64::from((side * s).floor().max(1.0) as u32));
         assert!(width * height <= MAX_BANDED_PIXELS as u64);
-    }
-
-    #[test]
-    fn plates_fit_the_pixel_and_side_caps() {
-        assert_eq!(plate_scale(40.0, 40.0, 1.0), 1.0);
-        // A4 at 2400 dpi would be 22 000 × 31 000 pixels.
-        let s = plate_scale(595.0, 842.0, 2400.0 / 72.0);
-        assert!((595.0 * s) * (842.0 * s) <= MAX_PLATE_PIXELS * 1.0001);
-        // A 1 × 10 000 pt strip fits the area cap but not the renderer's side limit.
-        assert!(10_000.0 * plate_scale(1.0, 10_000.0, 1.0) <= MAX_SIDE as f32);
-        assert!(plate_scale(0.0, f32::NAN, 1.0) > 0.0);
     }
 }

@@ -3,11 +3,15 @@
 //! packages of versions 14 on with their data streams, then pages, layers, guidelines, groups,
 //! curves, rectangles, ellipses, arcs and polygons with uniform fills and outlines. It also reads
 //! `.cmx` exchange files with 32-bit coordinates ([`read_cmx`]): their pages, layers, groups and
-//! curves with uniform fills and outlines.
+//! curves with uniform fills and outlines. [`preview()`] gives the picture a `.cdr` file keeps of its
+//! drawing, without reading the drawing.
 //!
 //! Every record layout the reader relies on is listed in `PROVENANCE.md` with its public source
 //! and status; code cites the row ids (R1 ...). Reading is bounded by [`Limits`], never recurses and does not
-//! panic. Nothing here writes `.cdr` or `.cmx` files.
+//! panic.
+//!
+//! [`write`] writes a [`Drawing`] as a `.cdr` file of version 15, laying out each record as the
+//! reader reads it. Nothing here writes `.cmx` files.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -22,6 +26,7 @@ mod layout;
 mod limits;
 pub mod model;
 mod package;
+mod preview;
 mod records;
 mod riff;
 mod styles;
@@ -30,10 +35,13 @@ pub mod synth;
 #[cfg(any(test, feature = "synth"))]
 pub mod synth_cmx;
 mod wl;
+mod write;
 mod zip;
 
 pub use limits::Limits;
 pub use model::{Drawing, Warning};
+pub use preview::{Preview, PreviewFormat, preview};
+pub use write::{WRITTEN_VERSION, WriteError, write};
 
 /// Does `bytes` look like a `.cdr` drawing: a RIFF file, a ZIP package holding one, or a `WL` file
 /// of version 1 or 2 whose header offsets fit the file?
@@ -61,7 +69,9 @@ pub enum Error {
     /// Past one of the [`Limits`].
     Limit(&'static str),
     /// A file this reader doesn't open: an encrypted, ZIP64 or split package, or a RIFF file that
-    /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates.
+    /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates; a
+    /// `DISP` preview that is not an uncompressed bitmap with a 40-byte header; a version 2 file's
+    /// picture.
     Unsupported(&'static str),
 }
 

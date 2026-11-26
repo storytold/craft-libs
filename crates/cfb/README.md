@@ -180,10 +180,11 @@ WordCraft (`wordcraft_doc::cfb_guard` and the `cfb` crate):
 `src/tests.rs` (from FilmCraft): round trips for both versions with empty, mini, boundary
 (63/64/65, 4095/4096/4097 bytes) and multi-sector streams and up to 40 siblings; red-black
 invariants of every sibling tree; a 7.5 MB stream that needs DIFAT sectors; Unicode and
-case-insensitive names; random mutations; DIFAT and directory chain loops.
+case-insensitive names; DIFAT and directory chain loops.
 
 `src/tests/ported.rs`: files from a second, independent test writer with another layout and an
-unsorted sibling list; every behaviour in the table above; each limit; truncation at every length
+unsorted sibling list; the behaviours of the table above that take more than one
+comparison; the limits; truncation at every length
 and every single-bit flip of two small files, and every special sector value in every header, FAT
 and directory field, none of which may panic or hang.
 
