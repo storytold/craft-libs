@@ -257,6 +257,8 @@ pub use craft_odf as odf;
 pub use craft_ods as ods;
 #[cfg(feature = "offcrypto")]
 pub use craft_offcrypto as offcrypto;
+#[cfg(feature = "officeart")]
+pub use craft_officeart as officeart;
 #[cfg(feature = "opc")]
 pub use craft_opc as opc;
 #[cfg(feature = "openpgp")]
