@@ -2,7 +2,8 @@
 //!
 //! Parse a bounded line with [`parse_json`], then pass the value to [`process`]. A host may
 //! inspect the parsed value first for a legacy protocol. `process` validates envelopes, dispatches
-//! requests and notifications separately, and constructs single or batch replies. The host owns
+//! requests and notifications separately, and constructs single or batch replies. [`process_with`]
+//! does the same with one [`Handler`] for both requests and notifications. The host owns
 //! the transport, method semantics and response-size policy.
 
 #![forbid(unsafe_code)]
@@ -183,21 +184,54 @@ fn invalid_request() -> Value {
     error_response(Value::Null, RpcError::new(-32600, "Invalid Request"))
 }
 
-fn one<F, N>(value: &Value, limits: Limits, on_request: &mut F, on_notification: &mut N) -> Option<Value>
+/// Receives the requests and notifications of one message for [`process_with`] and
+/// [`process_legacy_with`]. Both methods take `&mut self`, so one handler can update the same
+/// state for requests and notifications, in message order, without a `RefCell`.
+pub trait Handler {
+    /// Handle a request with an ID. The result or error becomes its response.
+    fn request(&mut self, request: Request<'_>) -> Result<Value, RpcError>;
+    /// Handle a notification, including its `params`. A notification never receives a response.
+    fn notification(&mut self, request: Request<'_>);
+}
+
+impl<H: Handler + ?Sized> Handler for &mut H {
+    fn request(&mut self, request: Request<'_>) -> Result<Value, RpcError> {
+        (**self).request(request)
+    }
+    fn notification(&mut self, request: Request<'_>) {
+        (**self).notification(request);
+    }
+}
+
+struct Callbacks<F, N> {
+    on_request: F,
+    on_notification: N,
+}
+
+impl<F, N> Handler for Callbacks<F, N>
 where
     F: FnMut(Request<'_>) -> Result<Value, RpcError>,
     N: FnMut(Request<'_>),
 {
+    fn request(&mut self, request: Request<'_>) -> Result<Value, RpcError> {
+        (self.on_request)(request)
+    }
+    fn notification(&mut self, request: Request<'_>) {
+        (self.on_notification)(request);
+    }
+}
+
+fn one<H: Handler>(value: &Value, limits: Limits, handler: &mut H) -> Option<Value> {
     let Some(request) = request(value, limits) else { return Some(invalid_request()) };
     let id = request.id;
     if request.params.is_some_and(|v| !v.is_object() && !v.is_array()) {
         return id.map(|id| error_response(id.clone(), RpcError::new(-32602, "Invalid params")));
     }
     let Some(id) = id else {
-        on_notification(request);
+        handler.notification(request);
         return None;
     };
-    Some(match on_request(request) {
+    Some(match handler.request(request) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err(error) => error_response(id.clone(), error),
     })
@@ -206,34 +240,43 @@ where
 /// Process a parsed JSON-RPC message. Notifications never receive a response. Invalid batch
 /// entries produce individual errors; an empty batch produces one invalid-request response.
 /// A batch over the limit returns [`ParseError::BatchTooLarge`] without invoking either callback.
-pub fn process<F, N>(value: &Value, limits: Limits, mut on_request: F, mut on_notification: N) -> Result<Option<Value>, ParseError>
+pub fn process<F, N>(value: &Value, limits: Limits, on_request: F, on_notification: N) -> Result<Option<Value>, ParseError>
 where
     F: FnMut(Request<'_>) -> Result<Value, RpcError>,
     N: FnMut(Request<'_>),
 {
-    let Some(batch) = value.as_array() else { return Ok(one(value, limits, &mut on_request, &mut on_notification)) };
+    process_with(value, limits, Callbacks { on_request, on_notification })
+}
+
+/// Process a parsed JSON-RPC message as [`process`] does, dispatching requests and
+/// notifications to one [`Handler`]. A batch over the limit returns
+/// [`ParseError::BatchTooLarge`] without calling the handler.
+pub fn process_with<H: Handler>(value: &Value, limits: Limits, mut handler: H) -> Result<Option<Value>, ParseError> {
+    let Some(batch) = value.as_array() else { return Ok(one(value, limits, &mut handler)) };
     if batch.len() > limits.max_batch_items {
         return Err(ParseError::BatchTooLarge);
     }
     if batch.is_empty() {
         return Ok(Some(invalid_request()));
     }
-    let responses: Vec<_> = batch.iter().filter_map(|v| one(v, limits, &mut on_request, &mut on_notification)).collect();
+    let responses: Vec<_> = batch.iter().filter_map(|v| one(v, limits, &mut handler)).collect();
     Ok((!responses.is_empty()).then_some(Value::Array(responses)))
 }
 /// Process a permissive legacy JSON-RPC envelope. This mode accepts arbitrary IDs and
 /// parameter shapes, ignores response envelopes, and retains legacy diagnostic messages.
 /// The caller supplies dispatch and notification callbacks, and should bound transport input.
-pub fn process_legacy<F, N>(value: &Value, mut on_request: F, mut on_notification: N) -> Option<Value>
+pub fn process_legacy<F, N>(value: &Value, on_request: F, on_notification: N) -> Option<Value>
 where
     F: FnMut(Request<'_>) -> Result<Value, RpcError>,
     N: FnMut(Request<'_>),
 {
-    fn one<F, N>(value: &Value, on_request: &mut F, on_notification: &mut N) -> Option<Value>
-    where
-        F: FnMut(Request<'_>) -> Result<Value, RpcError>,
-        N: FnMut(Request<'_>),
-    {
+    process_legacy_with(value, Callbacks { on_request, on_notification })
+}
+
+/// Process a permissive legacy JSON-RPC envelope as [`process_legacy`] does, dispatching
+/// requests and notifications to one [`Handler`].
+pub fn process_legacy_with<H: Handler>(value: &Value, mut handler: H) -> Option<Value> {
+    fn one<H: Handler>(value: &Value, handler: &mut H) -> Option<Value> {
         let Some(object) = value.as_object() else { return Some(error_response(Value::Null, RpcError::new(-32600, "message must be an object"))) };
         let id = object.get("id");
         let Some(method) = object.get("method").and_then(Value::as_str) else {
@@ -244,10 +287,10 @@ where
         };
         let request = Request { id, method, params: object.get("params") };
         let Some(id) = id else {
-            on_notification(request);
+            handler.notification(request);
             return None;
         };
-        Some(match on_request(request) {
+        Some(match handler.request(request) {
             Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
             Err(error) => error_response(id.clone(), error),
         })
@@ -256,10 +299,10 @@ where
         if batch.is_empty() {
             return Some(error_response(Value::Null, RpcError::new(-32600, "empty batch")));
         }
-        let replies: Vec<_> = batch.iter().filter_map(|v| one(v, &mut on_request, &mut on_notification)).collect();
+        let replies: Vec<_> = batch.iter().filter_map(|v| one(v, &mut handler)).collect();
         (!replies.is_empty()).then_some(Value::Array(replies))
     } else {
-        one(value, &mut on_request, &mut on_notification)
+        one(value, &mut handler)
     }
 }
 
