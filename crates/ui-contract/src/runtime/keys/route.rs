@@ -211,6 +211,17 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         push(&mut routed, focused, Intent::Cancel, false);
         cancel_mods = Some(escape.mods);
     }
+    // The Escapes the windows opened from this one handed on are the window's. A modal that opened meanwhile blocks the
+    // window they were pressed in, so they reach nothing.
+    let handed = current(ctx, |stage| std::mem::take(&mut stage.handed_cancels));
+    if !handed.is_empty() && overlay::app_modal_viewport(ctx).is_none() {
+        for mods in handed {
+            push(&mut routed, None, Intent::Cancel, false);
+            cancel_mods = Some(mods);
+        }
+        // A view that reads what is sent (`Input::Sent`) runs for them as for a key of the window's own.
+        current(ctx, |stage| stage.sent += 1);
+    }
     // A text opener's list keys arrive as claimed chords, withheld from its text part: they go to the list. The chords
     // fired commands stood for go to the owners of their claims.
     let mut claimed = fired_claims;
