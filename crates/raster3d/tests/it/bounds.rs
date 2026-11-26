@@ -354,10 +354,14 @@ fn sampling_a_texture_with_huge_sides_reads_missing_texels_as_transparent() {
 }
 
 #[test]
-fn unknown_light_kinds_and_alpha_modes_are_rejected() {
+fn unknown_light_kinds_falloffs_and_alpha_modes_are_rejected() {
     let mut s = lit_scene((16, 12), 1, false);
     s.lights[2].kind = 3;
     assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(2)));
+    let mut s = lit_scene((16, 12), 1, false);
+    s.lights[2].falloff = 3;
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(2)));
+    assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadLight(2)));
     let mut s = lit_scene((16, 12), 1, false);
     s.materials[3].alpha_mode = 3;
     assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadMaterial(3)));

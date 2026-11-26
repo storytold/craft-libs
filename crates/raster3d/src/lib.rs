@@ -97,12 +97,12 @@ pub enum RenderError {
     /// A texel is not finite, or its alpha is outside 0 to 1.
     #[error("texel {0} is not finite or has an alpha outside 0 to 1")]
     BadTexel(usize),
-    /// A light has a kind other than 0 to 2, a value that is not finite, a cone cosine outside −1
+    /// A light has a kind or falloff other than 0 to 2, a value that is not finite, a cone cosine outside −1
     /// to 1, (a spot light) an inner cone cosine below the outer one, a shadow darkness outside 0
     /// to 1, or (a parallel or spot light) a direction whose length differs from 1 by more than
     /// 0.001.
     #[error(
-        "light {0} has an unknown kind, a value that is not finite, a cone cosine outside -1 to 1 or out of order, a shadow darkness outside 0 to 1 or a direction that is not unit length"
+        "light {0} has an unknown kind or falloff, a value that is not finite, a cone cosine outside -1 to 1 or out of order, a shadow darkness outside 0 to 1 or a direction that is not unit length"
     )]
     BadLight(usize),
     /// The light count is over [`Limits::max_lights`].
