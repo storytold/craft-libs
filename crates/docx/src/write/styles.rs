@@ -56,8 +56,36 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     for st in &s.styles {
         style_xml(wr, &mut w, st, &flagged);
     }
+    if missing_comment_reference_style(doc) {
+        comment_reference_style_xml(&mut w, s);
+    }
     w.close("w:styles");
     w.into_bytes()
+}
+
+/// Comment reference runs name `CommentReference` when the document has no "annotation
+/// reference" character style (`story::section::comment_reference_style`). True when that id
+/// would then name no style, so `styles.xml` needs a definition for it.
+fn missing_comment_reference_style(doc: &Document) -> bool {
+    !doc.comments.is_empty()
+        && !doc
+            .styles
+            .styles
+            .iter()
+            .any(|st| st.id == "CommentReference" || (st.kind == StyleKind::Character && st.name.eq_ignore_ascii_case("annotation reference")))
+}
+
+/// Word's built-in "annotation reference" character style, without formatting of its own.
+fn comment_reference_style_xml(w: &mut W, s: &craft_wordmodel::styles::StyleSheet) {
+    w.open("w:style", &[("w:type", "character"), ("w:styleId", "CommentReference")]);
+    w.val("w:name", "annotation reference");
+    if s.styles.iter().any(|st| st.kind == StyleKind::Character && st.id == "DefaultParagraphFont") {
+        w.val("w:basedOn", "DefaultParagraphFont");
+    }
+    w.val("w:uiPriority", "99");
+    w.empty("w:semiHidden", &[]);
+    w.empty("w:unhideWhenUsed", &[]);
+    w.close("w:style");
 }
 
 /// One `w:style` element. A tracked change of its paragraph/run properties is nested in the
