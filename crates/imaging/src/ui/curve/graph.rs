@@ -763,43 +763,38 @@ impl CurveGraph<'_> {
         if n == 0 {
             return selected;
         }
-        let mut plus = 0;
-        for chord in PLUS {
-            while cx.take_claimed(chord) {
-                plus += 1;
-            }
-        }
-        for _ in 0..plus {
-            selected = Some(selected.map_or(0, |i| (i + 1).min(n - 1)));
-        }
-        while cx.take_claimed(MINUS) {
-            selected = Some(selected.map_or(n - 1, |i| i.saturating_sub(1)));
-        }
-        while cx.take_claimed(NEXT_POINT) {
-            selected = selected.map(|i| (i + 1) % n);
-        }
-        while cx.take_claimed(PREVIOUS_POINT) {
-            selected = selected.map(|i| (i + n - 1) % n);
-        }
-        let mut insert = false;
-        for chord in INSERT {
-            while cx.take_claimed(chord) {
-                insert = true;
-            }
-        }
-        if insert {
-            // A gap too narrow for a point adds nothing and keeps the selection.
-            let drawn = curve.points().map(|points| self.samples(points, &curve.corner_flags())).unwrap_or_default();
-            if let Some((next, i)) = rules.inserted(curve, selected, &drawn) {
-                cx.set(next.clone());
-                *curve = next;
-                selected = Some(i);
-            }
-        }
-        let mut delete = false;
-        for chord in DELETE {
-            while cx.take_claimed(chord) {
-                delete = true;
+        // The claimed keys in the order they were pressed, each as if it came alone: a Delete and then a Ctrl+Tab in
+        // one frame delete the point that was selected, not the next one.
+        let chords: Vec<Chord> = PLUS.into_iter().chain([MINUS, NEXT_POINT, PREVIOUS_POINT]).chain(INSERT).chain(DELETE).collect();
+        while let Some(chord) = cx.take_first_claimed(&chords) {
+            let n = curve.points().map_or(0, <[_]>::len);
+            if PLUS.contains(&chord) {
+                selected = Some(selected.map_or(0, |i| (i + 1).min(n - 1)));
+            } else if chord == MINUS {
+                selected = Some(selected.map_or(n - 1, |i| i.saturating_sub(1)));
+            } else if chord == NEXT_POINT {
+                selected = selected.map(|i| (i + 1) % n);
+            } else if chord == PREVIOUS_POINT {
+                selected = selected.map(|i| (i + n - 1) % n);
+            } else if INSERT.contains(&chord) {
+                // A gap too narrow for a point adds nothing and keeps the selection.
+                let drawn = curve.points().map(|points| self.samples(points, &curve.corner_flags())).unwrap_or_default();
+                if let Some((next, i)) = rules.inserted(curve, selected, &drawn) {
+                    cx.set(next.clone());
+                    *curve = next;
+                    selected = Some(i);
+                }
+            } else if let Some(at) = selected {
+                match CurveRules::deleted(curve, at) {
+                    Some(next) => {
+                        cx.set(next.clone());
+                        *curve = next;
+                        selected = None;
+                    }
+                    // An end point stays, and so does the selection on it unless `end_delete_deselects`.
+                    None if self.end_delete_deselects => selected = None,
+                    None => {}
+                }
             }
         }
         let rtl = cx.flow.is_rtl();
@@ -820,13 +815,6 @@ impl CurveGraph<'_> {
             by = [by[0] + dx * steps, by[1] + dy * steps];
         }
         let Some(at) = selected else { return selected };
-        if delete {
-            // An end point stays, and so does the selection on it unless `end_delete_deselects`.
-            let Some(next) = CurveRules::deleted(curve, at) else { return if self.end_delete_deselects { None } else { selected } };
-            cx.set(next.clone());
-            *curve = next;
-            return None;
-        }
         if by != [0.0, 0.0]
             && let Some(next) = rules.nudged(curve, at, by)
         {

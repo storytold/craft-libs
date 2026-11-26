@@ -18,6 +18,8 @@ pub(crate) struct Rig {
     pub(crate) selected: Rc<Cell<Option<usize>>>,
     /// The kind of each edit event, in order.
     kinds: Rc<RefCell<Vec<&'static str>>>,
+    /// The key presses left in egui's input after the editor, which the app reads, in order.
+    pub(crate) app_keys: Rc<RefCell<Vec<egui::Key>>>,
     origin: Pos2,
     scale: Vec2,
 }
@@ -43,7 +45,8 @@ pub(crate) fn rig_with(points: &[[f32; 2]], point_keys: bool) -> Rig {
     let shared = Rc::new(RefCell::new(curve.clone()));
     let selected = Rc::new(Cell::new(None));
     let kinds = Rc::new(RefCell::new(Vec::new()));
-    let (c, s, k) = (shared.clone(), selected.clone(), kinds.clone());
+    let app_keys = Rc::new(RefCell::new(Vec::new()));
+    let (c, s, k, a) = (shared.clone(), selected.clone(), kinds.clone(), app_keys.clone());
     let channels = [CurveChannel::new("RGB", ChannelColor::Neutral), CurveChannel::new("Red", ChannelColor::Red)];
     let mut fixture = Fixture::new(move |ui| {
         let mut value = c.borrow().clone();
@@ -57,10 +60,18 @@ pub(crate) fn rig_with(points: &[[f32; 2]], point_keys: bool) -> Rig {
         }
         s.set(out.selected);
         *c.borrow_mut() = value;
+        let pressed = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| if let egui::Event::Key { key, pressed: true, .. } = event { Some(*key) } else { None })
+                .collect::<Vec<_>>()
+        });
+        a.borrow_mut().extend(pressed);
     });
     fixture.room(room());
     fixture.settle();
-    let mut rig = Rig { fixture, curve: shared, selected, kinds, origin: Pos2::ZERO, scale: Vec2::ZERO };
+    let mut rig = Rig { fixture, curve: shared, selected, kinds, app_keys, origin: Pos2::ZERO, scale: Vec2::ZERO };
     rig.calibrate(&curve);
     rig
 }
