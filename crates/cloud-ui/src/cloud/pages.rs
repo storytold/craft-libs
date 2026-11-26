@@ -422,7 +422,9 @@ pub fn save_page<A: CloudApp>(app: &mut A, ui: &mut Ui) -> bool {
         asked = typing.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     });
     ui.add_space(10.0);
-    let ready = app.cloud().busy.is_none() && !document_name(&app.cloud().save_name, kind).is_empty();
+    // A sign-in in progress has emptied the folder, so the destination is not
+    // the one the user picked until the folders are listed again.
+    let ready = app.cloud().busy.is_none() && !app.cloud().relist_after_sign_in && !document_name(&app.cloud().save_name, kind).is_empty();
     if ui.add_enabled(ready, egui::Button::new(save_label)).clicked() {
         asked = true;
     }

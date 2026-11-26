@@ -66,6 +66,8 @@ fn imported_images_become_safe_linear_environments() {
     assert!(texturecraft_import(4, 2, &[[0.0; 4]; 7], ColorEncoding::Linear).is_none(), "pixel count must match");
     // HDR values stay above 1; NaN, infinity and negatives become 0; tiny images grow to 128×64.
     let px = [[50.0, f32::NAN, -1.0, 1.0], [f32::INFINITY, 0.5, 0.25, 1.0]];
+    let raw = EnvImage::try_from_rgba(2, 1, &px, ColorEncoding::Linear, &Limits::default()).unwrap();
+    assert_eq!(raw.pixels(), &[[50.0, 0.0, 0.0], [0.0, 0.5, 0.25]]);
     let e = texturecraft_import(2, 1, &px, ColorEncoding::Linear).unwrap();
     assert_eq!((e.width(), e.height()), (128, 64));
     assert!(e.pixels().iter().all(|c| c.iter().all(|v| v.is_finite() && *v >= 0.0)));
