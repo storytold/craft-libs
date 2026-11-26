@@ -922,6 +922,10 @@ mod native {
                 }
                 d.hard_owner_entries.retain(|key| !keys.contains(&key.to_ascii_lowercase()));
             }
+            ObjectType::DictionaryWithDefault(d) => {
+                clear_style_handle(&mut d.default_handle, removed);
+                d.entries.retain(|(_, h)| !removed.contains(h));
+            }
             ObjectType::Layout(layout) => clear_style_handle(&mut layout.visual_style_handle, removed),
             ObjectType::PlotSettings(settings) => clear_style_handle(&mut settings.visual_style_handle, removed),
             ObjectType::TableContent(table) => clear_style_common(&mut table.common, removed),
