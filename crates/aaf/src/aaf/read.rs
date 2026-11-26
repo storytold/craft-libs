@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use craft_timeline::time::{FrameRate, Tick};
+use craft_timeline::{FrameRate, Tick};
 
 use super::ids::{cls, ddef, def, pid};
 use super::store::{self, Auid, Obj, Value, rational_of, utf16_of};
