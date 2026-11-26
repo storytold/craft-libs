@@ -131,6 +131,15 @@ fn pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
     xs.windows(2).map(|pair| (&pair[0], &pair[1]))
 }
 
+// Craft patch (leading ClosePath): `kurbo::segments` panics on a ClosePath that comes before
+// any point, so such ClosePaths are dropped first. They draw nothing.
+pub(crate) fn skip_leading_close_paths(
+    path: impl IntoIterator<Item = kurbo::PathEl>,
+) -> impl Iterator<Item = kurbo::PathEl> {
+    path.into_iter()
+        .skip_while(|el| matches!(el, kurbo::PathEl::ClosePath))
+}
+
 struct SubpathIter<'a, I: Iterator> {
     inner: &'a mut Peekable<I>,
     started: bool,
@@ -325,7 +334,7 @@ impl Segments {
         };
         while let Some(subpath) = subpaths.next() {
             let old_len = self.segs.len();
-            for seg in kurbo::segments(subpath) {
+            for seg in kurbo::segments(skip_leading_close_paths(subpath)) {
                 let pieces = monotonic_pieces(seg);
                 for monotonic in pieces {
                     self.push_seg(monotonic.piece);
