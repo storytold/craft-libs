@@ -740,6 +740,16 @@ mod tests {
         assert!(bad.validate().is_err());
         bad.layers[0].shapes[0].production.stroke_width_mm = Some(-1.0);
         assert!(bad.validate().is_err());
+        // A bad width inside a Combine's kept members is caught too.
+        let mut nested = doc.clone();
+        let mut member = nested.layers[0].shapes[0].clone();
+        member.production.stroke_width_mm = Some(-1.0);
+        nested.layers[0].shapes[0].production.group = Some(Box::new(SourceGroup {
+            kind: GroupKind::Combine(CombineOp::Unite),
+            members: vec![member],
+            path: nested.layers[0].shapes[0].path.clone(),
+        }));
+        assert!(nested.validate().is_err());
     }
 
     #[test]
