@@ -2,7 +2,7 @@
 
 use crate::opus::decode::decoder::StreamDecoder;
 use crate::opus::decode::header::OpusHead;
-use crate::opus::decode::packet::Packet;
+use crate::opus::decode::packet::{Packet, Toc};
 use crate::opus::decode::{Error, Result};
 
 /// Opus decoder for an `OpusHead` configuration (mono, stereo, or multistream surround).
@@ -96,18 +96,24 @@ impl Decoder {
         self.decode_or_conceal(packet, None)
     }
 
-    /// Conceals one lost or undecodable packet. With its bytes at hand and a TOC and framing that
-    /// parse, the concealment is as long as the packet; otherwise as long as the last packet
+    /// Conceals one lost or undecodable packet. With its bytes at hand and a readable TOC,
+    /// the concealment is as long as the packet; otherwise as long as the last packet
     /// (20 ms before any).
     pub fn conceal(&mut self, packet: Option<&[u8]>) -> Result<Vec<Vec<f32>>> {
         let dur = packet.and_then(|d| self.packet_duration(d));
         self.decode_or_conceal(None, dur)
     }
 
-    /// Samples per channel, at the output rate, in a packet whose framing parses.
+    /// Samples per channel, at the output rate, from a packet's TOC.
     fn packet_duration(&self, data: &[u8]) -> Option<usize> {
-        let p = if self.streams.len() > 1 { Packet::parse_self_delimited(data).ok()?.0 } else { Packet::parse(data).ok()? };
-        Some(p.toc.frame_samples(self.rate) * p.frames.len()).filter(|&n| n > 0)
+        let toc = Toc::parse(*data.first()?);
+        let frames = match toc.code {
+            0 => 1,
+            1 | 2 => 2,
+            _ => usize::from(data.get(1)? & 0x3f),
+        };
+        let samples = toc.frame_samples(self.rate) * frames;
+        (samples > 0 && samples <= self.rate as usize * 120 / 1000).then_some(samples)
     }
 
     fn decode_or_conceal(&mut self, packet: Option<&[u8]>, conceal_len: Option<usize>) -> Result<Vec<Vec<f32>>> {

@@ -65,3 +65,32 @@ fn an_invalid_duration_does_not_discard_the_last_intact_packet() {
     assert_eq!(actual.channels[0][2 * FRAME..], known_duration.channels[0][2 * FRAME..]);
     assert!(actual.channels[0][2 * FRAME..].iter().any(|sample| sample.abs() > 0.0001));
 }
+
+#[test]
+fn a_malformed_packet_with_readable_toc_keeps_its_toc_duration() {
+    let (enc, packets) = encode(OpusEncoder::new(1, 64_000).expect("encoder"), &[music(8 * FRAME)]);
+    let parsed = craft_audio::opus::Packet::parse(&packets[0]).expect("packet");
+    assert_eq!(parsed.frames.len(), 1);
+    let mut first = vec![packets[0][0] & !3 | 1];
+    first.extend_from_slice(parsed.frames[0]);
+    first.extend_from_slice(parsed.frames[0]);
+    let mut head = enc.opus_head();
+    head[10..12].copy_from_slice(&0u16.to_le_bytes());
+    let mut tags = b"OpusTags".to_vec();
+    tags.extend_from_slice(&[0; 8]);
+    let file = |middle: &[u8]| {
+        let mut writer = PageWriter::new(7).with_page_target(1 << 20, 1);
+        let mut out = writer.header(&head);
+        out.extend(writer.header(&tags));
+        out.extend(writer.packet(&first, (2 * FRAME) as i64));
+        out.extend(writer.packet(middle, (3 * FRAME) as i64));
+        out.extend(writer.packet(&packets[2], (4 * FRAME) as i64));
+        out.extend(writer.finish(Some((4 * FRAME) as i64)));
+        out
+    };
+    let (_, actual) = decode(&file(&[0x62]), None).expect("decode malformed framing");
+    let (_, reference) = decode(&file(&[packets[1][0] & !3]), None).expect("decode readable single-frame duration");
+    assert_eq!(actual.frames(), 4 * FRAME);
+    assert_eq!(actual.channels[0][3 * FRAME..], reference.channels[0][3 * FRAME..]);
+    assert!(actual.channels[0][3 * FRAME..].iter().any(|sample| sample.abs() > 0.0001));
+}

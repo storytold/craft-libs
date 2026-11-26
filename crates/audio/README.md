@@ -188,7 +188,8 @@ each block's frames, and `seek` to that position.
 
 Ogg decoding clamps backward packet positions to the previous packet's end and fills missing
 pages with silence. An Opus packet with an invalid duration uses the previous packet's duration,
-or 960 samples before the first packet. A Vorbis stream containing only a primer packet returns
+or 960 samples before the first packet. A readable Opus TOC sets the concealment length even if
+the framing is malformed. A Vorbis stream containing only a primer packet returns
 an error even after seeking to frame 0.
 
 ### Decode packets from your own demuxer
