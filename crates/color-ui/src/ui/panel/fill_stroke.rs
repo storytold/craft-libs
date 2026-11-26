@@ -132,8 +132,8 @@ impl Body<'_> {
         }
     }
 
-    /// The Spectrum ramp (grey in Grayscale) with a tooltip naming the shown mode. A Cmd or Ctrl click recolours and
-    /// picks nothing; a Shift click moves to the next mode.
+    /// The Spectrum ramp (gray in Grayscale) with a tooltip naming the shown mode, at least as tall as its square end
+    /// boxes. A Cmd or Ctrl click recolors and picks nothing; a Shift click moves to the next mode.
     fn spectrum(&mut self, ui: &mut Ui) {
         let mode = self.shown_mode();
         let kind = if mode == ColorPanelMode::GrayscaleSlider { RampKind::Grayscale } else { RampKind::Spectrum };
@@ -146,6 +146,7 @@ impl Body<'_> {
             .gamut(gamut)
             .gamut_revision(revision)
             .web_safe(self.now.web_safe_ramp)
+            .square_boxes(true)
             .sizing(Sizing::Fill)
             .show(ui);
         self.ramp_events(ramp.edit.events);
