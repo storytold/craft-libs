@@ -977,7 +977,16 @@ mod tests {
         let at_cap = Lexer::new(wide(MAX_NODES - 1).as_bytes(), 0).object();
         assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == MAX_NODES - 1));
         assert!(Lexer::new(wide(MAX_NODES).as_bytes(), 0).object().is_err());
-        // The same inside a dictionary value and behind tolerated junk.
+        // The gate stops at the plain array (each case parses millions of operands); nightly adds the same budget inside a
+        // dictionary value, behind tolerated junk, and per top-level object.
+        // wasm32 has no divisor and always runs the gate's part.
+        #[cfg(not(target_arch = "wasm32"))]
+        let full = craft_testkit::hostile::divisor() == 1;
+        #[cfg(target_arch = "wasm32")]
+        let full = false;
+        if !full {
+            return;
+        }
         assert!(Lexer::new(format!("<< /A {} >>", wide(MAX_NODES)).as_bytes(), 0).object().is_err());
         assert!(Lexer::new(format!("[[{}] ]", "0 ".repeat(MAX_NODES)).as_bytes(), 0).object().is_err());
         // The budget is per top-level object: a lexer reused for many operands keeps working.

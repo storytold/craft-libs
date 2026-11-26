@@ -27,7 +27,7 @@ pub mod paths;
 pub mod preflight;
 pub mod sniff;
 pub mod svgz;
-#[cfg(feature = "tree")]
+#[cfg(feature = "tree-core")]
 pub mod tree;
 pub mod write;
 
@@ -38,3 +38,6 @@ pub mod simple_css;
 
 /// Prefix-preserving SVG transform-list compatibility.
 pub mod transform_compat;
+
+/// Compatibility SVG document/CSS interpretation helpers (style cascade, lengths, paints, viewBox).
+pub mod doc_style;
