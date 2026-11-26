@@ -111,8 +111,19 @@ struct LeastRuns {
     runs: Vec<(Id, u32)>,
 }
 
-/// Runs `f` as a measuring run. Nested calls are fine.
+/// Runs `f` as a measuring run, for code outside the framework that measures before it shows (an app that sizes a rect
+/// by `Show::measure_in` and then shows the component with `show_at`). Nested calls are fine.
+///
+/// What `f` measures is its own: it joins no kept transcript of the body around it, in that body's measuring run or in
+/// its real run alike. Otherwise the body's measuring run would keep it as one of the body's components while the
+/// real run, measuring outside every transcript, never asks it, and the body would read as changed every frame.
 pub fn run<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
+    measuring(ctx, || super::layout_memory::boundary(ctx, true, f))
+}
+
+/// Runs `f` as a measuring run whose measures join the transcript of the body whose measuring run is open around it:
+/// the framework's own measuring runs. Nested calls are fine.
+pub(crate) fn measuring<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
     /// Restores the depth when the run ends, by a panic too: a context used after a caught panic is not measuring.
     struct Open<'a>(&'a Context, u32);
     impl Drop for Open<'_> {

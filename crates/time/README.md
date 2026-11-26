@@ -88,6 +88,19 @@ assert_eq!(format_feet_frames(95, 40), "0002+15");
 assert_eq!(parse_feet_frames("2+15", 40, 0), Ok(95));
 ```
 
+### Elapsed-Time Clock (`format_clock`)
+
+`format_clock` formats a tick as `H:MM:SS` for recording timers and other readouts that count time rather than frames. `ClockStyle` pads the hours to two digits and adds tenths, hundredths or milliseconds (`ClockFraction`). The value is truncated, hours do not wrap, and a value that truncates to zero prints without a sign:
+
+```rust
+use craft_time::{ClockFraction, ClockStyle, Tick, TICKS_PER_SECOND, format_clock};
+
+let t = Tick(3661 * TICKS_PER_SECOND + TICKS_PER_SECOND / 4);
+assert_eq!(format_clock(t, ClockStyle::default()), "1:01:01");
+let style = ClockStyle { pad_hours: true, fraction: ClockFraction::Milliseconds };
+assert_eq!(format_clock(t, style), "01:01:01.250");
+```
+
 ## SoundCraft Sample-Time Compatibility
 
 The `soundcraft` module carries SoundCraft's existing sample-index clock (`i64` samples at the

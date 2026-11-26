@@ -18,8 +18,8 @@ use egui::{Pos2, Rect, Response, Vec2};
 
 use super::DetailsWords;
 use crate::FaceInfo;
-use crate::panel::faces::Owner;
-use crate::panel::specimen::{FontSample, SampleFace};
+use crate::axes::AxisValues;
+use crate::panel::specimen::{FontSample, HeldFace};
 
 /// What a style row offers at its end.
 #[derive(Clone, Debug)]
@@ -34,11 +34,28 @@ pub(super) enum Action {
 }
 
 /// One style of the sheet.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct StyleLine {
     pub label: String,
-    pub face: Option<(Owner, FaceInfo)>,
+    /// The face the sample is drawn in.
+    pub face: Option<HeldFace>,
+    /// The variation coordinates the face is drawn at.
+    pub coords: AxisValues,
+    /// The line follows the sheet's axis sliders, so it is no style of its own.
+    pub sliders: bool,
     pub action: Action,
+}
+
+impl StyleLine {
+    /// A style drawn in `face` as it is.
+    pub(super) fn new(label: impl Into<String>, face: Option<HeldFace>, action: Action) -> Self {
+        StyleLine { label: label.into(), face, coords: AxisValues::new(), sliders: false, action }
+    }
+
+    /// The style at `coords` of its face.
+    pub(super) fn at(self, coords: AxisValues) -> Self {
+        StyleLine { coords, ..self }
+    }
 }
 
 /// The lines as a collection source, keyed by position.
@@ -88,11 +105,11 @@ pub(super) struct StyleList {
 }
 
 impl StyleList {
-    /// A list named `label`; it is as tall as its rows, and shows `empty` while it has none.
+    /// A list named `label`; it fills the width, is as tall as its rows, and shows `empty` while it has none.
     pub(super) fn new(label: impl Into<Label>, empty: impl Into<Label>) -> Self {
         StyleList {
             common: Common::new(),
-            props: ContainerProps::new().sizing(Sizing::Content),
+            props: ContainerProps::new().sizing(Sizing::FillWidth),
             items: CollectionProps::new().select(SelectMode::Single).natural_height(true).empty(empty),
         }
         .label(label)
@@ -173,7 +190,6 @@ pub(super) struct StyleRow<'r> {
     family: &'r str,
     sample: &'r str,
     points: f32,
-    face: SampleFace<'r>,
     words: &'r DetailsWords,
     pressed: bool,
     /// The width of the action, measured in the pass's measure step and read by its paint.
@@ -181,10 +197,9 @@ pub(super) struct StyleRow<'r> {
 }
 
 impl<'r> StyleRow<'r> {
-    /// The row of `line`, a style of `family`, with the sample `sample` at `points` in `face`.
-    pub(super) fn new(line: &'r StyleLine, family: &'r str, sample: &'r str, points: f32, face: SampleFace<'r>, words: &'r DetailsWords) -> Self {
-        StyleRow { common: Common::new(), line, family, sample, points, face, words, pressed: false, action: Cell::new(0.0) }
-            .label(line.label.clone())
+    /// The row of `line`, a style of `family`, with the sample `sample` at `points`.
+    pub(super) fn new(line: &'r StyleLine, family: &'r str, sample: &'r str, points: f32, words: &'r DetailsWords) -> Self {
+        StyleRow { common: Common::new(), line, family, sample, points, words, pressed: false, action: Cell::new(0.0) }.label(line.label.clone())
     }
 
     fn style_name(&self) -> [(&'static str, &str); 1] {
@@ -208,7 +223,8 @@ impl<'r> StyleRow<'r> {
     }
 
     fn sample_leaf(&self) -> FontSample<'r> {
-        FontSample::new(format!("{} {}: {}", self.family, self.line.label, self.sample), self.sample, self.face, self.points)
+        let face = HeldFace::sample(self.line.face.as_ref());
+        FontSample::new(format!("{} {}: {}", self.family, self.line.label, self.sample), self.sample, face, self.points).coords(&self.line.coords)
     }
 }
 
