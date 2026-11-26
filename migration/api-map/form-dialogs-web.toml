@@ -1,0 +1,182 @@
+# API map of the "Form dialogs 3: Save for Web" family: old path to new path and setter renames.
+
+family = "Form dialogs 3: Save for Web"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "SaveForWebDialog"
+old = "craft_ui::dialog::export::web::SaveForWebDialog"
+new = "craft_ui::patterns::form_dialogs::SaveForWebDialog"
+status = "moved"
+note = "A pattern on `Dialog` that keeps its state in its root container's slot: a `FormDialog<SaveForWebOptions>`: `SaveForWebDialog::new(name, size: PixelSize, WebPictures, Bind<SaveForWebOptions>)` with `.presets(Vec<WebPreset>)`, `.animation(Animation)`, `.remember(SaveKey)`, `.saving(bool)`, `.answers(Vec<HostAnswer>)` and `.opened(Bind<bool>)`; `show(ui) -> SaveForWebOutput`. The settings the dialog opens with are the bound value; the old `.options` setter is the bind. The old `.matte([u8; 3])` and `.saved_to(PathBuf)` are `HostAnswer::Color` (key `MATTE_COLOR_KEY`) and `HostAnswer::Path` (key `SAVE_PATH_KEY`) in `.answers`. The owned form is `HostedSaveForWeb`, a `StackDialog` with `wanted_variants`, `set_variant`, `set_original`, `frame`, `pick_color`, `pick_path`, `answer_color`, `answer_path`, `cancel_requests`. The old `presets`, `animation`, `wanted_variants`, `set_variant`, `set_original` and `frame` keep their names on `HostedSaveForWeb`; `pick_color` keeps its name; `queue_save` and the picker ticket are `pick_path` and `answer_path`; `set_color` is `answer_color`."
+
+[[type]]
+name = "HostedSaveForWeb"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostedSaveForWeb"
+status = "replaced"
+note = "The `StackDialog` form of `SaveForWebDialog`: `HostedSaveForWeb::new(name, size, original: SizedTexture)`; it keeps the settings, drops stale variants, keeps the colour and path requests until taken and finishes with `SaveForWebResult` when `answer_path(key, path)` answers; `cancel_requests()` drops a pending request."
+
+[[type]]
+name = "SaveForWebOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::SaveForWebOutput"
+status = "replaced"
+note = "`SaveForWebOutput { response, closed, result, wanted_variants, requests: HostRequests, options, size, frame, selected }`; the matte colour request and the Save… path request are in `requests`."
+
+[[type]]
+name = "SaveForWebOptions"
+old = "craft_ui::dialog::export::web::SaveForWebOptions"
+new = "craft_ui::patterns::form_dialogs::SaveForWebOptions"
+status = "moved"
+note = "`#[non_exhaustive]`. The `resample` field is not carried until the sizing dialogs' `Resample` lands at the combined base."
+
+[[type]]
+name = "WebFormat"
+old = "craft_ui::dialog::export::web::WebFormat"
+new = "craft_ui::patterns::form_dialogs::WebFormat"
+status = "moved"
+note = "`#[non_exhaustive]`; `extension()`, `name()` and `indexed()` are public, `ALL` lists the formats."
+
+[[type]]
+name = "ColorTable"
+old = "craft_ui::dialog::export::web::ColorTable"
+new = "craft_ui::patterns::form_dialogs::ColorTable"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "Dither"
+old = "craft_ui::dialog::export::web::Dither"
+new = "craft_ui::patterns::form_dialogs::Dither"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "WebMetadata"
+old = "craft_ui::dialog::export::web::WebMetadata"
+new = "craft_ui::patterns::form_dialogs::WebMetadata"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "WebView"
+old = "craft_ui::dialog::export::web::WebView"
+new = "craft_ui::patterns::form_dialogs::WebView"
+status = "moved"
+note = "`#[non_exhaustive]`; `panes()` lists the panes a view shows."
+
+[[type]]
+name = "WebVariant"
+old = "craft_ui::dialog::export::web::WebVariant"
+new = "craft_ui::patterns::form_dialogs::WebVariant"
+status = "moved"
+note = "`texture: TextureHandle` is `picture: Result<SizedTexture, Label>` (a failed encode is the pane's `Failed` state); built by `WebVariant::new(index, revision, texture, bytes)` or `WebVariant::failed(..)` with `.colors(n)` and `.proxy(bool)`. `palette` is not carried: no swatch component exists to show it."
+
+[[type]]
+name = "SaveForWebResult"
+old = "craft_ui::dialog::export::web::SaveForWebResult"
+new = "craft_ui::patterns::form_dialogs::SaveForWebResult"
+status = "moved"
+note = "`#[non_exhaustive]`; `remember(&self, ui)` stores the settings and the view for the next open."
+
+[[type]]
+name = "four_up_variants"
+old = "craft_ui::dialog::export::web::four_up_variants"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[type]]
+name = "download_seconds"
+old = "craft_ui::dialog::export::web::download_seconds"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[type]]
+name = "advance_frame"
+old = "craft_ui::dialog::export::web::advance_frame"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[type]]
+name = "Nav"
+old = "craft_ui::dialog::export::web::Nav"
+new = ""
+status = "removed"
+note = "The panes' shared zoom and centre are one `PreviewView` in the dialog's slot, stepped by `PreviewZoom` and reported by `PreviewPane`."
+
+[[type]]
+name = "Pane"
+old = "craft_ui::dialog::export::web::Pane"
+new = ""
+status = "removed"
+note = "`PreviewPane::state(label, PreviewState, &PreviewView)`; `WebPane` names a pane."
+
+[[type]]
+name = "Preview"
+old = "craft_ui::dialog::export::web::Preview"
+new = ""
+status = "removed"
+note = "The tabs, the play and zoom rows and the panes are the dialog's private `panes` module over `Segmented`, `PreviewZoom` and `PreviewPane`."
+
+[[type]]
+name = "ZOOM_RANGE"
+old = "craft_ui::dialog::export::web::ZOOM_RANGE"
+new = ""
+status = "removed"
+note = "The `PreviewView` carries the range (0.0001 to 32)."
+
+[[type]]
+name = "WatermarkEditor"
+old = "craft_ui::dialog::export::watermark::WatermarkEditor"
+new = ""
+status = "removed"
+note = "`Watermark::new(label, Bind<WatermarkSettings>)` in `craft_ui::patterns::form_dialogs`, a pattern over `FieldGroup`: `show(ui) -> WatermarkOutput { response, value, requests: HostRequests }`; Position is `ReferencePoint`, size, opacity and insets are `SliderField`s, and the image picker is the `PathRequest` keyed `WATERMARK_IMAGE_KEY` in `requests`."
+
+[[type]]
+name = "Watermark"
+old = "craft_ui::dialog::export::watermark::Watermark"
+new = ""
+status = "removed"
+note = "The data is `WatermarkSettings`, with `position: Anchor9` (was `Anchor`); `rotation` stays degrees. The name `Watermark` now belongs to the pattern."
+
+[[type]]
+name = "WatermarkSettings"
+old = ""
+new = "craft_ui::patterns::form_dialogs::WatermarkSettings"
+status = "replaced"
+note = "The watermark's data: style, vertical, position, rotation, size, opacity, inset and shadow; `insets_across()` and `insets_down()` say which insets apply. No serde derive: `Anchor9` has none."
+
+[[type]]
+name = "WatermarkStyle"
+old = "craft_ui::dialog::export::watermark::WatermarkStyle"
+new = "craft_ui::patterns::form_dialogs::WatermarkStyle"
+status = "moved"
+note = "`#[non_exhaustive]`; `is_graphic()`; no serde derive."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "SaveForWebDialog"
+old = "SaveForWebDialog::new(name, width, height, original: TextureHandle)"
+new = "SaveForWebDialog::new(name, size: PixelSize, WebPictures)"
+note = "The original is `WebPictures::new().original(SizedTexture)`; `HostedSaveForWeb::new(name, size, original)` is the hosted form."
+
+[[setter]]
+type = "SaveForWebDialog"
+old = "presets(Vec<(String, SaveForWebOptions)>)"
+new = "presets(Vec<WebPreset>)"
+
+[[setter]]
+type = "SaveForWebDialog"
+old = "animation(frames, fps)"
+new = "animation(Animation::new(frames, fps))"
+
+[[setter]]
+type = "SaveForWebDialog"
+old = "wanted_variants() -> Vec<(usize, u64, SaveForWebOptions)>"
+new = "SaveForWebOutput::wanted_variants: Vec<WantedVariant>"
+note = "`HostedSaveForWeb::wanted_variants()` returns them once."
