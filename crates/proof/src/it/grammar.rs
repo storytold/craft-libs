@@ -222,7 +222,7 @@ fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: 
     let mut after_end = capital_first;
     for (i, (a, b)) in ws.iter().enumerate() {
         let Some(w) = text.get(*a..*b) else { continue };
-        if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
+        if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) && !crate::in_address(text, *a, *b) {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
             v.push(issue(*a, *b, "Maiuscola a inizio frase".into(), vec![fixed]));
         }

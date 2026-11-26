@@ -82,7 +82,7 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
     let mut after_end = capital_first;
     for (a, b) in &ws {
         let Some(w) = text.get(*a..*b) else { continue };
-        if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
+        if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) && !crate::in_address(text, *a, *b) {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
             v.push(Issue {
                 start: *a,
@@ -96,13 +96,25 @@ pub(super) fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
         let tail = text.get(*b..).unwrap_or("");
         let punctuation = tail.trim_start_matches(['"', '”', ')', '\'']);
         // Two or more dots are an ellipsis, not a full stop ending a sentence.
-        // A Unicode ellipsis (U+2026) does not match sentence-ending punctuation either.
+        // A Unicode ellipsis (U+2026) does not match sentence-ending punctuation either,
+        // and neither does the full stop of "e.g." or "i.e.".
         after_end = matches!(punctuation.chars().next(), Some('.' | '!' | '?'))
             && !punctuation.starts_with("..")
-            && punctuation.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ');
+            && punctuation.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ')
+            && !(punctuation.starts_with('.') && ends_e_g_or_i_e(text, *a, *b));
     }
     v.sort_by_key(|i| i.start);
     v
+}
+
+/// Is the word at `a..b` of `text` the end of "e.g." or "i.e." without its last full stop, in any
+/// case, or "eg" or "ie" in lower case or with a capital first letter? That full stop ends no
+/// sentence: `(e.g. answers)`. "IE." (the browser) and "EG." in capitals still end one.
+fn ends_e_g_or_i_e(text: &str, a: usize, b: usize) -> bool {
+    // From the start of the word's whitespace-delimited token, past opening brackets and quotes.
+    let start = text.get(..a).and_then(|t| t.char_indices().rev().find(|(_, c)| c.is_whitespace())).map_or(0, |(i, c)| i + c.len_utf8());
+    let lead = text.get(start..b).unwrap_or("").trim_start_matches(['(', '[', '"', '“', '‘', '\'']);
+    ["e.g", "i.e"].iter().any(|abbreviation| lead.eq_ignore_ascii_case(abbreviation)) || matches!(lead, "eg" | "ie" | "Eg" | "Ie")
 }
 
 fn starts_consonant_sound(w: &str) -> bool {

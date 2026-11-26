@@ -269,6 +269,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
             if capital_first
                 && let Some(w) = text.get(w_start..w_end)
                 && w.chars().next().is_some_and(char::is_lowercase)
+                && !crate::in_address(text, w_start, w_end)
             {
                 let cap = turkish_capitalize(w);
                 v.push(Issue {
@@ -302,6 +303,7 @@ pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
                 && !ABBREVIATIONS.contains(&turkish_to_lower(prev_word).as_str())
                 && let Some(w) = text.get(w_start..w_end)
                 && w.chars().next().is_some_and(char::is_lowercase)
+                && !crate::in_address(text, w_start, w_end)
             {
                 let cap = turkish_capitalize(w);
                 v.push(Issue {

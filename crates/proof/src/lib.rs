@@ -554,8 +554,16 @@ fn enclosing_token(text: &str, a: usize, b: usize) -> (usize, usize, bool) {
     (ts, te, text.get(ts..te).is_some_and(is_address))
 }
 
+/// Is the word at `a..b` of `text` part of a web or e-mail address ([`is_address`])? The rules
+/// asking for a capital at the start of a sentence skip it: `https` in `https://…`, `www` in
+/// `www.…` and `someone` in `someone@example.org` don't start a sentence.
+pub(crate) fn in_address(text: &str, a: usize, b: usize) -> bool {
+    enclosing_token(text, a, b).2
+}
+
 /// Does a whitespace-delimited token look like a web or e-mail address (`https://…`, `www.…`,
-/// `a@b.org`)? Spelling skips its words, and Spanish grammar its punctuation.
+/// `a@b.org`)? Spelling skips its words, Spanish grammar its punctuation, and the sentence-capital
+/// rules its first word ([`in_address`]).
 pub(crate) fn is_address(token: &str) -> bool {
     token.contains("://") || token.contains('@') || token.starts_with("www.")
 }
