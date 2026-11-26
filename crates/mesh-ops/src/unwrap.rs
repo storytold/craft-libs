@@ -275,6 +275,7 @@ fn interiors_overlap(a: &Flat, b: &Flat) -> bool {
 /// from each other and the borders. The padding is counted in texels of the square the charts
 /// are packed into: `resolution` (at least 16), doubled while the padding leaves no room for the
 /// charts, so at a doubled size the padding is narrower than `padding_texels` at `resolution`.
+/// An initial resolution above 65,536 texels per side is an error before the mesh changes.
 /// Vertices are split at chart borders; tangents are recomputed.
 /// Returns the number of charts. A mesh that fails the checks (indices, submesh ranges and
 /// materials, no triangle in submeshes of two materials, finite positions, finite normals and
@@ -297,6 +298,9 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
 /// More than `max_vertices` new vertices is an error too; the rebuilt arrays stop growing at
 /// most three vertices past it.
 pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32, limits: &Limits) -> Result<(usize, Vec<u32>)> {
+    if resolution > MAX_PACK_RES as u32 {
+        return Err(MeshOpsError::Invalid("UV packing resolution exceeds 65536 texels per side".into()));
+    }
     check_limit("vertex count", mesh.positions.len(), limits.max_vertices)?;
     check_limit("triangle count", mesh.triangle_count(), limits.max_unwrap_triangles)?;
     let listed = mesh.submeshes.iter().fold(0u64, |sum, s| sum.saturating_add(u64::from(s.count / 3)));
@@ -443,8 +447,7 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
 
     // Rebuild vertices: one per (vertex, chart). Each triangle reserves room for its three
     // corners before adding them.
-    let mut remap: HashMap<(u32, u32), u32> = HashMap::new();
-    reserved(remap.try_reserve(mesh.positions.len().saturating_mul(2)), "unwrap vertices")?;
+    let mut remap = vertex_remap(mesh.positions.len(), mesh.indices.len())?;
     let (mut positions, mut normals, mut uvs, mut colors, mut source) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut indices = try_vec(mesh.indices.len(), "indices")?;
     for (t, &c) in chart_of.iter().enumerate() {
@@ -574,6 +577,12 @@ fn grow_charts(faces: &Faces, tri_edges: impl Fn(usize) -> [(u32, u32); 3], corn
     Ok((chart_of, charts))
 }
 
+fn vertex_remap(positions: usize, indices: usize) -> Result<HashMap<(u32, u32), u32>> {
+    let mut remap = HashMap::new();
+    reserved(remap.try_reserve(positions.saturating_mul(2).min(indices)), "unwrap vertices")?;
+    Ok(remap)
+}
+
 /// Shelf-pack rectangles of world `sizes` (each grown by `pad` texels per side) into a square of
 /// `res` texels with the largest uniform scale that fits. Returns (texels per world unit,
 /// resolution used, texel offset per rectangle). The resolution doubles while the padding leaves
@@ -675,6 +684,28 @@ impl Mesh {
 mod tests {
     use super::*;
     use crate::{UvGBuffer, primitives};
+
+    #[test]
+    fn oversized_initial_resolution_is_rejected_without_changing_the_mesh() {
+        let mut mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y], indices: vec![0, 1, 2], ..Mesh::default() };
+        let before = mesh.clone();
+        assert!(auto_unwrap(&mut mesh, 1.0, u32::MAX).is_err());
+        assert_eq!(mesh, before);
+    }
+
+    #[test]
+    fn sparse_indices_keep_the_remap_allocation_small() {
+        let remap = vertex_remap(100_000, 3).unwrap();
+        assert!(remap.capacity() <= 16, "actual map capacity: {}", remap.capacity());
+    }
+
+    #[test]
+    fn a_small_face_connected_to_an_overlapping_large_face_starts_another_chart() {
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.5, 0.0001, 0.0]];
+        let indices = [0, 1, 2, 0, 1, 3];
+        let out = crate::unwrap_uvs(&positions, &indices, 1.0, 4096, &Limits::default()).unwrap();
+        assert_eq!(out.charts, 2, "the connected small face overlaps the large face");
+    }
 
     fn check(mut m: Mesh, min_coverage: f32) {
         m.uvs.clear();
