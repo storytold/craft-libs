@@ -259,3 +259,34 @@ fn intra_dc_threshold_precedes_the_interlace_flags() {
     assert!(!vop.alternate_vertical_scan);
     assert_eq!(vop.quant, 5);
 }
+
+#[test]
+fn gmc_duv_components_each_consume_their_marker_bit() {
+    let mut vol = plain_vol(false);
+    vol.gmc = Some(GmcConfig { warping_points: 1, warping_accuracy: 0 });
+    let mut w = BitWriter::new();
+    w.write_bits(3, 2); // S(GMC)-VOP
+    w.write_bit(false); // modulo_time_base
+    w.write_bit(true); // marker
+    w.write_bits(1, 5); // vop_time_increment
+    w.write_bit(true); // marker
+    w.write_bit(true); // vop_coded
+    w.write_bit(false); // rounding
+    w.write_bits(0, 3); // intra_dc_vlc_thr
+    // dx = +2 (size 2: prefix 011, value 10, marker 1)
+    w.write_bits(0b011, 3);
+    w.write_bits(0b10, 2);
+    w.write_bit(true);
+    // dy = -1 (size 1: prefix 010, value 0, marker 1)
+    w.write_bits(0b010, 3);
+    w.write_bits(0b0, 1);
+    w.write_bit(true);
+    w.write_bits(5, 5); // vop_quant = 5
+    w.write_bits(1, 3); // fcode_forward = 1
+    w.write_bits(0, 16);
+    let bytes = w.finish();
+    let mut r = BitReader::new(&bytes);
+    let vop = parse_vop_header(&mut r, &vol).expect("parse S-VOP header");
+    assert_eq!(vop.gmc_mv, (2, -1));
+    assert_eq!(vop.quant, 5);
+}

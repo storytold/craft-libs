@@ -214,6 +214,13 @@ impl Decoder {
         self.check_budget(&vol)?;
         let changed = self.vol.as_ref().is_none_or(|old| old.width != vol.width || old.height != vol.height);
         if changed {
+            if let (Some(fut), Some(old_vol)) = (self.future_ref.as_ref(), self.vol.as_ref())
+                && !fut.shown
+            {
+                // The displaced picture is copied at the old layer's dimensions before the old
+                // references are dropped: ensure the old layer also fits the current budget.
+                self.check_budget(old_vol)?;
+            }
             // A delayed picture still waiting for display keeps its own size and metadata.
             if let (Some(fut), Some(old_info)) = (self.future_ref.as_mut(), self.info.as_ref())
                 && !fut.shown
@@ -267,14 +274,25 @@ impl Decoder {
         if packet.is_empty() {
             return Ok(Vec::new());
         }
-        let units = scan_start_codes(packet);
         let mut out = std::mem::take(&mut self.held);
+        match self.decode_inner(packet, pts, &mut out) {
+            Ok(()) => Ok(out),
+            Err(e) => {
+                out.append(&mut self.held);
+                self.held = out;
+                Err(e)
+            }
+        }
+    }
+
+    fn decode_inner(&mut self, packet: &[u8], pts: i64, out: &mut Vec<Picture>) -> Result<(), DecodeError> {
+        let units = scan_start_codes(packet);
 
         if units.is_empty() {
             let mut r = BitReader::new(packet);
             if let Some((vol, mut vop)) = try_parse_short_video_header(&mut r)? {
                 self.activate_vol(vol)?;
-                out.extend(std::mem::take(&mut self.held));
+                out.append(&mut self.held);
                 let vol_cfg = self.vol.as_ref().ok_or_else(|| DecodeError::Invalid("missing VOL".into()))?.clone();
                 let info = self.info.as_ref().ok_or_else(|| DecodeError::Invalid("missing sequence info".into()))?.clone();
                 let ticks = i64::from(vop.time_increment);
@@ -289,14 +307,13 @@ impl Decoder {
                 self.past_ref = self.future_ref.take();
                 self.future_ref = Some(Anchor { frame, shown: true });
                 out.push(pic);
-                return Ok(out);
+                return Ok(());
             }
             return Err(DecodeError::Invalid("packet contains no start codes or short video header".into()));
         }
 
         let vop_count = units.iter().filter(|&&(c, _)| c == VOP_START).count();
         if vop_count > MAX_OUTPUT_PICTURES_PER_PACKET {
-            self.held = out;
             return Err(DecodeError::Invalid("packet contains too many VOPs".into()));
         }
         // Every picture is returned at most once, so a packet returns at most the pictures already
@@ -305,7 +322,6 @@ impl Decoder {
         let pending = self.future_ref.as_ref().is_some_and(|a| !a.shown);
         let worst_case = out.len() + usize::from(pending) + vop_count;
         if worst_case > MAX_OUTPUT_PICTURES_PER_PACKET {
-            self.held = out;
             return Err(DecodeError::Invalid("packet could return too many pictures".into()));
         }
         let multi_vop_packet = vop_count > 1;
@@ -428,7 +444,7 @@ impl Decoder {
             }
         }
 
-        Ok(out)
+        Ok(())
     }
 
     /// Flush any delayed anchor picture held for B-VOP reordering at the end of the stream.

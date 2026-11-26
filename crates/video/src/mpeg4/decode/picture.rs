@@ -325,8 +325,9 @@ struct VopCtx<'a> {
     mb_h: usize,
     qp: i32,
     slice_id: usize,
-    /// Quantiser of the previous coded macroblock, which selects the intra DC syntax (Table 6-12).
-    running_qp: i32,
+    /// Quantiser of the previous coded macroblock (`None` before the first coded macroblock in the
+    /// VOP or video packet), which selects the intra DC syntax (Table 6-12).
+    running_qp: Option<i32>,
     dc_store: DcAcStore,
     out: RefFrame,
 }
@@ -337,7 +338,7 @@ impl VopCtx<'_> {
             && let Some((_mb_num, new_q)) = try_read_video_packet_header(r, self.vol, self.vop)?
         {
             self.qp = i32::from(new_q);
-            self.running_qp = self.qp;
+            self.running_qp = None;
             self.slice_id += 1;
             return Ok(true);
         }
@@ -354,8 +355,8 @@ impl VopCtx<'_> {
     ) -> Result<(), DecodeError> {
         let (mx, my) = mb;
         let qp = self.qp;
-        let use_dc_vlc = self.running_qp < self.vop.intra_dc_vlc_thr_qp;
-        self.running_qp = qp;
+        let use_dc_vlc = self.running_qp.unwrap_or(qp) < self.vop.intra_dc_vlc_thr_qp;
+        self.running_qp = Some(qp);
         for b in 0..6 {
             let luma = b < 4;
             let scaler = if self.vol.short_header { 8 } else { dc_scaler(qp, luma) };
@@ -540,7 +541,7 @@ impl VopCtx<'_> {
                 continue;
             }
 
-            self.running_qp = self.qp;
+            self.running_qp = Some(self.qp);
             self.dc_store.set_non_intra(mx, my, self.slice_id);
             self.out.mbs[idx].not_coded = false;
             self.out.mbs[idx].intra = false;
@@ -715,7 +716,7 @@ pub(super) fn decode_vop(
     }
 
     let qp = i32::from(vop.quant);
-    let mut ctx = VopCtx { vol, vop, mb_w, mb_h, qp, slice_id: 0, running_qp: qp, dc_store: DcAcStore::new(mb_w, mb_h), out };
+    let mut ctx = VopCtx { vol, vop, mb_w, mb_h, qp, slice_id: 0, running_qp: None, dc_store: DcAcStore::new(mb_w, mb_h), out };
 
     match ctx.vop.coding_type {
         VopType::I => ctx.decode_i_vop(r)?,

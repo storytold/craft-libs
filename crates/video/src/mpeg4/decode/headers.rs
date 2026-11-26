@@ -395,6 +395,9 @@ fn read_gmc_duv(r: &mut BitReader<'_>) -> Result<i32, DecodeError> {
         return Ok(0);
     }
     let raw = r.read_bits(size)? as i32;
+    if !r.read_bit()? {
+        return Err(DecodeError::Invalid("missing marker bit after GMC duv".into()));
+    }
     let v = if (raw >> (size - 1)) == 0 { raw - ((1 << size) - 1) } else { raw };
     Ok(v)
 }
@@ -506,7 +509,6 @@ fn read_gmc_trajectory(r: &mut BitReader<'_>, vol: &VolConfig) -> Result<(i32, i
         1 => {
             let dx = read_gmc_duv(r)?;
             let dy = read_gmc_duv(r)?;
-            let _ = r.read_bit()?; // marker_bit
             // Convert from accuracy (0 = 1/2, 1 = 1/4, 2 = 1/8, 3 = 1/16) to half-pel (or qpel if quarter_sample)
             let target_shift = if vol.quarter_sample { 1u8 } else { 0u8 };
             let shift = gmc.warping_accuracy.saturating_sub(target_shift);
