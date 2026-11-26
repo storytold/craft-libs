@@ -329,8 +329,10 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     };
     // 1 where texel (xi, yi) does not occlude the receiver plane at the texel's center. The
     // perspective compare runs on 1/depth, which is linear across the map; a plane whose inverse
-    // depth reaches 0 is behind the light and cannot be occluded.
-    let (iz, iq) = (1.0 / z, 1.0 / (m.focal * z));
+    // depth reaches 0 is behind the light and cannot be occluded. `iz / focal` does not overflow
+    // for a depth whose product with the focal length would.
+    let iz = 1.0 / z;
+    let iq = iz / m.focal;
     let open = |xi: i64, yi: i64| -> f32 {
         let s = at(xi, yi) + bias;
         let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
@@ -617,8 +619,25 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::shadow_coord;
+    use super::{shadow_coord, shadow_factor};
     use crate::scene::ShadowMap;
+
+    #[test]
+    fn a_receiver_plane_far_from_the_light_keeps_its_slope() {
+        // The same oblique receiver and occluders at depth 100 and scaled by 1e36: the
+        // perspective compare does not depend on scale, so both give the same light. At 1e38,
+        // 400 × depth overflows f32.
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let ng = [1.0, 0.0, -0.01];
+        let light = |scale: f32| {
+            let m = ShadowMap { view, focal: 400.0, ortho: false, size: 64, offset: 0, bias: 1.5, radius: 0.5 * scale };
+            let texels = vec![96.0 * scale; 64 * 64];
+            shadow_factor(&m, &texels, [0.0, 0.0, 100.0 * scale], ng, 1.0)
+        };
+        let (near, far) = (light(1.0), light(1e36));
+        assert!(near > 0.1 && near < 0.9, "{near}");
+        assert!((near - far).abs() < 1e-3, "{near} {far}");
+    }
 
     #[test]
     fn a_receiver_whose_projection_overflows_f32_is_projected_in_f64() {
