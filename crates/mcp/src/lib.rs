@@ -206,10 +206,10 @@ impl Page {
 }
 
 /// Take the page of `items` that starts at the `cursor` in a list request's parameters, with at most
-/// `page_size` items (0 puts every item in one page). The cursors are the decimal offsets this
-/// function returns, which are multiples of `page_size`. Parameters that are not an object, and a
-/// cursor that is not one of those offsets, are rejected with -32602. A cursor
-/// past the end of a list that has shrunk since gives an empty last page.
+/// `page_size` items (0 puts every item in one page). The helper accepts canonical positive
+/// decimal offsets divisible by `page_size`. Parameters that are not an object, and malformed
+/// cursors, are rejected with -32602. The helper returns an empty last page for a cursor past
+/// the list's end, including after the list shrinks.
 pub fn page(params: Option<&Value>, mut items: Vec<Value>, page_size: usize) -> Result<Page, RpcError> {
     if params.is_some_and(|p| !p.is_object()) {
         return Err(RpcError::new(-32602, "List parameters must be an object"));
