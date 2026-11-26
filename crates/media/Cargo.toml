@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-media"
 description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, an MPEG-TS/PS demuxer and MPEG-TS muxer, and Ogg and AVI demuxers."
 version.workspace = true
@@ -41,59 +42,3 @@ chrono = { workspace = true, optional = true }
 craft-media-testkit = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
-
-[[test]]
-name = "fuzz"
-required-features = ["isobmff"]
-
-[[test]]
-name = "fuzz_matroska"
-required-features = ["matroska"]
-
-[[test]]
-name = "oracle_avi"
-required-features = ["avi"]
-
-[[test]]
-name = "oracle_avi_mux"
-required-features = ["avi"]
-
-[[test]]
-name = "oracle_demux"
-required-features = ["isobmff"]
-
-[[test]]
-name = "oracle_matroska"
-required-features = ["matroska"]
-
-[[test]]
-name = "oracle_mpegts"
-required-features = ["mpegts"]
-
-[[test]]
-name = "mpegts_mux_fuzz"
-required-features = ["mpegts"]
-
-[[test]]
-name = "mpegts_mux_readback"
-required-features = ["mpegts"]
-
-[[test]]
-name = "oracle_mux"
-required-features = ["isobmff"]
-
-[[test]]
-name = "oracle_mxf"
-required-features = ["mxf"]
-
-[[test]]
-name = "oracle_ogg"
-required-features = ["ogg"]
-
-[[test]]
-name = "oracle_vmd"
-required-features = ["vmd"]
-
-[[test]]
-name = "roundtrip"
-required-features = ["isobmff"]

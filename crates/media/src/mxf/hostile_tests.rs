@@ -159,13 +159,15 @@ fn extreme(f: &mut [u8], at: usize, len: usize, r: &mut Rng) {
 fn extreme_metadata_index_and_partition_fields_never_panic() {
     let mut r = Rng(0x00C0_FFEE_1234_5678);
     let mut opened = 0;
+    // The gate damages each base the hostile divisor's fraction of the rounds; nightly all 600.
+    let rounds = 600 / craft_media_testkit::hostile::divisor();
     for base in bases() {
         assert!(exercise(&base), "the unchanged file opens");
         // local sets (header metadata, index table segments) and partition packs
         let sets: Vec<(usize, usize, usize)> =
             klvs(&base).into_iter().filter(|&(k, _, len)| len > 0 && base[k + 4] == 0x02 && matches!(base[k + 5], 0x53 | 0x05)).collect();
         assert!(sets.len() > 10, "{} packets to damage", sets.len());
-        for round in 0..600 {
+        for round in 0..rounds {
             let mut f = base.clone();
             for _ in 0..1 + round % 3 {
                 let (k, v, len) = sets[r.below(sets.len())];
@@ -184,7 +186,7 @@ fn extreme_metadata_index_and_partition_fields_never_panic() {
             opened += usize::from(exercise(&f));
         }
     }
-    assert!(opened > 1200, "most damaged files still open and are read: {opened}");
+    assert!(opened > 2 * rounds, "most damaged files still open and are read: {opened} of {rounds} rounds a base");
 }
 
 /// KLV lengths that lie (longer than the file, the largest BER lengths, zero) and keys that stop

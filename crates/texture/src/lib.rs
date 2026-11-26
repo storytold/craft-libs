@@ -34,11 +34,15 @@
 //! [`normal`] makes tangent-space normal maps from a height plane, and [`packing`] packs
 //! occlusion, roughness and metallic into one RGBA image. Both read a [`ScalarSource`] one row at
 //! a time, so a tiled surface is read in place instead of copied into a float plane.
+//!
+//! [`mip`] builds mip chains with a box filter and samples them at the level of detail of a
+//! footprint, with nearest or linear filtering between levels.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(feature = "dds", test))]
 pub mod dds;
+pub mod mip;
 
 use std::sync::Arc;
 
