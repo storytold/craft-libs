@@ -126,6 +126,19 @@ fn disabled(fixture: &Fixture, label: &str) -> bool {
     rows(fixture).into_iter().find(|(name, _)| name.starts_with(label)).unwrap_or_else(|| panic!("no row {label}")).1
 }
 
+/// What the dialog face laid out, for a failing assertion: the box's width and those of the rows' list, the field and
+/// the rows, so a box wider than everything it holds reads apart from a field left at its measure.
+fn laid_out(fixture: &Fixture) -> String {
+    let wide = |role: Role| fixture.by_role(role).iter().map(|node| format!("{:.1}", node.rect.width())).collect::<Vec<_>>().join(", ");
+    format!(
+        "the box {:.1} wide, its rows' list [{}] wide, the field [{}] wide, the rows [{}] wide",
+        fixture.by_role(Role::DIALOG).first().map_or(0.0, |node| node.rect.width()),
+        wide(Role::LIST_BOX),
+        wide(Role::TEXT_INPUT),
+        wide(Role::LIST_BOX_OPTION)
+    )
+}
+
 #[trial]
 fn a_picked_command_runs_from_the_palette_and_comes_first_when_it_opens_again() {
     let entries = vec![
@@ -569,14 +582,19 @@ fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
         let field = fixture.by_role(Role::TEXT_INPUT).first().expect("the search field shows").rect;
         let pad = field.left() - frame.left();
         assert!(pad >= 0.0 && pad < frame.width() / 10.0, "{when}: the field starts inside the box's padding: {field:?} in {frame:?}");
-        assert!((frame.right() - field.right() - pad).abs() <= 1.0, "{when}: the field spans the box's inner width: {field:?} in {frame:?}");
+        assert!(
+            (frame.right() - field.right() - pad).abs() <= 1.0,
+            "{when}: the field spans the box's inner width: {field:?} in {frame:?}; {}",
+            laid_out(fixture)
+        );
         let listed = fixture.by_role(Role::LIST_BOX_OPTION);
         assert!(!listed.is_empty(), "{when}: the box lists rows");
         for row in listed {
             let row = row.rect;
             assert!(
                 (row.left() - field.left()).abs() <= 1.0 && (row.right() - field.right()).abs() <= 1.0,
-                "{when}: a row spans the box's inner width, as the field does: {row:?} under {field:?} in {frame:?}"
+                "{when}: a row spans the box's inner width, as the field does: {row:?} under {field:?} in {frame:?}; {}",
+                laid_out(fixture)
             );
         }
     };
