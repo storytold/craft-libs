@@ -16,10 +16,17 @@ use crate::geom::Op;
 use crate::text::{Font, HAlign, Text, VAlign};
 use crate::{Cap, Error, Frame, Join, LineStyle, MAX_BYTES, MAX_ITEMS, MAX_PIXELS, Picture, clip, dib, f};
 
+/// Why a picture's decode stopped early.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TruncationReason {
+    PrematureEof,
+    OpcodeLimitExceeded,
+}
+
 /// The application data before the picture in a PICT file.
 const FILE_HEADER: usize = 512;
 /// Most opcodes one picture plays (a small file can't keep the reader busy for minutes).
-const MAX_OPS: usize = 1 << 22;
+pub const MAX_OPS: usize = 1 << 22;
 /// Most rectangles one region breaks into.
 const MAX_RECTS: usize = 1 << 16;
 /// Steps the regions of one picture may take to read (each inversion point and band costs some).
@@ -43,15 +50,22 @@ const FLAT: u32 = 0x200;
 struct Be<'a> {
     data: &'a [u8],
     pos: usize,
+    eof: bool,
 }
 
 impl<'a> Be<'a> {
     fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos }
+        Self { data, pos, eof: false }
     }
     fn bytes(&mut self, n: usize) -> Option<&'a [u8]> {
         let end = self.pos.checked_add(n)?;
-        let b = self.data.get(self.pos..end)?;
+        let b = match self.data.get(self.pos..end) {
+            Some(b) => b,
+            None => {
+                self.eof = true;
+                return None;
+            }
+        };
         self.pos = end;
         Some(b)
     }
@@ -65,6 +79,7 @@ impl<'a> Be<'a> {
             self.pos = end;
             Some(())
         } else {
+            self.eof = true;
             None
         }
     }
@@ -624,6 +639,7 @@ struct Pict {
     pending_pen: Option<([u8; 3], f64)>,
     skipped_records: u32,
     truncated: bool,
+    truncation_reason: Option<TruncationReason>,
     dropped_images: u32,
     ignored_clips: u32,
     unplayed_raster_ops: u32,
@@ -661,6 +677,7 @@ impl Pict {
             pending_pen: None,
             skipped_records: 0,
             truncated: false,
+            truncation_reason: None,
             dropped_images: 0,
             ignored_clips: 0,
             unplayed_raster_ops: 0,
@@ -1448,24 +1465,41 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     let h = find(bytes).ok_or(Error::NotPict)?;
     let mut q = Pict::new(h.frame);
     let mut r = Be::new(bytes, h.ops);
-    let mut stopped_early = true;
+    let mut reached_end = false;
+    let mut halted_for_record_error = false;
+    let mut reason = None;
     for _ in 0..MAX_OPS {
         if h.v2 && r.pos % 2 == 1 && r.skip(1).is_none() {
+            reason = Some(TruncationReason::PrematureEof);
             break;
         }
         let Some(op) = (if h.v2 { r.u16() } else { r.u8().map(u16::from) }) else {
+            reason = Some(TruncationReason::PrematureEof);
             break;
         };
         if op == 0x00FF {
-            stopped_early = false;
+            reached_end = true;
             break;
         }
         if q.op(op, &mut r).is_none() {
+            if r.eof {
+                reason = Some(TruncationReason::PrematureEof);
+            } else {
+                halted_for_record_error = true;
+            }
+            break;
+        }
+        if r.eof {
+            reason = Some(TruncationReason::PrematureEof);
             break;
         }
     }
-    if stopped_early {
+    if !reached_end && !halted_for_record_error && reason.is_none() {
+        reason = Some(TruncationReason::OpcodeLimitExceeded);
+    }
+    if !reached_end {
         q.truncated = true;
+        q.truncation_reason = reason;
     }
     q.flush();
     let pic =
@@ -1473,6 +1507,7 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     Ok(Picture {
         skipped_records: q.skipped_records.saturating_add(pic.skipped_records),
         truncated: q.truncated || pic.truncated,
+        truncation_reason: q.truncation_reason.or(pic.truncation_reason),
         dropped_images: q.dropped_images.saturating_add(pic.dropped_images),
         ignored_clips: q.ignored_clips.saturating_add(pic.ignored_clips),
         unplayed_raster_ops: q.unplayed_raster_ops.saturating_add(pic.unplayed_raster_ops),
