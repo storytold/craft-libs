@@ -754,6 +754,13 @@ pub trait CanvasTool {
         Cursor::System(CursorIcon::Default)
     }
 
+    /// A wheel share over a canvas without a view, flipped by `invert_wheel_zoom`; true when the tool used it.
+    /// Default: `false`.
+    fn wheel(&mut self, wheel: &craft_behavior::Wheel, pointer: Pos2, cx: &mut ToolContext<'_>) -> bool {
+        let _ = (wheel, pointer, cx);
+        false
+    }
+
     /// Whether a press of `button` with `mods` held starts a gesture with this tool. A gesture keeps its button
     /// until that button comes up. A brush takes the primary button, and the secondary while Alt is held (the
     /// resize chord). The middle button never reaches `takes`: the canvas turns every middle press into a pan before
@@ -851,6 +858,10 @@ impl<T: CanvasTool + ?Sized> CanvasTool for &mut T {
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         (**self).cursor(cx)
+    }
+
+    fn wheel(&mut self, wheel: &craft_behavior::Wheel, pointer: Pos2, cx: &mut ToolContext<'_>) -> bool {
+        (**self).wheel(wheel, pointer, cx)
     }
 
     fn takes(&self, button: PointerButton, mods: Mods) -> bool {

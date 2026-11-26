@@ -291,6 +291,8 @@ pub struct RasterDisplay<'a> {
     read: PixelRect,
     shown: Option<Shown>,
     mapping: Option<Mapping>,
+    #[allow(dead_code)] // P3(graph-w1): vw.F18
+    uncapped: bool,
 }
 
 /// Where a mapped display's picture lies in document space; a source picture is drawn through the homography on a
@@ -356,6 +358,7 @@ impl<'a> RasterDisplay<'a> {
             read: PixelRect::default(),
             shown: None,
             mapping: None,
+            uncapped: false,
         }
         .label(label)
     }
@@ -381,6 +384,14 @@ impl<'a> RasterDisplay<'a> {
             mapping.placed = placed;
         }
         self
+    }
+
+    /// With `uncapped` and [`Extent::Tiled`] the display tiles the whole view by texture wrap, with no limit on copies;
+    /// by default the copies per axis stay capped.
+    #[must_use]
+    pub fn uncapped(self, uncapped: bool) -> Self {
+        let _ = uncapped;
+        todo!("vw.F18")
     }
 
     /// The store that holds this display's textures of one sampling. A texture is sharp (nearest) from 100 percent

@@ -47,6 +47,8 @@ pub struct NavigationOptions {
     pub middle_button: craft_behavior::MiddleButton,
     /// The middle-button scroll runs the other way. Off.
     pub invert_middle: bool,
+    /// Wheel and pinch zoom run the other way, on a canvas without a view too. Off.
+    pub invert_wheel_zoom: bool,
     /// How a middle-button autoscroll feels under [`MiddleButton::AutoScroll`]. [`MiddleAutoscrollFeel::Edge`].
     pub middle_autoscroll: MiddleAutoscrollFeel,
 }
@@ -107,6 +109,7 @@ impl Default for NavigationOptions {
             touchpad_glide: false,
             middle_button: craft_behavior::MiddleButton::default(),
             invert_middle: false,
+            invert_wheel_zoom: false,
             middle_autoscroll: MiddleAutoscrollFeel::Edge,
         }
     }

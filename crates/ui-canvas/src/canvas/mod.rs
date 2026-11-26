@@ -837,6 +837,7 @@ impl<'a> Canvas<'a> {
             snap: self.snapped(cx.env.shell().os),
             document: self.document_size(),
             navigation: self.navigation,
+            wheel: None,
             editor_input: self.editor_input.clone(),
             editor: cx.editor_handle(),
         }
@@ -874,6 +875,9 @@ pub struct CanvasOutput {
     pub autoscroll: Option<Pos2>,
     /// What the rulers given to [`Canvas::with_rulers`] reported in this pass.
     pub rulers: Option<RulersOutput>,
+    /// True when the user moved the view this pass (wheel, pinch, middle or hand pan, a view command, the overscroll
+    /// settle of those); false for queued requests and the first-show fit.
+    pub navigated: bool,
 }
 
 impl CanvasOutput {
@@ -907,6 +911,8 @@ pub struct ToolPass {
     pub view: Option<CanvasView>,
     pub(crate) snap: Option<Snap>,
     pub(crate) document: Option<Size>,
+    #[allow(dead_code)] // P3(graph-w1): vw.F11
+    pub(crate) wheel: Option<craft_behavior::Wheel>,
     pub(crate) navigation: NavigationOptions,
     /// The editor part's inputs of this pass, in the order they arrived; the body applies them to its own document.
     pub editor_input: Arc<[EditorInput]>,
@@ -1109,6 +1115,7 @@ impl Component for Canvas<'_> {
             auto_scrolling,
             autoscroll,
             rulers: self.ruler_output,
+            navigated: Default::default(),
         }
     }
 }

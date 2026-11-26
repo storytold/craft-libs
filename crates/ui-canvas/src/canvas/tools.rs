@@ -54,12 +54,21 @@ pub struct ViewTarget {
     /// The highest device zoom Fit on Screen reaches (1 = 100 %). Default: 1, so a document window never opens a small
     /// document magnified; a full-window dialog magnifies a small image to fill its canvas.
     pub fit_ceiling: f64,
+    #[allow(dead_code)] // P3(graph-w1): ge.C4
+    extent: Option<Rect>,
 }
 
 impl ViewTarget {
     /// A document of `size` with no artboard and no resolution.
     pub fn new(document: Size) -> Self {
-        Self { document, artboard: None, ppi: None, screen_ppi: SCREEN_PPI, fit_ceiling: 1.0 }
+        Self { document, artboard: None, ppi: None, screen_ppi: SCREEN_PPI, fit_ceiling: 1.0, extent: None }
+    }
+
+    /// A document with no edges: Fit on Screen fits `extent`, a never-shown view opens fitted to it, and overscroll
+    /// never clamps. Fit Artboard and Print Size are unavailable.
+    pub fn unbounded(extent: Rect) -> ViewTarget {
+        let _ = extent;
+        todo!("ge.C4")
     }
 
     /// The artboard Fit Artboard on Screen shows.
