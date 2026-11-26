@@ -58,5 +58,5 @@ python3 crates/raw/docs/verify_orf_reference.py --corpus /path/to/lightcraft/cor
 ```
 
 The reference check records output agreement, not independent derivation or
-provenance acceptance. The original LightCraft corpus acquisition manifest remains
-in [LightCraft](https://github.com/storytold/lightcraft/tree/225282d856868c4cb9063c72dd331c5bbcdadd1e/docs/raw).
+provenance acceptance. [LightCraft's pinned acquisition manifest](https://github.com/storytold/lightcraft/blob/225282d856868c4cb9063c72dd331c5bbcdadd1e/xtask/src/raw_samples.rs)
+lists the raw.pixls.us source URLs and input SHA-256 values for all 23 files.
