@@ -147,13 +147,13 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
         let inner = h - bevel;
         let mut v = Vec::new();
         for i in 0..kb {
-            v.push(-h + bevel * i as f32 / kb as f32);
+            v.push(-h + bevel * (i as f32 / kb as f32));
         }
         for i in 0..=kc {
-            v.push(-inner + 2.0 * inner * i as f32 / kc as f32);
+            v.push(inner * (2.0 * (i as f32 / kc as f32) - 1.0));
         }
         for i in 1..=kb {
-            v.push(inner + bevel * i as f32 / kb as f32);
+            v.push(inner + bevel * (i as f32 / kb as f32));
         }
         v
     };
@@ -536,6 +536,12 @@ mod tests {
             assert!(rounded_box(Vec3::ONE, bevel).is_ok(), "{bevel}");
         }
         assert!(cube(2.0).is_ok());
+    }
+
+    #[test]
+    fn large_finite_box_extents_keep_generated_positions_finite() {
+        let mesh = rounded_box(Vec3::new(1e38, 1.0, 1.0), 0.0).unwrap();
+        assert!(mesh.positions.iter().all(|p| p.is_finite()));
     }
 
     /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
