@@ -12,6 +12,7 @@ craft-file-formats = { workspace = true }
 craft-raster-codecs = { workspace = true }
 craft-svg = { workspace = true }
 craft-dxf = { workspace = true }
+craft-embroidery = { workspace = true }
 craft-pdf = { workspace = true, features = ["paths", "write"] }
 craft-eps = { workspace = true, features = ["paths"] }
 kurbo = { workspace = true }
