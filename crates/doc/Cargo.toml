@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-doc"
 description = "Read-only access to PhotoCraft, VectorCraft and EffectCraft documents: format detection, version, embedded previews and PDF, and the layer and page outline."
 version.workspace = true
@@ -30,4 +31,4 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"], optio
 ruzstd = { version = "0.9", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
-proptest = { workspace = true }
+craft-testkit = { workspace = true }
