@@ -444,6 +444,7 @@ impl DialogRole {
 pub struct FooterButton {
     label: Label,
     role: DialogRole,
+    tag: Option<Id>,
     letter: Option<char>,
     chord: Option<Chord>,
     enabled: bool,
@@ -478,6 +479,7 @@ impl FooterButton {
         FooterButton {
             label: label.into(),
             role,
+            tag: None,
             letter: None,
             chord: None,
             enabled: true,
@@ -486,6 +488,20 @@ impl FooterButton {
             stays_open: false,
             armed_after: None,
         }
+    }
+
+    /// Associates a generated button with the dialog body that handles it.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn tagged(mut self, tag: Id) -> Self {
+        self.tag = Some(tag);
+        self
+    }
+
+    /// The generated button's identity, preserved through footer settlement and picking.
+    #[doc(hidden)]
+    pub const fn tag(&self) -> Option<Id> {
+        self.tag
     }
 
     /// The letter that activates the button while its dialog holds focus and no text part owns the keys. On Windows
