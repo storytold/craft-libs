@@ -1154,6 +1154,106 @@ fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {
     );
 }
 
+/// Two rows whose eye cell is on and whose lock cell is off; the source does not flip the first row's cells.
+struct LockedFirst;
+
+const LOCKED_EYE: craft_behavior::ColumnKey = craft_behavior::ColumnKey::new("eye");
+
+impl craft_behavior::DisplayOrder<usize> for LockedFirst {
+    fn len(&self) -> usize {
+        2
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+}
+
+impl craft_behavior::ItemSource<usize> for LockedFirst {
+    fn toggled(&self, _: usize, column: &craft_behavior::ColumnKey) -> bool {
+        *column == LOCKED_EYE
+    }
+
+    fn toggle_enabled(&self, at: usize, _: &craft_behavior::ColumnKey) -> bool {
+        at != 0
+    }
+}
+
+/// A toggle cell the source does not flip paints its glyph in `text.disabled` at rest, under the pointer and under a
+/// press, shows no off glyph under the pointer, and its node reads disabled; the cells of a row that flips keep
+/// `text.muted`, their off glyph under the pointer and enabled nodes.
+#[trial]
+fn a_toggle_cell_that_does_not_flip_paints_disabled_and_ignores_the_pointer() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnSpec, Role, ToggleColumn};
+    use craft_ui::list::ToggleCell;
+    use craft_ui::runtime::env::Env;
+    use craft_ui::testing::pointer;
+    use egui::Color32;
+    use std::cell::Cell;
+    const LOCK: ColumnKey = ColumnKey::new("lock");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    // The eye and lock cells of each row.
+    let seen = Rc::new(Cell::new(([[egui::Rect::NOTHING; 2]; 2], Color32::TRANSPARENT, Color32::TRANSPARENT)));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let text = Env::of(ui).tokens.tokens().color.text;
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let columns = vec![
+            ColumnSpec::toggle(LOCKED_EYE, "", ToggleColumn::sweepable()),
+            ColumnSpec::toggle(LOCK, "", ToggleColumn::sweepable()),
+            ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0)),
+        ];
+        let _ = List::new("Layers").columns(columns).show_items(ui, &LockedFirst, &mut |key, icx| {
+            let (mut cells, ..) = held.get();
+            cells[*key] = [LOCKED_EYE, LOCK].map(|column| icx.cell(&column).unwrap_or(egui::Rect::NOTHING));
+            held.set((cells, color(text.disabled.0), color(text.muted.0)));
+            ListRow::new(NAMES[*key]).cells(icx.cells()).toggle(ToggleCell::eye(LOCKED_EYE, true)).toggle(ToggleCell::lock(LOCK, false))
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let tints = |shapes: &[egui::Shape], cell: egui::Rect| -> Vec<Color32> {
+        let mut tints: Vec<Color32> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if cell.contains(mesh.calc_bounds().center()) => Some(mesh.vertices.iter().map(|vertex| vertex.color)),
+                _ => None,
+            })
+            .flatten()
+            .filter(|color| color.a() > 0)
+            .collect();
+        tints.dedup();
+        tints
+    };
+    let ([[locked, locked_lock], [open, open_lock]], disabled, muted) = seen.get();
+    let shapes = fixture.frame_shapes();
+    let (rest, open_rest) = (tints(&shapes, locked), tints(&shapes, open));
+    let mut hover = |cell: egui::Rect| {
+        fixture.frame(vec![pointer::moved(cell.center())]);
+        fixture.frame(Vec::new());
+        tints(&fixture.frame_shapes(), cell)
+    };
+    let (locked_off, open_off) = (hover(locked_lock), hover(open_lock));
+    let hovered = hover(locked);
+    fixture.frame(vec![pointer::press(locked.center())]);
+    let pressed = tints(&fixture.frame_shapes(), locked);
+    fixture.frame(vec![pointer::release(locked.center())]);
+    for (when, found) in [("at rest", &rest), ("under the pointer", &hovered), ("under a press", &pressed)] {
+        assert!(!found.is_empty() && found.iter().all(|tint| *tint == disabled), "the locked eye reads text.disabled {disabled:?} {when}: {found:?}");
+    }
+    assert!(!open_rest.is_empty() && open_rest.iter().all(|tint| *tint == muted), "the open eye rests in text.muted {muted:?}: {open_rest:?}");
+    assert!(locked_off.is_empty(), "the locked row's off lock shows no glyph under the pointer: {locked_off:?}");
+    assert!(!open_off.is_empty(), "the open row's off lock shows its glyph under the pointer");
+    let tree = fixture.tree();
+    let switches: Vec<_> = tree.keys().into_iter().filter(|key| tree.role_of(*key) == Some(Role::SWITCH)).collect();
+    let states = |row: &str| -> Vec<bool> {
+        switches.iter().filter(|key| tree.name_of(**key).is_some_and(|name| name.contains(row))).map(|key| tree.is_disabled_key(*key)).collect()
+    };
+    assert_eq!(states(NAMES[0]), [true, true], "the locked row's toggle nodes read disabled");
+    assert_eq!(states(NAMES[1]), [false, false], "the open row's toggle nodes read enabled");
+}
+
 /// Every filled rect among `shapes`, nested lists included.
 fn fills(shapes: &[egui::Shape], out: &mut Vec<(egui::Rect, egui::Color32)>) {
     for shape in shapes {

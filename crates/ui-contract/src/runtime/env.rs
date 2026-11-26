@@ -378,6 +378,10 @@ pub struct ItemFacts {
     /// The keys of the toggle columns that have one (`ToggleColumn::key`), which their cells show in the tooltip.
     #[doc(hidden)]
     pub toggle_keys: Vec<(craft_behavior::ColumnKey, craft_keymap::Chord)>,
+    /// The toggle columns whose cell in this item does not flip (`ItemSource::toggle_enabled` is false, or the item is
+    /// a section): the row paints such a cell inactive.
+    #[doc(hidden)]
+    pub closed_toggles: Vec<craft_behavior::ColumnKey>,
     /// Each column's alignment and whether its figures are tabular, from its `ColumnSpec`: a row places its cells'
     /// text by them.
     #[doc(hidden)]

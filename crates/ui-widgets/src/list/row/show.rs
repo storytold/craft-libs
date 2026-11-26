@@ -14,7 +14,7 @@ use crate::contract::{
 };
 use crate::controls::disclosure::Disclosure;
 use crate::display::Progress;
-use crate::list::toggle::{ToggleFace, ToggleState};
+use crate::list::toggle::{ToggleCell, ToggleFace, ToggleState};
 use crate::list::words::ListWords;
 use crate::primitives::{DocRun, DocText, RectSide, RuleKind, StrokeWidth, TextRun, Wrap, glyph};
 use crate::runtime::commands::FireSource;
@@ -784,7 +784,13 @@ impl ListRow<'_> {
         self.cell_bounds.iter().find(|(key, _)| *key == part).map(|(_, rect)| *rect)
     }
 
-    /// The parts of the row's toggle cells: their flags, held state and tooltip with the toggle's key.
+    /// The collection does not flip `toggle` in this row (`ItemSource::toggle_enabled`): its cell paints in the
+    /// Disabled state and shows no hover.
+    pub(super) fn toggle_closed(&self, toggle: &ToggleCell) -> bool {
+        self.closed_toggles.contains(&toggle.column)
+    }
+
+    /// The parts of the row's toggle cells: their flags, held state, inactive state and tooltip with the toggle's key.
     fn toggle_parts(&self, placed: &Placed, cx: &mut PartsCx<'_, Self>) {
         for (at, cell) in &placed.toggles {
             let toggle = &self.toggles[*at];
@@ -813,7 +819,7 @@ impl ListRow<'_> {
                 Some(RowPressed::Row) => toggle.row_press,
                 _ => false,
             };
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held);
+            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held).inactive(self.toggle_closed(toggle));
             let _ = match tip {
                 Some(tip) => part.tooltip(tip),
                 None => part,

@@ -24,6 +24,7 @@ fn with_item_facts<R>(ui: &mut Ui, at: crate::runtime::access::SetPosition, body
         columns: Vec::new(),
         toggles: Vec::new(),
         toggle_keys: Vec::new(),
+        closed_toggles: Vec::new(),
         aligns: Vec::new(),
         pressed: None,
         menu_open: false,

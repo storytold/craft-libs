@@ -399,6 +399,9 @@ pub struct ListRow<'a> {
     pub(super) toggle_columns: Vec<ColumnKey>,
     /// The keys of those toggle columns that have one, from the same facts: their cells show the key in the tooltip.
     pub(super) toggle_keys: Vec<(ColumnKey, craft_keymap::Chord)>,
+    /// The toggle columns whose cell in this row does not flip, from the same facts: their cells paint inactive and
+    /// show no hover.
+    pub(super) closed_toggles: Vec<ColumnKey>,
     pub(super) toggles: Vec<ToggleCell>,
     pub(super) texts: Vec<TextCell>,
     /// The status cells (`cell_status`), in the order added.
@@ -538,6 +541,7 @@ impl<'a> ListRow<'a> {
             selectable: Vec::new(),
             toggle_columns: Vec::new(),
             toggle_keys: Vec::new(),
+            closed_toggles: Vec::new(),
             toggles: Vec::new(),
             texts: Vec::new(),
             statuses: Vec::new(),
