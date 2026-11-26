@@ -3,8 +3,6 @@
 //! This consumes the output of the sweep-line algorithm and does things
 //! like winding number computations and boolean operations.
 
-use std::sync::Arc;
-
 use kurbo::{Affine, BezPath, ParamCurve, PathEl, Rect, Shape};
 use smallvec::SmallVec;
 
@@ -189,7 +187,7 @@ struct OutputLimit {
 impl OutputLimit {
     /// Takes the units of a new output segment with `windings`, or returns `false` and takes
     /// nothing if they would pass the limit. Without a limit it counts nothing.
-    fn take<W: WindingNumber>(&mut self, windings: &SegmentWindingNumbers<W>) -> bool {
+    fn take<W: WindingNumber>(&mut self, windings: &HalfSegmentWindingNumbers<W>) -> bool {
         let Some(limit) = self.limit else {
             return true;
         };
@@ -206,6 +204,14 @@ impl OutputLimit {
     }
 }
 
+impl<W: WindingNumber> HalfSegmentWindingNumbers<W> {
+    /// A half-segment's winding numbers are trivial if they're the same on both sides.
+    /// In this case, the segment is invisible to the topology of the sets.
+    fn is_trivial(&self) -> bool {
+        self.counter_clockwise == self.clockwise
+    }
+}
+
 impl<W: WindingNumber> std::fmt::Debug for HalfSegmentWindingNumbers<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -213,52 +219,6 @@ impl<W: WindingNumber> std::fmt::Debug for HalfSegmentWindingNumbers<W> {
             "cw {:?} | cc {:?}",
             self.clockwise, self.counter_clockwise
         )
-    }
-}
-
-// Craft patch (winding storage).
-/// The winding numbers a topology stores for an output segment: the two sides of
-/// [`HalfSegmentWindingNumbers`], each behind an `Arc`.
-///
-/// The sweep builds each segment's winding numbers from a running winding number,
-/// so a segment's clockwise side is the same value as the counter-clockwise side
-/// of the segment before it. The two segments hold clones of one `Arc`, and each
-/// distinct winding number is stored once.
-#[derive(Clone)]
-struct SegmentWindingNumbers<W: WindingNumber> {
-    counter_clockwise: Arc<W>,
-    clockwise: Arc<W>,
-}
-
-impl<W: WindingNumber> SegmentWindingNumbers<W> {
-    /// A half-segment's winding numbers are trivial if they're the same on both sides.
-    /// In this case, the segment is invisible to the topology of the sets.
-    fn is_trivial(&self) -> bool {
-        Arc::ptr_eq(&self.counter_clockwise, &self.clockwise)
-            || self.counter_clockwise == self.clockwise
-    }
-}
-
-impl<W: WindingNumber> std::fmt::Debug for SegmentWindingNumbers<W> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "cw {:?} | cc {:?}",
-            self.clockwise, self.counter_clockwise
-        )
-    }
-}
-
-// Craft patch (winding storage): serialized as a `HalfSegmentWindingNumbers`,
-// which the snapshot tests record.
-#[cfg(test)]
-impl<W: WindingNumber + serde::Serialize> serde::Serialize for SegmentWindingNumbers<W> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("HalfSegmentWindingNumbers", 2)?;
-        s.serialize_field("counter_clockwise", &*self.counter_clockwise)?;
-        s.serialize_field("clockwise", &*self.clockwise)?;
-        s.end()
     }
 }
 
@@ -576,10 +536,7 @@ pub struct Topology<W: WindingNumber> {
     /// `HalfSegmentWindingNumbers` for each `HalfOutputSegIdx`. But since the two halves of
     /// the winding numbers are determined by one another, we only store the winding numbers
     /// for the start half of the output segment.
-    ///
-    /// Craft patch (winding storage): neighboring segments share each side's
-    /// value through an `Arc` (see [`SegmentWindingNumbers`]).
-    winding: OutputSegVec<SegmentWindingNumbers<W>>,
+    winding: OutputSegVec<HalfSegmentWindingNumbers<W>>,
     /// The output points.
     points: PointVec<Point>,
     /// The segment endpoints, as indices into `points`.
@@ -989,7 +946,7 @@ impl<W: WindingNumber> Topology<W> {
         open_segs: &mut SegVec<OpenSegs>,
         idx: SegIdx,
         p: PointIdx,
-        winding: SegmentWindingNumbers<W>,
+        winding: HalfSegmentWindingNumbers<W>,
         horizontal: bool,
         positively_oriented: bool,
     ) -> OutputSegIdx {
@@ -1056,11 +1013,8 @@ impl<W: WindingNumber> Topology<W> {
         output: &mut OutputLimit,
     ) -> bool {
         let y = pos.line().y();
-        // Craft patch (winding storage): `winding` and `w` below are shared with
-        // the segments that store them, and each step makes a new `Arc` instead
-        // of changing the shared value.
-        let mut winding: Arc<W> = scan_west
-            .map(|idx| Arc::clone(&self.winding[idx].counter_clockwise))
+        let mut winding = scan_west
+            .map(|idx| self.winding[idx].counter_clockwise.clone())
             .unwrap_or_default();
 
         let TopologyBuffers {
@@ -1112,14 +1066,12 @@ impl<W: WindingNumber> Topology<W> {
             // Also, calculate their winding numbers and update `winding`.
             seg_buf.clear();
             for new_seg in connected_segs.connected_down() {
-                let prev_winding = Arc::clone(&winding);
+                let prev_winding = winding.clone();
                 let orientation = segments.positively_oriented(new_seg);
-                let mut next = W::clone(&winding);
-                next += W::single(self.tag[new_seg], !orientation);
-                winding = Arc::new(next);
-                let windings = SegmentWindingNumbers {
+                winding += W::single(self.tag[new_seg], !orientation);
+                let windings = HalfSegmentWindingNumbers {
                     clockwise: prev_winding,
-                    counter_clockwise: Arc::clone(&winding),
+                    counter_clockwise: winding.clone(),
                 };
                 if !output.take(&windings) {
                     return false;
@@ -1158,7 +1110,7 @@ impl<W: WindingNumber> Topology<W> {
 
             // We don't want to update our "global" winding number state because that's supposed
             // to keep track of the winding number below the current sweep line.
-            let mut w = Arc::clone(&winding);
+            let mut w = winding.clone();
             seg_buf.clear();
             // Craft patch (coincident horizontals): every active horizontal runs from this
             // point to the next one, so they are all coincident, and `merge_coincident`
@@ -1167,13 +1119,11 @@ impl<W: WindingNumber> Topology<W> {
             // with the winding numbers before and after the run. When a run's winding
             // numbers cancel, it gets no output segment and the next fragment starts a new
             // run.
-            let mut run: Option<(SegIdx, bool, Arc<W>)> = None;
+            let mut run: Option<(SegIdx, bool, W)> = None;
             for (new_seg, same_orientation) in hsegs {
-                let prev_w = Arc::clone(&w);
+                let prev_w = w.clone();
                 let orientation = same_orientation == segments.positively_oriented(new_seg);
-                let mut next = W::clone(&w);
-                next += W::single(self.tag[new_seg], !orientation);
-                w = Arc::new(next);
+                w += W::single(self.tag[new_seg], !orientation);
                 match &run {
                     None => run = Some((new_seg, orientation, prev_w)),
                     Some((first, first_orientation, start)) => {
@@ -1192,8 +1142,8 @@ impl<W: WindingNumber> Topology<W> {
             if let Some((first, orientation, start)) = run {
                 self.note_folded(&folded, &start, &w, p);
                 folded.clear();
-                let windings = SegmentWindingNumbers {
-                    counter_clockwise: Arc::clone(&w),
+                let windings = HalfSegmentWindingNumbers {
+                    counter_clockwise: w.clone(),
                     clockwise: start,
                 };
                 if !output.take(&windings) {
@@ -1312,10 +1262,8 @@ impl<W: WindingNumber> Topology<W> {
                 // coincident then they'd better both be first halves.
                 debug_assert!(cw_nbr.first_half);
                 self.delete(idx);
-                // Craft patch (winding storage): share the value instead of
-                // copying it.
                 self.winding[cw_nbr.idx].counter_clockwise =
-                    Arc::clone(&self.winding[idx].counter_clockwise);
+                    self.winding[idx].counter_clockwise.clone();
 
                 if self.winding[cw_nbr.idx].is_trivial() {
                     self.delete(cw_nbr.idx);
@@ -3239,62 +3187,6 @@ mod tests {
     fn empty_bounding_box() {
         let top = Topology::from_polylines_binary(EMPTY, EMPTY, 0.01);
         assert_eq!(top.bounding_box(), kurbo::Rect::ZERO);
-    }
-
-    // Craft patch (winding storage).
-    /// `n` squares of side `n`, each one step right and down from the last, so the
-    /// edges of every square cross the edges of every other square.
-    fn staggered_squares(n: usize) -> Vec<BezPath> {
-        use kurbo::Shape as _;
-        (0..n)
-            .map(|i| {
-                let (i, n) = (i as f64, n as f64);
-                kurbo::Rect::new(i, i + 0.25, i + n, i + n + 0.25).to_path(0.1)
-            })
-            .collect()
-    }
-
-    // Craft patch (winding storage).
-    #[test]
-    fn neighboring_segments_share_winding_numbers() {
-        let paths = staggered_squares(8);
-        let top = Topology::<i32>::from_paths(paths.iter().map(|p| (p, ())), 1e-6).unwrap();
-        let mut sides = 0;
-        let mut stored = std::collections::HashSet::new();
-        for idx in top.segment_indices() {
-            let w = &top.winding[idx];
-            for side in [&w.clockwise, &w.counter_clockwise] {
-                sides += 1;
-                stored.insert(std::sync::Arc::as_ptr(side));
-            }
-        }
-        // A segment's clockwise side is the counter-clockwise side of the segment
-        // before it in the sweep, so most sides share a stored value.
-        assert!(
-            stored.len() * 3 <= sides * 2,
-            "{} winding numbers stored for {sides} sides",
-            stored.len()
-        );
-    }
-
-    // Craft patch (winding storage).
-    #[test]
-    fn staggered_squares_winding_numbers_count_the_covering_squares() {
-        use kurbo::Shape as _;
-        let paths = staggered_squares(8);
-        let top = Topology::<i32>::from_paths(paths.iter().map(|p| (p, ())), 1e-6).unwrap();
-        for k in 1..=8 {
-            // The points covered by at least `k` squares form `9 - k` squares of
-            // side `9 - k`, each one step from the last.
-            let s = f64::from(9 - k);
-            let expected = s * s + (s - 1.0) * (2.0 * s - 1.0);
-            let contours = top.contours(|w| w.abs() >= k);
-            let area: f64 = contours.contours().map(|c| c.path.area().abs()).sum();
-            assert!(
-                (area - expected).abs() < 1e-9,
-                "k = {k}: {area} != {expected}"
-            );
-        }
     }
 
     // Craft patch (input rules) test.
