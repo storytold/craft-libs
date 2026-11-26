@@ -1714,7 +1714,7 @@ fn bookmark_marks(blocks: &[std::sync::Arc<craft_wordmodel::Block>]) -> std::col
 
 /// Bookmarks in a header and a footnote land in those parts (#1818): their CPs are in the whole
 /// document's CP space, past the main text. One ending at the footnote's last CP, which is also
-/// the header's first, does not put its end into the header.
+/// the header's first, does not put its end into the header: the footnote closes it at its end.
 #[test]
 fn bookmarks_in_headers_and_notes_land_in_their_parts() {
     // CPs: main text 0..10, footnote subdocument 10..20, header subdocument 20..33.
@@ -1743,7 +1743,7 @@ fn bookmarks_in_headers_and_notes_land_in_their_parts() {
     let note = bookmark_marks(&note.blocks);
     let set = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<std::collections::BTreeSet<_>>();
     assert_eq!(body, set(&["+body", "-body"]), "the main text keeps its own bookmark only");
-    assert_eq!(note, set(&["+note", "-note", "+tail"]), "the footnote's bookmarks are read");
+    assert_eq!(note, set(&["+note", "-note", "+tail", "-tail"]), "the footnote's bookmarks are read, and one ending at its last CP is closed there");
     assert_eq!(header, set(&["+head", "-head"]), "the header's bookmark is read, and no end of the footnote's");
 }
 

@@ -670,8 +670,9 @@ impl ParaBuild {
 struct MarkWalk<'a> {
     marks: std::iter::Peekable<std::slice::Iter<'a, (u32, notes::Mark)>>,
     /// Bookmarks this walk started and has not ended, by name. A story's last CP is the next
-    /// one's first, so an end found there closes a bookmark of the story before and is left out.
-    open: std::collections::HashMap<&'a str, usize>,
+    /// one's first, so an end found there closes a bookmark of the story before and is left out;
+    /// what is still open when the walk stops is closed at its end ([`MarkWalk::close_open`]).
+    open: std::collections::BTreeMap<&'a str, usize>,
     /// Pays for each bookmark copied ([`Cost::Bookmark`]).
     work: &'a Work,
 }
@@ -679,7 +680,7 @@ struct MarkWalk<'a> {
 impl<'a> MarkWalk<'a> {
     fn new(marks: &'a [(u32, notes::Mark)], cp_start: u32, work: &'a Work) -> Self {
         let first = marks.partition_point(|(mcp, _)| *mcp < cp_start);
-        MarkWalk { marks: marks[first..].iter().peekable(), open: std::collections::HashMap::new(), work }
+        MarkWalk { marks: marks[first..].iter().peekable(), open: std::collections::BTreeMap::new(), work }
     }
 
     /// Emit the boundaries up to `cp` as inline objects. `<=` so a boundary inside a skipped
@@ -708,6 +709,27 @@ impl<'a> MarkWalk<'a> {
             };
             pb.push('\u{FFFC}', CharProps::default());
             pb.objects.push(obj);
+        }
+    }
+
+    /// Ends every bookmark this walk started and did not end, at the end of the walk's text:
+    /// in `pb` when it holds text, else in the last paragraph. A walk can stop before an end:
+    /// at the story's last CP (an end there is the next story's first), or early when the
+    /// character budget is spent. The ends were paid for with their starts.
+    fn close_open(self, pb: &mut ParaBuild, out: &mut [ParaOut]) {
+        let ends = self.open.into_iter().flat_map(|(name, n)| std::iter::repeat_n(name, n));
+        let last = out.last_mut().filter(|_| pb.text.is_empty());
+        let (text, runs, objects) = match last {
+            Some(p) => (&mut p.para.text, &mut p.para.runs, &mut p.para.objects),
+            None => (&mut pb.text, &mut pb.runs, &mut pb.objects),
+        };
+        for name in ends {
+            match runs.last_mut() {
+                Some(r) if r.props == CharProps::default() => r.len += '\u{FFFC}'.len_utf8(),
+                _ => runs.push(Run { len: '\u{FFFC}'.len_utf8(), props: CharProps::default() }),
+            }
+            text.push('\u{FFFC}');
+            objects.push(InlineObject::BookmarkEnd { name: name.to_string() });
         }
     }
 }
@@ -913,6 +935,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
+    marks.close_open(&mut pb, &mut out);
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
