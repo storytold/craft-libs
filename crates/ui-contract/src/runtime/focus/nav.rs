@@ -438,10 +438,16 @@ impl State {
             current = None;
         }
         if let Some(at) = after {
-            if forward {
-                entries.drain(..at.min(entries.len()));
-            } else {
-                entries.truncate(at.min(entries.len()));
+            // Narrowing the order to the entries past the opener's place; when none are left (the opener stands before
+            // every entry for Shift+Tab, or after them all for Tab) the cycle wraps as it does with none focused.
+            let at = at.min(entries.len());
+            let empties = if forward { at == entries.len() } else { at == 0 };
+            if !empties {
+                if forward {
+                    entries.drain(..at);
+                } else {
+                    entries.truncate(at);
+                }
             }
         }
         let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
