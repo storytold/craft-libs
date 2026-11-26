@@ -1678,6 +1678,66 @@ fn a_paste_and_a_text_in_one_pass_of_a_native_float_are_forwarded_in_their_order
     assert_eq!(frame(vec![text.clone(), paste.clone()]), [text, paste], "the text, then the paste");
 }
 
+/// Two native floats' own OS windows in one pass: each window's events reach `DockAreaOutput::window_events` in a batch
+/// of its own, with the modifiers held in that window, in the order the windows were drawn. A clipboard event carries
+/// no modifiers of its own, so a host that reads both floats' input in one pass cannot tell their chords apart unless
+/// each window's modifiers come with its own events.
+#[trial]
+fn two_native_floats_forward_a_batch_each_with_the_modifiers_held_in_its_window() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, FLOAT_AT));
+    // No command takes the paste chord, so each window's paste is the app's to read.
+    let mut unbound = craft_keymap::Overrides::new();
+    unbound.insert(EditCommands::Paste.id(), Vec::new());
+    windows.commands(CommandInput::new().overrides(Arc::new(unbound)));
+    let (first, second) = (1, 2);
+    // Both windows take the facts the trial gives them, so they ask for the same rect and the frame settles.
+    let at = Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size());
+    let layout = Layout::new(None, vec![Floating::single(110, vec![first], 0, at), Floating::single(111, vec![second], 0, at)]);
+    let mut workspace = Arc::new(Workspace::new(layout));
+    let mut frame = |child: Vec<Event>| {
+        let mut opened: Vec<(u32, ViewportId)> = Vec::new();
+        let mut batches: Vec<(u32, Modifiers, Vec<Event>)> = Vec::new();
+        windows.frame(vec![], child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config).show(ui);
+            opened = shown.windows;
+            batches = shown.window_events.into_iter().map(|window| (window.panel, window.modifiers, window.events)).collect();
+        });
+        (opened, batches)
+    };
+    for _ in 0..5 {
+        frame(vec![]);
+    }
+    let (opened, batches) = frame(vec![]);
+    assert!(batches.is_empty(), "a pass with no key forwards none");
+    let viewport =
+        |panel: u32| opened.iter().find(|(named, _)| *named == panel).map(|(_, viewport)| *viewport).expect("the float has a window of its own");
+    let (upper, lower) = (viewport(first), viewport(second));
+    assert_ne!(upper, lower, "each float has a window of its own");
+
+    // Each window's passed events carry the modifiers held in it: a clipboard event has none of its own to read.
+    windows.send(upper, vec![Event::ModifiersChanged(Modifiers::SHIFT), Event::Paste("upper".to_owned())]);
+    windows.send(lower, vec![Event::ModifiersChanged(Modifiers::NONE), Event::Paste("lower".to_owned())]);
+    let (_, batches) = frame(vec![]);
+    assert_eq!(
+        batches,
+        [(first, Modifiers::SHIFT, vec![Event::Paste("upper".to_owned())]), (second, Modifiers::NONE, vec![Event::Paste("lower".to_owned())]),],
+        "each window's batch keeps the modifiers held in it, in the order the windows were drawn"
+    );
+
+    // The other way round: the last window's modifiers are not the first window's.
+    windows.send(upper, vec![Event::ModifiersChanged(Modifiers::NONE), Event::Paste("upper".to_owned())]);
+    windows.send(lower, vec![Event::ModifiersChanged(Modifiers::SHIFT), Event::Paste("lower".to_owned())]);
+    let (_, batches) = frame(vec![]);
+    assert_eq!(
+        batches,
+        [(first, Modifiers::NONE, vec![Event::Paste("upper".to_owned())]), (second, Modifiers::SHIFT, vec![Event::Paste("lower".to_owned())]),],
+        "a host reads each window's modifiers with its events, whichever window holds what"
+    );
+}
+
 /// Palettes that record where each group showed, by its panels, in the window it showed in.
 #[derive(Default)]
 struct GroupRects(Vec<(Vec<u32>, Rect)>);
