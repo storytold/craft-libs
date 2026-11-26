@@ -9,9 +9,10 @@ use super::rows::{Action, Lines, StyleLine, StyleList, StyleRow};
 use super::{DetailsSheet, DetailsWords};
 use crate::panel::app::Detail;
 use crate::panel::faces::Owner;
-use crate::panel::fixtures::{SharedPanel, story_catalog, story_panel};
+use crate::panel::fixtures::{SharedPanel, VARIABLE, story_catalog, story_panel};
 use crate::panel::samples::PANGRAM;
-use crate::panel::specimen::SampleFace;
+use crate::panel::specimen::HeldFace;
+use crate::panel::subsets::SubsetFont;
 
 /// The sample size of the stories, in points.
 const POINTS: f32 = 24.0;
@@ -44,28 +45,22 @@ fn lines(count: usize) -> Vec<StyleLine> {
     let catalog = story_catalog();
     let face = catalog.styles("Hack").into_iter().next();
     (0..count)
-        .map(|n| StyleLine {
-            label: format!("Style {n}"),
-            face: face.clone().map(|face| (Owner::Installed, face)),
-            action: if n % 2 == 0 { Action::Install(format!("ofl/hack/Style{n}.ttf")) } else { Action::None },
+        .map(|n| {
+            let action = if n % 2 == 0 { Action::Install(format!("ofl/hack/Style{n}.ttf")) } else { Action::None };
+            StyleLine::new(format!("Style {n}"), face.clone().map(|face| HeldFace::local(Owner::Installed, face, &catalog)), action)
         })
         .collect()
 }
 
 fn list(ui: &mut Ui, count: usize) -> StoryOutput {
-    let lines = lines(count);
-    let catalog = story_catalog();
+    list_of(ui, &lines(count), PANGRAM)
+}
+
+fn list_of(ui: &mut Ui, lines: &[StyleLine], sample: &str) -> StoryOutput {
     let words = Env::of(ui).words::<DetailsWords>();
-    let source = Lines(&lines);
+    let source = Lines(lines);
     StyleList::new("Styles", words.no_styles.clone())
-        .show_items(ui, &source, &mut |key, _| {
-            let line = &lines[*key];
-            let face = match &line.face {
-                Some((owner, face)) => SampleFace::Face { catalog: &catalog, owner: *owner, face },
-                None => SampleFace::Missing,
-            };
-            StyleRow::new(line, "Hack", PANGRAM, POINTS, face, &words)
-        })
+        .show_items(ui, &source, &mut |key, _| StyleRow::new(&lines[*key], "Hack", sample, POINTS, &words))
         .into()
 }
 
@@ -84,9 +79,18 @@ fn style_list_many(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     list(ui, 4)
 }
 
+/// The styles of one variable subset from the preview service.
+#[story(StyleList, covers = [], drive = Drive::Never)]
+fn style_list_variable(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let face = HeldFace::Subset(SubsetFont { key: "story/orbitron".to_owned(), bytes: VARIABLE.into() });
+    let styles = [("Regular", 400.0), ("Bold", 700.0), ("Black", 900.0)];
+    let lines = styles.map(|(name, weight)| StyleLine::new(name, Some(face.clone()), Action::None).at(vec![(*b"wght", weight)]));
+    list_of(ui, &lines, "Orbitron")
+}
+
 #[story(StyleRow<'static>, covers = [Default], drive = Drive::Never)]
 fn style_row_installing(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let line = StyleLine { label: "Bold".to_owned(), face: None, action: Action::Running(Some(0.4)) };
+    let line = StyleLine::new("Bold", None, Action::Running(Some(0.4)));
     let words = Env::of(ui).words::<DetailsWords>();
-    show_as_only_item(ui, StyleRow::new(&line, "Hack", PANGRAM, POINTS, SampleFace::Missing, &words)).into()
+    show_as_only_item(ui, StyleRow::new(&line, "Hack", PANGRAM, POINTS, &words)).into()
 }

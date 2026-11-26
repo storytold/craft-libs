@@ -1,0 +1,123 @@
+# Japanese (ja) rows of the Fonts panel's words, for an app's shared catalog.
+# Format: context<TAB>source<TAB>translation; @id rows name a word by its id, @plural rows list the locale's plural forms.
+# Style and weight names (Regular, Bold, Italic), licence names and product names stay in English.
+@id	fontsPanel.sansSerif	サンセリフ
+@id	fontsPanel.serif	セリフ
+@id	fontsPanel.display	ディスプレイ
+@id	fontsPanel.handwriting	手書き
+@id	fontsPanel.monospace	等幅
+@id	fontsPanel.fontStore	フォントストア
+@id	fontsPanel.system	システム
+@id	fontsPanel.settingFailed	ダウンロードの設定を保存できませんでした: {error}
+@id	fontsPanel.consentNote	ダウンロードは、オフにするまで許可されたままです。
+@id	fontsPanel.consentAllow	ダウンロード
+@id	fontsBrowse.tabBrowse	探す
+@id	fontsBrowse.tabInstalled	インストール済み
+@id	fontsBrowse.search	検索
+@id	fontsBrowse.searchCatalogue	フォントを名前で検索
+@id	fontsBrowse.searchInstalled	インストール済みのフォントを検索
+@id	fontsBrowse.downloads	ダウンロード
+@id	fontsBrowse.allowDownloads	ダウンロードを許可
+@id	fontsBrowse.category	カテゴリ
+@id	fontsBrowse.allCategories	すべてのカテゴリ
+@id	fontsBrowse.language	言語
+@id	fontsBrowse.anyLanguage	すべての言語
+@id	fontsBrowse.languagePlaceholder	英語名またはその言語での名前
+@id	fontsBrowse.findLanguage	言語を検索
+@id	fontsBrowse.script	文字体系
+@id	fontsBrowse.anyScript	すべての文字体系
+@id	fontsBrowse.source	入手元
+@id	fontsBrowse.allSources	すべての入手元
+@id	fontsBrowse.show	表示
+@id	fontsBrowse.allFonts	すべてのフォント
+@id	fontsBrowse.installed	インストール済み
+@id	fontsBrowse.notInstalled	未インストール
+@id	fontsBrowse.clearFilters	絞り込みを解除
+@id	fontsBrowse.installedNote	フォントストアのフォントはすべての Craft アプリで使えます。システムフォントの追加と削除は、システムのフォント管理ツールで行います。
+@id	fontsBrowse.sample	サンプル
+@id	fontsBrowse.sentence	文
+@id	fontsBrowse.alphabet	アルファベット
+@id	fontsBrowse.numerals	数字と記号
+@id	fontsBrowse.sampleText	サンプルテキスト
+@id	fontsBrowse.size	サイズ
+@id	fontsBrowse.downloadsOff	ダウンロードはオフです
+@id	fontsBrowse.downloadsOffText	インストールしていないフォントは、プレビューするとサンプルが表示されます。許可するまで何もダウンロードされません。
+@id	fontsBrowse.noMatch	一致するフォントはありません
+@id	fontsBrowse.noMatchHint	別の名前を試すか、絞り込みを減らしてください。
+@id	fontsBrowse.clearSearch	検索と絞り込みを解除
+@id	fontsBrowse.indexesUnreadable	フォントの一覧を読み込めません: {error}
+@id	fontsBrowse.sourceError	{source}: {error}
+@id	fontsBrowse.tryAgain	もう一度試す
+@id	fontsBrowse.looking	インストール済みのフォントを探しています…
+@id	fontsBrowse.noInstalled	一致するインストール済みフォントはありません
+@id	fontsBrowse.installedEmpty	「探す」からインストールしたフォントがここに表示され、すべての Craft アプリで使えます。
+@id	fontsBrowse.tryName	別の名前を試してください。
+@id	fontsBrowse.installing	インストール中
+@id	fontsBrowse.removing	削除中
+@id	fontsBrowse.downloading	ダウンロード中
+@id	fontsBrowse.retry	再試行
+@id	fontsBrowse.failedInstall	インストールできませんでした
+@id	fontsBrowse.failedRemove	削除できませんでした
+@id	fontsBrowse.failedDownload	ダウンロードできませんでした
+@id	fontsBrowse.install	インストール
+@id	fontsBrowse.installFamily	{family} をインストール
+@id	fontsBrowse.preview	プレビュー
+@id	fontsBrowse.previewFamily	{family} をプレビュー
+@id	fontsBrowse.remove	削除
+@id	fontsBrowse.removeFamily	{family} を削除
+@id	fontsBrowse.notCurated	未審査
+@id	fontsBrowse.notCuratedTip	このファミリーは追加したソースのものです。Craft は審査していません。
+@id	fontsBrowse.cardSample	サンプル
+@id	fontDetails.designedBy	デザイン: {designer}
+@id	fontDetails.installing	インストール中
+@id	fontDetails.removing	削除中
+@id	fontDetails.downloading	ダウンロード中
+@id	fontDetails.installed	インストール済み
+@id	fontDetails.installedOnSystem	このシステムにインストール済み
+@id	fontDetails.installAll	すべてインストール
+@id	fontDetails.removeAll	すべて削除
+@id	fontDetails.preview	プレビュー
+@id	fontDetails.install	インストール
+@id	fontDetails.remove	削除
+@id	fontDetails.installStyle	{style} をインストール
+@id	fontDetails.removeStyle	{style} を削除
+@id	fontDetails.downloadSizeLine	ダウンロード {size}
+@id	fontDetails.previewNote	プレビューでは、このフォント ({size}) をこのセッションの間だけダウンロードし、インストールはしません。
+@id	fontDetails.notCurated	未審査
+@id	fontDetails.notCuratedNote	このファミリーは追加したソース ({url}) のものです。Craft はフォントもライセンスも審査していません。
+@id	fontDetails.couldntInstall	インストールできませんでした
+@id	fontDetails.couldntRemove	削除できませんでした
+@id	fontDetails.couldntDownload	ダウンロードできませんでした
+@id	fontDetails.retry	再試行
+@id	fontDetails.systemFontsNote	システムフォントは、システムのフォント管理ツールで削除します。
+@id	fontDetails.systemFontsRemoval	システムのフォントツールで削除します
+@id	fontDetails.source	入手元
+@id	fontDetails.designer	デザイナー
+@id	fontDetails.licence	ライセンス
+@id	fontDetails.stylesFact	スタイル
+@id	fontDetails.filesFact	ファイル
+@id	fontDetails.downloadSize	ダウンロードサイズ
+@id	fontDetails.scripts	文字体系
+@id	fontDetails.languages	言語 · {n}
+@id	fontDetails.languagesMore	{list} ほか {n} 言語
+@id	fontSources.remove	削除
+@id	fontSources.removeSource	{source} を削除
+@id	fontSources.notCurated	未審査
+@id	fontSources.changed	追加後に変更あり
+@id	fontSources.changedNote	このアドレスの一覧は、最初にダウンロードしたものと異なります。インストールする前にソースを確認してください。
+@id	fontSources.addASource	ソースを追加
+@id	fontSources.add	追加
+@id	fontSources.indexAddress	一覧のアドレス
+@id	fontSources.addWarning	追加したソースは審査されません。信頼できる一覧だけを追加してください。どのフォントも、使う前に一覧と照合されます。
+@id	fontSources.downloading	ソースをダウンロードしています…
+@id	fontSources.update	ソースを更新
+@id	fontSources.allowToUpdate	更新するにはダウンロードを許可してください
+@id	fontSources.added	追加しました。ダウンロードを許可するとダウンロードされます。
+@id	fontSources.couldntAdd	ソースを追加できませんでした: {error}
+@id	fontSources.couldntRemove	ソースを削除できませんでした: {error}
+@id	common.cancel	キャンセル
+@id	common.close	閉じる
+@plural	{n} style|{n} styles	{n} スタイル
+@plural	{n} family|{n} families	{n} ファミリー
+@plural	{n} font source couldn't be loaded|{n} font sources couldn't be loaded	{n} 件のフォントソースを読み込めませんでした
+@plural	{n} style installed|{n} styles installed	インストール済み {n} スタイル

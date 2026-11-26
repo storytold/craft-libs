@@ -734,6 +734,7 @@ pub struct FontPicker<'a> {
     host_picked: Option<String>,
     /// Whether the font picker uses compact bar sizing (`size.length.field.sm` / `size.length.short`).
     #[style_key]
+    #[prop]
     compact: bool,
 }
 
@@ -785,13 +786,6 @@ impl<'a> FontPicker<'a> {
         }
         .label(label)
         .enabled(catalog.is_ready())
-    }
-
-    /// Sets whether the font picker uses compact bar sizing (`size.length.field.sm` / `size.length.short`).
-    #[must_use]
-    pub fn compact(mut self, compact: bool) -> Self {
-        self.compact = compact;
-        self
     }
 
     /// The adornments at the end of the field: the missing mark when `missing`, then the chevron. The mark is a glyph

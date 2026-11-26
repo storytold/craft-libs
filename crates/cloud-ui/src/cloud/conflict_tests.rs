@@ -214,6 +214,53 @@ fn sign_out_recovers_save_after_a_backend_job_never_replies() {
     assert!(saved.is_ok(), "after sign-out and sign-in, Save is still refused: {saved:?}; busy={:?}", app.cloud.busy.as_ref().map(Busy::text));
 }
 
+/// While a sign-in waits on the browser, the previous account may still be the one the service
+/// answers for. No folder is listed until the sign-in answers, and then both are listed again,
+/// so a listing from before the sign-in does not stay on screen as the new account's files.
+#[test]
+fn folders_are_listed_again_only_after_a_sign_in_answers() {
+    let (mut app, held, _log) = two_tabs();
+    let ctx = egui::Context::default();
+    start(&mut app);
+    held.take(|j| matches!(j, Job::Account)).unwrap().1.send(Event::Account(Ok(account("Ada"))));
+    held.take(|j| matches!(j, Job::List(_))).unwrap().1.send(Event::Listed { path: String::new(), entries: Ok(vec![entry("/Ada.note", "a1")]) });
+    drain(&mut app, &ctx);
+    assert!(app.cloud.mine.loaded);
+
+    sign_in(&mut app);
+    start(&mut app);
+    drain(&mut app, &ctx);
+    assert!(held.take(|j| matches!(j, Job::List(_))).is_none(), "a folder is listed before the sign-in says who is signed in");
+    assert!(report(&app)["entries"].as_array().is_some_and(Vec::is_empty), "the previous account's files stay on screen during sign-in");
+
+    held.take(|j| matches!(j, Job::SignIn)).unwrap().1.send(Event::Account(Ok(account("Grace"))));
+    drain(&mut app, &ctx);
+    assert!(!app.cloud.mine.loading && !app.cloud.mine.loaded && !app.cloud.shared.loading && !app.cloud.shared.loaded);
+    start(&mut app);
+    let (_, list_post) = held.take(|j| matches!(j, Job::List(_))).expect("the root folder is listed again once the sign-in answers");
+    list_post.send(Event::Listed { path: String::new(), entries: Ok(vec![entry("/Grace.note", "g1")]) });
+    drain(&mut app, &ctx);
+    assert_eq!(report(&app)["entries"], serde_json::json!(["Grace.note"]));
+}
+
+/// A sign-in empties the folder the Save As page was showing. Until it answers, a save would go
+/// to the root rather than the folder the user picked, so Save As refuses.
+#[test]
+fn save_as_waits_for_a_sign_in_to_answer() {
+    let (mut app, held, _log) = two_tabs();
+    browse(&mut app, "/Projects");
+    sign_in(&mut app);
+    let folder = app.cloud.mine.path.clone();
+    let refused = save_as(&mut app, &folder, "B");
+    assert!(refused.is_err(), "Save As went ahead during sign-in: {refused:?}");
+    assert!(held.take(|j| matches!(j, Job::Create { .. })).is_none());
+
+    held.take(|j| matches!(j, Job::SignIn)).unwrap().1.send(Event::Account(Ok(account("Ada"))));
+    drain(&mut app, &egui::Context::default());
+    assert!(save_as(&mut app, "", "B").is_ok());
+    assert!(held.take(|j| matches!(j, Job::Create { .. })).is_some());
+}
+
 /// An account and a listing answer a job issued before sign-out. Landing after it, they must
 /// not put the previous session's account and file names on screen with nobody signed in.
 #[test]
