@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod production;
 pub use metadata::{LibraryIndex, LibraryTrashEntry, MAX_RECENT_FILES, RecentFiles};
-pub use production::{CombineOp, GroupKind, Operation, SendAssign, ShapeProduction, SourceGroup};
+pub use production::{CombineOp, FillPattern, GroupKind, MAX_PATTERN_DATA, Operation, PATTERN_TILE_MM, SendAssign, ShapeProduction, SourceGroup};
 
 /// Native format identity and supported version, defined by the shared wire-format crate.
 pub use craft_stencilcraft_format::{FORMAT_NAME, FORMAT_VERSION};
@@ -510,6 +510,11 @@ impl Document {
             return Err(DocError::Model(format!("a document holds at most {MAX_IMAGES} images")));
         }
         self.images.iter().try_for_each(RasterImage::validate)?;
+        self.layers
+            .iter()
+            .flat_map(|layer| &layer.shapes)
+            .filter_map(|shape| shape.production.fill_pattern.as_deref())
+            .try_for_each(FillPattern::validate)?;
         self.validate_canvas()
     }
 
@@ -591,6 +596,30 @@ pub fn load_from(path: &str) -> Result<Document, DocError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pattern_fills_round_trip_and_bad_ones_are_refused() {
+        let mut doc = Document::default();
+        let mut square = BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((10.0, 0.0));
+        square.line_to((10.0, 10.0));
+        square.close_path();
+        let id = doc.push_shape(0, square, CutStyle::Cut).unwrap().id;
+        let pattern = FillPattern { png_base64: "iVBORw0KGgo=".into(), tile_mm: 25.0, angle_deg: 15.0 };
+        doc.get_shape_mut(id).unwrap().production.fill_pattern = Some(Box::new(pattern.clone()));
+        let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
+        assert_eq!(back.get_shape(id).unwrap().production.fill_pattern.as_deref(), Some(&pattern));
+        for bad in [
+            FillPattern { tile_mm: f64::NAN, ..pattern.clone() },
+            FillPattern { tile_mm: 0.0, ..pattern.clone() },
+            FillPattern { angle_deg: f64::INFINITY, ..pattern.clone() },
+            FillPattern { png_base64: "".into(), ..pattern.clone() },
+        ] {
+            doc.get_shape_mut(id).unwrap().production.fill_pattern = Some(Box::new(bad));
+            assert!(doc.validate().is_err());
+        }
+    }
     use crate::geom::Point;
 
     fn rect_path(x: f64, y: f64, w: f64, h: f64) -> BezPath {

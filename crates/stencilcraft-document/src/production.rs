@@ -165,6 +165,43 @@ pub struct ShapeProduction {
     pub hidden_contours: Vec<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<Box<SourceGroup>>,
+    /// A picture repeated inside the shape instead of a plain fill (Silhouette's pattern
+    /// fill). Printed and shown; the cut follows the path as always.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_pattern: Option<Box<FillPattern>>,
+}
+
+/// A pattern fill: a picture tiled across the shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FillPattern {
+    /// The tile's pixels as base64 PNG, like placed images.
+    pub png_base64: std::sync::Arc<str>,
+    /// Width of one tile in millimetres (its height follows the picture's aspect).
+    pub tile_mm: f64,
+    /// Rotation of the tiling in degrees.
+    #[serde(default)]
+    pub angle_deg: f64,
+}
+
+/// The smallest and largest pattern tile, in millimetres.
+pub const PATTERN_TILE_MM: std::ops::RangeInclusive<f64> = 0.5..=2000.0;
+/// The most pixel data one pattern holds (base64 bytes).
+pub const MAX_PATTERN_DATA: usize = 16 * 1024 * 1024;
+
+impl FillPattern {
+    /// Tile size and angle are finite and in range, and the data within [`MAX_PATTERN_DATA`].
+    pub fn validate(&self) -> Result<(), crate::DocError> {
+        if !(self.tile_mm.is_finite() && PATTERN_TILE_MM.contains(&self.tile_mm)) {
+            return Err(crate::DocError::Model("pattern fill: tile size must be 0.5 to 2000 mm".to_string()));
+        }
+        if !self.angle_deg.is_finite() {
+            return Err(crate::DocError::Model("pattern fill: angle must be a number".to_string()));
+        }
+        if self.png_base64.is_empty() || self.png_base64.len() > MAX_PATTERN_DATA {
+            return Err(crate::DocError::Model("pattern fill: pixel data must be 1 byte to 16 MiB".to_string()));
+        }
+        Ok(())
+    }
 }
 
 impl ShapeProduction {
