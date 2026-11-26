@@ -352,9 +352,82 @@ fn detach(mount: &Path) -> Result<(), String> {
         return Ok(());
     }
     let m = mount.to_str().ok_or("unusual characters in the mount point's path")?;
-    process::run(HDIUTIL, &["detach", m, "-quiet"], Duration::from_secs(60))
-        .or_else(|_| process::run(HDIUTIL, &["detach", m, "-force", "-quiet"], Duration::from_secs(60)))
+    detach_with(m, process::run)
+}
+
+/// Keeps the helper's stderr: `-quiet` would hide the busy reply that cleanup retries.
+fn detach_with(mount: &str, run: impl Fn(&str, &[&str], Duration) -> Result<String, String>) -> Result<(), String> {
+    run(HDIUTIL, &["detach", mount], Duration::from_secs(60))
+        .or_else(|_| run(HDIUTIL, &["detach", mount, "-force"], Duration::from_secs(60)))
         .map(drop)
+}
+
+#[cfg(test)]
+#[craft_ui::testing::trial]
+fn detach_stderr_reaches_the_busy_retry_policy() {
+    // Model hdiutil's documented -quiet behavior, then use the real process reader and
+    // retry classifier instead of injecting an already classified error string.
+    let script = r#"
+state=$1
+scenario=$2
+shift 2
+count=0
+if [ -f "$state" ]; then read -r count < "$state"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$state"
+quiet=false
+for arg do
+if [ "$arg" = -quiet ]; then quiet=true; fi
+done
+case "$scenario:$count" in
+success:*|busy:3) exit 0 ;;
+busy:*) reason='hdiutil: detach failed - Resource busy' ;;
+permanent:*) reason='hdiutil: detach failed - Permission denied' ;;
+*) exit 64 ;;
+esac
+if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
+exit 16
+"#;
+    for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("attempts");
+        let calls = std::cell::RefCell::new(Vec::new());
+        let waits = std::cell::RefCell::new(Vec::new());
+        let mount = "/Volumes/PhotoCraft test";
+        let result = super::retry_busy_detach_with_elapsed(
+            || {
+                detach_with(mount, |program, args, timeout| {
+                    assert_eq!(program, "/usr/bin/hdiutil");
+                    assert_eq!(timeout, std::time::Duration::from_secs(60));
+                    calls.borrow_mut().push(args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
+                    let mut cmd = process::command("/bin/sh");
+                    cmd.args(["-c", script, "hdiutil-fixture"]).arg(&state).arg(scenario).args(args);
+                    process::run_command(cmd, program, timeout)
+                })
+            },
+            |delay| waits.borrow_mut().push(delay),
+            || std::time::Duration::ZERO,
+        );
+        if scenario == "permanent" {
+            assert_eq!(result, Err("hdiutil: detach failed - Permission denied".into()));
+        } else {
+            assert_eq!(result, Ok(()), "{scenario}");
+        }
+        let calls = calls.into_inner();
+        assert_eq!(calls.len(), expected_calls, "{scenario}");
+        assert_eq!(calls[0], ["detach", mount]);
+        if expected_calls > 1 {
+            assert_eq!(calls[1], ["detach", mount, "-force"]);
+        }
+        if scenario == "busy" {
+            assert_eq!(calls[2], ["detach", mount], "the preserved busy error must reach another ordinary attempt");
+        }
+        let waits = waits.into_inner();
+        assert_eq!(waits.len(), expected_waits, "{scenario}");
+        if scenario == "busy" {
+            assert_eq!(waits, [std::time::Duration::from_millis(500)]);
+        }
+    }
 }
 
 /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
@@ -474,6 +547,17 @@ fn process_ended() -> impl Fn(u32) -> bool {
 /// when `ended` says its process ended, or when it is this process's and no install here uses
 /// it. `detach` detaches an image. Failures are logged and the install goes on.
 pub(crate) fn clear_mounts(app: &App, cache: &Path, ended: impl Fn(u32) -> bool, detach: impl Fn(&Path) -> Result<(), String>) {
+    clear_mounts_with_wait(app, cache, ended, detach, std::thread::sleep);
+}
+
+/// [`clear_mounts`], with the busy-helper backoff supplied by the caller.
+pub(crate) fn clear_mounts_with_wait(
+    app: &App,
+    cache: &Path,
+    ended: impl Fn(u32) -> bool,
+    detach: impl Fn(&Path) -> Result<(), String>,
+    mut wait: impl FnMut(Duration),
+) {
     let Ok(entries) = std::fs::read_dir(cache) else { return };
     let prefix = format!("mount-{}-", app.id);
     // Read before `ended` runs `ps`, which then lists every process that made one of them.
@@ -487,7 +571,7 @@ pub(crate) fn clear_mounts(app: &App, cache: &Path, ended: impl Fn(u32) -> bool,
         if !gone {
             continue;
         }
-        match detach(&mount).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
+        match super::retry_busy_detach(|| detach(&mount), &mut wait).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
             Ok(()) => log::info!("removed {}, left by an install that ended partway", mount.display()),
             Err(e) => log::warn!("couldn't clear {}, left by an install that ended partway ({e})", mount.display()),
         }

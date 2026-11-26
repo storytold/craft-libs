@@ -66,6 +66,8 @@ pub(crate) struct Cx {
     /// Layers mapped so far, and the most the file may give.
     pub nodes: usize,
     pub max_nodes: usize,
+    /// Most points kept from any one path.
+    pub max_points: usize,
     /// Finds installed faces by PostScript name, and what it found (or didn't) so far.
     pub fonts: Option<super::FontLookup>,
     pub font_cache: std::collections::BTreeMap<String, Option<(String, String)>>,
@@ -123,6 +125,18 @@ pub(crate) fn to_rest(archive: &Archive, name: &str, max_nodes: usize, fonts: Op
 
 /// [`to_rest`] with a work budget of `max_work`.
 pub(crate) fn to_rest_within(archive: &Archive, name: &str, max_nodes: usize, fonts: Option<super::FontLookup>, max_work: u64) -> Map {
+    to_rest_with_point_cap(archive, name, max_nodes, fonts, max_work, super::path::MAX_POINTS)
+}
+
+/// The same mapping with explicit work and point budgets; public entry points keep the default point cap.
+pub(super) fn to_rest_with_point_cap(
+    archive: &Archive,
+    name: &str,
+    max_nodes: usize,
+    fonts: Option<super::FontLookup>,
+    max_work: u64,
+    max_points: usize,
+) -> Map {
     let symbols = super::symbols::Symbols::read(&archive.document, &archive.pages);
     let shared = super::shared::Shared::read(&archive.document);
     let mut cx = Cx {
@@ -142,6 +156,7 @@ pub(crate) fn to_rest_within(archive: &Archive, name: &str, max_nodes: usize, fo
         too_old: false,
         nodes: 0,
         max_nodes,
+        max_points,
         fonts,
         font_cache: std::collections::BTreeMap::new(),
     };
