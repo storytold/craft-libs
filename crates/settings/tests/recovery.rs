@@ -30,7 +30,7 @@ fn section_error_displays_its_section_and_message() {
     let (_, report) = open_in(tmp.path());
     let error = &report.section_errors[0];
     let text = error.to_string();
-    assert!(text.starts_with("settings section [appearance] was reset to defaults: "), "{text}");
+    assert!(text.starts_with("settings section [appearance.theme] was reset to defaults: "), "{text}");
     assert!(text.ends_with(&error.message), "{text}");
     let source: &dyn std::error::Error = error;
     assert!(source.source().is_none());
