@@ -96,6 +96,10 @@ pub(crate) fn seen(ctx: &Context) -> Seen {
     }
     let (read, reading) = take_read(ctx, viewport);
     at_hand.extend(read);
+    // The app reads the drop after this pass's components ran: the focused field's typed text commits first.
+    if !at_hand.is_empty() {
+        crate::runtime::focus::commit_focused(ctx);
+    }
     Seen { hovered, dropped: at_hand, reading }
 }
 

@@ -622,9 +622,11 @@ fn root_close_asked(ctx: &Context) -> bool {
     pass::current_viewport(ctx) == ViewportId::ROOT && viewports::current(ctx).close_requested && !viewports::close_cancelled(ctx)
 }
 
-/// Keeps the root window open and brings it forward, so the app can ask before it closes.
+/// Keeps the root window open and brings it forward, so the app can ask before it closes. The focused field's typed
+/// text commits in the next pass, so the next close request finds the document modified.
 #[doc(hidden)]
 pub fn hold_close(ctx: &Context) {
+    crate::runtime::focus::commit_focused(ctx);
     viewports::cancel_close(ctx);
     viewports::raise(ctx, ViewportId::ROOT);
 }

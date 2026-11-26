@@ -671,6 +671,11 @@ impl Board {
         self.registry.get(&command.id).or_else(|| self.app.as_ref()?.get(command))
     }
 
+    /// Whether `command` is the frame's app catalog's own: no linked set defines it.
+    fn from_catalog(&self, command: &CommandRef) -> bool {
+        self.registry.get(&command.id).is_none() && self.app.as_ref().is_some_and(|app| app.get(command).is_some())
+    }
+
     /// The scope name of `command`; commands no definition names belong to the application.
     fn scope_of(&self, command: &CommandRef) -> &str {
         self.def(command).map_or(CommandScope::APP.name(), |def| def.scope.as_str())
@@ -796,6 +801,8 @@ impl Board {
         let key = match declaring {
             Some(Declaration::Instance(id)) => self.numbers.get(command.id.as_str()).map(|&number| (number, Some(id))),
             Some(Declaration::Focused { .. }) => None,
+            // The app's states (`CommandInput::states`) enable its catalog's commands; the instance only routes them.
+            None if self.from_catalog(command) => self.state_key(command, None),
             None => self.state_key(command, instance),
         };
         // An app-scope state is the app's held one; an instance's is this frame's publish, else last frame's.
@@ -998,6 +1005,10 @@ fn build_keymap(
     }
     let app_defs: Vec<CommandDef> =
         app.map(|app| app.defs().iter().filter(|def| registry.get(&def.command.id).is_none()).cloned().collect()).unwrap_or_default();
+    // `AppCatalog::new` refuses a context scope, so an app def's scope is the app's or a panel's.
+    for def in app_defs.iter().filter(|def| !def.scope.is_app()) {
+        scopes = scopes.with_panel(def.scope.as_str());
+    }
     // The window-shortcut yield and the edit chords below read the registry's definitions only.
     let joined = |defs: &[CommandDef]| -> Vec<CommandDef> { defs.iter().chain(&app_defs).cloned().collect() };
     let mut defs = registry.defs_for(platform);
@@ -1771,7 +1782,14 @@ fn queue(ctx: &Context, fired: Fired) {
         crate::runtime::egui::clipboard::request_paste(ctx);
         return;
     }
-    with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
+    // An app catalog's command goes to the app (`FrameOutput.fired`), with the instance it was routed to as its target.
+    let to_app = with(ctx, |board| fired.target.is_none() || board.from_catalog(&fired.command));
+    // A command a chord fires at the app sees the focused field's typed text: its draft commits in this pass, before
+    // the app reads it. A command the focused part or an instance takes itself keeps the draft; a release runs none.
+    if to_app && fired.source == FireSource::Key && fired.phase != FirePhase::Release {
+        focus::commit_focused(ctx);
+    }
+    with(ctx, |board| if to_app { board.out.push(fired) } else { board.queue.push(fired) });
     // A scoped entry is taken next pass, so the root viewport runs one.
     repaint::request_of(ctx, ViewportId::ROOT);
 }

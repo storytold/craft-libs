@@ -59,9 +59,10 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Commands an app defines at run time (plug-ins, its tool list), all in the app scope ([`Scope::app`]). They join
-/// the linked command sets: their chords fire them into `FrameOutput.fired`, and surfaces resolve their label, icon,
-/// kind and chord. An id a linked set already defines stays that set's.
+/// Commands an app defines at run time (plug-ins, its tool list), each in the app scope ([`Scope::app`]) or in a panel
+/// scope. They join the linked command sets: their chords fire them into `FrameOutput.fired`, and surfaces resolve
+/// their label, icon, kind and chord. A panel-scope command fires only while the keyboard is inside a container whose
+/// `command_scope` is that scope. An id a linked set already defines stays that set's.
 #[derive(Clone)]
 pub struct AppCatalog {
     defs: Arc<[CommandDef]>,
@@ -75,11 +76,12 @@ pub struct AppCatalog {
 
 impl AppCatalog {
     /// A catalog of `defs`; `generation` changes when the app's rows do. Refuses two defs with one id (`Duplicate`) and a
-    /// def in another scope (`NotApp`).
+    /// def in a context scope, one a linked set holds by a momentary key or types in (`NotApp`): no instance carries a
+    /// context scope, so the app could never fire it.
     pub fn new(defs: Vec<CommandDef>, generation: u64) -> Result<Self, CommandDefError> {
         let mut index = HashMap::with_capacity(defs.len());
         for (at, def) in defs.iter().enumerate() {
-            if !def.scope.is_app() {
+            if is_context_scope(&def.scope) {
                 return Err(CommandDefError::NotApp { command: def.command.id.clone() });
             }
             registry::index_id(&mut index, &def.command.key_text(), at)?;
@@ -127,8 +129,8 @@ impl AppCatalog {
         self.generation
     }
 
-    /// The catalog's rows in the order the app gave them, each with its scope (always [`Scope::app`]), kind and
-    /// default bindings, as a shortcuts list reads them.
+    /// The catalog's rows in the order the app gave them, each with its scope (the app scope or a panel scope), kind
+    /// and default bindings, as a shortcuts list reads them.
     pub fn defs(&self) -> &[CommandDef] {
         &self.defs
     }
@@ -138,6 +140,14 @@ impl AppCatalog {
         let at = self.index.get(command.key_text().as_ref()).or_else(|| self.index.get(command.id.as_str()))?;
         self.defs.get(*at)
     }
+}
+
+/// Whether `scope` is a context scope of a linked set: one its momentary commands hold or one it types in.
+fn is_context_scope(scope: &Scope) -> bool {
+    let name = scope.as_str();
+    registry::sets()
+        .iter()
+        .any(|set| set.typing.is_some_and(|typing| typing.name() == name) || (set.holds)().iter().any(|(_, held)| held.name() == name))
 }
 
 /// A typed set of commands, written by `#[derive(CommandSet)]`.

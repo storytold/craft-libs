@@ -209,6 +209,11 @@ pub(crate) struct State {
     /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
     /// closing by the next pass, and its restoration needs the widget to still hold the focus.
     surrender_deferred: Option<Id>,
+    /// A commit of the focused draft asked for outside a pass or before this pass's focus stage (`commit_focused`);
+    /// the next `begin` applies it once, after `PressState::rotate` cleared the last pass's.
+    commit_requested: bool,
+    /// This viewport's `begin` ran and its `end` has not: a commit asked for now applies to the running pass.
+    in_pass: bool,
 }
 
 fn viewport(ctx: &Context) -> ViewportId {
@@ -1025,11 +1030,25 @@ pub(crate) fn commit_now(ctx: &Context) -> Option<Id> {
 }
 
 /// Marks the focused text part's draft for commit in this pass: a command fired by a chord, a root close request or a
-/// file drop ends it as `End::Blur` before the app reads the pass's output.
-#[allow(dead_code)] // P3(shell-w3): sh.C10
+/// file drop ends it as `End::Blur` before the app reads the pass's output. Asked for before this pass's focus stage
+/// (the drop step) or between passes (the close hold), it applies in the next `begin`, so the first pass to run takes
+/// it once; asked for after it (the board's fire step), it applies at once.
 pub(crate) fn commit_focused(ctx: &Context) {
-    let _ = ctx;
-    todo!("sh.C10")
+    with(ctx, |state| {
+        if state.in_pass {
+            commit_focused_stop(state);
+        } else {
+            state.commit_requested = true;
+        }
+    });
+}
+
+/// Sets `commit_now` to the focused stop when it is a text stop, as a press that leaves it does (`classify_press`),
+/// against the running pass's focus. A stop that is not text has no draft and nothing commits.
+fn commit_focused_stop(state: &mut State) {
+    if let Some(rec) = state.stop_of_focus().filter(|rec| rec.stop.text) {
+        state.press.commit_now = Some(rec.stop.id);
+    }
 }
 
 /// Whether the component `owner` opened a layer that keeps the focus on it (a dropdown) and the layer is shown: its
@@ -1122,6 +1141,11 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
         state.awaited = None;
         let host_focus = state.record.host_focus;
         let (acts, announcements) = nav::begin(state, input);
+        state.in_pass = true;
+        // After the press classification, which sets `commit_now` for a press only: a requested commit adds to it.
+        if std::mem::take(&mut state.commit_requested) {
+            commit_focused_stop(state);
+        }
         (acts, announcements, host_focus)
     });
     // egui's direction (its arrows, a Tab the key stage left to egui) moves focus from the widget it holds when that is
@@ -1202,6 +1226,7 @@ fn settle_given(ctx: &Context, app_widget: impl Fn(Id) -> bool) {
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
     let viewport = viewport(ctx);
+    with(ctx, |state| state.in_pass = false);
     take_app_widgets(ctx, None);
     report_undrawn_canvases(ctx);
     // A field held a pass for the scope it sits in lets go now, unless that scope is going away with focus in the field:
