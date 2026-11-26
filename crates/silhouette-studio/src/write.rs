@@ -141,6 +141,18 @@ const HEADER_MAGIC: u32 = 0x1DCD_672C;
 /// Write `doc` as a `.studio3` file. Errors on a page or point that is not finite and
 /// positive (pages) or within ±[`MAX_PAGE_MM`], or on too many shapes or points.
 pub fn write(doc: &WriteDocument) -> Result<Vec<u8>, Error> {
+    write_as(doc, false)
+}
+
+/// Write `doc` as a `.studio` (Studio V2, header `silhouette04;`) file, the legacy format
+/// Silhouette Studio's Save As offers as "Silhouette Studio V2". It is the `.studio3` objects
+/// section without the 1024-byte header, with a shorter page record, no layer objects and the
+/// V2 tool defaults. Same checks as [`write`].
+pub fn write_v2(doc: &WriteDocument) -> Result<Vec<u8>, Error> {
+    write_as(doc, true)
+}
+
+fn write_as(doc: &WriteDocument, v2: bool) -> Result<Vec<u8>, Error> {
     let (pw, ph) = doc.page_mm;
     let page_ok = |v: f64| v.is_finite() && v > 0.0 && v <= MAX_PAGE_MM;
     if !(page_ok(pw) && page_ok(ph)) {
@@ -171,9 +183,12 @@ pub fn write(doc: &WriteDocument) -> Result<Vec<u8>, Error> {
         }
     }
     let mut w = W::default();
-    w.raw(b"silhouette05;");
-    root(&mut w, doc);
+    w.raw(if v2 { b"silhouette04;" } else { b"silhouette05;" });
+    root(&mut w, doc, v2);
     let section = w.0;
+    if v2 {
+        return Ok(section);
+    }
     let mut out = vec![0u8; 0x400];
     out[..13].copy_from_slice(b"silhouette05;");
     out[0x10..0x18].copy_from_slice(&(section.len() as u64).to_le_bytes());
@@ -241,15 +256,15 @@ fn rgb(c: [u8; 3]) -> [f64; 4] {
     [f64::from(c[0]) / 255.0, f64::from(c[1]) / 255.0, f64::from(c[2]) / 255.0, 1.0]
 }
 
-fn root(w: &mut W, doc: &WriteDocument) {
+fn root(w: &mut W, doc: &WriteDocument, v2: bool) {
     w.rec(|w| {
         default_line_style(w);
-        page(w, doc.page_mm);
+        page(w, doc.page_mm, v2);
         view(w);
         document(w);
-        objects(w, &doc.shapes);
+        objects(w, &doc.shapes, v2);
         offset_setting(w);
-        cut_layers(w);
+        cut_layers(w, v2);
         group_all(w);
         default_layer(w);
         flags(w);
@@ -269,7 +284,7 @@ fn default_line_style(w: &mut W) {
     });
 }
 
-fn page(w: &mut W, (width, height): (f64, f64)) {
+fn page(w: &mut W, (width, height): (f64, f64), v2: bool) {
     // The page centred on the 12 × 12 in mat; a custom size has no preset name.
     let (x, y) = ((MAT_MM - width) / 2.0, (MAT_MM - height) / 2.0);
     w.rec(|w| {
@@ -303,6 +318,10 @@ fn page(w: &mut W, (width, height): (f64, f64)) {
         w.raw(&[0, 0, 1, 0, 0, 0]);
         (0..4).for_each(|_| w.f32(f64::from(TEN_MM)));
         w.u32(0);
+        // A V2 page record ends here.
+        if v2 {
+            return;
+        }
         // A page the size of the mat is Silhouette's 12 × 12 preset; others are custom.
         let preset = (width as f32 == MAT_MM as f32 && height as f32 == MAT_MM as f32).then_some("constant:12x12");
         w.s(preset.unwrap_or(""));
@@ -425,19 +444,26 @@ fn uid(n: u32) -> String {
     format!("{:08x}{:08x}{:08x}{:08x}", 0x5c4a_f700u32 ^ n, n.wrapping_mul(0x9E37_79B9), 0x0c0f_fee0, n)
 }
 
-fn objects(w: &mut W, shapes: &[WriteShape]) {
+fn objects(w: &mut W, shapes: &[WriteShape], v2: bool) {
     w.rec(|w| {
         if shapes.is_empty() {
             w.u32(u32::MAX);
             return;
         }
-        // Count minus one, then the layers around the shapes, as Silhouette saves them.
-        w.u32(shapes.len() as u32 + 1);
-        layer(w, "Layer 1", 1, 0xA7D0, 1);
+        // Count minus one, then (V3) the layers around the shapes, as Silhouette saves them;
+        // V2 has no layer objects.
+        if v2 {
+            w.u32(shapes.len() as u32 - 1);
+        } else {
+            w.u32(shapes.len() as u32 + 1);
+            layer(w, "Layer 1", 1, 0xA7D0, 1);
+        }
         for (i, shape) in shapes.iter().enumerate() {
             polygon(w, shape, 0xA800 + i as u32, 100 + i as u32);
         }
-        layer(w, "Layer 0", 0, 0xA7D5, 2);
+        if !v2 {
+            layer(w, "Layer 0", 0, 0xA7D5, 2);
+        }
     });
 }
 
@@ -680,16 +706,22 @@ fn offset_setting(w: &mut W) {
 const PATTERN: &str = "222222222222222222222222222222A";
 const MATERIAL_ID: &str = "5bdfacf526573b1fd749d97a05328dbb";
 
-fn tool_block(w: &mut W) {
+/// A cut layer's tool settings: V2 stores 98 and the action `unknown` where V3 has 100 and
+/// `no_action`.
+fn tool_block(w: &mut W, v2: bool) {
     w.s("no_tool");
-    w.u32(100);
+    tool_tail(w, v2);
+}
+
+fn tool_tail(w: &mut W, v2: bool) {
+    w.u32(if v2 { 98 } else { 100 });
     w.s(MATERIAL_ID);
     w.s(PATTERN);
     w.s("auto");
-    w.s("no_action");
+    w.s(if v2 { "unknown" } else { "no_action" });
 }
 
-fn cut_layers(w: &mut W) {
+fn cut_layers(w: &mut W, v2: bool) {
     const LAYERS: [(&str, bool, bool, bool); 10] = [
         ("cnon", false, false, false),
         ("ccut", true, false, false),
@@ -712,15 +744,11 @@ fn cut_layers(w: &mut W) {
                 w.s(&format!("@{key}:"));
                 w.s(PATTERN);
                 w.raw(&[u8::from(used), 0, u8::from(edge), u8::from(tool2), 0, 0, 0]);
-                tool_block(w);
+                tool_block(w, v2);
                 w.raw(&[u8::from(tool2), 0, 0, 0]);
                 w.raw(b"studio4.3extension1_dghyujnbvf");
                 w.u8(1);
-                w.u32(100);
-                w.s(MATERIAL_ID);
-                w.s(PATTERN);
-                w.s("auto");
-                w.s("no_action");
+                tool_tail(w, v2);
                 w.raw(&[u8::from(tool2), 0, 0, 0]);
             });
         }
@@ -1011,6 +1039,20 @@ mod tests {
         assert!((b.y0 - 27.5).abs() < 0.01 && (b.x0 - 10.0).abs() < 1e-4, "{b:?}");
         let curves = back.shapes[0].path.elements().iter().filter(|e| matches!(e, kurbo::PathEl::CurveTo(..))).count();
         assert_eq!(curves, 2);
+    }
+
+    #[test]
+    fn studio_v2_documents_read_back() {
+        let doc =
+            WriteDocument { page_mm: (120.0, 90.0), shapes: vec![shape(&[(10.0, 10.0), (60.0, 10.0), (60.0, 40.0)], true, Some([0, 90, 200]))] };
+        let bytes = write_v2(&doc).unwrap();
+        assert_eq!(bytes.get(..13), Some(b"silhouette04;".as_slice()));
+        let back = crate::import(&bytes).unwrap();
+        assert_eq!(back.version, crate::Version::V2);
+        assert_eq!(back.page_mm, Some((120.0, 90.0)));
+        assert_eq!(back.shapes.len(), 1);
+        assert_eq!(back.shapes[0].line_color, Some([0, 90, 200]));
+        assert!(write_v2(&WriteDocument { page_mm: (0.0, 1.0), shapes: Vec::new() }).is_err());
     }
 
     #[test]

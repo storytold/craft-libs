@@ -1,5 +1,5 @@
 //! Reader for Silhouette Studio documents: `.studio` (header `silhouette04;`) and
-//! `.studio3` (header `silhouette05;`), and a `.studio3` writer ([`write`]) for pages and
+//! `.studio3` (header `silhouette05;`), and writers for `.studio3` ([`write`]) and `.studio` ([`write_v2`]) for pages and
 //! shapes of straight and Bézier contours with line colour, width and fill.
 //!
 //! It reads every object's outline (open and closed paths, lines and Bézier curves, compound
@@ -19,7 +19,7 @@
 
 mod write;
 use kurbo::{BezPath, Point, Vec2};
-pub use write::{MAX_WRITE_POINTS, MAX_WRITE_SHAPES, WriteContour, WriteDocument, WriteNode, WriteShape, write};
+pub use write::{MAX_WRITE_POINTS, MAX_WRITE_SHAPES, WriteContour, WriteDocument, WriteNode, WriteShape, write, write_v2};
 
 /// Largest file read (store designs and saved samples are far smaller).
 pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
