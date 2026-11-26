@@ -1,9 +1,12 @@
-//! A segmented strip in a room narrower than its one line moves the segments that do not fit to the next line, so
-//! it stays inside the room; in a room it fits it keeps one line.
+//! A segmented strip in a column narrower than its one line moves the segments that do not fit to the next line, so
+//! it stays inside the room; in a room it fits, and in a row or bar, it keeps one line.
 
 use craft_i18n::Direction;
+use craft_ui::bars::{Bar, BarKind};
+use craft_ui::buttons::Button;
 use craft_ui::choice::Segmented;
-use craft_ui::contract::{Bind, Entry, Show as _};
+use craft_ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Row;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rect, Vec2};
 
@@ -65,6 +68,43 @@ fn a_strip_that_fits_its_room_keeps_one_line() {
     let (group, segments) = rects(&fixture);
     assert!(segments.iter().all(|segment| (segment.top() - segments[0].top()).abs() < 0.5), "the segments share one line");
     assert!((group.width() - line).abs() < 0.5, "the strip is as wide as its one line ({} against {line})", group.width());
+}
+
+/// The strip of the five modes followed by three buttons, in a row (`bar` false) or an options bar, `width` wide.
+fn strip_in_row(width: f32, bar: bool) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let entries: Vec<Entry<u8>> = (0..).zip(MODES).map(|(at, mode)| Entry::new(at, mode)).collect();
+        let mut picked = 0_u8;
+        let mut members = |ui: &mut egui::Ui| {
+            Segmented::new("Combine", Bind::bound(&mut picked), &entries).show(ui);
+            for at in 0..3 {
+                Button::new(format!("Button {at}")).show(ui);
+            }
+        };
+        if bar {
+            Bar::new("Options", BarKind::Options).show(ui, |ui, _| members(ui));
+        } else {
+            Row::new().show(ui, |ui, _| members(ui));
+        }
+    });
+    fixture.room(Vec2::new(width, 300.0)).settle();
+    fixture
+}
+
+#[trial]
+fn a_strip_in_a_row_or_bar_keeps_one_line_under_width_pressure() {
+    let line = one_line_width();
+    for bar in [false, true] {
+        let (_, wide) = rects(&strip_in_row(2000.0, bar));
+        let (_, narrow) = rects(&strip_in_row(line * 0.6, bar));
+        assert!(
+            narrow.iter().all(|segment| (segment.top() - narrow[0].top()).abs() < 0.5),
+            "bar {bar}: the segments share one line in a room narrower than the strip"
+        );
+        for ((mode, wide), narrow) in MODES.iter().zip(&wide).zip(&narrow) {
+            assert!(narrow.width() >= wide.width() - 0.5, "bar {bar}: {mode} keeps its whole face ({narrow:?} against {wide:?})");
+        }
+    }
 }
 
 #[trial]

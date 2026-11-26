@@ -1,7 +1,7 @@
 //! `Segmented`: one of a few options as a strip of segments. A leaf with a part per segment; each segment wears a
 //! face that is flat and muted, with a hover fill, and takes the selection fill and edge while it is picked. The row is one Tab stop over its segments: arrows, Home and End move focus between them, Space,
-//! Enter or a click picks the focused one. In a room narrower than the strip, the segments that do not fit move to
-//! the next line.
+//! Enter or a click picks the focused one. In a column narrower than the strip, the segments that do not fit move to
+//! the next line; in a row or bar the strip keeps one line.
 
 use crate::buttons::ActiveLook;
 use crate::buttons::face::{self, FaceLook, FaceSpec};
@@ -68,10 +68,17 @@ impl<'a, T: Value + 'static> Segmented<'a, T> {
     }
 
     /// The segments measured and flowed into lines `room` wide. At the least proposal the room is the widest segment,
-    /// so each segment keeps its whole face.
+    /// so each segment keeps its whole face. In a row or bar the strip keeps one line, so its least is the whole line
+    /// and the row's shrink step never wraps it.
     fn arrange(&self, cx: &MeasureCx<'_, Self>, room: f32) -> Placement {
         let wants = self.widths(cx);
-        let room = if cx.proposal == Proposal::Min { wants.iter().copied().fold(0.0, f32::max).min(room) } else { room };
+        let room = if cx.in_row() {
+            f32::INFINITY
+        } else if cx.proposal == Proposal::Min {
+            wants.iter().copied().fold(0.0, f32::max).min(room)
+        } else {
+            room
+        };
         place(&wants, room, cx.style.gap)
     }
 }
@@ -145,7 +152,7 @@ impl<T: Value + 'static> Component for Segmented<'_, T> {
         }
     }
 
-    /// The lines the segments take in the column's room: one line when the strip fits it.
+    /// The lines the segments take in the column's room: one line when the strip fits it, and always in a row.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.arrange(cx, cx.column_room().unwrap_or(f32::INFINITY)).size(cx.style.height, cx.style.gap)
     }
@@ -154,11 +161,12 @@ impl<T: Value + 'static> Component for Segmented<'_, T> {
         Sense::HOVER
     }
 
-    /// A part per segment, flowed into the lines of `rect`. A segment with an icon, or one cut to its line, shows its
-    /// label as its tooltip.
+    /// A part per segment, flowed into the lines of `rect`. A `rect` with room for one line only keeps the segments on
+    /// that line. A segment with an icon, or one cut to its line, shows its label as its tooltip.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let placement = self.arrange(cx, rect.width());
         let (gap, rtl) = (cx.style.gap, cx.flow.is_rtl());
+        let one_line = rect.height() < 2.0 * cx.style.height + gap - 0.5;
+        let placement = if one_line { place(&self.widths(cx), f32::INFINITY, gap) } else { self.arrange(cx, rect.width()) };
         let current = self.position_of(cx.value());
         for (at, entry) in self.entries.iter().enumerate() {
             let mut part = cx.part(Self::part(at), placement.rect(at, rect, gap, rtl));

@@ -2440,6 +2440,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn command(&self) -> Option<&ResolvedCommand>`. The bound command as step 1 resolved it, with the scoped bindings of the scopes above the component.
   - `pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<std::sync::Arc<ResolvedCommand>>`. `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
   - `pub fn column_room(&self) -> Option<f32>`. The width a component whose height follows its width (wrapped text, a square plot) sizes at: the room the
+  - `pub fn in_row(&self) -> bool`. Whether the component is a direct child of a `Row` body, a bar's included. A component that could wrap into
   - `pub fn picture_width(&self, least: f32, most: f32) -> f32`. The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
   - `pub fn picture_size(&self, least: f32, most: f32, height: impl FnOnce(f32) -> f32) -> Vec2`. The size of a picture whose height follows from its width (a square graph, a wheel, an image at its aspect):
   - `pub fn label(&self) -> Label`. The label as given.
