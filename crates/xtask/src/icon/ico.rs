@@ -73,7 +73,7 @@ pub struct Entry {
 /// size against [`Limits::max_total_bytes`], and for each entry: a PNG of at most
 /// [`Limits::max_png_bytes`], square dimensions, palette size 0, reserved 0, 1 plane and 32 bits per
 /// pixel, as [`pack`] writes them, a size no other entry has, and an 8-bit RGBA PNG that
-/// [`png_info`](super::png_info) accepts, of the size the entry states, lying wholly after the
+/// [`png_info`] accepts, of the size the entry states, lying wholly after the
 /// directory and inside the file. The PNGs together hold at most [`Limits::max_total_bytes`].
 pub fn read(ico: &[u8], limits: &Limits) -> Result<Vec<Entry>, Error> {
     let bad = Error::InvalidIcon;
