@@ -15,12 +15,18 @@ icu_decimal = { version = "~2.3", default-features = false, features = ["serde"]
 icu_locale_core = { version = "~2.3", default-features = false }
 icu_locale_fallback = { version = "~2.3", default-features = false, features = ["compiled_data"] }
 icu_plurals = { version = "~2.3", default-features = false, features = ["serde"] }
+# Dates: Gregorian formatting and week data on CLDR data (data/dates.postcard), same minor version.
+icu_calendar = { version = "~2.3", default-features = false }
+icu_datetime = { version = "~2.3", default-features = false, features = ["serde"] }
+icu_time = { version = "~2.3", default-features = false }
 icu_provider = { version = "~2.3", default-features = false, features = ["sync"] }
 icu_provider_adapters = { version = "~2.3", default-features = false }
 icu_provider_blob = { version = "~2.3", default-features = false }
 writeable = "0.6"
 log = "0.4"
 sys-locale = "0.3"
+# The system's UTC offset at a moment (`DateTime::from_unix` with `TimeZone::Local`).
+chrono = { workspace = true, features = ["clock"] }
 icu_normalizer = "~2.3"
 icu_properties = "~2.3"
 # Generated data fits one ICU4X minor version; data/generate-collation.sh names its datagen.
@@ -29,6 +35,8 @@ unicode-bidi = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sys-locale = { version = "0.3", features = ["js"] }
+# The browser's `Date` supplies the local offset.
+chrono = { workspace = true, features = ["clock", "wasmbind"] }
 
 # The regional format (Region::system); safe registry reads, MIT OR Apache-2.0.
 [target.'cfg(windows)'.dependencies]

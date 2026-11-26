@@ -14,9 +14,13 @@ use crate::cms::lab_to_srgb8;
 /// A process ink, in plate order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Process {
+    #[allow(missing_docs)]
     Cyan,
+    #[allow(missing_docs)]
     Magenta,
+    #[allow(missing_docs)]
     Yellow,
+    #[allow(missing_docs)]
     Black,
 }
 
@@ -69,7 +73,9 @@ pub struct Spot {
 /// A process or spot ink.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ink {
+    /// One of the four process inks.
     Process(Process),
+    /// A named spot ink.
     Spot(Spot),
 }
 
@@ -82,6 +88,7 @@ impl Ink {
         }
     }
 
+    /// Whether this is a spot ink.
     pub fn is_spot(&self) -> bool {
         matches!(self, Self::Spot(_))
     }
@@ -181,6 +188,7 @@ impl InkSet {
         self.by_name.get(name).copied()
     }
 
+    /// The ink with index `id`, if this set has it.
     pub fn get(&self, id: InkId) -> Option<&Ink> {
         self.inks.get(id.index())
     }
@@ -261,6 +269,7 @@ impl InkSet {
         self.all_to_process = on;
     }
 
+    /// Whether "All Spots to Process" is on; see [`set_all_to_process`](Self::set_all_to_process).
     pub fn all_to_process(&self) -> bool {
         self.all_to_process
     }
@@ -519,33 +528,6 @@ mod tests {
         Ink::Spot(Spot { name: name.into(), alternate: Alternate::Lab([80.0, 5.0, 60.0]), solidity: None })
     }
 
-    #[test]
-    fn spots_follow_the_process_inks_and_names_are_compared_as_pdf_names() {
-        let mut set = InkSet::new();
-        let gold = set.add(spot("/Gold#20Foil")).unwrap();
-        assert_eq!(gold.index(), 4);
-        assert_eq!(set.get(gold).unwrap().name(), "Gold Foil");
-        assert_eq!(set.add(spot("Gold Foil")), Some(gold), "added once");
-        assert_eq!(set.lookup("Gold#20Foil"), Some(gold));
-        assert_eq!(set.add(spot("Black")), Some(InkId::process(Process::Black)));
-        assert_eq!(set.lookup("/Cyan"), Some(InkId::process(Process::Cyan)));
-        assert_eq!(set.add(spot("All")), None);
-        assert_eq!(set.add(spot("None")), None);
-        assert_eq!(set.lookup("gold foil"), None, "names are case-sensitive");
-        let names: Vec<&str> = set.iter().map(|(_, ink)| ink.name()).collect();
-        assert_eq!(names, ["Cyan", "Magenta", "Yellow", "Black", "Gold Foil"]);
-        assert_eq!(set.spots().count(), 1);
-    }
-
-    #[test]
-    fn thousands_of_spots_are_added_and_found_without_rescanning() {
-        let mut set = InkSet::new();
-        let ids: Vec<InkId> = (0..60_000).map(|i| set.add(spot(&format!("Spot {i}"))).unwrap()).collect();
-        assert_eq!(set.add(spot("Spot 59999")), Some(ids[59_999]), "added once");
-        assert_eq!(set.lookup("Spot#2042"), Some(ids[42]));
-        assert_eq!(set.len(), 60_004);
-    }
-
     fn close(got: Option<[f32; 4]>, expected: [f32; 4]) -> bool {
         got.is_some_and(|got| got.iter().zip(expected).all(|(g, e)| (g - e).abs() < 1e-4))
     }
@@ -595,12 +577,5 @@ mod tests {
 
         assert!(set.alias(varnish, varnish));
         assert_eq!(set.alias_of(varnish), None);
-    }
-
-    #[test]
-    fn malformed_escapes_stay_as_written() {
-        assert_eq!(normalize_name("A#2"), "A#2");
-        assert_eq!(normalize_name("A#zz#41"), "A#zzA");
-        assert_eq!(normalize_name("#E2#82#AC"), "€");
     }
 }

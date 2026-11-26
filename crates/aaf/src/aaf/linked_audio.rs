@@ -5,7 +5,9 @@ use super::ids::{cls, pid};
 /// The two audio descriptor classes commonly attached to an external WAV source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DescriptorKind {
+    /// A WAVEDescriptor (`.wav` with a RIFF header).
     Wave,
+    /// A PCMDescriptor (raw PCM samples).
     Pcm,
 }
 
@@ -24,16 +26,22 @@ impl DescriptorKind {
 /// One property from an already framed and caller-validated object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DescriptorProperty<'a> {
+    /// The object has no such property.
     Missing,
+    /// The property is stored in a form other than a plain data value.
     OtherForm,
+    /// The property's raw value bytes.
     Data(&'a [u8]),
 }
 
 /// Why a descriptor field is unavailable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DescriptorFieldError {
+    /// The descriptor has no such property.
     Missing,
+    /// The property is stored in a form other than a plain data value.
     OtherForm,
+    /// The value is shorter than the field's type.
     Truncated,
 }
 
