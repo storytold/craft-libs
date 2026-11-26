@@ -691,6 +691,7 @@ impl FooterBar {
     /// Shows a bar of actions or buttons with the host's `leading` controls at its start edge, before the actions
     /// placed there by [`at_start`](FooterBar::at_start), under the same rule: a preset panel's size slider, a filter
     /// dialog's Preview box. `leading` gets the bar's body context. Returns what `leading` returned on its last run.
+    /// The end group moves below the leading controls when they cannot fit beside its wrapped members.
     pub fn show_footer_leading<R>(self, ui: &mut Ui, leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> (FooterOutput, Option<R>) {
         self.show_footer_with(ui, Some(leading))
     }
@@ -704,7 +705,12 @@ impl FooterBar {
             self.props.layout = self.props.layout.clone().wrap(true);
         }
         let mut led = None;
-        let probed = leading.is_some() && !matches!(content, Content::Body);
+        let probed = leading.is_some()
+            && match &content {
+                Content::Actions(actions) => !actions.is_empty(),
+                Content::Buttons(buttons) => !buttons.is_empty(),
+                Content::Body => false,
+            };
         let mut body = |ui: &mut Ui, bar: &mut BodyCx<'_>, end: EndGroup<'_>| match &content {
             Content::Body => Shown::default(),
             Content::Actions(actions) => {
@@ -814,7 +820,7 @@ impl FooterBar {
                     // least. The buttons take their ids from the bar, so they keep them when they wrap.
                     let base = Some(bar.id);
                     let ran = leading(ui, bar);
-                    let probe = matches!(end, EndGroup::Probe(_));
+                    let probe = !matches!(end, EndGroup::Show { .. });
                     if !probe {
                         led = Some(ran);
                     }
@@ -831,8 +837,11 @@ impl FooterBar {
         // A bar with leading controls is first measured with its end group on one line, in this pass, to find whether
         // the group runs past the bar's line once the leading controls have narrowed; the bar then shows the group on
         // more lines if it does, in its measuring run and its real run alike.
-        let wraps = probed && self.end_group_runs_past(ui, |ui, bar, end| body(ui, bar, end));
-        let shown = self.show(ui, |ui, bar| body(ui, bar, EndGroup::Show { wraps }));
+        let placement = if probed { self.end_group_runs_past(ui, |ui, bar, end| body(ui, bar, end)) } else { EndPlacement::default() };
+        if placement.below {
+            self.props.layout = self.props.layout.clone().wrap(true);
+        }
+        let shown = self.show(ui, |ui, bar| body(ui, bar, EndGroup::Show { wraps: placement.wraps }));
         let inner = shown.inner.unwrap_or_default();
         let mods = if inner.picked.is_some() || inner.dropped.is_some() {
             crate::runtime::pointer::frame(ui.ctx()).pick_mods
@@ -850,13 +859,11 @@ impl FooterBar {
         (output, led)
     }
 
-    /// Whether the end group of a bar with leading controls runs past the bar's line on one line, once the leading
-    /// controls have narrowed as far as the bar's row narrows them: a measure of a copy of the bar under an id of its
-    /// own, in the room the bar is shown in, whose `body` lays the group out on one line (`EndGroup::Probe`).
-    fn end_group_runs_past(&mut self, ui: &Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>, EndGroup<'_>) -> Shown) -> bool {
+    /// The probes measure the end group on one line and with wrapping after the leading controls narrow.
+    fn end_group_runs_past(&mut self, ui: &Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>, EndGroup<'_>) -> Shown) -> EndPlacement {
         let room = ui.available_size();
         if !room.x.is_finite() {
-            return false;
+            return EndPlacement::default();
         }
         let id = ui.next_auto_id().with("footer.end_probe");
         // The probe carries the bar's props (its size, glyph role and look), under an id of its own.
@@ -878,23 +885,30 @@ impl FooterBar {
         });
         // A measure that this pass already took serves again without running the body: the answer it found then stands.
         let ctx = ui.ctx();
-        let wraps = match ran_past.get() {
-            Some(ran_past) => {
-                ctx.data_mut(|data| data.insert_temp(id, ran_past));
-                ran_past
-            }
-            None => ctx.data(|data| data.get_temp(id)).unwrap_or(false),
+        let kept = ctx.data(|data| data.get_temp::<EndPlacement>(id)).unwrap_or_default();
+        let wraps = ran_past.get().unwrap_or(kept.wraps);
+        let below = if wraps {
+            let ran_past = Cell::new(None);
+            probe = probe.id(id.with("wrapped"));
+            probe.measure_in(ui, Proposal::Size(room), |ui, bar| {
+                body(ui, bar, EndGroup::WrappedProbe(&ran_past));
+            });
+            ran_past.get().unwrap_or(kept.below)
+        } else {
+            false
         };
+        let placement = EndPlacement { wraps, below };
+        ctx.data_mut(|data| data.insert_temp(id, placement));
         // The bar's kept measure holds the group's old placement: a pass whose placement differs from the last shown
         // one runs again, measuring the bar afresh.
         if !crate::runtime::measure::active(ctx) {
             let shown = id.with("shown");
             let was = ctx.data_mut(|data| {
-                let was = data.get_temp::<bool>(shown);
-                data.insert_temp(shown, wraps);
+                let was = data.get_temp::<EndPlacement>(shown);
+                data.insert_temp(shown, placement);
                 was
             });
-            if was.is_some_and(|was| was != wraps) {
+            if was.is_some_and(|was| was != placement) {
                 if frame::discardable(ctx) {
                     frame::discard_pass(ctx, "a footer bar's end group changed lines");
                 } else {
@@ -902,7 +916,7 @@ impl FooterBar {
                 }
             }
         }
-        wraps
+        placement
     }
 }
 
@@ -912,8 +926,17 @@ enum EndGroup<'a> {
     /// The bar's probe (`FooterBar::end_group_runs_past`): the group stays on one line, and whether it runs past the
     /// bar's line in the run is set here; a later run of the measure sets it again.
     Probe(&'a Cell<Option<bool>>),
+    WrappedProbe(&'a Cell<Option<bool>>),
     /// The bar shown: the group continues on a new line when `wraps`.
-    Show { wraps: bool },
+    Show {
+        wraps: bool,
+    },
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct EndPlacement {
+    wraps: bool,
+    below: bool,
 }
 
 /// The id of the member at `at` in the given order of a bar whose members take their ids from `base`.
@@ -936,6 +959,14 @@ fn show_end_group(ui: &mut Ui, bar: &BodyCx<'_>, end: EndGroup<'_>, mut body: im
                 // Half a point: less than a pixel shows at any scale the box runs.
                 ran_past.set(Some(rect.left() < room.left() - 0.5 || rect.right() > room.right() + 0.5));
             }
+        }
+        EndGroup::WrappedProbe(ran_past) => {
+            let room = ui.max_rect();
+            Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| {
+                body(ui);
+                let rect = ui.min_rect();
+                ran_past.set(Some(rect.left() < room.left() - 0.5 || rect.right() > room.right() + 0.5));
+            });
         }
         EndGroup::Show { wraps } => {
             Row::new().fill_width().align(RowAlign::End).wrap(wraps).show(ui, |ui, _| body(ui));

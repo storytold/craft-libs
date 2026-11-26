@@ -216,6 +216,10 @@ fn a_footer_bar_too_narrow_for_its_two_groups_side_by_side_keeps_them_inside_it(
 /// The slider's rect and the rects of three actions of a footer bar whose leading control is a thumbnail slider, in a
 /// room `width` wide.
 fn slider_footer(width: f32) -> (Rect, Vec<Rect>) {
+    slider_footer_in(width, craft_ui::runtime::env::Direction::Ltr)
+}
+
+fn slider_footer_in(width: f32, direction: craft_ui::runtime::env::Direction) -> (Rect, Vec<Rect>) {
     let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
     let out = Rc::clone(&seen);
     let mut fixture = Fixture::new(move |ui| {
@@ -225,7 +229,7 @@ fn slider_footer(width: f32) -> (Rect, Vec<Rect>) {
             .show_footer_leading(ui, |ui, _| ThumbnailSlider::new("Size", Bind::bound(&mut zoom), TileZoom::Ladder).show(ui).response.rect);
         *out.borrow_mut() = (slider.unwrap_or(Rect::NOTHING), output.responses.iter().map(|response| response.rect).collect());
     });
-    fixture.room(Vec2::new(width, 200.0)).settle();
+    fixture.direction(direction).room(Vec2::new(width, 200.0)).settle();
     seen.borrow().clone()
 }
 
@@ -242,6 +246,16 @@ fn a_footer_bar_narrows_its_leading_slider_before_its_actions_wrap() {
     assert!(actions.iter().all(|rect| (rect.min.y - actions[0].min.y).abs() < 0.5), "the actions stay on one line: {actions:?}");
     assert!(actions.iter().all(|rect| rect.max.x <= width + 0.5), "the actions end inside the {width}-point bar: {actions:?}");
     assert!(slider.width() < wide.width() - 0.5, "the slider kept its width {} in a narrow bar", slider.width());
+}
+
+#[trial]
+fn a_footer_bar_moves_its_actions_below_a_leading_control_that_cannot_narrow_further() {
+    let width = 40.0;
+    for direction in [craft_ui::runtime::env::Direction::Ltr, craft_ui::runtime::env::Direction::Rtl] {
+        let (slider, actions) = slider_footer_in(width, direction);
+        assert!(actions.iter().all(|rect| rect.min.x >= -0.5 && rect.max.x <= width + 0.5), "the actions overflow: {actions:?}");
+        assert!(actions.iter().all(|rect| rect.min.y >= slider.max.y), "the actions must follow the slider on later lines: {slider:?}, {actions:?}");
+    }
 }
 
 /// A bar whose actions wrapped beside a leading slider puts them back on one line, narrowing the slider, once fewer of
@@ -283,6 +297,13 @@ fn a_footer_bar_whose_wrapped_actions_shorten_puts_them_back_on_one_line() {
     assert!(eight.iter().all(|rect| (rect.min.y - eight[0].min.y).abs() < 0.5), "eight actions share one line in a wide bar: {eight:?}");
     let tree = fixture.tree();
     assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the focused action keeps its focus");
+    fixture.room(Vec2::new(40.0, 400.0)).frame(Vec::new());
+    let tree = fixture.tree();
+    assert_eq!(
+        tree.name_of(craft_ui::testing::access::focused_key(tree)),
+        Some("trash"),
+        "the focused action keeps its focus below the leading control"
+    );
 }
 
 /// A bar with a leading control narrowed until its actions wrap keeps them inside it in the first frame at the new
@@ -301,19 +322,29 @@ fn a_footer_bar_wraps_its_actions_beside_a_leading_control_in_the_first_frame() 
     fixture.room(Vec2::new(900.0, 200.0)).settle();
     let wide = seen.borrow().1.clone();
     assert!(wide.iter().all(|(_, rect)| (rect.min.y - wide[0].1.min.y).abs() < 0.5), "one line in a wide bar: {wide:?}");
-    fixture.room(Vec2::new(120.0, 200.0)).frame(Vec::new());
-    let (bar, narrow) = seen.borrow().clone();
-    assert_eq!(narrow.len(), 8);
-    assert!(narrow.iter().any(|(_, rect)| (rect.min.y - narrow[0].1.min.y).abs() >= 0.5), "the actions take more lines: {narrow:?}");
-    for (_, rect) in &narrow {
-        assert!(bar.expand(0.5).contains_rect(*rect), "{rect:?} lies outside the bar {bar:?} in the first narrow frame");
-    }
-    for ((was, _), (now, _)) in wide.iter().zip(&narrow) {
-        assert_eq!(was, now, "an action's id changed when the actions wrapped");
+    for width in [120.0, 40.0] {
+        fixture.room(Vec2::new(width, 400.0)).frame(Vec::new());
+        let (bar, narrow) = seen.borrow().clone();
+        assert_eq!(narrow.len(), 8);
+        assert!(narrow.iter().any(|(_, rect)| (rect.min.y - narrow[0].1.min.y).abs() >= 0.5), "the actions take more lines: {narrow:?}");
+        for (_, rect) in &narrow {
+            assert!(bar.expand(0.5).contains_rect(*rect), "{rect:?} lies outside the bar {bar:?} in the first narrow frame");
+        }
+        for ((was, _), (now, _)) in wide.iter().zip(&narrow) {
+            assert_eq!(was, now, "an action's id changed when the actions wrapped");
+        }
     }
 }
 
 const DIALOG_BUTTONS: [&str; 4] = ["Reset", "Don't Save", "Cancel", "OK"];
+
+#[trial]
+fn a_footer_bar_moves_its_buttons_below_leading_controls_when_they_do_not_fit_beside_them() {
+    let (_, wide) = dialog_buttons(900.0, false);
+    let width = wide.iter().map(Rect::width).fold(0.0, f32::max) + 8.0;
+    let (bar, buttons) = dialog_buttons(width, true);
+    assert!(buttons.iter().all(|rect| bar.expand(0.5).contains_rect(*rect)), "buttons overflow the bar {bar:?}: {buttons:?}");
+}
 
 /// The rect of a bar of four dialog buttons and the rect of each button, in a room `width` wide; `leading` puts a
 /// control at the start of the buttons' line.
