@@ -235,7 +235,8 @@ pub fn fetch_pinned(dest: &Path, pins: &[Pin<'_>]) -> Result<FetchSummary, Fetch
 /// folder, its address
 /// starts with `https://`, its SHA-256 has 64 hexadecimal digits and its `max_bytes` is not 0.
 /// `dest` and the folders the names need are created. The files are then handled in order, and
-/// the first failure stops the fetch; files handled before it stay in place.
+/// the first failure stops the fetch; files handled before it stay in place. As with [`extract`],
+/// no folder on the way to a written file may be writable by another user.
 pub fn fetch_pinned_with(dest: &Path, pins: &[Pin<'_>], transport: &dyn Transport) -> Result<FetchSummary, FetchError> {
     let checked = check_pins(pins)?;
     prepare(dest)?;
@@ -280,7 +281,9 @@ pub fn fetch_archive_with(dest: &Path, archive: &Pin<'_>, options: &ExtractOptio
 /// used for both a file and a folder each stop it with nothing written. Each file is then written
 /// through a temporary file and a rename; an existing file at that name is replaced. Files are
 /// written one at a time, so a write error after the checks leaves the files written before it in
-/// place.
+/// place. The link checks run before the writes, not as part of them, so no folder on the way to a
+/// written file (`dest`, the folders above it and the folders under it) may be writable by another
+/// user.
 pub fn extract(dest: &Path, name: &str, bytes: &[u8], options: &ExtractOptions) -> Result<Vec<String>, FetchError> {
     let items = read_tar(name, bytes, options)?;
     prepare(dest)?;

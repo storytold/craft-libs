@@ -213,7 +213,10 @@ reports such a refusal with an error of kind `FileTooLarge`.
 
 Neither `dest` nor any path under it may be a link. A link, or a folder where a file goes, or a
 file where a folder goes, stops the fetch with `FetchError::NotRegular`. The folders above `dest`
-are followed like any other path, links included.
+are followed like any other path, links included. The link checks run before the writes, not as
+part of them, so another process that replaces `dest` or a folder under it with a link after it was
+checked can redirect a write. Every folder on the way to a written file (`dest`, the folders above
+it and the folders under it) must be writable only by the user running the fetch or the system.
 
 The archive is held in memory, so the pin's `max_bytes` also bounds its memory. Before anything is
 written, every entry is checked: a symbolic or hard link, a device, a FIFO or any other special
