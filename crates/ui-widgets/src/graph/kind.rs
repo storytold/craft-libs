@@ -118,15 +118,13 @@ pub struct NodeHeader {
 impl NodeHeader {
     /// A header band of `tone`, `height` document units high.
     pub fn new(tone: DataColor, height: f32) -> Self {
-        let _ = (tone, height);
-        todo!("ge.C14")
+        NodeHeader { tone, height, icon: None }
     }
 
     /// The header shows `icon` at its end.
     #[must_use]
     pub fn icon(self, icon: IconSpec<'static>) -> Self {
-        let _ = (self, icon);
-        todo!("ge.C14")
+        NodeHeader { icon: Some(icon), ..self }
     }
 }
 
@@ -143,8 +141,7 @@ pub struct NodeFooter<'a> {
 impl<'a> NodeFooter<'a> {
     /// A footer of `text`, `height` document units high.
     pub fn new(text: &'a str, height: f32) -> Self {
-        let _ = (text, height);
-        todo!("ge.C14")
+        NodeFooter { text, height }
     }
 }
 
@@ -167,9 +164,9 @@ pub enum NodeEvent<E = ()> {
     /// A wire was dropped on a port of this node.
     #[non_exhaustive]
     Wired {
-        /// The port the wire started on.
+        /// The output end: the port the wire started on, or the port a wire from an input was dropped on.
         from: PortRef,
-        /// The port it was dropped on.
+        /// The input end: the port the wire was dropped on, or the input a reverse wire started on.
         to: PortRef,
         /// The drop operation: Alt copies.
         op: DropOperation,
@@ -179,9 +176,9 @@ pub enum NodeEvent<E = ()> {
     /// A wire that started on a port of this node was released, in the pass after the drop.
     #[non_exhaustive]
     WireEnded {
-        /// What the drop did, as the target answered it.
-        op: DropOperation,
-        /// The port the drag started on.
+        /// What the drop did, as the target answered it; `None` when no port took it.
+        op: Option<DropOperation>,
+        /// What the drag carried as its start: the source port of a detached wire, else the port pressed.
         from: PortRef,
         /// The id of the wire the drag took off an input, if it did.
         detached: Option<u64>,

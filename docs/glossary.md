@@ -180,7 +180,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `Name` | How a node is named | `craft_ui::runtime::access` | 12.1 |
 | `NavOutline`, `NavShape` | The key-free outline the navigation core steps through, and the navigation shape | craft-behavior | 9.5 |
 | `NodeGraph`, `Node`, `NodeKind` | The node-editor collection, its item component and the app trait for node kinds, each generic over the graph's edit type `E: 'static = ()` | `craft_ui::graph` | 20.6 |
-| `NodeEvent` | A node graph's event: `Wired`, `WireEnded`, or `Edit(E)` from a kind's inline controls | `craft_ui::graph` | 20.6 |
+| `NodeEvent` | A node graph's event: `Wired`, `WireEnded`, `Clicked` (a primary click on a node's body or port, with its modifiers), or `Edit(E)` from a kind's inline controls | `craft_ui::graph` | 20.6 |
 | `Numeric` | A node's numeric value, range, step and value text, set with `a.numeric(..)` | `craft_ui::runtime::access` | 12.1 |
 | One press per pass | The input hook's rule (H0) | `craft_ui::runtime::egui` (input) | 1.8, 8.3 |
 | `Opener` | The component that opens a free-standing popup | `craft_ui::contract` | 15.4 |
