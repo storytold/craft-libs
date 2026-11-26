@@ -570,6 +570,9 @@ pub fn format_timecode_ae(frame: i64, rate: FrameRate, drop_frame: bool) -> Stri
 }
 
 /// Format a tick according to a display mode.
+///
+/// [`TimeDisplay::AudioSamples`] pads the sample field to the digit count of `sample_rate - 1`, with at least five
+/// digits, so every position at one sample rate has the same width (`00:00:01:000000` at 192 kHz).
 pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisplay, sample_rate: i64) -> String {
     let frame = rate.frame_at(t);
     match display {
@@ -585,13 +588,19 @@ pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisp
             let h = total_secs / 3600;
             let m = (total_secs / 60) % 60;
             let s = total_secs % 60;
-            format!("{}{:02}:{:02}:{:02}:{:05}", if neg { "-" } else { "" }, h, m, s, rem_samples)
+            let width = sample_field_width(sample_rate);
+            format!("{}{:02}:{:02}:{:02}:{:0width$}", if neg { "-" } else { "" }, h, m, s, rem_samples)
         }
         TimeDisplay::Seconds => {
             let seconds = format!("{:.3}", t.seconds());
             if seconds == "-0.000" { "0.000".into() } else { seconds }
         }
     }
+}
+
+/// Digits in the sample field of [`TimeDisplay::AudioSamples`]: the digit count of `sample_rate - 1`, at least five.
+fn sample_field_width(sample_rate: i64) -> usize {
+    sample_rate.saturating_sub(1).checked_ilog10().map_or(1, |d| d as usize + 1).max(5)
 }
 
 /// Format a frame count as Feet + Frames (film footage counting).
@@ -923,6 +932,26 @@ mod tests {
         let zero = Tick::ZERO;
         assert_eq!(format_time(Tick(2), r, false, TimeDisplay::AudioSamples, -1), "00:00:00:00000");
         assert_eq!(format_time(zero, r, false, TimeDisplay::AudioSamples, 48_000), "00:00:00:00000");
+    }
+
+    #[test]
+    fn test_audio_samples_width_follows_sample_rate() {
+        let r = FrameRate::FPS_24;
+        let last_sample = |rate: i64| Tick::from_units(rate - 1, rate);
+        for rate in SAMPLE_RATES {
+            let first = format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, rate);
+            let last = format_time(last_sample(rate), r, false, TimeDisplay::AudioSamples, rate);
+            assert_eq!(first.len(), last.len(), "rate {rate}: `{first}` and `{last}` differ in width");
+        }
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 192_000), "00:00:00:000000");
+        assert_eq!(format_time(last_sample(192_000), r, false, TimeDisplay::AudioSamples, 192_000), "00:00:00:191999");
+        assert_eq!(format_time(last_sample(96_000), r, false, TimeDisplay::AudioSamples, 96_000), "00:00:00:95999");
+        assert_eq!(format_time(Tick(-TICKS_PER_SECOND), r, false, TimeDisplay::AudioSamples, 96_000), "-00:00:01:00000");
+        assert_eq!(format_time(Tick(TICKS_PER_SECOND), r, false, TimeDisplay::AudioSamples, 192_000), "00:00:01:000000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 0), "00:00:00:00000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, i64::MIN), "00:00:00:00000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 1_000_000), "00:00:00:000000");
+        assert_eq!(format_time(Tick::ZERO, r, false, TimeDisplay::AudioSamples, 1_000_001), "00:00:00:0000000");
     }
 
     #[test]
