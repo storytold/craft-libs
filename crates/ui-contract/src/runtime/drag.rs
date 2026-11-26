@@ -174,6 +174,13 @@ pub trait DropTarget<P: ?Sized> {
     fn copy_keys(&self) -> CopyKeys {
         CopyKeys::Alt
     }
+
+    /// What this target found under `at` that made [`accept`](Self::accept) refuse `payload` (a port whose direction
+    /// does not pair). When the topmost target under a release no target takes refuses, the source reads this value
+    /// as `DragEnd::refused`. By default a target names nothing.
+    fn refusal(&self, _payload: &P, _at: Pos2) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
 }
 
 /// What a component registers with `Pointer::window_drop_target`: a target over the whole window, optionally waiting
@@ -269,6 +276,8 @@ struct Session {
     began: u64,
     /// The last pointer position the source viewport saw, where a release outside that window is placed.
     last_pointer: Option<Pos2>,
+    /// What the topmost target under the release refused, which a release no target took reports.
+    refused: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 /// The mark of the target that would take a drop, with the viewport that registered it and the tokens of the region
@@ -290,6 +299,8 @@ struct Ended {
     op: Option<DropOperation>,
     /// The release point, in screen space.
     at: Pos2,
+    /// What the topmost target under a release no target took refused.
+    refused: Option<Arc<dyn Any + Send + Sync>>,
     frame: u64,
 }
 
@@ -334,6 +345,9 @@ pub(crate) struct Targets {
     component: bool,
     winner_window: bool,
     pointer: Option<Pos2>,
+    /// The topmost target of this pass that refused at the release, by layer position, and what it refused: a later
+    /// target on the same layer lies over an earlier one.
+    refused: Option<(usize, Option<Arc<dyn Any + Send + Sync>>)>,
 }
 
 fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
@@ -380,6 +394,7 @@ pub fn start(
                 hovering_next: Vec::new(),
                 began,
                 last_pointer: None,
+                refused: None,
             });
             board.ended = None;
             board.started += 1;
@@ -588,6 +603,7 @@ fn os_session(files: Vec<OsFile>, viewport: ViewportId, frame: u64) -> Session {
         hovering_next: Vec::new(),
         began: frame,
         last_pointer: None,
+        refused: None,
     }
 }
 
@@ -768,7 +784,7 @@ pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperatio
         session.taken = true;
         let values = std::iter::once(&session.payload).chain(&session.also).filter(|value| (***value).type_id() == payload).cloned().collect();
         let at = session.dropped_at.or(pointer).unwrap_or_default();
-        board.ended = Some(Ended { source: session.source, values, op: Some(op), at, frame });
+        board.ended = Some(Ended { source: session.source, values, op: Some(op), at, refused: None, frame });
         true
     })
 }
@@ -802,7 +818,18 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
         return None;
     }
     let op = current_operation(ctx, target.copy_keys());
-    let drop = target.accept(&*payload, at, op)?;
+    let Some(drop) = target.accept(&*payload, at, op) else {
+        if released(ctx) {
+            let position = areas::layer_position(ctx, zone.layer);
+            let refused = target.refusal(&*payload, at);
+            PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
+                if targets.refused.as_ref().is_none_or(|(below, _)| position >= *below) {
+                    targets.refused = Some((position, refused));
+                }
+            });
+        }
+        return None;
+    };
     let ordinal = next_ordinal(ctx, owner);
     register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, TargetReach { window: false, under_modal: target.under_modal() });
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
@@ -843,16 +870,21 @@ impl<P: 'static, T: DropTarget<P>> DropTarget<dyn Any + Send + Sync> for Typed<'
     fn copy_keys(&self) -> CopyKeys {
         self.0.copy_keys()
     }
+
+    fn refusal(&self, payload: &(dyn Any + Send + Sync), at: Pos2) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.0.refusal(payload.downcast_ref::<P>()?, at)
+    }
 }
 
 /// How the drag of `source`'s payload of type `P` ended at a release in the previous frame: the operation of the drop
-/// (`None` when no target took it), the release point in screen space and the payload. `None` after a cancel.
-pub(crate) fn ended<P: Clone + 'static>(ctx: &Context, source: Id) -> Option<(Option<DropOperation>, Pos2, P)> {
+/// (`None` when no target took it), the release point in screen space, the payload and what the topmost target under a
+/// release no target took refused. `None` after a cancel.
+pub(crate) fn ended<P: Clone + 'static>(ctx: &Context, source: Id) -> Option<(Option<DropOperation>, Pos2, P, Option<Arc<dyn Any + Send + Sync>>)> {
     let frame = pass::root_frame_nr(ctx);
     board(ctx, |board| {
         let ended = board.ended.as_ref().filter(|ended| ended.source == source && ended.frame + 1 == frame)?;
         let payload = ended.values.iter().find_map(|value| value.downcast_ref::<P>().cloned())?;
-        Some((ended.op, ended.at, payload))
+        Some((ended.op, ended.at, payload, ended.refused.clone()))
     })
 }
 
@@ -870,6 +902,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     });
     let open: Vec<bool> =
         scopes.iter().map(|(scope, through)| *through || overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
+    let mut refused = None;
     let winner = PerViewport::<Targets>::with(ctx, viewport, |targets| {
         // The topmost layer in the order the overlay host handed egui wins, then the target registered last: a target
         // shown later lies over an enclosing one.
@@ -887,6 +920,7 @@ pub(crate) fn end_pass(ctx: &Context) {
             best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op, registration.tokens.clone())));
         targets.winner = best.as_ref().map(|(key, _)| *key);
         targets.this.clear();
+        refused = targets.refused.take();
         best.map(|(_, won)| won)
     });
     let over_this_window = pointer::frame_raw(ctx).pos.is_some();
@@ -913,14 +947,17 @@ pub(crate) fn end_pass(ctx: &Context) {
             if is_source {
                 session.last_pointer = release.or(session.last_pointer);
             }
+            if let Some((_, refused)) = refused {
+                session.refused = refused;
+            }
             let expired = session.released.is_some_and(|released| frame > released + 1);
             let ended_here = is_source && !held && session.released.is_none();
             if expired || (ended_here && !foreign_target) {
                 // A release no target took: the source reads it as a drag that ended where it was let go.
                 if !session.taken && !session.os {
                     let values = std::iter::once(&session.payload).chain(&session.also).cloned().collect();
-                    board.ended =
-                        Some(Ended { source: session.source, values, op: None, at: release.or(session.last_pointer).unwrap_or_default(), frame });
+                    let at = release.or(session.last_pointer).unwrap_or_default();
+                    board.ended = Some(Ended { source: session.source, values, op: None, at, refused: session.refused.clone(), frame });
                 }
                 let next = std::mem::take(&mut session.hovering_next);
                 board.session = (!next.is_empty()).then(|| os_session(next, viewport, frame));

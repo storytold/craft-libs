@@ -10,6 +10,8 @@ use crate::style::{ComponentStyle, Corners, Flags, HandleLook, RuleKind, Statefu
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Insets, Metrics, PartKey, PointerButton, PressPhase, PressState, Sense};
 use craft_theme::Rgba;
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use std::any::Any;
+use std::sync::Arc;
 
 pub(super) const PORT: PartKey = PartKey::new("port");
 
@@ -197,6 +199,12 @@ impl DropTarget<WireDrag> for PortsTarget {
         Some(WireDrop { from, to, port, op, detached: wire.detached })
     }
 
+    /// The port under `at`: `accept` refused it for the same-node or direction rule.
+    fn refusal(&self, _wire: &WireDrag, at: Pos2) -> Option<Arc<dyn Any + Send + Sync>> {
+        let &(port, _, _) = self.ports.iter().find(|(_, center, _)| center.distance(at) <= self.reach)?;
+        Some(Arc::new(PortRef::new(self.node, port)))
+    }
+
     fn mark(&self, drop: &WireDrop) -> DropMark {
         let center = self.ports.iter().find(|(port, _, _)| *port == drop.port).map_or(Pos2::ZERO, |(_, center, _)| *center);
         DropMark::Into(Rect::from_center_size(center, Vec2::splat(2.0 * self.reach)))
@@ -342,8 +350,9 @@ impl<E: 'static> Component for Node<'_, E> {
         if let Some(end) = cx.drag_ended::<WireDrag>() {
             // The node's layer is the graph's body layer, where the node's rect is the body origin plus its place.
             let loose = end.op.is_none().then(|| self.place + (end.at - cx.rect.min));
+            let refused = end.refused_by::<PortRef>().copied();
             let WireDrag { from, detached, .. } = end.payload;
-            self.event = Some(NodeEvent::WireEnded { op: end.op, from, detached, loose });
+            self.event = Some(NodeEvent::WireEnded { op: end.op, from, detached, loose, refused });
         }
     }
 

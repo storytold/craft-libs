@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// How a drag this component started ended, read in the pass the release is reported.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct DragEnd<P> {
     /// What the drop did; `None` when the drag was released with no taker.
@@ -22,6 +22,26 @@ pub struct DragEnd<P> {
     pub at: Pos2,
     /// The payload the drag carried.
     pub payload: P,
+    /// What the topmost target under a release with no taker refused, as its `DropTarget::refusal` named it.
+    pub refused: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl<P> DragEnd<P> {
+    /// The refusal, when it is an `R`.
+    pub fn refused_by<R: 'static>(&self) -> Option<&R> {
+        self.refused.as_deref()?.downcast_ref()
+    }
+}
+
+/// Two ends are equal when they carry the same refusal value, not merely equal ones.
+impl<P: PartialEq> PartialEq for DragEnd<P> {
+    fn eq(&self, other: &Self) -> bool {
+        let refused = match (&self.refused, &other.refused) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        self.op == other.op && self.at == other.at && self.payload == other.payload && refused
+    }
 }
 
 /// Pointer state and requests (chapter 8).
@@ -216,9 +236,9 @@ impl Pointer for CxCore<'_> {
     }
 
     fn drag_ended<P: Clone + Send + Sync + 'static>(&self) -> Option<DragEnd<P>> {
-        let (op, at, payload) = drag::ended::<P>(&self.ctx, self.id)?;
+        let (op, at, payload, refused) = drag::ended::<P>(&self.ctx, self.id)?;
         let at = areas::layer_map(&self.ctx, self.response.layer_id).map_or(at, |map| map.to_layer(at));
-        Some(DragEnd { op, at, payload })
+        Some(DragEnd { op, at, payload, refused })
     }
 
     fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>> {

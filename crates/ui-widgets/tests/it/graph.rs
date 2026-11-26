@@ -189,6 +189,18 @@ impl Rig {
             .collect()
     }
 
+    /// The refusing port each `WireEnded` reported.
+    fn refused(&self) -> Vec<Option<PortRef>> {
+        let events = self.events.borrow();
+        events
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Item(_, NodeEvent::WireEnded { refused, .. }) => Some(*refused),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// How many `Move` events of each step the graph reported: begins, updates, commits and cancels.
     fn moves(&self) -> [usize; 4] {
         let mut counts = [0; 4];
@@ -240,10 +252,11 @@ fn a_wire_from_an_input_connects_to_an_output_and_detaches_when_connected() {
     graph.drag(graph.at("C in"), graph.at("B out"));
     assert_eq!(graph.wired(), [(port(1, 1), port(2, 0), None)], "an input that takes many keeps its wires and starts a reverse wire");
 
-    for (to, why) in [("A out", "a port of the same node"), ("B in", "a port of the drag's own direction")] {
+    for (to, refuser, why) in [("A out", port(0, 1), "a port of the same node"), ("B in", port(1, 0), "a port of the drag's own direction")] {
         graph.drag(graph.at("A in"), graph.at(to));
         assert!(graph.wired().is_empty(), "{why} refuses the wire: {:?}", graph.wired());
         assert!(matches!(graph.ended().as_slice(), [(_, None, Some(_))]), "{why}: the release is loose: {:?}", graph.ended());
+        assert_eq!(graph.refused(), [Some(refuser)], "{why}: the end names the port that refused");
     }
 
     // The output of A sits at (140, 70) in the document; the release lands (60, 60) document units past it.
@@ -257,7 +270,21 @@ fn a_wire_from_an_input_connects_to_an_output_and_detaches_when_connected() {
         assert_eq!(*start, port(0, 1), "at {zoom}");
         assert!(loose.distance(Pos2::new(140.0, 70.0) + past) < 1.0, "at {zoom}: the loose end is in document units: {loose:?}");
         assert!(zoomed.wired().is_empty(), "at {zoom}: nothing connected");
+        assert_eq!(zoomed.refused(), [None], "at {zoom}: no port refused a release over empty space");
     }
+}
+
+/// A refusing port names itself only when its node is the topmost target under the release: a node shown over it
+/// takes the release, and with no port of its own there, the end names none.
+#[trial]
+fn a_refusing_port_under_another_node_is_not_reported() {
+    let kinds = vec![Kind::new("A", ["A in", "A out"]), Kind::new("B", ["B in", "B out"]), Kind::new("C", ["C in", "C out"])];
+    // C, shown last, covers B's input at (240, 70), 40 units from C's own input and 60 from its output.
+    let places = vec![Pos2::new(40.0, 40.0), Pos2::new(240.0, 40.0), Pos2::new(200.0, 40.0)];
+    let mut graph = rig(Setup::cards(kinds, places));
+    graph.drag(graph.at("A in"), graph.at("B in"));
+    assert!(graph.wired().is_empty(), "nothing connected: {:?}", graph.wired());
+    assert_eq!(graph.refused(), [None], "the node over the refusing port takes the release");
 }
 
 /// A Dot's ports reach around its circle but not into it: a drag from inside the circle moves the Dot, one from just

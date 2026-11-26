@@ -184,6 +184,9 @@ pub enum NodeEvent<E = ()> {
         detached: Option<u64>,
         /// Where the wire was released, in document units, when no port took it.
         loose: Option<Pos2>,
+        /// The port under a release no port took, when the topmost node there refused the wire on it: a port of the
+        /// wire's own node, or one whose direction does not pair with the wire's start.
+        refused: Option<PortRef>,
     },
     /// A primary press and release with no drag, on the node's body or a port.
     #[non_exhaustive]
