@@ -100,6 +100,7 @@ pub struct ComboBox<'a> {
     preview: Preview<String>,
     /// Whether the combo box sizes to its options alone, as in a toolbar or ribbon.
     #[style_key]
+    #[prop]
     compact: bool,
 }
 
@@ -118,13 +119,6 @@ impl<'a> ComboBox<'a> {
             compact: false,
         }
         .label(label)
-    }
-
-    /// Sets whether the combo box sizes to its options alone, as in a toolbar or ribbon.
-    #[must_use]
-    pub fn compact(mut self, compact: bool) -> Self {
-        self.compact = compact;
-        self
     }
 
     /// Previews `text`, led by the pointer or by the keys. The pass reports it only when the previewed text changes,
