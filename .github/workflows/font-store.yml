@@ -3,7 +3,7 @@ name: Font store
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ['crates/font-store/**', 'crates/font-catalog/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-store.yml']
   pull_request:
     paths: ['crates/font-store/**', 'crates/font-catalog/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-store.yml']

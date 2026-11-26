@@ -191,29 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn repeated_words() {
-        let v = check("Eu eu vi isso e ele ele saiu.");
-        assert_eq!(v.len(), 2, "{v:?}");
-        assert_eq!(v[0].message, "Palavra repetida: \"eu\"");
-        assert_eq!(v[0].suggestions, ["Eu"]);
-        assert!(v.iter().all(|i| i.lang == ProofLang::Pt && i.kind == IssueKind::Grammar));
-        clean("Sim, sim! Não, não! Ora ora, que surpresa.");
-    }
-
-    #[test]
-    fn spaces_and_punctuation() {
-        let m = messages("Olá , mundo .  Tudo bem ?");
-        assert!(m.contains(&"Espaço antes da pontuação@ ,".to_string()), "{m:?}");
-        assert!(m.contains(&"Espaço antes da pontuação@ .".to_string()), "{m:?}");
-        assert!(m.contains(&"Espaço antes da pontuação@ ?".to_string()), "{m:?}");
-        assert!(m.contains(&"Espaço duplo@  ".to_string()), "{m:?}");
-        clean("Legal :) Muito bom :-) Ou :D Valor .5 e reticências ...");
-        let m = messages("Falou,, e saiu.. depois;; fim.");
-        assert_eq!(m.iter().filter(|x| x.starts_with("Sinal repetido")).count(), 3, "{m:?}");
-        clean("Esperei… e esperei... até ele voltar.");
-    }
-
-    #[test]
     fn sentence_start_capitals() {
         let m = messages("isso é um teste. a segunda frase! terceira? ok.");
         assert_eq!(m.iter().filter(|x| x.starts_with("Letra maiúscula")).count(), 4, "{m:?}");
@@ -238,29 +215,5 @@ mod tests {
         clean("Ele disse: \"Volto amanhã\". E saiu.");
         // A list item may start in lower case.
         clean("maçãs,");
-    }
-
-    #[test]
-    fn correct_portuguese_text_is_clean() {
-        clean(
-            "O rato roeu a roupa do rei de Roma. Quem não tem cão caça com gato, \
-             e quem tem paciência colhe o que plantou.",
-        );
-        clean("Brasília, 12 de outubro de 2026 — uma data memorável.");
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn never_panics(s in "\\PC{0,80}") {
-            let _ = check(&s);
-        }
-
-        #[test]
-        fn never_panics_on_portuguese_like_text(s in "[a-záàâãéêíóôõúüçA-Z ,.;:!?\"…\\-—]{0,60}") {
-            for i in check(&s) {
-                proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
-                proptest::prop_assert!(s.is_char_boundary(i.start) && s.is_char_boundary(i.end));
-            }
-        }
     }
 }

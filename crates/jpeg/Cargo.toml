@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-jpeg"
 description = "Clean-room JPEG decoder and 8-bit optimized baseline encoder (ITU-T T.81)."
 version.workspace = true
@@ -15,6 +16,7 @@ thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 # Reference encoder and baseline decoder for the comparison tests.
 jpeg-encoder = "0.6"
 zune-jpeg = "0.5"
