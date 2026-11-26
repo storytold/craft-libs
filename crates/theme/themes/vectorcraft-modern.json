@@ -1,0 +1,82 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.vectorcraft-modern",
+  "name": "VectorCraft Modern",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#f06a52",
+    "neutral": "#181b22",
+    "status": {
+      "bad": "#e34850",
+      "good": "#45af63",
+      "info": "#6f788a",
+      "warn": "#f0a330"
+    }
+  },
+  "shape": {
+    "grip": {
+      "mark": "bar",
+      "length": 18,
+      "width": 3
+    },
+    "locator": {
+      "cell": 9,
+      "square": 5
+    }
+  },
+  "light": {
+    "accent.solid": "#d9472f",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#d0d5dd",
+    "line.control_edge": "#c3c9d3",
+    "line.divider": "#dde1e8",
+    "line.grip": "#9aa1ad",
+    "line.outline": "#a4abb8",
+    "seeds": {
+      "accent": "#d9472f",
+      "neutral": "#f3f5f8"
+    },
+    "state.hover": "#e3e7ed",
+    "state.pressed": "#edcbc8",
+    "state.selected": "#eed2d0",
+    "state.text_selection": "#d9472f8c",
+    "surface.background": "#e6e9ee",
+    "surface.canvas": "#dfe3e9",
+    "surface.control": "#e3e7ed",
+    "surface.page": "#e9ecf1",
+    "surface.panel": "#f3f5f8",
+    "surface.sunken": "#ffffff",
+    "text.disabled": "#9aa1ad",
+    "text.faint": "#9aa1ad",
+    "text.muted": "#58606e",
+    "text.normal": "#1b1f27"
+  },
+  "dark": {
+    "accent.solid": "#f06a52",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#06070a",
+    "line.control_edge": "#2c323e",
+    "line.divider": "#232832",
+    "line.grip": "#5a6271",
+    "line.outline": "#4a5363",
+    "state.hover": "#262b35",
+    "state.pressed": "#593330",
+    "state.selected": "#4c2e2e",
+    "state.text_selection": "#f06a528c",
+    "surface.background": "#0b0d12",
+    "surface.canvas": "#101217",
+    "surface.control": "#282d37",
+    "surface.page": "#13161c",
+    "surface.panel": "#181b22",
+    "surface.sunken": "#0f1116",
+    "text.disabled": "#5a6271",
+    "text.faint": "#5a6271",
+    "text.muted": "#969faf",
+    "text.normal": "#dfe4ec"
+  }
+}

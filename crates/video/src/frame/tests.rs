@@ -226,6 +226,55 @@ fn vp9_color_space_maps_to_a_matrix() {
     assert_eq!([0, 1, 2, 3, 4, 5, 6, 7].map(convert::vp9_matrix), [2, 5, 1, 6, 7, 9, 2, 0]);
 }
 
+#[cfg(feature = "mjpeg")]
+#[test]
+fn mjpeg_frames_split_into_planes() {
+    use crate::mjpeg::{Frame as M, Samples as S};
+    // 2x2 RGB: pixels (1,2,3) (4,5,6) (7,8,9) (10,11,12).
+    let rgb = M { width: 2, height: 2, channels: 3, samples: S::U8((1..=12).collect()), damaged: false };
+    let f = VideoFrame::try_from(rgb).unwrap();
+    assert_eq!((f.family(), f.subsampling(), f.bit_depth()), (ColorFamily::Rgb, Subsampling::S444, 8));
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
+    let plane = |i: usize| f.plane(i).unwrap().samples().clone();
+    assert_eq!(plane(0), Samples::U8(vec![1, 4, 7, 10]));
+    assert_eq!(plane(1), Samples::U8(vec![2, 5, 8, 11]));
+    assert_eq!(plane(2), Samples::U8(vec![3, 6, 9, 12]));
+    assert!(f.alpha().is_none() && f.pts.is_none());
+    // A 12-bit gray frame is stored at 16 bits.
+    let gray = M { width: 3, height: 1, channels: 1, samples: S::U16(vec![0, 32768, 65535]), damaged: false };
+    let f = VideoFrame::try_from(gray).unwrap();
+    assert_eq!((f.family(), f.bit_depth(), f.planes().len()), (ColorFamily::Gray, 16, 1));
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U16(vec![0, 32768, 65535]));
+}
+
+#[cfg(feature = "mjpeg")]
+#[test]
+fn mjpeg_frames_that_do_not_fit_are_errors() {
+    use crate::mjpeg::{Frame as M, Samples as S};
+    let bad = |channels: u8, n: usize| M { width: 2, height: 2, channels, samples: S::U8(vec![0; n]), damaged: false };
+    assert!(VideoFrame::try_from(bad(2, 8)).is_err(), "two channels is not a Motion JPEG frame");
+    assert!(VideoFrame::try_from(bad(3, 11)).is_err(), "a short buffer");
+    assert!(VideoFrame::try_from(bad(1, 5)).is_err(), "a long buffer");
+    assert!(VideoFrame::try_from(M { width: u32::MAX, height: u32::MAX, channels: 3, samples: S::U8(Vec::new()), damaged: false }).is_err());
+}
+
+#[cfg(feature = "mjpeg")]
+#[test]
+fn a_decoded_mjpeg_picture_converts() {
+    use crate::mjpeg::{Decoder, Encoder, EncoderConfig};
+    let (w, h) = (24usize, 16usize);
+    let px: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let packet = Encoder::new(EncoderConfig::default()).unwrap().encode(w as u32, h as u32, 3, &px).unwrap();
+    let decoded = Decoder::new().decode(&packet).unwrap();
+    let want_r: Vec<u8> = match &decoded.samples {
+        crate::mjpeg::Samples::U8(v) => v.iter().step_by(3).copied().collect(),
+        crate::mjpeg::Samples::U16(_) => panic!("an 8-bit picture"),
+    };
+    let f = VideoFrame::try_from(decoded).unwrap();
+    assert_eq!((f.width(), f.height(), f.family()), (24, 16, ColorFamily::Rgb));
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U8(want_r));
+}
+
 #[cfg(feature = "mpeg2-decode")]
 #[test]
 fn mpeg2_picture_converts() {

@@ -10,6 +10,10 @@ use crate::DocxError;
 pub const MAX_DEPTH: usize = 256;
 /// Maximum number of elements in one part.
 pub const MAX_ELEMENTS: usize = 8_000_000;
+/// Maximum number of elements summed over every part a read parses: a file of many parts each
+/// inside [`MAX_ELEMENTS`] would otherwise cost a tree per part, and the trees a reader keeps
+/// (the main part's, charts' and diagrams') accumulate.
+pub const MAX_ELEMENTS_TOTAL: usize = MAX_ELEMENTS * 2;
 /// Maximum number of attributes on one element (#3702).
 pub const MAX_ATTRS: usize = 1024;
 
@@ -329,19 +333,31 @@ pub fn parse(bytes: &[u8]) -> Result<El, DocxError> {
     parse_ns(bytes, &[])
 }
 
+/// [`parse`], with the number of elements it built, stopping early at `max` elements: the caller
+/// charges the count against a package-wide budget (see [`MAX_ELEMENTS_TOTAL`]), and a part over
+/// what is left of it is refused before the whole per-part tree is built.
+pub fn parse_counted(bytes: &[u8], max: usize) -> Result<(El, usize), DocxError> {
+    parse_with(bytes, &[], false, max)
+}
+
+/// [`parse_counted`], strict, for a part whose loss would be silent data loss (the main
+/// document): a mismatched end tag or an element left open at the end of the data is an error,
+/// not a cue to stop reading.
+pub fn parse_strict_counted(bytes: &[u8], max: usize) -> Result<(El, usize), DocxError> {
+    parse_with(bytes, &[], true, max)
+}
+
 /// [`parse`] with `extra` namespaces (prefix, URI) mapped to canonical prefixes first, so a
 /// related vocabulary (WordprocessingML 2003) reads with the prefixes the reader knows.
 pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, DocxError> {
-    parse_with(bytes, extra, false)
+    parse_with(bytes, extra, false, MAX_ELEMENTS).map(|(e, _)| e)
 }
 
-/// [`parse`] for a part whose loss would be silent data loss (the main document): a mismatched end
-/// tag or an element left open at the end of the data is an error, not a cue to stop reading.
-pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
-    parse_with(bytes, &[], true)
-}
-
-fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
+/// The XML parser everything else goes through: transcodes UTF-16, walks the events and builds
+/// the tree depth-first, stopping at `max` elements and counting the ones it built. A mismatched
+/// end tag or an element left open at the end of the data is an error when `strict`, a cue to
+/// stop reading when not.
+fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool, max: usize) -> Result<(El, usize), DocxError> {
     let namespaces: Vec<(&str, &str)> =
         extra.iter().copied().chain(NAMESPACES.iter().copied()).chain(OTHER_NAMESPACES.iter().copied()).chain(STRICT.iter().copied()).collect();
     // The prefix of an element: its namespace's, with two exceptions for Strict documents
@@ -375,7 +391,9 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
         max_depth: MAX_DEPTH + 1,
         // Text stretches count as nodes too: two for each element.
         max_nodes: 2 * MAX_ELEMENTS,
-        max_elements: MAX_ELEMENTS,
+        // The parse stops here before the whole tree is built: a part over what is left of the
+        // package's element budget pays for at most that, not for the per-part cap.
+        max_elements: max,
         max_attrs: MAX_ATTRS,
         max_attrs_total: 2 * MAX_ELEMENTS,
     };
@@ -383,17 +401,27 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
     if strict {
         options = options.strict();
     }
-    let root = options.parse(bytes).map_err(|e| if e.is_limit() { DocxError::Limit(e.to_string()) } else { DocxError::Xml(e.to_string()) })?;
-    Ok(from_tree(root))
+    let root = options.parse(bytes).map_err(|e| match &e {
+        craft_xml::Error::TooManyElements(_) => DocxError::Limit(format!("over the XML element budget for this parse: at most {max} elements")),
+        e if e.is_limit() => DocxError::Limit(e.to_string()),
+        e => DocxError::Xml(e.to_string()),
+    })?;
+    Ok(from_tree_counted(root))
 }
 
-/// The `craft-xml` tree as this module's (whose shape the reader was written against).
+/// The `craft-xml` tree as this module's (whose shape the reader was written against), with the
+/// number of elements the subtree holds (the caller charges it against a package-wide budget).
 // shortcut: one copy of each parsed part; read craft_xml::El directly when the reader is ported to it.
-fn from_tree(e: craft_xml::El) -> El {
+fn from_tree_counted(e: craft_xml::El) -> (El, usize) {
     let mut kids = Vec::with_capacity(e.children.len());
+    let mut count = 1usize;
     for n in e.children {
         match n {
-            craft_xml::Node::El(c) => kids.push(Node::El(from_tree(c))),
+            craft_xml::Node::El(c) => {
+                let (kid, built) = from_tree_counted(c);
+                count += built;
+                kids.push(Node::El(kid));
+            }
             craft_xml::Node::Text(t) | craft_xml::Node::CData(t) => match kids.last_mut() {
                 Some(Node::Text(prev)) => prev.push_str(&t),
                 _ => kids.push(Node::Text(t)),
@@ -401,7 +429,7 @@ fn from_tree(e: craft_xml::El) -> El {
             craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
         }
     }
-    El { name: e.name, attrs: e.attrs, kids }
+    (El { name: e.name, attrs: e.attrs, kids }, count)
 }
 
 /// This module's tree as `craft-xml`'s, for the shared readers (`craft-drawingml`, `craft-math`)
@@ -515,12 +543,13 @@ mod tests {
     fn strict_parsing_rejects_a_dropped_entity_and_trailing_markup() {
         let bad = [&b"<w:t>before &unknown; after</w:t>"[..], b"<a></a><b></b>", b"<a></a><b>"];
         for xml in bad {
-            assert!(parse_strict(xml).is_err(), "{}", String::from_utf8_lossy(xml));
+            assert!(parse_strict_counted(xml, MAX_ELEMENTS).is_err(), "{}", String::from_utf8_lossy(xml));
         }
         assert!(
-            parse_strict(
+            parse_strict_counted(
                 b"<a>x &amp; y</a>
-"
+",
+                MAX_ELEMENTS
             )
             .is_ok()
         );
