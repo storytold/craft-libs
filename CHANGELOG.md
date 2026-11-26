@@ -2,6 +2,32 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
+## v1.0.8
+
+- **Release Notes:** [GitHub Release v1.0.8](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.8)
+
+### 2026-11-26 - Upstream Merge (`next`) and Space on the Controls That Ask
+
+- **Merged `storytold/craft-libs` into the fork's `next`:** `next` at `93c2e0825`, 190 upstream
+  commits on top of the line this fork follows (198 files), with the fork's own crates, their trials
+  and its Space rule kept.
+- **Space is routed by the stop that asks for it.** `PressRoute::Space` holds the stop whose Space is
+  down (`space_held`, one hold per context) and activates it on the release, as a click does, even
+  when the focus moved in between; a stop asks by name or among its activation keys, and every other
+  stop leaves Space to the application, where it is the canvas's Hand key.
+- **A focused icon button opens its menu from the keyboard.** `IconButton` declares Space among its
+  activation keys, as `Button` does, so upstream's menu trials pass with the fork's rule rather than
+  against it.
+- **The router's Space decision is one function.** `space_release` carries the clear and the
+  activation, because the guard's complexity sat over the workspace's clippy limit when the code
+  lived inside `begin`.
+- **The font picker's classification is callable from outside.** `FontClass::classify` exposes the
+  name, `sFamilyClass`, PANOSE and fixed-pitch reading, and `FamilyCodec::shown` passes the localized
+  names the signature now takes.
+- **Suites**: the workspace runs **18,563 passed / 0 failed / 63 skipped**; clippy, format and the
+  design lint exit 0.
+- See [Release Notes v1.0.8](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.8) for details.
+
 ## v1.0.7
 
 - **Release Notes:** [GitHub Release v1.0.7](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.7)

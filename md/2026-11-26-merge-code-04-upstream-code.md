@@ -1,226 +1,88 @@
-# The upstream code behind the fork's answers in craft-libs
+# The upstream code behind the answers in craft-libs
 
-For each adaptation the merge had to make: the upstream lines that forced
-it, what they do, why they broke the fork, and the fork's answer.
+The upstream lines each answer had to meet.
 
-Each entry names the upstream file and the lines the merge had to answer. The lines are
-quoted from `6fcf61c81` as it was merged, with their line numbers.
+Every quotation is `git show 93c2e0825:<path>`, with that commit's line numbers.
 
-## 1. The activation harness walks every activation key
+## 1. `shown_name` takes the localized names, not the whole `Info`
 
 **The upstream code.**
 
-`crates/ui-contract/src/testing/suite/activation.rs`, lines 78-79:
+`crates/font-manager/src/picker/rank.rs`, lines 159-168:
 
 ```rust
-   78 |     let keys = [(Key::Enter, subject.probe.keys.activate.enter()), (Key::Space, subject.probe.keys.activate.space())];
-   79 |     for story in &subject.stories {
+  159 | pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: bool) -> String {
+  160 |     let primary = |tag: &str| tag.split(['-', '_']).next().unwrap_or(tag).to_ascii_lowercase();
+  161 |     if english || primary(language) == "en" {
+  162 |         return family.to_owned();
+  163 |     }
+  164 |     let exact = |n: &&LocalizedName| n.language.as_deref().is_some_and(|l| l.replace('_', "-").eq_ignore_ascii_case(&language.replace('_', "-")));
+  165 |     let same_language = |n: &&LocalizedName| n.language.as_deref().is_some_and(|l| primary(l) == primary(language));
+  166 |     info.localized.iter().find(exact).or_else(|| info.localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
+  167 | }
+  168 | 
 ```
 
-`crates/ui-contract/src/testing/suite/activation.rs`, lines 91-98:
+**What it does.** Upstream's `shown_name` reads the family's localized names through a parameter of its own instead of reaching into the `Info` it was given.
 
-```rust
-   91 |             // Paths: 0 click, 1 AccessKit Click, 2 and 3 the activation keys.
-   92 |             let paths = [
-   93 |                 (0, "a click", true),
-   94 |                 (1, "AccessKit Click", declares(Declared::Click)),
-   95 |                 (2, "Enter", keys[0].1 && declares(Declared::Focus)),
-   96 |                 (3, "Space", keys[1].1 && declares(Declared::Focus)),
-   97 |             ];
-   98 |             // The paths of a part share one fixture while each leaves the component as it found it ([`left_as_found`]).
-```
+**What the merge had to answer.** The fork's `FamilyCodec::shown` called the old signature; the call had to pass `&info.localized` and the old call no longer compiles.
 
-**What it does.** Upstream's activation harness treats Space as an activation key: it reads the activation keys as a pair, and it checks a fourth path (a Space press) for every part that senses a click.
+**The answer.** The call site passes the localized names, which is the only change the fork needed.
 
-**Why it broke the fork.** The fork's rule is that a bare Space is the canvas's Hand key and only a control that asks for it takes Space. A Space path in the harness would ask every control in the application to answer Space, and the canvas's own Space would go to the controls.
-
-**The fork's answer.** The fork keeps Enter alone in the harness's `keys` array and drops the Space path, so the path list has three entries. Upstream's new loop around it - the filter that drops a disabled part, the sampling of repeated parts and the fixture the paths share - is taken as it is.
-
-## 2. The start-screen story names icons the catalog does not carry
+## 2. The fonts' classification is private to the picker module
 
 **The upstream code.**
 
-`crates/ui-shell/src/shell/start/stories.rs`, lines 212-219:
+`crates/font-manager/src/picker.rs`, lines 142-145:
 
 ```rust
-  212 | fn column_links() -> [StartLink; 3] {
-  213 |     [
-  214 |         StartLink::url("Join the community", Some(IconId::new("message-circle")), "https://example.com/chat").primary(),
-  215 |         StartLink::url("Website", Some(IconId::new("globe")), "https://example.com"),
-  216 |         StartLink::url("Source code", Some(IconId::new("git-branch")), "https://example.com/source"),
-  217 |     ]
-  218 | }
-  219 | 
+  142 |     pub fn of(catalog: &Catalog, family: &str) -> Option<FontClass> {
+  143 |         rank::class_of(catalog, family)
+  144 |     }
+  145 | }
 ```
 
-**What it does.** Upstream's column story gives the community link the icon `message-circle` and the source link the icon `git-branch`.
+**What it does.** The crate offers `FontClass::of`, which classifies a family already in the catalog, and nothing that classifies a bare name.
 
-**Why it broke the fork.** The built catalog holds neither name, so the icon draws nothing, and the workspace's icon-id check fails on the merged tree. The check fails on upstream's own tree as well (measured on `6fcf61c81`, file byte-identical), so this is upstream's own gap and not a merge error.
+**What the merge had to answer.** The fork's type-tool trials classify names that have no catalog entry (a name from a document), so they need the classifier itself.
 
-**The fork's answer.** The story names `link` and `open`, which the catalog's built manifest holds. The names are read from the generated manifest, whose ids are underscored.
+**The answer.** `FontClass::classify` is exposed over `rank::classify`, and the trial uses it.
 
-## 3. The components index is generated from the registrations
+## 3. An icon button declares no Space
 
 **The upstream code.**
 
-`docs/components-index.md`, lines 67-67:
+`crates/ui-widgets/src/buttons/icon_button.rs`, lines 163-168:
 
-```text
-   67 | | `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue |
+```rust
+  163 | impl Component for IconButton<'_> {
+  164 |     const ROLE: Role = Role::BUTTON;
+  165 |     const ALT_ROLES: &'static [Role] = &[Role::COMBO_BOX];
+  166 |     const PARTS: bool = false;
+  167 |     const SHOWS_LABEL: bool = false;
+  168 |     const OVERLAYS: bool = false;
 ```
 
-**What it does.** Upstream's committed components index describes the `Link` component without the note that a link standing alone is not underlined when `LinkLook::Plain` says so.
+**What it does.** Upstream's icon button leaves `KEYS` at the component default, so its activation keys are the pointer's alone.
 
-**Why it broke the fork.** The index is generated from the registrations, and the merged registrations carry that note, so the committed copy was stale and its check failed.
+**What the merge had to answer.** Upstream's new menu trials press Space on a focused icon button that opens a menu and expect the menu to open; the fork's rule is that Space belongs to the canvas unless a control asks for it, so nothing opened the menu.
 
-**The fork's answer.** The file is regenerated with `cargo run -p craft-ui-gallery --bin components-index`; the committed copy is the generated one and the check passes.
+**The answer.** `IconButton` asks for Space (`KeyUse::of(Input::Pointer).with_space_activation()`), and the menu opens from the keyboard as a click would.
 
-## 4. The page picture's paper and its document dimensions break two design rules
+## 4. Space is routed straight to the activation
 
 **The upstream code.**
 
-`crates/ui-widgets/src/tile_grid/tile.rs`, lines 308-308:
+`crates/ui-contract/src/runtime/keys/route.rs`, lines 806-808:
 
 ```rust
-  308 | const PAPER: DataColor = DataColor::new(Color32::WHITE);
+  806 |         PressRoute::Activate => route_activate(ctx, rec, routed, activated),
+  807 |         PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
+  808 |         PressRoute::Intent(intent) => push(routed, id, intent, false),
 ```
 
-`crates/ui-widgets/src/tile_grid/tile.rs`, lines 557-560:
+**What it does.** Upstream activates a stop on the Space press itself.
 
-```rust
-  557 |     pub fn page(self, width: f64, height: f64) -> Self {
-  558 |         self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
-  559 |     }
-  560 | 
-```
+**What the merge had to answer.** The fork activates on the release - that is what a click does - and keeps the stop whose Space is down, so a release that arrives after the focus moved still reaches the stop that was pressed.
 
-**What it does.** Upstream's page picture uses a raw white for the paper and takes the document's width and height as plain numbers.
-
-**Why it broke the fork.** The design lint reads every mapped crate: a raw colour constant must come from a semantic token, and a size in points must come from a token step, an aspect ratio or the content. The page's paper is document data and its width and height are the document's own dimensions.
-
-**The fork's answer.** Both sites carry a `design: allow` marker, and the exceptions file of the crate registers both markers with the number of sites each covers.
-
-## 5. The iconic trial compares measured rects with a half point
-
-**The upstream code.**
-
-`crates/ui-panels/src/docking/iconic/trials.rs`, lines 703-724:
-
-```rust
-  703 | fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
-  704 |     let (gripped, gripped_id, _) = separated(IconGroupSeparator::Grip, RAIL);
-  705 |     let gripped_first = gripped.part_rect(gripped_id, CELL.at(0)).expect("the first icon under grips");
-  706 |     let (mut fixture, id, _) = separated(IconGroupSeparator::Rule, RAIL);
-  707 |     let border = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.line.border);
-  708 |     let shapes = fixture.frame_shapes();
-  709 |     let level: Vec<(Pos2, Pos2, egui::Color32)> = shapes
-  710 |         .iter()
-  711 |         .filter_map(|shape| match shape {
-  712 |             egui::Shape::LineSegment { points: [a, b], stroke } if (a.y - b.y).abs() < EPS => Some((*a, *b, stroke.color)),
-  713 |             _ => None,
-  714 |         })
-  715 |         .collect();
-  716 |     let cell = |at: u64| fixture.part_rect(id, CELL.at(at)).expect("the icon shows");
-  717 |     let band = |group: u64| fixture.part_rect(id, GRIP.at(group)).expect("each group keeps a grip band");
-  718 |     let (first, last, next) = (cell(0), cell(1), cell(2));
-  719 |     let (top, lower) = (band(0), band(1));
-  720 |     assert!(first.top() < gripped_first.top() - 0.5, "the first icon {first:?} stands higher than under a grip strip {gripped_first:?}");
-  721 |     for (group, band) in [top, lower].into_iter().enumerate() {
-  722 |         assert!(grip_ticks(&shapes, band).is_none(), "group {group}: the band shows no marks");
-  723 |     }
-  724 |     assert!(
-```
-
-**What it does.** Upstream's trial asserts with the literal 0.5 that one icon stands higher than the one under a grip strip, and that the rule between two groups lies in the middle of the room.
-
-**Why it broke the fork.** The design lint names a literal size in a trial that shows a component; a rounding tolerance between two measured rects is not a size a token should carry.
-
-**The fork's answer.** The two assertions carry a `design: allow[test/literal-size]` marker, and one entry in the exceptions file of the crate lists both sites.
-
-## 6. The develop mixer indexes the band weights
-
-**The upstream code.**
-
-`crates/develop/src/colorops.rs`, lines 262-270:
-
-```rust
-  262 |             let w = band_weights(h);
-  263 |             let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
-  264 |             for i in 0..8 {
-  265 |                 dh += w[i] * self.hue[i];
-  266 |                 ds += w[i] * self.sat[i];
-  267 |                 dl += w[i] * self.lum[i];
-  268 |             }
-  269 |             let chroma_w = (c / 0.12).min(1.0);
-  270 |             h += dh * chroma_w;
-```
-
-**What it does.** Upstream's colour mixer walks `0..8` and indexes the band weights.
-
-**Why it broke the fork.** The workspace is built with `-D warnings`, and clippy rejects a loop that indexes the sequence it iterates.
-
-**The fork's answer.** The loop iterates the weights and keeps the index for the hue, saturation and luminance lookups; the three accumulations and their order are unchanged.
-
-## 7. The sensor's matrix interpolation indexes the result
-
-**The upstream code.**
-
-`crates/develop/src/sensor/color.rs`, lines 43-51:
-
-```rust
-   43 | fn lerp(a: &Mat3, b: &Mat3, g: f64) -> Mat3 {
-   44 |     let mut r = [[0.0; 3]; 3];
-   45 |     for i in 0..3 {
-   46 |         for j in 0..3 {
-   47 |             r[i][j] = g * a.0[i][j] + (1.0 - g) * b.0[i][j];
-   48 |         }
-   49 |     }
-   50 |     Mat3(r)
-   51 | }
-```
-
-**What it does.** Upstream's `lerp` fills the result matrix by indexing it.
-
-**Why it broke the fork.** The same clippy rule; the workspace's clippy run is a gate.
-
-**The fork's answer.** The result is filled through the matrix's own iterators; the interpolation and the layout are unchanged.
-
-## 8. The colour-space test helper indexes the matrix
-
-**The upstream code.**
-
-`crates/color-transform/src/space.rs`, lines 196-202:
-
-```rust
-  196 |     fn close(a: &Mat3, b: &[[f64; 3]; 3], tol: f64) {
-  197 |         for i in 0..3 {
-  198 |             for j in 0..3 {
-  199 |                 assert!((a.0[i][j] - b[i][j]).abs() < tol, "[{i}][{j}] {} vs {}", a.0[i][j], b[i][j]);
-  200 |             }
-  201 |         }
-  202 |     }
-```
-
-**What it does.** Upstream's `close` helper compares the matrices by indexing them.
-
-**Why it broke the fork.** The same clippy rule, in a crate of the workspace.
-
-**The fork's answer.** The helper walks the rows and the cells; the comparison, the tolerance and the failure message are unchanged.
-
-## 9. Space is an activation key for every stop that asks for one
-
-**The upstream code.**
-
-`crates/ui-contract/src/runtime/keys/route.rs`, lines 744-745:
-
-```rust
-  744 |         None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
-  745 |         None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
-```
-
-**What it does.** Upstream routes a Space press on a stop whose activation keys include Space straight to the activation, and it has no record of a Space that is down.
-
-**Why it broke the fork.** The fork's rule is that a bare Space is the canvas's Hand key and only a control that asks for it takes Space. Upstream's route cannot say that a control asks, and it activates on the press, where a click activates on the release.
-
-**The fork's answer.** The fork routes Space through `PressRoute::Space`, keeps the stop whose Space is down in `space_held`, and asks the stop whether it wants Space (by name or among its activation keys). The controls that answer Space declare it, and the router accepts Space for either way of asking.
-
+**The answer.** `PressRoute::Space` and `space_held` carry the fork's rule, and the router accepts a stop that asks for Space by name or among its activation keys.
