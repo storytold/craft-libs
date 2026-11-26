@@ -377,8 +377,9 @@ fn checks_turned_off_never_ask_the_network() {
     assert!(!u.prompt_open());
     assert_eq!(asked.load(Ordering::SeqCst), 0);
 
-    // Turned on again, a requested check asks.
+    // Turned on again, the status no longer says checks are off, and a requested check asks.
     u.set_checks_enabled(true);
+    assert_eq!(u.status(), &Status::Idle);
     u.check_now();
     u.settle_for_tests(&ctx);
     assert!(u.prompt_open());

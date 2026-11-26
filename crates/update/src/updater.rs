@@ -370,11 +370,16 @@ impl Updater {
     /// a check that is running; its thread skips the request when it has not begun it yet, and a
     /// request already under way finishes unread. A requested check then reports [`Status::Off`].
     /// A check at start that was skipped does not run when checks are turned on again;
-    /// [`Self::check_now`] does. An update that is installing or ready carries on, and
+    /// [`Self::check_now`] does. Turning checks on again sets a [`Status::Off`] back to
+    /// [`Status::Idle`]. An update that is installing or ready carries on, and
     /// [`Self::offer`] still opens the prompt for a release the app found itself. Checks are on
     /// by default.
     pub fn set_checks_enabled(&mut self, enabled: bool) {
         self.checks_enabled = enabled;
+        // A result that says checks are off is no longer true; the check dialog offers Check Now.
+        if enabled && self.status == Status::Off {
+            self.status = Status::Idle;
+        }
         if !enabled && self.check.take().is_some() {
             self.check_state.store(CHECK_DROPPED, Ordering::SeqCst);
             // A requested check answers as `finish_check` would while an update installs or is ready.
