@@ -47,6 +47,8 @@ pub struct PartResult {
     pub inactive: bool,
     /// The component holds a press on the part that the part does not sense itself: it paints pressed.
     pub held: bool,
+    /// A collection's part in its rows' space (`PartsCx::in_body`): its press reads in that space.
+    pub(crate) body: bool,
 }
 
 impl PartResult {
@@ -60,6 +62,7 @@ impl PartResult {
         sense: Sense::empty(),
         inactive: false,
         held: false,
+        body: false,
     };
 
     /// The part paints pressed: its own press, or one its component holds on it.
@@ -1327,6 +1330,7 @@ fn part_results_in(
                     sense: decl.sense,
                     inactive: decl.inactive,
                     held: decl.held,
+                    body: decl.body,
                 },
             )
         })

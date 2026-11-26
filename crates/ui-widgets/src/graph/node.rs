@@ -323,7 +323,8 @@ impl<E: 'static> Component for Node<'_, E> {
             let press = cx.part(PORT.at(port as u64)).press;
             if matches!(press.phase, PressPhase::DragStart { .. }) {
                 cx.start_drag(self.wire_from(port), DragPreview::None);
-            } else if primary_click(&press) {
+            } else if primary_click(&press) || matches!(cx.part_activated(PORT.at(port as u64)), Some(crate::runtime::commands::FireSource::Access)) {
+                // An assistive technology's click is a primary click with no modifiers.
                 self.event = Some(NodeEvent::Clicked { port: Some(port), mods: press.mods });
             }
         }

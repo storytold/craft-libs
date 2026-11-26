@@ -24,6 +24,9 @@ pub(super) const MARKER: PartKey = PartKey::new("marker");
 /// What every annotation part senses: a press selects, a drag moves or resizes, a secondary click asks for the menu.
 const SENSE: Sense = Sense::PRESS.union(Sense::CONTEXT_CLICK);
 
+/// Why an annotation part takes the pointer only (q134): the app's annotation commands act on the selected annotation.
+const POINTER_ONLY: &str = "the app's annotation commands act on the selected annotation: move, resize, edit and delete";
+
 /// Which annotation: the kind and the app's id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -252,7 +255,7 @@ impl<'a> Layers<'a> {
             let frame = in_body(origin, backdrop.rect);
             let key = AnnotationKey::Backdrop(backdrop.id);
             let stacking = u32::try_from(order).unwrap_or(u32::MAX);
-            let body = cx.in_body(BACKDROP.at(backdrop.id), frame).sense(SENSE).stacking(stacking).flags(self.flags(key));
+            let body = cx.in_body(BACKDROP.at(backdrop.id), frame).sense(SENSE).stacking(stacking).flags(self.flags(key)).pointer_only(POINTER_ONLY);
             if let Some(title) = backdrop.title {
                 body.node(Role::GROUP, title);
             }
@@ -274,6 +277,7 @@ impl<'a> Layers<'a> {
                 .priority(HitPriority::new(HitLevel::Body, 0))
                 .over()
                 .flags(self.flags(key))
+                .pointer_only(POINTER_ONLY)
                 .node(Role::PARAGRAPH, note.text);
         }
         for marker in self.markers {
@@ -285,6 +289,7 @@ impl<'a> Layers<'a> {
                 .priority(HitPriority::new(HitLevel::Body, 1))
                 .over()
                 .flags(self.flags(key))
+                .pointer_only(POINTER_ONLY)
                 .node(Role::BUTTON, marker.label);
         }
     }
@@ -359,9 +364,9 @@ impl<'a> Layers<'a> {
         for (part, key, resize) in parts {
             let Some(result) = cx.part_if_declared(part) else { continue };
             let press = result.press;
-            if let PressPhase::Down { start, .. } = press.phase
-                && start.button == PointerButton::Primary
-            {
+            // An assistive technology's click selects as a primary press does.
+            let by_access = matches!(cx.part_activated(part), Some(crate::runtime::commands::FireSource::Access));
+            if by_access || matches!(press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
                 pressed = Some(key);
             }
             self.gesture(press, key, resize, (zoom, origin, min), cx, &mut events);

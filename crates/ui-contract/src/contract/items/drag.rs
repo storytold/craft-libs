@@ -746,10 +746,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// The press of the part of the collection that holds the pointer's press, when the collection moves the selection
     /// from it (`Collection::moves_from_part`). That press is the part's own, never the collection's: its phase drives
-    /// the move, its release commits it and its cancel cancels it.
-    fn moving_part_press(comp: &C, cx: &Cx<'_, C>) -> Option<PressPhase> {
+    /// the move, its release commits it and its cancel cancels it. With it, whether the part is a body part, whose
+    /// phase reads in the rows' space already.
+    fn moving_part_press(comp: &C, cx: &Cx<'_, C>) -> Option<(PressPhase, bool)> {
         let part = crate::runtime::pointer::pressed_part(&cx.core.ctx, cx.core.id).filter(|&part| comp.moves_from_part(part))?;
-        Some(cx.part_if_declared(part)?.press.phase).filter(PressPhase::is_press)
+        let result = cx.part_if_declared(part)?;
+        Some((result.press.phase, result.body)).filter(|(phase, _)| phase.is_press())
     }
 
     /// Step 9: sweeps, row drags, drops and the free-layout move, from the collection's own press (or the press of a
@@ -766,17 +768,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let free = matches!(layout.nav(), NavShape::Spatial);
         let part_phase = if free { Self::moving_part_press(comp, cx) } else { None };
         let from_part = part_phase.is_some();
-        let phase = part_phase.unwrap_or(cx.core.press.phase);
+        let in_rows = part_phase.is_some_and(|(_, body)| body);
+        let phase = part_phase.map_or(cx.core.press.phase, |(phase, _)| phase);
         if !from_part && phase.is_press() && !matches!(phase, PressPhase::Cancel { .. }) {
             self.sweep_to(cx, layout, Placement { rect, offset, rtl }, phase);
         }
-        // The pointer comes in screen space; the rows and a move's offset are in the rows' own space.
+        // The pointer comes in screen space, a body part's press in the rows' own space, where the rows and a move's
+        // offset are.
         let xf = self.xf;
         let layer = |point: Pos2| xf.map_or(point, |map| map.to_layer(point));
+        let pressed = |point: Pos2| if in_rows { point } else { layer(point) };
         match phase {
             // A sweep opens only from the collection's own press, so none runs beside a part's move.
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary && from_part => {
-                self.free_move(cx, layer(start.origin), layer(pos));
+                self.free_move(cx, pressed(start.origin), pressed(pos));
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                 let origin = layer(start.origin);
@@ -796,7 +801,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             PressPhase::Release { start, pos, .. } => {
                 if let Some(gesture) = self.drags.moving.take() {
-                    self.events.push(CollectionEvent::Move(EditEvent::commit(gesture, Mixed::Same(Vec2::ZERO), layer(pos) - layer(start.origin))));
+                    self.events.push(CollectionEvent::Move(EditEvent::commit(
+                        gesture,
+                        Mixed::Same(Vec2::ZERO),
+                        pressed(pos) - pressed(start.origin),
+                    )));
                 }
                 for (gesture, before, after) in self.drags.sweep.take().map(|sweep| sweep.open).unwrap_or_default() {
                     self.events.push(CollectionEvent::Toggle(EditEvent::commit(gesture, Mixed::Same(before), after)));

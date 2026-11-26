@@ -898,6 +898,7 @@ pub(crate) fn member_show<C: Show>(
         sense,
         inactive: false,
         held: false,
+        body: false,
     };
     let part_state = steps::part_state(&result, enabled || faded, None);
     // A peek that opens no lifetime stage and is dropped without a write-back, as a face's.

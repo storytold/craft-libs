@@ -296,12 +296,17 @@ impl<'a, E: 'static> NodeGraph<'a, E> {
         self
     }
 
-    /// A port's position on screen: the node's place from the graph plus the kind's `port_offset`, through the
-    /// zoom. The one function behind the wires' parts, their paint and the loose wire.
-    fn port_point(&self, origin: Pos2, port: PortRef) -> Option<Pos2> {
+    /// A port's position in the rows' space: the node's place from the graph's top left at `origin` plus the kind's
+    /// `port_offset`, in document units. The one function behind the wires' parts, their paint and the loose wire.
+    fn port_in_body(&self, origin: Pos2, port: PortRef) -> Option<Pos2> {
         let rect = self.positions.get(port.node.0 as usize)?;
         let kind = self.kinds.get(port.node.0 as usize)?;
-        Some(origin + self.zoom.to_layer(port_center(*kind, *rect, port.port)).to_vec2())
+        Some(origin + port_center(*kind, *rect, port.port).to_vec2())
+    }
+
+    /// A point of the rows' space in the graph's layer, where the pointer and the loose wire are: through the zoom.
+    fn to_layer(&self, origin: Pos2, at: Pos2) -> Pos2 {
+        origin + self.zoom.to_layer((at - origin).to_pos2()).to_vec2()
     }
 
     /// The side of its node a port sits on, as the node's kind places it.
@@ -309,15 +314,11 @@ impl<'a, E: 'static> NodeGraph<'a, E> {
         Some(self.kinds.get(port.node.0 as usize)?.port_side(port.port))
     }
 
+    /// The curve of `wire` in the rows' space, from the graph's top left at `origin`.
     fn wire_curve(&self, origin: Pos2, wire: &Wire) -> Option<Vec<Pos2>> {
-        let (from, from_side) = (self.port_point(origin, wire.from)?, self.port_side(wire.from)?);
-        let (to, to_side) = (self.port_point(origin, wire.to)?, self.port_side(wire.to)?);
+        let (from, from_side) = (self.port_in_body(origin, wire.from)?, self.port_side(wire.from)?);
+        let (to, to_side) = (self.port_in_body(origin, wire.to)?, self.port_side(wire.to)?);
         Some(sampled(wire_controls(from, from_side, to, to_side)))
-    }
-
-    /// A point of the graph's layer, as press positions come, in document units: `port_point` undone.
-    fn to_document(&self, origin: Pos2, at: Pos2) -> Pos2 {
-        ((at - origin - self.zoom.offset) / self.zoom.scale).to_pos2()
     }
 
     /// The annotation layers, handed the graph's own slices.
@@ -374,8 +375,9 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
         }
     }
 
-    /// The annotations' parts, then each wire as a polyline part at `Edge` priority: a press on a port beats the
-    /// wire, which sits under the nodes. A wire in `wire_selection` carries `Flags::SELECTED`, so it resolves to its
+    /// The annotations' parts, then each wire as a polyline part in the rows' space at `Edge` priority, through the
+    /// zoom with the nodes: a press on a port beats the wire, which sits under the nodes and over the backdrops, so a
+    /// press inside a backdrop reaches it. A wire in `wire_selection` carries `Flags::SELECTED`, so it resolves to its
     /// on look.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.layers().parts(rect.min, cx);
@@ -383,8 +385,7 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
         for wire in self.wires {
             let Some(points) = self.wire_curve(rect.min, wire) else { continue };
             let flags = if selected.is_some_and(|wires| wires.contains(&wire.id)) { Flags::SELECTED } else { Flags::empty() };
-
-            cx.part(WIRE.at(wire.id), HitShape::polyline(points, false))
+            cx.in_body(WIRE.at(wire.id), HitShape::polyline(points, false))
                 .sense(Sense::CLICK | Sense::DRAG | Sense::CONTEXT_CLICK)
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .flags(flags)
@@ -392,35 +393,35 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
         }
     }
 
-    /// Reads each wire's press: it selects wires, and a double click, a secondary press and a primary press past the
-    /// slop report `WireEvent`s. A plain primary press on a node or on empty space (the collection's own press)
-    /// clears the wires. `Down` and `DragStart` come once per press, in the pass that applies that input, so a
-    /// second pass in the frame selects and reports nothing again. Then the annotation layers read the pointer.
+    /// Reads each wire's press, which reads in the rows' space: document units from the graph's top left. It selects
+    /// wires, and a double click, a secondary press and a primary press past the slop report `WireEvent`s. A plain
+    /// primary press on a node or on empty space (the collection's own press) clears the wires. `Down` and
+    /// `DragStart` come once per press, in the pass that applies that input, so a second pass in the frame selects and
+    /// reports nothing again. Then the annotation layers read the pointer.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let origin = cx.rect.min;
+        let document = |at: Pos2| (at - origin).to_pos2();
         for wire in self.wires {
             let Some(press) = cx.part_if_declared(WIRE.at(wire.id)).map(|result| result.press) else { continue };
             match press.phase {
                 PressPhase::Down { start, .. } => {
                     if press.double_pressed() {
-                        let at = self.to_document(origin, start.origin);
-                        self.wire_events.push(WireEvent::DoubleClicked { wire: wire.id, at });
+                        self.wire_events.push(WireEvent::DoubleClicked { wire: wire.id, at: document(start.origin) });
                     }
                     if start.button == PointerButton::Secondary {
-                        self.wire_events.push(WireEvent::ContextMenu { wire: wire.id, at: start.origin });
+                        self.wire_events.push(WireEvent::ContextMenu { wire: wire.id, at: self.to_layer(origin, start.origin) });
                     }
                     if matches!(start.button, PointerButton::Primary | PointerButton::Secondary) {
                         self.press_wire(cx, wire.id, press.mods, start.button == PointerButton::Secondary);
                     }
                 }
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
-                    let at = self.to_document(origin, pos);
-                    self.wire_events.push(WireEvent::Pulled { wire: wire.id, at });
+                    self.wire_events.push(WireEvent::Pulled { wire: wire.id, at: document(pos) });
                 }
                 _ => {}
             }
             if let Some(at) = press.context {
-                self.wire_events.push(WireEvent::ContextMenu { wire: wire.id, at });
+                self.wire_events.push(WireEvent::ContextMenu { wire: wire.id, at: self.to_layer(origin, at) });
             }
         }
         let own = *cx.press();
@@ -435,29 +436,13 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
         self.annotation_events = layers.update(self.zoom, origin, cx, self.annotation_selection.as_mut(), self.selection.as_mut());
     }
 
-    /// The wires, under the nodes. A selected wire is its on look and a hovered one its hover look, both thick; a wire
-    /// that only touches a selected node is `hot`; the wire a drag detaches is not drawn.
-    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let detached = cx.dragging::<WireDrag>().and_then(|(drag, _)| drag.detached);
-        let selected = self.wire_selection.as_ref().and_then(Bind::value);
-        let nodes = self.selection.as_ref().and_then(Bind::value);
-        let draw = ui.draw();
-        for wire in self.wires.iter().filter(|wire| Some(wire.id) != detached) {
-            let Some(points) = self.wire_curve(cx.rect.min, wire) else { continue };
-            let picked = selected.is_some_and(|wires| wires.contains(&wire.id));
-            let hovered = cx.part(WIRE.at(wire.id)).hovered;
-            let hot = !picked && !hovered && nodes.is_some_and(|nodes| nodes.contains(&wire.from.node) || nodes.contains(&wire.to.node));
-            let width = if picked || hovered { StrokeWidth::Thick } else { StrokeWidth::Medium };
-            let color = if hot { cx.style.hot } else { cx.resolve_part(WIRE.at(wire.id), &cx.style.wire) };
-            draw.stroke(&PaintShape::Path(points), width, color);
-        }
-    }
-
-    /// The loose wire from the port a drag started on to the pointer. Its free end enters by the side facing the start
-    /// port's.
+    /// The loose wire from the port a drag started on to the pointer, in the graph's layer. Its free end enters by the
+    /// side facing the start port's.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some((wire, at)) = cx.dragging::<WireDrag>() else { return };
-        if let (Some(from), Some(side)) = (self.port_point(cx.rect.min, wire.from), self.port_side(wire.from)) {
+        let origin = cx.rect.min;
+        let from = self.port_in_body(origin, wire.from).map(|port| self.to_layer(origin, port));
+        if let (Some(from), Some(side)) = (from, self.port_side(wire.from)) {
             let points = sampled(wire_controls(from, side, at, opposite(side)));
             ui.draw().stroke(&PaintShape::Path(points), StrokeWidth::Medium, cx.style.loose);
         }
@@ -497,9 +482,24 @@ impl<E: 'static> Collection for NodeGraph<'_, E> {
         node.in_graph(fed, self.port_labels).placed(place)
     }
 
-    /// The backdrops, under the nodes and through the zoom with them.
+    /// The backdrops, then the wires over them, under the nodes and through the zoom with them. A selected wire is its
+    /// on look and a hovered one its hover look, both thick; a wire that only touches a selected node is `hot`; the wire
+    /// a drag detaches is not drawn.
     fn paint_body_under(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         self.layers().paint_under(cx.rect.min, ui, cx);
+        let detached = cx.dragging::<WireDrag>().and_then(|(drag, _)| drag.detached);
+        let selected = self.wire_selection.as_ref().and_then(Bind::value);
+        let nodes = self.selection.as_ref().and_then(Bind::value);
+        let draw = ui.draw();
+        for wire in self.wires.iter().filter(|wire| Some(wire.id) != detached) {
+            let Some(points) = self.wire_curve(cx.rect.min, wire) else { continue };
+            let picked = selected.is_some_and(|wires| wires.contains(&wire.id));
+            let hovered = cx.part(WIRE.at(wire.id)).hovered;
+            let hot = !picked && !hovered && nodes.is_some_and(|nodes| nodes.contains(&wire.from.node) || nodes.contains(&wire.to.node));
+            let width = if picked || hovered { StrokeWidth::Thick } else { StrokeWidth::Medium };
+            let color = if hot { cx.style.hot } else { cx.resolve_part(WIRE.at(wire.id), &cx.style.wire) };
+            draw.stroke(&PaintShape::Path(points), width, color);
+        }
     }
 
     /// The notes and markers, over the nodes and through the zoom with them.

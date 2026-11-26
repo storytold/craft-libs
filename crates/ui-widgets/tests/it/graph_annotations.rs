@@ -207,3 +207,62 @@ fn a_backdrop_drag_and_grip_drag_report_one_gesture_each() {
     assert_eq!(menus.len(), 1, "a secondary click asks for the backdrop's menu once");
     assert!(menus[0].distance(from) < 0.5, "the menu opens at the click in the parent's layer space, not through the zoom");
 }
+
+/// A node with an input on its left edge and an output on its right, at mid height.
+struct Ported(&'static str, [&'static str; 2]);
+
+impl NodeKind<()> for Ported {
+    fn title(&self) -> &str {
+        self.0
+    }
+
+    fn port_count(&self) -> usize {
+        2
+    }
+
+    fn port_name(&self, port: usize) -> String {
+        self.1[port].to_owned()
+    }
+
+    fn port_offset(&self, port: usize, size: Vec2) -> Vec2 {
+        Vec2::new(if port == 0 { 0.0 } else { size.x }, size.y / 2.0)
+    }
+
+    fn port_direction(&self, port: usize) -> craft_ui::graph::PortDirection {
+        if port == 0 { craft_ui::graph::PortDirection::Input } else { craft_ui::graph::PortDirection::Output }
+    }
+}
+
+/// q133: the wires lie in the body over the backdrops, through the zoom with the nodes: a press on a wire where it
+/// crosses a backdrop takes the wire, not the backdrop.
+#[trial]
+fn a_press_on_a_wire_inside_a_backdrop_takes_the_wire_at_a_zoom() {
+    use craft_ui::graph::{PortRef, Wire};
+    let (wired, annotation) = (Rc::new(RefCell::new(Selection::<u64>::default())), Rc::new(RefCell::new(None::<AnnotationKey>)));
+    let (wired_in, annotation_in) = (Rc::clone(&wired), Rc::clone(&annotation));
+    let mut fixture = Fixture::new(move |ui| {
+        let (a, b) = (Ported("A", ["A in", "A out"]), Ported("B", ["B in", "B out"]));
+        let kinds: [&dyn NodeKind<()>; 2] = [&a, &b];
+        let ids = [NodeId::new(0), NodeId::new(1)];
+        let source = keyed(&ids, |id: &NodeId| *id);
+        let wires = [Wire::new(9, PortRef::new(NodeId::new(0), 1), PortRef::new(NodeId::new(1), 0))];
+        // Around both nodes, so the wire between them crosses it.
+        let around = Rect::from_min_max(Pos2::new(20.0, 20.0), Pos2::new(400.0, 160.0));
+        let backdrops = [Backdrop::new(0, around, DataColor::new(Color32::from_rgba_premultiplied(40, 80, 48, 96))).title("Group")];
+        let (mut wired, mut annotation) = (wired_in.borrow_mut(), annotation_in.borrow_mut());
+        let _ = NodeGraph::new(&NODES, &kinds, &wires)
+            .label("Graph")
+            .zoom(CanvasTransform::new(2.0, Vec2::ZERO))
+            .backdrops(&backdrops)
+            .wire_selection(Bind::bound(&mut *wired))
+            .annotation_selection(Bind::bound(&mut *annotation))
+            .show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
+    });
+    fixture.room(Vec2::new(900.0, 400.0)).settle();
+    // The wire runs level between ports at one height, so its middle lies halfway between them.
+    let middle = rect_of(&fixture, "A out").center().lerp(rect_of(&fixture, "B in").center(), 0.5);
+    assert!(rect_of(&fixture, "Group").contains(middle), "the trial presses the wire inside the backdrop");
+    fixture.click_at(middle);
+    assert_eq!(wired.borrow().items, [9], "the press takes the wire over the backdrop");
+    assert_eq!(*annotation.borrow(), None, "and not the backdrop under it");
+}

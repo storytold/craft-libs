@@ -402,7 +402,9 @@ fn release_loose(fixture: &mut Fixture) {
     fixture.drag_at(output.center(), Vec2::new(0.0, 40.0));
     fixture.drag_at(output.center(), input.center() - output.center());
     let after = fixture.data().note("loose", Vec::<Pos2>::new()).len();
-    assert!(after >= before + 2, "a release on empty canvas and one on a refused port each report a loose end");
+    // A disabled graph starts no wire, which the disabled case checks.
+    let disabled = fixture.tree().is_disabled_key(output.node);
+    assert!(after >= before + 2 || disabled, "a release on empty canvas and one on a refused port each report a loose end");
 }
 
 #[story(NodeGraph<'static, ()>, covers = [Many], drive = Drive::Custom(release_loose))]

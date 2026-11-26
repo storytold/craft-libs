@@ -127,7 +127,8 @@ fn backdrop_resizing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A note longer than its rect, which wraps and grows down, beside a backdrop whose description is clipped to it.
 #[story(NodeGraph<'static, ()>, covers = [LongText], drive = Drive::Never)]
 fn long_note(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let notes = [Note::new(1, Rect::from_min_size(Pos2::new(400.0, 64.0), Vec2::new(160.0, 40.0)), LONG_NOTE)];
+    // Under the backdrop and inside the story's room, which clips the graph's body.
+    let notes = [Note::new(1, Rect::from_min_size(Pos2::new(32.0, 164.0), Vec2::new(352.0, 24.0)), LONG_NOTE)];
     let small = Rect::from_min_max(FRAME.min, Pos2::new(FRAME.max.x, 150.0));
     annotated_graph(ui, data, &Annotated { frame: small, notes: &notes, markers: &MARKERS, selected: None })
 }
