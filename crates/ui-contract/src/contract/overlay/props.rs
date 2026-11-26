@@ -22,7 +22,8 @@ pub enum Outside {
     Close,
     /// Nothing.
     Keep,
-    /// Closes the layer and the press reaches nothing below.
+    /// Closes the layer. A primary press reaches nothing below; a secondary or middle press goes on to the widget
+    /// below, so a right-click elsewhere closes a menu and opens the menu there.
     Absorb,
 }
 
@@ -289,7 +290,7 @@ impl Overlay {
         overlay
     }
 
-    /// A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
+    /// A menu: a popup the arrow keys move through. A press outside closes it, and a primary one goes no further.
     pub fn menu() -> Overlay {
         let mut overlay = Overlay::base(Rank::Popup, Overlay::below(), OverlayFit::Content, OwnerClass::Menu, FocusPolicy::MENU);
         overlay.dismiss = Dismiss::new().outside(Outside::Absorb);

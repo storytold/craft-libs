@@ -108,8 +108,7 @@ struct Named {
 fn named(name: &Name, label: &str, fallbacks: &[Option<&str>]) -> Named {
     let (text, labelled_by, hidden) = match name {
         Name::FromLabel => (label.to_owned(), Vec::new(), false),
-        Name::Text(text) => (text.clone(), Vec::new(), false),
-        Name::Joined(parts) => (parts.join(", "), Vec::new(), false),
+        Name::Text(_) | Name::Joined(_) => (name.own_text().unwrap_or_default(), Vec::new(), false),
         Name::LabelledBy(id) => (String::new(), vec![*id], false),
         Name::Decorative => (String::new(), Vec::new(), true),
     };

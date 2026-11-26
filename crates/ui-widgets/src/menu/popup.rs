@@ -85,8 +85,8 @@ impl<T: Value> Outcome for MenuPick<T> {
     }
 }
 
-/// The layer of a menu, or of a submenu: a press outside closes it and reaches nothing below, and running a row
-/// closes the chain.
+/// The layer of a menu, or of a submenu: a press outside closes it, a primary one reaches nothing below, and running a
+/// row closes the chain.
 #[doc(hidden)]
 pub fn layer(submenu: bool) -> Overlay {
     let base = if submenu { Overlay::submenu() } else { Overlay::menu() };

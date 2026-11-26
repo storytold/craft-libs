@@ -166,7 +166,7 @@ pub struct OpenEntry {
     pub(crate) cover: Option<Layer>,
     /// The layer has a focus scope.
     pub(crate) scoped: bool,
-    /// A press outside its family closes it and goes no further.
+    /// A press outside its family closes it, and a primary one goes no further.
     pub(crate) absorbs: bool,
     /// A command run from outside it closes it (`Dismiss::commands`).
     pub(crate) closes_on_commands: bool,
@@ -305,7 +305,7 @@ pub(crate) struct Persist {
     /// The screen rects a press may land in without closing the top menu family: the family and its anchors. `None`
     /// when the top layer does not absorb outside presses.
     absorb_zone: Option<Vec<Rect>>,
-    /// An outside press the input hook removed for the running pass.
+    /// An outside press the input hook recorded for the running pass (and removed, for a primary one).
     outside_press: Option<Pos2>,
     /// The top live modal layer of the last finished pass in this viewport.
     top_modal: Option<TopModal>,
@@ -733,18 +733,20 @@ pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
     with_pass(ctx, |pass| pass.activated.iter().any(|(component, closes)| closes.contains(&id) && !pass.claimed.contains(component)))
 }
 
-/// The input hook: removes the primary presses that land outside the top menu family, its anchors and its parents,
-/// so nothing below the menu sees them (`Outside::Absorb`), and keeps the first one for the layers' dismissal.
-/// Returns whether it removed one.
+/// The input hook: keeps the first press of any button that lands outside the top menu family, its anchors and its
+/// parents for the layers' dismissal, and removes the primary ones, so nothing below the menu sees them
+/// (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a right-click on another part closes
+/// the menu and opens that part's menu. The record is for the layers open when the press was made: a layer that appears
+/// in this pass was not, and its dismissal reads none of it (`opening`). Returns whether it removed one.
 pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::input::RawInput) -> bool {
     let zone = with_persist(ctx, input.viewport_id, |persist| persist.absorb_zone.clone());
     let Some(zone) = zone else { return false };
     let before = input.events.len();
     let mut first = None;
     input.events.retain(|event| match event {
-        egui::Event::PointerButton { pos, pressed: true, .. } if !zone.iter().any(|rect| rect.contains(*pos)) => {
+        egui::Event::PointerButton { pos, button, pressed: true, .. } if !zone.iter().any(|rect| rect.contains(*pos)) => {
             first.get_or_insert(*pos);
-            false
+            *button != egui::PointerButton::Primary
         }
         _ => true,
     });
@@ -754,7 +756,9 @@ pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::in
     input.events.len() != before
 }
 
-/// The outside press the input hook removed for the running pass. A tracked input (`Input::Press`).
+/// The outside press the input hook recorded for the running pass: the lone point it landed on, for the layers the pass
+/// showed before it. `opening` is how a layer that appears in the pass tells it is none of those. A tracked input
+/// (`Input::Press`).
 pub(crate) fn absorbed_press(ctx: &Context) -> Option<Pos2> {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
     absorbed_press_raw(ctx)

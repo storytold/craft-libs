@@ -7,8 +7,9 @@ use craft_behavior::{MoveMods, NavMove};
 use egui::{Context, Id, Rect, Vec2};
 
 /// What the component left untaken that a scroll region serves: page and end moves go to the innermost scroll
-/// owner around the component, and an AccessKit request to show the component reveals its rect there. Both are
-/// applied at the owner's step 4 of the next pass.
+/// owner around the component, and an AccessKit request to show the component, or one of its parts, reveals the
+/// component's rect, or the part's, there, as focus on it does. Both are applied at the owner's step 4 of the next
+/// pass.
 pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     let scrolls = |mv: NavMove, _| matches!(mv, NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End);
     let mut moves = Vec::new();
@@ -24,14 +25,29 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     while let Some(mv) = core.intents.take_move_where(scrolls) {
         moves.push(mv);
     }
-    let reveal = core.intents.take_scroll_access(true).is_some();
-    if moves.is_empty() && !reveal {
+    let reveal = match core.intents.take_scroll_access(true) {
+        Some(_) => Some(core.rect),
+        None => {
+            // A part's Scroll Into View: a part the component declared this pass shows its own rect.
+            let results = &core.results;
+            let shows_part = |request: &craft_behavior::AccessRequest| {
+                request.action == craft_behavior::AccessAction::ScrollIntoView
+                    && request.target.is_some_and(|part| results.contains_key(&(part.key, part.index)))
+            };
+            core.intents
+                .take_access_where(shows_part)
+                .and_then(|request| request.target)
+                .and_then(|part| results.get(&(part.key, part.index)))
+                .map(|result| result.rect)
+        }
+    };
+    if moves.is_empty() && reveal.is_none() {
         return;
     }
     let Some(owner) = core.env.scroll_owner() else { return };
     pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods, false))));
-    if reveal {
-        pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));
+    if let Some(rect) = reveal {
+        pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(rect) }));
     }
     repaint::request(&core.ctx);
 }
