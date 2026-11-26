@@ -357,6 +357,15 @@ products match its vertices (moving the points alone skewed barycentric coordina
 `restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
 palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
 
+hayro-interpret, marked `Craft patch (ICC fallback)`: an `/ICCBased` space that does not use its
+embedded profile reports why through `extended_warning_sink`, as
+`ExtendedWarning::IccProfileFallback(IccFallback)`. The reasons are `ProfileUnreadable` (the
+stream does not decode or the profile does not parse), `UnsupportedComponents` (`/N` other than
+1, 3 or 4) and `TransformRefused` (the colour transform is refused, e.g. `/N` disagrees with the
+profile). It is reported once per profile per page, also when a later page takes the space from a
+shared cache; the record is capped at 64 profiles. The record is per thread, reset in `Context::new`.
+Tests: `color::icc_fallback_tests`.
+
 `hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
 `images` feature, matching `filter::ccitt`.
 

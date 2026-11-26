@@ -343,6 +343,8 @@ impl<'a> Context<'a> {
         hayro_syntax::set_page_jbig2_work(settings.jbig2_work);
         // PdfCraft patch (55): a fallback left over from another page is not this page's.
         crate::color::take_color_fallback();
+        // Craft patch (ICC fallback): and so are its ICC profile fallbacks.
+        crate::color::reset_icc_fallbacks();
         crate::encode::reset_mesh_budget();
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
@@ -637,6 +639,8 @@ impl<'a> Context<'a> {
                     &self.interpreter_cache.object_cache,
                 )
             })
+            // Craft patch (ICC fallback): a space read for an earlier page reports for this one.
+            .inspect(ColorSpace::report_icc_fallbacks)
     }
 
     pub(crate) fn stroke_props(&self) -> StrokeProps {
