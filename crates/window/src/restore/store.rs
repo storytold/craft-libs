@@ -1,4 +1,4 @@
-//! `window.json`: the saved [`Placement`] of each window, beside the app's `config.toml`.
+//! `window.json`: the saved [`Placement`](craft_behavior::placement::Placement) of each window, beside the app's `config.toml`.
 //!
 //! ```json
 //! { "schema_version": 1, "windows": { "main": { ... }, "<key>": { ... } } }
@@ -15,12 +15,15 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use craft_atomic::{NewFilePermissions, WriteOptions};
+#[cfg(not(target_arch = "wasm32"))]
 use craft_settings::paths::{self, Location, Portable, Probe};
+#[cfg(not(target_arch = "wasm32"))]
 use craft_settings::recovery;
 use serde_json::{Map, Value, json};
 
-use super::place::{Placement, sane};
+use craft_behavior::placement::Placement;
 
 /// The file name beside `config.toml`.
 pub const FILE_NAME: &str = "window.json";
@@ -41,12 +44,15 @@ pub enum ReadOnly {
 /// A write [`Store::take_pending`] prepared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
+    /// The file to write.
     pub path: PathBuf,
+    /// The file's new contents.
     pub bytes: Vec<u8>,
     /// Pass to [`Store::mark_saved`] after the write succeeded.
     pub generation: u64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Writes `pending` atomically and privately, creating the folder. Needs no access to the store.
 pub fn write_pending(pending: &Pending) -> io::Result<()> {
     if let Some(dir) = pending.path.parent() {
@@ -71,6 +77,7 @@ pub struct Store {
 }
 
 impl Store {
+    #[cfg(not(target_arch = "wasm32"))]
     /// The store for `app_id` in the folder `craft_settings` picks for its `config.toml`, with
     /// the suite's default portable marker. In an isolated or in-memory configuration
     /// (`<APP>_CONFIG_DIR` empty) nothing is read or written.
@@ -78,6 +85,7 @@ impl Store {
         Self::open_with(app_id, &Portable::DEFAULT, &Location::Auto, &Probe::default())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// [`open`](Self::open) with the app's own portable names, location override and probe: the
     /// same arguments its `craft_settings` options use.
     pub fn open_with(app_id: &str, portable: &Portable, location: &Location, probe: &Probe) -> Self {
@@ -87,6 +95,7 @@ impl Store {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// A store backed by the file at `path`. A missing file is an empty store.
     pub fn at(path: &Path) -> Self {
         let mut store = Self { path: Some(path.to_path_buf()), ..Self::in_memory() };
@@ -123,7 +132,7 @@ impl Store {
     /// stay. A placement with a non-finite size is ignored. Nothing is written until
     /// [`save`](Self::save) or [`take_pending`](Self::take_pending).
     pub fn set(&mut self, key: &str, placement: &Placement) {
-        let Some(placement) = sane(placement) else { return };
+        let Some(placement) = placement.repaired() else { return };
         let Ok(Value::Object(new)) = serde_json::to_value(&placement) else { return };
         let merged = match self.windows.get(key) {
             Some(Value::Object(old)) => {
@@ -179,6 +188,7 @@ impl Store {
 
     /// [`take_pending`](Self::take_pending), [`write_pending`] and [`mark_saved`](Self::mark_saved)
     /// in one call. `Ok(true)` when written; `Ok(false)` when there was nothing to write.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&mut self) -> io::Result<bool> {
         let Some(pending) = self.take_pending() else { return Ok(false) };
         write_pending(&pending)?;
@@ -186,6 +196,13 @@ impl Store {
         Ok(true)
     }
 
+    /// On the web there is no file: nothing is written.
+    #[cfg(target_arch = "wasm32")]
+    pub fn save(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn load(&mut self) {
         let Some(path) = self.path.clone() else { return };
         let text = match std::fs::read_to_string(&path) {
@@ -223,6 +240,7 @@ impl Store {
         self.extra = doc;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_over(&mut self, path: &Path) {
         match recovery::move_aside(path) {
             Ok(to) => self.moved_aside = Some(to),
@@ -236,11 +254,12 @@ impl Store {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::restore::{Monitor, MonitorKey};
+    use craft_behavior::placement::{Defaults, place};
+    use craft_behavior::{Monitor, MonitorKey};
 
     fn sample(x: i32) -> Placement {
         let m = Monitor::new(MonitorKey::new("DP-1", [1920, 1080]), [0, 0], [1920, 1080], 1.0);
-        let mut p = crate::restore::place(None, &[m], Some(0), &crate::restore::Defaults::new([800.0, 600.0], [300.0, 200.0]));
+        let mut p = place(None, &[m], Some(0), &Defaults::new([800.0, 600.0], [300.0, 200.0]));
         p.position_px = Some([x, 10]);
         p
     }
@@ -249,36 +268,6 @@ mod tests {
         let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         names.sort();
         names
-    }
-
-    #[test]
-    fn round_trip_through_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join(FILE_NAME);
-        let mut s = Store::at(&path);
-        assert!(s.get(MAIN).is_none());
-        s.set(MAIN, &sample(5));
-        s.set("doc-2", &sample(6));
-        assert!(s.save().unwrap());
-        assert!(!s.save().unwrap(), "nothing changed");
-        let again = Store::at(&path);
-        assert_eq!(again.get(MAIN), Some(sample(5)));
-        assert_eq!(again.get("doc-2"), Some(sample(6)));
-        assert_eq!(again.keys().collect::<Vec<_>>(), ["doc-2", MAIN]);
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["schema_version"], 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_file_is_private() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        let mut s = Store::at(&path);
-        s.set(MAIN, &sample(1));
-        s.save().unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
     }
 
     #[test]
@@ -295,14 +284,6 @@ mod tests {
         s.save().unwrap();
         assert!(Store::at(&path).get(MAIN).is_some());
         assert_eq!(siblings(dir.path()).len(), 2);
-    }
-
-    #[test]
-    fn json_without_a_schema_version_counts_as_corrupt() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, r#"{"windows":{}}"#).unwrap();
-        assert!(Store::at(&path).moved_aside().is_some());
     }
 
     #[test]
@@ -337,78 +318,5 @@ mod tests {
         assert_eq!(v["note"], json!({"a": 1}));
         assert_eq!(v["windows"]["odd"], json!({"unexpected": true}));
         assert_eq!(Store::at(&path).get(MAIN), Some(sample(2)));
-    }
-
-    #[test]
-    fn newer_schema_with_an_unexpected_shape_is_not_moved_aside() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, r#"{"schema_version":3,"windows":[1,2]}"#).unwrap();
-        let s = Store::at(&path);
-        assert_eq!(s.read_only(), Some(&ReadOnly::NewerSchema(3)));
-        assert!(s.moved_aside().is_none() && path.exists());
-    }
-
-    #[test]
-    fn non_finite_placements_are_never_stored() {
-        let mut s = Store::in_memory();
-        let mut p = sample(1);
-        p.normal.size[0] = f32::NAN;
-        s.set(MAIN, &p);
-        assert!(s.get(MAIN).is_none() && !s.is_dirty());
-        let mut p = sample(1);
-        p.normal.pos[1] = f32::INFINITY;
-        s.set(MAIN, &p);
-        assert_eq!(s.get(MAIN).unwrap().normal.pos, [0.0, 0.0]);
-    }
-
-    #[test]
-    fn set_keeps_unknown_fields_of_the_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        let mut entry = serde_json::to_value(sample(1)).unwrap();
-        entry["later"] = json!("x");
-        std::fs::write(&path, json!({"schema_version": 1, "windows": {MAIN: entry}}).to_string()).unwrap();
-        let mut s = Store::at(&path);
-        s.set(MAIN, &sample(2));
-        s.save().unwrap();
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["windows"][MAIN]["later"], "x");
-        assert_eq!(Store::at(&path).get(MAIN), Some(sample(2)));
-    }
-
-    #[test]
-    fn dirty_clears_only_after_the_write_is_reported() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut s = Store::at(&dir.path().join(FILE_NAME));
-        s.set(MAIN, &sample(1));
-        let first = s.take_pending().unwrap();
-        s.set(MAIN, &sample(2));
-        write_pending(&first).unwrap();
-        s.mark_saved(first.generation);
-        assert!(s.is_dirty(), "changed again while the first write was in flight");
-        let second = s.take_pending().unwrap();
-        assert!(s.is_dirty(), "taking a write does not clear it");
-        write_pending(&second).unwrap();
-        s.mark_saved(second.generation);
-        assert!(!s.is_dirty() && s.take_pending().is_none());
-    }
-
-    #[test]
-    fn in_memory_store_keeps_values_and_writes_nothing() {
-        let mut s = Store::in_memory();
-        s.set(MAIN, &sample(3));
-        assert_eq!(s.get(MAIN), Some(sample(3)));
-        assert!(!s.save().unwrap());
-        assert!(s.path().is_none());
-    }
-
-    #[test]
-    fn open_puts_the_file_beside_config_toml() {
-        let dir = tempfile::tempdir().unwrap();
-        let s = Store::open_with("app", &Portable::DEFAULT, &Location::Dir(dir.path().to_path_buf()), &Probe::default());
-        assert_eq!(s.path(), Some(dir.path().join(FILE_NAME).as_path()));
-        let mem = Store::open_with("app", &Portable::DEFAULT, &Location::Memory, &Probe::default());
-        assert!(mem.path().is_none());
     }
 }

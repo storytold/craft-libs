@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[cfg(not(target_arch = "wasm32"))]
-mod store;
+pub(crate) mod store;
 #[cfg(not(target_arch = "wasm32"))]
 pub use store::{FlagError, load, set};
 
@@ -135,6 +135,11 @@ impl Flags {
     }
 
     fn read_file(&mut self, text: &str) {
+        // The same limit as a file read from disk, also for text handed in directly.
+        if text.len() as u64 > MAX_FILE_BYTES {
+            self.problems.push(format!("the flags file is larger than {MAX_FILE_BYTES} bytes, so every flag is at its default"));
+            return;
+        }
         let doc = match text.parse::<toml_edit::DocumentMut>() {
             Ok(d) => d,
             Err(e) => {

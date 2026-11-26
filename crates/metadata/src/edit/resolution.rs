@@ -734,7 +734,7 @@ fn thumbnail_range(order: Order, body: &[u8], ptr: usize) -> Option<(usize, usiz
 }
 
 /// The EXIF to write next to upright pixels at resolution `ppi`: Orientation 1 (see
-/// [`upright_exif`]), no thumbnail of the source image (see [`exif_without_thumbnail`]) and,
+/// [`upright_exif`]), no thumbnail of the source image (see `exif_without_thumbnail`) and,
 /// when `ppi` is known, the resolution (see [`exif_with_resolution`]).
 pub fn export_exif(exif: &[u8], ppi: Option<(f32, f32)>) -> Cow<'_, [u8]> {
     export_exif_inner(exif, ppi, false)
