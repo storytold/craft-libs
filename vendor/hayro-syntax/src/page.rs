@@ -18,7 +18,8 @@ use crate::filter::{FlateState, MAX_DECODED_STREAM};
 use crate::object::stream::Incremental;
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
-use alloc::collections::{BTreeSet, VecDeque};
+use crate::object::ObjectIdentifier;
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
@@ -45,6 +46,10 @@ impl PagesContext {
 pub struct Pages<'a> {
     pages: Vec<Page<'a>>,
     xref: &'a XRef,
+    /// PdfCraft patch (59): the walk of the page tree stepped over some `/Kids` entry that is not
+    /// a dictionary (a reference to a missing object, say): the tree names pages this walk did
+    /// not reach, so an empty result is no sign that it has none.
+    incomplete: bool,
 }
 
 impl<'a> Pages<'a> {
@@ -56,9 +61,10 @@ impl<'a> Pages<'a> {
         work_limit: usize,
     ) -> Result<Self, PageTreeError> {
         let mut pages = vec![];
-        resolve_pages(pages_dict, &mut pages, ctx, work_limit)?;
+        let mut incomplete = false;
+        resolve_pages(pages_dict, &mut pages, ctx, work_limit, &mut incomplete)?;
 
-        Ok(Self { pages, xref })
+        Ok(Self { pages, xref, incomplete })
     }
 
     /// Create a new `Pages` object by bruteforce-searching.
@@ -66,18 +72,36 @@ impl<'a> Pages<'a> {
     /// Of course this could result in the order of pages being messed up, but
     /// this is still better than nothing.
     pub(crate) fn new_brute_force(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        Self::scan(ctx, xref, false)
+    }
+
+    /// PdfCraft patch (59): as [`Self::new_brute_force`], taking only dictionaries that say they
+    /// are pages (`/Type /Page`, ISO 32000-2 §7.7.3.3 Table 31) and have content.
+    /// `new_brute_force` takes any dictionary with a `/Contents` entry, which annotations have
+    /// too (a text string, Table 166); this scan runs on files whose page tree leads to no page,
+    /// with nothing to check what it finds against, so it takes pages only.
+    pub(crate) fn new_brute_force_typed(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        Self::scan(ctx, xref, true)
+    }
+
+    /// PdfCraft patch (59): the page dictionaries found by scanning, each with what it inherits
+    /// through its `/Parent` entries (see [`inherited_through_parents`]).
+    fn scan(ctx: &ReaderContext<'a>, xref: &'a XRef, typed: bool) -> Option<Self> {
         crate::cancel::check(ctx.control())?;
         let mut pages = vec![];
+        let mut known = BTreeMap::new();
 
         for object in xref.objects() {
             crate::cancel::check(ctx.control())?;
+            // `Page::new` takes no dictionary without `/Contents` here; that is checked first,
+            // so what other dictionaries would inherit is never looked up.
             if let Some(dict) = object.into_dict()
-                && let Some(page) = Page::new(
-                    &dict,
-                    &PagesContext::new(),
-                    Resources::new(Dict::empty(), None, ctx),
-                    true,
-                )
+                && dict.contains_key(CONTENTS)
+                && (!typed || dict.get::<Name<'_>>(TYPE).as_deref() == Some(PAGE))
+                && let Some(page) = {
+                    let (inherited, resources) = inherited_through_parents(&dict, ctx, &mut known);
+                    Page::new(&dict, &inherited, resources, true)
+                }
             {
                 pages.push(page);
             }
@@ -88,7 +112,7 @@ impl<'a> Pages<'a> {
             return None;
         }
 
-        Some(Self { pages, xref })
+        Some(Self { pages, xref, incomplete: false })
     }
 
     /// Return the xref table (of the document the pages belong to).   
@@ -140,11 +164,25 @@ impl<'a> PageTreeFrame<'a> {
 /// this one).
 const MAX_USER_UNIT: f64 = 75_000.0;
 
+/// PdfCraft patch: whether a `/Kids` entry is an intermediate node of the page tree. A node is
+/// `/Type /Pages`, or has a `/Kids` array and is not `/Type /Page`: ISO 32000-2 §7.7.3.2
+/// requires both keys of a node, but writers leave `/Type` out, and a page has no `/Kids`
+/// (§7.7.3.3), so the array tells them apart. A `/Kids` that is null (the same as absent,
+/// §7.3.9) or not an array leaves an untyped dictionary a page.
+fn is_page_tree_node(dict: &Dict<'_>) -> bool {
+    match dict.get::<Name<'_>>(TYPE).as_deref() {
+        Some(PAGES) => true,
+        Some(PAGE) => false,
+        _ => dict.get::<Array<'_>>(KIDS).is_some(),
+    }
+}
+
 fn resolve_pages<'a>(
     pages_dict: &Dict<'a>,
     entries: &mut Vec<Page<'a>>,
     reader_ctx: &ReaderContext<'a>,
     work_limit: usize,
+    incomplete: &mut bool,
 ) -> Result<(), PageTreeError> {
     crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     let mut remaining = work_limit.checked_sub(1).ok_or(PageTreeError::Limit)?;
@@ -181,29 +219,84 @@ fn resolve_pages<'a>(
             MaybeRef::NotRef(object) => object.into_dict(),
         };
         let Some(dict) = dict else {
+            // PdfCraft patch (59): an entry that is no dictionary may stand for pages this walk
+            // cannot reach. One that refers back to an entry already walked (an ancestor, read as
+            // a cycle, or a repeated leaf) was stepped over above and leads to no page missed.
+            *incomplete = true;
             continue;
         };
 
-        match dict.get::<Name<'_>>(TYPE).as_deref() {
-            Some(PAGES) => {
-                if let Some(child) = PageTreeFrame::new(&dict, frame.ctx.clone(), frame.resources.clone()) {
-                    stack.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
-                    stack.push(child);
-                }
+        if is_page_tree_node(&dict) {
+            if let Some(child) = PageTreeFrame::new(&dict, frame.ctx.clone(), frame.resources.clone()) {
+                stack.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
+                stack.push(child);
             }
+        } else if let Some(page) = Page::new(&dict, &frame.ctx, frame.resources.clone(), false) {
             // Let's be lenient and assume it's a `Page` in case it's `None` or something else
             // (see corpus test case 0083781).
-            _ => {
-                if let Some(page) = Page::new(&dict, &frame.ctx, frame.resources.clone(), false) {
-                    entries.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
-                    entries.push(page);
-                }
-            }
+            entries.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
+            entries.push(page);
         }
     }
 
     crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     Ok(())
+}
+
+/// PdfCraft patch (59): the most `/Parent` links [`inherited_through_parents`] follows up from one
+/// page, as deep as the page-tree walk is tested to go.
+const MAX_SCANNED_PAGE_PARENTS: usize = 1024;
+
+/// PdfCraft patch (59): what a page found by scanning inherits from the page-tree nodes its
+/// `/Parent` entries lead to (ISO 32000-2 §7.7.3.3 Table 31 makes `/Parent` required, and §7.7.3.4
+/// has `/Resources`, `/MediaBox`, `/CropBox` and `/Rotate` inherited from those ancestors), applied
+/// from the root down as [`resolve_pages`] applies them. A page whose tree leads no reader to it
+/// (the root's only kid is the root) still names its parent, and takes its size and fonts from
+/// there. The walk up stops at a node already seen, at one that is not a dictionary, and after
+/// `MAX_SCANNED_PAGE_PARENTS` nodes.
+///
+/// `known` holds what each indirect node passes on, as worked out for an earlier page of the same
+/// scan, so the pages under one node look it up once and the scan reads each node about once.
+fn inherited_through_parents<'a>(
+    page: &Dict<'a>,
+    ctx: &ReaderContext<'a>,
+    known: &mut BTreeMap<ObjectIdentifier, (PagesContext, Resources<'a>)>,
+) -> (PagesContext, Resources<'a>) {
+    let mut chain: Vec<Dict<'a>> = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(id) = page.obj_id() {
+        seen.insert(id);
+    }
+    let mut base = None;
+    let mut next = page.get::<Dict<'a>>(PARENT);
+    while let Some(node) = next {
+        if chain.len() >= MAX_SCANNED_PAGE_PARENTS {
+            break;
+        }
+        if let Some(id) = node.obj_id() {
+            if let Some(found) = known.get(&id) {
+                base = Some(found.clone());
+                break;
+            }
+            if !seen.insert(id) {
+                break;
+            }
+        }
+        next = node.get::<Dict<'a>>(PARENT);
+        chain.push(node);
+    }
+    let (mut inherited, mut resources) =
+        base.unwrap_or_else(|| (PagesContext::new(), Resources::new(Dict::empty(), None, ctx)));
+    for node in chain.iter().rev() {
+        inherited.media_box = node.get::<Rect>(MEDIA_BOX).or(inherited.media_box);
+        inherited.crop_box = node.get::<Rect>(CROP_BOX).or(inherited.crop_box);
+        inherited.rotate = node.get::<i32>(ROTATE).or(inherited.rotate);
+        resources = Resources::from_scope(node.get::<Dict<'a>>(RESOURCES), resources);
+        if let Some(id) = node.obj_id() {
+            known.insert(id, (inherited.clone(), resources.clone()));
+        }
+    }
+    (inherited, resources)
 }
 
 /// The rotation of the page.
@@ -940,10 +1033,28 @@ pub(crate) mod cached {
 
     impl CachedPages {
         pub(crate) fn new(xref: Arc<XRef>) -> Option<Self> {
-            Self::new_with_limit(xref, MAX_PAGE_TREE_WORK)
+            Self::build(xref, MAX_PAGE_TREE_WORK, false)
+        }
+
+        /// PdfCraft patch (59): as [`Self::new`], and a page tree that leads to no page (its
+        /// `/Kids` are empty or loop back to itself) gives way to the page dictionaries
+        /// `Pages::new_brute_force_typed` finds, as one that cannot be read at all does. ISO
+        /// 32000-2 §7.7.3.1 has every page reached through the tree; a root whose only kid is
+        /// itself lost the one page that names it as its `/Parent`. When the scan finds no page
+        /// either, the empty tree stands.
+        ///
+        /// Not when the walk stepped over a `/Kids` entry it could not read: that tree names
+        /// pages the walk did not reach. Not used while trying a table rebuilt over a cut-off
+        /// update (patch 43), whose empty tree means the older table is read instead.
+        pub(crate) fn new_or_scan(xref: Arc<XRef>) -> Option<Self> {
+            Self::build(xref, MAX_PAGE_TREE_WORK, true)
         }
 
         pub(super) fn new_with_limit(xref: Arc<XRef>, work_limit: usize) -> Option<Self> {
+            Self::build(xref, work_limit, false)
+        }
+
+        fn build(xref: Arc<XRef>, work_limit: usize, scan_if_empty: bool) -> Option<Self> {
             // SAFETY:
             // - The XRef's location is stable in memory:
             //   - We wrapped it in a `Arc` (or `Rc` in `no_std`), which implements `StableDeref`.
@@ -963,6 +1074,21 @@ pub(crate) mod cached {
                     Err(PageTreeError::Limit | PageTreeError::Cancelled) => return None,
                 },
                 None => Pages::new_brute_force(&ctx, xref_reference)?,
+            };
+            let pages = if scan_if_empty && pages.is_empty() && !pages.incomplete {
+                match Pages::new_brute_force_typed(&ctx, xref_reference) {
+                    Some(found) => {
+                        warn!("the page tree leads to no page; using the {} page objects found by scanning", found.len());
+                        found
+                    }
+                    None => {
+                        // A cancelled scan fails the load, as a cancelled walk does.
+                        crate::cancel::check(ctx.control())?;
+                        pages
+                    }
+                }
+            } else {
+                pages
             };
 
             Some(Self { pages, _xref: xref })
@@ -1114,6 +1240,195 @@ mod page_tree_tests {
         let repaired = cached_with_limit(&objects, 1).unwrap();
         assert_eq!(repaired.get().len(), 1);
         assert_eq!(repaired.get()[0].raw().obj_id().unwrap().obj_number, 3);
+    }
+
+    /// PdfCraft patch (storytold/pdfcraft#6498): intermediate nodes without `/Type` are told from
+    /// pages by their `/Kids` array (ISO 32000-2 §7.7.3.2, §7.7.3.3), so the pages under them are
+    /// read in order with what they inherit, and an untyped leaf is still a page.
+    #[test]
+    fn pages_under_nodes_without_a_type_are_read_in_order() {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 19 0 R] /Count 5 /MediaBox [0 0 612 792] >>",
+            // Node 3: no /Type, its own box.
+            "<< /Parent 2 0 R /Kids [4 0 R 9 0 R] /Count 4 /MediaBox [0 0 300 200] >>",
+            // Node 4: no /Type, its /Kids reached through two references.
+            "<< /Parent 3 0 R /Kids 16 0 R /Count 3 >>",
+            "null",
+            "<< /Type /Page /Parent 4 0 R /Contents [] >>",
+            // A `/Type /Page` given by reference, with a stray empty `/Kids`, is a page.
+            "<< /Parent 4 0 R /Type 18 0 R /Kids [] /Contents [] >>",
+            "<< /Type /Page /Parent 4 0 R /Contents [] >>",
+            // No /Type and a null /Kids (the same as no /Kids, §7.3.9): a page.
+            "<< /Parent 3 0 R /Kids null /Contents [] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents [] >>",
+            "null",
+            "null",
+            "null",
+            "null",
+            "null",
+            "17 0 R",
+            "[6 0 R 7 0 R 8 0 R]",
+            "/Page",
+            "10 0 R",
+        ]
+        .map(str::to_string);
+        let pdf = Pdf::new(pdf_bytes(&objects)).unwrap();
+        let pages = pdf.pages();
+        let ids: Vec<_> = pages.iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+        assert_eq!(ids, [6, 7, 8, 9, 10]);
+        let sizes: Vec<_> = pages.iter().map(|page| page.base_dimensions()).collect();
+        assert_eq!(sizes, [(300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (400.0, 400.0)]);
+    }
+
+    /// PdfCraft patch (51, storytold/pdfcraft#7391): a page dictionary holding a stray delimiter
+    /// between its entries keeps its page, the entries after the byte and the pages after it in
+    /// the tree (ISO 32000-2 §7.3.7, §7.7.3), also when the byte is in a nested dictionary.
+    #[test]
+    fn a_stray_delimiter_in_a_page_dictionary_keeps_the_page_and_the_pages_after_it() {
+        let font = "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>";
+        for stray in [")", "]", "{", "}", ">", ") ] )"] {
+            for nested in [false, true] {
+                let mut objects = vec![
+                    "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                    "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>".to_string(),
+                ];
+                for page in 0..4 {
+                    let (junk, resources) = match (page, nested) {
+                        (1, false) => (stray, format!("<< {font} >>")),
+                        (1, true) => ("", format!("<< {stray} {font} >>")),
+                        _ => ("", format!("<< {font} >>")),
+                    };
+                    objects.push(format!(
+                        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources {resources} /Contents [] {junk} /Rotate 90 >>"
+                    ));
+                }
+                let pdf = Pdf::new(pdf_bytes(&objects)).unwrap();
+                let pages = pdf.pages();
+                let ids: Vec<_> = pages.iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+                assert_eq!(ids, [3, 4, 5, 6], "{stray:?}, nested {nested}");
+                let second = &pages[1];
+                assert!(matches!(second.rotation(), Rotation::Horizontal), "{stray:?}, nested {nested}: the entry after the byte");
+                let f1 = Name::from_bytes(b"/F1").unwrap();
+                assert!(second.resources().get_font(&f1).is_some(), "{stray:?}, nested {nested}: the page keeps its font");
+            }
+        }
+    }
+
+    const HELLO: &str = "BT /F1 24 Tf 20 100 Td (Hello) Tj ET";
+
+    /// Objects 1-6: the catalog, a root whose `/Kids` are `kids` and which carries the media box
+    /// and the font, a page under it, the font, the page's content, and a note (an annotation
+    /// with a `/Contents` text string, which is no page).
+    fn tree_leading_to(kids: &str) -> Vec<String> {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!("<< /Type /Pages /Kids [{kids}] /Count 1 /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> >>"),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{HELLO}\nendstream", HELLO.len()),
+            "<< /Type /Annot /Subtype /Text /Rect [0 0 20 20] /Contents (a note) >>".to_string(),
+        ]
+    }
+
+    /// PdfCraft patch (59, storytold/pdfcraft#7500): a page tree that leads to no page (its root's
+    /// only kid is the root, or its `/Kids` are empty) gives way to the page dictionaries found by
+    /// scanning, with what they inherit through `/Parent` (ISO 32000-2 §7.7.3.1-7.7.3.4). The note
+    /// is not taken for a page although it has `/Contents`.
+    #[test]
+    fn a_page_tree_leading_to_no_page_gives_way_to_the_pages_found_by_scanning() {
+        let f1 = Name::from_bytes(b"/F1").unwrap();
+        for kids in ["2 0 R", ""] {
+            let pdf = Pdf::new(pdf_bytes(&tree_leading_to(kids))).unwrap();
+            let pages = pdf.pages();
+            let ids: Vec<_> = pages.iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+            assert_eq!(ids, [3], "{kids:?}: the page, not the note");
+            assert_eq!(pages[0].base_dimensions(), (300.0, 200.0), "{kids:?}: the media box of its /Parent");
+            assert!(pages[0].resources().get_font(&f1).is_some(), "{kids:?}: the font of its /Parent");
+            assert_eq!(pages[0].page_stream(), Some(HELLO.as_bytes()), "{kids:?}");
+        }
+    }
+
+    /// PdfCraft patch (59): a walk that stepped over a kid it could not read (object 9 is missing)
+    /// has not shown that the tree leads to no page, so the scan does not stand in for it: the
+    /// orphan page 8 is never one of the pages.
+    #[test]
+    fn a_tree_with_a_missing_kid_is_not_replaced_by_the_scan() {
+        for (kids, expected) in [("9 0 R", &[][..]), ("9 0 R 3 0 R", &[3][..]), ("null", &[][..])] {
+            let mut objects = tree_leading_to(kids);
+            objects.push("<< /Length 0 >>\nstream\n\nendstream".to_string());
+            objects.push("<< /Type /Page /MediaBox [0 0 500 500] /Contents 7 0 R >>".to_string());
+            let pdf = Pdf::new(pdf_bytes(&objects)).unwrap();
+            let ids: Vec<_> = pdf.pages().iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+            assert_eq!(ids, expected, "{kids:?}");
+        }
+    }
+
+    /// PdfCraft patch (59): pages found because the root cannot be read at all (it has no `/Kids`)
+    /// inherit through `/Parent` too, and the pages under one node share what it passes on, also
+    /// when the chain of parents loops.
+    #[test]
+    fn pages_found_by_scanning_inherit_through_their_parents() {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Count 3 /MediaBox [0 0 300 200] /Rotate 90 >>",
+            "<< /Type /Pages /Parent 2 0 R /MediaBox [0 0 100 50] >>",
+            "<< /Type /Page /Parent 3 0 R /Contents [] >>",
+            "<< /Type /Page /Parent 3 0 R /Contents [] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents [] >>",
+            // Its parents loop back to each other.
+            "<< /Type /Page /Parent 8 0 R /Contents [] >>",
+            "<< /Type /Pages /Parent 9 0 R /MediaBox [0 0 70 70] >>",
+            "<< /Type /Pages /Parent 8 0 R /Rotate 180 >>",
+        ]
+        .map(str::to_string);
+        let pdf = Pdf::new(pdf_bytes(&objects)).unwrap();
+        let pages = pdf.pages();
+        let found: Vec<_> = pages
+            .iter()
+            .map(|page| (page.raw().obj_id().unwrap().obj_number, page.base_dimensions(), page.rotation() as u8))
+            .collect();
+        let (horizontal, flipped) = (Rotation::Horizontal as u8, Rotation::Flipped as u8);
+        assert_eq!(
+            found,
+            [
+                (4, (100.0, 50.0), horizontal),
+                (5, (100.0, 50.0), horizontal),
+                (6, (300.0, 200.0), horizontal),
+                (7, (70.0, 70.0), flipped)
+            ]
+        );
+    }
+
+    /// PdfCraft patch (48, storytold/pdfcraft#7608): a reference whose generation number does not
+    /// fit 32 bits still names its object (a generation is at most 65,535, ISO 32000-2 §7.5.4, so
+    /// the object number is what identifies it), so a page's content streams named that way are
+    /// part of its content, in a `/Contents` array or alone (§7.3.10).
+    #[test]
+    fn a_content_stream_named_by_a_generation_past_32_bits_is_read() {
+        for (header, contents) in [
+            ("4285904753", "[4 0 R 5 4285904753 R]"),
+            ("4285904753", "5 4285904753 R"),
+            ("0", "[4 0 R 5 4285904753 R]"),
+            ("18446744073709551616", "[4 0 R 5 18446744073709551616 R]"),
+        ] {
+            // No table, so the objects are found by scanning the file.
+            let pdf = format!(
+                "%PDF-1.4\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {contents} >> endobj\n\
+                 4 0 obj << /Length 8 >> stream\n1 0 0 rg\nendstream endobj\n\
+                 5 {header} obj << /Length 25 >> stream\n0 0 0 rg 0 0 200 100 re f\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n\
+                 %%EOF\n"
+            );
+            let pdf = Pdf::new(pdf.into_bytes()).unwrap();
+            let content = pdf.pages()[0].page_stream().map(<[u8]>::to_vec).unwrap_or_default();
+            let content = String::from_utf8_lossy(&content);
+            assert!(content.contains("0 0 0 rg 0 0 200 100 re f"), "{header} / {contents}: {content:?}");
+            assert_eq!(content.contains("1 0 0 rg"), contents.starts_with('['), "{header} / {contents}: {content:?}");
+        }
     }
 
     fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {

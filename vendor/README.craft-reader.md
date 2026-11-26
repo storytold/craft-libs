@@ -78,6 +78,20 @@ object where two objects overlap. The erase pass resolves the group's resources 
 adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the case of craft-libs
 #870, a Multiply knockout group over a yellow page.
 
+Page-tree, reference and content-array repairs, ported from PdfCraft pull requests by mtlcl410
+that were open when they were ported (craft-libs #2528). Only their `hayro-syntax` part is ported.
+Code comments keep each pull request's `PdfCraft patch` label and number, where it has one. The
+tests are in the files they name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#6498](https://github.com/storytold/pdfcraft/pull/6498) | `page.rs` | A `/Kids` entry with a `/Kids` array and no `/Type /Page` is a page-tree node, so the pages under a node without `/Type` are read (ISO 32000-2 §7.7.3.1–7.7.3.3); an untyped leaf is still a page | `page::page_tree_tests::pages_under_nodes_without_a_type_are_read_in_order` |
+| [#7391](https://github.com/storytold/pdfcraft/pull/7391) | `object/dict.rs` | Patch 51: a closing delimiter or brace between dictionary entries (`/Contents 4 0 R ) >>`) is stepped over as garbage, read or skipped (§7.3.7), so a page dictionary holding one keeps its page and the pages after it (§7.7.3) | `object::dict::tests::a_stray_delimiter_between_entries_keeps_the_dictionary`, `page::page_tree_tests::a_stray_delimiter_in_a_page_dictionary_keeps_the_page_and_the_pages_after_it` |
+| [#7500](https://github.com/storytold/pdfcraft/pull/7500) | `page.rs`, `pdf.rs` | Patch 59: a page tree whose walk reaches no page (empty `/Kids`, or a root that is its own kid) gives way to the `/Type /Page` dictionaries found by scanning (§7.7.3.1); not when the walk stepped over a kid it could not read. Pages found by scanning, here and when the root cannot be read, inherit `/MediaBox`, `/CropBox`, `/Rotate` and `/Resources` through `/Parent` (§7.7.3.3, §7.7.3.4), each node looked up once per scan | `page::page_tree_tests::a_page_tree_leading_to_no_page_gives_way_to_the_pages_found_by_scanning`, `a_tree_with_a_missing_kid_is_not_replaced_by_the_scan`, `pages_found_by_scanning_inherit_through_their_parents` |
+| [#7608](https://github.com/storytold/pdfcraft/pull/7608) | `object/ref.rs` | Patch 48: a reference whose generation number does not fit an `i32` (`58 4285904753 R`) is read with generation 0, as skipping already took it for a reference (§7.3.10, §7.5.4), so a `/Contents` array written that way keeps the streams it names | `object::r#ref::tests::a_generation_past_32_bits_reads_as_0`, `page::page_tree_tests::a_content_stream_named_by_a_generation_past_32_bits_is_read` |
+| [#7405](https://github.com/storytold/pdfcraft/pull/7405) | `xref.rs` | Patch 52: a reference `n g R`, `g` not 0, to an object the table doesn't hold by that generation reaches the member `n 0` of an object stream, whose generation is 0 (§7.5.7); an object stored on its own still needs its own generation. The `craft-pdf` side is craft-libs #1504 | `xref::tests::a_member_of_an_object_stream_is_reached_by_another_generation` |
+| [#7392](https://github.com/storytold/pdfcraft/pull/7392) | `byte_reader.rs`, `content/mod.rs` | Patch 50: the `[` of an array operand that cannot be read (one never closed) is stepped over and its items read as operands of the next operator, so the rest of the content stream is read (§7.8.2, §9.4.3). Not an array refused for its nesting, which still ends the stream; the failed arrays of one stream may read eight times its length, and at least 1 MiB | `content::tests::the_operators_after_an_unclosed_array_are_read`, `an_array_nested_past_the_cap_still_ends_the_stream`, `unclosed_arrays_share_a_bounded_recovery_budget`, `random_bracket_soup_is_read_to_the_end_without_panicking` |
+
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
 §11.6.5.2 and §10.4.2.2 give `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, where the colors as
