@@ -206,11 +206,13 @@ fn expansion_bounds_stop_small_repeat_bombs() {
         r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="1048576"><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#,
     );
     assert!(matches!(open(&cells), Err(Error::TooLarge(_))));
+    // Text limits are set small so the files stay small: 1 MiB of text over all sheets, 64 KiB a cell.
+    let tight = Options { max_text: 1 << 20, max_cell_text: 64 << 10, ..Options::default() };
     let text = format!(
-        r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="100000"><table:table-cell office:value-type="string" office:string-value="{}"/></table:table-row></table:table>"#,
+        r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="2000"><table:table-cell office:value-type="string" office:string-value="{}"/></table:table-row></table:table>"#,
         "x".repeat(1024)
     );
-    assert!(matches!(open(&ods(&text)), Err(Error::TooLarge(_))));
+    assert!(matches!(read(&ods(&text), &tight), Err(Error::TooLarge(_))));
     fn check_text_limits() {
         let defaults = Options::default();
         assert_eq!(defaults.max_text, 64 << 20);
