@@ -52,6 +52,7 @@ craft_ui::words! {
         lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
         lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
         feet_name: "units.feetName" = "Feet";
+        feet_inches_name: "units.feetInchesName" = "Feet & Inches";
         yards_name: "units.yardsName" = "Yards";
         metres_name: "units.metresName" = "Metres";
         q_name: "units.qName" = "Q";
@@ -136,6 +137,10 @@ pub enum UnitKind {
     LinesPerCentimetre,
     /// `{n} ft`.
     Feet,
+    /// `{n} ft`: the Feet & Inches unit of a document. Its numbers are feet, written and read as [`Feet`](Self::Feet)
+    /// writes and reads them; only its name differs, so a list of units can offer both and check the one a document
+    /// uses.
+    FeetInches,
     /// `{n} yd`.
     Yards,
     /// `{n} m`.
@@ -161,7 +166,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 22] = [
+    const ALL: [UnitKind; 23] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -178,6 +183,7 @@ impl UnitKind {
         UnitKind::LinesPerInch,
         UnitKind::LinesPerCentimetre,
         UnitKind::Feet,
+        UnitKind::FeetInches,
         UnitKind::Yards,
         UnitKind::Metres,
         UnitKind::Q,
@@ -192,7 +198,7 @@ impl UnitKind {
             UnitKind::Pixels | UnitKind::Minutes | UnitKind::Letters | UnitKind::Hyphens => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
             UnitKind::Q | UnitKind::Ha => 0..=2,
-            UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0..=4,
+            UnitKind::Feet | UnitKind::FeetInches | UnitKind::Yards | UnitKind::Metres => 0..=4,
             UnitKind::Times
             | UnitKind::Centimetres
             | UnitKind::Millimetres
@@ -209,7 +215,13 @@ impl UnitKind {
     /// the kind steps by the kind's rule.
     pub const fn step(self) -> f64 {
         match self {
-            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres | UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0.1,
+            UnitKind::Times
+            | UnitKind::Inches
+            | UnitKind::Centimetres
+            | UnitKind::Feet
+            | UnitKind::FeetInches
+            | UnitKind::Yards
+            | UnitKind::Metres => 0.1,
             _ => 1.0,
         }
     }
@@ -226,7 +238,7 @@ impl UnitKind {
             UnitKind::Millimetres => Some(25.4),
             UnitKind::Points => Some(points_per_inch),
             UnitKind::Picas => Some(points_per_inch / 12.0),
-            UnitKind::Feet => Some(1.0 / 12.0),
+            UnitKind::Feet | UnitKind::FeetInches => Some(1.0 / 12.0),
             UnitKind::Yards => Some(1.0 / 36.0),
             UnitKind::Metres => Some(0.0254),
             UnitKind::Q | UnitKind::Ha => Some(101.6),
@@ -422,7 +434,7 @@ impl Units {
             UnitKind::Columns => words.columns.as_str(),
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
-            UnitKind::Feet => words.feet.as_str(),
+            UnitKind::Feet | UnitKind::FeetInches => words.feet.as_str(),
             UnitKind::Yards => words.yards.as_str(),
             UnitKind::Metres => words.metres.as_str(),
             UnitKind::Q => words.q.as_str(),
@@ -452,6 +464,7 @@ impl Units {
             UnitKind::LinesPerInch => &words.lines_per_inch_name,
             UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
             UnitKind::Feet => &words.feet_name,
+            UnitKind::FeetInches => &words.feet_inches_name,
             UnitKind::Yards => &words.yards_name,
             UnitKind::Metres => &words.metres_name,
             UnitKind::Q => &words.q_name,
