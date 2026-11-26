@@ -371,23 +371,28 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
                 if gone_before + gone_after == 0 {
                     continue;
                 }
-                // The deleted characters are `[lo - gone_before, hi + gone_after)` in the text's own indices.
-                let (removed_from, removed_to) = (lo - gone_before, hi + gone_after);
-                let end = byte_of(text, removed_to);
+                // The input method deletes two stretches, not one: `[lo - gone_before, lo)` before the selection and
+                // `[hi, hi + gone_after)` after it. What lies between them is the selection itself, which the deletion
+                // leaves where it is.
+                let (before_from, after_to) = (lo - gone_before, hi + gone_after);
+                let end = byte_of(text, after_to);
                 text.replace_range(hi_byte..end, "");
-                let start = byte_of(text, removed_from);
+                let start = byte_of(text, before_from);
                 text.replace_range(start..lo_byte, "");
-                // Every place in the text after the deletion moves with it: an endpoint before the deleted range stays,
-                // one beyond it loses the characters taken, and one inside it lands where the range began. The marked
-                // text and the selection the text part keeps for it move the same way, so a composition that ends
-                // without a commit (Escape, an empty pre-edit) leaves the caret where the marked text was.
+                // A place in the text moves through both stretches: one before them stays, one in a stretch lands where
+                // that stretch began, and one beyond them loses the characters taken. Every place from `lo` to `hi`
+                // keeps its place, so the selection, and the marked text held at `lo`, still cover the same characters.
                 let shift = |at: usize| {
-                    if at <= removed_from {
+                    if at <= before_from {
                         at
-                    } else if at >= removed_to {
-                        at - (removed_to - removed_from)
+                    } else if at < lo {
+                        before_from
+                    } else if at <= hi {
+                        at - gone_before
+                    } else if at < after_to {
+                        hi - gone_before
                     } else {
-                        removed_from
+                        at - (gone_before + gone_after)
                     }
                 };
                 if let Some(preedit) = &mut state.preedit {

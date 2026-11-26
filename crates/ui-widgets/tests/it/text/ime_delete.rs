@@ -115,3 +115,27 @@ fn a_delete_after_marked_text_moves_the_selection_endpoints_beyond_it() {
     fixture.type_text("Z").settle();
     assert_eq!(*text.borrow(), "abZf", "the caret followed the deletion, so Z replaces only the \"de\" the selection still covers");
 }
+
+/// A deletion after a selection leaves the selection covering the same characters: the text the input method deletes
+/// is the stretch after it, not the selection itself.
+#[trial]
+fn a_delete_after_a_selection_leaves_the_selection_on_its_characters() {
+    let text = Rc::new(RefCell::new("abcdef".to_owned()));
+    let field = Rc::new(std::cell::Cell::new(egui::Id::NULL));
+    let (held, seen) = (text.clone(), field.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        seen.set(TextField::new("Name", Bind::bound(&mut *held.borrow_mut())).show(ui).response.id);
+    });
+    fixture.settle();
+    let name = fixture.by_label("Name").expect("the field");
+    fixture.click(&name).settle();
+    let widget = craft_ui::testing::text::widget_id(field.get(), craft_behavior::PartKey::new("text"));
+    // "cde" is selected, and the input method deletes the character after it.
+    let mut state = egui::text_edit::TextEditState::load(fixture.ctx(), widget).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(2), egui::text::CCursor::new(5))));
+    state.store(fixture.ctx(), widget);
+    fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 0, after_chars: 1 })]).settle();
+    assert_eq!(*text.borrow(), "abcde", "the character after the selection is the one deleted");
+    fixture.type_text("Z").settle();
+    assert_eq!(*text.borrow(), "abZ", "the selection still covers \"cde\", so Z replaces it");
+}
