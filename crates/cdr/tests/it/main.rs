@@ -7,3 +7,4 @@ mod cmx;
 mod cmx_write;
 mod provenance;
 mod read;
+mod write;

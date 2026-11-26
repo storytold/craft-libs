@@ -1,7 +1,7 @@
 //! Editable PSD Type Tool Object Setting (`TySh`) envelope, extracted from PhotoCraft.
 //! App-specific text styles, layout, units and editing policy stay with the consumer.
 //! Parsing intentionally retains PhotoCraft's optional-warp and partial-bounds recovery.
-//! Existing read-only [`super::TypeLayer`] behavior is unchanged.
+//! Existing read-only [`crate::text::TypeLayer`] behavior is unchanged.
 
 use crate::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D, VersionedDescriptor};
 use crate::error::{PsdError, Result};
