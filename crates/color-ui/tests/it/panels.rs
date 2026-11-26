@@ -13,6 +13,7 @@ use craft_color_ui::ui::{
 };
 use craft_host::target::Os;
 use craft_theme::{ColorModel as _, HsbModel, Srgba};
+use craft_ui::buttons::Button;
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
@@ -360,6 +361,7 @@ struct PaletteReports {
     edits: Vec<EditEvent<Srgba>>,
     requests: Vec<ColorRequest>,
     picked: Vec<Srgba>,
+    swatches: Vec<usize>,
 }
 
 type Reports = Rc<RefCell<PaletteReports>>;
@@ -370,6 +372,7 @@ fn collect(reports: &Reports, shown: craft_color_ui::ui::SwatchPaletteOutput) {
     reports.edits.extend(shown.edit);
     reports.requests.extend(shown.pick_color);
     reports.picked.extend(shown.picked);
+    reports.swatches.extend(shown.picked_swatch);
 }
 
 fn palette_swatches() -> Vec<(Label, Srgba)> {
@@ -417,7 +420,7 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
     let recent = fixture.by_label(&RECENT[0].to_hex()).expect("a recent colour is named by its hex");
     fixture.click(&recent).settle();
     let taken = std::mem::take(&mut *reports.borrow_mut());
-    assert!(taken.requests.is_empty(), "a recent pick files no request");
+    assert!(taken.requests.is_empty() && taken.swatches.is_empty(), "a recent pick is not a palette entry");
     assert_eq!(taken.edits.len(), 1, "one edit for one recent pick");
     assert!(
         matches!(&taken.edits[0], EditEvent::Set { before: Mixed::Same(before), after, .. }
@@ -438,6 +441,47 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
     let taken = std::mem::take(&mut *reports.borrow_mut());
     assert!(taken.edits.is_empty(), "a click on the bound colour changes nothing: {:?}", taken.edits);
     assert_eq!(taken.picked.iter().map(|c| c.to_rgba()).collect::<Vec<_>>(), [swatch("Violet").to_rgba()], "and still reports the pick");
+}
+
+#[trial]
+fn a_palette_reports_the_actual_swatch_when_its_color_matches_the_bound_color() {
+    let color = swatch("Green");
+    let swatches = [(Label::from("First green"), color), (Label::from("Second green"), color), (Label::from("Third green"), color)];
+    let selected = Rc::new(Cell::new(2));
+    let preferred = Rc::clone(&selected);
+    let reports = Reports::default();
+    let out = reports.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        collect(&out, SwatchPalette::new("Swatches", Bind::given(color), &swatches).selected_swatch(Some(preferred.get())).show(ui));
+        let _ = Button::new("Next control").show(ui);
+    });
+    fixture.room(PALETTE_WIDE).settle();
+    let third = fixture.by_label("Third green").expect("the linked entry");
+    assert_eq!(fixture.tree().selected_of(third.node), Some(true), "the linked entry stays selected");
+    let second = fixture.by_label("Second green").expect("the second entry");
+    fixture.hold(Modifiers::SHIFT).click(&second).hold(Modifiers::NONE).settle();
+    let click = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(click.swatches, [1]);
+    assert_eq!(click.picked.iter().map(|picked| picked.to_rgba()).collect::<Vec<_>>(), [color.to_rgba()]);
+    assert!(click.edits.is_empty(), "the color binding has not changed");
+
+    fixture.key(Key::ArrowRight, Modifiers::NONE).key(Key::Space, Modifiers::NONE).settle();
+    let keys = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(keys.swatches, [2], "Space picks the already selected swatch");
+    assert!(keys.edits.is_empty());
+
+    let focused = |fixture: &Fixture| {
+        let tree = fixture.tree();
+        tree.name_of(craft_ui::testing::access::focused_key(tree)).map(str::to_owned)
+    };
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(focused(&fixture).as_deref(), Some("Next control"));
+    selected.set(0);
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::SHIFT).settle();
+    assert_eq!(focused(&fixture).as_deref(), Some("First green"));
+    fixture.key(Key::Space, Modifiers::NONE).settle();
+    assert_eq!(reports.borrow().swatches, [0], "Tab returns to the host's current swatch");
 }
 
 /// The FillStroke layout shows its Recent Colors caption while the host's list is empty, as it does with colors in
