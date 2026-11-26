@@ -314,3 +314,18 @@ fn a_long_data_table_name_stays_inside_the_chart() {
     assert!(rect[0] >= 0.0, "the name starts inside the chart: {rect:?}");
     assert!(name.ends_with('…'), "the name is cut short: {name}");
 }
+
+/// A legend placed by hand (`c:manualLayout`, edge mode) is drawn where the file puts it, over
+/// the chart, rather than in its automatic place.
+#[test]
+fn a_legend_placed_by_hand_is_drawn_where_the_file_puts_it() {
+    let legend = r#"<c:legend><c:legendPos val="b"/><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.1"/><c:y val="0.1"/><c:w val="0.4"/><c:h val="0.1"/></c:manualLayout></c:layout></c:legend>"#;
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>{legend}"#,
+        ser(0, "Sales", None, &["A", "B"], &["1", "2"]),
+    );
+    let texts = chart_texts(&chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0));
+    let (_, r, _) = texts.iter().find(|(t, _, _)| t == "Sales").expect("legend entry");
+    assert!(r[1] >= 18.0 && r[1] + r[3] <= 42.0, "inside the box 20..40 pt down: {r:?}");
+    assert!(r[0] >= 30.0 && r[0] + r[2] <= 150.0, "inside the box 30..150 pt across: {r:?}");
+}

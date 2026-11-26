@@ -100,7 +100,17 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
         if reverse {
             entries.reverse();
         }
-        area = legend(&mut out, &entries, pos, area, chart.text_size, (chart.legend_colour, chart.legend_bold));
+        let style = (chart.legend_colour, chart.legend_bold);
+        match chart.legend_box {
+            // Placed by hand: drawn in its box over the chart, taking no room from the plot.
+            Some([x, y, bw, bh]) => {
+                let (bx, by) = (x * w, y * h);
+                let bw = if bw > 0.0 { bw * w } else { (w - bx - PAD).max(1.0) };
+                let bh = if bh > 0.0 { bh * h } else { chart.text_size * LINE };
+                legend(&mut out, &entries, Pos::Top, Rect { x: bx, y: by, w: bw, h: bh }, chart.text_size, style);
+            }
+            None => area = legend(&mut out, &entries, pos, area, chart.text_size, style),
+        }
     }
     match chart.kind {
         Kind::Pie | Kind::Doughnut => pie(&mut out, &chart, area),
@@ -252,6 +262,8 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// Where the file puts the legend by hand: x, y, width, height as shares of the chart.
+    legend_box: Option<[f32; 4]>,
     /// The data table under the plot, when the file shows one.
     data_table: Option<DataTable>,
     /// Bold title, legend and other text, as their text properties say (a title is bold by

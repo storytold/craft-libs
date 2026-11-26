@@ -120,6 +120,7 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            legend_box: legend_el.and_then(manual_layout),
             data_table,
             title_bold: title_el.and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true),
             title_size: title_el.and_then(element_size).unwrap_or(TITLE_SIZE),
@@ -519,6 +520,21 @@ pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
             Some((title_text(l).unwrap_or_else(|| name.to_string()), element_text_colour(l, theme), element_bold(l).unwrap_or(false)))
         }),
     }
+}
+
+/// A chart element's hand-set place (`c:layout/c:manualLayout` in edge mode): x, y, width and
+/// height as shares of the chart (0 when the file gives none). Other modes (`factor`, a shift
+/// from the automatic place) are left to the automatic layout.
+fn manual_layout(e: &El) -> Option<[f32; 4]> {
+    let m = e.child("c:layout")?.child("c:manualLayout")?;
+    let edge = |n: &str| m.child(n).and_then(|e| e.attr("val")) == Some("edge");
+    if !edge("c:xMode") || !edge("c:yMode") {
+        return None;
+    }
+    let share = |n: &str| {
+        m.child(n).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
+    };
+    Some([share("c:x")?, share("c:y")?, share("c:w").unwrap_or(0.0), share("c:h").unwrap_or(0.0)])
 }
 
 /// A built-in display unit (`c:builtInUnit`): what it divides by, and its label.
