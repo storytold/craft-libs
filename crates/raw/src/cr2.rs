@@ -276,20 +276,29 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let widths: Vec<usize> = match &slices {
         Some(s) => {
             let n = s[0].min(64) as usize;
-            let mut v = vec![s[1] as usize; n];
-            v.push(s[2] as usize);
+            let (Some(w0), Some(w1)) = (usize::try_from(s[1]).ok(), usize::try_from(s[2]).ok()) else {
+                return Err(RawError::Corrupt("CR2 slice width exceeds address space".into()));
+            };
+            let mut v = vec![w0; n];
+            v.push(w1);
             v
         }
         None => {
-            let w = (fw as u64).checked_mul(nc as u64).ok_or_else(|| RawError::Corrupt("bad CR2 frame size".into()))?;
-            vec![w as usize]
+            let w = (fw as u64)
+                .checked_mul(nc as u64)
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| RawError::Corrupt("bad CR2 frame size".into()))?;
+            vec![w]
         }
     };
-    let width: usize = widths.iter().sum();
+    let width: usize = widths.iter().try_fold(0usize, |acc, &w| acc.checked_add(w)).ok_or(RawError::Limit("CR2 slice widths overflow"))?;
     if width == 0 || total % width != 0 {
         return Err(RawError::Corrupt(format!("CR2 slices ({width}) do not divide the frame ({total} samples)")));
     }
     let height = total / width;
+    if width > u32::MAX as usize || height > u32::MAX as usize {
+        return Err(RawError::Limit("CR2 dimensions exceed u32::MAX"));
+    }
     let mut data = Vec::new();
     if let Some(frame) = &frame {
         data = vec![0u16; total];
@@ -297,7 +306,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         let mut x0 = 0;
         for &sw in &widths {
             for y in 0..height {
-                data[y * width + x0..y * width + x0 + sw].copy_from_slice(&frame.data[i..i + sw]);
+                let row_start = y.checked_mul(width).and_then(|s| s.checked_add(x0)).ok_or(RawError::Limit("CR2 row index overflow"))?;
+                let row_end = row_start.checked_add(sw).ok_or(RawError::Limit("CR2 row index overflow"))?;
+                data[row_start..row_end].copy_from_slice(&frame.data[i..i + sw]);
                 i += sw;
             }
             x0 += sw;
@@ -312,13 +323,28 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let mut active = Rect::new(0, 0, width, height);
     let mut crop = Rect::new(0, 0, width, height);
     if let Some(si) = mn.as_ref().and_then(|m| m.ifd.u64s(SENSOR_INFO)).filter(|v| v.len() >= 9) {
-        let (l, tp, r, b) = (si[5] as usize, si[6] as usize, si[7] as usize, si[8] as usize);
-        if r > l && b > tp && r < width && b < height {
-            active = Rect::new(l, tp, r - l + 1, b - tp + 1);
-            // `AspectInfo` is measured from the image area's origin, so it only applies when that area is known.
-            let image = Rect::new(0, 0, active.width, active.height);
-            crop = crate::shared::aspect_crop(mn.as_ref().map(|m| &m.ifd), image).unwrap_or(image);
+        let coords = [si[5], si[6], si[7], si[8]].map(|v| usize::try_from(v).ok());
+        if let [Some(l), Some(tp), Some(r), Some(b)] = coords
+            && r > l
+            && b > tp
+            && r < width
+            && b < height
+        {
+            let cw = r - l + 1;
+            let ch = b - tp + 1;
+            if cw <= width - l && ch <= height - tp {
+                active = Rect::new(l, tp, cw, ch);
+                // `AspectInfo` is measured from the image area's origin, so it only applies when that area is known.
+                let image = Rect::new(0, 0, active.width, active.height);
+                crop = crate::shared::aspect_crop(mn.as_ref().map(|m| &m.ifd), image).unwrap_or(image);
+            }
         }
+    }
+    if active.width == 0 || active.height == 0 {
+        active = Rect::new(0, 0, width, height);
+    }
+    if crop.width == 0 || crop.height == 0 {
+        crop = Rect::new(0, 0, active.width, active.height);
     }
     let color_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
     let kelvin_presets = color_data.as_deref().and_then(kelvin_presets_from_color_data);
@@ -866,5 +892,24 @@ pub(crate) mod tests {
         let aspect = [0u32, 32, 8, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
         let image = decode_with_note(&[(crate::shared::ASPECT_INFO, 4, aspect)]);
         assert_eq!((image.active_area, image.crop), (Rect::new(0, 0, 64, 10), Rect::new(0, 0, 64, 10)));
+    }
+
+    /// Active sensor area dimensions that are missing, zero-sized or inverted fall back to the full sensor frame.
+    #[test]
+    fn active_area_fallback_on_missing_or_corrupt_sensor_info() {
+        let (w, h) = (68, 50);
+        // Zero-sized: right == left
+        let si_zero: Vec<u8> = [68u16, 50, 0, 0, 0, 4, 2, 4, 49].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let img = decode_sized_with_note(w, h, &[(SENSOR_INFO, 3, si_zero)]);
+        assert_eq!((img.active_area, img.crop), (Rect::new(0, 0, w, h), Rect::new(0, 0, w, h)));
+
+        // Inverted borders: right < left
+        let si_inv: Vec<u8> = [68u16, 50, 0, 0, 0, 10, 2, 4, 49].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let img = decode_sized_with_note(w, h, &[(SENSOR_INFO, 3, si_inv)]);
+        assert_eq!((img.active_area, img.crop), (Rect::new(0, 0, w, h), Rect::new(0, 0, w, h)));
+
+        // Without SensorInfo: falls back to full sensor frame
+        let img = decode_sized_with_note(w, h, &[]);
+        assert_eq!((img.active_area, img.crop), (Rect::new(0, 0, w, h), Rect::new(0, 0, w, h)));
     }
 }
