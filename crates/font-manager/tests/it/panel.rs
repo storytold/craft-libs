@@ -193,11 +193,11 @@ impl Rig {
         self.panel.borrow().installed().iter().any(|f| f.name == family)
     }
 
-    /// Opens the details of the card named `family`: the card takes the focus, Enter opens it.
+    /// Opens the details of the card named `family` with a click.
     fn open(&mut self, family: &str) {
         let card = self.named(Role::LIST_ITEM, family);
         self.fx.click_at(Pos2::new(card.rect.left() + 4.0, card.rect.top() + 4.0));
-        self.key(Key::Enter);
+        self.fx.settle();
         assert_eq!(self.panel.borrow().details_family().as_deref(), Some(family));
     }
 }
@@ -333,6 +333,20 @@ fn each_family_keeps_its_system_fonts_choice_across_starts() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("panel").join("os-choice");
     let again = start(&root, rig.store.clone(), Arc::new(MemorySections::default()), Arc::new(InlineJobs));
     assert_eq!(again.store.calls().len(), 2);
+}
+
+/// A single click on a card's name area opens its details; a click on its Install control does only its own thing.
+#[trial]
+fn a_single_click_on_a_card_opens_its_details() {
+    let mut rig = setup("card-click");
+    rig.allow();
+    rig.type_into("Search", "Hack");
+    rig.click("Install");
+    assert_eq!(rig.panel.borrow().details_family(), None, "a press on a card's control opens no details");
+    let card = rig.named(Role::LIST_ITEM, "Hack");
+    rig.fx.click_at(Pos2::new(card.rect.left() + 4.0, card.rect.top() + 4.0));
+    rig.fx.settle();
+    assert_eq!(rig.panel.borrow().details_family().as_deref(), Some("Hack"));
 }
 
 /// A card's Install menu installs for the choice picked, and the press on it opens no details.
