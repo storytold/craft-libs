@@ -39,7 +39,7 @@ const MONTH: u64 = 30 * DAY;
 const YEAR: u64 = 365 * DAY;
 
 /// From this age on a list column shows the date instead: seven days. The caller writes the date
-/// with [`DateFormat`](crate::DateFormat):
+/// with `DateFormat` (feature `dates`):
 ///
 /// ```ignore
 /// let text = if age < AGE_SHOWN_AS_DATE { relative_age(&words, &format, age, AgeStyle::Short) }

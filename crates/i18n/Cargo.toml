@@ -15,18 +15,18 @@ icu_decimal = { version = "~2.4", default-features = false, features = ["serde"]
 icu_locale_core = { version = "~2.4", default-features = false }
 icu_locale_fallback = { version = "~2.4", default-features = false, features = ["compiled_data"] }
 icu_plurals = { version = "~2.4", default-features = false, features = ["serde"] }
-# Dates: Gregorian formatting and week data on CLDR data (data/dates.postcard), same minor version.
-icu_calendar = { version = "~2.4", default-features = false }
-icu_datetime = { version = "~2.4", default-features = false, features = ["serde"] }
-icu_time = { version = "~2.4", default-features = false }
+# Dates (feature `dates`): Gregorian formatting and week data on CLDR data (data/dates.postcard), same minor version.
+icu_calendar = { version = "~2.4", default-features = false, optional = true }
+icu_datetime = { version = "~2.4", default-features = false, features = ["serde"], optional = true }
+icu_time = { version = "~2.4", default-features = false, optional = true }
 icu_provider = { version = "~2.4", default-features = false, features = ["sync"] }
 icu_provider_adapters = { version = "~2.4", default-features = false }
 icu_provider_blob = { version = "~2.4", default-features = false }
 writeable = "0.6"
 log = "0.4"
 sys-locale = "0.3"
-# The system's UTC offset at a moment (`DateTime::from_unix` with `TimeZone::Local`).
-chrono = { workspace = true, features = ["clock"] }
+# Dates (feature `dates`): the civil calendar for the 400-year range extension; its system zone gives the local offset (feature `local-time`).
+jiff = { workspace = true, optional = true }
 icu_normalizer = "~2.4"
 icu_properties = "~2.4"
 # Generated data fits one ICU4X minor version; data/generate-collation.sh names its datagen.
@@ -35,8 +35,8 @@ unicode-bidi = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sys-locale = { version = "0.3", features = ["js"] }
-# The browser's `Date` supplies the local offset.
-chrono = { workspace = true, features = ["clock", "wasmbind"] }
+# The browser's `Date` supplies the local offset (feature `local-time`).
+js-sys = { version = "0.3", optional = true }
 
 # The regional format (Region::system); safe registry reads, MIT OR Apache-2.0.
 [target.'cfg(windows)'.dependencies]
@@ -47,6 +47,13 @@ windows-registry = "0.6"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDateFormatter", "NSFormatter", "NSLocale", "NSString"] }
 
 [features]
+default = ["dates", "local-time"]
+# Dates and times (`DateFormat`, `CalendarDate`, `DateTime`, `utc_stamp`): ICU4X's date formatting on the CLDR data of
+# data/dates.postcard (about 427 KB) and jiff's civil types. Without it the crate has no date code and no date data.
+dates = ["dep:icu_calendar", "dep:icu_datetime", "dep:icu_time", "dep:jiff"]
+# The system's UTC offset for `TimeZone::Local`: jiff's system zone (the system's tz database; on Windows the one jiff bundles),
+# the browser's `Date` on wasm. Without it `TimeZone::Local` reads as UTC and nothing here reads the system's clock settings.
+local-time = ["dates", "jiff/tz-system", "jiff/tzdb-zoneinfo", "jiff/tzdb-concatenated", "jiff/tzdb-bundle-platform", "dep:js-sys"]
 # Locale sorting (`collate`), with ICU4X collation data for the suite's locales embedded.
 collate = ["dep:icu_collator", "icu_provider/serde", "icu_provider_blob/alloc"]
 

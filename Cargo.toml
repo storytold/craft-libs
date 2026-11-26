@@ -290,6 +290,9 @@ proptest = "1"
 encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# craft-i18n's dates (its `dates` feature) use jiff's civil types for the 400-year range extension and, with `local-time`, the system's zone. Only the civil
+# types by default: no time zone database and no system clock unless a crate asks for them.
+jiff = { version = "1", default-features = false, features = ["std"] }
 # Foundation crates for craft-gpu-wgpu. The versions match the ones the app repos already pin.
 pollster = "0.4"
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }

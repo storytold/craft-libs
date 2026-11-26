@@ -126,7 +126,15 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   fall back to English forms and ISO dates (a test of the data fails then). The ICU4X code and the
   number data add about 90 KB to a stripped release build and 80 KB to wasm; the date data is
   extra.
-- **Dates:** `DateFormat` (`I18n::dates`, `set_dates`, `reset_dates`, as `I18n::format` is for
+- **Features:** `dates` and `local-time` are on by default. `dates` is everything below under
+  Dates: ICU4X's date formatting and `data/dates.postcard` (about 427 KB), with jiff's civil types
+  for the 400-year range extension (no time zone database and no system clock: only `jiff`'s
+  `std`); `default-features = false` leaves it, and the date data, out. `local-time` (which
+  implies `dates`) reads the system's UTC offset for `TimeZone::Local`: jiff's system zone, on the
+  system's tz database (on Windows the one jiff bundles), and the browser's `Date` on wasm; without
+  it `TimeZone::Local` reads as UTC. `collate` is off by default (Sorting, below). Dates went from
+  `chrono` to `jiff` with these features: no `chrono` is in this crate's tree.
+- **Dates** (feature `dates`): `DateFormat` (`I18n::dates`, `set_dates`, `reset_dates`, as `I18n::format` is for
   numbers) writes dates and times for the region's time locale and clock in the `Short`, `Medium`,
   `Long` and `Full` lengths, month and weekday names (`NameLength`), the first day of the week and
   `parse_date` for typed dates; `CalendarDate` and `DateTime` do the day arithmetic. Dates are

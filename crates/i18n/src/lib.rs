@@ -15,6 +15,7 @@ mod age;
 mod catalog;
 #[cfg(feature = "collate")]
 mod collate;
+#[cfg(feature = "dates")]
 mod date;
 mod fold;
 mod format;
@@ -61,6 +62,7 @@ mod data {
 
     /// The date, time, name and week data (with the digits they use), read once; `None` if the
     /// blob doesn't load.
+    #[cfg(feature = "dates")]
     pub(crate) fn dates_provider() -> Option<&'static LocaleFallbackProvider<BlobDataProvider>> {
         static PROVIDER: OnceLock<Option<LocaleFallbackProvider<BlobDataProvider>>> = OnceLock::new();
         PROVIDER
@@ -82,6 +84,7 @@ use icu_plurals::{PluralCategory, PluralOperands, PluralRules};
 pub use age::{AGE_SHOWN_AS_DATE, AgeStyle, relative_age};
 #[cfg(feature = "collate")]
 pub use collate::Collator;
+#[cfg(feature = "dates")]
 pub use date::{
     CalendarDate, CalendarKind, DateFormat, DateLength, DateStyle, DateTime, LocalDate, NameLength, TimePrecision, TimeZone, Weekday, utc_stamp,
 };
@@ -235,7 +238,8 @@ pub struct I18n {
     system: OnceLock<Lang>,
     /// [`I18n::format`]; the system region's until [`I18n::set_format`].
     format: RwLock<Option<Arc<Format>>>,
-    /// [`I18n::dates`]; the system region's until [`I18n::set_dates`].
+    /// `I18n::dates`; the system region's until `I18n::set_dates`.
+    #[cfg(feature = "dates")]
     dates: RwLock<Option<Arc<DateFormat>>>,
 }
 
@@ -290,7 +294,15 @@ impl I18n {
                 l.chain = chain;
             }
         }
-        (I18n { locales, pseudo: Mutex::default(), system: OnceLock::new(), format: RwLock::default(), dates: RwLock::default() }, problems)
+        let i18n = I18n {
+            locales,
+            pseudo: Mutex::default(),
+            system: OnceLock::new(),
+            format: RwLock::default(),
+            #[cfg(feature = "dates")]
+            dates: RwLock::default(),
+        };
+        (i18n, problems)
     }
 
     /// Parse every locale and list every problem, `<locale>/<common|app>: line N: …`, for a test or
@@ -528,6 +540,7 @@ impl I18n {
     /// so the two cannot differ.
     pub fn set_region(&self, region: &Region, digits: Digits) {
         self.set_format(Format::new(region, digits));
+        #[cfg(feature = "dates")]
         self.set_dates(DateFormat::new(region).with_digits(digits));
     }
 
