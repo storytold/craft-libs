@@ -4,4 +4,5 @@ pub(crate) mod elide;
 pub(crate) mod faces;
 pub(crate) mod levelled;
 pub(crate) mod measure;
+pub(crate) mod paint_container;
 pub(crate) mod state_looks;

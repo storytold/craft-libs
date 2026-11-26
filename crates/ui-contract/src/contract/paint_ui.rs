@@ -3,7 +3,7 @@
 
 use super::label::{self, LeafLabel};
 use super::run::{self, FaceSource, ShowAt};
-use super::{ContentPainter, Cx, Show, TipFn};
+use super::{BodyCx, ContentPainter, Cx, Inner, Show, ShowContainer, TipFn};
 use super::{InsideLabel, SideLabel};
 use crate::primitives::sensing::PartResults;
 use crate::primitives::text_adapter;
@@ -178,9 +178,30 @@ impl PaintUi<'_> {
         })
     }
 
+    /// Shows a container component with its `body` at a physical rect, with id `cx.key(key)`: the container runs as
+    /// [`ShowContainer::show_at`] runs it, so a body function written for an egui `Ui` (a field group of labelled
+    /// fields) serves a composite that paints through `PaintUi` too. The container's `Ui` is pinned left to right, as
+    /// [`child`](Self::child)'s is.
+    pub fn container<C: ShowContainer, R>(
+        &mut self,
+        key: impl Hash + Debug,
+        rect: Rect,
+        container: C,
+        body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    ) -> Inner<C::Output, R> {
+        let id = self.id.with(key);
+        self.in_kids(None, |kids| super::Props::id(container, id).show_at(kids, rect, body))
+    }
+
     /// Shows `child` at `rect` under the composite's `enabled` and `size`, and `inside`, the inside label of the side
     /// label the child is the control of.
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
+        self.in_kids(inside, |kids| run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip))
+    }
+
+    /// Runs `show` in the children's `Ui` under the composite's `enabled` and `size`, and `inside`, the inside label
+    /// of the side label the child is the control of.
+    fn in_kids<R>(&mut self, inside: Option<Arc<InsideLabel>>, show: impl FnOnce(&mut Ui) -> R) -> R {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
         // The kids' `Ui` holds no entry of its own: they inherit the env of the composite's `Ui`.
@@ -204,7 +225,7 @@ impl PaintUi<'_> {
         let installed = Env::install_for(kids, env);
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
-        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip));
+        let output = layout_memory::boundary(&ctx, true, || show(kids));
         Env::restore(&ctx, installed);
         output
     }
