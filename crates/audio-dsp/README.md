@@ -35,6 +35,11 @@ and contains no `unsafe` code.
 - `biquad` and `design`: biquad filters with their magnitude response, and IIR filter design from
   Butterworth, Bessel, Chebyshev and elliptic prototypes.
 
+`noise_suppression` estimates the noise floor from minimum spectral power over 1.5 s. Its gain
+floor moves from 0 dB toward the attenuation set by `reduction` during the first search window
+of sound. Continuous voiced or tonal audio present from startup can enter the noise estimate
+and be attenuated afterward.
+
 ## Conventions
 
 Audio is planar `f32`: one slice per channel, all the same length. `AudioEffect::process`,
