@@ -8,12 +8,13 @@
 //!   sample type, over the part's data window. Every compression the `exr` crate reads is read,
 //!   scan lines and tiles alike (the largest resolution level). Other parts' chunks are skipped
 //!   unread, and channels the filter drops are never allocated. Other parts may be deep.
-//! - [`write`] writes one scan-line part.
+//! - [`fn@write`] writes one scan-line part.
 //!
 //! The `exr` crate sizes buffers from headers before it reads pixels, so everything that reaches
 //! it is checked first: preview attributes against their own size, each part's samples against
-//! [`Limits`], all parts together against the budget, and the samples against what a file of
-//! this size can decompress to.
+//! [`Limits`], all parts together against the budget, the samples against what a file of this
+//! size can decompress to, and the packed length of each chunk of the part being read against the
+//! rest of the file and the budget.
 
 use std::io::Cursor;
 
@@ -44,7 +45,7 @@ pub enum Error {
     /// The file declares more than [`Limits`] allow.
     #[error("OpenEXR exceeds a limit: {0}")]
     LimitExceeded(String),
-    /// The picture handed to [`write`] cannot be stored.
+    /// The picture handed to [`fn@write`] cannot be stored.
     #[error("OpenEXR: cannot write: {0}")]
     Encode(String),
 }
@@ -115,13 +116,7 @@ impl Limits {
     }
 }
 
-/// How a channel's samples are stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SampleType {
-    F16,
-    F32,
-    U32,
-}
+pub use crate::SampleType;
 
 impl SampleType {
     pub(crate) fn of(t: ExrSample) -> Self {
@@ -462,7 +457,11 @@ pub fn decode_display_part(
     if pixels > limits.max_pixels {
         return Err(Error::LimitExceeded(format!("display window of {pixels} pixels exceeds {}", limits.max_pixels)));
     }
-    let kept = info.channels.iter().filter(|channel| keep(&part_channel_name(info.name.as_deref(), &channel.name))).count();
+    let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
+    let prefix = header.own_attributes.layer_name.as_ref().map(|name| name.to_string()).filter(|name| !name.is_empty());
+    let kept_names = kept_channel_names(header, prefix.as_deref(), keep);
+    let kept =
+        header.channels.list.iter().filter(|channel| kept_names.contains(&part_channel_name(prefix.as_deref(), &channel.name.to_string()))).count();
     let bytes_needed = pixels
         .checked_mul(4)
         .and_then(|bytes_per_channel| bytes_per_channel.checked_mul(kept as u64))
@@ -470,16 +469,18 @@ pub fn decode_display_part(
     if bytes_needed > limits.max_bytes || usize::try_from(bytes_needed).is_err() {
         return Err(Error::LimitExceeded(format!("{bytes_needed} display-window bytes exceed {}", limits.max_bytes)));
     }
+    let recorded = |name: &str| kept_names.contains(name);
+    let keep: &dyn Fn(&str) -> bool = &recorded;
     let block_limit = std::cell::Cell::new(None);
     let select = DisplaySelect { index, keep, fill, limits, seen: std::cell::Cell::new(0), block_limit: &block_limit };
     let exr_error = |error| block_limit.take().map(Error::LimitExceeded).unwrap_or_else(|| map_exr(error));
     let planes = if meta.headers.iter().any(|header| header.deep) {
-        let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
         select.seen.set(index);
         let mut reader = select.create_channels_reader(header).map_err(exr_error)?;
         read_flat_part_chunks(bytes, &meta, index, &mut reader, limits)?;
         reader.into_channels()
     } else {
+        check_flat_packed_lengths(bytes, &meta, index, kept > 0, limits)?;
         ReadImage::new(ReadAllLayers { read_channels: select }, |_| {})
             .from_buffered(Cursor::new(bytes))
             .map_err(exr_error)?
@@ -828,6 +829,104 @@ pub(super) fn flat_block_ordinal(header: &Header, tile: TileCoordinates) -> Resu
     Err(malformed("flat tile names a missing level"))
 }
 
+/// Part `index`'s offset table (one `u64` per chunk) and where the last offset table ends. The
+/// tables follow the headers, one per part in header order, and must all lie inside the file.
+fn part_offset_table<'a>(bytes: &'a [u8], meta: &MetaData, index: usize) -> Result<(&'a [u8], u64)> {
+    let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
+    let truncated = || malformed("the offset tables run past the end of the file");
+    let (mut table, mut tables_end) = (0u64, tables_start(bytes)?);
+    for (i, h) in meta.headers.iter().enumerate() {
+        if i == index {
+            table = tables_end;
+        }
+        let len = u64::try_from(h.chunk_count).ok().and_then(|n| n.checked_mul(8)).ok_or_else(truncated)?;
+        tables_end = tables_end.checked_add(len).filter(|end| *end <= bytes.len() as u64).ok_or_else(truncated)?;
+    }
+    let offsets = usize::try_from(table)
+        .ok()
+        .and_then(|start| bytes.get(start..start.checked_add(header.chunk_count.checked_mul(8)?)?))
+        .ok_or_else(truncated)?;
+    Ok((offsets, tables_end))
+}
+
+/// The bytes from `offset` to the end of the file, and the packed length the flat chunk there
+/// declares. The chunk must start past the last offset table and inside the file, carry part
+/// number `index` in a multipart file, and declare no more bytes than the file has left after its
+/// length field.
+fn flat_chunk_at<'a>(bytes: &'a [u8], header: &Header, multipart: bool, index: usize, offset: u64, tables_end: u64) -> Result<(&'a [u8], usize)> {
+    let chunk = usize::try_from(offset)
+        .ok()
+        .filter(|_| offset >= tables_end)
+        .and_then(|start| bytes.get(start..))
+        .filter(|rest| !rest.is_empty())
+        .ok_or_else(|| malformed(format!("chunk offset {offset} is outside the chunk area of the file")))?;
+    if multipart {
+        let part = chunk.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
+        let part = part.ok_or_else(|| malformed(format!("the chunk at offset {offset} is cut off")))?;
+        if usize::try_from(part).ok() != Some(index) {
+            return Err(malformed(format!("the chunk at offset {offset} belongs to part {part}, not part {index}")));
+        }
+    }
+    // The crate allocates a chunk's declared payload before it reads it, so the payload must
+    // fit in the rest of the file. The length follows the part number and the block's y, or
+    // its four tile coordinates.
+    let fields = if matches!(header.blocks, exr::meta::BlockDescription::Tiles(_)) { 16 } else { 4 };
+    let size_at = if multipart { 4 } else { 0 } + fields;
+    let size = chunk.get(size_at..size_at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
+    let size = size.ok_or_else(|| malformed(format!("the chunk at offset {offset} is cut off")))?;
+    let left = chunk.len() - (size_at + 4);
+    if usize::try_from(size).is_ok_and(|size| size > left) {
+        return Err(malformed(format!("the chunk at offset {offset} declares {size} bytes, but {left} remain in the file")));
+    }
+    let size = usize::try_from(size).map_err(|_| malformed("negative packed chunk length"))?;
+    Ok((chunk, size))
+}
+
+/// The names of `header`'s channels that `keep` accepts, named as the channel readers name them
+/// (behind `prefix`, the part's name, when there is one). `keep` is asked once per channel, and
+/// the readers and the packed-length check use this one answer.
+fn kept_channel_names(header: &Header, prefix: Option<&str>, keep: &dyn Fn(&str) -> bool) -> std::collections::HashSet<String> {
+    let names = header.channels.list.iter().map(|channel| part_channel_name(prefix, &channel.name.to_string()));
+    names.filter(|name| keep(name)).collect()
+}
+
+/// Checks every chunk of flat part `index` before the `exr` crate's image reader reads the part.
+/// That reader reserves a chunk's declared packed length, up to the part's nominal block size,
+/// before it reads the payload, so each chunk is checked as [`flat_chunk_at`] describes. The
+/// reader picks the chunks it reads by their place in the offset table, which follows the
+/// part's blocks in increasing y order, and reads only the blocks of the largest resolution
+/// level, and none when the decode keeps no channel (`reads_any` false). The packed length of
+/// each chunk the reader reads must also fit in [`Limits::max_bytes`].
+///
+/// The table has one entry per block (`header.chunk_count`). Every block of a scan-line part is
+/// at the largest level. In a tiled part the largest level's tiles come first, so an entry is at
+/// that level when its place is below that level's tile count. The check works from these counts
+/// and does not list the blocks, so its memory does not grow with the size of the offset table.
+fn check_flat_packed_lengths(bytes: &[u8], meta: &MetaData, index: usize, reads_any: bool, limits: &Limits) -> Result<()> {
+    let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
+    let multipart = meta.requirements.is_multilayer();
+    let (offsets, tables_end) = part_offset_table(bytes, meta, index)?;
+    let largest_level_blocks = match &header.blocks {
+        exr::meta::BlockDescription::Tiles(tiles) => {
+            let (tile_w, tile_h) = (tiles.tile_size.width(), tiles.tile_size.height());
+            if tile_w == 0 || tile_h == 0 {
+                return Err(malformed("flat block has a zero dimension"));
+            }
+            header.layer_size.width().div_ceil(tile_w).saturating_mul(header.layer_size.height().div_ceil(tile_h))
+        }
+        exr::meta::BlockDescription::ScanLines => header.chunk_count,
+    };
+    let read_count = if reads_any { largest_level_blocks } else { 0 };
+    for (place, &entry) in offsets.as_chunks::<8>().0.iter().enumerate() {
+        let (_, size) = flat_chunk_at(bytes, header, multipart, index, u64::from_le_bytes(entry), tables_end)?;
+        let read = place < read_count;
+        if read && size as u64 > limits.max_bytes {
+            return Err(Error::LimitExceeded("packed flat block exceeds the byte budget".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Reads the chunks of flat part `index` of a file that also holds deep parts into `reader`.
 ///
 /// The `exr` crate's image reader validates every header before it reads a chunk and refuses
@@ -845,19 +944,7 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
     for flat in meta.headers.iter().filter(|h| !h.deep) {
         flat.validate(multipart, &mut long_names, false).map_err(map_exr)?;
     }
-    let truncated = || malformed("the offset tables run past the end of the file");
-    let (mut table, mut tables_end) = (0u64, tables_start(bytes)?);
-    for (i, h) in meta.headers.iter().enumerate() {
-        if i == index {
-            table = tables_end;
-        }
-        let len = u64::try_from(h.chunk_count).ok().and_then(|n| n.checked_mul(8)).ok_or_else(truncated)?;
-        tables_end = tables_end.checked_add(len).filter(|end| *end <= bytes.len() as u64).ok_or_else(truncated)?;
-    }
-    let offsets = usize::try_from(table)
-        .ok()
-        .and_then(|start| bytes.get(start..start.checked_add(header.chunk_count.checked_mul(8)?)?))
-        .ok_or_else(truncated)?;
+    let (offsets, tables_end) = part_offset_table(bytes, meta, index)?;
     // One bit per block, not a Vec/HashSet of every coordinate. A cropped display must not
     // permit unbounded bookkeeping for an enormous data window of tiny tiles.
     let tracking_bytes = header.chunk_count.div_ceil(8);
@@ -869,31 +956,7 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
     seen.resize(tracking_bytes, 0u8);
     for &entry in offsets.as_chunks::<8>().0 {
         let offset = u64::from_le_bytes(entry);
-        let chunk = usize::try_from(offset)
-            .ok()
-            .filter(|_| offset >= tables_end)
-            .and_then(|start| bytes.get(start..))
-            .filter(|rest| !rest.is_empty())
-            .ok_or_else(|| malformed(format!("chunk offset {offset} is outside the chunk area of the file")))?;
-        if multipart {
-            let part = chunk.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
-            let part = part.ok_or_else(|| malformed(format!("the chunk at offset {offset} is cut off")))?;
-            if usize::try_from(part).ok() != Some(index) {
-                return Err(malformed(format!("the chunk at offset {offset} belongs to part {part}, not part {index}")));
-            }
-        }
-        // The crate allocates a chunk's declared payload before it reads it, so the payload must
-        // fit in the rest of the file. The length follows the part number and the block's y, or
-        // its four tile coordinates.
-        let fields = if matches!(header.blocks, exr::meta::BlockDescription::Tiles(_)) { 16 } else { 4 };
-        let size_at = if multipart { 4 } else { 0 } + fields;
-        let size = chunk.get(size_at..size_at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
-        let size = size.ok_or_else(|| malformed(format!("the chunk at offset {offset} is cut off")))?;
-        let left = chunk.len() - (size_at + 4);
-        if usize::try_from(size).is_ok_and(|size| size > left) {
-            return Err(malformed(format!("the chunk at offset {offset} declares {size} bytes, but {left} remain in the file")));
-        }
-        let size = usize::try_from(size).map_err(|_| malformed("negative packed chunk length"))?;
+        let (chunk, size) = flat_chunk_at(bytes, header, multipart, index, offset, tables_end)?;
         // Read coordinates without allocating the payload. Validate their real clipped block
         // and budgets before Chunk::read uses the nominal (possibly huge) tile dimensions.
         let coordinate_at = if multipart { 4 } else { 0 };
@@ -965,6 +1028,10 @@ pub fn decode_part(bytes: &[u8], index: usize, keep: &dyn Fn(&str) -> bool, limi
         return Err(Error::Unsupported("HTJ2K compression".into()));
     }
     let info = part_info(index, header);
+    let kept_names = kept_channel_names(header, None, keep);
+    let keeps_any = !kept_names.is_empty();
+    let recorded = |name: &str| kept_names.contains(name);
+    let keep: &dyn Fn(&str) -> bool = &recorded;
     let select = Select { index, keep, seen: std::cell::Cell::new(0) };
     let planes = if meta.headers.iter().any(|header| header.deep) {
         select.seen.set(index);
@@ -972,6 +1039,7 @@ pub fn decode_part(bytes: &[u8], index: usize, keep: &dyn Fn(&str) -> bool, limi
         read_flat_part_chunks(bytes, &meta, index, &mut reader, limits)?;
         reader.into_channels()
     } else {
+        check_flat_packed_lengths(bytes, &meta, index, keeps_any, limits)?;
         let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {}).from_buffered(Cursor::new(bytes)).map_err(map_exr)?;
         image.layer_data.into_iter().nth(index).map(|l| l.channel_data).ok_or_else(|| malformed("the part was not read"))?
     };
@@ -979,7 +1047,7 @@ pub fn decode_part(bytes: &[u8], index: usize, keep: &dyn Fn(&str) -> bool, limi
     Ok(Part { info, channels })
 }
 
-/// Compression for [`write`].
+/// Compression for [`fn@write`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Compression {
     None,

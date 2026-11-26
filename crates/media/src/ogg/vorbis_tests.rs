@@ -114,6 +114,7 @@ fn stream(pages: &[(&[u8], i64)]) -> Stream {
         header_count: 3,
         header_bytes: 0,
         next_seq: None,
+        started: true,
     }
 }
 
