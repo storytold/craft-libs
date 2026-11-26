@@ -853,6 +853,11 @@ fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, rou
                     push(routed, owner, Intent::Access(request.request(node.part)), false);
                     return;
                 }
+                // A popup that a part with no node opens (a corner mark) is opened and closed by that part.
+                if let Some(part) = node.toggle {
+                    push(routed, owner, Intent::Access(request.request(Some(part))), false);
+                    return;
+                }
                 match focus::stop_rec(ctx, (node.owner, node.part)).filter(|rec| rec.stop.group.is_some()) {
                     Some(rec) => route_activate(ctx, &rec, routed, activated),
                     None => push(routed, owner, Intent::Activate, false),

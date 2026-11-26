@@ -4,7 +4,7 @@
 pub(crate) mod drawer;
 pub(crate) mod locate;
 
-use craft_behavior::{GesturePhase, Mixed};
+use craft_behavior::{GesturePhase, Mixed, PartKey};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
 use craft_ui::contract::{Props as _, Role, Show as _};
 use craft_ui::docking::{FloatingGroup, GroupDrag};
@@ -12,6 +12,7 @@ use craft_ui::rails::{FlyoutButton, RailTool};
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::runtime::drag;
 use craft_ui::runtime::frame::take_output;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
@@ -129,6 +130,48 @@ fn the_flyout_of_a_low_tool_slides_up_to_stay_in_the_window() {
     assert!(target.rect.top() + flyout.height() > window.bottom(), "the flyout does not fit under the tool's top");
     assert!(window.contains_rect(flyout), "the flyout {flyout:?} stays in the window {window:?}");
     assert!(flyout.bottom() > target.rect.bottom() + 1.0, "it slides: its bottom {} is below the tool's {}", flyout.bottom(), target.rect.bottom());
+}
+
+/// A tool group's button is one access node: the corner mark is the pointer's and adds no node, so a screen reader
+/// reads the tool once. The button reports that it opens a menu and whether the flyout is open, Expand and Collapse
+/// on it open and close the flyout, and a press on the mark still opens it at once.
+#[trial]
+fn a_tool_groups_button_is_one_node_that_reports_and_opens_the_flyout() {
+    let owner = Rc::new(Cell::new(None));
+    let seen = owner.clone();
+    let all = tools(&[UNDO, REDO, CUT]);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = FlyoutButton::new(&all, &UNDO).show(ui);
+        seen.set(Some(out.response.id));
+    });
+    fixture.settle();
+    let named = |fixture: &Fixture| -> Vec<Target> {
+        fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Undo")).collect()
+    };
+    let buttons = named(&fixture);
+    let rects: Vec<Rect> = buttons.iter().map(|button| button.rect).collect();
+    assert_eq!(buttons.len(), 1, "one Button node is named after the tool: {rects:?}");
+    let button = buttons[0];
+    let menu = Some(craft_ui::contract::PopupKind::Menu);
+    assert_eq!(fixture.tree().has_popup_of(button.node), menu, "the button says it opens a menu");
+    assert_eq!(fixture.tree().expanded_of(button.node), Some(false), "the button reports the flyout closed");
+
+    take_output(fixture.ctx());
+    fixture.access(AccessActionKind::Expand, &button).idle(2);
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "Expand on the button opens the flyout");
+    assert!(take_output(fixture.ctx()).fired.is_empty(), "Expand selects no tool");
+    assert_eq!(fixture.tree().expanded_of(button.node), Some(true), "the button reports the flyout open");
+    fixture.access(AccessActionKind::Collapse, &button).idle(2);
+    assert!(fixture.by_role(Role::MENU).is_empty(), "Collapse on the button closes the flyout");
+    assert_eq!(fixture.tree().expanded_of(button.node), Some(false), "the button reports the flyout closed again");
+
+    let owner = owner.get().expect("the flyout button shows");
+    let mark = fixture.part_rect(owner, PartKey::new("mark")).expect("the button has a corner mark");
+    assert!(button.rect.contains_rect(mark), "the mark {mark:?} lies on the button {:?}", button.rect);
+    fixture.frame(vec![moved(mark.center())]);
+    fixture.frame(vec![press(mark.center())]).idle(2);
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "a press on the mark opens the flyout without a hold");
+    assert_eq!(named(&fixture).len(), 1, "the open flyout leaves one node named after the tool");
 }
 
 /// A rail button tells assistive technology which tool is the current one: the current tool's button is pressed and

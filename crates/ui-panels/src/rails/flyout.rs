@@ -444,11 +444,11 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         if let Some(hint) = resolved.and_then(|resolved| resolved.hint.as_ref()) {
             access.description(hint.as_ref().to_owned());
         }
-        // The face covers the whole button, so the button's own node is the face's node.
+        // The face covers the whole button, so the button's own node is the face's node. The corner mark is the
+        // pointer's and has no node: the button's node reports the flyout open or closed and serves Expand and Collapse.
         access.node(FACE, Role::None);
         if self.has_flyout() {
             access.has_popup(PopupKind::Menu);
-            access.node(MARK, Role::BUTTON).name = Name::Text(name.unwrap_or_default());
         }
     }
 

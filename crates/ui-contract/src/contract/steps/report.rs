@@ -185,6 +185,12 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     let two_state = (role == crate::runtime::egui::access::NodeRole::Button)
         .then(|| p.shown_bool().or_else(|| core.command.as_deref().and_then(|command| command.checked)))
         .flatten();
+    let popups_by_part = crate::contract::overlay::has_toggle_nodes(&core.toggles, &access.nodes);
+    // The root takes Expand and Collapse for a sole toggling part that has no node of its own.
+    let toggle = match core.toggles.as_slice() {
+        [toggle] if !popups_by_part => Some(toggle.part),
+        _ => None,
+    };
     let own = Own {
         id,
         component: facts.name,
@@ -210,7 +216,8 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         scrolls: input.scrolls,
         access: &access,
         popups: &if facts.overlays { crate::contract::overlay::popups_shown(ctx, id) } else { Vec::new() },
-        popups_by_part: crate::contract::overlay::has_toggle_nodes(&core.toggles, &access.nodes),
+        popups_by_part,
+        toggle,
         ltr_axis: resolved.ltr_axis,
     };
     if let Some(owner) = inner_of {
@@ -350,6 +357,7 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             access: &access,
             popups: &[],
             popups_by_part: false,
+            toggle: None,
             ltr_axis: core.resolved.ltr_axis,
         },
     );
