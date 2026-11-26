@@ -9,7 +9,6 @@ use craft_host::queue::{Cancel, JobQueue, Priority, QueueOptions};
 use craft_host::{Jobs, Wake};
 use egui::{Context, Id, IdMap, ViewportId};
 use std::any::TypeId;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -229,7 +228,7 @@ pub fn finish_jobs(ctx: &Context, timeout: Duration) -> bool {
 /// Detaches the copied slot `Id` in the context the fork made: the `PendingSlot` type states what it drops.
 type Detacher = fn(&Context, Id);
 
-static DETACHERS: Mutex<Vec<Detacher>> = Mutex::new(Vec::new());
+static DETACHERS: Mutex<Vec<(TypeId, Detacher)>> = Mutex::new(Vec::new());
 
 /// Detaches the pending results of the copied slot `id`: the fork keeps what the slot showed and drops the `Started`
 /// it shared with the context it was copied from, so it neither takes that context's landed result nor holds its
@@ -246,7 +245,7 @@ pub(crate) fn detach_fork(from: &Context, to: &Context) {
     if ids.is_empty() {
         return;
     }
-    let detachers: Vec<Detacher> = DETACHERS.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let detachers: Vec<Detacher> = DETACHERS.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(_, detach)| *detach).collect();
     for id in ids {
         for detach in &detachers {
             detach(to, id);
@@ -256,8 +255,14 @@ pub(crate) fn detach_fork(from: &Context, to: &Context) {
 
 /// Notes that `id` was asked for in this pass of the running viewport.
 fn track<T: Clone + Send + Sync + 'static, E: Clone + Send + Sync + 'static>(ctx: &Context, id: Id, owner: Id) {
-    static REGISTERED: OnceLock<()> = OnceLock::new();
-    REGISTERED.get_or_init(|| DETACHERS.lock().unwrap_or_else(PoisonError::into_inner).push(detach_slot::<T, E>));
+    // Keyed by the slot type: a `static` inside a generic function is one item for every instantiation, so a
+    // first-seen flag would keep every later type from registering.
+    let slot_type = TypeId::of::<PendingSlot<T, E>>();
+    let mut detachers = DETACHERS.lock().unwrap_or_else(PoisonError::into_inner);
+    if !detachers.iter().any(|(known, _)| *known == slot_type) {
+        detachers.push((slot_type, detach_slot::<T, E>));
+    }
+    drop(detachers);
     let viewport = pass::current_viewport(ctx);
     let pass = pass::pass_nr(ctx, viewport);
     frame::register_end_sweep(ctx, TypeId::of::<PendingState>(), sweep);

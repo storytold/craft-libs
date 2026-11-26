@@ -80,17 +80,15 @@ fn host_over(jobs: Arc<dyn Jobs>) -> Arc<Host> {
     Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs).build())
 }
 
-/// The pending result of `"k"` under `id`'s stage, polled in a real pass. The job's answer is how many jobs this run of
-/// the trial submitted before it, so a fork's own submission is told from the window's.
-fn poll(ui: &Ui, id: egui::Id, attempts: &Arc<AtomicUsize>) -> Pending<u32, String> {
-    let attempts = Arc::clone(attempts);
+/// The pending result of `"k"` under `id`'s stage, polled in a real pass. The job's answer is `answer`, so a slot of
+/// another result type is a job of its own.
+fn poll_type<T, E>(ui: &Ui, id: egui::Id, answer: T) -> Pending<T, E>
+where
+    T: Clone + Default + Send + Sync + 'static,
+    E: Clone + Default + Send + Sync + 'static,
+{
     let mut stage = Stage::open(ui.ctx(), id);
-    let result = stage
-        .pending("k", move || {
-            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
-            Job::new(move |_, _| Ok::<u32, String>(attempt as u32))
-        })
-        .clone();
+    let result = stage.pending("k", move || Job::new(move |_, _| Ok(answer))).clone();
     stage.finish();
     result
 }
@@ -98,23 +96,32 @@ fn poll(ui: &Ui, id: egui::Id, attempts: &Arc<AtomicUsize>) -> Pending<u32, Stri
 #[trial]
 fn a_copied_pending_slot_takes_no_landed_result_from_the_context_it_was_forked_from() {
     let jobs = Arc::new(ManualJobs::new());
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let id = global("fork.pending", "owner");
+    let (first, second) = (global("fork.pending", "first"), global("fork.pending", "second"));
     let mut window = Frames::new();
     let mut shadow = Frames::new();
     window.host(host_over(jobs.clone()));
     shadow.host(host_over(jobs.clone()));
-    let (seen, shadow_seen) = (RefCell::new(Pending::default()), RefCell::new(Pending::default()));
-    window.frame(vec![], |ui| *seen.borrow_mut() = poll(ui, id, &attempts));
-    assert!(matches!(*seen.borrow(), Pending::Loading { .. }), "the window waits for its job: {:?}", seen.borrow());
+    let (seen, shadow_seen) = (RefCell::new(Pending::<u32, String>::default()), RefCell::new(Pending::<u32, String>::default()));
+    let (other, shadow_other) = (RefCell::new(Pending::<u64, String>::default()), RefCell::new(Pending::<u64, String>::default()));
+    window.frame(vec![], |ui| {
+        *seen.borrow_mut() = poll_type(ui, first, 7u32);
+        *other.borrow_mut() = poll_type(ui, second, 9u64);
+    });
+    assert!(matches!(*seen.borrow(), Pending::Loading { .. }), "the window waits for its jobs: {:?}", seen.borrow());
     jobs.run_all();
-    assert_eq!(attempts.load(Ordering::Relaxed), 1, "the window submitted the job once");
 
     fork_into(&window.ctx, &shadow.ctx).expect("the shadow runs no pass");
     // The shadow polls first, before the window takes what landed.
-    shadow.frame(vec![], |ui| *shadow_seen.borrow_mut() = poll(ui, id, &attempts));
-    window.frame(vec![], |ui| *seen.borrow_mut() = poll(ui, id, &attempts));
-    assert_eq!(*seen.borrow(), Pending::Ready(0), "the window still takes its own landed result");
+    shadow.frame(vec![], |ui| {
+        *shadow_seen.borrow_mut() = poll_type(ui, first, 7u32);
+        *shadow_other.borrow_mut() = poll_type(ui, second, 9u64);
+    });
+    window.frame(vec![], |ui| {
+        *seen.borrow_mut() = poll_type(ui, first, 7u32);
+        *other.borrow_mut() = poll_type(ui, second, 9u64);
+    });
+    assert_eq!(*seen.borrow(), Pending::Ready(7), "the window still takes its own landed result");
+    assert_eq!(*other.borrow(), Pending::Ready(9), "and so does its slot of another result type");
     assert_eq!(*shadow_seen.borrow(), Pending::Loading { progress: None }, "the fork submits a job of its own");
-    assert_eq!(attempts.load(Ordering::Relaxed), 2, "the fork's job is its own submission");
+    assert_eq!(*shadow_other.borrow(), Pending::Loading { progress: None }, "for each result type it copied");
 }

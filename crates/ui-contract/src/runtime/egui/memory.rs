@@ -215,9 +215,16 @@ pub(crate) fn copy_memory(from: &Context, to: &Context) {
 /// handles `copy` brought in share another context's state (a `Service` clone shares it), so they are dropped, and a
 /// type `to` had none of starts fresh on first use. Returns what was moved out, to drop outside every lock.
 pub(crate) fn keep_own_services(to: &Context, copy: impl FnOnce()) -> Vec<Removed> {
-    let kinds: Vec<Kind> = kinds().lock().unwrap_or_else(PoisonError::into_inner).values().copied().collect();
-    let own: Vec<(Kind, Removed)> = locked(to, |data| kinds.iter().filter_map(|kind| (kind.take)(data).map(|handle| (*kind, handle))).collect());
+    /// The service types a context has created, read with context data held: `Service::of` registers a type's kind under
+    /// that same lock before it publishes the handle, so a snapshot taken here holds every handle already in the data.
+    /// Returns them with context data held, as `of` takes them in that order too (data, then kinds).
+    fn kinds_of() -> Vec<Kind> {
+        kinds().lock().unwrap_or_else(PoisonError::into_inner).values().copied().collect()
+    }
+    let own: Vec<(Kind, Removed)> = locked(to, |data| kinds_of().iter().filter_map(|kind| (kind.take)(data).map(|handle| (*kind, handle))).collect());
     copy();
+    // Read after the copy: a type created while it ran is in this list too, so the handle it brought in is removed.
+    let kinds = kinds_of();
     locked(to, |data| {
         let mut gone: Vec<Removed> = kinds.iter().filter_map(|kind| (kind.take)(data)).collect();
         gone.extend(own.into_iter().filter_map(|(kind, handle)| (kind.put)(data, handle)));
@@ -231,18 +238,19 @@ impl<S: Default + Send + 'static> Service<S> {
         #[cfg(feature = "testing")]
         LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
         let slot = service_slot();
-        let (handle, created) = locked(ctx, |data| match data.get_temp::<Service<S>>(slot) {
-            Some(handle) => (handle, false),
-            None => (data.get_temp_mut_or_default::<Service<S>>(slot).clone(), true),
-        });
-        if created {
-            kinds()
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .entry(TypeId::of::<S>())
-                .or_insert(Kind { take: take_service::<S>, put: put_service::<S> });
-        }
-        handle
+        locked(ctx, |data| match data.get_temp::<Service<S>>(slot) {
+            Some(handle) => handle,
+            None => {
+                // The kind goes in before the handle does, under the data lock a fork holds while it copies: a fork
+                // that copies this handle therefore finds its kind and removes it from the copy.
+                kinds()
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .entry(TypeId::of::<S>())
+                    .or_insert(Kind { take: take_service::<S>, put: put_service::<S> });
+                data.get_temp_mut_or_default::<Service<S>>(slot).clone()
+            }
+        })
     }
 
     /// Runs `f` on the context's service of type `S`, created on first use.
