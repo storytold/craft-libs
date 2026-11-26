@@ -69,6 +69,8 @@ pub(super) fn show(
         .select(SelectMode::Single)
         .allow_empty(true)
         .sizing(Sizing::Content)
+        // The editor scrolls metadata and steps together; the list contributes its full row height.
+        .natural_height(true)
         .space(SpaceAction::ToggleCell)
         .columns(vec![
             ColumnSpec::toggle(INCLUDE_COLUMN, Label::Empty, ToggleColumn::sweepable()),
