@@ -826,8 +826,10 @@ pub fn temp_name(file: &str) -> String {
 /// staging file's modification time only while it writes bytes, not while it flushes or renames,
 /// and removing the staging file makes that save fail. Pass a `min_age` longer than the longest
 /// time any save into `dir`, by any process including the calling one, may go without writing,
-/// counting the final flush and rename. Entries that cannot be read or removed are left in place.
-/// Subfolders are not searched.
+/// counting the final flush and rename. On Windows, a write may not update the modification time
+/// until the staging file's handle closes, so pass a `min_age` longer than the longest whole save,
+/// from the staging file's creation through the rename. Entries that cannot be read or removed are
+/// left in place. Subfolders are not searched.
 /// On `wasm32` this returns an `Unsupported` error.
 pub fn sweep_temp_files(dir: &Path, min_age: std::time::Duration) -> io::Result<usize> {
     #[cfg(target_arch = "wasm32")]

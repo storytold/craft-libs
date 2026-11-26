@@ -80,7 +80,9 @@ a symbolic link, and does not search subfolders. A save updates its staging file
 time only while it writes bytes, not while it flushes or renames, and removing the staging file
 makes that save fail. Choose a minimum age longer than the longest time any save into the folder,
 by any process including the calling one, may go without writing, counting the final flush and
-rename. Entries that cannot be removed are left in place.
+rename. On Windows, a write may not update the modification time until the staging file's handle
+closes, so choose a minimum age longer than the longest whole save, from the staging file's
+creation through the rename. Entries that cannot be removed are left in place.
 
 ### Document Permissions and Private Data
 
