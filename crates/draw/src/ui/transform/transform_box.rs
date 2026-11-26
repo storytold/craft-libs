@@ -48,6 +48,11 @@ const EDGE: PartKey = PartKey::new("edge");
 /// the corner, as PhotoCraft's box does, beside the corner's round handle `BOX.at(Corner(k))`.
 const CORNER_REACH: PartKey = PartKey::new("cornerReach");
 
+/// The pointer-only parts of a side past its end, beside a corner and outside the corner's own reach:
+/// `CORNER_ZONE.at(2 * k)` is the zone at corner `k` of the side that starts there, `CORNER_ZONE.at(2 * k + 1)` that of
+/// the side that ends there (see [`corner_zones`]).
+const CORNER_ZONE: PartKey = PartKey::new("cornerZone");
+
 /// The pointer-only move part at the centre of a box whose reference point is hidden.
 const CENTRE: PartKey = PartKey::new("centre");
 
@@ -59,9 +64,11 @@ const MOVE_RING: PartKey = PartKey::new("moveRing");
 const RING_ARC_STEPS: usize = 8;
 
 /// The rank of a side among the handles: below corners, midpoints, the reference point and the centre, so a corner
-/// wins where a corner and a side both reach, and the nearest of the others wins among themselves.
+/// wins where a corner and a side both reach, and the nearest of the others wins among themselves. A side's zone past
+/// its end ranks between: above the band of the side it reaches into, below the corner's own reach.
 const EDGE_SUB: u8 = 0;
-const HANDLE_SUB: u8 = 1;
+const ZONE_SUB: u8 = 1;
+const HANDLE_SUB: u8 = 2;
 /// The rank of the move strips among the body-level parts: above the rotate bands and the inside, below every handle.
 const RING_SUB: u8 = 1;
 
@@ -110,8 +117,8 @@ const NUDGE_FAR: f64 = 10.0;
 /// corner reach is measured too (the reach probe of 2026-11-23: a press 10 along an axis from the corner takes it, 12
 /// not; 8.5 on the diagonal does, 11.3 not: a circle of about 11; 2026-11-25, outside the box beside the top-right
 /// corner, as far outside the right side and along it from the corner: 7 and 9, 3 and 11, 1 and 11, 10 and 5 take the
-/// corner, 7 and 11, 3 and 12, 1 and 13 the side: a circle of 11 where the view reads the pointer, and beyond it the
-/// side). On a box whose inside is the tool's the corners' share of the bands is PhotoCraft's: inside the box only a
+/// corner, 7 and 11, 3 and 12, 1 and 13 the side: a circle of 11 where the view reads the pointer, and beyond it a
+/// side: see [`corner_zones`] for which). On a box whose inside is the tool's the corners' share of the bands is PhotoCraft's: inside the box only a
 /// handle's own reach is the box's, so a press there off the handles reaches what lies under the box (a text editor
 /// under a paragraph frame).
 const HANDLE_REACH_IN_HANDLES: f32 = 1.375;
@@ -867,6 +874,14 @@ impl<'a> TransformBox<'a> {
                 .filter(|&k| self.rules.allows(BoxPart::Corner(k)))
                 .flat_map(|k| [0, 1].map(|end| (CORNER_REACH.at(2 * u64::from(k) + end), BoxPart::Corner(k)))),
         );
+        if self.inside_moves {
+            // The side each zone belongs to follows the box's shape, so every side that may take one is listed.
+            parts.extend(
+                (0..4u8)
+                    .flat_map(|k| [k, (k + 3) % 4].map(|side| (CORNER_ZONE.at(2 * u64::from(k) + u64::from(side != k)), BoxPart::Edge(side))))
+                    .filter(|(_, part)| self.rules.allows(*part)),
+            );
+        }
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
         }
@@ -1318,8 +1333,8 @@ impl Component for TransformBox<'_> {
 
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
     /// side as a pointer-only band outside it (either side of its line with the rules' edge band), each corner's
-    /// reach where the view reads the pointer (on a box whose inside is the tool's: its stretch of the two bands
-    /// beside it), the centre and the move
+    /// reach where the view reads the pointer and the sides' zones past their ends beside it (on a box whose inside is
+    /// the tool's: its stretch of the two bands beside it), the centre and the move
     /// strips where declared, and the outside. A handle, a corner's reach or stretch, the reference point and the centre
     /// rank alike, so the nearest wins where they overlap on a small box;
     /// they rank above a side, which ranks above the inside, which ranks above the outside. Every part takes a press's
@@ -1405,6 +1420,23 @@ impl Component for TransformBox<'_> {
                 .sense(Sense::DRAG | Sense::CLICK | context)
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
+        }
+        if self.inside_moves {
+            // Beside a corner, past the corner's own reach, one of its two sides takes the press past its end, into
+            // the other side's band too, as in the reference application.
+            for k in 0..4u8 {
+                for (side, zone) in corner_zones(&sides, k, style.side_band) {
+                    if !self.rules.allows(BoxPart::Edge(side)) {
+                        continue;
+                    }
+                    cx.part(CORNER_ZONE.at(2 * u64::from(k) + u64::from(side != k)), zone)
+                        .sense(Sense::DRAG | Sense::CLICK)
+                        .priority(HitPriority::new(HitLevel::Handle, ZONE_SUB))
+                        .pointer_only(EDGE_BY_KEY)
+                        // A zone ends where it was measured to end: never grown to the pointer's target size.
+                        .exact_hit();
+                }
+            }
         }
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Corner(k))) {
             let corner = usize::from(k);
@@ -1737,6 +1769,102 @@ fn edge_band(quad: &[Pos2; 4], side: usize, reach: f32) -> HitShape {
     let across = (quad[(side + 2) % 4] - b).length();
     let (inner, outer) = (out * -reach.min(across / 4.0).max(SIDE_LINE_INSIDE), out * reach);
     HitShape::Polygon(vec![a - along + inner, b + along + inner, b + along + outer, a - along + outer])
+}
+
+/// The zones beside corner `corner` of the box `quad` that its two sides take past their own ends, each with its
+/// side, as measured on the reference application (2026-11-25 and -26, Scale mode and Free Transform, 100 % and a
+/// third; 124 presses at the four corners of an upright box, a mirrored one and boxes turned 30, 60, 90 and 180
+/// degrees). Every zone lies within `width` of the corner on both screen axes and within `width` outside its side's
+/// line.
+///
+/// - A box whose sides lie along the screen's axes: the earlier of the corner's two sides in the order top, right,
+///   bottom, left on the screen takes everything past both sides' ends, and of the other side's band the part where
+///   the press lies at least as far outside that side as along it from the corner (at the top-right corner 10 right
+///   and 8 down took the top side, 7 right and 11 down the right side; at the bottom-right corner 8 left and 10 down
+///   took the right side, 11 left and 7 down the bottom side).
+/// - A turned box: at the first side's two corners (the picture's top) that side does the same, and the other side
+///   takes what lies past both ends beyond the first side's reach; at the other two corners the side whose line is
+///   nearer takes the press, past both ends and in the other side's band alike (turned 30 degrees: past both ends at
+///   the bottom-right corner, 12 outside the right side and 5 outside the bottom one took the bottom side; in the
+///   bottom side's band, 6 along it from the corner and 10 outside took the right side).
+///
+/// Nothing for a box with a side of no length or crossed over itself (not measured: each side keeps its own band).
+fn corner_zones(quad: &[Pos2; 4], corner: u8, width: f32) -> Vec<(u8, HitShape)> {
+    let crossed = (0..2).any(|k| crossing_of(quad[k], quad[k + 1], quad[k + 2], quad[(k + 3) % 4]).is_some());
+    if crossed {
+        return Vec::new();
+    }
+    let (ending, starting) = ((corner + 3) % 4, corner % 4);
+    let at = quad[usize::from(starting)];
+    // A side at this corner: which one, the unit vector along it away from the corner, and its outward normal.
+    let beside = |side: u8, far: Pos2| -> Option<(u8, Vec2, Vec2)> {
+        let along = far - at;
+        (along.length() >= 1e-3).then_some(())?;
+        Some((side, along.normalized(), outward(quad, usize::from(side))?))
+    };
+    let (Some(a), Some(b)) = (beside(ending, quad[usize::from(ending)]), beside(starting, quad[usize::from((corner + 1) % 4)])) else {
+        return Vec::new();
+    };
+    let square = vec![at + Vec2::new(-width, -width), at + Vec2::new(width, -width), at + Vec2::new(width, width), at + Vec2::new(-width, width)];
+    // The part of the square past the end of `side`, no further outside its line than `width` and no further on the
+    // box's side of the line than past the end; `nearer`: no further outside the line than past the end either.
+    let zone = |(side, away, out): (u8, Vec2, Vec2), nearer: bool| -> Option<(u8, HitShape)> {
+        let mut shape = kept(&square, at, -away, 0.0);
+        shape = kept(&shape, at, -out, -width);
+        shape = kept(&shape, at, out - away, 0.0);
+        if nearer {
+            shape = kept(&shape, at, -out - away, 0.0);
+        }
+        (shape.len() >= 3).then_some((side, HitShape::Polygon(shape)))
+    };
+    // The rest of the square past both sides' ends, for the side that is not the first.
+    let rest = |(side, away, out): (u8, Vec2, Vec2), first: Vec2| -> Option<(u8, HitShape)> {
+        let mut shape = kept(&square, at, -away, 0.0);
+        shape = kept(&shape, at, out, 0.0);
+        shape = kept(&shape, at, -out, -width);
+        shape = kept(&shape, at, first, width);
+        (shape.len() >= 3).then_some((side, HitShape::Polygon(shape)))
+    };
+    let level = |v: Vec2| v.x.abs() < 1e-3 || v.y.abs() < 1e-3;
+    let zones = if level(a.1) && level(b.1) {
+        // Where a side lies on the screen: top, right, bottom, left.
+        let place = |out: Vec2| {
+            if out.y < -0.5 {
+                0
+            } else if out.x > 0.5 {
+                1
+            } else if out.y > 0.5 {
+                2
+            } else {
+                3
+            }
+        };
+        vec![zone(if place(a.2) < place(b.2) { a } else { b }, false)]
+    } else if a.0 == 0 {
+        vec![zone(a, false), rest(b, a.2)]
+    } else if b.0 == 0 {
+        vec![zone(b, false), rest(a, b.2)]
+    } else {
+        vec![zone(a, true), zone(b, true)]
+    };
+    zones.into_iter().flatten().collect()
+}
+
+/// The part of the convex `polygon` where a point lies at least `least` from `origin` along `normal`.
+fn kept(polygon: &[Pos2], origin: Pos2, normal: Vec2, least: f32) -> Vec<Pos2> {
+    let inside = |point: Pos2| (point - origin).dot(normal) - least;
+    let mut out = Vec::with_capacity(polygon.len() + 1);
+    for (k, &here) in polygon.iter().enumerate() {
+        let before = polygon[(k + polygon.len() - 1) % polygon.len()];
+        let (a, b) = (inside(before), inside(here));
+        if (a >= 0.0) != (b >= 0.0) {
+            out.push(before + (here - before) * (a / (a - b)));
+        }
+        if b >= 0.0 {
+            out.push(here);
+        }
+    }
+    out
 }
 
 /// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `most` along it, as far

@@ -504,6 +504,143 @@ fn beyond_a_corners_own_reach_the_side_beside_it_takes_the_press() {
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(1)));
 }
 
+/// Beside a corner, past the corner's own reach, the earlier of the corner's two sides in the order top, right, bottom,
+/// left takes a press within 12 points past its end: everywhere outside both sides, and in the other side's band where
+/// the press lies at least as far outside that side as along it from the corner (the reference application at 100 %,
+/// 2026-11-25 and -26, Scale mode, 49 presses at the four corners of a 302 x 202 box; `u` is how far outside the
+/// upright side the press lies, `v` how far outside the level one, negative on the box's side of that line).
+#[trial]
+fn past_its_end_the_earlier_side_takes_a_press_beside_a_corner() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    let (top, right, bottom, left) = (BoxPart::Edge(0), BoxPart::Edge(1), BoxPart::Edge(2), BoxPart::Edge(3));
+    // The corner, which way is out of the box there on x and y, and what the measured presses took.
+    type Corner<'a> = (f64, f64, f64, f64, &'a [(f64, f64, BoxPart)]);
+    let corners: [Corner<'_>; 4] = [
+        (
+            RECT.x1,
+            RECT.y0,
+            1.0,
+            -1.0,
+            &[
+                (10.0, -8.0, top),
+                (12.0, -9.0, top),
+                (11.0, -10.0, top),
+                (12.0, -11.0, top),
+                (9.0, -8.0, top),
+                (7.0, -11.0, right),
+                (8.0, -10.0, right),
+                (10.0, -11.0, right),
+                (9.0, -12.0, right),
+                (9.0, 9.0, top),
+                (12.0, 2.0, top),
+                (12.0, 6.0, top),
+                (5.0, 11.0, top),
+                (3.0, 11.0, top),
+                (-8.0, 10.0, top),
+                (-11.0, 7.0, top),
+            ],
+        ),
+        (
+            RECT.x1,
+            RECT.y1,
+            1.0,
+            1.0,
+            &[
+                (10.0, -8.0, right),
+                (7.0, -11.0, right),
+                (10.0, 10.0, right),
+                (5.0, 11.0, right),
+                (11.0, 5.0, right),
+                (-8.0, 10.0, right),
+                (-11.0, 7.0, bottom),
+            ],
+        ),
+        (
+            RECT.x0,
+            RECT.y1,
+            -1.0,
+            1.0,
+            &[(10.0, -8.0, bottom), (10.0, 10.0, bottom), (5.0, 11.0, bottom), (11.0, 5.0, bottom), (-8.0, 10.0, bottom), (-11.0, 7.0, bottom)],
+        ),
+        (
+            RECT.x0,
+            RECT.y0,
+            -1.0,
+            -1.0,
+            &[(10.0, -8.0, top), (7.0, -11.0, left), (10.0, 10.0, top), (5.0, 11.0, top), (11.0, 5.0, top), (-8.0, 10.0, top), (-11.0, 7.0, top)],
+        ),
+    ];
+    for (x, y, out_x, out_y, cases) in corners {
+        for &(u, v, part) in cases {
+            hover(&mut h, Point::new(x + out_x * u, y + out_y * v));
+            assert_eq!(h.host.borrow().hovered, Some(part), "corner ({x}, {y}): {u} outside the upright side, {v} outside the level one");
+        }
+    }
+    // 14 past a side's end is past every zone (top-right corner: 8 below and 8 above the top side's line).
+    for (u, v) in [(14.0, -8.0), (14.0, 8.0), (20.0, 5.0)] {
+        hover(&mut h, Point::new(RECT.x1 + u, RECT.y0 - v));
+        assert!(!matches!(h.host.borrow().hovered, Some(BoxPart::Edge(_) | BoxPart::Corner(_))), "{u} outside the right side, {v} above the top one");
+    }
+}
+
+/// On a mirrored box the order top, right, bottom, left is the screen's, not the picture's (the reference application,
+/// 2026-11-26, after Flip Horizontal: 10 and 10 outside the bottom-left corner took the bottom side, outside the
+/// bottom-right corner the right side).
+#[trial]
+fn beside_a_mirrored_boxs_corner_the_earlier_side_on_the_screen_takes_the_press() {
+    // The picture's top-left corner stands at the top right: side 1 is on the left of the screen, side 3 on the right.
+    let quad = [Point::new(RECT.x1, RECT.y0), Point::new(RECT.x0, RECT.y0), Point::new(RECT.x0, RECT.y1), Point::new(RECT.x1, RECT.y1)];
+    let mut h = harness(BoxState::new(quad, RECT.center()), |config| config.rules = free_rules());
+    hover(&mut h, Point::new(RECT.x0 - 10.0, RECT.y1 + 10.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(2)), "bottom left: the bottom side, before the left one");
+    hover(&mut h, Point::new(RECT.x1 + 10.0, RECT.y1 + 10.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(3)), "bottom right: the side on the right, before the bottom one");
+    hover(&mut h, Point::new(RECT.x1 + 10.0, RECT.y0 - 10.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(0)), "top right: the top side");
+}
+
+/// Beside a corner of a turned box (the reference application, 2026-11-26, a box turned 30 degrees, Scale mode; `u`
+/// outside the side that was upright, `v` outside the one that was level, along the box's own axes): the zone is
+/// within 12 points of the corner on the screen's axes, not the box's; at the top side's corners the top side takes
+/// what lies within 12 of its line and the other side the rest past both ends; at the bottom corners the side whose
+/// line is nearer takes the press.
+#[trial]
+fn beside_a_turned_boxs_corner_the_top_side_then_the_nearer_line_takes_the_press() {
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let (centre, half_w, half_h) = (RECT.center(), RECT.width() / 2.0, RECT.height() / 2.0);
+    // The box's own axes on the screen: along the top side, and down the right side.
+    let at = |x: f64, y: f64| Point::new(centre.x + x * cos - y * sin, centre.y + x * sin + y * cos);
+    let quad = [at(-half_w, -half_h), at(half_w, -half_h), at(half_w, half_h), at(-half_w, half_h)];
+    let mut h = harness(BoxState::new(quad, centre), |config| config.rules = free_rules());
+    let (top, right, bottom, left) = (Some(BoxPart::Edge(0)), Some(BoxPart::Edge(1)), Some(BoxPart::Edge(2)), Some(BoxPart::Edge(3)));
+    // Which way is out of the box at the corner along its axes, then `u`, `v` and what the press took.
+    let cases = [
+        (1.0, -1.0, 10.0, -8.0, top),
+        (1.0, -1.0, 12.0, -5.0, top),
+        (1.0, -1.0, 7.0, 10.0, top),
+        (1.0, -1.0, 3.0, 12.0, right),
+        (1.0, -1.0, 4.0, 14.0, right),
+        (1.0, -1.0, -8.0, 10.0, top),
+        (1.0, 1.0, -6.0, 10.0, right),
+        (1.0, 1.0, -3.0, 12.0, right),
+        (1.0, 1.0, -9.0, 11.0, bottom),
+        (1.0, 1.0, 12.0, 5.0, bottom),
+        (1.0, 1.0, 10.0, -8.0, right),
+        (-1.0, 1.0, 10.0, -6.0, bottom),
+        (-1.0, 1.0, 4.0, 11.0, left),
+        (-1.0, -1.0, 11.0, 4.0, top),
+    ];
+    for (out_x, out_y, u, v, part) in cases {
+        hover(&mut h, at(out_x * (half_w + u), out_y * (half_h + v)));
+        assert_eq!(h.host.borrow().hovered, part, "corner ({out_x}, {out_y}): {u} outside the upright side, {v} outside the level one");
+    }
+    // 10 and 10 along the box's axes is 13.7 from the corner on a screen axis: past every zone.
+    for (out_x, out_y) in [(1.0, -1.0), (1.0, 1.0)] {
+        hover(&mut h, at(out_x * (half_w + 10.0), out_y * (half_h + 10.0)));
+        assert!(!matches!(h.host.borrow().hovered, Some(BoxPart::Edge(_) | BoxPart::Corner(_))), "corner ({out_x}, {out_y}): 10 and 10 outside");
+    }
+}
+
 /// On a box crossed over itself (a bow tie: its top and bottom sides cross), each of the two sides that do not cross
 /// takes a press outside its own triangle, not inside it (the reference application, 2026-11-25: on an hourglass made
 /// by a Perspective corner dragged past its partner, a press 8 px outside the right side took the side; the winding of
