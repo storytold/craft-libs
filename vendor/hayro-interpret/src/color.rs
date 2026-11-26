@@ -425,10 +425,41 @@ impl ColorSpaceType {
 #[derive(Debug, Clone)]
 pub struct ColorSpace(Arc<ColorSpaceType>, Option<Arc<[(u128, IccFallback)]>>);
 
+/// Craft patch (ICC fallback): a colour space read, else the ICC profile fallbacks met by the
+/// read that failed, as the colour space cache keeps it (see `ColorSpace::cached`).
+pub(crate) type ColorSpaceRead = Result<ColorSpace, Arc<[(u128, IccFallback)]>>;
+
 impl ColorSpace {
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
+        Self::read(object, cache).ok()
+    }
+
+    /// Craft patch (ICC fallback): as `new`, keeping the fallbacks of a read that fails.
+    pub(crate) fn read(object: Object<'_>, cache: &Cache) -> ColorSpaceRead {
         Self::built(|| Self::within(object, cache, 0))
+    }
+
+    /// Craft patch (ICC fallback): the space cached under `key`, read by `read` when no entry
+    /// holds it. A failed read is cached with its fallbacks, so that each call, a hit or not,
+    /// records the fallbacks for the page being interpreted, the space read or not.
+    pub(crate) fn cached(
+        cache: &Cache,
+        key: u128,
+        read: impl FnOnce() -> ColorSpaceRead,
+    ) -> Option<Self> {
+        match cache.get_or_insert_with(key, || Some(read()))? {
+            Ok(space) => {
+                space.report_icc_fallbacks();
+                Some(space)
+            }
+            Err(notes) => {
+                for &(profile, reason) in notes.iter() {
+                    record_icc_fallback(profile, reason);
+                }
+                None
+            }
+        }
     }
 
     /// A colour space named by another, `depth` levels down.
@@ -444,7 +475,7 @@ impl ColorSpace {
     /// met while reading it, for `report_icc_fallbacks`. A space read while another is being
     /// read passes its fallbacks on to the other too; when the outermost read ends, the
     /// thread keeps none.
-    fn built(build: impl FnOnce() -> Option<Self>) -> Option<Self> {
+    fn built(build: impl FnOnce() -> Option<Self>) -> ColorSpaceRead {
         let outer = ICC_FALLBACKS_BUILT.with(|built| built.replace(Some(Vec::new())));
         let space = build();
         let notes = ICC_FALLBACKS_BUILT.with(|built| {
@@ -458,16 +489,18 @@ impl ColorSpace {
             built.set(outer);
             notes
         });
-        let mut space = space?;
+        let Some(mut space) = space else {
+            return Err(notes.into());
+        };
         if !notes.is_empty() {
             space.1 = Some(notes.into());
         }
-        Some(space)
+        Ok(space)
     }
 
     /// Craft patch (ICC fallback): record, for the page being interpreted, the ICC profile
     /// fallbacks met when this space was read, for a space taken from the cache.
-    pub(crate) fn report_icc_fallbacks(&self) {
+    fn report_icc_fallbacks(&self) {
         for &(profile, reason) in self.1.iter().flat_map(|notes| notes.iter()) {
             record_icc_fallback(profile, reason);
         }
@@ -477,6 +510,12 @@ impl ColorSpace {
     /// built (marked tableless) rather than unreadable, for the image and colour operators to
     /// handle it (see `Indexed::new`). Every other space is read as by `new`.
     pub(crate) fn new_allowing_tableless(object: Object<'_>, cache: &Cache) -> Option<Self> {
+        Self::read_allowing_tableless(object, cache).ok()
+    }
+
+    /// Craft patch (ICC fallback): as `new_allowing_tableless`, keeping the fallbacks of a read
+    /// that fails.
+    pub(crate) fn read_allowing_tableless(object: Object<'_>, cache: &Cache) -> ColorSpaceRead {
         if let Object::Array(array) = &object
             && array
                 .flex_iter()
@@ -488,7 +527,7 @@ impl ColorSpace {
                     .map(|indexed| Self::of(ColorSpaceType::Indexed(indexed)))
             });
         }
-        Self::new(object, cache)
+        Self::read(object, cache)
     }
 
     /// Create a new color space from the name.
@@ -762,10 +801,9 @@ impl<'r, 'a> DefaultColorSpaces<'r, 'a> {
                     .resources
                     .get_color_space(&Name::new_unescaped(family.default_key()))?;
                 let key = object.cache_key();
-                let space = self
-                    .cache
-                    .get_or_insert_with(key, || ColorSpace::new(object.clone(), &self.cache))?;
-                space.report_icc_fallbacks();
+                let space = ColorSpace::cached(&self.cache, key, || {
+                    ColorSpace::read(object.clone(), &self.cache)
+                })?;
                 space.can_stand_in_for(family).then_some((space, key))
             })
             .clone()
@@ -3660,21 +3698,55 @@ mod icc_fallback_tests {
         );
     }
 
-    /// A profile stream whose `/Filter` does not decode its bytes leaves the space unreadable,
-    /// and says the profile was unreadable.
-    #[test]
-    fn a_profile_stream_that_does_not_decode_reports_it_unreadable() {
+    /// A profile stream whose `/Filter` does not decode its bytes.
+    fn undecodable_profile() -> String {
         // `{` is not an ASCII base-85 digit.
         let data = "{{{{{~>";
-        let stream = format!(
+        format!(
             "<< /N 3 /Alternate /DeviceRGB /Filter /ASCII85Decode /Length {} >>
 stream
 {data}
 endstream",
             data.len()
-        );
-        let pdf = pdf(1, FILL, stream, &[]);
+        )
+    }
+
+    /// A profile stream that does not decode leaves the space unreadable, and says the profile
+    /// was unreadable.
+    #[test]
+    fn a_profile_stream_that_does_not_decode_reports_it_unreadable() {
+        let pdf = pdf(1, FILL, undecodable_profile(), &[]);
         assert_eq!(fallbacks(&pdf), [[IccFallback::ProfileUnreadable]]);
+    }
+
+    /// The second page takes the unreadable space from the cache the first filled, and still
+    /// reports it.
+    #[test]
+    fn each_page_that_uses_an_undecodable_profile_reports_it() {
+        let pdf = pdf(2, FILL, undecodable_profile(), &[]);
+        assert_eq!(
+            fallbacks(&pdf),
+            [
+                [IccFallback::ProfileUnreadable],
+                [IccFallback::ProfileUnreadable]
+            ]
+        );
+    }
+
+    /// As above, for the profile read as the pages' `/DefaultRGB`.
+    #[test]
+    fn each_page_whose_default_space_has_an_undecodable_profile_reports_it() {
+        let space = "[/ICCBased 6 0 R] /DefaultRGB [/ICCBased 6 0 R]";
+        let fill = "/DeviceRGB cs 0.5 0.5 0.5 sc 0 0 10 10 re f
+";
+        let pdf = pdf_with_space(2, fill, undecodable_profile(), &[], space);
+        assert_eq!(
+            fallbacks(&pdf),
+            [
+                [IccFallback::ProfileUnreadable],
+                [IccFallback::ProfileUnreadable]
+            ]
+        );
     }
 
     /// With no `/Alternate`, a profile that can't be used is drawn in the device space for `/N`.

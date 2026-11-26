@@ -631,16 +631,11 @@ impl<'a> Context<'a> {
         name: &Name<'_>,
     ) -> Option<ColorSpace> {
         let cs_object = resources.get_color_space(name)?;
-        self.interpreter_cache
-            .object_cache
-            .get_or_insert_with(cs_object.cache_key(), || {
-                ColorSpace::new_allowing_tableless(
-                    cs_object.clone(),
-                    &self.interpreter_cache.object_cache,
-                )
-            })
-            // Craft patch (ICC fallback): a space read for an earlier page reports for this one.
-            .inspect(ColorSpace::report_icc_fallbacks)
+        // Craft patch (ICC fallback): a space read for an earlier page reports for this one.
+        let cache = &self.interpreter_cache.object_cache;
+        ColorSpace::cached(cache, cs_object.cache_key(), || {
+            ColorSpace::read_allowing_tableless(cs_object.clone(), cache)
+        })
     }
 
     pub(crate) fn stroke_props(&self) -> StrokeProps {
