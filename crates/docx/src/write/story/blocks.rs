@@ -1,5 +1,5 @@
 use super::toc::written_toc_span;
-use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
+use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, empty_change, tblpr, tcpr, trpr, twips};
 
 impl Writer<'_> {
     fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
@@ -77,13 +77,11 @@ impl Writer<'_> {
                 continue;
             }
             let name = self.doc.move_name(Some(rev)).unwrap_or("").to_string();
-            let (id, author, date) = self.rev_attrs(rev);
+            let mut a = self.change_attrs(rev);
+            let id = a.first().map(|(_, id)| id.clone()).unwrap_or_default();
+            a.insert(1, ("w:name", name));
             let tag = if to { "w:moveToRangeStart" } else { "w:moveFromRangeStart" };
-            if date.is_empty() {
-                w.empty(tag, &[("w:id", &id), ("w:name", &name), ("w:author", &author)]);
-            } else {
-                w.empty(tag, &[("w:id", &id), ("w:name", &name), ("w:author", &author), ("w:date", &date)]);
-            }
+            empty_change(w, tag, &a);
             self.open_moves.push((rev, id, to));
         }
     }

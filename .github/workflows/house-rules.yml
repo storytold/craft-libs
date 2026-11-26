@@ -2,7 +2,7 @@ name: House rules
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths:
       - AGENTS.md
       - CLAUDE.md

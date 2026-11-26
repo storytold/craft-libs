@@ -26,7 +26,8 @@
 //! of the caller's [`Resolver`], which may decline.
 //!
 //! Depends on no other Craft crate, except that `threemf` opens its package with `craft-opc`
-//! and reads its XML with `craft-xml`.
+//! and reads its XML with `craft-xml`. `serde_json` holds glTF's `extensions` and `extras` in
+//! the model, so it is a dependency with every feature.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // The helpers the formats share are not all used by every subset of them.
@@ -64,6 +65,10 @@ mod triangulate;
 
 use std::collections::HashMap;
 use std::fmt;
+
+/// The JSON types of the `extensions` and `extras` fields.
+pub use serde_json;
+use serde_json::{Map, Value};
 
 /// Why a file could not be read or a scene could not be written.
 #[derive(Clone, Debug, PartialEq)]
@@ -123,6 +128,9 @@ pub struct Limits {
     pub max_data_bytes: usize,
     /// Most skins, animations, cameras and lights (each), and most channels of one animation.
     pub max_extras: usize,
+    /// Most morph targets of one mesh. A mesh with more keeps its base shape, and its targets
+    /// are left out and counted in a warning.
+    pub max_morph_targets: usize,
 }
 
 impl Default for Limits {
@@ -138,6 +146,7 @@ impl Default for Limits {
             max_depth: 64,
             max_data_bytes: 1 << 30,
             max_extras: 10_000,
+            max_morph_targets: 256,
         }
     }
 }
@@ -255,6 +264,30 @@ pub struct Mesh {
     pub joints: Vec<[u16; 4]>,
     pub weights: Vec<[f32; 4]>,
     pub parts: Vec<Part>,
+    /// Morph targets (glTF): shapes whose offsets, times a weight, are added to the base shape.
+    pub morph_targets: Vec<MorphTarget>,
+    /// The weight of each morph target when nothing sets one (glTF `mesh.weights`); one per
+    /// target.
+    pub morph_weights: Vec<f32>,
+    /// The file's `extensions` object for the mesh (glTF), as written; empty when it has none.
+    pub extensions: Map<String, Value>,
+    /// The file's `extras` value for the mesh (glTF), as written.
+    pub extras: Option<Value>,
+}
+
+/// One morph target of a [`Mesh`]: offsets added to the base shape, times the target's weight.
+/// Each list is empty when the target does not move that attribute, or as long as the mesh's
+/// pool it moves.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MorphTarget {
+    /// The target's name, from the mesh's `extras.targetNames` (glTF); empty when it has none.
+    pub name: String,
+    /// One offset per entry of [`Mesh::positions`].
+    pub positions: Vec<[f64; 3]>,
+    /// One offset per entry of [`Mesh::normals`].
+    pub normals: Vec<[f64; 3]>,
+    /// One offset of `[x, y, z]` per entry of [`Mesh::tangents`]; the handedness does not move.
+    pub tangents: Vec<[f64; 3]>,
 }
 
 /// A triangle list with one index per vertex, as [`Mesh::unified`] builds it.
@@ -297,6 +330,20 @@ impl Mesh {
         if self.parts.iter().any(|p| p.has_tangents) && self.tangents.len() != self.positions.len() {
             return bad("a part names tangents but the tangent array does not match the positions");
         }
+        if !self.morph_weights.is_empty() && self.morph_weights.len() != self.morph_targets.len() {
+            return bad("the morph weights do not match the morph targets");
+        }
+        for t in &self.morph_targets {
+            for (what, len, pool) in [
+                ("positions", t.positions.len(), self.positions.len()),
+                ("normals", t.normals.len(), self.normals.len()),
+                ("tangents", t.tangents.len(), self.tangents.len()),
+            ] {
+                if len != 0 && len != pool {
+                    return bad(&format!("morph target `{}`: its {what} do not match the mesh's", t.name));
+                }
+            }
+        }
         for p in &self.parts {
             let total = if p.face_sizes.is_empty() {
                 (p.corners.len() % 3 == 0).then_some(p.corners.len())
@@ -321,13 +368,24 @@ impl Mesh {
     /// The mesh as triangles ([`Part::triangles_in`]) with one vertex per distinct corner.
     /// Corners whose indices are out of range are dropped with their triangle.
     pub fn unified(&self) -> Unified {
+        self.unified_parts(|_| true)
+    }
+
+    /// [`Mesh::unified`] over the parts that `keep` takes by index. The others get no triangles,
+    /// and their corners do not decide whether the vertices have normals and UVs.
+    pub(crate) fn unified_parts(&self, keep: impl Fn(usize) -> bool) -> Unified {
         let mut out = Unified::default();
-        let all = |f: &dyn Fn(&Corner) -> bool| self.parts.iter().all(|p| p.corners.iter().all(f));
+        let kept = || self.parts.iter().enumerate().filter(|(k, _)| keep(*k)).map(|(_, p)| p);
+        let all = |f: &dyn Fn(&Corner) -> bool| kept().all(|p| p.corners.iter().all(f));
         let normals = !self.normals.is_empty() && all(&|c| c.normal != NONE);
         let uv_set = self.uv_sets.first().filter(|_| all(&|c| c.uv != NONE));
         let colors = self.colors.len() == self.positions.len() && !self.colors.is_empty();
         let mut ids: HashMap<Corner, u32> = HashMap::new();
-        for part in &self.parts {
+        for (k, part) in self.parts.iter().enumerate() {
+            if !keep(k) {
+                out.parts.push(Vec::new());
+                continue;
+            }
             let mut tris = Vec::with_capacity(part.triangle_count());
             'tri: for t in part.triangles_in(&self.positions) {
                 let mut tri = [0u32; 3];
@@ -471,6 +529,11 @@ pub struct Material {
     pub sheen_roughness: f32,
     pub sheen_color_texture: Option<TextureRef>,
     pub sheen_roughness_texture: Option<TextureRef>,
+    /// The file's `extensions` object for the material (glTF), as written, the ones read into
+    /// the fields above included; empty when it has none.
+    pub extensions: Map<String, Value>,
+    /// The file's `extras` value for the material (glTF), as written.
+    pub extras: Option<Value>,
 }
 
 impl Default for Material {
@@ -499,6 +562,8 @@ impl Default for Material {
             sheen_roughness: 0.0,
             sheen_color_texture: None,
             sheen_roughness_texture: None,
+            extensions: Map::new(),
+            extras: None,
         }
     }
 }
@@ -615,11 +680,31 @@ pub struct Node {
     pub skin: Option<usize>,
     /// Indices into [`Scene::nodes`].
     pub children: Vec<usize>,
+    /// Morph target weights for this node's mesh (glTF `node.weights`), in place of the mesh's
+    /// [`Mesh::morph_weights`]; at most one per target the mesh has, and empty when the node
+    /// sets none.
+    pub morph_weights: Vec<f32>,
+    /// The file's `extensions` object for the node (glTF), as written; empty when it has none.
+    pub extensions: Map<String, Value>,
+    /// The file's `extras` value for the node (glTF), as written.
+    pub extras: Option<Value>,
 }
 
 impl Default for Node {
     fn default() -> Self {
-        Node { name: String::new(), transform: IDENTITY, trs: None, camera: None, light: None, mesh: None, skin: None, children: Vec::new() }
+        Node {
+            name: String::new(),
+            transform: IDENTITY,
+            trs: None,
+            camera: None,
+            light: None,
+            mesh: None,
+            skin: None,
+            children: Vec::new(),
+            morph_weights: Vec::new(),
+            extensions: Map::new(),
+            extras: None,
+        }
     }
 }
 
@@ -727,6 +812,11 @@ pub struct Scene {
     pub external: Vec<String>,
     /// What was left out or repaired while reading.
     pub warnings: Vec<String>,
+    /// The file's top-level `extensions` object (glTF), as written, the lights read into
+    /// [`Scene::lights`] included; empty when it has none.
+    pub extensions: Map<String, Value>,
+    /// The file's top-level `extras` value (glTF), as written.
+    pub extras: Option<Value>,
 }
 
 impl Scene {
