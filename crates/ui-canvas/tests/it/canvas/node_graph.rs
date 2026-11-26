@@ -132,14 +132,14 @@ fn a_node_graph_follows_the_canvas_view() {
     assert!(selection.borrow().contains(&NodeId::new(0)), "a click on a node selects it");
 
     // The view at a node far off at negative points builds it and not the ones near the origin; the same far off at
-    // positive points.
+    // positive points. A, the lead the click made, stays built out of view, as a collection keeps its lead.
     for (name, node) in [("C", NODES[2]), ("D", NODES[3])] {
         let mut far = view.get();
         far.center = middle_of(node);
         view.set(far);
         fixture.frame(Vec::new()).frame(Vec::new());
         assert!(built(&fixture, name), "{name} is built while the view shows it");
-        assert!(!built(&fixture, "A"), "A is not built while the view is at {name}");
+        assert!(!built(&fixture, "B"), "B is not built while the view is at {name}");
         let port = fixture.by_label(&format!("{name} in")).expect("the node is built");
         assert!(CANVAS.contains(port.rect.center()), "{name}'s input port is on the canvas: {:?}", port.rect);
     }

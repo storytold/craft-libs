@@ -20,7 +20,7 @@ use craft_ui::runtime::focus::{FocusTarget, KeyUse, request};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::windows::{hold_close, root_close_requested};
 use craft_ui::style::StyleCx;
-use craft_ui::testing::focus::{Stop, named_id, register_stop, widget};
+use craft_ui::testing::focus::{Stop, key_release, named_id, register_stop, widget};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::{Frames, trial};
@@ -279,8 +279,14 @@ impl Container for Scoped {}
 /// on the one in a plain container beside it, under a catalog that binds F8 to `PANEL_COMMAND` in `PANEL`; with
 /// `disabled` the app's states disable the command.
 fn press_in_panel(inside: bool, disabled: bool) -> Vec<(String, FirePhase)> {
+    fired_in_panel(inside, disabled, false)
+}
+
+/// As [`press_in_panel`]; with `hold` the catalog binds a hold of F8 instead, and F8 stays down past the hold delay.
+fn fired_in_panel(inside: bool, disabled: bool, hold: bool) -> Vec<(String, FirePhase)> {
+    const DELAY: f64 = 0.3;
     let scope = PANEL.scope().expect("the trial's scope name is valid");
-    let binding = Binding::parse("F8").expect("the trial's chord parses");
+    let binding = Binding::parse(if hold { "Hold F8" } else { "F8" }).expect("the trial's chord parses");
     let catalog =
         AppCatalog::new(vec![CommandDef::new(PANEL_COMMAND, "Panel command", scope).with_default(binding)], 1).expect("a panel-scope def is taken");
     let mut states = CommandStates::new();
@@ -297,7 +303,7 @@ fn press_in_panel(inside: bool, disabled: bool) -> Vec<(String, FirePhase)> {
         });
     };
     let mut frames = Frames::new();
-    frames.commands(CommandInput::new().catalog(catalog).states(&Tracked::new(states)));
+    frames.commands(CommandInput::new().catalog(catalog).states(&Tracked::new(states)).holds(hold.then_some(DELAY)));
     frames.idle(4, &mut show);
     let target = if inside { scoped.borrow().id } else { plain.borrow().id };
     request(&frames.ctx, FocusTarget::Id(target.expect("the probe showed")));
@@ -306,7 +312,22 @@ fn press_in_panel(inside: bool, disabled: bool) -> Vec<(String, FirePhase)> {
     take_output(&frames.ctx);
     frames.frame(vec![key_press(Key::F8, Modifiers::NONE)], &mut show);
     frames.idle(1, &mut show);
+    if hold {
+        frames.advance(DELAY * 2.0);
+        frames.idle(2, &mut show);
+        frames.frame(vec![key_release(Key::F8, Modifiers::NONE)], &mut show);
+        frames.idle(1, &mut show);
+    }
     take_output(&frames.ctx).fired.into_iter().map(|fired| (fired.command.id, fired.phase)).collect()
+}
+
+/// sh.C9 for a hold binding: a panel-scope def's hold of F8 runs only while the keyboard is inside a container of its
+/// scope; beside it the key is not the hold's and its deadline runs nothing.
+#[trial]
+fn a_panel_scope_hold_binding_runs_only_while_the_keyboard_is_inside_its_container() {
+    let ran = |fired: Vec<(String, FirePhase)>| fired.into_iter().filter(|(command, _)| command == PANEL_COMMAND).count();
+    assert_eq!(ran(fired_in_panel(true, false, true)), 1, "inside its container the hold runs the panel command");
+    assert_eq!(ran(fired_in_panel(false, false, true)), 0, "in the plain container beside it the hold runs nothing");
 }
 
 /// sh.C9: an app catalog's def in a panel scope fires only while the keyboard is inside a container of that scope,

@@ -775,6 +775,13 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         self.items().empty.as_ref().map_or(0.0, |text| items::empty_text::height(ui, cx.tokens, text, width))
     }
 
+    /// Whether the `PartsCx::in_body` parts are document content, whose places are data (a graph's wires and notes, as
+    /// a `FreeLayout`'s items are): they keep their places under a right-to-left interface, and their nodes say so,
+    /// as the nodes of `Props::ltr_axis` content do. False by default: body parts mirror with the collection.
+    fn body_is_document(&self) -> bool {
+        false
+    }
+
     /// Paints in the rows' space under the rows, where the `PartsCx::in_body` parts that are not `over` lie: on a
     /// transformed collection, inside its body's layer, so the paint follows the rows through the transform.
     fn paint_body_under(&mut self, _ui: &mut PaintUi<'_>, _cx: &Cx<'_, Self>) {}

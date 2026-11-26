@@ -482,6 +482,11 @@ impl<E: 'static> Collection for NodeGraph<'_, E> {
         node.in_graph(fed, self.port_labels).placed(place)
     }
 
+    /// The wires and annotations lie where the graph places them, as the nodes do.
+    fn body_is_document(&self) -> bool {
+        true
+    }
+
     /// The backdrops, then the wires over them, under the nodes and through the zoom with them. A selected wire is its
     /// on look and a hovered one its hover look, both thick; a wire that only touches a selected node is `hot`; the wire
     /// a drag detaches is not drawn.

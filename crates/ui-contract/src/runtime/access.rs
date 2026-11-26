@@ -552,6 +552,9 @@ pub struct SubNode {
     pub(crate) steps: bool,
     pub(crate) bounds: Option<egui::Rect>,
     pub(crate) run: Option<RunFacts>,
+    /// The node keeps its left-to-right place under a right-to-left interface: a body part of a collection whose
+    /// body is document content (`Collection::body_is_document`).
+    pub(crate) ltr_axis: bool,
 }
 
 impl SubNode {
@@ -583,6 +586,7 @@ impl SubNode {
             steps: false,
             bounds: None,
             run: None,
+            ltr_axis: false,
         }
     }
 

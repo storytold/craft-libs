@@ -295,7 +295,9 @@ fn report_sub(core: &CxCore<'_>, decls: &Decls, node: &SubNode, face: Option<&Fa
     let mut node = node.clone();
     node.flags |= result.map_or(Flags::empty(), |result| result.flags);
     let rect = result.map_or(core.rect, |result| result.rect);
-    let rect = if declared.is_some_and(|(decl, _)| decl.body) {
+    let body = declared.is_some_and(|(decl, _)| decl.body);
+    node.ltr_axis |= body && core.body_document;
+    let rect = if body {
         crate::primitives::sensing::body_rect_in_root(&core.ctx, core.id, rect)
     } else {
         crate::runtime::egui::areas::out_of_sublayer(&core.ctx, core.response.layer_id, rect)

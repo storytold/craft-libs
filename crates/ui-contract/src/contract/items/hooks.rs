@@ -415,6 +415,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let mut stripe: Option<(usize, usize)> = None;
         let transform = comp.props(Internal::new()).transform;
         let (parent, clip) = (ui.layer_id(), rect.intersect(ui.clip_rect()));
+        // The collection's rect in the rows' space, where the rows' `Ui`s and clips lie: through a transform, its body
+        // layer's.
+        let rows_rect = transform.map_or(rect, |transform| areas::body_transform(rect.min, transform.scale, transform.offset).inverse() * rect);
         let forward = areas::Forward { root: id, sense: response::to_egui(cx.core.root_sense), rect: cx.core.rect.intersect(ui.clip_rect()) };
         let placed = known.placed.clone();
         let tolerance = craft_behavior::layout_memory::measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
@@ -456,7 +459,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             comp.paint_body_under(&mut crate::contract::run::paint_ui(ui, env, &*cx.core, cx.style), &*cx);
             // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
             let members_ui = C::MEMBERS.then(|| {
-                let builder = UiBuilder::new().max_rect(rect).layout(child::column_layout(rtl)).scope_id(sub(id, "members"));
+                let builder = UiBuilder::new().max_rect(rows_rect).layout(child::column_layout(rtl)).scope_id(sub(id, "members"));
                 let members_ui = alloc::child(ui, builder);
                 let installed = Env::install_for(&members_ui, base_env.clone());
                 (members_ui, installed)
@@ -542,7 +545,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 drop(icx);
                 item = Props::id(item, item_id);
                 // A scrolled row slides under the frozen rows: it never paints into their band.
-                let below_frozen = Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + layout.frozen_band(at)), rect.max);
+                let below_frozen = Rect::from_min_max(Pos2::new(rows_rect.min.x, rows_rect.min.y + layout.frozen_band(at)), rows_rect.max);
                 let clip = below_frozen.intersect(ui.clip_rect());
                 let row_ui = match &members_ui {
                     Some(_) => None,
@@ -687,6 +690,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         focus::register_row_groups(&ctx, id, rtl, row_groups);
         self.shown = shown_rows;
         cx.core.grid = crate::contract::GridPlace::grid(len, columns.len());
+        cx.core.body_document = comp.body_is_document();
         let size = layout.content_size();
         self.content = Vec2::new(size.x as f32, size.y as f32);
         if self.scrolls && !ui.is_sizing_pass() && !crate::runtime::measure::active(&ctx) {

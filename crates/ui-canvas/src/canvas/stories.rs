@@ -110,7 +110,9 @@ fn node_graph_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Wire::new(1, PortRef::new(NodeId::new(1), 1), PortRef::new(NodeId::new(2), 0)),
     ];
     let source = keyed(&ids, |id| *id);
-    Canvas::new("Graph")
+    // What the graph reports (a port's click), which the app hears beside the canvas's own output.
+    let mut graph_events = Vec::new();
+    let mut shown: StoryOutput = Canvas::new("Graph")
         .document(ViewTarget::unbounded(graph_extent()))
         .view(view_at.bind(&mut *view))
         .show_at(ui, room, |ui, body| {
@@ -119,12 +121,15 @@ fn node_graph_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             if let Some(zoom) = space.view.layer_transform() {
                 graph = graph.zoom(zoom);
             }
-            let _ = graph.show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
+            let graph_out: StoryOutput = graph.show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize])).into();
+            graph_events = graph_out.collection;
             // In the picture slot, under the nodes.
             let _ = CanvasGrid::new("Grid").spacing(DocVec::new(GRID_STEP, GRID_STEP)).picture().show_at(ui, body.rect);
         })
         .output
-        .into()
+        .into();
+    shown.collection = graph_events;
+    shown
 }
 
 /// The side of the surface story's marker picture, in pixels.

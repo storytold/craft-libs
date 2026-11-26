@@ -401,6 +401,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.sort = node.sort;
     spec.sortable = node.sortable;
     write_states(&mut spec, flags, None, decl.enabled, false);
+    spec.ltr_axis = node.ltr_axis;
     declare_actions(&mut spec, decl.focusable, decl.clickable, false, numeric);
     if node.steps && numeric.is_none() {
         spec.actions.extend([NodeAction::Increment, NodeAction::Decrement]);

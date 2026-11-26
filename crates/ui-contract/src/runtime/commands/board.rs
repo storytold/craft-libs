@@ -2250,6 +2250,8 @@ pub(crate) fn begin(ctx: &Context) {
         let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
         resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
     };
+    // The hold binding of `shortcut`'s key, reached as a press's is: elsewhere it is unbound and the key taps.
+    let hold_of = |shortcut: &keys::Shortcut, typing: bool| keys.hold(&shortcuts.layout, &shortcut.input, typing).filter(|hit| reached(&hit.command));
     // Whether a text component has the keys for `shortcut`'s press; one that lets command keys through leaves their
     // presses to the app's commands.
     let typing_at = |shortcut: &keys::Shortcut| {
@@ -2284,7 +2286,7 @@ pub(crate) fn begin(ctx: &Context) {
                 // completes no double press and settles no wait, and the key a momentary or tool command holds stays
                 // held by its press. The key of a wait or of a hold binding repeats nothing.
                 let typing = typing_at(shortcut);
-                if wait.as_ref().is_some_and(|wait| Some(wait.key) == key) || keys.hold(&shortcuts.layout, &shortcut.input, typing).is_some() {
+                if wait.as_ref().is_some_and(|wait| Some(wait.key) == key) || hold_of(shortcut, typing).is_some() {
                     continue;
                 }
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, true, &enabled)));
@@ -2295,9 +2297,7 @@ pub(crate) fn begin(ctx: &Context) {
                 // Another key's press settles the wait first: keys act in the order they went down.
                 fired.extend(settle(wait.take(), time, Some(shortcut.place)));
                 let typing = typing_at(shortcut);
-                let hold = key
-                    .filter(|_| !typing && !modal_at_start)
-                    .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
+                let hold = key.filter(|_| !typing && !modal_at_start).and_then(|key| hold_of(shortcut, typing).map(|hold| (key, hold)));
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, false, &enabled)));
                 match (hold, tap) {
                     (Some((key, hold)), tap) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),

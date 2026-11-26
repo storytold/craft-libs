@@ -433,6 +433,7 @@ fn blank_core<'a>(
         text_unparsed: None,
         text_takes_pointer: false,
         grid: crate::runtime::access::GridPlace::default(),
+        body_document: false,
         escape_to_list: false,
         text_access: std::cell::RefCell::new(None),
         value_text: std::cell::RefCell::new(None),

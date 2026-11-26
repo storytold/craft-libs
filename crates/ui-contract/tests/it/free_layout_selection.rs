@@ -48,6 +48,8 @@ struct Board<'a> {
     grips: Option<(Rect, Rect)>,
     /// Declares `PAD` in the rows' space at this rect from the board's top left, and notes where a press on it begins.
     pad: Option<(Rect, &'a Cell<Option<Pos2>>)>,
+    /// `Collection::body_is_document`.
+    document: bool,
 }
 
 impl<'a> Board<'a> {
@@ -61,6 +63,7 @@ impl<'a> Board<'a> {
             drops: Vec::new(),
             grips: None,
             pad: None,
+            document: false,
         }
     }
 
@@ -110,7 +113,10 @@ impl Component for Board<'_> {
             }
         }
         if let Some((pad, _)) = self.pad {
-            cx.in_body(PAD, pad.translate(rect.min.to_vec2())).sense(craft_behavior::Sense::CLICK).pointer_only("the trial presses the part");
+            cx.in_body(PAD, pad.translate(rect.min.to_vec2()))
+                .sense(craft_behavior::Sense::CLICK)
+                .pointer_only("the trial presses the part")
+                .node(Role::BUTTON, "Pad");
         }
     }
 
@@ -149,6 +155,10 @@ impl Collection for Board<'_> {
 
     fn moves_from_part(&self, part: PartRef) -> bool {
         part.key == GRIP
+    }
+
+    fn body_is_document(&self) -> bool {
+        self.document
     }
 
     fn item_layout(&self, source: &dyn ItemSource<usize>, _: f32, _: &StyleCx<'_>) -> FreeLayout {
@@ -472,4 +482,24 @@ fn a_body_part_is_hit_where_the_transform_shows_it_after_a_pan_and_a_zoom() {
         let got = pressed.get();
         assert!(got.is_some_and(|got| inside.contains(got)), "{what}: the press takes the part, read in the rows' space: {got:?}");
     }
+}
+
+/// A board with no items and its pad at the start of its body, which says whether it is document content.
+fn pad_board(ui: &mut Ui, document: bool) -> craft_ui::testing::story::StoryOutput {
+    let pressed = Cell::new(None);
+    let mut board = Board::new(Vec::new()).with_body_part(Rect::from_min_size(Pos2::ZERO, Vec2::new(40.0, 20.0)), &pressed);
+    board.document = document;
+    board.id_salt("board").show_items(ui, &Count(0), &mut |_, _| Row::new()).into()
+}
+
+/// q135: a body part keeps its place under right-to-left, as a free layout's items do. The suite's right-to-left
+/// case takes it as document content when the collection says its body is (`Collection::body_is_document`), and
+/// fails the same part when the collection does not.
+#[trial]
+fn the_rtl_case_leaves_a_document_body_part_where_it_is() {
+    use craft_ui::testing::story::Story;
+    use craft_ui::testing::suite::rtl_case;
+    let failed = rtl_case(&Story::new("mirrored-body", |ui, _| pad_board(ui, false))).expect_err("the pad does not mirror");
+    assert!(failed.contains("not its reflection"), "{failed}");
+    rtl_case(&Story::new("document-body", |ui, _| pad_board(ui, true))).expect("a document body part keeps its place");
 }

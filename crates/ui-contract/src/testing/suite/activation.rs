@@ -146,7 +146,7 @@ fn signature(tree: &AccessTree) -> HashMap<NodeKey, String> {
         .collect()
 }
 
-/// Every action a node declares changes something: a click, an edit, a node state or the focus. A repeated set of
+/// Every action a node declares changes something: a click, an edit, a collection event, a node state or the focus. A repeated set of
 /// nodes runs on a fixed sample under the gate's fraction ([`nodes::sampled_actions`]).
 fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
     for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
@@ -174,7 +174,8 @@ fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
             fixture.access(kind, &target);
             fixture.settle();
             let outputs = fixture.take_outputs();
-            let acted = outputs.iter().any(|output| output.activated() || !output.edits.is_empty())
+            // An event a collection reports is the app's to act on, as a click is: an item's part reports its click so.
+            let acted = outputs.iter().any(|output| output.activated() || !output.edits.is_empty() || !output.collection.is_empty())
                 || signature(fixture.tree()) != before
                 || fixture.focused() != focus;
             if !acted {

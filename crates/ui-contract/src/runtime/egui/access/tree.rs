@@ -424,7 +424,8 @@ impl AccessTree {
     }
 
     /// Whether the node is, or lies inside, a component whose horizontal axis keeps its left-to-right order
-    /// (`Props::ltr_axis`): it or an ancestor declares left-to-right text direction on a node that is not a text run,
+    /// (`Props::ltr_axis`), or is a body part of a collection whose body is document content
+    /// (`Collection::body_is_document`): it or an ancestor declares left-to-right text direction on a node that is not a text run,
     /// which only that declaration does.
     pub fn in_ltr_axis(&self, key: NodeKey) -> bool {
         let mut at = Some(key);
