@@ -445,7 +445,7 @@ mod row_prediction {
             space: ImageColorspace::Rgb,
         };
         let mut up = Vec::new();
-        for (y, row) in overhead.color.chunks_exact(12).enumerate() {
+        for (y, row) in overhead.color.as_chunks::<12>().0.iter().enumerate() {
             up.push(2);
             for (x, byte) in row.iter().enumerate() {
                 let previous = if y == 0 { 0 } else { overhead.color[(y - 1) * 12 + x] };
