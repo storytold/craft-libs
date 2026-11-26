@@ -20,7 +20,7 @@ fn tones(rate: u32, channels: usize, frames: usize) -> AudioBuffer {
 
 /// Decodes `file` with ffmpeg's `decoder`; planar output in ffmpeg's (WAV) channel order.
 fn ffmpeg_decode(ff: &Path, decoder: &str, file: &[u8], channels: usize, tag: &str) -> Vec<Vec<f32>> {
-    let path = crate::testkit::fixtures_dir("vorbis-encoder").join(format!("{tag}.ogg"));
+    let path = crate::integration::codecs::testkit::fixtures_dir("vorbis-encoder").join(format!("{tag}.ogg"));
     std::fs::write(&path, file).unwrap();
     let out = Command::new(ff)
         .args(["-v", "error", "-xerror", "-c:a", decoder, "-i"])
@@ -90,14 +90,17 @@ fn every_channel_count_decodes_on_the_right_speakers() {
 /// a valid field name is left out.
 #[test]
 fn tags_reach_ffprobe() {
-    let Some(probe) = crate::common::tool("ffprobe").or_else(|| crate::common::skip("ffprobe not found")) else { return };
+    let Some(probe) = crate::integration::codecs::common::tool("ffprobe").or_else(|| crate::integration::codecs::common::skip("ffprobe not found"))
+    else {
+        return;
+    };
     let opts = OggVorbisOptions::new(3.0)
         .with_tag("TITLE", "Smörgåsbord ✓")
         .with_tag("ARTIST", "Craft")
         .with_tag("bad=name", "dropped")
         .with_vendor("craft-audio test");
     let file = encode_ogg_vorbis(&tones(44_100, 2, 44_100), &opts).unwrap();
-    let path = crate::testkit::fixtures_dir("vorbis-encoder").join("tags.ogg");
+    let path = crate::integration::codecs::testkit::fixtures_dir("vorbis-encoder").join("tags.ogg");
     std::fs::write(&path, &file).unwrap();
     let out = Command::new(probe).args(["-v", "error", "-of", "json", "-show_streams", "-show_format"]).arg(&path).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));

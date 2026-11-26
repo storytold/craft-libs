@@ -8,8 +8,9 @@
 //! Blank lines and lines starting with `#` are skipped. `file` is relative to the checkout and may
 //! end in `#<index>` to pick one face of a font collection (`.ttc`). The optional `role` is `ui` for
 //! an interface face: a full Regular TrueType face that an app's build cuts to the characters of its
-//! translation catalogs. Fields after the ninth are ignored, so a manifest that gains a field still
-//! embeds.
+//! translation catalogs; `mono` for the monospace face, which leads an app's Monospace family; or
+//! `signature` for the handwriting face, which leads the signature family.
+//! Fields after the ninth are ignored, so a manifest that gains a field still embeds.
 
 use std::fmt;
 
@@ -34,8 +35,8 @@ pub struct ManifestEntry {
     pub sha256: String,
     /// Where the file came from.
     pub source: String,
-    /// The optional ninth field: `Some("ui")` for an interface face, `None` when the line has no
-    /// role.
+    /// The optional ninth field: `Some("ui")` for an interface face, `Some("mono")` for the
+    /// monospace face, `Some("signature")` for the signature face, `None` when the line has no role.
     pub role: Option<String>,
 }
 
@@ -51,6 +52,11 @@ impl ManifestEntry {
         self.role.as_deref() == Some(UI_ROLE)
     }
 
+    /// Whether the face is the monospace face (`role` is `mono`).
+    pub fn is_mono(&self) -> bool {
+        self.role.as_deref() == Some(MONO_ROLE)
+    }
+
     /// Whether the face has a CJK script tag ([`CJK_SCRIPTS`]).
     pub fn is_cjk(&self) -> bool {
         CJK_SCRIPTS.iter().any(|tag| self.has_script(tag))
@@ -59,6 +65,12 @@ impl ManifestEntry {
 
 /// The `role` of an interface face.
 pub const UI_ROLE: &str = "ui";
+
+/// The `role` of the monospace face (JetBrains Mono): the Monospace stack leads with the embedded face that has it.
+pub const MONO_ROLE: &str = "mono";
+
+/// The `role` of a signature face: `FontRef::signature()` selects the embedded faces that have it.
+pub const SIGNATURE_ROLE: &str = "signature";
 
 /// Script tags of the CJK faces, which craft-fonts also ships as interface faces. `Hant` covers
 /// `Hant-HK`.
@@ -74,6 +86,7 @@ pub(crate) fn script_matches(face_tag: &str, wanted: &str) -> bool {
 pub struct ParseError {
     /// 1-based line number.
     pub line: usize,
+    /// What is wrong with the line.
     pub reason: String,
 }
 
