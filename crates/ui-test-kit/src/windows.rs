@@ -32,6 +32,10 @@ thread_local! {
     /// The window facts of each child opened from another child (a popup window): it opens where its builder puts it
     /// and follows its own commands.
     static OWN_INFO: RefCell<Vec<(ViewportId, ViewportInfo)>> = const { RefCell::new(Vec::new()) };
+    /// The child [`Windows::focus`] focused, whose window alone of the children reports focus; `None` until it is called.
+    static FOCUSED: Cell<Option<ViewportId>> = const { Cell::new(None) };
+    /// The children whose next pass reports a close request, as the window system sends one once.
+    static CLOSES: RefCell<Vec<ViewportId>> = const { RefCell::new(Vec::new()) };
     /// The window facts the root reports.
     static ROOT_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
     /// The children whose windows are open: those that ran a pass and are still shown. Like an integration, every pass's
@@ -79,6 +83,15 @@ const FRAME_SECONDS: f64 = 1.0 / 60.0;
 
 /// Runs `f` on the facts `id` reports: its own for a child opened from another child, else the ones every child
 /// opened from the root shares.
+/// The window facts the child `id` reports: its own or the shared ones, with the focus [`Windows::focus`] gave.
+fn facts_of(id: ViewportId) -> ViewportInfo {
+    let mut info = with_facts(id, |info| info.clone());
+    if let Some(focused) = FOCUSED.with(Cell::get) {
+        info.focused = Some(focused == id);
+    }
+    info
+}
+
 fn with_facts<R>(id: ViewportId, f: impl FnOnce(&mut ViewportInfo) -> R) -> R {
     let own = OWN_INFO.with(|own| {
         let mut own = own.borrow_mut();
@@ -213,8 +226,12 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     });
     let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     let dropped_files = dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
-    let mut info = with_facts(viewport.ids.this, |info| info.clone());
+    let mut info = facts_of(this);
     info.parent = Some(viewport.ids.parent);
+    if CLOSES.with(|closes| closes.borrow().contains(&this)) {
+        CLOSES.with(|closes| closes.borrow_mut().retain(|held| *held != this));
+        info.events.push(egui::ViewportEvent::Close);
+    }
     let mut input = RawInput {
         viewport_id: viewport.ids.this,
         events,
@@ -343,6 +360,8 @@ impl Windows {
         CHILD_INFO.with(|info| *info.borrow_mut() = ViewportInfo::default());
         OWN_INFO.with(|own| own.borrow_mut().clear());
         CHILDREN.with(|children| children.borrow_mut().clear());
+        FOCUSED.with(|focused| focused.set(None));
+        CLOSES.with(|closes| closes.borrow_mut().clear());
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
         TEXTURES.with(|textures| textures.borrow_mut().clear());
@@ -362,9 +381,33 @@ impl Windows {
     }
 
     /// The window facts `viewport` reports: its own for a child opened from another child, else those
-    /// [`child_info`](Self::child_info) gave.
+    /// [`child_info`](Self::child_info) gave, with the focus [`focus`](Self::focus) gave.
     pub fn facts(&self, viewport: ViewportId) -> ViewportInfo {
-        with_facts(viewport, |info| info.clone())
+        facts_of(viewport)
+    }
+
+    /// Focuses the child `viewport`'s window and unfocuses every other child's, overriding the focus in
+    /// [`child_info`](Self::child_info): from the next frame on their facts say so, and each open window whose focus
+    /// changed gets `Event::WindowFocused`.
+    pub fn focus(&self, viewport: ViewportId) {
+        let mut open = CHILDREN.with(|children| children.borrow().clone());
+        if !open.contains(&viewport) {
+            open.push(viewport);
+        }
+        let before: Vec<_> = open.iter().map(|&id| facts_of(id).focused).collect();
+        FOCUSED.with(|focused| focused.set(Some(viewport)));
+        for (id, was) in open.into_iter().zip(before) {
+            let now = id == viewport;
+            if was != Some(now) {
+                self.send(id, vec![Event::WindowFocused(now)]);
+            }
+        }
+    }
+
+    /// Has the window system ask the child `viewport` to close: its next pass reports one close request, and no other
+    /// child's does.
+    pub fn close(&self, viewport: ViewportId) {
+        CLOSES.with(|closes| closes.borrow_mut().push(viewport));
     }
 
     /// The window in which the app's own egui code shows a modal (`FrameInput::app_modal`), from the next frame on.
