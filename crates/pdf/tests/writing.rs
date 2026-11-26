@@ -460,14 +460,7 @@ mod row_prediction {
                 "ASCII={ascii}: serialized parameters must outweigh the payload saving"
             );
         }
-        rows.push(Row {
-            name: "serialized overhead RGB",
-            samples: overhead,
-            rgba: true,
-            png: false,
-            must_predict: false,
-            must_keep_raw: true,
-        });
+        rows.push(Row { name: "serialized overhead RGB", samples: overhead, rgba: true, png: false, must_predict: false, must_keep_raw: true });
 
         let png_samples = rows
             .iter()
