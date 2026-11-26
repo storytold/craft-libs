@@ -11,6 +11,7 @@
 //! | `mpeg2` | `mpeg2` | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder with CBR / VBR (`mpeg2-encode`) |
 //! | `mpeg4` | `mpeg4` | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): Simple profile encoder (`mpeg4-encode`) |
 //! | `ffv1` | `ffv1` | FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder |
+//! | `rawvideo` | `rawvideo` | Uncompressed packed pictures: UYVY, YUYV, YVYU, v210, r210, R10k |
 //! | `hap` | `hap` | Vidvox Hap, Hap Alpha, Hap Q, Hap Q Alpha, Hap Alpha-Only: decoder and encoder |
 //! | `mjpeg` | `mjpeg` | Motion JPEG: frame-level decoder and baseline encoder over `craft-jpeg` |
 //! | `prores` | `prores` | Apple ProRes (SMPTE RDD 36): decoder and encoder |
@@ -19,6 +20,7 @@
 //! | `vp9` | `vp9` | VP9: decoder (`vp9-decode`) and encoder (`vp9-encode`) |
 //! | `av1` | `av1` | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
 //! | `vmd` | `vmd` | Sierra VMD video (8-bit paletted): decoder (`vmd-decode`) |
+//! | `bink` | `bink` | Bink video (Bink 1, revisions `f` and `i`): decoder (`bink-decode`) |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -73,6 +75,9 @@ pub use track::{TrackDecoder, TrackDecoderOptions};
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;
 
+#[cfg(feature = "bink-decode")]
+pub mod bink;
+
 #[cfg(feature = "dnx")]
 pub mod dnx;
 
@@ -90,6 +95,8 @@ pub mod ffv1;
 
 #[cfg(feature = "hap")]
 pub mod hap;
+#[cfg(feature = "rawvideo")]
+pub mod rawvideo;
 
 #[cfg(feature = "mjpeg")]
 pub mod mjpeg;
@@ -115,6 +122,10 @@ pub mod raw_video;
 /// Bounded Screen Video key-frame decoding (FLV codec 3).
 #[cfg(feature = "screen-video")]
 pub mod screen_video;
+
+/// Theora video (Xiph.Org specification): decoder and encoder.
+#[cfg(any(feature = "theora-decode", feature = "theora-encode"))]
+pub mod theora;
 
 #[cfg(feature = "vmd-decode")]
 pub mod vmd;

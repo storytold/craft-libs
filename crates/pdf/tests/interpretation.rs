@@ -3,6 +3,11 @@
 #![cfg(feature = "read")]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+// A CID that is its character's vertical form draws a substitute's vertical glyph.
+#[cfg(feature = "interpret")]
+#[path = "interpretation/vertical_forms.rs"]
+mod vertical_forms;
+
 #[cfg(feature = "interpret")]
 mod device {
     use craft_pdf::interpret::{

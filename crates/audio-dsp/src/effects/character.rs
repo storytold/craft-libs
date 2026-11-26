@@ -159,6 +159,9 @@ impl AudioEffect for RingMod {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        if n == 0 {
+            return;
+        }
         let nch = channels.len().min(self.lines.len());
         let effect = self.pv.idx("effect");
         if effect != self.effect {
@@ -495,6 +498,27 @@ mod tests {
             let others = x.iter().enumerate().filter(|(i, _)| *i < 10 || (*i - 10) % 96 != 0).fold(0.0f32, |m, (_, v)| m.max(v.abs()));
             assert!(others < 1e-5, "effect {effect}: {others} between the repeats");
         }
+    }
+
+    #[test]
+    fn an_empty_block_keeps_the_resonator_ring() {
+        let p = [("effect", 2.0), ("frequency", 500.0), ("resonance", 80.0)];
+        let (mut r, mut still) = (ring(&p, 1), ring(&p, 1));
+        for f in [&mut r, &mut still] {
+            let mut x = vec![0.0f32; 50];
+            x[10] = 1.0;
+            f.process(&mut [&mut x]);
+        }
+        assert!(r.set_param("effect", 0.0));
+        let mut empty: [f32; 0] = [];
+        r.process(&mut [&mut empty[..]]);
+        r.process(&mut []);
+        assert!(r.set_param("effect", 2.0));
+        let (mut a, mut b) = (vec![0.0f32; 500], vec![0.0f32; 500]);
+        r.process(&mut [&mut a]);
+        still.process(&mut [&mut b]);
+        assert!(rms(&b) > 1e-3, "the ring has already died out");
+        assert_eq!(a, b);
     }
 
     /// Frequency Mod delays the input by 2 samples to 2 samples plus 2 ms, swinging across the
