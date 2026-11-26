@@ -3557,6 +3557,17 @@ name = "craft-palette"
 version = "0.1.0"
 
 [[package]]
+name = "craft-pbr"
+version = "0.1.0"
+dependencies = [
+ "craft-pbr",
+ "craft-texture",
+ "glam 0.30.10",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pcap"
 version = "0.1.0"
 dependencies = [
@@ -5220,7 +5231,7 @@ checksum = "e917a58e17b27d2f15626c490754ccced7f46592dc5b5f39a3013b89cba5f068"
 dependencies = [
  "astc-decode",
  "bitflags 2.13.2",
- "glam",
+ "glam 0.25.0",
  "resize",
  "zerocopy",
 ]
@@ -6766,6 +6777,12 @@ name = "glam"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
+
+[[package]]
+name = "glam"
+version = "0.30.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
 
 [[package]]
 name = "glifo"
