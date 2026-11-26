@@ -51,13 +51,15 @@ pub struct SplitButtonStyle {
     radius: CornerRadius,
 }
 
-/// What a split button reports: the main part's response (`clicked()` runs the action) and the entry picked from
-/// the menu this pass.
+/// What a split button reports: whether its action runs, and the entry picked from the menu this pass.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct SplitOutput<T> {
-    /// The main part's response.
+    /// The button's response, which reports the clicks on the arrow as the main part's.
     pub response: Response,
+    /// The action runs in this pass: a click on the main part, or an activation by key or AccessKit. Never a click on
+    /// the arrow.
+    pub activated: bool,
     /// The entry the user picked.
     pub chosen: Option<T>,
     /// The pointer's stay over the main part: hovered, entered, left and clicked under the pointer.
@@ -228,6 +230,11 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         }
     }
 
+    /// The arrow opens the menu: a click on it never runs the action, nor fires the bound command.
+    fn activated(&self, cx: &Cx<'_, Self>) -> bool {
+        cx.activation().is_some() && cx.part_activated(ARROW).is_none()
+    }
+
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         cx.join_roving();
         let menu = cx.popup("menu");
@@ -307,7 +314,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitOutput<T> {
-        SplitOutput { response: cx.response.clone(), chosen: self.chosen, hover: cx.hover() }
+        SplitOutput { activated: self.activated(&cx), response: cx.response.clone(), chosen: self.chosen, hover: cx.hover() }
     }
 }
 
