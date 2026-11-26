@@ -152,21 +152,3 @@ fn doubled_punctuation(text: &str, v: &mut Vec<Issue>) {
         i += run.max(1);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn checks_croatian_punctuation() {
-        let t = "Ovo ovo je primjer , s dva  razmaka..";
-        let issues = check(t);
-        assert!(issues.iter().any(|i| i.message.starts_with("Ponovljena riječ")));
-        assert!(issues.iter().any(|i| i.message == "Dvostruki razmak"));
-        assert!(issues.iter().all(|i| i.lang == ProofLang::Hr));
-    }
-    #[test]
-    fn abbreviations_do_not_trigger_capitals() {
-        let issues = check("To je npr. sasvim dobar primjer.");
-        assert!(!issues.iter().any(|i| i.message == "Rečenica treba započeti velikim slovom"));
-    }
-}

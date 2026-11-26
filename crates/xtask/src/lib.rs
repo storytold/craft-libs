@@ -17,6 +17,7 @@
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
 //! - `fetch` (feature `fetch`): files named in a pinned list, each checked against its SHA-256 before
 //!   it is written in place, and tar archives extracted under entry and size limits.
+//! - `stats` (feature `stats`): files, lines and tests of Rust per workspace crate (`cargo xtask stats`).
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -48,6 +49,15 @@ pub mod lock;
 #[cfg(feature = "report")]
 pub mod report;
 pub mod runner;
+#[cfg(feature = "stats")]
+pub mod stats;
+
+/// Writes one diagnostic line to stderr. A failed write, such as one to a closed pipe, is ignored, so a
+/// diagnostic never stops a run.
+pub(crate) fn note(line: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
 
 /// Keeps the tests that start child processes apart from the tests that check whether a slot is free.
 /// A child holds copies of the parent's open files, and so its file locks, until it starts its program.

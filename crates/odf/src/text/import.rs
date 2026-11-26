@@ -875,6 +875,12 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         None if styles_xml.is_some() => EMPTY_CONTENT.as_bytes().to_vec(),
         None => return Err("ODT: content.xml is missing".into()),
     };
+    let file_orders = super::frames::read_orders(&content, styles_xml.as_deref())?;
+    // Normalize source values before both model parsing and retained-markup capture.
+    // Rewriting values only keeps unknown XML and the model on the same order scale.
+    let content = super::xml::remap_orders(&content, |raw| file_orders.file_order(raw))?;
+    let styles_normalized = styles_xml.as_deref().map(|xml| super::xml::remap_orders(xml, |raw| file_orders.file_order(raw))).transpose()?;
+    let styles_xml = styles_normalized;
     let mut styles = Styles::default();
     let mut pages = Pages::default();
     if let Some(s) = &styles_xml {
@@ -931,6 +937,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects, &mut spaces_left)).unwrap_or_default();
     first_pages(&mut pages);
     let mut body = Body::new(&styles, &pages, &mut fetch);
+
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     body.raw = &content;
     body.markup = &content;

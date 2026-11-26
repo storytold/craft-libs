@@ -59,9 +59,9 @@ fn flate_stops_inside_stream_decoding() {
     }
     let length = 40 * 65535;
     input.extend_from_slice(&(((length % 65521) as u32) << 16 | 1).to_be_bytes());
-    assert_eq!(lzw_flate::flate::decode(&input, &Dict::empty(), usize::MAX).map(|v| v.len()), Some(length));
+    assert_eq!(lzw_flate::flate::decode(&input, &Dict::empty(), usize::MAX, None).map(|v| v.len()), Some(length));
     let (control, polls) = crate::cancel::stop_at(3);
-    assert!(lzw_flate::flate::decode_controlled(&input, &Dict::empty(), usize::MAX, Some(&control)).is_none());
+    assert!(lzw_flate::flate::decode_controlled(&input, &Dict::empty(), usize::MAX, Some(&control), None).is_none());
     assert_eq!(polls.load(Ordering::Relaxed), 3);
 }
 

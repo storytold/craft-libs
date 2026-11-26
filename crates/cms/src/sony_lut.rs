@@ -61,22 +61,77 @@ pub fn parse_spi3d(text: &str) -> Option<Lattice> {
         return None;
     }
     let count = n * n * n;
-    let mut values = vec![[0.0f32; 3]; count];
+    // Validate every row and the row count before reserving the lattice, so a short or
+    // malformed file never allocates the table its header claims. The rows are then read
+    // again in file order, which keeps the last value of a duplicate coordinate.
     let mut seen = 0usize;
-    for line in lines {
+    for line in lines.clone() {
         if seen == count {
             return None;
         }
-        let mut fields = line.split_whitespace();
-        let r: usize = fields.next()?.parse().ok()?;
-        let g: usize = fields.next()?.parse().ok()?;
-        let b: usize = fields.next()?.parse().ok()?;
-        let color = [fields.next()?.parse().ok()?, fields.next()?.parse().ok()?, fields.next()?.parse().ok()?];
-        if fields.next().is_some() || r >= n || g >= n || b >= n {
-            return None;
-        }
-        *values.get_mut(r + g * n + b * n * n)? = color;
+        spi3d_row(line, n)?;
         seen += 1;
     }
-    (seen == count).then_some(Lattice { size: n, values })
+    if seen != count {
+        return None;
+    }
+    #[cfg(test)]
+    tests::LATTICES_RESERVED.with(|r| r.set(r.get() + 1));
+    let mut values = vec![[0.0f32; 3]; count];
+    for line in lines {
+        let (index, color) = spi3d_row(line, n)?;
+        *values.get_mut(index)? = color;
+    }
+    Some(Lattice { size: n, values })
+}
+
+/// One `r g b  R G B` row of a side-`n` lattice: its red-fastest index and its colour.
+fn spi3d_row(line: &str, n: usize) -> Option<(usize, [f32; 3])> {
+    let mut fields = line.split_whitespace();
+    let r: usize = fields.next()?.parse().ok()?;
+    let g: usize = fields.next()?.parse().ok()?;
+    let b: usize = fields.next()?.parse().ok()?;
+    let color = [fields.next()?.parse().ok()?, fields.next()?.parse().ok()?, fields.next()?.parse().ok()?];
+    if fields.next().is_some() || r >= n || g >= n || b >= n {
+        return None;
+    }
+    Some((r + g * n + b * n * n, color))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    thread_local! {
+        /// How many lattices [`parse_spi3d`] has reserved on this thread.
+        pub(super) static LATTICES_RESERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn reserved() -> usize {
+        LATTICES_RESERVED.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn spi3d_reserves_the_lattice_only_once_its_rows_are_valid() {
+        let mut ok = "SPILUT 1.0\n3 3\n2 2 2\n".to_owned();
+        for i in 0..8 {
+            ok += &format!("{} {} {} 0 0 0\n", i & 1, (i >> 1) & 1, i >> 2);
+        }
+        // A header-only maximal claim, a short table, a full count of malformed rows, a table
+        // whose last row is bad and one with a valid row too many.
+        let max = format!("SPILUT 1.0\n3 3\n{MAX_SIDE} {MAX_SIDE} {MAX_SIDE}\n");
+        let short = "SPILUT 1.0\n3 3\n2 2 2\n0 0 0 1 1 1\n".to_owned();
+        let junk = "SPILUT 1.0\n3 3\n2 2 2\n".to_owned() + &"x\n".repeat(8);
+        let last_bad = ok.replace("1 1 1 0 0 0", "1 1 2 0 0 0");
+        let extra = ok.clone() + "0 0 0 0 0 0\n";
+        for bad in [max, short, junk, last_bad, extra] {
+            let before = reserved();
+            assert!(parse_spi3d(&bad).is_none());
+            assert_eq!(reserved(), before, "{bad}");
+        }
+        let before = reserved();
+        assert!(parse_spi3d(&ok).is_some());
+        assert_eq!(reserved(), before + 1);
+    }
 }

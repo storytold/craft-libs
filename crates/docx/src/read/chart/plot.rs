@@ -212,7 +212,8 @@ fn title_left(c: &Chart, cat_on: bool, val_on: bool, area_w: f32) -> f32 {
 fn flat_title_lines(c: &Chart, area_w: f32) -> Option<Vec<String>> {
     let left = if c.horizontal { &c.cat } else { &c.val };
     let r = left.title_rot?.rem_euclid(360.0);
-    if !(r < 1.0 || r > 359.0) {
+    // Only near-zero rotations fit the horizontal strip; non-finite rotations do not.
+    if !r.is_finite() || (1.0..=359.0).contains(&r) {
         return None;
     }
     let width = if area_w.is_finite() { (area_w * 0.18).max(1.0) } else { 1.0 };

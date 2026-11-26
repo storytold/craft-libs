@@ -54,7 +54,7 @@ One module and one Cargo feature per maker or container family. All are on by de
 | `jxl` | JPEG XL DNG (DNG 1.7, compression 52546) | Lossless and lossy tiles through `jxl-oxide`; implies `dng` |
 | `crw` | Canon CRW (CIFF) | Decoded by [`craft-crw`](../crw/README.md), the one CRW decoder, and returned through this crate's types |
 | `cr2` | Canon CR2 | The lossless-JPEG frame of IFD 3 de-sliced (`0xc640`); the layout from `CR2CFAPattern` (`0xc5e0`); image area from `SensorInfo`; black measured on the masked columns; white from the saturation plateau; as-shot white balance from `ColorData` or `WBInfo`; the white-balance presets at their temperatures (`ColorData::kelvin_presets`). sRAW / mRAW (subsampled YCbCr, 4:2:2 and 4:2:0) come out as linear white-balanced RGB with three samples per pixel, the chroma gains measured against the file's own 16-bit RGB image in IFD 2 |
-| `nef` | Nikon NEF / NRW | Uncompressed (16-bit words, 12-bit packed, Coolpix word packing), the packed layouts labelled compression 34713, Nikon's Huffman coding (lossless and lossy types, 12 and 14 bits, "lossy after split") with the `0x0096` linearisation table, small raw (YCbCr 4:2:2) as linear white-balanced RGB; black from `0x003d` or the NRW block, as-shot white balance from `0x000c`, `CropArea` or the measured image area of bodies that record none, masked trailing columns left out of the active area, the D1X pixel aspect, and the in-file distortion correction as a `WarpRectilinear` opcode ([derivation](docs/nikon-lens-corrections.md)). High Efficiency (HE / HE★) is refused by name; the previews still read |
+| `nef` | Nikon NEF / NRW | Uncompressed (16-bit words, 12-bit packed, Coolpix word packing), the two interlaced fields of the E5400, E5700, E8400 and E8800 (the E5700 CYGM mosaic as approximate linear RGB), the packed layouts labelled compression 34713, Nikon's Huffman coding (lossless and lossy types, 12 and 14 bits, "lossy after split") with the `0x0096` linearisation table, small raw (YCbCr 4:2:2) as linear white-balanced RGB; black from `0x003d` or the NRW block, as-shot white balance from `0x000c`, `CropArea` or the measured image area of bodies that record none, masked trailing columns left out of the active area, the D1X pixel aspect, and the in-file distortion correction as a `WarpRectilinear` opcode ([derivation](docs/nikon-lens-corrections.md)). High Efficiency (HE / HE★) is refused by name; the previews still read |
 | `rw2` | Panasonic RW2, Leica RWL, older Panasonic / Leica RAW | Packed blocks (formats 2, 5, 7), formats 4 and 6, format 8 prefix-coded strips and tiles (a sample outside the bit depth makes the strip corrupt), 16-bit words; black per colour from `0x001c`–`0x001e` (plus the 15 counts formats 4 and 6 store above it, 15 when no black is recorded); white from the saturation plateau; sensor borders as the active area and the in-camera aspect crop; mapped-out defect pixels filled; as-shot white balance from `0x0024`–`0x0026`; the in-camera distortion correction (`0x0119`) as a `WarpRectilinear` opcode. Raw formats 1 and 3 and compression 34826 are refused (no samples of them) |
 | `raf` | Fujifilm RAF | The RAF header, records and raw IFD; uncompressed Bayer and X-Trans (16-bit words, 12-bit LSB-first, 32-bit word packing); Fujifilm's lossless and lossy striped compression ([derivation](docs/raf-compression.md), [corpus](docs/raf-corpus.sha256)); black, as-shot white balance and, for bodies without colour matrices, the camera's neutral multipliers for Illuminant A and D65 (`ColorData::kelvin_presets`, a neutral pair); orientation, make and model from the embedded JPEG's Exif; the in-file distortion and vignetting corrections as opcodes; the embedded preview, also by range from the header alone (`bounded_preview`, `embedded_preview_from_range`). The pre-2010 FinePix layout without a raw IFD is refused |
 | `orf` | Olympus / OM System ORF | Uncompressed: 16-bit words (12-bit values in the top bits shifted down), 12-bit packed in 32-bit words (XZ-2), 12-bit two-field (older compacts), 16-byte blocks of ten 12-bit samples (E-300, E-330, E-500, high-resolution modes); CFA from Exif `CFAPattern`; black, as-shot white balance (relative to `WB_GLevel`) and crop from the maker note's ImageProcessing, or from the main note on bodies without it; the CameraSettings preview. Compressed ORF is refused ([why](docs/orf-compression.md)); its preview still reads |
@@ -216,3 +216,77 @@ decode bit-exactly; lossy tiles are made with `jpeg-encoder`, JPEG XL tiles with
 (tests only). Hostile input: every truncation of each sample, byte mutations across the
 header, 400 random mutations per property, random TIFF-like, lossless-JPEG, opcode-list and CIFF
 bytes, and a test per limit.
+
+## Decoder comparison reports
+
+The native `decode_report` example records the decoded sensor samples and selected metadata for an
+explicit, ordered list of local files. It reads one regular file at a time, accepts at most 512 MiB
+of encoded bytes per file, and uses `Limits::default()` for decoding.
+
+```sh
+cargo run --quiet --locked --release -p craft-raw --example decode_report -- fixture-a.dng fixture-b.nef > report.tsv
+```
+
+Use shell redirection that preserves native stdout bytes. The report is UTF-8 TSV with LF line
+endings, a header, and one row per argument, indexed from 1. Schema version 1 has these columns in
+this order.
+
+```text
+schema	input	status	format	sample_type	sample_count	sensor_sha256	width	height	cpp	bits	cfa	active_area	crop	orientation	baseline_exposure_bits
+```
+
+`format` is a fixed lowercase decoder label, such as `dng` or `cfa_tiff`. `sample_type` is `u16` or
+`f32`. `sensor_sha256` hashes the complete decoded sample sequence (`RawImage::data`), encoding
+each integer as two little-endian bytes and each float's IEEE 754 bits as four little-endian bytes.
+The digest is 64 lowercase hexadecimal digits. It reflects any mapping the decoder has already
+applied, such as a DNG `LinearizationTable`, so two stored codes that map to the same value give the
+same digest. Shape and metadata have their own columns, so an orientation change
+can be distinguished from a sample change.
+
+`cfa` is `width,height,origin_x,origin_y:pattern`, where the pattern is a comma-separated row-major
+sequence. It is empty for images without a CFA. Active area and crop are `x,y,width,height`, with
+crop coordinates relative to the active area. Orientation is the Exif integer code, and baseline
+exposure is the `f64` bit pattern as 16 lowercase hexadecimal digits.
+
+Use `--linearization` before the paths to select schema version 2:
+
+```sh
+cargo run --quiet --locked --release -p craft-raw --example decode_report -- --linearization fixture-a.dng fixture-b.dng > report.tsv
+```
+
+Schema 2 appends `linearization_state` and `linearization_table_sha256`. The state is `absent`,
+`applied`, or `deferred`. A deferred table is carried by the decoder for application after DNG
+`OpcodeList1`. The digest hashes all decoded table entries in index order as little-endian `u16`
+values. It is empty when the table is absent. Both fields are empty for failed inputs. The sample
+digest still describes `RawImage::data`, so two deferred inputs with identical stored samples can
+have the same sample digest and different table digests. Use a `--` separator before the paths to
+pass a path literally when its name matches an option.
+
+Each row's status is `ok`, `read_error`, `input_limit`, `not_raw`, `unsupported`, `corrupt`,
+`decode_limit`, or `tiff_error`. `input_limit` means the encoded-byte cap was exceeded.
+`decode_limit` covers RAW and TIFF decoder limits. A failed input has empty fields after `status`,
+and processing continues. The report contains input ordinals, with paths and free-form diagnostics
+omitted. A completed batch exits successfully even when inputs fail. No arguments or a report
+write or flush failure produces a nonzero exit and a concise diagnostic on stderr.
+
+To compare two pinned decoder revisions, use separate clean checkouts and keep the example source,
+enabled features, and ordered fixture list identical. If a revision predates the example, copy both
+`examples/decode_report/main.rs` and `examples/decode_report/report.rs` at the same relative paths
+under that checkout's `crates/raw/` directory. The example uses the crate's existing `sha2` dev
+dependency. The schema 2-capable example requires
+[`a99c8f8e`](https://github.com/storytold/craft-libs/commit/a99c8f8e366363ac5ff2f1eee535751610c2c82c)
+or later for `RawImage::linearization_table`. For comparisons involving an older decoder, use
+both example files from [#2417](https://github.com/storytold/craft-libs/pull/2417) in each checkout
+to produce schema 1. Those files require
+[`ecee6933`](https://github.com/storytold/craft-libs/commit/ecee693322c27acdbcafed4b57066356404e8378)
+or later for `Cfa::origin_x` and `Cfa::origin_y`. Build and save one report from each checkout, then
+compare them.
+
+```sh
+git diff --no-index -- before.tsv after.tsv
+```
+
+Repeat on the same revision to check deterministic output. Record both decoder revisions, the
+example source revision, enabled features, fixture checksums and order with the reports. A diff
+exit status of 1 indicates differing reports. Inspect the status, sample digest, shape and metadata
+columns to identify the change.
