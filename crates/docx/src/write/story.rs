@@ -8,7 +8,7 @@ use craft_wordmodel::section::{LineNumberRestart, NoteProps, SectionProps, Secti
 use craft_wordmodel::table::Table;
 use craft_wordmodel::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
 
-use super::props::{ChangeAttrs, borders, open_change, ppr_inner, rpr, rpr_inner, tblpr, tcpr, trpr};
+use super::props::{ChangeAttrs, borders, empty_change, open_change, ppr_inner, rpr, rpr_inner, tblpr, tcpr, trpr};
 use super::{PartRels, Writer};
 use crate::package::rt;
 use crate::units::{emu, n, twips};
