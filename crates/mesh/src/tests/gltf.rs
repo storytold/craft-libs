@@ -1039,6 +1039,22 @@ fn morph_targets_follow_their_primitives_vertices() {
     let mut normals = vec![[0.0, 1.0, 0.0]; 3];
     normals.extend([[0.0; 3]; 3]);
     assert_eq!(t.normals, normals);
+    // The NORMAL offsets of a primitive without normals are left out before their accessor is
+    // looked up, so offsets that name no accessor leave the primitive as it is.
+    let missing = json!({ "attributes": { "POSITION": four }, "indices": i, "targets": [{ "POSITION": out, "NORMAL": 99 }] });
+    let s = parse(&b.glb(json!({ "meshes": [{ "primitives": [missing] }] }))).unwrap();
+    assert_eq!(s.warnings, ["1 morph target attribute(s) do not fit their primitive's vertices and were left out"]);
+    assert_eq!((s.meshes[0].triangle_count(), s.meshes[0].morph_targets[0].positions.len()), (2, 4));
+}
+
+#[test]
+fn images_in_data_uris_count_against_the_data_limit() {
+    // Six bytes of image, and no buffers.
+    let doc = json!({ "asset": { "version": "2.0" }, "images": [{ "uri": "data:image/png;base64,AAAAAAAA" }] });
+    let glb = glb_container(&serde_json::to_vec(&doc).unwrap(), &[]).unwrap();
+    assert_eq!(with(&glb, &|l| l.max_data_bytes = 6).unwrap().images[0].data.as_deref(), Some(&[0u8; 6][..]));
+    assert!(too(with(&glb, &|l| l.max_data_bytes = 5)));
+    assert!(too(with(&glb, &|l| l.max_data_bytes = 0)));
 }
 
 #[test]

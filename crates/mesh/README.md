@@ -91,10 +91,23 @@ in a buffer view or a `data:` URI, or named; skins; translation, rotation and sc
 cameras; `KHR_lights_punctual`; morph targets (POSITION, NORMAL and TANGENT offsets, dense or
 sparse, with the mesh's default `weights`, a node's own `weights` and names from
 `extras.targetNames`). Primitives of a mesh that name the same accessors and morph targets share
-their vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials with
-their texture transforms and sampler wrap modes, and images; `write_glb_with_options` also writes
-each sampler's `magFilter` and `minFilter` when its `GlbWriteOptions` set them. The other
-formats' writers do not write texture transforms.
+their vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours, joints and
+weights), skins with their inverse bind matrices, morph targets (POSITION and NORMAL offsets, the
+mesh's and each node's `weights`, names in `extras.targetNames`; a target that moves fewer than
+three quarters of the vertices as a sparse accessor), materials with their texture transforms and
+sampler wrap modes, and images (with their `mimeType` when it is known); `write_glb_with_options`
+also writes each sampler's `magFilter` and `minFilter` when its `GlbWriteOptions` set them. Parts
+whose corners all have normals or UVs and parts whose corners do not are written as primitives over
+separate vertices. The kept `extensions` and `extras` are written as
+kept, except that the material extensions the reader reads into `Material` are written from its
+fields and `KHR_lights_punctual` is not written; `extensionsUsed` lists every extension in the
+file. The reader does not keep `extensionsRequired`; the writer requires only `EXT_texture_webp`,
+which it uses for every texture of a WebP image. The file's textures (`texture_variants`) keep their indices, and so do nodes, materials and
+skins, so kept extension data (a VRM file's, for example) still names the same things. Meshes
+without triangles and images without bytes or a URI are left out, and later meshes and images
+then move up; so do the textures after one the reader leaves out for want of an image, which it
+names in a warning. Accessor and buffer view indices in kept extension data are not rewritten. The
+other formats' writers do not write texture transforms.
 
 **3MF.** The package is opened with `craft-opc` and the model part found through its `3dmodel`
 relationship; `threemf::read_model_part` reads a model part's XML on its own. Mesh objects,
@@ -125,7 +138,7 @@ Not read (glTF): required geometry extensions (Draco, meshopt) are `Error::Unsup
 and lines are left out and counted in a warning, as are the morph targets of a mesh with more than
 `max_morph_targets`; scenes other than the default are named in one; animations of morph target
 weights are passed over.
-Not written: skins, morph targets, animations, cameras, lights, kept `extensions` and `extras`,
+Not written: animations, cameras, lights, tangents (and so the tangent offsets of morph targets),
 and `.gltf` with separate files.
 
 ## Hostile input
@@ -145,7 +158,7 @@ mutations of every byte of good files.
 | `max_materials` | 100 000 | materials; images; OBJ material libraries; 3MF base materials and textures together |
 | `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles); 3MF placed objects, build items and components |
 | `max_depth` | 64 | node nesting; 3MF component nesting (ends cycles) |
-| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; morph targets and their offsets (8 bytes per value); the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; an FBX file's meshes, image bytes and parsed values (binary: 8 bytes per array element, and other values are not counted; ASCII: `size_of::<Prop>()` per value, each array element included, plus string bytes; record names and the overhead of records and their containers are not counted) |
+| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes (in buffer views and `data:` URIs); skin and animation values; morph targets and their offsets (8 bytes per value); the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; an FBX file's meshes, image bytes and parsed values (binary: 8 bytes per array element, and other values are not counted; ASCII: `size_of::<Prop>()` per value, each array element included, plus string bytes; record names and the overhead of records and their containers are not counted) |
 | `max_extras` | 10 000 | skins, animations, cameras, lights, buffers (each); channels of one animation |
 | `max_morph_targets` | 256 | morph targets of one glTF mesh; a mesh with more is read in its base shape with a warning, not refused |
 
