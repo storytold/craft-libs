@@ -191,10 +191,25 @@ impl Mesh {
         if self.positions.iter().any(|p| !p.is_finite()) {
             return Err(GeomError::Invalid("mesh has non-finite positions".into()));
         }
+        self.validate_submeshes()
+    }
+
+    /// Check that every submesh range lies inside the index buffer on triangle boundaries, names
+    /// a material, and shares no triangle with another submesh (each triangle has one material).
+    pub(crate) fn validate_submeshes(&self) -> Result<()> {
         for s in &self.submeshes {
             if s.start as usize + s.count as usize > self.indices.len() || s.material >= self.materials.len().max(1) {
                 return Err(GeomError::Invalid(format!("submesh {} is out of range", s.name)));
             }
+            if s.start % 3 != 0 || s.count % 3 != 0 {
+                return Err(GeomError::Invalid(format!("submesh {} does not start and end on a triangle", s.name)));
+            }
+        }
+        let mut ranges: Vec<(u32, u32, &str)> =
+            self.submeshes.iter().filter(|s| s.count > 0).map(|s| (s.start, s.start + s.count, s.name.as_str())).collect();
+        ranges.sort_unstable_by_key(|r| r.0);
+        if let Some(pair) = ranges.windows(2).find(|pair| pair[1].0 < pair[0].1) {
+            return Err(GeomError::Invalid(format!("submeshes {} and {} share triangles", pair[0].2, pair[1].2)));
         }
         Ok(())
     }
@@ -226,16 +241,62 @@ impl Mesh {
             self.uvs = vec![Vec2::ZERO; self.positions.len()];
         }
         // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then.
-        let usable = !crate::unwrap::all_triangles_degenerate(self);
-        let mut g = Mikk { mesh: self };
-        if !usable || !mikktspace::generate_tangents(&mut g) {
+        // It also reads past the position array for an index out of range.
+        let in_range = self.indices.len().is_multiple_of(3) && self.indices.iter().all(|i| (*i as usize) < self.positions.len());
+        let usable = in_range && !crate::unwrap::all_triangles_degenerate(self);
+        let mut corners = Vec::new();
+        if usable {
+            let slots = self.indices.len();
+            let mut g = Mikk { mesh: self, corners: vec![None; slots] };
+            if mikktspace::generate_tangents(&mut g) {
+                corners = g.corners;
+            }
+        }
+        if corners.is_empty() {
             self.simple_tangents();
+        } else {
+            self.split_differing_corner_frames(&corners);
         }
         for (t, n) in self.tangents.iter_mut().zip(&self.normals) {
             // Orthonormalize against the normal; repair degenerate results.
             let v = t.truncate();
             let o = (v - *n * n.dot(v)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
             *t = o.extend(if t.w < 0.0 { -1.0 } else { 1.0 });
+        }
+    }
+
+    /// Store each corner's MikkTSpace frame on its vertex. A vertex whose corners disagree (a
+    /// mirrored UV layout across a shared vertex) is duplicated for each distinct frame, and the
+    /// corners' indices follow the copies; corners that agree keep sharing the vertex.
+    fn split_differing_corner_frames(&mut self, corners: &[Option<Vec4>]) {
+        let same = |a: Vec4, b: Vec4| (a.truncate() - b.truncate()).length() < 1e-3 && (a.w < 0.0) == (b.w < 0.0);
+        let mut assigned = vec![false; self.positions.len()];
+        let mut copies: std::collections::HashMap<u32, Vec<(Vec4, u32)>> = std::collections::HashMap::new();
+        for (k, corner) in corners.iter().enumerate() {
+            let (Some(frame), Some(&v)) = (corner, self.indices.get(k)) else { continue };
+            let Some(seen) = assigned.get_mut(v as usize) else { continue };
+            if !*seen {
+                *seen = true;
+                if let Some(t) = self.tangents.get_mut(v as usize) {
+                    *t = *frame;
+                }
+                continue;
+            }
+            if self.tangents.get(v as usize).is_some_and(|t| same(*t, *frame)) {
+                continue;
+            }
+            let found = copies.get(&v).and_then(|list| list.iter().find(|(f, _)| same(*f, *frame)).map(|(_, i)| *i));
+            let target = found.unwrap_or_else(|| {
+                let copy = self.duplicate_vertex(v as usize);
+                if let Some(t) = self.tangents.get_mut(copy as usize) {
+                    *t = *frame;
+                }
+                copies.entry(v).or_default().push((*frame, copy));
+                copy
+            });
+            if let Some(index) = self.indices.get_mut(k) {
+                *index = target;
+            }
         }
     }
 
@@ -440,6 +501,7 @@ impl Mesh {
             materials: vec![material.into()],
             diagonals: Vec::new(),
         };
+        m.validate_indices()?;
         if m.normals.len() != m.positions.len() {
             m.compute_normals();
         }
@@ -451,6 +513,8 @@ impl Mesh {
 
 struct Mikk<'a> {
     mesh: &'a mut Mesh,
+    /// The frame MikkTSpace gave each face corner (index into `Mesh::indices`).
+    corners: Vec<Option<Vec4>>,
 }
 
 impl Mikk<'_> {
@@ -479,9 +543,8 @@ impl mikktspace::Geometry for Mikk<'_> {
         [uv.x, 1.0 - uv.y]
     }
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
-        let i = self.vi(face, vert);
-        if let Some(t) = self.mesh.tangents.get_mut(i) {
-            *t = Vec4::from_array(tangent);
+        if let Some(corner) = self.corners.get_mut(face * 3 + vert) {
+            *corner = Some(Vec4::from_array(tangent));
         }
     }
 }
@@ -599,6 +662,55 @@ mod tests {
         let mut m = quad();
         m.uvs.pop();
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn from_parts_rejects_indices_past_the_positions() {
+        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
+        // Two corners read past the array and would both fall back to the origin.
+        assert!(Mesh::from_parts(positions.clone(), None, Vec::new(), vec![0, 1, 9], "m").is_err());
+        assert!(Mesh::from_parts(positions.clone(), None, Vec::new(), vec![0, 7, 9], "m").is_err());
+        assert!(Mesh::from_parts(positions.clone(), None, Vec::new(), vec![7, 7, 7], "m").is_err());
+        // compute_tangents itself does not panic on such a mesh.
+        let mut m = Mesh { positions, indices: vec![0, 1, 9], ..Mesh::default() };
+        m.compute_tangents();
+        assert_eq!(m.tangents.len(), 3);
+    }
+
+    #[test]
+    fn validate_requires_whole_triangles_and_one_material_each() {
+        let mut m = quad();
+        let sub = |name: &str, start, count| SubMesh { name: name.into(), material: 0, start, count };
+        m.submeshes = vec![sub("a", 1, 3)];
+        assert!(m.validate().is_err(), "starts inside a triangle");
+        m.submeshes = vec![sub("a", 0, 4)];
+        assert!(m.validate().is_err(), "ends inside a triangle");
+        m.submeshes = vec![sub("a", 0, 3), sub("b", 3, 3)];
+        m.validate().unwrap();
+        m.submeshes = vec![sub("a", 0, 6), sub("b", 3, 3)];
+        assert!(m.validate().is_err(), "triangle 1 belongs to both");
+        m.submeshes = vec![sub("a", 0, 3), sub("empty", 3, 0)];
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn shared_vertices_with_opposite_uv_orientation_are_split() {
+        let m = Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::Y],
+            None,
+            vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0)],
+            vec![0, 1, 2, 0, 2, 3],
+            "m",
+        )
+        .unwrap();
+        m.validate().unwrap();
+        let sign = |t: usize| {
+            let w: Vec<bool> = m.tri(t).unwrap().iter().map(|v| m.tangents[*v].w < 0.0).collect();
+            assert!(w.iter().all(|x| *x == w[0]), "triangle {t} has mixed handedness: {w:?}");
+            w[0]
+        };
+        assert_ne!(sign(0), sign(1), "the triangles have opposite UV orientation");
+        assert!(m.positions.len() > 4, "shared vertices were duplicated");
     }
 
     #[test]

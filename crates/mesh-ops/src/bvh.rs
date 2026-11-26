@@ -90,6 +90,10 @@ impl Bvh {
             tris.push([position(a), position(b), position(c)]);
         }
 
+        if tris.is_empty() {
+            return Bvh { nodes: Vec::new(), tris, order: Vec::new() };
+        }
+
         let mut order: Vec<u32> = (0..tris.len() as u32).collect();
         let centroids: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
 
@@ -253,31 +257,60 @@ impl Bvh {
         (tn <= tf).then_some(tn)
     }
 
-    /// Möller–Trumbore, double sided.
+    /// Möller–Trumbore, double sided. Rays clearly inside or outside the triangle are decided in
+    /// `f32`; a ray within `NEAR` of an edge (in barycentric weight) is decided again in `f64`
+    /// with a slack of `1e-9`, so rays through a shared edge do not slip between its two
+    /// triangles while a ray outside an isolated triangle does not hit it.
     fn hit_tri(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f32, f32, f32)> {
+        const NEAR: f32 = 1e-4;
         let e1 = t[1] - t[0];
         let e2 = t[2] - t[0];
         let p = d.cross(e2);
         let det = e1.dot(p);
-        if det.abs() < 1e-12 {
+        if !det.is_finite() {
             return None;
+        }
+        // Shallow rays leave a determinant close to the rounding of its factors: decide them in `f64`.
+        if det.abs() <= 1e-6 * e1.length() * p.length() {
+            return Self::hit_tri_exact(t, o, d);
         }
         let inv = 1.0 / det;
         let s = o - t[0];
-        // A little slack on the edges: rays through a shared edge must not slip between its
-        // two triangles to a surface behind.
-        const EDGE: f32 = 1e-5;
         let u = s.dot(p) * inv;
-        if !(-EDGE..=1.0 + EDGE).contains(&u) {
-            return None;
-        }
         let q = s.cross(e1);
         let v = d.dot(q) * inv;
-        if v < -EDGE || u + v > 1.0 + EDGE {
+        let w = 1.0 - u - v;
+        if u.min(v).min(w) < -NEAR {
             return None;
+        }
+        if u.min(v).min(w) <= NEAR || !(u.is_finite() && v.is_finite()) {
+            return Self::hit_tri_exact(t, o, d);
         }
         let tt = e2.dot(q) * inv;
         (tt > 0.0).then_some((tt, u, v))
+    }
+
+    fn hit_tri_exact(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f32, f32, f32)> {
+        const EDGE: f64 = 1e-9;
+        let (a, b, c) = (t[0].as_dvec3(), t[1].as_dvec3(), t[2].as_dvec3());
+        let (o, d) = (o.as_dvec3(), d.as_dvec3());
+        let (e1, e2) = (b - a, c - a);
+        let p = d.cross(e2);
+        let det = e1.dot(p);
+        // Below a few `f64` roundings of its factors the determinant is residue of an in-plane ray.
+        if det == 0.0 || det.abs() <= 1e-15 * e1.length() * p.length() {
+            return None;
+        }
+        let inv = 1.0 / det;
+        let s = o - a;
+        let u = s.dot(p) * inv;
+        let q = s.cross(e1);
+        let v = d.dot(q) * inv;
+        if u < -EDGE || v < -EDGE || u + v > 1.0 + EDGE {
+            return None;
+        }
+        let tt = e2.dot(q) * inv;
+        (tt > 0.0).then_some((tt as f32, u as f32, v as f32))
     }
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
@@ -545,6 +578,57 @@ mod tests {
         assert!(!found.is_empty() && found.len() <= 8, "{found:?}");
         let empty = Bvh::new(&Mesh::default());
         assert!(empty.closest(Vec3::ZERO, Vec3::X, 1.0).is_none());
+    }
+
+    fn single_triangle(a: Vec3, b: Vec3, c: Vec3) -> Bvh {
+        Bvh::new(&Mesh { positions: vec![a, b, c], indices: vec![0, 1, 2], ..Mesh::default() })
+    }
+
+    #[test]
+    fn empty_mesh_exports_no_nodes() {
+        let empty = Bvh::new(&Mesh::default());
+        assert_eq!(empty.nodes().len(), 0);
+        assert!(empty.is_empty());
+        assert!(empty.nearest(Vec3::ZERO, 1.0, &|_| true).is_none());
+        let mut called = false;
+        empty.query_box(Vec3::splat(-1.0), Vec3::splat(1.0), |_| called = true);
+        assert!(!called);
+    }
+
+    #[test]
+    fn small_triangle_is_hit_inside_and_missed_outside() {
+        let bvh = single_triangle(Vec3::ZERO, Vec3::X * 1e-7, Vec3::Y * 1e-7);
+        let hit = bvh.closest(Vec3::new(2.5e-8, 2.5e-8, 1.0), Vec3::NEG_Z, 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6, "{}", hit.t);
+        assert!(bvh.occluded(Vec3::new(2.5e-8, 2.5e-8, 1.0), Vec3::NEG_Z, 10.0));
+        assert!(!bvh.occluded(Vec3::new(8e-8, 8e-8, 1.0), Vec3::NEG_Z, 10.0), "outside the hypotenuse");
+        assert!(!bvh.occluded(Vec3::new(2.5e-8, 2.5e-8, 1.0), Vec3::X, 10.0), "parallel ray");
+    }
+
+    #[test]
+    fn shallow_ray_still_hits_a_triangle_it_crosses() {
+        let bvh = single_triangle(Vec3::ZERO, Vec3::X, Vec3::Y);
+        let hit = bvh.closest(Vec3::new(-1.0, 0.25, 1e-7), Vec3::new(1.0, 0.0, -1e-7), 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-3, "{}", hit.t);
+        assert!(!bvh.occluded(Vec3::new(-1.0, 0.25, 1e-7), Vec3::X, 10.0), "a ray in the plane has no hit");
+    }
+
+    #[test]
+    fn isolated_large_triangle_does_not_grow_past_its_edge() {
+        let bvh = single_triangle(Vec3::ZERO, Vec3::X * 1e6, Vec3::Y * 1e6);
+        assert!(bvh.occluded(Vec3::new(400_000.0, 400_000.0, 1.0), Vec3::NEG_Z, 10.0));
+        assert!(!bvh.occluded(Vec3::new(500_002.0, 500_002.0, 1.0), Vec3::NEG_Z, 10.0), "2.8 units past the diagonal");
+    }
+
+    #[test]
+    fn ray_through_a_shared_edge_of_large_triangles_hits() {
+        let s = 1e6;
+        let mesh =
+            Mesh { positions: vec![Vec3::ZERO, Vec3::X * s, Vec3::new(s, s, 0.0), Vec3::Y * s], indices: vec![0, 1, 2, 0, 2, 3], ..Mesh::default() };
+        let bvh = Bvh::new(&mesh);
+        for x in [100_000.0, 333_333.0, 500_000.0, 987_654.0] {
+            assert!(bvh.occluded(Vec3::new(x, x, 1.0), Vec3::NEG_Z, 10.0), "diagonal point {x}");
+        }
     }
 
     #[test]

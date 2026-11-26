@@ -178,8 +178,12 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let nrm = p(&mesh.normals)?.try_normalize().unwrap_or(Vec3::Y);
     // In `f64` the edges between any two finite `f32` positions and their cross product neither
     // overflow nor round to zero.
-    let (pa, pb, pc) = (mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3());
-    let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().map_or(nrm, |n| n.as_vec3());
+    // The edges start at the corner nearest the origin, so a far corner does not absorb a short
+    // edge of the other two; the corners keep their winding order.
+    let corners = [mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3()];
+    let anchor = (0..3).min_by(|&i, &j| corners[i].length_squared().total_cmp(&corners[j].length_squared())).unwrap_or(0);
+    let (from, next, last) = (corners[anchor], corners[(anchor + 1) % 3], corners[(anchor + 2) % 3]);
+    let geo_nrm = (next - from).cross(last - from).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
     let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
@@ -255,6 +259,21 @@ mod tests {
         let m = Mesh { positions: vec![Vec3::ZERO, Vec3::X * tiny, Vec3::Y * tiny], ..m };
         let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
         assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
+        // One far corner next to a short edge: subtracting the far corner from the other two gives
+        // identical edges, so the face normal comes from edges at the corner nearest the origin.
+        let far = 2.0_f32.powi(60);
+        for positions in [
+            vec![Vec3::new(far, far, 0.0), Vec3::ZERO, Vec3::X],
+            vec![Vec3::ZERO, Vec3::X, Vec3::new(far, far, 0.0)],
+            vec![Vec3::X, Vec3::new(far, far, 0.0), Vec3::ZERO],
+        ] {
+            let m = Mesh { positions, ..m.clone() };
+            let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
+            assert!(surface.geo_nrm.z > 0.999, "{}", surface.geo_nrm);
+        }
+        // Collinear corners still fall back to the shading normal.
+        let m = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0], ..m };
+        assert_eq!(surface_at(&m, 0, 0.25, 0.25).unwrap().geo_nrm, Vec3::X);
     }
 
     #[test]

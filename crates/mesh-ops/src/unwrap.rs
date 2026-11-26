@@ -71,6 +71,11 @@ impl Chart {
 /// own 0..1 space with charts at least `padding_texels` (minimum 1) away from each other and
 /// the borders at `resolution`. Vertices are split at chart borders; tangents are recomputed.
 /// Returns the number of charts.
+///
+/// The padding holds at `resolution` texels per side only while the charts fit there. When they
+/// do not (very many charts), each material is packed at a doubled resolution, up to 65,536,
+/// and the padding is `padding_texels` of that larger layout: a texture of the requested size
+/// then has proportionally less. A layout that does not fit at 65,536 returns an error.
 pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Result<usize> {
     mesh.validate_indices()?;
     if all_triangles_degenerate(mesh) {
@@ -125,6 +130,29 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
         }
     }
 
+    // Whether faces `f` and `g`, which share the welded edge `e`, lie on the same side of it in
+    // the plane spanned by `t` and `b`: laid out there, one would cover the other.
+    let folds_over = |f: usize, g: usize, e: (u32, u32), t: Vec3, b: Vec3| -> bool {
+        let project = |p: Vec3| Vec2::new(p.dot(t), p.dot(b));
+        let side = |face: usize, edge: Option<(Vec2, Vec2)>| -> Option<((Vec2, Vec2), f32)> {
+            let corners = mesh.tri(face)?;
+            let on_edge = |v: usize| wid(v) == e.0 || wid(v) == e.1;
+            let third = project(pos(*corners.iter().find(|v| !on_edge(**v))?));
+            let (start, end) = match edge {
+                Some(known) => known,
+                None => {
+                    let mut ends = corners.iter().filter(|v| on_edge(**v)).map(|v| project(pos(*v)));
+                    (ends.next()?, ends.next()?)
+                }
+            };
+            let d = end - start;
+            Some(((start, end), d.perp_dot(third - start)))
+        };
+        let Some((known, sf)) = side(f, None) else { return false };
+        let Some((_, sg)) = side(g, Some(known)) else { return false };
+        sf * sg > 0.0
+    };
+
     // Grow charts from the largest unassigned faces.
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|a, b| area[*b].total_cmp(&area[*a]));
@@ -146,7 +174,7 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
                 let Some(&(f0, f1, 2)) = edges.get(&e) else { continue };
                 let g = if f0 as usize == f { f1 } else { f0 } as usize;
                 let ok = normal.get(g).is_some_and(|nn| nn.is_none_or(|nn| nn.dot(sn) >= CHART_COS));
-                if ok && chart_of.get(g) == Some(&u32::MAX) && material.get(g) == Some(&material[seed]) {
+                if ok && chart_of.get(g) == Some(&u32::MAX) && material.get(g) == Some(&material[seed]) && !folds_over(f, g, e, t, sn.cross(t)) {
                     chart_of[g] = id;
                     queue.push_back(g);
                 }
@@ -202,9 +230,11 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
     // Pack each material's charts into its own 0..1 square.
     let pad = padding_texels.max(1.0);
     let mut scale = HashMap::new();
-    let mats: std::collections::BTreeSet<usize> = charts.iter().map(|c| c.material).collect();
-    for m in mats {
-        let ids: Vec<usize> = (0..charts.len()).filter(|i| charts[*i].material == m).collect();
+    let mut by_material: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, chart) in charts.iter().enumerate() {
+        by_material.entry(chart.material).or_default().push(i);
+    }
+    for (m, ids) in by_material {
         let sizes: Vec<Vec2> = ids.iter().map(|i| charts[*i].size()).collect();
         let (s, res, offsets) = pack(&sizes, resolution.max(16) as f32, pad)?;
         for (i, o) in ids.iter().zip(offsets) {
@@ -301,7 +331,7 @@ fn pack(sizes: &[Vec2], mut res: f32, pad: f32) -> Result<(f32, f32, Vec<Vec2>)>
 
 impl Mesh {
     /// Index-range checks only (attribute arrays may be incomplete before unwrapping).
-    fn validate_indices(&self) -> Result<()> {
+    pub(crate) fn validate_indices(&self) -> Result<()> {
         let n = self.positions.len();
         if !self.indices.len().is_multiple_of(3) || self.indices.iter().any(|i| *i as usize >= n) {
             return Err(GeomError::Invalid("mesh indices are out of range".into()));
@@ -309,6 +339,7 @@ impl Mesh {
         if self.triangle_count() > crate::MAX_TRIANGLES {
             return Err(GeomError::Invalid(format!("mesh has more than {} triangles", crate::MAX_TRIANGLES)));
         }
+        self.validate_submeshes()?;
         Ok(())
     }
 }
@@ -349,8 +380,35 @@ mod tests {
         auto_unwrap(&mut ball, 2.0, 1024).unwrap();
         for m in 0..ball.materials.len() {
             let g = UvGBuffer::new(&ball, m, 512, 512);
+            if ball.triangles_of(m).next().is_some() {
+                assert!(g.covered_count() > 0, "material {m} has triangles but no covered texel");
+            }
             assert!((g.overlaps as f32) < g.covered_count() as f32 * 0.005 + 1.0, "material {m}: {} overlaps", g.overlaps);
         }
+    }
+
+    #[test]
+    fn coincident_sheets_do_not_share_a_chart() {
+        // Two same-wound triangles with the same XY corners, 1e-7 apart in z: the weld grid joins
+        // their corners, so all three edges are shared, yet laid flat they would cover each other.
+        let p = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(0.0, 0.0, 1e-7), Vec3::new(1.0, 0.0, 1e-7), Vec3::new(0.0, 1.0, 1e-7)];
+        let mut m = Mesh::from_parts(p, None, Vec::new(), vec![0, 1, 2, 3, 4, 5], "m").unwrap();
+        assert_eq!(auto_unwrap(&mut m, 4.0, 256).unwrap(), 2);
+        let g = UvGBuffer::new(&m, 0, 256, 256);
+        assert!(g.covered_count() > 0);
+        assert_eq!(g.overlaps, 0);
+    }
+
+    #[test]
+    fn overlapping_submeshes_are_rejected() {
+        let p = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z];
+        let mut m = Mesh::from_parts(p, None, Vec::new(), vec![0, 1, 2, 0, 1, 3], "m").unwrap();
+        m.materials.push("n".into());
+        m.submeshes = vec![
+            crate::SubMesh { name: "a".into(), material: 0, start: 0, count: 6 },
+            crate::SubMesh { name: "b".into(), material: 1, start: 3, count: 3 },
+        ];
+        assert!(auto_unwrap(&mut m, 4.0, 256).is_err());
     }
 
     #[test]
