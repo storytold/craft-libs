@@ -111,9 +111,9 @@ struct Laid {
 /// One rail button that may stand for a group of tools. The face shows the tool `shown` with a mark at the corner
 /// when there is a flyout. A click, Enter or Space selects the shown tool and runs its command; holding the press,
 /// dragging it away from the button, a right click or the Menu key opens the flyout; a press on the corner mark opens it
-/// at once; after a press that opened it, releasing over a row picks it. Rows are the tools' commands, the shown tool with the radio mark. A hold selects the shown tool
-/// unless `hold_selects` is off, as for a command button. An Alt-click selects the next enabled tool of the slot,
-/// wrapping, and opens no flyout. With a `click` command, a click fires that command and selects nothing, and the
+/// at once; after a press that opened it, releasing over a row picks it. Rows are the tools' commands, the shown tool
+/// with a check mark and the others with none. A hold selects the shown tool unless `hold_selects` is off, as for a
+/// command button. An Alt-click selects the next enabled tool of the slot, wrapping, and opens no flyout. With a `click` command, a click fires that command and selects nothing, and the
 /// release that ends a hold fires nothing. A modified press is never a double click.
 ///
 /// With `tear_off` a bar runs down the flyout's end edge, named by `RailWords::tear_off`: a press on it dragged past
@@ -372,9 +372,9 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         }
     }
 
-    /// The flyout: one row per tool, each the tool's command, the shown tool with the radio mark, and with `tear_off`
-    /// the bar beside the rows. Running a row reports its tool and closes the flyout; tearing it off by the bar
-    /// reports the pointer and closes it.
+    /// The flyout: one row per tool, each the tool's command, the shown tool with a check mark and the others with
+    /// none, and with `tear_off` the bar beside the rows. Running a row reports its tool and closes the flyout; tearing
+    /// it off by the bar reports the pointer and closes it.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         if !self.has_flyout() {
             return;
@@ -394,7 +394,9 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
                     let rows = Menu::inline(name.clone()).show(ui, |ui, _| {
                         let mut ran = None;
                         for (at, tool) in tools.iter().enumerate() {
-                            let mut item = MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown);
+                            // A check before the shown tool and nothing before the others, as the reference application's
+                            // flyouts do: an unchosen radio row would draw an empty ring before every other tool.
+                            let mut item = MenuItem::command(tool.command.clone()).check(tool.id == *shown);
                             if let Some(icon) = &tool.icon {
                                 item = item.icon(icon.clone());
                             }

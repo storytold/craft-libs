@@ -111,6 +111,33 @@ fn dragging_a_press_away_opens_the_flyout_and_releasing_over_a_row_picks_it() {
     assert_eq!(*dragged.selected.borrow(), [REDO], "releasing over Redo picks it and nothing else");
 }
 
+/// The flyout marks only the shown tool, with a check, as the reference application's tool flyouts do: the other
+/// rows draw no mark, not the empty ring of an unchosen radio row (photocraft#17102).
+#[trial]
+fn the_flyout_checks_the_shown_tool_and_marks_no_other_row() {
+    let mut held = rig(true);
+    let target = button(&held);
+    held.fixture.press(&target);
+    held.fixture.advance(HELD);
+    held.fixture.idle(3);
+    assert!(!held.fixture.by_role(Role::MENU).is_empty(), "a held press opens the flyout");
+    // The rows, not the rail button that also bears the shown tool's name.
+    let checked = |fixture: &Fixture, label: &str| {
+        let rows = fixture.by_role(Role::MENU_ITEM_CHECK_BOX);
+        let row = rows.iter().find(|row| fixture.tree().name_of(row.node) == Some(label));
+        fixture.tree().toggled_of(row.unwrap_or_else(|| panic!("the flyout lists {label}")).node)
+    };
+    assert_eq!(checked(&held.fixture, "Undo"), Some(Mixed::Same(true)), "the shown tool's row is checked");
+    assert_eq!(checked(&held.fixture, "Redo"), Some(Mixed::Same(false)), "another tool's row is not");
+    let rings = held
+        .fixture
+        .frame_shapes()
+        .iter()
+        .filter(|shape| matches!(shape, egui::Shape::Circle(circle) if circle.stroke.width > 0.0 && circle.fill == egui::Color32::TRANSPARENT))
+        .count();
+    assert_eq!(rings, 0, "no row of the flyout draws an empty ring");
+}
+
 /// A flyout of a tool low on the rail, too tall for the room under the tool's top, slides up to stay in the window
 /// as PhotoCraft's tool flyouts do, rather than opening upward from the tool as a submenu does.
 #[trial]
