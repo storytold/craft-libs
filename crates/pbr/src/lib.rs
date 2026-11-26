@@ -33,6 +33,9 @@
 //! [`default_environment`]
 //! is a small studio environment for an environment light without an image.
 //!
+//! [`SHADE_WGSL`] is the WGSL text of the same shading functions for an app's own shaders, and
+//! [`GpuMaterial`] and [`GpuSh9`] lay out the values it reads.
+//!
 //! The diffuse coefficients are the nine real SH coefficients of the radiance, convolved with the
 //! clamped cosine lobe (band factors `π`, `2π/3` and `π/4`, Ramamoorthi and Hanrahan 2001,
 //! <https://graphics.stanford.edu/papers/envmap/envmap.pdf>) and divided by `π`. [`irradiance`]
@@ -52,6 +55,7 @@ mod environment;
 mod prefilter;
 mod sh;
 mod vec3;
+mod wgsl;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -60,6 +64,7 @@ pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, Visibility, try_env
 pub use environment::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, MAX_RADIANCE, default_environment, dir_of, uv_of};
 pub use prefilter::{PrefilterOptions, ggx_distribution, ggx_distribution_between, hammersley, try_prefilter};
 pub use sh::{irradiance, sh_basis, try_sh9};
+pub use wgsl::{GpuMaterial, GpuSh9, SHADE_WGSL};
 
 /// Why an environment could not be made, filtered or read, or a material could not be shaded.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

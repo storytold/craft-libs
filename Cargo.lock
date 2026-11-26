@@ -3564,6 +3564,7 @@ dependencies = [
  "craft-pbr",
  "craft-texture",
  "glam 0.30.10",
+ "naga",
  "rayon",
  "thiserror 2.0.21",
 ]

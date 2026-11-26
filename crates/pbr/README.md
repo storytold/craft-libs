@@ -113,6 +113,80 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
 On a 256 × 128 source, the default `try_prefilter` evaluates 1,396,736 samples (10,912 output
 pixels in levels 1 to 5, 128 samples each).
 
+## WGSL
+
+`SHADE_WGSL` is the WGSL text of the shading functions (`src/shade.wgsl`). It declares no
+bindings and no entry points, and every name in it starts with `pbr_`, `PBR_` or `Pbr`. An app
+joins its own declarations, the text and its entry points into one module:
+
+```rust
+let source = [APP_BINDINGS, craft_pbr::SHADE_WGSL, APP_ENTRY_POINTS].join("\n");
+```
+
+and passes `source` to its shader compiler (with wgpu, `wgpu::ShaderSource::Wgsl(source.into())`).
+The crate does not depend on wgpu or naga in its build.
+
+- **Values.** `Material::gpu()` returns a `GpuMaterial`, laid out as the WGSL struct
+  `PbrMaterial` (32 bytes: `base_color` at 0, `metallic` at 12, `roughness` at 16, `specular` at
+  20, `diffuse` at 24). `GpuSh9::try_new` takes the coefficients of `try_sh9` and lays them out as
+  `PbrSh9` (144 bytes, one `vec4<f32>` per coefficient). `to_bytes` on either returns the
+  little-endian bytes for a uniform or storage buffer. `GpuSh9::try_new` returns
+  `PbrError::BadOption` for a coefficient that is not finite or whose magnitude is over
+  `GpuSh9::MAX_COEFFICIENT` (1e30), which keeps the `f32` sum of `pbr_irradiance` finite. Every
+  result of `try_sh9` is accepted.
+- **Bounds.** No function loops or recurses. The GPU cannot return an error, so where the Rust
+  function returns one, the WGSL function returns a defined value: `pbr_direct` and
+  `pbr_environment_light` clamp material values to the ranges `Material::try_new` and
+  `try_with_weights` accept, a zero-length direction gives 0, and `pbr_environment_brdf` clamps
+  roughness to 0 to 1. WGSL implementations may assume that values are finite, so an app uploads
+  only checked values: a `GpuMaterial` comes from a checked `Material`.
+- **Output.** Colors are linear. The text has no display encoding.
+
+| Rust | WGSL | Notes |
+|------|------|-------|
+| `Material::try_new` | `pbr_material_clamped` | Clamps to the ranges the Rust constructors check, including `try_with_weights`. |
+| `Material::f0` | `pbr_f0` | Same formula. |
+| `Material::try_direct` | `pbr_direct` | Same floors: roughness at least 0.032, `n·v` at least `1e-4`, `n·h` at most 1 and `4 (n·v) (n·l)` at least `1e-4`. A light at or below the surface or a view straight opposite the light gives 0 in both. A zero-length direction gives 0 instead of an error, material values are clamped instead of checked, and `D` is evaluated in `f32` by `pbr_ggx_distribution`. |
+| `fresnel_schlick` | `pbr_fresnel_schlick` | Same formula. |
+| `smith_schlick_ggx` | `pbr_smith_schlick_ggx` | Same formula. |
+| `ggx_distribution` | `pbr_ggx_distribution` | Same `α` floor, in `f32`; `(n·h)² (α² − 1) + 1` is computed as `(1 − n·h)(1 + n·h) + (n·h)² α²`. |
+| `try_environment_brdf` | `pbr_environment_brdf` | Same fit and clamps; roughness is clamped instead of checked. |
+| `dir_of` | `pbr_dir_of` | Same frame. |
+| `uv_of` | `pbr_uv_of` | Same frame; a direction straight up or down has `u = 0`, as `atan2(0, 0)` gives in Rust. |
+| `sh_basis` | `pbr_sh_basis` | Same basis; a zero-length direction gives nine zeros. |
+| `irradiance` | `pbr_irradiance` | Sums in `f32` instead of `f64`. |
+| `unit` | `pbr_unit` | Scales by the largest component first, as the Rust helper does; a zero-length direction gives the zero vector. |
+
+Two WGSL functions have no Rust counterpart in this crate. `pbr_specular_levels(roughness,
+levels)` returns the two levels of a `try_prefilter` chain to blend and the weight of the second.
+`pbr_environment_light` combines irradiance, prefiltered radiance and `pbr_environment_brdf` by
+the split sum, as EffectCraft's `shade.rs` does on the CPU.
+
+The functions come from EffectCraft's `crates/gpu/src/shaders/advanced3d.wgsl` (at EffectCraft
+`f4d45dfe`), which ports `shade.rs`. Changes from that shader:
+
+- The direct roughness floor is 0.032 instead of 0.03, a view straight opposite the light gives 0
+  instead of a fallback half vector, `n·h` is taken as at most 1 as well as at least 0, and the
+  environment BRDF keeps `scale` and `bias` at least 0 with a sum of at most 1, as in the Rust
+  functions (see Origin).
+- A zero-length direction gives 0. EffectCraft's `norm3` replaced it with `(0, 0, −1)`.
+- Material values are clamped to the Rust ranges. EffectCraft clamped roughness to 0.03 to 1 and
+  read base color, metallic, specular and diffuse unchecked.
+- `D` computes its inner term as `(1 − n·h)(1 + n·h) + (n·h)² α²` with an `α` floor of 0.001 and
+  a denominator of at least `f32::MIN_POSITIVE`. EffectCraft computed `(n·h)² (α² − 1) + 1`,
+  which loses precision in `f32` near `n·h = 1` for small `α`, with a denominator of at least
+  `1e-12` and no `α` floor.
+- Fresnel raises `1 − v·h` to the fifth power by multiplication instead of `pow`.
+- The equirect mapping is in this crate's frame. For EffectCraft's frame, a direction
+  `(x, y, z)` there is `(−z, −y, −x)` here, which gives the same `v` and the same `u` before
+  EffectCraft adds its rotation.
+- EffectCraft's `srgb_to_linear` is not carried: the shader does not call it.
+
+Texture sampling, shadow maps, light attenuation and the unpacking of EffectCraft's buffers stay
+in EffectCraft: they read its own bindings and packed layouts. The tests parse and validate the
+text with naga, alone and with app bindings and `vs` and `fs` entry points, and check the
+`PbrMaterial` and `PbrSh9` layouts against `to_bytes`. They do not run the WGSL on a GPU.
+
 ## Origin
 
 The algorithms come from the `crates/render/src/ibl.rs` files of TextureCraft and MaterialCraft,
