@@ -14,6 +14,7 @@ pub(crate) mod reset;
 pub(crate) mod scheme;
 pub(crate) mod scrub_drags;
 pub(crate) mod short;
+pub(crate) mod stacked;
 pub(crate) mod tooltip;
 
 use self::kit::{Dial, Field, Seen, Wide};
