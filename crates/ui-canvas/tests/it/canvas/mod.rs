@@ -2,6 +2,8 @@
 
 pub(crate) mod crop;
 
+pub(crate) mod escape_keeps_press;
+
 pub(crate) mod editor;
 
 pub(crate) mod modal_wheel;
