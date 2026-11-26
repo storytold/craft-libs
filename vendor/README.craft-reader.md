@@ -65,6 +65,7 @@ where noted below.
 | [#2770](https://github.com/storytold/pdfcraft/pull/2770) | Guillem Hermida (guillehr2) | [6fcf2a4](https://github.com/guillehr2/pdfcraft/commit/6fcf2a4aca29e943e28cb69017ff8f87d00656c6) | hayro-interpret `color.rs`, `interpret/mod.rs`, `interpret/path.rs`, `interpret/state.rs`, `pattern.rs`, `shading.rs`, `soft_mask.rs`, `x_object.rs` | Patches 35 and 36, plate mode: `InterpreterSettings::plate` draws one ink's separation as a gray film (`color::Plate`, `ColorSpace::ink_use`/`ink_tint`); the graphics state reads `OP`, `op` and `OPM` and an overprinting paint that doesn't specify the plate's ink leaves the plate as it is (ISO 32000-2 §8.6.7); `InterpreterSettings::ink_sink` reports spot inks; `color::CmykSimulation` converts process color to an output intent's CMYK. Only the vendored interpreter part is ported; PdfCraft's `separations.rs` and Output Preview UI are not |
 | [#2974](https://github.com/storytold/pdfcraft/pull/2974) | mtlcl410 | [bae6981](https://github.com/mtlcl410/pdfcraft/commit/bae69819594a6385a027fec1f67e6b3c36c259b4) | hayro-interpret `device.rs`, `x_object.rs`; hayro `renderer.rs` | Knockout groups (`/K true`) knock out: while one is innermost, fills, strokes, glyph outlines and shadings are drawn with `Compose::Copy` (weighted by coverage); an unmasked image's rectangle (`Device::knockout_image`) and a nested group's shape (an erase pass between `Device::begin_knockout_erase` and `end_knockout_erase`) are cleared before their layer composites; a transparency group drawn in a knockout group always gets a layer of its own. Masked images and stencils composite as before |
 | [#4898](https://github.com/storytold/pdfcraft/pull/4898) | KenM76 | [6a76d28](https://github.com/KenM76/pdfcraft/commit/6a76d280168ebad42198de184d03ac11bf31f647) | hayro-interpret `device.rs`, `ocg.rs`, `x_object.rs`; hayro `renderer.rs` | A non-isolated knockout group entered at full opacity, without a soft mask and with Normal blending, composites each element with the backdrop in the element's own blend mode: the group is drawn once per blend mode its elements use (`Device::begin_knockout_pass`, `end_knockout_pass`), each pass a layer composited in its mode, in which elements of other modes clear their shape; a shading in a knockout group clears only where it paints (`Compose::DestOut`), so a mesh or a `/BBox` no longer clears its whole path |
+| [#7665](https://github.com/storytold/pdfcraft/pull/7665) | alehel | [6276f86](https://github.com/alehel/pdfcraft/commit/6276f8665c87f830c3f950aa47f5af41f25f9558) | hayro-interpret `font/cid.rs` | Patch 107, vertical forms (PdfCraft #7167): for a font of an Adobe CJK collection (Japan1, GB1, CNS1, Korea1) that the PDF doesn't embed, a CID that is its character's vertical form draws the substitute's vertical glyph. A CID counts when the collection's UTF-16 `-V` CMap gives it for its character and the `-H` CMap gives another, or, for the few vertical forms only they name (Adobe-Japan1 CIDs 8270, 8279 and 8281), the UCS-2 `-V` and `-H` CMaps do. The glyph comes from the substitute's GSUB `vert` lookups (`vrt2` when it has no `vert`): single substitutions, directly or through an extension lookup, from the collection's script (`kana`, `hani`, `hang`), else `DFLT`, including a language system's required feature. A face without vertical forms draws the ordinary glyph; embedded fonts and text extraction are unchanged |
 
 Code comments label #2974's changes `Knockout patch (pdfcraft #2974)` instead of a number: the
 pull request numbers them hayro-interpret patch 39 and hayro patch 19, and PdfCraft may
@@ -77,6 +78,12 @@ object where two objects overlap. The erase pass resolves the group's resources 
 `Knockout patch (pdfcraft #4898)`, beside #2974's. `crates/pdf/tests/knockout_backdrop.rs`
 adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the case of craft-libs
 #870, a Multiply knockout group over a yellow page.
+
+#7665 was open in PdfCraft when it was ported. Its comments keep the label `PdfCraft patch (107)`.
+Its tests are adapted in `crates/pdf/tests/interpretation/vertical_forms.rs`, with the fonts-build
+fixture `Tiny-glyf.ttf` as the substitute instead of PdfCraft's bundled Inter. Two changes
+are not in #7665: the UCS-2 CMaps alone decide when a resolver lacks the UTF-16 ones, and a script
+that lists no vertical feature leaves the lookups to `DFLT`, then to every script of the face.
 
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
@@ -114,7 +121,8 @@ the last filter of an image of known size may produce (1 GiB by default), and
 `with_max_image_pixels` sets the most pixels an image or mask may have for the interpreter to
 decode it (2^28 by default, at most 2^32), before and after its codec decodes it. With 64-bit
 pointers a caller may raise either one; elsewhere a raise is clamped to the default.
-`image_size_ok` keeps the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
+The CCITT and JPEG 2000 decoders hold an image to the document's pixel limit; JBIG2 keeps
+its own 2^28. `image_size_ok` and `ccitt_size_ok` keep the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
 RGB data instead of copying them into a second buffer. Tests:
 `decode_limits_tests::image_limits_default_and_caller_figures` in hayro-syntax and
 `image_limits` in `crates/pdf/tests/interpretation.rs`.
@@ -167,7 +175,8 @@ Hostile-input bounds (CodeRabbit findings):
 - A CID font's `/W2` run that starts past CID 65535 is skipped as in `/W`, instead of
   overflowing and discarding the whole table.
 - CCITT images: `ccitt_size_ok` (inherited PdfCraft ledger item 2) allows at most 2^20
-  columns and 2^28 pixels (columns × rows) before the decoder allocates. A `/Columns` past
+  columns and 2^28 pixels (columns × rows) before the decoder allocates; the decoder applies
+  the document's pixel limit in place of 2^28. A `/Columns` past
   `u32::MAX` is refused rather than wrapped to a small width. `/Rows` follows PdfCraft (17)
   and (19): `/Rows 0` or a value below `/Height` decodes to the image height, and decoding
   still stops where the data ends.
@@ -201,9 +210,10 @@ raster tests are adapted in `tests/upstream_raster.rs` and the text contracts in
 `tests/upstream_text.rs`. (P8)'s PdfCraft test needs a Japanese substitute font and is not
 ported.
 - A CCITT image with `/Rows 0` (unknown height) decodes at most the rows that fit the stream's
-  output limit (counted in 1-bit rows) and 2^28 pixels; a known height is clamped the same way.
-  Before, it decoded to the end of the data, and a bit of 2D code can repeat a whole row.
-- A JPEG 2000 image over 2^28 pixels, or over its output limit (at least 64 MiB), by the
+  output limit (counted in 1-bit rows) and the document's pixel limit (2^28 by default); a
+  known height is clamped the same way. Before, it decoded to the end of the data, and a bit of
+  2D code can repeat a whole row.
+- A JPEG 2000 image over the document's pixel limit (2^28 by default), or over its output limit (at least 64 MiB), by the
   codestream's own dimensions is refused before decoding, and its buffer is reserved fallibly:
   the image dictionary's smaller size no longer stands in for the size the decoder allocates.
 
@@ -300,6 +310,15 @@ the nonzero overprint mode, and DeviceGray on black alone, rather than through a
 or DefaultGray profile and the CMYK simulation of patch 36. PdfCraft's eight raster tests are
 adapted in `tests/upstream_raster.rs` (`default_color_spaces`); the plate case is
 `default_color_spaces_leave_device_color_on_its_plates` in `tests/plates.rs`.
+
+A craft-libs patch on top of it, labeled `Craft patch (default spaces)` in code comments:
+`RasterImage::default_color_space` returns the default color space that one draw of an image
+uses in place of its device space, with the cache key of the object it was read from, or `None`
+when the draw uses the image's own space. The same image XObject drawn inside and outside a
+default's scope reports each draw by its own scope. An inline image that names a `/ColorSpace`
+resource that is a device space reports the default substituted for it too
+(`named_color_space_and_default` in hayro-interpret `interpret/mod.rs`). Tests:
+`crates/pdf/tests/image_default_spaces.rs`.
 
 A rendering speedup from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
 hayro-interpret (35) with hayro (19), PdfCraft #3296, marked `PdfCraft patch (#3296)` because
