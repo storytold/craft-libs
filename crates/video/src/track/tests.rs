@@ -389,3 +389,85 @@ fn new_codec_errors_keep_their_category() {
     #[cfg(feature = "vp8-decode")]
     assert!(matches!(VideoError::from(crate::vp8::Error::Invalid("header".into())), VideoError::Malformed(_)));
 }
+
+#[test]
+#[allow(irrefutable_let_patterns, clippy::cognitive_complexity)]
+fn track_decoder_options_and_draft_persist_across_reset() {
+    #[allow(unused_variables)]
+    let opts = TrackDecoderOptions { threads: Some(0), draft: true };
+    #[cfg(feature = "h264-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::H264, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        } else {
+            panic!("expected H264 inner");
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        }
+        dec.set_draft(false);
+        assert!(!dec.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec.inner {
+            assert!(!inner.draft());
+        }
+        let dec2 = TrackDecoder::with_threads(&params(CodecId::H264, &[]), 2).unwrap();
+        assert_eq!(dec2.threads(), Some(2));
+        assert!(!dec2.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec2.inner {
+            let expected = if cfg!(all(feature = "threads", not(target_arch = "wasm32"))) { 2 } else { 1 };
+            assert_eq!(inner.threads(), expected);
+            assert!(!inner.draft());
+        }
+    }
+    #[cfg(feature = "hevc-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Hevc, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::Hevc { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::Hevc { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+    }
+    #[cfg(feature = "av1-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Av1, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::Av1 { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::Av1 { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+    }
+    #[cfg(feature = "vp9-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Vp9, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::Vp9(inner) = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::Vp9(inner) = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        }
+    }
+}

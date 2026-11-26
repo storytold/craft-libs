@@ -1,0 +1,648 @@
+//! The signature pad dialog and saved signatures.
+
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+
+use craft_behavior::{EditCommand, Input, Metrics, PartKey, PointerButton, PressPhase, Sense};
+use craft_host::{Host, PickId, PickRequest, Picked};
+use craft_theme::variant::Tone;
+use craft_ui::buttons::Button;
+use craft_ui::choice::Segmented;
+use craft_ui::contract::{
+    Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, Entry, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    Show as _, ShowContainer as _, clicked,
+};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::display::{Shade, Text};
+use craft_ui::fonts::FontRef;
+use craft_ui::layout_components::Row;
+use craft_ui::notices::{Notice, NoticeLayout};
+use craft_ui::popover::DropVeil;
+use craft_ui::primitives::{DocRun, DocText, Draw, HAlign, PaintShape, StrokeWidth, TextureCache};
+use craft_ui::runtime::drag::OsFile;
+use craft_ui::runtime::env::Env;
+use craft_ui::runtime::focus::{ActivateKeys, EditSet, KeyUse};
+use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx, SurfaceKind};
+use craft_ui::text::TextField;
+use egui::{ColorImage, Pos2, Rect, Vec2};
+
+use crate::signature::{
+    MAX_SIGNATURE_CHARS, PAPER_CUTOFF, PAPER_FEATHER, PickError, SavedSignature, SignatureDraft, SignatureImage, SignatureTab, decode_fitted,
+};
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+/// The pad's width over its height.
+const PAD_ASPECT: f32 = 460.0 / 150.0;
+/// Pad points closer than this (in pad units, both axes together) to the last one are dropped.
+const MIN_STEP: f32 = 0.002;
+/// The share of a box's height that strokes fill.
+const FILL: f32 = 0.9;
+/// The share of a box's height that typed text's font size takes.
+const TYPED_HEIGHT_SHARE: f32 = 0.9;
+/// The share of a box's width that typed text may take.
+const TYPED_WIDTH_SHARE: f32 = 0.95;
+
+craft_ui::words! {
+    /// The pad's words, English by default.
+    #[non_exhaustive]
+    pub struct SignatureWords {
+        create: template "signature.create" = "Create {what}";
+        change: template "signature.change" = "Change {what}";
+        signature: "signature.signature" = "signature";
+        initials: "signature.initials" = "initials";
+        type_tab: "signature.typeTab" = "Type";
+        draw_tab: "signature.drawTab" = "Draw";
+        image_tab: "signature.imageTab" = "Image";
+        scan_tab: "signature.scanTab" = "Scan";
+        type_hint: "signature.typeHint" = "Type text";
+        image_hint: "signature.imageHint" = "Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.";
+        browse: "signature.browse" = "Browse…";
+        browse_title: "signature.browseTitle" = "Choose an image";
+        image_filter: "signature.imageFilter" = "Image";
+        undo: "signature.undo" = "Undo";
+        clear: "signature.clear" = "Clear";
+        apply: "signature.apply" = "Apply";
+        cancel: "signature.cancel" = "Cancel";
+        image_failed: "signature.imageFailed" = "That image could not be read.";
+        image_too_large: "signature.imageTooLarge" = "That image is too large: up to 4 MiB and 8192 × 8192 pixels.";
+        drop_image: "signature.dropImage" = "Drop an image here";
+        drop_photo: "signature.dropPhoto" = "Drop a photo of a signature here";
+    }
+}
+
+/// The saved signature and initials, one settings section shared by every document. Each slot reads on its own: a
+/// stored value that does not read (an oversize or corrupt image) leaves that slot `None` and the other loaded.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct SignatureSettings {
+    /// The saved signature, if any.
+    #[serde(default, deserialize_with = "lenient_slot")]
+    pub signature: Option<SavedSignature>,
+    /// The saved initials, if any.
+    #[serde(default, deserialize_with = "lenient_slot")]
+    pub initials: Option<SavedSignature>,
+}
+
+/// A stored slot as read: a saved signature (or none), or anything else.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Slot {
+    Good(Option<SavedSignature>),
+    Bad(serde::de::IgnoredAny),
+}
+
+/// Reads a slot, turning a value that does not read into `None`: `Host::setting` defaults the whole section on any
+/// error, so one bad image would otherwise drop both slots.
+fn lenient_slot<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<SavedSignature>, D::Error> {
+    Ok(match <Slot as serde::Deserialize>::deserialize(deserializer)? {
+        Slot::Good(saved) => saved,
+        Slot::Bad(_ignored) => None,
+    })
+}
+
+impl craft_host::Section for SignatureSettings {
+    const KEY: &'static str = "signatures";
+}
+
+/// Draws a saved signature into `rect` in `color`: strokes scaled from pad units and fitted keeping the pad's shape
+/// (at the theme's medium stroke, whatever the rect's size), typed text in the signature face centred in the
+/// rect, an image fitted keeping its aspect. `ctx` holds the image's texture, cached under the image's key.
+pub fn paint_signature(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, signature: &SavedSignature, color: DataColor) {
+    match signature {
+        SavedSignature::Drawn(strokes) => paint_strokes(
+            rect,
+            strokes,
+            true,
+            |dot| draw.data_fill(&PaintShape::Circle(dot, 1.0), color),
+            |line| draw.stroke(&PaintShape::Path(line), StrokeWidth::Medium, color),
+        ),
+        SavedSignature::Typed(label) => paint_typed(ctx, draw, rect, label, color),
+        SavedSignature::Image(image) => paint_image(ctx, draw, rect, image),
+    }
+}
+
+/// Strokes in pad units: with `fit`, scaled to fill `rect` keeping the pad's shape; else laid over `rect` as the pad's
+/// own box. A one-point stroke goes to `dot`, a longer one to `line`.
+fn paint_strokes(rect: Rect, strokes: &[Vec<[f32; 2]>], fit: bool, dot: impl Fn(Pos2), line: impl Fn(Vec<Pos2>)) {
+    let points = || strokes.iter().flatten().filter(|p| p.iter().all(|v| v.is_finite()));
+    let (mut min, mut max) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for p in points() {
+        let at = Vec2::new(p[0] * PAD_ASPECT, p[1]);
+        min = min.min(at);
+        max = max.max(at);
+    }
+    if min.x > max.x {
+        return;
+    }
+    let extent = (max - min).max(Vec2::splat(f32::EPSILON));
+    let scale = (rect.width() / extent.x).min(rect.height() / extent.y) * FILL;
+    let middle = (min + max) / 2.0;
+    let place = |p: &[f32; 2]| {
+        if fit {
+            rect.center() + (Vec2::new(p[0] * PAD_ASPECT, p[1]) - middle) * scale
+        } else {
+            rect.min + Vec2::new(p[0] * rect.width(), p[1] * rect.height())
+        }
+    };
+    for stroke in strokes {
+        let shown: Vec<Pos2> = stroke.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(place).collect();
+        match shown.as_slice() {
+            [] => {}
+            [point] => dot(*point),
+            _ => line(shown),
+        }
+    }
+}
+
+/// `label` in the signature face, as large as fits `rect`, centred.
+fn paint_typed(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, label: &str, color: DataColor) {
+    if label.trim().is_empty() {
+        return;
+    }
+    let tall = rect.height() * TYPED_HEIGHT_SHARE;
+    let width = rect.width() * TYPED_WIDTH_SHARE;
+    // A name too wide at the height's size shrinks to the width, so it stays on one line.
+    let wide = DocText::new(&[DocRun::new(label.to_owned(), FontRef::signature(), tall, color)])
+        .layout(ctx, &Env::of_root(ctx).tokens, craft_i18n::Direction::Ltr)
+        .size()
+        .x;
+    let size = if wide > width { tall * width / wide } else { tall };
+    let room = Vec2::new(width, size);
+    let run = [DocRun::new(label.to_owned(), FontRef::signature(), size, color)];
+    let mut text = DocText::new(&run);
+    text.align = HAlign::Center;
+    draw.doc(Rect::from_center_size(rect.center(), room), &text);
+}
+
+/// `image` fitted into `rect` keeping its aspect.
+fn paint_image(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, image: &SignatureImage) {
+    let size = Vec2::new(image.width() as f32, image.height() as f32);
+    if size.min_elem() < 1.0 {
+        return;
+    }
+    let texture = TextureCache::texture(ctx, ("signature-image", image.key()), || pixels(image));
+    let fitted = size * (rect.width() / size.x).min(rect.height() / size.y);
+    let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    draw.texture(Rect::from_center_size(rect.center(), fitted), texture, uv);
+}
+
+type Decoded = Result<SignatureImage, PickError>;
+
+/// Where a decode job gets its bytes.
+enum Source {
+    Bytes(Vec<u8>),
+    Path(PathBuf),
+}
+
+/// Decodes a picked or dropped PNG or JPEG ([`decode_fitted`]: the size caps, the EXIF orientation, the saved size),
+/// then makes its paper transparent, so a photo of a signature on white paper keeps only the ink.
+fn decode_image(bytes: &[u8]) -> Decoded {
+    decode_fitted(bytes).map(|image| image.remove_white_background(PAPER_CUTOFF, PAPER_FEATHER))
+}
+
+/// The first of the files dropped: the pad takes one image.
+fn first_file(dropped: Option<&craft_ui::contract::OsFiles>) -> Option<OsFile> {
+    dropped.and_then(|files| files.files.first().cloned())
+}
+
+/// The pixels of `image` for its texture, empty when its buffer does not match its size.
+fn pixels(image: &SignatureImage) -> ColorImage {
+    let size = [image.width() as usize, image.height() as usize];
+    if size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(4)) == Some(image.rgba().len()) {
+        ColorImage::from_rgba_unmultiplied(size, image.rgba())
+    } else {
+        ColorImage::new([1, 1], vec![egui::Color32::TRANSPARENT])
+    }
+}
+
+/// The style of the pad.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct DrawPadStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
+    ink: StyleColor,
+    /// How far a shown signature sits in from the paper's edge.
+    inset: f32,
+}
+
+const PAD: PartKey = PartKey::new("pad");
+
+/// What a pad holds.
+enum PadContent<'a> {
+    /// Strokes in pad units that the pointer draws.
+    Strokes(Bind<'a, Vec<Vec<[f32; 2]>>>),
+    /// Typed text, shown as the signature it makes.
+    Typed(&'a str),
+    /// The picked image, if any, fitted to the paper.
+    Image(Option<&'a SignatureImage>),
+}
+
+/// The paper every tab of the signature pad shows its signature on, one size for all of them. The Draw tab's pad
+/// records strokes in pad units from the pointer or a pen (the Type tab makes the same signature from the keyboard);
+/// the Type and Image tabs' pads show the typed text or the picked image.
+#[derive(craft_ui::contract::Component)]
+pub struct DrawPad<'a> {
+    #[common]
+    common: Common,
+    content: PadContent<'a>,
+}
+
+impl<'a> DrawPad<'a> {
+    /// A pad named `label` that edits `strokes`.
+    pub fn new(label: impl Into<craft_ui::runtime::env::Label>, strokes: Bind<'a, Vec<Vec<[f32; 2]>>>) -> Self {
+        DrawPad { common: Common::new(), content: PadContent::Strokes(strokes) }.label(label)
+    }
+
+    /// A pad named `label` that shows `text` as a typed signature.
+    pub fn typed(label: impl Into<craft_ui::runtime::env::Label>, text: &'a str) -> Self {
+        DrawPad { common: Common::new(), content: PadContent::Typed(text) }.label(label)
+    }
+
+    /// A pad named `label` that shows `image` fitted to it, or blank paper without one.
+    pub fn image(label: impl Into<craft_ui::runtime::env::Label>, image: Option<&'a SignatureImage>) -> Self {
+        DrawPad { common: Common::new(), content: PadContent::Image(image) }.label(label)
+    }
+
+    fn draws(&self) -> bool {
+        matches!(self.content, PadContent::Strokes(_))
+    }
+}
+
+impl Component for DrawPad<'_> {
+    const ROLE: Role = Role::IMAGE;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
+    const OVERLAYS: bool = false;
+    const SINGLE_VALUE: bool = true;
+    /// The pad is drawn with the pointer: it takes no activation key, and Undo removes the last stroke.
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Neither).with_edits(EditSet::NONE.with(EditCommand::Undo));
+    type Style = DrawPadStyle;
+    type Output = craft_ui::contract::EditResponse<Vec<Vec<[f32; 2]>>>;
+
+    fn style(cx: &StyleCx<'_>, _: DrawPadStyleKey) -> DrawPadStyle {
+        let width = cx.tokens.size.plot.width;
+        DrawPadStyle {
+            metrics: Metrics::new().min_size(Vec2::new(width, width / PAD_ASPECT)),
+            focus: cx.focus_look(),
+            ink: cx.color(cx.tokens.color.text.normal),
+            inset: cx.tokens.space.pad.control,
+        }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        cx.style.metrics.min_size
+    }
+
+    fn sense(&self) -> Sense {
+        if self.draws() { Sense::FOCUS } else { Sense::empty() }
+    }
+
+    fn bind(&mut self) -> Option<BindMut<'_, Vec<Vec<[f32; 2]>>>> {
+        match &mut self.content {
+            PadContent::Strokes(strokes) => Some(strokes.reborrow()),
+            PadContent::Typed(_) | PadContent::Image(_) => None,
+        }
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        if self.draws() {
+            cx.part(PAD, rect).sense(Sense::DRAG | Sense::TAKE_FOCUS).pointer_only("the Type tab makes the same signature from the keyboard");
+        }
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if !self.draws() {
+            return;
+        }
+        let rect = cx.rect;
+        let normalise = |p: Pos2| {
+            let p = p.clamp(rect.min, rect.max);
+            [(p.x - rect.left()) / rect.width(), (p.y - rect.top()) / rect.height()]
+        };
+        let mut strokes = cx.value().cloned().unwrap_or_default();
+        while let Some(command) = cx.intents().take_edit() {
+            if command == EditCommand::Undo && pop_stroke(&mut strokes) {
+                cx.set(strokes.clone());
+            }
+        }
+        // The pointer belongs to the pad part: the component itself senses focus only.
+        let press = cx.part(PAD).press;
+        if !press.phase.start().is_some_and(|start| start.button == PointerButton::Primary) {
+            return;
+        }
+        match press.phase {
+            PressPhase::DragStart { pos, .. } => {
+                strokes.push(vec![normalise(pos)]);
+                cx.propose(strokes);
+            }
+            PressPhase::Drag { pos, .. } if cx.gesture().is_some() => {
+                if extend(&mut strokes, normalise(pos)) {
+                    cx.propose(strokes);
+                }
+            }
+            PressPhase::Release { pos, click: false, .. } if cx.gesture().is_some() => {
+                if extend(&mut strokes, normalise(pos)) {
+                    cx.propose(strokes);
+                }
+                cx.commit();
+            }
+            _ => {}
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let draw = ui.draw();
+        draw.surface(cx.rect, SurfaceKind::Well, craft_ui::style::Corners::All);
+        let ink = cx.style.ink;
+        let inner = cx.rect.shrink(cx.style.inset);
+        match &self.content {
+            PadContent::Strokes(_) => {
+                let strokes = cx.value().cloned().unwrap_or_default();
+                paint_strokes(
+                    cx.rect,
+                    &strokes,
+                    false,
+                    |dot| draw.fill(&PaintShape::Circle(dot, 1.0), ink),
+                    |line| draw.stroke(&PaintShape::Path(line), StrokeWidth::Medium, ink),
+                );
+            }
+            PadContent::Typed(text) => paint_typed(&cx.ctx, &draw, inner, text.trim(), DataColor::new(ink.egui())),
+            PadContent::Image(Some(image)) => paint_image(&cx.ctx, &draw, inner, image),
+            PadContent::Image(None) => {}
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Self::Output {
+        cx.edit_response()
+    }
+}
+
+/// Adds `point` to the last stroke unless it is within [`MIN_STEP`] of the stroke's last point; `true` when it was added.
+fn extend(strokes: &mut [Vec<[f32; 2]>], point: [f32; 2]) -> bool {
+    let Some(stroke) = strokes.last_mut() else { return false };
+    if stroke.last().is_none_or(|last| (last[0] - point[0]).abs() + (last[1] - point[1]).abs() > MIN_STEP) {
+        stroke.push(point);
+        true
+    } else {
+        false
+    }
+}
+
+/// Removes the last visible stroke (one of two points or more) with any bare dots after it; `true` when one went.
+fn pop_stroke(strokes: &mut Vec<Vec<[f32; 2]>>) -> bool {
+    while let Some(stroke) = strokes.pop() {
+        if stroke.len() > 1 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Input delivered to the host's scan tab.
+pub enum ScanEvent {
+    /// Draw the scan tab, with any file dropped on it this pass.
+    Show(Option<OsFile>),
+    /// Clear the scan's own state and cancel any pending work.
+    Clear,
+}
+
+/// The Scan tab's content and its clear handler, supplied by the host.
+pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft, ScanEvent) + Send>;
+
+/// Acrobat's signature pad on the dialog host: "Create signature" or "Change initials" with the tabs Type (a field over
+/// the pad that shows the typed signature), Draw (a pad of strokes, Undo), Image (Browse… a PNG or JPEG up to
+/// [`MAX_IMAGE_BYTES`](crate::signature::MAX_IMAGE_BYTES) through `host.files()`, or one dropped on the window, shown
+/// fitted to the same pad) and Scan (shown when the app gives a scan hook, which is handed a dropped photo); Clear;
+/// Apply (enabled when [`SignatureDraft::ready`]) and Cancel. Browse… and a drop read and decode the file on
+/// `host.jobs()`, and the paper of the image goes transparent; a file that fails or is too large shows an error under
+/// the button.
+#[derive(craft_ui::contract::Pattern)]
+pub struct SignaturePadDialog {
+    draft: SignatureDraft,
+    scan: Option<ScanTab>,
+    open: bool,
+    /// The Browse… pick waiting for its answer.
+    pick: Option<PickId>,
+    /// The decode job of a pick, until its result arrives.
+    decoding: Option<Receiver<Decoded>>,
+    /// The last pick's failure, until a pick succeeds or Clear.
+    error: Option<PickError>,
+}
+
+/// What [`SignaturePadDialog`] answers with.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SignaturePadResult {
+    /// What the user drew, typed or picked.
+    pub signature: SavedSignature,
+    /// Whether it is initials (else the signature).
+    pub initials: bool,
+}
+
+impl SignaturePadDialog {
+    /// A pad that starts from `draft`.
+    pub fn new(draft: SignatureDraft) -> Self {
+        Self { draft, scan: None, open: true, pick: None, decoding: None, error: None }
+    }
+
+    /// The Scan tab's content: it fills `draft.image` and handles [`ScanEvent::Clear`].
+    #[must_use]
+    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft, ScanEvent) + Send + 'static) -> Self {
+        self.scan = Some(Box::new(tab));
+        self
+    }
+
+    /// Starts the decode of a Browse… answer when it has come, and takes a finished decode.
+    fn take_picked(&mut self, host: &Host) {
+        if let Some(ticket) = self.pick
+            && let Some(picked) = host.files().take_answer(ticket)
+        {
+            self.pick = None;
+            let source = match picked {
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => None,
+                Picked::Contents(files) => files.into_iter().next().map(|(_, bytes)| Source::Bytes(bytes)),
+                Picked::Paths(paths) => paths.into_iter().next().map(Source::Path),
+                Picked::Saved { path, .. } => Some(Source::Path(path)),
+            };
+            if let Some(source) = source {
+                self.decode(host, source);
+            }
+        }
+        let Some(receive) = &self.decoding else { return };
+        match receive.try_recv() {
+            Ok(Ok(image)) => {
+                self.draft.image = Some(image);
+                self.error = None;
+                self.decoding = None;
+            }
+            Ok(Err(error)) => {
+                self.error = Some(error);
+                self.decoding = None;
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.error = Some(PickError::Unreadable);
+                self.decoding = None;
+            }
+        }
+    }
+
+    /// Reads and decodes `source` on `host.jobs()`; [`take_picked`](Self::take_picked) takes the result.
+    fn decode(&mut self, host: &Host, source: Source) {
+        let (send, receive) = channel();
+        let files = host.clone();
+        host.jobs().spawn(
+            "signature-image",
+            Box::new(move || {
+                let decoded = match source {
+                    Source::Bytes(bytes) => decode_image(&bytes),
+                    Source::Path(path) => files.files().read(&path).map_err(|_| PickError::Unreadable).and_then(|bytes| decode_image(&bytes)),
+                };
+                // The dialog may have closed; then nobody reads the answer.
+                let _ = send.send(decoded);
+            }),
+        );
+        self.decoding = Some(receive);
+    }
+
+    /// Imports a file dropped on the Image tab in place of any pending Browse… pick. A file with neither bytes nor a
+    /// path (a web drop still being read) is left alone.
+    fn take_dropped(&mut self, host: &Host, file: OsFile) {
+        let source = match (file.bytes, file.path) {
+            (Some(bytes), _) => Source::Bytes(bytes.to_vec()),
+            (None, Some(path)) => Source::Path(path),
+            (None, None) => return,
+        };
+        self.forget_pick(Some(host));
+        self.decode(host, source);
+    }
+
+    fn forget_pick(&mut self, host: Option<&Host>) {
+        self.decoding = None;
+        if let (Some(ticket), Some(host)) = (self.pick.take(), host) {
+            host.files().forget(ticket);
+        }
+    }
+}
+
+impl StackDialog for SignaturePadDialog {
+    type Result = SignaturePadResult;
+
+    fn id(&self) -> DialogId {
+        dialog_id("signature-pad")
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<Self::Result>> {
+        let env = Env::of(ui);
+        let words = env.words::<SignatureWords>();
+        let host = env.view().host().cloned();
+        if let Some(host) = &host {
+            self.take_picked(host);
+        }
+        let what = if self.draft.initials { words.initials.as_str() } else { words.signature.as_str() };
+        let title = if self.draft.editing { words.change.fill(&[("what", what)]) } else { words.create.fill(&[("what", what)]) };
+        let ready = self.draft.ready();
+        let buttons = vec![
+            FooterButton::new(words.apply.clone(), DialogRole::Accept).enabled(ready),
+            FooterButton::new(words.cancel.clone(), DialogRole::Cancel),
+        ];
+        let mut browse = false;
+        // A file dropped on the Image tab this pass.
+        let mut dropped: Option<OsFile> = None;
+        let SignaturePadDialog { draft, scan, open, decoding, error, .. } = self;
+        let decoding = decoding.is_some();
+        let shown = Dialog::new(title.clone()).opened(Bind::bound(open)).buttons(buttons).show(ui, |ui, _| {
+            let mut tabs = vec![
+                Entry::new(SignatureTab::Type, words.type_tab.clone()),
+                Entry::new(SignatureTab::Draw, words.draw_tab.clone()),
+                Entry::new(SignatureTab::Image, words.image_tab.clone()),
+            ];
+            if scan.is_some() {
+                tabs.push(Entry::new(SignatureTab::Scan, words.scan_tab.clone()));
+            }
+            Segmented::new(title.clone(), Bind::bound(&mut draft.tab), &tabs).show(ui);
+            match draft.tab {
+                SignatureTab::Type => {
+                    TextField::new(words.type_hint.clone(), Bind::bound(&mut draft.text))
+                        .placeholder(words.type_hint.clone())
+                        .limit(MAX_SIGNATURE_CHARS)
+                        .show(ui);
+                    DrawPad::typed(draft.text.clone(), &draft.text).show(ui);
+                }
+                SignatureTab::Draw => {
+                    DrawPad::new(words.draw_tab.clone(), Bind::bound(&mut draft.strokes)).show(ui);
+                }
+                SignatureTab::Image => {
+                    let veil = DropVeil::new(words.drop_image.clone()).show_with_files(ui, |ui, _| {
+                        Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
+                        if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
+                            browse = true;
+                        }
+                        if let Some(error) = *error {
+                            let word = match error {
+                                PickError::Unreadable => &words.image_failed,
+                                PickError::TooLarge => &words.image_too_large,
+                            };
+                            Notice::new(Tone::Bad, word.clone()).layout(NoticeLayout::Inline).show(ui);
+                        }
+                        DrawPad::image(words.image_tab.clone(), draft.image.as_ref()).show(ui);
+                    });
+                    dropped = first_file(veil.output.dropped.as_ref());
+                }
+                SignatureTab::Scan => {
+                    if let Some(tab) = scan.as_mut() {
+                        DropVeil::new(words.drop_photo.clone()).show_with_files(ui, |ui, files| tab(ui, draft, ScanEvent::Show(first_file(files))));
+                    }
+                }
+            }
+            Row::new().show(ui, |ui, _| {
+                if draft.tab == SignatureTab::Draw && clicked(&Button::new(words.undo.clone()).enabled(!draft.strokes.is_empty()).show(ui)) {
+                    draft.undo_stroke();
+                }
+                if clicked(&Button::new(words.clear.clone()).show(ui)) {
+                    draft.clear();
+                    *error = None;
+                    if let Some(tab) = scan.as_mut() {
+                        tab(ui, draft, ScanEvent::Clear);
+                    }
+                }
+            });
+        });
+        if browse && let Some(host) = &host {
+            self.forget_pick(Some(host));
+            let request =
+                PickRequest::open("signature-image").title(words.browse_title.as_str()).filter(words.image_filter.as_str(), &["png", "jpg", "jpeg"]);
+            self.pick = Some(host.files().pick(request));
+        }
+        if let (Some(file), Some(host)) = (dropped, &host) {
+            self.take_dropped(host, file);
+        }
+        let output = shown.output;
+        match output.picked {
+            Some(0) => {
+                let saved = self.draft.saved()?;
+                self.forget_pick(host.as_deref());
+                Some(DialogResult::Ok(SignaturePadResult { signature: saved, initials: self.draft.initials }))
+            }
+            _ if output.closed.is_some() => {
+                self.forget_pick(host.as_deref());
+                Some(DialogResult::Cancel)
+            }
+            _ => None,
+        }
+    }
+
+    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
+        self.draft.saved().map(|signature| SignaturePadResult { signature, initials: self.draft.initials })
+    }
+
+    fn cancelled(&mut self, _: &egui::Context) {
+        self.decoding = None;
+        self.pick = None;
+    }
+}
