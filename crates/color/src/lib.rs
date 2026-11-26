@@ -448,6 +448,77 @@ mod tests {
         assert_eq!(linear_to_srgb_u8(srgb_u8_to_linear_table()[128]), 128);
     }
 
+    /// SMPTE ST 2084 inverse EOTF in `f64`, with the constants as exact fractions from
+    /// Recommendation ITU-R BT.2100 Table 4.
+    fn st2084_inverse_eotf(y: f64) -> f64 {
+        let (m1, m2) = (2610.0 / 16384.0, 2523.0 / 4096.0 * 128.0);
+        let (c1, c2, c3) = (3424.0 / 4096.0, 2413.0 / 4096.0 * 32.0, 2392.0 / 4096.0 * 32.0);
+        let p = y.powf(m1);
+        ((c1 + c2 * p) / (1.0 + c3 * p)).powf(m2)
+    }
+
+    #[test]
+    fn pq_matches_the_st_2084_equations() {
+        for nits in [0.01_f64, 0.1, 1.0, 10.0, 100.0, 203.0, 1000.0, 4000.0, 10_000.0] {
+            let want = st2084_inverse_eotf(nits / 10_000.0);
+            let got = pq_inverse_eotf((nits / 10_000.0) as f32) as f64;
+            assert!((got - want).abs() < 1e-5, "{nits} nits: {got} vs {want}");
+            let back = pq_eotf(want as f32) as f64 * 10_000.0;
+            assert!((back - nits).abs() <= nits * 1e-4, "{want}: {back} vs {nits} nits");
+        }
+        assert!((pq_inverse_eotf(1.0) - 1.0).abs() < 1e-6);
+        assert!((pq_eotf(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// Report ITU-R BT.2408-7 Table 1: display luminance in cd/m², then the nominal signal level in
+    /// whole percent for a PQ reference display and for a 1 000 cd/m² HLG display.
+    const BT2408_TABLE_1: [(f32, f32, f32); 4] = [(26.0, 38.0, 38.0), (162.0, 56.0, 71.0), (179.0, 57.0, 73.0), (203.0, 58.0, 75.0)];
+
+    #[test]
+    fn signal_levels_match_bt2408_table_1() {
+        for (nits, pq_percent, hlg_percent) in BT2408_TABLE_1 {
+            let pq = pq_inverse_eotf(nits / 10_000.0) * 100.0;
+            assert!((pq - pq_percent).abs() <= 0.5, "{nits} nits: PQ {pq}% vs {pq_percent}%");
+            // The BT.2100 HLG OOTF has a system gamma of 1.2 on a 1 000 cd/m² display, so a
+            // neutral gray shown at `nits` comes from scene light (nits / 1000)^(1 / 1.2).
+            let hlg = hlg_oetf((nits / 1000.0).powf(1.0 / 1.2)) * 100.0;
+            assert!((hlg - hlg_percent).abs() <= 0.5, "{nits} nits: HLG {hlg}% vs {hlg_percent}%");
+        }
+    }
+
+    #[test]
+    fn hlg_matches_the_bt2100_equations() {
+        // Recommendation ITU-R BT.2100 Table 5: a = 0.17883277, b = 1 - 4a, c = 0.5 - a ln(4a).
+        let a = 0.178_832_77_f64;
+        let b = 1.0 - 4.0 * a;
+        let c = 0.5 - a * (4.0 * a).ln();
+        let oetf = |e: f64| if e <= 1.0 / 12.0 { (3.0 * e).sqrt() } else { a * (12.0 * e - b).ln() + c };
+        for e in [0.0_f64, 0.001, 0.01, 1.0 / 12.0, 0.1, 0.25, 0.5, 0.75, 1.0] {
+            let want = oetf(e);
+            let got = hlg_oetf(e as f32) as f64;
+            assert!((got - want).abs() < 1e-6, "E = {e}: {got} vs {want}");
+            let back = hlg_inverse_oetf(want as f32) as f64;
+            assert!((back - e).abs() <= 1e-6 + e * 1e-5, "E' = {want}: {back} vs {e}");
+        }
+        assert!((hlg_oetf(1.0 / 12.0) - 0.5).abs() < 1e-6);
+        assert!((hlg_oetf(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// The sRGB transfer of IEC 61966-2-1 (Amendment 1), as the ICC sRGB registry entry gives it.
+    #[test]
+    fn srgb_tables_match_the_iec_61966_2_1_equations() {
+        let decode = |v: f64| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        let encode = |l: f64| if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 };
+        for (i, got) in srgb_u8_to_linear_table().iter().enumerate() {
+            let want = decode(i as f64 / 255.0);
+            assert!((*got as f64 - want).abs() <= 1e-6, "code {i}: {got} vs {want}");
+        }
+        for (i, got) in linear_to_srgb_u8_table().iter().enumerate() {
+            let want = (encode(i as f64 / 4095.0) * 255.0).round() as u8;
+            assert_eq!(*got, want, "linear {i}/4095");
+        }
+    }
+
     #[test]
     fn hsl_roundtrip() {
         let c = [0.2, 0.6, 0.9];
