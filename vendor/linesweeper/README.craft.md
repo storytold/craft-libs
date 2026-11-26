@@ -6,7 +6,7 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 names, which is archived; its README says development moved off GitHub.
 
 The patched files are `src/order.rs`, `src/position.rs`, `src/sweep/sweep_line.rs`, `src/topology.rs`,
-`src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
+`src/curve/transverse.rs`, `src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -16,16 +16,29 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 ## Local patches
 
+`src/sweep/sweep_line.rs` also differs from the archive, in one doc comment.
+
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The touch branch of `Sweeper::handle_intersection` runs its scan right from a segment, or left from a segment, at most once per sweep line until the sweep-line order changes. Exact copies of a shape queue a touch event for every pair of coincident segments, and each event used to scan the whole bundle in both directions, so sweeping `n` copies took time growing faster than `n^3`. The skipped scans would only push events already queued, so the output does not change. The `coincident_copies_scan_once_per_order` test counts the scans for 60 copies of two shapes, and `coincident_copies_keep_the_fill` compares the output fill with the input's nonzero fill for 200 inputs with exact, reversed and split copies. |
 | `src/order.rs`, `src/sweep/sweep_line.rs`, `src/position.rs`, `src/curve/mod.rs` | `ComparisonCache` stores one `CurveOrder` per pair of segments instead of one for each direction, and flips it when the pair is looked up in the other order. `CurveOrder::flip_into` writes each flip into the buffers of the previous one, so a lookup in the other order does not allocate while the order's entries fit in the buffers that earlier flips allocated. `ComparisonCache::evict_ended` drops the pairs in which a segment ends above a given height, once the cache has doubled since its last scan. `Sweeper` calls it on both of its caches each time the sweep line moves down, and `compute_positions` calls it each time it takes the next height from its queue. Both caches used to keep every pair the sweep compared until the sweep ended, so a sweep of a 2,001-point star polygon held 4,001,998 cached orders (1,463 MiB). Code comments label the changes `Craft patch (comparison cache size)`. The `one_order_per_pair` and `reversed_lookup_flips_the_stored_order` tests check the stored and flipped orders, `reversed_lookups_reuse_the_flipped_buffers` checks that a second lookup in the other order keeps the same buffer and that `flip_into` gives the result of `flip`, `ended_pairs_leave_the_comparison_cache` checks that a sweep of a tall band keeps fewer than a tenth of the pairs, and `evicting_comparisons_keeps_the_sweep_lines` and `evicting_comparisons_keeps_the_correct_positions` check that the sweep lines, output events and positions do not change. |
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `src/curve/transverse.rs` | `transversal_after` returns `false` when either dy/dt bound it divides by is zero, negative or nan. It compared the two slope bounds by cross-multiplying, which reverses the comparison when a bound is negative. Two curves that leave a shared start point in opposite directions, with their first control points one ulp below the start, were reported as keeping their left-to-right order although they cross. `transversal_before` reflects its curves and calls `transversal_after`, so it returned the same wrong answer. The `crossing_with_negative_start_dy` test checks both functions. |
 | `src/curve/mod.rs` | When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN. The `short_curve_chord_with_huge_x` test fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307. Code comments label the change `Craft patch (huge chord)`. |
 | `src/curve/line.rs` | `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height. The `subnormal_x` test checks that line and a line from x = -1.5e-323 to 1.5e-323. Code comments label the change `Craft patch (subnormal x)`. |
 | `docs/sweep.typ` | The intersection scan to the left compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)`. |
 | `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
 | `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
 | `src/sweep/sweep_line.rs`, `src/topology.rs` | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. Code comments label the change `Craft patch (clippy lints)`. |
+
+`docs/sweep.typ` has one more change:
+
+- `docs/sweep.typ`: the crossing-height lemma (`lem-intersection-height-error`) and its proof divide
+  the starting gap `beta(y_0) - alpha(y_0)` by the sum of both gaps. With the ending gap
+  `alpha(y_1) - beta(y_1)` as the numerator, gaps of 1 and 3 gave `t = 0.75`, while the segments
+  cross at `t = 0.25`. The proof's inverse-slope difference is `d/(y_1 - y_0)`; the package has
+  `d/(y_1 - y_1)`, whose denominator is zero. The lemma's bound and the later bound on the crossing
+  height use the absolute values of `1/m_alpha` and `1/m_beta`, because the slopes can be negative.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

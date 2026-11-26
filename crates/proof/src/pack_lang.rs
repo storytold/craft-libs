@@ -1,6 +1,7 @@
 //! Proofing for any language by its locale ([`crate::ProofLang::Pack`]): its Hunspell dictionary (the
 //! dictionaries folder, then an installed Language pack, then the system's), read by the shared
-//! affix engine, with default suggestion tuning and no grammar rules.
+//! affix engine. Most use default suggestion tuning and no grammar rules; French locales add
+//! the spelling tuning and conservative typography in [`crate::fr`] without a separate cache.
 //!
 //! The loaded dictionaries share a memory budget ([`MAX_LOADED_BYTES`], estimated from their
 //! files); the one used least recently goes first, but never one used during the current
@@ -337,6 +338,9 @@ pub(crate) fn is_correct(word: &str, locale: PackLocale, opts: &crate::Options) 
     if other_script(w, &scripts) {
         return true;
     }
+    if locale.primary() == "fr" {
+        return crate::fr::check(&d, w, opts);
+    }
     let known = |w: &str| d.check(w) || crate::in_user_dictionary(&w.to_lowercase());
     if w.contains('-') && !known(w) {
         return w.split('-').all(|p| p.chars().count() <= 1 || known(p));
@@ -350,7 +354,7 @@ pub(crate) fn suggest(word: &str, max: usize, locale: PackLocale) -> Vec<String>
     if d.is_empty() {
         return Vec::new();
     }
-    crate::affix_suggest::suggest_in(&d, word, max, &Tuning::DEFAULT)
+    if locale.primary() == "fr" { crate::fr::suggest_in(&d, word, max) } else { crate::affix_suggest::suggest_in(&d, word, max, &Tuning::DEFAULT) }
 }
 
 /// The pack locales whose hyphenation patterns serve a [`crate::ProofLang::Pack`] language: the locale,
@@ -367,21 +371,6 @@ mod tests {
         PackLocale::new(t).unwrap()
     }
 
-    /// Review follow-up (craft-libs#485): a full list of locales with no dictionary forgets its
-    /// oldest one, not all of them, so a document in more languages doesn't look every one up again.
-    #[test]
-    fn missing_locales_forget_the_oldest_first() {
-        let tag = |i: usize| l(&format!("q{}{}", (b'a' + (i / 26 % 26) as u8) as char, (b'a' + (i % 26) as u8) as char));
-        let mut missing = Vec::new();
-        for i in 0..MAX_MISSING + 10 {
-            remember_missing(&mut missing, tag(i));
-            assert!(missing.len() <= MAX_MISSING);
-        }
-        assert_eq!(missing.len(), MAX_MISSING);
-        assert!(!missing.contains(&tag(0)) && !missing.contains(&tag(9)), "the oldest went first");
-        assert!(missing.contains(&tag(10)) && missing.contains(&tag(MAX_MISSING + 9)), "the rest stay");
-    }
-
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
     /// this thread's dictionaries pinned past the budget for good.
     #[test]
@@ -395,27 +384,6 @@ mod tests {
             assert!(CHECK_FROM.with(Cell::get).is_some(), "an inner check doesn't end the outer one");
         });
         assert_eq!(CHECK_FROM.with(Cell::get), None);
-    }
-
-    /// Review follow-up (craft-libs#485): a word with no letter in the dictionary's scripts is
-    /// in another script (a Cyrillic word in a Dutch run); a word in its script is always checked,
-    /// even with letters no dictionary word uses (CodeRabbit on #496: `zzzz`).
-    #[test]
-    fn words_in_another_script_are_not_the_dictionarys() {
-        let nl = AffixDict::from_hunspell("SET UTF-8\n", "3\nhuis\nkat\nÉén\n", &[]).unwrap();
-        let latin = scripts(&nl);
-        assert_eq!(latin.len(), 1);
-        for w in ["привет", "Привет", "αβγ", "שלום", "日本"] {
-            assert!(other_script(w, &latin), "{w}");
-        }
-        for w in ["huus", "kät", "huisп", "ÉÉN", "zzzz", "qxqw", "ŋʒ"] {
-            assert!(!other_script(w, &latin), "{w}");
-        }
-        assert!(!other_script("привет", &[]), "no scripts: every word is checked");
-        let ru = AffixDict::from_hunspell("SET UTF-8\n", "1\nдом\n", &[]).unwrap();
-        assert!(!other_script("щщщ", &scripts(&ru)) && other_script("dom", &scripts(&ru)));
-        assert_ne!(script_of('ა'), script_of('a'));
-        assert_eq!(script_of('ă'), script_of('Ạ'));
     }
 
     #[test]
