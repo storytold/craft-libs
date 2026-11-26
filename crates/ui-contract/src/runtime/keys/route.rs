@@ -431,7 +431,10 @@ fn owned_shortcuts(
         .map(|shortcut| {
             let key = shortcut.input.typed.or(shortcut.input.physical);
             // A release in the same batch belongs to its scalar press too; later releases are withheld by the strip.
+            // A release that names its own press is judged by that press below (`held`), which already knows whether it
+            // was scalar's: only a release with no press of its own is paired to a scalar press by its key here.
             let scalar_release = shortcut.phase == FirePhase::Release
+                && shortcut.press.is_none()
                 && match key {
                     Some(Key::Up) => scalar_releases[0],
                     Some(Key::Down) => scalar_releases[1],
