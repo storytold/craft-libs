@@ -10,6 +10,7 @@ use craft_ui::primitives::{ContentPainterCx, DocRun, DocText, FacesCx, TextLayou
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect};
 
+use crate::panel::subsets::SubsetFont;
 use crate::{Catalog, FaceInfo};
 
 /// Larger files are not drawn: a whole CJK family can be hundreds of megabytes.
@@ -56,6 +57,14 @@ pub(crate) fn shown(at: &impl FacesCx, catalog: &Arc<Catalog>, owner: Owner, fac
     })
 }
 
+/// The font that draws a subset of the preview service, once the registry has taken it.
+pub(crate) fn subset(at: &impl FacesCx, subset: &SubsetFont) -> Shown {
+    at.document_face(&format!("subset:{}", subset.key), || {
+        let face = subset.face();
+        move || Some(face)
+    })
+}
+
 /// The bytes of `face` once [`shown`] has it ready, for reading its tables without loading the file again.
 pub(crate) fn bytes(at: &impl FacesCx, owner: Owner, face: &FaceInfo) -> Option<FaceBytes> {
     at.document_face_bytes(&key(owner, face))
@@ -82,25 +91,41 @@ pub(crate) struct SampleLine {
     pub(crate) baseline: f32,
 }
 
-/// `text` in `font` for a band `band` high, laid out by `layout` (a measure's or a painter's) and cut to `room` as
+/// A sample's text and the face, size and colour it is drawn in.
+#[derive(Clone, Copy)]
+pub(crate) struct Sample<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) font: &'a FontRef,
+    /// The variation coordinates (axis tag, value) the face is drawn at; empty for the face as registered.
+    pub(crate) coords: &'a [([u8; 4], f32)],
+    pub(crate) points: f32,
+    pub(crate) color: DataColor,
+}
+
+impl<'a> Sample<'a> {
+    /// `text` in `font` as it is registered, at `points` in `color`.
+    pub(crate) fn new(text: &'a str, font: &'a FontRef, points: f32, color: DataColor) -> Self {
+        Sample { text, font, coords: &[], points, color }
+    }
+
+    /// The sample drawn at the coordinates `coords` of its face.
+    pub(crate) fn at(self, coords: &'a [([u8; 4], f32)]) -> Self {
+        Sample { coords, ..self }
+    }
+}
+
+/// `sample` for a band `band` high, laid out by `layout` (a measure's or a painter's) and cut to `room` as
 /// [`sample_text`] cuts it. Every face sits on one baseline: that of the interface face's line at `points` centred in
 /// the band, as a control's line sets its texts. The sample is laid out at `points`, or, where its ink (what the
 /// layout draws, as `Galley::mesh_bounds` holds it) would cross the band's top or bottom from that baseline, at the
 /// largest size whose ink stays inside the band.
-pub(crate) fn sample_line(
-    layout: impl Fn(&DocText<'_>) -> TextLayout,
-    font: &FontRef,
-    text: &str,
-    points: f32,
-    band: f32,
-    room: Option<f32>,
-    color: DataColor,
-) -> SampleLine {
+pub(crate) fn sample_line(layout: impl Fn(&DocText<'_>) -> TextLayout, sample: Sample<'_>, band: f32, room: Option<f32>) -> SampleLine {
+    let Sample { text, font, coords, points, color } = sample;
     let probe = [DocRun::new(BASELINE_PROBE, FontRef::proportional(), points, color)];
     let line = layout(&DocText::new(&probe));
     let baseline = (band - line.size().y) / 2.0 + line.first_baseline;
     let at = |size: f32| {
-        let runs = [DocRun::new(text, font.clone(), size, color)];
+        let runs = [DocRun::new(text, font.clone(), size, color).coords(coords)];
         layout(&sample_text(&runs, room))
     };
     let mut size = points;
@@ -127,8 +152,6 @@ fn share(room: f32, ink: f32) -> f32 {
     if ink > room { room / ink } else { 1.0 }
 }
 
-/// `text` on one line in `font` at `points` in the band `rect` ([`sample_line`]), at the reading start of `rect`,
-/// clipped to `rect`. The sample keeps its own direction whatever the interface's.
 /// The ink of a sample over `rect`: black on a white paper it fills, in every theme, when `on_white`; else `ink`.
 pub(crate) fn sample_ink(painter: &ContentPainterCx<'_>, rect: Rect, on_white: bool, ink: Color32) -> DataColor {
     if !on_white {
@@ -138,10 +161,12 @@ pub(crate) fn sample_ink(painter: &ContentPainterCx<'_>, rect: Rect, on_white: b
     DataColor::new(Color32::from(Srgba::BLACK))
 }
 
-pub(crate) fn paint_sample(painter: &ContentPainterCx<'_>, rect: Rect, font: &FontRef, text: &str, points: f32, color: DataColor) {
-    let line = sample_line(|doc| painter.layout(doc), font, text, points, rect.height(), Some(rect.width()), color);
+/// `sample` on one line in the band `rect` ([`sample_line`]), at the reading start of `rect`, clipped to `rect`. The
+/// sample keeps its own direction whatever the interface's.
+pub(crate) fn paint_sample(painter: &ContentPainterCx<'_>, rect: Rect, sample: Sample<'_>) {
+    let line = sample_line(|doc| painter.layout(doc), sample, rect.height(), Some(rect.width()));
     let size = line.layout.size();
-    let x = match base_direction(text) {
+    let x = match base_direction(sample.text) {
         Some(Direction::Rtl) => rect.right() - size.x,
         _ => rect.left(),
     };
