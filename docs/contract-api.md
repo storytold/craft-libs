@@ -4378,6 +4378,7 @@ Layout memory: sizes one pass measures and the next pass places by, the one disc
 
 Ids and memory: `Remember`, the memory stage, `Facts`, eviction and saved state.
 
+- `craft_ui::runtime::memory::ForkError`: `pub enum ForkError { DuringPass }`. Why [`fork_into`] refused.
 - `craft_ui::runtime::memory::Lifetime`: `pub enum Lifetime { Saved, Run }`. How long a remembered value lives.
 - `craft_ui::runtime::memory::Remember`: `pub trait Remember`. Implemented by `Cx`, `BodyCx` and `ItemCx` over the pipeline's memory stage, each keyed by its own base id.
   - `fn key(&self, part: impl Hash + Debug) -> Id`. `base.with(part)`: child and relation ids.
@@ -4396,6 +4397,7 @@ Ids and memory: `Remember`, the memory stage, `Facts`, eviction and saved state.
   - `pub fn named(key: impl Into<Arc<str>>) -> Self`. A key `crate_prefix.name` built at run time, for slots kept per item, such as a window for each open
   - `pub fn as_str(&self) -> &str`. The key's text.
 - `craft_ui::runtime::memory::Slot`: `pub trait Slot: Clone + Default + Send + Sync + 'static`. A value kept in memory. `Clone` is required because egui's temp store clones on insert; large caches hold `Arc`s.
+- `craft_ui::runtime::memory::fork_into`: `pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError>`. Gives `to` a copy of `from`'s UI memory, for a second context that draws what `from` shows (a headless capture of a
 - `craft_ui::runtime::memory::key_salt`: `pub fn key_salt(key: &impl Hash) -> u64`. A salt for an id made from `key`, a value that is only `Hash`: the ids egui makes also ask for `Debug`, which an
 - `craft_ui::runtime::memory::run_value`: `pub fn run_value<T: Slot>(ctx: &Context, key: &SaveKey) -> T`. The run-only value under `key`, in the session tier. It never reaches the host. It gives the default until a value
 - `craft_ui::runtime::memory::saved_value`: `pub fn saved_value<T: Savable>(ctx: &Context, key: &SaveKey) -> T`. The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'
