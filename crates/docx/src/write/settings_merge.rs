@@ -230,15 +230,49 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     Some((open_end, close, out))
 }
 
-/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
-fn merge_compat(orig: &str, generated: &str) -> Option<String> {
-    let mode = |s: &str| -> Option<(usize, usize)> {
-        let at = s.find("w:name=\"compatibilityMode\"")?;
-        let tag_start = s.get(..at)?.rfind('<')?;
-        let tag_end = tag_start + s.get(tag_start..)?.find('>')? + 1;
-        Some((tag_start, tag_end))
+/// Byte span of the whole `compatibilityMode` element in `s` (a `w:compat` block): its start tag,
+/// plus its end tag when it is written in expanded form (`<w:compatSetting …></w:compatSetting>`,
+/// as Word writes it). Splicing only the start tag would leave an expanded original's end tag
+/// behind the generated self-closed one, which is not well-formed XML (#6125). `None` when the
+/// element's end tag is missing: the caller then falls back to the generated part.
+fn mode_span(s: &str) -> Option<(usize, usize)> {
+    let at = s.find("w:name=\"compatibilityMode\"")?;
+    let start = s.get(..at)?.rfind('<')?;
+    let open_end = start + tag_end(s.get(start..)?)? + 1;
+    if s.get(start..open_end)?.ends_with("/>") {
+        return Some((start, open_end));
+    }
+    // CT_CompatSetting has no content, so the next end tag is this element's — unless a
+    // comment or processing instruction comes first: their text can spell the end tag
+    // without being one, and ending the span there would leave a tail behind as an
+    // unmatched tag. The scan walks `<` tokens in one forward pass, skipping each
+    // comment through `-->` and each instruction through `?>`.
+    let mut i = open_end;
+    let close = loop {
+        let tail = s.get(i..)?;
+        let lt = tail.find('<')?;
+        let rest = tail.get(lt..)?;
+        if rest.starts_with("</w:compatSetting") {
+            break i + lt;
+        } else if rest.starts_with("<!--") {
+            i += lt + rest.find("-->")? + 3;
+        } else if rest.starts_with("<?") {
+            i += lt + rest.find("?>")? + 2;
+        } else {
+            i += lt + 1;
+        }
     };
-    match (mode(orig), mode(generated)) {
+    Some((start, close + tag_end(s.get(close..)?)? + 1))
+}
+
+/// The original `w:compat` with its `compatibilityMode` element replaced by the generated one.
+fn merge_compat(orig: &str, generated: &str) -> Option<String> {
+    let orig_mode = mode_span(orig);
+    if orig_mode.is_none() && orig.contains("w:name=\"compatibilityMode\"") {
+        // A mode whose element can't be delimited: don't add a second one beside it.
+        return None;
+    }
+    match (orig_mode, mode_span(generated)) {
         (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
         (None, Some((c, d))) => {
             // No mode in the original: add the generated one before `</w:compat>`, or expand a self-closing `<w:compat/>`.
@@ -430,6 +464,66 @@ mod tests {
         assert!(out.contains("<w:useFELayout/>") && out.contains("compatibilityMode"), "{out}");
         assert!(has_unowned(orig.as_bytes()));
         assert!(!has_unowned(GEN.as_bytes()));
+    }
+
+    /// #6125: the whole expanded `compatibilityMode` element is replaced, end tag included.
+    #[test]
+    fn an_expanded_compat_mode_is_replaced_whole() {
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"></w:compatSetting><w:compatSetting w:name="x" w:uri="u" w:val="1" ></w:compatSetting ></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(
+            out.contains(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"/><w:compatSetting w:name="x" w:uri="u" w:val="1" ></w:compatSetting ></w:compat>"#),
+            "{out}"
+        );
+        assert_eq!(out.matches("</w:compatSetting").count(), 1, "{out}");
+        // An expanded generated mode is taken whole too.
+        let gen_x = GEN.replace(r#"w:val="15"/>"#, r#"w:val="15"></w:compatSetting>"#);
+        let out = String::from_utf8(merge(orig.as_bytes(), gen_x.as_bytes()).unwrap()).unwrap();
+        assert!(
+            out.contains(
+                r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"></w:compatSetting><w:compatSetting w:name="x""#
+            ),
+            "{out}"
+        );
+        assert_eq!(out.matches("</w:compatSetting").count(), 2, "{out}");
+        // A `>` in an attribute value doesn't end the start tag early.
+        let quoted = orig.replace(r#"w:uri="u" w:val="14""#, r#"w:uri="a>b" w:val="14""#);
+        let out = String::from_utf8(merge(quoted.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(!out.contains("a>b") && out.matches("</w:compatSetting").count() == 1, "{out}");
+    }
+
+    #[test]
+    fn a_comment_inside_an_expanded_compat_mode_does_not_truncate_it() {
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"><!-- </w:compatSetting> --></w:compatSetting><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(
+            out.contains(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"/><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat>"#),
+            "{out}"
+        );
+        assert!(!out.contains("-->"), "{out}");
+        assert_eq!(out.matches("</w:compatSetting").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn a_processing_instruction_inside_an_expanded_compat_mode_does_not_truncate_it() {
+        // A processing instruction can spell the end tag, or hold a comment opener with no
+        // comment end: neither ends the element, and neither makes the merge fall back.
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"><?p </w:compatSetting> ?></w:compatSetting><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).expect("merge fell back")).unwrap();
+        assert!(
+            out.contains(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"/><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat>"#),
+            "{out}"
+        );
+        assert_eq!(out.matches("</w:compatSetting").count(), 0, "{out}");
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"><?p <!-- ?></w:compatSetting></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).expect("merge fell back")).unwrap();
+        assert!(out.contains(r#"w:val="15""#) && out.contains("<w:rsids/>"), "{out}");
+    }
+
+    #[test]
+    fn a_compat_mode_without_its_end_tag_falls_back() {
+        assert!(merge_compat(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:val="14"></w:compat>"#, GEN).is_none());
+        assert!(mode_span(r#"<w:compatSetting w:name="compatibilityMode" w:val="14"></w:compatSetting"#).is_none());
     }
 
     #[test]
