@@ -232,6 +232,7 @@ craft-sbs = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
+craft-mesh-ops = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -658,6 +659,7 @@ mesh-dae = ["mesh", "craft-mesh/dae"]
 mesh-fbx = ["mesh", "craft-mesh/fbx"]
 mesh-gltf = ["mesh", "craft-mesh/gltf"]
 mesh-obj = ["mesh", "craft-mesh/obj"]
+mesh-ops = ["dep:craft-mesh-ops"]
 mesh-ply = ["mesh", "craft-mesh/ply"]
 mesh-stl = ["mesh", "craft-mesh/stl"]
 mesh-threemf = ["mesh", "craft-mesh/threemf"]

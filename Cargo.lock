@@ -1863,6 +1863,7 @@ dependencies = [
  "craft-media-source",
  "craft-menu",
  "craft-mesh",
+ "craft-mesh-ops",
  "craft-metadata",
  "craft-metafile",
  "craft-midi",
