@@ -2,16 +2,140 @@
 
 ## The upstream range
 
-- The fork's state before the merge: `75866f6b1`.
-- The upstream commit merged last: `93c2e0825`.
-- Commits taken: **190**, of which **117** are change commits.
+- The fork's state before this run: `75866f6b1`.
+- The upstream commits merged, in order: `93c2e0825`, `0cb8ed397`, `7635245a9`, `8f1bb4c46`, `e17227177`.
+- The upstream tip at the end of this run: `e17227177`.
+  - `93c2e0825`: 190 commits, 117 change commits (counted from `75866f6b1`).
+  - `0cb8ed397`: 210 commits, 128 change commits (counted from `75866f6b1`).
+  - `7635245a9`: 357 commits, 193 change commits (counted from `75866f6b1`).
+  - `8f1bb4c46`: 402 commits, 207 change commits (counted from `75866f6b1`).
+  - `e17227177`: 403 commits, 208 change commits (counted from `75866f6b1`).
 
-### Every commit
+**403 commits** between the fork's starting point and the last upstream commit of this run.
 
+### Every commit of the range
+
+- `e17227177 ui-contract: keep an app's own text curve for each mode (#3516) (#3615)`
+- `8f1bb4c46 Merge pull request #2088 from dotCooCoo/fix/color-portal-answer-shape`
+- `7f93aef96 Merge pull request #2086 from dotCooCoo/fix/portal-current-filter-shape`
+- `74f875c75 Merge pull request #3080 from dotCooCoo/feat/craft-shared-vec`
+- `c41c9433e Merge pull request #2969 from dotCooCoo/feat/color-row-alpha`
+- `54cbab4c5 Merge pull request #2964 from dotCooCoo/feat/dialog-confirm-held-refusal`
+- `16c41e2f7 Merge pull request #2959 from dotCooCoo/feat/about-licenses-tab`
+- `d9513bc41 Merge pull request #2957 from dotCooCoo/feat/range-param-step`
+- `c901ddcb7 Merge pull request #2956 from dotCooCoo/feat/automation-ui-drag`
+- `b6ca1de06 Merge pull request #2955 from dotCooCoo/feat/menu-bar-natural-width`
+- `40c4cb315 Merge pull request #2949 from dotCooCoo/feat/fit-short-order`
+- `634637b2d Merge pull request #2943 from dotCooCoo/fix/docx-hide-proofing-errors-next`
+- `7635245a9 Merge pull request #2718 from dotCooCoo/fix/canvas-paste-text`
+- `ba847f6d8 Merge pull request #3534 from dotCooCoo/fix/bezier-selected-anchor-lookup`
+- `af8600b13 Merge pull request #3531 from dotCooCoo/fix/anchored-layer-alignment-in-ltr-axis`
+- `3d3f73822 Merge pull request #3605 from dotCooCoo/fix/swatches-panel-document-key`
+- `2e3ef32b8 Merge pull request #3602 from dotCooCoo/fix/pdf-preset-label-flattener`
+- `09dd0b7d9 Merge pull request #3588 from dotCooCoo/fix/divide-slices-axis-names`
+- `fb46021c5 Merge pull request #3586 from dotCooCoo/fix/shortcuts-tab-strip-names`
+- `7c5ec6a47 Merge pull request #3584 from dotCooCoo/fix/cursor-follows-zoom-off`
+- `2bc819b47 Merge pull request #3573 from dotCooCoo/fix/page-list-document`
+- `0c03526c5 Merge pull request #3567 from dotCooCoo/fix/floating-window-least-size`
+- `039e80977 Merge pull request #3566 from dotCooCoo/fix/command-states-index`
+- `57ebc5a3e Merge pull request #3565 from dotCooCoo/fix/macos-save-format-menu`
+- `ff3519775 Merge pull request #3558 from dotCooCoo/fix/screenshot-settle-clock`
+- `e4fd69e76 Merge pull request #3553 from dotCooCoo/fix/preview-pane-narrow-room`
+- `00889a333 Merge pull request #3546 from dotCooCoo/fix/slider-end-labels-apart`
+- `982ee712a Merge pull request #3545 from dotCooCoo/feat/tab-title-type-role`
+- `2c295e739 Merge pull request #3543 from dotCooCoo/fix/color-wheel-tab-reaches-square`
+- `491fb985f Merge pull request #3541 from dotCooCoo/fix/mac-menu-retry-failed-build`
+- `9e7bfb65e Merge pull request #3540 from dotCooCoo/fix/command-search-skip-unheld-words`
+- `6e4b0281c Merge pull request #3539 from dotCooCoo/fix/find-dialog-escape`
+- `9c2aa1d81 Merge pull request #3537 from dotCooCoo/fix/dialog-initial-focus`
+- `eb9d439cd Merge pull request #3532 from dotCooCoo/fix/list-manager-enter`
+- `8fb3d6656 Merge pull request #3525 from dotCooCoo/fix/layer-direction-in-ltr-axis`
+- `e3ceeb4a7 Merge pull request #3521 from dotCooCoo/fix/slider-field-tab-order`
+- `10b8fa4e7 Merge pull request #3520 from dotCooCoo/fix/swatch-unnamed-group-no-header`
+- `6256e02f7 Merge pull request #3519 from dotCooCoo/fix/role-none-paint-children-parent`
+- `6b805b8e8 Merge pull request #3518 from dotCooCoo/fix/zoom-field-tab-leaves-focus`
+- `893c5fe23 Merge pull request #3514 from dotCooCoo/fix/flyout-mark-one-node`
+- `14cd3ae8a Merge pull request #3513 from dotCooCoo/fix/link-text-contrast`
+- `fcdaa5845 Merge pull request #3506 from dotCooCoo/fix/test-kit-unused-items`
+- `733e35fea Merge pull request #3492 from dotCooCoo/fix/dock-group-band-keeps-tab`
+- `0bd6ede25 Merge pull request #3479 from dotCooCoo/fix/widgets-focus-ring`
+- `8f5c0c547 Merge pull request #3478 from dotCooCoo/fix/inspect-overlay-badges-inside-view`
+- `fc9d606fa Merge pull request #3477 from dotCooCoo/fix/story-fixture-texture-delta`
+- `be8e1ace4 Merge pull request #3473 from dotCooCoo/fix/scroll-bar-short-view`
+- `5cae6c4af Merge pull request #3472 from dotCooCoo/fix/host-default-lanes-once`
+- `c77f2ffa6 Merge pull request #3469 from dotCooCoo/fix/field-stacks-when-control-squeezed`
+- `c67adb0d9 Merge pull request #3466 from dotCooCoo/fix/bezier-other-paths-handles`
+- `50005cc59 Merge pull request #3465 from dotCooCoo/fix/disclosure-flyout-focus-ring`
+- `93f9d6ee0 Merge pull request #3462 from dotCooCoo/fix/field-group-stacked-rows`
+- `30ee47714 Merge pull request #3458 from dotCooCoo/fix/grid-fill-columns-share-excess`
+- `748fcf8b4 Merge pull request #3403 from dotCooCoo/fix/account-list-private-at-create`
+- `acd389287 Merge pull request #3423 from dotCooCoo/fix/per-inch-typed-suffix`
+- `17e06511f Merge pull request #3385 from dotCooCoo/fix/control-token-file-private-at-create`
+- `34959dee6 Merge pull request #3456 from dotCooCoo/fix/dock-float-closed-keeps-place`
+- `2ccbe1491 Merge pull request #3455 from dotCooCoo/fix/save-for-web-panes-fill-height`
+- `436f5c79e Merge pull request #3450 from dotCooCoo/fix/paint-ring-wide-chip`
+- `91877f416 Merge pull request #3431 from dotCooCoo/fix/job-progress-layer-role`
+- `2952e91af Merge pull request #3430 from dotCooCoo/fix/rail-scroll-bar-at-rest`
+- `efd996021 Merge pull request #3427 from dotCooCoo/fix/stroke-caps-closed-paths`
+- `b2dafb163 Merge pull request #3421 from dotCooCoo/fix/glyph-text-path`
+- `96d8c7f23 Merge pull request #3420 from dotCooCoo/feat/per-inch-unit`
+- `704fb97f2 Merge pull request #3419 from dotCooCoo/feat/select-picture-aspect`
+- `3994c77bd Merge pull request #3417 from dotCooCoo/fix/color-ui-spectrum-square-boxes`
+- `5eef467f3 Merge pull request #3416 from dotCooCoo/fix/color-ui-recent-colors-empty-row`
+- `20c6b5737 Merge pull request #3414 from dotCooCoo/fix/color-ui-harmony-label-row`
+- `e13eb03e0 Merge pull request #3377 from dotCooCoo/fix/token-file-private-at-create`
+- `dfb938c71 color-ui: SwatchesPanel::document keeps an open rename with its document`
+- `0cb8ed397 Merge pull request #3487 from storytold/fix/wordcraft-7707-iconbutton-side-menu-ink`
+- `5fc077ba7 Merge pull request #3482 from storytold/fix/wordcraft-7679-gallery-arrow-size`
+- `f6a1bc3a3 Merge pull request #3471 from storytold/fix/wordcraft-7686-cm-ruler-labels`
+- `5c30761a8 Merge pull request #3599 from davidmann4/fix/photocraft-17006-token-cache-settings`
+- `616429fea ui-patterns: the PDF export preset row reads modified while custom flattener options are on`
+- `54c74e91e automation: a settings change reads the agent token file again (photocraft#17006)`
+- `906d63e50 Merge remote-tracking branch 'origin/next' into fix/wordcraft-7707-iconbutton-side-menu-ink`
+- `c062a92ff Merge remote-tracking branch 'origin/next' into fix/wordcraft-7679-gallery-arrow-size`
+- `fc71a947a Merge remote-tracking branch 'origin/next' into fix/wordcraft-7686-cm-ruler-labels`
+- `e1fcf7e17 Merge pull request #3581 from davidmann4/fix/prefs-classic-layout`
+- `309770a1a Merge next into fix/widgets-focus-ring`
+- `5b258d267 Merge next into fix/inspect-overlay-badges-inside-view`
+- `c53801f2e Merge next into fix/story-fixture-texture-delta`
+- `f35728894 Merge next into fix/scroll-bar-short-view`
+- `ad15bc4f9 Merge next into fix/host-default-lanes-once`
+- `5a3343266 Merge next into fix/field-stacks-when-control-squeezed`
+- `54a193b7b Merge next into fix/grid-fill-columns-share-excess`
+- `b08e2dcfe Merge next into fix/disclosure-flyout-focus-ring`
+- `528df7b27 Merge next into fix/field-group-stacked-rows`
+- `abd107a5a Merge next into fix/dock-float-closed-keeps-place`
+- `e2b46e33f Merge next into fix/test-kit-unused-items`
+- `b0f72d8da SectionList: only a framed list sets the columns' gap`
+- `83a63bcad Merge pull request #3579 from davidmann4/fix/photocraft-17006-agent-link-retry`
+- `2e19dbaa9 appkit: crate docs name save_panel without an intra-doc link`
+- `f74fe090f Preferences: an opt-in classic layout with a framed page list, group boxes and Prev/Next`
+- `baa7064a8 draw: Divide Slice's Divide By groups and value fields name their axis`
+- `702cb295c menu: Keyboard Shortcuts' tab strips have readable names`
+- `c3f675659 automation: sync's docs name fresh_token as code, not a link to a private item`
+- `cd76656f6 Merge next into fix/dock-float-closed-keeps-place`
+- `edb97e2e4 Merge next into fix/grid-fill-columns-share-excess`
+- `925e8e4e6 Merge next into fix/inspect-overlay-badges-inside-view`
+- `4269318aa WIP: Preferences classic layout (photocraft#17014)`
+- `d984f6637 Merge next into fix/widgets-focus-ring`
+- `318191492 Merge next into fix/host-default-lanes-once`
+- `05c5f3345 fonts-build: leave the tab-title face out of the text coverage check`
+- `8606c6b55 Merge next into fix/scroll-bar-short-view`
+- `e92a3ffc1 automation: the agent link replaces a token file the check refuses (photocraft#17006)`
+- `80827f838 Merge next into fix/story-fixture-texture-delta`
+- `9c8fc60b9 ui-contract: fit the tab-title face to the semibold face's x-height at its set weight`
+- `e04135846 Merge next into fix/field-stacks-when-control-squeezed`
+- `74cfafb61 Merge next into fix/field-group-stacked-rows`
+- `5b3bce1bd Cursors: with cursor_follows_zoom off, a pointer keeps its size at every interface zoom`
+- `5079d008b ui-widgets: declare the Abel test font in package.metadata.craft reads`
+- `3849354db automation: a refused agent token file is not retried every 5 s (photocraft#17006)`
+- `fa1bacf99 pages: PageList keeps a rename and its scroll per document`
 - `93c2e0825 Merge pull request #3568 from aiongg/next-sync-1125b`
 - `6a53eb858 Merge pull request #3561 from aiongg/update-local-mirror`
 - `5a88f5392 Merge pull request #3563 from aiongg/float-popup-focus`
 - `4d8997357 Merge main into next (font-store: Windows copies, #3467)`
+- `48bdc408e dialogs: macOS Save sheets list the file types in a Format menu`
+- `6b82d7c4b Dock: a floating window placed or restored outside its panels' limits shows within them`
 - `ccb5e7036 Merge pull request #3562 from aiongg/unreached-read-only-contract`
 - `0393de7e1 Merge the workspace lint fix (#3562)`
 - `6a78a88ac Window trials: the settle loop runs its frames one by one (clippy)`
@@ -22,39 +146,61 @@
 - `f94b37942 FontPicker and ComboBox: compact is a prop, so its setter is derived`
 - `308af64e6 CI: unreached-rs skips craft-pdf's read-only contract, a workspace of its own`
 - `b225cd881 Merge pull request #3551 from aiongg/float-menu`
+- `61cd27343 automation: ControlChannel::settle_at admits a screenshot at the time the app passes`
+- `ce87f5484 Merge next into fix/dock-group-band-keeps-tab`
+- `c8f211866 ui-contract, ui-patterns: a preview in a narrow panel stays inside it`
 - `6801f1f9b A window's records survive the frame that opens it: closed viewports' records go as a frame begins`
 - `c13ec14cf ui-test-kit: preserve FrameInput installed before Windows::frame_with_files`
+- `423b03750 fonts-build, theme, ui-contract, ui-widgets: semibold document tab titles draw in craft-fonts' condensed face`
+- `019f0cd70 ui-widgets: a slider's mark labels sit apart and inside it when they are long`
 - `6e308319c update: local-mirror, the feature that accepts a developer's loopback mirror`
+- `903478b7e ui-widgets: command search counts typo edits only for label and path words, and finds an entry's postings by binary search`
+- `a834f744e menu: a macOS menu rebuild that fails is tried again`
+- `ee36c0596 ui-contract: a folded control focused in an arena reports focus on its owner's node`
+- `c667c5ece ui-contract: Escape in a modeless dialog's field closes the dialog`
 - `c79d8d399 font-manager, ui-widgets: compact toolbar sizing for FontPicker and ComboBox (#3043) (#3053)`
 - `776c0bae9 ui-widgets: allow card Tile to render paper surface and large icon (#3041) (#3047)`
 - `2edd5edba font-manager: restore Plain FontPicker text click vs chevron parity (#3102) (#3103)`
+- `92c586ed8 ui-contract: CommandStates finds a command among the states with its id`
 - `2fc960dc4 Merge pull request #3454 from storytold/lightcraft-pr/fw-measure-run-boundary`
 - `85d24943f ui-widgets: allow card Tile to render paper surface and large icon (#3041) (#3047)`
 - `d0254a099 Merge pull request #3533 from aiongg/ports-combined`
+- `8b4c5998d ui-widgets: a click on an inline slider field's label focuses its number field`
+- `b226fe4f2 ui-contract: a dialog with no field and no default button opens on its first body stop`
 - `c3ff1715c Merge pull request #3216 from storytold/design-port/pr-docking-rails`
 - `560061879 Merge pull request #3445 from storytold/lightcraft-pr/fw-disclosure-name`
+- `96434df27 draw: the Bezier overlay looks each knot up in the selection's anchors gathered once per pass`
 - `1277d4b15 Merge pull request #3213 from storytold/design-port/pr-menus-popups`
 - `67f556908 Merge pull request #3139 from storytold/fix/picture-no-checker`
 - `aa401985d Merge commit 'ea2211729e' into ports-combined`
 - `ea2211729 The waiting window's repaint is a docking::native function`
 - `41519eaae Merge commit 'f15b0e87d2' into ports-combined`
 - `e9543a634 Merge commit 'd6aed656f2' into ports-combined`
+- `31d023406 ui-contract: a layer opened inside an ltr_axis component aligns to its anchor in the interface's direction`
+- `ca8556c9c ui-contract, ui-patterns: Enter in a list manager's name box runs its enabled first action`
 - `f3f0e69fd Merge pull request #3505 from aiongg/app-stop-focus`
 - `0826c445e Merge pull request #3508 from aiongg/next-sync-1125`
 - `fd7f86446 A floating window that takes over a held press opens its OS window once the press ends`
+- `630c2013a ui-contract: a layer opened inside an ltr_axis component flows in the interface's direction`
 - `ce5ac0807 Merge origin/next`
 - `c7fc2598a Merge origin/next`
 - `84febd993 docs: regenerate contract-api.md`
 - `f62036b16 docs: regenerate contract-api.md`
 - `f15b0e87d An Escape nothing in a floated dock window takes is the dock window's Cancel`
+- `ca09728e7 ui-widgets: Tab visits an inline slider field's slider before its number field`
 - `75efcf65c Merge remote-tracking branch 'origin/next' into fix/picture-no-checker`
+- `aac6c09b8 ui-contract, ui-widgets: Tab moves on from a zoom field with nothing typed`
 - `d6aed656f A press nothing takes leaves the app's document canvas focused`
+- `ff0406b63 color-ui: swatches outside every group show without a header row`
+- `04c4320e2 ui-contract: a component without a node keeps its painted children under its parent`
 - `82a4dd93a Dividers: the column bar and margin handles take key focus on a press again`
 - `b003bd172 Merge origin/next into design-port/pr-docking-rails`
 - `9a7c2255a Merge remote-tracking branch 'origin/next' into design-port/pr-menus-popups`
+- `6453e50b4 ui-panels, ui-contract: a tool group's rail button is one access node`
 - `a165ef3a2 Merge pull request #3476 from davidmann4/fix/photocraft-16905-own-window-moves`
 - `6f7a1f8da font-store: doc links to InstalledFamily`
 - `3249d5014 Merge remote-tracking branch 'upstream/next' into next-sync-1125`
+- `36b0dc54b ui-contract, ui-widgets: link text reads at 4.5:1 in accent.text; a toast's links take the card's text color`
 - `5e0c0b853 Merge pull request #3493 from storytold/fix/next-reds`
 - `d1bdf8e5d host_canvas: sizing passes report nothing, and declaring a focused canvas enters nothing`
 - `fda1a0c15 Merge storytold next into app-stop-focus`
@@ -67,6 +213,7 @@
 - `913c1b20a Merge remote-tracking branch 'upstream/next' into test-speed-3-frame`
 - `70374ab97 Merge pull request #3499 from aiongg/next-green-1125`
 - `051c45335 Merge host-canvas-finding into app-stop-focus`
+- `6bcf483cf ui-contract: gate the suite trials' Layer re-export and lookup count on suite`
 - `668f0b07d Merge storytold next into app-stop-focus`
 - `4bdb8b850 host_canvas: a canvas widget that takes no focus is the same finding`
 - `d6f213e0b Focus the runtime gives an app's own widget follows egui's rule`
@@ -82,40 +229,85 @@
 - `7d1a54d71 Workspace gate: craft-ui-contract at opt-level 2`
 - `d4af1f248 cl: pass the dev profile settings after the cargo subcommand`
 - `011ee7857 next: design-lint findings and the components index`
+- `52948ceaa dock: a docked group's drag band narrows before the shown tab loses its first letters`
 - `dd03495de font-store: write and flush an OS copy through one writable handle, so a read-only store file still copies`
 - `b0d422cf0 Document tabs: TabCloseLook::Glyph, the close button as a glyph (opt-in)`
 - `963ba7c7a Move bands: MoveBandCursor::Arrow keeps the arrow (opt-in)`
 - `3ccd688c0 Menu bar: MenuTitleLook::Button, titles as bare push buttons (opt-in)`
 - `60fcf6b1d A full-window container's own window moves by its title row and resizes by its edges (photocraft#16905)`
+- `cb1b2301a ui-widgets: InspectOverlay's Tab-order badges show whole inside the drawing`
+- `c0ed8a3e1 ui-contract: Fixture::frame_clipped_shapes clears the texture changes it does not render`
+- `49c27ec41 ui-widgets: ring focused parts that showed no focus ring`
 - `37c5317f1 WIP: a full-window dialog's own window moves and resizes (photocraft#16905)`
+- `84279466d ui-contract: a scroll bar whose track has no room paints nothing`
+- `c9c90a5a7 host: QueueOptions::default_lanes reads the core count once per process`
+- `715cccfbb ui-contract: a field puts a row of controls under its label when the row would fall below its least width`
+- `d4552077e ui-canvas rulers: drop the centimetre rule's unreachable halves fallback`
 - `bed639961 font-store: Windows flushes a copy through a writable handle; tests build and pass on Windows`
+- `9dfaf04f0 draw: the Bezier overlay counts other paths' selected anchors instead of copying them for each path`
 - `58acd23cd Merge pull request #3218 from mocenigo/page-view-fit-width`
+- `9a2615d2d ui-widgets, ui-panels: a focused disclosure or tool rail button shows the focus ring`
+- `f2656d986 ui-widgets: icon button reads in a side menu's ink`
+- `4c6c3bb6e menu gallery: scroll and more arrows show the small glyph, not the ribbon's icon side`
+- `f7ddd9957 ui-canvas rulers: a centimetre document ruler labels every whole centimetre`
 - `d445d2cf2 Merge pull request #3286 from batistalucasv/fix/font-picker-warning-filled`
+- `55756099e ui-contract: every row of a label group that stacks takes the stacked height`
+- `52a090c64 behavior: a Fill column raised to its least takes the difference from the other Fill columns, so a grid whose least widths fit no longer overflows`
+- `c5b1197af dock: a closed panel floated by Action::Float keeps the docked place it would reopen at`
+- `120d962bd save for web: the preview panes fill the height beside the settings`
 - `6bb97dbcb Runtime: what code outside the framework measures in measure::run joins no body's kept transcript`
+- `d3902e5f0 swatch: a ring well wider than it is high keeps its open middle`
+- `3fa9d4b40 Merge next into fix/docx-hide-proofing-errors-next`
 - `189716c2e ui-shell: the Column start stories use catalog icons for their links`
 - `e8e2fd1c4 List rows: a group row's triangle is named after the row's accessible name`
 - `05b99ee5d Merge pull request #3424 from aiongg/os-share-existing`
 - `94db2b1ce font-store: list a deleted copy as pending so start-up copies it again`
+- `557a5bf93 ui-contract, ui-panels: a job progress window's layer has the progress role, and OpenFilter::Asks leaves it out`
+- `cc650f49d ui-contract, ui-panels: an overlay scroll bar can show at rest (Scroll::at_rest), and ToolRail::bar_at_rest turns it on for the rail`
 - `beb452028 ui: size a split button's chevron half from the control height`
 - `ccc5f14e2 ui: keep a split button's chevron half just wide enough for the chevron`
 - `3ee92e88a font-manager: choose per font whether an install goes to the system fonts folder`
 - `00bd02793 ui: split button with an accessible name beyond its label`
+- `7e18e28f6 draw: StrokeEditor::caps_on_closed keeps the Caps row enabled on a closed path without dashes, and with the default of false a solid closed path still disables Caps`
 - `52f6b6e03 font-manager: make fonts installed before the OS copy available at start`
+- `74d7ea395 behavior: a typed /in after a count reads as the per-inch unit (40/in)`
+- `a9140ba04 Merge next into fix/control-token-file-private-at-create`
+- `63e8b4679 ui-contract: a value glyph can lay out text through the Draw that paints its icon`
+- `dd5b04eaa ui-contract: UnitKind::PerInch shows a count per inch after its number (10/in)`
 - `204743d4b Merge pull request #382 from aiongg/os-install`
+- `11b1534f9 ui-widgets: Select::picture_aspect sets the width of an entry's picture in its row and on the face; square stays the default`
+- `afeec9f9d Merge next into feat/dialog-confirm-held-refusal`
 - `92e4b97ea font-store: name macOS copies by family, recheck before publishing, drop gone system files`
 - `07dff4f8c font-store: make families available to all apps on Windows`
 - `097ff7c22 font-manager: copy installed families to the OS fonts folder, with a Craft-apps-only setting`
+- `ccf616d1f color-ui: the FillStroke Color panel's Spectrum ramp is at least as tall as its two square end boxes (ColorRamp::square_boxes, 40 pt in Compact), near production's 46 pt floor, instead of a 10 pt band in a panel sized by its content`
+- `6642934ce color-ui: the FillStroke Color panel shows its Recent Colors caption while the host's list is empty, as production drew the labeled empty row; a host that gives no recent colors (ColorPanel::recent not called) still shows no row`
 - `bed05b731 Merge pull request #3411 from storytold/ci/macos-windows-deps-cache`
+- `3a0f45652 color-ui: HarmonyPanel's variation end labels sit at the two edges of the grid`
 - `7c0723a68 font-store: split the OS-copy withdrawal test's ledger checks into a helper`
 - `3ad66c236 Merge upstream/main into os-install`
 - `68ab35c9b CI: a failed deps-profile hash stops the step instead of naming every entry v2-`
 - `6d1dbd47a CI: macOS and Windows cache entries are named by the dependency settings alone, so next restores main's`
+- `164261d54 Merge next into fix/portal-current-filter-shape`
+- `e173286b2 Merge next into feat/range-param-step`
+- `1418db7ab control: a token file create that owner_only timed out takes the timed-out path`
+- `4d75e6dc5 Merge fix/token-file-private-at-create into fix/control-token-file-private-at-create`
+- `c89a2a844 platform: owner_only creates a private folder with its access list and checks inherit-only entries`
 - `ed1da0da5 pages, ui-canvas: drop a held thumb's extent once its press ended unseen`
+- `7b7b62f5d Merge next into feat/menu-bar-natural-width`
+- `1f3b0578c suite-account: the account list is private from the moment it is created on Windows`
 - `fab457094 Merge pull request #3394 from aiongg/ci-profile-main`
+- `cce0c76a9 platform: owner_only ends a Windows tool that runs longer than 10 seconds`
+- `3c756a6c9 Merge main into fix/canvas-paste-text`
 - `5ddd943b6 CI: test builds pass the dev-profile overrides; nightly also runs the full tests on next`
 - `4987698e8 Merge pull request #3387 from aiongg/ci-fast-main`
 - `b8a434fa5 CI: CRW sample files are saved once, not once per pull request`
 - `192a1e6fa CI: pull requests gate on the Linux Workspace legs; macOS and Windows run after the merge`
+- `1798f485a control: the token file is private from the moment it is created`
+- `c9c601039 automation: the control token file is private from the moment it is created`
+- `f0a13eac3 Merge next into feat/color-row-alpha`
+- `9e5dff91d Merge next into feat/automation-ui-drag`
+- `3cd484ceb Merge next into feat/automation-ui-drag`
 - `ed7a4c4ee Focus: focus_came_with_open is a documented runtime API, as the menu rows read it`
 - `77cbfce41 menu: the first key is withheld only from the focus a pointer-opened menu gave`
 - `6624de371 Iconic trials: a type alias for the tall-flyout fixture's parts`
@@ -126,9 +318,14 @@
 - `13687e15a Docking: make DockConfig::menu_button a named option, GroupMenuButton::{HostRows, EveryGroup}`
 - `638397eda Merge remote-tracking branch 'origin/next' into design-port/pr-menus-popups`
 - `53dd357b3 menu: the first-key rule of a pointer-opened menu covers icon rows`
+- `871ff1d10 Merge next into feat/about-licenses-tab`
 - `652d1cc2f Merge branch 'next' into fix/font-picker-warning-filled`
 - `e7e8785ff ui-canvas: a held horizontal thumb keeps its bar until the press ends`
 - `5f87cb0b7 Merge upstream next into page-view-fit-width`
+- `c8eaac37c Merge next into fix/portal-current-filter-shape`
+- `6e934d856 Merge next into feat/menu-bar-natural-width`
+- `b4947833c Merge next into feat/dialog-confirm-held-refusal`
+- `9e5f2f638 Merge next into feat/range-param-step`
 - `e3385de04 font-manager: use filled warning triangle icon in FontPicker (storytold/wordcraft#7684)`
 - `db3553a14 Docking: drop DockConfig::flyout_outside_closes, which next's flyout outside rule covers`
 - `0266aed8f Merge next into design-port/pr-docking-rails`
@@ -141,6 +338,7 @@
 - `1f835743c ui-widgets: a rendered picture can skip its transparency checkerboard (wordcraft#7317 C3-3)`
 - `08d9dad55 Trials: assert a relation, not a literal size; the tool-icon trial reads the frame's shapes instead of a static`
 - `799861166 pages: no horizontal scroll bar while the pages fit the view's width`
+- `3160cc4dd Merge main into feat/craft-shared-vec`
 - `3364345d5 Select disabled-owner tests: plainer messages`
 - `f95acd746 Docking: wrap a long doc line`
 - `427edf5c4 rustfmt`
@@ -155,6 +353,28 @@
 - `bacdbc494 Select: tests for a disabled owner retiring its held popup`
 - `eab123489 Overlays: a popup with no opener closes when its owner goes disabled`
 - `1fb218634 Menus: Enter or Space on a focused opener opens its menu`
+- `e09bb4384 craft: the facade's shared-vec and shared-vec-serde features`
+- `1923a87c6 Merge next into fix/docx-hide-proofing-errors-next`
+- `464dcb71d craft-shared-vec: make small range edits as single edits`
+- `fb66ff092 Add craft-shared-vec: an indexed list whose clones share their blocks`
+- `6dbda989a Merge main into fix/canvas-paste-text`
+- `5b6295b5c Fit: short form docs name the late order, and the API listing lists the new items`
+- `39a7ddf9d Form dialogs: a color row can carry opacity (ParamKind::color_with_alpha)`
+- `a1cc33883 craft-automation: ui.dialog.confirm of a held OK replies with the app's answer, a refusal in English`
+- `76ff6288c About: a Licenses tab shows the app's third-party license texts`
+- `57b7a441b Form dialogs: a Range row can take a step (Param::step) for its slider and field`
+- `6c33621a0 Menu bar: the output reports the width every title takes side by side`
+- `45515d18b craft-automation: ui.drag presses, moves in even steps and releases as one request`
+- `97b202c28 Fit: items rank their short forms, and late ones shorten after the free items leave`
+- `2cde91985 craft-docx: read and write the hide spelling and grammar errors settings`
+- `ba70e5a89 Merge next into fix/portal-current-filter-shape`
+- `f24c8a852 Merge next into fix/portal-current-filter-shape`
+- `ed647a5d4 Canvas: the body's tool pass carries the text the editor part pastes`
+- `8ea5c2796 Merge next into fix/color-portal-answer-shape`
+- `3064826dd Merge next into fix/color-portal-answer-shape`
+- `8cf30337f Merge next into fix/portal-current-filter-shape`
+- `5926d7ead Screen: the color picker portal's answer of another shape fails the pick without a panic`
+- `460b5438c Dialogs: a Save As goes ahead when the portal answers with a file type of another shape`
 - `c20aba83d font-store: reflow a doc comment`
 - `db8ed5c86 font-store: removal past an unreachable OS folder, file-in-the-way conflicts, OS folder wording`
 - `9ecd599c3 font-store: README on which face the catalog keeps`
@@ -201,15 +421,17 @@
 
 ## What was measured
 
-- `cargo nextest run --workspace --no-fail-fast --test-threads 4`: **18,563 passed / 0 failed / 63 skipped**, exit 0 (1,341 s), on the committed tree `9f430f19b`.
+- `cargo nextest run --workspace --no-fail-fast --test-threads 4`: **18,710 passed / 0 failed / 63 skipped**, exit 0, on the tree `c5ca5a2ea` (the last full run).
 - `cargo clippy --workspace --all-targets -- -D warnings`: exit 0.
 - `cargo fmt -- --check`: exit 0.
-- `cargo nextest run -p craft-design-lint`: exit 0 (the workspace's design check).
-- `cargo nextest run -p craft-ui-widgets -E 'test(menu::openers)'`: 13 passed, after the icon-button repair.
-- `LOCALAPPDATA` is read by `craft-ipc`'s runtime-directory trial: the trial fails in a shell without it (`Refused { path: "%LOCALAPPDATA%", reason: "LOCALAPPDATA is unset" }`) and passes with it set, measured both ways on 2026-11-26.
+- `cargo nextest run -p craft-design-lint`: 28 passed, exit 0.
+- On the last upstream step (2 files, ui-contract): clippy, format and the design lint exit 0, `cargo nextest run -p craft-ui-contract` reports **542 passed**.
+- Upstream `7635245a9` alone fails the design lint with four findings; they are answered by this run's repair commit rather than by a downgrade of the check.
+- `LOCALAPPDATA` is read by `craft-ipc`'s runtime-directory trial; it fails in a shell without it (`Refused { path: "%LOCALAPPDATA%", reason: "LOCALAPPDATA is unset" }`).
 
 ## What is not proven
 
 - The macOS and Linux legs of the workflow were not run; this is a Windows machine.
 - The workflow's own runs were not checked: its push trigger names `main` while the fork's branch is `next`.
-- `cargo check --workspace --all-targets` was run before the two repair commits and before the formatting pass; the suites and clippy were run after them.
+- The last upstream step (2 files, ui-contract) was verified with clippy, format, the design lint and that crate's 542 trials, not with the whole workspace suite.
+- One full run met `LNK1104` on a test executable while another build for the other repository was writing its target directory; the run repeated alone passed.

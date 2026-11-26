@@ -2,9 +2,9 @@
 
 The upstream lines each answer had to meet.
 
-Every quotation is `git show 93c2e0825:<path>`, with that commit's line numbers.
+Quotations are `git show e17227177:<path>` with that commit's numbers.
 
-## 1. `shown_name` takes the localized names, not the whole `Info`
+## 1. `shown_name` takes localized names
 
 **The upstream code.**
 
@@ -23,13 +23,13 @@ Every quotation is `git show 93c2e0825:<path>`, with that commit's line numbers.
   168 | 
 ```
 
-**What it does.** Upstream's `shown_name` reads the family's localized names through a parameter of its own instead of reaching into the `Info` it was given.
+**What it does.** Upstream's `shown_name` reads the localized names through a parameter of its own.
 
-**What the merge had to answer.** The fork's `FamilyCodec::shown` called the old signature; the call had to pass `&info.localized` and the old call no longer compiles.
+**What the merge had to answer.** The fork's `FamilyCodec::shown` called the old signature.
 
-**The answer.** The call site passes the localized names, which is the only change the fork needed.
+**The answer.** The call passes `&info.localized`.
 
-## 2. The fonts' classification is private to the picker module
+## 2. The classifier is private to the picker module
 
 **The upstream code.**
 
@@ -42,11 +42,11 @@ Every quotation is `git show 93c2e0825:<path>`, with that commit's line numbers.
   145 | }
 ```
 
-**What it does.** The crate offers `FontClass::of`, which classifies a family already in the catalog, and nothing that classifies a bare name.
+**What it does.** The crate offers `FontClass::of` for a family already in the catalog, and nothing for a bare name.
 
-**What the merge had to answer.** The fork's type-tool trials classify names that have no catalog entry (a name from a document), so they need the classifier itself.
+**What the merge had to answer.** The fork's trials classify names that have no catalog entry.
 
-**The answer.** `FontClass::classify` is exposed over `rank::classify`, and the trial uses it.
+**The answer.** `FontClass::classify` is exposed over `rank::classify`.
 
 ## 3. An icon button declares no Space
 
@@ -63,26 +63,65 @@ Every quotation is `git show 93c2e0825:<path>`, with that commit's line numbers.
   168 |     const OVERLAYS: bool = false;
 ```
 
-**What it does.** Upstream's icon button leaves `KEYS` at the component default, so its activation keys are the pointer's alone.
+**What it does.** Upstream's icon button leaves `KEYS` at the default, so its activation keys are the pointer's alone.
 
-**What the merge had to answer.** Upstream's new menu trials press Space on a focused icon button that opens a menu and expect the menu to open; the fork's rule is that Space belongs to the canvas unless a control asks for it, so nothing opened the menu.
+**What the merge had to answer.** Upstream's new menu trials press Space on a focused icon button that opens a menu; the fork's rule is that Space belongs to the canvas unless a control asks.
 
-**The answer.** `IconButton` asks for Space (`KeyUse::of(Input::Pointer).with_space_activation()`), and the menu opens from the keyboard as a click would.
+**The answer.** `IconButton` asks for Space, and the menu opens from the keyboard as a click would.
 
 ## 4. Space is routed straight to the activation
 
 **The upstream code.**
 
-`crates/ui-contract/src/runtime/keys/route.rs`, lines 806-808:
+`crates/ui-contract/src/runtime/keys/route.rs`, lines 808-810:
 
 ```rust
-  806 |         PressRoute::Activate => route_activate(ctx, rec, routed, activated),
-  807 |         PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
-  808 |         PressRoute::Intent(intent) => push(routed, id, intent, false),
+  808 |         PressRoute::Activate => route_activate(ctx, rec, routed, activated),
+  809 |         PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
+  810 |         PressRoute::Intent(intent) => push(routed, id, intent, false),
 ```
 
 **What it does.** Upstream activates a stop on the Space press itself.
 
-**What the merge had to answer.** The fork activates on the release - that is what a click does - and keeps the stop whose Space is down, so a release that arrives after the focus moved still reaches the stop that was pressed.
+**What the merge had to answer.** The fork activates on the release, and keeps the stop whose Space is down so a late release still reaches it.
 
-**The answer.** `PressRoute::Space` and `space_held` carry the fork's rule, and the router accepts a stop that asks for Space by name or among its activation keys.
+**The answer.** `PressRoute::Space` and `space_held` carry that rule.
+
+## 5. The prompt sets its layer role by hand
+
+**The upstream code.**
+
+`crates/ui-panels/src/dialog/prompt.rs`, lines 260-264:
+
+```rust
+  260 |     pub(super) fn layer_role(mut self, role: LayerRole) -> Self {
+  261 |         self.layer_role = role;
+  262 |         self
+  263 |     }
+  264 | 
+```
+
+**What it does.** Upstream's `Prompt::layer_role` stores its argument behind a hand-written setter.
+
+**What the merge had to answer.** The design lint's `props/hand-setter` asks the field to declare itself and the derive to write the setter; upstream's tree fails the workspace check on it.
+
+**The answer.** The field is `#[prop]` and the hand setter is gone.
+
+## 6. A native menu driver reads the clock and asks for a frame
+
+**The upstream code.**
+
+`crates/menu/src/mac.rs`, lines 157-160:
+
+```rust
+  157 |         let attempt = self.retry.attempt(&spec, Instant::now, || {
+  158 |             let rebuilt = native.apply(&spec);
+  159 |             if rebuilt {
+  160 |                 *lock(live) = targets;
+```
+
+**What it does.** Upstream's native driver passes `Instant::now` and calls `request_repaint_after` for its retry.
+
+**What the merge had to answer.** The lint's `contract/motion` asks for the runtime's motion clock; a native menu driver has no frame of its own and the runtime exposes no clock to it.
+
+**The answer.** Both sites are registered exemptions with their reasons.

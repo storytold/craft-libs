@@ -1,16 +1,15 @@
-# The fork's code in craft-libs after the upstream merge
+# The fork's code in craft-libs after the upstream merges
 
-The files the merge and its repair decided on. The upstream is `storytold/craft-libs` `next`
-at `93c2e0825`; the fork's `next` is `9f430f19b`.
+The files the merges and their repairs decided on. The upstream is `storytold/craft-libs` `next`
+at `e17227177`; the fork's `next` is `e629d2315`.
 
 ## How a file got here
 
-A file is in this document when the merge had to decide something about it: its merged content
-differs from **both** parents (`git show <p1>:<path>`, `git show <p2>:<path>`, `git show <merge>:<path>`),
-or it was written by the repair commit that followed the merge. A file that one side left alone is
-not a decision, and it is not listed.
+A file is here when a merge of this run had to decide something about it: its merged content differs
+from **both** parents, or a repair commit after a merge wrote it. The fork's own identity (its crates,
+documents and plugins) is not a merge decision and is not listed.
 
-Every diff below is `git diff <upstream> <head> -- <path>`: the fork's code as the tree holds it now.
+Every diff is `git diff <upstream> <head> -- <path>`, with `<head>` = the fork's branch tip of this run.
 
 ## `Cargo.lock`
 
@@ -20,7 +19,7 @@ Every diff below is `git diff <upstream> <head> -- <path>`: the fork's code as t
 
 ```diff
 diff --git a/Cargo.lock b/Cargo.lock
-index 7ce18795f..2fac13969 100644
+index 4b32db172..a9ebaf6b7 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1419,9 +1419,9 @@ dependencies = [
@@ -37,11 +36,11 @@ index 7ce18795f..2fac13969 100644
  name = "clipboard-win"
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. The merged tree resolves upstream's `clap_lex 1.1.2`; the file regenerates, so it carries no hand-written line.
+1. Upstream moved the egui pin to `b9770908e` and craft-libs to its own `next`; the graph resolves with them, and the file regenerates.
 
-**Checked by.** `cargo metadata` regenerates it; `cargo check --workspace --all-targets` (exit 0 on 2026-11-26) proves the graph resolves.
+**Checked by.** `cargo metadata` regenerates it; `cargo clippy --workspace --all-targets` (exit 0) proves the graph.
 
 ## `.github/workflows/workspace.yml`
 
@@ -82,16 +81,32 @@ index 5c802e799..1abc5e03d 100644
                echo "keep $key"
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. The push trigger names `main` only, as the fork's file always has; upstream's copy lists `main, next`.
-2. The cache prune tolerates a cache another run already deleted: the delete's stderr goes to a file, and only `not found` or `HTTP 404` counts as success, while any other API error prints the output and fails the job.
+1. The push trigger names `main` only, as the fork's copy always has; upstream's lists `main, next`.
+2. The cache prune tolerates a cache another run already deleted: only `not found` or `HTTP 404` counts as success, and any other API error prints the output and fails the job.
 
-**Checked by.** No cargo command covers a workflow file. The two hunks are the fork's own text, unchanged by this merge; the workflow runs on the fork remote's `main`.
+**Checked by.** No cargo command covers a workflow file; the workflow runs on the fork remote's `main`.
+
+## `README.md`
+
+**Role.** The workspace README's crate table.
+
+**The code.**
+
+```diff
+
+```
+
+**Hunk by hunk.**
+
+1. The fork's README keeps upstream's new crate rows and its own heading order, so the merged table reads as one document.
+
+**Checked by.** No command; the file is prose.
 
 ## `crates/font-manager/src/picker.rs`
 
-**Role.** The font picker: which families are listed, in which language, and how a family is classified.
+**Role.** The font picker.
 
 **The code.**
 
@@ -123,12 +138,12 @@ index c89214e6f..f6a1e3fdc 100644
  
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. `FontClass::classify` is exposed as a public function over `rank::classify`, so a caller outside the crate can classify a family from its name, `sFamilyClass`, PANOSE and the fixed-pitch flag.
-2. `FamilyCodec::shown` passes `&info.localized` to `shown_name`, which is the signature upstream changed this range: the function used to take the whole `Info` and now takes the localized names.
+1. `FontClass::classify` exposes the name, `sFamilyClass`, PANOSE and fixed-pitch reading to callers outside the crate.
+2. `FamilyCodec::shown` passes the localized names, the signature upstream changed this run.
 
-**Checked by.** `cargo nextest run -p craft-font-manager` and `cargo clippy -p craft-font-manager --all-targets -- -D warnings` (both green on 2026-11-26).
+**Checked by.** `cargo nextest run -p craft-font-manager` (green in the 18,710-trial workspace run).
 
 ## `crates/font-manager/tests/it/picker.rs`
 
@@ -180,11 +195,11 @@ index 2b8992950..f566a3bba 100644
  }
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. The trial `classifies_japanese_and_cjk_families` pins the classification of Japanese and CJK families - 明朝, ゴシック, メイリオ, 行書, 教科書, ﾎﾟｯﾌﾟ, 等幅 - and the three boundaries the classifier keeps: an English word ending in `song` is not a CJK serif, `Xhei Script` stays a script, and a bare `Pop` is the rounded display face while `Pop Script` keeps Script.
+1. `classifies_japanese_and_cjk_families` pins 明朝/ゴシック/メイリオ/行書/教科書/ﾎﾟｯﾌﾟ/等幅 and the boundaries: an English word ending in `song` is no CJK serif, `Xhei Script` stays a script, `Pop` is handwritten while `Pop Script` is a script.
 
-**Checked by.** `cargo nextest run -p craft-font-manager` (green on 2026-11-26).
+**Checked by.** `cargo nextest run -p craft-font-manager` (green).
 
 ## `crates/pages/tests/it/views.rs`
 
@@ -226,21 +241,21 @@ index bc77a2420..077de5599 100644
  
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. The trial `the_reading_view_turns_a_column_on_space_and_enter` turns the reading view's column with Space and then with Enter, and asserts one column per press: it pins the fork's Space activation on a focused view.
+1. `the_reading_view_turns_a_column_on_space_and_enter` turns the column with Space and then Enter, one column per press.
 
-**Checked by.** `cargo test -p craft-pages --features screen-testing --lib` (green on 2026-11-26); the screen trials live in that binary.
+**Checked by.** `cargo test -p craft-pages --features screen-testing --lib` (green).
 
 ## `crates/ui-contract/src/runtime/focus/registration.rs`
 
-**Role.** The focus stop: the record of a component that can take the focus and the keys it answers.
+**Role.** The focus stop.
 
 **The code.**
 
 ```diff
 diff --git a/crates/ui-contract/src/runtime/focus/registration.rs b/crates/ui-contract/src/runtime/focus/registration.rs
-index d5f175b52..7c16631d7 100644
+index c504c221d..ccaa95cc5 100644
 --- a/crates/ui-contract/src/runtime/focus/registration.rs
 +++ b/crates/ui-contract/src/runtime/focus/registration.rs
 @@ -116,6 +116,13 @@ impl Stop {
@@ -259,21 +274,21 @@ index d5f175b52..7c16631d7 100644
          self.arena = arena;
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. `Stop::space()` adds Space to a stop's activation keys, so a component can ask for Space without naming the key enum directly.
+1. `Stop::space()` adds Space to a stop's activation keys, so a component asks for the key without naming the enum.
 
-**Checked by.** `cargo nextest run -p craft-ui-contract` (green as part of the 18,563-trial workspace run of 2026-11-26).
+**Checked by.** `cargo nextest run -p craft-ui-contract` (green).
 
 ## `crates/ui-contract/src/runtime/keys.rs`
 
-**Role.** The key batch a pass collects.
+**Role.** The key batch of a pass.
 
 **The code.**
 
 ```diff
 diff --git a/crates/ui-contract/src/runtime/keys.rs b/crates/ui-contract/src/runtime/keys.rs
-index 9e1f03570..8ee3257e1 100644
+index d02ff012b..ae96d039c 100644
 --- a/crates/ui-contract/src/runtime/keys.rs
 +++ b/crates/ui-contract/src/runtime/keys.rs
 @@ -187,6 +187,11 @@ struct Batch {
@@ -290,22 +305,22 @@ index 9e1f03570..8ee3257e1 100644
      /// they arrived.
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. `space_released` records that a bare Space release came in this pass.
-2. `space_release_pending` records a Space release whose press has not arrived yet, because the hook reads a pass's keys once and a release can come first.
+1. `space_released` records a bare Space release in this pass.
+2. `space_release_pending` records a Space release whose press has not arrived, because the hook reads a pass's keys once.
 
-**Checked by.** `cargo nextest run -p craft-ui-contract` (green on 2026-11-26).
+**Checked by.** `cargo nextest run -p craft-ui-contract` (green).
 
 ## `crates/ui-contract/src/runtime/keys/route.rs`
 
-**Role.** The key router: which press reaches which stop, and what a press means for it.
+**Role.** The key router.
 
 **The code.**
 
 ```diff
 diff --git a/crates/ui-contract/src/runtime/keys/route.rs b/crates/ui-contract/src/runtime/keys/route.rs
-index d1767e89a..47035cc20 100644
+index f78178bfb..f0c30fd20 100644
 --- a/crates/ui-contract/src/runtime/keys/route.rs
 +++ b/crates/ui-contract/src/runtime/keys/route.rs
 @@ -19,6 +19,23 @@ use std::sync::Arc;
@@ -340,7 +355,7 @@ index d1767e89a..47035cc20 100644
      if let Some(rec) = &target {
          for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
              *taken = if let Some(id) = hover_delete.filter(|id| Some(*id) != target.as_ref().map(|rec| rec.stop.id))
-@@ -693,6 +711,8 @@ enum PressRoute {
+@@ -695,6 +713,8 @@ enum PressRoute {
      Move(NavMove, MoveMods),
      /// The stop's activation.
      Activate,
@@ -349,7 +364,7 @@ index d1767e89a..47035cc20 100644
      /// A close of the dropdown layer whose opener has the focus.
      Close(Id),
      /// An intent of the stop.
-@@ -752,7 +772,13 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
+@@ -754,7 +774,13 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
          // app's.
          None if press.key == Key::Enter && stop.keys.activate.enter() && (plain || !commands::binds_scoped(ctx, &chord)) => PressRoute::Activate,
          None if press.key == Key::Enter && !press.mods.cmd && !press.mods.ctrl => PressRoute::Intent(Intent::Submit),
@@ -364,7 +379,7 @@ index d1767e89a..47035cc20 100644
          None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
          // A document canvas's editor reads Shift+Tab itself (a word processor's outdent, the previous slot of an
          // equation). No other stop that keeps Tab gets it as an intent.
-@@ -803,7 +829,16 @@ fn apply_press(
+@@ -805,7 +831,16 @@ fn apply_press(
                  push(routed, id, Intent::Move(mv, mods), horizontal);
              }
          }
@@ -382,7 +397,7 @@ index d1767e89a..47035cc20 100644
          PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
          PressRoute::Intent(intent) => push(routed, id, intent, false),
          PressRoute::Nudge(nudge) => routed.entry(id).or_default().nudge = Some(nudge),
-@@ -811,6 +846,50 @@ fn apply_press(
+@@ -813,6 +848,50 @@ fn apply_press(
      Taken::Yes
  }
  
@@ -435,13 +450,13 @@ index d1767e89a..47035cc20 100644
  fn route_activate(ctx: &Context, rec: &StopRec, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. `space_release` holds the whole Space decision in one function: a pass with neither a release nor a pending release clears the hold, and the pass that brings the release activates the stop that was pressed, even when the focus has moved since - the held stop's member and root are what the release has. The function exists because the guard's complexity sat over the workspace's clippy limit (`cognitive_complexity` 31/30) when it lived inside `begin`.
-2. `PressRoute::Space` is a route of its own: Space on a stop that asks for it activates on the release, as a click does. The route asks the stop either by name (`space_activates`) or among its activation keys (`ActivateKeys::Space`/`Both`); every other stop leaves Space to the application, where it is the canvas's Hand key.
-3. The `space_held` module keeps the stop whose Space is down in the context's memory, one per context, so two fixtures never share a hold and the release reaches the stop that was pressed rather than whatever has the focus then.
+1. `space_release` holds the Space decision: a pass with neither release nor pending release clears the hold, and the pass that brings the release activates the stop that was pressed, even when the focus moved. It exists because the guard's `cognitive_complexity` reached 31/30 inside `begin`, and the workspace builds with `-D warnings`.
+2. `PressRoute::Space` is a route of its own: Space on a stop that asks for it activates on the release, as a click does; a stop asks by name or among its activation keys, and every other stop leaves Space to the canvas's Hand key.
+3. `space_held` keeps the stop whose Space is down in the context's memory, one hold per context, so a release reaches the stop that was pressed.
 
-**Checked by.** `cargo nextest run -p craft-ui-contract` and `cargo nextest run -p craft-ui-widgets` (green on 2026-11-26); the menu-opener, link, select and word-run trials are the ones that fail without the route.
+**Checked by.** `cargo nextest run -p craft-ui-contract` and `-p craft-ui-widgets` (green); the menu-opener, link, select and word-run trials need the route.
 
 ## `crates/ui-panels/src/rails/flyout.rs`
 
@@ -451,7 +466,7 @@ index d1767e89a..47035cc20 100644
 
 ```diff
 diff --git a/crates/ui-panels/src/rails/flyout.rs b/crates/ui-panels/src/rails/flyout.rs
-index 0207a1c2b..4ceaf1c4f 100644
+index deca16fdb..10a991019 100644
 --- a/crates/ui-panels/src/rails/flyout.rs
 +++ b/crates/ui-panels/src/rails/flyout.rs
 @@ -5,7 +5,7 @@ use super::words::RailWords;
@@ -468,10 +483,10 @@ index 0207a1c2b..4ceaf1c4f 100644
  use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
  use crate::runtime::env::Label;
 +use crate::runtime::focus::KeyUse;
- use crate::style::{ComponentStyle, GlyphRole, StyleColor, StyleCx};
+ use crate::style::{ComponentStyle, FocusLook, GlyphRole, StyleColor, StyleCx};
  use craft_behavior::overlay::{Align, Side};
  use craft_behavior::{CursorIcon, HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
-@@ -233,6 +234,8 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
+@@ -237,6 +238,8 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
  
  impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
      const ROLE: Role = Role::BUTTON;
@@ -482,11 +497,121 @@ index 0207a1c2b..4ceaf1c4f 100644
      type Output = FlyoutOutput<T>;
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. `FlyoutButton` declares `KeyUse::of(Input::Pointer).with_space_activation()`: Space runs the face's command as a tap does, and it opens no flyout because the focus has no held press.
+1. `FlyoutButton` declares Space among its activation keys, merged with upstream's new `FocusLook` field: Space runs the face's command as a tap does and opens no flyout.
 
-**Checked by.** `cargo nextest run -p craft-ui-panels` (green on 2026-11-26).
+**Checked by.** `cargo nextest run -p craft-ui-panels` (green).
+
+## `crates/ui-panels/src/dialog/prompt.rs`
+
+**Role.** The dialog prompt.
+
+**The code.**
+
+```diff
+diff --git a/crates/ui-panels/src/dialog/prompt.rs b/crates/ui-panels/src/dialog/prompt.rs
+index 9ae51f814..75b50f3c7 100644
+--- a/crates/ui-panels/src/dialog/prompt.rs
++++ b/crates/ui-panels/src/dialog/prompt.rs
+@@ -227,7 +227,8 @@ pub struct Prompt<'a> {
+     escape: Option<DialogRole>,
+     /// Whether the dialog reports the alert-dialog role, described by the message and any tone.
+     alert: bool,
+-    /// What the dialog's layer is for.
++    /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
++    #[prop]
+     layer_role: LayerRole,
+ }
+ 
+@@ -255,13 +256,6 @@ impl<'a> Prompt<'a> {
+         self
+     }
+ 
+-    /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
+-    #[must_use]
+-    pub(super) fn layer_role(mut self, role: LayerRole) -> Self {
+-        self.layer_role = role;
+-        self
+-    }
+-
+     /// The answers, one footer button each.
+     #[must_use]
+     pub fn answers(mut self, answers: impl IntoIterator<Item = FooterButton>) -> Self {
+```
+
+**Hunk by hunk.**
+
+1. `layer_role` becomes a `#[prop]` field and the hand-written setter is gone: the derive writes it, which is what the design lint's `props/hand-setter` asks for (upstream's own tree carried the finding).
+
+**Checked by.** `cargo nextest run -p craft-design-lint` (28 trials, green) and `-p craft-ui-panels`.
+
+## `crates/draw/src/ui/pen/bezier/model.rs`
+
+**Role.** The pen's bezier overlay and its trials' counters.
+
+**The code.**
+
+```diff
+diff --git a/crates/draw/src/ui/pen/bezier/model.rs b/crates/draw/src/ui/pen/bezier/model.rs
+index d95f1d053..1e89aa60f 100644
+--- a/crates/draw/src/ui/pen/bezier/model.rs
++++ b/crates/draw/src/ui/pen/bezier/model.rs
+@@ -332,6 +332,7 @@ impl SelectedAnchors {
+ pub(crate) mod reads {
+     use std::cell::Cell;
+ 
++    // design: allow[contract/no-global-state](a trial's counter of overlay reads: it measures the drawing, it drives none of it)
+     thread_local! {
+         static READS: Cell<usize> = const { Cell::new(0) };
+     }
+```
+
+**Hunk by hunk.**
+
+1. The trial's `thread_local!` read counter carries a `design: allow[contract/no-global-state]` marker: it measures the drawing and drives none of it, and the lint offers no runtime replacement for a counter.
+
+**Checked by.** `cargo nextest run -p craft-design-lint` (green).
+
+## `crates/menu/src/mac.rs`
+
+**Role.** The macOS native menu driver.
+
+**The code.**
+
+```diff
+diff --git a/crates/menu/src/mac.rs b/crates/menu/src/mac.rs
+index ea200bd45..0a76fc4b9 100644
+--- a/crates/menu/src/mac.rs
++++ b/crates/menu/src/mac.rs
+@@ -154,7 +154,9 @@ impl Native {
+     fn update(&mut self, bar: &MenuBar) {
+         let (spec, targets) = lower(bar);
+         let (native, live) = (&mut self.bar, &self.targets);
+-        let attempt = self.retry.attempt(&spec, Instant::now, || {
++        // design: allow[contract/motion](the retry clock of a native menu driver: no frame draws while it waits)
++        let now = Instant::now;
++        let attempt = self.retry.attempt(&spec, now, || {
+             let rebuilt = native.apply(&spec);
+             if rebuilt {
+                 *lock(live) = targets;
+@@ -165,7 +167,7 @@ impl Native {
+         // due asks again.
+         if let Attempt::Retry(wait) = attempt {
+             self.pending = Some(bar.clone());
+-            self.ctx.request_repaint_after(wait);
++            self.ctx.request_repaint_after(wait); // design: allow[contract/motion](a native menu driver asks the context for the retry frame: it has no frame of its own)
+         }
+     }
+ }
+```
+
+**Hunk by hunk.**
+
+1. The retry clock is bound under a `design: allow[contract/motion]` marker: the driver asks the context for its retry frame and reads the clock, and no frame draws while the native menus rebuild.
+2. `request_repaint_after` carries the same allowance: a native menu driver has no frame of its own.
+
+**Checked by.** `cargo nextest run -p craft-design-lint` (green) and `cargo clippy -p craft-menu --all-targets -- -D warnings`.
 
 ## `crates/ui-widgets/src/buttons/icon_button.rs`
 
@@ -496,7 +621,7 @@ index 0207a1c2b..4ceaf1c4f 100644
 
 ```diff
 diff --git a/crates/ui-widgets/src/buttons/icon_button.rs b/crates/ui-widgets/src/buttons/icon_button.rs
-index 0dec4ab37..7a3e817d7 100644
+index cbf0e0fe5..1279598e2 100644
 --- a/crates/ui-widgets/src/buttons/icon_button.rs
 +++ b/crates/ui-widgets/src/buttons/icon_button.rs
 @@ -163,6 +163,9 @@ impl<'a> IconButton<'a> {
@@ -511,8 +636,68 @@ index 0dec4ab37..7a3e817d7 100644
      const OVERLAYS: bool = false;
 ```
 
-**What it does, hunk by hunk.**
+**Hunk by hunk.**
 
-1. `IconButton` declares Space among its activation keys, as `Button` does. The repair commit that followed the merge added it: upstream's new trials ask a focused opener - an icon button that opens a menu - to open the menu with Space, and the fork's rule is that a control takes Space only by asking for it.
+1. `IconButton` declares Space among its activation keys, as `Button` does: upstream's menu trials press Space on a focused opener, and the fork's rule is that a control takes Space only by asking.
 
-**Checked by.** `cargo nextest run -p craft-ui-widgets -E 'test(menu::openers)'` (13 trials, green on 2026-11-26) and the workspace run.
+**Checked by.** `cargo nextest run -p craft-ui-widgets -E 'test(menu::openers)'` (13 trials, green).
+
+## `design/exceptions/craft-draw/bezier.toml`
+
+**Role.** The draw crate's design-lint exemptions.
+
+**The code.**
+
+```diff
+diff --git a/design/exceptions/craft-draw/bezier.toml b/design/exceptions/craft-draw/bezier.toml
+new file mode 100644
+index 000000000..0d5309473
+--- /dev/null
++++ b/design/exceptions/craft-draw/bezier.toml
+@@ -0,0 +1,9 @@
++config_version = 1
++
++[[exception]]
++name = "bezier-overlay-read-counter"
++kind = "marker"
++rule = "contract/no-global-state"
++path = "crates/draw/src/ui/pen/bezier/model.rs"
++reason = "A trial's per-thread count of overlay reads: it measures the drawing and drives none of it."
++count = 1
+```
+
+**Hunk by hunk.**
+
+1. `bezier-overlay-read-counter` registers the trial counter's marker with its reason and its one site.
+
+**Checked by.** `cargo nextest run -p craft-design-lint` (green); an entry whose count does not match its sites is `exception/stale`.
+
+## `design/exceptions/craft-menu/mac.toml`
+
+**Role.** The menu crate's design-lint exemptions.
+
+**The code.**
+
+```diff
+diff --git a/design/exceptions/craft-menu/mac.toml b/design/exceptions/craft-menu/mac.toml
+new file mode 100644
+index 000000000..0dc8b32ad
+--- /dev/null
++++ b/design/exceptions/craft-menu/mac.toml
+@@ -0,0 +1,9 @@
++config_version = 1
++
++[[exception]]
++name = "native-menu-retry-clock"
++kind = "marker"
++rule = "contract/motion"
++path = "crates/menu/src/mac.rs"
++reason = "A native menu driver's retry waits on the context's clock: no frame draws while the native menus are rebuilt."
++count = 2
+```
+
+**Hunk by hunk.**
+
+1. `native-menu-retry-clock` registers both motion markers of the native driver: the clock it reads and the frame it asks for.
+
+**Checked by.** `cargo nextest run -p craft-design-lint` (green).
