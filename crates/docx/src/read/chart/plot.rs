@@ -140,8 +140,10 @@ impl Axes {
         // their own values, so the axis takes them in too (the stacked shares stay within 0..1).
         let percent = c.grouping == Grouping::Percent && !c.combined();
         let (vmin, vmax) = if percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
-        // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale).
-        let zero = !matches!(c.kind, Kind::Line | Kind::Scatter) || !narrow(dlo, dhi);
+        // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale);
+        // columns and areas stand on zero, so a combination with any of them keeps it.
+        let lines_only = |k: Kind| matches!(k, Kind::Line | Kind::Scatter);
+        let zero = !(lines_only(c.kind) && c.series.iter().all(|s| lines_only(s.kind))) || !narrow(dlo, dhi);
         let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
         // In display units the labels count thousands (or millions…) of the values.
         let unit = c.val.unit.unwrap_or(1.0);
@@ -169,6 +171,15 @@ struct Margins {
     wrapped: Vec<Vec<String>>,
     /// Every `skip`-th category label is shown under a column chart.
     skip: usize,
+    /// The data table's rows that are drawn: its header and as many series as fit.
+    table_rows: usize,
+}
+
+/// The rows of a data table (its header and a row per series) that fit in at most half of a
+/// chart `area_h` tall, so the plot keeps the rest; the header always does.
+fn table_rows(c: &Chart, area_h: f32, lh: f32) -> usize {
+    let fit = if lh > 0.0 && area_h.is_finite() { (area_h * 0.5 / lh).floor().clamp(0.0, 1e6) as usize } else { 1 };
+    (1 + c.series.len()).min(fit.max(1))
 }
 
 /// The margins the axis labels need around the plot in `area`. Category labels under a column
@@ -206,8 +217,9 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let widest_line = wrapped.iter().flatten().map(|s| text_w(s, fs)).fold(0.0, f32::max);
     let skip = ((widest_line / band_w).ceil() as usize).max(1);
     let label_lines = wrapped.iter().map(Vec::len).max().unwrap_or(1) as f32;
+    let table_rows = if c.data_table.is_some() { table_rows(c, area.h, lh) } else { 0 };
     let bottom = (if c.data_table.is_some() {
-        (1 + c.series.len()) as f32 * lh
+        table_rows as f32 * lh
     } else if cat_labels && !c.horizontal {
         if scatter { lh + GAP } else { label_lines * lh + GAP }
     } else if c.horizontal && val_labels {
@@ -216,7 +228,7 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
         0.0
     }) + title_bottom(c, cat_on, val_on, lh);
     let top = if !c.horizontal && val_labels { lh / 2.0 } else { 0.0 };
-    Margins { left, title, top, bottom, wrapped, skip }
+    Margins { left, title, top, bottom, wrapped, skip, table_rows }
 }
 
 /// Room for the vertical axis title on the plot's left: one line when the axis that sits there
@@ -310,7 +322,7 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         }
     }
     if let Some(t) = &c.data_table {
-        draw_data_table(out, c, t, &g, m.left);
+        draw_data_table(out, c, t, &g, m.left, m.table_rows);
     } else if !c.cat.deleted && c.cat.labels {
         draw_category_labels(out, c, &g, &ax.xticks, &m, area);
     }
@@ -361,20 +373,20 @@ fn table_names_w(c: &Chart, t: &DataTable, fs: f32) -> f32 {
 
 /// A data table under the plot: the categories over the plot's bands, then a row per series with
 /// its key and name left of the plot and its values under the categories.
-fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Frame, margin: f32) {
+fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Frame, margin: f32, rows: usize) {
     let (fs, lh) = (c.text_size, c.text_size * LINE);
     let plot = g.plot;
     let band = g.band();
     // The name column keeps to the left margin `axis_margins` reserved for it.
     let names_w = table_names_w(c, t, fs).min(margin).min(plot.x.max(0.0));
     let (x0, top) = (plot.x - names_w, plot.bottom());
-    let rows = 1 + c.series.len();
+    let rows = rows.clamp(1, 1 + c.series.len());
     let bottom = top + rows as f32 * lh;
     for (i, cat) in c.cats.iter().enumerate() {
         let x = g.band_start(i);
         text(out, Rect { x, y: top, w: band, h: lh }, &clip_text(cat, band, fs), fs, TextAlign::Center, t.bold, t.text);
     }
-    for (j, s) in c.series.iter().enumerate() {
+    for (j, s) in c.series.iter().enumerate().take(rows - 1) {
         let y = top + (j + 1) as f32 * lh;
         let mut x = x0 + GAP;
         if t.keys {

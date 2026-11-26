@@ -195,10 +195,24 @@ fn a_fill_in_a_drawing_is_saved_as_a_filled_rectangle() {
         let obj = InlineObject::Graphic { w: 108.0, h: 36.0, alt: "Chart".into(), float: Default::default(), graphic: std::sync::Arc::new(graphic) };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![craft_wordmodel::para_block(p)];
-        let g = groups(&import(&export(&d).unwrap()).unwrap());
-        g.first().map_or(0, |g| g.3.iter().filter(|m| m.0 == ShapeKind::Rectangle && m.2 == (108.0, 36.0) && m.4.is_empty()).count())
+        let back = import(&export(&d).unwrap()).unwrap();
+        let g = groups(&back);
+        let count = g.first().map_or(0, |g| g.3.iter().filter(|m| m.0 == ShapeKind::Rectangle && m.2 == (108.0, 36.0) && m.4.is_empty()).count());
+        // The fills of the group's shapes, as read back.
+        let fills: Vec<Option<Fill>> = back
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| if let InlineObject::Group { children, .. } = o { Some(children) } else { None })
+            .flatten()
+            .filter_map(|c| if let InlineObject::Shape { fill, .. } = &c.obj { Some(fill.clone()) } else { None })
+            .collect();
+        (count, fills)
     };
-    assert_eq!(areas(true), areas(false) + 1, "the fill is one more rectangle");
+    let ((with, fills), (without, _)) = (areas(true), areas(false));
+    assert_eq!(with, without + 1, "the fill is one more rectangle");
+    assert!(fills.contains(&Some(Fill::solid(Rgb(0xDD, 0xDD, 0xDD)))), "the rectangle keeps the fill's colour: {fills:?}");
 }
 
 /// A group anchored to a page stays on that page, and a number on another anchor says nothing.

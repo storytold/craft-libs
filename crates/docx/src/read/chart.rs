@@ -92,6 +92,8 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     if let Some(t) = &chart.title {
         area = title_block(&mut out, t, area, chart.title_colour, chart.title_bold, chart.title_size);
     }
+    // A legend placed by hand is drawn last, over the plot, as Word draws it.
+    let mut over = None;
     if let Some(pos) = chart.legend {
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
         // and for stacked columns with a vertical legend.
@@ -108,7 +110,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
                 let (bx, by) = (x * w, y * h);
                 let bw = if bw > 0.0 { bw * w } else { (w - bx - PAD).max(1.0) };
                 let bh = if bh > 0.0 { bh * h } else { chart.text_size * LINE };
-                legend(&mut out, &entries, Pos::Top, Rect { x: bx, y: by, w: bw, h: bh }, chart.text_size, style);
+                over = Some((entries, Rect { x: bx, y: by, w: bw, h: bh }, style));
             }
             None => area = legend(&mut out, &entries, pos, area, chart.text_size, style),
         }
@@ -117,6 +119,9 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
         Kind::Pie | Kind::Doughnut => pie(&mut out, &chart, area),
         Kind::Radar => radar(&mut out, &chart, area),
         _ => cartesian(&mut out, &chart, area),
+    }
+    if let Some((entries, rect, style)) = over {
+        legend(&mut out, &entries, Pos::Top, rect, chart.text_size, style);
     }
     out
 }

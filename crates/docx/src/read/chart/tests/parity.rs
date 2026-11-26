@@ -406,3 +406,83 @@ fn a_gradient_series_fills_its_columns_with_the_gradient() {
     assert_eq!(shaded, 2, "both columns shaded");
     assert!(filled(&items).is_empty(), "no flat column under them");
 }
+
+/// A legend placed by hand is drawn over the plot, after its fill and series: drawn first, an
+/// opaque plot area or a column hid it.
+#[test]
+fn a_hand_placed_legend_is_drawn_over_the_plot() {
+    let legend = r#"<c:legend><c:legendPos val="b"/><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.3"/><c:y val="0.4"/><c:w val="0.4"/><c:h val="0.1"/></c:manualLayout></c:layout></c:legend>"#;
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></c:spPr></c:plotArea>{legend}"#,
+        ser(0, "Sales", Some("FF0000"), &["A", "B"], &["1", "2"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let at = |f: &dyn Fn(&GraphicItem) -> bool| items.iter().rposition(f);
+    let entry = items.iter().position(|it| matches!(it, GraphicItem::Text { text, .. } if text == "Sales")).expect("the legend entry");
+    let plot_fill = at(&|it| matches!(it, GraphicItem::Fill { .. })).expect("the plot's fill");
+    let column = at(&|it| matches!(it, GraphicItem::Path { fill: Some(c), .. } if *c == Rgb(0xFF, 0, 0))).expect("a column");
+    assert!(entry > plot_fill && entry > column, "the legend after the plot: {entry} vs {plot_fill}, {column}");
+}
+
+/// A combination whose first chart type is a line still has columns, and columns stand on zero:
+/// the value axis keeps zero for a narrow range (1000..1050) instead of cutting the columns off.
+/// A line chart alone keeps its own narrow scale.
+#[test]
+fn a_line_first_combination_with_columns_keeps_zero_on_its_axis() {
+    let cats = ["A", "B"];
+    let line = |s: &str| format!(r#"<c:lineChart><c:grouping val="standard"/>{s}<c:axId val="1"/><c:axId val="2"/></c:lineChart>"#);
+    let bars = format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart>"#,
+        ser(1, "Columns", Some("FF0000"), &cats, &["1000", "1050"])
+    );
+    let ticks = |types: &str| {
+        let plot = format!(r#"<c:plotArea>{types}<c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#);
+        chart_texts(&chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0))
+            .into_iter()
+            .filter_map(|(t, _, _)| t.parse::<f64>().ok())
+            .collect::<Vec<_>>()
+    };
+    let lone = line(&ser(0, "Line", Some("0000FF"), &cats, &["1000", "1050"]));
+    assert!(ticks(&lone).iter().all(|t| *t > 0.0), "a line alone keeps its narrow scale: {:?}", ticks(&lone));
+    let both = ticks(&format!("{lone}{bars}"));
+    assert!(both.contains(&0.0), "the columns' zero is on the axis: {both:?}");
+}
+
+/// A data table under a chart with many series keeps the plot: the table takes at most half the
+/// chart's height, its header and the series rows that fit. It used to take all of it, and the
+/// chart drew nothing.
+#[test]
+fn a_data_table_with_many_series_leaves_the_plot_its_room() {
+    let cats = ["Q1", "Q2"];
+    let sers: String = (0..15).map(|i| ser(i, &format!("S{i}"), None, &cats, &["1", "2"])).collect();
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{sers}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:dTable><c:showKeys val="1"/></c:dTable></c:plotArea>"#
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    assert!(!filled(&items).is_empty(), "the columns are drawn");
+    let texts = chart_texts(&items);
+    assert!(texts.iter().any(|(t, _, _)| t == "Q1"), "the table's header is drawn: {texts:?}");
+    let names = texts.iter().filter(|(t, _, _)| t.starts_with('S') && t[1..].parse::<u32>().is_ok()).count();
+    assert!((1..15).contains(&names), "the rows that fit: {names}");
+    assert!(texts.iter().all(|(_, r, _)| r[1] + r[3] <= 200.5), "inside the chart: {texts:?}");
+}
+
+/// A data table shows the data as it is: a value far smaller than an axis tick's rounding error
+/// keeps its digits in its own format, and a small one in General is written in scientific
+/// notation (as Excel's General shows it), not as 0.
+#[test]
+fn small_values_keep_their_digits_in_a_data_table() {
+    let table = |fmt: &str, v: &str| {
+        let s = ser(0, "S", None, &["Q1"], &[v]).replace("<c:formatCode>General</c:formatCode>", &format!("<c:formatCode>{fmt}</c:formatCode>"));
+        let plot = format!(
+            r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{s}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:dTable/></c:plotArea>"#
+        );
+        chart_texts(&chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0)).into_iter().map(|(t, _, _)| t).collect::<Vec<_>>()
+    };
+    let fixed = table("0.0000000000", "0.0000000005");
+    assert!(fixed.iter().any(|t| t == "0.0000000005"), "{fixed:?}");
+    let general = table("General", "0.0000004");
+    assert!(general.iter().any(|t| t == "4E-07"), "{general:?}");
+    let negative = table("General", "-0.0000004");
+    assert!(negative.iter().any(|t| t == "-4E-07"), "{negative:?}");
+}
