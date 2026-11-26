@@ -49,7 +49,7 @@ pub fn parse(text: &str) -> Result<Document> {
         if line.trim().is_empty() {
             continue;
         }
-        match split_line(line.trim()) {
+        match split_line(line.trim_start()) {
             Some((t, raw)) => {
                 let lines: Vec<String> = raw.split('|').map(str::trim).filter(|l| !l.is_empty()).map(escape_markup).collect();
                 starts.push((t, lines.join("\n")));
@@ -120,6 +120,20 @@ pub fn write(doc: &Document) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_clearing_lines_keep_each_separator() {
+        for separator in [":", "=", " "] {
+            for indent in ["", " \t"] {
+                let input = format!("{indent}00:00:01{separator}  hello  \n{indent}00:00:02{separator}   \n");
+                let doc = parse(&input).unwrap();
+                assert_eq!(doc.cues.len(), 1, "{input:?}");
+                assert_eq!(doc.cues[0].text, "hello", "{input:?}");
+                assert_eq!(doc.cues[0].end, ms_to_tick(2000), "{input:?}");
+                assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+            }
+        }
+    }
 
     #[test]
     fn short_duration_cue_preserves_positive_duration_on_write_and_read() {
