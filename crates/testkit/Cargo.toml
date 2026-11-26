@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Source-level platform regression guards and verification utilities for the Craft application suite"
+description = "Source-level platform regression guards, test deadlines, hostile-input helpers and a reentrant test lock for the Craft application suite"
 publish = false
 
 [dependencies]

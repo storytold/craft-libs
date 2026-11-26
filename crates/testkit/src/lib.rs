@@ -1,6 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
-
 //! Source-level platform regression guards and verification utilities for the Craft application suite.
 //!
 //! This crate provides non-panicking source analysis guards that detect known platform hazards
@@ -25,6 +24,11 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! On targets other than `wasm32`, [`serial`] holds [`serial::TestLock`], a lock that a `static`
+//! can hold and that the thread holding it can take again, and [`serial::gpu_lock`], the one lock
+//! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
+//! different lock can run at the same time as one that takes this one.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -40,6 +44,8 @@ pub mod deadline;
 pub mod guards;
 pub mod hostile;
 pub mod sample_damage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod serial;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};
