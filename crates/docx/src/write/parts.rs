@@ -4,14 +4,16 @@ use super::settings::{
 };
 use super::styles::{numbering_xml, styles_xml};
 use super::{
-    BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, Writer, embed,
-    glossary, rt, settings_merge, watermark, xml,
+    BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, WriteOptions,
+    Writer, embed, glossary, mail_merge, rt, settings_merge, watermark, xml,
 };
 use crate::package::FONT_TABLE_PART;
 
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
-pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+    // Theme font slots are written while they name the run's font in this theme.
+    let _theme_fonts = super::props::ThemeFontsGuard::set(&doc.settings.major_font, &doc.settings.minor_font);
     // A range field must be whole in the file: drop markers that lost their partner in editing.
     let balanced;
     let doc = if doc.has_unbalanced_field_ranges() {
@@ -32,7 +34,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
         docpr: doc.next_shape_id().saturating_sub(1),
         shape_ids: std::collections::HashSet::new(),
-        z: 251_658_240,
+        z: 0,
+        zmap: BTreeMap::new(),
+        anchor_z: 0,
         footnotes: Vec::new(),
         endnotes: Vec::new(),
         hf: Vec::new(),
@@ -58,6 +62,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .flat_map(|(n, c)| c.iter().enumerate().map(move |(seq, id)| (*id, (n as u32 + 1, seq as u32))))
             .collect(),
     };
+    (wr.z, wr.zmap) = super::stacking(doc);
     wr.assign_media();
     wr.embeds.reserve_media(wr.media_files.values());
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
@@ -133,24 +138,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         push_part(&mut entries, &mut overrides, "word/numbering.xml", numbering_xml(doc), &format!("{CT_WML}numbering+xml"), PartRels::default());
     }
     rels.add(rt::SETTINGS, "settings.xml", false);
-    // The attached template is an external relationship of the settings part (§17.15.1.6).
-    let mut settings_rels = PartRels::default();
-    let template = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty());
-    let template_rel = template.map(|t| settings_rels.add(rt::ATTACHED_TEMPLATE, t, true));
-    push_part(
-        &mut entries,
-        &mut overrides,
-        "word/settings.xml",
-        {
-            let generated = settings_xml(doc, notes_part(doc, &wr, true), notes_part(doc, &wr, false), template_rel.as_deref());
-            match doc.passthrough.get(crate::package::SETTINGS_ORIG) {
-                Some(orig) => settings_merge::merge(orig, &generated).unwrap_or(generated),
-                None => generated,
-            }
-        },
-        &format!("{CT_WML}settings+xml"),
-        settings_rels,
-    );
+    let (settings, settings_rels) = write_settings(doc, &wr, options)?;
+    push_part(&mut entries, &mut overrides, "word/settings.xml", settings, &format!("{CT_WML}settings+xml"), settings_rels);
     rels.add(rt::THEME, "theme/theme1.xml", false);
     push_part(
         &mut entries,
@@ -288,6 +277,35 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
     Ok(entries)
+}
+
+fn write_settings(doc: &Document, wr: &Writer<'_>, options: WriteOptions) -> Result<(Vec<u8>, PartRels), DocxError> {
+    // The attached template is an external relationship of the settings part (§17.15.1.6).
+    let template = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let template_relationships = || {
+        let mut rels = PartRels::default();
+        let id = template.map(|target| rels.add(rt::ATTACHED_TEMPLATE, target, true));
+        (rels, id)
+    };
+    let (mut settings_rels, template_rel) = template_relationships();
+    let mail_merge = match mail_merge::write(doc, &mut settings_rels) {
+        Ok(merge) => merge,
+        Err(DocxError::MailMerge(_)) if options.discard_unusable_mail_merge => {
+            // Discard any partial source relationships and retain the template.
+            (settings_rels, _) = template_relationships();
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let generated = settings_xml(doc, notes_part(doc, wr, true), notes_part(doc, wr, false), template_rel.as_deref(), mail_merge.as_deref());
+    let settings = match doc.passthrough.get(crate::package::SETTINGS_ORIG) {
+        Some(orig) => settings_merge::merge(orig, &generated).unwrap_or(generated),
+        None => generated,
+    };
+    if mail_merge.is_some() {
+        settings_rels = mail_merge::source_relationships(&settings, settings_rels)?;
+    }
+    Ok((settings, settings_rels))
 }
 
 fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels, ns_refs: &[(&str, &str)]) -> Vec<u8> {
