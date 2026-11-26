@@ -10,7 +10,7 @@
 //! | Columns and words | [`INCLUDE_COLUMN`], [`DIALOG_COLUMN`], [`ActionsWords`] |
 
 mod body;
-mod editor;
+pub(crate) mod editor;
 mod editor_picker;
 mod editor_steps;
 mod footer;

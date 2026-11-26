@@ -121,12 +121,12 @@ craft_ui::words! {
         icon_burn: "actionEditor.iconBurn" = "Burn";
         icon_erase: "actionEditor.iconErase" = "Erase";
         icon_effects: "actionEditor.iconEffects" = "Layer effects";
-        icon_generated_effects: "actionEditor.iconGenerated_effects" = "Generated effects";
+        icon_generated_effects: "actionEditor.iconGeneratedEffects" = "Generated effects";
         icon_sharpen: "actionEditor.iconSharpen" = "Sharpen";
-        icon_object_selection: "actionEditor.iconObject_selection" = "Object selection";
+        icon_object_selection: "actionEditor.iconObjectSelection" = "Object selection";
         icon_wand: "actionEditor.iconWand" = "Magic wand";
         icon_generate: "actionEditor.iconGenerate" = "Generate";
-        icon_text_color: "actionEditor.iconText_color" = "Text color";
+        icon_text_color: "actionEditor.iconTextColor" = "Text color";
         icon_text: "actionEditor.iconText" = "Text";
         icon_download: "actionEditor.iconDownload" = "Download";
         icon_layers: "actionEditor.iconLayers" = "Layers";
