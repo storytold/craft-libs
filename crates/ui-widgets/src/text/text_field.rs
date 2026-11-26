@@ -9,8 +9,9 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
-use crate::primitives::{Completer, IconSpec, TabKey, TextOptions, TextRun, Wrap};
+use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
+use crate::style::FieldLook;
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
@@ -62,6 +63,15 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     pub(super) empty: Option<C::Value>,
     /// The search form: a clear part while there is text, and Escape clears the text.
     search: bool,
+    /// Whether a search field shows its clear button while there is text. Off, the field is a plain integrated one
+    /// (a find bar's): Escape still clears it.
+    #[prop]
+    clear_button: bool,
+    /// The field's look: [`FieldLook::Quiet`] is a bar's own field, with its fill and quiet edge at rest
+    /// ([`StyleCx::quiet_field`](crate::style::StyleCx::quiet_field)) and the muted placeholder.
+    #[prop]
+    #[style_key]
+    look: FieldLook,
     /// The adornments before the text, in reading order.
     leading: Vec<Adornment>,
     /// The field reserves and paints a chevron at the end, for the host's popup.
@@ -86,6 +96,16 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
 }
 
 impl<'a> TextField<'a, PlainText> {
+    /// Escape keeps the current text and ends editing by leaving focus: a live filter keeps its query. An open typing
+    /// run commits once, without submitting or cancelling, and the same Escape goes on to the enclosing scope. Plain
+    /// fields otherwise restore the run's start and search fields clear; neither default changes.
+    #[must_use]
+    pub fn keeps_on_escape(mut self) -> Self {
+        self.options.keep_on_escape = true;
+        self.options.clear_on_escape = false;
+        self
+    }
+
     /// A plain text field named `label`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, String>) -> Self {
         let mut field = TextField::with_codec(label, value, PlainText);
@@ -114,6 +134,8 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             limit: Limit::Default,
             empty: None,
             search: false,
+            clear_button: true,
+            look: FieldLook::Normal,
             leading: Vec::new(),
             arrow: false,
             drives: None,
@@ -161,6 +183,22 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     #[must_use]
     pub fn select_on_focus(mut self) -> Self {
         self.options.select_on_focus = true;
+        self
+    }
+
+    /// A layer that opens on this field leaves its caret where the codec puts it (after the text) instead of selecting
+    /// the whole text, so typing adds to it: a card that opens to edit text already written. Off by default.
+    #[must_use]
+    pub fn keep_caret_on_open(mut self) -> Self {
+        self.options.keep_caret_on_open = true;
+        self
+    }
+
+    /// With `on`, selects the whole text in this pass, so typing replaces it, unless the field is composing text; a
+    /// request made during a composition is dropped.
+    #[must_use]
+    pub fn select_all(mut self, on: bool) -> Self {
+        self.options.select_all = on;
         self
     }
 
@@ -245,6 +283,13 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// The key that submits a multi-line field (`TextOptions::submit_key`).
+    #[must_use]
+    pub fn submit_key(mut self, key: SubmitKey) -> Self {
+        self.options.submit_key = key;
+        self
+    }
+
     /// Completion candidates for the text before the caret. The text adapter owns the list and the keys it takes.
     #[must_use]
     pub fn complete(mut self, completer: impl Completer + 'static) -> Self {
@@ -280,17 +325,17 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
 impl<C: Codec + Clone + 'static> TextField<'_, C> {
     /// The clear part shows while the field has text.
     fn clear_shown(&self, value: Option<&C::Value>) -> bool {
-        self.search && value.is_some_and(|value| !self.codec.format(value).is_empty())
+        self.search && self.clear_button && value.is_some_and(|value| !self.codec.format(value).is_empty())
     }
 
     /// The adornments after the text, in reading order: the clear button when `clear` names it, then the arrow.
-    fn trailing(&self, clear: Option<Label>) -> SmallVec<[Adornment; 2]> {
+    fn trailing(&self, clear: Option<Label>, arrow: crate::controls::disclosure::DropdownArrow) -> SmallVec<[Adornment; 2]> {
         let mut trailing = SmallVec::new();
         if let Some(name) = clear {
             trailing.push(Adornment::button(CLEAR, IconSpec::svg(IconId::new("close")), name));
         }
         if self.arrow {
-            trailing.push(Adornment::glyph(crate::controls::disclosure::DisclosureGlyph::dropdown()));
+            trailing.push(Adornment::glyph(crate::controls::disclosure::DisclosureGlyph::dropdown_of(arrow)));
         }
         trailing
     }
@@ -314,6 +359,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             style = style.held_at(FieldStyle::chars_width(cx, chars));
         }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
+        if key.look == FieldLook::Quiet {
+            style.surface = cx.quiet_field();
+        }
         style
     }
 
@@ -349,9 +397,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         if cx.proposal == Proposal::Min {
             size.x = 0.0;
         }
-        let clear = self.search.then(|| Self::clear_name(&cx.words::<words::TextWords>()));
+        let clear = (self.search && self.clear_button).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
-        size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear));
+        size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear, cx.env.get()));
         // Short text keeps a field at `size.length.short`, so a column of fields ends at one edge; a content-sized field
         // takes its text and adornments only, as a content-sized number field does.
         if cx.proposal != Proposal::Min && cx.resolved.sizing() != Some(Sizing::Content) {
@@ -376,7 +424,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let value = cx.value();
         let clear = self.clear_shown(value).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
-        let trailing = self.trailing(clear);
+        let trailing = self.trailing(clear, cx.env.get());
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
         let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.flow.is_rtl());
         for (adornment, rect) in trailing.iter().zip(&placed.trailing) {
@@ -392,7 +440,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
                 Some(Mixed::Same(at)) => Some(at),
                 _ => None,
             });
-            let options = TextOptions { mixed: value.is_none(), limit, caret, ..self.options.clone() };
+            let options = TextOptions { mixed: value.is_none(), limit, caret, look: self.look, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }
@@ -410,12 +458,15 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             && let Some(empty) = self.empty.clone()
         {
             cx.set(empty);
+            // The text part showed the old text earlier in this pass: the pass runs again, so the field shows and reports
+            // the empty text in the pass that took the click, not one pass later.
+            crate::runtime::frame::discard_pass(&cx.core.ctx, "a search field's clear part emptied it");
         }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let clear = cx.part_if_declared(CLEAR).is_some().then(|| Self::clear_name(&cx.words::<words::TextWords>()));
-        let trailing = self.trailing(clear);
+        let trailing = self.trailing(clear, cx.env.get());
         let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.env.direction().is_rtl());
         let color = cx.resolve(&cx.style.glyph.color);
         for (adornment, rect) in self.leading.iter().chain(&trailing).zip(placed.leading.iter().chain(&placed.trailing)) {

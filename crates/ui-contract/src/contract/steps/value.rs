@@ -102,6 +102,9 @@ fn resolve_value<V: Value>(comp: &mut dyn ValueSource<V>, stage: &mut MemoryStag
     // ends here, the first pass it is shown again.
     let removed = !crate::runtime::memory::shown_last_pass(stage.ctx(), id);
     if stage.shown::<Gesture<V>>(slot).is_running() {
+        // A typing run cut short by the removal is forgotten: its text reached the binding as it was typed, and the value
+        // from before it may be long stale by the time the component is shown again.
+        let typing_cut_short = removed && crate::contract::text::run_open(stage, id);
         // `(given, value)` of a single-valued binding the app owns.
         let host = comp.binding().and_then(|bind| match bind.get() {
             Some(Mixed::Same(value)) if !bind.is_kept() => Some((bind.is_given(), value)),
@@ -130,8 +133,8 @@ fn resolve_value<V: Value>(comp: &mut dyn ValueSource<V>, stage: &mut MemoryStag
             gesture.last_given = Some(value.clone());
         }
         if let Some(reason) = reason {
-            // The document moved under the gesture, so there is nothing to restore.
-            let before = gesture.before.clone().filter(|_| !reason.document_moved());
+            // The document moved under the gesture, so there is nothing to restore; nor for a typing run cut short.
+            let before = gesture.before.clone().filter(|_| !reason.document_moved() && !typing_cut_short);
             cancelled = Some(EditEvent::cancel(gesture.id, reason, before));
             *gesture = gesture.ended(true);
         }

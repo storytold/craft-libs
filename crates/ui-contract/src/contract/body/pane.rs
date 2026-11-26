@@ -83,7 +83,8 @@ impl BodyHooks<'_> {
             ResizeEdge::Bottom => Rect::from_min_size(rect.min, Vec2::new(rect.width(), extent)),
             _ => Rect::from_min_max(Pos2::new(rect.min.x, rect.max.y - extent), rect.max),
         };
-        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind: PlacementKind::Size(edge) };
+        let change =
+            |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind: PlacementKind::Size(edge), continued: false };
         if gesture == GesturePhase::Begin {
             self.reports.push(change(resized(began), GesturePhase::Begin));
         }

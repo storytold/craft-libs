@@ -2,6 +2,7 @@
 //! face that is flat and muted, with a hover fill, and takes the selection fill and edge while it is picked. The row is one Tab stop over its segments: arrows, Home and End move focus between them, Space,
 //! Enter or a click picks the focused one.
 
+use crate::buttons::ActiveLook;
 use crate::buttons::face::{self, FaceLook, FaceSpec};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, MeasureCx, Name, PaintUi, PartsCx, Props as _, Role, SetPosition,
@@ -194,6 +195,8 @@ impl Segment {
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
+            chord: None,
+            detail: None,
         }
     }
 }
@@ -212,8 +215,13 @@ impl Component for Segment {
     fn style(cx: &StyleCx<'_>, _: SegmentStyleKey) -> SegmentStyle {
         let colors = &cx.tokens.color;
         let c = |rgba| cx.color(rgba);
-        let (clear, selected, selected_hover) = (c(Rgba::TRANSPARENT), c(colors.state.selected), c(colors.state.selected_hover));
-        let disabled = c(colors.state.disabled_fill);
+        // The picked segment wears the look of an icon button that is on (`face::filled_parts` under `Pressed` and `Control`).
+        let (selected, selected_hover, on_ink) = match cx.env::<ActiveLook>() {
+            ActiveLook::Accent => (c(colors.state.selected), c(colors.state.selected_hover), c(colors.text.on_selected)),
+            ActiveLook::Pressed => (c(colors.state.pressed), c(colors.state.pressed), c(colors.text.normal)),
+            ActiveLook::Control => (c(colors.surface.control), c(colors.surface.control), c(colors.text.normal)),
+        };
+        let (clear, disabled) = (c(Rgba::TRANSPARENT), c(colors.state.disabled_fill));
         let fill = cx.state_layer().on(States::new(selected, selected_hover, selected_hover, disabled));
         let edge = Stateful::new(c(colors.line.control_edge)).off(States::new(clear, clear, clear, clear)).on(States::new(
             c(colors.line.control_edge),
@@ -221,8 +229,8 @@ impl Component for Segment {
             c(colors.line.control_edge),
             c(colors.line.divider),
         ));
-        let (muted, on_selected, off) = (c(colors.text.muted), c(colors.text.on_selected), c(colors.text.disabled));
-        let ink = Stateful::new(muted).off(States::new(muted, muted, muted, off)).on(States::new(on_selected, on_selected, on_selected, off));
+        let (muted, off) = (c(colors.text.muted), c(colors.text.disabled));
+        let ink = Stateful::new(muted).off(States::new(muted, muted, muted, off)).on(States::new(on_ink, on_ink, on_ink, off));
         let control = cx.segment_control();
         SegmentStyle {
             // The selected segment rises: a bevelled theme draws the raised bevel, a flat one the edge alone.

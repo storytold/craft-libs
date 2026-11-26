@@ -10,10 +10,10 @@ pub(crate) mod stories;
 
 use std::sync::Arc;
 
-use super::browser::{BrowserTools, PresetBrowser};
+use super::browser::{BrowserTools, PresetBrowser, TipFn};
 use super::event::{PresetEvent, PresetOutput};
 use super::footer::PresetFooterOptions;
-use super::model::{CellShape, PresetRow, PreviewPaint};
+use super::model::{CellShape, PresetRow, PresetRowMenu};
 use super::source::PresetSource;
 use super::state::{DefaultOpen, PresetState, PresetView};
 use super::words::PresetWords;
@@ -24,13 +24,17 @@ use crate::contract::{
 use crate::layout_components::Stack;
 use crate::pickers::{FaceKind, SelectFace};
 use crate::popover::Popover;
+use crate::primitives::FacePaint;
 use crate::runtime::env::{Env, EnvView, Label};
 use crate::runtime::focus::Initial;
 use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
 use crate::tile_grid::TileZoom;
-use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, NumberCodec, PartKey, PressPhase, Sense, Value};
+use craft_behavior::{
+    EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, NumberCodec, PartKey, PressPhase, Selection, Sense, Value,
+};
+use craft_keymap::Mods;
 use egui::{Pos2, Response, Ui, Vec2};
 use std::hash::Hash;
 use std::ops::RangeInclusive;
@@ -109,6 +113,8 @@ pub struct PresetPickerOutput<K> {
     pub create: bool,
     /// The row `PresetPicker::detach_row` added was chosen in this pass; the popover has closed.
     pub detach: bool,
+    /// The modifiers the pick carried; `Mods::NONE` when nothing was picked.
+    pub mods: Mods,
 }
 
 impl<K: Value> Outcome for PresetPickerOutput<K> {
@@ -176,7 +182,10 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + MemoProps + 'static> {
     browser_id: Option<egui::Id>,
     /// Whether a secondary click or the context-menu key opens the browser's row menu.
     #[prop]
-    row_menu: bool,
+    row_menu: PresetRowMenu,
+    /// Paints the tip that shows on hover over a tile or row of the picker's browser.
+    #[prop(boxed = "Fn(&mut Ui, &K) + 'a")]
+    tip: Option<TipFn<'a, K>>,
     /// Shown, muted, while the value is no preset of the rows.
     #[prop(into)]
     placeholder: Option<Label>,
@@ -221,7 +230,7 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + MemoProps + 'static> {
     /// value the host holds when it is more than a preset (a brush's current tip). Without it the field shows the
     /// picked preset's preview.
     #[prop]
-    face_thumb: Option<PreviewPaint>,
+    face_thumb: Option<FacePaint>,
     /// The columns of the popover's grid: the popover is as wide as this many tiles, at least its field.
     #[prop]
     columns: u16,
@@ -238,6 +247,45 @@ struct Session {
 }
 
 impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
+    /// A picker with the same settings that borrows this one, so a composite whose body runs more than once in a
+    /// pass (a wrapping row measures before it shows) shows a fresh picker in each run, as [`Bind::reborrowed`]
+    /// hands on a binding. Bindings and the host's closures are borrowed; the rest is copied.
+    pub fn reborrowed(&mut self) -> PresetPicker<'_, K> {
+        PresetPicker {
+            label: self.label.clone(),
+            value: self.value.reborrowed(),
+            source: self.source,
+            state: self.state.reborrowed(),
+            field: self.field,
+            cell_shape: self.cell_shape,
+            view: self.view,
+            default_open: self.default_open,
+            browser: self.browser,
+            toolbar: self.toolbar,
+            search: self.search,
+            tools: self.tools.as_mut().map(|tools| BrowserTools::new(move |ui| tools.show(ui))),
+            browser_id: self.browser_id,
+            row_menu: self.row_menu,
+            tip: self.tip.as_deref().map(|tip| Box::new(move |ui: &mut Ui, key: &K| tip(ui, key)) as TipFn<'_, K>),
+            placeholder: self.placeholder.clone(),
+            display_name: self.display_name.clone(),
+            caption: self.caption.clone(),
+            caption_range: self.caption_range.clone(),
+            tooltip: self.tooltip.clone(),
+            head: self.head.as_mut().map(|head| PickerHead::new(move |ui, body| (head.0)(ui, body))),
+            keep_open: self.keep_open,
+            footer: self.footer.clone(),
+            thumb_range: self.thumb_range,
+            edit_face: self.edit_face,
+            create_row: self.create_row.clone(),
+            detach_row: self.detach_row.clone(),
+            face_thumb: self.face_thumb.clone(),
+            columns: self.columns,
+            resizable: self.resizable.clone(),
+            opened_at: self.opened_at.as_mut().map(|(at, open)| (*at, open.reborrowed())),
+        }
+    }
+
     /// A picker of patterns, built as [`new`](PresetPicker::new) is: the face shows the picked pattern's tile.
     pub fn pattern(label: impl Into<Label>, value: Bind<'a, Option<K>>, source: &'a PresetSource<'a, K>, state: Bind<'a, PresetState<K>>) -> Self {
         Self::new(label, value, source, state).field(PickerField::Thumbnail).cell_shape(CellShape::Square)
@@ -259,7 +307,8 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
             search: true,
             tools: None,
             browser_id: None,
-            row_menu: true,
+            row_menu: PresetRowMenu::Standard,
+            tip: None,
             placeholder: None,
             display_name: None,
             caption: None,
@@ -316,6 +365,7 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
             mut tools,
             browser_id,
             row_menu,
+            tip,
             placeholder,
             display_name,
             caption,
@@ -403,7 +453,10 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
                     browser = browser.browser_id(id);
                 }
                 if let Some(key) = current.clone() {
-                    browser = browser.selected(key);
+                    browser = browser.selection(Bind::given(Selection::single(key)));
+                }
+                if let Some(tip) = tip.as_ref() {
+                    browser = browser.tip(|ui, key| tip(ui, key));
                 }
                 browser.show(ui)
             };
@@ -449,14 +502,21 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
                 edit_requested,
                 create: false,
                 detach: false,
+                mods: Mods::NONE,
             };
             let mut pick: Option<(K, bool)> = None;
             if let Some(browsed) = browsed {
                 for event in browsed.events {
                     match event {
-                        PresetEvent::Select { key, .. } => pick = Some((key, !keep_open)),
-                        PresetEvent::Activate { key, .. } => pick = Some((key, true)),
-                        PresetEvent::Open(_) => {}
+                        PresetEvent::Select { key, mods } => {
+                            pick = Some((key, !keep_open));
+                            out.mods = mods;
+                        }
+                        PresetEvent::Activate { key, mods } => {
+                            pick = Some((key, true));
+                            out.mods = mods;
+                        }
+                        PresetEvent::Open(_) | PresetEvent::Selection(_) => {}
                         PresetEvent::Action(at) => match actions.get(at) {
                             Some(&(_, true)) => out.create = true,
                             Some(&(_, false)) => out.detach = true,
@@ -495,6 +555,7 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
                 edit_requested: false,
                 create: false,
                 detach: false,
+                mods: Mods::NONE,
             },
         }
     }
@@ -516,7 +577,7 @@ struct PickerFace<'a, K: Value + Eq + Hash + 'static> {
     display_name: Option<Label>,
     caption: Option<Label>,
     caption_range: Option<(RangeInclusive<f64>, usize)>,
-    face_thumb: Option<PreviewPaint>,
+    face_thumb: Option<FacePaint>,
     edit_face: bool,
     open: bool,
     toggle: bool,
@@ -588,11 +649,11 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
         let face = SelectFace::new(text);
         if let Some(thumb) = self.face_thumb.as_ref().filter(|_| self.field != PickerField::Name) {
             let face = if row.is_some() { face } else { face.placeholder() };
-            let draw = paint.then(|| Arc::clone(thumb));
+            let draw = paint.then(|| thumb.clone());
             let face = face
                 .thumb(self.cell_shape.aspect(), move |cx, rect| {
                     if let Some(draw) = &draw {
-                        draw(cx, rect);
+                        draw.paint(cx, rect);
                     }
                 })
                 .name(!self.thumb_only());
@@ -608,7 +669,7 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
                     let face = face
                         .thumb(preview.aspect, move |cx, rect| {
                             if let Some(draw) = &draw {
-                                draw(cx, rect);
+                                draw.paint(cx, rect);
                             }
                         })
                         .name(field == PickerField::ThumbnailAndName);

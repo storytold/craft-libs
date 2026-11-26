@@ -8,14 +8,15 @@
 #[cfg(feature = "font-picker")]
 use craft_font_manager::Catalog;
 #[cfg(feature = "font-picker")]
-use craft_font_manager::axes::AxisSliders;
+use craft_font_manager::axes::{AxesButton, AxisSliders};
 #[cfg(feature = "font-picker")]
-use craft_font_manager::picker::{FontFilters, FontPickerSettings};
+use craft_font_manager::picker::{FamilySet, FilterLayout, FontFilters, FontPickerSettings, FontScript, HostFontGroup};
 use std::ops::RangeInclusive;
 #[cfg(feature = "font-picker")]
 use std::sync::Arc;
 
 use crate::ui::length::DocUnit;
+use crate::ui::type_options::{TextAntiAlias, TypeOptionWords};
 use craft_behavior::{ColumnWidth, EditEvent, IconId, Preview};
 use craft_theme::{Rgba, Srgba};
 use craft_ui::choice::Swatch;
@@ -29,6 +30,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::{NamedOr, NumberName, NumberPick, NumberValue as _};
 use egui::{Response, Ui};
 
+pub(crate) mod format_text;
 pub(crate) mod paragraph;
 pub(crate) mod paragraph_dialog;
 pub(crate) mod rows;
@@ -36,14 +38,17 @@ pub(crate) mod rows;
 pub(crate) mod stories;
 pub(crate) mod style_options;
 
-pub use paragraph::{ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign};
+pub use format_text::{FormatControl, FormatText, FormatTextChange, FormatTextOutput, FormatTextWords, ListKind};
+pub use paragraph::{
+    DirectionRow, ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign,
+};
 pub use paragraph_dialog::{
     AsianTypography, LineBreakOptions, LineSpacing, ParagraphAlign, ParagraphAnswer, ParagraphDialog, ParagraphDialogWords, ParagraphFormat,
     ParagraphPreview, ParagraphPreviewStyle, ParagraphTab, SpacingKind, SpecialIndent,
 };
 use rows::{
-    LengthRow, Lengths, PlainRow, Toggle, agree, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,
-    plain, select_row, size_menu, string_entries, toggle_row,
+    LengthRow, Lengths, PlainRow, Toggle, agree, family_field_keyed, font_height_entries, hidden_side, leading_menu, leading_row_keyed, mark, mixed,
+    number_change, number_presets, plain, select_row, size_menu, string_entries, toggle_row,
 };
 pub use style_options::{
     STYLE_COLOR_KEY, StyleAttribute, StyleOptionValues, StyleOptionsChange, TextStyleOptions, TextStyleOptionsOutput, TextStyleOptionsWords,
@@ -90,7 +95,115 @@ craft_ui::words! {
         ordinals: "character.ordinals" = "Ordinals";
         fractions: "character.fractions" = "Fractions";
         language: "character.language" = "Language";
+        rotation: "character.rotation" = "Rotation";
+        anti_alias: "character.antiAlias" = "Anti-aliasing";
+        font_height: "character.fontHeight" = "Set Font Height Reference";
+        em_box: "character.emBox" = "Em Box";
+        cap_height: "character.capHeight" = "Cap Height";
+        x_height: "character.xHeight" = "x-Height";
+        icf_box: "character.icfBox" = "ICF Box";
+        aki_left: "character.akiLeft" = "Insert Aki Left";
+        aki_right: "character.akiRight" = "Insert Aki Right";
+        tsume: "character.tsume" = "Tsume";
+        diacritic_x: "character.diacriticX" = "Horizontal Diacritic Position";
+        diacritic_y: "character.diacriticY" = "Vertical Diacritic Position";
+        variable_font: "character.variableFont" = "Variable Font";
     }
+}
+
+/// The document keys of the family, size, leading, kerning and tracking fields, which a host focuses with
+/// `runtime::focus::request(ctx, FocusTarget::Doc(keys::SIZE))`.
+pub mod keys {
+    use craft_behavior::DocKey;
+
+    /// The family field.
+    pub const FAMILY: DocKey = DocKey::new("craft-text.character.family");
+    /// The size field.
+    pub const SIZE: DocKey = DocKey::new("craft-text.character.size");
+    /// The leading field.
+    pub const LEADING: DocKey = DocKey::new("craft-text.character.leading");
+    /// The kerning field.
+    pub const KERNING: DocKey = DocKey::new("craft-text.character.kerning");
+    /// The tracking field.
+    pub const TRACKING: DocKey = DocKey::new("craft-text.character.tracking");
+}
+
+/// The groups of rows the Character controls show, as named sets the host turns on or off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CharacterRows(u16);
+
+impl CharacterRows {
+    /// The colour swatch beside the baseline shift.
+    pub const COLOR: CharacterRows = CharacterRows(1 << 0);
+    /// Faux Bold and Faux Italic.
+    pub const FAUX: CharacterRows = CharacterRows(1 << 1);
+    /// Vertical and horizontal scale.
+    pub const SCALES: CharacterRows = CharacterRows(1 << 2);
+    /// Rotation.
+    pub const ROTATION: CharacterRows = CharacterRows(1 << 3);
+    /// Anti-aliasing.
+    pub const ANTI_ALIAS: CharacterRows = CharacterRows(1 << 4);
+    /// Set Font Height Reference.
+    pub const FONT_HEIGHT: CharacterRows = CharacterRows(1 << 5);
+    /// Superscript and Subscript.
+    pub const SUPERSCRIPT: CharacterRows = CharacterRows(1 << 6);
+    /// The OpenType buttons.
+    pub const OPENTYPE: CharacterRows = CharacterRows(1 << 7);
+    /// Insert Aki Left and Right, Tsume.
+    pub const EAST_ASIAN: CharacterRows = CharacterRows(1 << 8);
+    /// Horizontal and vertical diacritic positions.
+    pub const MIDDLE_EASTERN: CharacterRows = CharacterRows(1 << 9);
+    /// Baseline shift.
+    pub const BASELINE: CharacterRows = CharacterRows(1 << 10);
+    /// The style toggles: All Caps, Small Caps, Underline and Strikethrough, with Faux Bold and Italic under
+    /// [`FAUX`](Self::FAUX) and Superscript and Subscript under [`SUPERSCRIPT`](Self::SUPERSCRIPT).
+    pub const STYLE_TOGGLES: CharacterRows = CharacterRows(1 << 11);
+    /// The Properties panel's Character section: family, style, the axes, size, leading, kerning and tracking, with
+    /// no other group on.
+    pub const PROPERTIES: CharacterRows = CharacterRows(1 << 12);
+    /// The set `show` draws by default.
+    pub const PHOTOSHOP: CharacterRows =
+        CharacterRows(Self::COLOR.0 | Self::FAUX.0 | Self::SCALES.0 | Self::BASELINE.0 | Self::STYLE_TOGGLES.0 | Self::OPENTYPE.0);
+
+    /// Whether every group in `rows` is on.
+    pub const fn contains(self, rows: CharacterRows) -> bool {
+        self.0 & rows.0 == rows.0
+    }
+
+    /// The set with every group in `rows` turned on or off.
+    #[must_use]
+    pub const fn with(self, rows: CharacterRows, on: bool) -> Self {
+        CharacterRows(if on { self.0 | rows.0 } else { self.0 & !rows.0 })
+    }
+}
+
+impl std::ops::BitOr for CharacterRows {
+    type Output = CharacterRows;
+
+    fn bitor(self, other: CharacterRows) -> CharacterRows {
+        CharacterRows(self.0 | other.0)
+    }
+}
+
+impl Default for CharacterRows {
+    fn default() -> Self {
+        CharacterRows::PHOTOSHOP
+    }
+}
+
+/// The Set Font Height Reference values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
+#[non_exhaustive]
+pub enum FontHeightReference {
+    /// The em box.
+    #[default]
+    EmBox,
+    /// The cap height.
+    CapHeight,
+    /// The x-height.
+    XHeight,
+    /// The ideographic character face box.
+    IcfBox,
 }
 
 /// The font size menu's presets, in points (PhotoCraft's `SIZE_PRESETS`, Photoshop's list); the
@@ -134,8 +247,130 @@ const SHIFT_RANGE: RangeInclusive<f64> = -1296.0..=1296.0;
 const TRACKING_RANGE: RangeInclusive<f64> = -1000.0..=10000.0;
 /// The range of the scale fields, percent.
 const SCALE_RANGE: RangeInclusive<f64> = 0.0..=1000.0;
+/// The rotation presets, degrees.
+pub const ROTATION_PRESETS: [f32; 9] = [-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0];
+/// The Insert Aki Left and Right presets, thousandths of an em.
+pub const AKI_PRESETS: [f32; 4] = [0.0, 250.0, 500.0, 1000.0];
+/// The Tsume presets, percent.
+pub const TSUME_PRESETS: [f32; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
+/// The diacritic position presets, thousandths of an em.
+pub const DIACRITIC_PRESETS: [f32; 7] = [-200.0, -100.0, -50.0, 0.0, 50.0, 100.0, 200.0];
+/// The range of the rotation field, degrees.
+const ROTATION_RANGE: RangeInclusive<f64> = -360.0..=360.0;
+/// The range of the Insert Aki fields, thousandths of an em.
+const AKI_RANGE: RangeInclusive<f64> = 0.0..=1000.0;
+/// The range of the Tsume field, percent.
+const TSUME_RANGE: RangeInclusive<f64> = 0.0..=100.0;
+/// The range of the diacritic position fields, thousandths of an em.
+const DIACRITIC_RANGE: RangeInclusive<f64> = -1000.0..=1000.0;
 /// Two columns of the same share, for the rows of two fields.
 const TWO_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+
+/// A field of the rows' flow, in the order the rows are drawn. Cells flow two to a row; a full cell takes a row of its
+/// own and ends the run of cells before it.
+#[derive(Clone, Copy)]
+enum Cell {
+    Size,
+    Leading,
+    FontHeight,
+    Kerning,
+    Tracking,
+    VerticalScale,
+    HorizontalScale,
+    BaselineShift,
+    Color,
+    Rotation,
+    AntiAlias,
+    AkiLeft,
+    AkiRight,
+    Tsume,
+    DiacriticX,
+    DiacriticY,
+}
+
+/// A number field that is neither a length nor named: its mark, value, range and the change it makes.
+struct PlainCell {
+    label: Label,
+    mark: &'static str,
+    value: Option<f32>,
+    range: RangeInclusive<f64>,
+    percent: bool,
+    presets: &'static [f32],
+    change: fn(f32) -> CharacterChange,
+}
+
+impl Cell {
+    /// Every cell in drawing order.
+    const ALL: [Cell; 16] = [
+        Cell::Size,
+        Cell::Leading,
+        Cell::FontHeight,
+        Cell::Kerning,
+        Cell::Tracking,
+        Cell::VerticalScale,
+        Cell::HorizontalScale,
+        Cell::BaselineShift,
+        Cell::Color,
+        Cell::Rotation,
+        Cell::AntiAlias,
+        Cell::AkiLeft,
+        Cell::AkiRight,
+        Cell::Tsume,
+        Cell::DiacriticX,
+        Cell::DiacriticY,
+    ];
+
+    /// Whether the cell takes a row of its own.
+    fn full(self) -> bool {
+        matches!(self, Cell::FontHeight | Cell::AntiAlias)
+    }
+
+    /// Whether the groups `rows` turns on include the cell.
+    fn shown(self, rows: CharacterRows) -> bool {
+        match self {
+            Cell::Size | Cell::Leading | Cell::Kerning | Cell::Tracking => true,
+            Cell::FontHeight => rows.contains(CharacterRows::FONT_HEIGHT),
+            Cell::VerticalScale | Cell::HorizontalScale => rows.contains(CharacterRows::SCALES),
+            Cell::BaselineShift => rows.contains(CharacterRows::BASELINE),
+            Cell::Color => rows.contains(CharacterRows::COLOR),
+            Cell::Rotation => rows.contains(CharacterRows::ROTATION),
+            Cell::AntiAlias => rows.contains(CharacterRows::ANTI_ALIAS),
+            Cell::AkiLeft | Cell::AkiRight | Cell::Tsume => rows.contains(CharacterRows::EAST_ASIAN),
+            Cell::DiacriticX | Cell::DiacriticY => rows.contains(CharacterRows::MIDDLE_EASTERN),
+        }
+    }
+
+    /// The field of a cell that is a plain number; `None` for the others.
+    fn plain(self, words: &CharacterWords, values: &CharacterValues) -> Option<PlainCell> {
+        let cell =
+            |label: &Label,
+             mark: &'static str,
+             value: Option<f32>,
+             range: RangeInclusive<f64>,
+             percent: bool,
+             presets: &'static [f32],
+             change: fn(f32) -> CharacterChange| PlainCell { label: label.clone(), mark, value, range, percent, presets, change };
+        Some(match self {
+            Cell::VerticalScale => cell(&words.vertical_scale, "↕T", values.vertical_scale, SCALE_RANGE, true, &[], CharacterChange::VerticalScale),
+            Cell::HorizontalScale => {
+                cell(&words.horizontal_scale, "↔T", values.horizontal_scale, SCALE_RANGE, true, &[], CharacterChange::HorizontalScale)
+            }
+            Cell::Rotation => cell(&words.rotation, "↻", values.rotation, ROTATION_RANGE, false, &ROTATION_PRESETS, CharacterChange::Rotation),
+            Cell::AkiLeft => cell(&words.aki_left, "|A", values.aki_left, AKI_RANGE, false, &AKI_PRESETS, CharacterChange::AkiLeft),
+            Cell::AkiRight => cell(&words.aki_right, "A|", values.aki_right, AKI_RANGE, false, &AKI_PRESETS, CharacterChange::AkiRight),
+            Cell::Tsume => cell(&words.tsume, "|A|", values.tsume, TSUME_RANGE, true, &TSUME_PRESETS, CharacterChange::Tsume),
+            Cell::DiacriticX => {
+                cell(&words.diacritic_x, "Á↔", values.diacritic_x, DIACRITIC_RANGE, false, &DIACRITIC_PRESETS, CharacterChange::DiacriticX)
+            }
+            Cell::DiacriticY => {
+                cell(&words.diacritic_y, "Á↕", values.diacritic_y, DIACRITIC_RANGE, false, &DIACRITIC_PRESETS, CharacterChange::DiacriticY)
+            }
+            Cell::Size | Cell::Leading | Cell::FontHeight | Cell::Kerning | Cell::Tracking | Cell::BaselineShift | Cell::Color | Cell::AntiAlias => {
+                return None;
+            }
+        })
+    }
+}
 
 /// The variable-font axes of the current face: what the axis sliders under the style row show.
 #[cfg(feature = "font-picker")]
@@ -172,27 +407,84 @@ impl<'a> FaceAxes<'a> {
     }
 }
 
+/// How the axes show: the sliders under the style row, or one button that opens them.
+#[cfg(feature = "font-picker")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AxesLayout {
+    /// The sliders under the style row.
+    #[default]
+    Sliders,
+    /// `AxesButton` under the style row.
+    Button,
+}
+
 /// What the family field's font picker takes: the catalog, the app's stars, recents and filters, and the preview.
 #[cfg(feature = "font-picker")]
 #[non_exhaustive]
 pub struct FontPickerSource<'a> {
     /// The catalog the picker lists.
     pub catalog: &'a Arc<Catalog>,
-    /// The picker's settings (stars, recents).
-    pub settings: Bind<'a, FontPickerSettings>,
-    /// The picker's filters.
-    pub filters: Bind<'a, FontFilters>,
+    /// The picker's settings (stars, recents); `None` for a caller without them.
+    pub settings: Option<Bind<'a, FontPickerSettings>>,
+    /// The picker's filters; `None` for a caller without them.
+    pub filters: Option<Bind<'a, FontFilters>>,
     /// The text the previews show; the family's name when `None`.
     pub preview_text: Option<&'a str>,
     /// The families the app serves.
     pub served: &'a [String],
+    /// The host's family sets.
+    pub sets: &'a [FamilySet<'a>],
+    /// The scripts the script row offers.
+    pub scripts: &'a [FontScript],
+    /// The layout of the list's filter area.
+    pub filter_layout: FilterLayout,
+    /// The host's font rows, listed above the catalogue families.
+    pub host: &'a [HostFontGroup<'a>],
+    /// The key of the host row shown as the field's value.
+    pub current_host: Option<String>,
 }
 
 #[cfg(feature = "font-picker")]
 impl<'a> FontPickerSource<'a> {
-    /// A source over `catalog` with the app's `settings` and `filters`.
-    pub fn new(catalog: &'a Arc<Catalog>, settings: Bind<'a, FontPickerSettings>, filters: Bind<'a, FontFilters>) -> Self {
-        FontPickerSource { catalog, settings, filters, preview_text: None, served: &[] }
+    /// A source over `catalog`, with no settings, filters or host rows.
+    pub fn new(catalog: &'a Arc<Catalog>) -> Self {
+        FontPickerSource {
+            catalog,
+            settings: None,
+            filters: None,
+            preview_text: None,
+            served: &[],
+            sets: &[],
+            scripts: &[],
+            filter_layout: FilterLayout::default(),
+            host: &[],
+            current_host: None,
+        }
+    }
+
+    /// The app's stars and recents.
+    pub fn settings(mut self, settings: Bind<'a, FontPickerSettings>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// The app's filters.
+    pub fn filters(mut self, filters: Bind<'a, FontFilters>) -> Self {
+        self.filters = Some(filters);
+        self
+    }
+
+    /// The host's font rows, listed above the catalogue families.
+    pub fn host(mut self, groups: &'a [HostFontGroup<'a>]) -> Self {
+        self.host = groups;
+        self
+    }
+
+    /// The key of the host row shown as the field's value.
+    pub fn current_host(mut self, key: Option<String>) -> Self {
+        self.current_host = key;
+        self
     }
 
     /// The text the previews show.
@@ -204,6 +496,24 @@ impl<'a> FontPickerSource<'a> {
     /// The families the app serves.
     pub fn served(mut self, served: &'a [String]) -> Self {
         self.served = served;
+        self
+    }
+
+    /// The host's family sets, passed on to the family field's picker.
+    pub fn sets(mut self, sets: &'a [FamilySet<'a>]) -> Self {
+        self.sets = sets;
+        self
+    }
+
+    /// The scripts the picker's script row offers.
+    pub fn scripts(mut self, scripts: &'a [FontScript]) -> Self {
+        self.scripts = scripts;
+        self
+    }
+
+    /// The layout of the picker's filter area.
+    pub fn filter_layout(mut self, layout: FilterLayout) -> Self {
+        self.filter_layout = layout;
         self
     }
 }
@@ -338,14 +648,65 @@ pub struct CharacterValues {
     pub opentype: Vec<&'static str>,
     /// BCP 47 tag of the text's language (hyphenation, spelling, smart quotes).
     pub language: Option<String>,
-    /// The variable-font axis values of the selection, by axis tag; `None` while the selection mixes them or has none.
+    /// The variable-font axis values of the selection, by axis tag; `None` while the selection has no variable axes.
     pub axes: Option<Vec<([u8; 4], f32)>>,
+    /// The axes (by tag) whose values differ across the selection; `axes` holds the shared ones.
+    pub mixed_axes: Vec<[u8; 4]>,
+    /// Rotation in degrees.
+    pub rotation: Option<f32>,
+    /// Insert Aki Left, thousandths of an em.
+    pub aki_left: Option<f32>,
+    /// Insert Aki Right, thousandths of an em.
+    pub aki_right: Option<f32>,
+    /// Tsume, percent.
+    pub tsume: Option<f32>,
+    /// Horizontal diacritic position, thousandths of an em.
+    pub diacritic_x: Option<f32>,
+    /// Vertical diacritic position, thousandths of an em.
+    pub diacritic_y: Option<f32>,
+    /// The pair kerning Metrics or Optical gives at the caret; typing a number in the kerning field sets `Manual`.
+    pub auto_kerning: Option<f32>,
+    /// The anti-aliasing method.
+    pub anti_alias: Option<TextAntiAlias>,
+    /// The Set Font Height Reference value.
+    pub font_height: Option<FontHeightReference>,
+    /// Extra space after each character, in points; `None` while the selection mixes it.
+    pub char_spacing: Option<f32>,
 }
 
+/// A variation axis's tag and its value.
+type AxisValue = ([u8; 4], f32);
+
 impl CharacterValues {
+    /// The axis values of the face, none while the selection has no variable axes.
+    fn held_axes(&self) -> &[AxisValue] {
+        self.axes.as_deref().unwrap_or_default()
+    }
+
+    /// The axes two selections share with equal values, and the tags of the others: an axis mixes where either
+    /// selection mixes it or the values differ.
+    fn mix_axes(&self, other: &Self) -> (Option<Vec<AxisValue>>, Vec<[u8; 4]>) {
+        let shared: Vec<AxisValue> = self
+            .held_axes()
+            .iter()
+            .filter(|(tag, value)| !self.mixed_axes.contains(tag) && !other.mixed_axes.contains(tag) && other.held_axes().contains(&(*tag, *value)))
+            .copied()
+            .collect();
+        let mut mixed: Vec<[u8; 4]> = Vec::new();
+        let tags = self.held_axes().iter().map(|(tag, _)| tag).chain(other.held_axes().iter().map(|(tag, _)| tag));
+        for tag in tags.chain(&self.mixed_axes).chain(&other.mixed_axes) {
+            if !mixed.contains(tag) && !shared.iter().any(|(shared, _)| shared == tag) {
+                mixed.push(*tag);
+            }
+        }
+        let axes = if self.axes.is_none() && other.axes.is_none() { None } else { Some(shared) };
+        (axes, mixed)
+    }
+
     /// The values of two selections together: each field stays where both are equal and becomes `None` where they
     /// differ.
     pub fn mixed_with(&self, other: &Self) -> Self {
+        let (axes, mixed_axes) = self.mix_axes(other);
         CharacterValues {
             family: agree(&self.family, &other.family),
             style: agree(&self.style, &other.style),
@@ -365,7 +726,18 @@ impl CharacterValues {
             strikethrough: agree(&self.strikethrough, &other.strikethrough),
             opentype: self.opentype.iter().copied().filter(|tag| other.opentype.contains(tag)).collect(),
             language: agree(&self.language, &other.language),
-            axes: agree(&self.axes, &other.axes),
+            axes,
+            mixed_axes,
+            rotation: agree(&self.rotation, &other.rotation),
+            aki_left: agree(&self.aki_left, &other.aki_left),
+            aki_right: agree(&self.aki_right, &other.aki_right),
+            tsume: agree(&self.tsume, &other.tsume),
+            diacritic_x: agree(&self.diacritic_x, &other.diacritic_x),
+            diacritic_y: agree(&self.diacritic_y, &other.diacritic_y),
+            auto_kerning: agree(&self.auto_kerning, &other.auto_kerning),
+            anti_alias: agree(&self.anti_alias, &other.anti_alias),
+            font_height: agree(&self.font_height, &other.font_height),
+            char_spacing: agree(&self.char_spacing, &other.char_spacing),
         }
     }
 }
@@ -416,6 +788,24 @@ pub enum CharacterChange {
     Language(String),
     /// The variable-font axis values, by axis tag.
     Axes(Vec<([u8; 4], f32)>),
+    /// Rotation in degrees.
+    Rotation(f32),
+    /// Anti-aliasing.
+    AntiAlias(TextAntiAlias),
+    /// Set Font Height Reference.
+    FontHeight(FontHeightReference),
+    /// Insert Aki Left, thousandths of an em.
+    AkiLeft(f32),
+    /// Insert Aki Right, thousandths of an em.
+    AkiRight(f32),
+    /// Tsume, percent.
+    Tsume(f32),
+    /// Horizontal diacritic position, thousandths of an em.
+    DiacriticX(f32),
+    /// Vertical diacritic position, thousandths of an em.
+    DiacriticY(f32),
+    /// Extra space after each character, in points.
+    CharSpacing(f32),
 }
 
 /// What the Character controls did this pass.
@@ -436,6 +826,9 @@ pub struct CharacterControlsOutput {
     /// The colour swatch was clicked: the app opens its colour picker for this request (key [`COLOR_KEY`]) and sets
     /// the colour. Set for the one pass of the click.
     pub requests: HostRequests,
+    /// The family `FontPicker`'s id this pass, which `FrameOutput::ended_previews` names when the controls stop
+    /// showing with a preview.
+    pub picker: Option<egui::Id>,
 }
 
 impl Outcome for CharacterControlsOutput {
@@ -447,9 +840,12 @@ impl Outcome for CharacterControlsOutput {
 }
 
 /// The Character panel's controls, in Photoshop's rows: family; style; size and leading; kerning and tracking;
-/// vertical and horizontal scale; baseline shift and colour; the style toggles (Faux Bold, Faux Italic, All Caps,
-/// Small Caps, then Superscript and Subscript when [`superscript`](Self::superscript) is on, Underline,
-/// Strikethrough); the OpenType buttons; the language when [`languages`](Self::languages) is given.
+/// vertical and horizontal scale; baseline shift ([`CharacterRows::BASELINE`]) and colour; the style toggles
+/// ([`CharacterRows::STYLE_TOGGLES`]: Faux Bold, Faux Italic, All Caps, Small Caps, then Superscript and Subscript with
+/// [`CharacterRows::SUPERSCRIPT`], Underline, Strikethrough); the OpenType buttons; the language when
+/// [`languages`](Self::languages) is given. [`rows`](Self::rows) turns these and the other groups (rotation,
+/// anti-aliasing, font height reference, East Asian and Middle Eastern fields) on or off;
+/// [`CharacterRows::PROPERTIES`] keeps family, style, the axes, size, leading, kerning and tracking.
 ///
 /// ```ignore
 /// let out = CharacterControls::new("Character", &values, &families, &styles).unit(DocUnit::points()).show(ui);
@@ -493,6 +889,16 @@ pub struct CharacterControls<'a> {
     #[cfg(feature = "font-picker")]
     #[prop]
     axes: Option<FaceAxes<'a>>,
+    /// How `axes` shows: the sliders under the style row, or `AxesButton` under it.
+    #[cfg(feature = "font-picker")]
+    #[prop]
+    axes_layout: AxesLayout,
+    /// The row groups shown.
+    #[prop]
+    rows: CharacterRows,
+    /// The methods the Anti-aliasing select offers (with `CharacterRows::ANTI_ALIAS`).
+    #[prop]
+    anti_alias_methods: &'a [TextAntiAlias],
 }
 
 impl<'a> CharacterControls<'a> {
@@ -510,6 +916,10 @@ impl<'a> CharacterControls<'a> {
             picker: None,
             #[cfg(feature = "font-picker")]
             axes: None,
+            #[cfg(feature = "font-picker")]
+            axes_layout: AxesLayout::default(),
+            rows: CharacterRows::default(),
+            anti_alias_methods: &TextAntiAlias::BAR,
         }
     }
 
@@ -517,7 +927,10 @@ impl<'a> CharacterControls<'a> {
     pub fn show(self, ui: &mut Ui) -> CharacterControlsOutput {
         let values = self.values;
         let (families, styles, languages) = (self.families, self.styles, self.languages);
-        let (unit, superscript) = (self.unit, self.superscript);
+        let unit = self.unit;
+        let (rows, anti_alias_methods) = (self.rows, self.anti_alias_methods);
+        #[cfg(feature = "font-picker")]
+        let axes_layout = self.axes_layout;
         #[cfg(feature = "font-picker")]
         let mut picker = self.picker;
         #[cfg(feature = "font-picker")]
@@ -552,6 +965,8 @@ impl<'a> CharacterControls<'a> {
         let mut preview_family = Preview::Unchanged;
         let mut rested_family = None;
         let mut requests = HostRequests::new();
+        let mut picker_id = None;
+        let cells: Vec<Cell> = Cell::ALL.into_iter().filter(|cell| cell.shown(rows)).collect();
 
         // A short field needs room for its value, plus space for the mark and preset button.
         let tokens = &env.tokens;
@@ -560,160 +975,264 @@ impl<'a> CharacterControls<'a> {
         let columns = if ui.available_width() < pair_width { &TWO_COLUMNS[..1] } else { &TWO_COLUMNS };
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &words, values, families, picker.as_mut());
+            let family = family_field_keyed(ui, &words, values, families, Some(keys::FAMILY), None, Some(Sizing::FillWidth), picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &words, values, families);
+            let family = family_field_keyed(ui, &words, values, families, Some(keys::FAMILY), None, Some(Sizing::FillWidth));
             preview_family = family.preview;
             rested_family = family.rested;
+            picker_id = family.picker;
             edits.extend(family.edits);
-            edits.extend(select_row(ui, &words.style, hidden_side(), mixed(values.style.clone()), &style_entries, CharacterChange::Style));
+            edits.extend(select_row(
+                ui,
+                &words.style,
+                hidden_side(),
+                mixed(values.style.clone()),
+                &style_entries,
+                Some(Sizing::FillWidth),
+                CharacterChange::Style,
+            ));
             #[cfg(feature = "font-picker")]
             if let Some(axes) = axes {
                 let held = values.axes.clone().unwrap_or_default();
-                let mut sliders = AxisSliders::new(words.axes.clone(), axes.axes, Bind::given(held)).instances(axes.instances).italic(axes.italic);
-                if let Some(weight) = axes.weight {
-                    sliders = sliders.weight(weight);
-                }
-                edits.extend(sliders.show(ui).edit.into_iter().map(|event| event.map(CharacterChange::Axes)));
+                let edit = match axes_layout {
+                    AxesLayout::Sliders => {
+                        let mut sliders = AxisSliders::new(words.axes.clone(), axes.axes, Bind::given(held))
+                            .instances(axes.instances)
+                            .italic(axes.italic)
+                            .mixed(&values.mixed_axes);
+                        if let Some(weight) = axes.weight {
+                            sliders = sliders.weight(weight);
+                        }
+                        sliders.show(ui).edit
+                    }
+                    AxesLayout::Button => {
+                        let mut button = AxesButton::new(words.variable_font.clone(), axes.axes, Bind::given(held))
+                            .instances(axes.instances)
+                            .italic(axes.italic)
+                            .mixed(&values.mixed_axes);
+                        if let Some(weight) = axes.weight {
+                            button = button.weight(weight);
+                        }
+                        button.show(ui).edit
+                    }
+                };
+                edits.extend(edit.into_iter().map(|event| event.map(CharacterChange::Axes)));
             }
 
-            Grid::new(columns).fill_width().show(ui, |ui, _| {
-                let size = LengthRow {
-                    label: words.size.clone(),
-                    side: mark(GlyphLabel::text("tT"), None, FieldLayout::Inside),
-                    value: values.size,
-                    range: SIZE_RANGE,
-                    presets: &size_presets,
-                };
-                let (event, _) = lengths.row(ui, size);
-                edits.extend(number_change(event, CharacterChange::Size));
-                let side = mark(GlyphLabel::text("A↕"), Some(words.leading_hint.clone()), FieldLayout::Inside);
-                edits.extend(leading_row(&lengths, ui, &words, side, values.leading, values.size, &leading_presets));
-            });
-            Grid::new(columns).fill_width().show(ui, |ui, _| {
-                let event = lengths.kerning(
-                    ui,
-                    words.kerning.clone(),
-                    GlyphLabel::icon(IconId::new("text_cursor")),
-                    words.kerning_hint.clone(),
-                    kerning_shown,
-                    &kerning_presets,
-                );
-                edits.extend(event.map(|value| CharacterChange::Kerning(kerning_of(value))));
-                let tracking = PlainRow {
-                    label: words.tracking.clone(),
-                    side: mark(GlyphLabel::text("VA"), Some(words.tracking_hint.clone()), FieldLayout::Inside),
-                    value: plain(values.tracking),
-                    range: TRACKING_RANGE,
-                    percent: false,
-                    presets: &tracking_presets,
-                };
-                let (event, _) = lengths.plain(ui, tracking);
-                edits.extend(number_change(event, CharacterChange::Tracking));
-            });
-            Grid::new(columns).fill_width().show(ui, |ui, _| {
-                let vertical = PlainRow {
-                    label: words.vertical_scale.clone(),
-                    side: mark(GlyphLabel::text("↕T"), None, FieldLayout::Inside),
-                    value: plain(values.vertical_scale),
-                    range: SCALE_RANGE,
-                    percent: true,
-                    presets: &[],
-                };
-                let (event, _) = lengths.plain(ui, vertical);
-                edits.extend(number_change(event, CharacterChange::VerticalScale));
-                let horizontal = PlainRow {
-                    label: words.horizontal_scale.clone(),
-                    side: mark(GlyphLabel::text("↔T"), None, FieldLayout::Inside),
-                    value: plain(values.horizontal_scale),
-                    range: SCALE_RANGE,
-                    percent: true,
-                    presets: &[],
-                };
-                let (event, _) = lengths.plain(ui, horizontal);
-                edits.extend(number_change(event, CharacterChange::HorizontalScale));
-            });
-            Grid::new(columns).fill_width().show(ui, |ui, _| {
-                let shift = LengthRow {
-                    label: words.baseline_shift.clone(),
-                    side: mark(GlyphLabel::text("Aª"), None, FieldLayout::Inside),
-                    value: values.baseline_shift,
-                    range: SHIFT_RANGE,
-                    presets: &[],
-                };
-                let (event, _) = lengths.row(ui, shift);
-                edits.extend(number_change(event, CharacterChange::BaselineShift));
-                let color = mixed(values.color.map(Srgba::from));
-                let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(words.color.clone())));
-                let well = Field::new(words.text_color.clone())
-                    .side(side)
-                    .show(ui, |ui, _| Swatch::new(words.text_color.clone(), color).picker(COLOR_KEY).sizing(Sizing::FillWidth).show(ui).pick_color);
-                if let Some(request) = well.inner.flatten() {
-                    requests.request_color(request);
+            let mut draw = |ui: &mut Ui, cell: Cell| {
+                if let Some(spec) = cell.plain(&words, values) {
+                    let presets = number_presets(&units, std::iter::once(spec.presets));
+                    let row = PlainRow {
+                        label: spec.label,
+                        side: mark(GlyphLabel::text(spec.mark), None, FieldLayout::Inside),
+                        value: plain(spec.value),
+                        range: spec.range,
+                        percent: spec.percent,
+                        presets: &presets,
+                        disabled: None,
+                    };
+                    let (event, _) = lengths.plain(ui, row);
+                    edits.extend(number_change(event, spec.change));
+                    return;
                 }
-            });
+                match cell {
+                    Cell::Size => {
+                        let size = LengthRow {
+                            label: words.size.clone(),
+                            side: mark(GlyphLabel::text("tT"), None, FieldLayout::Inside),
+                            value: values.size,
+                            range: SIZE_RANGE,
+                            presets: &size_presets,
+                            disabled: None,
+                        };
+                        let (event, _) = lengths.row_keyed(ui, size, Some(keys::SIZE));
+                        edits.extend(number_change(event, CharacterChange::Size));
+                    }
+                    Cell::Leading => {
+                        let side = mark(GlyphLabel::text("A↕"), Some(words.leading_hint.clone()), FieldLayout::Inside);
+                        edits.extend(leading_row_keyed(
+                            &lengths,
+                            ui,
+                            &words,
+                            side,
+                            values.leading,
+                            values.size,
+                            &leading_presets,
+                            Some(keys::LEADING),
+                        ));
+                    }
+                    Cell::FontHeight => {
+                        let entries = font_height_entries(&words);
+                        edits.extend(select_row(
+                            ui,
+                            &words.font_height,
+                            hidden_side(),
+                            mixed(values.font_height),
+                            &entries,
+                            Some(Sizing::FillWidth),
+                            CharacterChange::FontHeight,
+                        ));
+                    }
+                    Cell::Kerning => {
+                        // PLAN: `NumberField::named` has no per-value display text, so the field shows the name
+                        // (Metrics, Optical) and `auto_kerning` is not shown.
+                        let event = lengths.kerning(
+                            ui,
+                            words.kerning.clone(),
+                            mark(GlyphLabel::icon(IconId::new("text_cursor")), Some(words.kerning_hint.clone()), FieldLayout::Inside),
+                            kerning_shown,
+                            &kerning_presets,
+                            Some(keys::KERNING),
+                        );
+                        edits.extend(event.map(|value| CharacterChange::Kerning(kerning_of(value))));
+                    }
+                    Cell::Tracking => {
+                        let tracking = PlainRow {
+                            label: words.tracking.clone(),
+                            side: mark(GlyphLabel::text("VA"), Some(words.tracking_hint.clone()), FieldLayout::Inside),
+                            value: plain(values.tracking),
+                            range: TRACKING_RANGE,
+                            percent: false,
+                            presets: &tracking_presets,
+                            disabled: None,
+                        };
+                        let (event, _) = lengths.plain_keyed(ui, tracking, Some(keys::TRACKING));
+                        edits.extend(number_change(event, CharacterChange::Tracking));
+                    }
+                    Cell::BaselineShift => {
+                        let shift = LengthRow {
+                            label: words.baseline_shift.clone(),
+                            side: mark(GlyphLabel::text("Aª"), None, FieldLayout::Inside),
+                            value: values.baseline_shift,
+                            range: SHIFT_RANGE,
+                            presets: &[],
+                            disabled: None,
+                        };
+                        let (event, _) = lengths.row(ui, shift);
+                        edits.extend(number_change(event, CharacterChange::BaselineShift));
+                    }
+                    Cell::Color => {
+                        let color = mixed(values.color.map(Srgba::from));
+                        let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(words.color.clone())));
+                        let well = Field::new(words.text_color.clone()).side(side).show(ui, |ui, _| {
+                            Swatch::new(words.text_color.clone(), color).picker(COLOR_KEY).sizing(Sizing::FillWidth).show(ui).pick_color
+                        });
+                        if let Some(request) = well.inner.flatten() {
+                            requests.request_color(request);
+                        }
+                    }
+                    Cell::AntiAlias => {
+                        let option_words = env.words::<TypeOptionWords>();
+                        let entries: Vec<Entry<TextAntiAlias>> =
+                            anti_alias_methods.iter().map(|&method| Entry::new(method, method.label(&option_words).clone())).collect();
+                        edits.extend(select_row(
+                            ui,
+                            &words.anti_alias,
+                            hidden_side(),
+                            mixed(values.anti_alias),
+                            &entries,
+                            Some(Sizing::FillWidth),
+                            CharacterChange::AntiAlias,
+                        ));
+                    }
+                    // The plain number cells are drawn above.
+                    Cell::VerticalScale
+                    | Cell::HorizontalScale
+                    | Cell::Rotation
+                    | Cell::AkiLeft
+                    | Cell::AkiRight
+                    | Cell::Tsume
+                    | Cell::DiacriticX
+                    | Cell::DiacriticY => {}
+                }
+            };
+            for run in cells.chunk_by(|a, b| !a.full() && !b.full()) {
+                match run {
+                    [cell] if cell.full() => draw(ui, *cell),
+                    _ => {
+                        Grid::new(columns).fill_width().show(ui, |ui, _| {
+                            for &cell in run {
+                                draw(ui, cell);
+                            }
+                        });
+                    }
+                }
+            }
 
-            let caps = values.caps;
-            let position = values.position;
-            let mut toggles: Vec<Toggle<CharacterChange>> = vec![
-                Toggle::new(&words.faux_bold, "text_bold", values.faux_bold, Box::new(CharacterChange::FauxBold)),
-                Toggle::new(&words.faux_italic, "text_italic", values.faux_italic, Box::new(CharacterChange::FauxItalic)),
-                Toggle::new(
+            if rows.contains(CharacterRows::STYLE_TOGGLES) {
+                let caps = values.caps;
+                let position = values.position;
+                let mut toggles: Vec<Toggle<CharacterChange>> = Vec::new();
+                if rows.contains(CharacterRows::FAUX) {
+                    toggles.push(Toggle::new(&words.faux_bold, "text_bold", values.faux_bold, Box::new(CharacterChange::FauxBold)));
+                    toggles.push(Toggle::new(&words.faux_italic, "text_italic", values.faux_italic, Box::new(CharacterChange::FauxItalic)));
+                }
+                toggles.push(Toggle::new(
                     &words.all_caps,
                     "text_all_caps",
                     caps.map(|caps| caps == Caps::AllCaps),
                     Box::new(|on| CharacterChange::Caps(if on { Caps::AllCaps } else { Caps::Normal })),
-                ),
-                Toggle::new(
+                ));
+                toggles.push(Toggle::new(
                     &words.small_caps,
                     "text_small_caps",
                     caps.map(|caps| caps == Caps::SmallCaps),
                     Box::new(|on| CharacterChange::Caps(if on { Caps::SmallCaps } else { Caps::Normal })),
-                ),
-            ];
-            if superscript {
-                toggles.push(Toggle::new(
-                    &words.superscript,
-                    "text_superscript",
-                    position.map(|position| position == BaselinePosition::Superscript),
-                    Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Superscript } else { BaselinePosition::Normal })),
                 ));
-                toggles.push(Toggle::new(
-                    &words.subscript,
-                    "text_subscript",
-                    position.map(|position| position == BaselinePosition::Subscript),
-                    Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Subscript } else { BaselinePosition::Normal })),
-                ));
+                if rows.contains(CharacterRows::SUPERSCRIPT) {
+                    toggles.push(Toggle::new(
+                        &words.superscript,
+                        "text_superscript",
+                        position.map(|position| position == BaselinePosition::Superscript),
+                        Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Superscript } else { BaselinePosition::Normal })),
+                    ));
+                    toggles.push(Toggle::new(
+                        &words.subscript,
+                        "text_subscript",
+                        position.map(|position| position == BaselinePosition::Subscript),
+                        Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Subscript } else { BaselinePosition::Normal })),
+                    ));
+                }
+                toggles.push(Toggle::new(&words.underline, "text_underline", values.underline, Box::new(CharacterChange::Underline)));
+                toggles.push(Toggle::new(&words.strikethrough, "text_strikethrough", values.strikethrough, Box::new(CharacterChange::Strikethrough)));
+                edits.extend(toggle_row(ui, None, &toggles));
             }
-            toggles.push(Toggle::new(&words.underline, "text_underline", values.underline, Box::new(CharacterChange::Underline)));
-            toggles.push(Toggle::new(&words.strikethrough, "text_strikethrough", values.strikethrough, Box::new(CharacterChange::Strikethrough)));
-            edits.extend(toggle_row(ui, None, &toggles));
 
-            let names = [
-                &words.standard_ligatures,
-                &words.contextual_alternates,
-                &words.discretionary_ligatures,
-                &words.swash,
-                &words.stylistic_alternates,
-                &words.titling_alternates,
-                &words.ordinals,
-                &words.fractions,
-            ];
-            let features: Vec<Toggle<CharacterChange>> = OPENTYPE_FEATURES
-                .iter()
-                .zip(OPENTYPE_ICONS)
-                .zip(names)
-                .map(|((&tag, icon), name)| {
-                    Toggle::new(name, icon, Some(values.opentype.contains(&tag)), Box::new(move |on| CharacterChange::OpenType { tag, on }))
-                })
-                .collect();
-            edits.extend(toggle_row(ui, None, &features));
+            if rows.contains(CharacterRows::OPENTYPE) {
+                let names = [
+                    &words.standard_ligatures,
+                    &words.contextual_alternates,
+                    &words.discretionary_ligatures,
+                    &words.swash,
+                    &words.stylistic_alternates,
+                    &words.titling_alternates,
+                    &words.ordinals,
+                    &words.fractions,
+                ];
+                let features: Vec<Toggle<CharacterChange>> = OPENTYPE_FEATURES
+                    .iter()
+                    .zip(OPENTYPE_ICONS)
+                    .zip(names)
+                    .map(|((&tag, icon), name)| {
+                        Toggle::new(name, icon, Some(values.opentype.contains(&tag)), Box::new(move |on| CharacterChange::OpenType { tag, on }))
+                    })
+                    .collect();
+                edits.extend(toggle_row(ui, None, &features));
+            }
 
             if let Some(entries) = &language_entries {
-                edits.extend(select_row(ui, &words.language, hidden_side(), mixed(values.language.clone()), entries, CharacterChange::Language));
+                edits.extend(select_row(
+                    ui,
+                    &words.language,
+                    hidden_side(),
+                    mixed(values.language.clone()),
+                    entries,
+                    Some(Sizing::FillWidth),
+                    CharacterChange::Language,
+                ));
             }
         });
-        CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family, requests }
+        CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family, requests, picker: picker_id }
     }
 }
 

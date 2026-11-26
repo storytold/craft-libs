@@ -1,6 +1,10 @@
-//! The theme styles' `right_to_left`.
+//! The theme styles' `right_to_left` and font coverage transfer function.
 
-use egui::{Context, Ui};
+use super::memory;
+use craft_theme::Mode;
+use egui::epaint::FontColorTransferFunction;
+use egui::{Context, Theme, Ui};
+use std::sync::Arc;
 
 /// Turns off egui's own caret blink in `ui`, and hides the caret stroke unless `visible`: the runtime blinks it.
 pub(crate) fn set_text_cursor(ui: &mut Ui, visible: bool) {
@@ -62,4 +66,49 @@ pub(crate) fn set_theme_direction(ctx: &Context, root: &mut Ui, right_to_left: b
 /// Sets the spacing between the children `ui` lays out.
 pub(crate) fn set_item_spacing(ui: &mut Ui, gap: egui::Vec2) {
     ui.spacing_mut().item_spacing = gap;
+}
+
+/// The egui style `ui` has now, for a framework part that shows an app's own egui code in a `Ui` of its own
+/// (`primitives::HostStyle`).
+pub(crate) fn style_of(ui: &Ui) -> Arc<egui::Style> {
+    Arc::clone(ui.style())
+}
+
+/// Gives `ui` the style `style`: an app's own egui style kept by `primitives::HostStyle`, or `ui`'s own back after it.
+pub(crate) fn set_style(ui: &mut Ui, style: &Arc<egui::Style>) {
+    ui.set_style(Arc::clone(style));
+}
+
+/// Each egui theme style's own font coverage transfer function, and the one [`set_text_color_transfer`] last wrote.
+#[derive(Clone, Copy)]
+struct TextCurves {
+    light: FontColorTransferFunction,
+    dark: FontColorTransferFunction,
+    written: FontColorTransferFunction,
+}
+
+/// Matches egui's font coverage transfer function to `mode` across both egui theme styles, so dark-on-light text
+/// never renders with the dark-mode curve (or vice versa) when the app's mode differs from the OS's.
+///
+/// The curve for `mode` is the one the app set on that mode's egui style (egui's default until it sets one): a
+/// style whose curve is not the one written here last has been set by the app since, and that curve becomes the
+/// style's own.
+pub(crate) fn set_text_color_transfer(ctx: &Context, mode: Mode) {
+    let id = memory::unique("craft-ui-contract text color transfer");
+    let held = |theme: Theme| ctx.style_of(theme).visuals.text_options.color_transfer_function;
+    let (light, dark) = (held(Theme::Light), held(Theme::Dark));
+    let (own_light, own_dark) = match memory::peek_copy::<TextCurves>(ctx, id) {
+        Some(last) => (if light == last.written { last.light } else { light }, if dark == last.written { last.dark } else { dark }),
+        None => (light, dark),
+    };
+    let transfer = match mode {
+        Mode::Light => own_light,
+        Mode::Dark => own_dark,
+    };
+    if light != transfer || dark != transfer {
+        ctx.all_styles_mut(|style| {
+            style.visuals.text_options.color_transfer_function = transfer;
+        });
+    }
+    memory::put(ctx, id, TextCurves { light: own_light, dark: own_dark, written: transfer });
 }

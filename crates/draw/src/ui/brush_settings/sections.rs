@@ -387,7 +387,7 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                         BrushSectionEvent::Enable { key, on: toggle.on }
                     });
                 }
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                     for slot in keys.iter().filter(|slot| !toggled.contains(slot)) {
                         let Slot::Section(key) = slot else { continue };
                         let pane_row = rows.section(key).is_some_and(|section| section.kind == BrushSectionKind::Pane);

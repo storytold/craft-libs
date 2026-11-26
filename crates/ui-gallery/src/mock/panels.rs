@@ -226,10 +226,8 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
         Canvas::new("Document").id(canvas_id).view(view).document(page.size()).with_rulers(strips).rulers(units, units).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
             let Document { guides, guide, .. } = &mut *document;
-            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
-            if let Some(selected) = *guide {
-                controls = controls.selected_guide(selected);
-            }
+            let selected = *guide;
+            let controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing).selected_guides(selected.as_slice());
             if let Some(select) = controls.show_at(ui, body.rect).select {
                 *guide = select;
             }

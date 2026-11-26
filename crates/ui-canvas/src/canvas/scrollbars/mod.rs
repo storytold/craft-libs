@@ -365,6 +365,19 @@ pub(crate) fn settled_as_proposed(proposed: &CanvasView, host: &CanvasView) -> b
         && (proposed.center.y - host.center.y).abs() < reach
 }
 
+/// Whether `host` is `proposed` passed through f32 layout units: its centre and zoom equal in f32 and every other
+/// field equal.
+fn rounded_as_proposed(proposed: &CanvasView, host: &CanvasView) -> bool {
+    let magnitude = proposed.center.x.abs().max(proposed.center.y.abs()).max(host.center.x.abs()).max(host.center.y.abs());
+    let mut rounded = *proposed;
+    rounded.center = host.center;
+    rounded.zoom = host.zoom;
+    rounded == *host
+        && craft_behavior::same_in_f32_at(proposed.center.x, host.center.x, magnitude)
+        && craft_behavior::same_in_f32_at(proposed.center.y, host.center.y, magnitude)
+        && craft_behavior::same_in_f32(proposed.zoom, host.zoom)
+}
+
 /// The four corners of a document rectangle.
 fn doc_corners(doc: DocRect) -> [Point; 4] {
     [Point::new(doc.x0, doc.y0), Point::new(doc.x1, doc.y0), Point::new(doc.x1, doc.y1), Point::new(doc.x0, doc.y1)]
@@ -464,7 +477,9 @@ impl<'a> CanvasScrollbars<'a> {
     }
 
     fn bars(&self, view: &CanvasView, rect: Rect, style: &ScrollbarsStyle, held: Option<&HeldThumb>) -> Bars {
-        Bars::of(view, self.document, self.overscroll, !self.vertical_only, rect, style, held)
+        // A horizontal thumb held keeps its bar until the press ends, so its release closes the drag.
+        let horizontal = !self.vertical_only || held.is_some_and(|held| held.on(Axis::X));
+        Bars::of(view, self.document, self.overscroll, horizontal, rect, style, held)
     }
 }
 
@@ -498,8 +513,11 @@ impl Component for CanvasScrollbars<'_> {
     /// comes back with its centre moved by under a point (photocraft#16006): that is the drag's own value, not the app
     /// changing the view under it, and the drag goes on. A different zoom, turn, mirroring or aspect, or a centre a
     /// point or more away, is a change.
+    ///
+    /// A host that maps a proposed centre through its own layout (a scroll offset in points) and back writes back a
+    /// view that differs from the proposal by f32 rounding only, zoom included: that is not a change either.
     fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
-        settled_as_proposed(proposed, host)
+        settled_as_proposed(proposed, host) || rounded_as_proposed(proposed, host)
     }
 
     /// The bars: `PartsCx::scroll` runs the thumb drag and the page press in the pipeline.
@@ -531,6 +549,16 @@ impl Component for CanvasScrollbars<'_> {
         }
         let Some(view) = cx.value().copied() else { return };
         let mut held = cx.press_slot::<HeldThumb>().clone();
+        // A press that ended while the bars weren't shown (a full-screen view drops them) never reached them: its thumb
+        // is idle again, and the extent kept for it is stale.
+        let stale = held.as_ref().is_some_and(|held| {
+            let thumb = thumb_of(if held.horizontal { HORIZONTAL } else { VERTICAL });
+            matches!(cx.part(thumb).press.phase, PressPhase::Idle | PressPhase::Hover)
+        });
+        if stale {
+            *cx.press_slot::<HeldThumb>() = None;
+            held = None;
+        }
         let bars = self.bars(&view, cx.rect, cx.style, held.as_ref());
         let mut ended = false;
         let rtl = cx.flow.is_rtl();

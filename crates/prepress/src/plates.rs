@@ -532,7 +532,8 @@ endstream endobj
     fn bands_reach_resolutions_past_the_plate_cap_and_can_stop() {
         let pdf = disc_and_spot();
         // 40 pt at 3700 dpi is 2055 pixels a side: 4.2 MP, past `MAX_PLATE_PIXELS`.
-        assert!(plates(&pdf, 0, 3700.0, &Options::default()).unwrap().dpi < 3700.0);
+        // (The whole-page entry point reduces by `plate_scale`; the bands below are not reduced.)
+        assert!(plate_scale(40.0, 40.0, 3700.0 / 72.0) < 3700.0 / 72.0);
         let mut bands = Vec::new();
         plates_in_bands(&pdf, 0, 3700.0, &Options::default(), |band| {
             let p = &band.plates;

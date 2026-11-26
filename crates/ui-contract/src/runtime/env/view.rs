@@ -2,7 +2,7 @@
 
 use super::app_values::EnvValue;
 use super::label::Label;
-use super::units::{PointSize, UnitWords, Units};
+use super::units::{PointSize, UnitWords, Units, ZoomPrecision};
 use super::values::{MotionPolicy, Scale};
 use super::{Held, ItemFacts, Scoped};
 use crate::runtime::commands::CommandChain;
@@ -46,6 +46,10 @@ impl<'a> EnvView<'a> {
     /// The innermost scrolling body around the component.
     pub(crate) fn scroll_owner(&self) -> Option<Id> {
         self.scoped.scroll_owner.map(|owner| owner.id)
+    }
+
+    pub(crate) fn fallback_collection(&self) -> Option<Id> {
+        self.scoped.fallback_collection
     }
 
     /// The view of the innermost scroll area around the scope.
@@ -159,6 +163,7 @@ impl<'a> EnvView<'a> {
     /// The scope's number format and unit words, to read and write numbers with their unit.
     pub fn units(&self) -> Units {
         Units::new(self.scoped.format.clone(), self.words::<UnitWords>(), self.scoped.words.clone(), self.scoped.values.get::<PointSize>())
+            .with_zoom_precision(self.scoped.values.get::<ZoomPrecision>())
     }
 
     /// How long ago `seconds` was, in the scope's language and digits: "Just now", "3 minutes ago", "Yesterday".

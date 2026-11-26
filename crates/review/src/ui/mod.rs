@@ -24,20 +24,26 @@ pub mod thread;
 pub mod versions;
 pub mod vote;
 
-pub use annotate::{AnnotateTool, AnnotateWords, AnnotationOverlay, AnnotationToolbar, AnnotationToolbarOutput, PALETTE};
+pub use annotate::{
+    AnnotateTool, AnnotateWords, AnnotationOverlay, AnnotationToolbar, AnnotationToolbarOutput, BodyPaint, DrawOptions, PALETTE, SelectOptions,
+};
 pub use avatar::{Avatar, AvatarOutput, paint_avatar};
 pub use balloons::{BalloonItem, BalloonPlace, BalloonWords, CommentBalloons, CommentBalloonsOutput};
 pub use chat::{ChatWords, CursorChatBox, CursorChatBoxOutput, ReviewCommand, paint_chat_bubble};
-pub use comments::{CommentEdit, CommentsPanel, CommentsPanelOutput, CommentsPanelState, CommentsWords};
+pub use comments::{
+    CommentEdit, CommentsHeader, CommentsPanel, CommentsPanelOutput, CommentsPanelState, CommentsWords, NoHostRow, comments_filter_menu,
+    comments_more_menu,
+};
 pub use join::{JoinField, JoinFieldOutput, JoinWords};
 pub use presence::{
     FollowCommand, FollowFrame, FollowFrameOutput, PeopleBar, PeopleBarOutput, PresenceWords, RemoteCursor, RemoteCursors, paint_pointer,
 };
 pub use revisions::{RevisionsPanel, RevisionsPanelOutput, RevisionsWords};
-pub use signature::{SignaturePadDialog, SignaturePadResult, SignatureSettings, SignatureWords, paint_signature};
+pub use signature::{ScanEvent, SignaturePadDialog, SignaturePadResult, SignatureSettings, SignatureWords, paint_signature};
 pub use thread::{
-    CommentComposer, CommentComposerOutput, CommentPin, CommentPins, CommentPinsOutput, PinCluster, PinMove, REACTIONS, ThreadPopover,
-    ThreadPopoverOutput, ThreadWords, cluster, insert_mention, mention_matches, mention_query,
+    CommentComposer, CommentComposerOutput, CommentPin, CommentPins, CommentPinsOutput, ComposerClose, ComposerDraft, NOTE_POPUP_LIMITS, NoteDrafts,
+    NotePopup, NotePopupMessage, NotePopupOutput, NoteReplyLook, PinCluster, PinMove, REACTIONS, ThreadPopover, ThreadPopoverOutput, ThreadWords,
+    cluster, insert_mention, mention_matches, mention_query,
 };
 pub use versions::{VersionAction, VersionHistoryPanel, VersionHistoryPanelOutput, VersionPreviewBanner, VersionPreviewBannerOutput, VersionsWords};
 pub use vote::{VotePill, VotePillOutput, VoteWords};
