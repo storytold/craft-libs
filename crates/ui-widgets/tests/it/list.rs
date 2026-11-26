@@ -992,6 +992,68 @@ fn a_toggle_column_holds_one_toggle_with_room_on_each_side() {
     assert!(cell.width() < 2.0 * cell.height(), "the toggle column holds one toggle: {cell:?}");
 }
 
+/// Each cell node of a row lies in its own column: a leading and a trailing toggle cell, the label cell, a text cell
+/// and a status cell each take their column's span of the row, not the whole row.
+#[trial]
+fn each_cell_node_of_a_row_takes_its_columns_bounds() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_theme::variant::Tone;
+    use craft_ui::contract::{ColumnSpec, Role, ToggleColumn};
+    use craft_ui::list::{CellStatus, ToggleCell};
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const SIZE: ColumnKey = ColumnKey::new("size");
+    const WARNINGS: ColumnKey = ColumnKey::new("warnings");
+    const LOCK: ColumnKey = ColumnKey::new("lock");
+    let cells = Rc::new(RefCell::new(Vec::new()));
+    let held = cells.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()),
+            ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)),
+            ColumnSpec::new(SIZE, "Size", ColumnWidth::fill(1.0)),
+            ColumnSpec::new(WARNINGS, "Warnings", ColumnWidth::fill(1.0)),
+            ColumnSpec::toggle(LOCK, "", ToggleColumn::sweepable()),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |_, icx| {
+            held.replace(icx.cells().to_vec());
+            ListRow::new("Layer 1")
+                .cells(icx.cells())
+                .toggle(ToggleCell::eye(EYE, true))
+                .cell(SIZE, "12 KB")
+                .cell_status(WARNINGS, CellStatus::new(Tone::Warn, "2 warnings"))
+                .toggle(ToggleCell::lock(LOCK, false))
+        });
+    });
+    fixture.room(Vec2::new(600.0, 200.0));
+    fixture.settle();
+    let cells = cells.borrow();
+    let column = |key: &ColumnKey| cells.iter().find(|(column, _)| column == key).map(|(_, rect)| *rect).expect("the row lists the column");
+    let nodes = fixture.by_role(Role::CELL);
+    assert_eq!(nodes.len(), 5, "one cell node per column: {nodes:?}");
+    for node in &nodes {
+        let tree = fixture.tree();
+        let key = match tree.name_of(node.node) {
+            Some("12 KB") => SIZE,
+            Some("2 warnings") => WARNINGS,
+            Some("Layer 1") => match tree.children_of(node.node).first().and_then(|child| tree.name_of(*child)) {
+                Some(name) if name.contains("Lock") => LOCK,
+                Some(_) => EYE,
+                None => NAME,
+            },
+            other => panic!("an unexpected cell node {other:?}"),
+        };
+        let span = column(&key);
+        assert!(
+            (node.rect.left() - span.left()).abs() < 0.5 && (node.rect.right() - span.right()).abs() < 0.5,
+            "the {key:?} cell spans its column: {:?}, the column {span:?}",
+            node.rect
+        );
+    }
+}
+
 /// A toggle cell's glyph rests in `text.muted` and reads in `text.normal` under the pointer.
 #[trial]
 fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {

@@ -14,7 +14,7 @@ use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show}
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::DataColor;
-use craft_behavior::{ColumnKey, Cursor};
+use craft_behavior::{ColumnKey, Cursor, PartRef};
 use craft_i18n::Word;
 use craft_theme::variant::Tone;
 use craft_theme::{LabelColor, TypeRole};
@@ -467,6 +467,8 @@ pub struct ListRow<'a> {
     /// The row's menu button was clicked: its rect, where the menu hangs.
     pub(super) menu: Option<Rect>,
     pub(super) label_rect: Rect,
+    /// The placed rect of each cell node, by the node's part: the access step reads them as the cells' bounds.
+    pub(super) cell_bounds: Vec<(PartRef, Rect)>,
 }
 
 impl<'a> ListRow<'a> {
@@ -564,6 +566,7 @@ impl<'a> ListRow<'a> {
             open: None,
             menu: None,
             label_rect: Rect::NOTHING,
+            cell_bounds: Vec::new(),
         }
         .label(label)
     }
