@@ -3456,6 +3456,7 @@ name = "craft-ods"
 version = "0.1.0"
 dependencies = [
  "craft-odf",
+ "craft-ods",
  "craft-sheet",
  "craft-xml",
  "thiserror 2.0.21",
