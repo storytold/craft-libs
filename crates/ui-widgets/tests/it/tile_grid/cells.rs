@@ -1,0 +1,82 @@
+//! Cell sizes: a grid sizes content cells from what its tiles measure and keeps that measure while nothing it reads
+//! changes, and packs tiles without a caption closer than captioned ones.
+
+use craft_behavior::{IconId, keyed};
+use craft_ui::contract::ShowCollection as _;
+use craft_ui::primitives::IconSpec;
+use craft_ui::testing::{Fixture, pointer, trial, widest_runs};
+use craft_ui::tile_grid::{CaptionPlace, Tile, TileActionPlace, TileGrid};
+use egui::Vec2;
+use std::cell::Cell;
+use std::rc::Rc;
+
+const KEYS: [usize; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+#[trial]
+fn band_tile_check_does_not_cover_its_picture() {
+    let picture = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let painted = Rc::clone(&picture);
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&KEYS[..1], |key: &usize| *key);
+        let _ = TileGrid::new("Pages").checks(true).action_place(TileActionPlace::Band).show_items(ui, &source, &mut |_, _| {
+            let painted = Rc::clone(&painted);
+            Tile::new("Page").thumb(craft_ui::list::ThumbAspect::SQUARE, move |_, rect| painted.set(rect))
+        });
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    let check = fixture.by_role(craft_ui::contract::Role::CHECK_BOX).first().expect("page check").rect;
+    assert!(check.bottom() <= picture.get().top(), "check {check:?} overlaps picture {:?}", picture.get());
+}
+
+fn icon_grid(content_cells: bool) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&KEYS, |key: &usize| *key);
+        let grid = TileGrid::new("Icons").caption(CaptionPlace::None).rows_stamp(1);
+        let grid = if content_cells { grid.content_cells() } else { grid };
+        let _ = grid.show_items(ui, &source, &mut |key, _| Tile::new(format!("Icon {key}")).icon(IconSpec::svg(IconId::new("settings"))));
+    });
+    fixture.room(Vec2::new(600.0, 400.0));
+    fixture.settle();
+    fixture
+}
+
+/// Icon tiles in content cells are as large as their icon and its inset, so a row holds more of them than of the
+/// thumbnail-sized cards a grid uses otherwise; a settled grid moves the pointer over them without measuring a tile.
+#[trial]
+fn content_cells_fit_the_icons_and_keep_their_measure() {
+    let width = |fixture: &Fixture| fixture.by_label("Icon 0").expect("the first tile has a node").rect.width();
+    let mut cells = icon_grid(true);
+    let thumbs = icon_grid(false);
+    assert!(width(&cells) < width(&thumbs), "content cells are smaller than thumbnail cards");
+    let row = |fixture: &Fixture| {
+        let top = fixture.by_label("Icon 0").expect("tile").rect.top();
+        KEYS.iter().filter(|key| fixture.by_label(&format!("Icon {key}")).is_some_and(|tile| (tile.rect.top() - top).abs() < 0.5)).count()
+    };
+    assert!(row(&cells) > row(&thumbs), "a row holds more content cells than thumbnail cards");
+    let over = cells.by_label("Icon 1").expect("tile").center();
+    cells.frame(vec![pointer::moved(over)]);
+    assert!(widest_runs(cells.ctx()).is_empty(), "a pointer move measured the tiles again: {:?}", widest_runs(cells.ctx()));
+}
+
+fn photo_grid(caption: CaptionPlace) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&KEYS, |key: &usize| *key);
+        let grid = TileGrid::new("Photos").caption(caption).rows_stamp(1);
+        let _ = grid.show_items(ui, &source, &mut |key, _| Tile::new(format!("Photo {key}")));
+    });
+    fixture.room(Vec2::new(600.0, 400.0));
+    fixture.settle();
+    fixture
+}
+
+/// Tiles without a caption pack closer than captioned tiles of the same picture size: neighbours in a row are nearer.
+#[trial]
+fn bare_tiles_pack_closer_than_captioned_tiles() {
+    let pitch = |fixture: &Fixture| {
+        let at = |key: usize| fixture.by_label(&format!("Photo {key}")).expect("the tile has a node").rect;
+        assert!((at(0).top() - at(1).top()).abs() < 0.5, "the first two tiles share a row");
+        (at(1).center().x - at(0).center().x).abs()
+    };
+    let (bare, captioned) = (photo_grid(CaptionPlace::None), photo_grid(CaptionPlace::Below));
+    assert!(pitch(&bare) < pitch(&captioned), "bare tiles sit closer than captioned ones");
+}

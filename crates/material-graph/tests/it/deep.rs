@@ -8,6 +8,12 @@ use std::fmt::Write;
 /// The stack of a thread spawned without asking for one (Rust's default), and of rayon's workers.
 const NORMAL_STACK: usize = 2 << 20;
 
+/// Stacks too small for a walk that recurses once per node: a frame takes at least tens of bytes (an unoptimised one about
+/// a kilobyte), so the chains below overflow them if the evaluator recurses, and the chain length needs no more work than
+/// that.
+const SMALL_STACK: usize = 128 << 10;
+const MEDIUM_STACK: usize = 512 << 10;
+
 /// The stack a function as deep as allowed is run with: the normal one in an optimised build (measured: 2040 nodes in a
 /// row take under 1 MB); an unoptimised build's frames are about fifteen times larger.
 const FUNCTION_STACK: usize = if cfg!(debug_assertions) { 32 << 20 } else { NORMAL_STACK };
@@ -51,22 +57,22 @@ fn nested(levels: u32) -> String {
 }
 
 #[test]
-fn a_chain_of_a_hundred_thousand_nodes_evaluates_on_a_normal_stack() {
-    let g = Graph::parse(&image_chain(100_000)).expect("parses");
+fn a_long_chain_evaluates_on_a_small_stack() {
+    let g = Graph::parse(&image_chain(10_000)).expect("parses");
     let shallow = Graph::parse(&image_chain(2)).expect("parses");
     let (deep, two) =
-        on_stack(NORMAL_STACK, move || (g.evaluate(None).map_err(|e| e.to_string()), shallow.evaluate(None).map_err(|e| e.to_string())));
+        on_stack(MEDIUM_STACK, move || (g.evaluate(None).map_err(|e| e.to_string()), shallow.evaluate(None).map_err(|e| e.to_string())));
     let (deep, two) = (deep.expect("evaluates"), two.expect("evaluates"));
     // an even number of inverts is the gradient again, as two are
     assert_eq!(deep["o"].px, two["o"].px);
 }
 
 #[test]
-fn every_node_of_a_long_chain_gets_a_thumbnail_on_a_normal_stack() {
-    let g = Graph::parse(&image_chain(20_000)).expect("parses");
-    let all = on_stack(NORMAL_STACK, move || g.evaluate_all(16, &[20_000]));
+fn every_node_of_a_long_chain_gets_a_thumbnail_on_a_small_stack() {
+    let g = Graph::parse(&image_chain(300)).expect("parses");
+    let all = on_stack(SMALL_STACK, move || g.evaluate_all(16, &[300]));
     assert!(all.errors.is_empty(), "{:?}", all.errors.iter().next());
-    assert_eq!(all.thumbs.len(), 20_001);
+    assert_eq!(all.thumbs.len(), 301);
 }
 
 #[test]

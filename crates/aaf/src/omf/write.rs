@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use craft_timeline::time::Tick;
+use craft_timeline::Tick;
 
 use super::bento;
 use crate::model::{CItem, CKind, Document, Gain, Source, ticks_to_units};

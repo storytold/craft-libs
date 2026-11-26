@@ -248,7 +248,9 @@ fn a_reader_that_fails_or_runs_out_ends_the_call() {
         }
     };
     let mut failed = 0;
-    for (fail, short) in (1..=reads).flat_map(|n| [(n, false), (n, true)]) {
+    // The gate fails every divisor-th read; nightly fails each one.
+    let step = craft_testkit::hostile::divisor();
+    for (fail, short) in (1..=reads).step_by(step).flat_map(|n| [(n, false), (n, true)]) {
         let Ok(mut pst) = Pst::open(Flaky { inner: Cursor::new(&bytes[..]), reads: 0, fail, short }) else { continue };
         let got = answers(&mut pst, &folders, &items);
         failed += got.iter().filter(|r| r.is_err()).count();
@@ -257,7 +259,7 @@ fn a_reader_that_fails_or_runs_out_ends_the_call() {
     }
     assert!(failed > 0);
     let mut capped = 0;
-    for floor in (0..bytes.len() as u64 * 4).step_by(256) {
+    for floor in (0..bytes.len() as u64 * 4).step_by(256 * step) {
         let limits = Limits { read_multiple: 0, read_floor: floor, ..Default::default() };
         let Ok(mut pst) = Pst::open_with(Cursor::new(&bytes[..]), limits) else { continue };
         let got = answers(&mut pst, &folders, &items);
