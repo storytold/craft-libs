@@ -500,6 +500,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let column_keys: Vec<craft_behavior::ColumnKey> = cells.iter().map(|(key, _)| key.clone()).collect();
                 let shown_cells = cells.clone();
                 let toggle_keys: Vec<craft_behavior::ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
+                let closed_toggles: Vec<craft_behavior::ColumnKey> = toggle_keys.iter().filter(|key| !self.toggle_open(at, key)).cloned().collect();
                 let mut icx = ItemCx {
                     key: &key,
                     at,
@@ -552,6 +553,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                                     columns: column_keys,
                                     toggles: toggle_keys,
                                     toggle_keys: self.header.toggle_keys(),
+                                    closed_toggles,
                                     aligns: aligns.clone(),
                                     pressed: state.pressed.clone(),
                                     menu_open: state.menu_open,
