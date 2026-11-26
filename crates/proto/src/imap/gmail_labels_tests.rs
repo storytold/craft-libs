@@ -165,6 +165,10 @@ fn tiny_labels_count_against_the_budget_too() {
 
 #[test]
 fn a_big_folders_listing_is_not_cut_short_for_its_size() {
+    // Sized to a cap of tens of MiB: the gate runs the cheaper tests of the same caps, nightly runs this one.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     // 300,000 messages with labels: more text than one command may otherwise bring (32 MiB).
     let count: u32 = 300_000;
     let mut server = String::with_capacity(count as usize * 200);
@@ -185,6 +189,10 @@ fn a_big_folders_listing_is_not_cut_short_for_its_size() {
 
 #[test]
 fn a_mailbox_claimed_huge_cant_fill_memory_with_flags() {
+    // Sized to a cap of tens of MiB: the gate runs the cheaper tests of the same caps, nightly runs this one.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     // Any server (no Gmail here): ten million messages claimed, then message after message with
     // every flag it may have. The text it may send is capped, and so are the flags kept: the
     // listing fails, and never hands back messages that seem to have lost their flags.

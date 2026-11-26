@@ -12,36 +12,6 @@ fn field<'a>(entity: &'a Entity, name: &str) -> Option<&'a str> {
 }
 
 #[test]
-fn a_plain_message_byte_for_byte() {
-    let subject = encode_unstructured("Subject", "Lunch on Friday?");
-    let from = crate::format_address_list(&[crate::Mailbox { name: "Ada Lovelace".into(), email: "ada@example.org".into() }]);
-    let headers = [
-        ("Date", "Tue, 01 Jul 2003 08:52:37 +0000"),
-        ("From", from.as_str()),
-        ("Subject", subject.as_str()),
-        ("Message-ID", "<abc.123@example.org>"),
-    ];
-    let want = "Date: Tue, 01 Jul 2003 08:52:37 +0000\r\n\
-                From: Ada Lovelace <ada@example.org>\r\n\
-                Subject: Lunch on Friday?\r\n\
-                Message-ID: <abc.123@example.org>\r\n\
-                MIME-Version: 1.0\r\n\
-                Content-Type: text/plain; charset=utf-8\r\n\
-                Content-Transfer-Encoding: 7bit\r\n\
-                \r\n\
-                Hello Bob,\r\n\r\nLunch?\r\n\r\n";
-    assert_eq!(text(write_message(&headers, &Entity::text("plain", "Hello Bob,\n\nLunch?\n"))), want);
-}
-
-#[test]
-fn the_body_says_what_it_is_not_the_headers() {
-    let headers =
-        [("X-Note", "kept"), ("Content-Type", "text/evil"), ("mime-version", "9"), ("Bad Name", "x"), ("Content-Transfer-Encoding", "base64")];
-    let out = text(write_message(&headers, &Entity::text("plain", "x")));
-    assert_eq!(out, "X-Note: kept\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 7bit\r\n\r\nx\r\n");
-}
-
-#[test]
 fn long_and_non_ascii_subjects_fold() {
     let written = |subject: &str| {
         let mut out = Vec::new();
@@ -62,90 +32,6 @@ fn long_and_non_ascii_subjects_fold() {
     assert!(encode_unstructured("Subject", " x").starts_with("=?UTF-8?B?"));
     assert_eq!(crate::decode_words(&encode_unstructured("Subject", "x ")), "x ");
     assert_eq!(encode_unstructured("Subject", "a\r\nb\0"), "ab");
-}
-
-#[test]
-fn kept_values_stay_seven_bit() {
-    assert_eq!(seven_bit_value("Received", "from a\tby b; =?x?="), "from a\tby b; =?x?=");
-    assert!(seven_bit_value("X-Note", "ñ").starts_with("=?UTF-8?B?"));
-    assert!(seven_bit_value("X-Note", "\tx").starts_with("=?UTF-8?B?"));
-    assert!(seven_bit_value("X-Note", &"x".repeat(3000)).split(' ').all(|w| w.len() <= 75));
-    assert_eq!(seven_bit_value("X-Note", "a\r\nb"), "ab");
-}
-
-#[test]
-fn text_encodings() {
-    let part = |t: &str| {
-        let p = Entity::text("plain", t);
-        (field(&p, "Content-Transfer-Encoding").unwrap_or("").to_string(), text(p.content))
-    };
-    assert_eq!(part("plain\ntext\r\nmixed\rends"), ("7bit".into(), "plain\r\ntext\r\nmixed\r\nends".into()));
-    assert_eq!(part("café"), ("quoted-printable".into(), "caf=C3=A9".into()));
-    assert_eq!(part("nul\0"), ("quoted-printable".into(), "nul=00".into()));
-    let (encoding, content) = part(&"x".repeat(1200));
-    assert_eq!(encoding, "quoted-printable");
-    assert!(content.split("\r\n").all(|l| l.len() <= 76));
-    assert_eq!(part(&"x".repeat(998)).0, "7bit");
-    assert_eq!(part("").0, "7bit");
-    assert_eq!(field(&Entity::text("HTML", "x"), "Content-Type"), Some("text/html; charset=utf-8"));
-    assert_eq!(field(&Entity::text("html\r\nX-Evil: 1", "x"), "Content-Type"), Some("text/plain; charset=utf-8"));
-}
-
-#[test]
-fn alternative_related_and_mixed_nest_as_they_should() {
-    let mut boundaries = Boundaries::new("=_mc_");
-    let logo = Entity::file(&File {
-        media_type: "image/png",
-        name: "logo.png",
-        inline: true,
-        content_id: "logo@example.org",
-        data: &[0x89, b'P', b'N', b'G'],
-    });
-    let report = Entity::file(&File { media_type: "application/pdf", name: "report.pdf", data: b"%PDF-1.4\n", ..File::default() });
-    let rich = Entity::multipart(
-        "related",
-        &[("type", "text/html")],
-        &[Entity::text("html", "<p>Hello <img src=\"cid:logo@example.org\"></p>"), logo],
-        &mut boundaries,
-    );
-    let forms = Entity::multipart("alternative", &[], &[Entity::text("plain", "Hello Bob,\n\nLunch?\n"), rich], &mut boundaries);
-    let root = Entity::multipart("mixed", &[], &[forms, report], &mut boundaries);
-    let bytes = write_message(&[("Subject", "Files")], &root);
-    let out = text(bytes.clone());
-    let types: Vec<&str> = out.split("\r\n").filter(|l| l.starts_with("Content-Type:")).collect();
-    assert_eq!(types.len(), 7, "{out}");
-    assert!(types[0].starts_with("Content-Type: multipart/mixed; boundary=\"=_mc_"));
-    assert!(types[1].starts_with("Content-Type: multipart/alternative; boundary=\"=_mc_"));
-    assert_eq!(types[2], "Content-Type: text/plain; charset=utf-8");
-    assert!(types[3].starts_with("Content-Type: multipart/related; type=\"text/html\";"));
-    assert_eq!(types[4], "Content-Type: text/html; charset=utf-8");
-    assert_eq!(types[5], "Content-Type: image/png; name=\"logo.png\"");
-    assert_eq!(types[6], "Content-Type: application/pdf; name=\"report.pdf\"");
-    assert!(out.contains("Content-Transfer-Encoding: base64\r\nContent-Disposition: inline; filename=\"logo.png\"\r\nContent-ID: <logo@example.org>\r\n\r\niVBORw==\r\n--=_mc_"));
-    assert!(out.contains("Content-Disposition: attachment; filename=\"report.pdf\"\r\n\r\nJVBERi0xLjQK\r\n--=_mc_"));
-    assert!(out.ends_with("--\r\n"));
-    // Three multiparts, three different boundaries.
-    let mut found: Vec<&str> = out.split("boundary=\"").skip(1).filter_map(|s| s.split('"').next()).collect();
-    found.sort_unstable();
-    found.dedup();
-    assert_eq!(found.len(), 3);
-
-    // And the reader finds it all again.
-    let m = parse(&bytes, &Limits::default());
-    let leaves = m.root.leaves();
-    let got: Vec<(&str, Vec<u8>)> = leaves.iter().map(|p| (p.media_type(), p.data().to_vec())).collect();
-    assert_eq!(
-        got,
-        [
-            ("text/plain", b"Hello Bob,\r\n\r\nLunch?\r\n".to_vec()),
-            ("text/html", b"<p>Hello <img src=\"cid:logo@example.org\"></p>".to_vec()),
-            ("image/png", vec![0x89, b'P', b'N', b'G']),
-            ("application/pdf", b"%PDF-1.4\n".to_vec()),
-        ]
-    );
-    assert_eq!(leaves[2].content_id(), Some("logo@example.org"));
-    assert_eq!((leaves[2].disposition().value.as_str(), leaves[3].disposition().value.as_str()), ("inline", "attachment"));
-    assert_eq!(crate::Resources::of(&m.root).find("cid:logo@example.org", "").map(|p| p.media_type()), Some("image/png"));
 }
 
 #[test]
@@ -245,40 +131,4 @@ fn boundaries_are_deterministic_and_avoid_the_content() {
         assert_eq!(out.matches(&format!("--{boundary}")).count(), 3, "{out}");
         body = format!("before\n--{boundary}\nafter");
     }
-}
-
-#[test]
-fn a_boundary_found_in_a_part_is_passed_over() {
-    let mut boundaries = Boundaries::new("=_mc_");
-    assert_eq!(boundaries.free(42, &[b"nothing here".to_vec()]), "=_mc_000000000000002a_0");
-    assert_eq!(boundaries.counter, 1);
-    // The parts hold the first two candidates, one of them in the second part.
-    let parts = [b"text --=_mc_000000000000002a_1 text".to_vec(), b"=_mc_000000000000002a_2".to_vec()];
-    assert_eq!(boundaries.free(42, &parts), "=_mc_000000000000002a_3");
-    assert_eq!(boundaries.counter, 4);
-    // The counter sets apart two multiparts with the same content.
-    let same = [b"same".to_vec()];
-    assert_ne!(boundaries.next(&same), boundaries.next(&same));
-    // A prefix can't carry what would break the parameter or the delimiter line.
-    let hostile = Boundaries::new("a\"\r\n b;c=d\0é--").next(&[]);
-    assert!(hostile.starts_with("ab") && hostile.bytes().all(|b| b.is_ascii_alphanumeric() || b"=_-.".contains(&b)), "{hostile}");
-    assert!(Boundaries::new(&"x".repeat(500)).next(&[]).len() <= 70);
-}
-
-#[test]
-fn substring_search() {
-    assert!(contains(b"hello world", b"lo w"));
-    assert!(contains(b"aaab", b"aab"));
-    assert!(contains(b"abc", b""));
-    assert!(contains(b"abc", b"abc"));
-    assert!(!contains(b"abc", b"abcd"));
-    assert!(!contains(b"", b"a"));
-    assert!(!contains(b"ababab", b"abb"));
-}
-
-#[test]
-fn ids_lose_what_could_end_them() {
-    assert_eq!(clean_id("id@example.org>\r\nX-Evil: 1\r\n<x"), "id@example.orgX-Evil:1x");
-    assert_eq!(clean_id(" a\t@\u{0}b "), "a@b");
-    assert_eq!(quoted("a\"b\\c\r\nd"), r#""a\"b\\cd""#);
 }

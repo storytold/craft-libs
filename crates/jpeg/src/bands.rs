@@ -1,9 +1,10 @@
 //! Band-at-a-time decoding of sequential Huffman-coded 8-bit JPEG: see [`Bands`].
 
-use crate::{
-    Bits, Error, Header, Huffman, HuffmanScan, Idct, Limits, ScanDecoder, Tables, be16, err, idct_basis, idct_block, is_ycc, parse_dac, parse_dht,
-    parse_dqt, parse_header, parse_scan, to_color, to_u8, unsupported, upsample_map, ycc_to_rgb,
-};
+use crate::huffman::{Bits, Huffman, HuffmanScan};
+use crate::idct::{Idct, idct_basis, idct_block, is_ycc, to_color, to_u8, upsample_map, ycc_to_rgb};
+use crate::parse::{Header, Tables, be16, parse_dac, parse_dht, parse_dqt, parse_header};
+use crate::scan::{ScanDecoder, parse_scan};
+use crate::{Error, Limits, err, unsupported};
 
 /// A component as the bands decode it.
 struct Comp {
@@ -333,7 +334,9 @@ pub struct Band<'r> {
     pub index: usize,
     /// The image row of its first row.
     pub y: u32,
+    /// Rows in the band: [`Bands::band_rows`], or fewer in the last band.
     pub rows: u32,
+    /// `rows × width × components` samples.
     pub samples: &'r [u8],
 }
 
