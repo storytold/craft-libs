@@ -717,11 +717,43 @@ pub(crate) mod inherited_pipe_tests {
         // The output is more than 8 MB, so a failure shows only its length.
         assert_eq!(result.map(|output| output.len()), Err(HelperFailure::Unfinished("the fixture didn't finish within 5 seconds".into())));
         // Lets the descendant go and waits until it has closed its end. The read time limit only
-        // stops a broken test.
+        // stops a broken test. On macOS, if the descendant already exited and closed its end,
+        // shutdown(Write) can return EINVAL (InvalidInput) or ENOTCONN (NotConnected).
         let mut holder = holder.expect("the direct child didn't exit while the descendant held its output");
-        holder.shutdown(std::net::Shutdown::Write).unwrap();
+        if let Err(e) = holder.shutdown(std::net::Shutdown::Write) {
+            let already_closed = matches!(
+                e.kind(),
+                std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+            );
+            assert!(already_closed, "unexpected shutdown error on holder socket: {e}");
+        }
         holder.set_read_timeout(Some(HOLD)).unwrap();
-        assert_eq!(holder.read_to_end(&mut Vec::new()).unwrap(), 0);
+        match holder.read_to_end(&mut Vec::new()) {
+            Ok(n) => assert_eq!(n, 0),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Err(e) => panic!("unexpected read_to_end error on holder socket: {e}"),
+        }
+    }
+
+    #[test]
+    fn socket_shutdown_treats_already_closed_peer_as_done() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        drop(client);
+        if let Err(e) = server.shutdown(std::net::Shutdown::Write) {
+            let already_closed = matches!(
+                e.kind(),
+                std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+            );
+            assert!(already_closed, "unexpected error: {e}");
+        }
     }
 }
 
