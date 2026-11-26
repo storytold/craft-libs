@@ -19,6 +19,11 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   once when distinct triangles with overlapping interiors cover its center.
   `surface` retains local attribute offsets between far UV corners. Its unit tangents are
   perpendicular to the interpolated normals.
+  `raster_uvs` stores vertex IDs and UV corners for triangles that own texels. Other triangle IDs
+  are absent. The raster mapping stays fixed when the mesh's UVs change or its triangle corners
+  are reordered. `surface` returns `None` when a triangle's vertex membership changes or its
+  interpolated UVs are non-finite.
+  `bary` keeps the corner order used during rasterization. Use `surface` after reordering corners.
 - **Primitives.** Sphere, rounded box, cube, cylinder, torus and plane with UVs and tangents, and
   the built-in scenes in `primitives::BUILTINS`.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a

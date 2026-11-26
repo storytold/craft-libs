@@ -23,6 +23,8 @@ pub struct UvGBuffer {
     pub tri: Vec<u32>,
     /// Rounded barycentric weights of the triangle's three vertices.
     pub bary: Vec<[f64; 3]>,
+    /// The vertex IDs and UV corners of triangles that own texels. Other triangle IDs are absent.
+    pub raster_uvs: std::collections::HashMap<u32, [(usize, Vec2); 3]>,
     /// The count of texels covered by distinct triangles with overlapping interiors.
     pub overlaps: u32,
 }
@@ -280,7 +282,21 @@ impl UvGBuffer {
                 overlaps
             })
             .sum();
-        UvGBuffer { width: w, height: h, tri, bary, overlaps }
+        let mut raster_uvs = std::collections::HashMap::new();
+        let mut previous = NO_TRI;
+        for &t in &tri {
+            if t == previous {
+                continue;
+            }
+            previous = t;
+            if t != NO_TRI
+                && let std::collections::hash_map::Entry::Vacant(entry) = raster_uvs.entry(t)
+                && let Some(vertices) = mesh.tri(t as usize)
+            {
+                entry.insert(vertices.map(|vertex| (vertex, mesh.uvs[vertex])));
+            }
+        }
+        UvGBuffer { width: w, height: h, tri, bary, raster_uvs, overlaps }
     }
 
     pub fn covered(&self, i: usize) -> bool {
@@ -306,10 +322,9 @@ impl UvGBuffer {
         if self.width == 0 || self.height == 0 || i >= (self.width as usize).checked_mul(self.height as usize)? {
             return None;
         }
-        let [a, b, c] = mesh.tri(t as usize)?;
-        let [Some(ua), Some(ub), Some(uc)] = [a, b, c].map(|vertex| mesh.uvs.get(vertex)) else { return None };
+        let corners = *self.raster_uvs.get(&t)?;
         let size = DVec2::new(f64::from(self.width), f64::from(self.height));
-        let [pa, pb, pc] = [ua, ub, uc].map(|uv| uv.as_dvec2() * size);
+        let [pa, pb, pc] = corners.map(|(_, uv)| uv.as_dvec2() * size);
         if ![pa, pb, pc].into_iter().all(|point| point.is_finite()) {
             return None;
         }
@@ -319,6 +334,12 @@ impl UvGBuffer {
             return None;
         }
         let weights = [edge_terms(pb, pc, point), edge_terms(pc, pa, point), edge_terms(pa, pb, point)];
+        let current = mesh.tri(t as usize)?;
+        if current[0] == current[1] || current[1] == current[2] || current[2] == current[0] {
+            return None;
+        }
+        let [Some(a), Some(b), Some(c)] = current.map(|vertex| corners.iter().position(|(original, _)| *original == vertex)) else { return None };
+        let weights = [weights[a], weights[b], weights[c]];
         surface_at_expanded(mesh, t, weights, area)
     }
 }
@@ -358,7 +379,13 @@ fn surface_at_expanded(mesh: &Mesh, t: u32, weights: [Expansion<12>; 3], denomin
     let [Some(ta), Some(tb), Some(tc)] = [a, b, c].map(|vertex| mesh.tangents.get(vertex)) else { return None };
     let tan = glam::DVec4::from_array(interpolate(&weights, [ta, tb, tc].map(|value| value.to_array().map(f64::from)), denominator));
     let [Some(ua), Some(ub), Some(uc)] = [a, b, c].map(|vertex| mesh.uvs.get(vertex)) else { return None };
+    if [ua, ub, uc].iter().any(|uv| !uv.is_finite()) {
+        return None;
+    }
     let uv = DVec2::from_array(interpolate(&weights, [ua, ub, uc].map(|value| value.to_array().map(f64::from)), denominator)).as_vec2();
+    if !uv.is_finite() {
+        return None;
+    }
     let normal = nrm.as_dvec3();
     let tdir = normal.cross(tan.truncate()).cross(normal).try_normalize().map_or_else(|| nrm.any_orthonormal_vector(), |tangent| tangent.as_vec3());
     let w = if tan.w < 0.0 { -1.0 } else { 1.0 };
@@ -649,6 +676,60 @@ mod tests {
             let expected = Vec2::new(0.0625, 0.25);
             assert_eq!(surface.uv, expected, "{far}");
             assert_eq!(surface.pos.truncate(), expected, "{far}");
+        }
+    }
+
+    #[test]
+    fn raster_mapping_stays_fixed_when_mesh_uvs_change() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 8, 8);
+        let before = buffer.surface(&mesh, 0).unwrap();
+        mesh.uvs.fill(Vec2::ZERO);
+        assert!(buffer.covered(0));
+        let after = buffer.surface(&mesh, 0).expect("the stored triangle mapping still exists");
+        assert_eq!(after.pos, before.pos);
+        assert_eq!(after.nrm, before.nrm);
+        assert_eq!(after.uv, Vec2::ZERO);
+    }
+
+    #[test]
+    fn raster_mapping_follows_cyclic_corner_reordering() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 8, 8);
+        let before = buffer.surface(&mesh, 0).unwrap();
+        mesh.indices[..3].rotate_left(1);
+        let after = buffer.surface(&mesh, 0).unwrap();
+        assert_eq!(after.pos, before.pos);
+        assert_eq!(after.uv, before.uv);
+        mesh.indices[0] = mesh.indices[1];
+        assert!(buffer.surface(&mesh, 0).is_none());
+    }
+
+    #[test]
+    fn raster_uv_cache_is_bounded_by_covered_texels() {
+        let mesh =
+            Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], [0, 1, 2].repeat(1000), "m").unwrap();
+        let buffer = UvGBuffer::new(&mesh, 0, 1, 1);
+        assert!(buffer.raster_uvs.len() <= buffer.covered_count());
+        for (i, &triangle) in buffer.tri.iter().enumerate().filter(|(_, triangle)| **triangle != NO_TRI) {
+            assert!(buffer.raster_uvs.contains_key(&triangle));
+            assert!(buffer.surface(&mesh, i).is_some());
+        }
+    }
+
+    #[test]
+    fn surface_rejects_uvs_that_overflow_during_interpolation() {
+        let mesh = mesh_with_uvs([[-f32::MAX, 0.0], [f32::MAX, 0.0], [f32::MAX, 1.0]]);
+        assert!(surface_at(&mesh, 0, 0.625, 0.5).is_none());
+    }
+
+    #[test]
+    fn raster_surface_rejects_non_finite_current_uvs() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+            let buffer = UvGBuffer::new(&mesh, 0, 8, 8);
+            mesh.uvs[0].x = invalid;
+            assert!(buffer.surface(&mesh, 0).is_none(), "{invalid}");
         }
     }
 
