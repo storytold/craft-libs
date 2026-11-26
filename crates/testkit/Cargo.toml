@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Source-level platform regression guards and verification utilities for the Craft application suite"
+description = "Source-level platform regression guards, test deadlines, hostile-input helpers and a reentrant test lock for the Craft application suite"
 publish = false
 
 [features]
@@ -16,6 +16,9 @@ mcp = ["dep:serde_json"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 serde_json = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [[test]]
 name = "mcp"

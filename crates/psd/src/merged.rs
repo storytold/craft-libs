@@ -1,5 +1,8 @@
 //! Borrowed, merged-only PSD reader that skips layer records and decodes selected planes.
-use crate::{Head, PsdError, Result};
+use crate::{Head, HeadView, PsdError, Result};
+
+mod rows;
+pub use rows::{ChannelRows, EncodedRow, EncodedRows};
 
 /// Dimensions in the fixed header fields, for reporting a preflight limit error.
 /// This does not validate the PSD signature or remaining header.
@@ -40,17 +43,83 @@ fn u64_at(bytes: &[u8], at: &mut usize) -> Result<u64> {
     Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
+fn has_merged_transparency(layer: &[u8], version: crate::Version) -> bool {
+    let mut at = 0usize;
+    let info_len = if version.is_psb() { u64_at(layer, &mut at).ok() } else { u32_at(layer, &mut at).ok().map(u64::from) };
+    let Some(info_len) = info_len else { return false };
+    if info_len >= 2 {
+        return layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0);
+    }
+    let Ok(info_len) = usize::try_from(info_len) else { return false };
+    let Some(next) = at.checked_add(info_len) else { return false };
+    at = next;
+    let Ok(mask_len) = u32_at(layer, &mut at) else { return false };
+    let Some(next) = at.checked_add(mask_len as usize) else { return false };
+    at = next;
+    while let Some(head) = at.checked_add(12).and_then(|end| layer.get(at..end)) {
+        let sig = &head[..4];
+        let key = &head[4..8];
+        if sig != b"8BIM" && sig != b"8B64" {
+            return false;
+        }
+        let Ok(key_arr): std::result::Result<&[u8; 4], _> = key.try_into() else { return false };
+        let len = if crate::tagged::uses_long_length(version, key_arr) {
+            let Ok(l) = u64_at(layer, &mut { at + 8 }) else { return false };
+            let Ok(l) = usize::try_from(l) else { return false };
+            at += 16;
+            l
+        } else {
+            at += 12;
+            u32::from_be_bytes([head[8], head[9], head[10], head[11]]) as usize
+        };
+        if (key == b"Lr16" || key == b"Lr32") && layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0) {
+            return true;
+        }
+        if matches!(key, b"Mtrn" | b"MTrn" | b"Mt16" | b"Mt32") {
+            return true;
+        }
+        // Global tagged blocks pad their data to 4 bytes (per psd-tools and craft-psd).
+        let Some(next) = len.checked_add(3).map(|v| v & !3).and_then(|p| at.checked_add(p)) else { return false };
+        at = next;
+    }
+    false
+}
+
 impl<'a> Merged<'a> {
     /// Open the merged section with a pixel limit. This skips layer records, preserving the ability
     /// to read a composite when its layer data is not understood. No image planes are allocated.
     pub fn open(bytes: &'a [u8], max_pixels: u64) -> Result<Self> {
+        Self::check_pixel_limit(bytes, max_pixels)?;
+        Self::from_head(bytes, Head::from_bytes(bytes)?, max_pixels)
+    }
+
+    /// Open the merged section while omitting all image resources, including valid records.
+    ///
+    /// This validates the header and declared section boundaries but skips the resource records.
+    /// Callers choose when to use it, for example after detecting damaged resources during a strict
+    /// open. The returned reader borrows the original file and only copies its color-mode data;
+    /// no resource payloads or image planes are allocated.
+    pub fn open_without_resources(bytes: &'a [u8], max_pixels: u64) -> Result<Self> {
+        Self::check_pixel_limit(bytes, max_pixels)?;
+        let view = HeadView::from_bytes(bytes)?;
+        let mut color_mode_data = Vec::new();
+        color_mode_data.try_reserve_exact(view.color_mode_data.len()).map_err(|_| PsdError::OutOfMemory("color-mode data"))?;
+        color_mode_data.extend_from_slice(view.color_mode_data);
+        let head = Head { header: view.header, color_mode_data, resources: Vec::new(), layer_section_offset: view.layer_section_offset };
+        Self::from_head(bytes, head, max_pixels)
+    }
+
+    fn check_pixel_limit(bytes: &[u8], max_pixels: u64) -> Result<()> {
         // Refuse a declared oversized canvas before copying color-mode data or resources.
         if let Some((w, h)) = declared_dimensions(bytes)
             && u64::from(w) * u64::from(h) > max_pixels
         {
             return Err(PsdError::LimitExceeded("pixel count"));
         }
-        let head = Head::from_bytes(bytes)?;
+        Ok(())
+    }
+
+    fn from_head(bytes: &'a [u8], head: Head, max_pixels: u64) -> Result<Self> {
         let h = &head.header;
         if u64::from(h.width) * u64::from(h.height) > max_pixels {
             return Err(PsdError::LimitExceeded("pixel count"));
@@ -59,8 +128,7 @@ impl<'a> Merged<'a> {
         let mut at = usize::try_from(head.layer_section_offset).map_err(|_| PsdError::LimitExceeded("offset"))?;
         let len = if psb { u64_at(bytes, &mut at)? } else { u64::from(u32_at(bytes, &mut at)?) };
         let layer = take(bytes, &mut at, usize::try_from(len).map_err(|_| PsdError::LimitExceeded("layer section"))?)?;
-        let offset = if psb { 8 } else { 4 };
-        let transparency = layer.get(offset..offset + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0);
+        let transparency = has_merged_transparency(layer, h.version);
         let compression = u16_at(bytes, &mut at)?;
         Ok(Self { head, transparency, compression, bytes, data_offset: at })
     }
@@ -247,5 +315,182 @@ mod tests {
         unpackbits(&[3, 7, 8], &mut row).unwrap();
         assert_eq!(row, [7, 8, 0, 0]);
         assert!(unpackbits(&[0x81, 1], &mut row).is_err());
+    }
+
+    #[test]
+    fn detects_lr16_and_mt16_merged_transparency() {
+        let with_layer = |layer: &[u8]| {
+            let mut b = head(2, 0);
+            b.splice(34..38, (layer.len() as u32).to_be_bytes().iter().copied().chain(layer.iter().copied()));
+            b
+        };
+        let mut lr16 = Vec::new();
+        lr16.extend_from_slice(&0u32.to_be_bytes());
+        lr16.extend_from_slice(&0u32.to_be_bytes());
+        lr16.extend_from_slice(b"8BIMPatt");
+        lr16.extend_from_slice(&6u32.to_be_bytes());
+        lr16.extend_from_slice(&[1, 2, 3, 4, 5, 6, 0, 0]);
+        lr16.extend_from_slice(b"8BIMLr16");
+        lr16.extend_from_slice(&2u32.to_be_bytes());
+        lr16.extend_from_slice(&(-1i16).to_be_bytes());
+        assert!(Merged::open(&with_layer(&lr16), 4).unwrap().transparency);
+
+        let n = lr16.len();
+        lr16[n - 2..].copy_from_slice(&1i16.to_be_bytes());
+        assert!(!Merged::open(&with_layer(&lr16), 4).unwrap().transparency);
+
+        let mut mt16 = vec![0; 8];
+        mt16.extend_from_slice(b"8BIMMt16\0\0\0\0");
+        assert!(Merged::open(&with_layer(&mt16), 4).unwrap().transparency);
+    }
+
+    #[test]
+    fn resource_skipping_open_reads_psd_raw_and_psb_packbits_from_original_bytes() {
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let valid_resources = recovery_resource();
+            let mut damaged_resources = valid_resources.clone();
+            damaged_resources.extend_from_slice(b"BAD!");
+            let (bytes, data_offset) = recovery_file(version, compression, &damaged_resources);
+            let (control_bytes, _) = recovery_file(version, compression, &[]);
+            let control = Merged::open(&control_bytes, 4).unwrap();
+
+            assert!(Head::from_bytes(&bytes).is_err());
+            assert!(Merged::open(&bytes, 4).is_err());
+            let recovered = Merged::open_without_resources(&bytes, 4).unwrap();
+            assert!(std::ptr::eq(recovered.bytes, bytes.as_slice()));
+            assert_eq!(recovered.data_offset, data_offset);
+            assert_eq!(recovered.head.header, control.head.header);
+            assert_eq!(recovered.head.color_mode_data, [9, 8]);
+            assert!(recovered.head.resources.is_empty());
+            assert_eq!(recovered.compression, compression);
+            assert!(recovered.transparency);
+            assert_eq!(recovered.transparency, control.transparency);
+            assert_eq!(recovered.read_planes(2).unwrap(), vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]]);
+            assert_eq!(recovered.read_planes(2).unwrap(), control.read_planes(2).unwrap());
+            recovered.validate_all().unwrap();
+
+            let (valid_bytes, _) = recovery_file(version, compression, &valid_resources);
+            let strict = Merged::open(&valid_bytes, 4).unwrap();
+            assert_eq!(strict.head.resources.len(), 1);
+            assert_eq!(strict.head.resources[0].id, 1039);
+            assert_eq!(strict.head.resources[0].data, [7, 6]);
+            let skipped = Merged::open_without_resources(&valid_bytes, 4).unwrap();
+            assert!(skipped.head.resources.is_empty());
+            assert_eq!(skipped.read_planes(2).unwrap(), strict.read_planes(2).unwrap());
+        }
+    }
+
+    #[test]
+    fn resource_skipping_open_ignores_truncated_resource_payload() {
+        for version in [1, 2] {
+            let mut resources = recovery_resource();
+            resources[8..12].copy_from_slice(&100u32.to_be_bytes());
+            let (bytes, _) = recovery_file(version, 0, &resources);
+            assert!(Merged::open(&bytes, 4).is_err());
+            let recovered = Merged::open_without_resources(&bytes, 4).unwrap();
+            assert!(recovered.head.resources.is_empty());
+            assert_eq!(recovered.read_planes(1).unwrap(), vec![vec![1, 2, 3, 4]]);
+        }
+    }
+
+    #[test]
+    fn resource_skipping_open_checks_pixel_limit_before_malformed_head() {
+        let (mut bytes, _) = recovery_file(1, 0, b"BAD!");
+        bytes.truncate(22);
+        bytes[..4].copy_from_slice(b"BAD!");
+        assert!(matches!(Merged::open_without_resources(&bytes, 3), Err(PsdError::LimitExceeded("pixel count"))));
+        assert!(matches!(Merged::open(&bytes, 3), Err(PsdError::LimitExceeded("pixel count"))));
+    }
+
+    #[test]
+    fn resource_skipping_open_rejects_out_of_bounds_sections_and_tail_framing() {
+        for version in [1, 2] {
+            let (bytes, data_offset) = recovery_file(version, 0, b"BAD!");
+            let mut invalid_header = bytes.clone();
+            invalid_header[..4].copy_from_slice(b"BAD!");
+            assert!(Merged::open_without_resources(&invalid_header, 4).is_err());
+
+            let mut color_outside_file = bytes.clone();
+            color_outside_file[26..30].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert!(Merged::open_without_resources(&color_outside_file, 4).is_err());
+            let mut resources_outside_file = bytes.clone();
+            resources_outside_file[32..36].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert!(Merged::open_without_resources(&resources_outside_file, 4).is_err());
+
+            let layer_offset = crate::HeadView::from_bytes(&bytes).unwrap().layer_section_offset as usize;
+            let length_width = if version == 2 { 8 } else { 4 };
+            assert!(Merged::open_without_resources(&bytes[..layer_offset + length_width - 1], 4).is_err());
+            let mut layer_outside_file = bytes.clone();
+            layer_outside_file[layer_offset..layer_offset + length_width].fill(0xff);
+            assert!(Merged::open_without_resources(&layer_outside_file, 4).is_err());
+            assert!(Merged::open_without_resources(&bytes[..data_offset - 1], 4).is_err());
+        }
+    }
+
+    #[test]
+    fn resource_skipping_open_preserves_selected_plane_and_full_validation_distinction() {
+        for (version, compression) in [(1, 0), (2, 1)] {
+            let (mut bytes, _) = recovery_file(version, compression, b"BAD!");
+            bytes.truncate(bytes.len() - if compression == 0 { 4 } else { 6 });
+            let recovered = Merged::open_without_resources(&bytes, 4).unwrap();
+            assert_eq!(recovered.read_planes(1).unwrap(), vec![vec![1, 2, 3, 4]]);
+            assert!(recovered.read_planes(2).is_err());
+            assert!(recovered.validate_all().is_err());
+        }
+    }
+
+    fn recovery_resource() -> Vec<u8> {
+        let mut bytes = b"8BIM".to_vec();
+        bytes.extend_from_slice(&1039u16.to_be_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&[7, 6]);
+        bytes
+    }
+
+    fn recovery_file(version: u16, compression: u16, resources: &[u8]) -> (Vec<u8>, usize) {
+        let mut bytes = b"8BPS".to_vec();
+        bytes.extend_from_slice(&version.to_be_bytes());
+        bytes.extend_from_slice(&[0; 6]);
+        bytes.extend_from_slice(&2u16.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&8u16.to_be_bytes());
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&[9, 8]);
+        bytes.extend_from_slice(&(resources.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(resources);
+        let mut layer = Vec::new();
+        if version == 2 {
+            layer.extend_from_slice(&2u64.to_be_bytes());
+        } else {
+            layer.extend_from_slice(&2u32.to_be_bytes());
+        }
+        layer.extend_from_slice(&(-1i16).to_be_bytes());
+        if version == 2 {
+            bytes.extend_from_slice(&(layer.len() as u64).to_be_bytes());
+        } else {
+            bytes.extend_from_slice(&(layer.len() as u32).to_be_bytes());
+        }
+        bytes.extend_from_slice(&layer);
+        bytes.extend_from_slice(&compression.to_be_bytes());
+        let data_offset = bytes.len();
+        if compression == 0 {
+            bytes.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        } else {
+            for _ in 0..4 {
+                if version == 2 {
+                    bytes.extend_from_slice(&3u32.to_be_bytes());
+                } else {
+                    bytes.extend_from_slice(&3u16.to_be_bytes());
+                }
+            }
+            for row in [[1, 2], [3, 4], [5, 6], [7, 8]] {
+                bytes.push(1);
+                bytes.extend_from_slice(&row);
+            }
+        }
+        (bytes, data_offset)
     }
 }
