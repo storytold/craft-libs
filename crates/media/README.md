@@ -457,6 +457,14 @@ link of a chained file), unless it carries on the page sequence of a stream with
 page yet. Damage recovery may read bytes again up to twice the file's length plus 1 MiB, so a file
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
+`probe` reads only the first pages: it stops once every stream that begins there has its header
+packets, after `PROBE_PACKETS` data packets, or at the first page that would start after
+`PROBE_BYTES` (128 MiB), a limit the search past damage keeps to as well. `PacketReader`
+reads the same first pages, then returns the data packets of every stream in file order, one page
+at a time, into a buffer the caller reuses. It keeps no packet list, so the cap on kept packets does
+not apply to it; damage is skipped with the same budget and warnings as `open`. Header packets stay
+in `streams()`, where a later link of a chained file appears as a new stream when its pages are
+reached. `OggFile::read_packet_into` reads a packet into a reused buffer.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
 
 The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
@@ -1060,7 +1068,8 @@ than the stream's previous packet.
   additions, color and mastering metadata, Chapters, Tags, Attachments, CRC-32, Cue-less seek,
   hostile cluster timestamps) and mux-demux round trips. For Ogg (`src/ogg`): page parsing, CRC,
   packets across pages, damage resync and its read budget, lost pages, chained links and stray
-  beginning-of-stream flags, the packet and header caps, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
+  beginning-of-stream flags, the packet and header caps, the first-pages probe and its limits, the
+  sequential reader against `open`, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
 - `tests/roundtrip.rs`: property tests that write random multi-track files (progressive and
   fragmented) and read them back.
 - `tests/oracle_demux.rs` and `tests/oracle_mux.rs` compare the demuxer and muxer with ffprobe and
