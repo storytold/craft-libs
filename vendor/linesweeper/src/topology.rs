@@ -4151,13 +4151,15 @@ mod tests {
         assert_eq!(actual.winding.inner.len(), expected.winding.inner.len());
     }
 
-    // Craft patch (work limit). 1,200 separate squares make 4,800 output
+    // With default features, 1,200 separate squares make 4,800 output
     // segments, each holding points, neighbors and winding numbers. The output
     // limit stops the topology before it allocates them all. An `i32` winding
     // number takes one storage unit, so each output segment takes three.
     #[test]
     fn output_limit() {
-        let paths: Vec<BezPath> = (0..1200)
+        // slow-asserts checks every pair on the sweep line after each insertion.
+        let (count, output_budget) = if cfg!(feature = "slow-asserts") { (100, 1000) } else { (1200, 10_000) };
+        let paths: Vec<BezPath> = (0..count)
             .map(|i| {
                 let x = 3.0 * f64::from(i);
                 let mut path = BezPath::new();
@@ -4171,7 +4173,7 @@ mod tests {
             .collect();
         let tagged = || paths.iter().map(|p| (p, ()));
 
-        let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 10_000);
+        let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, output_budget);
         assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
 
         let all = Topology::<i32>::from_paths(tagged(), 1e-6).unwrap().winding.inner.len();
