@@ -515,14 +515,27 @@ fn click_step(
         craft_behavior::ZoomFloor::ShorterSide(value) | craft_behavior::ZoomFloor::Fixed(value) => value.is_finite() && value > 0.0,
         _ => false,
     };
-    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0
-        || !current.is_finite() || current <= 0.0
-        || !view.rect.is_finite() || !view.rect.size().is_finite() || !view.rect.is_positive()
-        || !view.center.x.is_finite() || !view.center.y.is_finite() || !screen.is_finite()
-        || !size.width.is_finite() || size.width <= 0.0 || !size.height.is_finite() || size.height <= 0.0
-        || !scheme.hundred.is_finite() || scheme.hundred <= 0.0
+    if !pixels_per_point.is_finite()
+        || pixels_per_point <= 0.0
+        || !current.is_finite()
+        || current <= 0.0
+        || !view.rect.is_finite()
+        || !view.rect.size().is_finite()
+        || !view.rect.is_positive()
+        || !view.center.x.is_finite()
+        || !view.center.y.is_finite()
+        || !screen.is_finite()
+        || !size.width.is_finite()
+        || size.width <= 0.0
+        || !size.height.is_finite()
+        || size.height <= 0.0
+        || !scheme.hundred.is_finite()
+        || scheme.hundred <= 0.0
         || !valid_floor
-        || !minimum.is_finite() || minimum <= 0.0 || !maximum.is_finite() || maximum < minimum
+        || !minimum.is_finite()
+        || minimum <= 0.0
+        || !maximum.is_finite()
+        || maximum < minimum
         || !scheme.rungs.iter().all(|rung| rung.is_finite() && *rung > 0.0)
     {
         return None;
