@@ -295,8 +295,9 @@ fn naming_a_card_below_the_fold_scrolls_it_into_view() {
     });
     let room = egui::vec2(700.0, 300.0);
     fixture.room(room).settle();
-    let top = |fixture: &Fixture| fixture.texts().iter().find(|t| t.text == "Second").map(|t| t.rect.top());
-    let in_view = |top: f32| (0.0..room.y).contains(&top);
+    // The title's top against the clip it was painted under, which is the body, not the search row above it.
+    let top = |fixture: &Fixture| fixture.texts().iter().find(|t| t.text == "Second").map(|t| (t.rect.top(), t.clip));
+    let in_view = |(top, clip): (f32, egui::Rect)| (clip.min.y..clip.max.y).contains(&top);
     assert!(top(&fixture).is_none_or(|top| !in_view(top)), "the Second card starts below the view");
     *pick.borrow_mut() = Some("second".into());
     fixture.settle();
