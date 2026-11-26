@@ -32,9 +32,8 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
     let overlay = &env.tokens.color.overlay;
     let pen = Pen {
         art: RefCell::new(Art::default()),
-        fill: crate::style::rgba_color(overlay.stroke),
+        fill: crate::style::rgba_color(overlay.cursor),
         halo: crate::style::rgba_color(overlay.halo),
-        icon: crate::style::rgba_color(overlay.handle_fill),
         thin: env.tokens.stroke.thin,
         rtl: env.direction.is_rtl(),
     };
@@ -187,14 +186,12 @@ fn v(point: [f32; 2]) -> Vec2 {
     Vec2::new(point[0], point[1])
 }
 
-/// What the pointers draw with: the art they add marks to, the mark colour, its halo, the colour of a tool's icon over
-/// that halo, the hairline width, and whether the reading direction is right to left (marks that point along it
-/// mirror).
+/// What the pointers draw with: the art they add marks to, the mark colour, its halo, the hairline width, and whether
+/// the reading direction is right to left (marks that point along it mirror).
 pub(crate) struct Pen {
     pub art: RefCell<Art>,
     pub fill: Color32,
     pub halo: Color32,
-    pub icon: Color32,
     pub thin: f32,
     pub rtl: bool,
 }
@@ -345,7 +342,7 @@ pub(crate) fn zoom(pen: &Pen, out: bool) {
     }
 }
 
-/// A tool's `icon` of `side` points with `hotspot` (a point of the icon's 24-unit box) on the pointer, in the icon
+/// A tool's `icon` of `side` points with `hotspot` (a point of the icon's 24-unit box) on the pointer, in the mark
 /// colour over a halo of the icon drawn a hairline off in every direction, and its badge at the icon's lower right. An
 /// icon the catalog lacks leaves only the badge.
 pub(crate) fn tool(pen: &Pen, icon: Option<SvgIcon>, hotspot: Vec2, badge: Option<CursorBadge>, side: f32) {
@@ -358,7 +355,7 @@ pub(crate) fn tool(pen: &Pen, icon: Option<SvgIcon>, hotspot: Vec2, badge: Optio
     }
 }
 
-/// `icon` in `rect` in the icon colour, over copies of it a hairline off in each of eight directions in the halo.
+/// `icon` in `rect` in the mark colour, over copies of it a hairline off in each of eight directions in the halo.
 fn icon_on_halo(pen: &Pen, rect: Rect, icon: SvgIcon) {
     for dx in [-1.0, 0.0, 1.0] {
         for dy in [-1.0, 0.0, 1.0] {
@@ -367,7 +364,7 @@ fn icon_on_halo(pen: &Pen, rect: Rect, icon: SvgIcon) {
             }
         }
     }
-    pen.push(Mark::Icon(rect, icon, pen.icon));
+    pen.push(Mark::Icon(rect, icon, pen.fill));
 }
 
 /// The I-beam centred on the pointer: its stem and two serifs, as rules so each lies on whole device pixels and the
@@ -499,14 +496,7 @@ fn minus(center: Vec2, half: f32) -> Line {
 /// badges use, for interface icons that show the same mark. The hairline and the reading direction are those of the
 /// component that paints the icon: `tokens` and `direction`.
 pub(crate) fn paint_badge(painter: &egui::Painter, tokens: &UiTokens, direction: Direction, rect: Rect, badge: CursorBadge, ink: Color32) {
-    let pen = Pen {
-        art: RefCell::new(Art::default()),
-        fill: ink,
-        halo: Color32::TRANSPARENT,
-        icon: ink,
-        thin: tokens.stroke.thin,
-        rtl: direction.is_rtl(),
-    };
+    let pen = Pen { art: RefCell::new(Art::default()), fill: ink, halo: Color32::TRANSPARENT, thin: tokens.stroke.thin, rtl: direction.is_rtl() };
     self::badge(&pen, Vec2::ZERO, badge);
     pen.art.into_inner().paint(painter, rect.center());
 }
