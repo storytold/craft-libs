@@ -554,7 +554,7 @@ impl<'a> ColorPanel<'a> {
     /// The model values of each Recent Colors chip, in the order of [`recent`](Self::recent). A pick on a chip that has
     /// them reports them with its color (`PickedColor::in_model`), so a CMYK recent color stays CMYK, and a chip
     /// that shows the edited color's sRGB in another model still sets it. A chip with `None`, or past the end of
-    /// `models`, reports its sRGB.
+    /// `models`, works as without this call: a pick sets its sRGB, and a pick of the color already shown sets nothing.
     pub fn recent_models(mut self, models: &'a [Option<ModelValues>]) -> Self {
         self.recent_models = models;
         self
