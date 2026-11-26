@@ -201,10 +201,11 @@ fn table_count(face: &[u8]) -> Result<usize, FontError> {
     Ok(usize::from(u16_at(face, 4)?))
 }
 
-/// Whether `table` shares bytes with the table directory or with another table of the face.
+/// Whether `table` shares bytes with the table directory or with another table of the face. Another
+/// table of length 0 shares no bytes, wherever its offset points.
 fn shares_bytes(tables: &[Table], table: &Table) -> bool {
     let end = table.offset + table.length;
-    let overlaps = |start: usize, other_end: usize| start < end && table.offset < other_end;
+    let overlaps = |start: usize, other_end: usize| start < other_end && start < end && table.offset < other_end;
     overlaps(0, SFNT_HEADER + tables.len() * TABLE_RECORD)
         || tables.iter().any(|other| other.record != table.record && overlaps(other.offset, other.offset + other.length))
 }

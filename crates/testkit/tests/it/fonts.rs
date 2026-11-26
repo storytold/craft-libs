@@ -421,6 +421,20 @@ fn rename_rejects_name_table_sharing_bytes() {
 }
 
 #[test]
+fn rename_accepts_an_empty_table_inside_name_or_head() {
+    let font = face(&[(b"head", head()), (b"name", names(&[win(1, FROM)])), (b"zzzz", vec![7; 8])]);
+    let (record, _, _) = table(&font, b"zzzz");
+    let (_, name_at, _) = table(&font, b"name");
+    let (_, head_at, _) = table(&font, b"head");
+    for inside in [name_at + 18, head_at + 8] {
+        let mut empty = font.clone();
+        set32(&mut empty, record + 8, inside as u32);
+        set32(&mut empty, record + 12, 0);
+        assert!(rename_family(&empty, FROM, TO).is_ok(), "an empty table at {inside} shares no bytes");
+    }
+}
+
+#[test]
 fn rename_rejects_unknown_name_format() {
     let font = family_face(&[win(1, FROM)]);
     let (_, at, _) = table(&font, b"name");
