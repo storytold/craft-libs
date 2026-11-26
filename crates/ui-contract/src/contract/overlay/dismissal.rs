@@ -80,11 +80,16 @@ pub(super) fn dismissal(
 /// The dismissal of a layer shown in the popup window `popup`, decided in its opener's pass, beside what the popup's
 /// own pass decides: a layer that closes on outside presses closes on one in the opener outside it and its anchor
 /// (absorbed or not, as its rule says), and on one in any other window of the app; a popup also closes once the app
-/// has no focus. An absorbing layer can't keep a press in another OS window from reaching that window.
+/// has no focus. An absorbing layer can't keep a press in another OS window from reaching that window. A press recorded
+/// in the pass the layer appears in is not outside it: it was made before the layer opened.
 pub(super) fn popup_dismissal(ctx: &Context, layer: &Layer<'_>, rect: Rect, anchor: Rect, popup: egui::ViewportId) -> Option<CloseReason> {
     let here = match layer.overlay.dismiss.outside {
         Outside::Keep => return None,
-        Outside::Absorb => overlay::absorbed_press(ctx).is_some(),
+        // A layer that appears in this pass opened after the press was made, so the press is not outside it, as in
+        // `dismissal`. Its host recorded the appearance in this viewport (`note_appeared`) before the popup window's
+        // pass, nested in this one, showed it: `opening` reads this pass, not the frame, so a press a later pass of the
+        // frame takes still closes it.
+        Outside::Absorb => overlay::absorbed_press(ctx).is_some() && !overlay::opening(ctx, layer.id),
         Outside::Close => press_outside(ctx, layer, rect, anchor),
     };
     let away = layer.overlay.rank == Rank::Popup && crate::runtime::windows::app_away(ctx);

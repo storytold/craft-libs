@@ -307,8 +307,9 @@ pub(crate) struct Persist {
     stack: Vec<Id>,
     /// A press the modal drop removed, for the window host to raise the modal's window.
     dropped_press: bool,
-    /// The screen rects a press may land in without closing the top menu family: the family and its anchors. `None`
-    /// when the top layer does not absorb outside presses.
+    /// The screen rects a press may land in without closing the top menu family: its live layers and their anchors,
+    /// without the window that hosts the menus (`absorb_zone`). `None` when the top layer does not absorb outside
+    /// presses.
     absorb_zone: Option<Vec<Rect>>,
     /// An outside press the input hook recorded for the running pass (and removed, for a primary one).
     outside_press: Option<Pos2>,
@@ -744,10 +745,11 @@ pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
 }
 
 /// The input hook: keeps the first press of any button that lands outside the top menu family, its anchors and its
-/// parents for the layers' dismissal, and removes the primary ones, so nothing below the menu sees them
-/// (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a right-click on another part closes
-/// the menu and opens that part's menu. The record is for the layers open when the press was made: a layer that appears
-/// in this pass was not, and its dismissal reads none of it (`opening`). Returns whether it removed one.
+/// parents short of the window that hosts it (`absorb_zone`) for the layers' dismissal, and removes the primary ones,
+/// so nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a
+/// right-click on another part closes the menu and opens that part's menu. The record is for the layers open when the
+/// press was made: a layer that appears in this pass was not, and its dismissal reads none of it (`opening`). Returns
+/// whether it removed one.
 pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::input::RawInput) -> bool {
     let zone = with_persist(ctx, input.viewport_id, |persist| persist.absorb_zone.clone());
     let Some(zone) = zone else { return false };
@@ -777,6 +779,15 @@ pub(crate) fn absorbed_press(ctx: &Context) -> Option<Pos2> {
 /// `absorbed_press` without noting the read: for the pointer's begin hook, which moves `Input::Press` by it.
 pub(crate) fn absorbed_press_raw(ctx: &Context) -> Option<Pos2> {
     with_persist(ctx, pass::current_viewport(ctx), |persist| persist.outside_press)
+}
+
+/// A test hook (`testing::overlay::press_judgement`): what the running viewport's stack judges this pass's presses
+/// by, read in the pass without noting a tracked input. The zone the last pass left (`absorb_zone`), the outside press
+/// the input hook recorded for this pass (`absorbed_press`) and the layers the last pass showed, parent first.
+#[cfg(feature = "testing")]
+pub(crate) fn press_judgement(ctx: &Context) -> (Option<Vec<Rect>>, Option<Pos2>, Vec<OpenEntry>) {
+    let (zone, press) = with_persist(ctx, pass::current_viewport(ctx), |persist| (persist.absorb_zone.clone(), persist.outside_press));
+    (zone, press, with_pass(ctx, |pass| pass.last.clone()))
 }
 
 /// Whether a close is queued for one of the layers `ids`: only a run of the layer's owner takes it, so a memoized view
@@ -900,6 +911,31 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
+/// The screen rects a press may land in without closing `top`, the top layer of the family `members` (parent first),
+/// which absorbs outside presses: the rect, anchor and peers of each live member of the family, less the layers that
+/// host it. The host is the nearest of `top`'s parents that is a window, a floating window or panel (`Rank::Window`) or
+/// the entry of an OS window mount, outside every menu of the family; the layers it was opened from host the family
+/// with it. The menus show over their window and are not part of it, so a press elsewhere in the window is outside
+/// them, as one beside them in the main window is. A window opened from a menu (a menu's companion bar) is part of the
+/// menu, not its host. A member fading out takes no input, so a press on it, or on its anchor, is outside: the press
+/// that reopens a menu still fading out closes its open sibling.
+fn absorb_zone(members: &[OpenEntry], top: &OpenEntry) -> Vec<Rect> {
+    let in_menu = |entry: &OpenEntry| parents(members, entry).any(|parent| parent.rank == Rank::Popup);
+    let host = parents(members, top).find(|entry| (entry.rank == Rank::Window || (entry.window && !entry.popup)) && !in_menu(entry));
+    let hosts: Vec<Id> = host.into_iter().flat_map(|host| std::iter::once(host).chain(parents(members, host))).map(|entry| entry.id).collect();
+    members
+        .iter()
+        .filter(|member| !member.exiting && !hosts.contains(&member.id))
+        .flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied()))
+        .collect()
+}
+
+/// The parents of `entry` among `members`, nearest first.
+fn parents<'m>(members: &'m [OpenEntry], entry: &OpenEntry) -> impl Iterator<Item = &'m OpenEntry> {
+    let parent_of = move |at: &OpenEntry| at.parent.and_then(|parent| members.iter().find(|other| other.id == parent));
+    std::iter::successors(parent_of(entry), move |&at| parent_of(at))
+}
+
 /// The end hook: raises the families that appeared, also one that reopened during its own exit fade, those that were
 /// pressed and those that were asked to (`raise`), hands egui the order of every layer above the floating windows
 /// (which keep egui's own area order, where an asked raise moves them to the top), and records the open-modal fact.
@@ -1013,9 +1049,7 @@ pub(crate) fn end_pass(ctx: &Context) {
             .rev()
             .find_map(|members| members.iter().rev().find(|entry| !entry.exiting && entry.takes_keys()).map(|top| (top, members)))
             .filter(|(top, _)| top.absorbs)
-            .map(|(_, members)| {
-                members.iter().flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied())).collect()
-            });
+            .map(|(top, members)| absorb_zone(members, top));
         (order, to_top, floats, asked)
     });
     areas::set_layer_order(ctx, &order);
