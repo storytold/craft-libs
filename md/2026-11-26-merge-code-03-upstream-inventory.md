@@ -435,3 +435,33 @@
 - The workflow's own runs were not checked: its push trigger names `main` while the fork's branch is `next`.
 - The last upstream step (2 files, ui-contract) was verified with clippy, format, the design lint and that crate's 542 trials, not with the whole workspace suite.
 - One full run met `LNK1104` on a test executable while another build for the other repository was writing its target directory; the run repeated alone passed.
+
+### The one failing test, measured
+
+- `craft-xlsx`
+  aborts with a stack overflow (`0xc00000fd`) under `cargo nextest run`.
+- It is upstream's own test (`5a0caf286`, keithcsqueensu): this fork holds no change to
+  `crates/xlsx`, and the file is identical to `upstream/next`.
+- It builds its own thread with `stack_size(256 * 1024)` to decode and print 4,096 chained
+  strings. Measured here on 2026-11-27: `cargo nextest run` aborted in 2 of 5 runs; `cargo test`
+  on the same binary passed 5 of 5; with the stack raised to 2 MiB (a local probe, reverted at
+  once, `git diff` empty) nextest passed 5 of 5.
+- Upstream's own Workspace runs on `next` failed the same way: run `45864885952` (`5d2c8bdcf`,
+  2026-11-26 17:06) reports 18,485 tests, 1 failed, with macOS, Windows and the Linux `test 1/3`
+  leg red; the single failure there is `craft-design-lint::workspace mapped_crates_have_no_findings`,
+  and run `45799531604` (`ea14416aa`) is red as well.
+- No change is made here to mask it: the test, the crate and the nextest configuration are
+  upstream's, and the record above is the evidence.
+
+## The merge commit and the gates on it
+
+- The merge commit is `9943f69ee` (parents `3bfa373f2` and `ea14416aa`); `upstream/next` is an
+  ancestor of it and the branch is 0 behind.
+- On that commit: `cargo nextest run -p craft-design-lint` **28 passed / 0 failed**, `cargo fmt --
+  --check` exit 0, `cargo clippy --workspace --all-targets -- -D warnings` exit 0.
+- `design/exceptions/craft-menu/mac.toml` is deleted in that commit: its entry named the same
+  `contract/motion` site upstream registers in `crate.toml`, and with both the lint reported
+  `exception/stale` for each file.
+- The whole workspace suite on that commit is `18,724` tests with the one upstream failure above;
+  every other test passes.
+
