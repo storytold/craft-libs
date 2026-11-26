@@ -59,7 +59,8 @@ impl XmpMetadata {
     /// The `xmpDM:timeFormat` value for `start_timecode`, when its rate is a standard one.
     /// A `;` before the frames marks drop-frame counting.
     fn start_timecode_format(&self) -> Option<&'static str> {
-        let rate = self.start_timecode_rate?;
+        let raw = self.start_timecode_rate?;
+        let rate = Rational64::new(raw.num, raw.den).ok().filter(|r| r.num > 0 && r.den > 0)?;
         let drop = self.start_timecode.as_deref().is_some_and(|t| t.contains(';'));
         Some(match (rate.num, rate.den, drop) {
             (24_000, 1_001, _) => "23976Timecode",
@@ -243,5 +244,12 @@ mod tests {
         let meta =
             XmpMetadata { start_timecode: Some("01:00:00;00".into()), start_timecode_rate: Some(Rational64::FPS_29_97), ..XmpMetadata::default() };
         assert!(meta.to_xmp_packet().contains("2997DropTimecode"));
+
+        let unreduced = XmpMetadata {
+            start_timecode: Some("01:00:00:00".into()),
+            start_timecode_rate: Some(Rational64 { num: 50, den: 2 }),
+            ..XmpMetadata::default()
+        };
+        assert!(unreduced.to_xmp_packet().contains("25Timecode"));
     }
 }

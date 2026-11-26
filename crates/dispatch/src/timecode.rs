@@ -182,7 +182,8 @@ impl MediaTimecode {
             return Err(invalid("frame count beyond the frame rate"));
         }
         if self.drop_frame {
-            let drop = match (self.rate.num, self.rate.den) {
+            let reduced = Rational64::new(self.rate.num, self.rate.den)?;
+            let drop = match (reduced.num, reduced.den) {
                 (30_000, 1_001) => 2,
                 (60_000, 1_001) => 4,
                 _ => return Err(invalid("drop-frame needs 29.97 or 59.94 fps")),
@@ -253,6 +254,8 @@ mod tests {
         assert!(MediaTimecode::parse_smpte("00:01:00;00", rate).is_err());
         assert!(MediaTimecode::parse_smpte("00:01:00;01", rate).is_err());
         assert!(MediaTimecode::parse_smpte("00:01:00;02", rate).is_ok());
+        assert!(MediaTimecode::parse_smpte("00:01:00;02", Rational64 { num: 60_000, den: 2_002 }).is_ok());
+        assert!(MediaTimecode::parse_smpte("00:01:00;01", Rational64 { num: 60_000, den: 2_002 }).is_err());
         assert!(MediaTimecode::parse_smpte("00:10:00;00", rate).is_ok());
         assert!(MediaTimecode::parse_smpte("00:01:00;02", Rational64::FPS_25).is_err(), "drop-frame needs 29.97/59.94");
         assert!(MediaTimecode::parse_smpte("00:00:00:25", Rational64::FPS_25).is_err(), "frame beyond the rate");
