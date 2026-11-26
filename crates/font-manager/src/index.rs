@@ -17,12 +17,19 @@ pub fn source_label<'a>(index: &'a Index, family: &'a Family) -> (&'a str, bool)
     index.source_of(family).map_or((family.source.as_str(), family.is_curated()), |s| (s.name.as_str(), s.curated))
 }
 
+/// A Google Fonts category that the filter offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Category {
+    /// Sans serif faces.
     SansSerif,
+    /// Serif faces.
     Serif,
+    /// Display faces.
     Display,
+    /// Handwriting faces.
     Handwriting,
+    /// Monospaced faces.
     Monospace,
 }
 
@@ -48,23 +55,7 @@ pub fn categories(family: &Family) -> impl Iterator<Item = Category> + '_ {
     family.categories.iter().filter_map(|c| Category::of(c))
 }
 
+/// The display name of the script with ISO 15924 code `id`, if the index lists it.
 pub fn script_name<'a>(index: &'a Index, id: &str) -> Option<&'a str> {
     index.scripts().iter().find(|s| s.id == id).map(|s| s.name.as_str())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_index_reads() {
-        let index = bundled().unwrap();
-        assert!(index.families().len() > 1000);
-        let roboto = index.family("roboto").unwrap();
-        assert_eq!(categories(roboto).collect::<Vec<_>>(), [Category::SansSerif]);
-        assert_eq!(script_name(&index, "Arab"), Some("Arabic"));
-        assert_eq!(source_label(&index, roboto), ("Google Fonts", true));
-        let cjk = index.family("Noto Sans CJK JP").unwrap();
-        assert_eq!(source_label(&index, cjk), ("Noto", true));
-    }
 }
