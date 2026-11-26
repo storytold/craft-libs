@@ -1,0 +1,123 @@
+# Arabic (ar) rows of the Fonts panel's words, for an app's shared catalog.
+# Format: context<TAB>source<TAB>translation; @id rows name a word by its id, @plural rows list the locale's plural forms.
+# Style and weight names (Regular, Bold, Italic), licence names and product names stay in English.
+@id	fontsPanel.sansSerif	بلا زوائد
+@id	fontsPanel.serif	بزوائد
+@id	fontsPanel.display	عرض
+@id	fontsPanel.handwriting	خط اليد
+@id	fontsPanel.monospace	أحادي المسافة
+@id	fontsPanel.fontStore	متجر الخطوط
+@id	fontsPanel.system	النظام
+@id	fontsPanel.settingFailed	تعذّر حفظ إعداد التنزيل: {error}
+@id	fontsPanel.consentNote	يبقى التنزيل مسموحًا حتى توقفه.
+@id	fontsPanel.consentAllow	تنزيل
+@id	fontsBrowse.tabBrowse	تصفّح
+@id	fontsBrowse.tabInstalled	مثبّت
+@id	fontsBrowse.search	بحث
+@id	fontsBrowse.searchCatalogue	ابحث في الخطوط بالاسم
+@id	fontsBrowse.searchInstalled	ابحث في الخطوط المثبّتة
+@id	fontsBrowse.downloads	التنزيلات
+@id	fontsBrowse.allowDownloads	السماح بالتنزيل
+@id	fontsBrowse.category	الفئة
+@id	fontsBrowse.allCategories	كل الفئات
+@id	fontsBrowse.language	اللغة
+@id	fontsBrowse.anyLanguage	أي لغة
+@id	fontsBrowse.languagePlaceholder	الاسم بالإنجليزية أو باللغة نفسها
+@id	fontsBrowse.findLanguage	ابحث عن لغة
+@id	fontsBrowse.script	نظام الكتابة
+@id	fontsBrowse.anyScript	أي نظام كتابة
+@id	fontsBrowse.source	المصدر
+@id	fontsBrowse.allSources	كل المصادر
+@id	fontsBrowse.show	إظهار
+@id	fontsBrowse.allFonts	كل الخطوط
+@id	fontsBrowse.installed	مثبّت
+@id	fontsBrowse.notInstalled	غير مثبّت
+@id	fontsBrowse.clearFilters	مسح عوامل التصفية
+@id	fontsBrowse.installedNote	تستخدم كل تطبيقات Craft الخطوط الموجودة في متجر الخطوط. تُضاف خطوط النظام وتُزال بأدوات الخطوط في نظامك.
+@id	fontsBrowse.sample	العينة
+@id	fontsBrowse.sentence	جملة
+@id	fontsBrowse.alphabet	الأبجدية
+@id	fontsBrowse.numerals	الأرقام والرموز
+@id	fontsBrowse.sampleText	نص العينة
+@id	fontsBrowse.size	الحجم
+@id	fontsBrowse.downloadsOff	التنزيل متوقف
+@id	fontsBrowse.downloadsOffText	تظهر عينة الخط غير المثبّت بعد معاينته. لا يُنزَّل شيء حتى تسمح بذلك.
+@id	fontsBrowse.noMatch	لا توجد خطوط مطابقة
+@id	fontsBrowse.noMatchHint	جرّب اسمًا آخر أو عوامل تصفية أقل.
+@id	fontsBrowse.clearSearch	مسح البحث وعوامل التصفية
+@id	fontsBrowse.indexesUnreadable	تتعذّر قراءة فهارس الخطوط: {error}
+@id	fontsBrowse.sourceError	{source}: {error}
+@id	fontsBrowse.tryAgain	إعادة المحاولة
+@id	fontsBrowse.looking	جارٍ البحث عن الخطوط المثبّتة…
+@id	fontsBrowse.noInstalled	لا توجد خطوط مثبّتة مطابقة
+@id	fontsBrowse.installedEmpty	تظهر هنا الخطوط التي تثبّتها من «تصفّح»، لكل تطبيقات Craft.
+@id	fontsBrowse.tryName	جرّب اسمًا آخر.
+@id	fontsBrowse.installing	جارٍ التثبيت
+@id	fontsBrowse.removing	جارٍ الإزالة
+@id	fontsBrowse.downloading	جارٍ التنزيل
+@id	fontsBrowse.retry	إعادة المحاولة
+@id	fontsBrowse.failedInstall	تعذّر التثبيت
+@id	fontsBrowse.failedRemove	تعذّرت الإزالة
+@id	fontsBrowse.failedDownload	تعذّر التنزيل
+@id	fontsBrowse.install	تثبيت
+@id	fontsBrowse.installFamily	تثبيت {family}
+@id	fontsBrowse.preview	معاينة
+@id	fontsBrowse.previewFamily	معاينة {family}
+@id	fontsBrowse.remove	إزالة
+@id	fontsBrowse.removeFamily	إزالة {family}
+@id	fontsBrowse.notCurated	غير مراجَع
+@id	fontsBrowse.notCuratedTip	تأتي هذه العائلة من مصدر أضفته. لا يراجعها Craft.
+@id	fontsBrowse.cardSample	العينة
+@id	fontDetails.designedBy	تصميم {designer}
+@id	fontDetails.installing	جارٍ التثبيت
+@id	fontDetails.removing	جارٍ الإزالة
+@id	fontDetails.downloading	جارٍ التنزيل
+@id	fontDetails.installed	مثبّت
+@id	fontDetails.installedOnSystem	مثبّت على هذا النظام
+@id	fontDetails.installAll	تثبيت الكل
+@id	fontDetails.removeAll	إزالة الكل
+@id	fontDetails.preview	معاينة
+@id	fontDetails.install	تثبيت
+@id	fontDetails.remove	إزالة
+@id	fontDetails.installStyle	تثبيت {style}
+@id	fontDetails.removeStyle	إزالة {style}
+@id	fontDetails.downloadSizeLine	تنزيل {size}
+@id	fontDetails.previewNote	تنزّل المعاينة هذا الخط ({size}) لهذه الجلسة فقط دون تثبيته.
+@id	fontDetails.notCurated	غير مراجَع
+@id	fontDetails.notCuratedNote	تأتي هذه العائلة من مصدر أضفته ({url}). لا يراجع Craft خطوطه ولا تراخيصها.
+@id	fontDetails.couldntInstall	تعذّر التثبيت
+@id	fontDetails.couldntRemove	تعذّرت الإزالة
+@id	fontDetails.couldntDownload	تعذّر التنزيل
+@id	fontDetails.retry	إعادة المحاولة
+@id	fontDetails.systemFontsNote	تُزال خطوط النظام بأدوات الخطوط في نظامك.
+@id	fontDetails.systemFontsRemoval	يُزال بأدوات الخطوط في نظامك
+@id	fontDetails.source	المصدر
+@id	fontDetails.designer	المصمم
+@id	fontDetails.licence	الترخيص
+@id	fontDetails.stylesFact	الأنماط
+@id	fontDetails.filesFact	الملفات
+@id	fontDetails.downloadSize	حجم التنزيل
+@id	fontDetails.scripts	أنظمة الكتابة
+@id	fontDetails.languages	اللغات · {n}
+@id	fontDetails.languagesMore	{list} و{n} غيرها
+@id	fontSources.remove	إزالة
+@id	fontSources.removeSource	إزالة {source}
+@id	fontSources.notCurated	غير مراجَع
+@id	fontSources.changed	تغيّر منذ إضافته
+@id	fontSources.changedNote	الفهرس على هذا العنوان ليس الذي نُزِّل منه أول مرة. تحقّق من المصدر قبل التثبيت منه.
+@id	fontSources.addASource	إضافة مصدر
+@id	fontSources.add	إضافة
+@id	fontSources.indexAddress	عنوان الفهرس
+@id	fontSources.addWarning	المصدر الذي تضيفه لا يُراجَع: أضف فقط الفهارس التي تثق بها. يُتحقَّق من كل خط مقابل فهرسه قبل استخدامه.
+@id	fontSources.downloading	جارٍ تنزيل المصادر…
+@id	fontSources.update	تحديث المصادر
+@id	fontSources.allowToUpdate	اسمح بالتنزيل للتحديث
+@id	fontSources.added	أُضيف. يُنزَّل عند السماح بالتنزيل.
+@id	fontSources.couldntAdd	تعذّرت إضافة المصدر: {error}
+@id	fontSources.couldntRemove	تعذّرت إزالة المصدر: {error}
+@id	common.cancel	إلغاء
+@id	common.close	إغلاق
+@plural	{n} style|{n} styles	{n} نمط|{n} نمط|{n} نمط|{n} أنماط|{n} نمطًا|{n} نمط
+@plural	{n} family|{n} families	{n} عائلة|{n} عائلة|{n} عائلة|{n} عائلات|{n} عائلة|{n} عائلة
+@plural	{n} font source couldn't be loaded|{n} font sources couldn't be loaded	تعذّر تحميل {n} مصدر خطوط|تعذّر تحميل {n} مصدر خطوط|تعذّر تحميل {n} مصدر خطوط|تعذّر تحميل {n} مصادر خطوط|تعذّر تحميل {n} مصدرًا للخطوط|تعذّر تحميل {n} مصدر خطوط
+@plural	{n} style installed|{n} styles installed	{n} نمط مثبّت|{n} نمط مثبّت|{n} نمط مثبّت|{n} أنماط مثبّتة|{n} نمطًا مثبّتًا|{n} نمط مثبّت
