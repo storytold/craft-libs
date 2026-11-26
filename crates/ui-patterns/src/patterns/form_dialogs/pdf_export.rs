@@ -283,8 +283,8 @@ impl ItemSource<PdfSection> for Pages<'_> {}
 /// and Bleeds, Output, Advanced, Security and Summary) beside the shown section.
 ///
 /// - **Presets.** The row lists the built-in presets and the app's `saved_presets`. Choosing one fills every row; a
-///   change to any value marks the preset as modified. New, Rename and Delete come back as [`PdfPresetEvent`]s, which
-///   the app stores and hands back with `saved_presets`.
+///   change to any value marks the preset as modified, and so do custom flattener options (`custom_flattener`). New,
+///   Rename and Delete come back as [`PdfPresetEvent`]s, which the app stores and hands back with `saved_presets`.
 /// - **Standard.** A standard sets the PDF version it allows and turns off what its files can't have (editing data,
 ///   passwords, PDF layers in PDF/X-1a and PDF/X-3).
 /// - **Checks.** The checks of [`craft_pdf::settings`] run every pass; while one fails its message shows under the
@@ -348,7 +348,7 @@ pub struct PdfExportDialog<'a> {
     /// Binds the shown section.
     #[prop]
     section: Option<Bind<'a, PdfSection>>,
-    /// While on, the flattener select shows `[Custom]`.
+    /// While on, the flattener select shows `[Custom]` and the preset row marks the chosen preset as modified.
     #[prop]
     custom_flattener: bool,
     /// Warnings of the host, shown after the settings' own.
@@ -526,12 +526,13 @@ impl<'a> PdfExportDialog<'a> {
             let rows = PresetSource::new(names.as_slice(), PresetFns::new(preset_rows));
             let selected = live.preset.as_ref().and_then(|name| presets.iter().find(|preset| preset.name == *name));
             let reference = if editor { presets.iter().find(|preset| preset.name == default_name) } else { selected };
+            // Custom flattener options also mark the chosen preset as modified.
             let modified = selected.is_some_and(|preset| {
                 let mut shown = work.clone();
                 shown.clear_passwords();
                 let mut base = preset.settings.clone();
                 base.clear_passwords();
-                shown != base
+                shown != base || custom_flattener
             });
             let held = selected.filter(|_| !modified).map(|preset| preset.name.clone());
             let base = reference.map(|preset| preset.settings.clone()).unwrap_or_default();
