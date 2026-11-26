@@ -1,0 +1,13 @@
+[package]
+name = "craft-xfdf"
+description = "Bounded XFDF field-value reader without PDF or form policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+[lints]
+workspace = true
+[dependencies]
+craft-xml = { workspace = true }
+thiserror = { workspace = true }

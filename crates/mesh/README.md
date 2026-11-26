@@ -24,8 +24,9 @@ USD, Alembic and COLLADA are not here yet.
 - `Part`: the faces of a mesh that share a group name, a material and a smoothing group. A face is
   a polygon of three or more `Corner`s; each corner indexes a position and optionally a normal and
   a UV. Formats with separate indices (OBJ) are kept exactly, and polygons stay whole.
-  `Part::triangles()` fans them; `Mesh::unified()` gives one vertex per distinct corner as a
-  triangle list, which is what a renderer wants.
+  `Part::triangles_in(&mesh.positions)` triangulates them (a fan for a convex face, ear clipping
+  in the face's plane for a concave one; `Part::triangles()` only fans); `Mesh::unified()` gives
+  one vertex per distinct corner as a triangle list, which is what a renderer wants.
 - `Material`: metallic-roughness factors, alpha mode, double-sided, unlit, and five texture slots.
   A `TextureRef` names an `Image`, a UV set and wrap modes. An `Image` is a URI the caller
   resolves or the encoded bytes the file embedded; nothing here decodes images.

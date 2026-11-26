@@ -1282,10 +1282,11 @@ fn anchor_stacking_order_is_read_and_kept() {
         paras(d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.z) } else { None }).collect()
     };
     let d = read_body(&body);
-    assert_eq!(zs(&d), [251660288, 251657214, 0]);
+    // Kept one more than the file's (`Float::z`), so a file's 0 isn't "none".
+    assert_eq!(zs(&d), [251660289, 251657215, 0]);
     let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     let z = zs(&again);
-    assert_eq!(&z[..2], &[251660288, 251657214]);
+    assert_eq!(&z[..2], &[251660289, 251657215]);
     assert!(z[2] > 0, "an object without one gets an order on saving: {z:?}");
 }
 
@@ -2695,6 +2696,100 @@ fn anchored_wsp(name: &str, cx: u32, cy: u32, sppr: &str, style: &str, extra: &s
     format!(
         r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>12700</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>25400</wp:posOffset></wp:positionV><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="1" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp>{extra}<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>{sppr}</wps:spPr>{style}<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:line from="0,0" to="1pt,2pt"/></w:pict></mc:Fallback></mc:AlternateContent></w:r>"#
     )
+}
+
+/// wordcraft#2638: Word stacks floating objects by `relativeHeight`, not by their order in the text (a
+/// shape sent to back, then copied with the shape over it, comes first in the text but stays
+/// behind). The order is read and kept on save, and an object made here is saved above them.
+#[test]
+fn floating_objects_keep_their_stacking_order() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Canopy", 251662336), shape("Trunk", 251661312));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().map(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(251662337), Some(251661313)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&craft_docx::write(&d).unwrap());
+    let written = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight");
+    assert_eq!(written, ["251662337", "251662336", "251661312"]);
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(251662338), Some(251662337), Some(251661313)]);
+}
+
+/// wordcraft#2638: a file whose stacking orders reach `u32::MAX` leaves no room above them for an object
+/// made here. The stored orders are then numbered again, in their order, so the new object still
+/// goes over all of them and no two objects share an order (it was written as `u32::MAX` too).
+#[test]
+fn stacking_orders_at_the_top_of_the_range_are_numbered_again() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Top", u32::MAX), shape("Low", 7));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().map(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(u32::MAX), Some(8)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    let z: Vec<u32> = stacking(&back).into_iter().map(|z| z.expect("every anchor has an order")).collect();
+    assert!(z[0] > z[1] && z[1] > z[2], "new over Top over Low, all different: {z:?}");
+    // The note separators are saved with the document: an order there counts too.
+    let mut d = read_body(&format!("<w:p>{}</w:p>", shape("Low", 7)));
+    let mut sep = read_body(&format!("<w:p>{}</w:p>", shape("Separator", u32::MAX)));
+    d.footnote_separators.separator = Some(std::mem::take(&mut sep.body));
+    let (orders, unset) = d.stacking_orders();
+    assert_eq!((orders.last().copied(), unset), (Some(u32::MAX), 0), "the separator's order is seen");
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = 0;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&craft_docx::write(&d).unwrap());
+    let body: Vec<u64> = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+    let seps: Vec<u64> = attr_values(&text(&files, "word/footnotes.xml"), "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+    assert_eq!(seps.len(), 1, "the separator's shape is saved");
+    assert!(body[0] > seps[0] && seps[0] > body[1], "new over the separator's over Low: {body:?} {seps:?}");
+    // So does one in a building block of the glossary, saved with the same numbering (wordcraft#2638 review).
+    let mut d = read_body(&format!("<w:p>{}</w:p>", shape("Low", 7)));
+    let entry = read_body(&format!("<w:p>{}</w:p>", shape("Entry", u32::MAX)));
+    d.glossary.push(craft_wordmodel::BuildingBlock { name: "Entry".into(), blocks: entry.body, ..Default::default() });
+    assert_eq!(d.stacking_orders().0.last().copied(), Some(u32::MAX), "the glossary's order is seen");
+    // With room above, the stored orders are written as they are.
+    let room = read_body(&format!("<w:p>{}</w:p>", shape("Top", u32::MAX - 5)));
+    let back = craft_docx::read(&craft_docx::write(&room).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(u32::MAX - 4)]);
+}
+
+/// wordcraft#2638 (review): `relativeHeight="0"`, the lowest a file can give, is a stacking order like
+/// any other: under a shape with 1, not taken for an object without one (made here, which goes
+/// over everything), and saved back as 0.
+#[test]
+fn a_stacking_order_of_zero_stays_the_lowest() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let d = read_body(&format!("<w:p>{}{}</w:p>", shape("Bottom", 0), shape("Top", 1)));
+    let floats: Vec<_> = paras(&d)[0].objects.iter().filter_map(|o| o.frame().map(|(_, _, f)| f.clone())).collect();
+    assert_eq!(floats.iter().map(|f| f.z).collect::<Vec<_>>(), [1, 2]);
+    assert!(floats[0].stack() < floats[1].stack(), "0 stacks under 1");
+    assert!(floats[1].stack() < craft_wordmodel::para::Float::default().stack(), "an object made here goes over both");
+    let files = unzip(&craft_docx::write(&d).unwrap());
+    assert_eq!(attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight"), ["0", "1"]);
 }
 
 /// #611: diagrams drawn with Word's shapes were mostly missing. Connectors and boxes take their
@@ -4910,4 +5005,171 @@ fn vml_horizontal_rules_are_read_and_kept() {
     .concat();
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
+}
+
+#[test]
+fn extreme_raw_orders_share_one_map_across_parts_without_replaying_chunks() {
+    let shape = |name: &str, z: &str| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let doc = format!(
+        r#"<w:document {W_NS}><w:body><w:p>{}{}{}</w:p><w:altChunk r:id="chunk"/><w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#,
+        shape("zero", "0"),
+        shape("lower", "4294967292"),
+        shape("high", "4294967294")
+    );
+    let header = format!(
+        r#"<w:hdr {W_NS}><w:p>{}{}</w:p></w:hdr>"#,
+        shape("maximum", "429496729&#53;").replace("relativeHeight", "alien:relativeHeight"),
+        shape("equal", "4294967295")
+    )
+    .replace("xmlns:wp=", "xmlns:position=")
+    .replace("wp:", "position:");
+    let header: Vec<u8> = [vec![0xff, 0xfe], header.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat();
+    let ignored = format!(r#"<w:hdr {W_NS}><w:p>{}</w:p></w:hdr>"#, shape("wrong-case duplicate", "4294967293"));
+    let rel = rels(&[("header", "header", "header.part"), ("chunk", "aFChunk", "chunk.txt")]);
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", rel.as_bytes()),
+        ("word/header.part", &header),
+        ("WORD/HEADER.PART", ignored.as_bytes()),
+        ("word/chunk.txt", b"external chunk"),
+    ]);
+    let calls = std::cell::Cell::new(0);
+    let importer = |_: &craft_docx::AltChunk| {
+        calls.set(calls.get() + 1);
+        Some(Document::from_text("Imported once"))
+    };
+    let mut d = craft_docx::read_with(&bytes, &craft_docx::ReadOptions { chunks: Some(&importer), ..Default::default() }).unwrap();
+    assert_eq!(calls.get(), 1);
+    let orders = |d: &Document| {
+        let body: Vec<u32> = paras(d).iter().flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        let header = &d.parts[&d.last_section.headers.default.unwrap()];
+        let header: Vec<u32> =
+            header.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        (body, header)
+    };
+    let expected = (vec![1, u32::MAX - 2, u32::MAX - 1], vec![u32::MAX, u32::MAX]);
+    assert_eq!(orders(&d), expected);
+    for _ in 0..2 {
+        d = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(orders(&d), expected);
+    }
+    assert_eq!(calls.get(), 1);
+    let malformed = doc.replace("</w:body>", "");
+    assert!(craft_docx::read(&zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", malformed.as_bytes())])).is_err());
+}
+
+#[test]
+fn retained_drawingml_ole_uses_the_shared_stacking_map() {
+    let source = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="914400" cy="457200"/><wp:docPr id="7" name="Object 7"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name=""/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId8"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm flipH="1"><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing><o:OLEObject Type="Embed" ProgID="Package" DrawAspect="Content" ObjectID="_1000000002" r:id="rId9"/></w:object></w:r></w:p>"##;
+    let picture = "\u{89}PNG stand-in";
+    let ole = "\u{d0}\u{cf} opaque OLE storage";
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
+    for raw in [u32::MAX - 2, u32::MAX] {
+        let object = source
+            .replace("<wp:inline ", &format!("<wp:anchor relativeHeight=\"{raw}\" behindDoc=\"0\" odd=\"retain &amp; this\" "))
+            .replace("</wp:inline>", "</wp:anchor>");
+        let shape = anchored_wsp("Other", 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, r#"relativeHeight="4294967294""#);
+        let body = format!("{object}<w:p>{shape}</w:p>");
+        let mut d = craft_docx::read(&docx(
+            &body,
+            &[("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")],
+            &[("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)],
+        ))
+        .unwrap();
+        assert!(matches!(paras(&d)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+        let mut made = paras(&d)[0].objects[0].clone();
+        made.float_mut().unwrap().z = 0;
+        let mut p = Paragraph::new();
+        p.insert_object(0, made, &Default::default()).unwrap();
+        d.body.push(craft_wordmodel::para_block(p));
+        for _ in 0..3 {
+            let out = craft_docx::write(&d).unwrap();
+            let files = unzip(&out);
+            let xml = text(&files, "word/document.xml");
+            assert_eq!(attr_values(&xml, "wp:anchor", "odd"), ["retain &amp; this", "retain &amp; this"]);
+            assert_eq!(attr_values(&xml, "o:OLEObject", "ProgID"), ["Package", "Package"]);
+            let z: Vec<u32> = attr_values(&xml, "wp:anchor", "relativeHeight").iter().map(|v| v.parse().unwrap()).collect();
+            assert_eq!(z.len(), 3);
+            assert!(z[2] > z[0] && z[2] > z[1], "{z:?}");
+            assert_eq!(z[0] < z[1], raw < u32::MAX - 1, "{z:?}");
+            d = craft_docx::read(&out).unwrap();
+            assert!(matches!(paras(&d)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+        }
+    }
+    // An inline OLE frame may retain an opaque nested drawing. Its child's rank is not the
+    // outer object's rank, and the inline frame must not allocate an anchored rank at all.
+    let nested = source.replace("</wp:inline>", r#"<a:extLst><wp:anchor relativeHeight="17" odd="nested"/></a:extLst></wp:inline>"#);
+    let mut d = craft_docx::read(&docx(
+        &nested,
+        &[("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")],
+        &[("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)],
+    ))
+    .unwrap();
+    for _ in 0..3 {
+        let out = craft_docx::write(&d).unwrap();
+        let files = unzip(&out);
+        let xml = text(&files, "word/document.xml");
+        assert_eq!(attr_values(&xml, "wp:anchor", "relativeHeight"), ["17"], "{xml}");
+        assert_eq!(attr_values(&xml, "wp:anchor", "odd"), ["nested"]);
+        assert!(attr_values(&xml, "wp:inline", "relativeHeight").is_empty());
+        d = craft_docx::read(&out).unwrap();
+        assert!(matches!(paras(&d)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+    }
+    // A direct VML preview wins in read_object, even when DrawingML is retained beside it.
+    // Its signed z-index is not a modeled stacking rank. Preserve both representations rather
+    // than assigning a fresh DrawingML rank from the VML-derived model's unset z.
+    for signed in [-17, 17] {
+        let vml = format!(
+            r#"<v:shape style="position:absolute;width:72pt;height:36pt;z-index:{signed}" odd="vml"><v:imagedata r:id="rId8"/></v:shape><w:drawing>"#
+        );
+        let mixed =
+            source.replace("<w:drawing>", &vml).replace("<wp:inline ", r#"<wp:anchor relativeHeight="21" "#).replace("</wp:inline>", "</wp:anchor>");
+        let mut d = craft_docx::read(&docx(
+            &mixed,
+            &[("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")],
+            &[("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)],
+        ))
+        .unwrap();
+        assert_eq!(paras(&d)[0].objects[0].frame().unwrap().2.z, 0);
+        for _ in 0..3 {
+            let out = craft_docx::write(&d).unwrap();
+            let files = unzip(&out);
+            let xml = text(&files, "word/document.xml");
+            assert_eq!(attr_values(&xml, "wp:anchor", "relativeHeight"), ["21"]);
+            assert_eq!(attr_values(&xml, "v:shape", "odd"), ["vml"]);
+            let styles = attr_values(&xml, "v:shape", "style");
+            assert_eq!(styles.len(), 1);
+            assert!(styles[0].split(';').any(|p| p == format!("z-index:{signed}")));
+            d = craft_docx::read(&out).unwrap();
+            assert_eq!(paras(&d)[0].objects[0].frame().unwrap().2.z, 0);
+        }
+    }
+}
+
+#[test]
+fn extreme_chart_with_text_fallback_uses_the_package_order_map() {
+    // Both callers need the package map. MAX alone would still saturate to MAX without it;
+    // placing MAX-1 on each representation in turn catches a missing map at either caller.
+    for (chart_raw, shape_raw) in [(u32::MAX, u32::MAX - 1), (u32::MAX - 1, u32::MAX)] {
+        let mut files = unzip(&chartex_text_fallback_docx("<w:t>Chart not available.</w:t>"));
+        let shape = anchored_wsp("Other", 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{shape_raw}""#));
+        let xml = text(&files, "word/document.xml")
+            .replace("<wp:inline ", &format!(r#"<wp:anchor relativeHeight="{chart_raw}" "#))
+            .replace("</wp:inline>", "</wp:anchor>")
+            .replace("</w:body>", &format!("<w:p>{shape}</w:p></w:body>"));
+        files.insert("word/document.xml".to_string(), xml.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        let d = craft_docx::read(&zip(&entries)).unwrap();
+        let g = graphics(&d);
+        let [InlineObject::Graphic { float, .. }] = g.as_slice() else { panic!("chart placeholder missing") };
+        assert_eq!(float.z, chart_raw);
+        let other = paras(&d).iter().flat_map(|p| &p.objects).find(|o| matches!(o, InlineObject::Shape { .. })).unwrap();
+        assert_eq!(other.frame().unwrap().2.z, shape_raw);
+    }
 }

@@ -4,7 +4,7 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-use crate::content::Contents;
+use crate::content::{Contents, text_result};
 use crate::schema::{check_arguments, check_prompt_arguments};
 
 /// The newest protocol revision we speak; offered when the client asks for one we don't know.
@@ -88,9 +88,25 @@ pub struct Info {
     pub max_line: usize,
 }
 
+/// Opt-in behaviour for apps with their own conventions; `Options::default()` is what [`Server::new`]
+/// does. Set with [`Server::with_options`].
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    /// Sent as `serverInfo.websiteUrl` at `initialize` (MCP 2025-06-18) when set.
+    pub website_url: Option<String>,
+    /// Report a `tools/call` whose arguments fail the check against the tool's schema, or whose
+    /// tool is unknown, as a tool result with `isError: true` and the message as text, not as a
+    /// JSON-RPC -32602 error. For apps whose clients read every tool failure from the result.
+    pub tool_errors_as_results: bool,
+    /// Refuse a request whose `id` is neither a string nor a number (JSON-RPC 2.0) with -32600 and
+    /// a null id, instead of echoing the id back.
+    pub strict_request_ids: bool,
+}
+
 /// An MCP server over the app's [`Tools`].
 pub struct Server<T: Tools> {
     info: Info,
+    options: Options,
     tools: T,
     initialized: bool,
 }
@@ -157,7 +173,13 @@ pub fn response(id: Value, result: Value) -> Value {
 
 impl<T: Tools> Server<T> {
     pub fn new(info: Info, tools: T) -> Self {
-        Self { info, tools, initialized: false }
+        Self { info, options: Options::default(), tools, initialized: false }
+    }
+    /// This server with `options` ([`Options`]) in place of the defaults.
+    #[must_use]
+    pub fn with_options(mut self, options: Options) -> Self {
+        self.options = options;
+        self
     }
     pub fn tools(&mut self) -> &mut T {
         &mut self.tools
@@ -215,7 +237,11 @@ impl<T: Tools> Server<T> {
             if o.contains_key("result") || o.contains_key("error") {
                 return None;
             }
-            return Some(error(id.unwrap_or(Value::Null), INVALID_REQUEST, "missing `method`"));
+            let echoed = match id {
+                Some(id) if !self.options.strict_request_ids || id.is_string() || id.is_number() => id,
+                _ => Value::Null,
+            };
+            return Some(error(echoed, INVALID_REQUEST, "missing `method`"));
         };
         let params = o.get("params").cloned().unwrap_or(Value::Null);
         let Some(id) = id else {
@@ -224,6 +250,9 @@ impl<T: Tools> Server<T> {
             }
             return None;
         };
+        if self.options.strict_request_ids && !(id.is_string() || id.is_number()) {
+            return Some(error(Value::Null, INVALID_REQUEST, "`id` must be a string or number"));
+        }
         Some(match self.request(method, &params) {
             Ok(r) => response(id, r),
             Err((code, m)) => error(id, code, m),
@@ -236,10 +265,14 @@ impl<T: Tools> Server<T> {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 let Info { name, title, version: server_version, .. } = self.info;
+                let mut server_info = json!({"name": name, "title": title, "version": server_version});
+                if let Some(url) = &self.options.website_url {
+                    server_info["websiteUrl"] = json!(url);
+                }
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": self.capabilities(),
-                    "serverInfo": {"name": name, "title": title, "version": server_version},
+                    "serverInfo": server_info,
                     "instructions": self.tools.instructions(),
                 }))
             }
@@ -251,7 +284,9 @@ impl<T: Tools> Server<T> {
                     None | Some(Value::Null) => json!({}),
                     Some(a) => a.clone(),
                 };
-                check_arguments(&self.tools.list(), name, &args).map_err(|e| (INVALID_PARAMS, e))?;
+                if let Err(e) = check_arguments(&self.tools.list(), name, &args) {
+                    return if self.options.tool_errors_as_results { Ok(text_result(e, true)) } else { Err((INVALID_PARAMS, e)) };
+                }
                 Ok(self.tools.call(name, &args))
             }
             "resources/list" => Ok(json!({"resources": self.tools.resources()})),

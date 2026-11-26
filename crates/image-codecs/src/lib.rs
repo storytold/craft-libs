@@ -307,6 +307,15 @@ pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
 }
 
+/// Bytes of DCT coefficients to budget for a JPEG before decoding it: never less than
+/// [`JpegInfo::held_coefficients`] nor than the whole-picture estimate of every progressive
+/// frame header (SOF2, SOF6, SOF10, SOF14 at any precision, sampling clamped to 1..=4), and the
+/// costliest frame at the first size read when the header can't be followed. 0 without a
+/// readable frame. See the function body's rules for the precise charges.
+pub fn jpeg_worst_case_coefficients(bytes: &[u8]) -> u64 {
+    jpeg::worst_case_coefficients(bytes)
+}
+
 /// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.
 pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     codecs::pcx::dimensions(bytes)

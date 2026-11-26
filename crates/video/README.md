@@ -30,6 +30,7 @@ No codec feature is on by default.
 | `hevc` | [`hevc`](src/hevc/decode/README.md) | ITU-T H.265 / HEVC: decoder (`hevc-decode` alone) and encoder (`hevc-encode` alone) |
 | `vp9` | [`vp9`](src/vp9/decode/README.md) | VP9: decoder (`vp9-decode` alone) and encoder (`vp9-encode` alone) |
 | `av1` | [`av1`](src/av1/decode/README.md) | AV1 (AOMedia Video 1): decoder (`av1-decode` alone) and clean-room encoder (`av1-encode`); tiled rav1e fallback for large frames (`av1-large-encode`) |
+| `vmd` | `vmd` | Sierra VMD video (the 8-bit paletted pictures of Sierra and Coktel Vision game videos): decoder (`vmd-decode`) |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
 
 ## Decoded frames
@@ -41,7 +42,9 @@ comes with its codec's feature):
 - Planes are `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]` (`ColorFamily`), plus an optional alpha plane.
   DNx, VP9 and AV1 (identity matrix) store RGB as G, B, R; the conversion reorders them.
 - Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane (HEVC chroma may
-  differ from luma). Converting moves the buffers and copies no samples.
+  differ from luma). Converting moves the buffers and copies no samples, except for paletted
+  video: VMD holds its picture as palette indices in the decoder, so `VideoFrame::try_from(&decoder)`
+  looks them up and writes new 8-bit R, G, B planes.
 - Chroma subsampling is a log2 shift per axis, 0 to 3 (FFV1 codes up to 3).
 - Colour is given as ITU-T H.273 code points (`ColorTags`), mapped from each codec's own
   signalling. Codecs that do not signal a value leave it unspecified (2).

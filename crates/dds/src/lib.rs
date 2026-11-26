@@ -430,6 +430,7 @@ pub struct Texture<'a> {
     encoding: Encoding,
     /// Where the top level's pixel data starts.
     start: usize,
+    levels: u32,
 }
 
 impl<'a> Texture<'a> {
@@ -456,7 +457,8 @@ impl<'a> Texture<'a> {
         if width == 0 || height == 0 {
             return Err(bad("texture dimensions must be nonzero"));
         }
-        Ok(Texture { bytes: b, flags, width, height, encoding, start })
+        let levels = le32(b, 28)?.max(1).min(mip_levels(width, height));
+        Ok(Texture { bytes: b, flags, width, height, encoding, start, levels })
     }
 
     pub fn width(&self) -> u32 {
@@ -470,6 +472,51 @@ impl<'a> Texture<'a> {
     /// The layout [`Texture::decode`] returns.
     pub fn layout(&self) -> Layout {
         self.encoding.layout()
+    }
+
+    /// Number of declared mip levels, capped by the chain down to one pixel.
+    pub fn levels(&self) -> u32 {
+        self.levels
+    }
+
+    /// The encoding named by the header, including unsigned BC4 and BC5.
+    pub fn compression(&self) -> DdsCompression {
+        match self.encoding {
+            Encoding::Masks { .. } | Encoding::Unorm16 { .. } => DdsCompression::None,
+            Encoding::Bc1 => DdsCompression::Bc1,
+            Encoding::Bc2 => DdsCompression::Bc2,
+            Encoding::Bc3 => DdsCompression::Bc3,
+            Encoding::Bc4 => DdsCompression::Bc4,
+            Encoding::Bc5 => DdsCompression::Bc5,
+        }
+    }
+
+    /// A borrowed view of one mip level, without allocating or decoding pixels.
+    /// Lower levels are tightly packed; only the top level uses the header's row pitch.
+    pub fn mip_level(&self, index: u32) -> Result<Texture<'a>, DdsError> {
+        if index >= self.levels {
+            return Err(bad("mip level index is outside the declared chain"));
+        }
+        let (mut width, mut height, mut start) = (self.width, self.height, self.start);
+        for i in 0..index {
+            let pitch = if i == 0 && self.flags & DDSD_PITCH != 0 { Some(le32(self.bytes, 20)?) } else { None };
+            let (_, size) = self.encoding.level_layout(width, height, pitch)?;
+            start = start.checked_add(size).ok_or_else(|| bad("mip offset overflow"))?;
+            if start > self.bytes.len() {
+                return Err(bad("truncated mip data"));
+            }
+            width = (width / 2).max(1);
+            height = (height / 2).max(1);
+        }
+        Ok(Texture {
+            bytes: self.bytes,
+            flags: if index == 0 { self.flags } else { self.flags & !DDSD_PITCH },
+            width,
+            height,
+            encoding: self.encoding,
+            start,
+            levels: self.levels - index,
+        })
     }
 
     /// The top mip level's pixels in [`Texture::layout`], bounded by [`DEFAULT_MAX_DECODE_BYTES`].

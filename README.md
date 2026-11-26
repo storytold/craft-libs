@@ -274,7 +274,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
-  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
+  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, a Sierra VMD (`vmd`) demuxer, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
   lottie-spec 1.0 (animation, assets, layers by type, shape items, masks, effects, text, markers)
@@ -373,8 +373,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
   replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
   copies of a valid input, and fails the test with the case that panicked or did not finish. Its
-  `corpus` module (the `corpus` feature) checks a corpus folder against a pinned SHA-256 list. Not
-  published.
+  `skip` module prints a `SKIPPED:` line when a test lacks a program, a corpus or the craft-fonts
+  faces, or fails the test when the variable the caller names is `1`. Any other value of that
+  variable except empty fails the test as a configuration error. Its `corpus` module (the `corpus`
+  feature) checks a corpus folder against a pinned SHA-256 list. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

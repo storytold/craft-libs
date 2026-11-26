@@ -25,9 +25,14 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! [`skip`] decides what a test does when something it needs is missing (a program, a corpus,
+//! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
+//! variable the caller names is `1`. A value other than unset, empty or `1` fails the test as a
+//! configuration error. It is not built for `wasm32`.
+//!
 //! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
 //! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
-//! `corpus::pinned`.
+//! `corpus::pinned`, which skips or fails under the rule of [`skip`].
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
@@ -45,6 +50,9 @@ pub mod corpus;
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+pub mod sample_damage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod skip;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};

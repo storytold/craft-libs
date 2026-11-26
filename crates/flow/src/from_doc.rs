@@ -432,10 +432,11 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
     }
 }
 
-/// The placement a flow keeps for a drawing: when it floats, or turns or mirrors it in line.
+/// Keep placement, transforms, and explicit stacking metadata even for inline drawings.
+/// Presence alone does not imply anchoring: the retained Float keeps its original wrap.
 fn kept_float(f: &craft_wordmodel::para::Float) -> Option<Box<craft_wordmodel::para::Float>> {
     let turned = f.rot.is_finite() && f.rot.rem_euclid(360.0) > 0.001 && f.rot.rem_euclid(360.0) < 359.999;
-    (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v).then(|| Box::new(f.clone()))
+    (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v || f.z != 0).then(|| Box::new(f.clone()))
 }
 
 fn flow_comment(doc: &Document, c: &craft_wordmodel::Comment, parent: Option<u32>, opts: FlowOpts) -> FComment {
@@ -1280,5 +1281,20 @@ impl ListCounter {
             1 => format!("{}.", craft_wordmodel::section::letters(n)),
             _ => format!("{}.", craft_wordmodel::section::roman(n)),
         }
+    }
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    #[test]
+    fn explicit_inline_stacking_preserves_wrap_without_creating_an_anchor() {
+        use craft_wordmodel::para::{Float, Wrap};
+        let f = Float { z: u32::MAX, ..Float::default() };
+        assert_eq!(f.wrap, Wrap::Inline);
+        let kept = super::kept_float(&f).unwrap();
+        assert_eq!(kept.wrap, Wrap::Inline);
+        assert_eq!(kept.z, u32::MAX);
+        assert_eq!(kept.rot, f.rot);
+        assert!(super::kept_float(&Float::default()).is_none());
     }
 }

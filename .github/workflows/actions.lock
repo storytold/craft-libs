@@ -18,7 +18,6 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/cms.yml':
         - 'actions/checkout@v4.4.0'
         - 'dtolnay/rust-toolchain@stable'
@@ -27,16 +26,11 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/dialogs.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/doc.yml':
-        - 'actions/checkout@v7.0.1'
-        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
-        - 'step-security/harden-runner@v2.22.4'
-    '.github/workflows/docpath.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
@@ -52,22 +46,15 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
         - 'step-security/harden-runner@v2.22.4'
-        - 'swatinem/rust-cache@v2.9.3'
     '.github/workflows/house-rules.yml': []
-    '.github/workflows/i18n.yml':
-        - 'actions/checkout@v7.0.1'
-        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
-        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/jpeg.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/keymap.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/lockfile.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/harden-runner@v2.22.4'
@@ -75,11 +62,10 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/menu.yml':
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
-        - 'swatinem/rust-cache@v2.9.3'
+    '.github/workflows/nightly.yml': []
     '.github/workflows/pcraft-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -89,23 +75,12 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
         - 'step-security/taiki-e-install-action@v2.87.32'
-    '.github/workflows/print.yml':
-        - 'actions/checkout@v7.0.1'
-        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
-        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/proof.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/sonarcloud.yml': []
-    '.github/workflows/ui.yml':
-        - 'actions/checkout@v7.0.1'
-        - 'step-security/dtolnay-rust-toolchain@v1.0.0'
-        - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/update.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -118,7 +93,6 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/web-api.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -128,7 +102,6 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-        - 'step-security/rust-cache@v2.9.2'
         - 'step-security/taiki-e-install-action@v2.87.32'
     '.github/workflows/window.yml':
         - 'actions/checkout@v7.0.1'

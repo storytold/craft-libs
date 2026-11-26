@@ -7,6 +7,9 @@
 //! bottom-left and y points up, so the design is flipped about its bottom edge. Force and speed
 //! are set on the machine's panel.
 
+/// Byte-oriented HP-GL/2 lexer, including PCL/PJL framing and encoded polylines.
+pub mod lex;
+
 use crate::{Command, Error, Framing, Job, Program, y_up};
 
 /// Plotter units per mm (1 plu = 0.025 mm).

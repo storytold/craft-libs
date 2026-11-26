@@ -12,20 +12,17 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
-  group: atomic-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: atomic-${{ github.ref }}
+  cancel-in-progress: true
 
+# fmt, clippy and the tests run in the Workspace gate on every OS; this runs what it does not.
 jobs:
   atomic:
+    name: Atomic inherited Linux ACLs
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS runners are kept for releases: macOS runs only when started by hand.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -35,15 +32,9 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
       - name: Install ACL tools
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y acl
-      - run: cargo fmt --check
-      - run: cargo clippy -p craft-atomic -p craft-settings --all-targets --locked -- -D warnings
-      - run: cargo test -p craft-atomic -p craft-settings --locked -- --nocapture
       - name: Check inherited Linux ACLs
-        if: runner.os == 'Linux'
         run: cargo test -p craft-atomic --locked -- --ignored --nocapture
 
   wasm:

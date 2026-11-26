@@ -13,3 +13,6 @@ and its regression test preserve NetterSilver's
 `10e173c0e49696ad335e3da8a069889c089b09a6`; both contributors retain primary Git authorship
 for their respective port commits. Source and destination use MIT OR Apache-2.0.
 The shared adapter adds an aggregate 64 MiB stylesheet-text limit and idempotent indexing.
+
+### Transform compatibility
+`transform_compat::parse_transform` preserves EffectCraft transform-list recovery and exact composition. It retains six numeric arguments per operation; scanning is not time/byte capped and matrix overflow behavior is unchanged. The strict geometry reader is unchanged. Source: Brandon Thomas, EffectCraft94e1c86d89a866771f80ad1610afda9aa12e85d8; bounded safe argument matching by Altynzhan Karybai,4035d181329e847d7a57bf3d059502ea2c91b560.

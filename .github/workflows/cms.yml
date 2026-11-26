@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: cms-${{ github.ref }}
+  cancel-in-progress: true
+
+# clippy and the debug tests run in the Workspace gate; this runs the release build of the tests.
 jobs:
   cms:
     timeout-minutes: 20
@@ -18,9 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - run: cargo clippy -p craft-cms --all-targets --all-features --locked -- -D warnings
       # Release: the FOGRA39 fit and ink-limit tests take about 35 s in debug and 4 s here. Tests that need
       # installed system profiles print "skipped:" when none are present.
       - run: cargo test -p craft-cms --all-features --release --locked -- --nocapture

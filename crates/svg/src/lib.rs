@@ -35,3 +35,6 @@ pub mod write;
 pub mod prefix_path;
 /// Compatibility CSS subset for simple SVG importers.
 pub mod simple_css;
+
+/// Prefix-preserving SVG transform-list compatibility.
+pub mod transform_compat;
