@@ -1,4 +1,5 @@
-use super::dng::{base_ifd, dng, synthetic};
+use super::dng::{base_ifd, dng, synthetic, u16_bytes};
+use craft_raw::opcodes::{self, Area, Opcode};
 use craft_raw::{BlackLevel, Cfa, DngCompression, DngWriteOptions, Limits, Orientation, RawData, RawImage, write_dng};
 use craft_tiff::{ByteOrder, ImageData, Value, tags};
 use std::ffi::OsString;
@@ -122,6 +123,77 @@ fn report_rows(text: &str) -> Vec<Vec<&str>> {
         .collect()
 }
 
+fn linearization_dng(table: Option<Vec<u16>>, deferred: bool, order: ByteOrder) -> Vec<u8> {
+    let mut raw = base_ifd(4, 2, 16, 1, true);
+    raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![u16_bytes(&[2; 8], order)] });
+    raw.set(tags::WHITE_LEVEL, Value::Long(vec![30]));
+    if let Some(table) = table {
+        raw.set(tags::LINEARIZATION_TABLE, Value::Short(table));
+    }
+    if deferred {
+        let area = Area { top: 0, left: 0, bottom: 2, right: 4, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+        let list = opcodes::write_list(&[Opcode::MapTable { area, table: vec![0, 1, 3, 3] }]);
+        raw.set(tags::OPCODE_LIST_1, Value::Undefined(list));
+    }
+    dng(raw, order)
+}
+
+#[test]
+fn reports_linearization_state_and_digest_separately_from_samples() {
+    let fixtures = FixtureDir::new("linearization");
+    let write = |name, table, deferred, order| write_bytes(fixtures.path(), name, &linearization_dng(table, deferred, order));
+    let table = vec![0, 10, 20, 30];
+    let paths = [
+        OsString::from("--linearization"),
+        OsString::from("--"),
+        write("deferred.dng", Some(table.clone()), true, ByteOrder::Little),
+        write("changed-table.dng", Some(vec![0, 10, 20, 31]), true, ByteOrder::Little),
+        write("big-endian.dng", Some(table.clone()), true, ByteOrder::Big),
+        write("applied.dng", Some(table), false, ByteOrder::Little),
+        write("absent.dng", None, false, ByteOrder::Little),
+        fixtures.path().join("missing.dng").into_os_string(),
+    ];
+    let original = String::from_utf8(run_report(&paths[2..4], report::MAX_INPUT_BYTES, &Limits::default())).unwrap();
+    let original = report_rows(&original);
+    assert_eq!(original[0][2..], original[1][2..]);
+    let output = || run_report(&paths, report::MAX_INPUT_BYTES, &Limits::default());
+    let text = String::from_utf8(output()).unwrap();
+    let mut lines = text.lines();
+    let header = format!("{}\tlinearization_state\tlinearization_table_sha256", HEADER.trim_end());
+    assert_eq!(lines.next(), Some(header.as_str()));
+    assert_eq!(text.as_bytes(), output());
+    let rows: Vec<Vec<&str>> = lines.map(|line| line.split('\t').collect()).collect();
+    assert_eq!(rows.len(), 6);
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(row.len(), 18);
+        assert_eq!(row[..2], ["2", &(index + 1).to_string()]);
+    }
+
+    // Hashes from the four known u16 values packed as little-endian bytes.
+    let digest = "6e5d2a85c5e65eea7b6fde4ed812c7f22f3b41b99e76607a58a8141a254df12a";
+    let changed = "138055ff13d0e163c85338c4221f468ee093cb792f7ecab41fd62abd3869a9c6";
+    assert_eq!(rows[0][2..16], rows[1][2..16]);
+    assert_eq!(rows[0][2..], rows[2][2..]);
+    assert_eq!(rows[0][16..], ["deferred", digest]);
+    assert_eq!(rows[1][16..], ["deferred", changed]);
+    assert_eq!(rows[3][16..], ["applied", digest]);
+    assert_ne!(rows[3][6], rows[0][6]);
+    assert_eq!(rows[4][2], "ok");
+    assert_eq!(rows[4][6], rows[0][6]);
+    assert_eq!(rows[4][16..], ["absent", ""]);
+    assert_eq!(rows[5][2], "read_error");
+    assert!(rows[5][3..].iter().all(|field| field.is_empty()));
+}
+
+#[test]
+fn separator_allows_a_path_matching_the_linearization_option() {
+    let paths = [OsString::from("--"), OsString::from("--linearization")];
+    let text = String::from_utf8(run_report(&paths, report::MAX_INPUT_BYTES, &Limits::default())).unwrap();
+    let rows = report_rows(&text);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][..2], ["1", "1"]);
+}
+
 #[test]
 fn reports_mixed_failures_and_keeps_the_last_success() {
     let fixtures = FixtureDir::new("mixed");
@@ -184,11 +256,13 @@ fn separates_encoded_file_and_shared_decoder_limits() {
 }
 
 #[test]
-fn empty_arguments_report_usage_without_writing_a_header() {
-    let mut output = Vec::new();
-    let result = report::run([], &mut output, report::MAX_INPUT_BYTES, &Limits::default());
-    assert!(matches!(result, Err(report::RunError::Usage)));
-    assert!(output.is_empty());
+fn missing_paths_report_usage_without_writing_a_header() {
+    for args in [&[][..], &["--linearization"], &["--"], &["--linearization", "--"]] {
+        let mut output = Vec::new();
+        let result = report::run(args.iter().map(OsString::from), &mut output, report::MAX_INPUT_BYTES, &Limits::default());
+        assert!(matches!(result, Err(report::RunError::Usage)));
+        assert!(output.is_empty());
+    }
 }
 
 struct BrokenOutput {
