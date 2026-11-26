@@ -24,18 +24,19 @@ pub(super) fn show(
     words: &ActionEditorWords,
     editable: bool,
 ) {
+    let sizing = ui.is_sizing_pass();
     let trigger = Button::new(words.icon.clone())
         .icon(glyph(host, &value.action.icon))
         .selected(state.icons_open)
         .expanded(state.icons_open)
         .enabled(editable)
         .show(ui);
-    if trigger.clicks == 1 {
+    if trigger.clicked() && !sizing {
         state.icons_open = !state.icons_open;
     }
     let mut picked = false;
     if state.icons_open {
-        if Button::new(words.default_icon.clone()).enabled(editable).selected(value.action.icon.is_empty()).show(ui).clicks == 1 {
+        if Button::new(words.default_icon.clone()).enabled(editable).selected(value.action.icon.is_empty()).show(ui).clicked() && !sizing {
             value.action.icon.clear();
             state.icons_open = false;
             picked = true;
@@ -82,8 +83,8 @@ pub(super) fn show(
                         .id_salt(name)
                         .enabled(editable)
                         .show(ui)
-                        .clicks
-                        == 1
+                        .clicked()
+                        && !sizing
                     {
                         value.action.icon = (*name).to_owned();
                         state.icons_open = false;
@@ -119,7 +120,7 @@ pub(super) fn show(
                 if let Some(tint) = color.label_color() {
                     button = button.tint(tint.fill());
                 }
-                if button.show(ui).clicks == 1 {
+                if button.show(ui).clicked() && !sizing {
                     value.action.color = *color;
                 }
             }

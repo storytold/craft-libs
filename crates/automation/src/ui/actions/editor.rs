@@ -222,16 +222,16 @@ impl<'a> ActionEditor<'a> {
             let at = selected.map_or(value.action.steps.len(), |step| step + 1);
             let can_preview = hosted && !activity.busy && !activity.previewing;
             Row::new().show(ui, |ui, _| {
-                if Button::new(words.preview.clone()).enabled(can_preview && !value.action.steps.is_empty()).show(ui).clicks == 1 {
+                if Button::new(words.preview.clone()).enabled(can_preview && !value.action.steps.is_empty()).show(ui).clicked() {
                     events.push(ActionEditorEvent::Preview { from: 0 });
                 }
-                if Button::new(words.preview_from.clone()).enabled(can_preview && selected.is_some()).show(ui).clicks == 1
+                if Button::new(words.preview_from.clone()).enabled(can_preview && selected.is_some()).show(ui).clicked()
                     && let Some(from) = selected
                 {
                     events.push(ActionEditorEvent::Preview { from });
                 }
                 let label = if activity.recording { &words.stop_capture } else { &words.capture };
-                if Button::new(label.clone()).enabled(hosted && !activity.busy && !activity.previewing).show(ui).clicks == 1 {
+                if Button::new(label.clone()).enabled(hosted && !activity.busy && !activity.previewing).show(ui).clicked() {
                     events.push(if activity.recording {
                         ActionEditorEvent::EndCapture
                     } else {
@@ -242,19 +242,19 @@ impl<'a> ActionEditor<'a> {
             Row::new().show(ui, |ui, _| {
                 let editable =
                     selected.and_then(|step| value.action.steps.get(step)).is_some_and(|step| host.is_some_and(|host| host.can_edit_step(step)));
-                if Button::new(words.edit_step.clone()).enabled(idle && editable).show(ui).clicks == 1
+                if Button::new(words.edit_step.clone()).enabled(idle && editable).show(ui).clicked()
                     && let Some(step) = selected
                 {
                     events.push(ActionEditorEvent::EditStep { step });
                 }
                 for (label, duplicate) in [(words.duplicate_step.clone(), true), (words.delete_step.clone(), false)] {
-                    if Button::new(label).enabled(hosted && idle && selected.is_some()).show(ui).clicks == 1
+                    if Button::new(label).enabled(hosted && idle && selected.is_some()).show(ui).clicked()
                         && let Some(step) = selected
                     {
                         events.push(if duplicate { ActionEditorEvent::DuplicateStep { step } } else { ActionEditorEvent::DeleteStep { step } });
                     }
                 }
-                if Button::new(words.insert_stop.clone()).enabled(hosted && idle).show(ui).clicks == 1 {
+                if Button::new(words.insert_stop.clone()).enabled(hosted && idle).show(ui).clicked() {
                     events.push(ActionEditorEvent::InsertStop { at });
                 }
             });
@@ -267,7 +267,7 @@ impl<'a> ActionEditor<'a> {
                     (words.discard.clone(), ActionEditorEvent::Discard, true),
                     (words.leave.clone(), ActionEditorEvent::Leave, true),
                 ] {
-                    if Button::new(label).enabled(hosted && idle && enabled).show(ui).clicks == 1 {
+                    if Button::new(label).enabled(hosted && idle && enabled).show(ui).clicked() {
                         events.push(event);
                     }
                 }
