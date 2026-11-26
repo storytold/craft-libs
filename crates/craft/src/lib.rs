@@ -103,6 +103,8 @@ pub use craft_drawingml as drawingml;
 pub use craft_dwg as dwg;
 #[cfg(feature = "dxf")]
 pub use craft_dxf as dxf;
+#[cfg(feature = "ease")]
+pub use craft_ease as ease;
 #[cfg(feature = "ecproj-format")]
 pub use craft_ecproj_format as ecproj_format;
 #[cfg(feature = "elf")]
@@ -181,6 +183,8 @@ pub use craft_html as html;
 #[cfg(feature = "http-url")]
 pub use craft_http_url as http_url;
 pub use craft_i18n as i18n;
+#[cfg(feature = "i18n-build")]
+pub use craft_i18n_build as i18n_build;
 #[cfg(feature = "ical")]
 pub use craft_ical as ical;
 #[cfg(feature = "idml")]
@@ -243,6 +247,8 @@ pub use craft_media_source as media_source;
 pub use craft_menu as menu;
 #[cfg(feature = "mesh")]
 pub use craft_mesh as mesh;
+#[cfg(feature = "mesh-ops")]
+pub use craft_mesh_ops as mesh_ops;
 #[cfg(feature = "metadata")]
 pub use craft_metadata as metadata;
 #[cfg(feature = "metafile")]
@@ -267,6 +273,8 @@ pub use craft_ora as ora;
 pub use craft_pages as pages;
 #[cfg(feature = "palette")]
 pub use craft_palette as palette;
+#[cfg(feature = "pbr")]
+pub use craft_pbr as pbr;
 #[cfg(feature = "pcap")]
 pub use craft_pcap as pcap;
 #[cfg(feature = "pcraft-bundle")]
