@@ -11,7 +11,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign.
 - **UV unwrapping.** `unwrap::auto_unwrap` makes a non-overlapping layout per material, splitting
-  vertices where charts meet.
+  vertices where charts meet. It checks the mesh against its size limits and its attribute data
+  first and returns an error without changing the mesh when a check fails. Charts are projected
+  and packed in `f64`.
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle
   and barycentrics under the texel center; `surface_at` turns them into a position, normal and
   tangent frame.
