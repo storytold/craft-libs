@@ -468,8 +468,9 @@ fn flyout_dock(window: Option<Rect>) -> Arc<Workspace<u32>> {
     Arc::new(Workspace::new(Layout::new(Some(root), windows)))
 }
 
-/// The rect of the floating window of [`flyout_dock`] over the flyout at `flyout`: it starts inside the flyout, so
-/// the window's button lies over it, and reaches past its end edge and bottom, so part of the window lies clear of it.
+/// The rect of the floating window of [`flyout_dock`] over the flyout at `flyout`: it starts 40 points inside the
+/// flyout, so the window's button lies over it, and it reaches past the flyout's foot; at the flyout's own width, the
+/// dock's column, its end edge meets the flyout's, so the window's foot alone lies clear of the flyout.
 fn window_over(flyout: Rect) -> Rect {
     Rect::from_min_size(flyout.min + Vec2::new(40.0, 30.0), Vec2::new(300.0, 360.0))
 }
@@ -499,8 +500,14 @@ fn a_flyout_stands_among_the_floating_windows_in_their_order() {
     let window = window_over(open);
     *workspace.borrow_mut() = flyout_dock(Some(window));
     fixture.settle();
-    // The window is there and the flyout too; a corner of the window clear of the flyout names the window's layer.
-    let clear = Pos2::new(window.right() - 24.0, window.top() + 24.0);
+    // The window is there and the flyout too; a point of the window's foot, below the flyout's foot, names the window's
+    // layer. The flyout opens as wide as the dock's column, while the window starts 40 points inside it and is 300
+    // wide, so the window's end edge meets the flyout's: of the window, only its foot lies clear of the flyout.
+    let clear = Pos2::new(open.center().x, open.bottom() + 24.0);
+    assert!(
+        window.contains(clear) && !open.contains(clear),
+        "the window's foot lies in the window and clear of the flyout: {clear:?} in {window:?}, clear of {open:?}"
+    );
     let ctx = fixture.ctx().clone();
     let window_layer = ctx.layer_id_at(clear).expect("the floating window shows");
     let flyout_layer = ctx.layer_id_at(Pos2::new(open.left() + 8.0, open.center().y)).expect("the flyout shows beside the window");
@@ -525,7 +532,7 @@ fn a_flyout_stands_among_the_floating_windows_in_their_order() {
     assert_eq!(clicks.get(), 0, "and the press there does not reach the window's button");
 
     // A press on the window where the flyout does not reach raises the window, as a press raises any floating window.
-    assert!(!open.contains(clear), "the window's corner lies clear of the flyout: {clear:?} in {open:?}");
+    assert!(!open.contains(clear), "the window's foot lies clear of the reopened flyout: {clear:?} in {open:?}");
     fixture.frame(vec![pointer::moved(clear)]).frame(vec![pointer::press(clear)]).frame(vec![pointer::release(clear)]).settle();
     assert!(flyout.get().is_some(), "the flyout stays open: Auto-Collapse Iconic Panels is off");
     assert_eq!(ctx.layer_id_at(button), Some(window_layer), "the pressed window is in front of the flyout");
