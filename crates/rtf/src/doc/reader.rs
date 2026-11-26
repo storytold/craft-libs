@@ -1,7 +1,7 @@
 use super::parse::column_grid;
 use super::state::{
-    CellDef, CommentData, Dest, HeaderFooter, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS, MAX_SECTIONS, NoteData,
-    Output, PageGeom, SecFmt, St, Sub,
+    CellDef, CommentData, Dest, HeaderFooter, ListLevel, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS,
+    MAX_SECTIONS, NoteData, Output, PageGeom, SecFmt, St, Sub,
 };
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
@@ -48,9 +48,9 @@ pub(super) struct Reader {
     pub(super) style_def_cur: StyleDef,
     pub(super) meta: Meta,
     pub(super) info_text: String,
-    // Lists: list id → ordered per level; override ls → list id.
-    pub(super) lists: HashMap<i32, Vec<bool>>,
-    pub(super) list_cur: Vec<bool>,
+    // Lists: list id → its levels; override ls → list id.
+    pub(super) lists: HashMap<i32, Vec<ListLevel>>,
+    pub(super) list_cur: Vec<ListLevel>,
     pub(super) list_cur_id: i32,
     pub(super) overrides: HashMap<i32, i32>,
     pub(super) ov_list: i32,
@@ -95,9 +95,7 @@ pub(super) struct Reader {
     pub(super) def_cur: CellDef,
     pub(super) row_header: bool,
     pub(super) created: Option<(u32, u32, u32, u32, u32)>,
-    pub(super) in_creatim: bool,
     pub(super) rule_pending: bool,
-    pub(super) info_depth: Option<usize>,
     // Notes and comments (only when the caller wants them).
     pub(super) marks_on: bool,
     pub(super) sub: Option<Sub>,
@@ -370,7 +368,7 @@ impl Reader {
             Dest::FontTbl if !self.font_name.is_empty() => self.commit_font(),
             Dest::StyleSheet if !self.style_name.is_empty() => self.commit_style(),
             Dest::RevTbl if !self.rev_name.trim().is_empty() => self.commit_author(),
-            Dest::Info(k) => {
+            Dest::Info(k) if self.stack.last().is_none_or(|parent| parent.dest != closing) => {
                 let t = std::mem::take(&mut self.info_text).trim().to_string();
                 match k {
                     1 => self.meta.title = t,
@@ -380,7 +378,6 @@ impl Reader {
                     5 => self.meta.description = t,
                     _ => {}
                 }
-                self.in_creatim = false;
             }
             Dest::Atn(k) => self.commit_atn(k),
             Dest::ShpSv => self.commit_shape_prop(),
