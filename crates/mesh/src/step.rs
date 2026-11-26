@@ -36,7 +36,7 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     // supporting entities separately from the decoded geometry, which is checked as it is built.
     let max_entities = limits.max_vertices.saturating_add(limits.max_triangles.saturating_mul(8));
     let mut points: HashMap<u64, [f64; 3]> = HashMap::new();
-    let mut poly_loops: Vec<Vec<u64>> = Vec::new();
+    let mut poly_loops: Vec<(u64, Vec<u64>)> = Vec::new();
     let mut vertex_points: HashMap<u64, u64> = HashMap::new();
     let mut edge_curves: HashMap<u64, (u64, u64, u64)> = HashMap::new();
     let mut oriented_edges: HashMap<u64, (u64, bool)> = HashMap::new();
@@ -48,11 +48,11 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     let mut curve_types: HashMap<u64, String> = HashMap::new();
     let mut entity_count = 0usize;
 
-    for statement in statements(text)? {
+    for_each_statement(text, |statement| {
         let line = statement.trim();
-        let Some((id_str, entity_body)) = line.split_once('=') else { continue };
+        let Some((id_str, entity_body)) = line.split_once('=') else { return Ok(()) };
         let id_str = id_str.trim().trim_start_matches('#');
-        let Ok(id) = id_str.parse::<u64>() else { continue };
+        let Ok(id) = id_str.parse::<u64>() else { return Ok(()) };
         entity_count = entity_count.saturating_add(1);
         if entity_count > max_entities {
             return Err(too_large(KIND, format!("more than {max_entities} entities")));
@@ -90,7 +90,7 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
                         return Err(too_large(KIND, format!("a polygon loop has more than {} corners", limits.max_face_corners)));
                     }
                     if refs.len() >= 3 {
-                        poly_loops.push(refs);
+                        poly_loops.push((id, refs));
                     }
                 }
             }
@@ -142,7 +142,8 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
             }
             _ => {}
         }
-    }
+        Ok(())
+    })?;
 
     if points.is_empty() {
         return Err(malformed(KIND, "no 3D coordinate points found"));
@@ -160,6 +161,19 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
         {
             outer_bounds.entry(loop_id).or_insert(forward);
         }
+    }
+    if faces.is_empty() {
+        for &(loop_id, forward) in plain_bounds.values() {
+            outer_bounds.entry(loop_id).or_insert(forward);
+        }
+    }
+
+    let mut polygons: Vec<Vec<u64>> = Vec::with_capacity(poly_loops.len() + edge_loops.len());
+    for (loop_id, mut poly) in poly_loops {
+        if outer_bounds.get(&loop_id) == Some(&false) {
+            poly.reverse();
+        }
+        polygons.push(poly);
     }
 
     if !edge_loops.is_empty() {
@@ -197,12 +211,12 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
                 polygon.reverse();
             }
             if polygon.len() >= 3 {
-                poly_loops.push(polygon);
+                polygons.push(polygon);
             }
         }
     }
 
-    if poly_loops.is_empty() {
+    if polygons.is_empty() {
         return Err(Error::Unsupported("STEP: B-Rep tessellation without polygon loops is not supported".into()));
     }
 
@@ -210,7 +224,7 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     let mut part = Part::default();
     let mut tri_count = 0usize;
 
-    for polygon in poly_loops {
+    for polygon in polygons {
         let mut ring = Vec::with_capacity(polygon.len());
         for id in &polygon {
             let Some(&p) = points.get(id) else {
@@ -253,10 +267,9 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     Ok(Scene::from_meshes(vec![mesh], Vec::new()))
 }
 
-/// Split the exchange structure into statements at each `;` outside a quoted string and outside a
-/// `/* ... */` comment, dropping the comments (ISO 10303-21 §5.3, §6.4).
-fn statements(text: &str) -> Result<Vec<String>> {
-    let mut out = Vec::new();
+/// Stream the exchange structure into `on_statement` at each `;` outside a quoted string and
+/// outside a `/* ... */` comment, dropping comments and empty statements (ISO 10303-21 §5.3, §6.4).
+fn for_each_statement(text: &str, mut on_statement: impl FnMut(&str) -> Result<()>) -> Result<()> {
     let mut current = String::new();
     let mut chars = text.chars().peekable();
     let mut in_string = false;
@@ -293,15 +306,22 @@ fn statements(text: &str) -> Result<Vec<String>> {
                 }
                 current.push(' ');
             }
-            ';' => out.push(std::mem::take(&mut current)),
+            ';' => {
+                if !current.trim().is_empty() {
+                    on_statement(&current)?;
+                }
+                current.clear();
+            }
             other => current.push(other),
         }
     }
     if in_string {
         return Err(malformed(KIND, "unterminated string"));
     }
-    out.push(current);
-    Ok(out)
+    if !current.trim().is_empty() {
+        on_statement(&current)?;
+    }
+    Ok(())
 }
 
 fn step_arguments(input: &str) -> Vec<&str> {

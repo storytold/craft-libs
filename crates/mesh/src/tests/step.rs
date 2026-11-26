@@ -135,3 +135,13 @@ fn step_write_emits_faces_in_a_shape() {
         assert!(text.contains(entity), "{entity}");
     }
 }
+
+#[test]
+fn step_poly_loop_applies_face_bound_orientation() {
+    let reversed = b"ISO-10303-21;DATA;\
+        #1=CARTESIAN_POINT('',(0.,0.,0.));#2=CARTESIAN_POINT('',(1.,0.,0.));#3=CARTESIAN_POINT('',(0.,1.,0.));\
+        #4=POLY_LOOP('',(#1,#2,#3));#5=FACE_BOUND('',#4,.F.);#6=FACE('',(#5));\
+        ENDSEC;END-ISO-10303-21;";
+    let scene = step::read(reversed, &Limits::default()).unwrap();
+    assert_eq!(scene.meshes[0].normals[0], [0.0, 0.0, -1.0]);
+}
