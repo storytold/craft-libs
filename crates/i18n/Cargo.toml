@@ -57,5 +57,8 @@ local-time = ["dates", "jiff/tz-system", "jiff/tzdb-zoneinfo", "jiff/tzdb-concat
 # Locale sorting (`collate`), with ICU4X collation data for the suite's locales embedded.
 collate = ["dep:icu_collator", "icu_provider/serde", "icu_provider_blob/alloc"]
 
+[dev-dependencies]
+craft-testkit = { workspace = true }
+
 [lints]
 workspace = true

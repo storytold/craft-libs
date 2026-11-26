@@ -3015,6 +3015,7 @@ version = "0.1.0"
 name = "craft-i18n"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "fixed_decimal",
  "icu_calendar",
  "icu_collator",
