@@ -373,12 +373,12 @@ impl Bvh {
                     if !filter(orig) {
                         continue;
                     }
-                    let (q, u, v) = closest_on_triangle(p, tri);
-                    let dd = (q.as_dvec3() - pd).length_squared();
+                    let (q, u, v) = closest_on_triangle_f64(pd, tri.map(|corner| corner.as_dvec3()));
+                    let dd = (q - pd).length_squared();
                     // The first point found may lie exactly at `max_dist`.
                     if dd.is_finite() && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
                         best_d2 = dd;
-                        best = Some(Hit { t: dd.sqrt() as f32, tri: orig, u, v });
+                        best = Some(Hit { t: dd.sqrt() as f32, tri: orig, u: u as f32, v: v as f32 });
                     }
                 }
             } else {
@@ -423,6 +423,7 @@ impl Bvh {
 /// region tests round to zero inside thin triangles. A triangle without area is measured as the
 /// point or segment it is, and can be the nearest. An edge of zero length is skipped: the
 /// denominator of its parameter is its squared length.
+#[cfg(test)]
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
     let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), t.map(|c| c.as_dvec3()));
     (q.as_vec3(), v as f32, w as f32)
@@ -535,6 +536,15 @@ mod tests {
     }
 
     #[test]
+    fn nearest_compares_the_unrounded_projection_distance() {
+        let bvh = single_triangle(vec![Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0), Vec3::Y], vec![0, 1, 2]);
+        let point = Vec3::new(0.5, 0.25, f32::from_bits(0.5f32.to_bits() + 1));
+        assert!(bvh.nearest(point, 4e-8, &|_| true).is_none());
+        let hit = bvh.nearest(point, 5e-8, &|_| true).expect("the plane projection is inside the distance limit");
+        assert!(hit.t > 4e-8 && hit.t < 5e-8, "{hit:?}");
+    }
+
+    #[test]
     fn nearest_finds_a_point_inside_a_thin_triangle() {
         let bvh = single_triangle(vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1e-4, 0.0)], vec![0, 1, 2]);
         // p = a + 0.5 (b - a) + 0.25 (c - a) lies on the triangle.
@@ -559,7 +569,13 @@ mod tests {
         let p = Vec3::new(0.5, 1.0, 0.0);
         let (o, x) = (Vec3::ZERO, Vec3::X);
         // The surviving segment runs from the origin to +X; its point nearest p is (0.5, 0, 0).
-        for (positions, indices) in [(vec![o, o, x], vec![0, 1, 2]), (vec![x, x, o], vec![0, 1, 2]), (vec![o, x], vec![0, 0, 1])] {
+        for (positions, indices) in [
+            (vec![o, o, x], vec![0, 1, 2]),
+            (vec![o, x, o], vec![0, 1, 2]),
+            (vec![x, o, o], vec![0, 1, 2]),
+            (vec![x, x, o], vec![0, 1, 2]),
+            (vec![o, x], vec![0, 0, 1]),
+        ] {
             let bvh = single_triangle(positions.clone(), indices.clone());
             let hit = bvh.nearest(p, 10.0, &|_| true);
             let hit = hit.unwrap_or_else(|| panic!("{positions:?} {indices:?}: no point found"));
