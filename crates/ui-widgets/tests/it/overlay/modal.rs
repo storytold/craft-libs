@@ -15,7 +15,7 @@ use craft_ui::testing::focus::is_focused;
 use craft_ui::testing::overlay::{PressJudgement, press_judgement};
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Frames, trial};
-use egui::{Id, LayerId, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Context, Event, Id, LayerId, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
 const OPENER: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(180.0, 120.0) };
@@ -215,7 +215,9 @@ fn a_popup_created_before_a_modal_paints_above_it_and_takes_a_one_frame_tap() {
 }
 
 /// A modal dialog whose card holds a button with a context menu and a body of its own below it: a dialog with a menu
-/// inside its card.
+/// inside its card. Each real pass of the card adds a line to `runs` for a failing assertion's report: what the
+/// window's layer stack judged the pass's presses by (the absorb zone, the absorbed press and the layers of the last
+/// pass with their parents and ranks) and the card's menu with the layer it shows in and how it closed.
 #[derive(Component)]
 #[component(overlay)]
 struct CardMenu<'a> {
@@ -231,6 +233,8 @@ struct CardMenu<'a> {
     body: &'a Cell<Option<Id>>,
     /// How the card's menu closed, in the order it closed.
     menus: &'a RefCell<Vec<CloseReason>>,
+    /// What each real pass judged its presses by, and how the menu closed in it.
+    runs: &'a RefCell<Vec<String>>,
 }
 
 impl Component for CardMenu<'_> {
@@ -260,7 +264,7 @@ impl Component for CardMenu<'_> {
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("dialog");
-        let (dialog, target, inside, body, menus) = (self.dialog, self.target, self.inside, self.body, self.menus);
+        let (dialog, target, inside, body, menus, runs) = (self.dialog, self.target, self.inside, self.body, self.menus, self.runs);
         let shown = ui.show(popup, modal_on_first(), |ui, _| {
             let live = !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx());
             let opener = Button::new("Target").show(ui);
@@ -279,6 +283,7 @@ impl Component for CardMenu<'_> {
             let leaf = Leaf::new(inside, Vec2::new(220.0, 120.0)).id_salt("card-body").show(ui);
             if live {
                 body.set(Some(leaf.id));
+                runs.borrow_mut().push(judged_pass(ui.ctx(), menu.output.response.id, menu.output.closed));
             }
         });
         if shown.is_some() {
@@ -291,6 +296,52 @@ impl Component for CardMenu<'_> {
     }
 }
 
+/// What the layer stack judged the running pass's presses by and how the card's menu closed in it, for a failing
+/// assertion's report: the absorb zone, the absorbed press, each layer of the last pass (its id, rank, the layer it was
+/// opened from inside, its rect and anchor, and whether it fades out) and the menu's layer with its close reason.
+fn judged_pass(ctx: &Context, menu: Id, closed: Option<CloseReason>) -> String {
+    let judged = press_judgement(ctx);
+    let layers: Vec<String> = judged
+        .layers
+        .iter()
+        .map(|entry| {
+            let exiting = if entry.exiting { " exiting" } else { "" };
+            format!("{:?} {:?} parent {:?} at {:?} anchor {:?}{exiting}", entry.id, entry.rank, entry.parent, entry.rect, entry.anchor)
+        })
+        .collect();
+    format!(
+        "pass {}: zone {:?}, absorbed press {:?}, menu {menu:?} closed {closed:?}, stack [{}]",
+        ctx.cumulative_pass_nr(),
+        judged.zone,
+        judged.absorbed,
+        layers.join("; ")
+    )
+}
+
+/// The pointer events of `events` in words: each move's point, and each button's press or release and its point.
+fn events_in_words(events: &[Event]) -> String {
+    let words: Vec<String> = events
+        .iter()
+        .map(|event| match event {
+            Event::PointerMoved(pos) => format!("move to {pos:?}"),
+            Event::PointerButton { pos, button, pressed, .. } => format!("{button:?} {} at {pos:?}", if *pressed { "press" } else { "release" }),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    if words.is_empty() { "no events".to_owned() } else { words.join(", ") }
+}
+
+/// One frame with `events`, traced in `trace` for a failing assertion's report: the events in words, how many passes
+/// the frame ran and a line for each real pass of the card (`judged_pass`).
+fn traced(events: Vec<Event>, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), runs: &RefCell<Vec<String>>, trace: &mut Vec<String>) {
+    let words = events_in_words(&events);
+    runs.borrow_mut().clear();
+    let passes = frames.frame(events, &mut *show);
+    let lines: Vec<String> = std::mem::take(&mut *runs.borrow_mut());
+    let judged = if lines.is_empty() { "no real pass of the card".to_owned() } else { lines.join(" | ") };
+    trace.push(format!("frame {}: {words}, {passes} passes; {judged}", trace.len()));
+}
+
 /// The card the dialog shows hosts the menu opened inside it, so a press elsewhere on the card is outside the menu: the
 /// menu closes (`CloseReason::Outside`), the dialog stays open, and the press reaches neither the card's body nor what
 /// lies below the dialog.
@@ -300,11 +351,23 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
     let (dialog, inside, below) = (Opened::default(), RefCell::new(Seen::default()), RefCell::new(Seen::default()));
     let (target, body, menus) = (RefCell::new(None), Cell::new(None), RefCell::new(Vec::new()));
     let judged = RefCell::new(PressJudgement::default());
+    // Each real pass of the card leaves a line of what it judged its presses by, and each frame a line of its events
+    // and those passes: a failing assertion reports them, so a failure says where the press went.
+    let runs: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut trace: Vec<String> = Vec::new();
     let open = Cell::new(false);
     let mut show = |ui: &mut Ui| {
         dialog.shown.set(false);
-        let card =
-            CardMenu { common: Common::new(), open: open.get(), dialog: &dialog, target: &target, inside: &inside, body: &body, menus: &menus };
+        let card = CardMenu {
+            common: Common::new(),
+            open: open.get(),
+            dialog: &dialog,
+            target: &target,
+            inside: &inside,
+            body: &body,
+            menus: &menus,
+            runs: &runs,
+        };
         card.id_salt("dialog").show_at(ui, OPENER);
         Leaf::new(&below, Vec2::new(60.0, 30.0)).id_salt("below").show_at(ui, BELOW);
         // The press zone and the layers the layer stack judged the last pass by, for the trial's preconditions.
@@ -312,11 +375,16 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
             *judged.borrow_mut() = press_judgement(ui.ctx());
         }
     };
-    let right_click = |at: Pos2, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
-        frames.frame(vec![moved(at)], &mut *show);
-        frames.frame(vec![secondary(at, true)], &mut *show);
-        frames.frame(vec![secondary(at, false)], &mut *show);
-        frames.idle(10, &mut *show);
+    let frame = |events: Vec<Event>, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), trace: &mut Vec<String>| {
+        traced(events, frames, &mut *show, &runs, trace);
+    };
+    let right_click = |at: Pos2, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), trace: &mut Vec<String>| {
+        frame(vec![moved(at)], frames, &mut *show, trace);
+        frame(vec![secondary(at, true)], frames, &mut *show, trace);
+        frame(vec![secondary(at, false)], frames, &mut *show, trace);
+        for _ in 0..10 {
+            frame(vec![], frames, &mut *show, trace);
+        }
     };
     frames.idle(3, &mut show);
     open.set(true);
@@ -326,7 +394,7 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
     assert!(dialog.shown.get(), "the dialog shows");
     // A right click on the button in the card opens the card's menu.
     let button = (*target.borrow()).expect("the button in the card shows");
-    right_click(button.center(), &mut frames, &mut show);
+    right_click(button.center(), &mut frames, &mut show, &mut trace);
     let judged = {
         let judged = judged.borrow();
         (*judged).clone()
@@ -339,33 +407,42 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
         .expect("the dialog's card is a modal layer");
     let menu =
         judged.layers.iter().find(|entry| matches!(entry.rank, Rank::Popup)).map(|entry| entry.rect).expect("the card's menu is a popup layer");
-    assert!(menus.borrow().is_empty(), "the click that opened the menu leaves it open");
+    assert!(menus.borrow().is_empty(), "the click that opened the menu leaves it open:\n{}", trace.join("\n"));
     // A press elsewhere on the card, away from the menu and its anchor, closes the menu and nothing else.
     let body = body.get().and_then(|id| frames.ctx.read_response(id)).map(|response| response.rect).expect("the card's body shows");
     let at = body.center_bottom() - Vec2::new(0.0, 8.0);
-    assert!(card.contains(at) && !menu.contains(at), "the press at {at:?} lands on the card {card:?}, beside the menu {menu:?}");
+    assert!(
+        card.contains(at) && !menu.contains(at),
+        "the press at {at:?} lands on the card {card:?}, beside the menu {menu:?}:\n{}",
+        trace.join("\n")
+    );
     assert!(
         judged.layers.iter().filter_map(|entry| entry.anchor).all(|anchor| !anchor.contains(at)),
-        "the press at {at:?} lands away from the menu's anchor"
+        "the press at {at:?} lands away from the menu's anchor:\n{}",
+        trace.join("\n")
     );
-    frames.frame(vec![moved(at)], &mut show);
-    frames.frame(vec![press(at)], &mut show);
-    frames.frame(vec![release(at)], &mut show);
-    frames.idle(10, &mut show);
-    assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press elsewhere on the card closes the menu");
-    assert!(dialog.shown.get(), "the dialog stays open");
-    assert_eq!(inside.borrow().presses, 0, "the menu takes the press that closes it");
+    frame(vec![moved(at)], &mut frames, &mut show, &mut trace);
+    frame(vec![press(at)], &mut frames, &mut show, &mut trace);
+    frame(vec![release(at)], &mut frames, &mut show, &mut trace);
+    for _ in 0..10 {
+        frame(vec![], &mut frames, &mut show, &mut trace);
+    }
+    assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press elsewhere on the card closes the menu:\n{}", trace.join("\n"));
+    assert!(dialog.shown.get(), "the dialog stays open:\n{}", trace.join("\n"));
+    assert_eq!(inside.borrow().presses, 0, "the menu takes the press that closes it:\n{}", trace.join("\n"));
     // A press outside the dialog closes the menu opened again inside it, and reaches nothing below the dialog.
     menus.borrow_mut().clear();
-    right_click(button.center(), &mut frames, &mut show);
-    assert!(menus.borrow().is_empty(), "the menu opens again inside the dialog");
+    right_click(button.center(), &mut frames, &mut show, &mut trace);
+    assert!(menus.borrow().is_empty(), "the menu opens again inside the dialog:\n{}", trace.join("\n"));
     let outside = BELOW.center();
-    frames.frame(vec![moved(outside)], &mut show);
-    frames.frame(vec![press(outside)], &mut show);
-    frames.frame(vec![release(outside)], &mut show);
-    frames.idle(10, &mut show);
-    assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press outside the dialog closes the menu");
-    assert!(dialog.shown.get(), "the dialog stays open");
-    assert!(any_open(&frames.ctx, OpenFilter::Modal), "the dialog is still the open modal");
-    assert_eq!(below.borrow().presses, 0, "the press outside the dialog reaches nothing below it");
+    frame(vec![moved(outside)], &mut frames, &mut show, &mut trace);
+    frame(vec![press(outside)], &mut frames, &mut show, &mut trace);
+    frame(vec![release(outside)], &mut frames, &mut show, &mut trace);
+    for _ in 0..10 {
+        frame(vec![], &mut frames, &mut show, &mut trace);
+    }
+    assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press outside the dialog closes the menu:\n{}", trace.join("\n"));
+    assert!(dialog.shown.get(), "the dialog stays open:\n{}", trace.join("\n"));
+    assert!(any_open(&frames.ctx, OpenFilter::Modal), "the dialog is still the open modal:\n{}", trace.join("\n"));
+    assert_eq!(below.borrow().presses, 0, "the press outside the dialog reaches nothing below it:\n{}", trace.join("\n"));
 }
