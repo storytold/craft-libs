@@ -1,10 +1,15 @@
 //! The details sheet: a family's every style in its own face, its facts and languages, and
 //! installing or removing it whole or a style at a time.
+//!
+//! With a preview service, the styles not installed draw with its subsets: a static file's own, and one subset of each
+//! variable file with every axis kept, drawn at each named instance and at the values of the file's axis sliders. The
+//! axis values go with the text drawn, not with the face registered, so the sliders never register the face again.
 
 pub(crate) mod rows;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,24 +18,33 @@ use craft_host::Host;
 use craft_theme::variant::{Emphasis, Tone};
 use craft_ui::buttons::{Button, Link, SplitButton};
 use craft_ui::contract::overlay::Outside;
-use craft_ui::contract::{Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft_ui::contract::{
+    Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::{Badge, Progress, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::{Notice, NoticeAction};
+use craft_ui::primitives::Wrap;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::Initial;
 use craft_ui::style::Variant;
+use craft_ui::text::TextField;
 use egui::{Response, Ui};
 
 use self::rows::{Action, Lines, StyleLine, StyleList, StyleRow};
+use crate::axes::{AxisSliders, AxisValues, FontAxis, OpticalSize, read_axes, shown_axes};
 use crate::index::{Family, FontFile, Index, script_name, source_label};
 use crate::panel::app::{
     Detail, FontsPanel, FontsPanelWords, NotCopied, Pending, category_label, family_key, regular, source_name, style_count, style_name,
 };
 use crate::panel::faces::Owner;
 use crate::panel::jobs::Kind;
-use crate::panel::specimen::{FontSample, SampleFace};
-use crate::{Catalog, FaceInfo, Source};
+use crate::panel::legal::{Legal, legal_key};
+use crate::panel::specimen::{FontSample, HeldFace};
+use crate::panel::subsets::SubsetFont;
+use crate::store::LegalText;
+use crate::{FaceInfo, Source};
 
 /// The sample is at least this many points: the sheet shows styles, not thumbnails.
 const MIN_SAMPLE_POINTS: f32 = 24.0;
@@ -39,11 +53,16 @@ const HERO_POINTS: f32 = 96.0;
 /// The most languages the sheet lists; the rest are counted.
 const LANGUAGES_SHOWN: usize = 60;
 
+/// The most lines of a licence or NOTICE text in view; the rest scrolls.
+const LEGAL_LINES: usize = 10;
+/// The lines its box has for a shorter text: the least of a multi-line field.
+const LEGAL_LEAST_LINES: usize = 2;
+
+/// The sheet's sliders show the face's optical sizes, which its samples are drawn at.
+const OPTICAL_SIZE: OpticalSize = OpticalSize::Slider;
+
 /// The facts' labels over their values.
 const FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
-
-/// The installed catalog and the preview catalog, which the faces of the two owners load from.
-type Catalogs = (Arc<Catalog>, Arc<Catalog>);
 
 craft_ui::words! {
     /// The details sheet's words, English by default.
@@ -77,6 +96,16 @@ craft_ui::words! {
         preview: "fontDetails.preview" = "Preview";
         install: "fontDetails.install" = "Install";
         remove: "fontDetails.remove" = "Remove";
+        copyright: "fontDetails.copyright" = "Copyright";
+        /// `{url}`.
+        upstream: template "fontDetails.upstream" = "Upstream: {url}";
+        show_licence: "fontDetails.showLicence" = "Show licence text";
+        show_notice: "fontDetails.showNotice" = "Show notice";
+        licence_text: "fontDetails.licenceText" = "Licence text";
+        notice_text: "fontDetails.noticeText" = "Notice";
+        loading_text: "fontDetails.loadingText" = "Loading…";
+        /// The style of a variable file that names no instances.
+        default_style: "fontDetails.defaultStyle" = "Default";
         /// `{style}`.
         install_style: template "fontDetails.installStyle" = "Install {style}";
         /// `{style}`.
@@ -172,6 +201,34 @@ enum Do {
     Ask(Pending),
     Remove { faces: Vec<FaceInfo>, whole: bool },
     AvailableToAll { files: Vec<PathBuf>, on: bool },
+    ReadLegal(LegalText),
+}
+
+/// A licence or NOTICE text as the sheet shows it.
+enum LegalShown {
+    /// Not read yet.
+    Offer,
+    Loading,
+    Text(String),
+    Failed(String),
+}
+
+/// The licence and NOTICE texts `family` has, as far as they are read.
+fn legal_texts(panel: &FontsPanel, family: &Family) -> Vec<(LegalText, LegalShown)> {
+    let files = [(LegalText::Notice, family.notice_file.is_some()), (LegalText::License, family.license_file_name().is_some())];
+    files
+        .into_iter()
+        .filter(|(_, has)| *has)
+        .filter_map(|(which, _)| {
+            let shown = match panel.legal.get(&legal_key(family, which)) {
+                None => LegalShown::Offer,
+                Some(Legal::Loading(_)) => LegalShown::Loading,
+                Some(Legal::Ready(text)) => LegalShown::Text(text.clone()?),
+                Some(Legal::Failed(error)) => LegalShown::Failed(error.clone()),
+            };
+            Some((which, shown))
+        })
+        .collect()
 }
 
 /// The job running for the whole family, as the header shows it.
@@ -260,12 +317,19 @@ fn not_copied_text(words: &DetailsWords, not_copied: &NotCopied) -> String {
     }
 }
 
+/// A variable file drawn by the preview service, and its axes.
+struct FileAxes {
+    sha256: String,
+    label: String,
+    axes: Vec<FontAxis>,
+}
+
 /// Everything the sheet shows, read from the panel before the pass draws it.
 struct Sheet {
     eyebrow: String,
     title: String,
     byline: Option<String>,
-    hero: Option<(Owner, FaceInfo)>,
+    hero: Option<HeldFace>,
     run: Option<Run>,
     badge: Option<Label>,
     /// The family's position in the index when it can be installed whole.
@@ -281,9 +345,15 @@ struct Sheet {
     uncurated: Option<String>,
     failure: Option<Failed>,
     lines: Vec<StyleLine>,
+    /// The family's files, by position, whose styles the preview service draws.
+    subset_files: Vec<usize>,
+    /// The variable files among them, with the sliders of their axes.
+    axes: Vec<FileAxes>,
     facts: Vec<(Label, String)>,
     languages: Vec<String>,
-    scripts: Vec<String>,
+    /// The web page of the family's own project.
+    upstream: Option<String>,
+    legal: Vec<(LegalText, LegalShown)>,
     /// The family's position in the index; none for an installed family, whose styles cannot be installed.
     index: Option<usize>,
     sample: String,
@@ -326,26 +396,33 @@ impl<'a> DetailsSheet<'a> {
         let env = Env::of(ui);
         let words = env.words::<DetailsWords>();
         let host: Option<Arc<Host>> = env.view().host().cloned();
+        panel.read_notice(host.as_ref());
         let Some(sheet) = Sheet::read(panel, &env, &words) else {
             panel.detail = None;
             return DetailsOutput { response: ui.response(), closed: true };
         };
-        let catalogs: Catalogs = (Arc::clone(&panel.catalog), Arc::clone(&panel.previews));
         let points = panel.settings.size.max(MIN_SAMPLE_POINTS);
         let mut todo: Vec<Do> = Vec::new();
         let mut open = true;
-        let shown = Dialog::prompt(sheet.title.clone())
+        // The sheet is for reading: no field of it takes the keyboard when it opens.
+        let mut shown = Dialog::prompt(sheet.title.clone())
+            .initial_focus(Initial::Keep)
             .overlay(|overlay| {
                 let dismiss = overlay.dismiss.outside(Outside::Absorb);
                 overlay.dismiss(dismiss)
             })
             .opened(Bind::bound(&mut open))
             .show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
-                    sheet.header(ui, &env, &words, &catalogs, &mut todo);
-                    sheet.body(ui, &env, &words, &catalogs, points, &mut todo);
+                Stack::new().fill_width().show(ui, |ui, _| {
+                    sheet.header(ui, &env, &words, &mut todo);
+                    sheet.body(ui, &env, &words, points, &mut panel.detail_axes, &mut todo);
                 });
             });
+        let index = panel.index();
+        let family = sheet.index.zip(index.as_deref()).and_then(|(i, index)| Some((index, index.families().get(i)?, sheet.sample.as_str())));
+        if !craft_ui::runtime::frame::will_rerun(ui.ctx()) {
+            shown.settle(|_, ()| panel.subsets.request_detail(family, &sheet.subset_files));
+        }
         let closed = shown.output.closed.is_some();
         if closed {
             panel.detail = None;
@@ -354,6 +431,11 @@ impl<'a> DetailsSheet<'a> {
             match action {
                 Do::Ask(pending) => panel.ask(host.as_ref(), pending),
                 Do::Remove { faces, whole } => panel.remove(host.as_ref(), &sheet.title, &faces, whole),
+                Do::ReadLegal(which) => {
+                    if let Some(i) = sheet.index {
+                        panel.load_legal(host.as_ref(), i, which);
+                    }
+                }
                 Do::AvailableToAll { files, on } => panel.set_available_to_all(host.as_ref(), &sheet.title, files, on),
             }
         }
@@ -364,13 +446,10 @@ impl<'a> DetailsSheet<'a> {
 impl Sheet {
     /// The sheet of the panel's open detail; `None` when there is none or its family is gone.
     fn read(panel: &FontsPanel, env: &Env, words: &DetailsWords) -> Option<Sheet> {
-        let mut sheet = match panel.detail.clone()? {
-            Detail::Family(i) => Sheet::family(panel, env, words, i)?,
-            Detail::Installed(name, source) => Sheet::installed(panel, env, words, &name, source)?,
-        };
-        // The sample is what the user typed, else the preset for the family's scripts.
-        sheet.sample = panel.sample_for(sheet.scripts.iter().map(String::as_str));
-        Some(sheet)
+        match panel.detail.clone()? {
+            Detail::Family(i) => Sheet::family(panel, env, words, i),
+            Detail::Installed(name, source) => Sheet::installed(panel, env, words, &name, source),
+        }
     }
 
     fn family(panel: &FontsPanel, env: &Env, words: &DetailsWords, i: usize) -> Option<Sheet> {
@@ -386,8 +465,8 @@ impl Sheet {
         let names = env.words::<FontsPanelWords>();
         let eyebrow = [source.to_owned(), category_label(&names, &family)].join(" · ");
         let byline = (!family.designer.is_empty()).then(|| words.designed_by.fill(&[("designer", &family.designer)]));
-        let hero = regular(&installed).cloned().map(|f| (Owner::Installed, f));
-        let hero = hero.or_else(|| previewed.as_deref().and_then(regular).cloned().map(|f| (Owner::Preview, f)));
+        let hero = regular(&installed).cloned().map(|f| HeldFace::local(Owner::Installed, f, &panel.catalog));
+        let hero = hero.or_else(|| previewed.as_deref().and_then(regular).cloned().map(|f| HeldFace::local(Owner::Preview, f, &panel.previews)));
         let size = env.units().file_size(family.size());
         let all_installed =
             !installed.is_empty() && (on_system || family.files.iter().all(|f| store.iter().any(|x| file_name(x).as_deref() == Some(f.file_name()))));
@@ -396,10 +475,25 @@ impl Sheet {
             _ => None,
         };
         let installed_word = if on_system { &words.installed_on_system } else { &words.installed };
-        let unseen = installed.is_empty() && previewed.is_none();
+        let sample = panel.family_sample(&index, &family);
+        let unseen = installed.is_empty() && previewed.is_none() && !panel.subsets.draws_detail(&index, &family, &sample);
         let uncurated = (!curated).then(|| index.source_of(&family).and_then(|f| f.user_url.clone()).unwrap_or_default());
         let failure = panel.failed.get(&key).map(|f| Failed { what: f.kind, error: f.error.clone(), retry: f.retry.clone() });
-        let lines = family_lines(&names, &family, &installed, &store, on_system, previewed.as_deref(), &job);
+        let styles = FamilyStyles {
+            panel,
+            names: &names,
+            words,
+            index: &index,
+            family: &family,
+            sample: &sample,
+            installed: &installed,
+            store: &store,
+            on_system,
+            previewed: previewed.as_deref(),
+            job: &job,
+        };
+        let (lines, subset_files) = styles.lines();
+        let axes = styles.axes(&subset_files);
         let mut facts = family_facts(env, words, &index, &family, &size);
         let not_curated = env.view().resolve(&words.not_curated);
         let source_fact = if curated { source.to_owned() } else { format!("{source} · {}", not_curated.as_str()) };
@@ -425,18 +519,21 @@ impl Sheet {
             uncurated,
             failure,
             lines,
+            subset_files,
+            axes,
             facts,
             languages: languages.into_iter().map(|l| l.name.clone()).collect(),
-            scripts: family.scripts.clone(),
+            upstream: family.upstream.clone().filter(|url| url.starts_with("https://") || url.starts_with("http://")),
+            legal: legal_texts(panel, &family),
             index: Some(i),
-            sample: String::new(),
+            sample,
         })
     }
 
     fn installed(panel: &FontsPanel, env: &Env, words: &DetailsWords, name: &str, source: Source) -> Option<Sheet> {
         let family = panel.installed.iter().find(|f| f.name == name && f.source == source).cloned()?;
         let names = env.words::<FontsPanelWords>();
-        let hero = regular(&family.faces).cloned().map(|f| (Owner::Installed, f));
+        let hero = regular(&family.faces).cloned().map(|f| HeldFace::local(Owner::Installed, f, &panel.catalog));
         let job = panel.jobs.of("", &family.name).map(|j| (j.kind, j.file.clone(), j.fraction()));
         let run = match &job {
             Some((Kind::Remove, None, _)) => Some(Run { kind: Kind::Remove, fraction: None }),
@@ -445,10 +542,9 @@ impl Sheet {
         let lines = family
             .faces
             .iter()
-            .map(|face| StyleLine {
-                label: style_name(&names, face).to_owned(),
-                face: Some((Owner::Installed, face.clone())),
-                action: if face.source == Source::Store { Action::Remove(Box::new(face.clone())) } else { Action::None },
+            .map(|face| {
+                let action = if face.source == Source::Store { Action::Remove(Box::new(face.clone())) } else { Action::None };
+                StyleLine::new(style_name(&names, face), Some(HeldFace::local(Owner::Installed, face.clone(), &panel.catalog)), action)
             })
             .collect();
         let mut files: Vec<_> = family.faces.iter().filter_map(|f| f.path.clone()).collect();
@@ -460,7 +556,6 @@ impl Sheet {
             (words.styles_fact.clone(), format.integer(family.faces.len() as u64)),
             (words.files_fact.clone(), format.integer(files.len() as u64)),
         ];
-        let scripts = panel.index().and_then(|index| index.family(&family.name).map(|f| f.scripts.clone())).unwrap_or_default();
         Some(Sheet {
             eyebrow: source_name(&names, source).as_str().to_owned(),
             title: family.name.clone(),
@@ -479,24 +574,22 @@ impl Sheet {
             uncurated: None,
             failure: None,
             lines,
+            subset_files: Vec::new(),
+            axes: Vec::new(),
             facts,
             languages: Vec::new(),
-            scripts,
+            upstream: None,
+            legal: Vec::new(),
             index: None,
-            sample: String::new(),
+            sample: panel.installed_sample(&family.name),
         })
     }
 
     /// The eyebrow, the "Aa" in the family's face, the byline, and the family's install and remove controls.
-    fn header(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, catalogs: &Catalogs, todo: &mut Vec<Do>) {
+    fn header(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, todo: &mut Vec<Do>) {
         Text::new(self.eyebrow.clone()).shade(Shade::Faint).show(ui);
-        if let Some((owner, face)) = &self.hero {
-            let catalog = match owner {
-                Owner::Installed => &catalogs.0,
-                Owner::Preview => &catalogs.1,
-            };
-            let face = SampleFace::Face { catalog, owner: *owner, face };
-            FontSample::new(format!("{}: Aa", self.title), "Aa", face, HERO_POINTS).show(ui);
+        if let Some(face) = &self.hero {
+            FontSample::new(format!("{}: Aa", self.title), "Aa", HeldFace::sample(Some(face)), HERO_POINTS).show(ui);
         }
         if let Some(byline) = &self.byline {
             Text::new(byline.clone()).shade(Shade::Muted).show(ui);
@@ -583,35 +676,27 @@ impl Sheet {
         out.chosen.map(Some).or_else(|| out.activated.then_some(None))
     }
 
-    /// The styles, and beside them (or below, when narrow) the facts and the languages.
-    fn body(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, catalogs: &Catalogs, points: f32, todo: &mut Vec<Do>) {
-        Row::new().wrap(true).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| self.styles(ui, env, words, catalogs, points, todo));
-            Stack::new().show(ui, |ui, _| self.side(ui, env, words));
-        });
+    /// The styles, the axis sliders of each variable file under its name, the facts, the languages and the licence.
+    fn body(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, points: f32, axes: &mut HashMap<String, AxisValues>, todo: &mut Vec<Do>) {
+        self.styles(ui, env, words, points, todo);
+        for file in &self.axes {
+            Text::new(file.label.clone()).shade(Shade::Faint).show(ui);
+            let values = axes.entry(file.sha256.clone()).or_default();
+            AxisSliders::new(file.label.clone(), &file.axes, Bind::bound(values)).optical_size(OPTICAL_SIZE).show(ui);
+        }
+        self.side(ui, env, words);
+        self.licence(ui, words, todo);
     }
 
-    fn styles(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, catalogs: &Catalogs, points: f32, todo: &mut Vec<Do>) {
-        let total = self.lines.len() as u64;
-        let installed = self.lines.iter().filter(|l| matches!(l.face, Some((Owner::Installed, _)))).count();
-        let count = env.format().integer(total);
-        let heading = if installed == self.lines.len() { words.styles_installed.text(total, &count) } else { words.styles.text(total, &count) };
-        Text::new(heading).shade(Shade::Faint).show(ui);
+    fn styles(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, points: f32, todo: &mut Vec<Do>) {
+        let total = self.lines.iter().filter(|line| !line.sliders).count();
+        let installed = self.lines.iter().filter(|line| line.face.as_ref().is_some_and(HeldFace::installed)).count();
+        let count = env.format().integer(total as u64);
+        let counted = if installed == total { &words.styles_installed } else { &words.styles };
+        Text::new(counted.text(total as u64, &count)).shade(Shade::Faint).show(ui);
         let source = Lines(&self.lines);
-        let out = StyleList::new(self.title.clone(), words.no_styles.clone()).show_items(ui, &source, &mut |key, _| {
-            let line = &self.lines[*key];
-            let face = match &line.face {
-                Some((owner, face)) => {
-                    let catalog = match owner {
-                        Owner::Installed => &catalogs.0,
-                        Owner::Preview => &catalogs.1,
-                    };
-                    SampleFace::Face { catalog, owner: *owner, face }
-                }
-                None => SampleFace::Missing,
-            };
-            StyleRow::new(line, &self.title, &self.sample, points, face, words)
-        });
+        let out = StyleList::new(self.title.clone(), words.no_styles.clone())
+            .show_items(ui, &source, &mut |key, _| StyleRow::new(&self.lines[*key], &self.title, &self.sample, points, words));
         for event in out.events {
             let CollectionEvent::Item(key, _) = event else { continue };
             match &self.lines[key].action {
@@ -648,6 +733,48 @@ impl Sheet {
     }
 }
 
+impl Sheet {
+    /// The project's page, and the licence and NOTICE texts: each a button that reads it, then the text, or why it
+    /// couldn't be read.
+    fn licence(&self, ui: &mut Ui, words: &DetailsWords, todo: &mut Vec<Do>) {
+        if let Some(url) = &self.upstream {
+            let shown = url.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+            Link::new(shown.to_owned()).url(url.clone()).wrap(Wrap::Elide).description(words.upstream.fill(&[("url", url)])).show(ui);
+        }
+        for (at, (which, shown)) in self.legal.iter().enumerate() {
+            let (show, title) = match which {
+                LegalText::License => (&words.show_licence, &words.licence_text),
+                LegalText::Notice => (&words.show_notice, &words.notice_text),
+            };
+            let read = match shown {
+                LegalShown::Offer => clicked(&Button::new(show.clone()).variant(Variant::SECONDARY).show(ui)),
+                LegalShown::Loading => {
+                    Text::new(words.loading_text.clone()).shade(Shade::Muted).show(ui);
+                    false
+                }
+                LegalShown::Text(text) => {
+                    Text::new(title.clone()).shade(Shade::Faint).show(ui);
+                    TextField::new(title.clone(), Bind::given(text.clone()))
+                        .lines(LEGAL_LEAST_LINES)
+                        .max_lines(LEGAL_LINES)
+                        .sizing(Sizing::FillWidth)
+                        .mono()
+                        .read_only(true)
+                        .show(ui);
+                    false
+                }
+                LegalShown::Failed(error) => {
+                    let retry = NoticeAction::new(words.retry.clone());
+                    Notice::new(Tone::Bad, error.clone()).id_salt(("legal", at)).title(title.clone()).action(retry).show(ui).action.is_some()
+                }
+            };
+            if read {
+                todo.push(Do::ReadLegal(*which));
+            }
+        }
+    }
+}
+
 /// A job's progress: the job and the percent done when known, with a bar.
 fn progress(ui: &mut Ui, env: &Env, words: &DetailsWords, what: &Label, fraction: Option<f32>) {
     let what = env.view().resolve(what);
@@ -662,54 +789,136 @@ fn progress(ui: &mut Ui, env: &Env, words: &DetailsWords, what: &Label, fraction
     };
 }
 
-/// The rows of the family sheet: the installed faces, then the index files not installed, as the previewed faces when
-/// the preview has them.
-fn family_lines(
-    names: &FontsPanelWords,
-    family: &Family,
-    installed: &[FaceInfo],
-    store: &[FaceInfo],
+/// The styles of a family of the index, as its sheet lists them.
+struct FamilyStyles<'a> {
+    panel: &'a FontsPanel,
+    names: &'a FontsPanelWords,
+    words: &'a DetailsWords,
+    index: &'a Index,
+    family: &'a Family,
+    sample: &'a str,
+    installed: &'a [FaceInfo],
+    store: &'a [FaceInfo],
     on_system: bool,
-    previewed: Option<&[FaceInfo]>,
-    job: &Option<(Kind, Option<String>, Option<f32>)>,
-) -> Vec<StyleLine> {
-    let running = |path: &str| match job {
-        Some((Kind::Install, Some(p), fraction)) if p == path => Some(*fraction),
-        _ => None,
-    };
-    let mut lines = Vec::new();
-    for face in installed {
-        let action = match job {
-            Some((Kind::Remove, Some(p), _)) if face.path.as_ref().is_some_and(|x| x.display().to_string() == *p) => Action::Running(None),
-            _ if face.source == Source::Store => Action::Remove(Box::new(face.clone())),
-            _ => Action::None,
-        };
-        lines.push(StyleLine { label: style_name(names, face).to_owned(), face: Some((Owner::Installed, face.clone())), action });
-    }
-    if on_system {
-        return lines;
-    }
-    for file in &family.files {
-        if store.iter().any(|x| file_name(x).as_deref() == Some(file.file_name())) {
-            continue;
+    previewed: Option<&'a [FaceInfo]>,
+    job: &'a Option<(Kind, Option<String>, Option<f32>)>,
+}
+
+impl FamilyStyles<'_> {
+    /// The rows: the installed faces, then the index files not installed, as the previewed faces when the preview has
+    /// them, else as the preview service draws them; and the files, by position, of the last kind.
+    fn lines(&self) -> (Vec<StyleLine>, Vec<usize>) {
+        let mut lines = Vec::new();
+        let mut subset_files = Vec::new();
+        for face in self.installed {
+            let action = match self.job {
+                Some((Kind::Remove, Some(p), _)) if face.path.as_ref().is_some_and(|x| x.display().to_string() == *p) => Action::Running(None),
+                _ if face.source == Source::Store => Action::Remove(Box::new(face.clone())),
+                _ => Action::None,
+            };
+            lines.push(self.line(Owner::Installed, face, action));
         }
-        let preview_faces: Vec<&FaceInfo> =
-            previewed.unwrap_or_default().iter().filter(|f| file_of(family, f).is_some_and(|x| x.path == file.path)).collect();
-        let action = match running(&file.path) {
-            Some(fraction) => Action::Running(fraction),
-            None => Action::Install(file.path.clone()),
-        };
-        if preview_faces.is_empty() {
-            lines.push(StyleLine { label: file_label(file), face: None, action });
-        } else {
-            for (n, face) in preview_faces.iter().enumerate() {
+        if self.on_system {
+            return (lines, subset_files);
+        }
+        for (n, file) in self.family.files.iter().enumerate() {
+            if self.store.iter().any(|x| file_name(x).as_deref() == Some(file.file_name())) {
+                continue;
+            }
+            let preview_faces: Vec<&FaceInfo> =
+                self.previewed.unwrap_or_default().iter().filter(|f| file_of(self.family, f).is_some_and(|x| x.path == file.path)).collect();
+            let action = match self.job {
+                Some((Kind::Install, Some(p), fraction)) if *p == file.path => Action::Running(*fraction),
+                _ => Action::Install(file.path.clone()),
+            };
+            if !preview_faces.is_empty() {
                 // A variable file's instances install together: the file's action on its first.
-                let action = if n == 0 { action.clone() } else { Action::None };
-                lines.push(StyleLine { label: style_name(names, face).to_owned(), face: Some((Owner::Preview, (*face).clone())), action });
+                let actions = std::iter::once(action).chain(std::iter::repeat(Action::None));
+                lines.extend(preview_faces.into_iter().zip(actions).map(|(face, action)| self.line(Owner::Preview, face, action)));
+            } else if self.panel.subsets.serves(self.family) {
+                subset_files.push(n);
+                self.subset_lines(file, action, &mut lines);
+            } else {
+                lines.push(StyleLine::new(file_label(file), None, action));
             }
         }
+        (lines, subset_files)
     }
-    lines
+
+    fn line(&self, owner: Owner, face: &FaceInfo, action: Action) -> StyleLine {
+        let catalog = match owner {
+            Owner::Installed => &self.panel.catalog,
+            Owner::Preview => &self.panel.previews,
+        };
+        StyleLine::new(style_name(self.names, face), Some(HeldFace::local(owner, face.clone(), catalog)), action)
+    }
+
+    /// The rows of a file drawn by the preview service: a static file's one, or a variable file's named instances and
+    /// the row that follows its axis sliders, all at coordinates of one subset that keeps every axis.
+    fn subset_lines(&self, file: &FontFile, action: Action, lines: &mut Vec<StyleLine>) {
+        let face = self.subset(file).map(HeldFace::Subset);
+        if !file.is_variable() {
+            lines.push(StyleLine::new(file_label(file), face, action));
+            return;
+        }
+        // A variable file installs whole: the file's action on its first row.
+        if file.instances.is_empty() {
+            lines.push(StyleLine::new(self.words.default_style.as_str(), face.clone(), action));
+        } else {
+            let actions = std::iter::once(action).chain(std::iter::repeat(Action::None));
+            lines.extend(file.instances.iter().zip(actions).map(|(instance, action)| {
+                let coords = instance.coordinates.iter().filter_map(|(tag, v)| Some((axis_tag(tag)?, *v))).collect();
+                StyleLine::new(instance.name.clone(), face.clone(), action).at(coords)
+            }));
+        }
+        let values = self.panel.detail_axes.get(&file.sha256).cloned().unwrap_or_default();
+        lines.push(StyleLine { sliders: true, ..StyleLine::new(file_label(file), face, Action::None).at(values) });
+    }
+
+    fn subset(&self, file: &FontFile) -> Option<SubsetFont> {
+        self.panel.subsets.detail_font(self.index, self.family, file, self.sample)
+    }
+
+    /// The axes of the variable files among `files` that have a slider: the subset's own once it is here, else the index's
+    /// ranges.
+    fn axes(&self, files: &[usize]) -> Vec<FileAxes> {
+        files
+            .iter()
+            .filter_map(|n| self.family.files.get(*n))
+            .filter(|file| file.is_variable())
+            .map(|file| {
+                let own = self.subset(file).map(|font| read_axes(&font.bytes, 0)).filter(|axes| !axes.is_empty());
+                FileAxes { sha256: file.sha256.clone(), label: file_label(file), axes: own.unwrap_or_else(|| index_axes(file)) }
+            })
+            .filter(|file| shown_axes(&file.axes, OPTICAL_SIZE).next().is_some())
+            .collect()
+    }
+}
+
+/// `tag` as an OpenType tag: four printable ASCII characters, spaces only at the end.
+fn axis_tag(tag: &str) -> Option<[u8; 4]> {
+    let tag: [u8; 4] = tag.as_bytes().try_into().ok()?;
+    let printable = tag.iter().all(|b| (0x20..=0x7e).contains(b));
+    let spaces_last = tag.iter().skip_while(|b| **b != b' ').all(|b| *b == b' ');
+    (printable && spaces_last && tag[0] != b' ').then_some(tag)
+}
+
+/// A variable file's axes as the index gives them: its ranges about the file's default style.
+fn index_axes(file: &FontFile) -> Vec<FontAxis> {
+    file.axes
+        .iter()
+        .filter(|axis| axis.min < axis.max)
+        .filter_map(|axis| {
+            let tag = axis_tag(&axis.tag)?;
+            let default = match &tag {
+                b"wght" => f32::from(file.weight),
+                b"wdth" => file.width,
+                b"ital" => f32::from(u8::from(file.is_italic())),
+                _ => 0.0,
+            };
+            Some(FontAxis::new(tag, "", axis.min, default.clamp(axis.min, axis.max), axis.max))
+        })
+        .collect()
 }
 
 fn family_facts(env: &Env, words: &DetailsWords, index: &Index, family: &Family, size: &str) -> Vec<(Label, String)> {
@@ -720,6 +929,9 @@ fn family_facts(env: &Env, words: &DetailsWords, index: &Index, family: &Family,
         facts.push((words.designer.clone(), family.designer.clone()));
     }
     facts.push((words.licence.clone(), licence_name(&family.license).to_owned()));
+    if let Some(copyright) = family.copyright.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        facts.push((words.copyright.clone(), copyright.to_owned()));
+    }
     facts.push((words.styles_fact.clone(), format.integer(style_count(family) as u64)));
     facts.push((words.files_fact.clone(), format.integer(family.files.len() as u64)));
     facts.push((words.download_size.clone(), size.to_owned()));
