@@ -16,8 +16,20 @@ fn glyph(host: Option<&dyn ActionEditorHost>, name: &str) -> IconSpec<'static> {
     host.and_then(|host| host.icon(name)).unwrap_or_else(|| IconSpec::svg(IconId::new("play")))
 }
 
-pub(super) fn show(ui: &mut Ui, value: &mut ActionEditorValue, state: &mut ActionEditorState, host: Option<&dyn ActionEditorHost>, words: &ActionEditorWords, editable: bool) {
-    let trigger = Button::new(words.icon.clone()).icon(glyph(host, &value.action.icon)).selected(state.icons_open).expanded(state.icons_open).enabled(editable).show(ui);
+pub(super) fn show(
+    ui: &mut Ui,
+    value: &mut ActionEditorValue,
+    state: &mut ActionEditorState,
+    host: Option<&dyn ActionEditorHost>,
+    words: &ActionEditorWords,
+    editable: bool,
+) {
+    let trigger = Button::new(words.icon.clone())
+        .icon(glyph(host, &value.action.icon))
+        .selected(state.icons_open)
+        .expanded(state.icons_open)
+        .enabled(editable)
+        .show(ui);
     if trigger.clicks == 1 {
         state.icons_open = !state.icons_open;
     }
@@ -58,7 +70,16 @@ pub(super) fn show(ui: &mut Ui, value: &mut ActionEditorValue, state: &mut Actio
         for choices in icons.chunks(6) {
             Row::new().show(ui, |ui, _| {
                 for (name, label) in choices {
-                    if IconButton::new(glyph(host, name)).label(label.clone()).tooltip(label.clone()).selected(value.action.icon == *name).id_salt(*name).enabled(editable).show(ui).clicks == 1 {
+                    if IconButton::new(glyph(host, name))
+                        .label(label.clone())
+                        .tooltip(label.clone())
+                        .selected(value.action.icon == *name)
+                        .id_salt(*name)
+                        .enabled(editable)
+                        .show(ui)
+                        .clicks
+                        == 1
+                    {
                         value.action.icon = (*name).to_owned();
                         state.icons_open = false;
                         picked = true;
@@ -67,23 +88,35 @@ pub(super) fn show(ui: &mut Ui, value: &mut ActionEditorValue, state: &mut Actio
             });
         }
     }
-    if picked { trigger.response.request_focus(); }
+    if picked {
+        trigger.response.request_focus();
+    }
     Text::new(words.color.clone()).show(ui);
     // Display order is measured separately from the ATN header's index order.
     let colors = [
-        (ActionColor::None, words.none.clone()), (ActionColor::Red, words.red.clone()),
-        (ActionColor::Orange, words.orange.clone()), (ActionColor::Yellow, words.yellow.clone()),
-        (ActionColor::Green, words.green.clone()), (ActionColor::Teal, words.teal.clone()),
-        (ActionColor::Blue, words.light_blue.clone()), (ActionColor::Blue2, words.blue.clone()),
-        (ActionColor::Magenta, words.magenta.clone()), (ActionColor::Purple, words.purple.clone()),
-        (ActionColor::Violet, words.lavender.clone()), (ActionColor::Gray, words.gray.clone()),
+        (ActionColor::None, words.none.clone()),
+        (ActionColor::Red, words.red.clone()),
+        (ActionColor::Orange, words.orange.clone()),
+        (ActionColor::Yellow, words.yellow.clone()),
+        (ActionColor::Green, words.green.clone()),
+        (ActionColor::Teal, words.teal.clone()),
+        (ActionColor::Blue, words.light_blue.clone()),
+        (ActionColor::Blue2, words.blue.clone()),
+        (ActionColor::Magenta, words.magenta.clone()),
+        (ActionColor::Purple, words.purple.clone()),
+        (ActionColor::Violet, words.lavender.clone()),
+        (ActionColor::Gray, words.gray.clone()),
     ];
     for choices in colors.chunks(6) {
         Row::new().show(ui, |ui, _| {
             for (color, label) in choices {
                 let mut button = Button::new(label.clone()).selected(value.action.color == *color).enabled(editable).id_salt(color.atn_index());
-                if let Some(tint) = color.label_color() { button = button.tint(tint.fill()); }
-                if button.show(ui).clicks == 1 { value.action.color = *color; }
+                if let Some(tint) = color.label_color() {
+                    button = button.tint(tint.fill());
+                }
+                if button.show(ui).clicks == 1 {
+                    value.action.color = *color;
+                }
             }
         });
     }

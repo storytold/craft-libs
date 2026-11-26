@@ -121,7 +121,8 @@ fn action_metadata_and_atn_colors_survive_list_edits_and_files() {
             "name": "Imported", "steps": [["paint", {"amount": 4}]], "dialogs": [0],
             "description": "First line\nSecond line", "icon": "future-icon", "color": name,
             "options": {"future": {"thumbnailType": 41, "precondition": -9}}
-        }]}).to_string();
+        }]})
+        .to_string();
         let mut list = ActionList::from_file(ActionsFile::from_json(&text).unwrap());
         let imported = list.action(0).unwrap().clone();
         assert_eq!((imported.description.as_str(), imported.icon.as_str()), ("First line\nSecond line", "future-icon"));

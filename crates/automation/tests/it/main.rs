@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 pub(crate) mod access;
-pub(crate) mod actions;
 mod action_editor;
+pub(crate) mod actions;
 pub(crate) mod agents;
 pub(crate) mod control;
 pub(crate) mod dialogs;

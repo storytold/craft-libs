@@ -1,18 +1,26 @@
 //! The shared editor changes only an unpublished value; host effects remain requests.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use craft_automation::actions::{Action, ActionColor, ActionStep};
-use craft_automation::ui::actions::{ActionEditor, ActionEditorActivity, ActionEditorEvent as Event, ActionEditorHost, ActionEditorState, ActionEditorValue, ActionStepMove};
+use craft_automation::ui::actions::{
+    ActionEditor, ActionEditorActivity, ActionEditorEvent as Event, ActionEditorHost, ActionEditorState, ActionEditorValue, ActionStepMove,
+};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Vec2};
 use serde_json::json;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 struct Host;
 impl ActionEditorHost for Host {
-    fn step_label(&self, step: &ActionStep) -> String { format!("Run {}", step.command) }
-    fn step_summary(&self, step: &ActionStep) -> Option<String> { Some(format!("Settings: {}", step.command)) }
-    fn can_edit_step(&self, _: &ActionStep) -> bool { true }
+    fn step_label(&self, step: &ActionStep) -> String {
+        format!("Run {}", step.command)
+    }
+    fn step_summary(&self, step: &ActionStep) -> Option<String> {
+        Some(format!("Settings: {}", step.command))
+    }
+    fn can_edit_step(&self, _: &ActionStep) -> bool {
+        true
+    }
 }
 
 struct App {
@@ -32,7 +40,8 @@ struct App {
 }
 
 fn rig() -> (Fixture, Rc<RefCell<App>>) {
-    let mut action = Action::new("Imported", ["first", "second", "third"].into_iter().map(|command| ActionStep::new(command, json!({"amount": 2}))).collect());
+    let mut action =
+        Action::new("Imported", ["first", "second", "third"].into_iter().map(|command| ActionStep::new(command, json!({"amount": 2}))).collect());
     action.description = "Keep this description\nand its line break".into();
     action.icon = "future-icon".into();
     action.color = ActionColor::Unknown(u16::MAX);
@@ -40,13 +49,37 @@ fn rig() -> (Fixture, Rc<RefCell<App>>) {
     action.disabled.insert(0);
     action.dialogs.insert(2);
     let shared = Rc::new(RefCell::new(App {
-        published: action.clone(), value: ActionEditorValue::new(action, "legacy-unsupported-shortcut"), state: ActionEditorState::default(),
-        activity: ActionEditorActivity::default(), events: Vec::new(), changed: false, refused: false,
-        step_moves: Vec::new(), measure: false, sizing_passes: 0, sizing_moves: Vec::new(), sizing_changed: false, sizing_events: Vec::new(),
+        published: action.clone(),
+        value: ActionEditorValue::new(action, "legacy-unsupported-shortcut"),
+        state: ActionEditorState::default(),
+        activity: ActionEditorActivity::default(),
+        events: Vec::new(),
+        changed: false,
+        refused: false,
+        step_moves: Vec::new(),
+        measure: false,
+        sizing_passes: 0,
+        sizing_moves: Vec::new(),
+        sizing_changed: false,
+        sizing_events: Vec::new(),
     }));
     let shown = Rc::clone(&shared);
     let mut fixture = Fixture::new(move |ui| {
-        let App { value, state, activity, events, changed, refused, step_moves, measure, sizing_passes, sizing_moves, sizing_changed, sizing_events, .. } = &mut *shown.borrow_mut();
+        let App {
+            value,
+            state,
+            activity,
+            events,
+            changed,
+            refused,
+            step_moves,
+            measure,
+            sizing_passes,
+            sizing_moves,
+            sizing_changed,
+            sizing_events,
+            ..
+        } = &mut *shown.borrow_mut();
         if *measure {
             let builder = egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible();
             let mut measured = ui.new_child(builder);
@@ -57,7 +90,9 @@ fn rig() -> (Fixture, Rc<RefCell<App>>) {
             sizing_events.extend(out.events);
         }
         let mut editor = ActionEditor::new(state, value).host(&Host).activity(*activity);
-        if *refused { editor = editor.refusal("The draft changed; reopen it before saving."); }
+        if *refused {
+            editor = editor.refusal("The draft changed; reopen it before saving.");
+        }
         let out = editor.show(ui);
         *changed |= out.changed;
         step_moves.extend(out.step_moves);
@@ -67,9 +102,16 @@ fn rig() -> (Fixture, Rc<RefCell<App>>) {
     (fixture, shared)
 }
 
-fn node(fixture: &Fixture, label: &str) -> Target { fixture.by_label(label).unwrap_or_else(|| panic!("missing editor control {label}")) }
-fn press(fixture: &mut Fixture, label: &str) { let target = node(fixture, label); fixture.click(&target).idle(2); }
-fn take(shared: &Rc<RefCell<App>>) -> Vec<Event> { std::mem::take(&mut shared.borrow_mut().events) }
+fn node(fixture: &Fixture, label: &str) -> Target {
+    fixture.by_label(label).unwrap_or_else(|| panic!("missing editor control {label}"))
+}
+fn press(fixture: &mut Fixture, label: &str) {
+    let target = node(fixture, label);
+    fixture.click(&target).idle(2);
+}
+fn take(shared: &Rc<RefCell<App>>) -> Vec<Event> {
+    std::mem::take(&mut shared.borrow_mut().events)
+}
 
 #[trial]
 fn action_editor_keeps_unknown_metadata_until_an_explicit_choice() {
@@ -101,14 +143,18 @@ fn action_editor_keeps_unknown_metadata_until_an_explicit_choice() {
 #[trial]
 fn action_editor_save_discard_and_leave_wait_for_host_acknowledgement() {
     let (mut fixture, shared) = rig();
-    for label in ["Save", "Discard", "Back to Actions"] { press(&mut fixture, label); }
+    for label in ["Save", "Discard", "Back to Actions"] {
+        press(&mut fixture, label);
+    }
     assert_eq!(take(&shared), [Event::Save, Event::Discard, Event::Leave]);
     assert!(fixture.by_label("Name").is_some(), "requesting an effect never closes the page");
     assert_eq!(shared.borrow().value.action, shared.borrow().published);
     shared.borrow_mut().activity.busy = true;
     shared.borrow_mut().refused = true;
     fixture.settle();
-    for label in ["Save", "Play action", "Record", "Discard", "Back to Actions"] { press(&mut fixture, label); }
+    for label in ["Save", "Play action", "Record", "Discard", "Back to Actions"] {
+        press(&mut fixture, label);
+    }
     assert!(take(&shared).is_empty(), "busy host transitions refuse new effects");
     assert!(fixture.by_label("The draft changed; reopen it before saving.").is_some());
     assert_eq!(shared.borrow().value.action, shared.borrow().published, "a refusal preserves the complete local value");
@@ -168,7 +214,11 @@ fn action_editor_include_and_expanded_step_reorder_keep_flags_and_metadata() {
     drop(app);
     fixture.key(Key::ArrowUp, Modifiers::ALT).idle(2);
     let app = shared.borrow();
-    assert_eq!(app.value.action.steps.iter().map(|step| step.command.as_str()).collect::<Vec<_>>(), ["second", "first", "third"], "keyboard reorder also moves an expanded step as one row");
+    assert_eq!(
+        app.value.action.steps.iter().map(|step| step.command.as_str()).collect::<Vec<_>>(),
+        ["second", "first", "third"],
+        "keyboard reorder also moves an expanded step as one row"
+    );
     assert_eq!(app.state.selected, Some(1));
     assert!(app.state.expanded.contains(&1));
     assert_eq!(app.value.action.dialogs.iter().copied().collect::<Vec<_>>(), [2]);
@@ -195,7 +245,10 @@ fn action_editor_moves_identical_occurrences_once_and_never_during_sizing() {
     let moves = std::mem::take(&mut shared.borrow_mut().step_moves);
     assert_eq!(moves, [ActionStepMove { from: 0, to: 1 }], "one receipt for the applied occurrence move, not another for layout/idle passes");
     let mut native_origins: Vec<(&str, Vec<u8>)> = vec![("record-A", vec![0x01, 0x80]), ("record-B", vec![0x02, 0xff])];
-    for receipt in moves { let origin = native_origins.remove(receipt.from); native_origins.insert(receipt.to, origin); }
+    for receipt in moves {
+        let origin = native_origins.remove(receipt.from);
+        native_origins.insert(receipt.to, origin);
+    }
     assert_eq!(native_origins[0].0, "record-B");
     assert_eq!(native_origins[1], ("record-A", vec![0x01, 0x80]));
     {
@@ -211,7 +264,10 @@ fn action_editor_moves_identical_occurrences_once_and_never_during_sizing() {
     fixture.key(Key::ArrowUp, Modifiers::ALT).idle(2);
     let moves = std::mem::take(&mut shared.borrow_mut().step_moves);
     assert_eq!(moves, [ActionStepMove { from: 1, to: 0 }], "the next receipt indexes the evolving, already-moved sequence");
-    for receipt in moves { let origin = native_origins.remove(receipt.from); native_origins.insert(receipt.to, origin); }
+    for receipt in moves {
+        let origin = native_origins.remove(receipt.from);
+        native_origins.insert(receipt.to, origin);
+    }
     assert_eq!(native_origins, [("record-A", vec![0x01, 0x80]), ("record-B", vec![0x02, 0xff])]);
     {
         let mut app = shared.borrow_mut();
