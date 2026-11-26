@@ -123,8 +123,8 @@ pub struct AgentLink {
     applied: Option<Option<AgentSettings>>,
     retry_at: Option<Instant>,
     retry: Duration,
-    /// The token a failed start already read and checked, for its retries; cleared once a start
-    /// succeeds. On Windows the check starts `whoami` and PowerShell (`owner_only`), about 300 ms
+    /// The token a failed start already read and checked, for its retries with the same settings;
+    /// cleared once a start succeeds or the settings change. On Windows the check starts `whoami` and PowerShell (`owner_only`), about 300 ms
     /// on the UI thread, which every retry of a taken port would otherwise pay again.
     checked_token: Option<String>,
     status: AgentLinkStatus,
@@ -184,8 +184,14 @@ impl AgentLink {
         }
         let now = motion::now();
         let retry_due = self.retry_at.is_some_and(|at| now >= at);
-        if self.applied.as_ref().is_some_and(|applied| applied.as_ref() == want) && !retry_due {
+        let unchanged = self.applied.as_ref().is_some_and(|applied| applied.as_ref() == want);
+        if unchanged && !retry_due {
             return update;
+        }
+        // Only a retry with the same settings reuses the token its failed start checked: after a
+        // change (agents off and on again, another port) the file may hold another token by now.
+        if !unchanged {
+            self.checked_token = None;
         }
         let before = (self.status.clone(), self.applied.clone().flatten());
         self.applied = Some(want.cloned());

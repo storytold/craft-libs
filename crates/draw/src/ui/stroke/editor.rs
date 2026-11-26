@@ -71,7 +71,7 @@ impl Outcome for StrokeEditorOutput {
 ///   with a line sample drawn at opacity 1; the row matching [`StrokeStyle::line_style`] is selected, none for Custom.
 ///   Picking one applies [`StrokeStyle::with_line_style`].
 /// - Rows: Alignment (Inside, Center, Outside; enabled only when [`closed`](Self::closed)); Caps (Butt / Flat, Round,
-///   Square; disabled for a solid closed path); Corners (Miter, Round, Bevel; enabled only with
+///   Square; disabled for a solid closed path unless [`caps_on_closed`](Self::caps_on_closed)); Corners (Miter, Round, Bevel; enabled only with
 ///   [`corners`](Self::corners)); the app's [`rows`](Self::rows); Miter limit (1–500, `×`; enabled only for Miter
 ///   corners); Opacity ([`StrokeSections::OPACITY`], 0–100 %, stored 0..=1). Choices are selects, or segmented icon
 ///   buttons with [`StrokeSections::ICONS`]. Under the rows of an open path: "Open paths use centered strokes".
@@ -96,6 +96,7 @@ pub struct StrokeEditor<'a> {
     value: Bind<'a, StrokeStyle>,
     sections: StrokeSections,
     closed: bool,
+    caps_on_closed: bool,
     corners: bool,
     mixed: StrokeMixed,
     rows: &'a [StrokeChoiceRow<'a>],
@@ -109,6 +110,7 @@ impl<'a> StrokeEditor<'a> {
             value,
             sections: StrokeSections::default(),
             closed: true,
+            caps_on_closed: false,
             corners: true,
             mixed: StrokeMixed::default(),
             rows: &[],
@@ -121,10 +123,17 @@ impl<'a> StrokeEditor<'a> {
         self
     }
 
-    /// Whether the stroked path is closed: alignment applies and caps need dashes.
-    /// True by default.
+    /// Whether the stroked path is closed: alignment applies and caps need dashes, unless
+    /// [`caps_on_closed`](Self::caps_on_closed) is set. True by default.
     pub fn closed(mut self, closed: bool) -> Self {
         self.closed = closed;
+        self
+    }
+
+    /// Whether the Caps row stays enabled on a closed path without dashes. False by default: the row is then disabled
+    /// for a solid closed path and enabled for an open or dashed one.
+    pub fn caps_on_closed(mut self, enabled: bool) -> Self {
+        self.caps_on_closed = enabled;
         self
     }
 
@@ -148,7 +157,7 @@ impl<'a> StrokeEditor<'a> {
 
     /// Shows the editor.
     pub fn show(self, ui: &mut Ui) -> StrokeEditorOutput {
-        let StrokeEditor { label, mut value, sections, closed, corners, mixed, rows } = self;
+        let StrokeEditor { label, mut value, sections, closed, caps_on_closed, corners, mixed, rows } = self;
         let env = Env::of(ui);
         let words = env.words::<StrokeWords>();
         let name: Arc<str> = label.as_str().into();
@@ -164,7 +173,7 @@ impl<'a> StrokeEditor<'a> {
                 Some((base, draft)) if base == held => draft,
                 _ => held.clone(),
             };
-            let body = Body { words: &words, style: &style, sections, closed, corners, mixed, rows, name: name.clone() };
+            let body = Body { words: &words, style: &style, sections, closed, caps_on_closed, corners, mixed, rows, name: name.clone() };
             body.show(ui, &mut found);
             if !found.events.is_empty() {
                 for event in &found.events {
@@ -251,6 +260,7 @@ struct Body<'a> {
     style: &'a StrokeStyle,
     sections: StrokeSections,
     closed: bool,
+    caps_on_closed: bool,
     corners: bool,
     mixed: StrokeMixed,
     rows: &'a [StrokeChoiceRow<'a>],
@@ -325,7 +335,7 @@ impl Body<'_> {
 
     fn grid(&self, ui: &mut Ui, found: &mut Found) {
         let (style, mixed, words) = (self.style, self.mixed, self.words);
-        let solid_closed = self.closed && style.dashes.is_empty() && !mixed.dashes;
+        let solid_closed = self.closed && !self.caps_on_closed && style.dashes.is_empty() && !mixed.dashes;
         let icons = self.sections.contains(StrokeSections::ICONS);
         FieldGroup::new(words.title.clone()).show(ui, |ui, _| {
             let align = [
