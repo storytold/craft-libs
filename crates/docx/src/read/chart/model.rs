@@ -103,9 +103,39 @@ pub(crate) struct Axis {
     pub(crate) unit: Option<f64>,
     /// The display unit's label, when the axis shows one: its text, colour and weight.
     pub(crate) unit_label: Option<(String, Option<Rgb>, bool)>,
+    /// Where this axis crosses the other one (`c:crosses` / `c:crossesAt`).
+    pub(crate) crosses: Crosses,
+    /// Where its tick labels sit (`c:tickLblPos`).
+    pub(crate) tick_pos: TickPos,
+    /// The axis line's colour and width, when its `c:spPr` states them.
+    pub(crate) line_colour: Option<Rgb>,
+    pub(crate) line_w: Option<f32>,
     /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
     /// them, as Word does).
     pub(crate) labels: bool,
+}
+
+/// Where an axis crosses the other axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum Crosses {
+    /// At zero, or at the end of the range nearer zero when zero is outside it.
+    #[default]
+    AutoZero,
+    Min,
+    Max,
+    At(f64),
+}
+
+/// Where an axis's tick labels sit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TickPos {
+    /// Beside the axis, wherever it crosses.
+    #[default]
+    NextTo,
+    /// At the low end of the other axis (under a column chart's plot).
+    Low,
+    /// At the high end.
+    High,
 }
 
 /// The shape of a series' point markers (`ST_MarkerStyle`, ECMA-376 §21.2.3.28).

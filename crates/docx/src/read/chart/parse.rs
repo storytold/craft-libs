@@ -1,5 +1,6 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, DataTable, Grouping, Kind, LabelPos, Pos, Series, Symbol};
+use super::model::{Axis, Crosses, DataTable, Grouping, Kind, LabelPos, Pos, Series, Symbol, TickPos};
+use super::plot::Scale;
 use super::plot::label;
 use super::{
     AXIS, Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int, measure, slot,
@@ -149,6 +150,17 @@ impl Chart {
 
     pub(super) fn val_bold(&self) -> bool {
         self.val.bold.unwrap_or(self.text_bold)
+    }
+
+    /// Where the category axis crosses the value axis, as a value within its scale `vs`.
+    pub(super) fn cat_cross(&self, vs: &Scale) -> f64 {
+        let (lo, hi) = (vs.lo.min(vs.hi), vs.lo.max(vs.hi));
+        match self.cat.crosses {
+            Crosses::AutoZero => 0.0f64.clamp(lo, hi),
+            Crosses::Min => lo,
+            Crosses::Max => hi,
+            Crosses::At(v) => v.clamp(lo, hi),
+        }
     }
 
     pub(super) fn stacked(&self) -> bool {
@@ -514,6 +526,27 @@ pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
         labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),
         text: element_text_colour(a, theme),
         bold: element_bold(a),
+        // Where this axis crosses the perpendicular one, as a value on that axis's scale.
+        crosses: match a.child("c:crossesAt").and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()) {
+            Some(v) => Crosses::At(v),
+            None => match a.child("c:crosses").and_then(|e| e.attr("val")) {
+                Some("min") => Crosses::Min,
+                Some("max") => Crosses::Max,
+                _ => Crosses::AutoZero,
+            },
+        },
+        tick_pos: match a.child("c:tickLblPos").and_then(|e| e.attr("val")) {
+            Some("low") => TickPos::Low,
+            Some("high") => TickPos::High,
+            _ => TickPos::NextTo,
+        },
+        line_colour: a.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+        line_w: a
+            .child("c:spPr")
+            .and_then(|p| p.child("a:ln"))
+            .and_then(|l| l.attr("w"))
+            .and_then(|v| measure(v, 12_700.0))
+            .map(|w| w.clamp(0.0, 20.0)),
         unit: units.map(|(u, _)| u),
         unit_label: units.and_then(|(_, name)| {
             let l = du?.child("c:dispUnitsLbl")?;

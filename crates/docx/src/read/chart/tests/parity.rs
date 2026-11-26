@@ -329,3 +329,38 @@ fn a_legend_placed_by_hand_is_drawn_where_the_file_puts_it() {
     assert!(r[1] >= 18.0 && r[1] + r[3] <= 42.0, "inside the box 20..40 pt down: {r:?}");
     assert!(r[0] >= 30.0 && r[0] + r[2] <= 150.0, "inside the box 30..150 pt across: {r:?}");
 }
+
+/// A column chart with negative values: the category axis crosses the value axis at zero
+/// (`c:crosses` autoZero, the default), so its line is drawn there, in the colour and width
+/// its `c:spPr` states; its labels sit next to it unless `c:tickLblPos` says `low`.
+#[test]
+fn the_category_axis_crosses_at_zero_in_its_own_line() {
+    let chart = |tick: &str| {
+        let plot = format!(
+            r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/>{tick}<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></c:spPr></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+            ser(0, "S", Some("FF0000"), &["A", "B"], &["-2", "4"]),
+        );
+        chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0)
+    };
+    let items = chart("");
+    let texts = chart_texts(&items);
+    let mid = |s: &str| texts.iter().find(|(t, _, _)| t == s).map(|(_, r, _)| r[1] + r[3] / 2.0).unwrap();
+    let zero = mid("0");
+    let axis: Vec<(f32, f32)> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(c), stroke_width, .. } if *c == Rgb::BLACK => match segs.first() {
+                Some(PathSeg::Move(_, y)) => Some((*y, *stroke_width)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(axis.len(), 1, "one black axis line: {axis:?}");
+    assert!((axis[0].0 - zero).abs() < 0.5, "the axis at zero ({zero}), not the bottom: {axis:?}");
+    assert!(axis[0].1 > 0.75, "its own, wider line: {axis:?}");
+    let label_top = |items: &[GraphicItem]| chart_texts(items).iter().find(|(t, _, _)| t == "A").map(|(_, r, _)| r[1]).unwrap();
+    assert!((label_top(&items) - zero).abs() < 10.0, "labels next to the axis");
+    let low = chart(r#"<c:tickLblPos val="low"/>"#);
+    assert!(label_top(&low) > zero + 40.0, "low labels under the plot");
+}

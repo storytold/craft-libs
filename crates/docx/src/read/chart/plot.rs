@@ -2,7 +2,7 @@ use super::canvas::{
     Rect, SWATCH, clip_text, fill, rect_segs, runs, seg, stroke, swatch, text, text_angle, text_at, text_w, vertical_text, widest, wrap,
 };
 use super::format::format_value;
-use super::model::{DataLabel, DataTable, Grouping, Kind, LabelPos, Series, Symbol};
+use super::model::{DataLabel, DataTable, Grouping, Kind, LabelPos, Series, Symbol, TickPos};
 use super::parse::{category_text, series_name};
 use super::polar::{draw_data_labels, label_of, value_text};
 use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, LINE_W, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
@@ -440,15 +440,17 @@ fn draw_cat_grid(out: &mut Vec<GraphicItem>, g: &Frame, xticks: &[(f64, String)]
 fn draw_axes(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame) {
     let plot = g.plot;
     if !c.cat.deleted && c.cat.line {
-        let segs = if g.horiz { seg(plot.x, plot.y, plot.x, plot.bottom()) } else { seg(plot.x, plot.bottom(), plot.right(), plot.bottom()) };
-        stroke(out, segs, AXIS, 0.75);
+        // Where the category axis crosses the value axis: at zero unless the file says otherwise.
+        let p = if c.kind == Kind::Scatter { if g.horiz { plot.x } else { plot.bottom() } } else { g.val(c.cat_cross(&g.vs)) };
+        let segs = if g.horiz { seg(p, plot.y, p, plot.bottom()) } else { seg(plot.x, p, plot.right(), p) };
+        stroke(out, segs, c.cat.line_colour.unwrap_or(AXIS), c.cat.line_w.unwrap_or(0.75));
     }
     if let Some(color) = c.plot_border {
         stroke(out, rect_segs(plot.x, plot.y, plot.right(), plot.bottom()), color, 0.75);
     }
     if !c.val.deleted && c.val.line {
         let segs = if g.horiz { seg(plot.x, plot.bottom(), plot.right(), plot.bottom()) } else { seg(plot.x, plot.y, plot.x, plot.bottom()) };
-        stroke(out, segs, AXIS, 0.75);
+        stroke(out, segs, c.val.line_colour.unwrap_or(AXIS), c.val.line_w.unwrap_or(0.75));
     }
 }
 
@@ -484,10 +486,16 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
             }
         }
     } else {
+        // Under the axis where it crosses (next to it), or under the plot (low). High labels,
+        // which Word puts over the plot, are drawn under it too: the margins hold no room above.
+        let top = match c.cat.tick_pos {
+            TickPos::NextTo => g.val(c.cat_cross(&g.vs)).min(plot.bottom()),
+            TickPos::Low | TickPos::High => plot.bottom(),
+        };
         let band = g.band();
         for (i, lines) in m.wrapped.iter().enumerate().filter(|(i, _)| i % m.skip == 0) {
             for (k, s) in lines.iter().enumerate() {
-                let y = plot.bottom() + GAP / 2.0 + k as f32 * lh;
+                let y = top + GAP / 2.0 + k as f32 * lh;
                 text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, c.cat_bold(), c.cat_colour());
             }
         }
