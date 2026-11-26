@@ -209,6 +209,39 @@ fn bounded_line_read_handles_chunks_empty_lines_and_eof() {
 }
 
 #[test]
+fn skipping_an_over_long_line_resumes_at_the_next_message() {
+    use std::io::{BufReader, Cursor};
+    let mut reader = BufReader::with_capacity(2, Cursor::new(b"abcdefgh\nok\nxyzxyz"));
+    assert!(matches!(craft_jsonrpc::read_line(&mut reader, 3), Err(craft_jsonrpc::LineError::TooLong)));
+    assert!(craft_jsonrpc::skip_line(&mut reader).unwrap());
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"ok".to_vec()));
+    assert!(matches!(craft_jsonrpc::read_line(&mut reader, 3), Err(craft_jsonrpc::LineError::TooLong)));
+    assert!(!craft_jsonrpc::skip_line(&mut reader).unwrap());
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), None);
+}
+
+#[test]
+fn skipping_a_line_retries_interrupted_reads_and_reports_other_errors() {
+    struct Flaky(Vec<std::io::Result<&'static [u8]>>);
+    impl std::io::Read for Flaky {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            let bytes = self.0.remove(0)?;
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+    let interrupted = || Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+    let mut reader = std::io::BufReader::new(Flaky(vec![Ok(b"ab"), interrupted(), Ok(b"c\nok\n")]));
+    assert!(craft_jsonrpc::skip_line(&mut reader).unwrap());
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"ok".to_vec()));
+    let mut broken = std::io::BufReader::new(Flaky(vec![Err(std::io::Error::other("broken"))]));
+    assert!(craft_jsonrpc::skip_line(&mut broken).is_err());
+}
+
+#[test]
 fn bounded_line_read_propagates_io_errors() {
     struct Broken;
     impl std::io::Read for Broken {

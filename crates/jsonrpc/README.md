@@ -9,7 +9,8 @@ names and arguments.
 `Limits` defaults to 64 MiB per message and 4096 batch entries. `parse_json` checks the byte limit
 before deserialization, and `process` rejects an oversized batch before calling any handler.
 For newline-delimited transports, `read_line` bounds memory while reading; after an over-limit
-line, the caller must close the stream or discard the rest of that line.
+line, the caller must close the stream or call `skip_line`, which discards the rest of that line
+without buffering it, before reading the next message.
 `serde_json`'s nesting limit remains in effect. Response sizes are the caller's responsibility.
 
 A valid request receives the handler's result or error with its original string, numeric, or null

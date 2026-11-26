@@ -127,6 +127,28 @@ pub fn read_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> Result<Option<
     }
 }
 
+/// Discard input through the next newline without buffering it, as after [`LineError::TooLong`].
+/// Returns `true` when a newline was consumed, so the next read starts a new message, and `false`
+/// at EOF. An interrupted read is retried.
+pub fn skip_line<R: BufRead>(reader: &mut R) -> std::io::Result<bool> {
+    loop {
+        let bytes = match reader.fill_buf() {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if bytes.is_empty() {
+            return Ok(false);
+        }
+        let newline = bytes.iter().position(|&byte| byte == b'\n');
+        let len = newline.map_or(bytes.len(), |index| index + 1);
+        reader.consume(len);
+        if newline.is_some() {
+            return Ok(true);
+        }
+    }
+}
+
 /// Parse JSON after checking its byte length. `serde_json` also bounds nesting depth.
 pub fn parse_json(bytes: &[u8], limits: Limits) -> Result<Value, ParseError> {
     if bytes.len() > limits.max_message_bytes {
