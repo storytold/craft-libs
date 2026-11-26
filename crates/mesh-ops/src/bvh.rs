@@ -276,37 +276,71 @@ impl Bvh {
         let open = t0.is_nan_mask() | t1.is_nan_mask();
         let tn = Vec3A::select(open, Vec3A::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
         let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
-        (tn <= tf).then_some(tn)
+        let margin = 4.0 * f32::EPSILON * tn.abs().max(tf.abs()).min(f32::MAX);
+        (tn - margin <= tf + margin).then_some((tn - margin).max(0.0))
     }
 
     /// Möller–Trumbore, double sided.
     fn hit_tri(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f32, f32, f32)> {
+        const NEAR: f32 = 1e-4;
         let e1 = t[1] - t[0];
         let e2 = t[2] - t[0];
         let p = d.cross(e2);
         let det = e1.dot(p);
-        // A ray in the triangle's plane, or a triangle without area. The determinant is the
-        // product of the two edge lengths, the direction's length and the sines of the angles
-        // between them, so the cutoff shrinks with that product for small triangles.
-        if det.abs() < 1e-12 && (det == 0.0 || det.abs() < 1e-12 * (e1.length() * e2.length() * d.length()).min(1.0)) {
+        if !det.is_finite() || det.abs() <= 1e-6 * e1.length() * p.length() {
+            return Self::hit_tri_wide(t, o, d);
+        }
+        let inv = 1.0 / det;
+        if !inv.is_finite() {
+            return Self::hit_tri_wide(t, o, d);
+        }
+        let s = o - t[0];
+        let u = s.dot(p) * inv;
+        let q = s.cross(e1);
+        let v = d.dot(q) * inv;
+        let w = 1.0 - u - v;
+        if !(u.is_finite() && v.is_finite() && w.is_finite()) {
+            return Self::hit_tri_wide(t, o, d);
+        }
+        if u.min(v).min(w) < -NEAR {
+            return None;
+        }
+        if u.min(v).min(w) <= NEAR {
+            return Self::hit_tri_wide(t, o, d);
+        }
+        let tt = e2.dot(q) * inv;
+        if !tt.is_finite() {
+            return Self::hit_tri_wide(t, o, d);
+        }
+        (tt > 0.0).then_some((tt, u, v))
+    }
+
+    fn hit_tri_wide(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f32, f32, f32)> {
+        const EDGE: f64 = 1e-9;
+        let (a, b, c) = (t[0].as_dvec3(), t[1].as_dvec3(), t[2].as_dvec3());
+        let (o, d) = (o.as_dvec3(), d.as_dvec3());
+        let (e1, e2) = (b - a, c - a);
+        let p = d.cross(e2);
+        let det = e1.dot(p);
+        let products = e1.abs().dot(glam::DVec3::new(
+            (d.y * e2.z).abs() + (d.z * e2.y).abs(),
+            (d.z * e2.x).abs() + (d.x * e2.z).abs(),
+            (d.x * e2.y).abs() + (d.y * e2.x).abs(),
+        ));
+        if det == 0.0 || det.abs() <= 8.0 * f64::EPSILON * products {
             return None;
         }
         let inv = 1.0 / det;
-        let s = o - t[0];
-        // A little slack on the edges: rays through a shared edge must not slip between its
-        // two triangles to a surface behind.
-        const EDGE: f32 = 1e-5;
+        let s = o - a;
         let u = s.dot(p) * inv;
-        if !(-EDGE..=1.0 + EDGE).contains(&u) {
-            return None;
-        }
         let q = s.cross(e1);
         let v = d.dot(q) * inv;
-        if v < -EDGE || u + v > 1.0 + EDGE {
+        if u < -EDGE || v < -EDGE || u + v > 1.0 + EDGE {
             return None;
         }
         let tt = e2.dot(q) * inv;
-        (tt > 0.0).then_some((tt, u, v))
+        let distance = tt as f32;
+        (distance > 0.0 && distance.is_finite()).then_some((distance, u as f32, v as f32))
     }
 
     fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
@@ -483,6 +517,40 @@ fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
 mod tests {
     use super::*;
     use crate::primitives;
+
+    fn review_triangle(points: [Vec3; 3]) -> Bvh {
+        Bvh::new(&Mesh { positions: points.to_vec(), indices: vec![0, 1, 2], ..Mesh::default() })
+    }
+
+    #[test]
+    fn review_slab_accepts_an_exact_vertex_hit() {
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X, Vec3::Y]);
+        let hit = bvh.closest(Vec3::new(-1.0, 0.0, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6);
+        assert!(bvh.closest(Vec3::new(-1.0, -0.1, 41.0), Vec3::new(1.0, 0.0, -41.0), 2.0).is_none());
+    }
+
+    #[test]
+    fn review_ray_intersections_preserve_large_scales() {
+        let scale = 2.0_f32.powi(65);
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X * scale, Vec3::Z * scale]);
+        let hit = bvh.closest(Vec3::new(scale / 4.0, 1.0, scale / 4.0), -Vec3::Y, 2.0).unwrap();
+        assert_eq!((hit.t, hit.u, hit.v), (1.0, 0.25, 0.25));
+    }
+
+    #[test]
+    fn review_ray_intersections_preserve_small_scales() {
+        let scale = 2.0_f32.powi(-65);
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X * scale, Vec3::Z * scale]);
+        let hit = bvh.closest(Vec3::new(scale / 4.0, 1.0, scale / 4.0), -Vec3::Y, 2.0).unwrap();
+        assert_eq!((hit.t, hit.u, hit.v), (1.0, 0.25, 0.25));
+    }
+
+    #[test]
+    fn positive_ray_distances_that_underflow_are_not_zero_hits() {
+        let bvh = review_triangle([Vec3::ZERO, Vec3::X, Vec3::Y]);
+        assert!(bvh.closest(Vec3::new(0.0, 0.25, 1e-10), Vec3::new(0.0, 0.0, -f32::MAX), 1.0).is_none());
+    }
 
     #[test]
     fn nearest_point_matches_brute_force() {
@@ -787,11 +855,12 @@ mod tests {
         let out_of_range = m.triangle_count() - 1;
         m.indices[out_of_range * 3] = m.positions.len() as u32;
         let skipped = |t: usize| m.tri(t).is_some_and(|c| c.contains(&0) || c.contains(&24) || c.iter().any(|&i| i >= m.positions.len()));
-        let affected = (0..m.triangle_count()).filter(|&t| skipped(t)).count();
+        let expected: Vec<_> = (0..m.triangle_count()).filter(|&t| !skipped(t)).map(|t| t as u32).collect();
         let bvh = Bvh::new(&m);
         let mut found = Vec::new();
         bvh.query_box(Vec3::splat(-10.0), Vec3::splat(10.0), |t| found.push(t));
-        assert_eq!(found.len(), m.triangle_count() - affected);
+        found.sort_unstable();
+        assert_eq!(found, expected);
         for (lo, hi, _, _) in bvh.nodes() {
             assert!(lo.is_finite() && hi.is_finite(), "{lo} {hi}");
         }

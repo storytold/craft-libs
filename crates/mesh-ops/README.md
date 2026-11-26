@@ -19,7 +19,8 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   the built-in scenes in `primitives::BUILTINS`.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
   leaf. It answers closest-hit, any-hit and filtered ray casts, nearest-point queries and box
-  queries.
+  queries. Ray tests use double precision for non-finite intermediate values and hits near triangle
+  edges. Slab intervals include a floating-point rounding margin.
 - **Camera.** `OrbitCamera` and `Ray` give an orbit view and picking rays.
 
 `GeomError::Invalid` is the one error type. `rayon` parallelizes the UV G-buffer, and `serde`
