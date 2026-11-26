@@ -228,7 +228,7 @@ pub struct Prompt<'a> {
     /// Whether the dialog reports the alert-dialog role, described by the message and any tone.
     alert: bool,
     /// What the dialog's layer is for: `LayerRole::Progress` for a job's progress window.
-    #[prop]
+    #[prop(vis = "pub(super)")]
     layer_role: LayerRole,
 }
 

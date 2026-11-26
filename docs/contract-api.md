@@ -3295,7 +3295,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)>`. Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
   - `pub fn size(&self) -> egui::Vec2`. The galley size.
   - `pub fn char_x(&self, chars: usize) -> f32`. Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
-- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
+- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub look: crate::style::FieldLook, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
   - `pub fn new() -> Self`. Options with every default.
 - `craft_ui::primitives::TextOutcome`: `pub struct TextOutcome<V> { pub rect: Rect, pub draft: Option<String>, pub value: Option<V>, pub layout: Option<super::TextLayout>, pub caret_visible: bool, pub invalid: bool, pub committed: Option<craft_behavior::ParseNote>, pub composing: bool, pub completions: Vec<super::Completion>, pub clicked: bool }`. A text part's result this pass.
   - `pub const fn new(rect: Rect) -> Self`. An outcome over `rect` with no draft or value.
@@ -4122,6 +4122,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::WordTemplate`: re-export of `craft_i18n::WordTemplate` (outside these crates).
 - `craft_ui::runtime::env::Words`: re-export of `craft_i18n::Words` (outside these crates).
 - `craft_ui::runtime::env::WordsOverride`: `pub enum WordsOverride { Replace(Arc<Words>), Overlay(WordRows) }`. How a scope changes the built-in text: the only override path for words.
+- `craft_ui::runtime::env::ZoomPrecision`: `pub enum ZoomPrecision { Fractional, Whole }`. How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
 - `craft_ui::runtime::env::in_room`: `pub fn in_room<R>(ui: &mut Ui, rect: Rect, body: impl FnOnce(&mut Ui) -> R) -> R`. Runs `body` in a child `Ui` held to `rect` and clipped to it, as a layout room of its own: the flow grid, content
 - `craft_ui::runtime::env::system_appearance`: `pub fn system_appearance(ctx: &Context) -> SystemState`. What the OS reports on `ctx` now: the host's reader (`InstallSpec::system`), with the colour scheme egui's
 - `craft_ui::runtime::env::system_text_scale`: `pub fn system_text_scale(ctx: &Context) -> Option<f32>`. The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
@@ -4652,6 +4653,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
 - `craft_ui::style::DuplicateStyle`: `pub struct DuplicateStyle(pub &'static str)`. Two replacements named one style key.
 - `craft_ui::style::EnvKey`: `pub struct EnvKey`. The key of everything a style depends on besides its own key: tokens, direction, scale, the OS, the window's
   - `pub fn new(tokens: u64, direction: Direction, scale: Scale, os: Os, active: bool, values: u64) -> Self`. The key of these inputs. `tokens` is `UiTokens::key` and `values` the hash of the style-affecting app values.
+- `craft_ui::style::FieldLook`: `pub enum FieldLook { Normal, Quiet }`. How a text field looks where it sits: one value picks its fill, its edge and its placeholder together, so they
 - `craft_ui::style::FlagMask`: re-export of `craft_theme::FlagMask` (outside these crates).
 - `craft_ui::style::Flags`: re-export of `craft_theme::Flags` (outside these crates).
 - `craft_ui::style::FocusLook`: `pub struct FocusLook { pub stroke: Stroke, pub offset: f32 }`. A component's focus ring.
@@ -4735,6 +4737,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn surface(&self, kind: SurfaceKind) -> SurfaceStyle`. What a surface of `kind` draws.
   - `pub fn text_well(&self) -> SurfaceLook`. The look of a text well: the well surface with an edge that takes the focus colour while the well holds
   - `pub fn field(&self) -> SurfaceLook`. The look of a text or value field: the text well with the failure colour on its edge while its value is
+  - `pub fn quiet_field(&self) -> SurfaceLook`. The look of a field that sits in a bar (a title bar's search box,
   - `pub fn dropdown(&self) -> SurfaceLook`. The look of the closed box of a dropdown picker: the field, filled with the hover fill under the pointer and
   - `pub fn rule(&self, kind: RuleKind) -> RuleLook`. The line a rule of `kind` draws.
   - `pub fn handle(&self) -> HandleLook`. The look of a canvas handle.

@@ -1619,7 +1619,14 @@ impl BodyHooks<'_> {
         if lays_out {
             crate::runtime::lazy::begin(ctx, view, self.anchor.map(|anchor| anchor.child), self.glide.map(|glide| glide.child));
         }
-        let env = run.env.derive_local(|scoped| scoped.lazy = Some(view));
+        // The children fill what the view shows: the width the body was offered counts the bar's lane, so a child that
+        // fills the offered width would lie under the bar.
+        let env = run.env.derive_local(|scoped| {
+            scoped.lazy = Some(view);
+            if let Some(offered) = scoped.offered.as_mut() {
+                *offered = (*offered - inset.x).max(0.0);
+            }
+        });
         let installed = Env::install_for(&region_ui, env.clone());
         ScrollRegion { ui: region_ui, env, installed, seen, max, shown, bar, lays_out, laid_for: (inset, shows) }
     }

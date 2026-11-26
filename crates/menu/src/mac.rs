@@ -154,9 +154,8 @@ impl Native {
     fn update(&mut self, bar: &MenuBar) {
         let (spec, targets) = lower(bar);
         let (native, live) = (&mut self.bar, &self.targets);
-        // design: allow[contract/motion](the retry clock of a native menu driver: no frame draws while it waits)
-        let now = Instant::now;
-        let attempt = self.retry.attempt(&spec, now, || {
+        // design: allow[contract/motion](the AppKit menu rebuild retry is a native timer outside any pass, not a motion clock; the runtime clock is a web_time Instant, not std, on wasm)
+        let attempt = self.retry.attempt(&spec, Instant::now, || {
             let rebuilt = native.apply(&spec);
             if rebuilt {
                 *lock(live) = targets;
@@ -167,7 +166,7 @@ impl Native {
         // due asks again.
         if let Attempt::Retry(wait) = attempt {
             self.pending = Some(bar.clone());
-            self.ctx.request_repaint_after(wait); // design: allow[contract/motion](a native menu driver asks the context for the retry frame: it has no frame of its own)
+            craft_ui::runtime::frame::request_repaint_after(&self.ctx, wait.as_secs_f64());
         }
     }
 }

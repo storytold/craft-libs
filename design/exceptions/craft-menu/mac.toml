@@ -1,9 +1,0 @@
-config_version = 1
-
-[[exception]]
-name = "native-menu-retry-clock"
-kind = "marker"
-rule = "contract/motion"
-path = "crates/menu/src/mac.rs"
-reason = "A native menu driver's retry waits on the context's clock: no frame draws while the native menus are rebuilt."
-count = 2

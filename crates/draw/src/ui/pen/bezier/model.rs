@@ -328,7 +328,8 @@ impl SelectedAnchors {
 }
 
 /// The number of entries of selection anchor lists read on this thread, for trials that count the overlay's work.
-#[cfg(all(test, feature = "screen-testing"))]
+#[cfg(test)]
+#[cfg(feature = "screen-testing")]
 pub(crate) mod reads {
     use std::cell::Cell;
 

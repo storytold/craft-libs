@@ -125,3 +125,18 @@ Quotations are `git show e17227177:<path>` with that commit's numbers.
 **What the merge had to answer.** The lint's `contract/motion` asks for the runtime's motion clock; a native menu driver has no frame of its own and the runtime exposes no clock to it.
 
 **The answer.** Both sites are registered exemptions with their reasons.
+
+## Correction, 2026-11-27: `crates/menu/src/mac.rs`
+
+The lines quoted above are the round's; upstream `76322b729` landed later and this is the code
+the tree carries now (line numbers of the current file):
+
+```rust
+157:         // design: allow[contract/motion](the AppKit menu rebuild retry is a native timer outside any pass, not a motion clock; the runtime clock is a web_time Instant, not std, on wasm)
+158:         let attempt = self.retry.attempt(&spec, Instant::now, || {
+169:             craft_ui::runtime::frame::request_repaint_after(&self.ctx, wait.as_secs_f64());
+```
+
+The fork's second marker and its `mac.toml` entry are gone; upstream's single entry in
+`design/exceptions/craft-menu/crate.toml` covers line 157.
+

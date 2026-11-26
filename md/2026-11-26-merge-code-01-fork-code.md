@@ -701,3 +701,22 @@ index 000000000..0dc8b32ad
 1. `native-menu-retry-clock` registers both motion markers of the native driver: the clock it reads and the frame it asks for.
 
 **Checked by.** `cargo nextest run -p craft-design-lint` (green).
+
+## Correction, 2026-11-27
+
+The macOS menu driver's exemption is upstream's, not this fork's, and the two files above no
+longer describe the tree.
+
+- Upstream `76322b729` registers the AppKit rebuild retry in
+  `design/exceptions/craft-menu/crate.toml` (`mac-menu-rebuild-retry-clock`, `contract/motion`,
+  one site) and keeps `std::time::Instant` behind the marker on `crates/menu/src/mac.rs` line 157.
+  That is the same site this fork had registered twice.
+- `design/exceptions/craft-menu/mac.toml` (this fork's entry, `count = 2`) is therefore removed:
+  with it, `craft-design-lint` reported `exception/stale` for both files (one entry claimed two
+  sites where one exists, the other claimed one site where none was left). Without it, the lint
+  reports **28 passed / 0 failed**.
+- `Prompt::layer_role` is `#[prop(vis = "pub(super)")]` upstream; the plain `#[prop]` recorded
+  above is superseded. The hand-written setter is gone on both sides.
+- The fork keeps its own markers where upstream has none: `design/exceptions/craft-draw/bezier.toml`
+  is untouched.
+
