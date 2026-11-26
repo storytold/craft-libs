@@ -1,11 +1,17 @@
 //! The internal triangle mesh.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{DVec2, DVec3, Vec2, Vec3, Vec4};
 
 use crate::{GeomError, Result};
 
 /// An edge by the bits of its two end positions, the lower one first
 type EdgePositions = ([u32; 3], [u32; 3]);
+
+/// The centroid of a triangle's three UVs, summed in f64: the centroid of finite UVs is finite
+/// even when their f32 sum would overflow.
+fn uv_centroid(uvs: [Vec2; 3]) -> Vec2 {
+    (uvs.iter().map(Vec2::as_dvec2).sum::<DVec2>() / 3.0).as_vec2()
+}
 
 /// A contiguous index range drawn with one material.
 #[derive(Clone, Debug, PartialEq)]
@@ -199,13 +205,15 @@ impl Mesh {
         Ok(())
     }
 
-    /// Area-weighted smooth normals over the index buffer.
+    /// Area-weighted smooth normals over the index buffer. The face products are summed in `f64`,
+    /// where the cross product of any two `f32` edges neither overflows nor rounds to zero, so
+    /// very small and very large faces keep their normals.
     pub fn compute_normals(&mut self) {
-        let mut normals = vec![Vec3::ZERO; self.positions.len()];
+        let mut normals = vec![DVec3::ZERO; self.positions.len()];
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (a as usize, b as usize, c as usize);
             let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let face = (*pb - *pa).cross(*pc - *pa);
+            let face = (pb.as_dvec3() - pa.as_dvec3()).cross(pc.as_dvec3() - pa.as_dvec3());
             for v in [a, b, c] {
                 if let Some(x) = normals.get_mut(v) {
                     *x += face;
@@ -213,7 +221,7 @@ impl Mesh {
             }
         }
 
-        self.normals = normals.into_iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
+        self.normals = normals.into_iter().map(|v| v.try_normalize().map_or(Vec3::Y, |n| n.as_vec3())).collect();
     }
 
     /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails).
@@ -240,13 +248,13 @@ impl Mesh {
     }
 
     fn simple_tangents(&mut self) {
-        let mut tangents = vec![Vec3::ZERO; self.positions.len()];
+        let mut tangents = vec![DVec3::ZERO; self.positions.len()];
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (a as usize, b as usize, c as usize);
             let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
             let (Some(ua), Some(ub), Some(uc)) = (self.uvs.get(a), self.uvs.get(b), self.uvs.get(c)) else { continue };
-            let (e1, e2) = (*pb - *pa, *pc - *pa);
-            let (d1, d2) = (*ub - *ua, *uc - *ua);
+            let (e1, e2) = (pb.as_dvec3() - pa.as_dvec3(), pc.as_dvec3() - pa.as_dvec3());
+            let (d1, d2): (DVec2, DVec2) = (ub.as_dvec2() - ua.as_dvec2(), uc.as_dvec2() - ua.as_dvec2());
             let determinant = d1.x * d2.y - d2.x * d1.y;
             if determinant.abs() < 1e-12 {
                 continue;
@@ -260,7 +268,7 @@ impl Mesh {
             }
         }
 
-        self.tangents = tangents.into_iter().map(|t| t.try_normalize().unwrap_or(Vec3::X).extend(1.0)).collect();
+        self.tangents = tangents.into_iter().map(|t| t.try_normalize().map_or(Vec3::X, |n| n.as_vec3()).extend(1.0)).collect();
     }
 
     /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
@@ -269,7 +277,7 @@ impl Mesh {
         self.triangles_of(m)
             .filter_map(|t| {
                 let [a, b, c] = self.tri(t)?;
-                let uv = (*self.uvs.get(a)? + *self.uvs.get(b)? + *self.uvs.get(c)?) / 3.0;
+                let uv = uv_centroid([*self.uvs.get(a)?, *self.uvs.get(b)?, *self.uvs.get(c)?]);
                 uv.is_finite().then(|| (uv.x.floor() as i32, uv.y.floor() as i32))
             })
             .collect()
@@ -319,7 +327,7 @@ impl Mesh {
         let mut vertices = Vec::with_capacity(material_triangles.len() * 3);
         for t in &material_triangles {
             let Some(tri) = self.tri(*t) else { continue };
-            let centroid = tri.iter().map(|v| self.uvs.get(*v).copied().unwrap_or_default()).sum::<Vec2>() / 3.0;
+            let centroid = uv_centroid(tri.map(|v| self.uvs.get(v).copied().unwrap_or_default()));
             vertices.extend(tri.map(|v| (v, centroid)));
         }
 
@@ -489,6 +497,39 @@ impl mikktspace::Geometry for Mikk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normals_of_very_small_and_very_large_faces_keep_their_direction() {
+        for edge in [1e-25_f32, 1e25] {
+            let m = Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::new(0.0, edge, 0.0), Vec3::new(0.0, 0.0, edge)],
+                None,
+                vec![Vec2::ZERO; 3],
+                vec![0, 1, 2],
+                "a",
+            )
+            .unwrap();
+            assert_eq!(m.normals, vec![Vec3::X; 3], "edge {edge:e}");
+        }
+    }
+
+    #[test]
+    fn simple_tangents_survive_uv_products_that_overflow_f32() {
+        let uvs = vec![Vec2::ZERO, Vec2::new(1e20, 0.0), Vec2::new(0.0, 1e20)];
+        let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::Y, Vec3::Z], None, uvs, vec![0, 1, 2], "a").unwrap();
+        m.simple_tangents();
+        assert_eq!(m.tangents, vec![Vec4::new(0.0, 1.0, 0.0, 1.0); 3]);
+    }
+
+    #[test]
+    fn uv_centroids_of_large_finite_uvs_stay_finite() {
+        // Three UVs of 1.5e38 sum past f32::MAX; their centroid is 1.5e38.
+        let big = Vec2::splat(1.5e38);
+        let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![big; 3], vec![0, 1, 2], "a").unwrap();
+        assert_eq!(m.uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(i32::MAX, i32::MAX)]);
+        m.map_material_uvs_with(0, |c, _| c);
+        assert_eq!(m.uvs, vec![big; 3]);
+    }
 
     fn quad() -> Mesh {
         Mesh::from_parts(
