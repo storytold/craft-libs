@@ -1,6 +1,6 @@
 //! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, the OS close, and
 //! docking the whole window by dragging its title row. A context menu opened in a palette places its popup window as
-//! it places the menu in the main window.
+//! it places the menu in the main window; the palette's own menus keep their place and take the arrow keys in theirs.
 
 use craft_behavior::Intent;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
@@ -17,10 +17,10 @@ use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::{drag, keys};
-use craft_ui::testing::access::AccessTree;
+use craft_ui::testing::access::{AccessTree, focused_key};
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::pointer::{moved, press, release, secondary};
+use craft_ui::testing::pointer::{gone, moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, HeldButtons};
 use craft_ui::text::NumberField;
@@ -1606,6 +1606,101 @@ fn enter_and_escape_in_a_native_palettes_field_stay_the_fields() {
     }
 }
 
+/// What panel 1's body holds that takes an Escape pressed in its window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Taker {
+    Nothing,
+    /// A field, which a click focuses.
+    Field,
+    /// A button whose context menu a secondary click opens.
+    Menu,
+    /// App code that reads the window's leftover Escape.
+    App,
+}
+
+/// Panels of which panel 1 holds `taker`.
+struct EscapePalette {
+    taker: Taker,
+    opacity: Option<f64>,
+}
+
+impl DockPanels<u32> for EscapePalette {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        match self.taker {
+            _ if *panel != 1 => {}
+            Taker::Nothing => {}
+            Taker::Field => {
+                NumberField::new("Opacity", Bind::bound(&mut self.opacity)).show(ui);
+            }
+            Taker::Menu => {
+                let target = Button::new("Target").show(ui);
+                let _ = Menu::context("Target menu", &target).show(ui, |ui, _| {
+                    MenuItem::new("Row").show(ui);
+                });
+            }
+            Taker::App => {
+                keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Cancel));
+            }
+        }
+    }
+}
+
+/// An Escape pressed in a native palette that holds `taker`, with the field focused or the menu open: how many of the
+/// main window's Cancels two readers found that the app runs before its dock, one after the other.
+fn main_window_cancels(taker: Taker) -> (usize, usize) {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    let palette = dock.palette.expect("the palette's window opened");
+    let mut panels = EscapePalette { taker, opacity: Some(50.0) };
+    let mut read = (0, 0);
+    let mut frame = |child: Vec<Event>| {
+        dock.windows.frame(vec![], child, |ui| {
+            let cancel = |ui: &Ui| usize::from(keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Cancel)));
+            read.0 += cancel(ui);
+            read.1 += cancel(ui);
+            let _ = DockArea::new("Native dock", Bind::bound(&mut dock.workspace), &dock.specs, &mut panels, DockConfig::default()).show(ui);
+        })
+    };
+    frame(vec![]);
+    let out = frame(vec![]);
+    let at = |name: &str| {
+        let tree = tree_of_viewport(&out, palette);
+        let part = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(name) && tree.role_of(*key) != Some(Role::LABEL));
+        part.and_then(|key| tree.bounds_of(key)).expect("the palette shows it").center()
+    };
+    let opened = match taker {
+        Taker::Field => {
+            let field = at("Opacity");
+            vec![vec![moved(field), press(field)], vec![release(field)]]
+        }
+        Taker::Menu => {
+            let target = at("Target");
+            vec![vec![moved(target)], vec![secondary(target, true)], vec![secondary(target, false)]]
+        }
+        Taker::Nothing | Taker::App => vec![],
+    };
+    let escape = [vec![key_press(Key::Escape, Modifiers::NONE)], vec![key_release(Key::Escape, Modifiers::NONE)], vec![], vec![]];
+    for events in opened.into_iter().chain([vec![], vec![]]).chain(escape) {
+        frame(events);
+    }
+    read
+}
+
+/// An Escape that nothing in a native palette takes is the main window's Cancel, once: the app reads it where it reads
+/// the main window's own, and the read takes it.
+#[trial]
+fn an_escape_nothing_in_a_native_palette_takes_is_the_main_windows_cancel_once() {
+    assert_eq!(main_window_cancels(Taker::Nothing), (1, 0), "the first read finds the Escape, the second nothing");
+}
+
+/// An Escape in a native palette that a focused field, an open menu or the app's own code there takes or keeps never
+/// reaches the main window.
+#[trial]
+fn an_escape_taken_in_a_native_palette_never_reaches_the_main_window() {
+    for taker in [Taker::Field, Taker::Menu, Taker::App] {
+        assert_eq!(main_window_cancels(taker), (0, 0), "{taker:?}: the Escape stays in the palette's window");
+    }
+}
+
 /// A palette float made in the app window.
 fn float() -> Floating<u32> {
     Floating::single(104, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)))
@@ -1688,4 +1783,78 @@ fn a_context_menu_from_a_native_palette_too_tall_for_either_side_covers_the_poin
         let shown = node_rect(tree, &format!("Row {row}"), Role::MENU_ITEM).unwrap_or_else(|| panic!("row {row} shows"));
         assert!(window.contains_rect(shown), "row {row} {shown:?} lies whole in the menu's window {window:?}");
     }
+}
+
+/// Opens the menu a secondary click at `at`, a point of the palette's window, asks for; returns its popup window.
+fn open_menu(dock: &mut NativeDock, rect: &mut Rect, at: Pos2) -> ViewportId {
+    for events in [vec![moved(at)], vec![secondary(at, true)], vec![secondary(at, false)], vec![], vec![]] {
+        collapsed_frame(dock, &mut Palettes, rect, vec![], events);
+    }
+    let out = collapsed_frame(dock, &mut Palettes, rect, vec![], vec![]);
+    let opened = popups(dock, &out).into_iter().find(|viewport| !tree_of_viewport(&out, *viewport).with_role(Role::MENU).is_empty());
+    opened.expect("the menu shows in a popup window")
+}
+
+/// The arrow keys move the focus in a native palette's tab menu, and Enter runs the row they reach: Dock Panel, which
+/// is not the first row, docks the panel. Opened again after Escape, the menu starts as it opened first.
+#[trial]
+fn the_arrow_keys_reach_a_row_of_a_native_palettes_tab_menu() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    let mut at = FLOAT_AT;
+    dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    let out = collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], vec![]);
+    let palette = dock.palette.expect("the palette's window opened");
+    let tab = node_rect(tree_of_viewport(&out, palette), PALETTE_TITLE, Role::TAB).expect("the palette shows the panel's tab").center();
+    // A key in the menu's window, and the row focused in the frame after it.
+    let key = |dock: &mut NativeDock, at: &mut Rect, menu: ViewportId, key: Key| -> Option<String> {
+        dock.windows.send(menu, vec![key_press(key, Modifiers::NONE)]);
+        collapsed_frame(dock, &mut Palettes, at, vec![], vec![]);
+        dock.windows.send(menu, vec![key_release(key, Modifiers::NONE)]);
+        collapsed_frame(dock, &mut Palettes, at, vec![], vec![]);
+        let out = collapsed_frame(dock, &mut Palettes, at, vec![], vec![]);
+        let tree = &out.trees.iter().find(|(shown, _)| *shown == menu)?.1;
+        tree.name_of(focused_key(tree)).map(str::to_owned)
+    };
+    let menu = open_menu(&mut dock, &mut at, tab);
+    let first = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    let second = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    assert_ne!(first, second, "the second arrow moves the focus on");
+    key(&mut dock, &mut at, menu, Key::Escape);
+    for _ in 0..30 {
+        collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], vec![]);
+    }
+    let out = collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], vec![]);
+    assert!(!popups(&dock, &out).contains(&menu), "Escape closed the menu");
+    let menu = open_menu(&mut dock, &mut at, tab);
+    let mut row = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    assert_eq!(row, first, "the menu starts at the same row again");
+    for _ in 0..4 {
+        if row.as_deref() == Some("Dock Panel") {
+            break;
+        }
+        row = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    }
+    key(&mut dock, &mut at, menu, Key::Enter);
+    let layout = dock.workspace.layout();
+    assert!(layout.floating.is_empty(), "Enter ran {row:?}, which docks the panel: {layout:?}");
+}
+
+/// The menu a secondary click on a native palette's title row hangs at the pointer stays there while the pointer
+/// leaves the palette for the menu's window and comes back, and hangs at the new place of a second secondary click.
+#[trial]
+fn a_native_palettes_title_row_menu_stays_where_it_opened() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    let mut at = FLOAT_AT;
+    dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    let menu = open_menu(&mut dock, &mut at, ROW_AT);
+    let opened = window_rect(&dock, menu);
+    for events in [vec![gone()], vec![], vec![moved(ROW_AT + Vec2::new(-60.0, 80.0))], vec![]] {
+        collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], events);
+        assert_eq!(window_rect(&dock, menu), opened, "the menu stays where it opened");
+    }
+    let menu = open_menu(&mut dock, &mut at, ROW_AT - Vec2::new(40.0, 0.0));
+    let moved = window_rect(&dock, menu);
+    assert!(moved.min.x < opened.min.x - 1.0, "it hangs at the second click: {moved:?}, first {opened:?}");
 }

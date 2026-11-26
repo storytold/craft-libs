@@ -254,7 +254,7 @@ pub(crate) struct Shapes {
     #[cfg(feature = "testing")]
     resolutions: u32,
     /// The `made_by_component` lookups the running pass made, for the count trials.
-    #[cfg(feature = "testing")]
+    #[cfg(feature = "suite")]
     made_lookups: u32,
 }
 
@@ -388,6 +388,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         #[cfg(feature = "testing")]
         {
             shapes.resolutions = 0;
+        }
+        #[cfg(feature = "suite")]
+        {
             shapes.made_lookups = 0;
         }
     });
@@ -858,7 +861,7 @@ pub(crate) fn registered_widgets(ctx: &Context) -> std::collections::HashSet<Id>
 /// editor part, in the running pass of `viewport`.
 pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> bool {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        #[cfg(feature = "testing")]
+        #[cfg(feature = "suite")]
         {
             record.made_lookups += 1;
         }
@@ -867,7 +870,7 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
 }
 
 /// How many `made_by_component` lookups the running pass of `viewport` made so far, for the count trials.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.made_lookups)
 }
@@ -1233,18 +1236,24 @@ pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
     })
 }
 
+/// The part of `owner` holding a press in this viewport that was open when the pass began: in the pass that ends the
+/// press too, and in none after it.
+pub fn pressed_part(ctx: &Context, owner: Id) -> Option<PartRef> {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record.pressed_parts.iter().find_map(|(id, part)| (*id == owner).then_some(*part))
+    })
+}
+
 /// The part of `owner` holding the pointer's hover or an open press in this viewport.
 ///
 /// An open press keeps its part while the pointer moves away. A press open at the start of the pass keeps its part
 /// for that whole pass, so a child can still declare it after an enclosing arena has processed the release.
 pub fn active_part(ctx: &Context, owner: Id) -> Option<PartRef> {
-    let viewport = pass::current_viewport(ctx);
-    let pressed =
-        PerViewport::<Shapes>::with(ctx, viewport, |record| record.pressed_parts.iter().find_map(|(id, part)| (*id == owner).then_some(*part)));
+    let pressed = pressed_part(ctx, owner);
     if pressed.is_some() {
         return pressed;
     }
-    with_hover(ctx, viewport, |under, captured| {
+    with_hover(ctx, pass::current_viewport(ctx), |under, captured| {
         if captured {
             return None;
         }
