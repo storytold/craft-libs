@@ -12,10 +12,15 @@ workspace = true
 
 [dependencies]
 craft-gpu = { workspace = true }
-wgpu = "30"
+wgpu = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true }
+
+# The device tests (src/tests.rs) open a native adapter. The backends are on for this crate's own
+# tests only; crates that depend on craft-gpu-yuv get the workspace wgpu with `std` and `wgsl`.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }
 
 [dev-dependencies]
 craft-gpu-null = { workspace = true }
