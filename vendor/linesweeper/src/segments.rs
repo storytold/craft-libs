@@ -298,9 +298,17 @@ impl Segments {
     /// Add a Bézier path to this arena.
     ///
     /// The path can contain multiple subpaths, and each of them must be closed.
+    /// If one of them is not closed, this returns an error and leaves the arena
+    /// unchanged.
     pub fn add_bez_path(&mut self, p: &BezPath) -> Result<(), NonClosedPath> {
         let old_len = self.segs.len();
-        self.add_path_without_updating_enter_exit(p, true)?;
+        // Craft patch (add_bez_path error): segments pushed before the open
+        // subpath was found are removed, so no segment is left with a link
+        // past the end of the arena or without an entrance.
+        if let Err(e) = self.add_path_without_updating_enter_exit(p, true) {
+            self.truncate(old_len);
+            return Err(e);
+        }
         self.update_enter_exit(old_len);
         Ok(())
     }
@@ -405,6 +413,19 @@ impl Segments {
         };
         self.horizontal_decomps.push(decomp);
         self.segs.push(seg);
+    }
+
+    // Craft patch (add_bez_path error): drops every segment at index `len` or
+    // above. `enter` and `exit` are left alone, so this is only for segments
+    // that `update_enter_exit` has not seen yet.
+    fn truncate(&mut self, len: usize) {
+        self.segs.inner.truncate(len);
+        self.horizontal_decomps.inner.truncate(len);
+        self.contour_prev.inner.truncate(len);
+        self.contour_next.inner.truncate(len);
+        self.orientation.inner.truncate(len);
+        self.split_from_predecessor.inner.truncate(len);
+        self.input_segs.inner.truncate(len);
     }
 
     /// Construct a segment arena from a single closed polyline.
