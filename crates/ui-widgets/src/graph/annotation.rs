@@ -7,8 +7,8 @@ use crate::fonts::FontRef;
 use crate::primitives::{DocRun, DocText, Draw, IconSpec, PaintShape, StrokeWidth, TextRun};
 use crate::style::{DataColor, Flags, StyleColor, UiTokens};
 use craft_behavior::{
-    CancelReason, CanvasTransform, EditEvent, GestureId, HitLevel, HitPriority, IconId, Mixed, PartKey, PointerButton, PressCancel, PressPhase,
-    PressStart, Selection, Sense,
+    CancelReason, CanvasTransform, EditEvent, GestureId, HitLevel, HitPriority, IconId, Mixed, PartKey, PointerButton, PressPhase, PressStart,
+    PressState, Selection, Sense,
 };
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
@@ -190,7 +190,14 @@ fn label_rect(pin: Rect, label: Vec2) -> Rect {
 
 /// Paints the backdrop `backdrop` shown at `frame`: its fill, its edge (wider when selected), the description wrapped
 /// and clipped inside, and the grip. The title above is the caller's, which lays it out to place it.
-fn paint_backdrop(draw: &Draw<'_>, frame: Rect, backdrop: &Backdrop<'_>, sizes: &Sizes, style: &NodeGraphStyle, look: (StyleColor, StyleColor, bool)) {
+fn paint_backdrop(
+    draw: &Draw<'_>,
+    frame: Rect,
+    backdrop: &Backdrop<'_>,
+    sizes: &Sizes,
+    style: &NodeGraphStyle,
+    look: (StyleColor, StyleColor, bool),
+) {
     let (edge, ink, selected) = look;
     let shape = PaintShape::Rect(frame, CornerRadius::ZERO);
     draw.data_fill(&shape, backdrop.fill);
@@ -222,18 +229,7 @@ fn paint_marker(draw: &Draw<'_>, pin: Rect, marker: &Marker<'_>, style: &NodeGra
     let bounds = pin.union(label_rect(pin, size));
     draw.text(label_rect(pin, size), &label);
     if let Some(edge) = selected {
-        draw.stroke(&PaintShape::Rect(bounds, CornerRadius::ZERO), StrokeWidth::Thin, edge);
-    }
-}
-
-/// Why a captured press ended, as the reason its gesture ends without a commit.
-fn cancel_reason(reason: PressCancel) -> CancelReason {
-    match reason {
-        PressCancel::Escape => CancelReason::Escape,
-        PressCancel::FocusLost => CancelReason::Blur,
-        PressCancel::Removed | PressCancel::Disabled => CancelReason::Removed,
-        PressCancel::Host => CancelReason::HostChanged,
-        _ => CancelReason::Dismissed,
+        draw.stroke(&PaintShape::Rect(bounds, style.marker_radius), StrokeWidth::Thin, edge);
     }
 }
 
@@ -248,8 +244,7 @@ pub(super) struct Layers<'a> {
     pub(super) backdrops: &'a [Backdrop<'a>],
     pub(super) notes: &'a [Note<'a>],
     pub(super) markers: &'a [Marker<'a>],
-    // PLAN: the parts' selected flags and the paint's accent need the selected annotation, which ge.C29 does not
-    // carry; graph-w4 builds the layers with `Layers::of(self)`.
+    /// The selected annotation, read from the graph's binding this pass: the parts' flags and the paint's accent.
     pub(super) selected: Option<AnnotationKey>,
 }
 
@@ -345,7 +340,8 @@ impl<'a> Layers<'a> {
         }
         for marker in self.markers {
             let pin = pin_rect(origin + zoom.to_layer(marker.at).to_vec2(), sizes.icon);
-            let selected = (self.selected == Some(AnnotationKey::Marker(marker.id))).then(|| cx.resolve_part(MARKER.at(marker.id), &style.backdrop_edge));
+            let selected =
+                (self.selected == Some(AnnotationKey::Marker(marker.id))).then(|| cx.resolve_part(MARKER.at(marker.id), &style.backdrop_edge));
             paint_marker(&draw, pin, marker, style, selected);
         }
     }
@@ -380,17 +376,17 @@ impl<'a> Layers<'a> {
         let parts: Vec<_> = parts.collect();
         for (part, key, resize) in parts {
             let Some(result) = cx.part_if_declared(part) else { continue };
-            let phase = result.press.phase;
-            if let PressPhase::Down { start, .. } = phase
+            let press = result.press;
+            if let PressPhase::Down { start, .. } = press.phase
                 && start.button == PointerButton::Primary
             {
                 pressed = Some(key);
             }
-            self.gesture(phase, key, resize, (zoom, min), cx, &mut events);
+            self.gesture(press, key, resize, (zoom, min), cx, &mut events);
         }
         let current = annotations.as_ref().map_or(self.selected, |bind| bind.value().copied().flatten());
-        let press = crate::runtime::pointer::frame(&cx.core.ctx).press;
-        let elsewhere = pressed.is_none() && press.is_some_and(|press| cx.rect.contains(press.origin));
+        // The collection's own press: a press on a node or on empty space, not one on a wire or on a control over the graph.
+        let elsewhere = pressed.is_none() && matches!(cx.press().phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary);
         let label = cx.core.label_arc();
         let target = match pressed {
             Some(key) => Some(Some(key)),
@@ -415,13 +411,13 @@ impl<'a> Layers<'a> {
         events
     }
 
-    /// What `phase` on the part of `key` adds to `events`: a drag runs a `Move`, or a `Resize` of the backdrop at
+    /// What `press` on the part of `key` adds to `events`: a drag runs a `Move`, or a `Resize` of the backdrop at
     /// `resize`, as Begin, Update, then Commit or Cancel, in document units; a secondary click asks for the menu at the
     /// release point, in the graph's layer space, which is its parent's. A press that comes up where it went down
     /// changes nothing.
     fn gesture<E: 'static>(
         &self,
-        phase: PressPhase,
+        press: PressState,
         key: AnnotationKey,
         resize: Option<Rect>,
         (zoom, min): (CanvasTransform, Vec2),
@@ -439,7 +435,7 @@ impl<'a> Layers<'a> {
             },
         };
         let before = || Mixed::Same(Vec2::ZERO);
-        match phase {
+        match press.phase {
             PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
                 let id = gesture_of(start);
                 events.push(report(EditEvent::begin(id, before(), cx.core.label_arc(), None)));
@@ -460,12 +456,9 @@ impl<'a> Layers<'a> {
             PressPhase::Release { start, pos, click: true, .. } if start.button == PointerButton::Secondary => {
                 events.push(AnnotationEvent::ContextMenu { key, at: pos });
             }
-            PressPhase::Cancel { start, reason, .. } if start.button == PointerButton::Primary => {
-                // Only a press that moved past the slop began a gesture; the pointer still lies where the drag reached.
-                let pointer = crate::runtime::pointer::frame(&cx.core.ctx);
-                if pointer.pos.is_some_and(|pos| pos.distance(start.origin) > pointer.slop) {
-                    events.push(report(EditEvent::cancel(gesture_of(start), cancel_reason(reason), Some(before()))));
-                }
+            // Only a press that passed the slop began a gesture.
+            PressPhase::Cancel { start, reason, .. } if start.button == PointerButton::Primary && press.dragged() => {
+                events.push(report(EditEvent::cancel(gesture_of(start), reason.into(), Some(before()))));
             }
             _ => {}
         }

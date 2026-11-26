@@ -7,7 +7,7 @@
 
 mod annotation;
 #[cfg(feature = "suite")]
-mod annotation_stories;
+pub(crate) mod annotation_stories;
 mod kind;
 pub(crate) mod node;
 #[cfg(feature = "suite")]
@@ -22,14 +22,14 @@ use crate::contract::{
     PartsCx, Pointer as _, Role, RowState, SelectMode, Sizing, Styled as _,
 };
 use crate::primitives::{PaintShape, StrokeWidth};
-use crate::style::{ComponentStyle, Flags, Stateful, States, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use crate::style::{ComponentStyle, Flags, Stateful, States, StyleColor, StyleCx, SurfaceKind, TypeRole, UiTokens};
 use annotation::Layers;
 use craft_behavior::{
     CanvasTransform, EditEvent, FreeLayout, HitLevel, HitPriority, HitShape, ItemSource, Metrics, Mixed, PartKey, PartRef, PointerButton, PressPhase,
     Selection, SelectionChange, SelectionModel, Sense, Value,
 };
 use craft_keymap::Mods;
-use egui::{Pos2, Rect, Response, Vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 use node::port_center;
 
 const WIRE: PartKey = PartKey::new("wire");
@@ -112,6 +112,8 @@ pub struct NodeGraphStyle {
     note_text: Stateful<StyleColor>,
     /// The ink of a marker.
     marker: StyleColor,
+    /// The corners of a selected marker's outline.
+    marker_radius: CornerRadius,
     /// The ink of a backdrop's resize grip.
     grip: StyleColor,
     /// The least size a backdrop resizes to.
@@ -364,6 +366,7 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
             text_role: TypeRole::Body,
             note_text: Stateful::new(cx.color(color.text.normal)).when(Flags::SELECTED, accent),
             marker: accent,
+            marker_radius: UiTokens::corner(cx.tokens.shape.radius.sm),
             grip: cx.color(color.text.muted),
             backdrop_min: Vec2::splat(2.0 * cx.tokens.size.hit.target),
             grip_side: cx.tokens.size.handle.md,
@@ -385,7 +388,7 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
                 .sense(Sense::CLICK | Sense::DRAG | Sense::CONTEXT_CLICK)
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .flags(flags)
-                .pointer_only("the graph's wire commands act on the selected wire");
+                .pointer_only("the graph's wire commands act on the selected wire: Insert reroute dot, Swap, Delete links");
         }
     }
 
@@ -484,8 +487,7 @@ impl<E: 'static> Collection for NodeGraph<'_, E> {
 
     /// Hands each node the wires that feed its inputs, by id and source port, and when its ports' names show. The
     /// node owns what it is given, since the graph's `wires` cannot be lent for the item's `'r`.
-    fn dress<'r>(&self, node: Node<'r, E>, _: &RowState) -> Node<'r, E> {
-        // PLAN: graph-w3 adds `Node::id()` and `Node::placed(Pos2)` in `node.rs`.
+    fn dress<'r>(&self, node: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
         let id = node.id();
         let place = self.positions.get(id.0 as usize).map_or(Pos2::ZERO, |rect| rect.min);
         let mut fed = vec![None; self.kinds.get(id.0 as usize).map_or(0, |kind| kind.port_count())];

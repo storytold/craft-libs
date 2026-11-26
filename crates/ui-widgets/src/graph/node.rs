@@ -6,9 +6,7 @@ use crate::contract::{
     Pointer as _, Props as _, Role, Styled as _,
 };
 use crate::primitives::{Draw, HAlign, PaintShape, StrokeWidth, TextRun};
-use crate::style::{
-    ComponentStyle, Corners, Flags, HandleLook, RuleKind, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TypeRole,
-};
+use crate::style::{ComponentStyle, Corners, Flags, HandleLook, RuleKind, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TypeRole};
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Insets, Metrics, PartKey, PointerButton, PressPhase, PressState, Sense};
 use craft_theme::Rgba;
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};

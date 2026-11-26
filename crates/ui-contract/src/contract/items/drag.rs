@@ -20,8 +20,7 @@ use crate::runtime::egui::areas;
 use crate::runtime::env::Label;
 use crate::runtime::toggle_sweep::{self, Segment, Travel};
 use craft_behavior::{
-    Axis, CancelReason, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton,
-    PressCancel, PressPhase, ScrollPos,
+    Axis, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton, PressPhase, ScrollPos,
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
@@ -396,14 +395,6 @@ impl DropTarget<dyn Any + Send + Sync> for KindDrop {
 
     fn mark(&self, _: &DropOperation) -> DropMark {
         self.mark
-    }
-}
-
-fn cancel_reason(cancel: PressCancel) -> CancelReason {
-    match cancel {
-        PressCancel::Escape => CancelReason::Escape,
-        PressCancel::Removed => CancelReason::Removed,
-        _ => CancelReason::Blur,
     }
 }
 
@@ -813,10 +804,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             PressPhase::Cancel { reason, .. } => {
                 if let Some(gesture) = self.drags.moving.take() {
-                    self.events.push(CollectionEvent::Move(EditEvent::cancel(gesture, cancel_reason(reason), Some(Mixed::Same(Vec2::ZERO)))));
+                    self.events.push(CollectionEvent::Move(EditEvent::cancel(gesture, reason.into(), Some(Mixed::Same(Vec2::ZERO)))));
                 }
                 for (gesture, before, _) in self.drags.sweep.take().map(|sweep| sweep.open).unwrap_or_default() {
-                    self.events.push(CollectionEvent::Toggle(EditEvent::cancel(gesture, cancel_reason(reason), Some(Mixed::Same(before)))));
+                    self.events.push(CollectionEvent::Toggle(EditEvent::cancel(gesture, reason.into(), Some(Mixed::Same(before)))));
                 }
             }
             _ => {}

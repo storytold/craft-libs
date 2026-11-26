@@ -36,10 +36,8 @@ impl NodeKind<()> for Step {
 const STEP: Step = Step;
 
 /// The two nodes' rects, side by side, in document units.
-const NODES: [Rect; 2] = [
-    Rect { min: Pos2::new(48.0, 64.0), max: Pos2::new(188.0, 136.0) },
-    Rect { min: Pos2::new(228.0, 64.0), max: Pos2::new(368.0, 136.0) },
-];
+const NODES: [Rect; 2] =
+    [Rect { min: Pos2::new(48.0, 64.0), max: Pos2::new(188.0, 136.0) }, Rect { min: Pos2::new(228.0, 64.0), max: Pos2::new(368.0, 136.0) }];
 
 /// A backdrop around both nodes, with room for its description below them.
 const FRAME: Rect = Rect { min: Pos2::new(32.0, 40.0), max: Pos2::new(384.0, 200.0) };
@@ -115,13 +113,13 @@ fn select_each(fixture: &mut Fixture) {
 }
 
 /// The backdrop selected; the drive selects the note and then the marker in turn.
-#[story(NodeGraph<'static, ()>, covers = [], drive = Drive::Custom(select_each))]
+#[story(NodeGraph<'static, ()>, covers = [Many], drive = Drive::Custom(select_each))]
 fn annotation_selected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     annotated_graph(ui, data, &Annotated { frame: FRAME, notes: &NOTES, markers: &MARKERS, selected: Some(AnnotationKey::Backdrop(0)) })
 }
 
 /// The backdrop's grip pressed and moved: the backdrop takes the size the drag reports.
-#[story(NodeGraph<'static, ()>, covers = [], drive = Drive::Custom(drag_grip))]
+#[story(NodeGraph<'static, ()>, covers = [Many], drive = Drive::Custom(drag_grip))]
 fn backdrop_resizing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     annotated_graph(ui, data, &Annotated { frame: FRAME, notes: &[], markers: &[], selected: Some(AnnotationKey::Backdrop(0)) })
 }

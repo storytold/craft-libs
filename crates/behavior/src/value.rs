@@ -117,6 +117,20 @@ impl CancelReason {
     }
 }
 
+/// Why a captured press ended, as the reason the gesture it carried ends without a commit.
+impl From<crate::press::PressCancel> for CancelReason {
+    fn from(cancel: crate::press::PressCancel) -> Self {
+        use crate::press::PressCancel;
+        match cancel {
+            PressCancel::Escape => CancelReason::Escape,
+            PressCancel::Removed => CancelReason::Removed,
+            // `cancel_press_of`: the host's own state no longer matches what the press acts on.
+            PressCancel::Host => CancelReason::HostChanged,
+            _ => CancelReason::Blur,
+        }
+    }
+}
+
 /// What applying an event did to a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
