@@ -42,8 +42,8 @@ pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
 pub(crate) use intents::{
-    Lent, context_part, context_request, context_requests, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel,
-    take_every_escape, take_window_cancel,
+    Lent, context_part, context_request, context_requests, give_back, hand_on_cancel, lend, request_context, route_whole_reset, scope_escape,
+    take_cancel, take_every_escape, take_window_cancel,
 };
 pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
@@ -66,9 +66,6 @@ pub enum MenuKey {
 pub(crate) struct NavKeys {
     pub(crate) tabs: Vec<bool>,
     pub(crate) panes: Vec<bool>,
-    /// The input hook left a bare Tab in egui's input: nothing has the focus and the window registered no focus stop,
-    /// so the framework has nothing to move to and egui moves its own focus.
-    pub(crate) tab_to_egui: bool,
 }
 
 struct Press {
@@ -269,6 +266,9 @@ struct Node {
     focusable: bool,
     /// The node's expanded state this pass, `None` when it has none.
     expanded: Option<bool>,
+    /// The part of the owner that opens the popup whose state the node reports, when that part has no node of its own:
+    /// Expand and Collapse on the node go to the part instead of activating the owner.
+    toggle: Option<PartRef>,
 }
 
 #[derive(Default)]
@@ -325,6 +325,9 @@ pub(crate) struct Stage {
     pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.
     queued_edits: Vec<EditCommand>,
+    /// A component read its intents in this pass, so the pass's UI is running: an edit fired from now on waits for the
+    /// next pass.
+    intents_read: bool,
     /// The components that asked for a context menu in this pass, with the rect it opens at.
     contexts: Vec<(Id, egui::Rect, Option<PartRef>)>,
     /// Components with an open edit run this pass: Escape cancels the run before it leaves a row's child.
@@ -337,6 +340,9 @@ pub(crate) struct Stage {
     held_over: Vec<Key>,
     /// The modifiers of the last Escape of the pass that became a `Cancel`.
     escape_mods: Option<Mods>,
+    /// The Escapes that windows opened from this one handed on (`intents::hand_on_cancel`), by their modifiers: the next
+    /// pass's `Cancel`s.
+    handed_cancels: Vec<Mods>,
     /// How many lent keys session members have taken (`lend`), counted over the viewport's life.
     lent_taken: u64,
     /// The pane moves that menu, palette or automation fires of `NavCommand` asked for: `true` is forward.

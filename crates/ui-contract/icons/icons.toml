@@ -455,6 +455,11 @@ carbon = "warning--alt"
 tabler = "alert-triangle"
 
 [[icon]]
+name = "warning_filled"
+directional = false
+phosphor = "warning-filled"
+
+[[icon]]
 name = "web_colors"
 directional = false
 lucide = "box"

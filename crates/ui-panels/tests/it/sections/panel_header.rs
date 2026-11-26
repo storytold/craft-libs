@@ -70,3 +70,35 @@ fn panel_routes_unused_arrow_from_button_to_its_collection() {
     fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
     assert!(events.borrow().iter().any(|event| matches!(event, CollectionEvent::LeadMoved { .. })), "the list receives the move");
 }
+
+/// An app whose quiet title heads its body (`QuietHeader::Heads`, VectorCraft's kind line) draws no rule between the
+/// title and the first section, where the default keeps the section's rule; a second section still stands under its
+/// rule.
+#[trial]
+fn the_first_section_under_a_heading_quiet_title_draws_no_rule() {
+    use craft_ui::contract::QuietHeader;
+    use craft_ui::sections::{HeaderStrength, Section};
+    use egui::Shape;
+    let rules = |sections: &'static [&'static str], quiet: QuietHeader| {
+        let mut fixture = Fixture::new(move |ui| {
+            Panel::new("Properties").titled().strength(HeaderStrength::Quiet).show(ui, |ui, _| {
+                for title in sections {
+                    Section::fixed(*title).show(ui, |ui, _| {
+                        ui.label("body");
+                    });
+                }
+            });
+        });
+        fixture.root_value(quiet).room(egui::Vec2::new(400.0, 300.0)).settle();
+        fixture
+            .frame_shapes()
+            .iter()
+            .filter(|shape| !matches!(shape, Shape::Text(_)))
+            .map(Shape::visual_bounding_rect)
+            .filter(|rect| rect.is_finite() && rect.height() <= 2.0 && rect.width() >= 200.0)
+            .count()
+    };
+    let one = rules(&["Transform"], QuietHeader::Heads);
+    assert!(one < rules(&["Transform"], QuietHeader::Ruled), "no rule between the heading title and the first section");
+    assert!(rules(&["Transform", "Appearance"], QuietHeader::Heads) > one, "a section after another still stands under its rule");
+}

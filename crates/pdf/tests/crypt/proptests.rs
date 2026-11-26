@@ -120,10 +120,10 @@ fn open_aes256() -> &'static SecurityHandler {
     HANDLER.get_or_init(|| make(Algorithm::Aes256, "", "owner"))
 }
 
-/// Cases for the expensive properties (each draws fresh AES-256 files): the gate's fraction of
-/// `full` (the hostile-input divisor), at least `floor`; nightly runs `full`.
-fn cases(full: u32, floor: u32) -> ProptestConfig {
-    ProptestConfig::with_cases((full / craft_testkit::hostile::divisor() as u32).max(floor))
+/// Cases for the expensive properties (each case creates a file and runs a password hash per
+/// password it tries): `gate` cases at the gate, `full` nightly (hostile-input divisor 1).
+fn cases(full: u32, gate: u32) -> ProptestConfig {
+    ProptestConfig::with_cases(if craft_testkit::hostile::divisor() == 1 { full } else { gate })
 }
 
 proptest! {
@@ -280,7 +280,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(cases(256, 12))]
+    #![proptest_config(cases(256, 3))]
     /// A file created for `user` and `owner` opens for exactly the passwords whose effective bytes
     /// equal one of theirs, and reports the role that match earned — owner first, since viewers try
     /// `/O` before `/U`. Everything else is `WrongPassword`: never an opening, and no panic on odd
@@ -414,7 +414,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(cases(256, 12))]
+    #![proptest_config(cases(256, 5))]
     /// `/Perms` certifies the permission bits and `/EncryptMetadata`: decrypted with the file key it
     /// must hold `/P` little-endian, four set bytes, 'T' or 'F', and the `adb` sentinel (Algorithm 10).
     /// Nothing else in this crate reads it — `cos` writes it out and no code takes it back apart — so

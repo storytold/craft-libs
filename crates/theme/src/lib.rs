@@ -73,7 +73,7 @@ pub use color::{Hsb, Lab, Oklab, Oklch, Rgba, Srgba};
 pub use color_model::{
     Channel, ColorModel, DefaultOn, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, builtin_models, kept_or_converted,
 };
-pub use contrast::{contrast_ratio, ensure_contrast, relative_luminance, text_contrast_min};
+pub use contrast::{contrast_ratio, ensure_contrast, non_text_contrast_min, relative_luminance, text_contrast_min};
 pub use derive::{Anchoring, ContrastCheck, PassMove, Ramps, over};
 pub use explain::{ColorOrigin, Explained, PairReport, SizeLayer, SizeOrigin, explain, explain_sized};
 pub use id::{APP_DEFAULT, AppId, IconPackId, IdError, RESERVED_PREFIX, SUITE_DEFAULT, ThemeId};
@@ -98,9 +98,9 @@ pub use token_group::{GroupValues, TokenGroup};
 pub use tokens::{
     AccentColors, BarSizes, CaptionColors, ColorToken, ColorTokens, ControlSizes, DataColors, DialogSizes, DockColumnSizes, Edge, EdgeColors,
     ElevationTokens, FloatSizes, FontSlot, Gaps, GripMark, GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LetterCase,
-    LineColors, LocatorShape, Motion, MotionTokens, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes,
-    ShapeTokens, SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors, ThumbSamples,
-    ThumbSizes, Tokens, TypeRole, TypeStyle, TypeTokens, WellShape, WindowSizes,
+    LineColors, LocatorShape, Motion, MotionTokens, OverlayColors, Pads, PageGaps, PageSizes, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes,
+    RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors,
+    ThumbSamples, ThumbSizes, Tokens, TypeRole, TypeStyle, TypeTokens, WellShape, WindowSizes,
 };
 pub use values::ColorSource;
 pub use variant::{CustomVariant, Emphasis, RadiusStep, Variant, VariantLook};

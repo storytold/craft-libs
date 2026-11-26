@@ -29,7 +29,7 @@ use crate::menu::Menu;
 use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use craft_behavior::fit::{FitItem, fit_items};
 use craft_behavior::{
     Flow, HitLevel, HitPriority, IconId, Insets, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection,
@@ -99,6 +99,8 @@ pub struct TabStripOutput<K> {
     pub empty_drag: bool,
     /// The second press of a double click went down on the strip's empty room this pass.
     pub empty_double: bool,
+    /// The overflow button, when some tabs do not fit: its rect in screen space and the id of its accessibility node.
+    pub overflow: Option<(Rect, Id)>,
 }
 
 impl<K> Outcome for TabStripOutput<K> {
@@ -120,12 +122,14 @@ fn strip_lead(kind: TabKind, tokens: &crate::style::UiTokens) -> f32 {
     if kind == TabKind::Ribbon { tokens.space.pad.regular } else { 0.0 }
 }
 
-/// The look of a strip: it has none of its own; its row is as high as its tabs.
+/// The look of a strip: the focus ring of its end items; its row is as high as its tabs.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TabStripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The text line a wheel notch given in lines counts.
     line: f32,
     /// The colour of the one underline a ribbon strip slides under its shown tab.
@@ -825,6 +829,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         let (lead, side) = (strip_lead(key.kind, tokens), if ribbon { super::tab::ribbon_pad(tokens) - tokens.stroke.thick / 2.0 } else { 0.0 });
         TabStripStyle {
             metrics: Metrics::new().padding(Insets::new(lead, 0.0, 0.0, 0.0)),
+            focus: cx.focus_look(),
             line: tokens.typography.body.line_height,
             underline: cx.color(tokens.color.accent.solid),
             underline_inset: tokens.stroke.thick / 2.0,
@@ -988,6 +993,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
+        let overflow = self.more.map(|rect| (rect, crate::runtime::access::sub_node_id(cx.core.id, OVERFLOW.into())));
         let TabStrip { picked, torn, wheeled, empty_drag, empty_double, can_close, kind, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
@@ -1010,7 +1016,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             mods: craft_keymap::Mods::NONE,
         }));
         response.events = kept;
-        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
+        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double, overflow }
     }
 }
 
