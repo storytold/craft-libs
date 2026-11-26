@@ -187,12 +187,18 @@ pub struct Chunk {
 /// package.
 #[derive(Clone, Debug)]
 pub struct EssenceTrack {
+    /// Source package owning this essence track (canonical MXF byte order).
+    pub file_package_uid: [u8; 32],
     pub track_id: u32,
     pub track_number: u32,
     pub kind: TrackKind,
     pub name: Option<String>,
     /// Edit rate of the file package track.
     pub edit_rate: Rational,
+    /// Original material track clock, before conversion into file-package edit units.
+    pub material_edit_rate: Option<Rational>,
+    /// Original material source-clip duration, in `material_edit_rate` units.
+    pub material_duration: Option<i64>,
     /// File package track origin (edit units of pre-charge before the zero point).
     pub origin: i64,
     /// Material package source clip start position (edit units after the origin).
@@ -370,6 +376,15 @@ impl<S: ByteSource + ?Sized> Window<'_, S> {
     }
 }
 
+/// A private header packet may be skipped only within the declared metadata region,
+/// with room for the standard key that the caller verifies at the returned offset.
+fn opaque_header_end(pos: u64, header: &[u8], limit: Option<u64>, file_len: u64) -> Option<u64> {
+    let limit = limit?.min(file_len);
+    let (size, width) = ber_length(header.get(16..)?)?;
+    let end = pos.checked_add(16 + width as u64)?.checked_add(size)?;
+    (size <= MAX_META_VALUE && end.checked_add(16)? <= limit).then_some(end)
+}
+
 fn walk(src: &(impl ByteSource + ?Sized)) -> Result<WalkResult> {
     walk_within(src, MAX_META_TOTAL)
 }
@@ -383,6 +398,8 @@ pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64
     let mut win = Window { src, off: 0, buf: Vec::new(), refill: WINDOW_LARGE, small_left: 0 };
     let mut pos = run_in;
     let mut cur_meta: Option<usize> = None;
+    let mut metadata_end = None;
+    let mut reported_opaque = false;
     let mut resync_budget = 64 << 20;
     while pos + 17 <= len {
         let mut hdr_buf = [0u8; 25];
@@ -392,6 +409,16 @@ pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64
         let hdr = &hdr_buf[..hdr_len];
         let key = Ul(hdr[..16].try_into().unwrap_or([0; 16]));
         if !key.is_smpte() {
+            if let Some(end) = opaque_header_end(pos, hdr, metadata_end.filter(|_| cur_meta.is_some()), len)
+                && win.get(end, 16)?.starts_with(&[0x06, 0x0e, 0x2b, 0x34])
+            {
+                if !reported_opaque {
+                    w.warnings.push(format!("skipped opaque non-SMPTE header packet at byte {pos}"));
+                    reported_opaque = true;
+                }
+                pos = end;
+                continue;
+            }
             // Lost sync (corrupt data): look for the next partition pack.
             match resync(src, pos + 1, len, &mut resync_budget)? {
                 Some(p) => {
@@ -437,10 +464,14 @@ pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64
                     None => w.warnings.push(format!("short partition pack at byte {pos}")),
                 }
                 cur_meta = None;
+                metadata_end = None;
             }
             KeyClass::Primer => {
                 let v = read_value()?;
                 if let Some(pi) = w.partitions.len().checked_sub(1) {
+                    if cur_meta.is_none() && metadata_end.is_none() {
+                        metadata_end = pos.checked_add(w.partitions[pi].header_byte_count);
+                    }
                     w.metadata.push((pi, Primer::parse(&v), Vec::new()));
                     cur_meta = Some(w.metadata.len() - 1);
                 }
@@ -507,6 +538,14 @@ fn resync(src: &(impl ByteSource + ?Sized), from: u64, len: u64, budget: &mut us
 /// Data definition labels (ST 377-1 Annex / RP 224): 06 0E 2B 34 04 01 01 01 01 03 02 kk tt 00 00 00.
 fn track_kind_of(def: Option<Ul>) -> Option<(bool, TrackKind)> {
     let d = def?;
+    // Legacy AAF DataDefinition AUIDs, encoded in MXF's half-swapped UUID form.
+    // Picture, sound and timecode respectively.
+    match d.0 {
+        [0x80, 0x7d, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x6f, 0x3c, 0x8c, 0xe1, 0x6c, 0xef, 0x11, 0xd2] => return Some((false, TrackKind::Picture)),
+        [0x80, 0x7d, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x78, 0xe1, 0xeb, 0xe1, 0x6c, 0xef, 0x11, 0xd2] => return Some((false, TrackKind::Sound)),
+        [0x80, 0x7f, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x7f, 0x27, 0x5e, 0x81, 0x77, 0xe5, 0x11, 0xd2] => return Some((true, TrackKind::Data)),
+        _ => {}
+    }
     if !d.item_starts_with(&[0x01, 0x03, 0x02]) {
         return None;
     }
@@ -632,11 +671,14 @@ fn sound_info(d: &Set) -> SoundInfo {
 
 /// Resolved track before the sample tables are built.
 struct TrackRef {
+    file_package_uid: [u8; 32],
     track_id: u32,
     track_number: u32,
     kind: TrackKind,
     name: Option<String>,
     edit_rate: Rational,
+    material_edit_rate: Option<Rational>,
+    material_duration: Option<i64>,
     origin: i64,
     start_position: i64,
     duration: Option<i64>,
@@ -707,6 +749,9 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                     .unwrap_or_default();
                 let (body_sid, index_sid) = sids.get(&umid).copied().unwrap_or((0, 0));
                 return Some(TrackRef {
+                    file_package_uid: umid,
+                    material_edit_rate: None,
+                    material_duration: None,
                     track_id: tid,
                     track_number: t.u(tag::TRACK_NUMBER).unwrap_or(0) as u32,
                     kind: tk,
@@ -744,6 +789,8 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             if let Some(mut tr) =
                 file_track(pkg, Some(kind), src_track, clip.i(tag::START_POSITION).unwrap_or(0), duration, t.string(tag::TRACK_NAME))
             {
+                tr.material_edit_rate = mrate.is_valid().then_some(mrate);
+                tr.material_duration = duration;
                 if mrate.is_valid() && tr.edit_rate.is_valid() && mrate != tr.edit_rate {
                     let conv =
                         |v: i64| (v as i128 * tr.edit_rate.num as i128 * mrate.den as i128 / (tr.edit_rate.den as i128 * mrate.num as i128)) as i64;
@@ -901,11 +948,14 @@ fn build_track(
     let desc = r.descriptor.as_ref();
     let container = desc.and_then(|d| d.ul(tag::ESSENCE_CONTAINER));
     let mut t = EssenceTrack {
+        file_package_uid: r.file_package_uid,
         track_id: r.track_id,
         track_number: u32::from_be_bytes(key4),
         kind: r.kind,
         name: r.name.clone(),
         edit_rate: r.edit_rate,
+        material_edit_rate: r.material_edit_rate,
+        material_duration: r.material_duration,
         origin: r.origin,
         start_position: r.start_position,
         duration: r.duration,
@@ -1268,11 +1318,14 @@ mod aes3_read_tests {
         }
         let samples = (data.len() as u64 - 4) / 32;
         let track = EssenceTrack {
+            file_package_uid: [0; 32],
             track_id: 1,
             track_number: 0,
             kind: TrackKind::Sound,
             name: None,
             edit_rate: Rational::default(),
+            material_edit_rate: None,
+            material_duration: None,
             origin: 0,
             start_position: 0,
             duration: None,
