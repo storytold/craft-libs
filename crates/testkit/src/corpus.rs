@@ -200,8 +200,11 @@ fn parse_digest(text: &str) -> Option<[u8; 32]> {
 }
 
 /// Checks that `path` is relative and stays in the corpus folder: parts separated by `/`, none
-/// empty, `.` or `..`, and no `\`, `:` or control character (NUL included) anywhere, so the same
-/// row means the same file on every platform.
+/// empty, `.` or `..`, and no `\`, `:` or control character (NUL included) anywhere, so no
+/// platform reads a row as an absolute path or a path outside the folder. It does not check that
+/// each name is valid on a given file system: a name Windows reserves (`<>"|?*`, a trailing `.` or
+/// space, a device name such as `NUL`) or one that differs from another only in case is accepted,
+/// and the manifest must use names the file systems it is verified on support.
 fn check_path(path: &str) -> Result<(), PathError> {
     if path.is_empty() {
         return Err(PathError::Empty);
@@ -400,6 +403,14 @@ pub fn verify(dir: &Path, manifest: &Manifest) -> Result<(), VerifyError> {
 /// Checks every file `manifest` lists in `dir`: each must resolve inside `dir` after symbolic
 /// links are followed, be a regular file of at most `limits.max_file_bytes` bytes, and have the
 /// listed SHA-256. Returns the first failure in manifest order. An empty manifest is an error.
+///
+/// The resolved path is checked before the file is opened. On Unix the opened file is checked
+/// again: on Linux, Android and Apple platforms by the path the kernel reports for it, and
+/// elsewhere, or on Linux and Android without that path, by resolving the listed path a second time
+/// and comparing device and inode. That second lookup does not detect a folder inside `dir` that is
+/// changed while it runs. On Windows the opened file's location is not checked again, so a part of
+/// the path changed into a link out of `dir` between the check and the open is not detected. In
+/// each case the file must still have the listed SHA-256.
 pub fn verify_with_limits(dir: &Path, manifest: &Manifest, limits: &Limits) -> Result<(), VerifyError> {
     if manifest.entries.is_empty() {
         return Err(VerifyError::EmptyManifest);
@@ -467,9 +478,11 @@ fn verify_entry_with(
 
 /// Checks, after the open, that the opened file is inside `root`, so a path changed into a link out
 /// of the folder between the first check and the open is refused. On Linux, Android and Apple
-/// platforms the kernel reports the open file's path, which must start with `root`. On other Unix
-/// systems, and where that path cannot be read, the entry's path is resolved again and must lead, without a link in its last part, to the
-/// opened file (the same device and inode).
+/// platforms the kernel reports the open file's path, which must start with `root`; on Apple
+/// platforms an error from that query fails the check with [`VerifyError::Read`]. On other Unix
+/// systems, and on Linux and Android when `/proc/self/fd` cannot be read, the entry's path is
+/// resolved again and must lead, without a link in its last part, to the opened file (the same
+/// device and inode).
 #[cfg(unix)]
 fn opened_file_is_inside(root: &Path, entry: &Entry, file: &File, opened: &std::fs::Metadata) -> Result<(), VerifyError> {
     use std::os::unix::fs::MetadataExt;
@@ -534,10 +547,14 @@ fn open_for_reading(path: &Path) -> io::Result<File> {
 /// - Folder variable set, even to an empty value: fails the test unless the manifest parses and
 ///   every listed file matches.
 ///
-/// It fails the test with a panic whose message names the variable and the failure.
+/// A `var` that is empty or holds `=` or a NUL character fails the test before the environment is
+/// read. It fails the test with a panic whose message names the variable and the failure.
 #[allow(clippy::panic)]
 pub fn pinned(var: Option<&str>, manifest: &str) -> Option<PathBuf> {
     let var = var.unwrap_or(DEFAULT_VAR);
+    if let Err(message) = check_var(var) {
+        panic!("{message}");
+    }
     match gate(std::env::var_os(var), var, manifest) {
         Ok(Some(dir)) => Some(dir),
         Ok(None) => {
@@ -547,6 +564,15 @@ pub fn pinned(var: Option<&str>, manifest: &str) -> Option<PathBuf> {
         }
         Err(message) => panic!("{message}"),
     }
+}
+
+/// Refuses a folder variable name that is empty or holds `=` or a NUL character, the names
+/// [`skip::required`](crate::skip::required) refuses.
+fn check_var(var: &str) -> Result<(), String> {
+    if var.is_empty() || var.contains(['=', '\0']) {
+        return Err(format!("{var:?} cannot name the corpus folder variable: it is empty or holds `=` or a NUL character"));
+    }
+    Ok(())
 }
 
 /// The decision of [`pinned`] on the folder variable's value, without reading the environment or
@@ -1008,6 +1034,18 @@ mod tests {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{err}");
         assert!(err.contains(&format!("{VAR} is set but empty")), "{err}");
+    }
+
+    #[test]
+    fn a_bad_folder_variable_name_fails_before_the_environment_is_read() {
+        for name in ["", "A=B", "A\0B"] {
+            assert!(check_var(name).is_err(), "{name:?}");
+            let result = std::panic::catch_unwind(|| pinned(Some(name), "not a manifest"));
+            let payload = result.expect_err(&format!("{name:?} should fail the test"));
+            let message = payload.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
+            assert!(message.contains("cannot name the corpus folder variable"), "{name:?}: {message}");
+        }
+        assert_eq!(check_var(VAR), Ok(()));
     }
 
     #[test]
