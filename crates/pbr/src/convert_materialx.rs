@@ -1,7 +1,7 @@
-//! The conversion from a `craft_materialx::Material`: an OpenPBR Surface, Standard Surface or
-//! glTF PBR shader with its resolved inputs.
+//! The conversion from a `craft_materialx::StrictMaterial`: an OpenPBR Surface, Standard Surface
+//! or glTF PBR shader with its resolved inputs.
 
-use craft_materialx::{Material as MxMaterial, Shader, Value};
+use craft_materialx::{Resolved, Shader, StrictMaterial};
 use craft_texture::srgb_to_linear;
 
 use crate::surface::{
@@ -192,7 +192,8 @@ impl Inputs {
     }
 }
 
-/// Converts a `craft_materialx::Material` by the input tables of its shader's node definition
+/// Converts a `craft_materialx::StrictMaterial`, as `Document::read_material_strict` reads it, by
+/// the input tables of its shader's node definition
 /// (<https://github.com/AcademySoftwareFoundation/MaterialX/tree/main/libraries/bxdf>). An input
 /// that is absent takes the definition's default, so an empty input list gives the shader's
 /// default material.
@@ -242,7 +243,7 @@ impl Inputs {
 /// number of components, or is an
 /// `alpha_mode` other than 0, 1 or 2 is an error, and so is a texture on `alpha_mode` or
 /// `alpha_cutoff`, a UV tiling that is not two positive numbers, or an input named twice.
-pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
+pub fn try_from_materialx(m: &StrictMaterial) -> Result<Conversion, ConvertError> {
     let table = match m.shader {
         Shader::OpenPbr => OPEN_PBR,
         Shader::StandardSurface => STANDARD_SURFACE,
@@ -262,7 +263,7 @@ pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
         };
         let f = &table[idx];
         match value {
-            Value::Constant { values, colorspace } => {
+            Resolved::Constant { values, colorspace } => {
                 let v = checked_values(f, values, colorspace.as_deref())?;
                 if matches!(f.role, Role::Kept | Role::CoatKept | Role::Normal | Role::Occlusion) {
                     others.push((f.role, name.clone(), v));
@@ -270,7 +271,7 @@ pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
                     inputs.got[idx] = Got::Constant(v);
                 }
             }
-            Value::Image { file, colorspace, uv_tiling } => {
+            Resolved::Image { file, colorspace, uv_tiling } => {
                 if matches!(f.role, Role::AlphaMode | Role::AlphaCutoff) {
                     return Err(ConvertError::BadValue { input: name.clone(), reason: "cannot be a texture" });
                 }
@@ -555,7 +556,7 @@ fn luminance(c: [f32; 3]) -> f32 {
 
 /// Keeps the displacement as a texture or an other input.
 fn displacement(
-    value: Option<&Value>,
+    value: Option<&Resolved>,
     textures: &mut Vec<TextureBinding>,
     other_inputs: &mut Vec<(String, Vec<f32>)>,
     report: &mut ConversionReport,
@@ -563,8 +564,8 @@ fn displacement(
     const DISPLACEMENT: Field = field("displacement", Kind::Scalar(f32::MIN, f32::MAX), Role::Kept, 0.0);
     match value {
         None => return Ok(()),
-        Some(Value::Constant { values, .. }) => other_inputs.push(("displacement".into(), checked_values(&DISPLACEMENT, values, None)?)),
-        Some(Value::Image { file, colorspace, uv_tiling }) => {
+        Some(Resolved::Constant { values, .. }) => other_inputs.push(("displacement".into(), checked_values(&DISPLACEMENT, values, None)?)),
+        Some(Resolved::Image { file, colorspace, uv_tiling }) => {
             let mut binding = image_binding(&DISPLACEMENT, file, colorspace.as_deref(), *uv_tiling)?;
             binding.input = TextureInput::Displacement;
             textures.push(binding);

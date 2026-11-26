@@ -35,7 +35,7 @@
 //! mode, emission, sidedness, the unlit flag, clearcoat and sheen layers, and texture bindings
 //! that are kept but not loaded. With the `mesh` feature, `try_from_mesh` converts a
 //! `craft_mesh::Material`, and with the `materialx` feature, `try_from_materialx` converts a
-//! `craft_materialx::Material`. Each returns the surface and a [`ConversionReport`] of what it
+//! `craft_materialx::StrictMaterial`. Each returns the surface and a [`ConversionReport`] of what it
 //! kept without shading, approximated or dropped, and a [`ConvertError`] for a value that is not
 //! finite or is out of its range. Neither feature is on by default.
 //!

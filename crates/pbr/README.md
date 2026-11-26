@@ -102,7 +102,8 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
   `Material`; the layers, textures and other inputs are kept for a renderer that shades them, and
   an unlit surface shows its base color without lighting.
 - **Conversions.** `try_from_mesh` (feature `mesh`) converts a `craft_mesh::Material` and
-  `try_from_materialx` (feature `materialx`) converts a `craft_materialx::Material`. Each returns
+  `try_from_materialx` (feature `materialx`) converts the `craft_materialx::StrictMaterial` that
+  `Document::read_material_strict` reads. Each returns
   a `Conversion`: the `Surface` and a `ConversionReport` that lists what was kept without being
   shaded, what was approximated and how, what was dropped and why, and the MaterialX reader's
   warnings. No value is clamped: one that is not finite, is out of its range or has the wrong

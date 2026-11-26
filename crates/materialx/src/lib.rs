@@ -58,6 +58,16 @@ pub enum Shader {
 /// The value connected to a shader input.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    /// A finite numeric literal, kept in the source color space. `colorspace` is the input's
+    /// explicit tag; document-level defaults remain available on [`Document::root`].
+    Constant { values: Vec<f32>, colorspace: Option<String> },
+    /// A file path from an image node, with the effective file prefix applied.
+    Image(String),
+}
+
+/// The value connected to a shader input, as [`Document::read_material_strict`] resolves it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Resolved {
     /// One to four finite numbers, kept in the source color space. The numbers may be separated
     /// by commas, spaces or both, a `boolean` input's `true` and `false` are 1 and 0, and an
     /// `integer` input holds one whole number. A `convert` node's output holds the converted channels. `colorspace` is the color
@@ -88,6 +98,23 @@ pub struct Material {
     pub inputs: Vec<(String, Value)>,
     /// Resolved displacement input, if present.
     pub displacement: Option<Value>,
+    /// First valid image tiling value, or `[1, 1]`.
+    pub uv_tiling: [f32; 2],
+    /// Unsupported or ignored constructs encountered while resolving values.
+    pub warnings: Vec<String>,
+}
+
+/// A surface material resolved by [`Document::read_material_strict`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct StrictMaterial {
+    /// Material name, or `Material` when omitted.
+    pub name: String,
+    /// Shader dialect represented by the material.
+    pub shader: Shader,
+    /// Resolved inputs in the shader table's deterministic order.
+    pub inputs: Vec<(String, Resolved)>,
+    /// Resolved displacement input, if present.
+    pub displacement: Option<Resolved>,
     /// First image tiling of two positive numbers, kept in `0.001..=1000`, or `[1, 1]`.
     pub uv_tiling: [f32; 2],
     /// Unsupported or ignored constructs encountered while resolving values, and shader inputs
@@ -95,7 +122,73 @@ pub struct Material {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+struct Found {
+    value: Value,
+    tiling: Option<[f32; 2]>,
+}
+
+/// The material, its surface shader and the document's nodes, found for a read.
+struct Located<'a> {
+    mat: &'a El,
+    shader: &'a El,
+    kind: Shader,
+    nodes: HashMap<String, &'a El>,
+    graphs: HashMap<&'a str, &'a El>,
+    outputs: Vec<(String, String)>,
+}
+
 const OPEN_PBR_INPUTS: &[&str] = &[
+    "base_color",
+    "base_metalness",
+    "specular_roughness",
+    "geometry_normal",
+    "geometry_opacity",
+    "emission_color",
+    "coat_weight",
+    "coat_roughness",
+    "geometry_coat_normal",
+    "fuzz_weight",
+    "fuzz_color",
+    "fuzz_roughness",
+    "specular_roughness_anisotropy",
+    "transmission_weight",
+    "subsurface_weight",
+];
+const STANDARD_INPUTS: &[&str] = &[
+    "base_color",
+    "metalness",
+    "specular_roughness",
+    "normal",
+    "opacity",
+    "emission_color",
+    "coat",
+    "coat_roughness",
+    "coat_normal",
+    "sheen",
+    "sheen_color",
+    "sheen_roughness",
+    "specular_anisotropy",
+    "transmission",
+    "subsurface",
+];
+const GLTF_INPUTS: &[&str] = &[
+    "base_color",
+    "metallic",
+    "roughness",
+    "normal",
+    "alpha",
+    "emission",
+    "occlusion",
+    "clearcoat",
+    "clearcoat_roughness",
+    "clearcoat_normal",
+    "sheen_color",
+    "sheen_roughness",
+    "transmission",
+];
+
+const OPEN_PBR_STRICT_INPUTS: &[&str] = &[
     "base_color",
     "base_metalness",
     "specular_roughness",
@@ -119,7 +212,7 @@ const OPEN_PBR_INPUTS: &[&str] = &[
     "coat_ior",
     "emission_luminance",
 ];
-const STANDARD_INPUTS: &[&str] = &[
+const STANDARD_STRICT_INPUTS: &[&str] = &[
     "base_color",
     "metalness",
     "specular_roughness",
@@ -143,7 +236,7 @@ const STANDARD_INPUTS: &[&str] = &[
     "coat_IOR",
     "emission",
 ];
-const GLTF_INPUTS: &[&str] = &[
+const GLTF_STRICT_INPUTS: &[&str] = &[
     "base_color",
     "metallic",
     "roughness",
@@ -280,51 +373,81 @@ impl Document {
 
     /// Resolves a surface material into shader inputs, image paths and warnings.
     pub fn read_material(&self, material: Option<&str>) -> Result<Material, Error> {
-        let materials: Vec<&El> = self.root.children("surfacematerial").collect();
-        let mat = match material {
-            Some(name) => materials.iter().copied().find(|m| m.attr("name") == Some(name)).ok_or_else(|| Error::MissingMaterial(name.to_owned()))?,
-            None => materials.first().copied().ok_or_else(|| Error::Unsupported("document has no surfacematerial".into()))?,
+        let Located { mat, shader, kind, nodes, outputs, .. } = self.locate(material)?;
+        let inputs = match kind {
+            Shader::OpenPbr => OPEN_PBR_INPUTS,
+            Shader::StandardSurface => STANDARD_INPUTS,
+            Shader::GltfPbr => GLTF_INPUTS,
         };
-        let mut nodes = HashMap::new();
-        let mut graphs = HashMap::new();
-        let mut outputs = Vec::new();
-        for child in self.root.elements() {
-            if child.name == "nodegraph" {
-                let Some(graph) = child.attr("name") else { continue };
-                graphs.insert(graph, child);
-                for node in child.elements() {
-                    let Some(name) = node.attr("name") else { continue };
-                    if node.name == "output" {
-                        if let Some(from) = node.attr("nodename") {
-                            outputs.push((format!("{graph}/{name}"), format!("{graph}/{from}")));
-                        }
-                    } else {
-                        nodes.insert(format!("{graph}/{name}"), node);
-                    }
-                }
-            } else if let Some(name) = child.attr("name") {
-                nodes.insert(name.to_owned(), child);
-            }
-        }
-        let shader_name = mat.children("input").find(|i| i.attr("name") == Some("surfaceshader")).and_then(|i| i.attr("nodename"));
-        let shader = shader_name.and_then(|n| nodes.get(n).copied()).ok_or_else(|| Error::Malformed("material has no surface shader".into()))?;
-        let (kind, inputs) = match shader.name.as_str() {
-            "open_pbr_surface" => (Shader::OpenPbr, OPEN_PBR_INPUTS),
-            "standard_surface" => (Shader::StandardSurface, STANDARD_INPUTS),
-            "gltf_pbr" => (Shader::GltfPbr, GLTF_INPUTS),
-            other => return Err(Error::Unsupported(format!("surface shader is {other}"))),
-        };
-        let emission_gate = match kind {
-            Shader::OpenPbr => Some(("emission_luminance", true)),
-            Shader::StandardSurface => Some(("emission", true)),
+        let emission_enabled = emission_enabled(kind, shader, parse_numbers);
+        let mut warnings = Vec::new();
+        let base_weight_name = match kind {
+            Shader::OpenPbr => Some("base_weight"),
+            Shader::StandardSurface => Some("base"),
             Shader::GltfPbr => None,
         };
-        let emission_enabled = emission_gate.is_none_or(|(name, _)| {
-            shader
-                .children("input")
-                .find(|i| i.attr("name") == Some(name))
-                .is_some_and(|i| i.attr("value").is_none_or(|v| parse_numbers(v).and_then(|n| n.first().copied()).is_some_and(|v| v > 0.0)))
-        });
+        if base_weight_name.and_then(|n| numeric_input(shader, n)).is_some_and(|w| (w - 1.0).abs() > 1e-6) {
+            warnings.push("the base weight isn't 1; it was ignored".into());
+        }
+        let mut resolved = Vec::new();
+        let mut tiling = None;
+        for name in inputs {
+            let Some(input) = shader.children("input").find(|i| i.attr("name") == Some(*name)) else { continue };
+            let is_emission = matches!((kind, *name), (Shader::OpenPbr, "emission_color") | (Shader::StandardSurface, "emission_color"));
+            if is_emission && !emission_enabled {
+                warnings.push(format!("{name} was skipped: the shader's emission is 0"));
+                continue;
+            }
+            if let Some(found) = resolve_value(&self.root, input, None, &nodes, &outputs, 0, &mut warnings) {
+                if tiling.is_none() {
+                    tiling = found.tiling;
+                }
+                resolved.push(((*name).to_owned(), found.value));
+            }
+        }
+        let displacement = mat
+            .children("input")
+            .find(|i| i.attr("name") == Some("displacementshader"))
+            .and_then(|i| i.attr("nodename"))
+            .and_then(|n| nodes.get(n).copied())
+            .and_then(|d| d.children("input").find(|i| i.attr("name") == Some("displacement")))
+            .and_then(|i| resolve_value(&self.root, i, None, &nodes, &outputs, 0, &mut warnings))
+            .map(|found| {
+                if tiling.is_none() {
+                    tiling = found.tiling;
+                }
+                found.value
+            });
+        Ok(Material {
+            name: mat.attr("name").unwrap_or("Material").to_owned(),
+            shader: kind,
+            inputs: resolved,
+            displacement,
+            uv_tiling: tiling.unwrap_or([1.0, 1.0]),
+            warnings,
+        })
+    }
+
+    /// Resolves a surface material like [`Document::read_material`], with a wider input table, the
+    /// color space in effect and the UV tiling of each image, and stricter checks.
+    ///
+    /// The tables add each shader's weight, specular, IOR and coat color inputs, OpenPBR's
+    /// `emission_luminance`, and glTF PBR's `emissive_strength` and alpha mode inputs; glTF PBR's
+    /// emission color is read from `emissive`, the name its node definition gives it. Values may
+    /// be separated by commas, spaces or both, `convert` nodes follow the Standard Nodes rules,
+    /// and an image inside a nodegraph takes the nodegraph's `fileprefix`. A repeated shader
+    /// input, a value that is not one to four finite numbers or does not fit its type, and a
+    /// `uvtiling` that is not two finite numbers are [`Error::Malformed`]. A shader input that is
+    /// not in the table gives the warning `input <name> is not read`; the base weight warning of
+    /// [`Document::read_material`] is not given, since the weight is read.
+    pub fn read_material_strict(&self, material: Option<&str>) -> Result<StrictMaterial, Error> {
+        let Located { mat, shader, kind, nodes, graphs, outputs } = self.locate(material)?;
+        let inputs = match kind {
+            Shader::OpenPbr => OPEN_PBR_STRICT_INPUTS,
+            Shader::StandardSurface => STANDARD_STRICT_INPUTS,
+            Shader::GltfPbr => GLTF_STRICT_INPUTS,
+        };
+        let emission_enabled = emission_enabled(kind, shader, parse_values);
         let mut warnings = Vec::new();
         let mut seen = HashSet::new();
         for name in shader.children("input").filter_map(|i| i.attr("name")) {
@@ -369,7 +492,7 @@ impl Document {
                 tiling = displacement.as_ref().and_then(image_tiling);
             }
         }
-        Ok(Material {
+        Ok(StrictMaterial {
             name: mat.attr("name").unwrap_or("Material").to_owned(),
             shader: kind,
             inputs: resolved,
@@ -378,20 +501,156 @@ impl Document {
             warnings,
         })
     }
+
+    /// The surface material named `material` (or the first one), its surface shader, and the
+    /// document's nodes, nodegraphs and graph outputs.
+    fn locate(&self, material: Option<&str>) -> Result<Located<'_>, Error> {
+        let materials: Vec<&El> = self.root.children("surfacematerial").collect();
+        let mat = match material {
+            Some(name) => materials.iter().copied().find(|m| m.attr("name") == Some(name)).ok_or_else(|| Error::MissingMaterial(name.to_owned()))?,
+            None => materials.first().copied().ok_or_else(|| Error::Unsupported("document has no surfacematerial".into()))?,
+        };
+        let mut nodes = HashMap::new();
+        let mut graphs = HashMap::new();
+        let mut outputs = Vec::new();
+        for child in self.root.elements() {
+            if child.name == "nodegraph" {
+                let Some(graph) = child.attr("name") else { continue };
+                graphs.insert(graph, child);
+                for node in child.elements() {
+                    let Some(name) = node.attr("name") else { continue };
+                    if node.name == "output" {
+                        if let Some(from) = node.attr("nodename") {
+                            outputs.push((format!("{graph}/{name}"), format!("{graph}/{from}")));
+                        }
+                    } else {
+                        nodes.insert(format!("{graph}/{name}"), node);
+                    }
+                }
+            } else if let Some(name) = child.attr("name") {
+                nodes.insert(name.to_owned(), child);
+            }
+        }
+        let shader_name = mat.children("input").find(|i| i.attr("name") == Some("surfaceshader")).and_then(|i| i.attr("nodename"));
+        let shader = shader_name.and_then(|n| nodes.get(n).copied()).ok_or_else(|| Error::Malformed("material has no surface shader".into()))?;
+        let kind = match shader.name.as_str() {
+            "open_pbr_surface" => Shader::OpenPbr,
+            "standard_surface" => Shader::StandardSurface,
+            "gltf_pbr" => Shader::GltfPbr,
+            other => return Err(Error::Unsupported(format!("surface shader is {other}"))),
+        };
+        Ok(Located { mat, shader, kind, nodes, graphs, outputs })
+    }
 }
 
-fn image_tiling(value: &Value) -> Option<[f32; 2]> {
+/// Whether the shader's emission is on: its strength input (`emission_luminance` or
+/// `emission`) is connected or holds a value above 0, read with `parse`. glTF PBR has no such
+/// input, so its emission is always on.
+fn emission_enabled(kind: Shader, shader: &El, parse: fn(&str) -> Option<Vec<f32>>) -> bool {
+    let gate = match kind {
+        Shader::OpenPbr => Some("emission_luminance"),
+        Shader::StandardSurface => Some("emission"),
+        Shader::GltfPbr => None,
+    };
+    gate.is_none_or(|name| {
+        shader
+            .children("input")
+            .find(|i| i.attr("name") == Some(name))
+            .is_some_and(|i| i.attr("value").is_none_or(|v| parse(v).and_then(|n| n.first().copied()).is_some_and(|v| v > 0.0)))
+    })
+}
+
+fn numeric_input(shader: &El, name: &str) -> Option<f32> {
+    shader
+        .children("input")
+        .find(|i| i.attr("name") == Some(name))
+        .and_then(|i| i.attr("value"))
+        .and_then(parse_numbers)
+        .and_then(|n| n.first().copied())
+}
+
+fn parse_numbers(text: &str) -> Option<Vec<f32>> {
+    let nums: Option<Vec<f32>> = text.split(',').map(|part| part.trim().parse::<f32>().ok().filter(|v| v.is_finite())).collect();
+    nums.filter(|v| !v.is_empty() && v.len() <= 4)
+}
+
+fn resolve_value(
+    root: &El,
+    input: &El,
+    scope: Option<&str>,
+    nodes: &HashMap<String, &El>,
+    outputs: &[(String, String)],
+    hops: usize,
+    warnings: &mut Vec<String>,
+) -> Option<Found> {
+    if hops > 16 {
+        warnings.push("a node chain is longer than 16 nodes (or loops); skipped".into());
+        return None;
+    }
+    if let Some(value) = input.attr("value") {
+        return parse_numbers(value)
+            .map(|values| Found { value: Value::Constant { values, colorspace: input.attr("colorspace").map(str::to_owned) }, tiling: None });
+    }
+    let target = if let Some(graph) = input.attr("nodegraph") {
+        let selected = match input.attr("output") {
+            Some(output) => outputs.iter().rev().find(|(k, _)| k == &format!("{graph}/{output}")),
+            None => outputs.iter().find(|(k, _)| k.starts_with(&format!("{graph}/"))),
+        };
+        selected.map(|(_, node)| node.clone())
+    } else if let Some(name) = input.attr("nodename") {
+        let qualified = scope.map(|g| format!("{g}/{name}"));
+        qualified.filter(|q| nodes.contains_key(q)).or_else(|| Some(name.to_owned()))
+    } else {
+        None
+    }?;
+    let node = nodes.get(&target).copied()?;
+    let node_scope = target.split_once('/').map(|(g, _)| g);
+    match node.name.as_str() {
+        "image" | "tiledimage" => {
+            let file = node.children("input").find(|i| i.attr("name") == Some("file")).and_then(|i| i.attr("value"))?;
+            let prefix = node
+                .children("input")
+                .find(|i| i.attr("name") == Some("file"))
+                .and_then(|i| i.attr("fileprefix"))
+                .or_else(|| node.attr("fileprefix"))
+                .or_else(|| root.attr("fileprefix"))
+                .unwrap_or("");
+            let uv = node
+                .children("input")
+                .find(|i| i.attr("name") == Some("uvtiling"))
+                .and_then(|i| i.attr("value"))
+                .and_then(parse_numbers)
+                .filter(|n| n.len() == 2 && n.iter().all(|v| *v > 0.0))
+                .map(|n| [n[0].clamp(0.001, 1000.0), n[1].clamp(0.001, 1000.0)]);
+            Some(Found { value: Value::Image(format!("{prefix}{file}")), tiling: uv })
+        }
+        "normalmap" | "convert" => node
+            .children("input")
+            .find(|i| i.attr("name") == Some("in"))
+            .and_then(|i| resolve_value(root, i, node_scope, nodes, outputs, hops + 1, warnings)),
+        "constant" => node
+            .children("input")
+            .find(|i| i.attr("name") == Some("value"))
+            .and_then(|i| resolve_value(root, i, node_scope, nodes, outputs, hops + 1, warnings)),
+        other => {
+            warnings.push(format!("a {other} node ({:?}) is not supported; its input was skipped", node.attr("name").unwrap_or("")));
+            None
+        }
+    }
+}
+
+fn image_tiling(value: &Resolved) -> Option<[f32; 2]> {
     match value {
-        Value::Image { uv_tiling, .. } => {
+        Resolved::Image { uv_tiling, .. } => {
             uv_tiling.filter(|n| n.iter().all(|v| *v > 0.0)).map(|n| [n[0].clamp(0.001, 1000.0), n[1].clamp(0.001, 1000.0)])
         }
-        Value::Constant { .. } => None,
+        Resolved::Constant { .. } => None,
     }
 }
 
 /// One to four finite numbers separated by commas, spaces or both, as MaterialX's own value
 /// reader splits vector and color values.
-fn parse_numbers(text: &str) -> Option<Vec<f32>> {
+fn parse_values(text: &str) -> Option<Vec<f32>> {
     let nums: Option<Vec<f32>> = text
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|part| !part.is_empty())
@@ -410,7 +669,7 @@ fn input_numbers(input: &El, text: &str) -> Option<Vec<f32>> {
             _ => None,
         },
         Some("integer") => text.trim().parse::<i32>().ok().map(|v| vec![v as f32]),
-        _ => parse_numbers(text),
+        _ => parse_values(text),
     }
 }
 
@@ -496,7 +755,7 @@ impl<'a> Resolver<'a> {
         space: Option<&'a str>,
         hops: usize,
         warnings: &mut Vec<String>,
-    ) -> Result<Option<Value>, Error> {
+    ) -> Result<Option<Resolved>, Error> {
         if hops > 16 {
             warnings.push("a node chain is longer than 16 nodes (or loops); skipped".into());
             return Ok(None);
@@ -507,7 +766,7 @@ impl<'a> Resolver<'a> {
                 return Err(Error::Malformed(format!("input {name} has a value that is not one to four finite numbers or does not fit its type")));
             };
             let colorspace = if is_numeric_non_color(input.attr("type")) { self.working() } else { input.attr("colorspace").or(space) };
-            return Ok(Some(Value::Constant { values, colorspace: colorspace.map(str::to_owned) }));
+            return Ok(Some(Resolved::Constant { values, colorspace: colorspace.map(str::to_owned) }));
         }
         let target = self.target(input, scope);
         let Some(node) = target.as_ref().and_then(|t| self.nodes.get(t).copied()) else { return Ok(None) };
@@ -527,14 +786,14 @@ impl<'a> Resolver<'a> {
                     .unwrap_or("");
                 let uv_tiling = match child("uvtiling").and_then(|i| i.attr("value")) {
                     None => None,
-                    Some(text) => match parse_numbers(text) {
+                    Some(text) => match parse_values(text) {
                         Some(n) if n.len() == 2 => Some([n[0], n[1]]),
                         _ => return Err(Error::Malformed(format!("the uvtiling of image {node_name:?} is not two finite numbers"))),
                     },
                 };
                 let colorspace = if is_numeric_non_color(node.attr("type")) { self.working() } else { file_input.attr("colorspace").or(node_space) }
                     .map(str::to_owned);
-                Ok(Some(Value::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
+                Ok(Some(Resolved::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
             }
             "normalmap" => match child("in") {
                 Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
@@ -547,13 +806,13 @@ impl<'a> Resolver<'a> {
                 let from =
                     i.attr("type").or_else(|| self.target(i, node_scope).and_then(|t| self.nodes.get(&t).copied()).and_then(|n| n.attr("type")));
                 match value {
-                    Value::Constant { values, colorspace } => {
+                    Resolved::Constant { values, colorspace } => {
                         // A value with no type is a float or a vector, so it is in the working
                         // color space like a typed one.
                         let colorspace = if from.is_none() && i.attr("value").is_some() { self.working().map(str::to_owned) } else { colorspace };
                         let from = from.unwrap_or_else(|| untyped(values.len()));
                         match converted(&values, from, to) {
-                            Some(values) => Ok(Some(Value::Constant { values, colorspace })),
+                            Some(values) => Ok(Some(Resolved::Constant { values, colorspace })),
                             None => {
                                 warnings.push(format!(
                                     "a convert node ({node_name:?}) from type {from:?} to type {to:?} is not supported; its input was skipped"
@@ -564,7 +823,7 @@ impl<'a> Resolver<'a> {
                     }
                     // An image keeps its own channels, so only a convert that copies every
                     // channel as it is passes it on.
-                    image @ Value::Image { .. } => {
+                    image @ Resolved::Image { .. } => {
                         let copies = from.is_some_and(|from| from == to || channels(from).is_some_and(|n| n > 1 && channels(to) == Some(n)));
                         if copies {
                             Ok(Some(image))
@@ -581,8 +840,8 @@ impl<'a> Resolver<'a> {
                 // A connected value keeps the color space it resolved; only a written value takes
                 // the working color space.
                 Some(i) => match self.value(i, node_scope, node_space, hops + 1, warnings)? {
-                    Some(Value::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) && i.attr("value").is_some() => {
-                        Ok(Some(Value::Constant { values, colorspace: self.working().map(str::to_owned) }))
+                    Some(Resolved::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) && i.attr("value").is_some() => {
+                        Ok(Some(Resolved::Constant { values, colorspace: self.working().map(str::to_owned) }))
                     }
                     value => Ok(value),
                 },
@@ -755,9 +1014,13 @@ mod tests {
           <displacement name="D"><input name="displacement" nodename="H"/></displacement>
           <surfacematerial name="M"><input name="surfaceshader" nodename="S"/><input name="displacementshader" nodename="D"/></surfacematerial>
         </materialx>"#;
-        let material = Document::parse(xml).unwrap().read_material(None).unwrap();
-        assert_eq!(material.displacement, Some(Value::Image { file: "height.png".into(), colorspace: None, uv_tiling: Some([4.0, 2.0]) }));
+        let doc = Document::parse(xml).unwrap();
+        let material = doc.read_material(None).unwrap();
+        assert_eq!(material.displacement, Some(Value::Image("height.png".into())));
         assert_eq!(material.uv_tiling, [4.0, 2.0]);
+        let strict = doc.read_material_strict(None).unwrap();
+        assert_eq!(strict.displacement, Some(Resolved::Image { file: "height.png".into(), colorspace: None, uv_tiling: Some([4.0, 2.0]) }));
+        assert_eq!(strict.uv_tiling, [4.0, 2.0]);
     }
 
     #[test]
@@ -778,14 +1041,23 @@ mod tests {
         let material = doc.read_material(None).unwrap();
         assert_eq!(material.name, "M");
         assert_eq!(material.shader, Shader::OpenPbr);
-        assert_eq!(
-            material.inputs[0],
-            ("base_color".into(), Value::Image { file: "tex/albedo.png".into(), colorspace: None, uv_tiling: Some([2.0, 4.0]) })
-        );
-        assert_eq!(material.inputs[1], ("geometry_normal".into(), Value::Image { file: "tex/normal.png".into(), colorspace: None, uv_tiling: None }));
+        assert_eq!(material.inputs[0], ("base_color".into(), Value::Image("tex/albedo.png".into())));
+        assert_eq!(material.inputs[1], ("geometry_normal".into(), Value::Image("tex/normal.png".into())));
         assert_eq!(material.inputs[2].1, Value::Constant { values: vec![1.0, 0.5, 0.25], colorspace: None });
         assert_eq!(material.displacement, Some(Value::Constant { values: vec![0.25], colorspace: None }));
         assert_eq!(material.uv_tiling, [2.0, 4.0]);
+        let strict = doc.read_material_strict(None).unwrap();
+        assert_eq!(
+            strict.inputs[0],
+            ("base_color".into(), Resolved::Image { file: "tex/albedo.png".into(), colorspace: None, uv_tiling: Some([2.0, 4.0]) })
+        );
+        assert_eq!(
+            strict.inputs[1],
+            ("geometry_normal".into(), Resolved::Image { file: "tex/normal.png".into(), colorspace: None, uv_tiling: None })
+        );
+        assert_eq!(strict.inputs[2].1, Resolved::Constant { values: vec![1.0, 0.5, 0.25], colorspace: None });
+        assert_eq!(strict.displacement, Some(Resolved::Constant { values: vec![0.25], colorspace: None }));
+        assert_eq!(strict.uv_tiling, [2.0, 4.0]);
     }
 
     #[test]
@@ -800,26 +1072,67 @@ mod tests {
         let doc = Document::parse(xml.as_bytes()).unwrap();
         let material = doc.read_material(None).unwrap();
         assert_eq!(material.name, "Stone");
-        let image = |file: &str, space: &str| Value::Image { file: file.into(), colorspace: Some(space.into()), uv_tiling: None };
-        assert_eq!(material.inputs[0], ("base_color".into(), image("albedo<&.png", "srgb_texture")));
-        assert_eq!(material.inputs[1], ("specular_roughness".into(), image("rough.png", "lin_rec709")));
-        assert_eq!(material.inputs[2], ("geometry_normal".into(), image("normal.png", "lin_rec709")));
-        assert_eq!(material.displacement, Some(image("height.png", "lin_rec709")));
+        assert_eq!(material.inputs[0], ("base_color".into(), Value::Image("albedo<&.png".into())));
+        assert_eq!(material.inputs[1], ("specular_roughness".into(), Value::Image("rough.png".into())));
+        assert_eq!(material.inputs[2], ("geometry_normal".into(), Value::Image("normal.png".into())));
+        assert_eq!(material.displacement, Some(Value::Image("height.png".into())));
+        let strict = doc.read_material_strict(None).unwrap();
+        let image = |file: &str, space: &str| Resolved::Image { file: file.into(), colorspace: Some(space.into()), uv_tiling: None };
+        assert_eq!(strict.inputs[0], ("base_color".into(), image("albedo<&.png", "srgb_texture")));
+        assert_eq!(strict.inputs[1], ("specular_roughness".into(), image("rough.png", "lin_rec709")));
+        assert_eq!(strict.inputs[2], ("geometry_normal".into(), image("normal.png", "lin_rec709")));
+        assert_eq!(strict.displacement, Some(image("height.png", "lin_rec709")));
         assert!(xml.contains("colorspace=\"srgb_texture\""));
         assert!(xml.contains("doc=\"Tiles every 100 x 50 cm\""));
         assert!(!xml.contains("colorspace=\"ignored\""));
     }
 
-    fn read(xml: &str) -> Result<Material, Error> {
-        Document::parse(xml.as_bytes())?.read_material(None)
+    #[test]
+    fn read_material_keeps_its_input_table_values_and_lenient_checks() {
+        // `read_material` reads glTF PBR's `emission`, keeps the base weight warning, skips
+        // repeated inputs, bad values and bad `uvtiling` instead of failing, and gives a
+        // constant only its own `colorspace`; `read_material_strict` is the stricter read.
+        let xml = r#"<materialx colorspace="srgb_texture">
+          <gltf_pbr name="G"><input name="emission" value="1,0.5,0"/><input name="emissive" value="0.5,0.5,0"/><input name="roughness" value="0.25"/>
+            <input name="roughness" value="0.75"/><input name="metallic" value="nan"/><input name="base_color" nodename="T"/><input name="alpha" value="0.5"/></gltf_pbr>
+          <tiledimage name="T"><input name="file" value="a.png"/><input name="uvtiling" value="x"/></tiledimage>
+          <open_pbr_surface name="O"><input name="base_weight" value="0.5"/><input name="base_color" value="0.5 0.5 0.5"/></open_pbr_surface>
+          <surfacematerial name="M"><input name="surfaceshader" nodename="G"/></surfacematerial>
+          <surfacematerial name="N"><input name="surfaceshader" nodename="O"/></surfacematerial>
+        </materialx>"#;
+        let doc = Document::parse(xml.as_bytes()).unwrap();
+        let gltf = doc.read_material(Some("M")).unwrap();
+        assert_eq!(
+            gltf.inputs,
+            vec![
+                ("base_color".into(), Value::Image("a.png".into())),
+                ("roughness".into(), Value::Constant { values: vec![0.25], colorspace: None }),
+                ("alpha".into(), Value::Constant { values: vec![0.5], colorspace: None }),
+                ("emission".into(), Value::Constant { values: vec![1.0, 0.5, 0.0], colorspace: None }),
+            ]
+        );
+        assert_eq!(gltf.uv_tiling, [1.0, 1.0]);
+        assert!(gltf.warnings.is_empty(), "{:?}", gltf.warnings);
+        assert!(matches!(doc.read_material_strict(Some("M")), Err(Error::Malformed(_))));
+        let open = doc.read_material(Some("N")).unwrap();
+        assert_eq!(open.warnings, vec!["the base weight isn't 1; it was ignored".to_owned()]);
+        assert!(open.inputs.is_empty(), "{:?}", open.inputs);
+        let strict = doc.read_material_strict(Some("N")).unwrap();
+        assert!(strict.warnings.is_empty(), "{:?}", strict.warnings);
+        assert_eq!(input(&strict, "base_weight"), Some(&constant(&[0.5], Some("srgb_texture"))));
+        assert_eq!(input(&strict, "base_color"), Some(&constant(&[0.5; 3], Some("srgb_texture"))));
     }
 
-    fn input<'m>(material: &'m Material, name: &str) -> Option<&'m Value> {
+    fn read(xml: &str) -> Result<StrictMaterial, Error> {
+        Document::parse(xml.as_bytes())?.read_material_strict(None)
+    }
+
+    fn input<'m>(material: &'m StrictMaterial, name: &str) -> Option<&'m Resolved> {
         material.inputs.iter().find(|(n, _)| n == name).map(|(_, v)| v)
     }
 
-    fn constant(values: &[f32], space: Option<&str>) -> Value {
-        Value::Constant { values: values.to_vec(), colorspace: space.map(str::to_owned) }
+    fn constant(values: &[f32], space: Option<&str>) -> Resolved {
+        Resolved::Constant { values: values.to_vec(), colorspace: space.map(str::to_owned) }
     }
 
     #[test]
@@ -900,13 +1213,16 @@ mod tests {
         assert_eq!(input(&m, "base_color"), Some(&constant(&[0.5; 3], Some("srgb_texture"))));
         assert_eq!(input(&m, "specular_color"), Some(&constant(&[0.5; 3], Some("lin_rec709"))));
         assert_eq!(input(&m, "coat_color"), Some(&constant(&[0.1, 0.2, 0.3], Some("g22_rec709"))));
-        assert_eq!(input(&m, "fuzz_color"), Some(&Value::Image { file: "fuzz.png".into(), colorspace: Some("lin_rec709".into()), uv_tiling: None }));
+        assert_eq!(
+            input(&m, "fuzz_color"),
+            Some(&Resolved::Image { file: "fuzz.png".into(), colorspace: Some("lin_rec709".into()), uv_tiling: None })
+        );
         let doc = Document::parse(
             br#"<materialx colorspace="srgb_texture"><open_pbr_surface name="Tagged" colorspace="acescg"><input name="base_color" value="0.2,0.2,0.2"/></open_pbr_surface>
             <surfacematerial name="N"><input name="surfaceshader" nodename="Tagged"/></surfacematerial></materialx>"#,
         )
         .unwrap();
-        let tagged = doc.read_material(Some("N")).unwrap();
+        let tagged = doc.read_material_strict(Some("N")).unwrap();
         assert_eq!(input(&tagged, "base_color"), Some(&constant(&[0.2; 3], Some("acescg"))));
     }
 
@@ -971,7 +1287,7 @@ mod tests {
         .replacen("<materialx>", r#"<materialx fileprefix="shared/">"#, 1))
         .unwrap();
         let file = |name: &str| match input(&m, name) {
-            Some(Value::Image { file, .. }) => file.clone(),
+            Some(Resolved::Image { file, .. }) => file.clone(),
             other => panic!("{name}: {other:?}"),
         };
         assert_eq!(
@@ -990,8 +1306,8 @@ mod tests {
                 ),
             ))
         };
-        let tiling_of = |m: &Material| match input(m, "base_color") {
-            Some(Value::Image { uv_tiling, .. }) => *uv_tiling,
+        let tiling_of = |m: &StrictMaterial| match input(m, "base_color") {
+            Some(Resolved::Image { uv_tiling, .. }) => *uv_tiling,
             other => panic!("{other:?}"),
         };
         let wide = tiled("2000, 2").unwrap();
@@ -1053,7 +1369,7 @@ mod tests {
             ))
             .unwrap()
         };
-        let g = Value::Image { file: "g.png".into(), colorspace: None, uv_tiling: None };
+        let g = Resolved::Image { file: "g.png".into(), colorspace: None, uv_tiling: None };
         assert_eq!(input(&image("float", "float"), "base_color"), Some(&g));
         assert_eq!(input(&image("vector3", "color3"), "base_color"), Some(&g));
         for (ty, image_ty) in [("color3", "float"), ("color3", "color4")] {
@@ -1089,7 +1405,7 @@ mod tests {
             </materialx>"#,
         )
         .unwrap();
-        let image = |file: &str, space: &str| Value::Image { file: file.into(), colorspace: Some(space.into()), uv_tiling: None };
+        let image = |file: &str, space: &str| Resolved::Image { file: file.into(), colorspace: Some(space.into()), uv_tiling: None };
         assert_eq!(input(&m, "base_color"), Some(&constant(&[0.5; 3], Some("lin_rec709"))));
         assert_eq!(input(&m, "specular_color"), Some(&constant(&[0.1, 0.2, 0.3], Some("lin_rec709"))));
         assert_eq!(input(&m, "coat_color"), Some(&constant(&[0.1, 0.2, 0.3], Some("srgb_texture"))));

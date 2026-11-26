@@ -1,7 +1,7 @@
 //! Conversions into a `Surface`: glTF 2.0 materials from craft-mesh and MaterialX shaders from
 //! craft-materialx, checked against the defaults and ranges the public definitions give.
 
-use craft_materialx::{Document, Material as Mx, Shader, Texture, Value, write_open_pbr};
+use craft_materialx::{Document, Resolved as Value, Shader, StrictMaterial as Mx, Texture, write_open_pbr};
 use craft_mesh::{AlphaMode as MeshAlpha, Material as Mesh, TextureRef, UvTransform as MeshUv, Wrap as MeshWrap};
 use craft_pbr::{
     AlphaMode, Clearcoat, Conversion, ConvertError, ReportItem, Sheen, TextureEncoding, TextureInput, TextureSource, UvTransform, Wrap,
@@ -651,7 +651,7 @@ fn materialx_float_converted_to_a_color_is_not_decoded_from_the_nodes_color_spac
         </materialx>"#,
     )
     .unwrap();
-    let c = try_from_materialx(&doc.read_material(None).unwrap()).unwrap();
+    let c = try_from_materialx(&doc.read_material_strict(None).unwrap()).unwrap();
     assert_close3(c.surface.material.base_color(), [0.5; 3]);
 }
 
@@ -669,7 +669,7 @@ fn materialx_documents_convert_from_xml() {
         </materialx>"#,
     )
     .unwrap();
-    let c = try_from_materialx(&doc.read_material(None).unwrap()).unwrap();
+    let c = try_from_materialx(&doc.read_material_strict(None).unwrap()).unwrap();
     assert_eq!(c.surface.name, "Red");
     assert_close3(c.surface.material.base_color(), [craft_texture::srgb_to_linear(0.5); 3]);
     assert_eq!(c.surface.emissive, [3.0, 0.0, 0.0]);
@@ -684,7 +684,7 @@ fn materialx_documents_convert_from_xml() {
         Texture { input: "height".into(), file: "height.png".into(), colorspace: "lin_rec709".into() },
     ];
     let written = Document::parse(write_open_pbr("Stone", &textures, None).as_bytes()).unwrap();
-    let c = try_from_materialx(&written.read_material(None).unwrap()).unwrap();
+    let c = try_from_materialx(&written.read_material_strict(None).unwrap()).unwrap();
     let s = &c.surface;
     let by = |input: TextureInput| s.textures.iter().find(|b| b.input == input).map(|b| (b.source.clone(), b.encoding.clone()));
     assert_eq!(by(TextureInput::BaseColor), Some((TextureSource::File("albedo.png".into()), TextureEncoding::Srgb)));
