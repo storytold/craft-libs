@@ -203,10 +203,13 @@ followed by a combining accent are one name), and a file name may not also be us
 address starts with `https://`, the SHA-256 has 64 hexadecimal digits, and `max_bytes` is at
 least 1.
 
-`curl` runs with `-q` (no `.curlrc`), `--proto =https` and `--proto-redir =https`, `--fail`,
-`--max-filesize` set to `max_bytes`, a 10-second connect timeout, and a stop when a transfer stays
-under 1 KiB per second for 60 seconds. The crate counts the bytes itself as well, so a response of
-unknown length stops at `max_bytes` with any version of `curl`.
+`curl` runs with `-q` (no `.curlrc`), `--globoff` (brackets and braces in the address are sent as
+they are), `--proto =https` and `--proto-redir =https`, `--fail`, `--max-filesize` set to
+`max_bytes`, a 10-second connect timeout, and a stop when a transfer stays under 1 KiB per second for
+60 seconds. The crate counts the bytes itself as well, so a response of unknown length stops at
+`max_bytes` with any version of `curl`. A body over `max_bytes` is reported as `TooLarge` whether
+`curl` refuses it from its advertised size or the crate stops it while counting; a `Transport`
+reports such a refusal with an error of kind `FileTooLarge`.
 
 Neither `dest` nor any path under it may be a link. A link, or a folder where a file goes, or a
 file where a folder goes, stops the fetch with `FetchError::NotRegular`. The folders above `dest`

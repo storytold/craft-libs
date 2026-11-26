@@ -149,13 +149,17 @@ impl std::error::Error for FetchError {
 /// Sends the body found at an address to a writer.
 pub trait Transport {
     /// Writes the body of `url` to `out`. `max_bytes` is the most the caller accepts; the caller
-    /// counts the bytes itself and stops the transfer with a write error past it.
+    /// counts the bytes itself and stops the transfer with a write error past it. A transport that
+    /// refuses the body itself for being over `max_bytes` returns an error of kind
+    /// [`io::ErrorKind::FileTooLarge`], which the caller reports as [`FetchError::TooLarge`].
     fn download(&self, url: &str, max_bytes: u64, out: &mut dyn Write) -> io::Result<()>;
 }
 
 /// The [`Transport`] of [`fetch_pinned`] and [`fetch_archive`]: the system `curl`, reading no
-/// configuration file, allowed HTTPS only for the address and every redirect, failing on an HTTP
-/// error status, and stopping a transfer that stays under 1 KiB per second for 60 seconds.
+/// configuration file, requesting the address literally (no `[]` or `{}` globbing), allowed HTTPS
+/// only for the address and every redirect, failing on an HTTP error status, refusing a body whose
+/// advertised size is over the limit before it arrives, and stopping a transfer that stays under
+/// 1 KiB per second for 60 seconds.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Curl;
 
@@ -179,7 +183,12 @@ impl Transport for Curl {
             return Err(e);
         }
         let status = child.wait()?;
-        if status.success() { Ok(()) } else { Err(io::Error::other(format!("curl {url} failed: {status}"))) }
+        match status.code() {
+            Some(0) => Ok(()),
+            // Exit status 63: `--max-filesize` refused a body whose advertised size is over the limit.
+            Some(63) => Err(io::Error::new(io::ErrorKind::FileTooLarge, format!("curl refused a body over {max_bytes} bytes"))),
+            _ => Err(io::Error::other(format!("curl failed: {status}"))),
+        }
     }
 }
 
@@ -187,6 +196,7 @@ impl Transport for Curl {
 fn curl_args(url: &str, max_bytes: u64) -> Vec<String> {
     let mut args: Vec<String> = [
         "-q",
+        "--globoff",
         "--fail",
         "--silent",
         "--show-error",
@@ -492,11 +502,13 @@ fn join<S: AsRef<str>>(parts: &[S]) -> String {
 /// The key under which [`Names`] compares a part: the lowercase of its uppercase. The forms of one
 /// letter then get one key even when one is not the lowercase of another (`Σ`, `σ` and `ς`). A
 /// letter whose uppercase is longer gets the key of that spelling (`ß` and `ss`), so such pairs are
-/// refused even on a file system that keeps them apart. The key is then put in Unicode
-/// Normalization Form C, so a composed `é` and an `e` followed by a combining acute accent, which
-/// are one name on macOS, get one key.
+/// refused even on a file system that keeps them apart. The part is put in Unicode Normalization
+/// Form C before the case mapping and the key again after it, so a composed `é` and an `e`
+/// followed by a combining acute accent, which are one name on macOS, get one key, and so do
+/// `α` followed by U+0345 and U+0301 in either order.
 fn fold(part: &str) -> String {
-    part.to_uppercase().to_lowercase().nfc().collect()
+    let composed: String = part.nfc().collect();
+    composed.to_uppercase().to_lowercase().nfc().collect()
 }
 
 /// Creates `dest` when it is missing and checks that it is a folder and not a link.
@@ -630,7 +642,7 @@ impl<W: Write> Write for Sink<W> {
 /// Turns a finished transfer into its output, or into the error that rejects it: the limit first,
 /// then the transport's error, then the SHA-256.
 fn finish<W>(name: &str, sha256: &str, sink: Sink<W>, got: io::Result<()>) -> Result<W, FetchError> {
-    if sink.over {
+    if sink.over || matches!(&got, Err(e) if e.kind() == io::ErrorKind::FileTooLarge) {
         return Err(too_large(name, format!("{} bytes", sink.max)));
     }
     got.map_err(|source| FetchError::Download { name: name.to_string(), source })?;
@@ -760,19 +772,25 @@ fn entry_parts(raw: &[u8], strip: usize) -> Result<Option<Vec<String>>, String> 
     if text.starts_with('/') {
         return Err("the path is absolute".into());
     }
-    let parts: Vec<&str> = text.strip_suffix('/').unwrap_or(text).split('/').skip_while(|p| *p == ".").collect();
-    if parts.iter().all(|p| p.is_empty()) {
+    let parts = || text.strip_suffix('/').unwrap_or(text).split('/').skip_while(|p| *p == ".");
+    if parts().all(str::is_empty) {
         return Ok(None);
     }
-    for part in &parts {
+    // The parts are checked and the kept length measured before anything is collected, so a long
+    // path allocates nothing before it is refused.
+    let mut kept_bytes = 0usize;
+    for (i, part) in parts().enumerate() {
         check_part(part)?;
+        if i >= strip {
+            kept_bytes = kept_bytes.saturating_add(part.len() + 1);
+        }
     }
-    let kept: Vec<String> = parts.iter().skip(strip).map(|p| (*p).to_string()).collect();
+    if kept_bytes > MAX_NAME_BYTES {
+        return Err(format!("the path is longer than {MAX_NAME_BYTES} bytes"));
+    }
+    let kept: Vec<String> = parts().skip(strip).map(str::to_string).collect();
     if kept.is_empty() {
         return Ok(None);
-    }
-    if kept.iter().map(|p| p.len() + 1).sum::<usize>() > MAX_NAME_BYTES {
-        return Err(format!("the path is longer than {MAX_NAME_BYTES} bytes"));
     }
     Ok(Some(kept))
 }
@@ -798,9 +816,24 @@ mod tests {
         let args = curl_args("https://example.com/a.png", 1234);
         assert_eq!(args.first().map(String::as_str), Some("-q"));
         let joined = args.join(" ");
-        for expected in ["--fail", "--proto =https", "--proto-redir =https", "--max-filesize 1234", "--output -", "--url https://example.com/a.png"] {
+        for expected in
+            ["--globoff", "--fail", "--proto =https", "--proto-redir =https", "--max-filesize 1234", "--output -", "--url https://example.com/a.png"]
+        {
             assert!(joined.contains(expected), "{expected} is missing from {joined}");
         }
+    }
+
+    #[test]
+    fn entry_parts_keep_their_results_around_the_length_limit() {
+        let long = "a/".repeat(MAX_NAME_BYTES);
+        assert!(entry_parts(long.as_bytes(), 0).is_err());
+        // Stripped folders do not count toward the length, but are still checked.
+        let fits = format!("{}b", "a/".repeat(MAX_NAME_BYTES / 2));
+        let strip = MAX_NAME_BYTES / 2;
+        assert_eq!(entry_parts(fits.as_bytes(), strip), Ok(Some(vec!["b".to_string()])));
+        assert!(entry_parts(format!("..{}", &fits[1..]).as_bytes(), strip).is_err());
+        assert_eq!(entry_parts(b"./", 0), Ok(None));
+        assert_eq!(entry_parts(b"top/", 1), Ok(None));
     }
 
     #[test]

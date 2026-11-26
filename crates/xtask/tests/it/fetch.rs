@@ -4,21 +4,18 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft_xtask::fetch::{ExtractOptions, FetchError, FetchSummary, Pin, Transport, extract, fetch_archive_with, fetch_pinned_with, sha256_hex};
+use tempfile::TempDir;
 
-/// A folder under the system temporary folder, removed when dropped.
-struct Scratch(PathBuf);
+/// A folder under the system temporary folder, created with a unique name and removed when
+/// dropped.
+struct Scratch(PathBuf, TempDir);
 
 impl Scratch {
     fn new(label: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("craft-xtask-{label}-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
+        let dir = tempfile::Builder::new().prefix(&format!("craft-xtask-{label}-")).tempdir().unwrap();
+        Self(dir.path().to_path_buf(), dir)
     }
 
     /// Every name under the folder, sorted, with `/` between folders.
@@ -34,15 +31,9 @@ impl Scratch {
             }
         }
         let mut out = Vec::new();
-        walk(&self.0, "", &mut out);
+        walk(self.1.path(), "", &mut out);
         out.sort();
         out
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -51,6 +42,8 @@ enum Reply {
     Body(Vec<u8>),
     /// Sends these bytes, then fails as a dropped connection does.
     Cut(Vec<u8>),
+    /// Sends nothing and refuses the body for its advertised size, as `curl --max-filesize` does.
+    Refused,
 }
 
 /// An in-process transport: a table from address to reply, with a count of requests.
@@ -77,6 +70,7 @@ impl Transport for Fake {
                 out.write_all(bytes)?;
                 Err(io::Error::new(io::ErrorKind::ConnectionReset, "connection reset"))
             }
+            Some(Reply::Refused) => Err(io::Error::new(io::ErrorKind::FileTooLarge, "maximum file size exceeded")),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "404")),
         }
     }
@@ -165,6 +159,20 @@ fn a_response_of_unknown_length_stops_at_the_limit() {
 }
 
 #[test]
+fn a_body_the_transport_refuses_for_its_size_is_too_large() {
+    let dir = Scratch::new("refused");
+    let fake = Fake::default().with(URL, Reply::Refused);
+    let sha = sha256_hex(b"body");
+
+    let err = fetch_pinned_with(&dir.0, &[pin("a.png", &sha)], &fake).unwrap_err();
+    assert!(matches!(&err, FetchError::TooLarge { limit, .. } if limit == "1024 bytes"), "{err}");
+    let archive = Pin { name: "t.tar", url: URL, sha256: &sha, max_bytes: 1024 };
+    let err = fetch_archive_with(&dir.0, &archive, &ExtractOptions::default(), &fake).unwrap_err();
+    assert!(matches!(&err, FetchError::TooLarge { limit, .. } if limit == "1024 bytes"), "{err}");
+    assert!(dir.listing().is_empty(), "{:?}", dir.listing());
+}
+
+#[test]
 fn a_response_of_exactly_the_limit_is_accepted() {
     let dir = Scratch::new("exact");
     let body = vec![b'z'; 1024];
@@ -222,6 +230,9 @@ fn bad_pins_are_refused_before_any_download() {
     // A composed `é` and `e` followed by a combining acute accent are one name on macOS.
     cases.push(vec![pin("\u{e9}.png", &sha), pin("e\u{301}.png", &sha)]);
     cases.push(vec![pin("\u{e9}/a.png", &sha), pin("E\u{301}/b.png", &sha)]);
+    // `α` with U+0345 and U+0301 in either order is one name once composed.
+    cases.push(vec![pin("\u{3b1}\u{345}\u{301}.png", &sha), pin("\u{3b1}\u{301}\u{345}.png", &sha)]);
+    cases.push(vec![pin("\u{3b1}\u{345}\u{301}/a.png", &sha), pin("\u{3b1}\u{301}\u{345}/b.png", &sha)]);
     cases.push(vec![Pin { url: "file:///etc/passwd", ..pin("a.png", &sha) }]);
     cases.push(vec![Pin { url: "http://example.com/a.png", ..pin("a.png", &sha) }]);
     cases.push(vec![Pin { url: "https:///a.png", ..pin("a.png", &sha) }]);
@@ -366,7 +377,7 @@ fn an_archive_with_the_wrong_hash_or_size_writes_nothing() {
 
 #[test]
 fn unsafe_archive_entries_write_nothing() {
-    let cases: [&[(&str, u8, &[u8])]; 19] = [
+    let cases: [&[(&str, u8, &[u8])]; 21] = [
         &[("ok.png", b'0', b"1"), ("foo\\bar.png", b'0', b"2")],
         &[("ok.png", b'0', b"1"), ("foo//", b'5', b"")],
         &[("ok.png", b'0', b"1"), ("foo//bar.png", b'0', b"2")],
@@ -386,6 +397,8 @@ fn unsafe_archive_entries_write_nothing() {
         &[("\u{3c3}/a.txt", b'0', b"1"), ("\u{3c2}/b.txt", b'0', b"2")],
         &[("\u{e9}.txt", b'0', b"1"), ("e\u{301}.txt", b'0', b"2")],
         &[("e\u{301}/a.txt", b'0', b"1"), ("\u{c9}/b.txt", b'0', b"2")],
+        &[("\u{3b1}\u{345}\u{301}.txt", b'0', b"1"), ("\u{3b1}\u{301}\u{345}.txt", b'0', b"2")],
+        &[("\u{3b1}\u{345}\u{301}/a.txt", b'0', b"1"), ("\u{3b1}\u{301}\u{345}/b.txt", b'0', b"2")],
     ];
     for entries in cases {
         let dir = Scratch::new("unsafe");
@@ -500,9 +513,13 @@ fn reads_an_archive_made_by_the_system_tar() {
     let archive = source.0.join("suite.tgz");
     // COPYFILE_DISABLE keeps macOS tar from adding `._` metadata entries.
     let made = Command::new("tar").env("COPYFILE_DISABLE", "1").arg("-czf").arg(&archive).arg("-C").arg(&source.0).arg("suite").status();
-    if !matches!(made, Ok(status) if status.success()) {
-        eprintln!("SKIPPED: no system tar ({made:?})");
-        return;
+    match made {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            eprintln!("SKIPPED: no system tar");
+            return;
+        }
+        Err(e) => panic!("cannot run tar: {e}"),
+        Ok(status) => assert!(status.success(), "tar failed: {status}"),
     }
     let bytes = fs::read(&archive).unwrap();
 
