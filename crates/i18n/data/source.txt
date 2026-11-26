@@ -1,0 +1,2 @@
+icu4x-datagen 2.4.0
+cldr 49.0.0
