@@ -546,7 +546,10 @@ impl<'a> Native<'a> {
     /// frames (an empty WAV or AIFF is empty, not broken) or a seek reached the end.
     fn check_decoded(&mut self) -> Result<()> {
         let empty = self.frames_known && self.empty_ok && self.info.frames == 0 && self.errors == 0;
-        if self.decoded || empty || self.seeked && self.errors == 0 {
+        let end_seek = self.seeked
+            && self.errors == 0
+            && (self.empty_ok || self.frames_known && self.info.frames > 0 && self.from >= self.info.frames.saturating_add(self.skip));
+        if self.decoded || empty || end_seek {
             return Ok(());
         }
         Err(self.no_audio("stream contains no audio"))
@@ -1129,7 +1132,13 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
         Err(crate::opus::Error::Unsupported(_)) => return None,
         Err(e) => return Some(Err(e.into())),
     };
-    let timing = ogg::OpusTiming::of(s, u32::from(head.pre_skip));
+    let mut last_duration = 960;
+    let timing = ogg::OpusTiming::of_with_durations(s, u32::from(head.pre_skip), |packet| {
+        if let Some(duration) = ogg::opus_packet_samples(packet.prefix, packet.size) {
+            last_duration = duration;
+        }
+        last_duration
+    });
     let mut starts = timing.starts.clone();
     let mut total = timing.total;
     let durations: Vec<u64> = timing.durations.iter().map(|&d| u64::from(d)).collect();
@@ -1290,8 +1299,8 @@ fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64, bo
 /// fit in what is left is a damaged granule position: the packets from it on move back by the gap
 /// to follow the packet before it, and the packet after it is marked in the result, to count as
 /// damaged when read. A later packet placed before the end of the one before it (the granule
-/// positions come back down after one damaged page) moves forward again by up to what was taken
-/// off. A `total` past the last packet's end shrinks by what stays taken off at the end.
+/// positions come back down after one damaged page) moves forward to that end. A `total` past
+/// the last packet's end shrinks by what stays taken off at the end.
 fn bound_gaps(starts: &mut [i64], durations: &[u64], total: &mut i64, file_bytes: u64) -> Vec<bool> {
     let longest = durations.iter().copied().max().unwrap_or(0).max(1);
     let mut budget = file_bytes.saturating_mul(longest);
@@ -1301,10 +1310,10 @@ fn bound_gaps(starts: &mut [i64], durations: &[u64], total: &mut i64, file_bytes
     for k in 1..starts.len().min(durations.len()) {
         let expected = starts[k - 1].saturating_add(i64::try_from(durations[k - 1]).unwrap_or(i64::MAX));
         let mut start = starts[k].saturating_sub(shift);
-        if start < expected && shift > 0 {
-            let back = expected.saturating_sub(start).min(shift);
-            shift -= back;
-            start = start.saturating_add(back);
+        if start < expected {
+            let back = expected.saturating_sub(start);
+            shift = shift.saturating_sub(back).max(0);
+            start = expected;
         }
         if let Some(frames) = u64::try_from(start.saturating_sub(expected)).ok().filter(|&f| f > 0) {
             if frames <= budget {
@@ -1325,6 +1334,23 @@ fn bound_gaps(starts: &mut [i64], durations: &[u64], total: &mut i64, file_bytes
         *total = total.saturating_sub(shift).max(0);
     }
     jumps
+}
+
+#[cfg(test)]
+mod ogg_timing_tests {
+    #[test]
+    fn backward_packet_starts_are_clamped_without_removing_real_gaps_or_end_trimming() {
+        let durations = [0, 128, 128, 128, 128];
+        for last in [384, 512] {
+            let mut starts = [0, 0, 128, 0, last];
+            let mut total = last + 64;
+            let jumps = super::bound_gaps(&mut starts, &durations, &mut total, 1024);
+            assert!(starts.windows(2).zip(durations).all(|(pair, duration)| pair[1] >= pair[0] + duration as i64));
+            assert_eq!(starts[4], last);
+            assert_eq!(total, last + 64);
+            assert!(jumps.iter().all(|jump| !jump));
+        }
+    }
 }
 
 /// The audio tracks of `src` the native path reads, described for a track list; `None` when it

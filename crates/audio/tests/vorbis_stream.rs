@@ -253,9 +253,11 @@ fn a_lost_page_is_silence_and_the_audio_after_it_stays_in_place() {
     // the audio before the lost page, and from the second packet after it on (the first overlaps
     // the block before the gap), is the clean decode's
     let before: usize = p.frames[..lost.start].iter().sum();
+    let gap_end: usize = p.frames[..lost.end].iter().sum();
     let after: usize = p.frames[..lost.end + 1].iter().sum();
     for (ours, theirs) in buf.channels.iter().zip(&clean) {
         assert_eq!(ours[..before], theirs[..before]);
+        assert!(ours[before..gap_end].iter().all(|&sample| sample == 0.0));
         assert_eq!(ours[after..], theirs[after..]);
     }
     let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).expect("open");
@@ -349,6 +351,9 @@ fn damaged_and_cut_files_are_errors_or_results() {
     assert!(decode(&headers_only, None).is_err());
     let primer_only = remux(&p, &p.packets[..1], 8, 0, 0);
     assert!(decode(&primer_only, None).is_err());
+    let mut decoder = Decoder::from_bytes(&primer_only, None, &DecodeOptions::default()).expect("open primer");
+    assert_eq!(decoder.seek(0).expect("seek zero"), 0);
+    assert!(decoder.next_block().is_err(), "seeking zero cannot make a primer-only stream valid");
 }
 
 /// Two audio pages, the second the last: a first page whose granule position is above the last

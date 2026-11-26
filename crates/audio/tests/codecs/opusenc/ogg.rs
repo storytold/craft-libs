@@ -41,3 +41,27 @@ fn a_granule_jump_past_what_the_file_holds_is_damage() {
     assert_eq!((info.frames, info.damaged), (len as u64, 1));
     assert_eq!(buf.channels, clean_buf.channels);
 }
+
+#[test]
+fn an_invalid_duration_does_not_discard_the_last_intact_packet() {
+    let (enc, packets) = encode(OpusEncoder::new(1, 64_000).expect("encoder"), &[music(8 * FRAME)]);
+    let mut tags = b"OpusTags".to_vec();
+    tags.extend_from_slice(&[0; 8]);
+    let mut head = enc.opus_head();
+    head[10..12].copy_from_slice(&0u16.to_le_bytes());
+    let damaged_file = |damaged: &[u8]| {
+        let mut writer = PageWriter::new(7).with_page_target(1 << 20, 1);
+        let mut file = writer.header(&head);
+        file.extend(writer.header(&tags));
+        for (index, packet) in packets[..3].iter().enumerate() {
+            file.extend(writer.packet(if index == 1 { damaged } else { packet }, ((index + 1) * FRAME) as i64));
+        }
+        file.extend(writer.finish(Some((3 * FRAME) as i64)));
+        file
+    };
+    let (_, actual) = decode(&damaged_file(&[packets[1][0] | 3, 0]), None).expect("decode");
+    let (_, known_duration) = decode(&damaged_file(&[packets[1][0] & !3]), None).expect("decode with known duration");
+    assert_eq!(actual.frames(), 3 * FRAME);
+    assert_eq!(actual.channels[0][2 * FRAME..], known_duration.channels[0][2 * FRAME..]);
+    assert!(actual.channels[0][2 * FRAME..].iter().any(|sample| sample.abs() > 0.0001));
+}

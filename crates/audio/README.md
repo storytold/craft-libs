@@ -186,6 +186,11 @@ network drop) returns `AudioError::Io` from `next_block` instead, and that packe
 retry it, keep the position: start from the frame the last `seek` returned (0 without one), add
 each block's frames, and `seek` to that position.
 
+Ogg decoding clamps backward packet positions to the previous packet's end and fills missing
+pages with silence. An Opus packet with an invalid duration uses the previous packet's duration,
+or 960 samples before the first packet. A Vorbis stream containing only a primer packet returns
+an error even after seeking to frame 0.
+
 ### Decode packets from your own demuxer
 
 `TrackDecoder` takes a track's `CodecParams` and the first packets. The parameters come from any
