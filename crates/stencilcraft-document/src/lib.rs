@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 
 pub mod production;
 pub use metadata::{LibraryIndex, LibraryTrashEntry, MAX_RECENT_FILES, RecentFiles};
-pub use production::{CombineOp, FillGradient, FillPattern, GroupKind, MAX_PATTERN_DATA, Operation, PATTERN_TILE_MM, SendAssign, ShapeProduction, SourceGroup};
+pub use production::{
+    CombineOp, FillGradient, FillPattern, GroupKind, MAX_PATTERN_DATA, Operation, PATTERN_TILE_MM, SendAssign, ShapeProduction, SourceGroup,
+};
 
 /// Native format identity and supported version, defined by the shared wire-format crate.
 pub use craft_stencilcraft_format::{FORMAT_NAME, FORMAT_VERSION};
