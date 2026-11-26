@@ -153,10 +153,12 @@ impl Symbol {
 }
 
 /// One point's own colours, from its `c:dPt`: the fill (bars, slices, bubbles), the line into
-/// it (line, scatter and radar: `c:spPr/a:ln`) and its marker (`c:marker/c:spPr`).
+/// it (line, scatter and radar: `c:spPr/a:ln`) and its marker (`c:marker/c:spPr`). `no_fill`
+/// is an explicit `c:spPr/a:noFill` (a hollow bubble), unlike an absent fill.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct PointFmt {
     pub(super) fill: Option<Rgb>,
+    pub(super) no_fill: bool,
     pub(super) line: Option<Rgb>,
     pub(super) marker: Option<Rgb>,
 }

@@ -893,8 +893,12 @@ fn draw_bubbles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, bubbles: &[Bub
         let Some(s) = c.series.get(b.j) else { continue };
         let (cx, cy, d) = (g.scat_x(b.x), g.val(b.y), b.d);
         let line = s.outlines.get(b.i).copied().flatten();
-        // A series with `a:noFill` leaves its bubbles hollow, but for points with a fill of their own.
-        let filled = !s.no_fill || s.points.get(b.i).is_some_and(|p| p.fill.is_some());
+        // A point's own fill or `a:noFill` wins; else a series with `a:noFill` leaves it hollow.
+        let filled = match s.points.get(b.i) {
+            Some(p) if p.fill.is_some() => true,
+            Some(p) if p.no_fill => false,
+            _ => !s.no_fill,
+        };
         let (fill, stroke) =
             if b.v < 0.0 { (Some(Rgb::WHITE), Some(line.unwrap_or(Rgb::BLACK))) } else { (filled.then(|| c.point_colour(b.j, b.i)), line) };
         let r = d / 2.0;

@@ -366,6 +366,7 @@ impl Series {
             // line) and its `c:marker` each as a whole, as Word reads it.
             if let Some(sp) = dpt.child("c:spPr") {
                 slot.fill = fill_colour(sp, theme);
+                slot.no_fill = sp.child("a:noFill").is_some();
                 slot.line = sp.child("a:ln").and_then(|l| fill_colour(l, theme));
                 // The point's own `a:ln`, even `a:noFill`, replaces the series line (bubble
                 // outlines); without one the point has the series line.

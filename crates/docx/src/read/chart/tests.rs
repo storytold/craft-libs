@@ -1170,6 +1170,15 @@ fn bubbles_of_a_series_without_a_fill_are_hollow() {
 }
 
 #[test]
+fn a_bubble_point_without_a_fill_is_hollow_in_a_filled_series() {
+    let dpt = r#"<c:dPt><c:idx val="1"/><c:spPr><a:noFill/><a:ln w="19050"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:ln></c:spPr></c:dPt><c:xVal>"#;
+    let b = bubble_paint(&bubble_chart(&[three().concat().replacen("<c:xVal>", dpt, 1)], "", 432.0, 252.0));
+    assert_eq!(b.len(), 3, "{b:?}");
+    assert_eq!((b[1].1, b[1].2), (None, Some(BLUE)), "point 1 is only outlined: {b:?}");
+    assert_eq!((b[0].1, b[2].1), (Some(RED), Some(RED)), "the others keep the series fill: {b:?}");
+}
+
+#[test]
 fn bubble_data_labels_show_the_values() {
     let s = bser(0, "FF0000", &["1", "2", "3"], &["1.5", "2.5", "3.5"], Some(&["1", "4", "16"]));
     let items = bubble_chart(&[s], r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#, 432.0, 252.0);
