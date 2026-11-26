@@ -124,7 +124,7 @@ pub(super) fn encode(
     max_coded_symbols: usize,
 ) -> Option<Vec<u8>> {
     let page = page_with_limits(samples, columns, max_symbols, max_symbol_pixels)?;
-    [1, 2].into_iter().filter_map(|copies| plan_with_cap(&page, columns, rows, copies, None, None, max_coded_symbols)).min_by_key(Vec::len)
+    [1, 2].into_iter().filter_map(|copies| plan_within(&page, columns, rows, copies, None, None, max_coded_symbols)).min_by_key(Vec::len)
 }
 
 /// Images, each as [`encode`] takes one, symbol coded sharing one dictionary: the globals' data, a
@@ -409,18 +409,11 @@ fn symbols(page: &mut Page, max_symbols: usize, max_symbol_pixels: usize) -> Opt
 /// here, and the page's own dictionary holds only the others (none, when it has none), as
 /// [`encode_shared`] writes them; `None` too for a page that places none of the shared ones.
 fn plan(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>) -> Option<Vec<u8>> {
-    plan_with_cap(page, columns, rows, copies, log_strips, shared, MAX_CODED_SYMBOLS)
+    plan_within(page, columns, rows, copies, log_strips, shared, MAX_CODED_SYMBOLS)
 }
 
-fn plan_with_cap(
-    page: &Page,
-    columns: u32,
-    rows: u32,
-    copies: u32,
-    log_strips: Option<u32>,
-    shared: Option<&Shared>,
-    max_coded_symbols: usize,
-) -> Option<Vec<u8>> {
+/// [`plan`] coding at most `max` symbols.
+fn plan_within(page: &Page, columns: u32, rows: u32, copies: u32, log_strips: Option<u32>, shared: Option<&Shared>, max: usize) -> Option<Vec<u8>> {
     let symbol = |s: u32| page.symbols.get(s as usize);
     let global = |s: u32| shared.and_then(|g| g.ids.get(s as usize).copied().flatten());
     let globals = shared.map_or(0, |g| g.count);
@@ -428,7 +421,7 @@ fn plan_with_cap(
     let mut kept: Vec<u32> =
         (0..page.symbols.len() as u32).filter(|s| global(*s).is_none() && symbol(*s).is_some_and(|s| s.uses >= copies)).collect();
     let count = usize::try_from(globals).ok()?.checked_add(kept.len())?;
-    if !(2..=max_coded_symbols).contains(&count) {
+    if !(2..=max).contains(&count) {
         return None;
     }
     kept.sort_by_key(|s| symbol(*s).map(|s| (s.height, s.width)));
@@ -936,11 +929,98 @@ mod tests {
         assert!(page(&row.repeat(3), columns as u32).is_none(), "1.5 × 2^20 runs");
     }
 
-    /// A plan codes at most 32,767 symbols, which an independent decoder reads back. The other
-    /// guards use small limits: a plan past its cap can still code repeated marks, while too many
-    /// distinct marks or bitmap pixels leave the image to generic coding.
+    /// A plan codes at most 32,767 symbols, which an independent decoder reads back; with more,
+    /// the second plan can still code the repeated ones. Past 65,536 distinct marks, or 2^24
+    /// pixels of them, the image is left to generic coding; at either cap it is still looked at.
     #[test]
     fn too_many_symbols_are_left_to_generic_coding() {
+        // `n` distinct marks of 17 × 3 (full top and bottom rows joined by a code of 1 to n, in
+        // binary, on the row between), then `again` more with the codes 1 and 2 in turn.
+        let codes = |n: usize, again: usize| {
+            let (columns, rows) = (256 * 18, (n + again).div_ceil(256) * 4);
+            let mut picture = vec![vec![0u8; columns]; rows];
+            for k in 0..n + again {
+                let (x, y) = (k % 256 * 18, k / 256 * 4);
+                let code = if k < n { k + 1 } else { (k - n) % 2 + 1 };
+                picture[y][x..x + 17].fill(1);
+                picture[y + 2][x..x + 17].fill(1);
+                for b in (0..17).filter(|b| code >> b & 1 == 1) {
+                    picture[y + 1][x + b] = 1;
+                }
+            }
+            (samples(&picture), columns as u32, rows as u32)
+        };
+        // At a cap of 300 symbols, then (nightly: each picture is tens of thousands of marks coded and decoded) at
+        // MAX_CODED_SYMBOLS and past it through `encode_jbig2`.
+        let max = 300;
+        let (data, columns, rows) = codes(max, 0);
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(decode(&plan_within(&at_cap, columns, rows, 1, None, None, max).unwrap()), unpack(&data, columns, rows));
+        // One more distinct mark, each once: neither plan is made.
+        let (data, columns, rows) = codes(max + 1, 0);
+        let past = page(&data, columns).unwrap();
+        assert!(plan_within(&past, columns, rows, 1, None, None, max).is_none() && plan_within(&past, columns, rows, 2, None, None, max).is_none());
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
+        let (data, columns, rows) = codes(MAX_CODED_SYMBOLS, 0);
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
+        let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 0);
+        let past = page(&data, columns).unwrap();
+        assert!(plan(&past, columns, rows, 1, None, None).is_none() && plan(&past, columns, rows, 2, None, None).is_none());
+        assert_eq!(encode_jbig2(&data, columns, rows).unwrap(), encode_jbig2_generic(&data, columns, rows).unwrap());
+        // With two of them repeated, the second plan codes those two.
+        let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 200);
+        let past = page(&data, columns).unwrap();
+        assert!(plan(&past, columns, rows, 1, None, None).is_none());
+        assert_eq!(decode(&plan(&past, columns, rows, 2, None, None).unwrap()), unpack(&data, columns, rows));
+        // Above a page of text whose letters repeat, that second plan is the one `encode_jbig2`
+        // keeps: the first, of every mark, would code too many symbols.
+        let mut picture: Bitmap = vec![vec![0u8; 256 * 18]; 512];
+        for k in 0..=MAX_CODED_SYMBOLS {
+            let (x, y) = (k % 256 * 18, k / 256 * 4);
+            picture[y][x..x + 17].fill(1);
+            picture[y + 2][x..x + 17].fill(1);
+            for b in (0..17).filter(|b| (k + 1) >> b & 1 == 1) {
+                picture[y + 1][x + b] = 1;
+            }
+        }
+        picture.extend(text(256 * 18, 600, &glyphs(40, 7), 11));
+        let data = samples(&picture);
+        let (columns, rows) = (picture[0].len() as u32, picture.len() as u32);
+        let coded = encode_jbig2(&data, columns, rows).unwrap();
+        assert_eq!(segment_types(&coded)[1], 0, "symbol coded");
+        assert_eq!(decode(&coded), unpack(&data, columns, rows));
+        let (data, columns, _) = codes(MAX_SYMBOLS, 0);
+        assert_eq!(page(&data, columns).map(|p| p.symbols.len()), Some(MAX_SYMBOLS));
+        let (data, columns, _) = codes(MAX_SYMBOLS + 1, 0);
+        assert!(page(&data, columns).is_none());
+        // `n` black squares of 256 × 256, each with a white pixel in a different place: 2^16
+        // pixels a symbol, so 256 of them are exactly the cap.
+        let squares = |n: usize| {
+            let (columns, rows) = (16 * 258, n.div_ceil(16) * 258);
+            let mut picture = vec![vec![0u8; columns]; rows];
+            for k in 0..n {
+                let (x, y) = (k % 16 * 258, k / 16 * 258);
+                for row in &mut picture[y..y + 256] {
+                    row[x..x + 256].fill(1);
+                }
+                picture[y + 1 + k / 254][x + 1 + k % 254] = 0;
+            }
+            (samples(&picture), columns as u32, rows as u32)
+        };
+        let (data, columns, rows) = squares(256);
+        let at_cap = page(&data, columns).unwrap();
+        assert_eq!(at_cap.symbols.len(), 256);
+        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
+        let (data, columns, _) = squares(257);
+        assert!(page(&data, columns).is_none());
+    }
+
+    /// Small limits cover bitmap memory and the real selector without full-size fixtures.
+    #[test]
+    fn small_symbol_limits_cover_memory_and_generic_fallback() {
         assert_eq!(MAX_CODED_SYMBOLS, 32_767);
         assert_eq!(MAX_SYMBOLS, 65_536);
         assert_eq!(MAX_SYMBOL_PIXELS, 16_777_216);
@@ -961,29 +1041,25 @@ mod tests {
             }
             (samples(&picture), columns as u32, rows as u32)
         };
-        // Keep the real decoder's production dictionary boundary, not just a small stand-in.
-        let (data, columns, rows) = codes(MAX_CODED_SYMBOLS, 0);
-        let at_cap = page(&data, columns).unwrap();
-        assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
         let cap = 63;
         let capped_encode =
             |data: &[u8], columns, rows| super::super::encode_jbig2_capped(data, columns, rows, MAX_SYMBOLS, MAX_SYMBOL_PIXELS, cap).unwrap();
         let (data, columns, rows) = codes(cap, 0);
         let at_cap = page(&data, columns).unwrap();
-        assert_eq!(decode(&plan_with_cap(&at_cap, columns, rows, 1, None, None, cap).unwrap()), unpack(&data, columns, rows));
+        assert_eq!(decode(&plan_within(&at_cap, columns, rows, 1, None, None, cap).unwrap()), unpack(&data, columns, rows));
         // One more distinct mark, each once: neither plan is made, so the real selector keeps
         // the generic stream unchanged.
         let (data, columns, rows) = codes(cap + 1, 0);
         let past = page(&data, columns).unwrap();
         assert!(
-            plan_with_cap(&past, columns, rows, 1, None, None, cap).is_none() && plan_with_cap(&past, columns, rows, 2, None, None, cap).is_none()
+            plan_within(&past, columns, rows, 1, None, None, cap).is_none() && plan_within(&past, columns, rows, 2, None, None, cap).is_none()
         );
         assert_eq!(capped_encode(&data, columns, rows), encode_jbig2_generic(&data, columns, rows).unwrap());
         // With two of them repeated, the second plan codes those two.
         let (data, columns, rows) = codes(cap + 1, 200);
         let past = page(&data, columns).unwrap();
-        assert!(plan_with_cap(&past, columns, rows, 1, None, None, cap).is_none());
-        assert_eq!(decode(&plan_with_cap(&past, columns, rows, 2, None, None, cap).unwrap()), unpack(&data, columns, rows));
+        assert!(plan_within(&past, columns, rows, 1, None, None, cap).is_none());
+        assert_eq!(decode(&plan_within(&past, columns, rows, 2, None, None, cap).unwrap()), unpack(&data, columns, rows));
         // Above text whose letters repeat, that second plan is the one the real selector keeps:
         // the first, of every mark, would code too many symbols.
         let mut picture: Bitmap = vec![vec![0u8; 64 * 18]; 4];
@@ -1275,6 +1351,10 @@ mod tests {
     /// in. Ten marks of the first image are in two images after it, with 464 first seen there.
     #[test]
     fn past_the_marks_a_group_holds_later_ones_arent_shared() {
+        // 66,000 marks coded in four images: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (a, b) = (samples(&combs(0..40_000)), samples(&combs(40_000..65_536)));
         let late = combs((0..10).chain(65_536..66_000).collect::<Vec<_>>().into_iter());
         let (rows, late) = (late.len() as u32, samples(&late));
@@ -1293,6 +1373,10 @@ mod tests {
     /// or a generic region, whichever is smaller).
     #[test]
     fn past_the_shared_limit_the_most_widely_held_marks_are_shared() {
+        // 50,000 marks coded in three images: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         let (both, first) = (combs(0..20_000), combs(0..10_000));
         let rows = both.len();
         let first: Bitmap = first.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 120 * 36], rows - first.len())).collect();
