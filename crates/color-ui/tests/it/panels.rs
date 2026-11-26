@@ -628,6 +628,34 @@ fn a_dragged_swatch_carries_the_hosts_payload_beside_the_panels_own_move() {
     assert_eq!(edits.borrow().len(), 1, "a drop outside the panel edits nothing: {:?}", edits.borrow());
 }
 
+/// A panel shown for one document after another keeps a rename left open with its document: the other document's
+/// swatch of the same name opens no field, and Enter there renames nothing.
+#[trial]
+fn a_rename_left_open_stays_with_its_document() {
+    let entry = |name: &str| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0]));
+    let groups = vec![SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red"), entry("Rose")] }];
+    let document = Rc::new(Cell::new(1_u32));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let (shown, seen) = (Rc::clone(&document), Rc::clone(&edits));
+    let mut state = SwatchesState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = SwatchesPanel::new(&groups, Bind::bound(&mut state), RED).document(shown.get()).show(ui);
+        seen.borrow_mut().extend(out.edits);
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    let red = fixture.by_label("Red, #ff0000").expect("the Red swatch");
+    fixture.click(&red).key(Key::F2, Modifiers::NONE).type_text("X").settle();
+    let typed = |fixture: &Fixture, text: &str| {
+        let tree = fixture.tree();
+        tree.keys().into_iter().any(|key| tree.value_of(key) == Some(text))
+    };
+    assert!(typed(&fixture, "X"), "the rename field is open in the first document");
+    document.set(2);
+    fixture.settle();
+    fixture.type_text("Y").key(Key::Enter, Modifiers::NONE).settle();
+    assert!(!edits.borrow().iter().any(|edit| matches!(edit, SwatchEdit::Rename { .. })), "nothing is renamed: {:?}", edits.borrow());
+}
+
 fn table_entries(count: usize) -> Vec<(Label, Srgba)> {
     (0..count).map(|i| (Label::from(format!("Index {i}")), Srgba::rgb(i as f32 / count as f32, 0.5, 0.25))).collect()
 }
