@@ -51,6 +51,11 @@ pub(crate) fn decrypt(current_user: &[u8], stream: &[u8], pictures: &[u8], passw
     };
     let password = password.ok_or(PptError::Encrypted)?;
     let info = Rec::at(stream, session.at).map(|r| r.data).unwrap_or_default();
+    // A presentation uses RC4 CryptoAPI only ([MS-PPT] §2.3.7). Plain RC4 (version 1.1) is
+    // refused from its header, before the password is checked, so it isn't a wrong password.
+    if info.get(..4) == Some(&[1, 0, 1, 0]) {
+        return Err(PptError::UnsupportedEncryption("RC4 without CryptoAPI (version 1.1)".into()));
+    }
     let (key, _) = Key::open(info, password).map_err(|e| match e {
         craft_offcrypto::Error::WrongPassword => PptError::WrongPassword,
         craft_offcrypto::Error::Unsupported(what) => PptError::UnsupportedEncryption(what),

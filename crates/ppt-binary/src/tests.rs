@@ -1041,6 +1041,30 @@ fn unsupported_encryption_is_named() {
         let r = crate::import_with_password(&encrypted_with(&header, &*key), &AppDefaults, "pw");
         assert!(matches!(r, Err(crate::PptError::UnsupportedEncryption(_))), "{:?}", r.err());
     }
+    // Plain RC4 (version 1.1), which a presentation never uses, with a verifier that matches.
+    let (header, key) = rc4_header("pw");
+    let f = encrypted_with(&header, &*key);
+    for password in ["pw", "not it"] {
+        let r = crate::import_with_password(&f, &AppDefaults, password);
+        assert!(matches!(r, Err(crate::PptError::UnsupportedEncryption(_))), "{:?}", r.err());
+    }
+}
+
+/// A plain RC4 encryption header for `password` ([MS-OFFCRYPTO] §2.3.6.1) and the key of each
+/// block number, as Word and Excel use it.
+fn rc4_header(password: &str) -> (Vec<u8>, BlockKey) {
+    use craft_offcrypto::rc4::{Rc4, md5};
+    let salt = [7u8; 16];
+    let h0 = md5(&utf16(password));
+    let base: Vec<u8> = md5(&(0..16).flat_map(|_| h0[..5].iter().chain(&salt).copied()).collect::<Vec<u8>>())[..5].to_vec();
+    let key: BlockKey = Box::new(move |block| md5(&[&base[..], &block.to_le_bytes()].concat()).to_vec());
+    let verifier = *b"0123456789abcdef";
+    let mut enc = [verifier.to_vec(), md5(&verifier).to_vec()].concat();
+    Rc4::new(&key(0)).apply(&mut enc);
+    let mut h = vec![1, 0, 1, 0];
+    h.extend_from_slice(&salt);
+    h.extend_from_slice(&enc);
+    (h, key)
 }
 
 /// A damaged encrypted presentation never panics or reads past its streams: every 4-byte word
