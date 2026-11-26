@@ -13,7 +13,7 @@ pub(crate) mod node;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-pub use annotation::{AnnotationEvent, AnnotationKey, Backdrop, Marker, Note};
+pub use annotation::{AnnotationEvent, AnnotationKey, AnnotationRect, Backdrop, Marker, Note};
 pub use kind::{NodeEvent, NodeFooter, NodeHeader, NodeId, NodeKind, NodeShape, PortDirection, PortLabels, PortRef, PortSide, Wire, WireDrag};
 pub use node::{Node, NodeOutput, NodeStyle};
 
@@ -158,6 +158,8 @@ pub struct NodeGraph<'a, E: 'static = ()> {
     wire_events: Vec<WireEvent>,
     /// What the annotations reported this pass.
     annotation_events: Vec<AnnotationEvent>,
+    /// Where the annotations' parts lie this pass, as `parts` declared them.
+    annotation_rects: Vec<AnnotationRect>,
 }
 
 /// What a `NodeGraph` reports: each family's events, in order.
@@ -171,6 +173,8 @@ pub struct NodeGraphResponse<E> {
     pub wires: Vec<WireEvent>,
     /// What the annotations reported.
     pub annotations: Vec<AnnotationEvent>,
+    /// Where the part of each annotation shown lies, backdrops, then notes, then markers, in slice order.
+    pub annotation_rects: Vec<AnnotationRect>,
 }
 
 impl<E> Outcome for NodeGraphResponse<E> {
@@ -248,6 +252,7 @@ impl<'a, E: 'static> NodeGraph<'a, E> {
             annotation_selection: None,
             wire_events: Vec::new(),
             annotation_events: Vec::new(),
+            annotation_rects: Vec::new(),
         }
     }
 
@@ -380,7 +385,16 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
     /// press inside a backdrop reaches it. A wire in `wire_selection` carries `Flags::SELECTED`, so it resolves to its
     /// on look.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        self.layers().parts(rect.min, cx);
+        let origin = rect.min;
+        let shown = self.layers().parts(origin, cx);
+        self.annotation_rects = shown
+            .into_iter()
+            .map(|(key, body)| AnnotationRect {
+                key,
+                graph: body.translate(-origin.to_vec2()),
+                screen: Rect::from_two_pos(self.to_layer(origin, body.min), self.to_layer(origin, body.max)),
+            })
+            .collect();
         let selected = self.wire_selection.as_ref().and_then(Bind::value);
         for wire in self.wires {
             let Some(points) = self.wire_curve(rect.min, wire) else { continue };
@@ -449,7 +463,12 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
     }
 
     fn finish(self, mut cx: Cx<'_, Self>) -> NodeGraphResponse<E> {
-        NodeGraphResponse { collection: cx.collection_response(), wires: self.wire_events, annotations: self.annotation_events }
+        NodeGraphResponse {
+            collection: cx.collection_response(),
+            wires: self.wire_events,
+            annotations: self.annotation_events,
+            annotation_rects: self.annotation_rects,
+        }
     }
 }
 

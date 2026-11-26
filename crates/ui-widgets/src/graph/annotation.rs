@@ -2,7 +2,7 @@
 
 use super::kind::NodeId;
 use super::{NodeGraph, NodeGraphStyle};
-use crate::contract::{Bind, Cx, PaintUi, PartsCx, Pointer as _, Role, Styled as _};
+use crate::contract::{Bind, Cx, PaintUi, PartsCx, Pointer as _, Remember as _, Role, Styled as _};
 use crate::fonts::FontRef;
 use crate::primitives::{DocRun, DocText, Draw, IconSpec, PaintShape, StrokeWidth, TextRun};
 use crate::style::{DataColor, Flags, StyleColor};
@@ -146,6 +146,21 @@ pub enum AnnotationEvent {
     },
 }
 
+/// Where the part of an annotation the graph showed lies this pass: a backdrop's frame (without the title above it),
+/// a note's rect grown to its wrapped text, a marker's pin with its label. The app publishes these rather than
+/// sizing the parts itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AnnotationRect {
+    /// Which annotation.
+    pub key: AnnotationKey,
+    /// The part's rect in document units, from the graph's top left, where the annotation's own rect lies.
+    pub graph: Rect,
+    /// The part's rect in the graph's layer space, through the zoom: where it shows and takes the pointer, and where
+    /// `AnnotationEvent::ContextMenu` points lie.
+    pub screen: Rect,
+}
+
 /// `rect`, in document units, in the rows' space: from the graph's top left at `origin`, where the nodes lie. The
 /// body's transform zooms it with the nodes.
 fn in_body(origin: Pos2, rect: Rect) -> Rect {
@@ -221,6 +236,20 @@ fn gesture_of(start: PressStart) -> GestureId {
     GestureId::new(start.time.to_bits())
 }
 
+/// The rect a backdrop had when its resize began, held for the press: the app previews each proposal on the rect it
+/// hands the graph, so a resize measures from this one, not from the preview.
+#[derive(Clone, Copy)]
+struct ResizeFrom {
+    gesture: Option<GestureId>,
+    rect: Rect,
+}
+
+impl Default for ResizeFrom {
+    fn default() -> Self {
+        ResizeFrom { gesture: None, rect: Rect::NOTHING }
+    }
+}
+
 /// The seam with `NodeGraph`: the annotation layers it draws and lets the pointer reach.
 pub(super) struct Layers<'a> {
     pub(super) backdrops: &'a [Backdrop<'a>],
@@ -247,13 +276,16 @@ impl<'a> Layers<'a> {
     /// The backdrops lie under the nodes, so a press on a node inside a backdrop takes the node; a later backdrop
     /// stacks over an earlier one, so the smaller frame the app sorts after a larger one takes a press inside both.
     /// Notes and markers are `over` parts, above the nodes, and a marker ranks one sub-level over a note where they
-    /// overlap.
-    pub(super) fn parts<E: 'static>(&self, origin: Pos2, cx: &mut PartsCx<'_, NodeGraph<'_, E>>) {
+    /// overlap. Returns each annotation's part, the backdrop's body without its grip, by key and rect in the rows'
+    /// space.
+    pub(super) fn parts<E: 'static>(&self, origin: Pos2, cx: &mut PartsCx<'_, NodeGraph<'_, E>>) -> Vec<(AnnotationKey, Rect)> {
         let (grip_side, text_role) = (cx.style.grip_side, cx.style.text_role);
         let (text, icon) = (cx.tokens.typography.get(text_role).size, cx.tokens.size.icon.md);
+        let mut shown = Vec::with_capacity(self.backdrops.len() + self.notes.len() + self.markers.len());
         for (order, backdrop) in self.backdrops.iter().enumerate() {
             let frame = in_body(origin, backdrop.rect);
             let key = AnnotationKey::Backdrop(backdrop.id);
+            shown.push((key, frame));
             let stacking = u32::try_from(order).unwrap_or(u32::MAX);
             let body = cx.in_body(BACKDROP.at(backdrop.id), frame).sense(SENSE).stacking(stacking).flags(self.flags(key)).pointer_only(POINTER_ONLY);
             if let Some(title) = backdrop.title {
@@ -272,7 +304,9 @@ impl<'a> Layers<'a> {
             let runs = run(note.text, text, StyleColor(egui::Color32::PLACEHOLDER));
             let height = cx.layout_doc(&DocText { wrap: Some(frame.width()), ..DocText::new(&runs) }).size().y;
             let key = AnnotationKey::Note(note.id);
-            cx.in_body(NOTE.at(note.id), note_rect(frame, height))
+            let covers = note_rect(frame, height);
+            shown.push((key, covers));
+            cx.in_body(NOTE.at(note.id), covers)
                 .sense(SENSE)
                 .priority(HitPriority::new(HitLevel::Body, 0))
                 .over()
@@ -284,7 +318,9 @@ impl<'a> Layers<'a> {
             let pin = pin_rect(origin + marker.at.to_vec2(), icon);
             let label = cx.layout(&TextRun::new(marker.label).role(text_role)).size();
             let key = AnnotationKey::Marker(marker.id);
-            cx.in_body(MARKER.at(marker.id), pin.union(label_rect(pin, label)))
+            let covers = pin.union(label_rect(pin, label));
+            shown.push((key, covers));
+            cx.in_body(MARKER.at(marker.id), covers)
                 .sense(SENSE)
                 .priority(HitPriority::new(HitLevel::Body, 1))
                 .over()
@@ -292,6 +328,7 @@ impl<'a> Layers<'a> {
                 .pointer_only(POINTER_ONLY)
                 .node(Role::BUTTON, marker.label);
         }
+        shown
     }
 
     /// Paints the backdrops in the rows' space under the items, in slice order.
@@ -399,7 +436,10 @@ impl<'a> Layers<'a> {
     }
 
     /// What `press` on the part of `key` adds to `events`: a drag runs a `Move`, or a `Resize` of the backdrop at
-    /// `resize`, as Begin, Update, then Commit or Cancel, in document units; a secondary click asks for the menu at the
+    /// `resize`, as Begin, Update, then Commit or Cancel, in document units. A resize reports the rect at the press as
+    /// its `before` and the press rect plus the drag as each proposal, whatever preview the app shows on the rect it
+    /// hands the graph mid-drag, so the app applies the commit once and undoes to the press rect. A secondary click
+    /// asks for the menu at the
     /// release point, in the graph's layer space, which is its parent's. A press that comes up where it went down
     /// changes nothing. The parts' phases read in the rows' space, document units from the graph's top left at
     /// `origin`, so an offset is a difference of two of them and the menu's point goes through `zoom` to the layer.
@@ -409,9 +449,21 @@ impl<'a> Layers<'a> {
         key: AnnotationKey,
         resize: Option<Rect>,
         (zoom, origin, min): (CanvasTransform, Pos2, Vec2),
-        cx: &Cx<'_, NodeGraph<'_, E>>,
+        cx: &mut Cx<'_, NodeGraph<'_, E>>,
         events: &mut Vec<AnnotationEvent>,
     ) {
+        let id = press.phase.start().map(gesture_of);
+        let resize = resize.map(|rect| {
+            let held = cx.press_slot::<ResizeFrom>();
+            if matches!(press.phase, PressPhase::DragStart { .. }) {
+                *held = Some(ResizeFrom { gesture: id, rect });
+            }
+            let from = held.filter(|from| from.gesture == id).map_or(rect, |from| from.rect);
+            if matches!(press.phase, PressPhase::Release { .. } | PressPhase::Cancel { .. }) {
+                *held = None;
+            }
+            from
+        });
         let offset = |start: PressStart, pos: Pos2| pos - start.origin;
         let report = |edit: EditEvent<Vec2>| match resize {
             None => AnnotationEvent::Move { key, edit },

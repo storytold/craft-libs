@@ -1,9 +1,9 @@
 //! The graph's annotation layers: where they stack among the nodes, the one selection they share with the nodes, and
 //! the gestures a backdrop reports.
 
-use craft_behavior::{CancelReason, CanvasTransform, EditEvent, GestureId, Selection, keyed};
+use craft_behavior::{CancelReason, CanvasTransform, EditEvent, GestureId, Mixed, Selection, keyed};
 use craft_ui::contract::{Bind, Props as _, Role, ShowCollection as _};
-use craft_ui::graph::{AnnotationEvent, AnnotationKey, Backdrop, Marker, Node, NodeGraph, NodeId, NodeKind, Note};
+use craft_ui::graph::{AnnotationEvent, AnnotationKey, AnnotationRect, Backdrop, Marker, Node, NodeGraph, NodeId, NodeKind, Note};
 use craft_ui::style::DataColor;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Vec2};
@@ -48,6 +48,10 @@ struct Seen {
     annotation: Option<AnnotationKey>,
     nodes: Selection<NodeId>,
     events: Vec<AnnotationEvent>,
+    /// The backdrop's rect when the host previews each resize proposal on it, as an app does; `None` keeps `FRAME`.
+    frame: Option<Rect>,
+    /// The annotation part rects of the last pass.
+    rects: Vec<AnnotationRect>,
 }
 
 /// A graph at `zoom` with the backdrop, the note and the marker, both selections bound to `seen`. Every frame runs
@@ -58,9 +62,10 @@ fn graph(seen: &Rc<RefCell<Seen>>, zoom: f32) -> Fixture {
         let kinds: [&dyn NodeKind<()>; 2] = [&PLAIN, &PLAIN];
         let ids = [NodeId::new(0), NodeId::new(1)];
         let source = keyed(&ids, |id: &NodeId| *id);
-        let backdrops = [Backdrop::new(0, FRAME, DataColor::new(Color32::from_rgba_premultiplied(40, 80, 48, 96))).title("Group")];
         let mut seen = held.borrow_mut();
-        let Seen { annotation, nodes, events } = &mut *seen;
+        let Seen { annotation, nodes, events, frame, rects } = &mut *seen;
+        let fill = DataColor::new(Color32::from_rgba_premultiplied(40, 80, 48, 96));
+        let backdrops = [Backdrop::new(0, frame.unwrap_or(FRAME), fill).title("Group")];
         let response = NodeGraph::new(&NODES, &kinds, &[])
             .label("Graph")
             .zoom(CanvasTransform::new(zoom, Vec2::ZERO))
@@ -70,7 +75,15 @@ fn graph(seen: &Rc<RefCell<Seen>>, zoom: f32) -> Fixture {
             .selection(Bind::bound(nodes))
             .annotation_selection(Bind::bound(annotation))
             .show_items(ui, &source, &mut |id, _| Node::new(*id, kinds[id.0 as usize]));
+        if let Some(frame) = frame {
+            for event in &response.annotations {
+                if let AnnotationEvent::Resize { edit: EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. }, .. } = event {
+                    *frame = *value;
+                }
+            }
+        }
         events.extend(response.annotations);
+        *rects = response.annotation_rects;
         if ui.ctx().current_pass_index() == 0 {
             ui.ctx().request_discard("the trial reruns every pass");
         }
@@ -206,6 +219,51 @@ fn a_backdrop_drag_and_grip_drag_report_one_gesture_each() {
         .collect();
     assert_eq!(menus.len(), 1, "a secondary click asks for the backdrop's menu once");
     assert!(menus[0].distance(from) < 0.5, "the menu opens at the click in the parent's layer space, not through the zoom");
+}
+
+#[trial]
+fn the_response_reports_where_each_annotation_part_shows_at_a_zoom() {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let fixture = graph(&seen, 2.0);
+    let seen = seen.borrow();
+    let shown = [(AnnotationKey::Backdrop(0), "Group"), (AnnotationKey::Note(1), "Check the blend"), (AnnotationKey::Marker(2), "Review")];
+    assert_eq!(seen.rects.len(), shown.len(), "the response reports one rect per annotation shown");
+    for (key, label) in shown {
+        let rect = seen.rects.iter().find(|rect| rect.key == key).unwrap_or_else(|| panic!("the response reports {key:?}"));
+        let node = rect_of(&fixture, label);
+        assert!(
+            (rect.screen.min - node.min).length() < 0.5 && (rect.screen.max - node.max).length() < 0.5,
+            "{label}: {rect:?} is where it shows, {node:?}"
+        );
+        let half = rect.screen.size() / 2.0;
+        assert!((rect.graph.size() - half).length() < 0.5, "{label}: at zoom 2 the graph rect is half the shown one: {rect:?}");
+    }
+    let note = seen.rects.iter().find(|rect| rect.key == AnnotationKey::Note(1)).map(|rect| rect.graph);
+    assert_eq!(note.map(|rect| rect.min), Some(NOTES[0].rect.min), "a note's graph rect starts where the app placed it");
+}
+
+#[trial]
+fn a_previewed_resize_reports_the_press_rect_and_the_press_rect_plus_the_drag() {
+    let seen = Rc::new(RefCell::new(Seen { frame: Some(FRAME), ..Seen::default() }));
+    let mut fixture = graph(&seen, 1.0);
+    let by = Vec2::new(60.0, 40.0);
+
+    fixture.drag_at(rect_of(&fixture, "Group").max - Vec2::splat(2.0), by);
+    let seen = seen.borrow();
+    let commits: Vec<(&Mixed<Rect>, Rect)> = seen
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            AnnotationEvent::Resize { edit: EditEvent::Commit { before, after, .. }, .. } => Some((before, *after)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(commits.len(), 1, "a grip drag commits one resize");
+    let (before, after) = commits[0];
+    assert_eq!(*before, Mixed::Same(FRAME), "the commit's before is the rect at the press, not the host's preview");
+    assert_eq!(after.min, FRAME.min, "a resize keeps the backdrop's top left");
+    let grown = after.size() - FRAME.size();
+    assert!((grown - by).length() < 0.5, "the backdrop grew by the drag once, though the host previewed each step: {grown:?}");
 }
 
 /// A node with an input on its left edge and an output on its right, at mid height.
