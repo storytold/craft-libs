@@ -77,7 +77,12 @@ fn a_menu_is_closed_when_its_memoized_view_shows_again_after_an_absence() {
     fixture.frame(vec![]);
     fixture.frame(vec![]);
     shown.set(true);
-    fixture.frame(vec![]);
+    // Every frame of the return, before any settle pass could tidy it: a replay of the view must not show the layer the
+    // absence closed.
+    for frame in 0..3 {
+        fixture.frame(vec![]);
+        assert!(fixture.by_label("Invert").is_none(), "the menu does not survive the view's absence (frame {frame})");
+    }
     fixture.settle();
     assert!(fixture.by_label("Invert").is_none(), "the menu does not survive the view's absence");
 }
