@@ -124,7 +124,8 @@ pub struct Scoped {
     /// How wheel takers inside take the wheel (`WheelScope`). A layer opened from inside starts plain.
     pub wheel: WheelScope,
     /// The flow direction: layout order, arrow keys and roving. A container whose axis keeps its order
-    /// (`Props::ltr_axis`) sets it to left to right for what is inside.
+    /// (`Props::ltr_axis`) sets it to left to right for what is inside. A layer opened from inside starts at
+    /// `text_direction`.
     pub direction: Direction,
     /// The paragraph direction of text: the interface's, which a container that keeps its axis order leaves alone.
     /// The bidi order inside a label follows its script.
@@ -429,7 +430,12 @@ impl Scoped {
     /// The layer is outside its opener's flow: an inside label and a filling cell belong to the beside label's own
     /// control, and the opener's least measure is not the layer's. A tooltip of a control in an inspector cell keeps
     /// its text width, not the layer's cap.
+    ///
+    /// The layer flows in the interface's direction (`text_direction`): an axis that keeps its left-to-right order
+    /// (`Props::ltr_axis`) and a scope that turns only the flow keep that order for their own content, not for a
+    /// popover or bar opened from inside them.
     pub(crate) fn start_layer(&mut self) {
+        self.direction = self.text_direction;
         self.start_room();
         self.inside_label = None;
         self.cell_fills = false;
