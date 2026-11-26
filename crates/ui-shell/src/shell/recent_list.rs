@@ -85,7 +85,24 @@ impl<'a> RecentList<'a> {
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, picture, card_zoom: None, paper: None, drop_hint: None, now, actions: &actions };
+        let page = Page {
+            env: &env,
+            words: &words,
+            thumbnails,
+            picture,
+            card_zoom: None,
+            paper: None,
+            drop_hint: None,
+            now,
+            actions: &actions,
+            offers_new: true,
+            offers_open: true,
+            pinned_title: None,
+            templates_title: None,
+            new_label: None,
+            open_label: None,
+            heading_sections: false,
+        };
         let files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
         let empty = empty.unwrap_or_else(|| words.no_recent.clone());
         let shown = Section::fixed(words.recent.clone()).header_gap(Gap::Section).command_scope(StartRecentCommands::SCOPE).show(ui, |ui, cx| {
@@ -156,8 +173,8 @@ pub(super) fn recent_body(
         };
         let out = grid.show_items(ui, &source, &mut |path, _| {
             let Some(file) = file_of(path) else { return Tile::new(Label::Empty) };
-            page.tile(&file.name, page.age(file.opened), ThumbKey::Recent(file.path.clone()))
-                .corner_action(IconId::new("close"), StartRecentCommands::Remove)
+            page.tile(&file.name, page.recent_detail(file), ThumbKey::Recent(file.path.clone()))
+                .action(IconId::new("close"), StartRecentCommands::Remove)
                 .tooltip(file.path.display().to_string())
         });
         let corner: Vec<PathBuf> = out
@@ -165,7 +182,8 @@ pub(super) fn recent_body(
             .events
             .iter()
             .filter_map(|event| match event {
-                CollectionEvent::Item(key, TilePartEvent::CornerAction) => Some(key.clone()),
+                // The card's one action, its remove button, is action 0.
+                CollectionEvent::Item(key, TilePartEvent::Action(0)) => Some(key.clone()),
                 _ => None,
             })
             .collect();
@@ -182,7 +200,7 @@ pub(super) fn recent_body(
             .show_items(ui, &source, &mut |path, _| {
                 let Some(file) = file_of(path) else { return ListRow::new(Label::Empty) };
                 let row = ListRow::new(Label::from(file.name.clone())).detail(folder_of(&file.path)).tooltip(file.path.display().to_string());
-                let row = match page.age(file.opened) {
+                let row = match page.recent_detail(file) {
                     Some(age) => row.trailing(age),
                     None => row,
                 };

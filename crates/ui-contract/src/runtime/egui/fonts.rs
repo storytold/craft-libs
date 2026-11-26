@@ -40,6 +40,9 @@ struct ServedFace {
     data: FontData,
     /// The proportional family's faces follow the face in its family.
     over_interface: bool,
+    /// The served families whose faces follow the face, in order, before the interface faces: the sibling subsets of
+    /// a font split over several.
+    chain: Vec<String>,
 }
 
 /// The faces served one family at a time, by family name, and the proportional family's faces as the definitions
@@ -65,6 +68,11 @@ impl FontProvider for Served {
         let families = self.families.read().unwrap_or_else(PoisonError::into_inner);
         let Some(face) = families.get(&**name) else { return Vec::new() };
         let mut faces = vec![FontInsert::new(name, face.data.clone(), Vec::new())];
+        for link in face.chain.iter().filter(|link| **link != **name) {
+            if let Some(linked) = families.get(link) {
+                faces.push(FontInsert::new(link, linked.data.clone(), Vec::new()));
+            }
+        }
         if face.over_interface {
             let interface = self.interface.read().unwrap_or_else(PoisonError::into_inner);
             faces.extend(interface.iter().flatten().filter(|face| *face.name != **name).cloned());
@@ -144,17 +152,19 @@ pub(crate) fn add_face(ctx: &Context, name: String, data: FontData) {
     ctx.add_font(FontInsert { name, data, families });
 }
 
-/// Serves `data` as the family `family` (its face's name too): the face alone, or with `over_interface` the face
-/// followed by the proportional family's faces, so what the face lacks the interface fonts draw. Returns whether text
-/// laid out in the family in this pass finds it: false in the pass that first gives egui the served faces' provider.
-pub(crate) fn serve_face(ctx: &Context, family: &FontRef, data: FontData, over_interface: bool) -> bool {
+/// Serves `data` as the family `family` (its face's name too): the face, then the faces of the served families of
+/// `chain` that are served when egui first lays text out in the family, in order, then with `over_interface` the
+/// proportional family's faces, so what the face lacks its chain and then the interface fonts draw. Returns whether
+/// text laid out in the family in this pass finds it: false in the pass that first gives egui the served faces'
+/// provider.
+pub(crate) fn serve_face(ctx: &Context, family: &FontRef, data: FontData, over_interface: bool, chain: Vec<String>) -> bool {
     let FontFamily::Name(name) = family.family() else { return false };
     let (served, since) = memory::with::<Providers, _>(ctx, |providers| (Arc::clone(&providers.served), providers.served_since));
     let unset = served.interface.read().unwrap_or_else(PoisonError::into_inner).is_none();
     if over_interface && unset {
         ctx.fonts(|fonts| served.set_interface(fonts.definitions()));
     }
-    served.families.write().unwrap_or_else(PoisonError::into_inner).insert(name.to_string(), ServedFace { data, over_interface });
+    served.families.write().unwrap_or_else(PoisonError::into_inner).insert(name.to_string(), ServedFace { data, over_interface, chain });
     match since {
         Some(since) => served_live(ctx, since),
         None => {

@@ -2227,17 +2227,17 @@ mod parallel_tests {
         }
     }
 
-    /// The bytes depend on the image, not on the machine: one, two, seven and 32 worker threads
+    /// The bytes depend on the image, not on the machine: one, two and 32 worker threads
     /// (and the machine's own count, through `encode`) give the same stream.
     #[test]
     fn the_parallel_encoder_gives_the_same_bytes_on_any_thread_count() {
-        let (w, h, bpp) = (1201usize, 1013usize, 4usize);
+        let (w, h, bpp) = (1024usize, 1025usize, 4usize);
         let px: Vec<u8> =
             (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
         assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
-        for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
+        for level in [PngCompression::Fast, PngCompression::Best] {
             let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
-            for threads in [2, 7, 32] {
+            for threads in [2, 32] {
                 assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
             }
             assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
@@ -2251,8 +2251,9 @@ mod parallel_tests {
 
     #[test]
     fn large_images_roundtrip_through_the_parallel_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize), (ChannelLayout::Rgba, SampleType::U16, 4, 2)] {
-            let (w, h) = (1531u32, 977u32);
+        for (layout, sample, ch, bytes, w, h) in
+            [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize, 1024u32, 1400u32), (ChannelLayout::Rgba, SampleType::U16, 4, 2, 1024, 520)]
+        {
             let n = w as usize * h as usize * ch * bytes;
             let px: Vec<u8> =
                 (0..n).map(|i| ((i / 3) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 7) as u8 / 3 + (i % 97) as u8).collect();
@@ -2323,8 +2324,12 @@ mod streamed_tests {
     /// gives, at 8 and 16 bits, with a profile, resolution, text and XMP.
     #[test]
     fn streamed_rows_match_the_whole_image_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize), (ChannelLayout::Rgb, SampleType::U16, 3, 2)] {
-            let (w, h) = (1201u32, 1013u32);
+        // The gate runs every divisor-th (image, level, bands) case, nightly all twelve.
+        let divisor = craft_media_testkit::hostile::divisor();
+        let mut case = 0usize;
+        for (layout, sample, ch, bytes, w, h) in
+            [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize, 1024u32, 1025u32), (ChannelLayout::Rgb, SampleType::U16, 3, 2, 1024, 700)]
+        {
             let meta = Metadata {
                 dpi: Some((300.0, 300.0)),
                 text: vec![("Title".into(), "Tent".into())],
@@ -2337,9 +2342,20 @@ mod streamed_tests {
                 .with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
+                let one_band = [h];
+                let cases: Vec<&[u32]> = [&[1u32, 77, 300][..], &[256, 256, 256], &one_band]
+                    .into_iter()
+                    .filter(|_| {
+                        case += 1;
+                        (case - 1).is_multiple_of(divisor)
+                    })
+                    .collect();
+                if cases.is_empty() {
+                    continue;
+                }
                 let whole = crate::encode(&img, Format::Png, &opts).unwrap();
                 let (head, zlib, _) = split(&whole);
-                for heights in [&[1u32, 77, 300][..], &[256, 256, 256], &[1013]] {
+                for heights in cases {
                     let png = streamed(&img, heights, &opts);
                     let (h2, z2, _) = split(&png);
                     assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");

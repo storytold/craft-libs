@@ -1,7 +1,7 @@
 //! `PopupList` (15, 17): a dropdown under a field, holding the caller's `List`.
 
 use super::anchored::PopoverOutput;
-use crate::contract::{Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, POPUP_PAD, Props as _, Role, Trigger};
+use crate::contract::{Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, POPUP_PAD, Pad, Props as _, Role, Trigger};
 use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -17,6 +17,17 @@ pub(crate) mod stories;
 pub struct PopupListStyle {
     #[style(metrics)]
     metrics: Metrics,
+}
+
+/// How a popup list relates its rows to its opener.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PopupListKind {
+    /// A UI list with padding around its rows.
+    #[default]
+    Standard,
+    /// Document-field options whose rows extend to the field's edges.
+    Document,
 }
 
 /// A list popup under a field the app owns (a combo, a history picker). The body is the caller's `List::options`.
@@ -48,15 +59,32 @@ impl<'a> PopupList<'a> {
         PopupList { common: Common::new(), props, open, closed: None }.label(label)
     }
 
-    /// The field the popup hangs from. The popup closes when the opener is no longer shown.
+    /// Selects the list's relationship to its opener.
     #[must_use]
-    pub fn opened_by(mut self, opener: &Response) -> Self {
+    pub fn kind(mut self, kind: PopupListKind) -> Self {
+        self.props = self.props.pad(match kind {
+            PopupListKind::Standard => POPUP_PAD,
+            PopupListKind::Document => Pad::None,
+        });
+        self
+    }
+
+    /// Changes the popup's overlay as `Popover::overlay` does; callers hang the list from a part with
+    /// `Overlay::opener_anchor(Anchor::Rect(..))`.
+    #[must_use]
+    pub fn overlay(mut self, change: impl FnOnce(Overlay) -> Overlay) -> Self {
         let overlay = match std::mem::take(&mut self.props.mount) {
             Mount::Layer(overlay) => overlay,
             _ => Overlay::dropdown(),
         };
-        self.props = self.props.mount(Mount::Layer(overlay.opened_by(opener, Trigger::Manual)));
+        self.props = self.props.mount(Mount::Layer(change(overlay)));
         self
+    }
+
+    /// The field the popup hangs from. The popup closes when the opener is no longer shown.
+    #[must_use]
+    pub fn opened_by(self, opener: &Response) -> Self {
+        self.overlay(|overlay| overlay.opened_by(opener, Trigger::Manual))
     }
 
     /// The caller's `List`, by the id it is shown with: it takes the opener's list keys while the popup is open.

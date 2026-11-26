@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use super::reorder::REORDER_SCOPE;
-use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, Scroll};
+use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, QuietHeader, Scroll};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
 use crate::runtime::env::{AppValues, ArenaId, Scoped, ScrollOwner};
 use crate::style::{ComponentStyle as _, SurfaceKind};
@@ -56,10 +56,15 @@ impl BodyHooks<'_> {
         if matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow) {
             scoped.start_layer();
             let floor = super::placement::overlay_of(props).map_or(0.0, crate::contract::overlay::anchor_floor);
-            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor(floor));
+            // The anchor floors the layer's outer width; its regions have less room after the layer's padding.
+            let horizontal_padding = self.pads(props, &scoped.tokens).x;
+            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor((floor - 2.0 * horizontal_padding).max(0.0)));
         }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
         scoped.enabled &= core.resolved.enabled;
+        if let Some(collection) = props.fallback_collection {
+            scoped.fallback_collection = Some(collection);
+        }
         if let Some(window) = window {
             scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }
@@ -108,9 +113,11 @@ impl BodyHooks<'_> {
         if props.arena {
             scoped.arena = Some(ArenaId::new(id));
         }
-        // The body's flow starts after a rule when the container draws one under its header, or when the container
-        // draws nothing of its own (no header, surface or mount) and itself started after a rule.
-        scoped.after_rule = props.header.is_some_and(|header| header.rule && !header.inline)
+        // The body's flow starts after a rule when the container draws one under its header or its title heads the
+        // body as one would (`QuietHeader::Heads`), or when the container draws nothing of its own (no header, surface
+        // or mount) and itself started after a rule.
+        let heads = scoped.values.get::<QuietHeader>() == QuietHeader::Heads;
+        scoped.after_rule = props.header.is_some_and(|header| (header.rule || (header.heads && heads)) && !header.inline)
             || (props.header.is_none() && props.surface.is_none() && props.mount == Mount::Inline && self.after_rule);
         scoped.flow_body = None;
         scoped.column_row =

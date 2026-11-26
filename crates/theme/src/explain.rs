@@ -257,7 +257,7 @@ fn size_origins(resolved: &Resolved, size: Size, app: &AppSizes) -> Vec<SizeOrig
             _ => continue,
         };
         // A theme's own corner radii win over the app's, so an override that did not take is the set's.
-        let set_by_app = merged.get(path).is_some_and(|o| !path.starts_with("radius.") || *o == value);
+        let set_by_app = AppSizes::override_of(&merged, path).is_some_and(|o| !path.starts_with("radius.") || *o == value);
         let layer = if set_by_app { SizeLayer::App } else { SizeLayer::SizeSet };
         out.push(SizeOrigin { path: path.to_owned(), layer, value, range: (leaf.lo, leaf.hi) });
     }

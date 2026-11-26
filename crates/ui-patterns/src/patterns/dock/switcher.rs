@@ -7,7 +7,8 @@ use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, Sizi
 use crate::display::Divider;
 use crate::docking::{DockWords, WorkspaceCommands};
 use crate::menu::MenuItem;
-use crate::pickers::Select;
+use crate::pickers::{Select, SelectLook};
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Env;
 use craft_behavior::dock::WorkspaceSet;
 use craft_theme::ControlSize;
@@ -41,28 +42,52 @@ impl Outcome for WorkspaceSwitcherOutput {
 #[pattern(probe(WorkspaceSwitcher<'static, u32>))]
 pub struct WorkspaceSwitcher<'a, P> {
     set: &'a WorkspaceSet<P>,
+    /// The header menu's command rows in place of the default ones ([`WorkspaceSwitcher::commands`]).
+    commands: Option<Vec<CommandRef>>,
+    look: SelectLook,
 }
 
 impl<'a, P> WorkspaceSwitcher<'a, P> {
     /// A switcher over `set`.
     pub fn new(set: &'a WorkspaceSet<P>) -> Self {
-        WorkspaceSwitcher { set }
+        WorkspaceSwitcher { set, commands: None, look: SelectLook::Field }
+    }
+
+    /// The header menu's command rows, in place of the default `WorkspaceCommands` rows.
+    pub fn commands(mut self, rows: Vec<CommandRef>) -> Self {
+        self.commands = Some(rows);
+        self
+    }
+
+    /// How the select looks and how wide it is: a field as wide as the widest workspace name by default, or a quiet box
+    /// as wide as the current one (`SelectLook::Quiet`).
+    pub fn look(mut self, look: SelectLook) -> Self {
+        self.look = look;
+        self
     }
 
     /// Shows the switcher and reports the workspace picked.
     pub fn show(self, ui: &mut Ui) -> WorkspaceSwitcherOutput {
-        let set = self.set;
+        let WorkspaceSwitcher { set, commands, look } = self;
         let words = Env::of(ui).words::<DockWords>();
         let entries: Vec<Entry<String>> = set.builtin.iter().chain(&set.saved).map(|w| Entry::new(w.id.clone(), w.name.clone())).collect();
         let shown = Select::new(words.choose_workspace.clone(), Bind::given(set.current.clone()), &entries)
             .size(ControlSize::Sm)
             .sizing(Sizing::Content)
-            .header_menu(|ui, _| {
-                for ran in [WorkspaceCommands::Reset, WorkspaceCommands::New, WorkspaceCommands::Delete, WorkspaceCommands::Lock] {
-                    if ran == WorkspaceCommands::Lock {
-                        Divider::horizontal().show(ui);
+            .look(look)
+            .header_menu(|ui, _| match &commands {
+                Some(rows) => {
+                    for row in rows {
+                        MenuItem::command(row.clone()).show(ui);
                     }
-                    MenuItem::command(ran).show(ui);
+                }
+                None => {
+                    for ran in [WorkspaceCommands::Reset, WorkspaceCommands::New, WorkspaceCommands::Delete, WorkspaceCommands::Lock] {
+                        if ran == WorkspaceCommands::Lock {
+                            Divider::horizontal().show(ui);
+                        }
+                        MenuItem::command(ran).show(ui);
+                    }
                 }
             })
             .show(ui);

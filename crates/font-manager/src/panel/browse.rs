@@ -17,7 +17,7 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Access, ActivateOn, Bind, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Entry,
     ItemOutput, MeasureCx, Name, NoValue, Outcome, PartsCx, Props as _, Role, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    Sizing, clicked,
+    Sizing, WrapWidth, clicked,
 };
 use craft_ui::display::{Badge, Progress, Shade, Spinner, Text};
 use craft_ui::form::{SliderField, SliderFieldLayout};
@@ -64,6 +64,9 @@ craft_ui::words! {
         downloads: "fontsBrowse.downloads" = "Downloads";
         allow_downloads: "fontsBrowse.allowDownloads" = "Allow downloads";
         downloads_hint: "fontsBrowse.downloadsHint" = "From each font's source, only when you install or preview a font.";
+        system_fonts: "fontsBrowse.systemFonts" = "System fonts";
+        craft_apps_only: "fontsBrowse.craftAppsOnly" = "Keep fonts in Craft apps only";
+        craft_apps_only_hint: "fontsBrowse.craftAppsOnlyHint" = "Off: Install also copies fonts to your system's fonts folder, for all apps. Fonts already installed keep their own setting.";
         category: "fontsBrowse.category" = "Category";
         all_categories: "fontsBrowse.allCategories" = "All categories";
         language: "fontsBrowse.language" = "Language";
@@ -103,14 +106,19 @@ craft_ui::words! {
         installing: "fontsBrowse.installing" = "Installing";
         removing: "fontsBrowse.removing" = "Removing";
         downloading: "fontsBrowse.downloading" = "Downloading";
+        updating_system_fonts: "fontsBrowse.updatingSystemFonts" = "Updating system fonts";
         progress: template "fontsBrowse.progress" = "{what} {percent} %";
         working: template "fontsBrowse.working" = "{what}…";
         retry: "fontsBrowse.retry" = "Retry";
         failed_install: "fontsBrowse.failedInstall" = "Couldn't install";
         failed_remove: "fontsBrowse.failedRemove" = "Couldn't remove";
         failed_download: "fontsBrowse.failedDownload" = "Couldn't download";
+        failed_system_fonts: "fontsBrowse.failedSystemFonts" = "Couldn't update system fonts";
         install: "fontsBrowse.install" = "Install";
         install_family: template "fontsBrowse.installFamily" = "Install {family}";
+        install_options: "fontsBrowse.installOptions" = "More install options";
+        install_all_apps: "fontsBrowse.installAllApps" = "Install for all apps";
+        install_craft_apps: "fontsBrowse.installCraftApps" = "Install for Craft apps only";
         preview: "fontsBrowse.preview" = "Preview";
         preview_family: template "fontsBrowse.previewFamily" = "Preview {family}";
         remove: "fontsBrowse.remove" = "Remove";
@@ -173,7 +181,7 @@ impl FontsPanel {
                 TabItem::new(label.clone()).detail(Label::from(format.integer(count as u64)))
             });
             for event in out.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(tab) = keys.into_iter().last()
                 {
                     self.set_tab(tab);
@@ -189,7 +197,7 @@ impl FontsPanel {
 
     pub(crate) fn filters(&mut self, ui: &mut Ui, texts: &Texts<'_>) {
         let browse = texts.browse;
-        Stack::new().scroll(Scroll::vertical()).label(browse.filters.clone()).show(ui, |ui, _| {
+        Stack::new().scroll(Scroll::vertical()).wrap_width(WrapWidth::Column).label(browse.filters.clone()).show(ui, |ui, _| {
             match self.tab {
                 Tab::Catalogue => self.catalogue_filters(ui, texts),
                 Tab::Installed => self.installed_filters(ui, texts),
@@ -203,6 +211,16 @@ impl FontsPanel {
                         let _ = self.set_downloads_allowed(allowed);
                     }
                     Text::new(browse.downloads_hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                });
+            }
+            if self.installer.available_to_all_supported() {
+                Section::fixed(browse.system_fonts.clone()).id_salt("system-fonts").show(ui, |ui, _| {
+                    let mut on = self.craft_apps_only;
+                    Checkbox::new(Bind::bound(&mut on)).label(browse.craft_apps_only.clone()).show(ui);
+                    if on != self.craft_apps_only {
+                        self.set_craft_apps_only(on);
+                    }
+                    Text::new(browse.craft_apps_only_hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                 });
             }
         });
@@ -254,7 +272,7 @@ impl FontsPanel {
                     ListRow::new(if *key == 0 { any.clone() } else { Label::from(label(*key - 1)) })
                 });
             for event in listed.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     self.query.language = key.checked_sub(1);
@@ -320,8 +338,8 @@ impl FontsPanel {
     pub(crate) fn main(&mut self, ui: &mut Ui, texts: &Texts<'_>, folder: &Folder, host: Option<&Arc<Host>>) {
         Stack::new().fill().show(ui, |ui, _| {
             self.toolbar(ui, texts.browse);
-            if let Some(error) = self.notice.clone() {
-                Notice::new(Tone::Bad, Label::from(texts.panel.setting_failed.fill(&[("error", error.as_str())]))).show(ui);
+            if let Some(problem) = &self.notice {
+                Notice::new(Tone::Bad, Label::from(problem.text(texts.panel))).show(ui);
             }
             match self.tab {
                 Tab::Catalogue => {
@@ -397,7 +415,7 @@ impl FontsPanel {
         for event in events {
             match event {
                 CollectionEvent::Activate(i) => self.detail = Some(Detail::Family(i)),
-                CollectionEvent::Item(i, CardEvent::Install) => self.ask(host, Pending::Install(i)),
+                CollectionEvent::Item(i, CardEvent::Install(share)) => self.ask(host, Pending::Install(i, share)),
                 CollectionEvent::Item(i, CardEvent::Preview) => self.ask(host, Pending::Preview(i)),
                 CollectionEvent::Item(i, CardEvent::Retry) => {
                     let retry = index
@@ -508,7 +526,7 @@ impl FontsPanel {
         } else if installed.is_some() {
             CardState::Installed
         } else {
-            CardState::Offer { preview: !self.previewed.contains_key(&key) }
+            CardState::Offer { preview: !self.previewed.contains_key(&key), destinations: self.installer.available_to_all_supported() }
         };
         let (source, curated) = source_label(index, family);
         let meta = [texts.styles(style_count(family)), category_label(texts.panel, family), source.to_owned()].join(" · ");

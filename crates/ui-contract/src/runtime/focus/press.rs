@@ -1,6 +1,7 @@
 //! Focus on press (spec 8.3): the press is classified at the begin hook from last pass's shapes, and the
 //! classified focus move applies at the end hook.
 
+use super::nav::declared_canvas;
 use super::{Act, State, StopKey};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::{pointer, sampler};
@@ -107,8 +108,21 @@ impl State {
         let text_stop = text_rec.as_ref().map(|stop| stop.stop.id);
         let held = !on_focused && text_rec.as_ref().is_some_and(|stop| stop.stop.keys.holds_drafts) && (at.over_focus || self.press.holds(&at.under));
         self.press.held_draft = text_stop.filter(|_| held);
-        let kind = if on_focused || held { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
-        let (owner, part) = winner.map_or((None, None), |winner| (Some(winner.owner), winner.part));
+        // A press no shape wins that egui gives to the widget of a press-only stop (a selection part's text, which egui
+        // selects in) takes focus for that stop, as a press on any stop's shape does.
+        let widget_stop = at.target.filter(|_| winner.is_none()).and_then(|target| self.press_only_stop(target));
+        let kind = if on_focused || held {
+            PressFocus::Keep
+        } else if widget_stop.is_some() {
+            PressFocus::Take
+        } else {
+            classify_press(winner.map(|winner| winner.sense))
+        };
+        let (owner, part) = match (winner, widget_stop) {
+            (Some(winner), _) => (Some(winner.owner), winner.part),
+            (None, Some(rec)) => (Some(rec.stop.id), rec.stop.part),
+            (None, None) => (None, None),
+        };
         let was_text = text_stop.is_some() && kind.commits_draft();
         // A press that takes focus for another component commits too: the page that component switches may remove the
         // field in the same pass, so a later focus loss would never reach it.
@@ -130,10 +144,15 @@ impl State {
         self.find_stop((owner, part)).or_else(|| self.find_stop((owner, None)))
     }
 
-    /// The press's focus move at the end hook; `focused` is egui's focus now. The press moves the framework's focus
-    /// only: when `focused` is an app's own widget (`on_app_widget`), egui's own surrender rule, by the app's
-    /// `surrender_focus_on`, decides whether a press elsewhere takes it; a press a component takes still moves focus
-    /// to the component.
+    /// The press-only stop whose egui widget is `widget`.
+    fn press_only_stop(&self, widget: Id) -> Option<super::StopRec> {
+        self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.press_only && rec.stop.root == widget).cloned()
+    }
+
+    /// The press's focus move at the end hook; `focused` is egui's focus now. A press a component takes moves focus to
+    /// the component, whatever has it. A press nothing takes ends the focus of a component only: it leaves the app's
+    /// document canvas focused (`declared_canvas`), and when `focused` is an app's own widget (`on_app_widget`),
+    /// egui's own surrender rule, by the app's `surrender_focus_on`, decides whether a press elsewhere takes it.
     pub(super) fn apply_press(&mut self, focused: Option<Id>, on_app_widget: bool) -> Vec<Act> {
         let Some(plan) = self.press.plan.take() else { return Vec::new() };
         match plan.kind {
@@ -148,7 +167,12 @@ impl State {
                 None if self.in_trapping_scope() => Vec::new(),
                 None => focused.map(Act::Surrender).into_iter().collect(),
             },
-            PressFocus::Unclaimed if focused == self.press.focus_at_begin && !on_app_widget && !self.in_trapping_scope() => {
+            PressFocus::Unclaimed
+                if focused == self.press.focus_at_begin
+                    && !on_app_widget
+                    && !focused.is_some_and(|id| declared_canvas(&self.stops, id))
+                    && !self.in_trapping_scope() =>
+            {
                 focused.map(Act::Surrender).into_iter().collect()
             }
             _ => Vec::new(),

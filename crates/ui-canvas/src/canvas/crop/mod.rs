@@ -1,6 +1,6 @@
 //! `CropOverlay`: the crop frame of a document, a canvas control (20.6). The frame, its corners and its edges are
-//! parts in the canvas's arena; the outside of the frame turns it and, while Straighten is armed, the whole canvas draws
-//! the straighten line. The value is a [`CropBox`] in document units.
+//! parts in the canvas's arena; the outside of the frame turns it, applies the crop or draws a new frame, and, while
+//! Straighten is armed, the whole canvas draws the straighten line. The value is a [`CropBox`] in document units.
 
 mod gesture;
 mod paint;
@@ -33,8 +33,14 @@ pub use shield::{CropShield, ShieldColor, paint_outside};
 /// A part of the frame: `FRAME.at(part.index())` with the whole frame at 0, the corners at 1 to 4 and the edges at 5
 /// to 8, so the keyboard order is the whole frame and then the corners and the edges clockwise.
 pub(super) const FRAME: PartKey = PartKey::new("frame");
-/// The outside of the frame: a press there turns it.
+/// The outside of the frame with [`CropOutside::Turn`]: a press there turns it.
 const TURN: PartKey = PartKey::new("turn");
+/// The outside of the frame with [`CropOutside::Apply`] (a click applies) or [`CropOutside::NewFrame`] (a drag draws a
+/// new frame).
+const OUTSIDE: PartKey = PartKey::new("outside");
+/// With [`CropOutside::Apply`], the cut-away area between the frame and the area's outline: a press there is taken and
+/// does nothing.
+const CUT: PartKey = PartKey::new("cut");
 /// The whole canvas while Straighten is armed.
 const STRAIGHTEN: PartKey = PartKey::new("straighten");
 
@@ -42,6 +48,9 @@ const STRAIGHTEN: PartKey = PartKey::new("straighten");
 const STRAIGHTEN_MIN: f64 = 3.0;
 /// The step of a Shift turn, in degrees.
 const TURN_STEP: f64 = 15.0;
+/// The smallest side by default, in document units: none beyond the floor of one document unit (`MIN_FRAME`), which
+/// [`CropBox::size_ok`] always applies.
+const MIN_SIDE: f64 = 0.0;
 /// X swaps portrait and landscape.
 const SWAP: Chord = Chord::plain(Key::X);
 
@@ -86,7 +95,7 @@ const GUIDE_FADE: f32 = 0.55;
 /// What the overlay reports beyond the edit.
 #[derive(Clone, Debug, Default)]
 struct Report {
-    apply: bool,
+    apply: Option<CropApply>,
     discard: bool,
     straightened: Option<f64>,
     view: Option<CanvasView>,
@@ -111,12 +120,16 @@ struct Live {
 /// behind it in image mode) and by the keyboard.
 ///
 /// - Pointer: a corner or an edge resizes along the frame's own axes (Shift keeps the proportions, a corner following
-///   the frame's diagonal; Alt resizes about the centre); inside moves; outside turns the frame about its centre (Shift
-///   in steps). Inside the [default frame](CropOverlay::default_frame) a drag draws a new frame (Shift square, Alt from
-///   the centre, Space moves it while it is drawn). A [ratio](CropOverlay::ratio) is held by every gesture. A drag
-///   begins on the first move; a press released without moving changes nothing, and a drag that leaves a side under
-///   one document unit is cancelled. The canvas's snapping ([`canvas_snap`]) applies to draws, moves, resizes and the
-///   Straighten line.
+///   the frame's diagonal; Alt resizes about the centre); inside moves. A press outside does what
+///   [`outside`](CropOverlay::outside) says: [`Turn`](CropOutside::Turn) turns the frame about its centre (Shift in
+///   steps); [`Apply`](CropOutside::Apply) applies the crop on a primary click, while a press in the cut-away
+///   [area](CropOverlay::area) between the frame and its outline is taken and does nothing;
+///   [`NewFrame`](CropOutside::NewFrame) draws a new frame, kept inside the bounds. Inside the
+///   [default frame](CropOverlay::default_frame) a drag draws a new frame (Shift square, Alt from the centre, Space
+///   moves it while it is drawn). A [ratio](CropOverlay::ratio) is held by every gesture. A drag begins on the first
+///   move; a press released without moving changes nothing. A resize stops before a side goes under the
+///   [minimum side](CropOverlay::min_side) (the floor of one document unit always applies), and a drag released with a side under it
+///   is cancelled. The canvas's snapping ([`canvas_snap`]) applies to draws, moves, resizes and the Straighten line.
 /// - Look: until a drag changes the untouched default frame in image mode, the outline is dashed and no shield or
 ///   guide shows. While an image-mode turn runs, a turn grid replaces the chosen guide.
 /// - Keys, on a focused part, on the focused canvas or with nothing focused (the overlay holds the canvas's session,
@@ -172,10 +185,35 @@ pub struct CropOverlay<'a> {
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
+    /// What a press outside the frame does: turns it, applies the crop, or draws a new frame.
+    #[prop]
+    outside: CropOutside,
+    /// With [`CropOutside::Apply`], the quad of what is cropped (a placed picture) in document units, the frame is bounded
+    /// to it: a step that would leave the frame outside it keeps the last frame. It is drawn as a faint outline, and a
+    /// press between it and the frame is taken and does nothing. Without it the bounds serve for the outline.
+    #[prop]
+    area: Option<[Point; 4]>,
+    /// The smallest side, in document units, a resize may leave and a drag may be released with; the floor of one document
+    /// unit (`MIN_FRAME`) always applies.
+    #[prop(quantity = "document units")]
+    min_side: f64,
     /// What the crop is bounded by: the document, or one placed picture's source.
     #[prop]
     scope: CropScope,
     report: Report,
+}
+
+/// What a press outside a crop frame does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CropOutside {
+    /// The press turns the frame.
+    #[default]
+    Turn,
+    /// The press applies the crop.
+    Apply,
+    /// The press draws a new frame.
+    NewFrame,
 }
 
 /// What a crop is of.
@@ -218,6 +256,9 @@ impl<'a> CropOverlay<'a> {
             auto_center: false,
             fills_uncovered: false,
             hidden: false,
+            outside: CropOutside::default(),
+            area: None,
+            min_side: MIN_SIDE,
             scope: CropScope::default(),
             report: Report::default(),
         }
@@ -233,6 +274,8 @@ impl<'a> CropOverlay<'a> {
             image: self.image_mode,
             auto_center: self.auto_center,
             fills_uncovered: self.fills_uncovered,
+            min_side: self.min_side,
+            area: self.area,
             resize_grows: matches!(self.scope, CropScope::Document),
             snap: canvas_snap(env),
             os: env.shell().os,
@@ -270,6 +313,19 @@ impl<'a> CropOverlay<'a> {
     fn shown(&self, value: Option<&CropBox>, view: &CanvasView) -> CropBox {
         value.copied().unwrap_or_else(|| CropBox::upright(self.limit().unwrap_or_else(|| view.visible())))
     }
+
+    /// With [`CropOutside::Apply`], the cut-away area's corners on screen: the area, else the bounds. `None` in the
+    /// other modes, with neither, or when it has no extent on screen.
+    fn cut_area(&self, view: &CanvasView) -> Option<[Pos2; 4]> {
+        if self.outside != CropOutside::Apply {
+            return None;
+        }
+        let corners = self
+            .area
+            .or_else(|| self.bounds.map(|b| [Point::new(b.x0, b.y0), Point::new(b.x1, b.y0), Point::new(b.x1, b.y1), Point::new(b.x0, b.y1)]))?;
+        let q = corners.map(|p| view.to_screen(p));
+        (!degenerate(&q)).then_some(q)
+    }
 }
 
 /// How the overlay maps the document: the canvas's space, or, in a canvas with no view, the shown rect at one to one
@@ -302,6 +358,8 @@ fn frame_part(index: u64) -> Option<BoxPart> {
 enum Grab {
     Part(BoxPart),
     Turn,
+    Outside,
+    Cut,
     Line,
 }
 
@@ -310,6 +368,8 @@ impl Grab {
         match self {
             Grab::Part(part) => (FRAME, Some(part.index())),
             Grab::Turn => (TURN, None),
+            Grab::Outside => (OUTSIDE, None),
+            Grab::Cut => (CUT, None),
             Grab::Line => (STRAIGHTEN, None),
         }
     }
@@ -325,15 +385,9 @@ fn size_row(cx: &Cx<'_, CropOverlay<'_>>, space: &CanvasSpace, (w, h): (f64, f64
     vec![(Label::from(words.crop_width.as_str().to_owned()), text(x, w)), (Label::from(words.crop_height.as_str().to_owned()), text(y, h))]
 }
 
-fn angle_row(cx: &Cx<'_, CropOverlay<'_>>, degrees: f64) -> Vec<(Label, String)> {
-    let words = cx.words::<CanvasWords>();
-    let number = cx.env.units().number_ungrouped(degrees, 1..=1);
-    vec![(Label::from(words.crop_angle.as_str().to_owned()), format!("{number}°"))]
-}
-
 impl CropOverlay<'_> {
-    /// Starts the drag of `grab` pressed at screen point `origin`.
-    fn begin(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, grab: Grab, origin: Pos2, mods: Mods) -> Drag {
+    /// Starts the drag of `grab` pressed at screen point `origin`; `None` for a press that is taken and moves nothing.
+    fn begin(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, grab: Grab, origin: Pos2, mods: Mods) -> Option<Drag> {
         let view = space.view;
         let from = view.to_doc(origin);
         let kind = match grab {
@@ -342,6 +396,9 @@ impl CropOverlay<'_> {
                 Kind::Line { from, to: from }
             }
             Grab::Turn => Kind::Turn { grab: gesture::grab(frame, from) },
+            Grab::Outside if self.outside == CropOutside::NewFrame => Kind::Draw { anchor: from, cur: from, last: from },
+            // The cut-away area takes a press and does nothing; the outside of an Apply crop senses no drag.
+            Grab::Outside | Grab::Cut => return None,
             Grab::Part(BoxPart::Inside) if !self.draws() => Kind::Move,
             Grab::Part(BoxPart::Inside) => Kind::Draw { anchor: from, cur: from, last: from },
             Grab::Part(part) => Kind::Resize(part),
@@ -349,7 +406,7 @@ impl CropOverlay<'_> {
         if !matches!(kind, Kind::Line { .. }) {
             cx.begin();
         }
-        Drag { kind, at_press: *frame, from, press_view: self.image_mode.then_some(view), last: *frame, changed: false, pointer: origin }
+        Some(Drag { kind, at_press: *frame, from, press_view: self.image_mode.then_some(view), last: *frame, changed: false, pointer: origin })
     }
 
     /// One step of the drag with the pointer at screen point `pos`.
@@ -361,11 +418,12 @@ impl CropOverlay<'_> {
             *to = rules.snap_screen(&view, pos, mods);
             self.report.dragging = true;
             if let Some(degrees) = gesture::line_degrees(*from, *to) {
-                readout(cx, pos, &angle_row(cx, degrees));
+                readout(cx, pos, &readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), degrees));
             }
             return;
         }
-        let held_space = crate::runtime::keys::down(&cx.ctx).contains(&Key::Space);
+        // PLAN: pl.F1's `held` is typed `Vec<egui::Key>` at the stub; shortcuts-w2 must return `craft_keymap::Key` for this compare.
+        let held_space = crate::runtime::keys::held(&cx.ctx).contains(&Key::Space);
         let to = drag.press_view.as_ref().unwrap_or(&view).to_doc(pos);
         let (to, lines) = rules.snapped(drag, &view, to, mods, held_space);
         self.report.snapped = lines;
@@ -388,7 +446,7 @@ impl CropOverlay<'_> {
             _ => {}
         }
         let rows = match drag.kind {
-            Kind::Turn { .. } => angle_row(cx, gesture::turn_degrees(&drag.last, self.image_mode)),
+            Kind::Turn { .. } => readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), gesture::turn_degrees(&drag.last, self.image_mode)),
             Kind::Draw { .. } | Kind::Resize(_) => drag.last.crop_size().map(|size| size_row(cx, space, size)).unwrap_or_default(),
             _ => Vec::new(),
         };
@@ -403,7 +461,7 @@ impl CropOverlay<'_> {
             }
             return;
         }
-        if drag.last.is_finite() && drag.last.size_ok() {
+        if drag.last.is_finite() && drag.last.size_ok(self.min_side) {
             if let Some(view) = gesture::centred(&drag, self.auto_center, &space.view, &drag.last) {
                 self.report.view = Some(view);
             }
@@ -426,7 +484,7 @@ impl CropOverlay<'_> {
             return;
         }
         if cx.intents().take(Intent::Submit) {
-            self.report.apply = true;
+            self.report.apply = Some(CropApply::Enter);
         }
         // Escape drops an armed Straighten first; else it discards a started crop. The untouched default frame has
         // nothing to discard and leaves Escape to the window.
@@ -468,16 +526,29 @@ impl CropOverlay<'_> {
     }
 }
 
+/// Why the overlay asks to apply the crop ([`CropOverlayOutput::apply`]): a host that lets the selection go on a click
+/// away keeps it for the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CropApply {
+    /// Enter, the overlay's Submit key.
+    Enter,
+    /// A double click inside a drawn frame.
+    DoubleClick,
+    /// A primary click outside the frame and its cut-away area, with [`CropOutside::Apply`].
+    Away,
+}
+
 /// What the overlay reports.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CropOverlayOutput {
-    /// The edit of the frame: a drag is one `Begin` to `Commit` (a `Cancel` on Escape or when a side ends under one
-    /// document unit); a key is a `Set`.
+    /// The edit of the frame: a drag is one `Begin` to `Commit` (a `Cancel` on Escape or when a side ends under the
+    /// minimum side); a key is a `Set`.
     pub edit: EditResponse<CropBox>,
-    /// Apply the crop: Enter (see the overlay's keys), or a double click inside a drawn frame (not a handle, not the
-    /// default frame).
-    pub apply: bool,
+    /// Apply the crop, and why: Enter (see the overlay's keys), a double click inside a drawn frame (not a handle, not
+    /// the default frame), or with [`CropOutside::Apply`] a primary click outside the frame and its cut-away area.
+    pub apply: Option<CropApply>,
     /// Close the frame without applying it: Escape with no drag.
     pub discard: bool,
     /// A released Straighten line's frame angle; the line itself sends no edit.
@@ -557,8 +628,8 @@ impl Component for CropOverlay<'_> {
         Some(self.crop.reborrow())
     }
 
-    /// The frame, its corners and its edges as one roving group in keyboard order, the outside that turns it, and the
-    /// Straighten surface while that is armed.
+    /// The frame, its corners and its edges as one roving group in keyboard order, the outside as [`CropOutside`]
+    /// says (with `Apply`, the cut-away area above it), and the Straighten surface while that is armed.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let space = space_of(&cx.env, rect);
         let view = space.view;
@@ -586,7 +657,7 @@ impl Component for CropOverlay<'_> {
         let (lu, lv) = ((q[1] - q[0]).length(), (q[3] - q[0]).length());
         // A small frame keeps a movable middle: the reach inside is at most a quarter of the shortest side.
         let reach = cx.style.reach.min(lu.min(lv) / 4.0);
-        let body = if self.default_frame { CursorIcon::Crosshair } else { CursorIcon::Move };
+        let body = if self.default_frame { CursorIcon::Crosshair } else { CursorIcon::Grab };
         cx.part(FRAME.at(BoxPart::Inside.index()), HitShape::Polygon(q.to_vec()))
             .sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
             .priority(HitPriority::BODY)
@@ -620,12 +691,38 @@ impl Component for CropOverlay<'_> {
             }
             let _ = declared;
         }
-        // Outside a picture's frame there is no turn part, so a press there reaches the picture beneath.
-        if self.turns() {
-            cx.part(TURN, HitShape::Rect(rect))
-                .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
-                .priority(HitPriority::new(HitLevel::Background, u8::MAX))
-                .pointer_only("the options bar's angle field sets the frame's angle");
+        let outside = HitPriority::new(HitLevel::Background, u8::MAX);
+        match self.outside {
+            // Outside a picture's frame there is no turn part, so a press there reaches the picture beneath.
+            CropOutside::Turn => {
+                if self.turns() {
+                    cx.part(TURN, HitShape::Rect(rect))
+                        .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
+                        .priority(outside)
+                        .pointer_only("the options bar's angle field sets the frame's angle");
+                }
+            }
+            CropOutside::Apply => {
+                cx.part(OUTSIDE, HitShape::Rect(rect))
+                    .sense(Sense::CLICK | Sense::CONTEXT_CLICK)
+                    .priority(HitPriority::new(HitLevel::Background, u8::MAX - 1))
+                    .pointer_only("Enter applies the crop");
+                // One step stronger than the outside, below the frame's parts: a press between the frame and the
+                // area's outline lands here.
+                if let Some(cut) = self.cut_area(&view) {
+                    cx.part(CUT, HitShape::Polygon(cut.to_vec()))
+                        .sense(Sense::DRAG | Sense::CLICK)
+                        .priority(outside)
+                        .pointer_only("a press on the cut-away area does nothing, so it has no keyboard path");
+                }
+            }
+            CropOutside::NewFrame => {
+                cx.part(OUTSIDE, HitShape::Rect(rect))
+                    .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
+                    .priority(outside)
+                    .cursor(CursorIcon::Crosshair)
+                    .pointer_only("the options bar's size fields set the frame");
+            }
         }
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
     }
@@ -638,7 +735,8 @@ impl Component for CropOverlay<'_> {
             return;
         }
         let mut live = cx.memory::<Live>().clone();
-        let grabs = [Grab::Line, Grab::Turn].into_iter().chain((0..=8).filter_map(frame_part).map(Grab::Part)).collect::<Vec<_>>();
+        let grabs =
+            [Grab::Line, Grab::Turn, Grab::Outside, Grab::Cut].into_iter().chain((0..=8).filter_map(frame_part).map(Grab::Part)).collect::<Vec<_>>();
         for grab in grabs {
             let (key, index) = grab.key();
             let part = match index {
@@ -651,13 +749,14 @@ impl Component for CropOverlay<'_> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     if grab == Grab::Part(BoxPart::Inside) && press.double_pressed() && !self.draws() {
-                        self.report.apply = true;
+                        self.report.apply = Some(CropApply::DoubleClick);
                     }
                 }
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
-                    let mut drag = self.begin(cx, &space, &frame, grab, start.origin, mods);
-                    self.step(cx, &space, &mut drag, pos, mods);
-                    live.drag = Some(drag);
+                    if let Some(mut drag) = self.begin(cx, &space, &frame, grab, start.origin, mods) {
+                        self.step(cx, &space, &mut drag, pos, mods);
+                        live.drag = Some(drag);
+                    }
                 }
                 PressPhase::Drag { pos, .. } => {
                     if let Some(mut drag) = live.drag.take() {
@@ -672,6 +771,9 @@ impl Component for CropOverlay<'_> {
                         self.report.context = Some((at, press.mods));
                     }
                     self.report.straighten_ended |= grab == Grab::Line && start.button == PointerButton::Primary;
+                    if click && grab == Grab::Outside && self.outside == CropOutside::Apply && start.button == PointerButton::Primary {
+                        self.report.apply = Some(CropApply::Away);
+                    }
                     if !click && let Some(drag) = live.drag.take() {
                         self.finish(cx, &space, drag);
                     }
@@ -695,8 +797,11 @@ impl Component for CropOverlay<'_> {
         self.report.hovered = (0..=8)
             .filter_map(frame_part)
             .find(|part| cx.hover_pos(craft_behavior::PartRef { key: FRAME, index: Some(part.index()) }).is_some())
-            .or_else(|| cx.hover_pos(TURN).map(|_| BoxPart::Outside));
+            .or_else(|| [TURN, OUTSIDE].into_iter().find_map(|key| cx.hover_pos(key)).map(|_| BoxPart::Outside));
         self.run_keys(cx, &space, &frame, live.drag.is_some());
+        if live.drag.as_ref().is_some_and(|drag| matches!(drag.kind, Kind::Move)) {
+            cx.cursor(CursorIcon::Grabbing, CursorPriority::Drag);
+        }
         self.report.scrolls_at = live.drag.as_ref().and_then(|drag| drag.scrolls_at(self.image_mode, self.auto_center));
         *cx.memory::<Live>() = live;
     }

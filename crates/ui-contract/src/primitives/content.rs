@@ -7,12 +7,13 @@ use crate::fonts::{FontRef, SEMIBOLD, stack_facts};
 use crate::runtime::egui::text_layout;
 use crate::runtime::env::Env;
 use crate::style::{DataColor, Ink, StyleCx, UiTokens, ink_color};
-use craft_i18n::Direction;
+use craft_i18n::{Direction, Format, WordSet};
 use egui::epaint::text::{FontId, TextDirection};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, Context, FontFamily, Painter, Stroke};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 /// The weight of a regular run.
 const REGULAR: u16 = 400;
@@ -108,6 +109,18 @@ impl<'a> ContentPainterCx<'a> {
     /// laid out by the call `TextRun::layout` uses.
     pub fn layout(&self, text: &DocText<'_>) -> TextLayout {
         text.layout(self.painter.ctx(), self.tokens, Direction::Ltr)
+    }
+}
+
+impl ContentPainterCx<'_> {
+    /// The word set `L` in the language of the scope the painter paints for.
+    pub fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L> {
+        self.env.words()
+    }
+
+    /// How the scope the painter paints for writes numbers.
+    pub fn format(&self) -> &Format {
+        self.env.format()
     }
 }
 

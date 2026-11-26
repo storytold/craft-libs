@@ -14,6 +14,11 @@
 //! The registry keeps faces up to [`MAX_DOCUMENT_FACE_BYTES`] of font files, counted with the files egui still holds
 //! for faces taken out; past it the faces drawn longest ago go, and faces drawn in the last frame always stay. A face a
 //! settled view shows by replaying its last run counts as drawn: the replay marks it (`runtime::replay::journal`).
+//!
+//! A face may name a chain of other document faces ([`FaceBytes::chain`]): a font split over several subsets (Word
+//! embeds one subset per run of characters) draws each character from the first subset that has it, before the
+//! interface family. egui asks for a family's faces once, so a sibling that lands after the face it follows makes
+//! egui's fonts again, and drawing a face marks its chain drawn, so the siblings stay while the face does.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -39,7 +44,8 @@ pub const MAX_DOCUMENT_FACE_BYTES: usize = 512 << 20;
 /// budget of new faces, not for each face that lands past the budget.
 const LOW_MARK_DIVISOR: usize = 2;
 
-/// The bytes of a face, its index in a collection and its variation coordinates (axis tag, value).
+/// The bytes of a face, its index in a collection, its variation coordinates (axis tag, value) and the faces that
+/// draw what it lacks.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct FaceBytes {
@@ -49,12 +55,30 @@ pub struct FaceBytes {
     pub index: u32,
     /// The variation coordinates the face is drawn at.
     pub coords: Vec<([u8; 4], f32)>,
+    /// The keys of the document faces that draw the characters this face has no glyph for, in order, before the
+    /// interface family.
+    pub chain: Vec<String>,
 }
 
 impl FaceBytes {
-    /// Face `index` of the file `bytes`, at its default coordinates.
+    /// Face `index` of the file `bytes`, at its default coordinates, with no chain.
     pub fn new(bytes: Arc<[u8]>, index: u32) -> Self {
-        FaceBytes { bytes, index, coords: Vec::new() }
+        FaceBytes { bytes, index, coords: Vec::new(), chain: Vec::new() }
+    }
+
+    /// The face followed by the document faces of `keys`, in order, for the characters it has no glyph for: the
+    /// sibling subsets of a font split over several (Word). Each key is a face asked for with `document_face` on its
+    /// own; one not registered, unavailable or taken out is skipped, and the face's own key is ignored. Drawing the
+    /// face marks its chain drawn too, so a sibling the face relies on stays while the face does.
+    #[must_use]
+    pub fn chain(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.chain = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The family names of the chain's faces (each drawn alone).
+    fn chain_families(&self) -> Vec<String> {
+        self.chain.iter().map(|key| Kind::Alone.family_name(key)).collect()
     }
 
     /// The face drawn at `coords`.
@@ -136,6 +160,27 @@ impl Default for Registry {
 }
 
 impl Registry {
+    /// Marks the kept face `name` and the faces of its chain drawn in this frame.
+    fn mark_drawn(&mut self, name: &str) {
+        let now = self.frame;
+        let Some(face) = self.faces.get_mut(name) else { return };
+        face.used = now;
+        for link in face.face.chain_families() {
+            if let Some(linked) = self.faces.get_mut(&link) {
+                linked.used = now;
+            }
+        }
+    }
+
+    /// Whether a face of `landed` is in the chain of a face kept from before: egui may have asked for that face's
+    /// family already, without the sibling.
+    fn links_late(&self, landed: &[String]) -> bool {
+        self.faces
+            .iter()
+            .filter(|(name, face)| !face.face.chain.is_empty() && !landed.contains(name))
+            .any(|(_, face)| face.face.chain_families().iter().any(|link| landed.contains(link)))
+    }
+
     /// When the kept and withdrawn files pass the budget, takes out the faces drawn longest ago (never one the last
     /// frame drew) down to the low mark, and returns their names and whether egui's fonts are made again to free the
     /// withdrawn files.
@@ -208,7 +253,7 @@ fn queue_of(ctx: &Context, registry: &mut Registry) -> Arc<JobQueue<String, Opti
     let wake_ctx = ctx.clone();
     let wake = Wake::new(move || repaint::request(&wake_ctx));
     let lanes = QueueOptions::default_lanes();
-    let queue = Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes, name: "craft-document-faces" }));
+    let queue = Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes, name: "craft-document-faces", ..QueueOptions::default() }));
     registry.queue = Some(Queue { lanes, queue: Arc::clone(&queue) });
     queue
 }
@@ -255,12 +300,14 @@ fn begin_pass(ctx: &Context) {
                 }
             }
         }
+        let served: Vec<String> = landed.iter().filter(|(_, face)| face.is_some()).map(|(name, _)| name.clone()).collect();
+        let late = registry.links_late(&served);
         let (gone, rebuild) = registry.evict(now);
-        (landed, gone, rebuild)
+        (landed, gone, rebuild || late)
     });
     for (name, face) in landed {
         if let Some(face) = face {
-            egui_fonts::serve_face(ctx, &FontRef::named(&name), face.data(), false);
+            egui_fonts::serve_face(ctx, &FontRef::named(&name), face.data(), false, face.chain_families());
         }
     }
     if !gone.is_empty() {
@@ -273,12 +320,7 @@ fn begin_pass(ctx: &Context) {
 
 /// Marks the kept face `name` drawn in this frame: a replay's journal entry.
 fn mark_drawn(ctx: &Context, name: &str) {
-    memory::with::<Registry, _>(ctx, |registry| {
-        let now = registry.frame;
-        if let Some(face) = registry.faces.get_mut(name) {
-            face.used = now;
-        }
-    });
+    memory::with::<Registry, _>(ctx, |registry| registry.mark_drawn(name));
 }
 
 /// Sets the budget of `ctx`'s document faces to `bytes` in place of [`MAX_DOCUMENT_FACE_BYTES`], so a trial reaches
@@ -355,12 +397,12 @@ impl DocumentFaces {
                     memory::with::<Registry, _>(ctx, |registry| registry.failed.insert(name));
                     return FaceState::Unavailable;
                 };
-                let data = face.data();
+                let (data, chain) = (face.data(), face.chain_families());
                 memory::with::<Registry, _>(ctx, |registry| {
                     let used = registry.frame;
                     registry.faces.insert(name.clone(), Registered { face, used });
                 });
-                if egui_fonts::serve_face(ctx, &FontRef::named(&name), data, true) {
+                if egui_fonts::serve_face(ctx, &FontRef::named(&name), data, true, chain) {
                     FaceState::Ready(FontRef::named(&name))
                 } else {
                     frame::request_repaint(ctx);
@@ -384,8 +426,8 @@ impl DocumentFaces {
             let now = registry.frame;
             if registry.failed.contains(name) {
                 Known::Failed
-            } else if let Some(face) = registry.faces.get_mut(name) {
-                face.used = now;
+            } else if registry.faces.contains_key(name) {
+                registry.mark_drawn(name);
                 Known::Ready
             } else if let Some(asked) = registry.loading.get_mut(name) {
                 *asked = now;

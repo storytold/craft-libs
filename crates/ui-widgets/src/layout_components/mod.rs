@@ -3,7 +3,7 @@
 
 use crate::contract::{
     Access, BodyCx, Bracket, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
-    LeastWidth, Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
+    LeastWidth, Pad, PadEdges, Role, Scroll, Sizing, ThemeScope, WrapWidth,
 };
 use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
@@ -95,6 +95,12 @@ macro_rules! layout_component {
             /// The padding tier around the children.
             pub fn pad(mut self, pad: Pad) -> Self {
                 self.props = self.props.pad(pad);
+                self
+            }
+
+            /// The edges the padding tier applies to (every edge by default).
+            pub fn pad_edges(mut self, edges: PadEdges) -> Self {
+                self.props = self.props.pad_edges(edges);
                 self
             }
 
@@ -201,14 +207,14 @@ layout_component!(
     /// a collection that fills it.
     Stack,
     StackStyleKey,
-    [command_scope, surface],
+    [command_scope, surface, fallback_collection],
     <'a> { header: Option<RegionFn<'a>>, footer: Option<RegionFn<'a>> }
 );
 layout_component!(
     /// Children side by side.
     Row,
     RowStyleKey,
-    []
+    [fit_rank, fallback_collection]
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
@@ -219,7 +225,7 @@ layout_component!(
     /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
-    []
+    [fallback_collection]
 );
 
 impl<'a> Stack<'a> {
