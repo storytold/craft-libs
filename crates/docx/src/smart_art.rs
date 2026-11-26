@@ -535,7 +535,10 @@ fn venn(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         let (tx, ty) = if n == 1 { (x, y) } else { polar(x, y, r * 0.35, deg) };
         let (bw, bh) = (r * 1.1, r * 0.8);
         let b = [tx - bw / 2.0, ty - bh / 2.0, bw, bh];
-        let mut s = Sh::node("rect", b, spec.colors.accent(j)).for_item(spec, i, true).text_box(b);
+        // The circle outline above owns hit testing and bounding box for item `i`; this invisible
+        // text overlay only draws the text so its corners outside the circle cannot register hits.
+        let mut s = Sh::node("rect", b, spec.colors.accent(j)).text_box(b);
+        s.text = paras(spec, i, true);
         s.fill = Paint::None;
         s.line = Paint::None;
         s.dark_text = true;
@@ -1347,10 +1350,16 @@ mod tests {
     fn a_venn_circle_is_its_items_shape() {
         // The circle is the item's shape, not the small invisible text box drawn over it.
         let mut g = SmartArtSpec::sample(SmartArtLayout::Venn);
+        assert_eq!(g.items.len(), 3);
         for i in 0..g.items.len() {
             let b = smart_art_item_box(&g, 432.0, 252.0, i).unwrap();
             assert_eq!(b[2], b[3], "item {i} is outlined by its circle: {b:?}");
         }
+        // A corner of item 1's invisible text rectangle that protrudes outside all three circles
+        // must not register a hit on item 1.
+        let [x1, y1, d1, _] = smart_art_item_box(&g, 432.0, 252.0, 1).unwrap();
+        let r = d1 / 2.0;
+        assert_eq!(smart_art_item_at(&g, 432.0, 252.0, x1 + r + 0.84 * r, y1 + r + 0.56 * r), None);
         g.items.truncate(1);
         let [x, y, w, h] = smart_art_item_box(&g, 432.0, 252.0, 0).unwrap();
         // Inside the circle, above its text.
