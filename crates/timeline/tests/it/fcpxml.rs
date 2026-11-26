@@ -954,11 +954,8 @@ fn deferred_audio_replay_updates_ordinary_video_partners() {
     // No successful replay is available to clear this pair: either there is no pending
     // child, or the pending child becomes video-only when rebuilt.
     for silent_child in [false, true] {
-        let pending = if silent_child {
-            r#"<ref-clip ref="m63" name="Silent child" lane="-1" offset="6s" duration="1s" srcEnable="audio"/>"#
-        } else {
-            ""
-        };
+        let pending =
+            if silent_child { r#"<ref-clip ref="m63" name="Silent child" lane="-1" offset="6s" duration="1s" srcEnable="audio"/>"# } else { "" };
         let refs = format!(
             r#"<gap duration="10s">
               <asset-clip ref="av" name="Occupier" lane="-256" offset="0s" duration="5s" srcEnable="audio"/>

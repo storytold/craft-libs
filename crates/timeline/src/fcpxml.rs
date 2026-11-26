@@ -24,8 +24,8 @@ use crate::build::{
     kind_from_ext, param, param_modified, scaled, set_param, settings_for, standard_effects, transition_effect, transition_name,
 };
 use crate::interchange::{
-    BinId, Catalog, ClipId, Interpolation, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaKind, Param, ParamValue, Project, Sequence,
-    TrackItem, TrackKind, Transition, TransitionAlign, TransitionId, Vec2,
+    BinId, Catalog, ClipId, Interpolation, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaKind, Param, ParamValue, Project,
+    Sequence, TrackItem, TrackKind, Transition, TransitionAlign, TransitionId, Vec2,
 };
 use crate::path::{file_name, path_to_file_url, resolve_path, resolve_url};
 use crate::rates::FrameRate;
@@ -517,12 +517,8 @@ impl<'a> Imp<'a, '_, '_> {
         for (parent, state) in parents {
             // Some audio never reaches a successful replay (a silent child, refused
             // budget, or no deferred child at all). Its picture must not retain a link.
-            let unplaced_links: HashMap<_, _> = state
-                .unplaced
-                .iter()
-                .filter_map(|a| state.paired.get(&a.id))
-                .filter_map(|(video, link)| link.map(|link| (*video, link)))
-                .collect();
+            let unplaced_links: HashMap<_, _> =
+                state.unplaced.iter().filter_map(|a| state.paired.get(&a.id)).filter_map(|(video, link)| link.map(|link| (*video, link))).collect();
             if !unplaced_links.is_empty()
                 && let Some(seq) = self.b.p.sequence_mut(*parent)
             {
@@ -541,23 +537,11 @@ impl<'a> Imp<'a, '_, '_> {
             if state.diagnostics.is_empty() {
                 continue;
             }
-            let placed: HashSet<_> = self
-                .b
-                .p
-                .sequence(*parent)
-                .into_iter()
-                .flat_map(|s| &s.audio_tracks)
-                .flat_map(|t| &t.items)
-                .map(|a| a.id)
-                .collect();
+            let placed: HashSet<_> =
+                self.b.p.sequence(*parent).into_iter().flat_map(|s| &s.audio_tracks).flat_map(|t| &t.items).map(|a| a.id).collect();
             // A later replay can displace audio again. Report adjustments only for the
             // final placed clips, once, in their original encounter order.
-            for element in state
-                .order
-                .iter()
-                .filter(|(id, _)| placed.contains(id))
-                .filter_map(|(id, _)| state.diagnostics.get(id))
-            {
+            for element in state.order.iter().filter(|(id, _)| placed.contains(id)).filter_map(|(id, _)| state.diagnostics.get(id)) {
                 report_audio_adjustments(*element, &self.effects, self.b.catalog, self.report, self.report_limit);
             }
         }
