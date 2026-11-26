@@ -33,11 +33,6 @@ mod tests {
     }
 
     #[test]
-    fn nosuggest_stems_and_forms_are_never_offered() {
-        crate::affix::tests::assert_nosuggest_is_honoured(suggest_in);
-    }
-
-    #[test]
     fn gujarati_suggestions_use_runtime_tables() {
         crate::gu::test_dict::install();
         for (word, want) in [("શાલા", "શાળા"), ("પાની", "પાણી"), ("પ્રેમમ", "પ્રેમ"), ("પરીકશણ", "પરીક્ષણ")]

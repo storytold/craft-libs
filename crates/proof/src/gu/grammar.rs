@@ -7,6 +7,7 @@ fn issue(start: usize, end: usize, message: String, suggestions: Vec<String>) ->
     Issue { start, end, kind: IssueKind::Grammar, message, suggestions, lang: ProofLang::Gu }
 }
 
+/// Checks `text` for repeated words and spacing problems, with Gujarati messages.
 pub fn check(text: &str) -> Vec<Issue> {
     let mut issues = Vec::new();
     repeated_words(text, &words(text), &mut issues);

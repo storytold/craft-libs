@@ -94,9 +94,41 @@ pub fn write_hpgl2(pens: &[Pen], paths_per_pen: &[Vec<Vec<(i64, i64)>>]) -> Vec<
     out
 }
 
+/// HP-GL: `IN;`, each pen's paths as `PU` and `PD`, `PU;SP0;`.
+///
+/// The index of each path group plus one is its pen number; empty groups do not
+/// renumber later pens. The caller owns coordinate and output-size limits.
+/// The original classic serializer is from dotCooCoo (VectorCraft 987dd18a).
+pub fn write_hpgl(by_pen: &[Vec<Vec<(i64, i64)>>]) -> Vec<u8> {
+    let mut s = String::from("IN;");
+    for (i, paths) in by_pen.iter().enumerate().filter(|(_, p)| !p.is_empty()) {
+        s.push_str(&format!("PU;SP{};", i + 1));
+        for path in paths {
+            let Some(((x, y), rest)) = path.split_first() else { continue };
+            s.push_str(&format!("PU{x},{y};PD"));
+            for (k, (x, y)) in rest.iter().enumerate() {
+                if k > 0 {
+                    s.push(',');
+                }
+                s.push_str(&format!("{x},{y}"));
+            }
+            s.push(';');
+        }
+    }
+    s.push_str("PU;SP0;");
+    s.into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classic_hpgl_keeps_pen_ordinals_and_path_bytes() {
+        assert_eq!(write_hpgl(&[]), b"IN;PU;SP0;");
+        let paths = vec![vec![vec![(0, 0), (9, -3), (5, 1)]], vec![], vec![vec![(4, 1), (0, 2)], vec![(5, -6), (7, 8)]]];
+        assert_eq!(write_hpgl(&paths), b"IN;PU;SP1;PU0,0;PD9,-3,5,1;PU;SP3;PU4,1;PD0,2;PU5,-6;PD7,8;PU;SP0;");
+    }
 
     #[test]
     fn pe_numbers_are_raw_bytes_and_paths_lift_the_pen() {
