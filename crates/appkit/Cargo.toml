@@ -1,0 +1,30 @@
+[package]
+name = "craft-appkit"
+description = "The macOS menu-tracking observers that need `unsafe`, behind a safe API, so no other crate allows `unsafe`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# `NSMenuDidBeginTrackingNotification` and `NSMenuDidEndTrackingNotification`, observed through
+# `NSNotificationCenter` with a block.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSMenu"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
+
+# The workspace table with `unsafe_code` at `deny`: `lib.rs` allows it for this crate's FFI calls, and design-lint's
+# `contract/unsafe-allow` rule names this crate's source as one of the places that may. Cargo cannot override one
+# workspace lint.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"

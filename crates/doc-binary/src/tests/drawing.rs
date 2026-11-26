@@ -147,6 +147,37 @@ fn floating_picture_from_the_blip_store_keeps_position_and_wrap() {
     assert_eq!(doc.media.get(media).map(|b| b.as_slice()), Some(png.as_slice()));
 }
 
+/// Layout in table cell is `fLayoutInCell` (bit 15) of the Group Shape Boolean Properties
+/// (0x03BF), valid when `fUsefLayoutInCell` (bit 31) is set; otherwise it's on, its default
+/// ([MS-ODRAW] §2.3.4.44). Off, the shape is placed outside the cell it is anchored in.
+#[test]
+fn layout_in_table_cell_off_places_the_shape_outside_its_cell() {
+    let png = tiny_png();
+    for (bools, outside) in [
+        (None, false),
+        (Some(0x8000_0000), true),
+        // fAllowOverlap and its use bit set as well, as Word writes them.
+        (Some(0x8200_0200), true),
+        (Some(0x8000_8000), false),
+        // The flag off but its use bit clear: the default, on.
+        (Some(0x0000_0000), false),
+        (Some(0x0200_0200), false),
+    ] {
+        let mut props = vec![(0x0104, 1)];
+        props.extend(bools.map(|b| (0x03BF, b)));
+        let pic = sp(&[fsp(75, 1025, 0xA00), fopt(&props, &[])]);
+        let art = art_content(&[fbse_png(&png)], &[pic]);
+        let spas = plc(&[1, 3], &spa(1025, [1440, 720, 4320, 2160], spa_flags(2, 2, 1, false)));
+        let text = "A\u{8}B\r";
+        let ccp = text.chars().count() as u32;
+        let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+        let doc = read(&struct_doc(&spec)).expect("opens");
+        let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+        let Some(InlineObject::Image { float, .. }) = p0.objects.first() else { panic!("no image: {:?}", p0.objects) };
+        assert_eq!((float.outside_cell, float.wrap), (outside, Wrap::TopAndBottom), "{bools:?}");
+    }
+}
+
 #[test]
 fn shapes_keep_kind_colours_wrap_and_text_box_text() {
     // A red ellipse with a 2 pt blue outline behind the text, and an unfilled text box.

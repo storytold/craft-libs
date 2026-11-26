@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+kurbo = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 

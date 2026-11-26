@@ -530,9 +530,9 @@ impl super::Writer<'_> {
                 }
             }
             "wp:effectExtent" => {
-                // Word's effect extent also covers a rotated object's overhang (its rotated bounds),
+                // Word's effect extent also covers a rotated object's overhang (`Float::effect_spin_pad`),
                 // unless the file it came from kept none.
-                let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(w, h) };
+                let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.effect_spin_pad(w, h) };
                 let [el, et, er, eb] = float.effect_extent();
                 let ext = [el + px, et + py, er + px, eb + py].map(emu);
                 e.attrs.retain(|(k, _)| !matches!(k.as_str(), "l" | "t" | "r" | "b"));
