@@ -9,7 +9,7 @@ pub use label::{Label, Message, Word};
 #[doc(hidden)]
 pub use shell::ShellEntry;
 pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
-pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
+pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units, ZoomPrecision};
 
 use crate::runtime::commands::CommandChain;
 use crate::runtime::egui::memory::{self, FastMap};
@@ -669,6 +669,7 @@ impl Env {
     /// The scope's number format and unit words, to read and write numbers with their unit.
     pub fn units(&self) -> Units {
         Units::new(self.format.clone(), self.words::<UnitWords>(), self.words.clone(), self.values.get::<PointSize>())
+            .with_zoom_precision(self.values.get::<ZoomPrecision>())
     }
 
     /// How long ago `seconds` was, in the scope's language and digits: "Just now", "3 minutes ago", "Yesterday".

@@ -4122,6 +4122,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::WordTemplate`: re-export of `craft_i18n::WordTemplate` (outside these crates).
 - `craft_ui::runtime::env::Words`: re-export of `craft_i18n::Words` (outside these crates).
 - `craft_ui::runtime::env::WordsOverride`: `pub enum WordsOverride { Replace(Arc<Words>), Overlay(WordRows) }`. How a scope changes the built-in text: the only override path for words.
+- `craft_ui::runtime::env::ZoomPrecision`: `pub enum ZoomPrecision { Fractional, Whole }`. How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
 - `craft_ui::runtime::env::in_room`: `pub fn in_room<R>(ui: &mut Ui, rect: Rect, body: impl FnOnce(&mut Ui) -> R) -> R`. Runs `body` in a child `Ui` held to `rect` and clipped to it, as a layout room of its own: the flow grid, content
 - `craft_ui::runtime::env::system_appearance`: `pub fn system_appearance(ctx: &Context) -> SystemState`. What the OS reports on `ctx` now: the host's reader (`InstallSpec::system`), with the colour scheme egui's
 - `craft_ui::runtime::env::system_text_scale`: `pub fn system_text_scale(ctx: &Context) -> Option<f32>`. The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
