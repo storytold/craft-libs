@@ -41,6 +41,6 @@ assert!(Records::new(&fopt[..5]).next().is_none());
 
 All three readers read BLIPs, property tables and drawings with these rules and limits, and make
 the same files of them: a DIB decoded as a PNG (a BMP when it can't be), a WMF with its placeable
-header back. Each sets its budget's total. `craft-doc-binary` also keeps a Macintosh PICT as a
-placeholder its document model can show; the `.ppt` and `.xls` models have no such placeholder, so
-those readers leave PICT out, and `craft-xls` leaves TIFF out too.
+header back. Each sets its budget's total. `craft-doc-binary` and `craft-ppt-binary` also keep a
+Macintosh PICT as it is, for the app to show as a placeholder; the `.xls` model has no such
+placeholder, so `craft-xls` leaves PICT out, and TIFF too.
