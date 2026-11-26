@@ -116,10 +116,17 @@ fn source_clip(uid: u8, def: [u8; 16], dur: i64, pkg: [u8; 32], track: u32) -> V
 /// 16-bit stereo sound element of 1920 frames (sample k of the file = k, -k on the channels);
 /// a footer index with temporal offsets `to` and flags `flags`.
 fn build(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], flags: &[u8]) -> Vec<u8> {
-    build_with_package_uid(n, pic, to, flags, Some(&umid(2)))
+    build_with_packages(n, pic, to, flags, Some(&umid(2)), false)
 }
 
-fn build_with_package_uid(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], flags: &[u8], file_package_uid: Option<&[u8]>) -> Vec<u8> {
+fn build_with_packages(
+    n: usize,
+    pic: impl Fn(usize) -> Vec<u8>,
+    to: &[i8],
+    flags: &[u8],
+    file_package_uid: Option<&[u8]>,
+    separate_picture: bool,
+) -> Vec<u8> {
     let mut md = Vec::new();
     // primer: no dynamic tags
     klv(&mut md, ul(&[0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0D, 0x01, 0x02, 0x01, 0x01, 0x05, 0x01, 0x00]), &batch(&[]));
@@ -141,7 +148,7 @@ fn build_with_package_uid(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], f
     klv(&mut md, set_key(0x14), &tc.0);
     klv(&mut md, set_key(0x3B), &track(11, 2, 0, 21));
     klv(&mut md, set_key(0x0F), &sequence(21, PICTURE_DEF, d, 31));
-    klv(&mut md, set_key(0x11), &source_clip(31, PICTURE_DEF, d, umid(2), 2));
+    klv(&mut md, set_key(0x11), &source_clip(31, PICTURE_DEF, d, if separate_picture { umid(3) } else { umid(2) }, 2));
     klv(&mut md, set_key(0x3B), &track(12, 3, 0, 22));
     klv(&mut md, set_key(0x0F), &sequence(22, SOUND_DEF, d, 32));
     klv(&mut md, set_key(0x11), &source_clip(32, SOUND_DEF, d, umid(2), 3));
@@ -150,7 +157,14 @@ fn build_with_package_uid(n: usize, pic: impl Fn(usize) -> Vec<u8>, to: &[i8], f
     if let Some(uid) = file_package_uid {
         fp.p(0x4401, uid);
     }
-    fp.p(0x4403, &batch(&[&uuid(13), &uuid(14)])).p(0x4701, &uuid(40));
+    if separate_picture {
+        let mut picture = LocalSet::new(7);
+        picture.p(0x4401, &umid(3)).p(0x4403, &batch(&[&uuid(13)])).p(0x4701, &uuid(41));
+        klv(&mut md, set_key(0x37), &picture.0);
+        fp.p(0x4403, &batch(&[&uuid(14)])).p(0x4701, &uuid(42));
+    } else {
+        fp.p(0x4403, &batch(&[&uuid(13), &uuid(14)])).p(0x4701, &uuid(40));
+    }
     klv(&mut md, set_key(0x37), &fp.0);
     klv(&mut md, set_key(0x3B), &track(13, 2, 0x1501_0500, 23));
     klv(&mut md, set_key(0x0F), &sequence(23, PICTURE_DEF, d, 33));
@@ -469,12 +483,41 @@ fn material_clock_and_duration_survive_file_unit_conversion() {
 #[test]
 fn readable_essence_without_a_usable_file_package_id_has_no_relink_identity() {
     for uid in [None, Some(&[0; 32][..]), Some(&[7; 31][..]), Some(&[7; 33][..])] {
-        let bytes = build_with_package_uid(2, prores_like, &[], &[], uid);
+        let bytes = build_with_packages(2, prores_like, &[], &[], uid, false);
         let mxf = open(&bytes).unwrap();
         let audio = mxf.track_of_kind(TrackKind::Sound).unwrap();
         assert_eq!(mxf.tracks[audio].file_package_uid, None);
         let pcm = mxf.read_pcm(&bytes, audio, 0, 8).unwrap();
         assert_eq!(pcm[0].len(), 8);
         assert!(pcm[0][7] > 0.0);
+    }
+}
+
+#[test]
+fn a_resolved_picture_package_does_not_hide_stored_audio_with_an_unusable_uid() {
+    let overlong = [umid(2).as_slice(), &[0xff]].concat();
+    for uid in [Some(overlong.as_slice()), Some(&[7; 31][..]), Some(&[0; 32][..]), None] {
+        let bytes = build_with_packages(2, prores_like, &[], &[], uid, true);
+        let file = open(&bytes).unwrap();
+        let picture = file.track_of_kind(TrackKind::Picture).unwrap();
+        assert_eq!(file.tracks[picture].file_package_uid, Some(umid(3)));
+        let sound = file.track_of_kind(TrackKind::Sound).expect("stored audio remains readable");
+        assert_eq!(file.tracks[sound].file_package_uid, None);
+        assert!(file.read_pcm(&bytes, sound, 0, 8).unwrap()[0][7] > 0.0);
+        assert_eq!(file.tracks.len(), 2);
+    }
+}
+
+#[test]
+fn an_unidentified_package_cannot_guess_a_stream_or_claim_the_resolved_picture() {
+    for number in [0, 0x1501_0500] {
+        let mut bytes = build_with_packages(2, prores_like, &[], &[], None, true);
+        let original = track(14, 3, 0x1601_0300, 24);
+        let at = bytes.windows(original.len()).position(|v| v == original).unwrap();
+        bytes[at..at + original.len()].copy_from_slice(&track(14, 3, number, 24));
+        let file = open(&bytes).unwrap();
+        assert_eq!(file.tracks.len(), 1);
+        assert_eq!(file.tracks[0].kind, TrackKind::Picture);
+        assert_eq!(file.tracks[0].file_package_uid, Some(umid(3)));
     }
 }

@@ -673,6 +673,7 @@ fn sound_info(d: &Set) -> SoundInfo {
 
 /// Resolved track before the sample tables are built.
 struct TrackRef {
+    require_unclaimed_element: bool,
     file_package_uid: Option<[u8; 32]>,
     track_id: u32,
     track_number: u32,
@@ -752,6 +753,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                     .unwrap_or_default();
                 let (body_sid, index_sid) = umid.and_then(|id| sids.get(&id)).copied().unwrap_or((0, 0));
                 return Some(TrackRef {
+                    require_unclaimed_element: false,
                     file_package_uid: umid,
                     material_edit_rate: None,
                     material_duration: None,
@@ -771,6 +773,7 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             }
             None
         };
+    let mut unresolved_package = false;
     if let Some(m) = material {
         for r in m.references(tag::PACKAGE_TRACKS) {
             let Some(t) = md.get(&r) else { continue };
@@ -780,8 +783,12 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                 continue;
             }
             let Some(clip) = comps.iter().find(|c| c.kind() == Some(st::SOURCE_CLIP)) else { continue };
-            let Some(umid) = umid_of(clip, tag::SOURCE_PACKAGE_ID) else { continue };
+            let Some(umid) = umid_of(clip, tag::SOURCE_PACKAGE_ID) else {
+                unresolved_package = true;
+                continue;
+            };
             let Some(pkg) = file_pkg(&umid) else {
+                unresolved_package = true;
                 warnings.push(format!("material track {} refers to a package not in this file", t.u(tag::TRACK_ID).unwrap_or(0)));
                 continue;
             };
@@ -809,10 +816,13 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             }
         }
     }
-    if out.is_empty() {
-        // No usable material package: present the file packages' essence tracks directly.
+    let partial = !out.is_empty();
+    if !partial || unresolved_package {
+        // After partial resolution, recover only directly identifiable, unclaimed local
+        // essence. An unmatched material reference cannot supply its timing or identity.
+        let mut candidate_numbers = HashMap::<u32, usize>::new();
         for pkg in &sources {
-            if pkg.reference(tag::SOURCE_PACKAGE_DESCRIPTOR).is_none() {
+            if pkg.reference(tag::SOURCE_PACKAGE_DESCRIPTOR).is_none() || (partial && umid_of(pkg, tag::PACKAGE_UID).is_some()) {
                 continue;
             }
             // A package that names one track many times would otherwise build (and retain) its sample tables per mention.
@@ -823,13 +833,20 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                 if !seen.insert(id) {
                     continue;
                 }
-                if let Some(tr) = file_track(pkg, None, Some(id), 0, None, None) {
+                if let Some(mut tr) = file_track(pkg, None, Some(id), 0, None, None) {
+                    if partial {
+                        tr.require_unclaimed_element = true;
+                        *candidate_numbers.entry(tr.track_number).or_default() += 1;
+                    }
                     out.push(tr);
                 }
             }
-            if timecode.is_none() {
+            if !partial && timecode.is_none() {
                 timecode = package_timecode(md, pkg);
             }
+        }
+        if partial {
+            out.retain(|tr| !tr.require_unclaimed_element || candidate_numbers.get(&tr.track_number) == Some(&1));
         }
     }
     (out, timecode, name)
@@ -878,6 +895,9 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
     for r in &refs {
         let number = r.track_number.to_be_bytes();
         let mut key4 = all_numbers.iter().find(|n| **n == number).copied();
+        if r.require_unclaimed_element && (key4.is_none() || claimed.contains(&number)) {
+            continue;
+        }
         if key4.is_none() {
             // Track number missing or not matching (some OP-Atom writers): the only unclaimed
             // element stream of the right kind.
