@@ -266,7 +266,7 @@ pub fn read(path: &Path) -> Result<Accounts, Error> {
 /// Readable by this user alone where the platform has file modes. The file holds no token. It does
 /// say who is signed in. That is nobody else's business.
 ///
-/// Refuses a list that would serialize past [`MAX_BYTES`], before any file is touched. [`read`]
+/// Refuses a list that would serialize past `MAX_BYTES`, before any file is touched. [`read`]
 /// rejects a file that large; writing one anyway would succeed here and then make every later
 /// read of this list fail, including the reads every other mutation needs before it can repair
 /// anything. An oversized `display` or `email` on one account is the realistic way to reach this,
