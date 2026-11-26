@@ -146,7 +146,8 @@ fn help_line(ui: &mut Ui, help: &Option<Label>) {
 }
 
 /// The field a row's control stands in: named by the row, with its help.
-fn field_of(row: &ShownRow) -> Field<'_> { // P3(panels-w2): pn.C6
+fn field_of(row: &ShownRow) -> Field<'_> {
+    // P3(panels-w2): pn.C6
     let field = Field::new(row.label.clone()).id_salt(row.key.as_str()).enabled(row.enabled);
     match &row.help {
         Some(help) => field.help(Help::Text(help.clone())),
