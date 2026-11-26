@@ -3055,14 +3055,15 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn scaled(self, scale: f32) -> Self`. The width with a document width multiplied by `scale` (a view's zoom); a theme width stays as the theme names
 - `craft_ui::primitives::DataWidth`: `pub struct DataWidth`. A line width the data gives (a path's thickness, a pen size), in screen points: the caller maps a document width
   - `pub const fn points(points: f32) -> Self`. A width of `points`.
-- `craft_ui::primitives::DocRun`: `pub struct DocRun<'a> { pub text: Cow<'a, str>, pub font: FontRef, pub size: f32, pub weight: u16, pub italic: bool, pub color: DataColor, pub underline: bool, pub strikethrough: bool, pub indent: f32 }`. One run of document text.
+- `craft_ui::primitives::DocRun`: `pub struct DocRun<'a> { pub text: Cow<'a, str>, pub font: FontRef, pub size: f32, pub weight: u16, pub italic: bool, pub color: DataColor, pub underline: bool, pub strikethrough: bool, pub indent: f32, pub coords: Cow<'a, [([u8; 4], f32)]> }`. One run of document text.
   - `pub fn new(text: impl Into<Cow<'a, str>>, font: FontRef, size: f32, color: DataColor) -> Self`. A regular-weight upright run without lines or indent.
   - `pub fn italic(mut self) -> Self`. Italic.
   - `pub fn bold(mut self) -> Self`. Bold weight.
   - `pub fn underline(mut self) -> Self`. Underlined.
   - `pub fn strikethrough(mut self) -> Self`. Struck through.
   - `pub fn indent(mut self, points: f32) -> Self`. `points` of space before the run.
-  - `pub fn into_owned(self) -> DocRun<'static>`. The run owning its text.
+  - `pub fn coords(mut self, coords: impl Into<Cow<'a, [([u8; 4], f32)]>>) -> Self`. The run drawn at the variation coordinates `coords` (axis tag, value) of its face.
+  - `pub fn into_owned(self) -> DocRun<'static>`. The run owning its text and coordinates.
 - `craft_ui::primitives::DocText`: `pub struct DocText<'a> { pub runs: &'a [DocRun<'a>], pub wrap: Option<f32>, pub align: HAlign, pub elide: bool }`. Document text: runs with their own font, size and colour. On `TextRun` these fields would let any component
   - `pub const fn new(runs: &'a [DocRun<'a>]) -> Self`. Unwrapped document text of `runs`.
   - `pub const fn elide(mut self) -> Self`. Cuts the text to one row with an ellipsis at the end.
@@ -4130,6 +4131,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
 
 - `craft_ui::runtime::focus::FocusMove`: `pub enum FocusMove { Keys, Other }`. What moved the key focus.
 - `craft_ui::runtime::focus::FocusShape`: `pub enum FocusShape { Rect, Circle, Polygon(Vec<egui::Pos2>) }`. The shape the focus ring takes around a part.
+- `craft_ui::runtime::focus::focus_came_with_open`: `pub fn focus_came_with_open(ctx: &Context) -> bool`. Whether the focused stop took the focus when its scope opened (a menu's first row as the menu showed) and has kept
 - `craft_ui::runtime::focus::has`: `pub fn has(ctx: &Context, id: Id) -> bool`. Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
 - `craft_ui::runtime::focus::host_canvas`: `pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse)`. Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: its focus stop
 - `craft_ui::runtime::focus::is_focused`: `pub fn is_focused(ctx: &Context, id: Id) -> bool`. Whether the focus stop is the component `id`: the focused member or item of its arena, or a root that
