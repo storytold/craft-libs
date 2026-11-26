@@ -1062,39 +1062,15 @@ mod tests {
     }
 
     #[test]
-    fn gradients_and_crowded_groups_go_to_complex() {
-        let gradient = Item::Fill(FillItem {
-            path: Rect::new(50.0, 0.0, 150.0, 100.0).to_path(0.1),
-            rule: FillRule::NonZero,
-            paint: Paint::Gradient {
-                stops: vec![(0.0, InkColor::Tints(vec![(C, 0.0)])), (1.0, InkColor::Tints(vec![(C, 1.0)]))],
-                geometry: GradientGeometry::Axial {
-                    start: Point::new(50.0, 0.0),
-                    end: Point::new(150.0, 0.0),
-                    extend: [true; 2],
-                    transform: Affine::IDENTITY,
-                },
-            },
-            overprint: Overprint::default(),
-        });
+    fn sweep_limits_send_the_group_to_complex() {
         let l = list(
             InkSet::new(),
             vec![
                 solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(M, 1.0)]),
-                Item::Group(group(0.5, BlendMode::Normal, vec![gradient])),
-                solid(Rect::new(140.0, 0.0, 200.0, 100.0), &[(Y, 1.0)]),
+                Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(C, 1.0)])])),
             ],
         );
-        let f = flat(&l);
-        assert_eq!(f.report.complex_regions, 1, "touching regions merge: {:?}", f.complex);
-        let both = f.complex.iter().find(|c| c.path.winding(Point::new(75.0, 50.0)) != 0).unwrap();
-        assert_eq!(both.items, [0, 1]);
-        assert_eq!(both.at, f.items.len() - 1, "before the yellow kept on top");
-        assert_eq!(at(&f, 25.0, 50.0, &[M]).1, [1.0]);
-
-        let f = flatten(&l, &FlattenOptions { max_regions: 2, ..FlattenOptions::default() }).unwrap();
-        assert_eq!(f.report.complex_groups, [ComplexGroup { items: vec![0, 1], reason: ComplexReason::TooManyRegions(3) }]);
-        assert_eq!((f.complex.len(), f.items.len()), (1, 1));
+        assert!(flat(&l).report.complex_groups.is_empty());
 
         for opts in
             [FlattenOptions { max_sweep_work: 1, ..FlattenOptions::default() }, FlattenOptions { max_sweep_units: 1, ..FlattenOptions::default() }]

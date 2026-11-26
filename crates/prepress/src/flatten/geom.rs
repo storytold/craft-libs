@@ -1154,7 +1154,7 @@ mod tests {
                 fill(rect(i, i + 0.25, i + 8.0, i + 8.25))
             })
             .collect();
-        let a = Arrangement::new(&shapes, &[], DEFAULT_SLIVER).unwrap();
+        let a = Arrangement::new(&shapes, &[], DEFAULT_SLIVER, DEFAULT_MAX_SWEEP_WORK, DEFAULT_MAX_TOPOLOGY_UNITS).unwrap();
         let mut sides = 0;
         let mut lists = std::collections::HashSet::new();
         for s in a.top.segment_indices() {
