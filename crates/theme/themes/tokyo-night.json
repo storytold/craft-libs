@@ -1,0 +1,73 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.tokyo-night",
+  "name": "Tokyo Night",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#7aa2f7",
+    "neutral": "#1a1b26",
+    "status": {
+      "bad": "#f7768e",
+      "good": "#9ece6a",
+      "info": "#7dcfff",
+      "warn": "#e0af68"
+    }
+  },
+  "shape": null,
+  "light": {
+    "seeds": {
+      "accent": "#2959aa",
+      "neutral": "#d6d8df",
+      "status": {
+        "bad": "#8c4351",
+        "good": "#385f0d",
+        "info": "#006c86",
+        "warn": "#8f5e15"
+      }
+    },
+    "accent.border": "#2959aa78",
+    "accent.soft": "#2959aa2e",
+    "accent.solid": "#2959aa",
+    "caption.close_hover": "#8c4351",
+    "caption.close_text": "#e6e7ed",
+    "line.border": "#c1c2c7",
+    "line.control_edge": "#9da0ab",
+    "line.divider": "#c1c2c7",
+    "state.hover": "#e1e2e8",
+    "state.pressed": "#dadce3",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#d6d8df",
+    "surface.canvas": "#e6e7ed",
+    "surface.panel": "#e6e7ed",
+    "surface.sunken": "#d6d8df",
+    "text.faint": "#4a5272",
+    "text.muted": "#40434f",
+    "text.normal": "#343b58"
+  },
+  "dark": {
+    "accent.border": "#7aa2f778",
+    "accent.soft": "#7aa2f72e",
+    "accent.solid": "#7aa2f7",
+    "caption.close_hover": "#f7768e",
+    "caption.close_text": "#1a1b26",
+    "data.scope": "#16161e",
+    "line.border": "#101014",
+    "line.control_edge": "#414868",
+    "line.divider": "#101014",
+    "state.hover": "#202330",
+    "state.pressed": "#24283b",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#16161e",
+    "surface.canvas": "#16161e",
+    "surface.panel": "#1a1b26",
+    "surface.sunken": "#14141b",
+    "text.faint": "#9aa5ce",
+    "text.muted": "#a9b1d6",
+    "text.normal": "#c0caf5"
+  }
+}
