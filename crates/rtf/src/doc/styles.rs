@@ -1,5 +1,5 @@
 use super::export::HEAD_SIZES;
-use super::state::{Dest, St};
+use super::state::{Dest, ListLevel, St};
 use super::{Fmt, Kind, ListInfo, Para, Reader, model};
 
 impl Reader {
@@ -96,8 +96,12 @@ impl Reader {
         if let Some(ls) = st.ls {
             let list = self.overrides.get(&ls).and_then(|id| self.lists.get(id));
             let lv = st.ilvl.min(8);
-            let ordered = list.and_then(|l| l.get(lv as usize).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv, start: 1, ..Default::default() });
+            let level = list.and_then(|l| l.get(lv as usize));
+            let ordered = level.is_some_and(|l| l.ordered);
+            // The level's start number and label (#2085); a level without level text keeps none.
+            let start = level.map_or(1, |l| l.start);
+            let label = level.and_then(ListLevel::label);
+            p.list = Some(ListInfo { ordered, level: lv, start, label, ..Default::default() });
         }
         p
     }
