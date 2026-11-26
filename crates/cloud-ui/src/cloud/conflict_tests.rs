@@ -319,6 +319,21 @@ fn a_page_drawn_after_sign_out_does_not_bring_the_account_back() {
     assert!(held.take(|j| matches!(j, Job::List(_))).is_some(), "the next sign-in lists the root folder again");
 }
 
+/// Save As while signed out has no account to land in. A provider that has not ended the session
+/// yet would create the file in the account that is leaving.
+#[test]
+fn save_as_after_sign_out_is_refused_until_the_next_sign_in() {
+    let (mut app, held, _log) = two_tabs();
+    start(&mut app);
+    let (_, post) = held.take(|j| matches!(j, Job::Account)).unwrap();
+    post.send(Event::Account(Ok(account("Previous Person"))));
+    drain(&mut app, &egui::Context::default());
+    sign_out(&mut app);
+    let refused = save_as(&mut app, "", "Plan");
+    assert!(refused.is_err(), "signed out, yet Save As went ahead: {refused:?}");
+    assert!(held.take(|j| matches!(j, Job::Create { .. })).is_none(), "nothing is created while signed out");
+}
+
 /// Save as a copy, then the first click on the Save As page is refused (no name typed yet). The
 /// second click, with a name, must still copy the conflicted document A, not the active tab B.
 #[test]

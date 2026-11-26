@@ -648,6 +648,9 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     if app.cloud().relist_after_sign_in {
         return Err("wait for the sign-in to finish".to_owned());
     }
+    if app.cloud().signed_out {
+        return Err(app.tr("Sign in to save to the cloud"));
+    }
     // A document that does not exist yet has no content type to read. The
     // name a person just typed is the whole of what was asked for.
     let bytes = app.encode(uid, Destination::new(&name))?;
