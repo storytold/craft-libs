@@ -1,0 +1,1073 @@
+//! The content-paint kit (5.4): the recurring shapes of document and plot painting, read from tokens, so an
+//! allowlisted content painter draws them through one implementation. The shape functions are pure; the
+//! `ContentPainterCx` methods add their shapes to its painter.
+
+use super::content::ContentPainterCx;
+use super::draw::{Dashes, PaintShape, StrokeWidth};
+use super::rule::{Rule, RuleKind};
+use super::surface::Surface;
+use super::textures::{TextureCache, UNTINTED};
+use crate::style::{Corners, DataColor, RuleLook, RuleWidth, SurfaceKind, UiTokens, ink_color, rgba_color, rule_look, surface_style};
+use craft_behavior::{Axis, CanvasView, kurbo};
+use egui::epaint::{RectShape, Vertex};
+use egui::{
+    Color32, ColorImage, Context, CornerRadius, Mesh, Pos2, Rect, Shape, Stroke, TextureFilter, TextureId, TextureOptions, TextureWrapMode, Vec2,
+    pos2,
+};
+use std::f32::consts::{FRAC_PI_2, TAU};
+
+/// Which edge of a rect a tick row sits on, and so which way its marks point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TickEdge {
+    /// Marks rise from the bottom edge, positions run along x.
+    Bottom,
+    /// Marks hang from the top edge, positions run along x.
+    Top,
+    /// Marks grow from the left edge, positions run along y.
+    Left,
+    /// Marks grow from the right edge, positions run along y.
+    Right,
+}
+
+impl TickEdge {
+    /// Whether positions run along x (a top or bottom edge).
+    pub const fn horizontal(self) -> bool {
+        matches!(self, TickEdge::Bottom | TickEdge::Top)
+    }
+}
+
+/// How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
+/// component set ([`RulerFace::of`]); the face changes the arrangement only, every value still comes from the same
+/// tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RulerFace {
+    /// Marks rise from the strip's inner edge, a major one across the strip's depth, and each number sits beside its
+    /// major mark.
+    #[default]
+    Edge,
+    /// A bar inset in the strip by `BAR_INSET` carries the marks centred on it, and a number stands in place of
+    /// each major mark; a major mark shows only where its number is dropped.
+    Centred,
+}
+
+impl RulerFace {
+    /// The face the component set `set` shows: the creative set the edge face, the productivity set the centred one.
+    pub const fn of(set: craft_theme::ComponentSet) -> Self {
+        match set {
+            craft_theme::ComponentSet::Creative => RulerFace::Edge,
+            craft_theme::ComponentSet::Productivity => RulerFace::Centred,
+        }
+    }
+
+    /// Where the marks of a strip along `edge` sit: the whole strip for the edge face, the strip inset across its
+    /// depth by `BAR_INSET` on each side for the centred face.
+    pub fn bar(self, strip: Rect, edge: TickEdge) -> Rect {
+        match self {
+            RulerFace::Edge => strip,
+            RulerFace::Centred => {
+                if edge.horizontal() {
+                    strip.shrink2(Vec2::new(0.0, BAR_INSET))
+                } else {
+                    strip.shrink2(Vec2::new(BAR_INSET, 0.0))
+                }
+            }
+        }
+    }
+
+    /// The marks of `marks` this face shows beside the numbers in `numbers` (screen boxes): the edge face shows every
+    /// mark, the centred face leaves out each one whose position lies inside a number widened by `pad` along `edge`'s
+    /// axis, so a number stands in place of its own mark and no mark runs through one. `origin` is the screen position
+    /// the marks' `at` counts from.
+    pub fn beside_numbers(self, edge: TickEdge, origin: f32, marks: Vec<Tick>, numbers: &[Rect], pad: f32) -> Vec<Tick> {
+        match self {
+            RulerFace::Edge => marks,
+            RulerFace::Centred => marks
+                .into_iter()
+                .filter(|mark| {
+                    let at = origin + mark.at;
+                    !numbers.iter().any(|number| {
+                        let along = if edge.horizontal() { number.x_range() } else { number.y_range() };
+                        (along.min - pad..=along.max + pad).contains(&at)
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    /// The box a centred number of `size` takes for the mark at `at` (a screen position along `edge`'s axis): centred
+    /// on the mark and on the bar.
+    pub fn centred_number(bar: Rect, edge: TickEdge, at: f32, size: Vec2) -> Rect {
+        let centre = if edge.horizontal() { pos2(at, bar.center().y) } else { pos2(bar.center().x, at) };
+        Rect::from_center_size(centre, size)
+    }
+}
+
+/// How long a tick is: the rank it has among its neighbours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TickRank {
+    /// The shortest, `TICK_MINOR` long.
+    Minor,
+    /// Halfway between two major ticks, `TICK_MID` long.
+    Mid,
+    /// The longest: across the depth of the rect the marks are painted in.
+    Major,
+}
+
+/// The length of a minor tick, in points. The same in every density, as in the apps' rulers.
+const TICK_MINOR: f32 = 3.0;
+
+/// The length of the tick halfway between two major ticks, in points, in every density.
+const TICK_MID: f32 = 6.0;
+
+/// How far the centred face's bar sits inside the ruler strip on each side across its depth.
+const BAR_INSET: f32 = 2.0;
+
+/// One tick: where it sits along its edge and how long it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Tick {
+    /// The position along the edge, in points from the rect's origin on that axis.
+    pub at: f32,
+    /// The tick's length class.
+    pub rank: TickRank,
+}
+
+impl Tick {
+    /// A tick at `at` of the length class `rank`.
+    pub const fn new(at: f32, rank: TickRank) -> Self {
+        Tick { at, rank }
+    }
+}
+
+/// The cells of the transparency checkerboard: their side and the two colours. A field left unset takes the
+/// theme's checker (`size.checker` and the overlay checker colours); the transparency grid is an app setting, so an
+/// app sets any of them from its preferences.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct Checker {
+    /// The side of a cell, in points.
+    pub size: Option<f32>,
+    /// The colour of the cells that fill the rect.
+    pub light: Option<DataColor>,
+    /// The colour of the cells that sit on the light ones.
+    pub dark: Option<DataColor>,
+}
+
+impl Checker {
+    /// The theme's checker.
+    pub const fn new() -> Self {
+        Checker { size: None, light: None, dark: None }
+    }
+
+    /// Cells of `size` points.
+    #[must_use]
+    pub const fn size(mut self, size: f32) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// The light and dark colours.
+    #[must_use]
+    pub const fn colors(mut self, light: DataColor, dark: DataColor) -> Self {
+        self.light = Some(light);
+        self.dark = Some(dark);
+        self
+    }
+
+    /// The texture of the two colours and the side of a cell.
+    fn texture(&self, ctx: &Context, tokens: &UiTokens) -> (TextureId, f32) {
+        let side = self.size.unwrap_or(tokens.size.checker).max(f32::EPSILON);
+        let light = self.light.map_or_else(|| rgba_color(tokens.color.overlay.checker_light), |color| color.0);
+        let dark = self.dark.map_or_else(|| rgba_color(tokens.color.overlay.checker_dark), |color| color.0);
+        (checker_texture(ctx, light, dark), side)
+    }
+
+    /// The checkerboard over the convex polygon `corners` as one textured mesh, a light cell with its top-left corner at
+    /// `origin`: the cells follow the polygon's edge, which a rect's clip cannot.
+    pub fn polygon_shape(&self, ctx: &Context, tokens: &UiTokens, corners: &[Pos2], origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
+        let mut mesh = fill_polygon(corners, UNTINTED, 0.0);
+        mesh.texture_id = texture;
+        for vertex in &mut mesh.vertices {
+            vertex.uv = ((vertex.pos - origin) / (2.0 * side)).to_pos2();
+        }
+        Shape::mesh(mesh)
+    }
+
+    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
+    /// with its top-left corner at `origin`. A painter's clip cuts it.
+    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
+        // One texel per cell; the texture repeats every two cells.
+        let uv = |p: Pos2| ((p - origin) / (2.0 * side)).to_pos2();
+        match area {
+            CheckerArea::Rect(rect, radius) => {
+                Shape::Rect(RectShape::filled(rect, radius, UNTINTED).with_texture(texture, Rect::from_min_max(uv(rect.min), uv(rect.max))))
+            }
+            CheckerArea::Quad(corners) => {
+                let mut mesh = Mesh::with_texture(texture);
+                mesh.vertices.extend(corners.iter().map(|&pos| Vertex { pos, uv: uv(pos), color: UNTINTED }));
+                mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+                Shape::mesh(mesh)
+            }
+        }
+    }
+}
+
+/// Where a [`Checker`] paints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum CheckerArea {
+    /// A rect with these corners.
+    Rect(Rect, CornerRadius),
+    /// A convex quad, its corners in order around it (a turned document).
+    Quad([Pos2; 4]),
+}
+
+/// The 2 x 2 texture of the checkerboard's two colours (light at the top left and bottom right), repeating, sampled
+/// without blending so each texel stays one sharp cell.
+fn checker_texture(ctx: &Context, light: Color32, dark: Color32) -> TextureId {
+    let options = TextureOptions {
+        magnification: TextureFilter::Nearest,
+        minification: TextureFilter::Nearest,
+        wrap_mode: TextureWrapMode::Repeat,
+        mipmap_mode: None,
+    };
+    TextureCache::texture_with(ctx, ("craft-ui-checker", light, dark), options, || ColorImage::new([2, 2], vec![light, dark, dark, light]))
+}
+
+/// A turn whose cross product is at most this (in square points) is straight: its vertex is cut away without a
+/// triangle.
+const FLAT_TURN: f32 = 1e-4;
+
+/// The closed polygon through `points` (convex or not; its edges must not cross) filled with `color`, as one mesh:
+/// the edge fades out over `feather` points as egui fades a convex fill (0 for a hard edge), and the inside is cut
+/// into triangles by ear clipping, so the parts of one shape meet without a seam. Either winding fills; a last point
+/// equal to the first is dropped. The one polygon fill: `Draw` fills every `PaintShape::Polygon` with it.
+pub fn fill_polygon(points: &[Pos2], color: Color32, feather: f32) -> Mesh {
+    let mut mesh = Mesh::default();
+    let mut ring = points.to_vec();
+    ring.dedup();
+    if ring.len() > 1 && ring.first() == ring.last() {
+        ring.pop();
+    }
+    let n = ring.len();
+    if n < 3 || color == Color32::TRANSPARENT || ring.iter().any(|p| !p.is_finite()) {
+        return mesh;
+    }
+    // Clockwise on screen (y down), the winding egui's fill and its edge normals expect.
+    let doubled_area: f32 = (0..n).map(|i| ring[i].x * ring[(i + 1) % n].y - ring[(i + 1) % n].x * ring[i].y).sum();
+    if doubled_area < 0.0 {
+        ring.reverse();
+    }
+    let triangles = ear_clip(&ring);
+    if feather > 0.0 {
+        // An opaque inner and a clear outer vertex per point, half the feather each side of the edge (egui's
+        // `fill_closed_path`), with the normals of egui's `Path::add_line_loop`.
+        let edge_normal = |i: usize| (ring[(i + 1) % n] - ring[i]).normalized().rot90();
+        for (i, &point) in ring.iter().enumerate() {
+            let (before, after) = (edge_normal((i + n - 1) % n), edge_normal(i));
+            let normal = (before + after) * 0.5;
+            let length_sq = normal.length_sq();
+            let normal = if length_sq > f32::EPSILON { normal / length_sq } else { after };
+            mesh.colored_vertex(point - normal * (0.5 * feather), color);
+            mesh.colored_vertex(point + normal * (0.5 * feather), Color32::TRANSPARENT);
+        }
+        for i in 0..n as u32 {
+            let before = (i + n as u32 - 1) % n as u32;
+            mesh.add_triangle(2 * i, 2 * before, 2 * before + 1);
+            mesh.add_triangle(2 * before + 1, 2 * i + 1, 2 * i);
+        }
+        for [a, b, c] in triangles {
+            mesh.add_triangle(2 * a, 2 * b, 2 * c);
+        }
+    } else {
+        for &point in &ring {
+            mesh.colored_vertex(point, color);
+        }
+        for [a, b, c] in triangles {
+            mesh.add_triangle(a, b, c);
+        }
+    }
+    mesh
+}
+
+/// The triangles that cover the clockwise (on screen) polygon `ring`, as indices into it: each turn is cut off as an
+/// ear when no reflex vertex lies inside it. Only reflex vertices can lie inside an ear, so a convex polygon takes
+/// one pass. A polygon whose edges cross still ends: when a whole round finds no ear, the next turn is cut anyway.
+fn ear_clip(ring: &[Pos2]) -> Vec<[u32; 3]> {
+    let n = ring.len();
+    let turn = |a: usize, b: usize, c: usize| {
+        let (a, b, c) = (ring[a], ring[b], ring[c]);
+        (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+    };
+    let side = |a: Pos2, b: Pos2, p: Pos2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let inside = |p: Pos2, a: Pos2, b: Pos2, c: Pos2| side(a, b, p) > 0.0 && side(b, c, p) > 0.0 && side(c, a, p) > 0.0;
+    let mut prev: Vec<usize> = (0..n).map(|i| (i + n - 1) % n).collect();
+    let mut next: Vec<usize> = (0..n).map(|i| (i + 1) % n).collect();
+    let mut reflex: Vec<bool> = (0..n).map(|i| turn(prev[i], i, next[i]) < -FLAT_TURN).collect();
+    let reflex_at: Vec<usize> = (0..n).filter(|&i| reflex[i]).collect();
+    let mut removed = vec![false; n];
+    let mut triangles = Vec::with_capacity(n - 2);
+    let (mut at, mut left, mut misses) = (0, n, 0);
+    while left > 3 {
+        let (a, c) = (prev[at], next[at]);
+        let bend = turn(a, at, c);
+        let flat = bend.abs() <= FLAT_TURN;
+        let ear = flat
+            || bend > 0.0 && !reflex_at.iter().any(|&j| reflex[j] && !removed[j] && j != a && j != c && inside(ring[j], ring[a], ring[at], ring[c]));
+        if ear || misses > left {
+            if !flat {
+                triangles.push([a as u32, at as u32, c as u32]);
+            }
+            removed[at] = true;
+            (next[a], prev[c]) = (c, a);
+            for v in [a, c] {
+                reflex[v] = turn(prev[v], v, next[v]) < -FLAT_TURN;
+            }
+            (at, left, misses) = (c, left - 1, 0);
+        } else {
+            (at, misses) = (next[at], misses + 1);
+        }
+    }
+    if turn(prev[at], at, next[at]).abs() > FLAT_TURN {
+        triangles.push([prev[at] as u32, at as u32, next[at] as u32]);
+    }
+    triangles
+}
+
+/// The samples along each rounded corner of a ramp, so the strip's edge follows the arc.
+const ARC_STEPS: usize = 8;
+
+/// A colour ramp over `rect` with corners of `radius` (`CornerRadius::ZERO` for square ones): the strip shades from
+/// stop to stop along `axis` (`Axis::X` runs left to right, `Axis::Y` top to bottom). Each stop is its place along the
+/// strip, from 0 at the start to 1 at the end, and its colour. Stops are taken in order; a place outside 0 to 1 is
+/// clamped, and a ramp whose first stop is after 0 or whose last is before 1 holds that colour out to the edge. The
+/// colours blend as the renderer blends mesh vertices, in sRGB. A rounded ramp keeps inside the rounded outline, as a
+/// rounded rect of the same radius draws it.
+pub fn ramp(rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) -> Vec<Shape> {
+    if !(rect.width() > 0.0 && rect.height() > 0.0) {
+        return Vec::new();
+    }
+    let mut marks: Vec<(f32, Color32)> = stops.iter().filter(|(at, _)| at.is_finite()).map(|(at, color)| (at.clamp(0.0, 1.0), color.0)).collect();
+    let (Some(&(first_at, first)), Some(&(last_at, last))) = (marks.first(), marks.last()) else { return Vec::new() };
+    if first_at > 0.0 {
+        marks.insert(0, (0.0, first));
+    }
+    if last_at < 1.0 {
+        marks.push((1.0, last));
+    }
+    let vertical = axis == Axis::Y;
+    // Along the strip from `s0` to `s1`, across it from `c0` to `c1`.
+    let (s0, s1, c0, c1) =
+        if vertical { (rect.top(), rect.bottom(), rect.left(), rect.right()) } else { (rect.left(), rect.right(), rect.top(), rect.bottom()) };
+    let length = s1 - s0;
+    let most = rect.width().min(rect.height()) / 2.0;
+    let r = |corner: u8| f32::from(corner).min(most);
+    // The corners at the start and the end of the strip, on its low and high side across.
+    let (start_lo, start_hi, end_lo, end_hi) =
+        if vertical { (r(radius.nw), r(radius.ne), r(radius.sw), r(radius.se)) } else { (r(radius.nw), r(radius.sw), r(radius.ne), r(radius.se)) };
+    // How far a corner of radius `r` pulls the edge in, `d` along the strip from its end.
+    let inset = |r: f32, d: f32| if d < r { r - (r * r - (r - d) * (r - d)).max(0.0).sqrt() } else { 0.0 };
+    let corners = [(start_lo, true), (start_hi, true), (end_lo, false), (end_hi, false)];
+    let columns = if corners.iter().all(|(r, _)| *r <= 0.0) { marks } else { rounded_columns(&marks, &corners, length) };
+    let mut mesh = Mesh::default();
+    for (index, (at, color)) in columns.iter().enumerate() {
+        let s = s0 + length * *at;
+        let (from_start, from_end) = (s - s0, s1 - s);
+        let lo = c0 + inset(start_lo, from_start).max(inset(end_lo, from_end));
+        let hi = c1 - inset(start_hi, from_start).max(inset(end_hi, from_end));
+        let point = |c: f32| if vertical { pos2(c, s) } else { pos2(s, c) };
+        mesh.colored_vertex(point(lo), *color);
+        mesh.colored_vertex(point(hi), *color);
+        if let Some(base) = (index as u32).checked_sub(1).map(|previous| previous * 2) {
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base + 1, base + 3, base + 2);
+        }
+    }
+    vec![Shape::mesh(mesh)]
+}
+
+/// `mesh` with every vertex that lies outside a rounded corner of `rect` moved onto the arc, towards the corner's
+/// centre, keeping its colour. A square corner moves nothing.
+fn rounded_mesh(mut mesh: Mesh, rect: Rect, radius: CornerRadius) -> Vec<Shape> {
+    let most = rect.width().min(rect.height()) / 2.0;
+    let r = |corner: u8| f32::from(corner).min(most);
+    let corners = [
+        (r(radius.nw), rect.left_top(), egui::vec2(1.0, 1.0)),
+        (r(radius.ne), rect.right_top(), egui::vec2(-1.0, 1.0)),
+        (r(radius.sw), rect.left_bottom(), egui::vec2(1.0, -1.0)),
+        (r(radius.se), rect.right_bottom(), egui::vec2(-1.0, -1.0)),
+    ];
+    for vertex in &mut mesh.vertices {
+        for &(r, corner, toward) in &corners {
+            if r <= 0.0 {
+                continue;
+            }
+            let centre = corner + toward * r;
+            let d = vertex.pos - centre;
+            if d.x * toward.x < 0.0 && d.y * toward.y < 0.0 && d.length() > r {
+                vertex.pos = centre + d * (r / d.length());
+            }
+        }
+    }
+    vec![Shape::mesh(mesh)]
+}
+
+/// The columns of a rounded ramp: the places of `marks` (sorted) and of samples along each corner of `corners` (its
+/// radius, and whether it is at the start of the strip), each with its colour.
+fn rounded_columns(marks: &[(f32, Color32)], corners: &[(f32, bool)], length: f32) -> Vec<(f32, Color32)> {
+    let mut places: Vec<f32> = marks.iter().map(|(at, _)| *at).collect();
+    for &(r, from_start) in corners {
+        if r > 0.0 {
+            for k in 0..=ARC_STEPS {
+                let d = r * (1.0 - (k as f32 / ARC_STEPS as f32 * FRAC_PI_2).cos());
+                places.push(if from_start { d / length } else { 1.0 - d / length });
+            }
+        }
+    }
+    places.retain(|at| at.is_finite());
+    places.iter_mut().for_each(|at| *at = at.clamp(0.0, 1.0));
+    places.sort_by(f32::total_cmp);
+    places.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    // The colour at a place: the stops' colours blended straight between their places, as the mesh blends them.
+    let color_at = |at: f32| -> Color32 {
+        let next = marks.iter().position(|(place, _)| *place >= at).unwrap_or(marks.len() - 1);
+        let (b_at, b) = marks[next];
+        let Some(&(a_at, a)) = next.checked_sub(1).and_then(|previous| marks.get(previous)) else { return b };
+        let t = if b_at > a_at { ((at - a_at) / (b_at - a_at)).clamp(0.0, 1.0) } else { 1.0 };
+        let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+        Color32::from_rgba_premultiplied(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()), mix(a.a(), b.a()))
+    };
+    // Each mark keeps its own colour where two share a place (a hard step), so the marks' places come in pairs.
+    let mut columns: Vec<(f32, Color32)> = Vec::with_capacity(places.len() + marks.len());
+    for at in places {
+        let on_marks: Vec<Color32> = marks.iter().filter(|(place, _)| (*place - at).abs() < 1e-6).map(|(_, color)| *color).collect();
+        if on_marks.is_empty() {
+            columns.push((at, color_at(at)));
+        } else {
+            columns.extend(on_marks.into_iter().map(|color| (at, color)));
+        }
+    }
+    columns
+}
+
+/// Most lines a grid draws along one axis.
+pub const MAX_LINES: usize = 10_000;
+
+/// The smallest step, in screen points, at which a grid axis draws.
+const MIN_STEP: f64 = 6.0;
+
+/// The smallest major step, in screen points, at which crossings draw.
+const CROSSING_MIN: f64 = 8.0;
+
+/// Minor lines' share of the major colour's alpha.
+const MINOR_SHARE: f32 = 0.45;
+
+/// How many times a thinned grid doubles its step before it gives up.
+const MAX_DOUBLINGS: u32 = 32;
+
+/// What a grid does when its lines come closer than the minimum step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GridCrowding {
+    /// Draws nothing for an axis whose lines are too close.
+    #[default]
+    Hide,
+    /// Doubles the step, at most 32 times, until the lines fit.
+    Thin,
+}
+
+/// The lines of one axis: positions along it, in the grid's space.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct GridAxis {
+    /// The minor lines.
+    pub minor: Vec<f64>,
+    /// The major lines.
+    pub major: Vec<f64>,
+}
+
+/// The major step an axis draws at `zoom`: `step` when it is at least [`MIN_STEP`] screen points; else, for `Thin`, the
+/// step doubled (at most 32 times) until it is; `None` when the axis draws nothing. Lines and crossings both read it, so
+/// crossings follow what is drawn.
+fn fitted_step(step: f64, zoom: f64, crowding: GridCrowding) -> Option<f64> {
+    if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    let mut step = step;
+    if crowding == GridCrowding::Thin {
+        for _ in 0..MAX_DOUBLINGS {
+            if step * zoom >= MIN_STEP || !step.is_finite() {
+                break;
+            }
+            step *= 2.0;
+        }
+    }
+    (step.is_finite() && step * zoom >= MIN_STEP).then_some(step)
+}
+
+impl GridAxis {
+    /// The lines of one axis between `lo` and `hi`: majors every `step` from `origin`, minors between them when the
+    /// minor step is at least [`MIN_STEP`] screen points at `zoom`. An axis whose major step is under `MIN_STEP`
+    /// draws nothing; at most [`MAX_LINES`] lines are given.
+    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64, crowding: GridCrowding) -> GridAxis {
+        let Some(step) = fitted_step(step, zoom, crowding) else {
+            return GridAxis::default();
+        };
+        let subdivided = subdivisions > 1 && step / f64::from(subdivisions) * zoom >= MIN_STEP;
+        let pitch = if subdivided { step / f64::from(subdivisions) } else { step };
+        let every = if subdivided { i64::from(subdivisions) } else { 1 };
+        let (first, last) = (((lo - origin) / pitch).ceil(), ((hi - origin) / pitch).floor());
+        let mut lines = GridAxis::default();
+        if !(first.is_finite() && last.is_finite()) || last < first {
+            return lines;
+        }
+        for i in (first as i64..=last as i64).take(MAX_LINES) {
+            let at = origin + i as f64 * pitch;
+            if i.rem_euclid(every) == 0 { lines.major.push(at) } else { lines.minor.push(at) }
+        }
+        lines
+    }
+}
+
+/// The lines of a grid, as [`grid_lines`] draws them: vertical lines (by x) and horizontal lines (by y), each
+/// running across `extent`. The positions are in document units under `view`, or in screen points without one.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct GridLines {
+    /// The vertical lines.
+    pub x: GridAxis,
+    /// The horizontal lines.
+    pub y: GridAxis,
+    /// Where the lines run; `None` when the grid draws nothing.
+    pub extent: Option<kurbo::Rect>,
+    /// Whether the major spacing is wide enough for crossings on both axes.
+    pub crossings: bool,
+    /// The view that maps the positions to the screen.
+    pub view: Option<CanvasView>,
+}
+
+impl GridLines {
+    /// The lines of a grid in document units: majors every `spacing` from `origin`, `subdivisions` steps to a major
+    /// (1 or 0 is no minor lines), across `extent` as `view` shows it.
+    pub fn document(
+        view: &CanvasView,
+        extent: kurbo::Rect,
+        spacing: kurbo::Vec2,
+        origin: kurbo::Point,
+        subdivisions: u32,
+        crowding: GridCrowding,
+    ) -> Self {
+        let subdivisions = subdivisions.max(1);
+        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x(), crowding);
+        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom, crowding);
+        let wide = |step: f64, zoom: f64| fitted_step(step, zoom, crowding).is_some_and(|fitted| fitted * zoom >= CROSSING_MIN);
+        let crossings = wide(spacing.x, view.zoom_x()) && wide(spacing.y, view.zoom);
+        GridLines { x, y, extent: Some(extent), crossings, view: Some(*view) }
+    }
+
+    /// The lines over `rect` that `clip` shows, every `spacing` points from the rect's top-left corner, all major.
+    /// Lines closer than a device pixel are drawn a pixel apart.
+    pub fn screen(rect: Rect, spacing: Vec2, clip: Rect, pixels_per_point: f32) -> Self {
+        let visible = rect.intersect(clip);
+        if visible.width() < 0.0 || visible.height() < 0.0 {
+            return GridLines::default();
+        }
+        let pixel = 1.0 / pixels_per_point.max(f32::EPSILON);
+        let along = |spacing: f32, from: f32, lo: f32, hi: f32| {
+            let mut axis = GridAxis::default();
+            if spacing > 0.0 {
+                let step = spacing.max(pixel);
+                let first = ((lo - from) / step).ceil().max(0.0);
+                axis.major = (0..MAX_LINES).map(|n| from + (first + n as f32) * step).take_while(|at| *at <= hi).map(f64::from).collect();
+            }
+            axis
+        };
+        let extent = kurbo::Rect::new(visible.left().into(), visible.top().into(), visible.right().into(), visible.bottom().into());
+        GridLines {
+            x: along(spacing.x, rect.left(), visible.left(), visible.right()),
+            y: along(spacing.y, rect.top(), visible.top(), visible.bottom()),
+            extent: Some(extent),
+            crossings: false,
+            view: None,
+        }
+    }
+}
+
+/// How the lines of a grid are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GridStroke {
+    /// An unbroken line.
+    #[default]
+    Solid,
+    /// Dashes of `stroke.dash` with gaps of `stroke.dash_gap`.
+    Dashed,
+    /// Dots `stroke.dash_gap` apart.
+    Dots,
+}
+
+/// The colours a grid's lines take; an unset one is the theme's.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct GridInk {
+    /// The major lines' colour: the overlay grid colour by default.
+    pub major: Option<DataColor>,
+    /// The minor lines' colour: the major colour at a share of its alpha by default.
+    pub minor: Option<DataColor>,
+    /// How the lines are drawn.
+    pub stroke: GridStroke,
+}
+
+impl GridInk {
+    /// The theme's colours and solid lines.
+    pub const fn new() -> Self {
+        GridInk { major: None, minor: None, stroke: GridStroke::Solid }
+    }
+
+    /// The major lines in `color`.
+    #[must_use]
+    pub const fn major(mut self, color: DataColor) -> Self {
+        self.major = Some(color);
+        self
+    }
+
+    /// The minor lines in `color`.
+    #[must_use]
+    pub const fn minor(mut self, color: DataColor) -> Self {
+        self.minor = Some(color);
+        self
+    }
+
+    /// The lines drawn as `stroke`.
+    #[must_use]
+    pub const fn stroke(mut self, stroke: GridStroke) -> Self {
+        self.stroke = stroke;
+        self
+    }
+}
+
+/// What the lines of a grid read from the tokens: the line colour and width, and the dash and gap lengths.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GridLook {
+    color: Color32,
+    width: RuleWidth,
+    dash: f32,
+    gap: f32,
+}
+
+impl GridLook {
+    /// The grid look of `tokens`.
+    pub fn of(tokens: &UiTokens) -> Self {
+        let look = rule_look(tokens, RuleKind::Grid);
+        GridLook { color: look.color, width: look.width, dash: tokens.stroke.dash, gap: tokens.stroke.dash_gap }
+    }
+}
+
+/// The lines of `grid` as `ink` draws them: minor lines first, then the major ones, each running across
+/// the grid's extent and mapped through its view.
+pub fn grid_lines(tokens: &UiTokens, grid: &GridLines, ink: &GridInk, pixels_per_point: f32) -> Vec<Shape> {
+    grid_lines_with(&GridLook::of(tokens), grid, ink, pixels_per_point)
+}
+
+/// [`grid_lines`] from a look read earlier.
+pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_per_point: f32) -> Vec<Shape> {
+    let Some(extent) = grid.extent else { return Vec::new() };
+    let major = ink.major.map_or(look.color, |color| color.0);
+    let minor = ink.minor.map_or_else(|| major.gamma_multiply(MINOR_SHARE), |color| color.0);
+    let screen = |x: f64, y: f64| match &grid.view {
+        Some(view) => view.to_screen(kurbo::Point::new(x, y)),
+        None => pos2(x as f32, y as f32),
+    };
+    let mut shapes = Vec::new();
+    for (color, xs, ys) in [(minor, &grid.x.minor, &grid.y.minor), (major, &grid.x.major, &grid.y.major)] {
+        let ends =
+            xs.iter().map(|&x| (screen(x, extent.y0), screen(x, extent.y1))).chain(ys.iter().map(|&y| (screen(extent.x0, y), screen(extent.x1, y))));
+        for (a, b) in ends {
+            match ink.stroke {
+                GridStroke::Solid => shapes.extend(Rule::shapes(&RuleLook { color, width: look.width }, a, b, pixels_per_point)),
+                GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width.points(pixels_per_point), color)),
+                GridStroke::Dots => shapes.extend(Rule::dotted(&RuleLook { color, width: look.width }, a, b, look.gap, pixels_per_point)),
+            }
+        }
+    }
+    shapes
+}
+
+/// The tick marks of `ticks` along `edge` of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
+/// `TICK_MINOR` long, mid ones `TICK_MID`, major ones across the whole depth of `rect`. The edge
+/// face hangs them from `edge`; the centred face centres them on `rect`'s middle line (`rect` is then the face's bar).
+pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, face: RulerFace, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
+    let look = RuleLook { color: rgba_color(tokens.color.text.faint), width: RuleWidth::Points(tokens.stroke.thin) };
+    let depth = match edge {
+        TickEdge::Bottom | TickEdge::Top => rect.height(),
+        TickEdge::Left | TickEdge::Right => rect.width(),
+    };
+    ticks
+        .iter()
+        .filter_map(|tick| {
+            let length = match tick.rank {
+                TickRank::Minor => TICK_MINOR,
+                TickRank::Mid => TICK_MID,
+                TickRank::Major => depth,
+            };
+            let (from, to) = match (face, edge) {
+                (RulerFace::Edge, TickEdge::Bottom) => {
+                    (pos2(rect.left() + tick.at, rect.bottom()), pos2(rect.left() + tick.at, rect.bottom() - length))
+                }
+                (RulerFace::Edge, TickEdge::Top) => (pos2(rect.left() + tick.at, rect.top()), pos2(rect.left() + tick.at, rect.top() + length)),
+                (RulerFace::Edge, TickEdge::Left) => (pos2(rect.left(), rect.top() + tick.at), pos2(rect.left() + length, rect.top() + tick.at)),
+                (RulerFace::Edge, TickEdge::Right) => (pos2(rect.right(), rect.top() + tick.at), pos2(rect.right() - length, rect.top() + tick.at)),
+                (RulerFace::Centred, TickEdge::Bottom | TickEdge::Top) => {
+                    let (x, y) = (rect.left() + tick.at, rect.center().y);
+                    (pos2(x, y - length / 2.0), pos2(x, y + length / 2.0))
+                }
+                (RulerFace::Centred, TickEdge::Left | TickEdge::Right) => {
+                    let (x, y) = (rect.center().x, rect.top() + tick.at);
+                    (pos2(x - length / 2.0, y), pos2(x + length / 2.0, y))
+                }
+            };
+            clip.intersects(Rect::from_two_pos(from, to)).then(|| Rule::shapes(&look, from, to, pixels_per_point))
+        })
+        .flatten()
+        .collect()
+}
+
+/// The line that marks a shape on any image: a `thick` halo under a `medium` line, in the overlay colours.
+pub fn outline(tokens: &UiTokens, shape: &PaintShape) -> Vec<Shape> {
+    outline_in(tokens, std::slice::from_ref(shape), rgba_color(tokens.color.overlay.line))
+}
+
+/// The outline of [`outline`] with the line in `line`, a colour the user picked (a Navigator proxy colour), over the
+/// overlay halo. Every halo is drawn under every line, so the edges of one mark that meet or cross stay unbroken.
+pub fn outline_in(tokens: &UiTokens, shapes: &[PaintShape], line: Color32) -> Vec<Shape> {
+    outline_with(Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo)), Stroke::new(tokens.stroke.medium, line), shapes)
+}
+
+/// The outline of `shapes` with the strokes given: the halo under the line. For a component that keeps shapes built in
+/// `update`, where only `style` has read the tokens.
+pub fn outline_with(halo: Stroke, line: Stroke, shapes: &[PaintShape]) -> Vec<Shape> {
+    let halos = shapes.iter().flat_map(|shape| stroked(shape, halo));
+    halos.chain(shapes.iter().flat_map(|shape| stroked(shape, line))).collect()
+}
+
+/// A dashed line along `points` in `color`, `width` thick, with the lengths and phase of `pattern`. The pattern
+/// continues across the segments; the corners are not closed. The one dashed-line implementation: `Draw::dashed` and
+/// the painter's `dashed` call it.
+pub fn dashed(points: &[Pos2], pattern: Dashes, width: f32, color: Color32) -> Vec<Shape> {
+    Shape::dashed_line_with_offset(points, Stroke::new(width, color), &[pattern.dash], &[pattern.gap], pattern.phase)
+}
+
+/// Longer than any line that fits the view: only its part in view is dashed.
+const LONG_EDGE: f32 = 8192.0;
+
+/// The ants' geometry on a display of some device pixels per point, at one moment of the march.
+#[derive(Clone, Copy)]
+struct Ants {
+    ppp: f32,
+    /// Line thickness, in device pixels.
+    width: i64,
+    /// Dash length, in device pixels.
+    dash: i64,
+    /// How far the pattern has marched, in device pixels.
+    phase: i64,
+}
+
+impl Ants {
+    /// Ants of `stroke.dash` line widths, a line width being a whole number of device pixels (one at 100 percent,
+    /// two up to 200 percent), marched `phase` points.
+    fn new(tokens: &UiTokens, ppp: f32, phase: f32) -> Self {
+        let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
+        // A hair over a whole scale (a windowing system's rounding) is still that scale.
+        let width = ((ppp - 0.01).ceil() as i64).clamp(1, 8);
+        let dash = (tokens.stroke.dash.round().max(1.0) as i64) * width;
+        let phase = if phase.is_finite() { (f64::from(phase) * f64::from(ppp)).round().rem_euclid((2 * dash) as f64) as i64 } else { 0 };
+        Ants { ppp, width, dash, phase }
+    }
+
+    /// The dark runs of `[lo, hi)` along one pixel row (or column) of a band. A pixel is dark where
+    /// `(s + phase) mod 2 * dash < dash`, `s` being its position along the edge plus `off`, `width` times its position
+    /// across it: a dash ends on a slant in a band thicker than a pixel.
+    fn runs(&self, lo: i64, hi: i64, off: i64) -> impl Iterator<Item = (i64, i64)> + '_ {
+        let period = 2 * self.dash;
+        let first = lo - (lo + off + self.phase).rem_euclid(period);
+        std::iter::successors(Some(first), move |s| Some(s + period))
+            .take_while(move |&s| s < hi)
+            .map(move |s| (s.max(lo), (s + self.dash).min(hi)))
+            .filter(|(s, e)| e > s)
+    }
+}
+
+/// Marching ants along `points` (closed when `closed`) inside `clip`: bands of the marquee colour with dark dashes in
+/// the halo colour, shifted by `phase` points along the path. The pattern is fixed to the screen's device pixels, so
+/// each horizontal or vertical edge is a band of whole pixels (one at 100 percent, two up to 200 percent) at any
+/// fractional scale and one mesh of pixel-aligned quads; a slanted edge stays a line shape.
+pub fn marching_ants(tokens: &UiTokens, points: &[Pos2], closed: bool, phase: f32, clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
+    let (light, dark) = (rgba_color(tokens.color.overlay.marquee), rgba_color(tokens.color.overlay.halo));
+    let ants = Ants::new(tokens, pixels_per_point, phase);
+    let Ants { ppp, width: w, dash, .. } = ants;
+    let mut mesh = egui::Mesh::default();
+    let mut slanted = Vec::new();
+    // Device pixels to a rectangle in points.
+    let mut quad = |x0: i64, y0: i64, x1: i64, y1: i64, color: Color32| {
+        let rect = Rect::from_min_max(pos2(x0 as f32 / ppp, y0 as f32 / ppp), pos2(x1 as f32 / ppp, y1 as f32 / ppp));
+        mesh.add_colored_rect(rect, color);
+    };
+    // The view in device pixels, a dash period wider: a band is cut to it so a long edge costs what its visible part
+    // does, and the pattern is fixed to the screen so the cut does not move it.
+    let view = clip.expand(2.0 * dash as f32 / ppp);
+    let (vx0, vy0) = ((view.min.x * ppp).floor() as i64, (view.min.y * ppp).floor() as i64);
+    let (vx1, vy1) = ((view.max.x * ppp).ceil() as i64, (view.max.y * ppp).ceil() as i64);
+    // The first pixel of a band across its boundary: centred on it, the odd one after it.
+    let half = w / 2;
+    let back = points.first().zip(points.last()).filter(|_| closed && points.len() > 2).map(|(first, last)| (*last, *first));
+    let lines = points.windows(2).map(|pair| (pair[0], pair[1])).chain(back);
+    for (pa, pb) in lines {
+        if !(pa.is_finite() && pb.is_finite() && clip.intersects(Rect::from_two_pos(pa, pb).expand(1.0))) {
+            continue;
+        }
+        let (pa, pb) = if pa.distance(pb) > LONG_EDGE {
+            let Some(inside) = clip_line(view, pa, pb) else { continue };
+            inside
+        } else {
+            (pa, pb)
+        };
+        let (da, db) = (pa * ppp, pb * ppp);
+        let (ax, ay, bx, by) = (da.x.round() as i64, da.y.round() as i64, db.x.round() as i64, db.y.round() as i64);
+        if (ax, ay) == (bx, by) {
+            continue;
+        }
+        if ay == by {
+            // Rows `y0..y0 + w`, from one end's band to the other's, so edges meet at corners.
+            let (x0, x1) = ((ax.min(bx) - half).max(vx0), (ax.max(bx) - half + w).min(vx1));
+            let y0 = ay - half;
+            if x1 <= x0 {
+                continue;
+            }
+            quad(x0, y0, x1, y0 + w, light);
+            for y in y0..y0 + w {
+                for (s, e) in ants.runs(x0, x1, w * y) {
+                    quad(s, y, e, y + 1, dark);
+                }
+            }
+        } else if ax == bx {
+            let (y0, y1) = ((ay.min(by) - half).max(vy0), (ay.max(by) - half + w).min(vy1));
+            let x0 = ax - half;
+            if y1 <= y0 {
+                continue;
+            }
+            quad(x0, y0, x0 + w, y1, light);
+            for x in x0..x0 + w {
+                for (s, e) in ants.runs(y0, y1, w * x) {
+                    quad(x, s, x + 1, e, dark);
+                }
+            }
+        } else {
+            let len = da.distance(db);
+            let dir = (db - da) / len;
+            let stroke = |color| Stroke::new(w as f32 / ppp, color);
+            slanted.push(Shape::line_segment([da / ppp, db / ppp], stroke(light)));
+            // Phased by screen position, like the straight edges, so dashes line up across joins.
+            let period = (2 * dash) as f32;
+            let mut t = -(da.x.floor() + da.y.floor() + ants.phase as f32).rem_euclid(period);
+            while t < len {
+                let (s0, s1) = (t.max(0.0), (t + dash as f32).min(len));
+                if s1 > s0 {
+                    slanted.push(Shape::line_segment([(da + dir * s0) / ppp, (da + dir * s1) / ppp], stroke(dark)));
+                }
+                t += period;
+            }
+        }
+    }
+    if !mesh.is_empty() {
+        slanted.push(Shape::mesh(mesh));
+    }
+    slanted
+}
+
+/// The part of the segment `a`-`b` inside `r`, clipped in f64: a zoomed view can put endpoints far away, where f32
+/// interpolation loses viewport-sized differences.
+fn clip_line(r: Rect, a: Pos2, b: Pos2) -> Option<(Pos2, Pos2)> {
+    let (ax, ay) = (f64::from(a.x), f64::from(a.y));
+    let (dx, dy) = (f64::from(b.x) - ax, f64::from(b.y) - ay);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-dx, ax - f64::from(r.min.x)), (dx, f64::from(r.max.x) - ax), (-dy, ay - f64::from(r.min.y)), (dy, f64::from(r.max.y) - ay)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else if p < 0.0 {
+            t0 = t0.max(q / p);
+        } else {
+            t1 = t1.min(q / p);
+        }
+    }
+    let at = |t: f64| pos2((ax + dx * t) as f32, (ay + dy * t) as f32);
+    (t0 <= t1).then(|| (at(t0), at(t1)))
+}
+
+/// The insertion mark of a drop from `from` to `to`.
+pub fn drop_mark(tokens: &UiTokens, from: Pos2, to: Pos2, pixels_per_point: f32) -> Vec<Shape> {
+    Rule::shapes(&rule_look(tokens, RuleKind::DropMark), from, to, pixels_per_point)
+}
+
+/// The points of the ellipse with centre `center` and conjugate half-axes `axes` (a rotated or skewed circle is
+/// a pair of axes), counter-clockwise from the first axis, with a count that keeps the chord error under a
+/// fraction of a point at any size. The first point is not repeated at the end.
+pub fn ellipse(center: Pos2, axes: [Vec2; 2]) -> Vec<Pos2> {
+    // Chord error of a regular n-gon on radius r is r (1 - cos(pi / n)); n = pi / acos(1 - e / r) keeps it under e.
+    const MAX_CHORD_ERROR: f32 = 0.1;
+    const MIN_POINTS: usize = 16;
+    const MAX_POINTS: usize = 720;
+    let radius = axes[0].length().max(axes[1].length());
+    let count = if radius <= MAX_CHORD_ERROR {
+        MIN_POINTS
+    } else {
+        ((std::f32::consts::PI / (1.0 - MAX_CHORD_ERROR / radius).acos()).ceil() as usize).clamp(MIN_POINTS, MAX_POINTS)
+    };
+    (0..count)
+        .map(|i| {
+            let angle = TAU * i as f32 / count as f32;
+            center + axes[0] * angle.cos() + axes[1] * angle.sin()
+        })
+        .collect()
+}
+
+/// A line `width` points wide along `points`, with round dots at every point, in the theme's text-selection fill
+/// (translucent, so the content under it shows): the swath a rubbing tool leaves.
+pub fn swath(tokens: &UiTokens, points: &[Pos2], width: f32) -> Vec<Shape> {
+    let color = rgba_color(tokens.color.state.text_selection);
+    let mut shapes = vec![Shape::line(points.to_vec(), Stroke::new(width, color))];
+    // A line has butt ends and no joins: a dot at each point keeps the swath's width at the ends and corners.
+    shapes.extend(points.iter().map(|&p| Shape::circle_filled(p, width / 2.0, color)));
+    shapes
+}
+
+fn stroked(shape: &PaintShape, stroke: Stroke) -> Vec<Shape> {
+    match shape {
+        PaintShape::Rect(rect, radius) => vec![Shape::rect_stroke(*rect, *radius, stroke, egui::StrokeKind::Middle)],
+        PaintShape::Circle(center, radius) => vec![Shape::circle_stroke(*center, *radius, stroke)],
+        PaintShape::Polygon(points) => vec![Shape::closed_line(points.clone(), stroke)],
+        PaintShape::Path(points) => vec![Shape::line(points.clone(), stroke)],
+    }
+}
+
+impl ContentPainterCx<'_> {
+    fn ppp(&self) -> f32 {
+        self.painter.pixels_per_point()
+    }
+
+    /// Paints shapes whose colours are data (a colour mesh, a plot's series, document text laid out by `layout`): as
+    /// they are, at `Opacity::DISABLED` while the component paints its Disabled state (each colour keeps its hue), and
+    /// in the theme's disabled fill for an inactive part, as `Draw::data_fill` paints a data colour.
+    pub fn data_shapes(&self, shapes: impl IntoIterator<Item = Shape>) {
+        self.painter.extend(shapes.into_iter().map(|mut shape| {
+            self.data.shape(self.tokens, &mut shape);
+            shape
+        }));
+    }
+
+    /// Paints the part `uv` of `texture` into `rect`, untinted, with corners of `radius` points (zero for square ones).
+    /// The picture is data, painted as `Draw::texture` paints one.
+    pub fn picture(&self, texture: egui::TextureId, rect: Rect, uv: Rect, radius: f32) {
+        super::draw::data_picture(&self.painter, self.tokens, self.data, texture, rect, uv, UiTokens::corner(radius));
+    }
+
+    /// Paints the theme's transparency checkerboard over `rect`, as the data over it; see [`Self::checker_with`].
+    pub fn checker(&self, rect: Rect) {
+        self.checker_with(&Checker::new(), rect, CornerRadius::ZERO);
+    }
+
+    /// Paints a colour ramp over `rect` with corners of `radius` along `axis`, as data; see [`ramp`].
+    pub fn ramp(&self, rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) {
+        self.data_shapes(ramp(rect, radius, stops, axis));
+    }
+
+    /// Paints a colour `mesh` laid over `rect`, as data, with its vertices pulled inside the outline of corners of
+    /// `radius`, so a gradient keeps inside the rounded ring of the well it fills.
+    pub fn mesh_in(&self, rect: Rect, radius: CornerRadius, mesh: Mesh) {
+        self.data_shapes(rounded_mesh(mesh, rect, radius));
+    }
+
+    /// Paints the well of a plot over `rect` and returns the rect inside its edge, where the plot draws.
+    pub fn plot_frame(&self, rect: Rect) -> Rect {
+        let style = surface_style(self.tokens, SurfaceKind::Well);
+        self.painter.extend(Surface::shapes(&style, None, rect, Corners::None, self.direction, self.ppp()));
+        rect.shrink(self.tokens.stroke.thin)
+    }
+
+    /// Paints a surface of `kind` over `rect`; [`Self::ink_on`] is the ink text and glyphs read on it.
+    pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners) {
+        let style = surface_style(self.tokens, kind);
+        self.painter.extend(Surface::shapes(&style, None, rect, corners, self.direction, self.ppp()));
+    }
+
+    /// Paints `icon` centred in `rect`, as `Draw::icon` does: a glyph on a tile the content draws itself.
+    pub fn icon(&self, rect: Rect, icon: &super::IconSpec<'_>) {
+        self.with_draw(|draw| draw.icon(rect, icon));
+    }
+
+    /// The ink text and glyphs read on a surface of `kind`.
+    pub fn ink_on(&self, kind: SurfaceKind) -> Color32 {
+        ink_color(self.tokens, kind.ink())
+    }
+
+    /// Paints the lines of `grid` in `ink`; see [`grid_lines`].
+    pub fn grid_lines(&self, grid: &GridLines, ink: &GridInk) {
+        self.painter.extend(grid_lines(self.tokens, grid, ink, self.ppp()));
+    }
+
+    /// Paints the checkerboard `checker` over `rect` with corners of `radius`. It shows through data, so it paints as
+    /// the data over it, as `Draw::checker` does.
+    pub fn checker_with(&self, checker: &Checker, rect: Rect, radius: CornerRadius) {
+        super::draw::data_checker(&self.painter, self.tokens, self.data, checker, rect, radius);
+    }
+
+    /// Where the marks of a ruler strip along `edge` sit in `face`; see [`RulerFace::bar`].
+    pub fn ruler_bar(&self, strip: Rect, edge: TickEdge, face: RulerFace) -> Rect {
+        face.bar(strip, edge)
+    }
+
+    /// Paints tick marks along `edge` of `rect` in `face`; see [`ticks`].
+    pub fn ticks(&self, rect: Rect, edge: TickEdge, face: RulerFace, marks: &[Tick]) {
+        self.painter.extend(ticks(self.tokens, rect, edge, face, marks, self.painter.clip_rect(), self.ppp()));
+    }
+
+    /// Paints a halo-and-line outline of `shape`.
+    pub fn outline(&self, shape: &PaintShape) {
+        self.painter.extend(outline(self.tokens, shape));
+    }
+
+    /// Paints the halo-and-line outline of `shapes` with the line in `line`; see `outline_in`.
+    pub fn outline_in(&self, shapes: &[PaintShape], line: Color32) {
+        self.painter.extend(outline_in(self.tokens, shapes, line));
+    }
+
+    /// Paints a dashed line along `points`; see [`dashed`].
+    pub fn dashed(&self, points: &[Pos2], pattern: Dashes, width: StrokeWidth, color: Color32) {
+        self.painter.extend(dashed(points, pattern, width.points(self.tokens, self.ppp()), color));
+    }
+
+    /// Paints marching ants along `points`, shifted `phase` points; see [`marching_ants`].
+    pub fn marching_ants(&self, points: &[Pos2], closed: bool, phase: f32) {
+        self.painter.extend(marching_ants(self.tokens, points, closed, phase, self.painter.clip_rect(), self.ppp()));
+    }
+
+    /// The device pixels per point of the surface being painted.
+    pub fn pixels_per_point(&self) -> f32 {
+        self.ppp()
+    }
+
+    /// Paints a swath `width` points wide along `points` in the text-selection fill; see [`swath`].
+    pub fn swath(&self, points: &[Pos2], width: f32) {
+        self.painter.extend(swath(self.tokens, points, width));
+    }
+
+    /// Paints the insertion mark of a drop.
+    pub fn drop_mark(&self, from: Pos2, to: Pos2) {
+        self.painter.extend(drop_mark(self.tokens, from, to, self.ppp()));
+    }
+}

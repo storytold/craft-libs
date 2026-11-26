@@ -1,0 +1,324 @@
+//! `EditorMock`: a document editor window composed from library components.
+
+use super::commands::AppCommand;
+use super::model::{MockState, Panel, Tool, ToolKey};
+use super::panels::Panels;
+use super::tools::Tools;
+use super::words::MockWords;
+use craft_behavior::IconId;
+use craft_behavior::dock::PanelState;
+use craft_theme::variant::Tone;
+use craft_ui::bars::{Bar, BarKind, StatusMessage, StatusReadout, StatusValues};
+use craft_ui::buttons::{IconButton, Link};
+use craft_ui::canvas::{PickStep, ViewCommands};
+use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
+use craft_ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
+use craft_ui::display::{Divider, Text};
+use craft_ui::docking::{DockConfig, DockEvent, PanelSpecs as _};
+use craft_ui::menu::{Menu, MenuBar, MenuItem, MenuTitle};
+use craft_ui::patterns::dock::DockArea;
+use craft_ui::patterns::form_dialogs::{
+    DialogFields, HostedImageSize, HostedParamDialog, ImageSize, ImageSizeValues, Param, ParamDialog, ParamResult,
+};
+use craft_ui::runtime::commands::{self, CommandRef, Commands as _, EditCommands};
+use craft_ui::runtime::env::{Env, Label, WindowKey};
+use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
+use craft_window::Layout;
+use egui::{Rect, Ui};
+use std::sync::Arc;
+
+/// The parameters of Gaussian Blur.
+const BLUR: &str = r#"{"radius":0.1..1000=1}"#;
+
+/// The command key of the Gaussian Blur dialog.
+const BLUR_KEY: &str = "gaussianBlur";
+
+/// Where Gaussian Blur remembers its values.
+const BLUR_MEMORY: SaveKey = SaveKey::new("craft_ui_gallery.gaussianBlur");
+
+/// The mock editor: the shell with its title bar and menus, options bar and status bar around a dock whose canvas group
+/// holds the document tabs, the canvas with its rulers and pasteboard, and the toolbar, Navigator and layer panels.
+///
+/// - Tool: the toolbar (a stepped dock column) and the tool keys pick the current tool; Hand and Zoom run in the canvas's tool host.
+/// - Menus: every row is an app command with its chord; the body takes them.
+/// - Dialogs: Layer, Delete, Layer and Filter, Gaussian Blur open on the window's dialog host; Image, Image Size
+///   shows its dialog over the document's size.
+/// - Screen modes: the shell's own commands (F) and the reveal keys act inside the window's region; the
+///   [`screen_mode`](Self::screen_mode) binding holds the mode.
+#[derive(craft_ui::contract::Pattern)]
+pub struct EditorMock<'a> {
+    label: Label,
+    state: &'a mut MockState,
+    screen_mode: Bind<'a, ScreenMode>,
+}
+
+impl<'a> EditorMock<'a> {
+    /// A mock editor named `label` over `state`.
+    pub fn new(label: impl Into<Label>, state: &'a mut MockState) -> Self {
+        EditorMock { label: label.into(), state, screen_mode: Bind::kept() }
+    }
+
+    /// The window's screen mode; without a binding the window keeps it, starting at `Standard`.
+    pub fn screen_mode(mut self, mode: Bind<'a, ScreenMode>) -> Self {
+        self.screen_mode = mode;
+        self
+    }
+
+    /// Shows the window in the room offered. Each instance keeps its screen mode, Tab toggle and dialogs apart.
+    pub fn show(self, ui: &mut Ui) -> AppShellOutput {
+        self.show_in(ui, None)
+    }
+
+    /// Shows the window at `rect`, taking that rect's room in the flow of `ui`: for a host that sizes it (a story
+    /// card, which sizes a filling story from its content, and the window's canvas has none).
+    pub fn show_at(self, ui: &mut Ui, rect: Rect) -> AppShellOutput {
+        self.show_in(ui, Some(rect))
+    }
+
+    fn show_in(self, ui: &mut Ui, at: Option<Rect>) -> AppShellOutput {
+        let EditorMock { label, state, screen_mode } = self;
+        let window = WindowKey::new(format!("mock-{:x}-{}", ui.scope_id().value(), label.as_str()));
+        let shell = AppShell::embedded(window)
+            .screen_mode(screen_mode)
+            .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
+            .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
+            .status(true, |ui, _, state: &mut MockState| status_bar(ui, state))
+            .body_label(label)
+            .body(|ui, cx, state: &mut MockState| body(ui, cx, state));
+        match at {
+            Some(rect) => shell.show_at(ui, rect, state),
+            None => shell.show(ui, state),
+        }
+    }
+}
+
+/// The dock, then the commands and dialog answers of this pass.
+fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
+    let mut tools = cx.keep::<Tools>().clone();
+    let (events, picked) = {
+        let mut panels = Panels {
+            document: &mut state.document,
+            tool: state.tool,
+            tools: &mut tools,
+            slots: &state.slots,
+            last_used: &mut state.last_used,
+            picked: None,
+        };
+        // The mock app is a preview inside the gallery's page: its floats stay in it.
+        let mut area =
+            DockArea::new("Dock", Bind::bound(&mut state.workspace), &state.specs, &mut panels, DockConfig::default().native_windows(false))
+                .flyout(Bind::bound(&mut state.flyout));
+        if let Some(panel) = state.maximized {
+            area = area.maximized(panel);
+        }
+        let events = area.show(ui).events;
+        (events, panels.picked)
+    };
+    if let Some(tool) = picked {
+        select(ui, state, tool);
+    }
+    for event in events {
+        if let DockEvent::ToggleMaximize { panel, .. } = event {
+            state.maximized = if state.maximized == Some(panel) { None } else { Some(panel) };
+        }
+    }
+
+    while let Some((command, fired)) = cx.take_command::<Tool>() {
+        // A tool key's release picks nothing.
+        if fired.phase != commands::FirePhase::Release {
+            select(ui, state, command);
+        }
+    }
+    while let Some((key, _)) = cx.take_command::<ToolKey>() {
+        match key {
+            ToolKey::PickBrush => pick(ui, state, Tool::Brush, PickStep::Last),
+            ToolKey::CycleBrush => pick(ui, state, Tool::Brush, PickStep::Next),
+            ToolKey::SwapColors => state.colors.swap(),
+            ToolKey::ResetColors => state.colors.reset(),
+        }
+    }
+    let mut asked = Vec::new();
+    while let Some((command, _)) = cx.take_command::<AppCommand>() {
+        asked.push(command);
+    }
+    let mut dialogs = Vec::new();
+    for command in asked {
+        if let Some(panel) = command.panel() {
+            // A panel in a column collapsed to icons shows in its flyout: the command opens or closes that.
+            if state.workspace.layout().opens_in_flyout(&panel) {
+                state.flyout = if state.flyout == Some(panel) { None } else { Some(panel) };
+                continue;
+            }
+            let shown = state.workspace.layout().panel_state(&panel) != PanelState::Hidden;
+            let specs = &state.specs;
+            let _ = Arc::make_mut(&mut state.workspace).set_visible(panel, !shown, None, false, |panel| specs.permissions(panel));
+            continue;
+        }
+        match command {
+            AppCommand::NewLayer => state.document.add_layer(),
+            AppCommand::Rulers => state.document.rulers = !state.document.rulers,
+            AppCommand::ImageSize | AppCommand::DeleteLayer | AppCommand::GaussianBlur => dialogs.push(command),
+            _ => {}
+        }
+    }
+    *cx.keep::<Tools>() = tools;
+
+    if let Some(host) = cx.dialogs() {
+        host.with(|host| {
+            for command in dialogs {
+                match command {
+                    AppCommand::GaussianBlur => {
+                        host.open(HostedParamDialog::new(ui.ctx(), BLUR_KEY, DialogFields::new(), |fields| {
+                            ParamDialog::new(BLUR_KEY, "Gaussian Blur", Param::parse_list(BLUR)).values(Bind::bound(fields)).remember(BLUR_MEMORY)
+                        }));
+                    }
+                    AppCommand::DeleteLayer => {
+                        let name = state.document.current_layer().map(|layer| layer.name.clone()).unwrap_or_default();
+                        host.open(StandardPrompt::confirm_delete([name], 1));
+                    }
+                    AppCommand::ImageSize => {
+                        let values = ImageSizeValues::new(state.document.pixel_size());
+                        host.open(HostedImageSize::new(values, |values: Bind<'_, ImageSizeValues>| ImageSize::new(values)));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(result) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::<ParamResult>::ok) {
+                result.remember(ui);
+                state.document.dirty = true;
+            }
+            if let Some(result) = host.take::<HostedImageSize>().and_then(DialogResult::ok) {
+                state.document.resize(result.size);
+                let env = Env::of(ui);
+                let (width, height) = (env.format().integer(result.size.width), env.format().integer(result.size.height));
+                let text = env.words::<MockWords>().size_status.fill(&[("width", &width), ("height", &height)]);
+                state.status = Some(StatusMessage::new(text));
+            }
+            let confirmed = host.take::<StandardPrompt>().and_then(DialogResult::ok).is_some_and(|answer| answer.choice == PromptChoice::Proceed);
+            if confirmed {
+                state.document.delete_current();
+            }
+        });
+    }
+}
+
+/// Makes the tool a key picks in `tool`'s slot the current tool.
+fn pick(ui: &Ui, state: &mut MockState, tool: Tool, step: PickStep) {
+    if let Some(picked) = Tool::pick(tool.slot(), state.tool, &state.last_used, step) {
+        select(ui, state, picked);
+    }
+}
+
+/// Makes `tool` the current tool and says so in the status bar.
+fn select(ui: &Ui, state: &mut MockState, tool: Tool) {
+    state.tool = tool;
+    let name = commands::resolve(ui.ctx(), CommandRef::from(tool)).label.clone();
+    let text = Env::of(ui).words::<MockWords>().tool_status.fill(&[("tool", &*name)]);
+    state.status = Some(StatusMessage::new(text));
+}
+
+/// The title bar as a picture of a window: an integrated frame of the generic family with every caption at the end,
+/// the menus at the start, the document's name in the middle and search at the end. It acts on no window, since the
+/// mock's shell is embedded.
+fn title_bar(ui: &mut Ui, state: &MockState) {
+    let document = &state.document;
+    let title = if document.dirty { Title::unsaved(document.title.clone()) } else { Title::new(document.title.clone()) };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout::default() });
+    TitleBar::new().frame(frame).show_titled(
+        ui,
+        title,
+        |ui, _| {
+            let titles = vec![
+                MenuTitle::new("&File", |ui| {
+                    for command in [AppCommand::New, AppCommand::Open, AppCommand::Save] {
+                        MenuItem::command(command).enabled(false).show(ui);
+                    }
+                }),
+                MenuTitle::new("&Edit", |ui| {
+                    for command in [EditCommands::Undo, EditCommands::Redo] {
+                        MenuItem::command(command).enabled(false).show(ui);
+                    }
+                    Divider::horizontal().show(ui);
+                    for command in [EditCommands::Cut, EditCommands::Copy, EditCommands::Paste] {
+                        MenuItem::command(command).enabled(false).show(ui);
+                    }
+                }),
+                MenuTitle::new("&Image", |ui| {
+                    MenuItem::command(AppCommand::ImageSize).show(ui);
+                }),
+                MenuTitle::new("&Layer", |ui| {
+                    MenuItem::command(AppCommand::NewLayer).show(ui);
+                    Menu::submenu_row(ui, "Delete", |ui, _| {
+                        MenuItem::command(AppCommand::DeleteLayer).enabled(document.layers.len() > 1).show(ui);
+                    });
+                }),
+                MenuTitle::new("Fil&ter", |ui| {
+                    MenuItem::command(AppCommand::GaussianBlur).show(ui);
+                }),
+                MenuTitle::new("&View", |ui| {
+                    for command in
+                        [ViewCommands::FitOnScreen, ViewCommands::FillScreen, ViewCommands::ActualPixels, ViewCommands::ZoomIn, ViewCommands::ZoomOut]
+                    {
+                        MenuItem::command(command).show(ui);
+                    }
+                    Divider::horizontal().show(ui);
+                    MenuItem::command(AppCommand::Rulers).check(document.rulers).show(ui);
+                }),
+                MenuTitle::new("&Window", |ui| {
+                    for panel in Panel::ALL {
+                        let layout = state.workspace.layout();
+                        let shown = if layout.opens_in_flyout(&panel) {
+                            state.flyout == Some(panel)
+                        } else {
+                            layout.panel_state(&panel) != PanelState::Hidden
+                        };
+                        MenuItem::command(AppCommand::showing(panel)).check(shown).enabled(!panel.protected()).show(ui);
+                    }
+                }),
+            ];
+            MenuBar::new("Main menu", titles).show(ui);
+        },
+        |ui, _| {
+            let _ = IconButton::new(IconId::new("search")).label("Search").show(ui);
+        },
+    );
+}
+
+fn options_bar(ui: &mut Ui, state: &MockState) {
+    let colors = state.colors;
+    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        Text::new(format!("Foreground #{:06X}   Background #{:06X}", colors.foreground, colors.background)).show(ui);
+    });
+}
+
+/// The status bar: the zoom and the chosen readout item, the colour mode, the layer count and the message, and the
+/// render-path warning at the end.
+fn status_bar(ui: &mut Ui, state: &mut MockState) {
+    let MockState { document, tool, status_item, status, .. } = state;
+    let mut values = StatusValues::default();
+    values.document_dimensions = Some(document.pixel_size());
+    values.current_tool = Some(CommandRef::from(*tool));
+    values.layer_count = Some(document.layers.len());
+    let env = Env::of(ui);
+    let words = env.words::<MockWords>();
+    let layers = document.layers.len() as u64;
+    let layer_count = words.layer_count.text(layers, &env.format().integer(layers));
+    let mut chosen = None;
+    let _ = Bar::new("Status", BarKind::Status)
+        .trailing(|ui, _| {
+            Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
+        })
+        .show(ui, |ui, _| {
+            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view), document.size, *status_item, &values).show(ui).item;
+            Divider::vertical().show(ui);
+            Text::new(words.color_mode.clone()).show(ui);
+            Divider::vertical().show(ui);
+            Text::new(layer_count.clone()).show(ui);
+            if let Some(message) = status.as_ref() {
+                message.show(ui);
+            }
+        });
+    if let Some(item) = chosen {
+        *status_item = item;
+    }
+}
