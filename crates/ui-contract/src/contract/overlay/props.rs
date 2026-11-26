@@ -41,14 +41,16 @@ pub struct Dismiss {
     pub on_activate: bool,
     /// The anchor is no longer shown.
     pub anchor_gone: bool,
+    /// A command a key, a native menu pick or the palette ran, from outside the layer and the layers opened from it.
+    pub commands: bool,
     /// Seconds after opening.
     pub timeout: Option<f32>,
 }
 
 impl Dismiss {
-    /// An outside press closes; nothing else does.
+    /// An outside press or a command closes; nothing else does.
     pub const fn new() -> Self {
-        Dismiss { outside: Outside::Close, enter: false, focus_left: false, on_activate: false, anchor_gone: true, timeout: None }
+        Dismiss { outside: Outside::Close, enter: false, focus_left: false, on_activate: false, anchor_gone: true, commands: true, timeout: None }
     }
 
     /// Sets what an outside press does.
@@ -72,6 +74,13 @@ impl Dismiss {
     /// Closes when a component inside is activated, except an opener toggling its popup.
     pub const fn on_activate(mut self, on: bool) -> Self {
         self.on_activate = on;
+        self
+    }
+
+    /// Closes when a key, a native menu pick or the palette runs a command from outside it; off for a layer its host
+    /// opens and closes, as a dock panel's flyout.
+    pub const fn commands(mut self, on: bool) -> Self {
+        self.commands = on;
         self
     }
 
@@ -556,4 +565,7 @@ pub struct PlacementChange {
     pub pointer: Option<Pos2>,
     /// What changed the rect.
     pub kind: PlacementKind,
+    /// The move continues a press that went down outside the overlay and was handed to its move band
+    /// ([`Overlay::continue_move`]): a drag the host began elsewhere (a panel's tab) that the layer carries on.
+    pub continued: bool,
 }

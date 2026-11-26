@@ -6,7 +6,9 @@
 use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
 use craft_theme::Variant;
-use craft_ui::buttons::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, SplitButton, SplitMenu, ToggleButton};
+use craft_ui::buttons::{
+    Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, PushButtonLook, SplitButton, SplitMenu, ToggleButton,
+};
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, CommandSet, Entry, Hover, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::Picture;
@@ -14,8 +16,8 @@ use craft_ui::list::ThumbAspect;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
-use craft_ui::runtime::env::with_env;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Commands as _, Scope};
+use craft_ui::runtime::env::{Env, InBar, in_room, with_env};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pictures::sample_picture;
@@ -466,6 +468,71 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     assert!(narrow < wide - 0.5, "a ribbon's flat toggle sits close: {narrow} against {wide}");
 }
 
+/// Under an app's `PushButtonLook::Filled` a push or split button that asks for no variant draws the filled tile: a fill
+/// apart from the outline's clear rest, no edge at rest and one under the pointer. A variant it asks for stays, the
+/// outline included, and a ribbon keeps its flat look.
+#[trial]
+fn an_apps_filled_look_fills_its_default_push_buttons() {
+    let filled = |ui: &mut Ui, show: &dyn Fn(&mut Ui)| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(PushButtonLook::Filled);
+            },
+            show,
+        )
+    };
+    let button = std::any::type_name::<Button<'static>>();
+    let (tile, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").show(ui);
+        })
+    });
+    let (outline, _) = seen(button, "Cancel", |ui| {
+        let _ = Button::new("Cancel").show(ui);
+    });
+    let (primary, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").variant(Variant::PRIMARY).show(ui);
+        })
+    });
+    let (plain_primary, _) = seen(button, "Cancel", |ui| {
+        let _ = Button::new("Cancel").variant(Variant::PRIMARY).show(ui);
+    });
+    let (ribbon, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            in_ribbon(ui, |ui| {
+                let _ = Button::new("Cancel").show(ui);
+            })
+        })
+    });
+    let (ghost, _) = seen(button, "Cancel", |ui| {
+        let _ = Button::new("Cancel").variant(Variant::GHOST).show(ui);
+    });
+    let (asked, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").variant(Variant::SECONDARY).show(ui);
+        })
+    });
+    assert_eq!(asked, outline, "a button that asks for the outline keeps it");
+    let (tile, outline) = (tile.expect("a filled button has a surface"), outline.expect("a button has a surface"));
+    assert_ne!(tile.fill.off.rest, outline.fill.off.rest, "a filled button rests on a fill of its own");
+    let edge = tile.border.as_ref().expect("a filled button is edged by state").off;
+    assert_eq!(edge.rest.egui().a(), 0, "a filled button shows no edge at rest");
+    assert!(edge.hover.egui().a() > 0 && edge.pressed.egui().a() > 0, "a filled button is edged under the pointer and the press");
+    assert_eq!(primary, plain_primary, "a variant asked for stays");
+    assert_eq!(ribbon, ghost, "a ribbon's button stays flat");
+
+    let split = std::any::type_name::<SplitButton<'static, usize>>();
+    let (split_tile, _) = seen(split, "Paste", move |ui| {
+        filled(ui, &|ui| {
+            let entries = [Entry::new(1_usize, "Keep text only")];
+            let _ = SplitButton::new("Paste", &entries).show(ui);
+        })
+    });
+    assert_eq!(split_tile.map(|look| look.fill.off.rest), Some(tile.fill.off.rest), "a split button takes the same tile");
+}
+
 /// In a ribbon a combo box is as wide as its widest option and its chevron, not a field length.
 #[trial]
 fn a_ribbons_combo_box_is_as_wide_as_its_options() {
@@ -487,6 +554,110 @@ fn a_ribbons_combo_box_is_as_wide_as_its_options() {
     };
     let (ribbon, standard) = (width(true), width(false));
     assert!(ribbon < standard / 2.0, "the ribbon's combo box fits two digits and its chevron: {ribbon} against {standard}");
+}
+
+#[trial]
+fn a_bars_combo_box_is_as_wide_as_its_options() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::style::SurfaceKind;
+
+    #[derive(Clone, Copy)]
+    enum Placement {
+        Standard,
+        InBarEnv,
+        CompactOptIn,
+        FloatingBar,
+    }
+
+    let width = |kind: Placement| {
+        let mut fixture = Fixture::new(move |ui| {
+            let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+            let mut size = "11".to_owned();
+            let mut show = |ui: &mut Ui| {
+                let mut cb = ComboBox::new("Font Size", Bind::bound(&mut size), &options);
+                if matches!(kind, Placement::CompactOptIn) {
+                    cb = cb.compact(true);
+                }
+                let _ = cb.show(ui);
+            };
+            match kind {
+                Placement::Standard | Placement::CompactOptIn => show(ui),
+                Placement::InBarEnv => {
+                    with_env(
+                        ui,
+                        |overrides| {
+                            overrides.values.set(craft_ui::contract::InBar(true));
+                        },
+                        show,
+                    );
+                }
+                Placement::FloatingBar => {
+                    let _ = Bar::new("Floating Bar", BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+                        show(ui);
+                    });
+                }
+            }
+        });
+        fixture.settle();
+        fixture.by_label("Font Size").expect("the combo box").rect.width()
+    };
+    let standard = width(Placement::Standard);
+    let in_bar = width(Placement::InBarEnv);
+    let opt_in = width(Placement::CompactOptIn);
+    let floating_bar = width(Placement::FloatingBar);
+    assert!(in_bar < standard / 2.0, "the bar's combo box fits two digits and its chevron: {in_bar} against {standard}");
+    assert!((in_bar - opt_in).abs() < 0.5, "opt-in compact combo box matches in_bar: {opt_in} against {in_bar}");
+    assert!((in_bar - floating_bar).abs() < 0.5, "floating bar combo box matches in_bar: {floating_bar} against {in_bar}");
+}
+
+#[trial]
+fn a_nested_in_room_inside_a_bar_does_not_reuse_the_bars_compact_style() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::style::SurfaceKind;
+
+    let mut standard_fixture = Fixture::new(|ui| {
+        let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+        let mut size = "11".to_owned();
+        let _ = ComboBox::new("Standard Size", Bind::bound(&mut size), &options).show(ui);
+    });
+    standard_fixture.settle();
+    let standard = standard_fixture.by_label("Standard Size").expect("the standard combo box").rect.width();
+
+    let seen_keys = Rc::new(Cell::new(None));
+    let seen_in_bar = Rc::new(Cell::new(true));
+    let keys_out = Rc::clone(&seen_keys);
+    let in_bar_out = Rc::clone(&seen_in_bar);
+
+    let mut fixture = Fixture::new(move |ui| {
+        let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+        let mut bar_size = "11".to_owned();
+        let mut room_size = "11".to_owned();
+        let _ = Bar::new("Toolbar", BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+            let bar_key = Env::of(ui).key;
+            // Warm the style cache with the bar's compact InBar(true) entry first.
+            let _ = ComboBox::new("Bar Size", Bind::bound(&mut bar_size), &options).show(ui);
+            in_room(ui, Rect::from_min_size(pos2(0.0, 60.0), vec2(400.0, 80.0)), |ui| {
+                let room_env = Env::of(ui);
+                in_bar_out.set(room_env.get::<InBar>().0);
+                keys_out.set(Some((bar_key, room_env.key)));
+                let _ = ComboBox::new("Room Size", Bind::bound(&mut room_size), &options).show(ui);
+            });
+        });
+    });
+    fixture.room(vec2(500.0, 200.0));
+    fixture.settle();
+
+    let bar_width = fixture.by_label("Bar Size").expect("the bar combo box").rect.width();
+    let room_width = fixture.by_label("Room Size").expect("the nested room combo box").rect.width();
+    let (bar_key, room_key) = seen_keys.get().expect("keys recorded");
+
+    assert!(!seen_in_bar.get(), "nested in_room resets InBar to false");
+    assert_ne!(bar_key, room_key, "nested in_room derives a new EnvKey when resetting InBar");
+    assert!(bar_width < standard / 2.0, "the bar's combo box is compact: {bar_width} against {standard}");
+    assert!(
+        (room_width - standard).abs() < 0.5,
+        "combo box in a nested in_room uses standard width rather than the bar's warmed compact style: {room_width} against {standard}"
+    );
 }
 
 /// A page's side menu (`ControlPlace::SideMenu`) shows its buttons as rows of places: the label in the large body role
@@ -578,6 +749,96 @@ fn a_side_menus_row_shows_the_standard_icon() {
     };
     let (menu, plain) = (icon_side(true), icon_side(false));
     assert!(menu > plain, "a side menu's icon is the standard one: {menu} against {plain}");
+}
+
+/// An icon-only button in a side menu (WordCraft's Back arrow on the File rail) reads in the menu's ink, as a `Button`
+/// row's icon does, not in the dark ghost ink that vanished on the brand surface; elsewhere it keeps its own ink.
+#[trial]
+fn a_side_menus_icon_button_reads_in_the_menus_ink() {
+    let rest = |side: bool, icon_only: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                if icon_only {
+                    let _ = IconButton::new(IconId::new("print")).label("Back").show(ui);
+                } else {
+                    let _ = Button::new("Print").icon(IconId::new("print")).variant(Variant::GHOST).show(ui);
+                }
+            };
+            if side {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        let kind = if icon_only { std::any::type_name::<IconButton<'static>>() } else { std::any::type_name::<Button<'static>>() };
+        let style = fixture.styles_of(kind).into_iter().next().expect("the button resolved its style");
+        style.looks.icons.first().expect("the button has an icon look").color.off.rest.egui()
+    };
+    assert_eq!(rest(true, true), rest(true, false), "the icon button takes the ink of the menu's rows");
+    assert_ne!(rest(true, true), rest(false, true), "outside a side menu it keeps its own ink");
+}
+
+/// The command the arrow trial's split button is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "splitTrial", scope = "splitTrial")]
+#[non_exhaustive]
+enum SplitCommand {
+    #[command(label = "Trace")]
+    Trace,
+}
+
+/// A click on a split button's arrow opens its menu and never runs the action, read from the output or bound as a
+/// command; a click on the main part runs it.
+#[trial]
+fn a_split_buttons_arrow_never_runs_its_action() {
+    let ran = Rc::new(Cell::new(0));
+    let count = Rc::clone(&ran);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(0u8, "For all apps")];
+        if SplitButton::new("Install", &entries).arrow_label("Install options").show(ui).activated {
+            count.set(count.get() + 1);
+        }
+    });
+    fixture.settle();
+    let arrow = fixture.by_label("Install options").expect("the arrow part");
+    fixture.click(&arrow).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    assert_eq!(ran.get(), 0, "the arrow's click is not the action's");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    let main = fixture.by_label("Install").expect("the split button");
+    fixture.click_at(Pos2::new(main.rect.left() + 4.0, main.rect.center().y)).settle();
+    assert_eq!(ran.get(), 1, "the main part runs the action");
+
+    let fired = Rc::new(Cell::new(0));
+    let count = Rc::clone(&fired);
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::layout_components::Stack::new().command_scope(SplitCommand::SCOPE).show(ui, |ui, scope| {
+            while scope.take_command::<SplitCommand>().is_some() {
+                count.set(count.get() + 1);
+            }
+            scope.publish(SplitCommand::Trace, CommandState::new());
+            let entries = [Entry::new(0u8, "Colour")];
+            let _ = SplitButton::command(SplitCommand::Trace, SplitMenu::Entries(&entries)).arrow_label("Tracing presets").show(ui);
+        });
+    });
+    fixture.settle();
+    let arrow = fixture.by_label("Tracing presets").expect("the arrow part");
+    fixture.click(&arrow).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    assert_eq!(fired.get(), 0, "the arrow's click does not fire the command");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    let main = fixture.by_label("Trace").expect("the split button");
+    fixture.click_at(Pos2::new(main.rect.left() + 4.0, main.rect.center().y)).settle();
+    assert_eq!(fired.get(), 1, "the main part fires it");
 }
 
 /// A split button's body that closes itself (a colour palette's swatch pick) closes the split's menu layer: before,

@@ -1,7 +1,7 @@
 //! `StyleCx`: what `style` and the app colour hooks get. Tokens are readable only through it.
 
 use super::key::{EnvKey, Ink};
-use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
+use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackFill, TrackLook};
 use super::paint::{
     AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, auto_scroll_mark_look, handle_look,
     marker_look, reset_mark_look, rule_look, scroll_bar_look_of,
@@ -38,6 +38,9 @@ pub enum GlyphRole {
     ToolRail,
     /// A list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
     PanelRail,
+    /// A stack of small arrow buttons (a gallery's scroll arrows): `size.icon.glyph_sm` whatever the control size, and
+    /// a ribbon's small icon side does not widen it.
+    Compact,
 }
 
 /// What `fn style` gets. Tokens are read here and nowhere else.
@@ -207,12 +210,12 @@ impl<'a> StyleCx<'a> {
         f(&StyleCx::of_env(ctx, &env))
     }
 
-    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
-    /// not `enabled`.
+    /// The one link look: body role, underlined, `accent.text`, `text.disabled` when not `enabled`.
+    ///
+    /// The theme holds `accent.text` to the text minimum on the panel, raised and sunken surfaces at every contrast.
     pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
         let colors = &self.tokens.color;
-        let accent = if self.contrast() == Contrast::High { colors.accent.text } else { colors.accent.solid };
-        let (ink, off) = (self.color(accent), self.color(colors.text.disabled));
+        let (ink, off) = (self.color(colors.accent.text), self.color(colors.text.disabled));
         let rest = if enabled { ink } else { off };
         super::look::TextLook::new(craft_theme::TypeRole::Body, Stateful::new(rest).off(States::new(rest, rest, rest, off)))
     }
@@ -289,6 +292,19 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::non_text_contrast_min(self.contrast())))
+    }
+
     /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
     /// needs: the inverse of [`ink_on`](Self::ink_on).
     pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
@@ -350,14 +366,18 @@ impl<'a> StyleCx<'a> {
         ))
     }
 
-    /// The look of a value track: a groove of `size.groove` with the part a value fills over it, and its marks.
+    /// The look of a value track: a groove of `size.groove` with the part a value fills over it, in the scope's
+    /// [`TrackFill`], and its marks.
     pub fn track(&self) -> TrackLook {
         let colors = &self.tokens.color;
-        let groove = self.color(colors.line.control_edge);
-        let muted = self.color(colors.text.muted);
+        let (groove, fill) = match self.env::<TrackFill>() {
+            TrackFill::Muted => (colors.line.control_edge, colors.text.muted),
+            TrackFill::Accent => (colors.line.outline, colors.accent.solid),
+        };
+        let (groove, fill) = (self.color(groove), self.color(fill));
         TrackLook {
             unfilled: Stateful::new(groove),
-            filled: Stateful::new(muted).off(States::new(muted, muted, muted, self.color(colors.text.disabled))),
+            filled: Stateful::new(fill).off(States::new(fill, fill, fill, self.color(colors.text.disabled))),
             edge: Stateful::new(self.color(colors.line.control_edge)),
             edge_width: self.tokens.stroke.thin,
             thickness: self.tokens.size.groove,
@@ -390,6 +410,33 @@ impl<'a> StyleCx<'a> {
     pub fn glyph(&self) -> f32 {
         let icon = &self.tokens.size.icon;
         BySize { sm: icon.glyph_sm, md: icon.glyph_md }.get(self.size)
+    }
+
+    /// The height of a push button at the ambient size: `size.button` at the medium size, grown as a control's height
+    /// is; a small button stands a small control high.
+    pub fn button_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.button, self.line_ratio),
+        }
+    }
+
+    /// The height of a dialog's footer button at the ambient size: `size.dialog.button_height` at the medium size, grown
+    /// as a control's height is; a small button stands a small control high.
+    pub fn dialog_button_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.dialog.button_height, self.line_ratio),
+        }
+    }
+
+    /// The height of a menu row at the ambient size: `size.row.menu` at the medium size, grown as a control's height
+    /// is; a small row stands a small control high.
+    pub fn menu_row_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.row.menu, self.line_ratio),
+        }
     }
 
     /// How the icon-only buttons of the scope show their glyph.
@@ -560,10 +607,15 @@ impl<'a> StyleCx<'a> {
 /// token's type line: the control's vertical padding (the token height less the label role's line height, which
 /// the token already holds) around the leading face's line height at the label size. `line_ratio` is that face's
 /// line height per point of text (`0` with no stack installed: the token alone).
+/// A control height token grown by what a label line under `line_ratio` takes beyond the label's line height.
+fn grown(tokens: &UiTokens, token: f32, line_ratio: f32) -> f32 {
+    let label = tokens.typography.label;
+    token + (line_ratio * label.size - label.line_height).max(0.0)
+}
+
 pub(crate) fn control_metrics(tokens: &UiTokens, size: ControlSize, line_ratio: f32) -> ControlMetrics {
     let sizes = &tokens.size;
-    let label = tokens.typography.label;
-    let grown = |token: f32| token + (line_ratio * label.size - label.line_height).max(0.0);
+    let grown = |token: f32| grown(tokens, token, line_ratio);
     let pad = tokens.space.pad.control;
     let gap = tokens.space.gap.inline;
     ControlMetrics::at(

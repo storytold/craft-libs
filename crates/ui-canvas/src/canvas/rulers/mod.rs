@@ -6,7 +6,7 @@
 pub(crate) mod stories;
 mod ticks;
 
-pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
+pub use ticks::{CENTIMETRE_LABEL_STEP_MIN, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
 
 use super::words::CanvasWords;
 use super::{CanvasRulers, CanvasSpace, GuideDrag, RulerText, Snap, context_menu, readout};
@@ -402,7 +402,7 @@ impl Component for Rulers<'_> {
         for (part, strip) in [(RulerPart::Horizontal, top), (RulerPart::Vertical, left)] {
             let declared = cx.part(part.part(), strip).priority(handle).pointer_only("the New Guide... command places a guide by number");
             if self.interactive {
-                let declared = declared.sense(Sense::DRAG | Sense::CLICK);
+                let declared = declared.sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK);
                 if let Some(space) = space {
                     declared.cursor(resize_cursor(&space.view, motion_across(part.guide_along())));
                 }
@@ -410,7 +410,11 @@ impl Component for Rulers<'_> {
         }
         let declared = cx.part(CORNER, corner).priority(handle);
         if self.interactive {
-            let sense = if self.origin_locked { Sense::CLICK | Sense::CONTEXT_CLICK } else { Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS };
+            let sense = if self.origin_locked {
+                Sense::CLICK | Sense::CONTEXT_CLICK
+            } else {
+                Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS
+            };
             let declared = declared.sense(sense);
             if self.origin_locked {
                 declared.pointer_only("the zero point is locked");

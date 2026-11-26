@@ -34,6 +34,7 @@ craft-draw = { workspace = true, optional = true }
 craft-ecproj-format = { workspace = true, optional = true }
 craft-font-catalog = { workspace = true, optional = true }
 craft-font-manager = { workspace = true, optional = true }
+craft-font-os-windows = { workspace = true, optional = true }
 craft-font-store = { workspace = true, optional = true }
 craft-font-subset = { workspace = true, optional = true }
 craft-imaging = { workspace = true, optional = true }
@@ -109,6 +110,7 @@ craft-kra = { workspace = true, optional = true }
 craft-latex = { workspace = true, optional = true }
 craft-lottie = { workspace = true, optional = true }
 craft-markdown = { workspace = true, optional = true }
+craft-material-graph = { workspace = true, optional = true }
 craft-materialx = { workspace = true, optional = true }
 craft-math = { workspace = true, optional = true }
 craft-mesh = { workspace = true, optional = true }
@@ -227,6 +229,7 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-shared-vec = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -499,6 +502,8 @@ font-catalog-system = ["font-catalog", "craft-font-catalog/system"]
 
 font-manager = ["dep:craft-font-manager"]
 
+font-os-windows = ["dep:craft-font-os-windows"]
+
 font-store = ["dep:craft-font-store"]
 font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
 
@@ -608,6 +613,8 @@ macho = ["dep:craft-macho"]
 macho-serde = ["macho", "craft-macho/serde"]
 
 markdown = ["dep:craft-markdown"]
+
+material-graph = ["dep:craft-material-graph"]
 
 materialx = ["dep:craft-materialx"]
 
@@ -798,6 +805,9 @@ settings-testing = ["settings", "craft-settings/testing"]
 sf2 = ["dep:craft-sf2"]
 sf2-test-support = ["sf2", "craft-sf2/test-support"]
 
+shared-vec = ["dep:craft-shared-vec"]
+shared-vec-serde = ["shared-vec", "craft-shared-vec/serde"]
+
 sheet = ["dep:craft-sheet"]
 
 shx = ["dep:craft-shx"]
@@ -936,6 +946,7 @@ ui-system_fonts = ["ui", "craft-ui/system_fonts"]
 ui-testing = ["ui", "craft-ui/testing"]
 
 update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
+update-local-mirror = ["update", "craft-update/local-mirror"]
 update-oci_migration = ["update", "craft-update/oci_migration"]
 
 usd = ["dep:craft-usd"]

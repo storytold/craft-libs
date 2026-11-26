@@ -1,5 +1,6 @@
 //! The in-window bar's own rules over the model.
 
+use craft_host::target::Os;
 use craft_menu::{Item, Menu, MenuBar, MenuBarUi, Node};
 use craft_ui::contract::Tracked;
 use craft_ui::testing::{Fixture, trial};
@@ -18,6 +19,8 @@ fn a_disabled_submenu_is_greyed_and_does_not_open() {
     let mut fixture = Fixture::new(move |ui| {
         MenuBarUi::new(&bar).show(ui);
     });
+    // The in-window bar's rules; a Mac's menus are in the system bar.
+    fixture.os(Os::Linux);
     fixture.settle();
     let Some(file) = fixture.by_label("File") else { panic!("the bar shows File") };
     fixture.click(&file).settle();

@@ -3,7 +3,7 @@
 
 use super::kit::{Dial, Field, Seen};
 use super::{ROW_A, START};
-use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{LinkLabelUnderline, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Ui, Vec2, pos2};
 use std::cell::{Cell, RefCell};
@@ -78,4 +78,31 @@ fn by_label_gives_the_control_a_link_label_names() {
     let dial = row.seen.borrow().id.expect("the dial ran");
     let control = fixture.node_of(dial).expect("the dial is in the access tree").node;
     assert_eq!(fixture.by_label("Opacity").map(|found| found.node), Some(control), "the label's name finds its control");
+}
+
+/// Regression: egui strokes a link's underline on its text box's bottom edge, which the clip of a label rect no taller
+/// than that box cut away, so the link showed no underline. Under `LinkLabelUnderline::Inside` the label draws the
+/// underline under its name, inside its rect.
+#[trial]
+fn an_inside_underline_is_painted_under_the_name_inside_the_clip() {
+    let row = Row::new();
+    let shown = row.clone();
+    let mut fixture = Fixture::new(move |ui| shown.show(ui, "link", SideLabel::new().link(), ROW_A));
+    fixture.root_value(LinkLabelUnderline::Inside).settle();
+    let shapes = fixture.frame_clipped_shapes();
+    let (clip, name) = shapes
+        .iter()
+        .find_map(|(clip, shape)| match shape {
+            egui::Shape::Text(text) if text.galley.text() == "Opacity" => Some((*clip, shape.visual_bounding_rect())),
+            _ => None,
+        })
+        .expect("the link label paints its name");
+    let line = shapes
+        .iter()
+        .filter(|(at, shape)| *at == clip && !matches!(shape, egui::Shape::Text(_)))
+        .map(|(_, shape)| shape.visual_bounding_rect())
+        .find(|rect| rect.is_finite() && rect.height() <= 2.0 && rect.width() >= name.width() / 2.0)
+        .expect("the label draws its underline");
+    assert!(line.center().y > name.center().y, "the underline {line:?} lies under the name {name:?}");
+    assert!(clip.y_range().contains(line.top()) && clip.y_range().contains(line.bottom()), "the underline {line:?} lies inside the clip {clip:?}");
 }

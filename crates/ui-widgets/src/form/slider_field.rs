@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::{ComponentStyle, StyleCx};
 use crate::text::{NumberField, RangeAlert};
-use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace};
+use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace, TrackPress};
 use craft_behavior::{Flow, Metrics, Mixed, Proposal, Sense, decimals_for_step};
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
@@ -54,16 +54,18 @@ pub struct SliderFieldStyle {
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
 /// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field shows
 /// at most the decimals of its unit kind (three without one), or exactly [`fixed_decimals`](Self::fixed_decimals),
-/// zeros included, and so does its range alert. The field and then the slider are Tab stops. A log or power scale
-/// curves the slider's track only: the field, typing and steps stay linear.
+/// zeros included, and so does its range alert. The field and the slider are Tab stops in the order they are read: the
+/// field and then the slider when stacked, the slider and then the field when inline. A click on the row's label
+/// focuses the number field in either layout. A log or power scale curves the slider's track only: the field, typing
+/// and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
     #[common]
     common: Common,
     value: Bind<'a, f64>,
     range: RangeInclusive<f64>,
-    /// Whether the caption and the number field share a line over the slider, or the number field comes first on the
-    /// slider's line for a row labelled by an enclosing `Field`.
+    /// Whether the caption and the number field share a line over the slider, or the slider and then the number field
+    /// share one line for a row labelled by an enclosing `Field`.
     #[prop]
     layout: SliderFieldLayout,
     /// How positions along the slider's track map to values.
@@ -78,6 +80,9 @@ pub struct SliderField<'a> {
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// When a press on the slider's track sets the value (`Slider::track_press`): on its release or drag by default.
+    #[prop]
+    track_press: TrackPress,
     /// What the number counts: the field shows its unit and reads its spellings.
     #[prop]
     unit_kind: Option<UnitKind>,
@@ -108,6 +113,10 @@ pub struct SliderField<'a> {
     /// a short field and the number, as production's Opacity, not the room it is offered.
     #[prop]
     short: bool,
+    /// The number field selects its whole value when it takes focus, so typing replaces it
+    /// ([`NumberField::select_on_focus`]): a click on the value selects it, a drag across it keeps the range.
+    #[prop(flag)]
+    select_on_focus: bool,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -157,6 +166,7 @@ impl<'a> SliderField<'a> {
             step: None,
             typed_decimals: None,
             wheel_step: None,
+            track_press: TrackPress::OnRelease,
             unit_kind: None,
             unit: None,
             fixed_decimals: None,
@@ -166,6 +176,7 @@ impl<'a> SliderField<'a> {
             field_sizing: None,
             marks: None,
             short: false,
+            select_on_focus: false,
             field_width: 0.0,
             out_of_range: None,
         }
@@ -189,6 +200,7 @@ impl<'a> SliderField<'a> {
     /// What the children are built from, apart from the binding and the track face.
     fn look(&self) -> Look {
         Look {
+            track_press: self.track_press,
             range: self.range.clone(),
             scale: self.scale,
             step: self.step,
@@ -203,6 +215,7 @@ impl<'a> SliderField<'a> {
             field_sizing: self.field_sizing,
             marks: self.marks.clone(),
             short: self.short,
+            select_on_focus: self.select_on_focus,
         }
     }
 }
@@ -218,6 +231,7 @@ enum FieldMarks {
 
 /// What a `SliderField` builds its two children from.
 struct Look {
+    track_press: TrackPress,
     range: RangeInclusive<f64>,
     scale: SliderScale,
     step: Option<f64>,
@@ -233,6 +247,7 @@ struct Look {
     field_sizing: Option<Sizing>,
     marks: Option<FieldMarks>,
     short: bool,
+    select_on_focus: bool,
 }
 
 /// The composite's check, which its children check their values with.
@@ -258,7 +273,13 @@ impl Look {
         if let Some(check) = check {
             bind = bind.check_with(check, BindCheck::validity);
         }
-        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).short(self.short).label(name.clone());
+        let slider = Slider::new(bind, self.range.clone())
+            .track_press(self.track_press)
+            .scale(self.scale)
+            .fill(self.fill)
+            .thumb(self.thumb)
+            .short(self.short)
+            .label(name.clone());
         let slider = match &self.marks {
             Some(FieldMarks::Plain(marks)) => slider.marks(marks),
             Some(FieldMarks::Labelled(marks)) => slider.marks_labelled(marks.iter().cloned()),
@@ -303,6 +324,7 @@ impl Look {
             Some(decimals) => field.max_decimals(decimals),
             None => field,
         };
+        let field = if self.select_on_focus { field.select_on_focus() } else { field };
         let field = match self.unit_kind {
             Some(kind) => field.unit_kind(kind),
             None => field,
@@ -397,24 +419,43 @@ impl Component for SliderField<'_> {
         };
         let flow = Flow::new(cx.rect, cx.env.direction().is_rtl());
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
-        // The field is shown first, so it is the first Tab stop.
+        // The parts are shown in the order they are read, which is their Tab order: the field's line comes first when
+        // stacked, and the slider comes before the field on the inline line.
         // The group has no stop, so its tooltip, and with it the reason it is disabled, is carried by the first stop.
         let face = self.track_face.take();
         let bind = self.value.reborrow();
         let field_view = look.field(&name, shown, Some(bind.check_of()));
-        let field_view = match cx.resolved.tooltip {
-            Some(tooltip) => field_view.tooltip(tooltip.clone()),
-            None => field_view,
-        };
-        let typed = match self.layout {
+        // A read-only field's track is read-only too: no press on it edits the value, whatever `track_press` is, and an
+        // inert composite arms no first-Down gesture in its child for a later writable release.
+        let slider = look.slider(&name, shown, Some(bind.check_of()), face).read_only(cx.resolved.read_only);
+        let (typed, dragged) = match self.layout {
             // The label step puts the caption at the line's start and the field in the number cell at its end.
             SliderFieldLayout::Stacked => {
-                ui.labelled("field", place(field), name.clone(), SideLabel::new().layout(FieldLayout::Line).scrub(true), field_view)
+                let field_view = match cx.resolved.tooltip {
+                    Some(tooltip) => field_view.tooltip(tooltip.clone()),
+                    None => field_view,
+                };
+                let typed = ui.labelled("field", place(field), name.clone(), SideLabel::new().layout(FieldLayout::Line).scrub(true), field_view);
+                (typed, ui.child("slider", place(track), slider))
             }
-            SliderFieldLayout::Inline => ui.child("field", place(field), field_view),
+            SliderFieldLayout::Inline => {
+                let slider = match cx.resolved.tooltip {
+                    Some(tooltip) => slider.tooltip(tooltip.clone()),
+                    None => slider,
+                };
+                // The number field the label focuses shows the tooltip too while enabled. Disabled, the slider alone
+                // carries the reason and stays the one Tab stop.
+                let field_view = match cx.resolved.tooltip {
+                    Some(tooltip) if cx.resolved.enabled => field_view.tooltip(tooltip.clone()),
+                    _ => field_view,
+                };
+                let dragged = ui.child("slider", place(track), slider);
+                // A click on the enclosing field's label focuses the number field, the part that takes typing.
+                ui.label_target("field");
+                (ui.child("field", place(field), field_view), dragged)
+            }
         };
         self.out_of_range = typed.out_of_range.clone();
-        let dragged = ui.child("slider", place(track), look.slider(&name, shown, Some(bind.check_of()), face));
         let start = *self.range.start();
         cx.adopt(&typed, &start, |value, mine| {
             if let Some(value) = value {

@@ -4,7 +4,7 @@
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::{Point, Rect, Size};
 use craft_behavior::{EditEvent, Mixed, RulerUnits};
-use craft_draw::ui::transform::{SizeUnit, TransformField, TransformFields, TransformGroups, TransformRow, TransformSource};
+use craft_draw::ui::transform::{FieldArrangement, SizeUnit, TransformField, TransformFields, TransformGroups, TransformRow, TransformSource};
 use craft_ui::canvas::{CanvasRulers, RulerText};
 use craft_ui::contract::Bind;
 use craft_ui::runtime::env::UnitKind;
@@ -285,4 +285,45 @@ fn a_start_box_that_moves_with_a_scrub_keeps_the_scrub_running() {
     assert!(!events.iter().any(|event| matches!(event, EditEvent::Cancel { .. })), "the scrub was not cancelled: {events:?}");
     assert!(events.iter().any(|event| matches!(event, EditEvent::Commit { .. })), "the release committed it: {events:?}");
     assert!(row.state.quad[0].distance(row.state.quad[1]) > START.width(), "the scrub widened the box: {row:?}");
+}
+
+/// The position-first panel form stands the reference point before the X and W, Y and H rows and the link after them
+/// centred across the rows, both clear of every field, in a wide room, a narrow one and a host sized from its content.
+#[trial]
+fn the_position_first_link_stands_between_the_width_and_height_rows() {
+    use craft_ui::contract::ShowContainer as _;
+    for (width, content) in [(260.0, false), (400.0, false), (400.0, true)] {
+        let mut row = TransformRow::new(BoxState::from_rect(START), 0.0);
+        let mut linked = true;
+        let mut fixture = Fixture::new(move |ui| {
+            let mut show = |ui: &mut egui::Ui| {
+                TransformFields::new("Transform", Bind::bound(&mut row), START, Bind::bound(&mut linked))
+                    .arrangement(FieldArrangement::PositionFirst)
+                    .show(ui)
+            };
+            if content {
+                craft_ui::layout_components::Stack::new().show(ui, |ui, _| show(ui));
+            } else {
+                show(ui);
+            }
+        });
+        fixture.room(egui::vec2(width, 400.0)).settle();
+        let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the fields show {label}")).rect;
+        let link = rect("Maintain aspect ratio");
+        let reference = rect("Reference point");
+        let fields = ["X position", "Width", "Y position", "Height"].map(rect);
+        let dump = format!("in {width} (content: {content}): reference {reference:?}, link {link:?}, fields {fields:?}");
+        assert!(
+            fields.iter().all(|field| !field.intersects(link) && !field.intersects(reference)),
+            "no field overlaps the link or the point: {dump}"
+        );
+        let [x, w, _, h] = fields;
+        assert!(
+            reference.right() <= x.left() && w.right() <= link.left() && link.right() <= width,
+            "point, fields, link in order, inside the room: {dump}"
+        );
+        assert!(h.top() >= w.bottom(), "H is under W: {dump}");
+        let middle = (w.top() + h.bottom()) / 2.0;
+        assert!((link.center().y - middle).abs() <= 1.0, "the link is centred across the two rows: {dump}");
+    }
 }

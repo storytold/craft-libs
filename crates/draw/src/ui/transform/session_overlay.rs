@@ -160,6 +160,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .reference_point(session.reference_point())
             .reach(self.reach)
             .rotate_zone(self.rotate_zone)
+            .own_context_menu(self.reach == TransformReach::Box)
             .id_source(self.id);
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);

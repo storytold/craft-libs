@@ -9,7 +9,7 @@ use craft_ui::docking::{DockColumn, HidePanels, PanelKey, PanelSpec};
 use craft_ui::testing::memory::global;
 use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Pos2, Rect};
+use egui::{Key, Modifiers, Pos2, Rect, Vec2};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -79,4 +79,36 @@ fn a_resize_under_a_pruned_view_keeps_the_hidden_panels() {
         matches!(layout.root, Some(Node::Split { size: SplitSize::Ratio(ratio), .. }) if (ratio - 0.8).abs() < 1e-6),
         "the resize reached the layout"
     );
+}
+
+/// Tabs until the divider holds key focus.
+fn tab_to_divider(fixture: &mut Fixture) {
+    for _ in 0..12 {
+        if craft_ui::testing::access::focused_key(fixture.tree()) == divider(fixture).node {
+            return;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE).idle(2);
+    }
+    panic!("Tab never reached the divider");
+}
+
+/// A pointer drag of a divider leaves key focus where it was, so the next arrow key does not resize the dock; a
+/// divider reached by Tab still resizes with the arrows.
+#[trial]
+fn a_dragged_divider_does_not_keep_the_arrow_keys_but_a_tabbed_one_takes_them() {
+    let (mut fixture, rects) = column();
+    fixture.settle();
+    let grip = divider(&fixture);
+    fixture.drag(&grip, Vec2::new(0.0, 20.0)).idle(2);
+    let dragged = rects.borrow()[0].bottom();
+    assert_ne!(craft_ui::testing::access::focused_key(fixture.tree()), divider(&fixture).node, "the drag did not focus the divider");
+    fixture.key(Key::ArrowDown, Modifiers::NONE).idle(2);
+    assert!((rects.borrow()[0].bottom() - dragged).abs() < 0.5, "the arrows after a pointer drag left the dock as it was");
+
+    let (mut fixture, rects) = column();
+    fixture.settle();
+    tab_to_divider(&mut fixture);
+    let tabbed = rects.borrow()[0].bottom();
+    fixture.key(Key::ArrowDown, Modifiers::NONE).idle(2);
+    assert!((rects.borrow()[0].bottom() - tabbed).abs() > 0.5, "an arrow key moves the divider Tab reached");
 }

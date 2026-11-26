@@ -165,8 +165,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.region_gap = gap_of(&env.tokens, Gap::Tight);
         self.end_gap = gap_of(&env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(props, &env.tokens);
-        self.after_rule = layout::flow_start(&ctx, env) == Some(true);
-        self.rules = RuleBands::of(props, &env.tokens, crate::runtime::egui::scale::pixels_per_point(&ctx), self.after_rule);
+        let start = layout::flow_start(&ctx, env);
+        self.after_rule = start == Some(true);
+        self.rules = RuleBands::of(props, env, crate::runtime::egui::scale::pixels_per_point(&ctx), start);
         self.least_width = least_of(&env.tokens, props.least_width);
         let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
         if !matches!(props.mount, Mount::Inline | Mount::Pane(_))
@@ -328,6 +329,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// the room. What the regions took is recorded for the rest of the pass; a record this pass already holds serves
     /// instead when the room still allows it (`reusable`).
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
+        // A layer measures under its opener's env and runs in its own, which flows in the layer's direction
+        // (`Scoped::layer_direction`): its measuring run lays out in that direction too.
+        let layer_env = matches!(self.props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow)
+            .then(|| at.env.derive(|scoped| scoped.direction = scoped.layer_direction()));
+        let at = &Measuring { env: layer_env.as_ref().unwrap_or(at.env), command: at.command.clone(), ..*at };
         let scrolled_share = match self.measure_room(comp, at, cx) {
             Ok(scrolled_share) => scrolled_share,
             Err(extent) => return extent,
@@ -629,8 +635,19 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.label_step(ui, env, cx.core, &mut plan);
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if plan.is_open {
+            let fits_end = !plan.real && self.end_fit.is_none() && props.end.is_some_and(|end| end.fit);
+            if fits_end {
+                layout::ask_shortfall(&plan.ctx, plan.layout_id);
+            }
             self.body_step(comp, ui, env, cx.core, &mut plan);
+            // The end region's ranked units give up the body's shortfall.
+            if fits_end && let Some(short) = layout::take_shortfall(&plan.ctx, plan.layout_id) {
+                self.end_unfit = Some(short);
+            }
             self.after_body(ui, env, &mut plan);
+            if plan.real {
+                crate::runtime::focus::end_body(&plan.ctx, plan.id);
+            }
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
             }
@@ -638,6 +655,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             // A collapsed body keeps its last full size in layout memory, so opening it again places by that size
             // and asks for no discard pass.
             self.body_size = if props.collapse.is_some() { None } else { Some(Vec2::ZERO) };
+            if plan.real {
+                crate::runtime::focus::end_body(&plan.ctx, plan.id);
+            }
         }
         self.close_label(&mut plan);
         // B4 footer: under the control column of a label-scoped container, which starts where the label step put
@@ -820,10 +840,41 @@ impl BodyHooks<'_> {
         (layer, rect): (areas::LayerKey, Rect),
         values: &AppValues,
     ) {
-        if self.props.label_column {
+        if self.props.end.is_some_and(|end| end.fit) {
+            self.fitting_sweeps(comp, at, cx, (layer, rect), values);
+        } else if self.props.label_column {
             self.settling_sweeps(comp, at, cx, (layer, rect), values);
         } else {
             self.sweep(comp, at, cx, (layer, rect), values);
+        }
+    }
+
+    /// An end region that joins the body's fit (`EndRegion::fit`) gives way before the body: when the body's units ask
+    /// for more than the line the region leaves, the sweep is taken back and the content runs once more with the
+    /// region's first row giving up the body's shortfall by its ranked units, so they leave before a body unit narrows
+    /// or leaves.
+    #[inline(never)]
+    fn fitting_sweeps<C: Container>(
+        &mut self,
+        comp: &mut C,
+        at: &Measuring<'_, '_>,
+        cx: &mut Cx<'_, C>,
+        (layer, rect): (areas::LayerKey, Rect),
+        values: &AppValues,
+    ) {
+        let ctx = at.ui.ctx().clone();
+        let (unfit, _) = crate::contract::draft(
+            &ctx,
+            || {
+                self.sweep(comp, at, cx, (layer, rect), values);
+                self.end_unfit.take()
+            },
+            Option::is_none,
+        );
+        if let Some(short) = unfit {
+            self.end_fit = Some(short);
+            self.sweep(comp, at, cx, (layer, rect), values);
+            (self.end_fit, self.end_unfit) = (None, None);
         }
     }
 
@@ -1254,7 +1305,7 @@ impl BodyHooks<'_> {
             plan.footer_env = plan.region_env.derive_local(|scoped| scoped.content_column = true);
         }
         if plan.real {
-            crate::runtime::focus::begin_body(&plan.ctx);
+            crate::runtime::focus::begin_body(&plan.ctx, plan.id);
         }
         // A stack is a content column where its width comes from its content: a content-sized stack in flow, or a
         // held fill-width container. A stack given its width (a rect it is shown at, or a column's width it passes
@@ -1291,7 +1342,8 @@ impl BodyHooks<'_> {
                 ..line
             });
         }
-        let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: &plan.line_env, gap: plan.gap };
+        let fitted = self.end_fit.filter(|_| !plan.real).map(|short| plan.line_env.derive_local(|scoped| scoped.rank_short = Some(short)));
+        let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: fitted.as_ref().unwrap_or(&plan.line_env), gap: plan.gap };
         let closed = self.end_region(comp, ui, &mut end_cx, &frame, props, end, line);
         plan.close = plan.close.or(closed);
     }
@@ -1860,8 +1912,9 @@ impl BodyHooks<'_> {
         self.region_gap = gap_of(&at.env.tokens, Gap::Tight);
         self.end_gap = gap_of(&at.env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(&props, &at.env.tokens);
-        self.after_rule = layout::flow_start(at.ui.ctx(), at.env) == Some(true);
-        self.rules = RuleBands::of(&props, &at.env.tokens, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()), self.after_rule);
+        let start = layout::flow_start(at.ui.ctx(), at.env);
+        self.after_rule = start == Some(true);
+        self.rules = RuleBands::of(&props, at.env, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()), start);
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),

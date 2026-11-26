@@ -8,7 +8,7 @@
 //! A dock window's title row is also the bar of the column the window holds, with the column's double arrow.
 
 use super::dock_column::{CHEVRON, ColumnArrow, describe_chevron, paint_chevron};
-use super::drop::{DragUnit, start_group_drag};
+use super::drop::start_window_drag;
 use super::{DockDropTarget, DockDropped, DockSizes, DockWords, GroupDrag, PanelDrag, PanelKey, native};
 use crate::contract::BodyCx;
 use crate::contract::SizeLimits;
@@ -23,7 +23,7 @@ use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::WindowSpec;
+use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
@@ -194,6 +194,13 @@ pub struct FloatingGroupOutput {
     pub collapsed_width: Option<f32>,
     /// The files dropped on the group's window that no target there took.
     pub files: Vec<OsFile>,
+    /// The band the group is moved by this pass, with the id of its accessibility node; `None` when it has none.
+    pub grip: Option<(Rect, Id)>,
+    /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
+    /// accessibility node; none while it does not resize (minimized).
+    pub resize: Vec<(ResizeEdge, Rect, Id)>,
+    /// Where `files` were dropped, in the group's layer space, when the drop session knew the pointer.
+    pub files_at: Option<Pos2>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -226,7 +233,8 @@ impl Outcome for FloatingGroupOutput {
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
-///   the platform has no windows. The window comes to the front when the user begins to move or resize it.
+///   the platform has no windows. The window comes to the front when the user begins to move or resize it, and in
+///   the pass [`raise`](FloatingGroup::raise) is set.
 /// - Menu: the Menu action and a context request on the title row open the `menu` rows, under the action's part.
 /// - Show it with [`show_group`](FloatingGroup::show_group): the closure fills the body, and is not called while
 ///   the group is minimized.
@@ -295,8 +303,10 @@ pub struct FloatingGroup<'a> {
     start_drag: Option<StartDrag<'a>>,
     /// Takes the drops released on the group, on the group's own layer.
     take_drop: Option<TakeDrop<'a>>,
-    /// A move by the title began this pass.
+    /// A move of the window began this pass.
     moving: bool,
+    /// That move continues a press another component handed over (`continue_move`), not a press on the title row.
+    continued: bool,
     /// The window takes over the held primary press in this pass: its own move gesture begins from that press with the
     /// pointer at this point inside the window, so the window follows the pointer and, with
     /// [`window_of`](FloatingGroup::window_of), docks where it would dock on release. A request of the pass, for the
@@ -305,11 +315,20 @@ pub struct FloatingGroup<'a> {
     /// ([`native`](FloatingGroup::native)) moves only when pressed again.
     #[prop(quantity = "grab point")]
     continue_move: Option<Vec2>,
+    /// Brings the window to the front of the windows it overlaps in this pass: its layer above the other floating
+    /// layers, or its OS window raised and focused. A request of the pass, for the pass the host reveals a panel of the
+    /// window in.
+    #[prop(flag)]
+    raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
+    /// Where they were dropped.
+    files_at: Option<Pos2>,
 }
 
-type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
+/// Starts the window-unit drag of a window of the given size: a move by the title row when the flag is set, else a
+/// drag the window took over.
+type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool, Vec2) + 'a>;
 
 type TakeDrop<'a> = Box<dyn for<'b, 'c> FnMut(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
 
@@ -321,6 +340,10 @@ impl<'a> FloatingGroup<'a> {
             .pad(Pad::None)
             .sizing(Sizing::Content)
             .header(HeaderRegion::new().band(DragBand::Move).rule(true));
+        let props = match <DockWords as craft_i18n::WordSet>::word("floatingGroup.resize") {
+            Some(word) => props.resize_name(Label::from(word)),
+            None => props,
+        };
         FloatingGroup {
             common: Common::new(),
             props,
@@ -351,8 +374,11 @@ impl<'a> FloatingGroup<'a> {
             start_drag: None,
             take_drop: None,
             moving: false,
+            continued: false,
             continue_move: None,
+            raise: false,
             files: Vec::new(),
+            files_at: None,
         }
         .label(title)
     }
@@ -362,8 +388,7 @@ impl<'a> FloatingGroup<'a> {
     #[must_use]
     pub fn window_of<P: Clone + Hash + Send + Sync + 'static>(mut self, anchor: P) -> Self {
         let active = PanelKey::of(&anchor);
-        let size = self.rect.size();
-        self.start_drag = Some(Box::new(move |cx| start_group_drag(cx, DragUnit::Window(anchor), active, Some(size), None)));
+        self.start_drag = Some(Box::new(move |cx, title_row, size| start_window_drag(cx, anchor, active, size, title_row)));
         self
     }
 
@@ -426,8 +451,8 @@ impl<'a> FloatingGroup<'a> {
     /// A minimized group, and one with `Sizing::Content`, is placed by its position and width; its height is its
     /// content's, which is the chrome alone while minimized.
     fn mount(&self) -> Mount {
-        // The frame's limits are the body's with the chrome on top.
-        let frame = self.limits.around(Vec2::new(0.0, self.chrome));
+        let frame = self.frame_limits();
+        let rect = self.within_limits();
         // A collapsed column's width stays within its own bounds, a minimized one's within the panels' limits.
         let widths = self.column.map(|column| match column.collapsed {
             Some(_) => column.widths,
@@ -450,7 +475,7 @@ impl<'a> FloatingGroup<'a> {
             let width = self.rect.width().max(frame.min.x).min(frame.max.map_or(f32::INFINITY, |max| max.x));
             overlay.placed_at(self.rect.min).size_limits(SizeLimits { min: Vec2::new(width, frame.min.y), max: frame.max })
         } else {
-            overlay.placed(self.rect).size_limits(frame)
+            overlay.placed(rect).size_limits(frame)
         };
         if let Some(bounds) = self.bounds {
             overlay = overlay.bounds(bounds);
@@ -471,7 +496,21 @@ impl<'a> FloatingGroup<'a> {
     /// Where the group shows while its column's content fixes its height ([`WindowColumn::shown`]). `None` while the
     /// rect gives the height.
     fn held_rect(&self) -> Option<Rect> {
-        self.column?.shown(self.rect, self.chrome, self.rtl)
+        let column = self.column?;
+        // A collapsed column's width is its own; an expanded one shows at the rect's width within the panels' limits.
+        let rect = if column.collapsed.is_some() { self.rect } else { self.within_limits() };
+        column.shown(rect, self.chrome, self.rtl)
+    }
+
+    /// The window's size limits: the body's with the chrome on top.
+    fn frame_limits(&self) -> SizeLimits {
+        self.limits.around(Vec2::new(0.0, self.chrome))
+    }
+
+    /// The rect at its place, its size within [`Self::frame_limits`]: a rect placed or restored outside the panels'
+    /// limits shows at the nearest size within them, as an OS window's placed rect does.
+    fn within_limits(&self) -> Rect {
+        Rect::from_min_size(self.rect.min, self.frame_limits().clamp(self.rect.size()))
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
@@ -514,6 +553,8 @@ impl Component for FloatingGroup<'_> {
             let target = WholeWindow::new(cx.rect);
             if let Some(dropped) = cx.window_drop_target::<OsFiles, _>(&target) {
                 self.files = dropped.files;
+                // The drop session's pointer, which a drop the OS sent before any position waits for.
+                self.files_at = cx.dragging::<OsFiles>().map(|(_, at)| at);
             }
         }
     }
@@ -537,7 +578,10 @@ impl Component for FloatingGroup<'_> {
         if self.moving
             && let Some(start) = self.start_drag.take()
         {
-            start(&mut cx);
+            // A window its column's content sizes keeps the rect's size; any other keeps it within the panels' limits.
+            let fitted = self.column.is_some_and(|column| column.fitted.is_some());
+            let size = if fitted { self.rect.size() } else { self.within_limits().size() };
+            start(&mut cx, !self.continued, size);
         }
         if let Some(opener) = self.menu_opener {
             Popup::toggle(opener, &mut cx);
@@ -553,8 +597,11 @@ impl Component for FloatingGroup<'_> {
             iconic,
             collapsed_width: self.collapsed_width,
             files: self.files,
+            grip: cx.move_band(),
+            resize: cx.resize_grips(),
+            files_at: self.files_at,
         };
-        native::raise(&cx.core.ctx, &output);
+        native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);
         output
     }
@@ -622,7 +669,10 @@ impl Container for FloatingGroup<'_> {
         } else if self.minimized {
             change.rect = Rect::from_min_size(change.rect.min, Vec2::new(change.rect.width(), self.rect.height()));
         }
-        self.moving |= change.kind == PlacementKind::Move && change.phase == GesturePhase::Begin;
+        if change.kind == PlacementKind::Move && change.phase == GesturePhase::Begin {
+            self.moving = true;
+            self.continued = change.continued;
+        }
         self.placed = Some(change);
     }
 }

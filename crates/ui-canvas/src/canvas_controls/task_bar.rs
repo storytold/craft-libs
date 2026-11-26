@@ -10,18 +10,19 @@ use crate::buttons::IconButton;
 use crate::canvas::canvas_space;
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad, PopupKind,
-    Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, Gap, HeaderRegion, Inner, MeasureCx, Mount, NoValue, Outcome, Overlay,
+    Pad, PaintUi, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Sizing, Styled as _, Trigger,
 };
 use crate::display::{Divider, Icon};
 use crate::menu::{Menu, MenuItem, PanelMenu, PanelRow};
-use crate::primitives::IconSpec;
+use crate::primitives::{IconSpec, PaintShape};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::kurbo::Point;
 use craft_behavior::overlay::{Align, PlaceRequest, Side};
 use craft_behavior::{EditEvent, GesturePhase, IconId, Metrics, Mixed, Sense};
+use craft_theme::{Stateful, States};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
@@ -67,14 +68,15 @@ impl TaskBarPlace {
 /// members and a More menu (Hide, Pin, Reset, then the host's rows). One place, pin and Hide setting for Crop and
 /// Frame.
 ///
-/// - Place: on `side` of the anchor's bounds on screen (below, centred, by default), a section gap away, following the
-///   anchor each pass; it flips to the other side when there is no room. Dragged by its grip (any free point of the
-///   bar), it keeps its offset from that place while the anchor moves or the bar grows; a press with no drag changes
-///   nothing. A moved bar whose offset place would cover the `keep_clear` point shows at its unmoved place and keeps
+/// - Place: on `side` of the anchor's bounds on screen (below, centred, by default), a section gap away (or as far as
+///   [`hang_gap`](Self::hang_gap) says), following the anchor each pass; it flips to the other side when there is no
+///   room. Dragged by its grip (any free point of the bar), it keeps its offset from that place while the anchor moves
+///   or the bar grows; a press with no drag changes nothing. A moved bar whose offset place would cover the `keep_clear` point shows at its unmoved place and keeps
 ///   its offset. Pinned, it stays where it shows.
 /// - Area: the bar shows inside `area` (the canvas rect): a move stays inside it, and a stored place outside it comes
-///   back inside, its left and top edges winning where the bar does not fit. Its members continue on a new line when
-///   the area is too narrow for them.
+///   back inside, its left and top edges winning where the bar does not fit. An anchor that leaves no room on either
+///   side (a crop frame larger than the view) has the bar over it, on its side's edge of the area, with all its
+///   members. Its members continue on a new line when the area is too narrow for them.
 /// - Menu: Hide bar reports `hide`; Reset bar position clears the place, so the bar follows its anchor again; Pin bar
 ///   position keeps it where it shows and, picked again, lets it follow its anchor from where it shows.
 /// - `place` is the caller's value (`Bind::bound`): the bar reads it before it shows and writes the pass's change
@@ -112,6 +114,16 @@ pub struct TaskBar<'a> {
     /// default.
     #[prop]
     compact: bool,
+    /// How the task bar's grip looks: the `grip` icon by default.
+    #[prop]
+    grip: TaskBarGrip,
+    /// The space between the bar's members, in place of the tool bar's tight gap: `Gap::Item` sets them a control gap
+    /// apart.
+    #[prop(into)]
+    member_gap: Option<Gap>,
+    /// How far from its anchor's bounds a bar hung from document points hangs: a section gap by default.
+    #[prop]
+    hang_gap: TaskBarHang,
 }
 
 /// What a bar hangs from: the screen bounds of document points, or the canvas view's top edge, aligned in reading
@@ -134,6 +146,30 @@ pub enum TaskBarKind {
     /// A bar that hangs where it is placed, below its anchor or at the view's top edge: no grip, no move band and no
     /// More menu.
     Fixed,
+}
+
+/// How the grip of a [`TaskBar`] looks. Either way the grip takes no press of its own: the bar's move band under it
+/// moves the bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarGrip {
+    /// The `grip` icon.
+    #[default]
+    Icon,
+    /// One rounded upright bar, a value track's groove wide and the members' line less a row gap at each end tall, in
+    /// the control edge's line colour; muted text under the pointer and while the bar moves (VectorCraft's).
+    Bar,
+}
+
+/// How far from its anchor's bounds a [`TaskBar`] hangs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarHang {
+    /// A section gap away.
+    #[default]
+    Gap,
+    /// The handle ring and a section gap away: clear of a selection's handles on that side and their hit area.
+    ClearOfHandles,
 }
 
 /// What an outside press does to a [`TaskBar`].
@@ -257,6 +293,9 @@ impl<'a> TaskBar<'a> {
             keep_clear: None,
             dismiss: TaskBarDismiss::Close,
             compact: false,
+            grip: TaskBarGrip::Icon,
+            member_gap: None,
+            hang_gap: TaskBarHang::Gap,
         }
     }
 
@@ -283,6 +322,9 @@ impl<'a> TaskBar<'a> {
             keep_clear: None,
             dismiss: TaskBarDismiss::Close,
             compact: false,
+            grip: TaskBarGrip::Icon,
+            member_gap: None,
+            hang_gap: TaskBarHang::Gap,
         }
     }
 
@@ -311,7 +353,7 @@ impl<'a> TaskBar<'a> {
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact } = self;
+        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact, grip: grip_look, member_gap, hang_gap } = self;
         let side = side.unwrap_or(match kind {
             TaskBarKind::Task | TaskBarKind::Fixed => Side::Below,
             TaskBarKind::Selection => Side::Above,
@@ -329,7 +371,8 @@ impl<'a> TaskBar<'a> {
                     bounds.extend_with(at);
                     bounds
                 });
-                let gap = env.tokens.space.gap.section;
+                let clear = if hang_gap == TaskBarHang::ClearOfHandles { env.tokens.size.handle.ring } else { 0.0 };
+                let gap = env.tokens.space.gap.section + clear;
                 // A fixed bar keeps the gap on both sides of its anchor: it opens above when there is no room below.
                 let rect = if kind == TaskBarKind::Fixed { bounds.expand2(Vec2::new(0.0, gap)) } else { hang_rect(bounds, gap, side) };
                 (room && bounds.is_finite()).then(|| Hung {
@@ -348,7 +391,7 @@ impl<'a> TaskBar<'a> {
             Some(Mixed::Same(held)) => held,
             _ => TaskBarPlace::default(),
         };
-        let rtl = env.direction.is_rtl();
+        let rtl = env.layer_direction().is_rtl();
         let overlay = match kind {
             TaskBarKind::Selection => selection_overlay(hung.as_ref(), area, dismiss),
             TaskBarKind::Task | TaskBarKind::Fixed => layer_overlay(&held, hung.as_ref(), area, movable),
@@ -357,14 +400,25 @@ impl<'a> TaskBar<'a> {
         let mut menu = MoreMenu { words: Arc::clone(&words), offered: movable, pinned: held.pinned, rows, placed: false, pick: None };
         // Only the task bar moves, so only it starts with the grip.
         let grip = movable.then(|| words.task_bar_move.clone());
-        let mut shown = layer.show(ui, |ui, _| {
+        let mut shown = layer.show(ui, |ui, layer| {
+            let moving = layer.moving();
             // The bar is the one surface: the grip is its first member, on the members' line inside its padding.
             let bar = Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).wrap();
             // A compact bar takes a popup's smaller corners and lighter shadow, as production's small frame.
             let bar = if compact { bar.compact().surface(SurfaceKind::Popup) } else { bar };
+            let bar = match member_gap {
+                Some(gap) => bar.gap(gap),
+                None => bar,
+            };
             bar.show(ui, |ui, _| {
-                if let Some(grip) = &grip {
-                    let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
+                match (&grip, grip_look) {
+                    (Some(grip), TaskBarGrip::Bar) => {
+                        let _ = GripBar { common: Common::new(), moving }.label(grip.clone()).show(ui);
+                    }
+                    (Some(grip), _) => {
+                        let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
+                    }
+                    (None, _) => {}
                 }
                 menu.placed = false;
                 let inner = body(ui, &mut TaskBarCx { menu: &mut menu });
@@ -411,7 +465,7 @@ impl Hung {
     /// Where a bar of `size` hangs inside `area` before any offset: the place the overlay host computes for the
     /// anchored layer, taken from the one placement rule.
     fn unmoved(&self, size: Vec2, area: Rect, rtl: bool) -> Rect {
-        let request = PlaceRequest::new(self.rect, size, area).side(self.side).align(self.align).rtl(rtl).flips_across(true);
+        let request = PlaceRequest::new(self.rect, size, area).side(self.side).align(self.align).rtl(rtl).flips_across(true).covers_anchor(true);
         craft_behavior::overlay::place(&request).rect
     }
 }
@@ -441,7 +495,7 @@ fn selection_overlay(hang: Option<&Hung>, area: Rect, dismiss: TaskBarDismiss) -
     };
     let overlay = Overlay::floating().modeless().body_scroll(false).dismiss(Dismiss::new().outside(outside));
     match hang {
-        Some(hang) => overlay.bounds(area).place(Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align)),
+        Some(hang) => overlay.bounds(area).place(Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).covering_anchor()),
         None => overlay,
     }
 }
@@ -456,7 +510,9 @@ fn layer_overlay(held: &TaskBarPlace, hang: Option<&Hung>, area: Rect, movable: 
     if let Some(at) = held.placed_in(area).filter(|_| movable) {
         return overlay.placed_at(at);
     }
-    let mut hung = Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).flipping_across();
+    // An anchor that fills the area (a crop frame larger than the view) leaves no room on either side: the bar keeps
+    // its members and slides over the anchor, inside the area, instead of showing an empty surface.
+    let mut hung = Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).flipping_across().covering_anchor();
     if movable {
         hung = hung.offset(held.offset_in().unwrap_or(Vec2::ZERO));
     }
@@ -496,6 +552,70 @@ fn settled(held: TaskBarPlace, shown: Rect, area: Rect, moved: Option<Rect>, pic
         }
     }
     next
+}
+
+/// The style of the [`TaskBarGrip::Bar`] grip.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct GripBarStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    /// The bar's width and height.
+    size: Vec2,
+    /// The bar's ink: the line colour at rest, muted text under the pointer.
+    ink: Stateful<StyleColor>,
+    /// The ink while the bar moves.
+    moving: StyleColor,
+}
+
+/// The [`TaskBarGrip::Bar`] grip: one rounded upright bar centred on the members' line. It senses only hover, so a
+/// press on it reaches the layer's move band under it.
+#[derive(crate::contract::Component, crate::contract::Props)]
+#[component(unregistered)]
+struct GripBar {
+    #[common]
+    common: Common,
+    /// The layer's move band is moving the bar this pass.
+    moving: bool,
+}
+
+impl Component for GripBar {
+    const ROLE: Role = Role::IMAGE;
+    const PARTS: bool = false;
+    const INPUT: craft_behavior::Input = craft_behavior::Input::Display;
+    const SHOWS_LABEL: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = GripBarStyle;
+    type Output = Response;
+
+    fn style(cx: &StyleCx<'_>, _: GripBarStyleKey) -> GripBarStyle {
+        let colors = &cx.tokens.color;
+        let (rest, lit) = (cx.color(colors.line.control_edge), cx.color(colors.text.muted));
+        GripBarStyle {
+            metrics: Metrics::new(),
+            size: Vec2::new(cx.tokens.size.groove, cx.control().height - 2.0 * cx.tokens.space.gap.row),
+            ink: Stateful::new(rest).off(States::new(rest, lit, lit, rest)),
+            moving: lit,
+        }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        cx.style.size
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::HOVER
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let ink = if self.moving { cx.style.moving } else { cx.resolve(&cx.style.ink) };
+        let bar = Rect::from_center_size(cx.rect.center(), cx.style.size);
+        ui.draw().fill(&PaintShape::Rect(bar, UiTokens::corner(cx.style.size.x / 2.0)), ink);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
 }
 
 /// The style of the task bar's layer: the surface comes from the container.

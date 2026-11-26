@@ -64,7 +64,7 @@ Grouped by gallery level, then shape, then name.
 | `Disclosure` | Leaf | `craft_ui_widgets::controls::disclosure` | A button bound to an open state, with the expanded state |
 | `IconButton` | Leaf | `craft_ui_widgets::buttons::icon_button` | A square button showing only an icon |
 | `Kbd` | Leaf | `craft_ui_widgets::display::kbd` | A key chord |
-| `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue |
+| `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue (`LinkLook::Plain` drops the underline of a link standing alone) |
 | `LinkedFields` | Leaf | `craft_ui_widgets::text::linked` | `N` number fields joined by a link toggle |
 | `NumberField` | Leaf | `craft_ui_widgets::text::number` | A number field: a text part over [`NumberCodec`]; empty text is `None` |
 | `PointPicker` | Leaf | `craft_ui_widgets::value_drag::point_picker` | A point `[x, y]` picked on a well: x grows to the right and y downwards, as image coordinates do, in either reading direction |
@@ -236,7 +236,7 @@ Grouped by gallery level, then shape, then name.
 | `Watermark` | Pattern | `craft_ui_patterns::patterns::form_dialogs::watermark` | The watermark rows of an export dialog: Style (Text, Graphic), the text field or the image path with Choose…, Orientation, Position as the 3 by 3 reference point, Rotation, Size, Opacity, Inset X and Y, and Shadow |
 | `WindowMenuRows` | Pattern | `craft_ui_panels::docking::window_menu` | One check row per panel in the order the app gives, for a Window menu |
 | `WorkspaceSwitcher` | Pattern | `craft_ui_patterns::patterns::dock::switcher` | The switcher at the end of an options bar: a small select showing the current workspace's name |
-| `ZoomField` | Pattern | `craft_ui_widgets::text::zoom_field` | A zoom field: a `NumberField` over the view's zoom in percent on its [`ZoomScale`] (device pixels unless set), with the zoom codec and the zoom ladder's range |
+| `ZoomField` | Pattern | `craft_ui_widgets::text::zoom_field` | A zoom field: a `NumberField` over the view's zoom in percent on its [`ZoomScale`] (device pixels unless set), with the zoom codec and the zoom scheme's range |
 | `RecoveryDialog` | Dialog | `craft_ui_panels::dialog::recovery` | Recover Unsaved Work, one document at a time: a prompt saying when the document was autosaved, with Discard and Recover (the accepting answer) |
 
 ### Shells
@@ -273,7 +273,7 @@ Grouped by gallery level, then shape, then name.
 | `craft_behavior::eviction` | When a component's remembered state is due for eviction |
 | `craft_behavior::fit` | The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu |
 | `craft_behavior::flow` | `Insets`, `Flow` and `Axis`: start and end geometry resolved once for the layout direction |
-| `craft_behavior::focus` | Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, focus after removal, the Escape order and the focus-on-press kinds |
+| `craft_behavior::focus` | Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, the Escape order and the focus-on-press kinds |
 | `craft_behavior::frame_step` | The step of one pass of motion: a Hand glide, a held Zoom press and an autoscroll integrate over it |
 | `craft_behavior::grid` | The `Grid` cursor: columns resolved from last pass's measurements, and the cell each child takes |
 | `craft_behavior::hit` | Hit shapes, their priority and the arena's resolve rule (8.3) |

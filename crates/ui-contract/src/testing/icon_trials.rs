@@ -1,13 +1,15 @@
 //! Trials of the icon lookup: the app icon registry (the catalog wins a clashing name, the first set keeps a name two
 //! sets share), the set a theme's icon pack picks, and an app icon's layers by class.
 
-use crate::primitives::{AppIcons, DataMode, Draw, DrawEnv, IconSpec, Layer, Mirror, PaintRecord, SvgIcon, icon_names, register_app_icons};
-use crate::style::{Ink, StyleColor, UiTokens, ink_color, rgba_color};
+use crate::primitives::{
+    AppIcons, DataMode, Draw, DrawEnv, Glyph, IconSpec, Layer, Mirror, PaintRecord, SvgIcon, TextRun, icon_names, paint_icon, register_app_icons,
+};
+use crate::style::{Ink, StyleColor, TypeRole, UiTokens, ink_color, rgba_color};
 use crate::testing::{Frames, style, trial};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
 use craft_theme::{AppSizes, Appearance, Contrast, IconPackId, Mode, Size, TextSize, builtins};
-use egui::{Color32, ColorImage, Rect, Shape, TextureId, pos2, vec2};
+use egui::{Color32, ColorImage, Painter, Rect, Shape, TextureId, pos2, vec2};
 use std::cell::RefCell;
 
 // Built from parts so the workspace scan of icon-id literals does not read them.
@@ -219,4 +221,73 @@ fn an_icon_with_a_fill_keeps_its_colour_under_the_tint() {
     }
     let tint = Color32::from_rgb(10, 200, 30);
     assert_eq!(painted(CATALOG_NAME, tint), [tint], "an icon with no fill paints the icon only");
+}
+
+/// A glyph that paints a dot with a painter and a question mark as text when a `Draw` paints it.
+#[derive(crate::contract::MemoProps)]
+struct MarkGlyph;
+
+impl MarkGlyph {
+    fn run(color: Color32) -> TextRun<'static> {
+        TextRun::new("?").role(TypeRole::Caption).color(StyleColor(color))
+    }
+}
+
+impl Glyph for MarkGlyph {
+    fn paint(&self, painter: &Painter, _tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
+        painter.circle_filled(rect.center(), rect.width() / 4.0, color);
+    }
+
+    fn paint_draw(&self, draw: &Draw<'_>, rect: Rect, color: Color32, _mirrored: bool) {
+        let layout = draw.layout(&Self::run(color), f32::INFINITY);
+        draw.galley(rect.center() - layout.size() / 2.0, &layout);
+    }
+}
+
+/// A glyph that implements `paint` only.
+#[derive(crate::contract::MemoProps)]
+struct DotGlyph;
+
+impl Glyph for DotGlyph {
+    fn paint(&self, painter: &Painter, _tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
+        painter.circle_filled(rect.center(), rect.width() / 4.0, color);
+    }
+}
+
+/// A glyph that implements `paint_draw` lays its text out through the `Draw` of the component that shows it, in the
+/// theme's type; `paint_icon`, which has no `Draw`, paints it with `paint`, and a glyph that implements `paint` only
+/// paints as before.
+#[trial]
+fn a_glyph_that_paints_with_draw_lays_out_text_in_the_themes_type() {
+    let tokens = style::tokens(Mode::Light, Contrast::Standard);
+    let rect = Rect::from_min_max(pos2(10.0, 10.0), pos2(34.0, 34.0));
+    let color = ink_color(&tokens, Ink::OnPanel);
+    let mut frames = Frames::new();
+    let env = DrawEnv { tokens: &tokens, direction: Direction::Ltr, ink: Ink::OnPanel };
+    let (asks, dot) = (MarkGlyph, DotGlyph);
+    let mut theme_font = None;
+    let record = RefCell::new(PaintRecord::default());
+    let drawn = frames.frame_shapes(|ui| {
+        let draw = Draw::new(ui.painter(), &record, env);
+        theme_font = draw.layout(&MarkGlyph::run(color), f32::INFINITY).galley.job.sections.first().map(|section| section.format.font_id.clone());
+        draw.icon(rect, &IconSpec::glyph(&asks));
+    });
+    let texts: Vec<_> = drawn.iter().filter_map(|shape| if let Shape::Text(text) = shape { Some(text) } else { None }).collect();
+    assert_eq!(texts.len(), 1, "the glyph paints its mark as one text run, got {drawn:?}");
+    let text = texts[0];
+    assert_eq!(text.galley.text(), "?");
+    assert!(rect.contains_rect(text.visual_bounding_rect()), "the mark lies inside the icon");
+    assert!(theme_font.is_some());
+    assert_eq!(text.galley.job.sections.first().map(|section| section.format.font_id.clone()), theme_font, "the mark is in the theme's caption type");
+    assert!(!drawn.iter().any(|shape| matches!(shape, Shape::Circle(_))), "the painter fallback is not painted as well");
+
+    let raw = frames.frame_shapes(|ui| paint_icon(ui.painter(), &tokens, Direction::Ltr, rect, &IconSpec::glyph(&asks)));
+    assert!(raw.iter().any(|shape| matches!(shape, Shape::Circle(_))), "paint_icon paints the glyph with its painter");
+    assert!(!raw.iter().any(|shape| matches!(shape, Shape::Text(_))));
+
+    let record = RefCell::new(PaintRecord::default());
+    let plain = frames.frame_shapes(|ui| Draw::new(ui.painter(), &record, env).icon(rect, &IconSpec::glyph(&dot)));
+    let circles: Vec<_> = plain.iter().filter_map(|shape| if let Shape::Circle(circle) = shape { Some(circle) } else { None }).collect();
+    assert_eq!(circles.len(), 1, "a glyph with no Draw path paints with its painter, got {plain:?}");
+    assert!(rect.contains(circles[0].center), "inside the icon");
 }

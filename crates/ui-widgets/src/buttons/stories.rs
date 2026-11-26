@@ -1,8 +1,8 @@
 //! Stories of the buttons.
 
 use super::{
-    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PopupMark, PressFocus, SplitButton, SplitMenu,
-    ToggleButton,
+    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, LinkLook, PopupMark, PressFocus, PushButtonLook,
+    SplitButton, SplitMenu, ToggleButton,
 };
 use crate::contract::{Bind, BodyCx, Entry, LeastWidth, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger, Validity};
 use crate::display::{Picture, Shade, Text};
@@ -48,6 +48,30 @@ fn button_variants(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let full = Grid::new(ALL).measure_in(ui, Proposal::Ideal, |ui, _| rows(ui, &STATES));
     let (columns, states) = if full.x <= ui.available_width() { (ALL, &STATES[..]) } else { (&ALL[..3], &STATES[..2]) };
     Grid::new(columns).show(ui, |ui, _| rows(ui, states)).into()
+}
+
+/// The push buttons of an app that sets `PushButtonLook::Filled` at its root: a button, a split button and a disabled
+/// button at each size, filled neutral tiles with no edge at rest. Under the pointer they take the hover fill and the
+/// control edge, pressed the pressed fill and the accent edge.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "Filled")]
+fn button_filled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let entries = presets();
+    let shown = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(PushButtonLook::Filled);
+        },
+        |ui| {
+            Grid::new(&[ColumnWidth::Content; 3]).show(ui, |ui, _| {
+                for (size_name, size) in SIZES {
+                    Button::new("Cancel").size(size).id_salt(("rest", size_name)).show(ui);
+                    SplitButton::new("Trace", &entries).size(size).id_salt(("split", size_name)).show(ui);
+                    Button::new("Unavailable").size(size).enabled(false).id_salt(("disabled", size_name)).show(ui);
+                }
+            })
+        },
+    );
+    shown.into()
 }
 
 #[story(Button<'static>, covers = [Default], group = "Playground", title = "Playground")]
@@ -312,6 +336,44 @@ fn button_in_side_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     shown.into()
 }
 
+/// A page's call to action: a primary button with its icon in the `CallToAction` place, `size.page.action` high,
+/// beside a standard one.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "As a call to action")]
+fn button_as_call_to_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ControlPlace::CallToAction);
+            },
+            |ui| {
+                Button::new("Join the community").icon(IconId::new("note")).variant(Variant::PRIMARY).show(ui);
+            },
+        );
+        Button::new("Open").show(ui);
+    });
+    shown.into()
+}
+
+/// A start page's New and Open in the `PageAction` place: at least `size.page.button` high with at least
+/// `size.page.button_side` beside their labels (a push button's own in the built-in size sets).
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "As page actions")]
+fn button_as_page_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ControlPlace::PageAction);
+        },
+        |ui| {
+            Row::new().show(ui, |ui, _| {
+                Button::new("New file").variant(Variant::PRIMARY).show(ui);
+                Button::new("Open").show(ui);
+            })
+        },
+    )
+    .into()
+}
+
 /// One toggle off and one on with an icon, as the gallery card shows them.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -467,6 +529,19 @@ fn split_button_command(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Link, covers = [Default])]
 fn link(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Link::new("Show all your shortcuts").url("https://example.com/shortcuts").show(ui).into()
+}
+
+/// A link in the link colour alone (`LinkLook::Plain`), as a start page's list of links shows it.
+#[story(Link, covers = [], title = "Plain")]
+fn link_plain(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(LinkLook::Plain);
+        },
+        |ui| Link::new("Source code on the web").url("https://example.com/source").show(ui),
+    )
+    .into()
 }
 
 /// A command button showing its command's chord after the label.

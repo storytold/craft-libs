@@ -1199,6 +1199,10 @@ fn run_pass(
             Label::from(words.page_of.fill(&[("page", label.as_str()), ("count", total.as_str())]))
         };
         let bars = if count > 0 { bars.tip(&tip) } else { bars };
+        // Pages that fit the view's width can't scroll sideways, so there is no horizontal bar. The layout drawn
+        // decides, as the bars measure it.
+        let (x_lo, x_hi) = offset_range(drawn.doc.x0, drawn.doc.x1, vw);
+        let bars = if x_lo >= x_hi { bars.vertical_only() } else { bars };
         // Full screen's edge-to-edge view (`PageView::fill_screen`) has no scroll bars: nothing is drawn and nothing takes a press
         // along the window's edges.
         let bar_moved = if build.fill_screen {
@@ -1544,7 +1548,8 @@ impl KeyMoves {
     /// Page Up and Down a screen less a key line (a row when not continuous, and with Cmd), Home and End the first
     /// and last page, Up and Down a key line (not continuous, a turn once the row is at its edge that way), Left and
     /// Right a key line sideways while the current page or spread has more to show that way, else a turn of a page or
-    /// spread; Cmd with Left or Right turns at once. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
+    /// spread; Cmd with Left or Right turns at once. Home and End with Shift, or with Cmd off macOS (which gives Cmd
+    /// with them no move), and Page Up, Page Down, Up and
     /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift alone with the other keys,
     /// leave them to nothing.
     fn of(

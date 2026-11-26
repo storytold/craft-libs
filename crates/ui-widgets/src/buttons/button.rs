@@ -37,7 +37,7 @@ const SIDE_MENU_DISABLED_ALPHA: u8 = 110;
 
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct ButtonStyle {
     #[style(surface)]
@@ -289,11 +289,32 @@ impl<'a> Button<'a> {
     }
 }
 
+/// A side menu stands on the brand surface: its names and icons read in the ink of strong fills, a disabled page's
+/// dimmed, and its bands are that ink laid thinly over the brand colour (hover lighter than the page shown), not the
+/// panel's state fills, which painted a light band with dark text over the rail. The row of the page shown (`on`)
+/// keeps its band, so the menu marks where the page is. Returns the ink and the band fill, for every control of the
+/// place (`Button`, `IconButton`).
+pub(super) fn side_menu_ink(cx: &StyleCx<'_>) -> (craft_theme::Stateful<StyleColor>, craft_theme::Stateful<StyleColor>) {
+    let ink = cx.tokens.color.text.on_strong;
+    let (rest, dim) = (cx.color(ink), cx.color(ink.with_alpha(SIDE_MENU_DISABLED_ALPHA)));
+    let text = craft_theme::Stateful::new(rest).off(craft_theme::States::new(rest, rest, rest, dim));
+    let (clear, hover, shown) =
+        (cx.color(Rgba::TRANSPARENT), cx.color(ink.with_alpha(SIDE_MENU_HOVER_ALPHA)), cx.color(ink.with_alpha(SIDE_MENU_SHOWN_ALPHA)));
+    let fill = craft_theme::Stateful::new(clear)
+        .off(craft_theme::States::new(clear, hover, shown, clear))
+        .on(craft_theme::States::new(shown, shown, shown, shown));
+    (text, fill)
+}
+
 impl Component for Button<'_> {
     const ROLE: Role = Role::BUTTON;
     const OVERLAYS: bool = false;
     type Style = ButtonStyle;
     type Output = ButtonOutput;
+
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
         let cx = &super::placed(cx);
@@ -306,19 +327,27 @@ impl Component for Button<'_> {
         }
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
+            // A dialog's footer button stands a dialog button high.
+            if matches!(least, LeastWidth::DialogButton | LeastWidth::DialogSideButton) && key.arrangement == Arrangement::Inline {
+                style.metrics.min_size.y = cx.dialog_button_height();
+            }
+        }
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::CallToAction {
+            style.metrics.min_size.y = style.metrics.min_size.y.max(cx.tokens.size.page.action);
+            style.text.role = TypeRole::BodyStrong;
+        }
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::PageAction {
+            let page = &cx.tokens.size.page;
+            let padding = &mut style.metrics.padding;
+            style.metrics.min_size.y = style.metrics.min_size.y.max(page.button);
+            (padding.start, padding.end) = (padding.start.max(page.button_side), padding.end.max(page.button_side));
         }
         // A side menu's row: the large body text, padded as a list row of places, not as a control.
         if cx.env::<super::ControlPlace>() == super::ControlPlace::SideMenu && key.arrangement == Arrangement::Inline {
             let pad = &cx.tokens.space.pad;
             style.text.role = TypeRole::BodyLarge;
             style.metrics.padding = Insets::new(pad.roomy, pad.roomy, pad.segment, pad.segment);
-            // A side menu stands on the brand surface: its names and icons read in the ink of strong fills, a disabled
-            // page's dimmed, and its bands are that ink laid thinly over the brand colour (hover lighter than the page
-            // shown), not the panel's state fills, which painted a light band with dark text over the rail. The row of
-            // the page shown (`selected`) keeps its band, so the menu marks where the page is.
-            let ink = cx.tokens.color.text.on_strong;
-            let (rest, dim) = (cx.color(ink), cx.color(ink.with_alpha(SIDE_MENU_DISABLED_ALPHA)));
-            let text = craft_theme::Stateful::new(rest).off(craft_theme::States::new(rest, rest, rest, dim));
+            let (text, fill) = side_menu_ink(cx);
             style.text.color = text.clone();
             // A place's icon is the large icon, not a control's standard one, set off from its name by a section gap: a
             // list of places reads by its icons (WordCraft's File rail: 18 pt icons, nearest token 20 pt, 12 pt before 14 pt names).
@@ -326,11 +355,7 @@ impl Component for Button<'_> {
             // The face paints by its gap and the measure by the metrics', so the two stay one.
             style.face.gap = style.face.gap.max(cx.tokens.space.gap.section);
             style.metrics.gap = style.face.gap;
-            let (clear, hover, shown) =
-                (cx.color(Rgba::TRANSPARENT), cx.color(ink.with_alpha(SIDE_MENU_HOVER_ALPHA)), cx.color(ink.with_alpha(SIDE_MENU_SHOWN_ALPHA)));
-            style.surface.fill = craft_theme::Stateful::new(clear)
-                .off(craft_theme::States::new(clear, hover, shown, clear))
-                .on(craft_theme::States::new(shown, shown, shown, shown));
+            style.surface.fill = fill;
         }
         style
     }

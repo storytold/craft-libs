@@ -24,14 +24,16 @@ pub fn heads_toward(from: Pos2, now: Pos2, submenu: Rect) -> bool {
 pub(super) struct Row {
     pub(super) id: Id,
     pub(super) text: String,
+    /// The letter the row asks for in place of the level's pick, shown or not in its text.
+    pub(super) own: Option<char>,
     pub(super) enabled: bool,
 }
 
 /// A row's mnemonic as the level assigned it when the user last saw the rows: the letter and its character index
-/// in the row's text.
+/// in the row's text, none for a letter the text does not show.
 struct Assigned {
     id: Id,
-    mnemonic: Option<(char, usize)>,
+    mnemonic: Option<(char, Option<usize>)>,
     enabled: bool,
 }
 
@@ -41,8 +43,11 @@ struct OpenSubmenu {
     rect: Option<Rect>,
 }
 
-/// A level's letters (each row's mnemonic, or none) with the folder and labels they were assigned for.
-type KeptLetters = (Folder, Vec<String>, Vec<Option<(char, usize)>>);
+/// A row's text and own letter, as the level's letters were assigned for it.
+type Lettered = (String, Option<char>);
+
+/// A level's letters (each row's mnemonic, or none) with the folder and rows they were assigned for.
+type KeptLetters = (Folder, Vec<Lettered>, Vec<Option<(char, Option<usize>)>>);
 
 #[derive(Default)]
 struct LevelState {
@@ -76,14 +81,17 @@ struct LevelState {
 
 impl LevelState {
     /// The letter of each row of this pass, in order, assigned once for these labels.
-    fn letters(&mut self, folder: Folder) -> &[Option<(char, usize)>] {
+    fn letters(&mut self, folder: Folder) -> &[Option<(char, Option<usize>)>] {
         let same = self.letters.as_ref().is_some_and(|(kept, labels, _)| {
-            *kept == folder && labels.len() == self.now.len() && labels.iter().zip(&self.now).all(|(label, row)| *label == row.text)
+            *kept == folder
+                && labels.len() == self.now.len()
+                && labels.iter().zip(&self.now).all(|((text, own), row)| *text == row.text && *own == row.own)
         });
         if !same {
             let labels: Vec<&str> = self.now.iter().map(|row| row.text.as_str()).collect();
-            let assigned = mnemonic::assign(&labels, &folder);
-            self.letters = Some((folder, self.now.iter().map(|row| row.text.clone()).collect(), assigned));
+            let own: Vec<Option<char>> = self.now.iter().map(|row| row.own).collect();
+            let assigned = mnemonic::assign_with(&labels, &own, &folder);
+            self.letters = Some((folder, self.now.iter().map(|row| (row.text.clone(), row.own)).collect(), assigned));
         }
         self.letters.as_ref().map_or(&[], |(_, _, assigned)| assigned.as_slice())
     }
@@ -201,7 +209,7 @@ impl MenuLevel {
         });
     }
 
-    pub(super) fn mnemonic_of(&self, id: Id) -> Option<(char, usize)> {
+    pub(super) fn mnemonic_of(&self, id: Id) -> Option<(char, Option<usize>)> {
         self.with(|state| {
             let folder = state.lettered?;
             let at = state.now.iter().position(|row| row.id == id)?;
@@ -316,6 +324,11 @@ impl MenuLevel {
 
     pub(crate) fn active(&self) -> Option<Id> {
         self.with(|state| state.active)
+    }
+
+    /// The active row while it is enabled.
+    pub(super) fn active_enabled(&self) -> Option<Id> {
+        self.with(|state| state.active.filter(|active| state.shown.iter().any(|row| row.id == *active && row.enabled)))
     }
 
     /// Moves the active row by `mv` among the enabled rows as the user last saw them, without moving the focus (the

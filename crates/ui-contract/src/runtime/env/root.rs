@@ -38,7 +38,9 @@ pub struct RootEnv {
     /// Whether a bare Tab toggles the window's chrome in place of moving focus where the key stage's gate allows it.
     pub tab_toggles_chrome: bool,
     /// Whether Escape in a focused text field also takes the focus from it, with or without typing to revert, so the
-    /// next keys go to the window. A clearing field (a search box) still clears its text first.
+    /// next keys go to the window. A clearing field (a search box) still clears its text first. In a dialog whose Escape
+    /// closes it, modal or modeless, the field keeps the focus, and an Escape it does not take for its typing closes
+    /// the dialog.
     pub escape_leaves_fields: bool,
     /// Whether a held key's repeats run the command its chord binds again (`FirePhase::Repeat`), as a held Cmd+= keeps
     /// zooming in. A key with a hold binding, and a key held down while a modal layer opened or closed, repeat nothing.
@@ -67,6 +69,12 @@ pub struct RootEnv {
     pub wheel: WheelSpeed,
     /// The code pages that decode Alt+numpad codes.
     pub alt_codes: AltCodePages,
+    /// On Windows and Linux, a Ctrl+wheel in fractions of a notch (a point-unit one on Linux) is a touchpad pinch
+    /// and arrives as `egui::Event::Zoom`: Windows hands a precision touchpad's pinch to apps only that way, and some
+    /// Wayland stacks do too. On by default. Off, it stays a wheel event with Ctrl held, for an app whose Ctrl+wheel
+    /// does something else or zooms at its own rate (Zoom with Trackpad Pinch off). Whole notches stay wheel events
+    /// either way; macOS sends a pinch as its own event.
+    pub ctrl_wheel_pinch: bool,
 }
 
 impl Default for RootEnv {
@@ -95,6 +103,7 @@ impl Default for RootEnv {
             today: None,
             wheel: WheelSpeed::default(),
             alt_codes: AltCodePages::default(),
+            ctrl_wheel_pinch: true,
         }
     }
 }
@@ -179,6 +188,21 @@ impl RootEnv {
         self.resolved_for(super::system_appearance(ctx).appearance)
     }
 
+    /// The mode the root's theme actually shows on `ctx`: the resolved mode clamped to the theme's supported
+    /// variants (for example, `Mode::Light` for a light-only theme even when dark mode is requested).
+    pub(crate) fn effective_mode(&self, ctx: &Context) -> Mode {
+        let wanted = self.resolved(ctx).mode;
+        if let Some(def) = &self.theme_def {
+            return def.variants.mode_for(wanted);
+        }
+        let themes = craft_theme::builtins();
+        let theme = [self.theme.as_str(), craft_theme::SUITE_DEFAULT]
+            .into_iter()
+            .find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id))
+            .unwrap_or(&themes[0]);
+        theme.variants.mode_for(wanted)
+    }
+
     /// What the choices resolve to when the OS reports `system`.
     pub fn resolved_for(&self, system: SystemAppearance) -> ResolvedRoot {
         let mode = match self.mode {
@@ -217,8 +241,8 @@ impl RootEnv {
         self
     }
 
-    /// Sets whether painted cursor images scale with the interface zoom (the Scale Cursor Proportional to UI
-    /// preference). On by default.
+    /// Sets whether painted pointers grow with the interface zoom (the Scale Cursor Proportional to UI preference).
+    /// Off, they keep the size they have at zoom 1; a brush tip follows the canvas either way. On by default.
     pub fn cursor_follows_zoom(mut self, on: bool) -> Self {
         self.cursor_follows_zoom = on;
         self
@@ -262,6 +286,12 @@ impl RootEnv {
     /// Sets the code pages that decode Alt+numpad codes.
     pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self {
         self.alt_codes = pages;
+        self
+    }
+
+    /// Sets whether a fractional Ctrl+wheel arrives as a pinch (`ctrl_wheel_pinch`).
+    pub fn ctrl_wheel_pinch(mut self, pinch: bool) -> Self {
+        self.ctrl_wheel_pinch = pinch;
         self
     }
 }

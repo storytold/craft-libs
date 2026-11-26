@@ -19,7 +19,8 @@ pub use chips::{ChipCodec, ChipField, ChipFieldOutput, ChipFieldStyle, ChipWords
 pub use hex::{HexCodec, HexField};
 pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, LinkedOutput, LinkedWords, follow_equal, follow_ratio, link_toggle};
 pub use number::{
-    NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, StepArrows, UnitPlacement,
+    NamedOr, NumberField, NumberLook, NumberName, NumberOutput, NumberPick, NumberPrecision, NumberStepper, NumberStyle, NumberValue, RangeAlert,
+    StepArrows, UnitPlacement,
 };
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
@@ -123,7 +124,8 @@ fn text_part<V>() -> TextKey<V> {
 }
 
 /// The text field every collection's `rename_editor` and the canvas `Pasteboard`'s page-name rename show over a label:
-/// it selects the name on focus, so typing replaces it.
+/// it selects the name on focus, so typing replaces it. It caps nothing: the item's name is the app's, and a rename shows
+/// and edits all of it.
 pub fn rename_field<'a>(draft: Bind<'a, String>, name: &str) -> TextField<'a> {
-    TextField::new(name.to_owned(), draft).select_on_focus()
+    TextField::new(name.to_owned(), draft).select_on_focus().limit(None::<usize>)
 }

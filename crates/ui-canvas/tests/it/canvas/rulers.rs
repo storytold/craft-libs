@@ -4,8 +4,8 @@ use craft_behavior::geometry::{SnapOptions, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CancelReason, CanvasView, RulerUnits, TickLabels, Ticks};
 use craft_ui::canvas::{
-    Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap, StepLadder, TickRule,
-    ToolAction, ToolContext, ToolPath, ToolPointer,
+    CENTIMETRE_LABEL_STEP_MIN, Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap,
+    StepLadder, TickRule, ToolAction, ToolContext, ToolPath, ToolPointer,
 };
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::TickRank;
@@ -58,6 +58,24 @@ fn labelled_ticks_never_touch_at_any_zoom() {
             assert!(gap >= f64::from(ladder.label_gap) - 1e-9, "the step ladder at zoom {zoom}: labels {gap} points apart");
         }
     }
+}
+
+/// A document ruler labels every whole centimetre at 100% (28.35 points each), and thins the labels out when zoomed
+/// out so they never touch.
+#[trial]
+fn a_centimetre_document_ruler_labels_each_centimetre_and_thins_out_zoomed_out() {
+    let centimetres = RulerUnits::new(2.54 / 72.0, Ticks::decimal(false));
+    let rule = TickRule::of_unit(UnitKind::Centimetres);
+    let at_full = least_label_gap(&centimetres, rule, 1.0);
+    assert!(at_full < f64::from(LABEL_STEP_MIN), "labels at 100% are closer than the generic metric step: {at_full}");
+    let one_cm = 72.0 / 2.54;
+    assert!((at_full - one_cm).abs() < 1e-6, "labels at 100% are one centimetre apart: {at_full}");
+    let least = f64::from(CENTIMETRE_LABEL_STEP_MIN) - 1e-9;
+    for zoom in ZOOMS {
+        let gap = least_label_gap(&centimetres, rule, zoom);
+        assert!(gap >= least, "centimetre labels at zoom {zoom}: {gap} points apart");
+    }
+    assert!(least_label_gap(&centimetres, rule, 0.25) > at_full, "labels thin out when zoomed out");
 }
 
 /// A vertical label stacks its characters one label-role size apart; the longest label the metric rule gives at the
@@ -264,4 +282,44 @@ fn a_corner_drag_the_host_cancelled_lands_nothing_at_its_release() {
     fixture.frame(vec![craft_ui::testing::pointer::release(to + Vec2::splat(10.0))]);
     fixture.settle();
     assert_eq!(*zero.borrow(), host, "the release after the host's change leaves the zero point where the host put it");
+}
+
+/// A right-click on a ruler strip or on the corner is the rulers': they report the part, for their units menu, and
+/// the tool host under them asks for no menu of its own.
+#[trial]
+fn a_right_click_on_a_ruler_is_the_rulers_not_the_tools() {
+    use craft_ui::canvas::{RulerPart, ToolHost, tool_pass};
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let asked: Rc<RefCell<(Option<RulerPart>, bool)>> = Rc::new(RefCell::new((None, false)));
+    let (shown_zero, seen) = (Rc::clone(&zero), Rc::clone(&asked));
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let tool = RefCell::new(Overpaint);
+    let mut fixture = Fixture::new(move |ui| {
+        let at = ui.available_rect_before_wrap();
+        shown_room.set(at);
+        let view = CanvasView::new(at, Point::new(f64::from(at.center().x), f64::from(at.center().y)), 1.0);
+        let mut zero = shown_zero.borrow_mut();
+        let mut host_asked = false;
+        let canvas = Canvas::new("Document").view(view).with_rulers(Some(Rulers::new("Rulers", Bind::bound(&mut *zero)))).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                host_asked = ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()).context.is_some();
+            }
+        });
+        let mut seen = seen.borrow_mut();
+        seen.0 = seen.0.or(canvas.output.rulers.as_ref().and_then(|rulers| rulers.context));
+        seen.1 |= host_asked;
+    });
+    fixture.room(Vec2::new(500.0, 400.0)).settle();
+    let mut right_click = |at: Pos2| {
+        *asked.borrow_mut() = (None, false);
+        fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+        fixture.frame(vec![craft_ui::testing::pointer::secondary(at, true)]);
+        fixture.frame(vec![craft_ui::testing::pointer::secondary(at, false)]);
+        fixture.settle();
+        *asked.borrow()
+    };
+    let canvas = room.get();
+    assert_eq!(right_click(egui::pos2(canvas.center().x, canvas.min.y + 4.0)), (Some(RulerPart::Horizontal), false), "the top strip");
+    assert_eq!(right_click(canvas.min + Vec2::splat(4.0)), (Some(RulerPart::Corner), false), "the corner, its zero point unlocked");
 }

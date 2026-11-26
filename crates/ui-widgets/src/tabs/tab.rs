@@ -2,24 +2,25 @@
 //!
 //! Selection, the lead, the focus ring and the drag ghost belong to the collection that shows the tab; the tab draws
 //! the look the item step gives it and reports what its own parts do. The strip gives the tab a rect: the tab's
-//! measure is its natural width (`Proposal::Min` the room for the first letters of its title), and a narrower rect cuts the label
-//! first, then the detail, and shows the whole text as a tooltip.
+//! measure is its natural width (`Proposal::Min` the room for the first letters of its title beside its icon and close
+//! button), and a narrower rect cuts the label first, then the detail, and shows the whole text as a tooltip.
 
-use super::rules::{CloseSide, TabKind, close_side};
+use super::rules::{CloseSide, PanelTabLook, TabCloseLook, TabKind, close_side};
 use super::words::TabWords;
+use std::borrow::Cow;
 
 /// The width, in digits of the label role, a document tab shows of its name at most.
 const MAX_NAME_DIGITS: usize = 22;
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::{MarkerStyle, paint_marker};
 use crate::contract::{
-    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, SetPosition, Styled as _,
-    WordSetCx as _,
+    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition,
+    Styled as _, WordSetCx as _,
 };
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
+use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, Span, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Proposal, Sense};
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -132,17 +133,40 @@ pub struct TabStyle {
     indicator: Option<StyleColor>,
     /// A divider at the tab's trailing edge.
     divider: bool,
+    /// The pill a panel tab in [`PanelTabLook::Pill`] shows under its label in place of the surface.
+    pill: Option<Pill>,
     close_side: CloseSide,
+    /// The close glyph's side and its ink at rest and under the pointer under [`TabCloseLook::Glyph`]; none for the icon
+    /// button.
+    close_glyph: Option<(f32, StyleColor, StyleColor)>,
     sizes: Sizes,
     /// Document tabs in [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking): a name capped at
     /// `MAX_NAME_DIGITS` digits' width, a readable prefix at their least, and the marker dot for a modified tab.
     shrinking: bool,
+    /// Document tabs in [`DocumentTabLook::Semibold`](super::DocumentTabLook::Semibold): the label and its `*` in the
+    /// role's semibold face, the [`TypeRole::TabTitle`] role for a tab that is not large.
+    strong: bool,
     /// The marker dot's diameter.
     marker: f32,
     /// The marker dot of a marked tab.
     marker_color: StyleColor,
     /// The ring around the marker dot.
     marker_edge: StyleColor,
+}
+
+/// The pill of a panel tab in [`PanelTabLook::Pill`]: its fill in each state, its corners and its height, in the
+/// middle of the tab's height.
+#[derive(Clone, Debug, PartialEq)]
+struct Pill {
+    fill: Stateful<StyleColor>,
+    radius: egui::CornerRadius,
+    height: f32,
+}
+
+/// `text` as a run of the label: in the role's semibold face where the look sets the label strong.
+fn label_text<'t>(style: &TabStyle, text: impl Into<Cow<'t, str>>) -> TextRun<'t> {
+    let span = Span::new(text);
+    TextRun::spans(vec![if style.strong { span.strong() } else { span }])
 }
 
 /// Where the parts of a tab lie in its content rect.
@@ -179,6 +203,10 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop(flag)]
     large: bool,
+    /// The look of a panel tab ([`TabKind::Panel`]); the other kinds have their own.
+    #[style_key]
+    #[prop]
+    panel_look: PanelTabLook,
     /// Secondary text after the label (a colour mode, a zoom).
     #[prop(into)]
     detail: Option<Label>,
@@ -189,6 +217,10 @@ pub struct Tab<'a> {
     /// [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking).
     #[prop(flag)]
     modified: bool,
+    /// The length in bytes of the label's name part (a document's name before its zoom and colour mode): a modified
+    /// tab under the `*` look shows the mark right after the name, inside the label.
+    #[prop]
+    name_len: Option<usize>,
     /// Whether the tab can be closed; by default whether the kind shows a close button.
     #[prop]
     closable: Option<bool>,
@@ -215,9 +247,11 @@ impl<'a> Tab<'a> {
             kind: TabKind::Document,
             role: TabRole::default(),
             large: false,
+            panel_look: PanelTabLook::Plain,
             detail: None,
             icon: None,
             modified: false,
+            name_len: None,
             closable: None,
             progress: None,
             close_label: None,
@@ -230,7 +264,7 @@ impl<'a> Tab<'a> {
 
     /// Whether the tab can be closed.
     fn can_close(&self) -> bool {
-        self.closable.unwrap_or(self.kind.shows_close())
+        self.closable.unwrap_or(self.kind.closes_by_default())
     }
 
     /// Whether the tab shows a close button.
@@ -243,7 +277,7 @@ impl<'a> Tab<'a> {
     }
 
     fn label_run<'t>(&self, style: &TabStyle, text: &'t str) -> TextRun<'t> {
-        TextRun::new(text).role(style.label.role)
+        label_text(style, text).role(style.label.role)
     }
 
     /// Whether the marker dot shows: the tab's content has something to show, or the document is modified and the
@@ -252,14 +286,29 @@ impl<'a> Tab<'a> {
         self.marked || (self.modified && style.shrinking)
     }
 
-    /// Whether the modified mark `*` shows: a modified tab whose look shows no dot for it.
-    fn starred(&self, style: &TabStyle) -> bool {
-        self.modified && !style.shrinking
+    /// Where in `label` the modified mark `*` goes: after the name part, for a modified tab whose look shows no dot for
+    /// it.
+    fn mark_at(&self, style: &TabStyle, label: &str) -> Option<usize> {
+        self.name_len.filter(|at| self.modified && !style.shrinking && label.is_char_boundary(*at))
+    }
+
+    /// Whether the modified mark `*` shows after the text: a modified tab whose look shows no dot for it, and whose
+    /// label holds no name part for the mark to follow.
+    fn starred(&self, style: &TabStyle, label: &str) -> bool {
+        self.modified && !style.shrinking && self.mark_at(style, label).is_none()
+    }
+
+    /// The text the tab shows for `label`: the label, with the modified mark after its name part where it has one.
+    fn shown_label<'t>(&self, style: &TabStyle, label: &'t str) -> Cow<'t, str> {
+        match self.mark_at(style, label) {
+            Some(at) => Cow::Owned(format!("{}{MARK}{}", &label[..at], &label[at..])),
+            None => Cow::Borrowed(label),
+        }
     }
 
     /// The modified mark, in the label's type.
     fn mark_run(&self, style: &TabStyle) -> TextRun<'static> {
-        TextRun::new(MARK).role(style.label.role)
+        label_text(style, MARK).role(style.label.role)
     }
 
     /// Where the parts lie in `content`, with `natural` the unbounded width of a run. `parts` registers its parts
@@ -271,7 +320,8 @@ impl<'a> Tab<'a> {
         if self.shows_close() {
             let at_start = style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
             let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
-            close = Some(slot);
+            // The glyph takes clicks in a square of the button's width, not the content's whole height.
+            close = Some(if style.close_glyph.is_some() { Rect::from_center_size(slot.center(), Vec2::splat(sizes.close_box)) } else { slot });
             flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
         }
         flow = flow.take_end(sizes.tail).1;
@@ -285,7 +335,7 @@ impl<'a> Tab<'a> {
         let label_natural = natural(&self.label_run(style, label));
         let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(style.detail.role)));
         // The marks keep their room; the label is cut first, then the detail.
-        let mark_width = if self.starred(style) { natural(&self.mark_run(style)) } else { 0.0 };
+        let mark_width = if self.starred(style, label) { natural(&self.mark_run(style)) } else { 0.0 };
         let marker_width = if self.dotted(style) { sizes.gap + style.marker } else { 0.0 };
         let marks = mark_width + marker_width;
         let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
@@ -339,11 +389,15 @@ impl Component for Tab<'_> {
         let ribbon = key.kind == TabKind::Ribbon;
         let c = |rgba: Rgba| cx.color(rgba);
         let clear = Rgba::TRANSPARENT;
-        // A ribbon tab measures at the shown tab's semibold type, so showing a tab does not move its neighbours.
+        let strong = key.kind == TabKind::Document && cx.env::<super::DocumentTabLook>() == super::DocumentTabLook::Semibold;
+        // A ribbon tab measures at the shown tab's semibold type, so showing a tab does not move its neighbours. A
+        // semibold document tab's title is in the tab-title role: the condensed face where the app embeds it.
         let role = if ribbon {
             TypeRole::BodyStrong
         } else if text_only || key.large {
             TypeRole::Body
+        } else if strong {
+            TypeRole::TabTitle
         } else {
             TypeRole::Label
         };
@@ -356,7 +410,7 @@ impl Component for Tab<'_> {
         } else if text_only {
             line(role) + space.gap.tight + stroke.thick
         } else if key.large {
-            size.bar.title
+            size.bar.tab_large
         } else if key.kind == TabKind::Panel {
             size.panel_header
         } else {
@@ -375,9 +429,24 @@ impl Component for Tab<'_> {
             Stateful::new(c(clear)).off(States::new(c(clear), hover, c(clear), c(clear))).on(States::new(c(clear), c(clear), c(clear), c(clear)))
         } else if text_only {
             Stateful::new(c(clear))
+        } else if key.kind == TabKind::Panel && key.panel_look == PanelTabLook::Block {
+            let control = c(colors.surface.control);
+            Stateful::new(c(clear)).off(States::new(c(clear), hover, hover, c(clear))).on(States::new(control, control, control, control))
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
+        // A pill panel tab shows its fill as the pill instead of the surface.
+        let pill = (key.kind == TabKind::Panel && key.panel_look == PanelTabLook::Pill).then(|| {
+            let control = c(colors.surface.control);
+            Pill {
+                fill: Stateful::new(c(clear))
+                    .off(States::new(c(clear), control, control, c(clear)))
+                    .on(States::new(control, control, control, control)),
+                radius: UiTokens::corner(tokens.shape.radius.control),
+                height: size.control.sm,
+            }
+        });
+        let fill = if pill.is_some() { Stateful::new(c(clear)) } else { fill };
         let surface = if ribbon { SurfaceLook::new(fill).radius(UiTokens::corner(tokens.shape.radius.sm)) } else { SurfaceLook::new(fill) };
         let disabled = c(colors.text.disabled);
         let ink = |off: Rgba, on: Rgba| {
@@ -413,9 +482,12 @@ impl Component for Tab<'_> {
             underline: c(colors.text.normal),
             indicator: (!text_only && cx.contrast() == Contrast::High).then(|| c(colors.accent.solid)),
             divider: key.kind.trailing_divider(),
+            pill,
             close_side: close_side(cx.os, cx.direction.is_rtl()),
+            close_glyph: (cx.env::<TabCloseLook>() == TabCloseLook::Glyph).then(|| (size.icon.sm, c(colors.text.muted), c(colors.text.normal))),
             sizes,
             shrinking: key.kind.shrinks_in(cx.env::<super::DocumentTabLook>()),
+            strong,
             marker: marker.side,
             marker_color: marker.color,
             marker_edge: marker.edge,
@@ -424,40 +496,44 @@ impl Component for Tab<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sizes = &cx.style.sizes;
+        let shown = self.shown_label(cx.style, cx.resolved.label);
+        let label: &str = &shown;
+        // What `place` takes before the label: the tail, the icon and the close button, each with its gap.
+        let mut parts = sizes.tail;
+        if self.icon.is_some() {
+            parts += sizes.icon + sizes.gap;
+        }
+        if self.shows_close() {
+            parts += sizes.gap + sizes.close_box;
+        }
         // The first letters of the title: the least a shrunk tab shows.
         let letters = || {
-            let first: String = cx.resolved.label.chars().take(MIN_LETTERS).collect();
+            let first: String = label.chars().take(MIN_LETTERS).collect();
             cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x
         };
         if cx.proposal == Proposal::Min && !cx.style.shrinking {
-            return Vec2::new(letters(), sizes.label_line);
+            return Vec2::new(parts + letters(), sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
-        let label_width = width(&self.label_run(cx.style, cx.resolved.label));
+        let label_width = width(&self.label_run(cx.style, label));
         // A document tab never takes more than a name of `MAX_NAME_DIGITS` digits' width, as production's tabs cut a long
         // name short so the other tabs and the Open control keep their room; the label is cut with an ellipsis.
         let capped = if cx.style.shrinking { label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS)))) } else { label_width };
-        let mut natural = sizes.tail + capped;
-        if self.icon.is_some() {
-            natural += sizes.icon + sizes.gap;
-        }
+        let mut natural = parts + capped;
         if let Some(detail) = self.detail_text() {
             natural += sizes.gap + width(&TextRun::new(detail).role(cx.style.detail.role));
         }
-        if self.starred(cx.style) {
+        if self.starred(cx.style, label) {
             natural += width(&self.mark_run(cx.style));
         }
         if self.dotted(cx.style) {
             natural += sizes.gap + cx.style.marker;
         }
-        if self.shows_close() {
-            natural += sizes.gap + sizes.close_box;
-        }
         let measured = if cx.proposal == Proposal::Min {
-            let end = cx.resolved.label.char_indices().nth(12).map_or(cx.resolved.label.len(), |(index, _)| index);
-            let prefix = cx.resolved.label.get(..end).unwrap_or(cx.resolved.label);
+            let end = label.char_indices().nth(12).map_or(label.len(), |(index, _)| index);
+            let prefix = label.get(..end).unwrap_or(label);
             let readable = natural - capped + width(&self.label_run(cx.style, prefix));
-            readable.max(letters()).min(natural)
+            readable.max(parts + letters()).min(natural)
         } else {
             natural
         };
@@ -469,7 +545,8 @@ impl Component for Tab<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let placed = self.place(cx.style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| cx.layout_at(run, f32::INFINITY).size().x);
+        let shown = self.shown_label(cx.style, cx.resolved.label);
+        let placed = self.place(cx.style, cx.content_rect, cx.flow.is_rtl(), &shown, |run| cx.layout_at(run, f32::INFINITY).size().x);
         if placed.cut {
             let full = match self.detail_text() {
                 Some(detail) => format!("{}, {detail}", cx.resolved.label),
@@ -530,9 +607,14 @@ impl Component for Tab<'_> {
         let sizes = style.sizes;
         let selected = cx.resolved.selected == Some(true) || cx.state().flags.contains(Flags::SELECTED);
         let draw = ui.draw();
-        let placed = self.place(style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| draw.layout(run, f32::INFINITY).size().x);
+        let shown = self.shown_label(style, cx.resolved.label);
+        let placed = self.place(style, cx.content_rect, cx.flow.is_rtl(), &shown, |run| draw.layout(run, f32::INFINITY).size().x);
         if style.divider {
             draw.edge_rule(RuleKind::Divider, rect, RectSide::end(cx.flow.is_rtl()));
+        }
+        if let Some(pill) = &style.pill {
+            let band = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), pill.height.min(rect.height())));
+            draw.fill(&PaintShape::Rect(band, pill.radius), cx.resolve(&pill.fill));
         }
         if let (Some(color), true) = (style.indicator, selected) {
             let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), sizes.indicator.min(rect.height())));
@@ -545,7 +627,7 @@ impl Component for Tab<'_> {
             draw.stroke(&line, StrokeWidth::Thick, style.underline);
         }
         let role = if selected { style.label.role } else { style.idle_role };
-        let label = TextRun::new(cx.resolved.label).role(role).color(cx.resolve(&style.label.color));
+        let label = label_text(style, &*shown).role(role).color(cx.resolve(&style.label.color));
         draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
@@ -562,7 +644,11 @@ impl Component for Tab<'_> {
             }
             ui.draw().icon(at, icon);
         }
-        if placed.close.is_some() {
+        if let (Some(at), Some((side, rest, hover))) = (placed.close, style.close_glyph) {
+            let mut glyph = IconSpec::from(IconId::new("close"));
+            glyph.color = Some(if cx.hover_pos(CLOSE).is_some() { hover } else { rest });
+            ui.draw().icon(Rect::from_center_size(at.center(), Vec2::splat(side)), &glyph);
+        } else if placed.close.is_some() {
             let words = cx.words::<TabWords>();
             let name = match &self.close_label {
                 Some(name) => name.as_str().to_owned(),

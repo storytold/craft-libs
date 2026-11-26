@@ -11,7 +11,7 @@ use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
 use crate::runtime::{inspect, keys, pass_state};
 use crate::style::Flags;
-use craft_behavior::Sense;
+use craft_behavior::{PartRef, Sense};
 use egui::Id;
 
 /// What step 16 reads that the pass computed before: the part declarations, the sense and the container facts.
@@ -185,6 +185,12 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     let two_state = (role == crate::runtime::egui::access::NodeRole::Button)
         .then(|| p.shown_bool().or_else(|| core.command.as_deref().and_then(|command| command.checked)))
         .flatten();
+    let popups_by_part = crate::contract::overlay::has_toggle_nodes(&core.toggles, &access.nodes);
+    // The root takes Expand and Collapse for a sole toggling part that has no node of its own.
+    let toggle = match core.toggles.as_slice() {
+        [toggle] if !popups_by_part => Some(toggle.part),
+        _ => None,
+    };
     let own = Own {
         id,
         component: facts.name,
@@ -210,7 +216,8 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         scrolls: input.scrolls,
         access: &access,
         popups: &if facts.overlays { crate::contract::overlay::popups_shown(ctx, id) } else { Vec::new() },
-        popups_by_part: crate::contract::overlay::has_toggle_nodes(&core.toggles, &access.nodes),
+        popups_by_part,
+        toggle,
         ltr_axis: resolved.ltr_axis,
     };
     if let Some(owner) = inner_of {
@@ -239,7 +246,8 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
-    if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
+    // An arena member's focus is its own node; a folded child's is its owner's, set above.
+    if inner_of.is_none() && core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);
     }
     let facts = core.env.facts_of(id);
@@ -275,6 +283,16 @@ pub(crate) fn report_parts(core: &CxCore<'_>, decls: &Decls, nodes: &[SubNode], 
     }
     for face in faces.iter().filter(|face| !seen.contains(&face.part)) {
         report_sub(core, decls, &SubNode::new(face.part, face.role), Some(face), parent);
+    }
+    for (decl, extras) in decls {
+        let part = PartRef { key: decl.key, index: decl.index };
+        let Some((role, name)) = &extras.node else { continue };
+        if seen.contains(&part) || faces.iter().any(|face| face.part == part) {
+            continue;
+        }
+        let mut node = SubNode::new(part, *role);
+        node.name = access::Name::Text(name.clone());
+        report_sub(core, decls, &node, None, parent);
     }
 }
 
@@ -340,6 +358,7 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             access: &access,
             popups: &[],
             popups_by_part: false,
+            toggle: None,
             ltr_axis: core.resolved.ltr_axis,
         },
     );

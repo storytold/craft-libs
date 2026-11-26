@@ -131,7 +131,8 @@ pub(crate) fn request_repaint_of(ctx: &Context, viewport: ViewportId) {
     ctx.request_repaint_of(viewport);
 }
 
-/// The options the runtime owns at install: interface scale and quit are commands, so egui's own shortcuts go.
+/// The options the runtime owns at install: the interface scale is the app's `RootEnv::scale` and quit is a command
+/// (`QuitCommand`), so egui's own keyboard zoom and quit shortcuts go.
 pub(crate) fn clear_shortcuts(ctx: &Context) {
     ctx.options_mut(|options| {
         options.zoom_with_keyboard = false;
@@ -682,7 +683,7 @@ const PINCH_CONTINUES: f64 = 0.25;
 
 /// Windows and Linux: turns a fractional Ctrl+wheel (or a Wayland point-unit one) into `Event::Zoom` at egui's Ctrl-scroll
 /// speed; a whole notch stays a wheel event unless within 0.25 s of a pinch step. An input that carries `Event::Zoom`
-/// already is left alone and ends the run of pinch steps.
+/// already is left alone and ends the run of pinch steps. Runs while `RootEnv::ctrl_wheel_pinch` is on.
 pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
     let os = crate::runtime::windows::os_of(ctx);
     if os == Os::Mac {
@@ -741,14 +742,16 @@ pub(crate) struct RawState {
 /// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
 /// once and each digit folded once, with nothing to replay or remember between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
-    fold_legacy_pinch(ctx, input);
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
-    // PLAN: assumed `pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages)` in `runtime/frame.rs` (platform-w3).
-    let (wheel, pages) = crate::runtime::frame::root_input(ctx);
-    scale_wheel(&mut input.events, wheel);
+    let root = crate::runtime::frame::root_input(ctx);
+    if root.ctrl_wheel_pinch {
+        fold_legacy_pinch(ctx, input);
+    }
+    let pages = root.alt_codes;
+    scale_wheel(&mut input.events, root.wheel);
     let os = crate::runtime::windows::os_of(ctx);
     let macos = os == Os::Mac;
-    // A chord a component claims or a capture holds goes to its owner before Alt-code entry.
+    // A chord the key target claims or a capture holds goes to its owner before Alt-code entry.
     let claimed = crate::runtime::keys::claims_press(ctx, input);
     let events = &mut input.events;
     PerViewport::<RawState>::with(ctx, input.viewport_id, |state| {
@@ -790,6 +793,11 @@ fn scale_wheel(events: &mut [Event], speed: crate::runtime::env::WheelSpeed) {
 /// The widget egui holds a drag on.
 pub(crate) fn dragged(ctx: &Context) -> Option<Id> {
     ctx.dragged_id()
+}
+
+/// Whether a pointer button is down.
+pub(crate) fn button_down(ctx: &Context) -> bool {
+    ctx.input(|input| input.pointer.any_down())
 }
 
 /// Where the press that is held down began, while a button is down.

@@ -93,7 +93,7 @@ High contrast meets every minimum below: it moves pinned values that miss one. S
 
 | Pair | Standard | High |
 |---|---|---|
-| `text.normal`, `text.muted`, `text.faint` on surfaces (background, panel, chrome, raised, sunken), `state.hover` and `state.pressed` | 4.5 | 7 |
+| `text.normal`, `text.muted`, `text.faint` on surfaces (background, panel, chrome, raised, sunken, control), `state.hover` and `state.pressed` | 4.5 | 7 |
 | `text.on_selected` on `state.selected` and `state.selected_hover`; `text.on_inverse` on `surface.inverse` | 4.5 | 7 |
 | `accent.text` on `surface.panel`, `surface.raised` and `surface.sunken`; `accent.on_soft` on `accent.soft` | 4.5 | 7 |
 | Status text (`status.good.fg` ...) on `surface.panel`, `surface.raised` and its own `status.*.bg` | 4.5 | 7 |

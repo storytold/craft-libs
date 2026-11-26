@@ -270,6 +270,22 @@ fn the_wheel_steps_the_shown_tab_only_where_the_strip_asks_for_it() {
     }
 }
 
+/// A notch of wheel scroll that arrives in four quarter-notch passes shows one tab step, as a whole notch in one pass
+/// does: a trackpad's small deltas add up instead of being dropped.
+#[trial]
+fn small_wheel_deltas_add_up_to_one_tab_step() {
+    use craft_ui::testing::pointer;
+    for parts in [4_u32, 1] {
+        let (mut fixture, shown) = wheel_rig(true);
+        let over = fixture.by_label("Two").expect("the tab's node").center();
+        fixture.frame(vec![pointer::moved(over)]).idle(1);
+        for _ in 0..parts {
+            fixture.frame(vec![pointer::wheel_lines(-1.0 / parts as f32)]).idle(2);
+        }
+        assert_eq!(shown.get(), 1, "a notch in {parts} passes shows exactly the next tab");
+    }
+}
+
 /// A double click on the empty room after the last document tab asks for a new document; a double click on a tab
 /// activates it and asks for none.
 #[trial]
@@ -315,6 +331,36 @@ fn a_document_tab_shows_its_own_tooltip() {
         assert!(texts.iter().any(|text| text == WHOLE), "the whole title shows over the tab at {width} pt: {texts:?}");
         assert!(!fixture.texts().iter().any(|run| run.text == "Poster.vc" && !run.elided && cut), "and not the name alone: {texts:?}");
     }
+}
+
+/// A modified document tab with a name part shows the `*` right after the name, inside its text, and takes the mark's
+/// room once, as the same tab whose `*` follows the whole label does.
+#[trial]
+fn a_modified_tab_shows_its_mark_after_the_name_part() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const NAME: &str = "Untitled-1";
+    const LABEL: &str = "Untitled-1 @ 93.5 % (RGB/Preview)";
+    let shown = |name_len: Option<usize>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut tab = DocumentTab::new(0_usize, LABEL).modified(true);
+            if let Some(len) = name_len {
+                tab = tab.name_len(len);
+            }
+            let _ = DocumentTabs::new("Documents", &[tab]).show(ui);
+        });
+        fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+        let texts: Vec<(String, Rect)> = fixture.texts().iter().map(|run| (run.text.clone(), run.rect)).collect();
+        (texts, tab_rects(fixture.tree(), &format!("{LABEL}, modified")).first().copied())
+    };
+    let (named, named_tab) = shown(Some(NAME.len()));
+    let (whole, whole_tab) = shown(None);
+    assert!(named.iter().any(|(text, _)| text == "Untitled-1* @ 93.5 % (RGB/Preview)"), "the mark follows the name: {named:?}");
+    assert!(!named.iter().any(|(text, _)| text == "*"), "and is not drawn again after the label: {named:?}");
+    let star = whole.iter().find(|(text, _)| text == "*").map(|(_, rect)| *rect).expect("without a name part the mark follows the label");
+    assert!(whole.iter().any(|(text, _)| text == LABEL), "and the label is drawn whole: {whole:?}");
+    let (named_tab, whole_tab) = (named_tab.expect("the named tab's node"), whole_tab.expect("the whole tab's node"));
+    let apart = (named_tab.width() - whole_tab.width()).abs();
+    assert!(apart < star.width() / 2.0, "the mark takes its room once: {named_tab:?} against {whole_tab:?}, the mark {star:?}");
 }
 
 /// A middle click on a document tab asks to close it, unless the tab cannot close; it does not show the tab.
@@ -740,6 +786,41 @@ fn document_tabs_keep_whole_touching_titles_and_an_asterisk_by_default() {
     assert!((second.left() - first.right()).abs() < 0.5, "neighbouring document tabs touch: {first:?}, {second:?}");
     let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
     assert_eq!(stars, 1, "the modified tab shows its asterisk");
+}
+
+/// A semibold document tab's title draws in the font stack's tab-title family when the app embeds the tab-title face,
+/// so its width follows that face; a tab in the default look keeps its label's face. The stand-in face is Abel, a
+/// condensed face, which the stack scales to the semibold face's x-height.
+#[trial]
+fn a_semibold_document_tab_title_draws_in_the_tab_title_face() {
+    use craft_ui::fonts::{EmbeddedFace, I18nScripts, SystemFonts, UiFonts};
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const TAB: EmbeddedFace = EmbeddedFace {
+        family: "Abel",
+        style: "Regular",
+        scripts: &["Latn"],
+        bytes: include_bytes!("../../../font-subset/tests/data/abel/Abel-Regular.ttf"),
+        index: 0,
+        // craft-fonts-build's `TAB_ROLE`.
+        role: Some("tab"),
+    };
+    let title = "Poster draft one";
+    let width = |look: DocumentTabLook, faces: &'static [EmbeddedFace]| {
+        let mut fixture = Fixture::new(move |ui| {
+            let tabs = [DocumentTab::new(0, title)];
+            let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        });
+        fixture.root_value(look);
+        fixture.room(egui::vec2(600.0, 100.0)).settle();
+        UiFonts::new(&I18nScripts).craft_faces(faces).languages(&["en"]).ui_language("en").system_fonts(SystemFonts::Off).install(fixture.ctx());
+        fixture.settle();
+        fixture.texts().iter().find(|run| run.text == title).map_or(f32::NAN, |run| run.rect.width())
+    };
+    let (plain, condensed) = (width(DocumentTabLook::Semibold, &[]), width(DocumentTabLook::Semibold, &[TAB]));
+    assert!(plain.is_finite() && condensed.is_finite(), "the title is painted: {plain} {condensed}");
+    assert!(condensed < plain - 2.0, "the semibold tab's title draws in the condensed tab-title face: {plain} vs {condensed}");
+    let (whole, whole_with) = (width(DocumentTabLook::Whole, &[]), width(DocumentTabLook::Whole, &[TAB]));
+    assert!((whole - whole_with).abs() < 0.01, "a default tab's title keeps its face: {whole} vs {whole_with}");
 }
 
 /// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its

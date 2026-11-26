@@ -3,12 +3,13 @@
 use craft_behavior::{Metrics, MotionMode, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-use craft_ui::contract::overlay::{Dismiss, Outside};
+use craft_ui::contract::overlay::{Dismiss, OpenFilter, Outside, any_open};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptChoice, PromptKind,
-    RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, Prompt, PromptChoice,
+    PromptKind, RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
+    dialog_id,
 };
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
@@ -300,6 +301,32 @@ fn a_prompt_without_a_default_answer_opens_with_no_button_focused() {
     assert_eq!(answered.get(), None, "Enter answers nothing");
     fixture.key(egui::Key::Escape, Modifiers::NONE).idle(2);
     assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+}
+
+/// A job window is not a dialog that asks: an app that draws it only while no such dialog is open draws it in every
+/// pass, and the window still counts as a modal layer. A prompt with an answer counts as asking.
+#[trial]
+fn a_job_window_is_a_modal_layer_that_asks_nothing() {
+    let (passes, drawn) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (all, shown) = (Rc::clone(&passes), Rc::clone(&drawn));
+    let mut fixture = Fixture::new(move |ui| {
+        all.set(all.get() + 1);
+        if !any_open(ui.ctx(), OpenFilter::Asks) {
+            JobProgress::new("Exporting", "Page 1 of 3").show(ui);
+            shown.set(shown.get() + 1);
+        }
+    });
+    fixture.idle(6);
+    assert_eq!(drawn.get(), passes.get(), "the window is drawn in every pass");
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows");
+    assert!(any_open(fixture.ctx(), OpenFilter::Modal), "the window is a modal layer");
+    assert!(!any_open(fixture.ctx(), OpenFilter::Asks), "the window asks nothing");
+
+    let mut fixture = Fixture::new(|ui| {
+        Prompt::new("Replace the file?", "A file with this name exists.").answers([FooterButton::new("Replace", DialogRole::Accept)]).show(ui);
+    });
+    fixture.idle(6);
+    assert!(any_open(fixture.ctx(), OpenFilter::Asks), "a prompt with an answer asks");
 }
 
 const BAND: PartKey = PartKey::new("band");
@@ -734,6 +761,17 @@ fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
     use craft_theme::Variant;
     let seen = footer_variants(Some(craft_ui::sections::DialogButtonLook::Quiet));
     assert!(seen.contains(&Variant::GHOST), "Cancel is a ghost button: {seen:?}");
+    assert!(seen.contains(&Variant::PRIMARY), "Save is the accented button: {seen:?}");
+    assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
+}
+
+/// VectorCraft's dialogs (`DialogButtonLook::Filled`) show Cancel and Don't Save as filled neutral tiles beside the
+/// accented answer, not as outlines.
+#[trial]
+fn a_footer_cancel_is_a_filled_button_beside_the_accent_answer() {
+    use craft_theme::Variant;
+    let seen = footer_variants(Some(craft_ui::sections::DialogButtonLook::Filled));
+    assert!(seen.contains(&craft_ui::buttons::FILLED), "Cancel is a filled button: {seen:?}");
     assert!(seen.contains(&Variant::PRIMARY), "Save is the accented button: {seen:?}");
     assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
 }
@@ -1198,4 +1236,37 @@ fn a_new_question_in_place_of_another_waits_again_for_its_armed_answer() {
     fixture.idle(60);
     click_ok(&mut fixture);
     assert!(host.borrow().is_empty(), "after its delay the OK answers it");
+}
+
+/// A dialog is padded `space.pad.dialog` and its footer buttons stand `size.dialog.button_height` high (VectorCraft's
+/// 22-point margin and 28-point buttons); an app that sets neither keeps a panel's padding and a push button's height.
+#[trial]
+fn a_dialog_takes_its_padding_and_footer_button_height_from_the_dialog_sizes() {
+    let shown = |overrides: &[(&str, f32)]| {
+        let mut sizes = craft_theme::AppSizes::default();
+        for (path, value) in overrides {
+            sizes.all.insert((*path).to_owned(), craft_theme::SizeValue::Number(*value));
+        }
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.sizes = Arc::new(sizes);
+        let mut fixture = Fixture::new(|ui| {
+            let mut open = true;
+            Dialog::new("Options").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+                Text::new("Body text").show(ui);
+            });
+        });
+        fixture.root(root).room(vec2(1200.0, 800.0)).settle();
+        let dialog = fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+        let text = fixture.texts().iter().find(|run| run.text == "Body text").expect("the body is painted").rect;
+        (text.left() - dialog.left(), fixture.by_label("OK").expect("the footer's OK").rect.height())
+    };
+    let standard = shown(&[]);
+    let dialog = shown(&[("space.pad.dialog", 30.0), ("size.dialog.button_height", 40.0)]);
+    assert!(dialog.0 > standard.0 + 10.0, "a larger dialog padding moves the body in from the edge: {standard:?} then {dialog:?}");
+    assert!(dialog.1 > standard.1 + 10.0, "a taller dialog button raises OK: {standard:?} then {dialog:?}");
+    let follows = shown(&[("space.pad.regular", 30.0), ("size.button", 40.0)]);
+    assert!(
+        (follows.0 - dialog.0).abs() < 0.5 && (follows.1 - dialog.1).abs() < 0.5,
+        "both follow the panel padding and the push button: {follows:?} and {dialog:?}"
+    );
 }
