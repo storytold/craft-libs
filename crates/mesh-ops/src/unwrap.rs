@@ -272,9 +272,8 @@ fn interiors_overlap(a: &Flat, b: &Flat) -> bool {
 
 /// Replace the UVs of `mesh` with an automatic non-overlapping layout: each material gets its
 /// own 0..1 space with charts at least `padding_texels` (minimum 1, which a NaN counts as) away
-/// from each other and the borders. The padding is counted in texels of the square the charts
-/// are packed into: `resolution` (at least 16), doubled while the padding leaves no room for the
-/// charts, so at a doubled size the padding is narrower than `padding_texels` at `resolution`.
+/// from each other and the borders. The padding is counted at `resolution` (at least 16).
+/// A layout that cannot fit with the requested padding returns an error.
 /// An initial resolution above 65,536 texels per side is an error before the mesh changes.
 /// Vertices are split at chart borders; tangents are recomputed.
 /// Returns the number of charts. A mesh that fails the checks (indices, submesh ranges and
@@ -585,11 +584,10 @@ fn vertex_remap(positions: usize, indices: usize) -> Result<HashMap<(u32, u32), 
 
 /// Shelf-pack rectangles of world `sizes` (each grown by `pad` texels per side) into a square of
 /// `res` texels with the largest uniform scale that fits. Returns (texels per world unit,
-/// resolution used, texel offset per rectangle). The resolution doubles while the padding leaves
-/// no room for a positive scale (very many charts, or padding as wide as the square), so the
-/// result always fits in 0..1 and charts with a size keep it. The sizes and the scale are in
+/// resolution used, texel offset per rectangle). A layout without room for a positive scale
+/// returns an error. The sizes and the scale are in
 /// `f64`, where the scale of any chart of finite `f32` positions is finite and above zero.
-fn pack(sizes: &[DVec2], mut res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>)> {
+fn pack(sizes: &[DVec2], res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>)> {
     let mut order: Vec<usize> = try_vec(sizes.len(), "unwrap charts")?;
     order.extend(0..sizes.len());
     // Tallest first and equal heights in input order, which is the order a stable sort gives; an
@@ -623,32 +621,26 @@ fn pack(sizes: &[DVec2], mut res: f32, pad: f32) -> Result<(f64, f32, Vec<DVec2>
         true
     };
     let largest = sizes.iter().map(|s| s.max_element()).fold(0.0f64, f64::max);
-    loop {
-        if place(0.0, res, &mut out) {
-            if largest <= 0.0 {
-                return Ok((0.0, res, out));
-            }
-            // The largest scale that fits, by bisection; none above zero means a larger square.
-            let (mut lo, mut hi) = (0.0f64, (f64::from(res) - 2.0 * pad).max(0.0) / largest);
-            if hi > 0.0 && place(hi, res, &mut out) {
-                lo = hi;
-            }
-            for _ in 0..40 {
-                if hi - lo <= lo * 1e-4 {
-                    break;
-                }
-                let mid = 0.5 * (lo + hi);
-                if place(mid, res, &mut out) { lo = mid } else { hi = mid }
-            }
-            if lo > 0.0 && place(lo, res, &mut out) {
-                return Ok((lo, res, out));
-            }
+    if place(0.0, res, &mut out) {
+        if largest <= 0.0 {
+            return Ok((0.0, res, out));
         }
-        res *= 2.0;
-        if res > MAX_PACK_RES {
-            return Err(MeshOpsError::Invalid("too many UV charts to pack".into()));
+        let (mut lo, mut hi) = (0.0f64, (f64::from(res) - 2.0 * pad).max(0.0) / largest);
+        if hi > 0.0 && place(hi, res, &mut out) {
+            lo = hi;
+        }
+        for _ in 0..40 {
+            if hi - lo <= lo * 1e-4 {
+                break;
+            }
+            let mid = 0.5 * (lo + hi);
+            if place(mid, res, &mut out) { lo = mid } else { hi = mid }
+        }
+        if lo > 0.0 && place(lo, res, &mut out) {
+            return Ok((lo, res, out));
         }
     }
+    Err(MeshOpsError::Invalid("UV charts cannot fit with the requested padding and resolution".into()))
 }
 
 impl Mesh {
@@ -743,8 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn many_tiny_charts_still_fit() {
-        // 2000 disconnected triangles: the packer grows its virtual resolution.
+    fn too_many_charts_preserve_the_requested_padding_and_mesh() {
         let mut p = Vec::new();
         let mut idx = Vec::new();
         for i in 0..2000u32 {
@@ -753,8 +744,29 @@ mod tests {
             idx.extend([i * 3, i * 3 + 1, i * 3 + 2]);
         }
         let mut m = Mesh::from_parts(p, None, Vec::new(), idx, "m").unwrap();
-        auto_unwrap(&mut m, 4.0, 128).unwrap();
+        let before = m.clone();
+        assert!(auto_unwrap(&mut m, 4.0, 128).is_err());
+        assert_eq!(m, before);
+        auto_unwrap(&mut m, 4.0, 512).unwrap();
         assert!(m.uvs.iter().all(|uv| (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y)));
+    }
+
+    #[test]
+    fn an_invalid_color_array_does_not_replace_the_existing_layout() {
+        let mut mesh = primitives::cube(1.0);
+        mesh.colors = vec![glam::Vec4::ONE; 2];
+        let before = mesh.clone();
+        assert!(auto_unwrap(&mut mesh, 4.0, 256).is_err());
+        assert_eq!(mesh, before);
+    }
+
+    #[test]
+    fn packing_does_not_reduce_the_requested_texel_border() {
+        assert!(pack(&[DVec2::ONE; 2000], 128.0, 4.0).is_err());
+        let (_, resolution, offsets) = pack(&[DVec2::ONE; 2], 128.0, 4.0).unwrap();
+        assert_eq!(resolution, 128.0);
+        let minimum_uv = (offsets[0].x + 4.0) / f64::from(resolution);
+        assert_eq!(minimum_uv * 128.0, 4.0);
     }
 
     #[test]
@@ -954,9 +966,8 @@ mod tests {
     }
 
     #[test]
-    fn small_faces_that_overlap_a_large_one_start_another_chart() {
-        // Many unit faces set the grid, then a strip of faces 1e-4 across winds back over the
-        // first face: the overlap test measures each pair by its own size.
+    fn a_small_overlapping_fan_splits_with_a_grid_set_by_large_faces() {
+        // Unit faces set the grid size. A separate fan of small faces winds past a full turn.
         let mut positions = vec![[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         let mut indices = vec![0u32, 1, 2];
         for k in 0..40u32 {
@@ -1082,7 +1093,9 @@ mod tests {
     #[test]
     fn a_layout_that_fits_only_at_zero_scale_is_not_accepted() {
         // With 8 texels of padding per side, a 16-texel square has no room left for the chart.
-        let out = crate::unwrap_uvs(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &[0, 1, 2], 8.0, 16, &crate::Limits::default()).unwrap();
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        assert!(crate::unwrap_uvs(&positions, &[0, 1, 2], 8.0, 16, &crate::Limits::default()).is_err());
+        let out = crate::unwrap_uvs(&positions, &[0, 1, 2], 8.0, 32, &crate::Limits::default()).unwrap();
         let [a, b, c] = [0, 1, 2].map(|k| Vec2::from_array(out.uvs[out.indices[k] as usize]));
         let area = (b - a).perp_dot(c - a).abs() * 0.5;
         assert!(area > 0.01, "UV area {area}: {:?}", out.uvs);

@@ -48,7 +48,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   below 0.5. Normals are unit vectors, as glTF 2.0 stores them.
 - **UV unwrapping.** `unwrap_uvs` and `unwrap::auto_unwrap` make a non-overlapping layout per
   material, splitting vertices where charts meet. An initial packing resolution above 65,536
-  texels per side returns `MeshOpsError::Invalid` without changing the mesh. A face joins a chart only when its projection
+  texels per side returns `MeshOpsError::Invalid` without changing the mesh. Padding is measured
+  at the requested resolution. A layout that cannot fit returns an error without changing the
+  mesh. A face joins a chart only when its projection
   onto the chart's plane does not overlap the chart's other faces, and every chart is packed at
   a scale above zero. The charts are projected, measured and packed in `f64` from the positions
   as given, so a small chart far from the origin keeps its shape. A mesh whose submeshes put one
