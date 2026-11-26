@@ -14,7 +14,7 @@ use crate::menu::{self, Menu, MenuItem};
 use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, GlyphRole, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, GlyphRole, StyleColor, StyleCx};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -30,12 +30,16 @@ const MARK: PartKey = PartKey::new("mark");
 const BAR: PartKey = PartKey::new("bar");
 
 /// The style of a flyout button: it paints through its face, so it holds no look of its own besides its side, the rail
-/// button's, and the size of the corner mark's press area, which is the size and the inset of the mark the face paints.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// button's, its focus ring, and the size of the corner mark's press area, which is the size and the inset of the mark
+/// the face paints.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct FlyoutButtonStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring the button shows while it has keyboard focus: a face paints none.
+    #[style(focus)]
+    focus: FocusLook,
     /// The side of the corner mark, which is also its inset from the face's corner.
     mark: f32,
     /// The button's glyph role, which its face shows the icon in.
@@ -239,7 +243,12 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn style(cx: &StyleCx<'_>, _: FlyoutButtonStyleKey<T>) -> FlyoutButtonStyle {
         let side = cx.env::<RailDensity>().button(cx.tokens);
-        FlyoutButtonStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), mark: cx.tokens.space.gap.tight, glyphs: cx.glyph_role() }
+        FlyoutButtonStyle {
+            metrics: Metrics::new().min_size(Vec2::splat(side)),
+            focus: cx.focus_look(),
+            mark: cx.tokens.space.gap.tight,
+            glyphs: cx.glyph_role(),
+        }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

@@ -149,6 +149,29 @@ fn the_current_tools_button_reports_pressed_and_the_others_not() {
     assert_eq!(pressed("Cut"), Some(Mixed::Same(false)), "another tool's button reports that it is not");
 }
 
+/// A rail button with keyboard focus is ringed as a button is: a focus stroke of two points around its own rect.
+#[trial]
+fn a_focused_rail_button_shows_the_focus_ring_around_it() {
+    let all = tools(&[UNDO, REDO]);
+    let mut fixture = Fixture::new(move |ui| {
+        FlyoutButton::new(&all, &UNDO).show(ui);
+    });
+    fixture.settle();
+    let ring = |fixture: &mut Fixture| {
+        fixture.frame_shapes().iter().find_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.stroke.width >= 2.0 => Some(rect.rect),
+            _ => None,
+        })
+    };
+    assert!(ring(&mut fixture).is_none(), "an unfocused rail button has no ring");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.focused().is_some(), "Tab focused the rail button");
+    let target = fixture.by_role(Role::BUTTON).into_iter().next().expect("the rail button shows");
+    let ring = ring(&mut fixture).expect("the focused rail button paints a focus ring");
+    assert!(ring.expand(1.0).contains_rect(target.rect), "the ring {ring:?} goes around the button {:?}", target.rect);
+}
+
 /// With a click command a click, Enter or Space fires it and selects nothing; a hold, a drag away and a right click
 /// list the tools, and the release that ends a hold fires nothing.
 #[trial]
