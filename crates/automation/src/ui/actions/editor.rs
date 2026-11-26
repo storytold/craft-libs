@@ -308,10 +308,8 @@ mod stories {
     }
 
     fn draft() -> ActionEditorValue {
-        let mut action = Action::new(
-            "Retouch draft",
-            ["Levels", "Curves", "Blur"].into_iter().map(|name| ActionStep::new(name, json!({"amount": 2}))).collect(),
-        );
+        let mut action =
+            Action::new("Retouch draft", ["Levels", "Curves", "Blur"].into_iter().map(|name| ActionStep::new(name, json!({"amount": 2}))).collect());
         action.description = "Adjust the tonal range.\nThen soften the result.".to_owned();
         action.color = ActionColor::Teal;
         action.disabled.insert(1);
@@ -325,10 +323,8 @@ mod stories {
     fn action_editor_draft(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         // StoryData lends one slot at a time, so copy the value out and write it back after showing.
         let mut value = data.value("draft", draft()).clone();
-        let state = data.note(
-            "editor-state",
-            ActionEditorState { selected: Some(0), expanded: [0].into_iter().collect(), ..ActionEditorState::default() },
-        );
+        let state =
+            data.note("editor-state", ActionEditorState { selected: Some(0), expanded: [0].into_iter().collect(), ..ActionEditorState::default() });
         let output = ActionEditor::new(state, &mut value).host(&Host).show(ui);
         *data.value("draft", draft()) = value;
         if output.changed || !output.step_moves.is_empty() || !output.events.is_empty() {
