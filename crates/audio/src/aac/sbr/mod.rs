@@ -493,7 +493,8 @@ mod tests {
         };
         let mut e = Element::new(1, RATE);
         let mut pair = Element::new(2, RATE);
-        for i in 0..600 {
+        // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs 1/N of the rounds.
+        for i in 0..600usize.div_ceil(craft_media_testkit::hostile::divisor()) {
             let mut data = good.clone();
             for _ in 0..1 + next() % 6 {
                 let bit = next() as usize % (8 * data.len());

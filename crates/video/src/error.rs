@@ -1,10 +1,10 @@
-//! [`VideoError`], the error of the codec-agnostic layer ([`crate::TrackDecoder`]).
+//! [`VideoError`], the error of the codec-agnostic layer (`TrackDecoder`).
 
 use crate::frame::FrameError;
 
 /// Errors from the codec-agnostic layer.
 ///
-/// Codec errors convert into it, so code mixing [`crate::TrackDecoder`] with the codec modules can
+/// Codec errors convert into it, so code mixing `TrackDecoder` with the codec modules can
 /// use `?` throughout: a codec's "unsupported" stays [`VideoError::Unsupported`], anything else in
 /// the input is [`VideoError::Malformed`]. The message starts with the codec's name.
 #[non_exhaustive]

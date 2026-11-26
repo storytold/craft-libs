@@ -114,7 +114,8 @@ the last filter of an image of known size may produce (1 GiB by default), and
 `with_max_image_pixels` sets the most pixels an image or mask may have for the interpreter to
 decode it (2^28 by default, at most 2^32), before and after its codec decodes it. With 64-bit
 pointers a caller may raise either one; elsewhere a raise is clamped to the default.
-`image_size_ok` keeps the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
+The CCITT and JPEG 2000 decoders hold an image to the document's pixel limit; JBIG2 keeps
+its own 2^28. `image_size_ok` and `ccitt_size_ok` keep the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
 RGB data instead of copying them into a second buffer. Tests:
 `decode_limits_tests::image_limits_default_and_caller_figures` in hayro-syntax and
 `image_limits` in `crates/pdf/tests/interpretation.rs`.
@@ -167,7 +168,8 @@ Hostile-input bounds (CodeRabbit findings):
 - A CID font's `/W2` run that starts past CID 65535 is skipped as in `/W`, instead of
   overflowing and discarding the whole table.
 - CCITT images: `ccitt_size_ok` (inherited PdfCraft ledger item 2) allows at most 2^20
-  columns and 2^28 pixels (columns × rows) before the decoder allocates. A `/Columns` past
+  columns and 2^28 pixels (columns × rows) before the decoder allocates; the decoder applies
+  the document's pixel limit in place of 2^28. A `/Columns` past
   `u32::MAX` is refused rather than wrapped to a small width. `/Rows` follows PdfCraft (17)
   and (19): `/Rows 0` or a value below `/Height` decodes to the image height, and decoding
   still stops where the data ends.
@@ -201,9 +203,10 @@ raster tests are adapted in `tests/upstream_raster.rs` and the text contracts in
 `tests/upstream_text.rs`. (P8)'s PdfCraft test needs a Japanese substitute font and is not
 ported.
 - A CCITT image with `/Rows 0` (unknown height) decodes at most the rows that fit the stream's
-  output limit (counted in 1-bit rows) and 2^28 pixels; a known height is clamped the same way.
-  Before, it decoded to the end of the data, and a bit of 2D code can repeat a whole row.
-- A JPEG 2000 image over 2^28 pixels, or over its output limit (at least 64 MiB), by the
+  output limit (counted in 1-bit rows) and the document's pixel limit (2^28 by default); a
+  known height is clamped the same way. Before, it decoded to the end of the data, and a bit of
+  2D code can repeat a whole row.
+- A JPEG 2000 image over the document's pixel limit (2^28 by default), or over its output limit (at least 64 MiB), by the
   codestream's own dimensions is refused before decoding, and its buffer is reserved fallibly:
   the image dictionary's smaller size no longer stands in for the size the decoder allocates.
 
@@ -300,6 +303,15 @@ the nonzero overprint mode, and DeviceGray on black alone, rather than through a
 or DefaultGray profile and the CMYK simulation of patch 36. PdfCraft's eight raster tests are
 adapted in `tests/upstream_raster.rs` (`default_color_spaces`); the plate case is
 `default_color_spaces_leave_device_color_on_its_plates` in `tests/plates.rs`.
+
+A craft-libs patch on top of it, labeled `Craft patch (default spaces)` in code comments:
+`RasterImage::default_color_space` returns the default color space that one draw of an image
+uses in place of its device space, with the cache key of the object it was read from, or `None`
+when the draw uses the image's own space. The same image XObject drawn inside and outside a
+default's scope reports each draw by its own scope. An inline image that names a `/ColorSpace`
+resource that is a device space reports the default substituted for it too
+(`named_color_space_and_default` in hayro-interpret `interpret/mod.rs`). Tests:
+`crates/pdf/tests/image_default_spaces.rs`.
 
 A rendering speedup from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
 hayro-interpret (35) with hayro (19), PdfCraft #3296, marked `PdfCraft patch (#3296)` because
