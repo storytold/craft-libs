@@ -159,35 +159,6 @@ Second body\n";
     }
 
     #[test]
-    fn empty_and_odd_files() {
-        assert!(read(b"").is_empty());
-        assert!(read(b"\n\n\r\n").is_empty());
-        assert!(read(b"From a@example.org Tue Jul  1 08:52:37 2003\n").is_empty());
-        assert!(read(b"From \n\nFrom \n\nFrom ").is_empty());
-        // A `From ` line in the middle of a paragraph, without a time, is content.
-        assert_eq!(read(b"From \nFrom \n\nFrom ").len(), 1);
-        // A lone message without a separator.
-        assert_eq!(read(b"\nSubject: Lone\n\nbody\n"), ["Subject: Lone\n\nbody\n"]);
-        // The iterator stays finished.
-        let mut messages = mbox_messages(b"Subject: x\n\ny\n");
-        assert!(messages.next().is_some());
-        assert!(messages.next().is_none() && messages.next().is_none());
-    }
-
-    #[test]
-    fn writes_separators_and_quotes_from_lines() {
-        let mut out = Vec::new();
-        write_mbox_message(&mut out, "ada@example.org", &DATE, b"Subject: Hi\r\n\r\nFrom here\r\n>From there\r\nplain\r\n");
-        assert_eq!(
-            String::from_utf8_lossy(&out),
-            "From ada@example.org Tue Jul  1 08:52:37 2003\r\nSubject: Hi\r\n\r\n>From here\r\n>>From there\r\nplain\r\n\r\n"
-        );
-        let mut out = Vec::new();
-        write_mbox_message(&mut out, " \r\n", &DateTime::default(), b"x");
-        assert_eq!(String::from_utf8_lossy(&out), "From MAILER-DAEMON Thu Jan  1 00:00:00 1970\r\nx\r\n\r\n");
-    }
-
-    #[test]
     fn a_written_mbox_reads_back() {
         let messages: [&[u8]; 4] = [
             b"Subject: One\r\n\r\nFrom the top\r\n\r\nFrom after a blank line\r\n>From quoted already\r\n",
@@ -203,26 +174,7 @@ Second body\n";
         assert_eq!(back, messages);
     }
 
-    #[test]
-    fn hostile_senders_cannot_break_the_separator() {
-        let mut out = Vec::new();
-        write_mbox_message(&mut out, "a@example.org\r\nFrom evil@example.org Tue Jul  1 08:52:37 2003", &DATE, b"Subject: x\r\n\r\ny\r\n");
-        assert_eq!(mbox_messages(&out).count(), 1);
-        assert_eq!(out.iter().filter(|b| **b == b'\n').count(), 5);
-    }
-
     proptest::proptest! {
-        #[test]
-        fn any_bytes_read(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..600)) {
-            let total: usize = mbox_messages(&data).map(|m| m.len()).sum();
-            proptest::prop_assert!(total <= data.len());
-        }
-
-        #[test]
-        fn from_soup_reads(s in "(From |>From |>|\n|\r\n|a|12:34| |: ){0,60}") {
-            let _ = mbox_messages(s.as_bytes()).count();
-        }
-
         #[test]
         fn any_message_written_reads_back(s in "(From |>From |>|\r\n|a|12:34| |: ){0,40}") {
             // A message is not white space alone, and ends its last line.

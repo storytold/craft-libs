@@ -53,11 +53,15 @@ fn a_fix_in_one_operation_leaves_most_kinds_alone() {
         files.iter().for_each(|f| println!("  {}", f.name));
     }
     assert!(files.len() > 20, "{} of {} files reachable", files.len(), all.len());
+    let started = std::time::Instant::now();
     let tree = SourceTree::scan(&files, DISPATCHERS);
+    eprintln!("DIAG kind_versions first scan {:?}", started.elapsed());
     let kinds: Vec<String> = tree.kinds().map(str::to_string).collect();
     assert!(kinds.len() > 100, "the kinds were found: {}", kinds.len());
     let versions = |t: &SourceTree| kinds.iter().map(|k| t.kind_version(k, SHARED).unwrap()).collect::<Vec<_>>();
+    let started = std::time::Instant::now();
     let before = versions(&tree);
+    eprintln!("DIAG kind_versions first versions {:?}", started.elapsed());
     let distinct: std::collections::BTreeSet<_> = before.iter().collect();
     if std::env::var_os("TC_VERSIONS_DUMP").is_some() {
         for k in &kinds {
@@ -72,24 +76,38 @@ fn a_fix_in_one_operation_leaves_most_kinds_alone() {
     }
     assert!(distinct.len() > kinds.len() / 2, "{} distinct versions of {} kinds", distinct.len(), kinds.len());
 
-    let changed_by = |file: &str, from: &str, to: &str| {
+    let changed_by_all = |edits: &[(&str, &str, &str)]| {
         let edited: Vec<SourceFile> = files
             .iter()
             .map(|f| {
-                let text = if f.name == file { f.text.replacen(from, to, 1) } else { f.text.clone() };
-                assert!(f.name != file || text != f.text, "{from} is in {file}");
+                let mut text = f.text.clone();
+                for (file, from, to) in edits.iter().filter(|e| e.0 == f.name) {
+                    let next = text.replacen(from, to, 1);
+                    assert!(next != text, "{from} is in {file}");
+                    text = next;
+                }
                 SourceFile { text, ..f.clone() }
             })
             .collect();
-        let after = versions(&SourceTree::scan(&edited, DISPATCHERS));
+        let started = std::time::Instant::now();
+        let scanned = SourceTree::scan(&edited, DISPATCHERS);
+        let scan = started.elapsed();
+        let after = versions(&scanned);
+        eprintln!(
+            "DIAG kind_versions edit of {:?}: scan {scan:?}, versions {:?}",
+            edits.iter().map(|e| e.0).collect::<Vec<_>>(),
+            started.elapsed() - scan
+        );
         kinds.iter().zip(before.iter().zip(&after)).filter(|(_, (a, b))| a != b).map(|(k, _)| k.clone()).collect::<Vec<String>>()
     };
+    let changed_by = |file: &str, from: &str, to: &str| changed_by_all(&[(file, from, to)]);
 
-    let added = changed_by("src/compiled_ops.rs", "pub fn compute(kind: &str", "fn __added_helper() -> u8 { 1 }\npub fn compute(kind: &str");
-    assert_eq!(added, Vec::<String>::new(), "an added function nothing uses changes nothing");
-
-    let comment = changed_by("src/atomic.rs", "\"levels_mid\" => {", "\"levels_mid\" => { // a comment\n");
-    assert_eq!(comment, Vec::<String>::new(), "a comment changes nothing");
+    // an added function nothing uses, and a comment: both change nothing (edits in two files, one pass)
+    let unchanged = changed_by_all(&[
+        ("src/compiled_ops.rs", "pub fn compute(kind: &str", "fn __added_helper() -> u8 { 1 }\npub fn compute(kind: &str"),
+        ("src/atomic.rs", "\"levels_mid\" => {", "\"levels_mid\" => { // a comment\n"),
+    ]);
+    assert_eq!(unchanged, Vec::<String>::new(), "an unused added function and a comment change nothing");
 
     // a fix inside one node's arm
     let arm = changed_by("src/atomic.rs", "\"levels_mid\" => {", "\"levels_mid\" => { let _fixed = 1;");

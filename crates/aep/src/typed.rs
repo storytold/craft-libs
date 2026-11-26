@@ -453,7 +453,7 @@ pub struct KeyList<'f> {
 }
 
 /// What the property header says about its keyframe records: how many value components each
-/// record holds and which of the two record templates applies (see [`KeyframeKind`]).
+/// record holds and which of the two record templates applies (see `KeyframeKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyLayout {
     /// `tdb4` byte 3.

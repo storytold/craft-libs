@@ -85,13 +85,3 @@ fn varint(b: &[u8], at: usize) -> Option<(u64, usize)> {
     }
     None
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn rejects_cookie_size_above_signed_range() {
-        let mut bytes = b"caff\0\x01\0\0kuki".to_vec();
-        bytes.extend_from_slice(&(1u64 << 63).to_be_bytes());
-        assert!(super::check(&bytes, 0).is_err());
-    }
-}

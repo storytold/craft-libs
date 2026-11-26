@@ -34,6 +34,10 @@ mod java_attribute_names;
 mod java_constant_pool_slots;
 
 #[cfg(test)]
+#[path = "regressions/java_copied_names.rs"]
+mod java_copied_names;
+
+#[cfg(test)]
 #[path = "regressions/java_invoke_operands.rs"]
 mod java_invoke_operands;
 
