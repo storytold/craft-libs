@@ -238,6 +238,144 @@ pub fn normalize_c(v: u32, bits: u32, range: Range) -> Result<f32, InvalidBitDep
     })
 }
 
+/// Quantize a luma signal in 0..1 to an integer code value: the inverse of [`normalize_y`].
+///
+/// Limited range follows ITU-R BT.709 and BT.2100 (`round((219 * E + 16) * 2^(bits - 8))`), full
+/// range follows BT.2100 (`round((2^bits - 1) * E)`). Values outside the signal range are clamped
+/// to the codes `0..=2^bits - 1`, and NaN is treated as 0.
+pub fn quantize_y(e: f32, bits: u32, range: Range) -> Result<u16, InvalidBitDepth> {
+    if !(8..=16).contains(&bits) {
+        return Err(InvalidBitDepth(bits));
+    }
+    let e = if e.is_nan() { 0.0 } else { f64::from(e) };
+    let scale = f64::from(1u32 << (bits - 8));
+    let code = match range {
+        Range::Limited => (219.0 * e + 16.0) * scale,
+        Range::Full => f64::from((1u32 << bits) - 1) * e,
+    };
+    Ok(clamp_code(code, bits))
+}
+
+/// Quantize a chroma signal in −0.5..0.5 to an integer code value: the inverse of
+/// [`normalize_c`].
+///
+/// Limited range is `round((224 * E + 128) * 2^(bits - 8))`, full range is
+/// `round((2^bits - 1) * E + 2^(bits - 1))` (BT.2100). Values outside the signal range are
+/// clamped to the codes `0..=2^bits - 1`, and NaN is treated as 0 (no chroma).
+pub fn quantize_c(e: f32, bits: u32, range: Range) -> Result<u16, InvalidBitDepth> {
+    if !(8..=16).contains(&bits) {
+        return Err(InvalidBitDepth(bits));
+    }
+    let e = if e.is_nan() { 0.0 } else { f64::from(e) };
+    let scale = f64::from(1u32 << (bits - 8));
+    let code = match range {
+        Range::Limited => (224.0 * e + 128.0) * scale,
+        Range::Full => f64::from((1u32 << bits) - 1) * e + f64::from(1u32 << (bits - 1)),
+    };
+    Ok(clamp_code(code, bits))
+}
+
+#[inline]
+fn clamp_code(code: f64, bits: u32) -> u16 {
+    // `bits` is at most 16, so the maximum fits in u16.
+    code.round().clamp(0.0, f64::from((1u32 << bits) - 1)) as u16
+}
+
+/// Convert non-linear R'G'B' (0..1) to integer Y'CbCr code values at a bit depth and range.
+pub fn rgb_to_ycbcr_codes(r: f32, g: f32, b: f32, m: Matrix, bits: u32, range: Range) -> Result<[u16; 3], InvalidBitDepth> {
+    let [y, cb, cr] = rgb_to_ycbcr(r, g, b, m);
+    Ok([quantize_y(y, bits, range)?, quantize_c(cb, bits, range)?, quantize_c(cr, bits, range)?])
+}
+
+/// Convert integer Y'CbCr code values at a bit depth and range to non-linear R'G'B'.
+///
+/// The result is not clamped: codes outside the nominal range (limited-range footroom and
+/// headroom) give values below 0 or above 1.
+pub fn ycbcr_codes_to_rgb(y: u32, cb: u32, cr: u32, m: Matrix, bits: u32, range: Range) -> Result<[f32; 3], InvalidBitDepth> {
+    Ok(ycbcr_to_rgb(normalize_y(y, bits, range)?, normalize_c(cb, bits, range)?, normalize_c(cr, bits, range)?, m))
+}
+
+/// Fixed-point conversion between 8-bit R'G'B' and 8-bit Y'CbCr for one matrix and range.
+///
+/// The coefficients are computed once by [`Ycbcr8::new`]; each conversion is integer
+/// multiply-adds with 16 fractional bits, for per-pixel loops over camera or encoder frames.
+/// Results stay within one code of [`rgb_to_ycbcr_codes`] and [`ycbcr_codes_to_rgb`], and
+/// neutral grays keep chroma at exactly 128.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ycbcr8 {
+    y_offset: i32,
+    // R'G'B' to Y'CbCr.
+    y_rgb: [i32; 3],
+    cb_rgb: [i32; 3],
+    cr_rgb: [i32; 3],
+    // Y'CbCr to R'G'B'.
+    rgb_y: i32,
+    r_cr: i32,
+    g_cb: i32,
+    g_cr: i32,
+    b_cb: i32,
+}
+
+const FIXED_ONE: f64 = 65536.0;
+const FIXED_HALF: i32 = 1 << 15;
+
+impl Ycbcr8 {
+    /// Coefficients for matrix `m` and range `range`.
+    pub fn new(m: Matrix, range: Range) -> Ycbcr8 {
+        let (kr, kb) = m.kr_kb();
+        let (kr, kb) = (f64::from(kr), f64::from(kb));
+        let kg = 1.0 - kr - kb;
+        let (y_offset, y_scale, c_scale) = match range {
+            Range::Limited => (16, 219.0, 224.0),
+            Range::Full => (0, 255.0, 255.0),
+        };
+        let fixed = |v: f64| (v * FIXED_ONE).round() as i32;
+        // Luma: the green weight takes the rounding remainder so 255 gray reaches the top code.
+        let y_total = fixed(y_scale / 255.0);
+        let (y_r, y_b) = (fixed(kr * y_scale / 255.0), fixed(kb * y_scale / 255.0));
+        // Chroma: the green weight cancels the other two so every gray gives exactly 128.
+        let cb_scale = c_scale / 255.0 / (2.0 * (1.0 - kb));
+        let cr_scale = c_scale / 255.0 / (2.0 * (1.0 - kr));
+        let (cb_r, cb_b) = (fixed(-kr * cb_scale), fixed((1.0 - kb) * cb_scale));
+        let (cr_r, cr_b) = (fixed((1.0 - kr) * cr_scale), fixed(-kb * cr_scale));
+        let r_cr = 2.0 * (1.0 - kr) * 255.0 / c_scale;
+        let b_cb = 2.0 * (1.0 - kb) * 255.0 / c_scale;
+        Ycbcr8 {
+            y_offset,
+            y_rgb: [y_r, y_total - y_r - y_b, y_b],
+            cb_rgb: [cb_r, -cb_r - cb_b, cb_b],
+            cr_rgb: [cr_r, -cr_r - cr_b, cr_b],
+            rgb_y: fixed(255.0 / y_scale),
+            r_cr: fixed(r_cr),
+            g_cb: fixed(-kb * b_cb / kg),
+            g_cr: fixed(-kr * r_cr / kg),
+            b_cb: fixed(b_cb),
+        }
+    }
+
+    /// 8-bit R'G'B' to 8-bit Y'CbCr code values.
+    #[inline]
+    pub fn rgb_to_ycbcr(&self, r: u8, g: u8, b: u8) -> [u8; 3] {
+        let rgb = [i32::from(r), i32::from(g), i32::from(b)];
+        let dot = |k: &[i32; 3]| k[0] * rgb[0] + k[1] * rgb[1] + k[2] * rgb[2];
+        [to_u8(dot(&self.y_rgb) + (self.y_offset << 16)), to_u8(dot(&self.cb_rgb) + (128 << 16)), to_u8(dot(&self.cr_rgb) + (128 << 16))]
+    }
+
+    /// 8-bit Y'CbCr code values to 8-bit R'G'B', clamped to 0..=255.
+    #[inline]
+    pub fn ycbcr_to_rgb(&self, y: u8, cb: u8, cr: u8) -> [u8; 3] {
+        let y = self.rgb_y * (i32::from(y) - self.y_offset);
+        let (cb, cr) = (i32::from(cb) - 128, i32::from(cr) - 128);
+        [to_u8(y + self.r_cr * cr), to_u8(y + self.g_cb * cb + self.g_cr * cr), to_u8(y + self.b_cb * cb)]
+    }
+}
+
+/// Round a 16.16 fixed-point value to the nearest integer and clamp it to a u8.
+#[inline]
+fn to_u8(v: i32) -> u8 {
+    ((v + FIXED_HALF) >> 16).clamp(0, 255) as u8
+}
+
 /// sRGB electro-optical transfer (encoded → linear).
 #[inline]
 pub fn srgb_to_linear(v: f32) -> f32 {
@@ -609,6 +747,92 @@ mod tests {
         assert_eq!(HdrMetadata { max_cll: Some(0.0), mastering_max_nits: Some(400.0), ..HdrMetadata::default() }.peak_nits(), Some(400.0));
         // never below reference white
         assert_eq!(HdrMetadata { max_cll: Some(100.0), ..HdrMetadata::default() }.peak_nits(), Some(REFERENCE_WHITE_NITS as f32));
+    }
+
+    #[test]
+    fn code_values_match_published_levels() {
+        // The BT.709 and BT.2100 quantization levels: black, nominal peak and achromatic chroma.
+        assert_eq!(rgb_to_ycbcr_codes(0.0, 0.0, 0.0, Matrix::Bt709, 8, Range::Limited), Ok([16, 128, 128]));
+        assert_eq!(rgb_to_ycbcr_codes(1.0, 1.0, 1.0, Matrix::Bt709, 8, Range::Limited), Ok([235, 128, 128]));
+        assert_eq!(rgb_to_ycbcr_codes(1.0, 1.0, 1.0, Matrix::Bt2020Ncl, 10, Range::Limited), Ok([940, 512, 512]));
+        assert_eq!(rgb_to_ycbcr_codes(0.0, 0.0, 0.0, Matrix::Bt2020Ncl, 10, Range::Limited), Ok([64, 512, 512]));
+        assert_eq!(rgb_to_ycbcr_codes(1.0, 1.0, 1.0, Matrix::Bt2020Ncl, 12, Range::Full), Ok([4095, 2048, 2048]));
+        // 100% red: Y'CbCr of the BT.709 and BT.601 color bars.
+        assert_eq!(rgb_to_ycbcr_codes(1.0, 0.0, 0.0, Matrix::Bt709, 8, Range::Limited), Ok([63, 102, 240]));
+        assert_eq!(rgb_to_ycbcr_codes(1.0, 0.0, 0.0, Matrix::Bt601, 8, Range::Limited), Ok([81, 90, 240]));
+        // JFIF (ITU-T T.871) full-range BT.601: red is Y 76, Cb 85, Cr 255.5 clamped to 255.
+        assert_eq!(rgb_to_ycbcr_codes(1.0, 0.0, 0.0, Matrix::Bt601, 8, Range::Full), Ok([76, 85, 255]));
+    }
+
+    #[test]
+    fn quantize_inverts_normalize() {
+        for range in [Range::Limited, Range::Full] {
+            for bits in [8, 10, 12, 16] {
+                for v in [0, 1, 16, 64, 128, 235, 240, 255] {
+                    let v = v << (bits - 8);
+                    assert_eq!(u32::from(quantize_y(normalize_y(v, bits, range).unwrap(), bits, range).unwrap()), v, "{range:?} {bits} y {v}");
+                    assert_eq!(u32::from(quantize_c(normalize_c(v, bits, range).unwrap(), bits, range).unwrap()), v, "{range:?} {bits} c {v}");
+                }
+                let top = (1u32 << bits) - 1;
+                assert_eq!(u32::from(quantize_y(f32::INFINITY, bits, range).unwrap()), top);
+                assert_eq!(quantize_c(f32::NEG_INFINITY, bits, range), Ok(0));
+                assert_eq!(quantize_c(f32::NAN, bits, range), quantize_c(0.0, bits, range));
+                assert_eq!(quantize_y(f32::NAN, bits, range), quantize_y(0.0, bits, range));
+            }
+        }
+        for bits in [0, 7, 17, u32::MAX] {
+            assert_eq!(quantize_y(0.5, bits, Range::Full), Err(InvalidBitDepth(bits)));
+            assert_eq!(quantize_c(0.0, bits, Range::Limited), Err(InvalidBitDepth(bits)));
+            assert_eq!(rgb_to_ycbcr_codes(0.5, 0.5, 0.5, Matrix::Bt709, bits, Range::Full), Err(InvalidBitDepth(bits)));
+            assert_eq!(ycbcr_codes_to_rgb(0, 0, 0, Matrix::Bt709, bits, Range::Full), Err(InvalidBitDepth(bits)));
+        }
+    }
+
+    #[test]
+    fn ycbcr_codes_roundtrip() {
+        for m in [Matrix::Bt601, Matrix::Bt709, Matrix::Bt2020Ncl] {
+            for range in [Range::Limited, Range::Full] {
+                let [y, cb, cr] = rgb_to_ycbcr_codes(0.8, 0.3, 0.1, m, 10, range).unwrap();
+                let back = ycbcr_codes_to_rgb(y.into(), cb.into(), cr.into(), m, 10, range).unwrap();
+                for (k, v) in [0.8, 0.3, 0.1].into_iter().enumerate() {
+                    assert!((back[k] - v).abs() < 4e-3, "{m:?} {range:?} {back:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_point_8_bit_matches_float() {
+        let close = |a: [u8; 3], b: [u16; 3]| a.iter().zip(b).all(|(&a, b)| (i32::from(a) - i32::from(b)).abs() <= 1);
+        for m in [Matrix::Bt601, Matrix::Bt709, Matrix::Bt2020Ncl] {
+            for range in [Range::Limited, Range::Full] {
+                let conv = Ycbcr8::new(m, range);
+                for r in (0..=255u8).step_by(5) {
+                    for g in (0..=255u8).step_by(5) {
+                        for b in (0..=255u8).step_by(5) {
+                            let float = rgb_to_ycbcr_codes(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0, m, 8, range).unwrap();
+                            let fixed = conv.rgb_to_ycbcr(r, g, b);
+                            assert!(close(fixed, float), "{m:?} {range:?} {r} {g} {b}: {fixed:?} vs {float:?}");
+                            let [y, cb, cr] = fixed;
+                            let rgb = ycbcr_codes_to_rgb(y.into(), cb.into(), cr.into(), m, 8, range).unwrap();
+                            let want = rgb.map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u16);
+                            assert!(close(conv.ycbcr_to_rgb(y, cb, cr), want), "{m:?} {range:?} {fixed:?}");
+                        }
+                    }
+                }
+                for v in 0..=255u8 {
+                    let [_, cb, cr] = conv.rgb_to_ycbcr(v, v, v);
+                    assert_eq!((cb, cr), (128, 128), "{m:?} {range:?} gray {v}");
+                }
+                // Out-of-range codes clamp instead of wrapping.
+                assert_eq!(conv.ycbcr_to_rgb(255, 255, 255)[0], 255);
+                assert_eq!(conv.ycbcr_to_rgb(0, 0, 0)[0], 0);
+            }
+            assert_eq!(Ycbcr8::new(m, Range::Limited).rgb_to_ycbcr(255, 255, 255), [235, 128, 128]);
+            assert_eq!(Ycbcr8::new(m, Range::Full).rgb_to_ycbcr(255, 255, 255), [255, 128, 128]);
+            assert_eq!(Ycbcr8::new(m, Range::Limited).ycbcr_to_rgb(235, 128, 128), [255, 255, 255]);
+            assert_eq!(Ycbcr8::new(m, Range::Limited).ycbcr_to_rgb(16, 128, 128), [0, 0, 0]);
+        }
     }
 
     #[test]
