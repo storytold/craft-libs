@@ -15,7 +15,7 @@ fn alert(low: &str, high: &str) -> Option<(String, String)> {
 #[trial]
 fn an_out_of_range_number_inserts_the_closest_value_and_gives_the_alert() {
     for (field, typed, kept, low, high) in [
-        ("Hue", "400", "360", "0", "360"),
+        ("Hue", "400", "0", "0", "360"),
         ("Saturation", "150", "100", "0", "100"),
         ("Brightness", "101", "100", "0", "100"),
         ("Red", "300", "255", "0", "255"),

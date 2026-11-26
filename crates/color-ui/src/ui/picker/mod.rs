@@ -10,6 +10,8 @@ pub(crate) mod hex_case_tests;
 #[cfg(all(test, feature = "screen-testing"))]
 pub(crate) mod hex_short_input_tests;
 #[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod hue_wrap_tests;
+#[cfg(all(test, feature = "screen-testing"))]
 pub(crate) mod range_alert_tests;
 pub(crate) mod screen_pick;
 #[cfg(feature = "suite")]
