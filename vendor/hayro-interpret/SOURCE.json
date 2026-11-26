@@ -404,7 +404,7 @@
       "path": "src/pattern.rs",
       "source_sha256": "17b49a465275c20e6645dea9443f2cb3a64c594925fd860e74b80b44d5344e37",
       "source_git_blob": "9295f51709f8915951d7b9afca9411651d65a1f8",
-      "sha256": "e57d4de60126eafa0da2113af12bbbde1aabd15554f1ee26f6551b8219f4ede5"
+      "sha256": "e3add1bdf210b4220e0a5b02434ec5b4ea5a148490449631fee7573b477031f7"
     },
     {
       "path": "src/shading.rs",

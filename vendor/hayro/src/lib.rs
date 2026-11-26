@@ -858,4 +858,123 @@ mod mesh_extent_tests {
         assert_eq!(px(&p, 196, 98), [255, 0, 0, 255]);
         assert_eq!(px(&p, 150, 50), [255, 255, 255, 255]);
     }
+    // Adapted from storytold/pdfcraft#5318, approved head 8b1d5f96 (MIT OR Apache-2.0).
+    /// ISO 32000-2 §11.6.4.4: the fill and stroke opacity (`ca`, `CA`) in effect when a tiling
+    /// pattern paints apply to the whole pattern, as to a solid colour or a shading pattern. A
+    /// coloured pattern drew opaque whatever the opacity, and an uncoloured one took the fill
+    /// opacity current at `scn`, so a `gs` after it had no effect. MuPDF and Ghostscript draw every
+    /// band below at 25 %, except the uncoloured stroke, which takes its own 75 % stroke opacity
+    /// under a 25 % fill opacity (so a stroke that took `ca` would show). Poppler and PDFium don't
+    /// follow the stroke opacity for a pattern: the coloured stroke comes out opaque and the
+    /// uncoloured one at `ca`.
+    #[test]
+    fn tiling_pattern_uses_the_alpha_current_at_paint_time() {
+        let content = "q /F1 gs /Pattern cs /P0 scn 0 80 100 15 re f Q \
+                       q /Pattern cs /P0 scn /F1 gs 0 55 100 15 re f Q \
+                       q /Pattern cs /P0 scn /F1 gs 0 70 50 10 re f /F2 gs 50 70 50 10 re f Q \
+                       q /CS0 cs 1 0 0 /P1 scn /F1 gs 0 30 100 15 re f Q \
+                       q /Pattern CS /P0 SCN /S1 gs 10 w 0 12 m 100 12 l S Q \
+                       q /F1 gs /CS0 CS 1 0 0 /P1 SCN /S2 gs 6 w 0 23 m 100 23 l S Q \
+                       q /Pattern cs /P0 scn 0 0 10 5 re f Q";
+        let pdf = format!(
+            "%PDF-1.7
+    1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+    2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+    3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R
+      /Resources << /ExtGState << /S1 << /CA 0.25 >> /S2 << /CA 0.75 >> /F1 << /ca 0.25 >> /F2 << /ca 0.75 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >>
+      /Pattern << /P0 5 0 R /P1 6 0 R >> >> >> endobj
+    4 0 obj << /Length {} >> stream
+    {content}
+    endstream endobj
+    5 0 obj << /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length 23 >> stream
+    1 0 0 rg 0 0 10 10 re f
+    endstream endobj
+    6 0 obj << /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length 14 >> stream
+    0 0 10 10 re f
+    endstream endobj
+    trailer << /Root 1 0 R >>
+    %%EOF",
+            content.len()
+        );
+        let p = render_at(pdf.into_bytes(), 1.0);
+        let px = |x: u16, y: u16| {
+            let c = p.sample(x, y);
+            vec![c.r, c.g, c.b, c.a]
+        };
+        // Red at 25% over white is about (255, 191, 191); opaque red would be (255, 0, 0).
+        for (what, y) in [
+            ("coloured, /ca set before scn", 13),
+            ("coloured, /ca set after scn", 38),
+            ("uncoloured, /ca set after scn", 63),
+            ("coloured stroke, /CA set after SCN", 88),
+        ] {
+            let c = px(50, y);
+            assert!(c[0] >= 250 && (185..=197).contains(&c[1]) && (185..=197).contains(&c[2]), "{what}: {c:?}");
+        }
+        // Red at 75% over white is about (255, 64, 64): the stroke opacity, not the fill's 25%.
+        let c = px(50, 77);
+        assert!(c[0] >= 250 && (55..=73).contains(&c[1]) && (55..=73).contains(&c[2]), "uncoloured stroke, /CA set after SCN: {c:?}");
+        // The same selected pattern keeps different alpha values in the cell cache.
+        for (x, expected) in [(25, 185..=197), (75, 55..=73)] {
+            let c = px(x, 25);
+            assert!(c[0] >= 250 && expected.contains(&c[1]) && expected.contains(&c[2]), "reused fill at x={x}: {c:?}");
+        }
+        // Without an opacity in force the pattern stays opaque.
+        assert_eq!(px(5, 97), vec![255, 0, 0, 255], "no opacity");
+    }
+
+    /// The same rule where a step too large for a cell pixmap draws the cell once (#3349): the cell
+    /// is rendered on its own and must take the opacity in force too, fill and stroke alike,
+    /// coloured or uncoloured.
+    #[test]
+    fn a_tiling_pattern_drawn_once_uses_the_alpha_current_at_paint_time() {
+        let render = |content: &str| {
+            let cell = "0 0 1 rg 0 0 10 10 re f";
+            let pdf = format!(
+                "%PDF-1.7
+    1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+    2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+    3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R
+      /Resources << /ExtGState << /F1 << /ca 0.25 >> /F2 << /ca 0.75 >> /S1 << /CA 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >> /Pattern << /P1 5 0 R /P2 6 0 R >> >> >> endobj
+    4 0 obj << /Length {} >> stream
+    {content}
+    endstream endobj
+    5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 3 /BBox [0 0 10 10] /XStep 2147480100 /YStep 2147480100 /Matrix [1 0 0 -1 10 20] /Length {} >> stream
+    {cell}
+    endstream endobj
+    6 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 3 /BBox [0 0 10 10] /XStep 2147480100 /YStep 2147480100 /Matrix [1 0 0 -1 10 20] /Length 14 >> stream
+    0 0 10 10 re f
+    endstream endobj
+    trailer << /Root 1 0 R >>
+    %%EOF",
+                content.len(),
+                cell.len()
+            );
+            render_at(pdf.into_bytes(), 1.0)
+        };
+        let sample = |p: &Pixmap, x| {
+            let c = p.sample(x, 25);
+            [c.r, c.g, c.b, c.a]
+        };
+        // Blue at 25% over white is about (191, 191, 255); opaque blue would be (0, 0, 255).
+        for (what, content) in [
+            ("fill under /ca 0.25", "/F1 gs /Pattern cs /P1 scn 0 0 40 40 re f"),
+            ("stroke under /CA 0.25", "/Pattern CS /P1 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
+            ("uncoloured fill, /ca set after scn", "/CS0 cs 0 0 1 /P2 scn /F1 gs 0 0 40 40 re f"),
+            ("uncoloured stroke, /CA set after SCN", "/CS0 CS 0 0 1 /P2 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
+        ] {
+            let c = sample(&render(content), 15);
+            assert!((185..=197).contains(&c[0]) && (185..=197).contains(&c[1]) && c[2] >= 250, "{what}: {c:?}");
+        }
+        let opaque = render("/Pattern cs /P1 scn 0 0 40 40 re f");
+        assert_eq!(sample(&opaque, 15), [0, 0, 255, 255], "no opacity");
+
+        let reused = render("/Pattern cs /P1 scn /F1 gs 10 10 5 10 re f /F2 gs 15 10 5 10 re f");
+        for (x, expected) in [(12, 185..=197), (17, 55..=73)] {
+            let c = sample(&reused, x);
+            assert!(expected.contains(&c[0]) && expected.contains(&c[1]) && c[2] >= 250, "reused single cell at x={x}: {c:?}");
+        }
+    }
+
+
 }
