@@ -36,6 +36,9 @@ pub struct OutputPath {
     pub data_kind: Option<String>,
     /// Close each open contour for formats that require closed cutting operations.
     pub close_open_contours: bool,
+    /// The colour the path is filled with in SVG and PDF output (even-odd, as drawn); `None`
+    /// leaves it unfilled. Cutter and DXF writers ignore it.
+    pub fill_rgb: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,8 +136,9 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
                 .iter()
                 .map(|path| {
                     let color = path.color_rgb;
+                    let fill = path.fill_rgb.map_or_else(|| "none".to_string(), |[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}"));
                     let mut attributes = vec![
-                        craft_svg::write::Attribute::text("fill", "none"),
+                        craft_svg::write::Attribute::text("fill", fill),
                         craft_svg::write::Attribute::text("stroke", format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])),
                         craft_svg::write::Attribute::text("stroke-width", format_float(path.stroke_width_mm / view_scale)),
                     ];
@@ -173,7 +177,15 @@ fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
         .enumerate()
         .filter(|(_, layer)| layer.visible)
         .flat_map(|(layer_index, _)| paths_by_layer[layer_index].iter().copied())
-        .map(|path| PdfPath { path: path.path.clone(), color_rgb: path.color_rgb, stroke_width_mm: Some(path.stroke_width_mm) })
+        // A filled path paints its fill, then its line over it.
+        .flat_map(|path| {
+            let fill = path.fill_rgb.map(|rgb| PdfPath { path: path.path.clone(), color_rgb: rgb, stroke_width_mm: None });
+            fill.into_iter().chain(std::iter::once(PdfPath {
+                path: path.path.clone(),
+                color_rgb: path.color_rgb,
+                stroke_width_mm: Some(path.stroke_width_mm),
+            }))
+        })
         .collect();
     write_pdf_pages(&[PdfPage { width_mm: scene.width_mm, height_mm: scene.height_mm, view_box: scene.view_box, paths }])
 }
@@ -444,4 +456,44 @@ fn point_is_finite(point: Point) -> bool {
 
 fn format_float(value: f64) -> String {
     value.to_string()
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    fn scene(fill_rgb: Option<[u8; 3]>) -> OutputScene {
+        let mut square = BezPath::new();
+        square.move_to((10.0, 10.0));
+        square.line_to((30.0, 10.0));
+        square.line_to((30.0, 30.0));
+        square.line_to((10.0, 30.0));
+        square.close_path();
+        OutputScene {
+            width_mm: 50.0,
+            height_mm: 50.0,
+            view_box: [0.0, 0.0, 50.0, 50.0],
+            layers: vec![OutputLayer { name: "cut".into(), dxf_name: "CUT".into(), visible: true, dxf_color_index: 1, class: None, data_kind: None }],
+            paths: vec![OutputPath {
+                path: square,
+                layer: 0,
+                color_rgb: [255, 0, 0],
+                stroke_width_mm: 0.25,
+                class: None,
+                data_kind: None,
+                close_open_contours: false,
+                fill_rgb,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_filled_path_is_filled_in_svg_and_pdf() {
+        let svg = write_svg(&scene(Some([0x12, 0x34, 0x56]))).unwrap();
+        assert!(svg.contains("fill=\"#123456\""), "{svg}");
+        assert!(write_svg(&scene(None)).unwrap().contains("fill=\"none\""));
+        let filled = write_pdf(&scene(Some([0x12, 0x34, 0x56]))).unwrap();
+        let plain = write_pdf(&scene(None)).unwrap();
+        assert!(filled.len() > plain.len(), "a fill is drawn as well as the line");
+    }
 }
