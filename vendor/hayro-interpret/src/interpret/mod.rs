@@ -550,19 +550,30 @@ fn named_color_space<'a>(
     defaults: &DefaultColorSpaces<'_, '_>,
     context: &mut Context<'a>,
 ) -> Option<ColorSpace> {
+    named_color_space_and_default(name, resources, defaults, context).map(|(space, _)| space)
+}
+
+/// Craft patch (default spaces): [`named_color_space`], with the cache key of the default it
+/// substituted for a device space, if it did.
+fn named_color_space_and_default<'a>(
+    name: &hayro_syntax::object::Name<'_>,
+    resources: &Resources<'a>,
+    defaults: &DefaultColorSpaces<'_, '_>,
+    context: &mut Context<'a>,
+) -> Option<(ColorSpace, Option<u128>)> {
     if let Some(named) = ColorSpace::new_from_name(name) {
         let default = DeviceFamily::of_name(name).and_then(|family| defaults.get(family));
-        return Some(default.map_or(named, |(space, _)| space));
+        return Some(default.map_or((named, None), |(space, key)| (space, Some(key))));
     }
     let resource = resources.get_color_space(name);
-    if let Some((space, _)) = resource
+    if let Some((space, key)) = resource
         .as_ref()
         .and_then(DeviceFamily::of_object)
         .and_then(|family| defaults.get(family))
     {
-        return Some(space);
+        return Some((space, Some(key)));
     }
-    context.get_color_space(resources, name)
+    context.get_color_space(resources, name).map(|space| (space, None))
 }
 
 /// Interprets the instructions that `ops` yields, until they run out or the caller cancels. It runs
@@ -1100,7 +1111,7 @@ fn interpret_window<'a>(
                 // resource, draws in its default.
                 if let Some(x_object) = ImageXObject::new(
                     i.0,
-                    |name| named_color_space(name, resources, &defaults, context),
+                    |name| named_color_space_and_default(name, resources, &defaults, context),
                     &warning_sink,
                     Some(&extended_warning_sink),
                     &cache,

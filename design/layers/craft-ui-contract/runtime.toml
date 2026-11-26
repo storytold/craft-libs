@@ -1,0 +1,10 @@
+config_version = 1
+
+[[module]]
+path = "runtime"
+layer = 2
+
+[[module]]
+path = "runtime::egui"
+layer = 2
+internal = [2, 7]

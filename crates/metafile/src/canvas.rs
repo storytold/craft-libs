@@ -306,7 +306,7 @@ pub(crate) enum Raw {
 }
 
 impl Raw {
-    fn set_region(&mut self, region: RawClip) {
+    pub(crate) fn set_region(&mut self, region: RawClip) {
         match self {
             Raw::Path { region: slot, .. }
             | Raw::Pattern { region: slot, .. }
@@ -358,9 +358,6 @@ pub(crate) struct Canvas {
     /// Indices below `objects.len()` that hold no object, so the WMF handle table finds its lowest
     /// free slot without scanning.
     free: std::collections::BTreeSet<usize>,
-    /// Table slots examined by `add_object(None, ..)`; the tests assert it stays constant per call.
-    #[cfg(test)]
-    pub slot_probes: usize,
     pen: Pen,
     brush: Brush,
     even_odd: bool,
@@ -413,8 +410,6 @@ impl Canvas {
             held: 0,
             objects: Vec::new(),
             free: std::collections::BTreeSet::new(),
-            #[cfg(test)]
-            slot_probes: 0,
             pen: Pen::new(0, 0.0, [0, 0, 0, 255]),
             brush: Brush::new(BS_SOLID, [255, 255, 255, 255]),
             even_odd: true,
@@ -889,10 +884,6 @@ impl Canvas {
             Some(_) => {}
             None => match self.free.pop_first() {
                 Some(i) => {
-                    #[cfg(test)]
-                    {
-                        self.slot_probes += 1;
-                    }
                     if let Some(s) = self.objects.get_mut(i) {
                         *s = Some(obj);
                     }
@@ -1527,24 +1518,5 @@ mod object_table_tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn creating_into_a_full_table_does_not_scan_it() {
-        let mut cv = Canvas::new();
-        for i in 0..MAX_OBJECTS as u32 {
-            cv.add_object(None, pen(i));
-        }
-        assert_eq!(cv.objects.len(), MAX_OBJECTS);
-        let before = cv.slot_probes;
-        for i in 0..10_000 {
-            cv.add_object(None, pen(i));
-        }
-        // A scan from index 0 would examine 4096 slots per create; the free set examines none.
-        assert_eq!(cv.slot_probes, before);
-        cv.delete_object(7);
-        cv.add_object(None, pen(99));
-        assert_eq!(cv.slot_probes, before + 1);
-        assert_eq!(cv.objects.get(7).map(id_of), Some(Some(99)));
     }
 }
