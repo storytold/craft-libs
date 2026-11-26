@@ -35,8 +35,11 @@ and contains no `unsafe` code.
 - `biquad` and `design`: biquad filters with their magnitude response, and IIR filter design from
   Butterworth, Bessel, Chebyshev and elliptic prototypes.
 
-`noise_suppression` estimates the noise floor from minimum spectral power over 1.5 s. Its gain
-floor moves from 0 dB toward the attenuation set by `reduction` during the first search window
+`noise_suppression` estimates the noise floor from minimum spectral power over 1.5 s. The first
+noise estimate after a reset starts from the median bin's power. Each bin's value is clamped
+between 30 dB below its own estimate and its own estimate. Windows that overlap a run of at
+least one hop of zeros (64 samples at 48 kHz) do not enter the noise estimate. The gain floor
+moves from 0 dB toward the attenuation set by `reduction` during the first search window
 of sound. Continuous voiced or tonal audio present from startup can enter the noise estimate
 and be attenuated afterward.
 

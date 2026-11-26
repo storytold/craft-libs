@@ -21,12 +21,13 @@
 //! second, so a vowel or a note held for longer than the search window keeps its level for a few
 //! seconds more, and a noise floor that rises by 12 dB is suppressed again within 3 s.
 //! After a reset the gain floor moves from 0 dB toward the attenuation set by `reduction` over
-//! the first search window of sound. The first estimate sets each bin's noise power no higher
-//! than the median bin's, nor more than 30 dB below the bin's own estimate, and it rises from
-//! there by the same 10 dB a second. Steady noise of an even spectrum is suppressed as soon as
-//! the floor allows; noise whose spectrum is uneven takes up to 3 s more in the bins well above
-//! the median. Continuous voiced or tonal audio present from startup can enter the noise
-//! estimate and be attenuated afterward.
+//! the first search window of sound. The first noise estimate after a reset starts from the
+//! median bin's power. Each bin's value is clamped between 30 dB below its own estimate and its
+//! own estimate. The noise power then rises by at most 10 dB a second. A vowel held from the
+//! first sample keeps its level for a few seconds, like one held after a stretch of noise, while
+//! steady noise of an even spectrum is suppressed as soon as the floor allows; noise whose
+//! spectrum is uneven takes up to 3 s more in the bins well above the median. Continuous voiced
+//! or tonal audio present from startup can eventually enter the noise estimate and be attenuated.
 
 use super::stft::{Pairing, Plan, Spectral, StftChannel, stream};
 use crate::{AudioEffect, MAX_CHANNELS, ParamSpec, ParamValues, Unit, block_len, db_to_gain, flush32, param_plumbing};
