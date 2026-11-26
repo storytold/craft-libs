@@ -18,6 +18,18 @@ let resolved = resolve(theme, appearance, None);
 // resolved.tokens: colours, shape, size, space and type tokens; resolved.warnings: contrast misses.
 ```
 
+## Opt-in palettes
+
+`palettes::definition` supplies cached Flat and Quiet definitions at four brightness tones.
+The definitions retain their original VectorCraft theme ids and palette values. They are not
+added to `builtins()` and do not change the suite default. The host registers its chosen
+definition and keeps its preference parsing and brightness mapping.
+
+`palettes::apply_corners` applies the selected corner scale to a host's cached `AppSizes`
+without replacing its other size, spacing or type overrides. Call it while constructing the
+size sets, not on every frame. Quiet changes palette and shape tokens; this API does not draw
+panel separators, remove panel cards or integrate segmented dock tabs.
+
 ## Tokens
 
 Two layers, the second derived from the first:
