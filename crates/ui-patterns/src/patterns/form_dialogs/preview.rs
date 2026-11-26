@@ -456,7 +456,8 @@ impl Component for PreviewPane<'_> {
             metrics: if key.fixed {
                 Metrics::new()
             } else {
-                Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, cx.tokens.size.plot.height))
+                // The width's floor is `measure`'s (`picture_width`), which a narrow room may take below the plot width.
+                Metrics::new().min_size(Vec2::new(0.0, cx.tokens.size.plot.height))
             },
             focus: cx.focus_look(),
         }

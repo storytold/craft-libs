@@ -2364,10 +2364,11 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::GroupState`: `pub struct GroupState<M> { pub selected: Option<M>, pub members: Vec<(M, Id, bool)> }`. A group's registrations: the members shown in the last pass and the member the group picked.
 - `craft_ui::contract::HeaderEdge`: `pub enum HeaderEdge { Start, End }`. An edge of a header's line, where a container's own header parts sit.
 - `craft_ui::contract::HeaderMenuRequest`: `pub struct HeaderMenuRequest { pub column: Option<ColumnKey>, pub at: Pos2 }`. A request for the header menu: a secondary click on a header cell or on the empty header after the last one, or the
-- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
+- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32, pub end_least: Option<f32>, pub keep: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
   - `pub const NONE: HeaderParts`. No room for parts.
   - `pub const fn start(mut self, width: f32) -> Self`. `width` at the start edge.
   - `pub const fn end(mut self, width: f32) -> Self`. `width` at the end edge.
+  - `pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self`. The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
 - `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub heads: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
   - `pub const fn new() -> Self`. A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
   - `pub const fn fill(mut self, kind: SurfaceKind) -> Self`. The surface of a band behind the header.
@@ -4422,7 +4423,7 @@ The layer stack (15.2): the record of the egui layers shown, their order and the
 - `craft_ui::runtime::overlay::Backdrop`: `pub enum Backdrop { None, Scrim }`. A modal's backdrop.
 - `craft_ui::runtime::overlay::CloseReason`: `pub enum CloseReason { Requested, Escape, Outside, FocusLeft(crate::runtime::focus::FocusMove), Activated, Enter, Timeout, AnchorGone }`. Why a layer closes.
 - `craft_ui::runtime::overlay::LayerRole`: `pub enum LayerRole { Plain, Progress, InPlaceEditor }`. What a layer is for, beyond its rank.
-- `craft_ui::runtime::overlay::OpenFilter`: `pub enum OpenFilter { Any, Modal, Keys }`. What `any_open` counts.
+- `craft_ui::runtime::overlay::OpenFilter`: `pub enum OpenFilter { Any, Modal, Keys, Asks }`. What `any_open` counts.
 - `craft_ui::runtime::overlay::Rank`: `pub enum Rank { Window, Toast, Popup, Modal { backdrop: Backdrop }, ModalChrome, Tooltip }`. An overlay's place in the order. `Rank` is the only place a layer's egui order is chosen.
   - `pub const fn modal(backdrop: Backdrop) -> Rank`. A modal rank with `backdrop`.
 - `craft_ui::runtime::overlay::any_open`: `pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool`. Whether any layer of the running viewport that `filter` counts was shown last frame.
@@ -4704,7 +4705,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn of_env(ctx: &'a Context, env: &'a crate::runtime::env::Env) -> Self`. The style context of the scope `env` describes, in the secondary variant: for code outside a style function
   - `pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
   - `pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
-  - `pub fn link_look(&self, enabled: bool) -> super::look::TextLook`. The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+  - `pub fn link_look(&self, enabled: bool) -> super::look::TextLook`. The one link look: body role, underlined, `accent.text`, `text.disabled` when not `enabled`.
   - `pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)>`. The keyed presences of `name` in the motion memory of the component this context is scoped to, for the keys
   - `pub fn env<T: StyleValue>(&self) -> T`. An app value set by a scope. Its hash is part of the style cache key.
   - `pub fn color(&self, color: Rgba) -> StyleColor`. The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour

@@ -12,6 +12,7 @@ use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::{Label, Scale, UnitKind};
 use craft_ui::testing::relations::{above, left_of};
 use craft_ui::testing::{Fixture, trial};
+use craft_ui::text::NumberLook;
 use craft_ui::value_drag::SliderScale;
 use egui::{Key, Modifiers, Vec2};
 use serde_json::json;
@@ -825,6 +826,65 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
             assert_eq!(held.number("offset"), Some(3.25));
             assert_eq!(held.int("copies"), Some(1));
         }
+    }
+}
+
+/// A count per inch shows `/in` after its number, apart in the field or in the number's own run in the inline look, and
+/// a typed number or an edit of that run is read back as the count.
+#[trial]
+fn a_count_per_inch_row_shows_per_inch_and_reads_the_count() {
+    let detail = vec![Param::new("detail", "Detail", ParamKind::number(Some(0.0), Some(100.0), 10.0, 1.0, 0)).unit(UnitKind::PerInch)];
+    for inline in [false, true] {
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let params = detail.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamDialog::new("Distort", "Distort", params.clone()).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        });
+        if inline {
+            fixture.root_value(NumberLook::Inline);
+        }
+        fixture.room(Vec2::new(1280.0, 800.0)).settle();
+        let field = fixture.by_label("Detail").expect("the number field");
+        let runs: Vec<String> = fixture
+            .texts()
+            .iter()
+            .filter(|text| !text.elided && text.clip.contains_rect(text.rect) && field.rect.contains_rect(text.rect))
+            .map(|text| text.text.clone())
+            .collect();
+        let unit = runs.iter().filter(|run| run.ends_with("/in")).count();
+        assert_eq!(unit, 1, "inline {inline}: one visible /in on Detail: {runs:?}");
+        assert!(runs.iter().any(|run| run.starts_with("10")), "inline {inline}: the count shows: {runs:?}");
+
+        fixture.click(&field).settle();
+        if inline {
+            // The run holds "10/in": an edit at its start keeps the unit's text, which is read back with the number.
+            fixture.key(Key::Home, Modifiers::NONE).key(Key::Delete, Modifiers::NONE).type_text("4");
+        } else {
+            fixture.key(Key::A, Modifiers::COMMAND).type_text("40");
+        }
+        fixture.key(Key::Tab, Modifiers::NONE).settle();
+        assert_eq!(values.borrow().number("detail"), Some(40.0), "inline {inline}: the edited count commits");
+    }
+}
+
+/// In the default look, where the field draws `/in` apart, a typed `/in` after the count is read as the unit, and a `/`
+/// before a number still divides.
+#[trial]
+fn a_count_per_inch_row_reads_a_typed_per_inch() {
+    let detail = vec![Param::new("detail", "Detail", ParamKind::number(Some(0.0), Some(100.0), 10.0, 1.0, 0)).unit(UnitKind::PerInch)];
+    for typed in ["40/in", "40 /IN", "80/2"] {
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let params = detail.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamDialog::new("Distort", "Distort", params.clone()).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        });
+        fixture.room(Vec2::new(1280.0, 800.0)).settle();
+        let field = fixture.by_label("Detail").expect("the number field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed).key(Key::Tab, Modifiers::NONE).settle();
+        assert_eq!(values.borrow().number("detail"), Some(40.0), "{typed:?} commits the count");
     }
 }
 

@@ -1,6 +1,7 @@
 //! The screen tests of craft-pages, folded into the lib's test target.
 
 pub(crate) mod access;
+pub(crate) mod list;
 pub(crate) mod range;
 pub(crate) mod rulers;
 pub(crate) mod setup;

@@ -1,7 +1,8 @@
 //! The stroke editor's dash fields: typing in the blank after the pattern adds an entry, clearing a later field ends
-//! the pattern there, and the first field never clears.
+//! the pattern there, and the first field never clears. Its Caps row on a solid closed path: disabled by default,
+//! enabled with `caps_on_closed`.
 
-use craft_draw::ui::stroke::{StrokeEditor, StrokeSections, StrokeStyle};
+use craft_draw::ui::stroke::{LineCap, StrokeEditor, StrokeSections, StrokeStyle};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
@@ -32,6 +33,39 @@ fn type_into(fixture: &mut Fixture, label: &str, text: &str) {
     }
     fixture.key(Key::Enter, Modifiers::NONE);
     fixture.idle(3);
+}
+
+/// The panel editor over a solid closed path, with `caps_on_closed` as given, and the style it writes through to.
+fn closed_editor(caps_on_closed: bool) -> (Fixture, Rc<RefCell<StrokeStyle>>) {
+    let style = Rc::new(RefCell::new(StrokeStyle::default()));
+    let shown = Rc::clone(&style);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut style = shown.borrow_mut();
+        let _ = StrokeEditor::new("Stroke", Bind::bound(&mut *style))
+            .sections(StrokeSections::PANEL)
+            .closed(true)
+            .caps_on_closed(caps_on_closed)
+            .show(ui);
+    });
+    fixture.settle();
+    (fixture, style)
+}
+
+#[trial]
+fn caps_on_closed_keeps_the_cap_buttons_enabled_on_a_solid_closed_path() {
+    let (mut fixture, style) = closed_editor(false);
+    let square = fixture.by_label("Square").expect("the editor shows Square");
+    assert!(fixture.tree().is_disabled_key(square.node), "by default Caps is disabled for a solid closed path");
+    fixture.click(&square);
+    fixture.idle(3);
+    assert_ne!(style.borrow().cap, LineCap::Square, "a disabled cap button does not change the cap");
+
+    let (mut fixture, style) = closed_editor(true);
+    let square = fixture.by_label("Square").expect("the editor shows Square");
+    assert!(!fixture.tree().is_disabled_key(square.node), "with caps_on_closed Caps is enabled");
+    fixture.click(&square);
+    fixture.idle(3);
+    assert_eq!(style.borrow().cap, LineCap::Square, "the cap button sets the cap");
 }
 
 #[trial]

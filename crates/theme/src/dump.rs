@@ -245,6 +245,7 @@ fn slot(s: FontSlot) -> &'static str {
         FontSlot::Ui => "ui",
         FontSlot::UiSemibold => "ui_semibold",
         FontSlot::Mono => "mono",
+        FontSlot::UiCondensed => "ui_condensed",
     }
 }
 
