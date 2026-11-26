@@ -389,6 +389,12 @@ impl State {
         self.last_scope_order.iter().rev().find(|id| self.last_scopes.get(id).is_some_and(|scope| scope.policy.trap)).copied()
     }
 
+    /// A stop's place in last pass's Tab order: its index among the stops Tab and the arrows move over, the order the
+    /// entries keep.
+    fn place(&self, rec: &StopRec) -> usize {
+        self.last_stops.iter().position(|stop| stop.stop.key() == rec.stop.key()).unwrap_or(usize::MAX)
+    }
+
     /// A Tab move. In a dialog's trap with `dialog_tab` at `Fields`, only text stops are entries, whatever the
     /// window's rule: a roving group whose arrival member holds no text is skipped too.
     pub(super) fn tab(&mut self, forward: bool, all_controls: bool, dialog_tab: TabReach) -> Vec<Act> {
@@ -402,7 +408,7 @@ impl State {
         // Tab out of a menu that lets it leave (`Menu::tab_exits`) goes on from the menu's opener, either way, as if the
         // menu were part of it: the menu's own rows are no entries, so Shift+Tab reaches the stop before the opener.
         let exits = current.as_ref().and_then(|rec| self.tab_exit_menu(rec.scope));
-        let current = exits.and_then(|menu| self.return_stop(menu)).or(current);
+        let mut current = exits.and_then(|menu| self.return_stop(menu)).or(current);
         let trap = self.trap_of(current.as_ref());
         let in_dialog = trap.and_then(|id| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Dialog);
         let fields = in_dialog && dialog_tab == TabReach::Fields;
@@ -416,19 +422,43 @@ impl State {
                 && exits.is_none_or(|menu| !self.within(scope, menu))
                 && (!fields || entry.arrival().stop.text)
         });
+        // The opener a `tab_exits` menu hands Tab to is no entry itself where only some stops are (a non-text opener in a
+        // dialog that tabs through fields): it keeps its place in the order, so Tab takes the entry after that place and
+        // Shift+Tab the one before, and the neighbour stays the one beside the opener.
+        let mut after = None;
+        if let Some(ref opener) = current
+            && exits.is_some()
+            && !entries.iter().any(|entry| entry.holds(&opener, opener.stop.group.map(|group| self.last().outermost(group))))
+        {
+            let place = self.place(opener);
+            after = Some(entries.iter().filter(|entry| self.place(entry.arrival()) < place).count());
+            current = None;
+        }
+        if let Some(at) = after {
+            if forward {
+                entries.drain(..at.min(entries.len()));
+            } else {
+                entries.truncate(at.min(entries.len()));
+            }
+        }
         let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
         let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
         self.focus_stop(arrival)
     }
 
-    /// The menu around `scope` that Tab leaves (`Menu::tab_exits`): a menu scope that traps nothing.
+    /// The menu around `scope` that Tab leaves (`Menu::tab_exits`): a menu scope that traps nothing. The walk stops at a
+    /// dialog: a dialog shown from inside such a menu records it as the scope around it, and its trap keeps Tab inside
+    /// it until it closes.
     fn tab_exit_menu(&self, scope: Option<Id>) -> Option<Id> {
         let mut at = scope;
         while let Some(id) = at {
             let rec = self.last_scopes.get(&id)?;
             if rec.policy.kind == ScopeKind::Menu && !rec.policy.trap {
                 return Some(id);
+            }
+            if rec.policy.kind == ScopeKind::Dialog {
+                return None;
             }
             at = rec.parent;
         }

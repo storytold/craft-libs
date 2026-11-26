@@ -118,3 +118,41 @@ fn tab_right_after_escape_goes_on_from_the_opener_of_a_tab_exits_menu() {
     assert_eq!(rig.ran.get(), 0, "no row runs");
     assert_eq!(rig.focused(), rig.after.get(), "the focus goes on to the stop after the opener and stays there");
 }
+
+/// Where Tab reaches only text fields (a Mac's default), a `tab_exits` menu's non-text opener is no Tab entry itself: it
+/// still holds its place in the order, so Tab goes on to the field after it and Shift+Tab to the one before.
+#[trial]
+fn tab_that_reaches_only_fields_leaves_a_tab_exits_menu_for_the_field_beside_its_opener() {
+    let before = Rc::new(Cell::new(None));
+    let after = Rc::new(Cell::new(None));
+    let opener = Rc::new(Cell::new(None));
+    let (shown_before, shown_after, shown_opener) = (before.clone(), after.clone(), opener.clone());
+    let mut text = (String::new(), String::new());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut first = std::mem::take(&mut text.0);
+        shown_before.set(Some(craft_ui::text::TextField::new("Before", craft_ui::contract::Bind::bound(&mut first)).show(ui).response.id));
+        text.0 = first;
+        let preset = Button::new("Preset").show(ui);
+        shown_opener.set(Some(preset.id));
+        Menu::new("Presets").opened_by(&preset, Trigger::Press).tab_exits().show(ui, |ui, _| {
+            MenuItem::new("Linear").show(ui);
+        });
+        let mut second = std::mem::take(&mut text.1);
+        shown_after.set(Some(craft_ui::text::TextField::new("After", craft_ui::contract::Bind::bound(&mut second)).show(ui).response.id));
+        text.1 = second;
+    });
+    fixture.os(craft_host::target::Os::Mac);
+    let mut root = craft_ui::runtime::env::RootEnv::default();
+    root.tab_all_controls = false;
+    fixture.root(root);
+    fixture.settle();
+    focus::request(fixture.ctx(), FocusTarget::Id(opener.get().expect("the opener ran")));
+    fixture.settle();
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Linear").is_some(), "Enter on the focused opener opens the menu");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Linear").is_none(), "Tab leaves the menu");
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), after.get(), "Tab goes on to the field after the opener");
+}
