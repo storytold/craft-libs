@@ -330,11 +330,14 @@ impl NumberCodec {
         // follows, a number ("+2.50", "+ 2.50", "+٣") or an expression ("+(2+3)"), is read on its own, so it re-enters
         // neither the reader's relative `+` (which would add it to the start value) nor the share of the start value.
         // A lone "+" is no number, so it falls through to the reader, which refuses it.
+        // Whatever the reader accepts after the sign is read on its own; text it does not read (a word the field's
+        // `or_parse` stands for) falls through with its `+`, which is the text a custom parser is given.
         if self.plus
             && let Some(rest) = trimmed.strip_prefix('+').map(str::trim_start)
             && !rest.is_empty()
+            && let Ok(read) = self.parse_tagged_with(rest, &None, false)
         {
-            return self.parse_tagged_with(rest, &None, false);
+            return Ok(read);
         }
         if share && let Some(share_of_start) = self.reader.share(trimmed) {
             return start.map(|start| (Some(start * share_of_start), ParseNote::default())).ok_or(NotAValue);
@@ -488,6 +491,10 @@ mod review_tests {
         assert_eq!(angle.parse("+2+3", &Some(10.0)).ok(), Some(Some(5.0)), "and a signed sum reads the same as without the sign");
         assert_eq!(angle.parse("-(2+3)", &Some(10.0)).ok(), Some(Some(-5.0)), "a minus stays absolute, as it was");
         assert_eq!(plain.parse("+(2+3)", &Some(10.0)).ok(), Some(Some(15.0)), "a plain field still adds a leading plus to the start");
+        // A word the field's own parser stands for is given the text as it was typed, `+` and all.
+        let named = NumberCodec::new(Reader::new(), 2).explicit_plus().or_parse(|text| (text == "+Auto").then_some(42.0));
+        assert_eq!(named.parse("+Auto", &Some(10.0)).ok(), Some(Some(42.0)), "a custom parser still sees the signed text");
+        assert_eq!(named.parse("+2", &Some(10.0)).ok(), Some(Some(2.0)), "while a number after the sign stays absolute");
         assert_eq!(angle.parse("\u{663}", &Some(10.0)).ok(), Some(Some(3.0)), "and the reader reads that digit as before");
         assert_eq!(plain.parse("+\u{663}", &Some(10.0)).ok(), Some(Some(13.0)), "a plain field still adds it to the start");
     }
