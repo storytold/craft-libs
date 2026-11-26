@@ -14,3 +14,7 @@ workspace = true
 craft-flow = { workspace = true }
 craft-html = { workspace = true }
 craft-wordmodel = { workspace = true }
+
+[dev-dependencies]
+# A test writes imported Markdown to HTML, to check a list stays one there.
+craft-html = { workspace = true, features = ["flow"] }
