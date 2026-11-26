@@ -101,11 +101,16 @@ impl std::error::Error for LineError {
 
 /// Read at most `max_bytes` before a newline, without allocating for an oversized line. The
 /// newline is consumed but omitted from the returned bytes. EOF with no bytes returns `None`;
-/// an empty line returns `Some(Vec::new())`.
+/// an empty line returns `Some(Vec::new())`. A read interrupted by a signal is retried, as
+/// [`BufRead::read_until`] does.
 pub fn read_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> Result<Option<Vec<u8>>, LineError> {
     let mut line = Vec::new();
     loop {
-        let bytes = reader.fill_buf().map_err(LineError::Io)?;
+        let bytes = match reader.fill_buf() {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(LineError::Io(error)),
+        };
         if bytes.is_empty() {
             return Ok((!line.is_empty()).then_some(line));
         }

@@ -221,6 +221,28 @@ fn bounded_line_read_propagates_io_errors() {
 }
 
 #[test]
+fn bounded_line_read_retries_interrupted_reads() {
+    struct Interrupting {
+        chunks: Vec<std::io::Result<&'static [u8]>>,
+    }
+    impl std::io::Read for Interrupting {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.chunks.is_empty() {
+                return Ok(0);
+            }
+            let bytes = self.chunks.remove(0)?;
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+    let interrupted = || Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+    let mut reader = std::io::BufReader::new(Interrupting { chunks: vec![interrupted(), Ok(b"ab"), interrupted(), Ok(b"c\nd"), interrupted()] });
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"abc".to_vec()));
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), Some(b"d".to_vec()));
+    assert_eq!(craft_jsonrpc::read_line(&mut reader, 3).unwrap(), None);
+}
+
+#[test]
 fn inspect_single_request_distinguishes_null_ids_and_invalid_envelopes() {
     let request = json!({"jsonrpc":"2.0", "id":null, "method":"ping"});
     let parsed = craft_jsonrpc::request(&request, Limits::default()).unwrap();
