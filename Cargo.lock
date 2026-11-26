@@ -4258,6 +4258,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tablet"
+version = "0.1.0"
+dependencies = [
+ "x11rb",
+]
+
+[[package]]
 name = "craft-tar"
 version = "0.1.0"
 dependencies = [

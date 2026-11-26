@@ -1,0 +1,15 @@
+[package]
+name = "craft-tablet"
+description = "Pen tablet pressure on X11 and Xwayland: an XInput2 raw-event reader (pure Rust, no libxcb) and the valuator-to-pressure mapping, for apps whose windowing layer reports a pen as a mouse."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# The reader runs on Linux only; the pressure mapping in `xi` builds everywhere.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["xinput"] }
