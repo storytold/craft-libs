@@ -904,6 +904,9 @@ fn deferred_audio_export_keeps_unmerged_nested_sound_on_its_own_lane() {
         expected.id = after.id;
         expected.item = after.item;
         expected.link = None;
+        // Auto motion points use NaN; compare effects as in the OTIO round-trip control.
+        assert_eq!(format!("{:?}", after.effects), format!("{:?}", expected.effects));
+        expected.effects = after.effects.clone();
         assert_eq!(after, &expected, "split source selections must retain their timing and state");
     }
     let neighbour = again.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Neighbour").unwrap();
