@@ -652,7 +652,7 @@ mod tests {
             apply(&mut px, n, n, 70.0, -60.0, SRGB);
             [px[(n / 8) * n + n / 8][0], px[(3 * n / 4) * n + 3 * n / 4][0]]
         };
-        let (a, b) = (at(96), at(384));
+        let (a, b) = (at(64), at(256));
         assert!((a[0] - b[0]).abs() < 0.02 && (a[1] - b[1]).abs() < 0.02, "{a:?} {b:?}");
     }
 }
