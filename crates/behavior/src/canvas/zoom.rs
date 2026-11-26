@@ -95,6 +95,12 @@ impl ZoomScheme {
         hundred: 1.0,
     };
 
+    /// A scheme with its own rungs, floor and greatest zoom in scheme units, `hundred` 1. Scheme units times `hundred`
+    /// are device zoom; a range measured in points per unit is built with [`with_hundred`](Self::with_hundred).
+    pub const fn new(rungs: &'static [f64], floor: ZoomFloor, max: f64) -> ZoomScheme {
+        ZoomScheme { rungs, max, floor, hundred: 1.0 }
+    }
+
     /// The scheme with `device` as the device zoom of 100 %.
     pub const fn with_hundred(self, device: f64) -> Self {
         ZoomScheme { hundred: device, ..self }
@@ -203,7 +209,9 @@ pub fn fit_rect(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point:
     fit_rect_up_to(view, rect, size, pixels_per_point, scheme.max_device(), margin, scheme);
 }
 
-fn fit_rect_up_to(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, max_device: f64, margin: Vec2, scheme: &ZoomScheme) {
+/// The one fit function the unbounded target's Fit on Screen and Fit Layers use: [`fit_rect`] with the device zoom
+/// capped at `max_device` instead of the scheme's greatest.
+pub fn fit_rect_up_to(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, max_device: f64, margin: Vec2, scheme: &ZoomScheme) {
     let rect = rect.abs();
     let (shown_w, shown_h, sin, cos) = shown_extent(view, rect.size());
     let (bw, bh) = (shown_w * cos + shown_h * sin, shown_w * sin + shown_h * cos);

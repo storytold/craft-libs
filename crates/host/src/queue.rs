@@ -60,6 +60,12 @@ impl Cancel {
         self.0.load(Ordering::Relaxed)
     }
 
+    /// The job's own cancel flag, the one [`is_cancelled`](Cancel::is_cancelled) reads, for engine and render steps
+    /// that poll an `AtomicBool`.
+    pub fn flag(&self) -> &AtomicBool {
+        todo!("sh.C3")
+    }
+
     /// Sets the flag.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Relaxed);
