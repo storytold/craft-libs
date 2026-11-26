@@ -1864,6 +1864,7 @@ dependencies = [
  "craft-odf",
  "craft-ods",
  "craft-offcrypto",
+ "craft-officeart",
  "craft-opc",
  "craft-openpgp",
  "craft-ora",
