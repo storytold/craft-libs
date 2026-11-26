@@ -33,6 +33,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_ui::menu::Alternate;
@@ -153,7 +154,8 @@ impl Native {
     fn update(&mut self, bar: &MenuBar) {
         let (spec, targets) = lower(bar);
         let (native, live) = (&mut self.bar, &self.targets);
-        let attempt = self.retry.attempt(&spec, craft_ui::runtime::motion::now, || {
+        // design: allow[contract/motion](the AppKit menu rebuild retry is a native timer outside any pass, not a motion clock; the runtime clock is a web_time Instant, not std, on wasm)
+        let attempt = self.retry.attempt(&spec, Instant::now, || {
             let rebuilt = native.apply(&spec);
             if rebuilt {
                 *lock(live) = targets;
