@@ -94,7 +94,9 @@ The app shows the question for `current()` (craft-ui's `UnsavedChangesDialog`), 
   stops the operation.
 - `retry_after_failure()` puts the document back at the front, clears the "Apply to All" answer and
   asks about that document again.
-- `forget(&doc)` drops a document that closed elsewhere while the guard ran.
+- `forget(&doc)` drops a document that closed elsewhere while the guard ran. It returns no step. When
+  it removed the last waiting document and no save is in progress, `is_finished()` is `true`: the app then treats the operation
+  as `Finished` and does what the `Finished` row above says.
 - `remaining()` counts the documents still waiting, the current one included. The prompt shows
   "Apply to All" when it is more than one.
 
@@ -116,8 +118,9 @@ craft-menu uses this id for its Quit item. An app without a menu of its own call
 
 A browser tab has no close request an app can answer. On `wasm32`, call
 `craft_quit::web::hold_leave(unsaved)` each frame. While the last call passed `true`, the page's
-`beforeunload` listener calls `prevent_default`, and the browser asks the user before leaving. The
-first call adds the listener; a page without a window gets none, and a later call tries again.
+`beforeunload` listener calls `prevent_default`, and the browser may ask the user before leaving.
+Browsers decide whether to show the prompt (some skip it when the page has had no user interaction),
+and the prompt cannot be customized, so treat it as best effort. The first call adds the listener; a page without a window gets none, and a later call tries again.
 
 ## Notes
 
