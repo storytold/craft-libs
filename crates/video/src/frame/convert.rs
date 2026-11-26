@@ -70,6 +70,32 @@ impl TryFrom<crate::h264::decode::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "hap")]
+impl TryFrom<crate::hap::Image> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit RGB frame with an alpha plane, full range, identity matrix (Hap Q's YCoCg is
+    /// already converted to RGB by the decoder). The picture does not say whether the variant has
+    /// alpha: Hap and Hap Q give an opaque (255) alpha plane. The decoder returns interleaved RGBA,
+    /// so this conversion copies the samples into planes.
+    fn try_from(p: crate::hap::Image) -> Result<Self, FrameError> {
+        let (w, h) = (p.width, p.height);
+        let pixels = usize::try_from(w)
+            .ok()
+            .zip(usize::try_from(h).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .ok_or(FrameError::Plane("plane size overflows"))?;
+        if pixels.checked_mul(4) != Some(p.rgba.len()) {
+            return Err(FrameError::Shape("sample count does not fit the frame"));
+        }
+        let plane = |c: usize| Plane::packed(w, h, 8, Samples::U8(p.rgba.iter().skip(c).step_by(4).copied().collect()));
+        let planes = vec![plane(0)?, plane(1)?, plane(2)?];
+        let mut f = VideoFrame::new(w, h, ColorFamily::Rgb, Subsampling::S444, planes, Some(plane(3)?))?;
+        f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "hevc-decode")]
 impl TryFrom<crate::hevc::decode::Picture> for VideoFrame {
     type Error = FrameError;
@@ -276,6 +302,39 @@ impl TryFrom<crate::vp8::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "rawvideo")]
+impl TryFrom<crate::rawvideo::Frame> for VideoFrame {
+    type Error = FrameError;
+
+    /// A 4:2:2 YCbCr or an RGB frame at 8 or 10 bits, in 16-bit storage. Raw video carries no colour
+    /// description, so YCbCr leaves everything unspecified; RGB gets the identity matrix and full
+    /// range, as for every codec.
+    fn try_from(p: crate::rawvideo::Frame) -> Result<Self, FrameError> {
+        use crate::rawvideo::Kind;
+        let (w, h, bits) = (p.width, p.height, p.bit_depth);
+        let [a, b, c] = p.planes;
+        let (family, sub) = match p.kind {
+            Kind::Yuv422 => (ColorFamily::YCbCr, Subsampling::S422),
+            Kind::Rgb => (ColorFamily::Rgb, Subsampling::S444),
+        };
+        let max_val = if bits < 16 { (1u16 << bits) - 1 } else { u16::MAX };
+        if a.iter().any(|&s| s > max_val) || b.iter().any(|&s| s > max_val) || c.iter().any(|&s| s > max_val) {
+            return Err(FrameError::Plane("sample value exceeds bit depth"));
+        }
+        let (cw, ch) = sub.chroma_size(w, h);
+        let planes = vec![
+            Plane::packed(w, h, bits, Samples::U16(a))?,
+            Plane::packed(cw, ch, bits, Samples::U16(b))?,
+            Plane::packed(cw, ch, bits, Samples::U16(c))?,
+        ];
+        let mut f = VideoFrame::new(w, h, family, sub, planes, None)?;
+        if family == ColorFamily::Rgb {
+            f.color = ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED };
+        }
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "prores")]
 impl TryFrom<crate::prores::Frame> for VideoFrame {
     type Error = FrameError;
@@ -313,7 +372,8 @@ impl TryFrom<crate::dnx::Frame> for VideoFrame {
 
     /// A YCbCr frame, or an RGB one whose stored G, B, R planes are reordered to R, G, B; optional
     /// alpha, 16-bit storage. The colour volume (`CLV`) gives only the matrix; primaries, transfer
-    /// and range are not signalled.
+    /// and range are not signalled. An RGB frame is tagged full range, as an RGB frame that does
+    /// not signal a range is.
     fn try_from(p: crate::dnx::Frame) -> Result<Self, FrameError> {
         use crate::dnx::{ChromaFormat, ColorVolume, Interlace};
         let sub = match p.chroma {
@@ -425,8 +485,8 @@ impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
     }
 }
 
-/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity), the
-/// other colour tags unspecified.
+/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity) and
+/// full range, the other colour tags unspecified.
 #[cfg(feature = "vmd-decode")]
 fn paletted(width: usize, height: usize, indices: &[u8], palette: &[[u8; 3]; 256]) -> Result<VideoFrame, FrameError> {
     let too_large = FrameError::Shape("picture size does not fit in u32");

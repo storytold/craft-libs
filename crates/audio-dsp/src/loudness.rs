@@ -12,7 +12,7 @@
 //!   to the placement of blocks within 0.01 LU of the relative threshold.
 //! * Loudness range (EBU Tech 3342): short-term values, −70 LUFS absolute and −20 LU relative
 //!   gate, LRA = 95th − 10th percentile.
-//! * Sample peak and true peak (polyphase oversampling to ≥ 176.4 kHz, see [`crate::oversample`]).
+//! * Sample peak and true peak (polyphase oversampling to ≥ 176.4 kHz, in the crate's internal `oversample` module).
 
 use crate::biquad::{Biquad, Coeffs};
 use crate::oversample::{Interpolator, PolyphaseBank, TAPS_PER_PHASE, true_peak_factor};
@@ -625,7 +625,7 @@ mod tests {
     fn tech3341_case1_and_2_stereo_sine() {
         for (sr, freq) in [(48000.0, 1000.0), (44100.0, 997.0), (96000.0, 1000.0)] {
             for level in [-23.0, -33.0] {
-                let x = segments(freq, sr, &[(20.0, level)]);
+                let x = segments(freq, sr, &[(6.0, level)]);
                 let m = stereo_measure(&x, sr);
                 assert!((m.integrated() - level).abs() < 0.1, "sr {sr} I {}", m.integrated());
                 assert!((m.momentary() - level).abs() < 0.1, "M {}", m.momentary());
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn interleaved_matches_planar() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(5.0, -20.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -20.0)]);
         let il: Vec<f32> = x.iter().flat_map(|&v| [v, v]).collect();
         let mut m = LoudnessMeter::new(sr, 2);
         m.process_interleaved(&il);
@@ -650,12 +650,12 @@ mod tests {
     #[test]
     fn tech3341_case3_4_gating() {
         let sr = 48000.0;
-        // Case 3: -36 / -23 / -36 dBFS for 10 / 60 / 10 s → -23.0 LUFS.
-        let x = segments(1000.0, sr, &[(10.0, -36.0), (60.0, -23.0), (10.0, -36.0)]);
+        // Case 3: -36 / -23 / -36 dBFS for 3 / 18 / 3 s → -23.0 LUFS.
+        let x = segments(1000.0, sr, &[(3.0, -36.0), (18.0, -23.0), (3.0, -36.0)]);
         let m = stereo_measure(&x, sr);
         assert!((m.integrated() + 23.0).abs() < 0.1, "{}", m.integrated());
-        // Case 4: -72 / -36 / -23 / -36 / -72 dBFS for 10/10/60/10/10 s → -23.0 LUFS.
-        let x = segments(1000.0, sr, &[(10.0, -72.0), (10.0, -36.0), (60.0, -23.0), (10.0, -36.0), (10.0, -72.0)]);
+        // Case 4: -72 / -36 / -23 / -36 / -72 dBFS for 3/3/18/3/3 s → -23.0 LUFS.
+        let x = segments(1000.0, sr, &[(3.0, -72.0), (3.0, -36.0), (18.0, -23.0), (3.0, -36.0), (3.0, -72.0)]);
         let m = stereo_measure(&x, sr);
         assert!((m.integrated() + 23.0).abs() < 0.1, "{}", m.integrated());
     }
@@ -663,7 +663,7 @@ mod tests {
     #[test]
     fn tech3341_case5_relative_gate() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(20.0, -26.0), (20.1, -20.0), (20.0, -26.0)]);
+        let x = segments(1000.0, sr, &[(5.0, -26.0), (5.025, -20.0), (5.0, -26.0)]);
         let m = stereo_measure(&x, sr);
         assert!((m.integrated() + 23.0).abs() < 0.1, "{}", m.integrated());
     }
@@ -683,7 +683,8 @@ mod tests {
 
     #[test]
     fn tech3342_loudness_range() {
-        let sr = 48000.0;
+        // The range is level-relative, so a low rate gives the same reading for far fewer samples.
+        let sr = 16000.0;
         let cases: [(&[(f64, f64)], f64); 4] = [
             (&[(20.0, -20.0), (20.0, -30.0)], 10.0),
             (&[(20.0, -20.0), (20.0, -15.0)], 5.0),
@@ -712,15 +713,17 @@ mod tests {
         assert_eq!(before, 0.0);
         assert!((m.file_loudness_range() - s.loudness_range_lu).abs() < 1e-12);
         assert_eq!(m.loudness_range(), before);
-        // A steady program keeps a file range near 0.
-        let y = segments(1000.0, sr, &[(30.0, -20.0)]);
-        assert!(measure(&[&y, &y], sr).loudness_range_lu < 1.0);
+        // A steady program keeps a file range near 0. It must be long beside the 1.5 s silence tail, so it runs at a
+        // low rate (the range is level-relative).
+        let low = 16000.0;
+        let y = segments(1000.0, low, &[(30.0, -20.0)]);
+        assert!(measure(&[&y, &y], low).loudness_range_lu < 1.0);
     }
 
     #[test]
     fn log_sweep_matches_analytic_k_weighting() {
         let sr = 48000.0;
-        let secs = 20.0;
+        let secs = 6.0;
         let n = (sr * secs) as usize;
         let (f1, f2) = (20.0f64, 20000.0f64);
         let k = (f2 / f1).ln();
@@ -749,7 +752,7 @@ mod tests {
     #[test]
     fn surround_weights() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(10.0, -30.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -30.0)]);
         let z = vec![0.0f32; x.len()];
         // Signal only in Ls of a 5.1 layout → +1.5 dB weighting vs. front channel.
         let mut front = LoudnessMeter::new(sr, 6);
@@ -767,7 +770,7 @@ mod tests {
     #[test]
     fn surround_weights_follow_speaker_positions() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(10.0, -30.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -30.0)]);
         let z = vec![0.0f32; x.len()];
         let only = |n: usize, ch: usize| {
             let mut m = LoudnessMeter::new(sr, n);
@@ -776,7 +779,8 @@ mod tests {
             m.integrated()
         };
         let front = only(8, 0);
-        assert!((only(8, 4) - front).abs() < 0.01, "back {}", only(8, 4) - front);
+        let back = only(8, 4) - front;
+        assert!(back.abs() < 0.01, "back {back}");
         assert!((only(8, 6) - front - 10.0 * 1.41f64.log10()).abs() < 0.01);
         assert_eq!(only(8, 3), f64::NEG_INFINITY);
         assert_eq!(default_channel_weights(12), vec![1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.41, 1.41, 1.0, 1.0, 1.0, 1.0]);
@@ -864,14 +868,14 @@ mod tests {
         assert_eq!((m.sample_rate(), m.channels()), (f64::from(crate::FALLBACK_SAMPLE_RATE), 1));
         assert_eq!(LoudnessMeter::new(48_000.0, usize::MAX).channels(), crate::MAX_CHANNELS);
         let sr = 48_000.0;
-        let mut x = segments(1000.0, sr, &[(5.0, -23.0)]);
+        let mut x = segments(1000.0, sr, &[(2.0, -23.0)]);
         x[1000] = f32::NAN;
         x[2000] = f32::INFINITY;
         let m = stereo_measure(&x, sr);
         assert!((m.integrated() + 23.0).abs() < 0.1, "I {}", m.integrated());
         assert!(m.true_peak().is_finite() && m.momentary().is_finite());
         // A NaN or negative weight leaves its channel out instead of poisoning the sum.
-        let x = segments(1000.0, sr, &[(5.0, -23.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -23.0)]);
         let mut m = LoudnessMeter::new(sr, 3);
         m.set_channel_weights(&[1.0, f64::NAN, -2.0]);
         m.process(&[&x, &x, &x]);
@@ -883,12 +887,12 @@ mod tests {
     #[test]
     fn reset_clears_everything() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(5.0, -20.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -20.0)]);
         let mut m = stereo_measure(&x, sr);
         m.reset();
         assert_eq!(m.integrated(), f64::NEG_INFINITY);
         assert_eq!(m.true_peak(), 0.0);
-        let x = segments(1000.0, sr, &[(5.0, -30.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -30.0)]);
         m.process(&[&x, &x]);
         assert!((m.integrated() + 30.0).abs() < 0.1);
     }
@@ -942,7 +946,7 @@ mod tests {
         assert_eq!(normalize_gain_db_peak_limited(-30.0, -23.0, -10.0, -1.0), 7.0);
         // Applying the gain lands on target.
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(10.0, -31.3)]);
+        let x = segments(1000.0, sr, &[(4.0, -31.3)]);
         let m = stereo_measure(&x, sr);
         let g = 10f64.powf(normalize_gain_db(m.integrated(), -16.0) / 20.0) as f32;
         let y: Vec<f32> = x.iter().map(|v| v * g).collect();
