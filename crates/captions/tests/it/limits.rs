@@ -18,7 +18,10 @@ fn input_over_the_size_limit_is_refused() {
     for format in Format::ALL {
         assert_eq!(parse(&big, format), Err(Error::TooLarge(MAX_INPUT)), "{format:?}");
     }
-    assert!(parse(big.get(..MAX_INPUT).unwrap(), Format::Srt).is_ok());
+    // Reading 64 MiB at the limit takes seconds: nightly only.
+    if craft_testkit::hostile::divisor() == 1 {
+        assert!(parse(big.get(..MAX_INPUT).unwrap(), Format::Srt).is_ok());
+    }
 }
 
 /// TTML is read without entity expansion: a document type with entities defines nothing.
@@ -35,7 +38,8 @@ fn mutated_files_never_panic() {
     for format in Format::ALL {
         let bytes = write(&doc(), format, WriteOptions::default());
         // every byte of a text file, and the header and first blocks of the (sparse) binary one
-        for i in 0..bytes.len().min(2048) {
+        // The gate runs every divisor-th byte; nightly runs every one.
+        for i in (0..bytes.len().min(2048)).step_by(craft_testkit::hostile::divisor()) {
             for v in [0u8, 0x20, 0x3c, 0x7f, 0xff] {
                 let mut m = bytes.clone();
                 if let Some(b) = m.get_mut(i) {

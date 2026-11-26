@@ -13,7 +13,7 @@
 //! [`crate::guard::entities_expand_past`], [`crate::guard::too_wide`] (attributes an element),
 //! [`crate::guard::prescan`] (nesting in the text),
 //! [`height`] (nesting with references followed, as usvg walks them), then usvg.
-//! [`image_resolver`] bounds the SVG documents embedded in `<image>` data URLs the same way.
+//! `image_resolver` (with the `tree` feature) bounds the SVG documents embedded in `<image>` data URLs the same way.
 //! [`draw`] bounds what drawing a tree with resvg allocates.
 //!
 //! Stack: usvg uses about 15 kB of stack for each level of nesting (measured natively by
@@ -24,7 +24,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+#[cfg(feature = "tree")]
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(feature = "tree")]
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 pub use usvg;
@@ -65,10 +67,12 @@ pub struct Limits {
     pub attribute_work: usize,
     /// Nodes the XML may hold once entities are expanded.
     pub xml_nodes: u32,
+    /// Accept a document type declaration; `false` refuses any `<!DOCTYPE`.
+    pub allow_dtd: bool,
     /// Bytes of all SVG documents embedded in `<image>` data URLs, unpacked, for
-    /// [`image_resolver`].
+    /// `image_resolver`.
     pub embedded_bytes: usize,
-    /// SVG documents embedded inside one another, for [`image_resolver`].
+    /// SVG documents embedded inside one another, for `image_resolver`.
     pub embedded_depth: usize,
     /// Cumulative raster decode pixels for a drawing. usvg sends each data-URL
     /// resolution separately, so repeated uses normally spend a separate charge.
@@ -87,6 +91,7 @@ impl Default for Limits {
             attributes: guard::MAX_ATTRIBUTES,
             attribute_work: guard::MAX_ATTRIBUTE_WORK,
             xml_nodes: 4_000_000,
+            allow_dtd: true,
             embedded_bytes: 32 << 20,
             embedded_depth: 4,
             embedded_raster_pixels: 24_000_000,
@@ -136,7 +141,7 @@ pub fn text<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Cow<'a, str>, Error>
 }
 
 /// The tree of an SVG or SVGZ file, within `limits`. `options` are usvg's: fonts, the default
-/// size, and the image resolver ([`image_resolver`] unless the caller reads linked files).
+/// size, and the image resolver (`image_resolver` unless the caller reads linked files).
 pub fn parse(bytes: &[u8], limits: &Limits, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
     parse_text(&svgz::text(bytes, limits.bytes)?, limits, options)
 }
@@ -172,6 +177,7 @@ pub struct Preflight<'s> {
     xml: roxmltree::Document<'s>,
     depth: usize,
     /// [`height`]: the nesting usvg converts, references followed.
+    #[cfg_attr(not(feature = "tree"), expect(dead_code, reason = "only the embedded-image resolver reads it"))]
     height: usize,
 }
 
@@ -237,6 +243,7 @@ pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Err
         attributes: limits.attributes,
         attribute_work: limits.attribute_work,
         xml_nodes: limits.xml_nodes,
+        allow_dtd: limits.allow_dtd,
     };
     let (xml, _, depth) = crate::preflight::parse_text_with_depth(svg, &preflight_limits).map_err(|e| match e {
         crate::preflight::Error::Text(e) => Error::Text(e),
@@ -429,6 +436,7 @@ pub fn height(xml: &roxmltree::Document<'_>, most: usize) -> Result<Option<usize
     Ok(Some(heights.get(&xml.root_element().id()).copied().unwrap_or(0)))
 }
 
+#[cfg(feature = "tree")]
 /// What the embedded SVGs of one import have used so far.
 struct Used {
     bytes: AtomicUsize,
@@ -445,6 +453,7 @@ struct Used {
     svg_resource_limit: AtomicUsize,
 }
 
+#[cfg(feature = "tree")]
 /// What resolving one drawing's embedded images used or refused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ImageUsage {
@@ -473,6 +482,7 @@ pub struct ImageUsage {
     pub svg_resource_limit_images: usize,
 }
 
+#[cfg(feature = "tree")]
 /// A data-URL resolver and the accounting for the one drawing it serves.
 ///
 /// Keep this value while parsing, then read [`usage`](Self::usage). Linked files are never read.
@@ -481,6 +491,7 @@ pub struct ImageResolver {
     used: Arc<Used>,
 }
 
+#[cfg(feature = "tree")]
 impl ImageResolver {
     /// Create one resolver budget for one drawing import.
     pub fn new(limits: Limits) -> Self {
@@ -540,6 +551,7 @@ impl ImageResolver {
     }
 }
 
+#[cfg(feature = "tree")]
 // usvg's data-URL decoder returns before resolve_data for invalid base64. Count
 // these omissions separately, including feImage, without reading linked resources.
 fn account_invalid_data_urls(xml: &roxmltree::Document<'_>, used: &Used) {
@@ -561,6 +573,7 @@ fn account_invalid_data_urls(xml: &roxmltree::Document<'_>, used: &Used) {
     }
 }
 
+#[cfg(feature = "tree")]
 #[derive(Clone, Copy)]
 enum SvgRaster {
     Png,
@@ -569,6 +582,7 @@ enum SvgRaster {
     WebP,
 }
 
+#[cfg(feature = "tree")]
 impl SvgRaster {
     fn codec(self) -> craft_image_codecs::Format {
         match self {
@@ -590,6 +604,7 @@ impl SvgRaster {
 }
 
 /// Match supported raster signatures to the MIME types both image resolvers accept.
+#[cfg(feature = "tree")]
 fn declared_raster(mime: &str, data: &[u8]) -> Option<SvgRaster> {
     use craft_image_codecs::Format;
     match (mime, craft_image_codecs::detect(data)?) {
@@ -601,6 +616,7 @@ fn declared_raster(mime: &str, data: &[u8]) -> Option<SvgRaster> {
     }
 }
 
+#[cfg(feature = "tree")]
 fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: SvgRaster) -> Option<usvg::ImageKind> {
     let Ok((width, height)) = craft_image_codecs::probe_allocation_size(&data) else {
         used.invalid_raster.fetch_add(1, Ordering::Relaxed);
@@ -653,6 +669,7 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: SvgRas
 }
 
 /// Decode one child within the original byte allowance, including encoding expansion.
+#[cfg(feature = "tree")]
 fn embedded_text<'a>(data: &'a [u8], room: usize, limits: &Limits) -> Result<Cow<'a, str>, svgz::Error> {
     let text = svgz::text(data, room.min(limits.bytes))?;
     if text.len() > room {
@@ -661,12 +678,14 @@ fn embedded_text<'a>(data: &'a [u8], room: usize, limits: &Limits) -> Result<Cow
     Ok(text)
 }
 
+#[cfg(feature = "tree")]
 enum ChildRefusal {
     Depth,
     Bytes,
     Invalid,
 }
 
+#[cfg(feature = "tree")]
 fn preflight_child<'a>(text: &'a str, limits: &Limits) -> Result<Preflight<'a>, ChildRefusal> {
     preflight(text, limits).map_err(|error| match error {
         Error::TooDeep(_) => ChildRefusal::Depth,
@@ -676,10 +695,12 @@ fn preflight_child<'a>(text: &'a str, limits: &Limits) -> Result<Preflight<'a>, 
 }
 
 /// Reserve the complete checked height within the parent's remaining XML room.
+#[cfg(feature = "tree")]
 fn child_total_depth(parent: usize, checked: &Preflight<'_>, limits: &Limits) -> Option<usize> {
     parent.checked_add(checked.height).filter(|depth| *depth <= limits.tree_depth)
 }
 
+#[cfg(feature = "tree")]
 /// An embedded SVG document, if the budgets allow it.
 fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'_>) -> Option<usvg::ImageKind> {
     if used.depth.load(Ordering::Relaxed) >= limits.embedded_depth {
@@ -744,6 +765,7 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
     }
 }
 
+#[cfg(feature = "tree")]
 /// An image resolver for `usvg::Options::image_href_resolver` that reads `<image>` data URLs
 /// only: raster images as they are (PNG, JPEG, GIF, WebP), SVG documents (SVGZ too) through the
 /// same checks as [`parse`] and within [`Limits::embedded_bytes`] in all and
@@ -753,6 +775,7 @@ pub fn image_resolver(limits: Limits) -> usvg::ImageHrefResolver<'static> {
     ImageResolver::new(limits).resolver()
 }
 
+#[cfg(feature = "tree")]
 fn image_resolver_for(limits: Limits, used: Arc<Used>) -> usvg::ImageHrefResolver<'static> {
     usvg::ImageHrefResolver {
         resolve_data: Box::new(move |mime, data, options| {
@@ -775,7 +798,7 @@ fn image_resolver_for(limits: Limits, used: Arc<Used>) -> usvg::ImageHrefResolve
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tree"))]
 mod tests;
 
 #[cfg(test)]

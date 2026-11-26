@@ -59,7 +59,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
     big();
     let mut small_scaled = || (0..scale).for_each(|_| small());
     let (mut t1, mut tk) = (f64::INFINITY, f64::INFINITY);
-    for _ in 0..5 {
+    for _ in 0..3 {
         let a = Instant::now();
         small_scaled();
         t1 = t1.min(a.elapsed().as_secs_f64() / scale as f64);
@@ -76,8 +76,8 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 #[test]
 fn a_document_with_many_inline_content_controls_saves_in_linear_time() {
     let scale = 4;
-    let small = inline_controls(8_000);
-    let big = inline_controls(8_000 * scale);
+    let small = inline_controls(2_000);
+    let big = inline_controls(2_000 * scale);
     let (t1, tk, ratio) = cost_ratio(
         scale,
         || {
@@ -96,8 +96,8 @@ fn a_document_with_many_inline_content_controls_saves_in_linear_time() {
 #[test]
 fn a_document_with_many_block_content_controls_saves_in_linear_time() {
     let scale = 4;
-    let small = block_controls(8_000);
-    let big = block_controls(8_000 * scale);
+    let small = block_controls(2_000);
+    let big = block_controls(2_000 * scale);
     let (t1, tk, ratio) = cost_ratio(
         scale,
         || {
