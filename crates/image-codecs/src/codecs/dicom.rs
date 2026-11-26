@@ -364,6 +364,11 @@ fn write_empty(b: &mut Vec<u8>, group: u16, elem: u16, vr: &[u8; 2]) {
 
 /// A fresh, globally unique UID under the `2.25.` root (a UUID-sized random integer, PS3.5 B.2).
 fn new_uid(salt: &[u8]) -> String {
+    let mut os_entropy = [0u8; 16];
+    if getrandom::fill(&mut os_entropy).is_ok() && os_entropy.iter().any(|&b| b != 0) {
+        let value = u128::from_le_bytes(os_entropy);
+        return format!("2.25.{value}");
+    }
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -373,7 +378,6 @@ fn new_uid(salt: &[u8]) -> String {
     #[cfg(target_arch = "wasm32")]
     let now_nanos = 0u128;
     let half = |tag: u8| {
-        // `RandomState` is seeded randomly per instance, so each half is unpredictable.
         let mut h = std::collections::hash_map::RandomState::new().build_hasher();
         h.write_u8(tag);
         h.write_u64(count);
