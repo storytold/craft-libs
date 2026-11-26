@@ -103,6 +103,7 @@ craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
+craft-ease = { path = "crates/ease" }
 craft-eps = { path = "crates/eps" }
 craft-elf = { path = "crates/elf" }
 craft-file-formats = { path = "crates/file-formats" }
@@ -146,6 +147,7 @@ craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }
 craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
+craft-i18n-build = { path = "crates/i18n-build" }
 craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
 craft-indd = { path = "crates/indd" }
@@ -228,6 +230,7 @@ craft-testkit = { path = "crates/testkit" }
 craft-text = { path = "crates/text" }
 craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
+craft-pbr = { path = "crates/pbr" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
