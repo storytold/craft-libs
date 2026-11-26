@@ -1,6 +1,6 @@
 [package]
 name = "craft-pbr"
-description = "Image-based lighting for physically based rendering: equirect environments, a GGX-prefiltered specular chain and SH9 diffuse irradiance"
+description = "Image-based lighting for physically based rendering: equirect environments, a GGX-prefiltered specular chain, SH9 diffuse irradiance and the metallic-roughness BRDF"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
