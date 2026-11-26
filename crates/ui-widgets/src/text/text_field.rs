@@ -75,8 +75,12 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// layer or inline, and typed text stays with the field. While the field is empty Home and End go to the
     /// collection too, and for a tree Left and Right open and close its rows; with text they move the caret. `list` is
     /// the id the collection is built with (`Props::id`), so a pattern can name a collection it shows after the field.
+    /// Modified Enter chords stay with the field unless [`drives_modified_enter`](Self::drives_modified_enter) lists
+    /// them.
     #[prop]
     drives: Option<Id>,
+    /// The modified Enter chords the field hands on to the collection it drives.
+    enter_mods: Vec<craft_keymap::Mods>,
     /// Binds the caret, as a byte offset into the text: a value the app writes places the caret at the character
     /// boundary at or before it, collapses the selection and scrolls the caret into view; the user moving the caret
     /// writes its offset back.
@@ -133,6 +137,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             leading: Vec::new(),
             arrow: false,
             drives: None,
+            enter_mods: Vec::new(),
             caret: None,
             max_lines: None,
             width_chars: None,
@@ -214,6 +219,18 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     #[must_use]
     pub fn lines(mut self, lines: usize) -> Self {
         self.options.lines = Some(lines);
+        self
+    }
+
+    /// The field hands Enter with each of the modifiers `mods` lists on to the collection it [`drives`](Self::drives),
+    /// as an activation of the collection's lead row, which the collection reports with those modifiers
+    /// (`CollectionResponse::activation_mods`): a picker can open its pick one way on Enter and another on Cmd+Enter
+    /// while typing stays in the field. A chord a scoped command binds stays that command's. Without `drives`, or for
+    /// chords it doesn't list, Enter with modifiers stays with the field as before; plain Enter goes to the
+    /// collection in any case, and `Mods::NONE` in `mods` changes nothing.
+    #[must_use]
+    pub fn drives_modified_enter(mut self, mods: impl IntoIterator<Item = craft_keymap::Mods>) -> Self {
+        self.enter_mods = mods.into_iter().collect();
         self
     }
 
@@ -459,7 +476,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         if let Some(list) = self.drives {
             let empty = cx.value().is_none_or(|value| self.codec.format(value).is_empty());
-            crate::runtime::focus::registration::drive(&cx.core.ctx, cx.core.id, list, empty);
+            crate::runtime::focus::registration::drive(&cx.core.ctx, cx.core.id, list, empty, &self.enter_mods);
         }
         if cx.part_activated(CLEAR).is_some()
             && let Some(empty) = self.empty.clone()

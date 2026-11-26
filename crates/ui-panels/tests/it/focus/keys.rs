@@ -285,8 +285,10 @@ fn a_key_held_when_a_modal_opens_or_closes_reaches_neither_layer() {
     assert!(!open.get(), "a fresh Enter answers the alert");
 }
 
-/// A search field over a list it drives, inline or in a dialog, and the keys of the rows the list activated.
-fn drive_fixture(in_modal: bool) -> (craft_ui::testing::Fixture, std::rc::Rc<RefCell<Vec<usize>>>) {
+/// A search field over a list it drives, inline or in a dialog, handing it the modified Enter chords `enter_mods`, and
+/// the keys of the rows the list activated with the modifiers it reported.
+type Activated = std::rc::Rc<RefCell<Vec<(usize, craft_keymap::Mods)>>>;
+fn drive_fixture(in_modal: bool, enter_mods: &[craft_keymap::Mods]) -> (craft_ui::testing::Fixture, Activated) {
     use craft_behavior::{DisplayOrder, ItemSource};
     use craft_ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, ShowCollection as _, ShowContainer as _};
     use craft_ui::dialog::Dialog;
@@ -311,18 +313,19 @@ fn drive_fixture(in_modal: bool) -> (craft_ui::testing::Fixture, std::rc::Rc<Ref
     let activated = std::rc::Rc::new(RefCell::new(Vec::new()));
     let sink = activated.clone();
     let query = std::rc::Rc::new(RefCell::new(String::new()));
+    let enter_mods = enter_mods.to_vec();
     let fixture = Fixture::new(move |ui| {
         let list_id = ui.scope_id().with("names");
         let body = |ui: &mut egui::Ui| {
             let mut text = query.borrow().clone();
-            TextField::search("Search", Bind::bound(&mut text)).drives(list_id).show(ui);
+            TextField::search("Search", Bind::bound(&mut text)).drives(list_id).drives_modified_enter(enter_mods.clone()).show(ui);
             let out = List::new("Names")
                 .id(list_id)
                 .select(SelectMode::Single)
                 .filter(&text, |key: &usize| vec![Label::from(NAMES[*key])])
                 .show_items(ui, &Names, &mut |key, _| ListRow::new(NAMES[*key]));
             sink.borrow_mut().extend(out.events.iter().filter_map(|event| match event {
-                CollectionEvent::Activate(key) => Some(*key),
+                CollectionEvent::Activate(key) => Some((*key, out.activation_mods)),
                 _ => None,
             }));
             *query.borrow_mut() = text;
@@ -345,7 +348,7 @@ fn drive_fixture(in_modal: bool) -> (craft_ui::testing::Fixture, std::rc::Rc<Ref
 #[trial]
 fn a_field_that_drives_a_list_hands_it_its_list_keys_inline_and_in_a_modal() {
     for in_modal in [false, true] {
-        let (mut fixture, activated) = drive_fixture(in_modal);
+        let (mut fixture, activated) = drive_fixture(in_modal, &[]);
         fixture.settle();
         let field = fixture.by_role(Role::TEXT_INPUT).pop().expect("the search field shows");
         fixture.click(&field);
@@ -360,6 +363,47 @@ fn a_field_that_drives_a_list_hands_it_its_list_keys_inline_and_in_a_modal() {
         assert_eq!(typed.as_deref(), Some("b"), "the arrows left the typed text in the field (modal: {in_modal})");
         fixture.key(Key::Enter, Modifiers::NONE);
         fixture.idle(4);
-        assert_eq!(*activated.borrow(), [2], "Enter picks the second match (modal: {in_modal})");
+        assert_eq!(*activated.borrow(), [(2, craft_keymap::Mods::NONE)], "Enter picks the second match (modal: {in_modal})");
+    }
+}
+
+/// A field that drives a list hands it the modified Enter chords it lists, inline and in a modal layer: each activates
+/// the lead once and the list reports the chord's modifiers, while the typed text stays in the field. A chord it does
+/// not list, the same chords from a field that lists none, and any chord over an empty list activate nothing.
+#[trial]
+fn a_driving_field_hands_on_the_modified_enter_it_lists_and_the_list_reports_it() {
+    use craft_keymap::Mods;
+    let cmd_alt = Mods { alt: true, ..Mods::CMD };
+    let run = |in_modal: bool, enter_mods: &[Mods], typed: &str, chords: &[Modifiers]| {
+        let (mut fixture, activated) = drive_fixture(in_modal, enter_mods);
+        fixture.settle();
+        let field = fixture.by_role(Role::TEXT_INPUT).pop().expect("the search field shows");
+        fixture.click(&field);
+        fixture.idle(2);
+        fixture.type_text(typed);
+        fixture.idle(2);
+        fixture.key(Key::ArrowDown, Modifiers::NONE);
+        fixture.idle(2);
+        let mut reported = Vec::new();
+        for &chord in chords {
+            activated.borrow_mut().clear();
+            fixture.key(Key::Enter, chord);
+            fixture.idle(4);
+            reported.push(activated.borrow().clone());
+        }
+        let kept = fixture.focused().and_then(|id| fixture.tree().value(id).map(str::to_owned));
+        assert_eq!(kept.as_deref(), Some(typed), "the chords left the typed text in the field (modal: {in_modal})");
+        reported
+    };
+    for in_modal in [false, true] {
+        let chords = [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::ALT, Modifiers::SHIFT];
+        let reported = run(in_modal, &[Mods::CMD, cmd_alt], "b", &chords);
+        assert_eq!(reported[0], [(1, Mods::CMD)], "Cmd+Enter activates the lead with Cmd (modal: {in_modal})");
+        assert_eq!(reported[1], [(1, cmd_alt)], "Cmd+Alt+Enter activates the lead with both (modal: {in_modal})");
+        assert!(reported[2].is_empty(), "Shift+Enter, not listed, stays with the field (modal: {in_modal})");
+        let unlisted = run(in_modal, &[], "b", &chords[..2]);
+        assert!(unlisted.iter().all(Vec::is_empty), "a field that lists no chord keeps them (modal: {in_modal})");
+        let empty = run(in_modal, &[Mods::CMD, cmd_alt], "zz", &chords[..2]);
+        assert!(empty.iter().all(Vec::is_empty), "over an empty list no chord activates (modal: {in_modal})");
     }
 }
