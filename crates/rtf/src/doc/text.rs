@@ -1,4 +1,4 @@
-use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_PICT, St};
+use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_LEVEL_TEXT, MAX_PICT, St};
 use super::{Fmt, Inline, Reader, Rgb, make_img, model};
 use std::sync::Arc;
 
@@ -306,6 +306,16 @@ impl Reader {
                         self.commit_author();
                     } else if self.rev_name.len() < 256 {
                         self.rev_name.push(c);
+                    }
+                }
+            }
+            Dest::LevelText => {
+                if let Some(level) = self.list_cur.last_mut() {
+                    for c in s.chars() {
+                        if level.text.chars().count() >= MAX_LEVEL_TEXT {
+                            break;
+                        }
+                        level.text.push(c);
                     }
                 }
             }

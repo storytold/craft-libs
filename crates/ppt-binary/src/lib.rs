@@ -8,11 +8,13 @@
 //! place and style. There is no `.ppt` writer.
 //!
 //! PowerPoint 95 files (a different record framing, learned from files PowerPoint 95 wrote) read
-//! as far as their slide size, masters with their colour schemes and backgrounds, and slides with
-//! their order, master, layout type and background; their shapes, text, pictures and notes are
-//! not read yet, so the slides are empty. Older formats aren't read: a compound file in neither
-//! framing is refused as too old when its current user record has neither of [MS-PPT]'s tokens
-//! and it has no edit record, and a file that isn't a compound file is not a presentation.
+//! as far as their slide size, masters with their colour schemes, backgrounds, placeholder boxes
+//! and text styles, and slides with their order, master, layout type, background, placeholders
+//! and text boxes with formatted, anchored text, and shapes and lines with their fill, line and
+//! shadow; their pictures and notes are not read yet. Older formats aren't read: a compound file
+//! in neither framing is refused as too old when its current user record has neither of
+//! [MS-PPT]'s tokens and it has no edit record, and a file that isn't a compound file is not a
+//! presentation.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -78,7 +80,7 @@ pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presenta
     // PowerPoint 97 path, which refuses older formats as too old.
     if let Some(document) = ppt95::document(&stream) {
         let p = ppt95::convert(&document, defaults);
-        let lost = ppt95::lost(&document, &p);
+        let lost = ppt95::lost(&document);
         return Ok((p, lost));
     }
     let current_user = file.read_path_capped("Current User", cap).unwrap_or_default();
