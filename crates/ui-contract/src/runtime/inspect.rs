@@ -247,6 +247,8 @@ struct Open {
     stack: Vec<usize>,
     /// The nodes a label scope named by its label, with the label's node.
     labels: Vec<(Id, Id)>,
+    /// The text value noted for each component, kept for its facts, which may arrive later in the pass.
+    text_values: IdMap<String>,
 }
 
 #[derive(Default)]
@@ -269,10 +271,17 @@ pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, O
     if ui.is_sizing_pass() || measure::active(&ctx) {
         return (body(ui), None);
     }
-    let open = Open { layer: ui.layer_id(), elements: Vec::new(), parts: Vec::new(), stack: Vec::new(), labels: Vec::new() };
+    let open =
+        Open { layer: ui.layer_id(), elements: Vec::new(), parts: Vec::new(), stack: Vec::new(), labels: Vec::new(), text_values: IdMap::default() };
+    let noted = crate::runtime::replay::mark(&ctx);
     pass_state::with::<Log, _>(&ctx, |log| log.open.push(open));
     let out = body(ui);
     let Some(open) = pass_state::with::<Log, _>(&ctx, |log| log.open.pop()) else { return (out, None) };
+    // What the body's components noted belongs to this region: a replay of a view around it adds only the region's
+    // own record (below), not those elements to whatever region is open there.
+    if let Some(noted) = noted {
+        crate::runtime::replay::withdraw(&ctx, noted, replay_step);
+    }
     let recorded = Arc::new(finish(&ctx, open));
     keep(&ctx, key, &recorded);
     // A memoized view that replays this region keeps its record as the run left it.
@@ -432,13 +441,143 @@ fn name_from_labels(elements: &mut [Element]) {
     }
 }
 
+/// A call a component made to the open region's record. Each is noted in the journal of the records open around it
+/// (`replay::journal`), so a memoized view that replays inside a region adds to the region what its run added: the
+/// elements, their parts, facts, commands and text values, and the labels that name them. The hit areas and the Tab order need no
+/// step: the sensing and focus services replay their own registrations, and [`finish`] reads those for the elements.
+#[derive(Clone, Debug, PartialEq)]
+enum Step {
+    /// [`open_element`].
+    Open { id: Id, component: &'static str, layer: Layer },
+    /// [`close_element`].
+    Close { id: Id, rect: Rect, content: Rect },
+    /// [`note_command`].
+    Command { id: Id, command: Option<CommandRef> },
+    /// [`node_facts`].
+    Facts { id: Id, part: Option<PartRef>, rect: Rect, facts: Facts },
+    /// [`labelled`].
+    Label { node: Id, label: Id },
+    /// [`note_text_value`].
+    TextValue { id: Id, value: String },
+}
+
+/// A replay at another place moves the boxes the step records.
+impl crate::runtime::Shift for Step {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        match self {
+            Step::Close { id, rect, content } => Step::Close { id: *id, rect: by.rect(*rect), content: by.rect(*content) },
+            Step::Facts { id, part, rect, facts } => Step::Facts { id: *id, part: *part, rect: by.rect(*rect), facts: facts.clone() },
+            other => other.clone(),
+        }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        match (self, to) {
+            (Step::Close { id, rect, content }, Step::Close { rect: to_rect, content: to_content, .. }) => {
+                Step::Close { id: *id, rect: rect.snapped(to_rect, within), content: content.snapped(to_content, within) }
+            }
+            (Step::Facts { id, part, rect, facts }, Step::Facts { rect: to_rect, .. }) => {
+                Step::Facts { id: *id, part: *part, rect: rect.snapped(to_rect, within), facts: facts.clone() }
+            }
+            (other, _) => other.clone(),
+        }
+    }
+}
+
+/// Makes the call `step` stands for in the innermost open region; returns whether a region took it.
+fn apply(ctx: &Context, step: &Step) -> bool {
+    pass_state::with::<Log, _>(ctx, |log| {
+        let Some(open) = log.open.last_mut() else { return false };
+        match step {
+            Step::Open { id, component, layer } => {
+                let element = Element {
+                    id: *id,
+                    part: None,
+                    component,
+                    depth: open.stack.len(),
+                    rect: Rect::NOTHING,
+                    content: Rect::NOTHING,
+                    facts: None,
+                    stop: None,
+                    command: None,
+                };
+                open.stack.push(open.elements.len());
+                open.elements.push((element, *layer));
+            }
+            Step::Close { id, rect, content } => {
+                let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == *id) else { return true };
+                let index = open.stack[at];
+                open.stack.truncate(at);
+                let element = &mut open.elements[index].0;
+                element.rect = *rect;
+                element.content = *content;
+            }
+            Step::Command { id, command } => {
+                let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == *id) else { return true };
+                let index = open.stack[at];
+                open.elements[index].0.command = command.clone();
+            }
+            Step::Facts { id, part, rect, facts } => {
+                let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id) else { return true };
+                match part {
+                    None => {
+                        let mut facts = facts.clone();
+                        // A text value noted before the facts arrived; a value the node states itself wins.
+                        if facts.value.is_none() {
+                            facts.value = open.text_values.get(id).cloned();
+                        }
+                        owner.0.facts = Some(facts);
+                    }
+                    Some(part) => {
+                        let (component, depth) = (owner.0.component, owner.0.depth + 1);
+                        open.parts.retain(|element| !(element.id == *id && element.part == Some(*part)));
+                        open.parts.push(Element {
+                            id: *id,
+                            part: Some(*part),
+                            component,
+                            depth,
+                            rect: *rect,
+                            content: *rect,
+                            facts: Some(facts.clone()),
+                            stop: None,
+                            command: None,
+                        });
+                    }
+                }
+            }
+            Step::Label { node, label } => open.labels.push((*node, *label)),
+            Step::TextValue { id, value } => {
+                // Kept for facts that arrive later in the pass, and written on facts that already did. A value the
+                // node states itself wins over the text the adapter wrote.
+                let value = open.text_values.entry(*id).or_insert_with(|| value.clone());
+                let owner = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id);
+                if let Some(facts) = owner.and_then(|(element, _)| element.facts.as_mut()) {
+                    facts.value.get_or_insert_with(|| value.clone());
+                }
+            }
+        }
+        true
+    })
+}
+
+/// What a replay of a noted step calls.
+fn replay_step(ctx: &Context, step: &Step) {
+    apply(ctx, step);
+}
+
+/// Makes the call `step` stands for and, when a region took it, notes it for the replay of a memoized view around it.
+/// With no region open nothing is built or noted.
+fn run(ctx: &Context, step: Step) -> bool {
+    let took = apply(ctx, &step);
+    if took {
+        crate::runtime::replay::journal(ctx, || step, replay_step);
+    }
+    took
+}
+
 /// Records that a label scope named the node of the component `node` by the label's node `label`.
 pub(crate) fn labelled(ctx: &Context, node: Id, label: Id) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        if let Some(open) = log.open.last_mut() {
-            open.labels.push((node, label));
-        }
-    });
+    run(ctx, Step::Label { node, label });
 }
 
 /// Whether the components shown in `ui` report their nodes for an inspected region: a region is open and the run is
@@ -455,74 +594,110 @@ pub(crate) fn open_element(ui: &Ui, id: Id, component: &'static str) -> bool {
     if measure::active(ctx) {
         return false;
     }
-    let layer = ui.layer_id();
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return false };
-        let component = component.rsplit("::").next().unwrap_or(component);
-        let component = component.split('<').next().unwrap_or(component);
-        let element = Element {
-            id,
-            part: None,
-            component,
-            depth: open.stack.len(),
-            rect: Rect::NOTHING,
-            content: Rect::NOTHING,
-            facts: None,
-            stop: None,
-            command: None,
-        };
-        open.stack.push(open.elements.len());
-        open.elements.push((element, layer));
-        true
-    })
+    // The type's own name: generic arguments go first, so `Select<'_, alloc::string::String>` is `Select`.
+    let component = component.split('<').next().unwrap_or(component);
+    let component = component.rsplit("::").next().unwrap_or(component);
+    run(ctx, Step::Open { id, component, layer: ui.layer_id() })
 }
 
 /// Ends the record [`open_element`] started for `id`, with the box the component took and the box inside its padding.
 pub(crate) fn close_element(ctx: &Context, id: Id, rect: Rect, content: Rect) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
-        let index = open.stack[at];
-        open.stack.truncate(at);
-        let element = &mut open.elements[index].0;
-        element.rect = rect;
-        element.content = content;
-    });
+    run(ctx, Step::Close { id, rect, content });
 }
 
 /// Notes the command bound to the control `id` in the open region's record; the report step calls it with the
 /// component's resolved command. It does nothing outside a region or for a component whose record is not open.
 pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
-        let index = open.stack[at];
-        open.elements[index].0.command = command;
-    });
+    run(ctx, Step::Command { id, command });
+}
+
+/// Notes the text value the text adapter wrote on the node of the component `id` (`report_text`), unless the node
+/// states a value itself: the inspector then lists what AccessKit reads for a text field. The value is listed whether
+/// the node's facts ([`node_facts`]) arrive before or after it in the pass.
+pub(crate) fn note_text_value(ctx: &Context, id: Id, value: &str) {
+    if recording(ctx) {
+        run(ctx, Step::TextValue { id, value: value.to_owned() });
+    }
 }
 
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.
 pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rect, facts: Facts) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == id) else { return };
-        match part {
-            None => owner.0.facts = Some(facts),
-            Some(part) => {
-                let (component, depth) = (owner.0.component, owner.0.depth + 1);
-                open.parts.retain(|element| !(element.id == id && element.part == Some(part)));
-                open.parts.push(Element {
-                    id,
-                    part: Some(part),
-                    component,
-                    depth,
-                    rect,
-                    content: rect,
-                    facts: Some(facts),
-                    stop: None,
-                    command: None,
-                });
-            }
+    run(ctx, Step::Facts { id, part, rect, facts });
+}
+
+/// The record's own order: a text value lists whether the node's facts arrive before or after it in the pass. No
+/// component reports its facts after its text, so these trials drive the record's calls directly.
+#[cfg(all(feature = "testing", any(test, feature = "suite")))]
+pub(crate) mod trials {
+    use super::{Facts, close_element, node_facts, note_text_value, open_element, record};
+    use crate::testing::{Fixture, trial};
+    use egui::Id;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The facts of a text input node that states `value` itself, or none.
+    fn facts(value: Option<&str>) -> Facts {
+        Facts {
+            role: "TextInput".to_owned(),
+            name: None,
+            labelled_by: Vec::new(),
+            value: value.map(str::to_owned),
+            actions: Vec::new(),
+            disabled: false,
+            interactive: true,
         }
-    });
+    }
+
+    /// A text value noted before its node's facts arrive is listed once they do, as it is when they arrived first;
+    /// facts reported again keep it, and a value the node states itself still wins.
+    #[trial]
+    fn a_text_value_is_listed_whichever_order_the_facts_arrive_in() {
+        let key = Id::NULL.with("trial.inspect.text_value_order");
+        let (before, after, again, own) = (key.with("before"), key.with("after"), key.with("again"), key.with("own"));
+        let seen = Rc::new(RefCell::new(None));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let ctx = ui.ctx().clone();
+            let (_, recorded) = record(ui, key, |ui| {
+                let rect = ui.max_rect();
+                // The text value first, then the facts.
+                open_element(ui, before, "Field");
+                note_text_value(&ctx, before, "before");
+                node_facts(&ctx, before, None, rect, facts(None));
+                close_element(&ctx, before, rect, rect);
+                // The order the report step takes: the facts, then the text value.
+                open_element(ui, after, "Field");
+                node_facts(&ctx, after, None, rect, facts(None));
+                note_text_value(&ctx, after, "after");
+                close_element(&ctx, after, rect, rect);
+                // The facts, the text value, then the facts reported again.
+                open_element(ui, again, "Field");
+                node_facts(&ctx, again, None, rect, facts(None));
+                note_text_value(&ctx, again, "again");
+                node_facts(&ctx, again, None, rect, facts(None));
+                close_element(&ctx, again, rect, rect);
+                // The node states a value of its own, after the text value.
+                open_element(ui, own, "Field");
+                note_text_value(&ctx, own, "typed");
+                node_facts(&ctx, own, None, rect, facts(Some("own")));
+                close_element(&ctx, own, rect, rect);
+            });
+            if recorded.is_some() {
+                *out.borrow_mut() = recorded;
+            }
+        });
+        fixture.frame(Vec::new());
+        let seen = seen.borrow();
+        let recorded = seen.as_deref();
+        assert!(recorded.is_some(), "the region ran");
+        let Some(recorded) = recorded else { return };
+        let value = |id: Id| {
+            let element = recorded.elements.iter().find(|element| element.id == id && element.part.is_none());
+            element.and_then(|element| element.facts.as_ref()).and_then(|facts| facts.value.clone())
+        };
+        assert_eq!(value(before).as_deref(), Some("before"), "facts arriving after the text value list it: {:?}", recorded.elements);
+        assert_eq!(value(after).as_deref(), Some("after"), "facts arriving before the text value list it");
+        assert_eq!(value(again).as_deref(), Some("again"), "facts reported again keep the text value");
+        assert_eq!(value(own).as_deref(), Some("own"), "a value the node states itself wins over the text value");
+    }
 }

@@ -172,3 +172,20 @@ fn the_host_activates_the_other_well_while_one_keeps_the_focus_and_an_arrow_acti
     fixture.key(Key::ArrowRight, Modifiers::NONE).key(Key::ArrowLeft, Modifiers::NONE).settle();
     assert_eq!(active.get(), Well::Primary, "the arrow onto Fill makes it active");
 }
+
+/// Each well is named by its own label, not the pair's: a screen reader, and a test, tells the two apart.
+#[trial]
+fn each_well_is_named_by_its_own_label() {
+    let mut fixture = Fixture::new(|ui| {
+        let wells = [PairWell::new("Fill", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Stroke", Srgba::rgb(1.0, 1.0, 1.0))];
+        SwatchPair::<()>::new("Fill and Stroke", wells, Bind::given(Well::Primary)).popover(false).show(ui);
+    });
+    fixture.room(vec2(200.0, 200.0)).settle();
+    let wells = fixture.by_role(Role::RADIO_BUTTON);
+    let names: Vec<Option<&str>> = wells.iter().map(|well| fixture.tree().name_of(well.node)).collect();
+    assert_eq!(names, vec![Some("Fill"), Some("Stroke")], "the two wells are radio buttons named by their own labels, the primary first");
+    let fill = fixture.by_label("Fill").expect("a node is named Fill");
+    let stroke = fixture.by_label("Stroke").expect("a node is named Stroke");
+    assert_eq!(fill.node, wells[0].node, "Fill names the primary well's radio button");
+    assert_eq!(stroke.node, wells[1].node, "Stroke names the secondary well's radio button");
+}
