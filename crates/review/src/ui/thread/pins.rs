@@ -1,17 +1,18 @@
 //! Comment pins on a canvas: clustering, the pin bubble and [`CommentPins`].
 
-use craft_behavior::{IconId, Metrics, PressPhase, Proposal, Sense};
+use craft_behavior::{CanvasView, IconId, Metrics, PressPhase, Proposal, Sense};
 use craft_ui::contract::{
-    Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Pattern, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Trigger,
+    Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Pattern, Pointer as _, Props as _, Role, Show as _, ShowContainer as _,
+    Trigger,
 };
 use craft_ui::layout_components::Stack;
 use craft_ui::menu::{Menu, MenuItem};
-use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun};
+use craft_ui::primitives::{ContentPainterCx, HAlign, IconSpec, PaintShape, StrokeWidth, TextRun};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, TypeRole};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 
-use crate::comments::ThreadId;
+use crate::comments::{CommentAnchor, ThreadId};
 use crate::ui::avatar::{paint_avatar, paint_face};
 
 use super::ThreadWords;
@@ -64,13 +65,45 @@ pub struct CommentPin<'a> {
     pub unread: bool,
     /// The thread is resolved: a grey avatar and a check.
     pub resolved: bool,
+    /// The projected area corners and the canvas clip for the selection outline.
+    area: Option<([Pos2; 4], Rect)>,
 }
 
 impl<'a> CommentPin<'a> {
     /// A read, unresolved pin of the thread `id` at `point`, started by `author` in their colour `color`; `text` is
     /// the thread's first message.
     pub fn new(id: ThreadId, point: Pos2, author: &'a str, text: &'a str, color: [u8; 3]) -> Self {
-        CommentPin { id, point, author, text, color, unread: false, resolved: false }
+        CommentPin { id, point, author, text, color, unread: false, resolved: false, area: None }
+    }
+
+    /// Projects a canvas thread's anchor through the current view. The area pin sits at the
+    /// document rectangle's upper-left corner. Rebuild after zooming or panning, and show the
+    /// pins in the canvas's clipped UI. Returns `None` for other anchor types or invalid geometry.
+    pub fn from_canvas_anchor(
+        id: ThreadId,
+        anchor: &CommentAnchor,
+        view: &CanvasView,
+        author: &'a str,
+        text: &'a str,
+        color: [u8; 3],
+    ) -> Option<Self> {
+        match *anchor {
+            CommentAnchor::Canvas { at, .. } => {
+                let point = view.to_screen(kurbo::Point::new(at[0], at[1]));
+                point.is_finite().then(|| Self::new(id, point, author, text, color))
+            }
+            CommentAnchor::CanvasArea { bounds } if bounds.is_finite() => {
+                let bounds = bounds.abs();
+                let corners = view.quad(bounds);
+                if bounds.width() == 0.0 || bounds.height() == 0.0 || !corners.iter().all(|p| p.is_finite()) {
+                    return None;
+                }
+                let mut pin = Self::new(id, corners[0], author, text, color);
+                pin.area = Some((corners, view.rect));
+                Some(pin)
+            }
+            _ => None,
+        }
     }
 
     /// Whether the viewer hasn't read the thread.
@@ -197,6 +230,12 @@ impl Component for PinBubble {
         if self.mine() { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
     }
 
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if let Face::Pin { open, .. } = self.face {
+            access.expanded(open);
+        }
+    }
+
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let line = cx.layout(&TextRun::new("0").role(TypeRole::Caption)).size().y;
         self.line = line;
@@ -263,8 +302,9 @@ impl Component for PinBubble {
 /// Comment pins over a canvas: a pin per thread (the author's avatar in the author's colour in a speech
 /// bubble with a square bottom-left corner, grey with a check once resolved, a dot while unread), pins
 /// within one pin's width of each other gathered into a cluster showing the count. A click or Enter on a
-/// pin opens its thread, on the open pin closes it, on a cluster lists its threads. Your own pin can be
-/// dragged to another spot, reported as a [`PinMove`] on release. Each pin is a focus stop in reading order.
+/// pin opens its thread, on the open pin closes it, on a cluster lists its threads. Dragging your own point pin
+/// to another spot reports a [`PinMove`] on release. The open area thread is outlined beneath the pins
+/// with a transparent interior. Each pin is a focus stop in reading order.
 #[must_use = "show the pins with `show`"]
 #[derive(Pattern)]
 pub struct CommentPins<'a> {
@@ -313,7 +353,12 @@ impl CommentPins<'_> {
     /// Shows the pins and reports clicks and drags.
     pub fn show(self, ui: &mut Ui) -> CommentPinsOutput {
         let CommentPins { label, pins, me, open } = self;
-        let words = Env::of(ui).words::<ThreadWords>();
+        let env = Env::of(ui);
+        let words = env.words::<ThreadWords>();
+        if let Some((corners, clip)) = pins.iter().find(|pin| open == Some(pin.id)).and_then(|pin| pin.area) {
+            let painter = ContentPainterCx::new(ui.painter().with_clip_rect(clip), &env, env.ink);
+            painter.outline(&PaintShape::Polygon(corners.to_vec()));
+        }
         let side = PinBubble::new(Face::Cluster { count: 1 }, String::new()).measure_in(ui, Proposal::Ideal).y;
         let points: Vec<Pos2> = pins.iter().map(|pin| pin.point).collect();
         let mut spots: Vec<PinCluster> = cluster(&points, side)
@@ -325,7 +370,8 @@ impl CommentPins<'_> {
             .collect();
         spots.sort_by(|a, b| a.at.y.total_cmp(&b.at.y).then(a.at.x.total_cmp(&b.at.x)));
         let (mut opened, mut closed, mut moved) = (None, None, None);
-        let shown = Stack::new().label(label).show(ui, |ui, _| {
+        // The pins are positioned in the canvas rather than in the stack's flow.
+        let shown = Stack::new().label(label).show_at(ui, ui.clip_rect(), |ui, _| {
             for spot in &spots {
                 let one = match spot.threads.as_slice() {
                     [thread] => pins.iter().find(|pin| pin.id == *thread),
@@ -333,10 +379,11 @@ impl CommentPins<'_> {
                 };
                 if let Some(pin) = one {
                     let words_of = pin.text.split_whitespace().take(PIN_NAME_WORDS).collect::<Vec<_>>().join(" ");
-                    let name = if words_of.is_empty() {
-                        words.pin.fill(&[("author", pin.author)])
-                    } else {
-                        words.pin_text.fill(&[("author", pin.author), ("words", &words_of)])
+                    let name = match (pin.area.is_some(), words_of.is_empty()) {
+                        (true, true) => words.area_pin.fill(&[("author", pin.author)]),
+                        (true, false) => words.area_pin_text.fill(&[("author", pin.author), ("words", &words_of)]),
+                        (false, true) => words.pin.fill(&[("author", pin.author)]),
+                        (false, false) => words.pin_text.fill(&[("author", pin.author), ("words", &words_of)]),
                     };
                     let face = Face::Pin {
                         author: pin.author.to_owned(),
@@ -344,7 +391,7 @@ impl CommentPins<'_> {
                         unread: pin.unread,
                         resolved: pin.resolved,
                         open: open == Some(pin.id),
-                        mine: pin.author == me,
+                        mine: pin.author == me && pin.area.is_none(),
                     };
                     let rect = Rect::from_min_max(Pos2::new(spot.at.x, spot.at.y - side), Pos2::new(spot.at.x + side, spot.at.y));
                     let bubble = PinBubble::new(face, name).id_salt(("pin", pin.id.0)).show_at(ui, rect);
@@ -368,7 +415,8 @@ impl CommentPins<'_> {
                     let mut chosen = None;
                     Menu::new(name).opened_by(&bubble.response, Trigger::Click).show(ui, |ui, _| {
                         for thread in spot.threads.iter().filter_map(|thread| pins.iter().find(|pin| pin.id == *thread)) {
-                            if MenuItem::new(words.pin.fill(&[("author", thread.author)])).show(ui).ran {
+                            let label = if thread.area.is_some() { &words.area_pin } else { &words.pin };
+                            if MenuItem::new(label.fill(&[("author", thread.author)])).show(ui).ran {
                                 chosen = Some(thread.id);
                             }
                         }

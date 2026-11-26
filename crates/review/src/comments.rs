@@ -5,6 +5,15 @@ use craft_i18n::Folder;
 
 use crate::annotate::AnnotationKind;
 
+#[cfg(test)]
+#[craft_ui::testing::trial]
+fn a_saved_canvas_point_keeps_its_position_and_node() {
+    let saved = r#"{"Canvas":{"at":[12.5,34.25],"node":7}}"#;
+    let expected = CommentAnchor::Canvas { at: [12.5, 34.25], node: Some(7) };
+    assert_eq!(serde_json::from_str::<CommentAnchor>(saved).expect("legacy canvas point"), expected);
+    assert_eq!(serde_json::to_value(expected).expect("canvas point"), serde_json::from_str::<serde_json::Value>(saved).expect("legacy JSON"));
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 /// Identifies a comment thread.
@@ -40,6 +49,11 @@ pub enum CommentAnchor {
         /// Position on the timeline, in seconds.
         seconds: f64,
     },
+    /// A rectangular region of the canvas, in document coordinates.
+    CanvasArea {
+        /// The region's bounds. Either drag direction is accepted.
+        bounds: kurbo::Rect,
+    },
 }
 
 impl CommentAnchor {
@@ -60,6 +74,7 @@ impl CommentAnchor {
             CommentAnchor::Page { at, .. } | CommentAnchor::Canvas { at, .. } => at[1],
             CommentAnchor::Slide { at, .. } => at.map_or(0.0, |at| at[1]),
             CommentAnchor::Time { seconds } => *seconds,
+            CommentAnchor::CanvasArea { bounds } => bounds.y0.min(bounds.y1),
         }
     }
 }
