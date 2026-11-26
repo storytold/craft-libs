@@ -106,6 +106,18 @@ fn jpeg_grayscale_decodes_as_gray() {
 }
 
 #[test]
+fn jpeg_roundtrip_preserves_inch_density_and_single_exif_prefix() {
+    let mut img = synth(40, 30, ChannelLayout::Rgb, SampleType::U8, 2, 0.02);
+    img.meta.dpi = Some((300.0, 240.0));
+    img.meta.exif = Some(b"II*\0\x08\0\0\0\0\0\0\0\0\0\0".to_vec());
+    let bytes = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    assert_eq!(bytes.windows(6).filter(|w| *w == b"Exif\0\0").count(), 1);
+    let back = decode(&bytes).unwrap();
+    assert_eq!(back.meta.dpi, Some((300.0, 240.0)));
+    assert_eq!(back.meta.exif.as_deref(), img.meta.exif.as_deref());
+}
+
+#[test]
 fn jpeg_cmyk_roundtrip_with_adobe_marker() {
     let img = synth(40, 30, ChannelLayout::Cmyk, SampleType::U8, 3, 0.02);
     let bytes = encode(&img, Format::Jpeg, &EncodeOptions { jpeg_quality: 95, ..Default::default() }).unwrap();
