@@ -2,8 +2,8 @@
 //! `.studio3` (header `silhouette05;`).
 //!
 //! It reads every object's outline (open and closed paths, lines and Bézier curves, compound
-//! paths, text as outlines), each outline's line colour and the page size. Coordinates are
-//! millimetres from the page's top-left corner, y down, as the file stores them. Fills, layers
+//! paths, text as outlines), each outline's line and fill colours and the page size. Coordinates are
+//! millimetres from the page's top-left corner, y down, as the file stores them. Layers
 //! and cut settings are not read.
 //!
 //! The layout comes from differential analysis of documents drawn and saved in Silhouette
@@ -67,6 +67,9 @@ pub struct Shape {
     pub path: BezPath,
     /// The object's line colour (R, G, B), when its style record was found.
     pub line_color: Option<[u8; 3]>,
+    /// The object's fill colour (R, G, B); `None` when it has no fill or the style record was
+    /// not found.
+    pub fill_color: Option<[u8; 3]>,
 }
 
 /// A document's shapes in file order, plus notes about what was skipped.
@@ -139,7 +142,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
             warnings.push(format!("skipped a path at byte {at}: coordinates out of range"));
             continue;
         }
-        shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at) });
+        shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at), fill_color: fill_color_before(body, style_from, at) });
         style_from = path.end;
     }
     if budget.get() == 0 {
@@ -364,6 +367,49 @@ fn line_color_before(d: &[u8], from: usize, to: usize) -> Option<[u8; 3]> {
     found
 }
 
+/// The fill of the last style record in `from..to`. The record ends with two short
+/// length-prefixed names (the line's cap and join, "rounded" in every file seen) with a 0x01
+/// byte between them, then a byte:
+/// 0 for no fill, or 1 and the fill as four little-endian f32 R, G, B, A in 0..=1. Seen in
+/// `.studio3` files saved with no fill, a yellow (#F7EF29) and a blue (#1B7CB8) fill, whose
+/// floats match the `@fill:RRGGBB` text the file also holds.
+fn fill_color_before(d: &[u8], from: usize, to: usize) -> Option<[u8; 3]> {
+    let name = |at: usize| -> Option<usize> {
+        let n = usize::try_from(u32_at(d, at)?).ok()?;
+        let text = d.get(at + 4..at + 4 + n)?;
+        ((3..=16).contains(&n) && text.iter().all(u8::is_ascii_lowercase)).then_some(at + 4 + n)
+    };
+    let mut found = None;
+    let end = to.min(d.len());
+    let mut at = from;
+    while at + 4 < end {
+        if let Some(first_end) = name(at)
+            && d.get(first_end) == Some(&1)
+            && let Some(flag_at) = name(first_end + 1)
+            && flag_at < end
+        {
+            found = match d.get(flag_at) {
+                Some(1) => {
+                    let channel = |i: usize| {
+                        let v = f32_at(d, flag_at + 1 + 4 * i)?;
+                        (v.is_finite() && (0.0..=1.0).contains(&v)).then(|| (v * 255.0).round() as u8)
+                    };
+                    match (channel(0), channel(1), channel(2), channel(3)) {
+                        (Some(r), Some(g), Some(b), Some(_)) => Some(Some([r, g, b])),
+                        _ => found,
+                    }
+                }
+                Some(0) => Some(None),
+                _ => found,
+            };
+            at = flag_at;
+            continue;
+        }
+        at += 1;
+    }
+    found.flatten()
+}
+
 /// Page width and height (mm): the root's second record, 0x29 bytes into its payload.
 /// Seen in one page size only (12 × 12 in), so it is checked hard and optional.
 fn page_size(d: &[u8], root: &Block) -> Option<(f64, f64)> {
@@ -396,6 +442,43 @@ fn f32_at(d: &[u8], at: usize) -> Option<f32> {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// The tail of a style record as `.studio3` files store it: the cap and join names, then
+    /// the fill flag and, with a fill, R, G, B, A as f32.
+    fn style_tail(fill: Option<[f32; 4]>) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&7u32.to_le_bytes());
+        out.extend_from_slice(b"rounded");
+        out.push(1);
+        out.extend_from_slice(&7u32.to_le_bytes());
+        out.extend_from_slice(b"rounded");
+        match fill {
+            Some(rgba) => {
+                out.push(1);
+                for v in rgba {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            None => out.extend_from_slice(&[0; 17]),
+        }
+        out
+    }
+
+    #[test]
+    fn fill_colours_come_from_the_style_records_tail() {
+        // The floats a blue fill (#1B7CB8) was saved with.
+        let blue = style_tail(Some([0.105_882_354, 0.486_274_5, 0.721_568_64, 1.0]));
+        assert_eq!(fill_color_before(&blue, 0, blue.len()), Some([0x1B, 0x7C, 0xB8]));
+        let none = style_tail(None);
+        assert_eq!(fill_color_before(&none, 0, none.len()), None);
+        // The last record before the outline wins; a bad float is no fill.
+        let mut both = style_tail(Some([1.0, 0.0, 0.0, 1.0]));
+        both.extend(style_tail(None));
+        assert_eq!(fill_color_before(&both, 0, both.len()), None);
+        let wild = style_tail(Some([f32::NAN, 0.0, 0.0, 1.0]));
+        assert_eq!(fill_color_before(&wild, 0, wild.len()), None);
+        assert_eq!(fill_color_before(&blue, 0, 10), None, "the window ends before the flag");
+    }
 
     fn block(payload: &[u8]) -> Vec<u8> {
         let mut out = vec![1];
