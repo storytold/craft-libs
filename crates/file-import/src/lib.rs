@@ -89,14 +89,15 @@ pub const CAPABILITIES: &[Capability] = &[
         detected_formats: &[
             craft_file_formats::Format::Png,
             craft_file_formats::Format::Jpeg,
+            craft_file_formats::Format::JpegLs,
             craft_file_formats::Format::Bmp,
             craft_file_formats::Format::Gif,
             craft_file_formats::Format::Tiff,
             craft_file_formats::Format::WebP,
         ],
-        extensions: &["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "webp"],
+        extensions: &["png", "jpg", "jpeg", "jls", "bmp", "gif", "tif", "tiff", "webp"],
         write_extensions: &["png", "jpg", "jpeg"],
-        mime_types: &["image/png", "image/jpeg", "image/bmp", "image/gif", "image/tiff", "image/webp"],
+        mime_types: &["image/png", "image/jpeg", "image/jls", "image/bmp", "image/gif", "image/tiff", "image/webp"],
         raster: true,
         vector: false,
     },
@@ -197,7 +198,7 @@ pub fn format_for(name: &str, bytes: &[u8]) -> Option<ImportFormat> {
         F::Pdf => Some(ImportFormat::Pdf),
         F::Illustrator if bytes.starts_with(b"%PDF-") => Some(ImportFormat::Pdf),
         F::Eps | F::PostScript | F::Illustrator => Some(ImportFormat::Eps),
-        F::Png | F::Jpeg | F::Bmp | F::Gif | F::Tiff | F::WebP => Some(ImportFormat::Raster),
+        F::Png | F::Jpeg | F::JpegLs | F::Bmp | F::Gif | F::Tiff | F::WebP => Some(ImportFormat::Raster),
         _ => None,
     }
 }
@@ -401,5 +402,28 @@ mod format_tests {
     fn pdf_based_illustrator_is_routed_to_pdf_reader() {
         let bytes = b"%PDF-1.7\n/AIPrivateData";
         assert_eq!(format_for("illustration.ai", bytes), Some(ImportFormat::Pdf));
+    }
+
+    #[test]
+    fn jpeg_ls_is_routed_to_the_raster_reader() {
+        use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image, encode};
+        let gray: Vec<u8> = (0..6).map(|value| value * 40).collect();
+        let Ok(image) = Image::from_u8(3, 2, ChannelLayout::Gray, gray.clone()) else {
+            panic!("a 3 by 2 gray image");
+        };
+        let Ok(bytes) = encode(&image, Format::JpegLs, &EncodeOptions::default()) else {
+            panic!("JPEG-LS encodes");
+        };
+        for name in ["scan.jls", "scan.jpg", "scan"] {
+            assert_eq!(format_for(name, &bytes), Some(ImportFormat::Raster), "{name}");
+            let Ok(Imported::Raster(raster)) = import(name, &bytes, Limits::default()) else {
+                panic!("{name} imports as a raster image");
+            };
+            assert_eq!((raster.width, raster.height), (3, 2));
+            let red: Vec<u8> = raster.rgba.as_chunks::<4>().0.iter().map(|pixel| pixel[0]).collect();
+            assert_eq!(red, gray, "{name}");
+        }
+        assert!(supported_formats(ImportFormat::Raster).contains(&craft_file_formats::Format::JpegLs));
+        assert!(supported_extensions().contains(&"jls"));
     }
 }

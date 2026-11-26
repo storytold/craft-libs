@@ -1,0 +1,24 @@
+[package]
+name = "craft-ppt-binary"
+description = "Reader for the PowerPoint 97-2003 binary file format (.ppt, .pot, .pps; [MS-PPT], [MS-ODRAW]), and the start of PowerPoint 95, into the craft-pptx presentation model, on craft-cfb."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+craft-codepage = { workspace = true }
+craft-drawingml = { workspace = true }
+craft-pptx = { workspace = true }
+log = { workspace = true }
+miniz_oxide = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Pictures in the tests: a PNG to embed, and the BMP a DIB blip becomes.
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
