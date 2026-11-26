@@ -366,27 +366,54 @@ pub(crate) fn record_control_min(ctx: &Context, width: f32) {
         stack.0.iter().rev().find(|scope| matches!(scope.kind, Kind::Label(_))).map(|scope| scope.container)
     });
     if let Some(container) = container {
-        layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width }));
+        layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width, whole: false }));
     }
+}
+
+/// The innermost open label scope, when no control inside it has reported its narrowest width yet.
+pub(crate) fn label_awaiting_min(ctx: &Context) -> Option<Id> {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        stack
+            .0
+            .iter()
+            .rev()
+            .find(|scope| matches!(scope.kind, Kind::Label(_)))
+            .filter(|scope| scope.control_min.is_none())
+            .map(|scope| scope.container)
+    })
+}
+
+/// Records `width` as the narrowest width of the controls of `container`'s label scope, in place of what the first of
+/// them reported: the least of a row that holds them side by side, the first control of the scope
+/// (`label_awaiting_min`). Only a measuring run records it.
+pub(crate) fn record_row_min(ctx: &Context, container: Id, width: f32) {
+    layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width, whole: true }));
 }
 
 /// A control's narrowest width reported to the label scope of `container`, as a measuring run hands it forward.
 struct ControlMin {
     container: Id,
     width: f32,
+    /// The width is the least of a row of controls (`record_row_min`): it replaces the first control's.
+    whole: bool,
 }
 
 impl layout_memory::Contribution for ControlMin {
     fn apply(&self, ctx: &Context) {
         pass_state::with::<Stack, _>(ctx, |stack| {
             if let Some(scope) = stack.0.iter_mut().rev().find(|scope| scope.container == self.container && matches!(scope.kind, Kind::Label(_))) {
-                scope.control_min.get_or_insert(self.width);
+                if self.whole {
+                    scope.control_min = Some(self.width);
+                } else {
+                    scope.control_min.get_or_insert(self.width);
+                }
             }
         });
     }
 
     fn report(&self) -> Option<(Id, f32)> {
-        Some((sub(self.container, "control_min"), self.width))
+        // A row's shrink step sweeps only in a measuring run, so a real run has no row least to compare.
+        (!self.whole).then(|| (sub(self.container, "control_min"), self.width))
     }
 
     fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
