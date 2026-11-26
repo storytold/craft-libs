@@ -850,8 +850,9 @@ impl<'p> Pass<'p> {
         let value = self.work.number(line.key).unwrap_or(*range.start());
         let option = line.param.option();
         let places = option.range_places();
+        let step = option.range_step();
         if option.popup_slider {
-            self.popup_range(ui, line, range, value, places);
+            self.popup_range(ui, line, range, value, places, step);
             return;
         }
         let layout = self.sliders;
@@ -862,8 +863,8 @@ impl<'p> Pass<'p> {
             if short {
                 slider = slider.short(true).field_sizing(Sizing::Content);
             }
-            if let Some(places) = places {
-                slider = slider.step(10f64.powi(-(places as i32)));
+            if let Some(step) = step {
+                slider = slider.step(step);
             }
             if !option.marks().is_empty() {
                 slider = slider.marks_labelled(option.marks().iter().cloned());
@@ -900,10 +901,10 @@ impl<'p> Pass<'p> {
         }
     }
 
-    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>) {
+    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>, set_step: Option<f64>) {
         // Match the ordinary range row's number field precision when the caller sets no step.
         let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
-        let step = places.map_or(default_step, |places| 10f64.powi(-(places as i32)));
+        let step = set_step.unwrap_or(default_step);
         let unit = line.param.unit.map(|kind| (kind, self.units.symbol(kind)));
         let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
@@ -911,11 +912,11 @@ impl<'p> Pass<'p> {
                 let mut field = NumberField::new(line.name.clone(), line.bind(Some(value), default))
                     .range(range.clone())
                     .popup_slider(range.clone())
-                    .snap_popup_slider(places.is_some())
+                    .snap_popup_slider(set_step.is_some())
                     .commit_decimals(decimals_for_step(step))
                     .scrub_by_label();
-                if places.is_some() || default_step != 1.0 {
-                    field = field.step(step).snap_typed(places.is_some());
+                if set_step.is_some() || default_step != 1.0 {
+                    field = field.step(step).snap_typed(set_step.is_some());
                 }
                 if let Some((kind, _)) = &unit {
                     field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);

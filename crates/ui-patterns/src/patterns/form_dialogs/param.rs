@@ -557,6 +557,8 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    /// The step of a range row's slider and field ([`Param::step`]).
+    range_step: Option<f64>,
     pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
@@ -1230,6 +1232,18 @@ impl Param {
         self
     }
 
+    /// The step of a [`ParamKind::Range`] row, as `SliderField::step`: the slider and the field move by `step` on arrow
+    /// keys, the wheel and a scrub, and drags, clicks on the track and typed values snap to it. It takes the place of
+    /// the step [`decimals`](Param::decimals) implies; the stored value is still rounded to those decimals. A step that
+    /// is not finite and positive leaves the row's step as it was; other kinds are unchanged.
+    #[must_use]
+    pub fn step(mut self, step: f64) -> Self {
+        if matches!(self.kind, ParamKind::Range { .. }) && step.is_finite() && step > 0.0 {
+            self.options.get_or_insert_default().range_step = Some(step);
+        }
+        self
+    }
+
     /// Shows a Range row's slider in a linear popup opened from the number field.
     #[must_use]
     pub fn popup_slider(mut self) -> Self {
@@ -1486,6 +1500,12 @@ impl RowOptions {
     /// The decimals a range row stores, or `None` for as typed.
     pub(crate) fn range_places(&self) -> Option<u32> {
         self.range_decimals
+    }
+
+    /// The step a range row's slider and field use: the one [`Param::step`] set, else the one its decimals imply, or
+    /// `None` for the controls' own.
+    pub(crate) fn range_step(&self) -> Option<f64> {
+        self.range_step.or_else(|| self.range_decimals.map(|places| 10f64.powi(-(places as i32))))
     }
 
     /// Whether an int row has a Random button.

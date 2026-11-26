@@ -118,6 +118,37 @@ fn a_short_popup_slider_can_select_its_midpoint_without_explicit_precision() {
     assert!((value - 0.0005).abs() <= 0.00002, "linear midpoint: {value}");
 }
 
+/// A range row with a step moves by it on the slider's arrow keys, snaps a typed value to it, and keeps it when its
+/// slider is a popup; a step that is not positive leaves the row as it was.
+#[trial]
+fn a_range_row_moves_and_snaps_by_its_step() {
+    let gain = || Param::new("gain", "Gain", ParamKind::range(-30.0, 30.0, 0.0, SliderScale::Linear));
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![gain().step(0.5)], &values);
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the slider");
+    fixture.click_at(slider.center()).settle();
+    assert_eq!(values.borrow().number("gain"), Some(0.0), "the middle of the track is on a step");
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("gain"), Some(0.5), "Right moves one step");
+
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the number field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("3.3");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("gain"), Some(3.5), "a typed value snaps to the step");
+
+    let popup = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![gain().popup_slider().step(0.5)], &popup);
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the popup row's field");
+    fixture.click(&field).settle();
+    fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    assert_eq!(popup.borrow().number("gain"), Some(0.5), "Up on the popup row's field moves one step");
+
+    assert_eq!(gain().step(0.0), gain(), "a zero step is ignored");
+    assert_eq!(gain().step(f64::NAN), gain(), "a step that is no number is ignored");
+    assert_eq!(Param::new("on", "On", ParamKind::bool(false)).step(0.5), Param::new("on", "On", ParamKind::bool(false)), "other kinds are unchanged");
+}
+
 // A row with `visible_when` is there only while its condition holds, and one with `enabled_when` takes input only
 // while its condition holds; a tooltip is the description of its row.
 #[trial]
