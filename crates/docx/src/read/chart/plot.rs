@@ -132,8 +132,8 @@ impl Axes {
         Axes::fitting(c, &[], 0.0, 0.0)
     }
 
-    /// [`Axes::of`], with automatic axis ends widened so that each of `bubbles` fits whole in a
-    /// plot `w` x `h` points, as Word widens them (measured: x 1..3 with sizes 1, 4 and 16 at
+    /// [`Axes::of`], with automatic axis ends widened so that `bubbles` fit whole in a plot
+    /// `w` x `h` points ([`fit_scale`] says when they may not), as Word widens them (measured: x 1..3 with sizes 1, 4 and 16 at
     /// 432 x 252 gets 0..3.5, and data 1..10 with the largest bubble at the top gets y -2..12).
     fn fitting(c: &Chart, bubbles: &[Bubble], w: f32, h: f32) -> Axes {
         let (dlo, dhi) = extent(c);
@@ -160,10 +160,12 @@ impl Axes {
     }
 }
 
-/// [`nice_scale`] for data `dlo..dhi`, widened until every disc (centre in axis units, radius in
-/// points) fits whole on an axis `len` points long: first the least room that fits them at the
+/// [`nice_scale`] for data `dlo..dhi`, widened so that discs (centre in axis units, radius in
+/// points) fit whole on an axis `len` points long: first the least room that fits them at the
 /// data's own span, then, while one still sticks out of the rounded scale, room at that scale's
-/// span. An end the file fixes (`min`, `max`) stays put; the drawing cuts what crosses it.
+/// span, for a bounded number of rounds each. Discs nearly as large as the axis may still stick
+/// out after them, and the drawing cuts them (what Word does there isn't recorded). An end the
+/// file fixes (`min`, `max`) stays put; the drawing cuts what crosses it.
 fn fit_scale((dlo, dhi): (f64, f64), zero: bool, (min, max): (Option<f64>, Option<f64>), discs: &[(f64, f64)], len: f64) -> Scale {
     const ROUNDS: usize = 8;
     let plain = nice_scale(dlo, dhi, zero, min, max);
