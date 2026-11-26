@@ -1980,3 +1980,15 @@ fn a_scope_tree_indent_sets_how_far_a_level_steps_in() {
     assert!((set - 10.0).abs() < 0.01, "a level steps in by the value the scope sets: {set}");
     assert!(own > set, "the size set's own step ({own}) is wider than the 10 pt the scope sets");
 }
+
+/// A host's step must be a real length: `+inf` (or NaN) is no step, so a level keeps the size set's, and a depth-0 row's
+/// `0 * step` never turns into a NaN that fails the row's own fit.
+#[trial]
+fn a_tree_indent_that_is_not_a_finite_length_keeps_the_size_sets_step() {
+    use craft_ui::list::TreeIndent;
+    let own = tree_indent_step(None);
+    for bad in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -4.0] {
+        let step = tree_indent_step(Some(TreeIndent(bad)));
+        assert_eq!(step, own, "TreeIndent({bad}) is no step, so a level keeps the size set's {own}");
+    }
+}

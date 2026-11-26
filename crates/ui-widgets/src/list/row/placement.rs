@@ -65,7 +65,8 @@ impl Sizes {
         Sizes {
             row,
             icon: control.icon,
-            indent: if set_indent > 0.0 { set_indent } else { own_indent },
+            // (a host's step must be a real length: `+inf` would make a depth-0 row's `0 * step` a NaN and fail every fit)
+            indent: if set_indent.is_finite() && set_indent > 0.0 { set_indent } else { own_indent },
             mark: if sub_row { small.icon } else { control.icon },
             pad: control.pad_x,
             gap: control.gap,
