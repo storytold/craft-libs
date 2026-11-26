@@ -42,9 +42,9 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     let mut oriented_edges: HashMap<u64, (u64, bool)> = HashMap::new();
     let mut edge_loops: Vec<(u64, Vec<u64>)> = Vec::new();
     let mut outer_bounds: HashMap<u64, bool> = HashMap::new();
+    let mut outer_bounds_by_id: HashMap<u64, (u64, bool)> = HashMap::new();
     let mut plain_bounds: HashMap<u64, (u64, bool)> = HashMap::new();
     let mut faces: Vec<Vec<u64>> = Vec::new();
-    let mut outer_bound_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut curve_types: HashMap<u64, String> = HashMap::new();
     let mut entity_count = 0usize;
 
@@ -136,8 +136,9 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
             }
             "FACE_OUTER_BOUND" => {
                 if let (Some(loop_id), Some(orientation)) = (args.get(1).and_then(|arg| step_references(arg).first().copied()), args.get(2)) {
-                    outer_bounds.insert(loop_id, orientation.trim().eq_ignore_ascii_case(".T."));
-                    outer_bound_ids.insert(id);
+                    let forward = orientation.trim().eq_ignore_ascii_case(".T.");
+                    outer_bounds.insert(loop_id, forward);
+                    outer_bounds_by_id.insert(id, (loop_id, forward));
                 }
             }
             _ => {}
@@ -150,19 +151,21 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     }
 
     // A face with more than one bound has holes (or several outer rings); filling them would be
-    // wrong, so refuse. A face whose single bound is a plain `FACE_BOUND` is its outer ring.
-    for face in &faces {
-        let rings = face.iter().filter(|b| outer_bound_ids.contains(b) || plain_bounds.contains_key(b)).count();
-        if rings > 1 {
-            return Err(Error::Unsupported("STEP: faces with inner boundaries are not supported".into()));
+    // wrong, so refuse. A face's referenced bound sets the orientation of its loop.
+    if !faces.is_empty() {
+        outer_bounds.clear();
+        for face in &faces {
+            let rings = face.iter().filter(|b| outer_bounds_by_id.contains_key(b) || plain_bounds.contains_key(b)).count();
+            if rings > 1 {
+                return Err(Error::Unsupported("STEP: faces with inner boundaries are not supported".into()));
+            }
+            if let [bound] = face.as_slice()
+                && let Some(&(loop_id, forward)) = outer_bounds_by_id.get(bound).or_else(|| plain_bounds.get(bound))
+            {
+                outer_bounds.insert(loop_id, forward);
+            }
         }
-        if let [bound] = face.as_slice()
-            && let Some(&(loop_id, forward)) = plain_bounds.get(bound)
-        {
-            outer_bounds.entry(loop_id).or_insert(forward);
-        }
-    }
-    if faces.is_empty() {
+    } else {
         for &(loop_id, forward) in plain_bounds.values() {
             outer_bounds.entry(loop_id).or_insert(forward);
         }

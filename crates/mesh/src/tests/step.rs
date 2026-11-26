@@ -144,4 +144,11 @@ fn step_poly_loop_applies_face_bound_orientation() {
         ENDSEC;END-ISO-10303-21;";
     let scene = step::read(reversed, &Limits::default()).unwrap();
     assert_eq!(scene.meshes[0].normals[0], [0.0, 0.0, -1.0]);
+
+    let referenced_bound_wins = b"ISO-10303-21;DATA;\
+        #1=CARTESIAN_POINT('',(0.,0.,0.));#2=CARTESIAN_POINT('',(1.,0.,0.));#3=CARTESIAN_POINT('',(0.,1.,0.));\
+        #4=POLY_LOOP('',(#1,#2,#3));#5=FACE_BOUND('',#4,.T.);#6=FACE_OUTER_BOUND('',#4,.F.);#7=FACE('',(#5));\
+        ENDSEC;END-ISO-10303-21;";
+    let scene = step::read(referenced_bound_wins, &Limits::default()).unwrap();
+    assert_eq!(scene.meshes[0].normals[0], [0.0, 0.0, 1.0]);
 }
