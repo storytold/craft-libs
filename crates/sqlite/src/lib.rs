@@ -8,6 +8,8 @@
 
 use core::fmt;
 
+pub mod wal;
+
 const MAX_VARINT_BYTES: usize = 9;
 
 /// The b-tree cell layouts that carry payload bytes.
@@ -55,6 +57,8 @@ pub fn local_payload_len(usable: u32, payload_len: u64, kind: PayloadKind) -> Op
 pub enum Error {
     /// Input ended before the integer was complete.
     TruncatedVarint,
+    /// The record's declared header length excludes its prefix or extends beyond the payload.
+    InvalidRecordHeaderLength(u64),
     /// The serial type is reserved and has no defined field width.
     ReservedSerialType(u64),
     /// The decoded database page size is not a power of two in `512..=65_536`.
@@ -77,6 +81,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TruncatedVarint => f.write_str("truncated SQLite varint"),
+            Self::InvalidRecordHeaderLength(length) => write!(f, "invalid SQLite record header length {length}"),
             Self::ReservedSerialType(code) => write!(f, "reserved SQLite serial type {code}"),
             Self::InvalidPageSize(size) => write!(f, "invalid SQLite page size {size}"),
             Self::UsablePageSizeTooSmall(usable) => write!(f, "usable SQLite page size {usable} is too small"),
@@ -118,6 +123,31 @@ pub fn read_varint(input: &[u8]) -> Result<(u64, usize), Error> {
         }
     }
     Err(Error::TruncatedVarint)
+}
+
+/// Split a SQLite record payload into its serial-type bytes and body.
+///
+/// The [record header length](https://www.sqlite.org/fileformat.html#record_format) includes
+/// the leading length varint. The returned serial-type slice excludes that varint and ends
+/// before the body. The caller decodes serial types from that slice and checks field lengths.
+///
+/// # Errors
+///
+/// Returns [`Error::TruncatedVarint`] for an incomplete length and
+/// [`Error::InvalidRecordHeaderLength`] for a size outside the supplied payload's bounds.
+///
+/// ```
+/// use craft_sqlite::split_record;
+///
+/// assert_eq!(split_record(&[2, 1, 42]), Ok((&[1][..], &[42][..])));
+/// ```
+pub fn split_record(payload: &[u8]) -> Result<(&[u8], &[u8]), Error> {
+    let (length, length_bytes) = read_varint(payload)?;
+    let invalid_length = Error::InvalidRecordHeaderLength(length);
+    let header_end = usize::try_from(length).map_err(|_| invalid_length)?;
+    let (header, body) = payload.split_at_checked(header_end).ok_or(invalid_length)?;
+    let serial_types = header.get(length_bytes..).ok_or(invalid_length)?;
+    Ok((serial_types, body))
 }
 
 /// Return the encoded body width in bytes for a SQLite record serial type.

@@ -107,15 +107,17 @@ fn ggx_d(cos_t: f32, a: f32) -> f32 {
 }
 
 /// Sizes of the source pyramid after level 0: halved while it is wider than 8 or taller than 4,
-/// at most 9 more.
-fn pyramid_sizes(w: u32, h: u32) -> Vec<(u32, u32)> {
-    let mut sizes = Vec::new();
+/// at most 9 more. The sizes are the first `count` entries of the array, which stays on the stack.
+fn pyramid_sizes(w: u32, h: u32) -> ([(u32, u32); 9], usize) {
+    let mut sizes = [(0, 0); 9];
+    let mut count = 0;
     let mut size = (w, h);
-    while sizes.len() < 9 && (size.0 > 8 || size.1 > 4) {
+    while count < sizes.len() && (size.0 > 8 || size.1 > 4) {
         size = half_size(size.0, size.1);
-        sizes.push(size);
+        sizes[count] = size;
+        count += 1;
     }
-    sizes
+    (sizes, count)
 }
 
 /// The size of the output level after one of `size`: each side halved but kept at least 4 × 2,
@@ -159,19 +161,23 @@ fn pixels_of(sizes: &[(u32, u32)]) -> Option<u64> {
     sizes.iter().try_fold(0u64, |acc, &(w, h)| acc.checked_add(u64::from(w) * u64::from(h)))
 }
 
-/// Checks the bytes held at once (the source copies, the pyramid, the levels with their list
-/// entries, and one sample table) and the sample work of a call before anything is allocated.
+/// Checks the bytes held at once (the source copies, the pyramid with its list entries, the levels
+/// with their list entries, and one sample table) and the sample work of a call before anything is
+/// allocated.
 fn check_budget(env: &EnvImage, options: &PrefilterOptions, pyramid: &[(u32, u32)], limits: &Limits) -> Result<(), PbrError> {
     let (w, h) = (env.width(), env.height());
     let src = u64::from(w) * u64::from(h);
     // One level is a copy of the source; no pyramid, capped copy or sample table is made.
     let filtering = options.levels > 1;
     let copies = if filtering && options.firefly_cap.is_some() { 2 } else { 1 };
+    // The halved levels, and a reference to each pyramid level including the source.
+    let rungs = pyramid.len() as u64;
+    let pyramid_lists = if filtering { rungs * size_of::<EnvImage>() as u64 + (rungs + 1) * size_of::<&EnvImage>() as u64 } else { 0 };
     let pyramid = if filtering { pixels_of(pyramid) } else { Some(0) };
     let levels = level_pixels(w, h, options.levels);
     let pixels = pyramid.zip(levels).and_then(|(p, l)| src.checked_mul(copies)?.checked_add(p)?.checked_add(l));
     let table = if filtering { u64::from(options.samples) * size_of::<Sample<'_>>() as u64 } else { 0 };
-    let lists = u64::from(options.levels) * (size_of::<(u32, u32)>() + size_of::<EnvImage>()) as u64;
+    let lists = u64::from(options.levels) * (size_of::<(u32, u32)>() + size_of::<EnvImage>()) as u64 + pyramid_lists;
     let bytes = pixels.and_then(|p| p.checked_mul(PIXEL_BYTES)?.checked_add(table)?.checked_add(lists));
     limits.check_total_bytes(bytes, w, h)?;
     let needed = levels.and_then(|l| l.checked_mul(u64::from(options.samples))).unwrap_or(u64::MAX);
@@ -257,8 +263,9 @@ pub fn try_prefilter(env: &EnvImage, options: &PrefilterOptions, limits: &Limits
     options.validate(limits)?;
     let (w, h) = (env.width(), env.height());
     limits.check(w, h)?;
-    let pyramid_size = pyramid_sizes(w, h);
-    check_budget(env, options, &pyramid_size, limits)?;
+    let (pyramid_buf, rungs) = pyramid_sizes(w, h);
+    let pyramid_size = &pyramid_buf[..rungs];
+    check_budget(env, options, pyramid_size, limits)?;
     let sizes = level_sizes(w, h, options.levels)?;
 
     let mut out = Vec::new();
@@ -276,11 +283,14 @@ pub fn try_prefilter(env: &EnvImage, options: &PrefilterOptions, limits: &Limits
     let base = base.as_ref().unwrap_or(env);
     let unbounded = Limits { max_side: u32::MAX, max_pixels: u64::MAX, max_bytes: u64::MAX, ..*limits };
     let mut rest: Vec<EnvImage> = Vec::new();
-    for _ in &pyramid_size {
+    rest.try_reserve_exact(rungs).map_err(|_| PbrError::OutOfMemory)?;
+    for _ in pyramid_size {
         let next = rest.last().unwrap_or(base).try_half(&unbounded)?;
         rest.push(next);
     }
-    let pyramid: Vec<&EnvImage> = std::iter::once(base).chain(rest.iter()).collect();
+    let mut pyramid: Vec<&EnvImage> = Vec::new();
+    pyramid.try_reserve_exact(rungs + 1).map_err(|_| PbrError::OutOfMemory)?;
+    pyramid.extend(std::iter::once(base).chain(rest.iter()));
     let src_pixels = w as f32 * h as f32;
     let steps = (options.levels - 1) as f32;
     for (l, &(lw, lh)) in sizes.iter().enumerate() {

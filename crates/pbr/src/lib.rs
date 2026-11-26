@@ -28,8 +28,13 @@
 //! [`Material`] holds a glTF 2.0 metallic-roughness material, and [`Material::try_direct`]
 //! evaluates its BRDF for one light in the final form of section B.3.5
 //! (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metal-brdf-and-dielectric-brdf>),
-//! with the Smith-Schlick geometry term Karis gives for analytic lights. [`default_environment`]
+//! with the Smith-Schlick geometry term Karis gives for analytic lights by default. [`Visibility`]
+//! selects section B.3.2's separable Smith form or the height-correlated Smith form instead.
+//! [`default_environment`]
 //! is a small studio environment for an environment light without an image.
+//!
+//! [`SHADE_WGSL`] is the WGSL text of the same shading functions for an app's own shaders, and
+//! [`GpuMaterial`] and [`GpuSh9`] lay out the values it reads.
 //!
 //! A [`Surface`] is a [`Material`] with the state a renderer applies around it: alpha and its
 //! mode, emission, sidedness, the unlit flag, clearcoat and sheen layers, and texture bindings
@@ -63,11 +68,12 @@ mod prefilter;
 mod sh;
 mod surface;
 mod vec3;
+mod wgsl;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, try_environment_brdf};
+pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, Visibility, try_environment_brdf};
 #[cfg(feature = "materialx")]
 pub use convert_materialx::try_from_materialx;
 #[cfg(feature = "mesh")]
@@ -79,6 +85,7 @@ pub use surface::{
     AlphaMode, Clearcoat, Conversion, ConversionReport, ConvertError, ReportItem, Sheen, Surface, TextureBinding, TextureEncoding, TextureInput,
     TextureSource, UvTransform, Wrap,
 };
+pub use wgsl::{GpuMaterial, GpuSh9, SHADE_WGSL};
 
 /// Why an environment could not be made, filtered or read, or a material could not be shaded.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
