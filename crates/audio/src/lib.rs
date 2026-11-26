@@ -35,7 +35,8 @@
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
 //!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
-//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM), [`dsd`] (`dsd`: DSF and DSDIFF files to PCM),
+//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM), [`s302m`] (`s302m`: SMPTE 302M packets),
+//!   [`dsd`] (`dsd`: DSF and DSDIFF files to PCM),
 //!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`vmd`] (`vmd-decode`:
 //!   Sierra VMD sound).
 //!
@@ -91,6 +92,8 @@ pub mod peaks;
 pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(feature = "s302m")]
+pub mod s302m;
 #[cfg(feature = "sbc")]
 pub mod sbc;
 #[cfg(any(

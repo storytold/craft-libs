@@ -64,6 +64,10 @@ mod ffv1;
 #[path = "bink_oracle.rs"]
 mod bink_oracle;
 
+#[cfg(feature = "rawvideo")]
+#[path = "rawvideo.rs"]
+mod rawvideo;
+
 #[cfg(feature = "prores")]
 #[path = "prores/main.rs"]
 mod prores;
