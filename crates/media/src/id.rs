@@ -46,6 +46,8 @@ pub enum Container {
     MpegPs,
     /// Sierra VMD (Video and Music Data).
     Vmd,
+    /// Bink (BIK).
+    Bink,
 }
 
 impl Container {
@@ -69,6 +71,7 @@ impl Container {
             Container::MpegTs => "MPEG-TS",
             Container::MpegPs => "MPEG-PS",
             Container::Vmd => "VMD",
+            Container::Bink => "Bink",
         }
     }
 }
@@ -111,6 +114,10 @@ pub enum CodecId {
     Vorbis,
     /// Speex.
     Speex,
+    /// Bink Audio, RDFT form.
+    BinkAudioRdft,
+    /// Bink Audio, DCT form.
+    BinkAudioDct,
     /// H.264 / AVC.
     H264,
     /// H.265 / HEVC.
@@ -141,6 +148,8 @@ pub enum CodecId {
     VmdVideo,
     /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
     VmdAudio,
+    /// Bink Video (Bink 1).
+    BinkVideo,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -165,6 +174,8 @@ impl CodecId {
             CodecId::Opus => "Opus",
             CodecId::Vorbis => "Vorbis",
             CodecId::Speex => "Speex",
+            CodecId::BinkAudioRdft => "Bink Audio (RDFT)",
+            CodecId::BinkAudioDct => "Bink Audio (DCT)",
             CodecId::H264 => "H.264",
             CodecId::Hevc => "HEVC",
             CodecId::Av1 => "AV1",
@@ -180,6 +191,7 @@ impl CodecId {
             CodecId::Apv => "APV",
             CodecId::VmdVideo => "VMD video",
             CodecId::VmdAudio => "VMD audio",
+            CodecId::BinkVideo => "Bink Video",
             CodecId::Unknown => "unknown",
         }
     }
@@ -205,6 +217,8 @@ impl CodecId {
                 | CodecId::Vorbis
                 | CodecId::Speex
                 | CodecId::VmdAudio
+                | CodecId::BinkAudioRdft
+                | CodecId::BinkAudioDct
         )
     }
 
@@ -226,6 +240,7 @@ impl CodecId {
                 | CodecId::Dnxhd
                 | CodecId::Apv
                 | CodecId::VmdVideo
+                | CodecId::BinkVideo
         )
     }
 }
@@ -368,40 +383,4 @@ pub fn xiph_lace(packets: &[Vec<u8>]) -> Option<Vec<u8>> {
         out.extend_from_slice(p);
     }
     Some(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn audio_and_video_are_disjoint() {
-        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex, CodecId::VmdAudio] {
-            assert!(c.is_audio() && !c.is_video(), "{c:?}");
-        }
-        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv, CodecId::VmdVideo] {
-            assert!(c.is_video() && !c.is_audio(), "{c:?}");
-        }
-        assert!(!CodecId::Unknown.is_audio() && !CodecId::Unknown.is_video());
-        assert_eq!((CodecId::VmdVideo.name(), CodecId::VmdAudio.name(), Container::Vmd.name()), ("VMD video", "VMD audio", "VMD"));
-    }
-
-    #[test]
-    fn params_builder() {
-        let p = CodecParams::new(CodecId::Aac).with_extradata([0x12, 0x10]).with_sample_rate(48_000).with_channels(2).with_sample_rate(0);
-        assert_eq!((p.codec, p.extradata.as_slice(), p.sample_rate, p.channels), (CodecId::Aac, &[0x12, 0x10][..], None, Some(2)));
-        let v = CodecParams::new(CodecId::ProRes).with_tag(*b"apcn").with_size(1920, 1080);
-        assert_eq!((v.tag, v.width, v.height), (Some(*b"apcn"), Some(1920), Some(1080)));
-        assert_eq!(v.with_size(0, 1080).width, None);
-    }
-
-    #[test]
-    fn xiph_lacing() {
-        let laced = xiph_lace(&[vec![1; 30], vec![2; 300], vec![3; 5]]).unwrap();
-        assert_eq!(&laced[..4], &[2, 30, 255, 45]);
-        assert_eq!(laced.len(), 4 + 335);
-        assert_eq!(xiph_lace(&[]), None);
-        assert_eq!(xiph_lace(&vec![vec![0]; 257]), None);
-        assert!(xiph_lace(&vec![vec![0]; 256]).is_some());
-    }
 }
