@@ -375,15 +375,12 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
             *judged.borrow_mut() = press_judgement(ui.ctx());
         }
     };
-    let frame = |events: Vec<Event>, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), trace: &mut Vec<String>| {
-        traced(events, frames, &mut *show, &runs, trace);
-    };
-    let right_click = |at: Pos2, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), trace: &mut Vec<String>| {
-        frame(vec![moved(at)], frames, &mut *show, trace);
-        frame(vec![secondary(at, true)], frames, &mut *show, trace);
-        frame(vec![secondary(at, false)], frames, &mut *show, trace);
+    let right_click = |at: Pos2, frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), runs: &RefCell<Vec<String>>, trace: &mut Vec<String>| {
+        traced(vec![moved(at)], frames, &mut *show, runs, trace);
+        traced(vec![secondary(at, true)], frames, &mut *show, runs, trace);
+        traced(vec![secondary(at, false)], frames, &mut *show, runs, trace);
         for _ in 0..10 {
-            frame(vec![], frames, &mut *show, trace);
+            traced(vec![], frames, &mut *show, runs, trace);
         }
     };
     frames.idle(3, &mut show);
@@ -394,7 +391,7 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
     assert!(dialog.shown.get(), "the dialog shows");
     // A right click on the button in the card opens the card's menu.
     let button = (*target.borrow()).expect("the button in the card shows");
-    right_click(button.center(), &mut frames, &mut show, &mut trace);
+    right_click(button.center(), &mut frames, &mut show, &runs, &mut trace);
     let judged = {
         let judged = judged.borrow();
         (*judged).clone()
@@ -421,25 +418,25 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
         "the press at {at:?} lands away from the menu's anchor:\n{}",
         trace.join("\n")
     );
-    frame(vec![moved(at)], &mut frames, &mut show, &mut trace);
-    frame(vec![press(at)], &mut frames, &mut show, &mut trace);
-    frame(vec![release(at)], &mut frames, &mut show, &mut trace);
+    traced(vec![moved(at)], &mut frames, &mut show, &runs, &mut trace);
+    traced(vec![press(at)], &mut frames, &mut show, &runs, &mut trace);
+    traced(vec![release(at)], &mut frames, &mut show, &runs, &mut trace);
     for _ in 0..10 {
-        frame(vec![], &mut frames, &mut show, &mut trace);
+        traced(vec![], &mut frames, &mut show, &runs, &mut trace);
     }
     assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press elsewhere on the card closes the menu:\n{}", trace.join("\n"));
     assert!(dialog.shown.get(), "the dialog stays open:\n{}", trace.join("\n"));
     assert_eq!(inside.borrow().presses, 0, "the menu takes the press that closes it:\n{}", trace.join("\n"));
     // A press outside the dialog closes the menu opened again inside it, and reaches nothing below the dialog.
     menus.borrow_mut().clear();
-    right_click(button.center(), &mut frames, &mut show, &mut trace);
+    right_click(button.center(), &mut frames, &mut show, &runs, &mut trace);
     assert!(menus.borrow().is_empty(), "the menu opens again inside the dialog:\n{}", trace.join("\n"));
     let outside = BELOW.center();
-    frame(vec![moved(outside)], &mut frames, &mut show, &mut trace);
-    frame(vec![press(outside)], &mut frames, &mut show, &mut trace);
-    frame(vec![release(outside)], &mut frames, &mut show, &mut trace);
+    traced(vec![moved(outside)], &mut frames, &mut show, &runs, &mut trace);
+    traced(vec![press(outside)], &mut frames, &mut show, &runs, &mut trace);
+    traced(vec![release(outside)], &mut frames, &mut show, &runs, &mut trace);
     for _ in 0..10 {
-        frame(vec![], &mut frames, &mut show, &mut trace);
+        traced(vec![], &mut frames, &mut show, &runs, &mut trace);
     }
     assert_eq!(*menus.borrow(), vec![CloseReason::Outside], "the press outside the dialog closes the menu:\n{}", trace.join("\n"));
     assert!(dialog.shown.get(), "the dialog stays open:\n{}", trace.join("\n"));
