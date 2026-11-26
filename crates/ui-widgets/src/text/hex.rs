@@ -32,11 +32,13 @@ pub struct HexCodec {
     alpha: bool,
     /// Whether a six-digit field pads short input and holds long input to `FFFFFF`.
     short_input: bool,
+    /// Whether the digits show in lower case.
+    lower_case: bool,
 }
 
 impl Default for HexCodec {
     fn default() -> Self {
-        HexCodec { digits: 2, alpha: false, short_input: false }
+        HexCodec { digits: 2, alpha: false, short_input: false, lower_case: false }
     }
 }
 
@@ -58,6 +60,13 @@ impl HexCodec {
     /// with the typed number noted as held. Such input applies on commit only. Off by default; other forms ignore it.
     pub fn short_input(mut self, on: bool) -> Self {
         self.short_input = on;
+        self
+    }
+
+    /// Whether the digits show in lower case (`ff8000`, the reference image editor's Color Picker); upper case by
+    /// default. Typed digits read in either case.
+    pub fn lower_case(mut self, on: bool) -> Self {
+        self.lower_case = on;
         self
     }
 
@@ -88,10 +97,11 @@ impl Codec for HexCodec {
 
     fn format(&self, v: &Rgba) -> String {
         let channels = &v.0[..self.channels()];
-        match self.digits {
+        let text: String = match self.digits {
             1 => channels.iter().map(|value| format!("{:X}", (u16::from(*value) + 8) / 17)).collect(),
             _ => channels.iter().map(|value| format!("{value:02X}")).collect(),
-        }
+        };
+        if self.lower_case { text.to_ascii_lowercase() } else { text }
     }
 
     fn parse(&self, text: &str, start: &Rgba) -> Result<Rgba, NotAValue> {
@@ -202,6 +212,13 @@ impl<'a> TextField<'a, HexCodec> {
     #[must_use]
     pub fn alpha(mut self, on: bool) -> Self {
         self.codec = self.codec.alpha(on);
+        self
+    }
+
+    /// Whether the digits show in lower case ([`HexCodec::lower_case`]); upper case by default.
+    #[must_use]
+    pub fn lower_case(mut self, on: bool) -> Self {
+        self.codec = self.codec.lower_case(on);
         self
     }
 

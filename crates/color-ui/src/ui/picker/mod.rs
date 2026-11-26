@@ -6,6 +6,8 @@ pub(crate) mod channel;
 mod compact;
 mod full;
 #[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod hex_case_tests;
+#[cfg(all(test, feature = "screen-testing"))]
 pub(crate) mod hex_short_input_tests;
 pub(crate) mod screen_pick;
 #[cfg(feature = "suite")]

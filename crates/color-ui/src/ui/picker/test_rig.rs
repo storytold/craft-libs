@@ -48,6 +48,12 @@ impl Rig {
             .unwrap_or_else(|| panic!("the picker shows a {name} field"))
     }
 
+    /// The text field `name` shows.
+    pub fn text(&self, name: &str) -> String {
+        let field = self.field(name);
+        self.fixture.tree().value_of(field.node).unwrap_or_default().to_owned()
+    }
+
     /// Types `text` over field `name` and commits it with Tab (Enter would confirm the dialog).
     pub fn type_tab(&mut self, name: &str, text: &str) {
         let field = self.field(name);
