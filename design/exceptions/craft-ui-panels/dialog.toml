@@ -1,1 +1,9 @@
 config_version = 1
+
+[[exception]]
+name = "dialog-trial-rooms"
+kind = "exempt"
+rule = "test/literal-size"
+path = "crates/ui-panels/src/dialog/trials.rs"
+reason = "Trial rooms, not looks."
+count = 1
