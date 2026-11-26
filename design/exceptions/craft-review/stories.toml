@@ -1,0 +1,17 @@
+config_version = 1
+
+[[exception]]
+name = "balloons-story-paper"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/review/src/ui/balloons/stories.rs"
+reason = "The demo page is white paper, document data and not a theme colour."
+count = 1
+
+[[exception]]
+name = "balloons-id-scope"
+kind = "marker"
+rule = "contract/memory"
+path = "crates/review/src/ui/balloons.rs"
+reason = "The balloons are a function, not a component: the label salts the ids of its cards so two balloon columns never meet, and no contract call scopes ids by hand."
+count = 1

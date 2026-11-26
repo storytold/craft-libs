@@ -1,4 +1,4 @@
-//! Type layers: the `TySh` block as a read-only view.
+//! Type layers: read-only views and borrowed data framing for the `TySh` block.
 //!
 //! Layout (Adobe's specification, "Type tool object setting"): a version, six doubles of
 //! transform, a text version, a descriptor version and the text descriptor, whose `Txt ` is the
@@ -81,6 +81,32 @@ impl LayerRecord {
     pub fn type_layer(&self) -> Option<TypeLayer> {
         TypeLayer::from_bytes(&self.block(b"TySh")?.data).ok()
     }
+}
+
+/// Append TySh data with fixed version fields and a zero-bounds suffix.
+///
+/// Writes version 1, six raw transform doubles, text version 50 and descriptor
+/// version 16, the text descriptor, warp version 1 and descriptor version 16,
+/// the warp descriptor, then sixteen zero bytes. No outer key, length or padding
+/// is written. Text, EngineData and warp semantics remain the caller's policy.
+/// Both views inherit the finite, stable, acyclic borrowed-writer contract.
+/// Existing output is preserved; traversal uses O(depth) heap frames, without
+/// an owned model conversion or a full serialized temporary.
+pub fn append_type_layer_data_with_zero_bounds(
+    out: &mut Vec<u8>,
+    transform: &[f64; 6],
+    text: &dyn crate::descriptor::borrowed::DescriptorView,
+    warp: &dyn crate::descriptor::borrowed::DescriptorView,
+) {
+    out.extend_from_slice(&[0, 1]);
+    for value in transform {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    out.extend_from_slice(&[0, 50, 0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, text);
+    out.extend_from_slice(&[0, 1, 0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, warp);
+    out.extend_from_slice(&[0; 16]);
 }
 
 #[cfg(test)]
@@ -202,6 +228,41 @@ mod tests {
         }
         assert!(TypeLayerPrefix::from_bytes_with_limits(&data, ParseLimits { max_descriptor_items: 1, ..limits }).is_err());
         assert!(TypeLayerPrefix::from_bytes_with_limits(&data, ParseLimits { max_list_items: 1, ..limits }).is_err());
+    }
+
+    #[test]
+    fn borrowed_type_data_preserves_raw_transform_two_views_and_zero_tail() {
+        use crate::descriptor::borrowed::{ClassRef, DescriptorView, IdRef, UnicodeRef, ValueRef};
+        struct View(bool);
+        impl DescriptorView for View {
+            fn class(&self) -> ClassRef<'_> {
+                ClassRef { name: UnicodeRef::Units(&[]), id: IdRef::Code(*b"null") }
+            }
+            fn item(&self, index: usize) -> Option<(IdRef<'_>, ValueRef<'_>)> {
+                (self.0 && index == 0).then_some((IdRef::Code(*b"flag"), ValueRef::Boolean(true)))
+            }
+        }
+        let transform = [1.0, -0.0, f64::INFINITY, f64::NEG_INFINITY, f64::from_bits(0x7ff8_1234_5678_9abc), -3.0];
+        for (text, warp) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut out = vec![0xa5];
+            append_type_layer_data_with_zero_bounds(&mut out, &transform, &View(text), &View(warp));
+            let mut expected = vec![
+                0xa5, 0, 1, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x7f, 0xf0, 0, 0, 0, 0, 0, 0, 0xff, 0xf0, 0, 0, 0, 0, 0, 0,
+                0x7f, 0xf8, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xc0, 8, 0, 0, 0, 0, 0, 0, 0, 50, 0, 0, 0, 16,
+            ];
+            for (index, populated) in [text, warp].into_iter().enumerate() {
+                if index == 1 {
+                    expected.extend([0, 1, 0, 0, 0, 16]);
+                }
+                expected.extend_from_slice(b"\0\0\0\0\0\0\0\0null\0\0\0");
+                expected.push(u8::from(populated));
+                if populated {
+                    expected.extend_from_slice(b"\0\0\0\0flagbool\x01");
+                }
+            }
+            expected.extend([0; 16]);
+            assert_eq!(out, expected);
+        }
     }
 }
 
