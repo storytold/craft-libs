@@ -248,6 +248,10 @@ Measured on 2026-11-27, on the review commit `ffbb41783`, MSVC x64, Windows:
   runs here, passed 5 of 5 under `cargo test`, and passed 5 of 5 with the stack raised to 2 MiB in a
   probe that was reverted. The fork holds no change to `crates/xlsx`, and upstream's own Workspace
   runs on `next` (`45864885952`, `5d2c8bdcf`) are red as well.
+- The whole workspace on the review commit `ffbb41783`: **18,724 tests, 18,722 passed, 63 skipped,
+  2 failed** (527.7 s). The second failure there is `craft-video av1_decode::oracle_inter::inter_gops`,
+  which generates the same fixture as the draft-mode trial when the fixture directory is cold; it
+  passed 3 of 3 runs once warm, measured straight after.
 - `cargo nextest run -p craft-design-lint`: **28 passed; 0 failed**.
 - `cargo fmt -- --check`: exit 0. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0.
 
