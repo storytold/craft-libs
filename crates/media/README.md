@@ -202,6 +202,15 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | `tmcd` | `Timecode(TimecodeConfig)`: flags (drop frame), timescale, frame duration, fps, start frame, reel name; `format_frame()` |
 | anything else | `Unknown { fourcc, raw }` |
 
+An encoder's parameter sets give the `avcC` and `hvcC` records directly:
+`AvcConfig::from_parameter_sets(sps, pps, length_size)` and
+`HevcConfig::from_parameter_sets(vps, sps, pps, length_size)` read the profile, level and the other
+fields the record repeats from the SPS, including the High-profile chroma format and bit depths of
+`avcC`, and mark each `hvcC` array complete. `AvcSps::parse` and `HevcSps::parse` return those SPS
+fields, and `HevcSps::picture_size` is the picture size inside the conformance window. A NAL unit of
+the wrong type, an empty one, one longer than 65,535 bytes or a length size other than 1, 2 or 4 is
+an error.
+
 Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `gama` and `btrt` into
 `VideoParams`, and QuickTime's `logs` box into `VideoParams::log_transfer_function`: the CoreMedia log
 transfer-function identifier (`com.apple.rec2020.apple-log` for Apple Log), kept as text whatever
