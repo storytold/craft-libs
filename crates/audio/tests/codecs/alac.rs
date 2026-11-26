@@ -160,7 +160,7 @@ fn ffmpeg_decodes_our_alac_exactly() {
 /// one stream changes its shift from packet to packet.
 #[test]
 fn ffmpeg_decodes_our_quiet_alac_exactly() {
-    let Some(ff) = crate::testkit::ffmpeg_or_skip("alac oracle") else { return };
+    let Some(ff) = crate::integration::codecs::testkit::ffmpeg_or_skip("alac oracle") else { return };
     for (channels, bits) in [(1, 24), (2, 24), (6, 24), (1, 32), (2, 32)] {
         let full = input(channels, bits, 4 * 4096);
         let wav: Vec<Vec<i32>> = full
