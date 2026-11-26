@@ -199,8 +199,9 @@ impl<E: 'static> Component for Node<'_, E> {
             // P3(graph-w3): ge.C18
             self.event = Some(NodeEvent::Wired { from, to, op, detached: None });
         }
-        if let Some(op) = cx.drag_ended::<WireDrag>() {
+        if let Some(end) = cx.drag_ended::<WireDrag>() {
             // P3(graph-w3): ge.C18
+            let op = end.op.unwrap_or(DropOperation::Move);
             self.event = Some(NodeEvent::WireEnded { op, from: PortRef::new(self.id, 0), detached: None, loose: None });
         }
     }

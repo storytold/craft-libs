@@ -366,6 +366,10 @@ pub struct StartScreen<'a> {
     /// The heading of the templates section, in place of the built-in word.
     #[prop(into)]
     templates_title: Option<Label>,
+    /// The heading over the recent files on a [`StartLayout::Greeting`] page, beside the templates' heading; `None`
+    /// shows no heading.
+    #[prop(into)]
+    recent_title: Option<Label>,
     /// The heading over the links on a [`StartLayout::Column`] page.
     #[prop(into)]
     links_title: Option<Label>,
@@ -493,6 +497,7 @@ impl<'a> StartScreen<'a> {
             title: None,
             subtitle: None,
             templates_title: None,
+            recent_title: None,
             links_title: None,
             more_templates: None,
             picture: (PICTURE_WIDE, PICTURE_HIGH),
@@ -725,6 +730,7 @@ impl StartScreen<'_> {
             title,
             subtitle,
             templates_title,
+            recent_title: _, // P3(shell-w13): sh.C6
             links_title,
             more_templates,
             picture,

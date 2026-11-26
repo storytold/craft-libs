@@ -282,6 +282,8 @@ struct ShownMark {
 struct Ended {
     source: Id,
     payload: TypeId,
+    /// The payload of that type the session carried.
+    value: Option<Arc<dyn Any + Send + Sync>>,
     op: DropOperation,
     frame: u64,
 }
@@ -750,7 +752,8 @@ pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperatio
             return false;
         }
         session.taken = true;
-        board.ended = Some(Ended { source: session.source, payload, op, frame });
+        let value = std::iter::once(&session.payload).chain(&session.also).find(|value| (***value).type_id() == payload).cloned();
+        board.ended = Some(Ended { source: session.source, payload, value, op, frame });
         true
     })
 }
@@ -834,6 +837,18 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
             .as_ref()
             .filter(|ended| ended.source == source && ended.payload == TypeId::of::<P>() && ended.frame + 1 == frame)
             .map(|ended| ended.op)
+    })
+}
+
+/// The payload of the drop of `source`'s payload of type `P` that the previous frame took.
+pub(crate) fn ended_payload<P: Clone + 'static>(ctx: &Context, source: Id) -> Option<P> {
+    let frame = pass::root_frame_nr(ctx);
+    board(ctx, |board| {
+        board
+            .ended
+            .as_ref()
+            .filter(|ended| ended.source == source && ended.payload == TypeId::of::<P>() && ended.frame + 1 == frame)
+            .and_then(|ended| ended.value.as_ref()?.downcast_ref::<P>().cloned())
     })
 }
 

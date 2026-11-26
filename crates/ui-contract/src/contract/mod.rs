@@ -77,7 +77,7 @@ pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, regi
 #[doc(hidden)]
 pub use cx::THUMB;
 pub use cx::{
-    Accessible, Activation, BodyCx, Cx, CxCore, Edit, Focus, ItemCx, ItemOpener, MeasureCx, PartBuilder, PartsCx, Pointer, Styled, WordSetCx,
+    Accessible, Activation, BodyCx, Cx, CxCore, DragEnd, Edit, Focus, ItemCx, ItemOpener, MeasureCx, PartBuilder, PartsCx, Pointer, Styled, WordSetCx,
 };
 pub use entry::{Entry, step_stop, step_stops};
 #[doc(hidden)]

@@ -12,6 +12,18 @@ use std::any::{Any, TypeId};
 use std::ops::Range;
 use std::sync::Arc;
 
+/// How a drag this component started ended, read in the pass the release is reported.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DragEnd<P> {
+    /// What the drop did; `None` when the drag was released with no taker.
+    pub op: Option<DropOperation>,
+    /// Where the pointer was released, in the source's layer space.
+    pub at: Pos2,
+    /// The payload the drag carried.
+    pub payload: P,
+}
+
 /// Pointer state and requests (chapter 8).
 pub trait Pointer {
     /// The result of `part` this pass: idle for a part first registered this frame. A part `parts` did not
@@ -72,9 +84,10 @@ pub trait Pointer {
     /// component beats it wherever that accepts. By default the payload is read without a pointer position; a target
     /// that requires one waits for it so the target at that position can take the drop.
     fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop>;
-    /// The operation of a drop of this component's payload, in the pass after the drop; `None` while dragging, when the
-    /// drag was cancelled and when no target took it.
-    fn drag_ended<P: Send + Sync + 'static>(&self) -> Option<DropOperation>;
+    /// How the drag of this component's payload ended, in the pass the release is reported: the operation (`None` when no
+    /// target took the drop), the release point in this component's layer space and the payload. `None` while dragging
+    /// and when the drag was cancelled.
+    fn drag_ended<P: Clone + Send + Sync + 'static>(&self) -> Option<DragEnd<P>>;
     /// The visible range the scroll part `key` moved to this pass (thumb or end drag, page press, or an AccessKit click
     /// on the track, which pages toward the track's centre).
     fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>>;
@@ -202,8 +215,11 @@ impl Pointer for CxCore<'_> {
         drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
     }
 
-    fn drag_ended<P: Send + Sync + 'static>(&self) -> Option<DropOperation> {
-        drag::ended::<P>(&self.ctx, self.id)
+    fn drag_ended<P: Clone + Send + Sync + 'static>(&self) -> Option<DragEnd<P>> {
+        // P3(graph-w2): q118: the release point and the no-taker case are not recorded yet.
+        let op = drag::ended::<P>(&self.ctx, self.id)?;
+        let payload = drag::ended_payload::<P>(&self.ctx, self.id)?;
+        Some(DragEnd { op: Some(op), at: Pos2::ZERO, payload })
     }
 
     fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>> {
@@ -308,7 +324,7 @@ impl<C: Component> Pointer for Cx<'_, C> {
         self.core.window_drop_target(target)
     }
 
-    fn drag_ended<P: Send + Sync + 'static>(&self) -> Option<DropOperation> {
+    fn drag_ended<P: Clone + Send + Sync + 'static>(&self) -> Option<DragEnd<P>> {
         self.core.drag_ended::<P>()
     }
 

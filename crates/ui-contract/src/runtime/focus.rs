@@ -1024,6 +1024,14 @@ pub(crate) fn commit_now(ctx: &Context) -> Option<Id> {
     with(ctx, |state| state.press.commit_now)
 }
 
+/// Marks the focused text part's draft for commit in this pass: a command fired by a chord, a root close request or a
+/// file drop ends it as `End::Blur` before the app reads the pass's output.
+#[allow(dead_code)] // P3(shell-w3): sh.C10
+pub(crate) fn commit_focused(ctx: &Context) {
+    let _ = ctx;
+    todo!("sh.C10")
+}
+
 /// Whether the component `owner` opened a layer that keeps the focus on it (a dropdown) and the layer is shown: its
 /// list takes Escape before the component does.
 pub(crate) fn holds_anchored_layer(ctx: &Context, owner: Id) -> bool {

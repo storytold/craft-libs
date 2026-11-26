@@ -60,7 +60,6 @@ pub(super) fn record_lead(ctx: &Context, collection: Id, at: Option<usize>) {
 }
 
 /// The position of the lead of `collection` after its last item step, `None` while it has none.
-#[doc(hidden)]
 pub fn lead_position(ctx: &Context, collection: Id) -> Option<usize> {
     store::peek_clone::<LeadFact>(ctx, lead_slot(collection)).and_then(|fact| fact.0)
 }

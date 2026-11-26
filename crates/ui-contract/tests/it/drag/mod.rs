@@ -79,8 +79,9 @@ impl Component for Chip<'_> {
         if matches!(cx.part(GRIP).press.phase, PressPhase::DragStart { .. }) {
             cx.start_drag(Payload(7), self.preview.clone());
         }
-        if let Some(op) = cx.drag_ended::<Payload>() {
-            self.seen.borrow_mut().ended.push(op);
+        if let Some(end) = cx.drag_ended::<Payload>() {
+            // P3(graph-w2): q118
+            self.seen.borrow_mut().ended.push(end.op.unwrap_or(DropOperation::Move));
         }
     }
 

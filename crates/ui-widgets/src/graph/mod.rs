@@ -78,6 +78,9 @@ pub struct NodeGraphStyle {
     /// The side of a backdrop's resize grip.
     #[allow(dead_code)] // P3(graph-w4): ge.C23
     grip_side: f32,
+    /// The ink of a wire that touches a selected node and is not itself selected.
+    #[allow(dead_code)] // P3(graph-w4): ge.C23
+    hot: StyleColor,
 }
 
 /// A graph of nodes at stored positions, joined by wires. `positions` and `kinds` are indexed by `NodeId`.
@@ -281,6 +284,7 @@ impl<E: 'static> Component for NodeGraph<'_, E> {
             grip: rest,
             backdrop_min: Vec2::ZERO,
             grip_side: 0.0,
+            hot: cx.color(color.accent.solid),
         }
     }
 
