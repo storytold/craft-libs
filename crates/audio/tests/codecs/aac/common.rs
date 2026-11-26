@@ -5,13 +5,13 @@ use std::process::Command;
 
 use craft_audio::aac::{Decoder, Encoder, EncoderConfig, EncoderStats, split_adts};
 
-/// ffmpeg (see `crate::testkit::oracle`); `None` after printing `SKIPPED`.
+/// ffmpeg (see `crate::integration::codecs::testkit::oracle`); `None` after printing `SKIPPED`.
 pub fn ffmpeg() -> Option<PathBuf> {
-    crate::testkit::ffmpeg_or_skip("aac oracle")
+    crate::integration::codecs::testkit::ffmpeg_or_skip("aac oracle")
 }
 
 pub fn fixtures() -> PathBuf {
-    crate::testkit::fixtures_dir("aac")
+    crate::integration::codecs::testkit::fixtures_dir("aac")
 }
 
 pub struct Rng(pub u64);

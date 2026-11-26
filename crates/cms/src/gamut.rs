@@ -25,10 +25,14 @@ pub struct GamutCheck {
     source_space: ColorSpace,
     grid: Option<Clut>,
     exact: (Pipeline, Pipeline),
+    /// ΔE76 above which a colour counts as out of gamut. [`DEFAULT_THRESHOLD`] is a usual choice.
     pub threshold: f32,
 }
 
 impl GamutCheck {
+    /// Builds the check for colours in `src` proofed on `proof`. `threshold` is in ΔE76.
+    ///
+    /// Fails when either profile cannot be linked to Lab.
     pub fn new(src: &Profile, proof: &Profile, threshold: f32) -> Result<GamutCheck, CmsError> {
         let lab = crate::Builtin::LabD50.profile();
         let direct = Pipeline::new(src.channels(), link_stages(src, lab, Intent::RelativeColorimetric, false)?)?;
@@ -53,6 +57,7 @@ impl GamutCheck {
         Ok(GamutCheck { inputs: n, source_space: src.color_space, grid, exact: (direct, via), threshold })
     }
 
+    /// Number of channels of the source profile; the length every colour passed to this check needs.
     pub fn inputs(&self) -> usize {
         self.inputs
     }
@@ -79,6 +84,7 @@ impl GamutCheck {
         Ok(o[0])
     }
 
+    /// `true` when [`delta_e`](Self::delta_e) is above [`threshold`](Self::threshold).
     pub fn out_of_gamut(&self, px: &[f32]) -> Result<bool, CmsError> {
         Ok(self.delta_e(px)? > self.threshold)
     }
