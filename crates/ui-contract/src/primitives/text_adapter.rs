@@ -98,10 +98,16 @@ pub(crate) fn text_id(id: Id, key: PartKey) -> Id {
     crate::runtime::memory::sub(id, ("text", key))
 }
 
-/// The keys the text part keeps, from its options.
-pub(crate) fn keys_of(base: KeyUse, options: &TextOptions) -> KeyUse {
-    // A part whose Tab inserts, rewrites or reports keeps Tab, so the focus service never moves focus on it.
-    let keys = if options.tab != TabKey::Moves {
+/// The keys the text part keeps, from its options and whether it holds a draft (`drafting`).
+pub(crate) fn keys_of(base: KeyUse, options: &TextOptions, drafting: bool) -> KeyUse {
+    // A part whose Tab inserts or reports keeps Tab, so the focus service never moves focus on it. A part whose Tab
+    // rewrites keeps it only while it holds a draft to rewrite; with nothing typed, Tab moves focus on.
+    let keeps_tab = match options.tab {
+        TabKey::Moves => false,
+        TabKey::Rewrites => drafting,
+        TabKey::Inserts | TabKey::Reports => true,
+    };
+    let keys = if keeps_tab {
         base.with_keep(KeepKeys::Tab)
     } else if options.multiline() {
         base.with_keep(KeepKeys::BlockArrows)
@@ -542,7 +548,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let mut tab = None;
     if input.focused && state.preedit.is_none() {
         match input.options.tab {
-            TabKey::Rewrites if !input.read_only => {
+            TabKey::Rewrites if !input.read_only && state.draft.is_some() => {
                 if egui_input::take_tab(ctx).is_some() {
                     state.end = Some(End::Rewrite { refuses: true });
                 }
