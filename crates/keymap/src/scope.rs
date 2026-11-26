@@ -29,10 +29,12 @@ impl Scope {
         Scope(APP.to_string())
     }
 
+    /// Whether this is the application scope.
     pub fn is_app(&self) -> bool {
         self.0 == APP
     }
 
+    /// The scope name.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -51,10 +53,41 @@ impl<'de> Deserialize<'de> for Scope {
     }
 }
 
+/// A scope named at compile time: the scope of a command set and of a container instance that receives its
+/// commands. [`CommandScope::APP`] is the application scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CommandScope(&'static str);
+
+impl CommandScope {
+    /// The application scope.
+    pub const APP: CommandScope = CommandScope(APP);
+
+    /// The scope named `name`; [`CommandScope::scope`] is `None` for a name [`Scope::new`] refuses.
+    pub const fn new(name: &'static str) -> CommandScope {
+        CommandScope(name)
+    }
+
+    /// The scope name.
+    pub const fn name(self) -> &'static str {
+        self.0
+    }
+
+    /// Whether this is the application scope.
+    pub fn is_app(self) -> bool {
+        self.0 == APP
+    }
+
+    /// The matching [`Scope`], `None` when the name is not a valid scope name.
+    pub fn scope(self) -> Option<Scope> {
+        Scope::new(self.0)
+    }
+}
+
 /// What kind of scope a name is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ScopeKind {
+    /// Works whatever has the keyboard.
     Application,
     /// Works while the panel has the keyboard. Names that are not registered count as panels.
     Panel,
@@ -81,8 +114,11 @@ impl Default for Scopes {
 /// being typed in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Active<'a> {
+    /// The focused panel, if any.
     pub panel: Option<&'a str>,
+    /// The active contexts.
     pub contexts: &'a [&'a str],
+    /// Whether a text field is being typed in.
     pub typing: bool,
 }
 
@@ -90,12 +126,14 @@ impl<'a> Active<'a> {
     /// No panel focused, no context, not typing.
     pub const NONE: Active<'static> = Active { panel: None, contexts: &[], typing: false };
 
+    /// Only `panel` focused: no context, not typing.
     pub const fn panel(panel: &'a str) -> Active<'a> {
         Active { panel: Some(panel), contexts: &[], typing: false }
     }
 }
 
 impl Scopes {
+    /// An empty registry; panel fallthrough is on.
     pub fn new() -> Scopes {
         Scopes::default()
     }
@@ -108,6 +146,7 @@ impl Scopes {
         self
     }
 
+    /// Registers a context.
     pub fn with_context(mut self, name: &str) -> Scopes {
         if !self.contexts.iter().any(|c| c == name) {
             self.contexts.push(name.to_string());
@@ -131,14 +170,17 @@ impl Scopes {
         self
     }
 
+    /// The registered panels.
     pub fn panels(&self) -> &[String] {
         &self.panels
     }
 
+    /// The registered contexts.
     pub fn contexts(&self) -> &[String] {
         &self.contexts
     }
 
+    /// Whether panel fallthrough is on: see [`Scopes::with_panel_fallthrough`].
     pub fn panel_fallthrough(&self) -> bool {
         self.panel_fallthrough
     }
@@ -152,6 +194,7 @@ impl Scopes {
             || self.shares.iter().any(|(a, b)| a == name || b == name)
     }
 
+    /// The kind of `scope`: application, a registered context, else a panel.
     pub fn kind(&self, scope: &Scope) -> ScopeKind {
         self.kind_of(scope.as_str())
     }
@@ -184,6 +227,24 @@ impl Scopes {
                 Some(p) if p == name => Some(1),
                 Some(p) if self.shares(p, name) => Some(2),
                 _ => self.panel_fallthrough.then_some(4),
+            },
+        }
+    }
+
+    /// [`rank`](Self::rank) for a focus inside nested panels: `outer` lists the panels around the focused one,
+    /// which claim a chord after it and before the panels that share with it. An active context 0, the
+    /// focused panel 1, an enclosing panel 2, a panel sharing with the focused one 3, the application 4,
+    /// any other panel 5 with fallthrough on.
+    pub fn rank_nested(&self, scope: &Scope, active: &Active, outer: &[&str]) -> Option<u8> {
+        let name = scope.as_str();
+        match self.kind_of(name) {
+            ScopeKind::Context => active.contexts.contains(&name).then_some(0),
+            ScopeKind::Application => Some(4),
+            ScopeKind::Panel => match active.panel {
+                Some(p) if p == name => Some(1),
+                _ if outer.contains(&name) => Some(2),
+                Some(p) if self.shares(p, name) => Some(3),
+                _ => self.panel_fallthrough.then_some(5),
             },
         }
     }
