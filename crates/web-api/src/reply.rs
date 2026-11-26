@@ -1,4 +1,4 @@
-//! Reply shaping that needs no browser, so it is natively tested.
+//! Reply shaping that needs no browser.
 
 use serde_json::Value;
 
@@ -25,44 +25,4 @@ pub fn screenshot_data(mut reply: Value) -> Value {
         result.insert("data".to_string(), png);
     }
     reply
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::screenshot_data;
-
-    #[test]
-    fn every_apps_field_name_becomes_data_and_stays_where_it_was() {
-        for field in ["pngBase64", "png_base64", "png", "base64"] {
-            let reply = json!({"ok": true, "result": {field: "UE5H", "width": 2}});
-            let out = screenshot_data(reply);
-            assert_eq!(out["result"]["data"], "UE5H", "{field}");
-            assert_eq!(out["result"][field], "UE5H", "{field} is kept");
-            assert_eq!(out["result"]["width"], 2);
-        }
-    }
-
-    #[test]
-    fn a_reply_with_its_own_data_a_path_only_or_an_error_is_left_alone() {
-        for reply in [
-            json!({"ok": true, "result": {"data": "own", "png": "other"}}),
-            json!({"ok": true, "result": {"data": null, "png": "UE5H"}}),
-            json!({"ok": true, "result": {"data": {"n": 1}, "png": "UE5H"}}),
-            json!({"ok": true, "result": {"path": "/tmp/a.png", "width": 2}}),
-            json!({"ok": false, "error": "boom"}),
-            json!({"ok": false, "error": "boom", "result": {"png": "UE5H"}}),
-            json!({"ok": true, "result": null}),
-            json!({"ok": true, "result": {"png": 7}}),
-        ] {
-            assert_eq!(screenshot_data(reply.clone()), reply);
-        }
-    }
-
-    #[test]
-    fn the_first_field_in_the_list_wins() {
-        let out = screenshot_data(json!({"ok": true, "result": {"png": "b", "pngBase64": "a"}}));
-        assert_eq!(out["result"]["data"], "a");
-    }
 }

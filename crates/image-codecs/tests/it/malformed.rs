@@ -6,7 +6,7 @@ use craft_image_codecs::*;
 use proptest::prelude::*;
 
 fn tight() -> DecodeOptions {
-    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 22, max_alloc: 64 << 20 }, ..Default::default() }
+    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 21, max_alloc: 16 << 20 }, ..Default::default() }
 }
 
 fn samples() -> Vec<(Format, Vec<u8>)> {
@@ -99,9 +99,12 @@ fn byte_overwrites_in_header_never_panic() {
     let step = craft_media_testkit::hostile::divisor();
     for (k, (f, bytes)) in samples().into_iter().enumerate() {
         for i in (0..bytes.len().min(64)).filter(|i| (i + k) % step == 0) {
-            for v in [0x00, 0x7F, 0xFF] {
+            // nightly writes every value to each byte; the gate one per byte, rotating, so the sampled bytes together see all
+            let values = [0x00, 0x7F, 0xFF];
+            let one = [values[(i / step) % 3]];
+            for v in if step == 1 { &values[..] } else { &one[..] } {
                 let mut b = bytes.clone();
-                b[i] = v;
+                b[i] = *v;
                 no_panic(f, &b);
             }
         }
