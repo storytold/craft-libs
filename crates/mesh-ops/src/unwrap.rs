@@ -180,9 +180,7 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
     let pos = |v: usize| mesh.positions.get(v).copied().unwrap_or_default();
     let wid = |v: usize| weld.get(v).copied().unwrap_or(u32::MAX);
 
-    // Face normals (None for degenerate faces) and materials. The cross products are taken in
-    // `f64` from the positions as given, where they neither overflow nor round to zero, so a
-    // small face far from the origin keeps its plane.
+    // Face normals (None for degenerate faces) and materials.
     let mut normal: Vec<Option<Vec3>> = Vec::with_capacity(n);
     let mut area = Vec::with_capacity(n);
     for t in 0..n {
