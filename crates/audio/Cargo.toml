@@ -44,6 +44,8 @@ aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
 aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
+# SMPTE ST 302M (AES3 audio in MPEG-2 transport streams): packet decoder and encoder.
+s302m = []
 # ADPCM (`adpcm`): IMA WAV, Microsoft, Yamaha and Flash (SWF) decoders and encoders.
 adpcm = ["craft-media/bitstream"]
 # QOA (Quite OK Audio) files: decoder and encoder in the `qoa` module, each on its own.
