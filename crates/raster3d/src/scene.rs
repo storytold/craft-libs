@@ -356,6 +356,18 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
 /// Every light and the environment light either has no shadow (a negative mark) or refers to
 /// maps in [`Scene::shadows`]: six from its mark for a point light or a spot light whose cone
 /// one map does not cover, one otherwise.
+/// Checks that no drawn triangle of the opaque range has a shadows-only material (its first
+/// vertex's material, as the raster reads it; a material with `visible` false is not drawn). Run
+/// after [`validate`].
+pub(crate) fn validate_passes(s: &Scene) -> Result<(), RenderError> {
+    let shadows_only =
+        |t: &[u32]| s.vertices.get(t[0] as usize).and_then(|v| s.materials.get(v.material as usize)).is_some_and(|m| m.shadows_only && m.visible);
+    match s.indices.get(..s.opaque_count as usize).unwrap_or_default().chunks(3).position(shadows_only) {
+        Some(t) => Err(RenderError::ShadowsOnlyOpaque(t)),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn validate_shadow_refs(s: &Scene) -> Result<(), RenderError> {
     let exists = |first: i32, count: usize| first < 0 || (first as usize).checked_add(count).is_some_and(|end| end <= s.shadows.len());
     if let Some(i) = s.lights.iter().position(|l| !exists(l.shadow, if cube_maps(l) { 6 } else { 1 })) {
@@ -375,6 +387,7 @@ fn validate_shadows(s: &Scene) -> Result<(), RenderError> {
             && m.focal.is_finite()
             && m.focal > 0.0
             && finite(&[m.bias, m.radius])
+            && m.radius >= 0.0
             && end.is_some_and(|e| e <= s.shadow_texels.len() as u64);
         if !ok {
             return Err(RenderError::BadShadowMap(i));

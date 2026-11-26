@@ -2,8 +2,8 @@
 //! allocates the target or indexes past an array, and never panics.
 
 use craft_raster3d::{
-    EnvInfo, Image, Light, Limits, Material, RenderError, Scene, Target, TexInfo, Vertex, linear_to_srgb, sample, try_encode, try_env_shadow_map,
-    try_render, try_render_cpu, try_resolve, try_shadow_maps,
+    EnvInfo, Image, Light, Limits, Material, RenderError, Scene, Target, TexInfo, Vertex, linear_to_srgb, sample, srgb_to_linear, try_encode,
+    try_env_shadow_map, try_render, try_render_cpu, try_resolve, try_shadow_maps,
 };
 
 use crate::{bits4, limits, lit_scene, quad_scene};
@@ -57,6 +57,23 @@ fn malformed_index_lists_are_rejected() {
     s.indices[4] = 99;
     assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadIndex { position: 4, index: 99 }));
     assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadIndex { position: 4, index: 99 }));
+}
+
+#[test]
+fn a_shadows_only_triangle_in_the_opaque_range_is_rejected() {
+    // Two opaque quads, triangles 0 and 1 then 2 and 3; the second becomes shadows-only.
+    let mut s = quad_scene(8, 8, &[([1.0, 1.0, 7.0, 7.0], 100.0, WHITE), ([0.0, 0.0, 8.0, 8.0], 50.0, WHITE)]);
+    s.materials[1].shadows_only = true;
+    assert_eq!(s.opaque_count, 12);
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::ShadowsOnlyOpaque(2)));
+    assert!(matches!(try_render_cpu(&s, &Limits::default()), Err(RenderError::ShadowsOnlyOpaque(2))));
+    // A shadows-only material that is not drawn may stay in the opaque range.
+    let mut hidden = s.clone();
+    hidden.materials[1].visible = false;
+    assert!(try_render(&hidden, &Limits::default()).is_ok());
+    // In the transparent range the same triangles draw.
+    s.opaque_count = 6;
+    assert!(try_render(&s, &Limits::default()).is_ok());
 }
 
 #[test]
@@ -504,6 +521,47 @@ fn masked_casters_shadow_where_the_material_alpha_passes_the_cutoff() {
 }
 
 #[test]
+fn a_textured_blended_caster_multiplies_its_base_alpha_by_the_opacity_first() {
+    // Texel alpha 9586981 / 2^24 times (0.875 × (1 − 2^-24)) rounds to 0.5 in f32, and casts;
+    // (texel alpha × 0.875) × (1 − 2^-24) rounds to 0.49999997.
+    let covered = |opacity: f32| {
+        let mut s = quad_scene(16, 16, &[([0.0, 0.0, 8.0, 8.0], 100.0, [1.0, 1.0, 1.0, 0.875])]);
+        alpha_textures(&mut s, &[9_586_981.0 / 16_777_216.0]);
+        (s.materials[0].casts_shadows, s.materials[0].tex_base, s.materials[0].opacity) = (true, 0, opacity);
+        s.lights = vec![shadow_light(0)];
+        try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+        s.shadow_texels.iter().filter(|t| t.is_finite()).count()
+    };
+    let full = covered(1.0);
+    assert!(full > 0);
+    assert_eq!(covered(1.0 - 1.0 / 16_777_216.0), full);
+}
+
+#[test]
+fn a_caster_texture_coordinate_that_overflows_f32_at_a_spot_map_depth_is_wrapped() {
+    // A masked caster 1/64 in front of a spot light, with a repeated texture of three texels whose
+    // alpha is 0, 1, 0. U = 0 samples between the end texels, which fail the cutoff, and so does
+    // U = f32::MAX, a whole number of periods away; U × 64 overflows f32.
+    let covered = |u: f32, alphas: [f32; 3]| {
+        let mut s = quad_scene(8, 8, &[]);
+        s.materials.push(Material { casts_shadows: true, alpha_mode: 1, tex_base: 0, ..Material::default() });
+        s.texels = alphas.map(|a| [1.0, 1.0, 1.0, a]).to_vec();
+        s.textures = vec![TexInfo { offset: 0, width: 3, height: 1, wrap_u: 0, wrap_v: 0 }];
+        let z = 1.0 / 64.0;
+        for p in [[-0.002, -0.002, z], [0.002, -0.002, z], [0.0, 0.002, z]] {
+            s.vertices.push(Vertex { pos: p, normal: [0.0, 0.0, -1.0], uv: [u, 0.5], tangent: [1.0, 0.0, 0.0, 1.0], material: 0 });
+        }
+        (s.indices, s.opaque_count) = (vec![0, 1, 2], 3);
+        s.lights = vec![spot([0.0; 3], [0.0, 0.0, 1.0], 0.95, 0.85)];
+        try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+        s.shadow_texels.iter().filter(|t| t.is_finite()).count()
+    };
+    assert!(covered(f32::MAX, [1.0; 3]) > 0, "the caster covers texels of the map");
+    assert_eq!(covered(0.0, [0.0, 1.0, 0.0]), 0);
+    assert_eq!(covered(f32::MAX, [0.0, 1.0, 0.0]), 0);
+}
+
+#[test]
 fn a_caster_whose_spot_map_corners_overflow_f32_is_projected_in_f64() {
     // A spot light at the origin along +z. The first corner's 1e37 times the map's focal length
     // overflows f32; divided by its depth of 1e38 it lies a few dozen texels from the center.
@@ -562,6 +620,11 @@ fn supplied_shadow_maps_are_checked() {
     let mut bad = s.clone();
     bad.shadows[0].focal = 0.0;
     assert_eq!(try_render(&bad, &Limits::default()), Err(RenderError::BadShadowMap(0)));
+    let mut bad = s.clone();
+    bad.shadows[0].radius = -1.0;
+    assert_eq!(try_render(&bad, &Limits::default()), Err(RenderError::BadShadowMap(0)));
+    bad.shadows[0].radius = 0.0;
+    assert!(try_render(&bad, &Limits::default()).is_ok(), "a radius of 0 is valid");
     let mut bad = s;
     bad.shadow_texels[5] = f32::NAN;
     assert_eq!(try_render(&bad, &Limits::default()), Err(RenderError::BadShadowTexel(5)));
@@ -693,8 +756,6 @@ fn encode_rejects_pixels_it_cannot_encode() {
         [f32::NAN, 0.5, 0.5, 0.5],
         [0.5, f32::NEG_INFINITY, 0.5, 0.5],
         [3e38, 0.5, 0.5, 1e-5],
-        // Finite before and after the division; the curve's linear segment overflows.
-        [-1e38, 0.0, 0.0, 1.0],
     ]
     .into_iter()
     .enumerate()
@@ -723,6 +784,26 @@ fn encode_follows_the_srgb_curve_on_unpremultiplied_color() {
     assert_eq!(img.data[1], [0.0; 4]);
     assert_eq!(img.data[2], [linear_to_srgb(0.2), linear_to_srgb(0.5), linear_to_srgb(1.0), 1.0]);
     assert_eq!(img.data[3], [1e-7; 4], "a pixel with alpha at or under 1e-6 is left as it is");
+}
+
+#[test]
+fn encoding_mirrors_the_srgb_curve_for_negative_color() {
+    // The segment is chosen by magnitude and the sign is kept: red −0.25 encodes to about −0.537
+    // (on the linear segment it would be −3.23), −0.001 stays on the linear segment, and the
+    // finite extremes encode to finite values.
+    let curve = |c: f64| if c.abs() <= 0.0031308 { 12.92 * c } else { (1.055 * c.abs().powf(1.0 / 2.4) - 0.055).copysign(c) };
+    let mut img = Image { width: 2, height: 1, data: vec![[-0.25, -0.001, 0.25, 1.0], [-f32::MAX, f32::MAX, -1e38, 1.0]] };
+    try_encode(&mut img).unwrap();
+    for (c, linear) in [-0.25f64, -0.001, 0.25].into_iter().enumerate() {
+        assert!((f64::from(img.data[0][c]) - curve(linear)).abs() < 1e-6, "channel {c}: {}", img.data[0][c]);
+    }
+    assert!((img.data[0][0] + 0.537).abs() < 1e-3, "{}", img.data[0][0]);
+    assert_eq!(img.data[0][0], -img.data[0][2]);
+    assert!(img.data[1].iter().all(|c| c.is_finite()), "{:?}", img.data[1]);
+    assert_eq!(img.data[1][0], -img.data[1][1]);
+    // Decoding takes a negative value back the same way.
+    assert_eq!(srgb_to_linear(-linear_to_srgb(0.25)), -srgb_to_linear(linear_to_srgb(0.25)));
+    assert!((srgb_to_linear(-0.5) + 0.214).abs() < 1e-3, "{}", srgb_to_linear(-0.5));
 }
 
 #[test]
@@ -1011,6 +1092,35 @@ fn shadow_map_work_stops_counting_once_past_the_limit() {
 }
 
 #[test]
+fn shadow_map_work_does_not_count_the_boxes_of_casters_that_cast_nothing() {
+    // One large quad in a parallel light's map: its two triangles' boxes hold thousands of texels.
+    // As an untextured masked caster with alpha 0 under a cutoff of 0.5, or an opaque-mode caster
+    // at an opacity of 0.4, it casts nothing, and the work is one test per caster and map.
+    let fits = |f: &dyn Fn(&mut Material)| {
+        let mut s = quad_scene(16, 16, &[([0.0, 0.0, 16.0, 16.0], 100.0, WHITE)]);
+        alpha_textures(&mut s, &[1.0]);
+        s.materials[0].casts_shadows = true;
+        f(&mut s.materials[0]);
+        s.lights = vec![shadow_light(0)];
+        try_shadow_maps(&mut s, true, &limits(|l| l.max_work = 2))
+    };
+    assert!(matches!(fits(&|_| {}), Err(RenderError::TooMuchWork { needed, .. }) if needed > 1_000));
+    assert_eq!(fits(&|m| (m.alpha_mode, m.base[3]) = (1, 0.0)), Ok(()));
+    assert_eq!(fits(&|m| m.opacity = 0.4), Ok(()));
+    // With a base texture: a blended caster at an opacity of 0, and a masked caster with base
+    // alpha 0 under a cutoff of 0.5. A masked caster under a cutoff of 0 still casts.
+    let textured = |f: &dyn Fn(&mut Material)| {
+        fits(&|m| {
+            m.tex_base = 0;
+            f(m);
+        })
+    };
+    assert_eq!(textured(&|m| (m.alpha_mode, m.opacity) = (2, 0.0)), Ok(()));
+    assert_eq!(textured(&|m| (m.alpha_mode, m.base[3]) = (1, 0.0)), Ok(()));
+    assert!(matches!(textured(&|m| (m.alpha_mode, m.base[3], m.alpha_cutoff) = (1, 0.0, 0.0)), Err(RenderError::TooMuchWork { .. })));
+}
+
+#[test]
 fn spot_map_near_plane_crossings_next_to_a_corner_stay_on_the_plane() {
     // A spot light at the origin along +z (light space is world space) and a caster with corner a
     // 1e10 behind the light and to its left: both edges at a cross the near plane, z = 0.001, two
@@ -1208,8 +1318,8 @@ fn a_block_of_more_than_two_to_the_twenty_fourth_subsamples_counts_each_one() {
 
 #[test]
 fn encoding_names_the_first_pixel_that_fails() {
-    // Pixel 0 passes the input checks but its encoding overflows; pixel 1 has a negative alpha.
-    let mut img = Image { width: 2, height: 1, data: vec![[-f32::MAX, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, -1.0]] };
+    // Pixel 0 is finite but its color divided by its alpha overflows; pixel 1 has a negative alpha.
+    let mut img = Image { width: 2, height: 1, data: vec![[3e38, 0.0, 0.0, 1e-5], [0.0, 0.0, 0.0, -1.0]] };
     let before = img.clone();
     assert_eq!(try_encode(&mut img), Err(RenderError::BadPixel(0)));
     assert_eq!(img, before);
