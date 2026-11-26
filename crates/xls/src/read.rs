@@ -345,8 +345,9 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
             0x0031 => g.styles.font(&mut c),
             0x0092 => g.styles.palette(&mut c),
             0x0293 => g.styles.style(&mut c),
-            // MsoDrawingGroup: one buffer of drawing records, cut at MAX_DRAWING.
-            0x00EB => keep_drawing(&mut dgg, &c.rest(), MAX_DRAWING),
+            // MsoDrawingGroup: one buffer of drawing records, cut at MAX_DRAWING. A full buffer skips
+            // the record without copying it.
+            0x00EB if dgg.len() < MAX_DRAWING => keep_drawing(&mut dgg, &c.rest(), MAX_DRAWING),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
@@ -969,7 +970,7 @@ fn object_record(rec: &Record<'_>, c: &mut Cursor<'_, '_>, st: &mut SheetState<'
             }
         }
         // MsoDrawing: the sheet's drawing records, joined and cut at MAX_DRAWING.
-        0x00EC => keep_drawing(&mut st.drawing, &c.rest(), MAX_DRAWING),
+        0x00EC if st.drawing.len() < MAX_DRAWING => keep_drawing(&mut st.drawing, &c.rest(), MAX_DRAWING),
         _ => {}
     }
     Ok(())
