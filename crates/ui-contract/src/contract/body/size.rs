@@ -1,0 +1,374 @@
+//! How big a container is: its sizing, the room its mount offers and the sizes its regions took.
+
+use super::BodyHooks;
+use super::placement::overlay_of;
+use super::regions::{RegionSizes, end_full_height, footer_in_body, footer_in_end};
+use super::scroll::scroll_of;
+use crate::contract::run::ShowAt;
+use crate::contract::{ContainerProps, Mount, PadEdges, PaneEdge, ShellPane, Sizing};
+use crate::runtime::egui::areas;
+use crate::runtime::env::Env;
+use crate::runtime::layout_memory;
+use crate::runtime::memory::sub;
+use crate::style::UiTokens;
+use craft_behavior::layout_memory::measure_tolerance;
+use egui::{Context, Id, Rect, Ui, Vec2};
+use std::sync::Arc;
+
+/// The inputs a body's measuring run measures under. A later pass offering the same takes the body's kept
+/// transcript (`layout_memory::kept_serves`); its real run checks that the content is the same.
+#[derive(Clone, PartialEq)]
+pub(super) struct MeasureKey {
+    props: MeasuredProps,
+    room: Vec2,
+    given: (bool, bool),
+    /// Whether the body is laid out across its room (`wide`): a transcript measured content-sized never serves a
+    /// measure across the same room.
+    wide: bool,
+    width: Option<f32>,
+    /// Whether the body shows, and how much of it an animated collapse shows.
+    shows: (bool, f32),
+    env: EnvFacts,
+    /// Where its parent flow showed the container: as a row of a vertical flow (`label::in_column`), and with a rule
+    /// just before it (a rule above its header is not drawn).
+    flow: (bool, bool),
+}
+
+/// The props a body was measured under, compared on the fields its measure reads.
+#[derive(Clone)]
+struct MeasuredProps(Arc<ContainerProps>);
+
+impl PartialEq for MeasuredProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.measures_like(&other.0)
+    }
+}
+
+/// What a measure reads of its env besides the room: a body's, and a collection's of its items.
+#[derive(Clone, PartialEq)]
+pub(crate) struct EnvFacts {
+    style: crate::style::EnvKey,
+    words: u64,
+    size: craft_theme::ControlSize,
+    enabled: bool,
+    text_direction: crate::runtime::env::Direction,
+    content: (bool, bool),
+    content_column: bool,
+    given_column: bool,
+    unbounded: (bool, bool),
+    row_room: Option<f32>,
+    rank_short: Option<f32>,
+    row_line: Option<crate::runtime::env::RowLine>,
+    offered: Option<f32>,
+    measure: Option<f32>,
+    grid: Option<Id>,
+    egui_cell: bool,
+}
+
+impl EnvFacts {
+    pub(crate) fn of(env: &Env) -> EnvFacts {
+        EnvFacts {
+            style: env.key,
+            words: env.words.generation(),
+            size: env.size,
+            enabled: env.enabled,
+            text_direction: env.text_direction,
+            content: env.content,
+            content_column: env.content_column,
+            given_column: env.given_column,
+            unbounded: env.unbounded,
+            row_room: env.row_room,
+            rank_short: env.rank_short,
+            row_line: env.row_line,
+            offered: env.offered,
+            measure: env.measure,
+            grid: env.grid,
+            egui_cell: env.egui_cell,
+        }
+    }
+}
+
+impl<'b> BodyHooks<'b> {
+    /// The inputs this body's measuring run measures under, once `measured_extent` has its room.
+    pub(super) fn measure_key(&self, env: &Env, width: Option<f32>) -> MeasureKey {
+        MeasureKey {
+            props: MeasuredProps(Arc::clone(&self.props)),
+            room: self.room,
+            given: self.given,
+            wide: self.wide(),
+            width,
+            shows: (self.open, self.presence.t),
+            env: EnvFacts::of(env),
+            flow: (self.in_column, self.after_rule),
+        }
+    }
+
+    /// How the container's size follows its content here: a pane or a rect the host gives is filled; a layer sizes
+    /// from its content until the user sizes it; an inline container follows its props.
+    pub(super) fn sizing(&self, props: &ContainerProps) -> Sizing {
+        match &props.mount {
+            Mount::Pane(pane) if pane.content_extent && matches!(pane.edge, PaneEdge::Start | PaneEdge::End) => Sizing::FillHeight,
+            Mount::Pane(pane) if pane.content_extent => Sizing::FillWidth,
+            Mount::Pane(_) | Mount::Window { .. } => Sizing::Fill,
+            Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow if self.fixed => Sizing::Fill,
+            Mount::Layer(_) | Mount::Viewport { .. } => Sizing::Content,
+            _ => props.sizing,
+        }
+    }
+
+    /// Whether the container fills the width of a content-sized column it sits in: the column holds it at its measured
+    /// width and shows it across the width the column settles on (step 6).
+    pub(super) fn held(&self, props: &ContainerProps, env: &Env) -> bool {
+        env.content_column && matches!(props.mount, Mount::Inline) && !self.sizing(props).content_width()
+    }
+
+    /// The axes the container is given where `env` is its parent's: a rect it is shown at gives both; an inline
+    /// container that fills an axis takes the room only where its parent was given that axis.
+    ///
+    /// A container that fits its content in a bar (`ContainerProps::content_in_bar`) is not given the width there.
+    /// A fill-width container whose body is a row, shown on the line of a row given its height, is given that height
+    /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot). A container that
+    /// fills its height where its parent sizes from its content is capped (`capped`), and `given_room` decides whether
+    /// it is given its room.
+    pub(super) fn given_axes(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> (bool, bool) {
+        let sizing = self.sizing(props);
+        let fills_line = sizing == Sizing::FillWidth && unwrapped_row(props) && env.row_line.is_some();
+        let fits_bar = props.content_in_bar && env.values.get::<crate::contract::InBar>().0;
+        let (x, y) = (!sizing.content_width() && !fits_bar, sizing.fills_height() || fills_line);
+        match (at, &props.mount) {
+            (ShowAt::Rect(_), _) => (true, true),
+            (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),
+            (ShowAt::Flow, _) => (x, y),
+        }
+    }
+
+    /// The height of the line an inline container that fills its height stands on, where `env` is its parent's: the
+    /// line of an unwrapped row that takes its height from its content, once this pass's measuring run of the row
+    /// settled it. The container's room is that height (`mount_room`), and it is given the room (`given_room`): its
+    /// body runs in it, so the children in it that fill share it (a ribbon group as tall as the tallest group, its
+    /// title at its foot). In the row's measuring run there is no settled line, not even where the row shares a line
+    /// with an inline header or an end region, and the container measures its content.
+    pub(super) fn line_height(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> Option<f32> {
+        let inline = matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline));
+        if !(inline && self.sizing(props).fills_height() && env.content.1) {
+            return None;
+        }
+        env.row_line.filter(|line| line.settled).and_then(|line| line.height).filter(|height| height.is_finite() && *height > 0.0)
+    }
+
+    /// Whether a content-sized inline container passes the width its column gives it on to its own body, where `env`
+    /// is its parent's: in a `Stack` body given its width, a child of its body that fills takes that width, and the
+    /// container takes what its content took. A content-sized mount, a row or a grid stops it.
+    pub(super) fn passes_width(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
+        matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props).content_width() && env.given_column
+    }
+
+    /// Whether the height the container is given (`given_axes`) is a fixed extent: a rect it is shown at, a pane's, or
+    /// the row line a fill-width row fills. An inline container that fills takes a share of its parent's room, which
+    /// follows the content.
+    pub(super) fn fixed_height(&self, props: &ContainerProps, at: ShowAt) -> bool {
+        self.given.1 && !(matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props).fills_height())
+    }
+
+    /// Whether the container centres its body's line in the height it is given: its body is a row that does not scroll
+    /// along the height, and that height is a fixed extent (`fixed_height`). Its padding then keeps the members off the
+    /// start and end edges only (`pad_edges`).
+    pub(super) fn centres_line(&self, props: &ContainerProps) -> bool {
+        self.given.1 && self.fixed_height && unwrapped_row(props) && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
+    }
+
+    /// The edges the container's padding tier applies to: `ContainerProps::pad_edges`, or the start and end edges where
+    /// the container centres its line in its height.
+    pub(super) fn pad_edges(&self, props: &ContainerProps) -> PadEdges {
+        if self.centres_line(props) { PadEdges::Inline } else { props.pad_edges }
+    }
+
+    /// The container's padding on each side along each axis.
+    pub(super) fn pads(&self, props: &ContainerProps, tokens: &crate::style::UiTokens) -> Vec2 {
+        super::regions::pad_vec(tokens, props.pad, self.pad_edges(props))
+    }
+
+    /// What the container's frame adds to its regions' size: the padding on each side, and on a layer that keeps
+    /// `band` clear above its header for its top grip (`window::top_band`), the part of the band the padding leaves.
+    pub(super) fn frame_size(&self, props: &ContainerProps, tokens: &crate::style::UiTokens, band: f32) -> Vec2 {
+        let pad = self.pads(props, tokens);
+        2.0 * pad + Vec2::new(0.0, (band - pad.y).max(0.0))
+    }
+
+    /// The rect the regions lie in within `content`: inside the padding, and below `band` at the top.
+    pub(super) fn inner_rect(&self, props: &ContainerProps, tokens: &crate::style::UiTokens, content: Rect, band: f32) -> Rect {
+        let mut inner = content.shrink2(self.pads(props, tokens));
+        inner.min.y = inner.min.y.max(content.min.y + band);
+        inner
+    }
+
+    /// Whether the container's body is laid out across the width it is offered: the container is given the width,
+    /// passes it on, or is held across the width its column settled on.
+    pub(super) fn wide(&self) -> bool {
+        self.given.0 || self.passes || self.across
+    }
+
+    /// Whether the container fills a height its parent sizes from its content, in a room of finite height: it takes
+    /// its content height, at most that room. A body that scrolls along the height keeps to the room by scrolling.
+    pub(super) fn capped(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
+        matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline))
+            && self.sizing(props).fills_height()
+            && env.content.1
+            && self.room.y.is_finite()
+            && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
+    }
+
+    /// Whether a capped container is given its room, so it lays its children out as given the height there and the
+    /// children that fill share it: the room is the settled line of the row it stands on (`line_height`), or its
+    /// content is taller than the room, as this pass's measure found it (the record `content` its measuring run leaves
+    /// then). Otherwise it takes its content height.
+    pub(super) fn given_room(&self, props: &ContainerProps, env: &Env, at: ShowAt, ctx: &Context, id: Id) -> bool {
+        let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+        self.capped(props, env, at)
+            && (self.line_height(props, env, at).is_some()
+                || layout_memory::measured(ctx, sub(id, "content")).is_some_and(|content| content.took.y > self.room.y + tolerance))
+    }
+
+    /// What the regions took together, padding included, from the records a measuring run left in this pass, when they
+    /// serve a run offered `self.room`: on each axis the room equals the recorded one, or the container is not given
+    /// that axis, took less than the recorded room (the room did not bound it) and fits in the room now.
+    pub(super) fn reusable(&self, props: &ContainerProps, ctx: &Context, id: Id, pad: Vec2, tolerance: f32) -> Option<Vec2> {
+        let body = layout_memory::measured(ctx, id)?;
+        let region =
+            |key: &str, has: bool| if has { layout_memory::measured(ctx, sub(id, key)).map_or(Vec2::ZERO, |region| region.took) } else { Vec2::ZERO };
+        let (header, footer, end) =
+            (region("header", props.header.is_some()), region("footer", props.footer.is_some()), region("end", props.end.is_some()));
+        let fits = |now: f32, was: f32, given: bool, took: f32| layout_memory::Measured::serves(now, was, given, took, tolerance);
+        let full = self.regions_size(props, body.took, header, footer, end) + pad;
+        if !(fits(self.room.x, body.room.x, self.wide(), full.x) && fits(self.room.y, body.room.y, self.given.1, full.y)) {
+            return None;
+        }
+        let body = if self.open { body.took } else { Vec2::ZERO };
+        Some(self.regions_size(props, body, header, footer, end) + pad)
+    }
+
+    /// What a header, footer or end region took: what its content allocated.
+    pub(super) fn region_size(&self, ui: &Ui) -> Vec2 {
+        ui.min_rect().size()
+    }
+
+    /// The size the regions take together, from what the body, header, footer and end region took (zero for a region
+    /// the container lacks or that took the whole room). An inline header shares the line; a footer in the end region
+    /// stacks with its content; a full-height end region stands beside the body and the footer.
+    pub(super) fn regions_size(&self, props: &ContainerProps, body: Vec2, header: Vec2, footer: Vec2, end: Vec2) -> Vec2 {
+        let in_end = footer_in_end(props);
+        // A footer the body places is inside the body's size.
+        let footer = if footer_in_body(props) { Vec2::ZERO } else { footer };
+        let end = if in_end { Vec2::new(end.x.max(footer.x), end.y + footer.y) } else { end };
+        let across = if in_end { Vec2::ZERO } else { footer };
+        let gap = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
+        let end_gap = self.end_gap + self.rules.end;
+        let inline = props.header.is_some_and(|header| header.inline);
+        // The line: the body with an inline header before it.
+        let line = if inline { Vec2::new(body.x + gap(header.x, self.region_gap), body.y.max(header.y)) } else { body };
+        let (width, height) = if end_full_height(props) {
+            (line.x.max(across.x) + gap(end.x, end_gap), (line.y + across.y).max(end.y))
+        } else {
+            ((line.x + gap(end.x, end_gap)).max(across.x), line.y.max(end.y) + across.y)
+        };
+        let above = self.rules.above_band();
+        if inline {
+            Vec2::new(width, height + above)
+        } else {
+            Vec2::new(width.max(header.x), above + header.y + self.header_space(header.y) + height)
+        }
+    }
+
+    /// The width the regions ask for in a content-sized container: what they took together in this pass's measuring run.
+    pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
+        self.measured_body.map(|body| {
+            let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
+            self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width)
+        })
+    }
+
+    /// The width the header, body and footer share in a content-sized container: the widest region's, at most the
+    /// room; the whole room before any pass.
+    pub(super) fn shared_width(&self, room: f32, props: &ContainerProps) -> f32 {
+        self.wanted_width(props).map_or(room.max(0.0), |wanted| wanted.min(room.max(0.0)))
+    }
+
+    /// The sizes the regions are placed from before any of them ran in this run: the measuring run's.
+    pub(super) fn measured_sizes(&self) -> RegionSizes {
+        RegionSizes { header: self.measured_header, footer: self.measured_footer, end: self.measured_end }
+    }
+
+    /// The room a content-sized body runs in: what the mount offers, less the padding.
+    pub(super) fn room_size(&self, rect: Rect, inner: Rect) -> Vec2 {
+        self.room - (inner.min - rect.min) * 2.0
+    }
+
+    /// The room the mount offers: a layer's room, unless the host gives it a rect of its own size, else the rect the
+    /// container is shown at, else the room of the flow. `tokens` are the container's own, as its token scope sets them:
+    /// the layer keeps the inset from the screen edge the host places it with.
+    pub(super) fn mount_room(&self, props: &ContainerProps, ui: &Ui, id: Id, at: ShowAt, tokens: &UiTokens) -> Vec2 {
+        match (overlay_of(props), self.fixed) {
+            (Some(overlay), false) => {
+                let env = Env::of(ui);
+                let overlay = &overlay.opened_in(&env);
+                let room = Self::layer_room(ui.ctx(), &env, overlay).size();
+                // An anchored layer's body runs in the room the anchor leaves on the side it takes, as the host
+                // offers it: a body taller than that scrolls instead of covering the anchor.
+                let ctx = ui.ctx();
+                let own = Rect::from_min_max(ui.cursor().min, ui.cursor().min);
+                let rtl = Env::of(ui).direction.is_rtl();
+                match crate::contract::overlay::measuring_room(
+                    ctx,
+                    &env,
+                    id,
+                    overlay,
+                    own,
+                    areas::layer_to_screen(ctx, ui.layer_id()),
+                    tokens.space.pad.regular,
+                    rtl,
+                ) {
+                    Some(side) => side.min(room),
+                    None => room,
+                }
+            }
+            // A pane as large as its content runs in the rect its caller laid out.
+            _ => match (&props.mount, at) {
+                (Mount::Pane(ShellPane { at: Some(rect), content_extent: true, .. }), _) => rect.size(),
+                (_, ShowAt::Rect(rect)) => rect.size(),
+                (_, ShowAt::Flow) => {
+                    let room = crate::layout::flow_room(ui);
+                    // A row that shrinks its children to fit gives a body among them a width: it measures and shows
+                    // in that room. A body that fills a bounded row takes the rest of it instead.
+                    let fills = !self.sizing(props).content_width() && room.x.is_finite();
+                    let cap = match Env::of(ui).shrink {
+                        Some(crate::layout::Shrink::Apply(row)) if !fills => crate::layout::shrink_cap(ui.ctx(), row, id).map(|cap| cap.width),
+                        _ => None,
+                    };
+                    // A body that fills the height of a `Stack` body that scrolls along y takes a share of what the view
+                    // shows (`layout::view_room`): it runs in that room, bounded like a body in a room that does not scroll.
+                    let shares_view = !room.y.is_finite() && self.sizing(props).fills_height() && crate::layout::shares_y(ui);
+                    let y = shares_view.then(|| crate::layout::view_room(ui, craft_behavior::Axis::Y)).flatten().unwrap_or(room.y);
+                    // A body that fills the height of the row line it stands on runs in that line.
+                    let y = self.line_height(props, &Env::of(ui), at).unwrap_or(y);
+                    Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(y))
+                }
+            },
+        }
+    }
+
+    /// The room a layer offers its content: the safe rect (the region of a contained layer), or the share of it the overlay caps its content at.
+    fn layer_room(ctx: &Context, env: &Env, overlay: &crate::contract::Overlay) -> Rect {
+        let bounds = crate::contract::overlay::screen_for(ctx, env, overlay);
+        match overlay.fit {
+            crate::contract::overlay::OverlayFit::ContentCapped(share) => {
+                Rect::from_min_size(bounds.min, Vec2::new(bounds.width() * share.x, bounds.height() * share.y))
+            }
+            _ => bounds,
+        }
+    }
+}
+
+/// Whether the container's body is a `Row` that does not wrap: its children sit on one line.
+pub(super) fn unwrapped_row(props: &ContainerProps) -> bool {
+    matches!(props.layout, crate::layout::BodyLayout::Row { wrap: false, .. })
+}

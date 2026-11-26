@@ -3,7 +3,7 @@ name: Window decorations
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ['crates/window/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/window.yml']
   pull_request:
     paths: ['crates/window/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/window.yml']
@@ -17,11 +17,11 @@ concurrency:
   group: window-${{ github.ref }}
   cancel-in-progress: true
 
-# fmt, clippy and the tests with default and with all features (egui and restore together) run in
-# the Workspace gate on every OS; this runs each feature alone.
+# fmt, clippy and the tests with default and with all features run in the Workspace gate on every
+# OS; this runs the ui feature alone.
 jobs:
   window:
-    name: Window with each feature alone
+    name: Window with ui alone
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -38,7 +38,5 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - run: cargo clippy -p craft-window --all-targets --locked --features egui -- -D warnings
-      - run: cargo test -p craft-window --locked --features egui -- --nocapture
-      - run: cargo clippy -p craft-window --all-targets --locked --features restore -- -D warnings
-      - run: cargo test -p craft-window --locked --features restore -- --nocapture
+      - run: cargo clippy -p craft-window --all-targets --locked --features ui -- -D warnings
+      - run: cargo test -p craft-window --locked --features ui -- --nocapture
