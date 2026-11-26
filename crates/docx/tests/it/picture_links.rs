@@ -629,9 +629,8 @@ fn empty_linked_groups_release_the_last_member_slot() {
 
     // Save a small, nonempty linked group to obtain normalized DrawingML with its relationship.
     // Then remove its drawable and fill the root independently of the VML boundary input.
-    let seed = input(&format!(
-        r#"<v:group style="width:1pt;height:1pt" coordsize="1,1" href="https://example.com/Empty">{before}</v:group>{after}"#,
-    ));
+    let seed =
+        input(&format!(r#"<v:group style="width:1pt;height:1pt" coordsize="1,1" href="https://example.com/Empty">{before}</v:group>{after}"#,));
     let saved = craft_docx::write(&craft_docx::read(&seed).unwrap()).unwrap();
     let mut xml = craft_xml::parse(part(&saved, "word/document.xml").as_bytes()).unwrap();
     let group = xml
