@@ -1233,8 +1233,10 @@ pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
     })
 }
 
-/// The part of `owner` holding a press in this viewport that was open when the pass began: in the pass that ends the
-/// press too, and in none after it.
+/// The part of `owner` holding a press in this viewport, in the pass that ends the press and in none after it.
+///
+/// The press is one that was open when the pass began, so a child still declares its part after an enclosing arena
+/// processed the release.
 pub fn pressed_part(ctx: &Context, owner: Id) -> Option<PartRef> {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.pressed_parts.iter().find_map(|(id, part)| (*id == owner).then_some(*part))

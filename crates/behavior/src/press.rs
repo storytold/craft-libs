@@ -1221,6 +1221,22 @@ mod tests {
         assert!(end.dragging, "the release ends the drag the part saw start");
     }
 
+    /// A jump release past slop on a part that clicks and passes its drag reads the same when a new press shares its
+    /// batch: the release ends the press before the move ever passes the drag on, so it reports no drag, and the new
+    /// press opens from where it went down.
+    #[test]
+    fn a_passed_jump_release_that_gives_way_to_a_new_press_reports_no_drag() {
+        let far = SLOP * 4.0;
+        let mut machine = PressMachine::new();
+        passing_pass(&mut machine, &[press(0.0, 1.0)]);
+        let end = passing_pass(&mut machine, &[up(far), press(far, 1.5)]);
+        assert!(matches!(end.phase, Some(PressPhase::Release { pos, click: false, .. }) if pos == pos2(far, 0.0)), "{:?}", end.phase);
+        assert!(!end.dragging, "no shape was ever told the drag started, so its release claims none");
+        assert_eq!(end.activated, None, "a jump release past slop is no click");
+        assert_eq!(machine.target(), Some(1), "the new press is open");
+        assert!(!machine.dragging(), "and it is no drag");
+    }
+
     /// A jump release past slop on a target that only clicks abandons the click as a move past slop does: the release
     /// is reported with no click and nothing activates.
     #[test]

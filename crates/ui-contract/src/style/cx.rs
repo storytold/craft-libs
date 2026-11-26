@@ -289,8 +289,10 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
-    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
-    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    /// The ink for icons and non-text on a user colour, pushed to the non-text contrast it needs.
+    ///
+    /// The fill picks the higher-contrast of `text.normal` and `text.on_strong`, and that colour is adjusted to the
+    /// non-text minimum: 3.0 in standard contrast, 4.5 in high contrast.
     pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
         let fill = Rgba::from(fill.0);
         let text = &self.tokens.color.text;
