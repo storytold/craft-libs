@@ -7,29 +7,26 @@
 //! [`run`] is the command: the caller passes its workspace root, the Cargo program to run and the
 //! words after `version`.
 //!
-//! The manifest is read with a small TOML scanner that keeps every byte outside the changed strings,
-//! comments and line endings included. The root version may be written in any TOML form
+//! The manifest is read and written with `toml_edit`, which keeps every byte outside the changed
+//! strings, comments and line endings included. The root version may be written in any TOML form
 //! (`[workspace.package]` with `version = "…"`, a dotted key, an inline table), with double or
-//! single quotes. A manifest the scanner cannot read, a duplicate key, a version that is not a
-//! one-line string, or a current version that is not valid returns an error before anything is
-//! written.
+//! single quotes, and keeps its quotes. A manifest that is not valid TOML (a duplicate key
+//! included), a version that is not a one-line string, or a current version that is not valid
+//! returns an error before anything is written.
 
-use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use toml_edit::{DocumentMut, Formatted, Item, Value};
 
 /// The largest root `Cargo.toml` [`run`] reads, in bytes.
 pub const DEFAULT_MAX_MANIFEST_BYTES: u64 = 1 << 20;
 /// The largest `Cargo.lock` [`run`] keeps in memory to put back after a failed `cargo update`, in bytes.
 pub const DEFAULT_MAX_LOCK_BYTES: u64 = 64 << 20;
-/// How deeply arrays and inline tables may nest in the manifest.
-const MAX_DEPTH: usize = 64;
 const USAGE: &str = "usage: cargo xtask version [set X.Y.Z[-pre]]";
-const ROOT_VERSION: [&str; 3] = ["workspace", "package", "version"];
 
 /// Size limits for [`run_with`].
 #[non_exhaustive]
@@ -64,8 +61,7 @@ impl Limits {
 
 /// The `version` of `[workspace.package]`.
 pub fn read(manifest: &str) -> Result<String, String> {
-    let entries = scan(manifest)?;
-    Ok(root_version(&entries)?.text.clone())
+    root_version(&parse(manifest)?)
 }
 
 /// `manifest` with the workspace version set to `new`, and every path dependency in
@@ -74,25 +70,47 @@ pub fn read(manifest: &str) -> Result<String, String> {
 /// every other byte is unchanged.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
-    let entries = scan(manifest)?;
-    let root = root_version(&entries)?;
-    let old = root.text.as_str();
-    validate(old).map_err(|e| format!("the current [workspace.package] version is not valid: {e}"))?;
-    let mut edits = vec![(root, new.to_owned())];
-    edits.extend(path_pins(&entries, old).into_iter().map(|(pin, prefix)| (pin, format!("{prefix}{new}"))));
-    edits.sort_by_key(|(s, _)| s.span.start);
-    let mut out = String::with_capacity(manifest.len() + edits.len() * new.len());
-    let mut at = 0;
-    for (s, text) in edits {
-        out.push_str(slice(manifest, at..s.span.start)?);
-        let q = char::from(s.quote);
-        out.push(q);
-        out.push_str(&text);
-        out.push(q);
-        at = s.span.end;
+    let mut doc = parse(manifest)?;
+    let old = root_version(&doc)?;
+    validate(&old).map_err(|e| format!("the current [workspace.package] version is not valid: {e}"))?;
+    let pins = path_pins(&doc, &old);
+    let root = doc.get_mut("workspace").and_then(|w| w.get_mut("package")).and_then(|p| p.get_mut("version"));
+    set_string(root.ok_or(NO_VERSION)?, new)?;
+    if !pins.is_empty() {
+        let deps = doc.get_mut("workspace").and_then(|w| w.get_mut("dependencies")).and_then(Item::as_table_like_mut);
+        let deps = deps.ok_or("Cargo.toml: [workspace.dependencies] is not a table")?;
+        for (name, prefix) in pins {
+            let pin = deps.get_mut(&name).and_then(Item::as_table_like_mut).and_then(|d| d.get_mut("version"));
+            set_string(pin.ok_or_else(|| format!("Cargo.toml: no version for `{name}`"))?, &format!("{prefix}{new}"))?;
+        }
     }
-    out.push_str(slice(manifest, at..manifest.len())?);
-    Ok(out)
+    with_line_endings(manifest, &doc.to_string())
+}
+
+/// `out` with the line endings of `original`, line by line. `toml_edit` writes every line ending as LF
+/// and ends the last line with one, and the replaced strings are on one line, so `out` has the same
+/// lines as `original`.
+fn with_line_endings(original: &str, out: &str) -> Result<String, String> {
+    let out = if original.ends_with('\n') { out } else { out.strip_suffix('\n').unwrap_or(out) };
+    if !original.contains("\r\n") {
+        return Ok(out.to_owned());
+    }
+    let before: Vec<&str> = original.split_inclusive('\n').collect();
+    let after: Vec<&str> = out.split_inclusive('\n').collect();
+    if before.len() != after.len() {
+        return Err("Cargo.toml: its line endings could not be kept, nothing was written".into());
+    }
+    let mut text = String::with_capacity(out.len() + before.len());
+    for (was, line) in before.into_iter().zip(after) {
+        match line.strip_suffix('\n') {
+            Some(body) if was.ends_with("\r\n") => {
+                text.push_str(body.strip_suffix('\r').unwrap_or(body));
+                text.push_str("\r\n");
+            }
+            _ => text.push_str(line),
+        }
+    }
+    Ok(text)
 }
 
 /// Semver without build metadata: `MAJOR.MINOR.PATCH` plus an optional `-pre.release` tag.
@@ -348,386 +366,65 @@ fn update_lock(root: &Path, cargo_program: &OsStr) -> Result<(), String> {
     update(true).or_else(|_| update(false))
 }
 
-fn slice(s: &str, r: Range<usize>) -> Result<&str, String> {
-    s.get(r).ok_or_else(|| "Cargo.toml: an edit does not fall on a character boundary".to_owned())
+const NO_VERSION: &str = "no `version` in [workspace.package] of the root Cargo.toml";
+
+fn parse(manifest: &str) -> Result<DocumentMut, String> {
+    manifest.parse::<DocumentMut>().map_err(|e| format!("Cargo.toml: {e}"))
 }
 
-/// A one-line string value: the byte range of its quoted token, its text and its quote character.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Str {
-    span: Range<usize>,
-    text: String,
-    quote: u8,
+/// The string value of `item`, when it is one.
+fn as_string(item: &Item) -> Option<&Formatted<String>> {
+    match item.as_value()? {
+        Value::String(s) => Some(s),
+        _ => None,
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Value {
-    Str(Str),
-    /// A multi-line string.
-    LongStr,
-    /// A number, boolean, date, array or inline table.
-    Other,
-}
-
-/// A key of the manifest with its full dotted path (table, dotted key and inline tables).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Entry {
-    path: Vec<String>,
-    value: Value,
+/// Whether `s` is written as a `"""…"""` or `'''…'''` string.
+fn is_multi_line(s: &Formatted<String>) -> bool {
+    let repr = s.display_repr();
+    repr.starts_with("\"\"\"") || repr.starts_with("'''")
 }
 
 /// The `[workspace.package]` version string.
-fn root_version(entries: &[Entry]) -> Result<&Str, String> {
-    let mut found = entries.iter().filter(|e| e.path.iter().map(String::as_str).eq(ROOT_VERSION));
-    let first = found.next().ok_or("no `version` in [workspace.package] of the root Cargo.toml")?;
-    if found.next().is_some() {
-        return Err("[workspace.package] version is set more than once in Cargo.toml".into());
+fn root_version(doc: &DocumentMut) -> Result<String, String> {
+    let item = doc.get("workspace").and_then(|w| w.get("package")).and_then(|p| p.get("version")).ok_or(NO_VERSION)?;
+    let s = as_string(item).ok_or("[workspace.package] version is not a string")?;
+    if is_multi_line(s) {
+        return Err("[workspace.package] version is a multi-line string; write it as `version = \"X.Y.Z\"`".into());
     }
-    match &first.value {
-        Value::Str(s) if s.text.is_empty() => Err("empty [workspace.package] version".into()),
-        Value::Str(s) => Ok(s),
-        Value::LongStr => Err("[workspace.package] version is a multi-line string; write it as `version = \"X.Y.Z\"`".into()),
-        Value::Other => Err("[workspace.package] version is not a string".into()),
+    if s.value().is_empty() {
+        return Err("empty [workspace.package] version".into());
     }
+    Ok(s.value().clone())
 }
 
-/// The `version` strings of path dependencies in `[workspace.dependencies]` that require `old`, each
-/// with the operator in front of the version (`""` or `"="`).
-fn path_pins<'a>(entries: &'a [Entry], old: &str) -> Vec<(&'a Str, String)> {
-    let dep = |e: &'a Entry| match e.path.as_slice() {
-        [w, d, name, key] if w == "workspace" && d == "dependencies" => Some((name.as_str(), key.as_str(), &e.value)),
-        _ => None,
+/// The names of the path dependencies in `[workspace.dependencies]` whose one-line `version` requires
+/// `old`, each with the operator in front of the version (`""` or `"="`).
+fn path_pins(doc: &DocumentMut, old: &str) -> Vec<(String, String)> {
+    let Some(deps) = doc.get("workspace").and_then(|w| w.get("dependencies")).and_then(Item::as_table_like) else {
+        return Vec::new();
     };
-    let with_path: HashSet<&str> = entries.iter().filter_map(dep).filter(|(_, k, _)| *k == "path").map(|(n, _, _)| n).collect();
-    entries
-        .iter()
-        .filter_map(dep)
-        .filter_map(|(name, key, value)| match value {
-            Value::Str(s) if key == "version" => Some((name, s)),
-            _ => None,
+    deps.iter()
+        .filter_map(|(name, dep)| {
+            let dep = dep.as_table_like()?;
+            dep.get("path")?;
+            let version = dep.get("version").and_then(as_string).filter(|v| !is_multi_line(v))?;
+            let prefix = version.value().strip_suffix(old)?;
+            matches!(prefix.trim(), "" | "=").then(|| (name.to_owned(), prefix.to_owned()))
         })
-        .filter_map(|(name, s)| {
-            let prefix = s.text.strip_suffix(old)?;
-            matches!(prefix.trim(), "" | "=").then(|| (name, s, prefix.to_owned()))
-        })
-        .filter(|(name, _, _)| with_path.contains(name))
-        .map(|(_, s, prefix)| (s, prefix))
         .collect()
 }
 
-/// Every key of `manifest` whose value is not inside an array.
-fn scan(manifest: &str) -> Result<Vec<Entry>, String> {
-    let mut s = Scanner { s: manifest, b: manifest.as_bytes(), i: 0, table: Vec::new(), out: Vec::new() };
-    loop {
-        s.skip_blank()?;
-        match s.peek() {
-            None => return Ok(s.out),
-            Some(b'[') => s.header()?,
-            Some(_) => s.key_value()?,
-        }
-        s.end_of_line()?;
-    }
-}
-
-/// A single pass over the manifest that records each key and the byte range of each one-line string.
-struct Scanner<'a> {
-    s: &'a str,
-    b: &'a [u8],
-    i: usize,
-    table: Vec<String>,
-    out: Vec<Entry>,
-}
-
-impl Scanner<'_> {
-    fn peek(&self) -> Option<u8> {
-        self.b.get(self.i).copied()
-    }
-
-    fn at(&self, text: &str) -> bool {
-        self.b.get(self.i..).is_some_and(|rest| rest.starts_with(text.as_bytes()))
-    }
-
-    fn err(&self, what: &str) -> String {
-        let before = self.b.get(..self.i).unwrap_or(self.b);
-        let breaks = before.iter().enumerate().filter(|&(at, &b)| b == b'\n' || (b == b'\r' && before.get(at + 1) != Some(&b'\n'))).count();
-        let line = 1 + breaks;
-        format!("Cargo.toml line {line}: {what}")
-    }
-
-    fn expect(&mut self, c: u8) -> Result<(), String> {
-        if self.peek() == Some(c) {
-            self.i += 1;
-            Ok(())
-        } else {
-            Err(self.err(&format!("expected `{}`", char::from(c))))
-        }
-    }
-
-    fn skip_spaces(&mut self) {
-        while matches!(self.peek(), Some(b' ' | b'\t')) {
-            self.i += 1;
-        }
-    }
-
-    fn skip_comment(&mut self) {
-        if self.peek() == Some(b'#') {
-            while !matches!(self.peek(), None | Some(b'\n' | b'\r')) {
-                self.i += 1;
-            }
-        }
-    }
-
-    /// Skips a line ending: LF, CRLF or a lone CR.
-    fn newline(&mut self) -> bool {
-        match self.peek() {
-            Some(b'\n') => self.i += 1,
-            Some(b'\r') => self.i += if self.b.get(self.i + 1) == Some(&b'\n') { 2 } else { 1 },
-            _ => return false,
-        }
-        true
-    }
-
-    /// Skips spaces, comments and line endings.
-    fn skip_blank(&mut self) -> Result<(), String> {
-        loop {
-            self.skip_spaces();
-            self.skip_comment();
-            if !self.newline() {
-                return Ok(());
-            }
-        }
-    }
-
-    fn end_of_line(&mut self) -> Result<(), String> {
-        self.skip_spaces();
-        self.skip_comment();
-        if self.peek().is_none() || self.newline() { Ok(()) } else { Err(self.err("expected the end of the line")) }
-    }
-
-    /// `[table]` or `[[array.of.tables]]`.
-    fn header(&mut self) -> Result<(), String> {
-        self.i += 1;
-        let array = self.peek() == Some(b'[');
-        if array {
-            self.i += 1;
-        }
-        let mut path = self.key()?;
-        self.expect(b']')?;
-        if array {
-            self.expect(b']')?;
-            path.push("[]".to_owned());
-        }
-        self.table = path;
-        Ok(())
-    }
-
-    fn key_value(&mut self) -> Result<(), String> {
-        let key = self.key()?;
-        self.expect(b'=')?;
-        let mut path = self.table.clone();
-        path.extend(key);
-        self.value(Some(path), 0)
-    }
-
-    /// A dotted key, with the spaces around it.
-    fn key(&mut self) -> Result<Vec<String>, String> {
-        let mut parts = Vec::new();
-        loop {
-            self.skip_spaces();
-            parts.push(self.simple_key()?);
-            self.skip_spaces();
-            if self.peek() != Some(b'.') {
-                return Ok(parts);
-            }
-            self.i += 1;
-        }
-    }
-
-    fn simple_key(&mut self) -> Result<String, String> {
-        match self.peek() {
-            Some(b'"') if !self.at("\"\"\"") => Ok(self.basic()?.text),
-            Some(b'\'') if !self.at("'''") => Ok(self.literal()?.text),
-            _ => {
-                let start = self.i;
-                while self.peek().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
-                    self.i += 1;
-                }
-                if start == self.i {
-                    return Err(self.err("expected a key"));
-                }
-                slice(self.s, start..self.i).map(str::to_owned)
-            }
-        }
-    }
-
-    /// A value; it is recorded under `path` unless `path` is `None` (inside an array).
-    fn value(&mut self, path: Option<Vec<String>>, depth: usize) -> Result<(), String> {
-        if depth > MAX_DEPTH {
-            return Err(self.err("arrays and inline tables nest too deeply"));
-        }
-        self.skip_spaces();
-        let value = match self.peek() {
-            Some(b'"') if self.at("\"\"\"") => self.long_string(b'"').map(|()| Value::LongStr)?,
-            Some(b'\'') if self.at("'''") => self.long_string(b'\'').map(|()| Value::LongStr)?,
-            Some(b'"') => Value::Str(self.basic()?),
-            Some(b'\'') => Value::Str(self.literal()?),
-            Some(b'[') => self.array(depth).map(|()| Value::Other)?,
-            Some(b'{') => self.inline_table(path.as_deref(), depth).map(|()| Value::Other)?,
-            _ => self.scalar().map(|()| Value::Other)?,
-        };
-        if let Some(path) = path {
-            self.out.push(Entry { path, value });
-        }
-        Ok(())
-    }
-
-    /// A number, boolean or date; only its extent matters.
-    fn scalar(&mut self) -> Result<(), String> {
-        let start = self.i;
-        let ends = |b: u8| matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}' | b'#');
-        while self.peek().is_some_and(|b| !ends(b)) {
-            self.i += 1;
-        }
-        // A date and a time may be separated by one space: `1979-05-27 07:32:00Z`.
-        let date = self.i - start == 10 && self.b.get(start + 4) == Some(&b'-');
-        if date && self.peek() == Some(b' ') && self.b.get(self.i + 1).is_some_and(u8::is_ascii_digit) {
-            self.i += 1;
-            while self.peek().is_some_and(|b| !ends(b)) {
-                self.i += 1;
-            }
-        }
-        if start == self.i { Err(self.err("expected a value")) } else { Ok(()) }
-    }
-
-    fn array(&mut self, depth: usize) -> Result<(), String> {
-        self.i += 1;
-        loop {
-            self.skip_blank()?;
-            if self.peek() == Some(b']') {
-                self.i += 1;
-                return Ok(());
-            }
-            self.value(None, depth + 1)?;
-            self.skip_blank()?;
-            match self.peek() {
-                Some(b',') => self.i += 1,
-                Some(b']') => {
-                    self.i += 1;
-                    return Ok(());
-                }
-                _ => return Err(self.err("expected `,` or `]` in an array")),
-            }
-        }
-    }
-
-    /// An inline table; line breaks inside it are accepted.
-    fn inline_table(&mut self, path: Option<&[String]>, depth: usize) -> Result<(), String> {
-        self.i += 1;
-        loop {
-            self.skip_blank()?;
-            if self.peek() == Some(b'}') {
-                self.i += 1;
-                return Ok(());
-            }
-            let key = self.key()?;
-            self.expect(b'=')?;
-            let child = path.map(|p| p.iter().cloned().chain(key).collect());
-            self.value(child, depth + 1)?;
-            self.skip_blank()?;
-            match self.peek() {
-                Some(b',') => self.i += 1,
-                Some(b'}') => {
-                    self.i += 1;
-                    return Ok(());
-                }
-                _ => return Err(self.err("expected `,` or `}` in an inline table")),
-            }
-        }
-    }
-
-    /// A one-line `"…"` string, with its escapes decoded.
-    fn basic(&mut self) -> Result<Str, String> {
-        let start = self.i;
-        self.i += 1;
-        let mut text = String::new();
-        loop {
-            match self.peek() {
-                None | Some(b'\n' | b'\r') => return Err(self.err("unterminated string")),
-                Some(b'"') => break,
-                Some(b'\\') => text.push(self.escape()?),
-                Some(_) => {
-                    let run = self.i;
-                    while self.peek().is_some_and(|b| !matches!(b, b'"' | b'\\' | b'\n' | b'\r')) {
-                        self.i += 1;
-                    }
-                    text.push_str(slice(self.s, run..self.i)?);
-                }
-            }
-        }
-        self.i += 1;
-        Ok(Str { span: start..self.i, text, quote: b'"' })
-    }
-
-    fn escape(&mut self) -> Result<char, String> {
-        self.i += 1;
-        let c = self.peek().ok_or_else(|| self.err("unterminated string"))?;
-        self.i += 1;
-        let digits = match c {
-            b'"' => return Ok('"'),
-            b'\\' => return Ok('\\'),
-            b'b' => return Ok('\u{8}'),
-            b't' => return Ok('\t'),
-            b'n' => return Ok('\n'),
-            b'f' => return Ok('\u{c}'),
-            b'r' => return Ok('\r'),
-            b'e' => return Ok('\u{1b}'),
-            b'x' => 2,
-            b'u' => 4,
-            b'U' => 8,
-            _ => return Err(self.err("unknown escape in a string")),
-        };
-        let hex = self.s.get(self.i..self.i + digits).filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()));
-        let ch = hex.and_then(|h| u32::from_str_radix(h, 16).ok()).and_then(char::from_u32).ok_or_else(|| self.err("invalid unicode escape"))?;
-        self.i += digits;
-        Ok(ch)
-    }
-
-    /// A one-line `'…'` string.
-    fn literal(&mut self) -> Result<Str, String> {
-        let start = self.i;
-        self.i += 1;
-        while self.peek().is_some_and(|b| !matches!(b, b'\'' | b'\n' | b'\r')) {
-            self.i += 1;
-        }
-        if self.peek() != Some(b'\'') {
-            return Err(self.err("unterminated string"));
-        }
-        let text = slice(self.s, start + 1..self.i)?.to_owned();
-        self.i += 1;
-        Ok(Str { span: start..self.i, text, quote: b'\'' })
-    }
-
-    /// A `"""…"""` or `'''…'''` string; only its extent matters.
-    fn long_string(&mut self, q: u8) -> Result<(), String> {
-        self.i += 3;
-        loop {
-            match self.peek() {
-                None => return Err(self.err("unterminated multi-line string")),
-                Some(b'\\') if q == b'"' => self.i += 2,
-                Some(c) if c == q && self.b.get(self.i..self.i + 3) == Some(&[q, q, q][..]) => {
-                    self.i += 3;
-                    // Up to two more quotes belong to the string.
-                    for _ in 0..2 {
-                        if self.peek() == Some(q) {
-                            self.i += 1;
-                        }
-                    }
-                    return Ok(());
-                }
-                Some(_) => self.i += 1,
-            }
-        }
-    }
+/// Sets the string at `item` to `text`, keeping its quote character and the comments and spaces
+/// around it. `text` is a version, with an optional operator in front, so it needs no escapes.
+fn set_string(item: &mut Item, text: &str) -> Result<(), String> {
+    let old = as_string(item).ok_or("Cargo.toml: a version to replace is not a string")?;
+    let quoted = if old.display_repr().starts_with('\'') { format!("'{text}'") } else { format!("\"{text}\"") };
+    let mut value: Value = quoted.parse().map_err(|e| format!("Cargo.toml: {e}"))?;
+    *value.decor_mut() = old.decor().clone();
+    *item = Item::Value(value);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -915,13 +612,18 @@ mod tests {
     }
 
     #[test]
-    fn preserves_mixed_and_cr_line_endings() {
-        let mixed = "[workspace]\r\nmembers = [\r\"a\",\n]\r\n[workspace.package]\rversion = \"0.1.0\"\r\n# end\r";
+    fn preserves_mixed_line_endings_and_rejects_a_lone_cr() {
+        let mixed = "[workspace]\r\nmembers = [\n\"a\",\r\n]\n[workspace.package]\r\nversion = \"0.1.0\"\nnote = \"\"\"\r\nx\n\"\"\"\r\n# end\r\n";
         let out = replace(mixed, "0.2.0").unwrap();
         assert_eq!(out, mixed.replace("0.1.0", "0.2.0"));
+        // A manifest without a final line ending keeps it that way.
+        for unended in [MANIFEST.trim_end().to_owned(), MANIFEST.trim_end().replace('\n', "\r\n")] {
+            assert_eq!(replace(&unended, "0.2.0").unwrap(), unended.replace("0.1.0", "0.2.0"), "{unended:?}");
+        }
+        // TOML, and so Cargo, reads a CR only as part of CRLF.
         let cr = MANIFEST.replace('\n', "\r");
-        assert_eq!(read(&cr).unwrap(), "0.1.0");
-        assert_eq!(replace(&cr, "2.0.0").unwrap(), cr.replace("\"0.1.0\"", "\"2.0.0\""));
+        assert!(read(&cr).is_err());
+        assert!(replace(&cr, "2.0.0").is_err());
     }
 
     #[test]
@@ -936,15 +638,18 @@ mod tests {
     fn rejects_unsupported_and_ambiguous_manifests() {
         let deep = format!("[workspace.package]\nversion = \"0.1.0\"\nx = {}{}\n", "[".repeat(100), "]".repeat(100));
         for (manifest, what) in [
-            ("[workspace.package]\nversion = \"0.1.0\"\n[workspace]\npackage.version = \"0.2.0\"\n", "more than once"),
+            ("[workspace.package]\nversion = \"0.1.0\"\n[workspace]\npackage.version = \"0.2.0\"\n", "duplicate key"),
+            ("[workspace.package]\nversion = \"0.1.0\"\nversion = \"0.2.0\"\n", "duplicate key"),
             ("[workspace.package]\nversion = \"\"\"0.1.0\"\"\"\n", "multi-line"),
+            ("[workspace.package]\nversion = '''0.1.0'''\n", "multi-line"),
             ("[workspace.package]\nversion = 1\n", "not a string"),
             ("[workspace.package]\nversion = \"\"\n", "empty"),
-            ("[workspace.package]\nversion = \"0.1.0\n", "unterminated"),
-            ("[workspace.package]\nversion = \"0.1.0\" extra\n", "end of the line"),
-            ("[workspace.package\nversion = \"0.1.0\"\n", "expected `]`"),
-            ("[workspace.package]\nversion = \"\\q\"\n", "escape"),
-            (deep.as_str(), "nest too deeply"),
+            ("[workspace.package]\nversion = \"0.1.0\n", "Cargo.toml: TOML parse error"),
+            ("[workspace.package]\nversion = \"0.1.0\" extra\n", "Cargo.toml: TOML parse error"),
+            ("[workspace.package\nversion = \"0.1.0\"\n", "Cargo.toml: TOML parse error"),
+            ("[workspace.package]\nversion = \"\\q\"\n", "Cargo.toml: TOML parse error"),
+            (deep.as_str(), "Cargo.toml: TOML parse error"),
+            ("[workspace]\nmembers = []\n", "no `version`"),
         ] {
             let Err(e) = replace(manifest, "1.0.0") else { panic!("accepted {manifest:?}") };
             assert!(e.contains(what), "{manifest:?}: {e}");

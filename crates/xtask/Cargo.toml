@@ -20,11 +20,12 @@ report = ["dep:serde_json", "dep:craft-atomic"]
 stats = ["dep:serde_json"]
 # `cargo xtask version [set X.Y.Z[-pre]]`, with Cargo.toml and Cargo.lock replaced atomically and one
 # `set` at a time per workspace through `lock`.
-version = ["lock", "dep:craft-atomic"]
+version = ["lock", "dep:craft-atomic", "dep:toml_edit"]
 
 [dependencies]
 craft-atomic = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+toml_edit = { version = "0.25", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK and O_NOFOLLOW for lock and owner opens that must not wait on a FIFO or follow a symlink. Constants only.
