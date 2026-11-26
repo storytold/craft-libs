@@ -89,3 +89,29 @@ fn a_delete_before_marked_text_moves_the_caret_it_leaves_behind() {
     fixture.type_text("Z").settle();
     assert_eq!(*text.borrow(), "abZd", "typing then goes in between \"ab\" and \"d\"");
 }
+
+/// A delete after the marked text moves the saved selection's own endpoints with it: one that lay beyond the deleted
+/// characters loses them, so the next edit replaces the characters the selection covered and not one more.
+#[trial]
+fn a_delete_after_marked_text_moves_the_selection_endpoints_beyond_it() {
+    let text = Rc::new(RefCell::new("abcdef".to_owned()));
+    let field = Rc::new(std::cell::Cell::new(egui::Id::NULL));
+    let (held, seen) = (text.clone(), field.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        seen.set(TextField::new("Name", Bind::bound(&mut *held.borrow_mut())).show(ui).response.id);
+    });
+    fixture.settle();
+    let name = fixture.by_label("Name").expect("the field");
+    fixture.click(&name).settle();
+    let widget = craft_ui::testing::text::widget_id(field.get(), craft_behavior::PartKey::new("text"));
+    // The saved selection is "cde" (caret 5, anchor 2), and the input method marks its text at the anchor.
+    let mut state = egui::text_edit::TextEditState::load(fixture.ctx(), widget).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(2), egui::text::CCursor::new(5))));
+    state.store(fixture.ctx(), widget);
+    fixture.frame(vec![Event::Ime(ImeEvent::Preedit { text: "XY".to_owned(), active_range_chars: None })]).settle();
+    // One character is deleted after the marked text: "c" goes, and the caret that lay at 5 belongs at 4.
+    fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 0, after_chars: 1 })]).settle();
+    fixture.frame(vec![Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None })]).settle();
+    fixture.type_text("Z").settle();
+    assert_eq!(*text.borrow(), "abZf", "the caret followed the deletion, so Z replaces only the \"de\" the selection still covers");
+}

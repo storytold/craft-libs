@@ -371,16 +371,29 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
                 if gone_before + gone_after == 0 {
                     continue;
                 }
-                let end = byte_of(text, hi + gone_after);
+                // The deleted characters are `[lo - gone_before, hi + gone_after)` in the text's own indices.
+                let (removed_from, removed_to) = (lo - gone_before, hi + gone_after);
+                let end = byte_of(text, removed_to);
                 text.replace_range(hi_byte..end, "");
-                let start = byte_of(text, lo - gone_before);
+                let start = byte_of(text, removed_from);
                 text.replace_range(start..lo_byte, "");
-                // The marked text, and the selection the text part keeps for it, move with the deletion: a composition
-                // that ends without a commit (Escape, an empty pre-edit) leaves the caret where the marked text was.
+                // Every place in the text after the deletion moves with it: an endpoint before the deleted range stays,
+                // one beyond it loses the characters taken, and one inside it lands where the range began. The marked
+                // text and the selection the text part keeps for it move the same way, so a composition that ends
+                // without a commit (Escape, an empty pre-edit) leaves the caret where the marked text was.
+                let shift = |at: usize| {
+                    if at <= removed_from {
+                        at
+                    } else if at >= removed_to {
+                        at - (removed_to - removed_from)
+                    } else {
+                        removed_from
+                    }
+                };
                 if let Some(preedit) = &mut state.preedit {
-                    preedit.at = preedit.at.saturating_sub(gone_before);
+                    preedit.at = shift(preedit.at);
                 }
-                text_edit::select(ctx, widget, anchor.saturating_sub(gone_before), caret.saturating_sub(gone_before));
+                text_edit::select(ctx, widget, shift(anchor), shift(caret));
                 changed = true;
             }
             _ => {}
