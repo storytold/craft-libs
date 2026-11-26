@@ -13,6 +13,8 @@
 //! - `mpegts` (feature `mpegts`): a clean-room MPEG-2 Systems demuxer (transport streams and
 //!   program streams) and transport stream writer.
 //! - `vmd` (feature `vmd`): a clean-room Sierra VMD (Video and Music Data) demuxer.
+//! - `interleave` (no feature): a bounded interleaver that merges live streams' packets into
+//!   the time order muxers take.
 //! - [`Container`] and [`CodecId`] (no feature): the identifiers the codec crates report a file's
 //!   container and codec with.
 //! - `FileReader` (native): a pooled file `ByteSource` so many clips can be open without holding a
@@ -28,6 +30,7 @@ pub mod bitstream;
 #[cfg(not(target_arch = "wasm32"))]
 mod file;
 mod id;
+pub mod interleave;
 #[cfg(feature = "isobmff")]
 pub mod isobmff;
 #[cfg(feature = "matroska")]
