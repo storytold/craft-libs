@@ -76,6 +76,42 @@ fn the_first_frames_table_and_transparent_entry() {
 }
 
 #[test]
+fn graphic_control_ends_at_plain_text() {
+    let mut bytes = Vec::new();
+    let colors = [0, 0, 0, 255, 0, 0];
+    {
+        let mut encoder = gif::Encoder::new(&mut bytes, 2, 2, &colors).unwrap();
+        let frame = gif::Frame {
+            width: 2,
+            height: 2,
+            delay: 23,
+            transparent: Some(1),
+            dispose: gif::DisposalMethod::Previous,
+            buffer: std::borrow::Cow::Borrowed(&[0; 4]),
+            ..gif::Frame::default()
+        };
+        encoder.write_frame(&frame).unwrap();
+    }
+    let image_start = scan(&bytes, 1).unwrap().frames[0].offset;
+    // A comment does not consume the control that precedes it.
+    let comment = [0x21, 0xfe, 1, b'x', 0];
+    bytes.splice(image_start..image_start, comment);
+    let before = scan(&bytes, 1).unwrap();
+    let first = before.frames[0];
+    assert_eq!((first.delay_cs, first.transparent, first.disposal), (23, Some(1), 3));
+    assert_eq!(palette(&bytes).unwrap().1, Some(1));
+
+    // A 2×2 plain text grid with 1×1 cells and one character consumes it.
+    let text = [0x21, 0x01, 12, 0, 0, 0, 0, 2, 0, 2, 0, 1, 1, 1, 0, 1, b'X', 0];
+    bytes.splice(first.offset..first.offset, text);
+    let after = scan(&bytes, 1).unwrap();
+    assert!(after.complete);
+    let first = after.frames[0];
+    assert_eq!((first.delay_cs, first.transparent, first.disposal), (0, None, 0));
+    assert_eq!(palette(&bytes).unwrap(), (vec![[0, 0, 0], [255, 0, 0]], None));
+}
+
+#[test]
 fn no_table_or_not_a_gif_is_none() {
     assert_eq!(palette(&gif(&[], None, None)), None, "no table at all");
     assert_eq!(palette(b"\x89PNG\r\n\x1a\n"), None);
