@@ -80,9 +80,13 @@ craft_ui::words! {
         description: "actions.editor.description" = "Description";
         shortcut: "actions.editor.shortcut" = "Keyboard shortcut";
         icon: "actions.editor.icon" = "Icon";
+        default_icon: "actions.editor.defaultIcon" = "Default icon";
         color: "actions.editor.color" = "Color";
         steps: "actions.editor.steps" = "Steps";
         include: "actions.editor.include" = "Include in playback: {row}";
+        dialog: "actions.editor.dialog" = "Show dialog during playback: {row}";
+        duplicate_step: "actions.editor.duplicateStep" = "Duplicate step";
+        delete_step: "actions.editor.deleteStep" = "Delete step";
         preview: "actions.editor.preview" = "Play action";
         preview_from: "actions.editor.previewFrom" = "Play from selected step";
         capture: "actions.editor.capture" = "Record";

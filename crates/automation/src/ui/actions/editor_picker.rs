@@ -35,6 +35,11 @@ pub(super) fn show(
     }
     let mut picked = false;
     if state.icons_open {
+        if Button::new(words.default_icon.clone()).enabled(editable).selected(value.action.icon.is_empty()).show(ui).clicks == 1 {
+            value.action.icon.clear();
+            state.icons_open = false;
+            picked = true;
+        }
         let icons = [
             ("ClickAction", words.icon_click.clone()),
             ("ActionsCrop", words.icon_crop.clone()),

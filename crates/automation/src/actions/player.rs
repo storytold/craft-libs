@@ -175,9 +175,21 @@ impl ActionPlayer {
             let failure = StepFailure { step: 0, command: String::new(), message: "no such action".to_owned() };
             return PlaybackReport { failed: Some(failure), ..PlaybackReport::default() };
         };
+        Self::play_snapshot(action, &action.name, from, runner, budget)
+    }
+
+    /// Play an immutable action value without inserting it into a library. The host supplies an
+    /// identity shared by every call and continuation of this occurrence, distinct from other
+    /// occurrences with the same display name. Steps, gates, flags and budgets use the same player
+    /// as [`Self::play`]; a refusal reports the action's display name, not the host's identity.
+    /// The host remains responsible for admitting a draft preview and its recording ownership.
+    pub fn play_snapshot(action: &Action, identity: &str, from: usize, runner: &mut dyn ActionRunner, budget: &mut PlaybackBudget) -> PlaybackReport {
         let mut report = PlaybackReport::default();
-        if let Err(refusal) = budget.enter(&action.name) {
-            report.refused = Some(refusal);
+        if let Err(refusal) = budget.enter(identity) {
+            report.refused = Some(match refusal {
+                PlaybackRefusal::Recursive(_) => PlaybackRefusal::Recursive(action.name.clone()),
+                other => other,
+            });
             return report;
         }
         for (i, step) in action.enabled_steps().filter(|(i, _)| *i >= from) {

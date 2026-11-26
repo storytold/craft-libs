@@ -138,6 +138,12 @@ fn action_editor_keeps_unknown_metadata_until_an_explicit_choice() {
     assert_eq!(shared.borrow().value.action.icon, "ActionsCrop");
     assert_eq!(fixture.tree().focused_key(), Some(node(&fixture, "Icon").node), "choosing a glyph returns real focus to its trigger");
     assert_eq!(shared.borrow().published.icon, "future-icon", "no published action was bound to the editor");
+    press(&mut fixture, "Icon");
+    press(&mut fixture, "Default icon");
+    assert!(shared.borrow().value.action.icon.is_empty());
+    press(&mut fixture, "Icon");
+    press(&mut fixture, "Click");
+    assert_eq!(shared.borrow().value.action.icon, "ClickAction", "default is distinct from the named click glyph");
 }
 
 #[trial]
@@ -174,9 +180,12 @@ fn action_editor_preview_and_capture_requests_use_valid_selected_boundaries() {
     press(&mut fixture, "Play from selected step");
     press(&mut fixture, "Record");
     press(&mut fixture, "Edit step settings");
-    assert_eq!(take(&shared), [Event::Preview { from: 0 }, Event::BeginCapture { at: 1 }, Event::EditStep { step: 0 }]);
+    assert_eq!(take(&shared), [Event::Preview { from: 0 }, Event::BeginCapture { at: 3 }, Event::EditStep { step: 0 }]);
     shared.borrow_mut().activity.recording = true;
     fixture.settle();
+    press(&mut fixture, "Play action");
+    assert_eq!(take(&shared), [Event::Preview { from: 0 }], "preview requests the owned capture snapshot without ending capture");
+    assert!(shared.borrow().activity.recording);
     press(&mut fixture, "Stop recording");
     assert_eq!(take(&shared), [Event::EndCapture]);
     assert!(shared.borrow().activity.recording, "the host acknowledges the end of capture");
@@ -222,6 +231,22 @@ fn action_editor_include_and_expanded_step_reorder_keep_flags_and_metadata() {
     assert_eq!(app.state.selected, Some(1));
     assert!(app.state.expanded.contains(&1));
     assert_eq!(app.value.action.dialogs.iter().copied().collect::<Vec<_>>(), [2]);
+    let before = app.value.clone();
+    drop(app);
+    take(&shared);
+    press(&mut fixture, "Duplicate step");
+    press(&mut fixture, "Delete step");
+    assert_eq!(take(&shared), [Event::DuplicateStep { step: 1 }, Event::DeleteStep { step: 1 }]);
+    assert_eq!(shared.borrow().value, before, "structural requests wait for guarded host acknowledgement");
+    press(&mut fixture, "Show dialog during playback: Run first");
+    let mut expected = before.clone();
+    expected.action.dialogs.insert(1);
+    assert_eq!(shared.borrow().value, expected, "the dialog cell changes only its flag, retaining opaque metadata and steps");
+    shared.borrow_mut().activity.busy = true;
+    fixture.settle();
+    for label in ["Duplicate step", "Delete step", "Show dialog during playback: Run first"] { press(&mut fixture, label); }
+    assert!(take(&shared).is_empty());
+    assert_eq!(shared.borrow().value, expected, "busy controls cannot mutate the flag or request structural edits");
 }
 
 // Identical shared steps may still be different physical records in an app's native codec.
