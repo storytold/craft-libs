@@ -7,7 +7,8 @@ use egui::{Context, Id, Pos2, Rect};
 #[derive(Clone, Debug, Default)]
 pub struct PressJudgement {
     /// The screen rects a press may land in without closing the top menu family, as the last pass left them: the
-    /// family, its anchors and its peers. `None` when the top layer does not absorb outside presses.
+    /// family, its anchors and its peers, without the layer that hosts them. `None` when the top layer does not absorb
+    /// outside presses.
     pub zone: Option<Vec<Rect>>,
     /// The outside press the input hook recorded for this pass, which closes the layers that absorb outside presses.
     pub absorbed: Option<Pos2>,
