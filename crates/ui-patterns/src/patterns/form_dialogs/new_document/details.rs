@@ -5,7 +5,7 @@ use super::presets::{
     BackgroundContents, ColorMode, DocumentOptions, MAX_NAME, MAX_SAVED, Orientation, PIXEL_ASPECTS, RESOLUTION_UNITS, SIZE_UNITS, SQUARE_PIXELS,
 };
 use super::settings::{DetailsCx, DocumentSettings, RasterMemory};
-use super::{BACKGROUND_COLOR_KEY, NewDocumentWords, Read, Session, background_rgb, depth_label, mode_label};
+use super::{BACKGROUND_COLOR_KEY, DocumentTabs, NewDocumentWords, Read, Session, background_rgb, depth_label, mode_label};
 use crate::buttons::{Button, IconButton};
 use crate::choice::{Checkbox, Segmented, Swatch};
 use crate::contract::{Bind, Entry, FieldLayout, Gap, MemoProps, Props as _, Show as _, ShowContainer as _, Sizing, Validity, clicked};
@@ -121,12 +121,16 @@ pub(super) fn show<S: DocumentSettings>(
                 if std::mem::take(&mut session.focus_name) {
                     focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
                 }
-                let title = words.save_preset_title.clone();
-                let save = IconButton::new(IconId::new("square_plus")).label(title.clone()).tooltip(title).id_salt("save-preset").show(ui);
-                if clicked(&save) {
-                    session.naming = Some(proposed_name(read));
-                    session.name_tried = false;
-                    session.focus_preset_name = true;
+                // Saved presets live on the Saved tab, so only the dialog that shows it offers to save one.
+                if read.tabs == DocumentTabs::RecentPresetsSaved {
+                    let title = words.save_preset_title.clone();
+                    let save =
+                        IconButton::new(IconId::new("square_plus")).label(title.clone()).tooltip(title).id_salt("save-preset").show(ui);
+                    if clicked(&save) {
+                        session.naming = Some(proposed_name(read));
+                        session.name_tried = false;
+                        session.focus_preset_name = true;
+                    }
                 }
             });
         });

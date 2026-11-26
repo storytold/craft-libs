@@ -2,7 +2,7 @@
 
 use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, PresetCategory, size_line};
 use super::settings::{CardCx, CardSource, DocumentCard, DocumentSettings, RasterSetup};
-use super::{NewDocumentWords, Read, Session, background_label, depth_label, mode_label};
+use super::{DocumentTabs, NewDocumentWords, PicturePainter, Read, Session, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
 use crate::contract::{Bind, CollectionEvent, MemoProps, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
 use crate::display::{Shade, Text};
@@ -31,27 +31,50 @@ pub(super) enum TabId {
 }
 
 impl TabId {
-    /// The id of the `tab` binding: `"recent"`, the category's id, or `"saved"`.
-    pub(super) fn key<P>(self, categories: &[PresetCategory<P>]) -> String {
-        match self {
-            TabId::Recent => RECENT_KEY.to_owned(),
-            TabId::Saved => SAVED_KEY.to_owned(),
-            TabId::Category(at) => categories.get(at).map_or_else(|| RECENT_KEY.to_owned(), |category| category.id.to_string()),
+    /// The tabs the strip lists, in order: Recent, the categories and Saved for `RecentPresetsSaved`; the categories
+    /// alone for `Presets`, or one tab of every card (`Category(0)`) when there are none.
+    pub(super) fn shown(tabs: DocumentTabs, categories: usize) -> Vec<TabId> {
+        match tabs {
+            DocumentTabs::RecentPresetsSaved => {
+                std::iter::once(TabId::Recent).chain((0..categories).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect()
+            }
+            DocumentTabs::Presets => (0..categories.max(1)).map(TabId::Category).collect(),
         }
     }
 
-    /// The tab a [`key`](Self::key) names; `None` for an id no tab has.
-    pub(super) fn from_key<P>(key: &str, categories: &[PresetCategory<P>]) -> Option<TabId> {
-        match key {
-            RECENT_KEY => Some(TabId::Recent),
-            SAVED_KEY => Some(TabId::Saved),
-            _ => categories.iter().position(|category| category.id == key).map(TabId::Category),
+    /// The tab a dialog of `tabs` opens on: the first one [`shown`](Self::shown) lists.
+    pub(super) fn first(tabs: DocumentTabs) -> TabId {
+        match tabs {
+            DocumentTabs::RecentPresetsSaved => TabId::Recent,
+            DocumentTabs::Presets => TabId::Category(0),
         }
+    }
+
+    /// The id of the `tab` binding: `"recent"`, the category's id, or `"saved"`. A position past the categories is
+    /// Recent's id under `RecentPresetsSaved` and the all-cards tab's under `Presets`.
+    pub(super) fn key<P>(self, tabs: DocumentTabs, categories: &[PresetCategory<P>]) -> String {
+        let missing = match tabs {
+            DocumentTabs::RecentPresetsSaved => RECENT_KEY,
+            DocumentTabs::Presets => ALL_KEY,
+        };
+        match self {
+            TabId::Recent => RECENT_KEY.to_owned(),
+            TabId::Saved => SAVED_KEY.to_owned(),
+            TabId::Category(at) => categories.get(at).map_or_else(|| missing.to_owned(), |category| category.id.to_string()),
+        }
+    }
+
+    /// The tab a [`key`](Self::key) names among those [`shown`](Self::shown); `None` for an id no shown tab has, so
+    /// `"recent"` and `"saved"` name nothing under `Presets`.
+    pub(super) fn from_key<P>(key: &str, tabs: DocumentTabs, categories: &[PresetCategory<P>]) -> Option<TabId> {
+        TabId::shown(tabs, categories.len()).into_iter().find(|tab| tab.key(tabs, categories) == key)
     }
 }
 
 const RECENT_KEY: &str = "recent";
 const SAVED_KEY: &str = "saved";
+/// The id of the one tab a `Presets` dialog without categories lists.
+const ALL_KEY: &str = "all";
 
 /// The card the user picked in this pass.
 pub(super) struct Picked<S> {
@@ -118,8 +141,7 @@ pub(super) fn clipboard_at<S: DocumentSettings>(session: &Session<S>, values: &S
 /// Shows the full-width category strip above the two columns.
 pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read: &Read<'_, S>, left: &mut Left<S>) {
     let words = read.words;
-    let tabs: Vec<TabId> =
-        std::iter::once(TabId::Recent).chain((0..read.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
+    let tabs = TabId::shown(read.tabs, read.categories.len());
     let source = keyed(&tabs, |tab| *tab);
     let strip = TabStrip::new(words.tabs.clone())
         .kind(TabKind::Text)
@@ -186,7 +208,7 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
             .detail_line()
             .rows_stamp(stamp)
             .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index], look));
+            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index], look, read.pictures));
         route(shown.response.events, &cards, left);
     }
 }
@@ -245,7 +267,8 @@ fn tab_title<P>(tab: TabId, categories: &[PresetCategory<P>], words: &NewDocumen
     match tab {
         TabId::Recent => words.recent.clone(),
         TabId::Saved => words.saved.clone(),
-        TabId::Category(at) => categories.get(at).map_or_else(Label::default, |category| match category.id.as_ref() {
+        // Past the categories is the one tab of every card a `Presets` dialog without categories lists.
+        TabId::Category(at) => categories.get(at).map_or_else(|| words.cards.clone(), |category| match category.id.as_ref() {
             "photo" => words.photo.clone(),
             "print" => words.print.clone(),
             "art" => words.art.clone(),
@@ -367,15 +390,22 @@ pub enum PresetCardLook {
     Page,
 }
 
-/// The tile of a card: the page at the card's aspect in `look`, the title and the size line.
-fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook) -> Tile<'static> {
+/// The tile of a card: its square picture when it has one and the dialog paints pictures, else the page at the card's
+/// aspect in `look`; then the title and the size line.
+fn tile_of<'p, S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook, pictures: Option<&'p PicturePainter<'p>>) -> Tile<'p> {
     let page = card.settings.page();
     let tile = Tile::new(card.title.clone()).detail(card.line.clone());
-    let tile = match look {
-        PresetCardLook::Outline => {
-            tile.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page))
+    let tile = match (pictures, &card.picture) {
+        (Some(paint), Some(picture)) => {
+            let picture = picture.clone();
+            tile.thumb(ThumbAspect::new(1, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint(&picture, painter, rect))
         }
-        PresetCardLook::Page => tile.page(page.0, page.1),
+        _ => match look {
+            PresetCardLook::Outline => tile
+                .flat_thumbnail()
+                .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page)),
+            PresetCardLook::Page => tile.page(page.0, page.1),
+        },
     };
     match &card.tooltip {
         Some(tooltip) => tile.tooltip(tooltip.clone()),

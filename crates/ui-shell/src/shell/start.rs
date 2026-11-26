@@ -21,7 +21,7 @@ use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
 use crate::primitives::{
-    CheckerArea, ContentPainterCx, HAlign, IconSpec, Priority, RectSide, Rule, RuleKind, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails,
+    CheckerArea, ContentPainterCx, HAlign, IconSpec, RectSide, Rule, RuleKind, ThumbSource, Thumbnails,
     paint_surround,
 };
 use crate::runtime::commands::{self, CommandRef, FireSource};
@@ -29,7 +29,7 @@ use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label, Overrides, with_env};
 use crate::sections::{HeaderStrength, Section};
 use crate::style::{Corners, DataColor, StyleCx, SurfaceKind, SurroundLook, TypeRole, rgba_color};
-use crate::tile_grid::{CaptionPlace, CardText, GridZoom, Tile, TileGrid};
+use crate::tile_grid::{CaptionPlace, CardText, GridZoom, Tile, TileGrid, TileMark};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Proposal, SelectionChange, keyed};
 use craft_theme::variant::{CustomVariant, Emphasis, RadiusStep, Tone, VariantLook};
 use craft_theme::{PageSizes, Rgba, Tokens, Variant};
@@ -297,9 +297,10 @@ type AppSection<'a> = (Label, RefCell<&'a mut dyn FnMut(&mut Ui)>);
 ///   [`app_section`](StartScreen::app_section) when it gives one, Templates when it gives any, then the host's
 ///   [`StartPlace::AfterSections`] sections, in call order. The page scrolls as a whole, and each grid and list takes
 ///   the height of its rows.
-/// - **Greeting layout.** With `layout(StartLayout::Greeting)` the page shows the `title`, the templates without a
-///   section heading, the `more_templates` link, then the recent files as rows in the order the app gave them, then the
-///   app's own section: no view switch, no sort, no Pinned Folders and no drop card.
+/// - **Greeting layout.** With `layout(StartLayout::Greeting)` the page shows the `title`, the templates (under
+///   `templates_title` when set), the `more_templates` link, then the recent files as rows in the order the app gave
+///   them (under `recent_title` when set), then the app's own section: no view switch, no sort, no Pinned Folders and
+///   no drop card.
 /// - **Recent files.** A grid of cards or a list, by the `view` binding, in the order of the `sort` binding. A click or
 ///   Enter opens a file; arrows move; the context menu (secondary click, the menu key or Shift+F10) and the
 ///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder. A file's
@@ -363,7 +364,8 @@ pub struct StartScreen<'a> {
     /// The line under the title on a [`StartLayout::Column`] page.
     #[prop(into)]
     subtitle: Option<Label>,
-    /// The heading of the templates section, in place of the built-in word.
+    /// The heading of the templates section, in place of the built-in word. A [`StartLayout::Greeting`] page heads its
+    /// templates only when this is set.
     #[prop(into)]
     templates_title: Option<Label>,
     /// The heading over the recent files on a [`StartLayout::Greeting`] page, beside the templates' heading; `None`
@@ -668,13 +670,7 @@ pub(super) fn paint_thumb(
     key: &ThumbKey,
     paper: Option<DataColor>,
 ) {
-    let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
-    let state = thumbnails.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
-    let paint = match paper {
-        Some(paper) => ThumbPaint::default().checker(false).paper(paper),
-        None => ThumbPaint::default(),
-    };
-    if thumbnails.paint(cx, rect, &state, &paint) {
+    if thumbnails.paint_cell(cx, rect, source, key, paper) {
         return;
     }
     if paper.is_none() {
@@ -730,7 +726,7 @@ impl StartScreen<'_> {
             title,
             subtitle,
             templates_title,
-            recent_title: _, // P3(shell-w13): sh.C6
+            recent_title,
             links_title,
             more_templates,
             picture,
@@ -818,7 +814,8 @@ impl StartScreen<'_> {
             }
             host_sections(ui, StartPlace::BeforeRecent);
             if layout == StartLayout::Greeting {
-                greeting_body(&page, ui, title.as_ref(), more_templates.as_ref(), templates, recent, max_recent);
+                let headings = GreetingHeadings { title: title.as_ref(), recent: recent_title.as_ref(), more_templates: more_templates.as_ref() };
+                greeting_body(&page, ui, headings, templates, recent, max_recent);
                 app_section(ui, page_section);
             } else {
                 // With `pinned_first` the pinned folders stand above the recent files, as production's Folders section
@@ -1141,35 +1138,49 @@ fn home_drop(page: &Page<'_>, ui: &mut Ui, hint: &Label, center: f32, wide: bool
     });
 }
 
-/// The greeting page's sections: the title, the templates without a section heading, the more-templates link and the
-/// recent files as rows in the order the app gave them. Like production's File > Home page it shows neither Pinned nor
-/// the drop card, so the `pinned` and `drop_hint` props do not apply to it.
-fn greeting_body(
-    page: &Page<'_>,
-    ui: &mut Ui,
-    title: Option<&Label>,
-    more_templates: Option<&Label>,
-    templates: &[Template],
-    recent: &[RecentFile],
-    max_recent: usize,
-) {
-    if let Some(title) = title {
+/// The texts of a greeting page that the app sets: its title, the heading over the recent rows and the
+/// more-templates link. The templates' heading is the page's `templates_title`.
+struct GreetingHeadings<'p> {
+    title: Option<&'p Label>,
+    recent: Option<&'p Label>,
+    more_templates: Option<&'p Label>,
+}
+
+/// The greeting page's sections: the title, the templates (under `templates_title` when the app sets one), the
+/// more-templates link and the recent files as rows in the order the app gave them (under `recent_title` when set).
+/// Like production's File > Home page it shows neither Pinned nor the drop card, so the `pinned` and `drop_hint` props
+/// do not apply to it.
+fn greeting_body(page: &Page<'_>, ui: &mut Ui, headings: GreetingHeadings<'_>, templates: &[Template], recent: &[RecentFile], max_recent: usize) {
+    if let Some(title) = headings.title {
         Text::new(title.clone()).role(TypeRole::Heading).show(ui);
     }
     if !templates.is_empty() {
-        templates_grid(page, ui, templates);
+        match page.templates_title {
+            Some(heading) => {
+                let _ = page_section(heading.clone()).show(ui, |ui, _| templates_grid(page, ui, templates));
+            }
+            None => templates_grid(page, ui, templates),
+        }
     }
-    if let Some(label) = more_templates
+    if let Some(label) = headings.more_templates
         && clicked(&Link::new(label.clone()).id_salt("more-templates").show(ui))
     {
         page.push(StartAction::MoreTemplates);
     }
-    let mut list = RecentList::new(recent).max_recent(max_recent).now(page.now);
-    if let Some((thumbnails, source)) = page.thumbnails {
-        list = list.thumbnails(thumbnails, source);
-    }
-    for action in list.show(ui).actions {
-        page.push(action);
+    let recent_rows = |ui: &mut Ui| {
+        let mut list = RecentList::new(recent).max_recent(max_recent).now(page.now);
+        if let Some((thumbnails, source)) = page.thumbnails {
+            list = list.thumbnails(thumbnails, source);
+        }
+        for action in list.show(ui).actions {
+            page.push(action);
+        }
+    };
+    match headings.recent {
+        Some(heading) => {
+            let _ = page_section(heading.clone()).show(ui, |ui, _| recent_rows(ui));
+        }
+        None => recent_rows(ui),
     }
 }
 
@@ -1614,7 +1625,7 @@ fn templates_grid(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
     let out = grid.show_items(ui, &source, &mut |id, _| {
         let Some(template) = templates.iter().find(|template| &template.id == id) else { return Tile::new(Label::Empty) };
         let detail = (!template.detail.is_empty()).then(|| template.detail.clone());
-        match template.page {
+        let tile = match template.page {
             Some((width, height)) => {
                 let tile = Tile::new(Label::from(template.name.clone())).page(width, height);
                 match detail {
@@ -1623,6 +1634,12 @@ fn templates_grid(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
                 }
             }
             None => page.tile(&template.name, detail, ThumbKey::Template(template.id.clone())),
+        };
+        // The description is the info mark's tooltip, so it also joins the card's accessible name.
+        if template.description.is_empty() {
+            tile
+        } else {
+            tile.mark(TileMark::new(IconId::new("info"), template.description.clone()))
         }
     });
     let mut lead = None;

@@ -84,9 +84,9 @@ impl Template {
 
     /// This template's card carries `text` as its description: a tooltip and part of its accessible name.
     #[must_use]
-    pub fn description(self, text: impl Into<String>) -> Self {
-        let _ = text;
-        todo!("sh.C6")
+    pub fn description(mut self, text: impl Into<String>) -> Self {
+        self.description = text.into();
+        self
     }
 
     /// This template makes a `width` by `height` page, which its card shows.

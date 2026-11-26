@@ -136,8 +136,14 @@ craft_ui::words! {
     }
 }
 
-/// What the columns read besides the session: the setup, the categories, the remembered lists, the words and the units.
+/// Paints the picture a card names into a rect: what [`NewDocumentDialog::thumbnails`] keeps.
+type PicturePainter<'a> = dyn Fn(&str, &ContentPainterCx<'_>, Rect) + 'a;
+
+/// What the columns read besides the session: the setup, the categories, the remembered lists, the words, the units,
+/// the tabs shown and the card pictures.
 struct Read<'a, S: DocumentSettings> {
+    tabs: DocumentTabs,
+    pictures: Option<&'a PicturePainter<'a>>,
     setup: &'a S::Setup,
     categories: &'a [PresetCategory<S::Preset>],
     recents: &'a [S],
@@ -163,9 +169,12 @@ struct Bound<'a, S: DocumentSettings> {
     actions: &'a RefCell<Vec<String>>,
 }
 
-/// What the body reads besides its form: the setup, the categories, the recent documents, the words and the units.
+/// What the body reads besides its form: the setup, the categories, the recent documents, the words, the units, the
+/// tabs shown and the card pictures.
 struct Shared<'a, S: DocumentSettings> {
     bound: Bound<'a, S>,
+    tabs: DocumentTabs,
+    pictures: Option<&'a PicturePainter<'a>>,
     setup: &'a S::Setup,
     categories: &'a [PresetCategory<S::Preset>],
     recents: &'a [S],
@@ -344,9 +353,13 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
     if form.first() && !shared.host_opened {
         values.open(setup, shared.untitled);
     }
+    // A fresh session holds Recent, which a `Presets` dialog does not show.
+    if form.first() && !TabId::shown(shared.tabs, shared.categories.len()).contains(&session.tab) {
+        session.tab = TabId::first(shared.tabs);
+    }
     let mut answers = form.take_answers();
     if let Some(cell) = bound.tab
-        && let Some(tab) = TabId::from_key(cell.borrow().as_str(), shared.categories)
+        && let Some(tab) = TabId::from_key(cell.borrow().as_str(), shared.tabs, shared.categories)
         && tab != session.tab
     {
         session.tab = tab;
@@ -360,6 +373,8 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
     let mut changed = false;
 
     let read = Read {
+        tabs: shared.tabs,
+        pictures: shared.pictures,
         setup,
         categories: shared.categories,
         recents: &recents,
@@ -439,7 +454,7 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
         }
     }
     if let Some(cell) = bound.tab {
-        let key = session.tab.key(shared.categories);
+        let key = session.tab.key(shared.tabs, shared.categories);
         if *cell.borrow() != key {
             *cell.borrow_mut() = key;
         }
@@ -466,7 +481,10 @@ pub enum DocumentTabs {
 ///
 /// - Tabs: Recent, the categories and Saved. Recent lists the clipboard's image size first when the app gives one,
 ///   then the recent documents kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet among them. Saved lists the user's presets in a list
-///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none.
+///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none. With
+///   [`DocumentTabs::Presets`] only the categories show, the first one open, and there is no Save Document Preset.
+/// - Pictures: a card that names a picture (`DocumentCard::picture`) shows it square from the store given to
+///   [`thumbnails`](NewDocumentDialog::thumbnails).
 /// - Cards: a click or an arrow fills the details; Enter on a card or a double click creates. A built-in card turns with
 ///   the orientation control. Saved and recent cards restore every setting but the name. A Web or Mobile card turns
 ///   Artboards on; a card of another category turns it off again only when such a card turned it on.
@@ -513,7 +531,8 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     /// only reads it: the app adds the created document itself.
     #[prop]
     recent: Option<Bind<'a, Vec<S>>>,
-    /// Binds the shown tab's id (`recent`, `saved` or a category's id) to `tab`.
+    /// Binds the shown tab's id (`recent`, `saved` or a category's id; `all` for the one tab of a
+    /// [`DocumentTabs::Presets`] dialog without categories) to `tab`. An id the dialog does not show is ignored.
     #[prop]
     tab: Option<Bind<'a, String>>,
     /// Keeps what the details rows keep (`DocumentSettings::Memory`) in `memory`, in place of the dialog's session, so
@@ -544,11 +563,10 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     #[prop]
     tabs: DocumentTabs,
     /// The dialog's title, in place of the word `newDocument.title`.
-    #[prop]
+    #[prop(into)]
     title: Option<Label>,
     /// Paints a card's picture from the borrowed thumbnail store; see [`NewDocumentDialog::thumbnails`].
-    #[allow(dead_code)] // P3(shell-w2): sh.C8
-    pictures: Option<Box<dyn Fn(&str, &ContentPainterCx<'_>, Rect) + 'a>>,
+    pictures: Option<Box<PicturePainter<'a>>>,
 }
 
 impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
@@ -579,8 +597,11 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
     /// `source` under the key `key` maps the picture's name to. A card without a picture, or a dialog without
     /// thumbnails, keeps its `PresetCardLook`.
     pub fn thumbnails<K: TextureKey>(mut self, thumbnails: &'a Thumbnails<K>, source: &'a dyn ThumbSource<K>, key: impl Fn(&str) -> K + 'a) -> Self {
-        let _ = (&mut self, thumbnails, source, key);
-        todo!("sh.C8")
+        self.pictures = Some(Box::new(move |picture: &str, cx: &ContentPainterCx<'_>, rect: Rect| {
+            // The card's tile has its own surface, so a picture the store does not paint needs no stand-in here.
+            let _ = thumbnails.paint_cell(cx, rect, source, &key(picture), None);
+        }));
+        self
     }
 }
 
@@ -650,9 +671,9 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             mut setup,
             print_resolution,
             screen_resolution,
-            tabs: _,
-            title: _,
-            pictures: _,
+            tabs,
+            title,
+            pictures,
         } = self;
         S::set_resolutions(&mut setup, print_resolution, screen_resolution);
         let recent_is_bound = recent_bound.is_some();
@@ -673,6 +694,8 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
             bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), memory: memory_cell.as_ref(), events: &events, actions: &actions },
+            tabs,
+            pictures: pictures.as_deref(),
             setup: &setup,
             categories: &categories,
             recents: &recent,
@@ -684,7 +707,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             host_opened: opening.is_some(),
         };
 
-        let mut dialog = FormDialog::new(words.title.clone(), bound)
+        let mut dialog = FormDialog::new(title.unwrap_or_else(|| words.title.clone()), bound)
             .ok_label(words.create.clone())
             .cancel_label(words.close.clone())
             .collection_body(true)
@@ -833,7 +856,12 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
     /// A hosted dialog opening on `options`; `build` makes the dialog over them (the clipboard, the profiles, the
     /// app's name). The settings open at once (the clipboard's size, the default name from the root's words), so
     /// automation lists and sets them before the first pass.
-    pub fn new(ctx: &egui::Context, options: S, build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static) -> Self {
+    pub fn new(ctx: &egui::Context, mut options: S, build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static) -> Self {
+        // Automation reads `tab` before the first pass, so it names the tab the built dialog opens on.
+        let tab = {
+            let built = build(&mut options);
+            TabId::first(built.tabs).key(built.tabs, &built.categories)
+        };
         let mut hosted = HostedNewDocument {
             id: dialog_id("new-document"),
             opening: S::default(),
@@ -843,7 +871,7 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
             open: true,
             saved: PresetLibrary::new(),
             recent: Vec::new(),
-            tab: TabId::Recent.key::<S::Preset>(&[]),
+            tab,
             events: Vec::new(),
             hold: false,
             held: HeldAnswer::new(),
@@ -956,8 +984,11 @@ impl<S: DocumentSettings> StackDialog for HostedNewDocument<S> {
         match field {
             "tab" => {
                 let key = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
-                let categories = (self.build)(&mut self.options).categories;
-                if TabId::from_key(key, &categories).is_none() {
+                let known = {
+                    let built = (self.build)(&mut self.options);
+                    TabId::from_key(key, built.tabs, &built.categories).is_some()
+                };
+                if !known {
                     return Err(FieldRefusal::Rejects(&value).message(field));
                 }
                 self.tab = key.to_owned();

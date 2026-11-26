@@ -349,8 +349,13 @@ impl<K: TextureKey> Thumbnails<K> {
     /// default [`ThumbPaint`], or with the checker off and `paper` under it when `paper` is set. Returns whether the
     /// store painted; the caller draws its own fallback.
     pub fn paint_cell(&self, cx: &ContentPainterCx<'_>, rect: Rect, source: &dyn ThumbSource<K>, key: &K, paper: Option<DataColor>) -> bool {
-        let _ = (cx, rect, source, key, paper);
-        todo!("sh.C11")
+        let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
+        let state = self.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
+        let paint = match paper {
+            Some(paper) => ThumbPaint::default().checker(false).paper(paper),
+            None => ThumbPaint::default(),
+        };
+        self.paint(cx, rect, &state, &paint)
     }
 
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {

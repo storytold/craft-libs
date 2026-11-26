@@ -1,6 +1,8 @@
 //! Stories of `NewDocumentDialog`.
 
-use super::{CardCx, CardSource, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, NewDocumentDialog, PresetCardLook};
+use super::{
+    CardCx, CardSource, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, DocumentTabs, NewDocumentDialog, PresetCardLook, PresetCategory,
+};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, clicked};
@@ -8,6 +10,7 @@ use crate::form::Field;
 use crate::patterns::presets::{GroupPath, PresetLibrary};
 use crate::pickers::Select;
 use crate::popover::Popover;
+use crate::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::runtime::env::with_env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;
@@ -200,5 +203,112 @@ fn new_document_dialog_saving_host_details(ui: &mut Ui, data: &mut StoryData) ->
     *data.value("settings", StorySettings::default()) = settings;
     *data.value("library", seeded_library()) = library;
     *data.value("tab", "saved".to_owned()) = tab;
+    output.into()
+}
+
+/// Only the category tabs: no Recent, no Saved and no Save Document Preset. The dialog opens from its button.
+#[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never)]
+fn new_document_dialog_presets_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (open, open_at) = data.value_at("open", false);
+    if clicked(&Button::new("New Document…").show(ui)) {
+        *open = true;
+    }
+    NewDocumentDialog::new(Bind::kept()).tabs(DocumentTabs::Presets).opened(open_at.bind(open)).show(ui).into()
+}
+
+/// The dialog under the app's own title. The dialog opens from its button.
+#[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never)]
+fn new_document_dialog_custom_title(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (open, open_at) = data.value_at("open", false);
+    if clicked(&Button::new("New Graph…").show(ui)) {
+        *open = true;
+    }
+    NewDocumentDialog::new(Bind::kept()).title("New graph").opened(open_at.bind(open)).show(ui).into()
+}
+
+/// A template a picture card stands for: its id, which also names its picture, and its name.
+type StoryTemplate = (&'static str, &'static str);
+
+/// Settings made from a template: the document's name and the template it starts from.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct TemplateSettings {
+    name: String,
+    template: String,
+}
+
+impl DocumentSettings for TemplateSettings {
+    type Preset = StoryTemplate;
+    type Setup = ();
+    type Memory = ();
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
+    fn page(&self) -> (f64, f64) {
+        (1.0, 1.0)
+    }
+
+    fn same_document(&self, other: &Self) -> bool {
+        self.template == other.template
+    }
+
+    fn fits(&self) -> bool {
+        true
+    }
+
+    fn open(&mut self, _setup: &(), untitled: &str) {
+        if self.name.is_empty() {
+            untitled.clone_into(&mut self.name);
+        }
+    }
+
+    fn preset_card(&(id, name): &StoryTemplate, _cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
+        let settings = TemplateSettings { name: String::new(), template: id.to_owned() };
+        DocumentCard::new(name.to_owned(), "1024 × 1024 px".to_owned(), settings, CardSource::preset(None)).picture(id)
+    }
+
+    fn recent_cards(_cx: &CardCx<'_, Self>) -> Vec<DocumentCard<Self>> {
+        Vec::new()
+    }
+
+    fn saved_card(name: &str, saved: &Self, _cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
+        DocumentCard::new(name.to_owned(), String::new(), saved.clone(), CardSource::Recent)
+    }
+
+    fn apply_card(&mut self, card: &DocumentCard<Self>, _setup: &(), _memory: &mut ()) {
+        self.template.clone_from(&card.settings.template);
+    }
+
+    fn details(_ui: &mut Ui, _values: &mut Self, _cx: &mut DetailsCx<'_, Self>) {}
+}
+
+// The story owner is the probe instantiation; the dialog is built over `TemplateSettings` in the body.
+/// Template cards with pictures from the thumbnail store, on the category tabs alone; "rough" has no picture and keeps
+/// the card's own surface. The dialog opens from its button.
+#[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never)]
+fn new_document_dialog_presets_with_pictures(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let categories = vec![
+        PresetCategory::new("all", "All", vec![("brick", "Brick wall"), ("wood", "Wood planks"), ("rough", "Rough stone")]),
+        PresetCategory::new("material", "Material", vec![("brick", "Brick wall"), ("wood", "Wood planks")]),
+    ];
+    let source = FakeThumbSource::<String>::new().opaque(true).blank(["rough".to_owned()]);
+    let thumbnails = Thumbnails::<String>::in_context(ui.ctx(), "new-document-stories", ThumbnailOptions::new());
+    let mut settings = data.value("settings", TemplateSettings::default()).clone();
+    let (open, open_at) = data.value_at("open", false);
+    if clicked(&Button::new("New Graph…").show(ui)) {
+        *open = true;
+    }
+    let output = NewDocumentDialog::over(Bind::bound(&mut settings))
+        .categories(categories)
+        .tabs(DocumentTabs::Presets)
+        .thumbnails(&thumbnails, &source, |id: &str| id.to_owned())
+        .opened(open_at.bind(open))
+        .show(ui);
+    *data.value("settings", TemplateSettings::default()) = settings;
     output.into()
 }

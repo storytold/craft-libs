@@ -88,8 +88,8 @@ impl<S> DocumentCard<S> {
     /// The picture the card shows, named for the dialog's thumbnails.
     #[must_use]
     pub fn picture(mut self, key: impl Into<String>) -> Self {
-        let _ = (&mut self, key);
-        todo!("sh.C8")
+        self.picture = Some(key.into());
+        self
     }
 
     /// The card's hover text.

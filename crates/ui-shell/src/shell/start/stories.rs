@@ -178,6 +178,15 @@ fn start_screen_list_sorted_by_name(ui: &mut Ui, data: &mut StoryData) -> StoryO
     screen(ui, data, choice, &picture_files(), &[], &picture_templates(), Extras { source: Some(&source), ..Extras::default() })
 }
 
+/// A template with a description: its card carries the info mark, whose tooltip is the description.
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_template_description(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let source = picture_source();
+    let mut templates = picture_templates();
+    templates[0] = templates[0].clone().description("A portrait page for letters and printed handouts.");
+    screen(ui, data, Choice::default(), &picture_files(), &[], &templates, Extras { source: Some(&source), ..Extras::default() })
+}
+
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
 fn start_screen_without_files(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let extras = Extras { drop_hint: Some("Drop a file here or click to open one"), ..Extras::default() };
@@ -193,6 +202,23 @@ fn start_screen_greeting(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .now(NOW)
         .layout(StartLayout::Greeting)
         .title("Good afternoon")
+        .more_templates("More templates")
+        .show(ui)
+        .into()
+}
+
+/// The greeting page with a heading over its templates and one over its recent files.
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_greeting_headings(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let (files, templates) = (plain_files(), plain_templates());
+    let (mut view, mut sort) = (RecentView::default(), RecentSort::default());
+    StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files)
+        .templates(&templates)
+        .now(NOW)
+        .layout(StartLayout::Greeting)
+        .title("Good afternoon")
+        .templates_title("Start something new")
+        .recent_title("Recent files")
         .more_templates("More templates")
         .show(ui)
         .into()

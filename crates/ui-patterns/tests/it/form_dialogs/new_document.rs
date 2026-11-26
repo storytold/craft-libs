@@ -1,5 +1,5 @@
-//! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards and
-//! the pixel aspect ratio.
+//! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards, the
+//! pixel aspect ratio, the card layout and the tabs a `Presets` dialog shows.
 
 use craft_behavior::MotionMode;
 use craft_ui::buttons::Button;
@@ -557,4 +557,42 @@ fn the_preset_cards_fill_the_column_and_show_their_size_lines_whole() {
             assert!((line.rect.center().x - card.rect.center().x).abs() <= 1.0, "{:?} is centred in its card", line.text);
         }
     }
+}
+
+/// A `Presets` dialog lists the category tabs alone and opens on the first, refusing a bound `recent`, and offers no Save
+/// Document Preset; with no categories it lists one tab.
+#[trial]
+fn presets_only_tabs_drop_recent_saved_and_the_save_pane_and_an_empty_list_shows_one_tab() {
+    use craft_ui::patterns::form_dialogs::{DocumentTabs, PresetCategory};
+    use craft_ui::runtime::access::Role;
+
+    let tab_names = |fixture: &Fixture| -> Vec<String> {
+        let tree = fixture.tree();
+        tree.with_role(Role::TAB).into_iter().filter_map(|key| tree.name_of(key).map(str::to_owned)).collect()
+    };
+
+    let tab = Rc::new(RefCell::new("recent".to_owned()));
+    let held = Rc::clone(&tab);
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut bound = held.borrow().clone();
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).tabs(DocumentTabs::Presets).tab(Bind::bound(&mut bound)).show(ui);
+        *held.borrow_mut() = bound;
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let names = tab_names(&fixture);
+    let categories = PresetCategory::standard();
+    assert_eq!(names.len(), categories.len(), "one tab per category and no others: {names:?}");
+    assert!(names.iter().any(|name| name.starts_with("Photo")), "the strip names the categories: {names:?}");
+    assert!(!names.iter().any(|name| name.starts_with("Recent") || name.starts_with("Saved")), "no Recent or Saved tab: {names:?}");
+    assert_eq!(*tab.borrow(), categories[0].id, "the dialog opens on the first category and refuses the bound Recent");
+    assert!(fixture.by_label("Save Document Preset").is_none(), "no Save Document Preset without a Saved tab");
+
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).categories(Vec::new()).tabs(DocumentTabs::Presets).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let names = tab_names(&fixture);
+    assert_eq!(names.len(), 1, "one tab without categories: {names:?}");
 }
