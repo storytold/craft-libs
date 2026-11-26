@@ -90,7 +90,7 @@ fn a_node_graph_follows_the_canvas_view() {
             let mut given = shown.get();
             given.rect = ui.available_rect_before_wrap();
             let kinds: Vec<&dyn NodeKind> = KINDS.iter().map(|kind| kind as &dyn NodeKind).collect();
-            let ids: Vec<NodeId> = (0..NODES.len() as u32).map(NodeId).collect();
+            let ids: Vec<NodeId> = (0..NODES.len() as u32).map(NodeId::new).collect();
             let source = keyed(&ids, |id| *id);
             let mut selection = selected.borrow_mut();
             let canvas = Canvas::new("Graph").document(ViewTarget::unbounded(extent)).view(given).show(ui, |ui, body| {
@@ -129,7 +129,7 @@ fn a_node_graph_follows_the_canvas_view() {
 
     // A primary press on a node selects it.
     fixture.click_at(moved.to_screen(middle_of(NODES[0])));
-    assert!(selection.borrow().contains(&NodeId(0)), "a click on a node selects it");
+    assert!(selection.borrow().contains(&NodeId::new(0)), "a click on a node selects it");
 
     // The view at a node far off at negative points builds it and not the ones near the origin; the same far off at
     // positive points.
