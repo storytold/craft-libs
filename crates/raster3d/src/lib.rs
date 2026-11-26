@@ -65,6 +65,11 @@ pub enum RenderError {
     /// [`Scene::opaque_count`] is over the index count or not a multiple of 3.
     #[error("the opaque count {opaque} does not split the {len} indices into whole triangles")]
     BadOpaqueCount { opaque: u32, len: usize },
+    /// A triangle (by number) in the first [`Scene::opaque_count`] indices has a visible
+    /// shadows-only material, which is drawn only in the transparent pass. [`try_render`] returns
+    /// it.
+    #[error("triangle {0} is in the opaque range but its material draws only shadows")]
+    ShadowsOnlyOpaque(usize),
     /// The triangle count is over [`Limits::max_triangles`].
     #[error("the scene holds {count} triangles, over the limit of {limit}")]
     TooManyTriangles { count: u64, limit: u64 },
@@ -125,9 +130,9 @@ pub enum RenderError {
         "the environment light has a value that is not finite or out of range, a direction that is not unit length or names a texture that does not exist"
     )]
     BadEnvironment,
-    /// A shadow map has a zero size, a scale or transform that is not finite, or a span that
-    /// runs past [`Scene::shadow_texels`].
-    #[error("shadow map {0} has a bad size, scale, transform or span")]
+    /// A shadow map has a zero size, a scale or transform that is not finite, a negative penumbra
+    /// radius, or a span that runs past [`Scene::shadow_texels`].
+    #[error("shadow map {0} has a bad size, scale, transform, radius or span")]
     BadShadowMap(usize),
     /// A shadow texel is NaN.
     #[error("shadow texel {0} is NaN")]

@@ -32,7 +32,8 @@ fn area(w: u32, h: u32) -> Option<usize> {
 
 /// Box-filter a supersampled target down by `k` per side: each output pixel is the mean of its
 /// `k × k` premultiplied colors, and its depth is the mean of the covered subsamples' depths
-/// (infinity where none is covered). A pixel whose `f32` sums overflow is averaged in `f64`.
+/// (infinity where none is covered). A pixel whose `f32` sums overflow, and every pixel when a
+/// block holds more than 2^24 subsamples, is averaged in `f64`.
 ///
 /// Returns [`RenderError::BadFactor`] when `k` is zero or does not divide both sides, and
 /// [`RenderError::BadDataLength`] when the color or depth buffer does not hold width × height
@@ -56,8 +57,14 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
         return Ok((img, depth));
     }
     let n = (u64::from(k) * u64::from(k)) as f32;
+    // An f32 count stops at 2^24, so a larger block is averaged in f64.
+    let wide = u64::from(k) * u64::from(k) > 1 << 24;
     img.data.par_chunks_mut(w as usize).zip(depth.par_chunks_mut(w as usize)).enumerate().for_each(|(y, (row, drow))| {
         for x in 0..w as usize {
+            if wide {
+                (row[x], drow[x]) = mean_f64(t, k as usize, x, y);
+                continue;
+            }
             let mut acc = [0.0f32; 4];
             let (mut dz, mut dn) = (0.0f32, 0.0f32);
             for j in 0..k as usize {
@@ -160,7 +167,7 @@ fn mean_f64(t: &Target, k: usize, x: usize, y: usize) -> ([f32; 4], f32) {
 ///
 /// Every pixel is checked before any is changed. Returns [`RenderError::BadPixel`] with the first
 /// pixel whose channels are not finite, whose alpha is negative or over 1 (beyond rounding), or
-/// whose color divided by its alpha or encoded is not finite,
+/// whose color divided by its alpha is not finite,
 /// and [`RenderError::BadDataLength`] when the image does not hold width × height pixels.
 pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
     let expected = area(img.width, img.height).ok_or(RenderError::TooLarge(img.width, img.height))?;
@@ -170,13 +177,15 @@ pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
     let bad = |p: &[f32; 4]| {
         !p.iter().all(|c| c.is_finite()) || p[3] < 0.0 || p[3] > 1.0 + ALPHA_SLACK || (p[3] > 1e-6 && !p[..3].iter().all(|c| (c / p[3]).is_finite()))
     };
-    if let Some(i) = img.data.iter().position(bad) {
-        return Err(RenderError::BadPixel(i));
-    }
+    // A pixel that fails the checks above is written as NaN, so the first invalid pixel is
+    // reported.
     let encoded: Vec<[f32; 4]> = img
         .data
         .par_iter()
         .map(|&p| {
+            if bad(&p) {
+                return [f32::NAN; 4];
+            }
             let mut p = p;
             let a = p[3];
             if a > 1e-6 {
@@ -187,7 +196,6 @@ pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
             p
         })
         .collect();
-    // A finite color far outside 0 to 1 can still overflow the curve's segments.
     if let Some(i) = encoded.iter().position(|p| !p.iter().all(|c| c.is_finite())) {
         return Err(RenderError::BadPixel(i));
     }

@@ -9,7 +9,7 @@
 
 use rayon::prelude::*;
 
-use crate::scene::{NO_PART, Scene, Vertex, validate, validate_aux, validate_shadow_refs};
+use crate::scene::{NO_PART, Scene, Vertex, validate, validate_aux, validate_passes, validate_shadow_refs};
 use crate::shade::{Frag, shade};
 use crate::{Limits, RenderError};
 
@@ -700,6 +700,7 @@ fn prepare(s: &Scene, limits: &Limits, aux: bool) -> Result<(usize, Vec<STri>, V
         limits.check_aux(s.width, s.height, None)?;
     }
     let pixels = validate(s, limits)?;
+    validate_passes(s)?;
     if aux {
         validate_aux(s)?;
     }

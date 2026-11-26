@@ -1,6 +1,7 @@
 //! The scene: everything the rasterizer needs, flattened into world-space triangles and plain
 //! arrays, and the checks a scene passes before it is rendered.
 
+use crate::shadow::cube_maps;
 use crate::{Limits, RenderError};
 
 /// One vertex in world space.
@@ -124,12 +125,13 @@ pub struct Light {
     pub falloff: u32,
     pub radius: f32,
     pub falloff_distance: f32,
-    /// First shadow map (point lights use six), −1 = none. [`crate::try_shadow_maps`] reads any
+    /// First shadow map (point lights, and spot lights whose outer cone's half angle is over 1.40
+    /// radians, use six), −1 = none. [`crate::try_shadow_maps`] reads any
     /// value of 0 or more as a request for maps.
     pub shadow: i32,
     /// Fraction of the light a full shadow removes, 0 to 1.
     pub shadow_darkness: f32,
-    /// Penumbra widening in output pixels.
+    /// Penumbra widening in output pixels, 0 or more.
     pub shadow_diffusion: f32,
 }
 
@@ -179,7 +181,7 @@ pub struct EnvInfo {
     pub shadow: i32,
     /// Fraction of the occluded light a full shadow removes, 0 to 1.
     pub shadow_darkness: f32,
-    /// Penumbra widening in output pixels.
+    /// Penumbra widening in output pixels, 0 or more.
     pub shadow_diffusion: f32,
 }
 
@@ -359,6 +361,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && (-1.0..=1.0).contains(&l.cos_outer)
             && (l.kind != 1 || l.cos_inner >= l.cos_outer)
             && (0.0..=1.0).contains(&l.shadow_darkness)
+            && l.shadow_diffusion >= 0.0
             && (l.kind == 2 || unit(&l.dir))
     };
     if let Some(i) = s.lights.iter().position(|l| !ok(l)) {
@@ -370,6 +373,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && finite(&[e.intensity, e.rotation, e.key, e.shadow_darkness, e.shadow_diffusion])
             && (0.0..=1.0).contains(&e.key)
             && (0.0..=1.0).contains(&e.shadow_darkness)
+            && e.shadow_diffusion >= 0.0
             && e.mips > 0
             && e.radiance.checked_add(e.mips).is_some_and(|end| end as usize <= s.textures.len())
             && (e.irradiance as usize) < s.textures.len();
@@ -381,10 +385,23 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
 }
 
 /// Every light and the environment light either has no shadow (a negative mark) or refers to
-/// maps in [`Scene::shadows`]: six from its mark for a point light, one otherwise.
+/// maps in [`Scene::shadows`]: six from its mark for a point light or a spot light whose cone
+/// one map does not cover, one otherwise.
+/// Checks that no drawn triangle of the opaque range has a shadows-only material (its first
+/// vertex's material, as the raster reads it; a material with `visible` false is not drawn). Run
+/// after [`validate`].
+pub(crate) fn validate_passes(s: &Scene) -> Result<(), RenderError> {
+    let shadows_only =
+        |t: &[u32]| s.vertices.get(t[0] as usize).and_then(|v| s.materials.get(v.material as usize)).is_some_and(|m| m.shadows_only && m.visible);
+    match s.indices.get(..s.opaque_count as usize).unwrap_or_default().chunks(3).position(shadows_only) {
+        Some(t) => Err(RenderError::ShadowsOnlyOpaque(t)),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn validate_shadow_refs(s: &Scene) -> Result<(), RenderError> {
     let exists = |first: i32, count: usize| first < 0 || (first as usize).checked_add(count).is_some_and(|end| end <= s.shadows.len());
-    if let Some(i) = s.lights.iter().position(|l| !exists(l.shadow, if l.kind == 2 { 6 } else { 1 })) {
+    if let Some(i) = s.lights.iter().position(|l| !exists(l.shadow, if cube_maps(l) { 6 } else { 1 })) {
         return Err(RenderError::MissingShadowMap(Some(i)));
     }
     if s.env.is_some_and(|e| !exists(e.shadow, 1)) {
@@ -401,6 +418,7 @@ fn validate_shadows(s: &Scene) -> Result<(), RenderError> {
             && m.focal.is_finite()
             && m.focal > 0.0
             && finite(&[m.bias, m.radius])
+            && m.radius >= 0.0
             && end.is_some_and(|e| e <= s.shadow_texels.len() as u64);
         if !ok {
             return Err(RenderError::BadShadowMap(i));
