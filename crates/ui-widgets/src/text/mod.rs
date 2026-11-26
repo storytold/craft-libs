@@ -53,6 +53,12 @@ pub struct FieldStyle {
     button: f32,
 }
 
+/// The space above the first and below the last of the lines of a multi-line text in a field of `metrics`, its lines
+/// `line` high: that of a single line in its control, so a box of `n` lines shows them whole.
+pub(crate) fn lines_inset(metrics: &Metrics, line: f32) -> f32 {
+    ((metrics.min_size.y - line) / 2.0).max(0.0)
+}
+
 impl FieldStyle {
     /// The style a text-like field reads from the theme.
     pub fn at(cx: &StyleCx<'_>) -> FieldStyle {
