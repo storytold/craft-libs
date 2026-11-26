@@ -609,3 +609,33 @@ fn a_request_for_the_swatches_opens_the_picker_on_its_swatch_view() {
     assert!(shows_swatches(request().on_swatches()), "the swatch view shows the library's cells");
     assert!(!shows_swatches(request()), "without it the picker opens on the Color Models");
 }
+
+/// The number a Compact picker's channel field named `channel` paints, the picker showing HSB `values`.
+fn compact_field_number(values: [f32; 3], channel: &str) -> String {
+    let hsb = ModelValues::new(HsbModel.id(), &values);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut color = PickedColor::in_model(HsbModel.to_srgb(&hsb.values), hsb);
+        let models: [&dyn ColorModel; 2] = [&HsbModel, &RgbModel];
+        let _ = ColorPicker::new("Color", Bind::bound(&mut color)).layout(ColorPickerLayout::Compact).models(models).show(ui);
+    });
+    fixture.room(vec2(600.0, 700.0));
+    fixture.settle();
+    let tree = fixture.tree();
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().find(|t| tree.name_of(t.node) == Some(channel));
+    let field = field.unwrap_or_else(|| panic!("the picker shows a {channel} field")).rect;
+    let texts = fixture.texts();
+    let number = texts.iter().find(|run| field.contains(run.rect.center()) && run.text.starts_with(|c: char| c.is_ascii_digit()));
+    number
+        .unwrap_or_else(|| panic!("the {channel} field shows its value: {:?}", texts.iter().map(|r| r.text.to_string()).collect::<Vec<_>>()))
+        .text
+        .to_string()
+}
+
+/// A Compact picker's channel rows, which the Color panel and the harmony brightness row share, show the decimals their
+/// channel declares, a percent channel too: HSB saturation declares none, so 66.7 % reads "67", not the percent look's
+/// "66.7".
+#[trial]
+fn the_compact_pickers_percent_channels_show_the_decimals_they_declare() {
+    assert_eq!(compact_field_number([210.0, 66.7, 60.0], "Saturation"), "67");
+    assert_eq!(compact_field_number([210.0, 66.7, 60.0], "Hue"), "210", "a degree channel keeps its whole degrees");
+}

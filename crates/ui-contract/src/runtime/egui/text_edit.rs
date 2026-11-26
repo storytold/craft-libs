@@ -25,6 +25,10 @@ pub(crate) struct Edit<'a> {
     pub hint: Option<&'a str>,
     pub mono: bool,
     pub role: TypeRole,
+    /// The text size in points in place of the role's (`TextOptions::size`).
+    pub size: Option<f32>,
+    /// A multi-line text starts at the top of the rect (`TextOptions::top`).
+    pub top: bool,
     pub ink: Color32,
     pub filter: EventFilter,
     pub char_limit: Option<usize>,
@@ -86,6 +90,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         hint,
         mono,
         role,
+        size,
+        top,
         ink,
         filter,
         char_limit,
@@ -105,8 +111,12 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
     // Behind selected text and the selected text itself: the field's roles.
     let selection = (tokens.color.accent.soft, tokens.color.text.normal);
     let facts = crate::fonts::stack_facts(ui.ctx());
-    let font_id = tokens.font(facts, role, mono);
-    let optical_size = tokens.optical_size(facts, role, mono);
+    let mut font_id = tokens.font(facts, role, mono);
+    // A size of the caller's own keeps the role's face; the optical size follows the size the text is set at.
+    let optical_size = tokens.optical_size(facts, role, mono).map(|role_size| size.unwrap_or(role_size));
+    if let Some(size) = size {
+        font_id.size = size;
+    }
     let had_focus = ui.memory(|memory| memory.has_focus(id));
     let entered = had_focus && ui.input(|input| input.key_pressed(egui::Key::Enter));
     let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
@@ -206,7 +216,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(line_break, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
-                    // A laid-out galley sits at the rect's corner, as a painted run does.
+                    // A laid-out galley sits at the rect's corner, as a painted run does; the lines of a multi-line text
+                    // start at the top of its part when the part asks (`top`), whatever room is left below them.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (centred, rtl) => {
@@ -215,8 +226,10 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                                 (false, true) => egui::Align::Min,
                                 (false, false) => egui::Align::Max,
                             };
-                            // A multi-line text starts at the part's top, however many of its lines the text fills.
-                            egui::Align2([across, if multiline { egui::Align::Min } else { egui::Align::Center }])
+                            // A multi-line text starts at the part's top when the part asks (`top`), however many of its
+                            // lines the text fills.
+                            let down = if multiline && top { egui::Align::Min } else { egui::Align::Center };
+                            egui::Align2([across, down])
                         }
                     });
                 if let Some(hint) = hint_text.clone() {
