@@ -391,7 +391,7 @@ impl<'a> TaskBar<'a> {
             Some(Mixed::Same(held)) => held,
             _ => TaskBarPlace::default(),
         };
-        let rtl = env.direction.is_rtl();
+        let rtl = env.layer_direction().is_rtl();
         let overlay = match kind {
             TaskBarKind::Selection => selection_overlay(hung.as_ref(), area, dismiss),
             TaskBarKind::Task | TaskBarKind::Fixed => layer_overlay(&held, hung.as_ref(), area, movable),

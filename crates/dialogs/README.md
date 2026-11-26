@@ -44,7 +44,7 @@ pub type Override = Box<dyn FnMut(&Request) -> Answer>;
 
 pub enum Kind { Open { multiple: bool }, Folder, Save }
 pub struct FileDialog { pub kind: Kind, pub title: Option<String>, pub filters: Vec<Filter>,
-    pub directory: Option<PathBuf>, pub file_name: Option<String> }
+    pub directory: Option<PathBuf>, pub file_name: Option<String>, pub format_label: Option<String> }
 pub struct Filter { pub name: String, pub extensions: Vec<String> }
 pub struct Message { pub level: MessageLevel, pub title: String, pub description: String,
     pub buttons: MessageButtons }
@@ -66,7 +66,7 @@ impl<T> Dialogs<T> {
 ```
 
 `FileDialog` has builders: `FileDialog::open().title("Place").filter("Images", &["png", "jpg"])`,
-and `open_many`, `folder`, `save`, `directory`, `file_name`.
+and `open_many`, `folder`, `save`, `directory`, `file_name`, `format_label`.
 
 In an eframe app:
 
@@ -126,6 +126,12 @@ Save and message boxes are sheets through rfd's async dialogs. rfd falls back to
 they start only with a parent in a running app, and answer `Unavailable` otherwise. Dialogs needed
 before the event loop starts or after it ends (startup and crash messages) stay blocking `rfd`
 calls in the app.
+
+A Save that offers two or more file types is a sheet the crate makes itself, with a Format menu
+that lists each type by name, the suggested name's type chosen. Choosing a type changes the
+extension in the name field, and the answer is `Saved` with the chosen type's index in `filter`.
+The menu's label is `FileDialog::format_label`, set from `FilePanels::set_format_label` (English
+"Format:" when unset). A Save with one type is rfd's sheet, which has no menu.
 
 ## Follow-ups
 

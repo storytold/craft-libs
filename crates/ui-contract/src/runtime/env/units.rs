@@ -36,6 +36,7 @@ craft_ui::words! {
         hyphens: unit "units.hyphens" = "{n} hyphens";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
+        per_inch: unit "units.perInch" = "{n}/in";
         pixels_name: "units.pixelsName" = "Pixels";
         percent_name: "units.percentName" = "Percent";
         degrees_name: "units.degreesName" = "Degrees";
@@ -59,6 +60,7 @@ craft_ui::words! {
         ha_name: "units.haName" = "Ha";
         letters_name: "units.lettersName" = "Letters";
         hyphens_name: "units.hyphensName" = "Hyphens";
+        per_inch_name: "units.perInchName" = "Per Inch";
     }
 }
 
@@ -153,6 +155,9 @@ pub enum UnitKind {
     Letters,
     /// `{n} hyphens`: a hyphenation setting counted in hyphens.
     Hyphens,
+    /// `{n}/in`: how many of something fall in an inch of length, such as the points a distortion adds along a path.
+    /// It is a count, not a length: [`per_inch`](Self::per_inch) answers `None` for it.
+    PerInch,
 }
 
 impl UnitKind {
@@ -166,7 +171,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 23] = [
+    const ALL: [UnitKind; 24] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -190,6 +195,7 @@ impl UnitKind {
         UnitKind::Ha,
         UnitKind::Letters,
         UnitKind::Hyphens,
+        UnitKind::PerInch,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
@@ -206,7 +212,8 @@ impl UnitKind {
             | UnitKind::PixelsPerInch
             | UnitKind::PixelsPerCentimetre
             | UnitKind::LinesPerInch
-            | UnitKind::LinesPerCentimetre => 0..=2,
+            | UnitKind::LinesPerCentimetre
+            | UnitKind::PerInch => 0..=2,
             UnitKind::Inches | UnitKind::Columns => 0..=3,
         }
     }
@@ -441,6 +448,7 @@ impl Units {
             UnitKind::Ha => words.ha.as_str(),
             UnitKind::Letters => words.letters.as_str(),
             UnitKind::Hyphens => words.hyphens.as_str(),
+            UnitKind::PerInch => words.per_inch.as_str(),
         }
     }
 
@@ -471,6 +479,7 @@ impl Units {
             UnitKind::Ha => &words.ha_name,
             UnitKind::Letters => &words.letters_name,
             UnitKind::Hyphens => &words.hyphens_name,
+            UnitKind::PerInch => &words.per_inch_name,
         };
         name.clone()
     }

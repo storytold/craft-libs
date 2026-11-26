@@ -260,6 +260,8 @@ pub struct Canvas<'a> {
     settled: Option<Settled>,
     /// The Menu key or Shift+F10 reached the focused canvas this pass.
     context_key: bool,
+    /// The text of the paste the editor part takes this pass, taken in `update` with its inputs.
+    pasted: Option<Arc<str>>,
     /// The ease the app asked for from the view it drew ([`ease_from`](Self::ease_from)).
     ease: Option<Steer>,
     /// The app's tool moves the view with the pointer this pass (an image-moving crop slides the view by fractional
@@ -343,6 +345,7 @@ impl<'a> Canvas<'a> {
             snap: None,
             settled: None,
             context_key: false,
+            pasted: None,
             ease: None,
             follows_pointer: false,
             tool_regions: Vec::new(),
@@ -840,6 +843,7 @@ impl<'a> Canvas<'a> {
             navigation: self.navigation,
             editor_input: self.editor_input.clone(),
             editor: cx.editor_handle(),
+            pasted: self.pasted.clone(),
         }
     }
 
@@ -913,6 +917,11 @@ pub struct ToolPass {
     pub editor_input: Arc<[EditorInput]>,
     /// The editor part of this pass, through which the body reports its editor state; `None` without an editor.
     pub editor: Option<EditorHandle>,
+    /// The text of the paste the editor part takes this pass (its [`EditorInput::Edit`] of
+    /// [`EditCommand::Paste`](craft_behavior::EditCommand::Paste)), as the platform's paste event carried it: Ctrl+V's,
+    /// or the one a Paste command asks the platform for. The framework takes that event out of egui's input, and the
+    /// platform's read can succeed where the installed clipboard can't be opened. `None` in a pass without one.
+    pub pasted: Option<Arc<str>>,
 }
 
 impl ToolPass {
@@ -1032,6 +1041,10 @@ impl Component for Canvas<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         // Taken once: `Cx::editor_input` empties the pass's inputs, and the body reads them from the `ToolPass`.
         self.editor_input = cx.editor_input().collect::<Vec<_>>().into();
+        self.pasted = match cx.clipboard().paste() {
+            crate::runtime::pending::Pending::Ready(content) => content.text.clone(),
+            _ => None,
+        };
         // Left untaken: the canvas's generic context request is recorded as for a secondary click.
         self.context_key = cx.intents().untaken(&Intent::ContextMenu);
         // The canvas is no value component: it reads and writes its view's binding itself, as a container does.

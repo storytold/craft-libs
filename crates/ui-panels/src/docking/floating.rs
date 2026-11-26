@@ -326,8 +326,9 @@ pub struct FloatingGroup<'a> {
     files_at: Option<Pos2>,
 }
 
-/// Starts the window-unit drag: a move by the title row when the flag is set, else a drag the window took over.
-type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool) + 'a>;
+/// Starts the window-unit drag of a window of the given size: a move by the title row when the flag is set, else a
+/// drag the window took over.
+type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool, Vec2) + 'a>;
 
 type TakeDrop<'a> = Box<dyn for<'b, 'c> FnMut(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
 
@@ -387,8 +388,7 @@ impl<'a> FloatingGroup<'a> {
     #[must_use]
     pub fn window_of<P: Clone + Hash + Send + Sync + 'static>(mut self, anchor: P) -> Self {
         let active = PanelKey::of(&anchor);
-        let size = self.rect.size();
-        self.start_drag = Some(Box::new(move |cx, title_row| start_window_drag(cx, anchor, active, size, title_row)));
+        self.start_drag = Some(Box::new(move |cx, title_row, size| start_window_drag(cx, anchor, active, size, title_row)));
         self
     }
 
@@ -451,8 +451,8 @@ impl<'a> FloatingGroup<'a> {
     /// A minimized group, and one with `Sizing::Content`, is placed by its position and width; its height is its
     /// content's, which is the chrome alone while minimized.
     fn mount(&self) -> Mount {
-        // The frame's limits are the body's with the chrome on top.
-        let frame = self.limits.around(Vec2::new(0.0, self.chrome));
+        let frame = self.frame_limits();
+        let rect = self.within_limits();
         // A collapsed column's width stays within its own bounds, a minimized one's within the panels' limits.
         let widths = self.column.map(|column| match column.collapsed {
             Some(_) => column.widths,
@@ -475,7 +475,7 @@ impl<'a> FloatingGroup<'a> {
             let width = self.rect.width().max(frame.min.x).min(frame.max.map_or(f32::INFINITY, |max| max.x));
             overlay.placed_at(self.rect.min).size_limits(SizeLimits { min: Vec2::new(width, frame.min.y), max: frame.max })
         } else {
-            overlay.placed(self.rect).size_limits(frame)
+            overlay.placed(rect).size_limits(frame)
         };
         if let Some(bounds) = self.bounds {
             overlay = overlay.bounds(bounds);
@@ -496,7 +496,21 @@ impl<'a> FloatingGroup<'a> {
     /// Where the group shows while its column's content fixes its height ([`WindowColumn::shown`]). `None` while the
     /// rect gives the height.
     fn held_rect(&self) -> Option<Rect> {
-        self.column?.shown(self.rect, self.chrome, self.rtl)
+        let column = self.column?;
+        // A collapsed column's width is its own; an expanded one shows at the rect's width within the panels' limits.
+        let rect = if column.collapsed.is_some() { self.rect } else { self.within_limits() };
+        column.shown(rect, self.chrome, self.rtl)
+    }
+
+    /// The window's size limits: the body's with the chrome on top.
+    fn frame_limits(&self) -> SizeLimits {
+        self.limits.around(Vec2::new(0.0, self.chrome))
+    }
+
+    /// The rect at its place, its size within [`Self::frame_limits`]: a rect placed or restored outside the panels'
+    /// limits shows at the nearest size within them, as an OS window's placed rect does.
+    fn within_limits(&self) -> Rect {
+        Rect::from_min_size(self.rect.min, self.frame_limits().clamp(self.rect.size()))
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
@@ -564,7 +578,10 @@ impl Component for FloatingGroup<'_> {
         if self.moving
             && let Some(start) = self.start_drag.take()
         {
-            start(&mut cx, !self.continued);
+            // A window its column's content sizes keeps the rect's size; any other keeps it within the panels' limits.
+            let fitted = self.column.is_some_and(|column| column.fitted.is_some());
+            let size = if fitted { self.rect.size() } else { self.within_limits().size() };
+            start(&mut cx, !self.continued, size);
         }
         if let Some(opener) = self.menu_opener {
             Popup::toggle(opener, &mut cx);

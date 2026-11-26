@@ -115,7 +115,8 @@ pub enum LayerRole {
     /// An ordinary layer.
     #[default]
     Plain,
-    /// A progress window: `any_open` leaves it out, as it blocks nothing the user waits on.
+    /// A progress window: `any_open` with `OpenFilter::Asks` leaves it out, as it asks the user nothing. The other
+    /// filters count it, since it still covers the window.
     Progress,
     /// A field over its owner's own content that edits it in place (a page's rename field): it is part of the owner,
     /// so the owner reports no open or expanded state and no popup it controls while it shows.
@@ -132,6 +133,8 @@ pub enum OpenFilter {
     Modal,
     /// Layers that take keys: popups and modals.
     Keys,
+    /// Modal layers that wait for the user's answer: every modal layer except a progress window.
+    Asks,
 }
 
 /// One shown egui layer.
@@ -442,10 +445,11 @@ pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| {
-        pass.last.iter().filter(|entry| !entry.exiting && entry.role != LayerRole::Progress).any(|entry| match filter {
+        pass.last.iter().filter(|entry| !entry.exiting).any(|entry| match filter {
             OpenFilter::Any => true,
             OpenFilter::Modal => entry.blocks_window(),
             OpenFilter::Keys => entry.takes_keys(),
+            OpenFilter::Asks => entry.blocks_window() && entry.role != LayerRole::Progress,
         })
     })
 }
