@@ -739,7 +739,18 @@ const POLL: Duration = Duration::from_millis(10);
 /// once it exits the output must reach its end within [`DRAIN`]. Standard error is read on another
 /// thread to its end, so a command that writes a lot there does not stop on a full pipe; its first
 /// `stderr_limit` bytes are kept, waiting at most [`DRAIN`] after a failing exit.
-fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) -> Result<Vec<u8>, Error> {
+fn output(cmd: Command, command: &str, limit: usize, stderr_limit: usize) -> Result<Vec<u8>, Error> {
+    output_with(cmd, command, limit, stderr_limit, Instant::now, Head::finish)
+}
+
+fn output_with(
+    mut cmd: Command,
+    command: &str,
+    limit: usize,
+    stderr_limit: usize,
+    mut now: impl FnMut() -> Instant,
+    finish: impl FnOnce(Head, Duration) -> Vec<u8>,
+) -> Result<Vec<u8>, Error> {
     let read_error = |source: io::Error| Error::Read { command: command.into(), source };
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|source| Error::Start { command: command.into(), source })?;
@@ -773,7 +784,7 @@ fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) ->
             Err(RecvTimeoutError::Disconnected) => break (Some(Err(io::Error::other("the output reader stopped"))), None),
             Err(RecvTimeoutError::Timeout) => match child.try_wait() {
                 Ok(Some(status)) => {
-                    let exit = Instant::now();
+                    let exit = now();
                     break (receiver.recv_timeout(DRAIN).ok(), Some((status, exit)));
                 }
                 Ok(None) => {}
@@ -798,7 +809,7 @@ fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) ->
     };
     let (status, exit) = match exited {
         Some(exited) => exited,
-        None => (child.wait().map_err(read_error)?, Instant::now()),
+        None => (child.wait().map_err(read_error)?, now()),
     };
     let Some(stdout) = stdout else {
         return Err(read_error(io::Error::new(io::ErrorKind::TimedOut, "the output stayed open after the command exited")));
@@ -806,7 +817,7 @@ fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) ->
     if status.success() {
         return Ok(stdout);
     }
-    let stderr = stderr.map(|head| head.finish(drain_left(exit, Instant::now()))).unwrap_or_default();
+    let stderr = stderr.map(|head| finish(head, drain_left(exit, now()))).unwrap_or_default();
     let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
     // An incomplete character at the end of the kept bytes decodes to a three-byte replacement.
     while stderr.len() > stderr_limit {
@@ -1502,6 +1513,8 @@ mod tests {
 
     /// The commands run as children: the test binary itself, running [`fake_child`].
     mod process {
+        #[cfg(unix)]
+        use super::super::output_with;
         use super::super::{DRAIN, Error, Limits, TargetFeatures, Violation, drain_left, host_target, metadata, run_target_features};
         use std::io::{BufRead, BufReader, Read, Write};
         use std::process::{Command, Stdio};
@@ -1509,6 +1522,8 @@ mod tests {
         const MODE: &str = "CRAFT_XTASK_PINS_FAKE";
         /// The file whose lock a `linger` child waits for.
         const RELEASE: &str = "CRAFT_XTASK_PINS_RELEASE";
+        const RELEASE_OUT: &str = "CRAFT_XTASK_PINS_RELEASE_OUT";
+        const RELEASE_ERR: &str = "CRAFT_XTASK_PINS_RELEASE_ERR";
         /// The line a `linger` child prints once it holds its pipe.
         const READY: &str = "craft-xtask-pins-linger-ready";
 
@@ -1516,6 +1531,28 @@ mod tests {
             let mut cmd = Command::new(std::env::current_exe().unwrap());
             cmd.args(["--ignored", "--exact", "--nocapture", "--test-threads=1", "pins::tests::process::fake_child", "--"]).env(MODE, mode);
             cmd
+        }
+
+        fn pipe_holder(holds_stdout: bool, release: Option<std::ffi::OsString>) -> bool {
+            let mut linger = fake(if holds_stdout { "linger-out" } else { "linger-err" });
+            linger.stdin(Stdio::null());
+            if let Some(release) = release {
+                linger.env(RELEASE, release);
+            }
+            if holds_stdout {
+                linger.stdout(Stdio::inherit()).stderr(Stdio::piped());
+            } else {
+                linger.stdout(Stdio::piped()).stderr(Stdio::inherit());
+            }
+            let Ok(mut child) = linger.spawn() else {
+                return false;
+            };
+            let signal: Option<Box<dyn Read>> = if holds_stdout {
+                child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read>)
+            } else {
+                child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read>)
+            };
+            signal.is_some_and(|pipe| BufReader::new(pipe).lines().any(|line| line.is_ok_and(|line| line.contains(READY))))
         }
 
         /// Stands in for `cargo` or `rustc` when [`MODE`] is set; does nothing otherwise. The harness
@@ -1548,27 +1585,21 @@ mod tests {
                 // and waits until it reports that it holds the pipe. Exits with code 4 when it does not.
                 "orphan-out" | "orphan-out-fail" | "orphan-err" => {
                     let holds_stdout = mode != "orphan-err";
-                    let mut linger = fake(if holds_stdout { "linger-out" } else { "linger-err" });
-                    linger.stdin(Stdio::null());
-                    if holds_stdout {
-                        linger.stdout(Stdio::inherit()).stderr(Stdio::piped());
-                    } else {
-                        linger.stdout(Stdio::piped()).stderr(Stdio::inherit());
-                    }
-                    let Ok(mut child) = linger.spawn() else {
-                        std::process::exit(4);
-                    };
-                    let signal: Option<Box<dyn Read>> = if holds_stdout {
-                        child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read>)
-                    } else {
-                        child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read>)
-                    };
-                    let ready = signal.is_some_and(|pipe| BufReader::new(pipe).lines().any(|line| line.is_ok_and(|line| line.contains(READY))));
-                    if !ready {
+                    if !pipe_holder(holds_stdout, None) {
                         std::process::exit(4);
                     }
                     if mode == "orphan-out" {
                         std::process::exit(0);
+                    }
+                    eprint!("failed");
+                    std::process::exit(3);
+                }
+                "orphan-both" => {
+                    let (Some(out), Some(err)) = (std::env::var_os(RELEASE_OUT), std::env::var_os(RELEASE_ERR)) else {
+                        std::process::exit(4);
+                    };
+                    if !pipe_holder(true, Some(out)) || !pipe_holder(false, Some(err)) {
+                        std::process::exit(4);
                     }
                     eprint!("failed");
                     std::process::exit(3);
@@ -1594,6 +1625,7 @@ mod tests {
                         let _ = writeln!(out, "{READY}").and_then(|()| out.flush());
                     }
                     let _ = file.lock();
+                    std::process::exit(0);
                 }
                 "host" => println!("rustc 1.0.0\nhost: fake-target\nrelease: 1.0.0"),
                 "tree" => println!("app-pdf v0.1.0|\ncraft-pdf v0.1.0|write\nkrilla v0.8.2|raster-images,simple-text"),
@@ -1707,6 +1739,48 @@ mod tests {
             assert_eq!(drain_left(exit, exit), DRAIN);
             assert_eq!(drain_left(exit, exit + DRAIN), std::time::Duration::ZERO);
             assert_eq!(drain_left(exit, exit + DRAIN * 2), std::time::Duration::ZERO);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn delayed_stdout_leaves_only_the_remaining_stderr_drain() {
+            let dir = tempfile::tempdir().unwrap();
+            let (out_path, err_path) = (dir.path().join("stdout"), dir.path().join("stderr"));
+            let out = std::fs::File::create(&out_path).unwrap();
+            let err = std::fs::File::create(&err_path).unwrap();
+            out.lock().unwrap();
+            err.lock().unwrap();
+            let mut cmd = fake("orphan-both");
+            cmd.env(RELEASE_OUT, &out_path).env(RELEASE_ERR, &err_path);
+            let exit = std::time::Instant::now();
+            let mut calls = 0;
+            let result = output_with(
+                cmd,
+                "fake command",
+                64 << 10,
+                1000,
+                || {
+                    calls += 1;
+                    if calls == 1 {
+                        out.unlock().unwrap();
+                        exit
+                    } else {
+                        exit + DRAIN / 2
+                    }
+                },
+                |head, wait| {
+                    err.unlock().unwrap();
+                    assert_eq!(wait, DRAIN / 2, "stderr received a second full drain window");
+                    head.finish(wait)
+                },
+            );
+            match result {
+                Err(Error::Exit { status, stderr, .. }) => {
+                    assert_eq!(status.code(), Some(3));
+                    assert_eq!(stderr, "failed");
+                }
+                other => panic!("expected Exit, got {other:?}"),
+            }
         }
 
         #[test]
