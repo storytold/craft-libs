@@ -131,7 +131,7 @@ fn has_words(dic: &str) -> bool {
 fn fits(registry: &[Entry], key: PackLocale, bytes: u64) -> Result<(), RegisterError> {
     let others: u64 = registry.iter().filter(|e| e.key != key).map(|e| e.bytes).fold(0, u64::saturating_add);
     let needed = others.saturating_add(bytes);
-    let budget = crate::pack_lang::budget();
+    let budget = crate::budget();
     if needed > budget { Err(RegisterError::OverBudget { needed, budget }) } else { Ok(()) }
 }
 

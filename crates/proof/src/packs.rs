@@ -37,7 +37,7 @@ const MAX_HYPHENATION_LOOKUPS: usize = 256;
 /// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
 /// a pack's patterns may be as large as a dictionary (64 MB of file), and up to
 /// [`MAX_HYPHENATION_LOOKUPS`] of them are kept, so they get a budget of their own, as the
-/// dictionaries do (`pack_lang::MAX_LOADED_BYTES`).
+/// dictionaries do (`pack_lang::DEFAULT_BUDGET`).
 const MAX_HYPHENATION_BYTES: u64 = 256 << 20;
 /// Estimated memory per pattern (its packed key, its values and the map's own room).
 const BYTES_PER_PATTERN: u64 = 64;

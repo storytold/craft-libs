@@ -22,7 +22,7 @@ fn finish() {
     for tag in registered_dictionaries() {
         unregister_dictionary(&tag);
     }
-    crate::pack_lang::set_budget(crate::pack_lang::MAX_LOADED_BYTES);
+    crate::set_budget(crate::DEFAULT_BUDGET);
     crate::packs::set_packs_dir(None);
     set_dictionaries_folder(Some(crate::tests::shared_test_folder()));
 }
@@ -165,7 +165,7 @@ fn a_registered_pair_is_charged_to_the_budget() {
     }
     crate::packs::set_packs_dir(Some(root.clone()));
     let pack = (AFF.len() as u64 + b"1\nwordqa\n".len() as u64) * crate::pack_lang::BYTES_PER_FILE_BYTE;
-    crate::pack_lang::set_budget(one + pack);
+    crate::set_budget(one + pack);
     let loads = crate::pack_lang::loads();
     assert!(is_correct_in("wordqa", lang("qa")));
     assert!(is_correct_in("wordqb", lang("qb")));
@@ -206,19 +206,19 @@ fn a_pair_past_the_caps_is_refused_with_a_reason() {
         assert!(matches!(&e, RegisterError::Unreadable(r) if r.contains("no words")), "{e:?}");
     }
     // Past the budget: the estimate of the pair is more than the room that is left.
-    crate::pack_lang::set_budget(100);
+    crate::set_budget(100);
     let e = refused("qr", AFF, b"1\nword\n");
     let needed = (AFF.len() as u64 + b"1\nword\n".len() as u64) * crate::pack_lang::BYTES_PER_FILE_BYTE;
     assert_eq!(e, RegisterError::OverBudget { needed, budget: 100 });
     assert!(e.to_string().contains("budget"), "{e}");
-    crate::pack_lang::set_budget(crate::pack_lang::MAX_LOADED_BYTES);
+    crate::set_budget(crate::DEFAULT_BUDGET);
     // The budget is checked before the bytes are decoded: a file that isn't text is over the budget,
     // not unreadable, when it could not fit anyway.
-    crate::pack_lang::set_budget(1 << 20);
+    crate::set_budget(1 << 20);
     let junk = vec![0xff; 1 << 20];
     let e = refused("qr", AFF, &junk);
     assert!(matches!(e, RegisterError::OverBudget { budget, .. } if budget == 1 << 20), "{e:?}");
-    crate::pack_lang::set_budget(crate::pack_lang::MAX_LOADED_BYTES);
+    crate::set_budget(crate::DEFAULT_BUDGET);
     // None of these registered anything.
     assert!(registered_dictionaries().is_empty());
     assert_eq!(bytes(), 0);

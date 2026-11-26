@@ -139,7 +139,7 @@ spelling message and the conservative French grammar and typography described ab
 spelling has no marks and hyphenation falls back to English; French grammar and typography
 still apply independently of a spelling dictionary.
 `has_dictionary(tag)` / `ProofLang::is_proofed()` say whether a `Pack` language has a dictionary
-now (read on first use, cached). Loaded `Pack` dictionaries share a 256 MB budget (estimated from their files); the least recently used goes first, but never one used in the paragraph being checked, and languages with no dictionary take no room. Downstream `match`es on `ProofLang` need a `Pack(_)` arm; `code()` stays `&'static str`
+now (read on first use, cached). Loaded `Pack` dictionaries share a [memory budget](#the-memory-budget) (256 MiB until the host sets one, estimated from their files); the least recently used goes first, but never one used in the paragraph being checked, and languages with no dictionary take no room. Downstream `match`es on `ProofLang` need a `Pack(_)` arm; `code()` stays `&'static str`
 and is `""` for it, as for `Other`: anything that keys, saves or reports a language (settings, caches, JSON/MCP output) uses `tag()`, which is `code()` for the built-ins and the locale (`nl`, `fr-fr`) for a pack language.
 
 **Which pack serves a language:** its locale, then shorter prefixes (`fr-ca` → `fr`), then another
@@ -221,6 +221,24 @@ unregister_dictionary("en-US");                       // back to the next source
   says `EnglishSource::Registered`.
 - Registering or removing a pair loads every dictionary again (`dictionary_generation()` changes),
   so register at start or when a language is first needed.
+
+### The memory budget
+
+```rust
+craft_proof::set_budget(64 << 20);          // a browser: 64 MiB (`DEFAULT_BUDGET` is 256 MiB)
+let used = craft_proof::memory_estimate();  // what the budget governs, in the same bytes
+let room = craft_proof::budget();
+```
+
+The budget governs the dictionaries loaded for the languages that read packs, the dictionaries
+folders or the system (`ProofLang::Pack`, German and Bulgarian) and the pairs registered as bytes. An
+estimate is six times the bytes of a dictionary's `.aff` and `.dic` files, and `memory_estimate()`
+adds them up. **A lowered budget takes effect at once:** the least recently used dictionaries are
+dropped until what is left fits, except those the check running on the thread uses, and a dropped one
+loads again on its next use. A registered pair is never dropped (`unregister_dictionary` removes it),
+and a dictionary larger than the whole budget still loads, alone. The languages with a dictionary slot
+of their own (`ProofLang::PROOFED` but the Englishes, such as Polish, Russian, Spanish) and the
+Englishes keep what they load until the folders change, and `memory_estimate()` does not count them.
 
 ### English is always checked
 
