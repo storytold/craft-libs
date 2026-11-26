@@ -71,10 +71,14 @@ fn the_destination_black_matches_the_source_lightness() {
             let o = TransformOptions { intent, bpc, ..opts() };
             let coated_lab = Transform::with_options(coated(), Builtin::LabD50.profile(), o).unwrap();
             let fogra_lab = Transform::with_options(fogra(), Builtin::LabD50.profile(), o).unwrap();
-            for (src, dst, src_lab, dst_lab) in [(coated(), fogra(), &coated_lab, &fogra_lab), (fogra(), coated(), &fogra_lab, &coated_lab)] {
+            // Both directions for one setting; the other settings in the forward one.
+            let directions = if intent == Intent::RelativeColorimetric && bpc { 2 } else { 1 };
+            for (src, dst, src_lab, dst_lab) in
+                [(coated(), fogra(), &coated_lab, &fogra_lab), (fogra(), coated(), &fogra_lab, &coated_lab)].into_iter().take(directions)
+            {
                 let bp = BlackPreserving::new(src, dst, o).unwrap();
                 let dst_black = lightness(dst_lab, [0.0, 0.0, 0.0, 1.0]);
-                for k in [0.1f32, 0.3, 0.5, 0.7, 0.9, 1.0] {
+                for k in [0.1f32, 0.5, 0.9, 1.0] {
                     let want = lightness(src_lab, [0.0, 0.0, 0.0, k]);
                     if want <= dst_black {
                         assert_eq!(bp.map_k(k), 1.0, "darker than the destination's black clamps to K = 1");

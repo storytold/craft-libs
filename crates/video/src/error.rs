@@ -1,10 +1,10 @@
-//! [`VideoError`], the error of the codec-agnostic layer ([`crate::TrackDecoder`]).
+//! [`VideoError`], the error of the codec-agnostic layer (`TrackDecoder`).
 
 use crate::frame::FrameError;
 
 /// Errors from the codec-agnostic layer.
 ///
-/// Codec errors convert into it, so code mixing [`crate::TrackDecoder`] with the codec modules can
+/// Codec errors convert into it, so code mixing `TrackDecoder` with the codec modules can
 /// use `?` throughout: a codec's "unsupported" stays [`VideoError::Unsupported`], anything else in
 /// the input is [`VideoError::Malformed`]. The message starts with the codec's name.
 #[non_exhaustive]
@@ -113,5 +113,15 @@ impl From<crate::ffv1::Error> for VideoError {
 impl From<crate::vp8::Error> for VideoError {
     fn from(e: crate::vp8::Error) -> Self {
         VideoError::Malformed(format!("VP8: {e}"))
+    }
+}
+
+#[cfg(feature = "mjpeg")]
+impl From<crate::mjpeg::Error> for VideoError {
+    fn from(e: crate::mjpeg::Error) -> Self {
+        match e {
+            crate::mjpeg::Error::Unsupported(_) => VideoError::Unsupported(format!("Motion JPEG: {e}")),
+            _ => VideoError::Malformed(format!("Motion JPEG: {e}")),
+        }
     }
 }

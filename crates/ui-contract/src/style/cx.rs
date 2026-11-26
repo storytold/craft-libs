@@ -1,0 +1,627 @@
+//! `StyleCx`: what `style` and the app colour hooks get. Tokens are readable only through it.
+
+use super::key::{EnvKey, Ink};
+use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackFill, TrackLook};
+use super::paint::{
+    AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, auto_scroll_mark_look, handle_look,
+    marker_look, reset_mark_look, rule_look, scroll_bar_look_of,
+};
+use super::surface::{SurfaceStyle, surface_style};
+use super::tokens::UiTokens;
+use crate::fonts::stack_facts;
+use crate::runtime::env::{AppValues, MotionPolicy, Scale, StyleValue};
+use crate::runtime::motion::{MotionSpec, Presence};
+use crate::runtime::pass_state;
+use craft_behavior::ControlMetrics;
+use craft_host::target::Os;
+use craft_i18n::Direction;
+use craft_theme::Stroke as StrokeStep;
+use craft_theme::{BySize, Contrast, ControlSize, Flags, RadiusStep, Rgba, Size, Stateful, States, TokenGroup, Variant, VariantLook, variant::Tone};
+use egui::{Color32, Context, CornerRadius, Id};
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::Arc;
+
+/// How the icon-only buttons of a scope show their glyph, set by the container that holds them
+/// (`ContainerProps::child_glyphs`) or on one component (`Props::glyphs`). Each role reads size tokens only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GlyphRole {
+    /// A glyph inside a control: `size.icon.glyph_sm` or `glyph_md` by the control size, in the variant's ink.
+    #[default]
+    Control,
+    /// A command strip of tool icons (align and distribute) or a panel footer's actions: `size.icon.md`, in the
+    /// variant's ink.
+    Tool,
+    /// A tool rail: `size.icon.lg`, resting in `text.muted` and in the variant's ink under the pointer.
+    ToolRail,
+    /// A list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
+    PanelRail,
+}
+
+/// What `fn style` gets. Tokens are read here and nowhere else.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub struct StyleCx<'a> {
+    /// The resolved tokens of the scope.
+    pub tokens: &'a UiTokens,
+    /// The control size.
+    pub size: ControlSize,
+    /// The variant, one the component accepts.
+    pub variant: Variant,
+    /// The layout direction.
+    pub direction: Direction,
+    /// The interface scale.
+    pub scale: Scale,
+    /// The operating system.
+    pub os: Os,
+    /// Whether the window is active, so selection and focus looks dim in an inactive window.
+    pub active: bool,
+    /// The key of everything above that the style cache depends on.
+    pub key: EnvKey,
+    /// The glyph role of the scope; the key folds it in when it is not `Control`.
+    glyphs: GlyphRole,
+    /// The text colour of the part this component is shown as the face of.
+    host: Option<&'a Stateful<StyleColor>>,
+    /// The muted text colour of the host part, when the host has one.
+    host_muted: Option<&'a Stateful<StyleColor>>,
+    /// The line height per point of text of the interface face, as the scope's frame began.
+    line_ratio: f32,
+    ctx: &'a Context,
+    values: &'a AppValues,
+    /// The component whose motion memory `exiting` reads, and the motion policy it runs under; set by the collection
+    /// hook for the layout it asks of the component.
+    owner: Option<(Id, MotionPolicy)>,
+    /// The `Ui` a collection's layout hook measures faces in; none elsewhere.
+    pub(crate) measuring: Option<&'a egui::Ui>,
+}
+
+/// A variant's look as style parts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantParts {
+    /// The fill per state.
+    pub fill: Stateful<StyleColor>,
+    /// The text and icon colour per state.
+    pub text: Stateful<StyleColor>,
+    /// The colour of secondary glyphs per state.
+    pub muted: Stateful<StyleColor>,
+    /// The edge per state.
+    pub edge: Option<Stateful<StyleColor>>,
+    /// The corner radius.
+    pub radius: CornerRadius,
+}
+
+/// Token groups built for a token set, and the type behind each group path.
+#[derive(Default)]
+pub(crate) struct GroupCache {
+    built: HashMap<(TypeId, u64), Arc<dyn Any + Send + Sync>>,
+    paths: Vec<(&'static str, TypeId)>,
+}
+
+/// A hash of every colour and flag mask of `ink`.
+fn ink_hash(ink: &Stateful<StyleColor>) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut put = |color: &StyleColor| color.egui().to_array().hash(&mut hasher);
+    let mut states = |states: &States<StyleColor>| [states.rest, states.hover, states.pressed, states.disabled].iter().for_each(&mut put);
+    states(&ink.off);
+    ink.on.iter().for_each(&mut states);
+    for (mask, color) in &ink.when {
+        mask.0.hash(&mut hasher);
+        color.egui().to_array().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn egui_color(c: Rgba) -> Color32 {
+    let [r, g, b, a] = c.0;
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+impl<'a> StyleCx<'a> {
+    /// The frame's context, for the gate on effects in a measuring run.
+    #[doc(hidden)]
+    pub fn frame_ctx(&self) -> &Context {
+        self.ctx
+    }
+
+    /// The contrast setting of the scope, for a style that adds a cue at high contrast.
+    pub fn contrast(&self) -> Contrast {
+        self.tokens.contrast()
+    }
+
+    /// The density preset of the scope, for a style whose shape differs between presets.
+    pub fn density(&self) -> Size {
+        self.tokens.density()
+    }
+
+    /// The component set of the scope, for a component that maps it to one of its named variants.
+    pub fn set(&self) -> craft_theme::ComponentSet {
+        self.env::<craft_theme::ComponentSet>()
+    }
+
+    /// A style context for the scope the pipeline or an app colour hook runs in.
+    #[expect(clippy::too_many_arguments, reason = "one argument per input the style cache key covers")]
+    #[doc(hidden)]
+    pub fn new(
+        ctx: &'a Context,
+        tokens: &'a UiTokens,
+        values: &'a AppValues,
+        size: ControlSize,
+        variant: Variant,
+        direction: Direction,
+        scale: Scale,
+        os: Os,
+        active: bool,
+        key: EnvKey,
+        line_ratio: f32,
+    ) -> Self {
+        StyleCx {
+            tokens,
+            size,
+            variant,
+            direction,
+            scale,
+            os,
+            active,
+            key,
+            glyphs: GlyphRole::Control,
+            host: None,
+            host_muted: None,
+            line_ratio,
+            ctx,
+            values,
+            owner: None,
+            measuring: None,
+        }
+    }
+
+    /// The style context of the scope `env` describes, in the secondary variant: for code outside a style function
+    /// that works out a layout from a component's style or the scope's tokens.
+    pub fn of_env(ctx: &'a Context, env: &'a crate::runtime::env::Env) -> Self {
+        StyleCx::new(
+            ctx,
+            &env.tokens,
+            &env.values,
+            env.size,
+            Variant::SECONDARY,
+            env.direction,
+            env.scale,
+            env.os,
+            env.active,
+            env.key,
+            env.line_ratio,
+        )
+    }
+
+    /// Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
+    /// component's style, such as the dock's sizes outside a style pass.
+    pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
+        Self::with_root_scoped(ctx, &crate::runtime::env::ThemeScope::new(), f)
+    }
+
+    /// Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
+    pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
+        let env = crate::runtime::env::Env::of_root(ctx).derive_local(|scoped| scope.apply(ctx, scoped));
+        f(&StyleCx::of_env(ctx, &env))
+    }
+
+    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+    /// not `enabled`.
+    pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
+        let colors = &self.tokens.color;
+        let accent = if self.contrast() == Contrast::High { colors.accent.text } else { colors.accent.solid };
+        let (ink, off) = (self.color(accent), self.color(colors.text.disabled));
+        let rest = if enabled { ink } else { off };
+        super::look::TextLook::new(craft_theme::TypeRole::Body, Stateful::new(rest).off(States::new(rest, rest, rest, off)))
+    }
+
+    /// The same context measuring faces in `ui`; the collection hook calls it before it asks for a layout.
+    pub(crate) fn measured_by<'b>(&self, ui: &'b egui::Ui) -> StyleCx<'b>
+    where
+        'a: 'b,
+    {
+        StyleCx { measuring: Some(ui), ..*self }
+    }
+
+    /// The same context scoped to the component `id`, whose keyed presences `exiting` reads under `policy`.
+    pub(crate) fn owned_by(&self, id: Id, policy: MotionPolicy) -> StyleCx<'a> {
+        StyleCx { owner: Some((id, policy)), ..*self }
+    }
+
+    /// The keyed presences of `name` in the motion memory of the component this context is scoped to, for the keys
+    /// not among `listed` (the keys its source lists now): each is still fading out, with the payload it was last
+    /// given and the presence it has at this pass's clock, as `Animate::exiting` computes it. It reads without
+    /// driving, so a collection's `item_layout` can keep the room of an item that is leaving until its exit ends.
+    /// Empty outside a collection's layout.
+    pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)> {
+        let Some((id, policy)) = self.owner else { return Vec::new() };
+        let listed: Vec<Id> = listed.iter().map(crate::runtime::motion::key_id).collect();
+        crate::runtime::motion::peek_exiting(self.ctx, id, policy, name, spec, &listed)
+    }
+
+    /// The same context with another variant.
+    #[doc(hidden)]
+    pub fn with_variant(&self, variant: Variant) -> StyleCx<'a> {
+        StyleCx { variant, ..*self }
+    }
+
+    /// The same context in a scope whose icon-only buttons show their glyph in `role`.
+    pub(crate) fn with_glyphs(&self, role: GlyphRole) -> StyleCx<'a> {
+        let key = if role == GlyphRole::Control { self.key } else { self.key.folded(role as u64 + 1) };
+        StyleCx { glyphs: role, key, ..*self }
+    }
+
+    /// The same context for a component shown as the face of a part whose text colour is `ink` and whose muted text
+    /// colour is `muted`. The key folds both in, so a face's cached styles are per host look.
+    pub(crate) fn hosted(&self, ink: &'a Stateful<StyleColor>, muted: Option<&'a Stateful<StyleColor>>) -> StyleCx<'a> {
+        let key = muted.map_or(self.key.folded(ink_hash(ink)), |muted| self.key.folded(ink_hash(ink)).folded(ink_hash(muted)));
+        StyleCx { host: Some(ink), host_muted: muted, key, ..*self }
+    }
+
+    /// An app value set by a scope. Its hash is part of the style cache key.
+    pub fn env<T: StyleValue>(&self) -> T {
+        debug_assert!(
+            T::AFFECTS_STYLE,
+            "{} is read by style but does not set AFFECTS_STYLE, so cached styles would go stale",
+            std::any::type_name::<T>()
+        );
+        self.values.get::<T>()
+    }
+
+    /// The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
+    /// here. Content paint picks a role through `Draw::role`.
+    pub fn color(&self, color: Rgba) -> StyleColor {
+        StyleColor(egui_color(color))
+    }
+
+    /// The ink for text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the contrast the text needs.
+    pub fn ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
+    }
+
+    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::non_text_contrast_min(self.contrast())))
+    }
+
+    /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
+    /// needs: the inverse of [`ink_on`](Self::ink_on).
+    pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
+        self.color(craft_theme::ensure_contrast(Rgba::from(color.0), on, craft_theme::text_contrast_min(self.contrast())))
+    }
+
+    /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
+    pub fn focus_look(&self) -> FocusLook {
+        FocusLook::new(egui::Stroke::new(self.tokens.stroke.focus, self.color(self.tokens.color.line.focus).egui()), 0.0)
+    }
+
+    /// The colour text and icons of `tone` read in.
+    pub fn tone(&self, tone: Tone) -> StyleColor {
+        self.color(tone.ink(self.tokens))
+    }
+
+    /// The tinted background text and icons of `tone` sit on: the status or accent background, and the sunken surface
+    /// for no status.
+    pub fn tone_fill(&self, tone: Tone) -> StyleColor {
+        self.color(tone.soft_fill(self.tokens))
+    }
+
+    /// The colour text and icons read in on [`tone_fill`](Self::tone_fill): `accent.on_soft`, the status foreground,
+    /// and the normal text for no status.
+    pub fn tone_on_fill(&self, tone: Tone) -> StyleColor {
+        self.color(tone.on_soft(self.tokens))
+    }
+
+    /// A text or icon colour that is `base` when the component stands alone and the text colour of the host part
+    /// when it is shown as that part's face, so a face reads on whatever fill the host draws under it.
+    pub fn host_ink(&self, base: Stateful<StyleColor>) -> Stateful<StyleColor> {
+        self.host.cloned().unwrap_or(base)
+    }
+
+    /// A muted text colour that is `base` when the component stands alone and the muted text colour of the host part
+    /// when it is shown as that part's face and the host has one.
+    pub fn host_muted_ink(&self, base: Stateful<StyleColor>) -> Stateful<StyleColor> {
+        self.host_muted.cloned().unwrap_or(base)
+    }
+
+    /// The ink of a glyph that acts on a click without a face of its own (a disclosure, a list row's toggle cell):
+    /// `text.muted` at rest, `text.normal` under the pointer and while pressed, `text.disabled` when disabled, on or off.
+    pub fn quiet_ink(&self) -> Stateful<StyleColor> {
+        let text = &self.tokens.color.text;
+        let (muted, normal, off) = (self.color(text.muted), self.color(text.normal), self.color(text.disabled));
+        Stateful::new(muted).off(States::new(muted, normal, normal, off))
+    }
+
+    /// The fill of an accent control that is on or filled: the strong accent at rest, with its hover and pressed
+    /// shades, and the disabled fill when disabled.
+    pub fn accent_fill(&self) -> Stateful<StyleColor> {
+        let (accent, state) = (&self.tokens.color.accent, &self.tokens.color.state);
+        let rest = self.color(accent.strong);
+        Stateful::new(rest).off(States::new(
+            rest,
+            self.color(accent.strong_hover),
+            self.color(accent.strong_pressed),
+            self.color(state.disabled_fill),
+        ))
+    }
+
+    /// The look of a value track: a groove of `size.groove` with the part a value fills over it, in the scope's
+    /// [`TrackFill`], and its marks.
+    pub fn track(&self) -> TrackLook {
+        let colors = &self.tokens.color;
+        let (groove, fill) = match self.env::<TrackFill>() {
+            TrackFill::Muted => (colors.line.control_edge, colors.text.muted),
+            TrackFill::Accent => (colors.line.outline, colors.accent.solid),
+        };
+        let (groove, fill) = (self.color(groove), self.color(fill));
+        TrackLook {
+            unfilled: Stateful::new(groove),
+            filled: Stateful::new(fill).off(States::new(fill, fill, fill, self.color(colors.text.disabled))),
+            edge: Stateful::new(self.color(colors.line.control_edge)),
+            edge_width: self.tokens.stroke.thin,
+            thickness: self.tokens.size.groove,
+            ramp: self.tokens.size.ramp.groove,
+            radius: UiTokens::corner(self.tokens.shape.radius.pill),
+            mark_length: self.tokens.space.gap.tight,
+            mark_width: self.tokens.stroke.thin,
+            mark_color: Stateful::new(self.color(colors.line.mark)),
+            snap: self.control().icon / 2.0,
+        }
+    }
+
+    /// The colour text and icons on a surface read in.
+    pub fn ink(&self, ink: Ink) -> StyleColor {
+        let c = &self.tokens.color.text;
+        self.color(match ink {
+            Ink::OnPanel => c.normal,
+            Ink::OnDark => c.on_strong,
+            Ink::Accent => self.tokens.color.accent.text,
+        })
+    }
+
+    /// The height, icon side, padding, gap and field widths of a control at the ambient size.
+    pub fn control(&self) -> ControlMetrics {
+        self.control_of(self.size)
+    }
+
+    /// The side of a mark inside a control at the ambient size (`size.icon.glyph_sm`, `glyph_md`): an icon-only
+    /// button's glyph, a slider's thumb. Smaller than the icon side, so it reads below the cap height of text beside it.
+    pub fn glyph(&self) -> f32 {
+        let icon = &self.tokens.size.icon;
+        BySize { sm: icon.glyph_sm, md: icon.glyph_md }.get(self.size)
+    }
+
+    /// The height of a push button at the ambient size: `size.button` at the medium size, grown as a control's height
+    /// is; a small button stands a small control high.
+    pub fn button_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.button, self.line_ratio),
+        }
+    }
+
+    /// The height of a dialog's footer button at the ambient size: `size.dialog.button_height` at the medium size, grown
+    /// as a control's height is; a small button stands a small control high.
+    pub fn dialog_button_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.dialog.button_height, self.line_ratio),
+        }
+    }
+
+    /// The height of a menu row at the ambient size: `size.row.menu` at the medium size, grown as a control's height
+    /// is; a small row stands a small control high.
+    pub fn menu_row_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.row.menu, self.line_ratio),
+        }
+    }
+
+    /// How the icon-only buttons of the scope show their glyph.
+    pub fn glyph_role(&self) -> GlyphRole {
+        self.glyphs
+    }
+
+    /// `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's
+    /// adornment button) reads its height here.
+    pub fn control_of(&self, size: ControlSize) -> ControlMetrics {
+        control_metrics(self.tokens, size, self.line_ratio)
+    }
+
+    /// `control`, with the side padding of a segment of a segmented control: `space.pad.control` at the small size
+    /// and `space.pad.segment` at the medium one.
+    pub fn segment_control(&self) -> ControlMetrics {
+        let pads = &self.tokens.space.pad;
+        let mut control = self.control();
+        control.pad_x = BySize { sm: pads.control, md: pads.segment }.get(self.size);
+        control
+    }
+
+    /// The width of `text` set in the face of `role`: the sizes that follow the text (a row header's digit) read it
+    /// here instead of borrowing an icon or control size.
+    pub fn text_width(&self, role: craft_theme::TypeRole, text: &str) -> f32 {
+        super::text_measure::line_width(self.ctx, self.tokens, stack_facts(self.ctx), self.direction, role, text)
+    }
+
+    /// What a surface of `kind` draws.
+    pub fn surface(&self, kind: SurfaceKind) -> SurfaceStyle {
+        surface_style(self.tokens, kind)
+    }
+
+    /// The look of a text well: the well surface with an edge that takes the focus colour while the well holds
+    /// focus, in any modality, and the quieter divider colour while it is disabled. The edge replaces the surface's
+    /// flat stroke; a bevelled well keeps its bevel and draws an edge only while it holds focus. A component that carries no value, so
+    /// is never invalid, uses it as it is.
+    pub fn text_well(&self) -> SurfaceLook {
+        let well = self.surface(SurfaceKind::Well);
+        let colors = &self.tokens.color;
+        let flat = matches!(well.edge, super::surface::SurfaceEdge::Border(_));
+        let (rest, disabled) = if flat { (colors.line.control_edge, colors.line.divider) } else { (Rgba::TRANSPARENT, Rgba::TRANSPARENT) };
+        let (rest, disabled) = (self.color(rest), self.color(disabled));
+        let edge = Stateful::new(rest).off(States::new(rest, rest, rest, disabled)).when(Flags::FOCUSED, self.color(colors.line.focus));
+        let (fill, off) = (StyleColor(well.fill), self.color(self.tokens.color.state.disabled_fill));
+        SurfaceLook::new(Stateful::new(fill).off(States::new(fill, fill, fill, off)))
+            .kind(SurfaceKind::Well)
+            .radius(well.radius)
+            .border(edge, StrokeStep::W1.width(1.0))
+            .border_replaces_edge()
+    }
+
+    /// The look of a text or value field: the text well with the failure colour on its edge while its value is
+    /// invalid. A focused invalid field keeps the focus colour on its edge and draws the failure colour as a line
+    /// inside it.
+    pub fn field(&self) -> SurfaceLook {
+        let mut look = self.text_well();
+        let bad = self.tone(Tone::Bad);
+        if let Some(edge) = &mut look.border {
+            edge.when.push((Flags::INVALID.into(), bad));
+            let clear = self.color(Rgba::TRANSPARENT);
+            look.inner = Some(Stateful::new(clear).when(Flags::INVALID | Flags::FOCUSED, bad));
+        }
+        look
+    }
+
+    /// The look of the closed box of a dropdown picker: the field, filled with the hover fill under the pointer and
+    /// while its list is open.
+    pub fn dropdown(&self) -> SurfaceLook {
+        let mut look = self.field();
+        let hover = self.color(self.tokens.color.state.hover);
+        look.fill.off.hover = hover;
+        look.fill.off.pressed = hover;
+        look
+    }
+
+    /// The line a rule of `kind` draws.
+    pub fn rule(&self, kind: RuleKind) -> RuleLook {
+        rule_look(self.tokens, kind)
+    }
+
+    /// The look of a canvas handle.
+    pub fn handle(&self) -> HandleLook {
+        handle_look(self.tokens)
+    }
+
+    /// The look of a colour marker.
+    pub fn marker(&self) -> MarkerLook {
+        marker_look(self.tokens)
+    }
+
+    /// The look of a scroll bar.
+    pub fn scroll_bar(&self) -> ScrollBarLook {
+        self.scroll_bar_of(ScrollBarKind::Floating)
+    }
+
+    /// The look of a scroll bar of `kind`.
+    pub fn scroll_bar_of(&self, kind: ScrollBarKind) -> ScrollBarLook {
+        scroll_bar_look_of(self.tokens, kind)
+    }
+
+    /// The state layer: the theme's hover and press fills, clear at rest and while disabled. A part declared
+    /// `PartBuilder::state_layer` gets it from the paint step; a look built over it reads it here.
+    pub fn state_layer(&self) -> Stateful<StyleColor> {
+        super::paint::state_layer_look(self.tokens)
+    }
+
+    /// The look of the auto-scroll mark.
+    pub fn auto_scroll_mark(&self) -> AutoScrollMarkLook {
+        auto_scroll_mark_look(self.tokens)
+    }
+
+    /// The look of the reset mark.
+    pub fn reset_mark(&self) -> ResetMarkLook {
+        reset_mark_look(self.tokens)
+    }
+
+    /// The look of the instance's variant as style parts.
+    pub fn variant_look(&self) -> VariantParts {
+        let look: VariantLook = self.variant.resolve(self.tokens);
+        let states = |s: States<Rgba>| {
+            let c = |c: Rgba| self.color(c);
+            Stateful::new(c(s.rest)).off(States::new(c(s.rest), c(s.hover), c(s.pressed), c(s.disabled)))
+        };
+        let radius = &self.tokens.shape.radius;
+        let px = match look.radius {
+            RadiusStep::Button => radius.button,
+            RadiusStep::Pill => radius.pill,
+            _ => radius.control,
+        };
+        VariantParts {
+            fill: states(look.fill),
+            text: states(look.text),
+            muted: states(look.muted),
+            edge: look.edge.map(states),
+            radius: UiTokens::corner(px),
+        }
+    }
+
+    /// The token group `G` for this token set: derived from the tokens with the theme's values under `G::PATH` laid
+    /// over it, built on the first read and cached by `(TypeId::of::<G>(), UiTokens::key)`.
+    pub fn token_group<G: TokenGroup>(&self) -> G {
+        let cache_key = (TypeId::of::<G>(), self.tokens.key());
+        let hit = pass_state::with::<GroupCache, _>(self.ctx, |cache| cache.built.get(&cache_key).cloned());
+        if let Some(hit) = hit.and_then(|entry| entry.downcast::<G>().ok()) {
+            return (*hit).clone();
+        }
+        let clash = pass_state::with::<GroupCache, _>(self.ctx, |cache| {
+            let clash = cache.paths.iter().any(|(path, ty)| *path == G::PATH && *ty != TypeId::of::<G>());
+            if !clash && !cache.paths.iter().any(|(_, ty)| *ty == TypeId::of::<G>()) {
+                cache.paths.push((G::PATH, TypeId::of::<G>()));
+            }
+            clash
+        });
+        debug_assert!(!clash, "two token group types share the path {}", G::PATH);
+        let mut group = G::derive(self.tokens);
+        group.overlay(self.tokens.groups());
+        // The clone is app code, so it runs before the service lock is taken.
+        let shared: Arc<dyn Any + Send + Sync> = Arc::new(group.clone());
+        pass_state::with::<GroupCache, _>(self.ctx, |cache| cache.built.insert(cache_key, shared));
+        group
+    }
+}
+
+/// The height, icon side, padding, gap and field widths of a control of `size`.
+///
+/// The height is the size token, or more when the face that leads the interface stack sets taller rows than the
+/// token's type line: the control's vertical padding (the token height less the label role's line height, which
+/// the token already holds) around the leading face's line height at the label size. `line_ratio` is that face's
+/// line height per point of text (`0` with no stack installed: the token alone).
+/// A control height token grown by what a label line under `line_ratio` takes beyond the label's line height.
+fn grown(tokens: &UiTokens, token: f32, line_ratio: f32) -> f32 {
+    let label = tokens.typography.label;
+    token + (line_ratio * label.size - label.line_height).max(0.0)
+}
+
+pub(crate) fn control_metrics(tokens: &UiTokens, size: ControlSize, line_ratio: f32) -> ControlMetrics {
+    let sizes = &tokens.size;
+    let grown = |token: f32| grown(tokens, token, line_ratio);
+    let pad = tokens.space.pad.control;
+    let gap = tokens.space.gap.inline;
+    ControlMetrics::at(
+        size,
+        &BySize { sm: grown(sizes.control.sm), md: grown(sizes.control.md) },
+        &BySize { sm: sizes.icon.sm, md: sizes.icon.md },
+        &BySize { sm: pad, md: pad },
+        &BySize { sm: gap, md: gap },
+        &BySize { sm: sizes.length.field.sm, md: sizes.length.field.md },
+        &BySize { sm: sizes.length.number.sm, md: sizes.length.number.md },
+    )
+}
