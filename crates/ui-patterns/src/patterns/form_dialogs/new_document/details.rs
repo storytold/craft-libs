@@ -124,8 +124,7 @@ pub(super) fn show<S: DocumentSettings>(
                 // Saved presets live on the Saved tab, so only the dialog that shows it offers to save one.
                 if read.tabs == DocumentTabs::RecentPresetsSaved {
                     let title = words.save_preset_title.clone();
-                    let save =
-                        IconButton::new(IconId::new("square_plus")).label(title.clone()).tooltip(title).id_salt("save-preset").show(ui);
+                    let save = IconButton::new(IconId::new("square_plus")).label(title.clone()).tooltip(title).id_salt("save-preset").show(ui);
                     if clicked(&save) {
                         session.naming = Some(proposed_name(read));
                         session.name_tried = false;

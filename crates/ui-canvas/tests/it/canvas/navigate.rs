@@ -1668,7 +1668,8 @@ fn a_wheel_navigates_but_a_queued_request_does_not() {
         // Never given a rect, the view opens fitted in the first pass that has room.
         let given = shown.get();
         let commands = asked.borrow().clone();
-        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).queued(&commands).show(ui, |_, _| {});
+        let canvas =
+            Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).queued(&commands).show(ui, |_, _| {});
         shown.set(canvas.output.view.unwrap_or(given));
         seen.borrow_mut().push(canvas.output.navigated);
         asked.borrow_mut().clear();

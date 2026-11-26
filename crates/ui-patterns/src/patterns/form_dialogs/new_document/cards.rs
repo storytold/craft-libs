@@ -268,15 +268,18 @@ fn tab_title<P>(tab: TabId, categories: &[PresetCategory<P>], words: &NewDocumen
         TabId::Recent => words.recent.clone(),
         TabId::Saved => words.saved.clone(),
         // Past the categories is the one tab of every card a `Presets` dialog without categories lists.
-        TabId::Category(at) => categories.get(at).map_or_else(|| words.cards.clone(), |category| match category.id.as_ref() {
-            "photo" => words.photo.clone(),
-            "print" => words.print.clone(),
-            "art" => words.art.clone(),
-            "web" => words.web.clone(),
-            "mobile" => words.mobile.clone(),
-            "film" => words.film.clone(),
-            _ => category.title.clone(),
-        }),
+        TabId::Category(at) => categories.get(at).map_or_else(
+            || words.cards.clone(),
+            |category| match category.id.as_ref() {
+                "photo" => words.photo.clone(),
+                "print" => words.print.clone(),
+                "art" => words.art.clone(),
+                "web" => words.web.clone(),
+                "mobile" => words.mobile.clone(),
+                "film" => words.film.clone(),
+                _ => category.title.clone(),
+            },
+        ),
     }
 }
 
@@ -401,9 +404,9 @@ fn tile_of<'p, S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook
             tile.thumb(ThumbAspect::new(1, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint(&picture, painter, rect))
         }
         _ => match look {
-            PresetCardLook::Outline => tile
-                .flat_thumbnail()
-                .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page)),
+            PresetCardLook::Outline => {
+                tile.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page))
+            }
             PresetCardLook::Page => tile.page(page.0, page.1),
         },
     };

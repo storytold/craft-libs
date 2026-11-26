@@ -20,10 +20,7 @@ use crate::list::{List, ListRow, RowEvent, ThumbAspect, TrailingFace, TrailingPa
 use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
-use crate::primitives::{
-    CheckerArea, ContentPainterCx, HAlign, IconSpec, RectSide, Rule, RuleKind, ThumbSource, Thumbnails,
-    paint_surround,
-};
+use crate::primitives::{CheckerArea, ContentPainterCx, HAlign, IconSpec, RectSide, Rule, RuleKind, ThumbSource, Thumbnails, paint_surround};
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label, Overrides, with_env};
@@ -1636,11 +1633,7 @@ fn templates_grid(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
             None => page.tile(&template.name, detail, ThumbKey::Template(template.id.clone())),
         };
         // The description is the info mark's tooltip, so it also joins the card's accessible name.
-        if template.description.is_empty() {
-            tile
-        } else {
-            tile.mark(TileMark::new(IconId::new("info"), template.description.clone()))
-        }
+        if template.description.is_empty() { tile } else { tile.mark(TileMark::new(IconId::new("info"), template.description.clone())) }
     });
     let mut lead = None;
     for id in read_events(out.response.events, &mut lead).0 {
