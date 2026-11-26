@@ -1111,6 +1111,39 @@ fn build_track(
     Ok(t)
 }
 
+/// A single KLV can hold a whole clip. Only recover it when every edit unit
+/// can be delimited, or file-track metadata identifies exactly one picture.
+fn has_recovered_boundaries(
+    element: &Element,
+    expected: Option<usize>,
+    entries: &std::collections::BTreeMap<usize, IndexEntry>,
+    unit_bytes: u32,
+) -> bool {
+    if element.truncated || element.size == 0 {
+        return false;
+    }
+    if expected == Some(1) {
+        return u32::try_from(element.size).is_ok();
+    }
+    if unit_bytes > 0 {
+        let width = u64::from(unit_bytes);
+        return element.size.is_multiple_of(width) && expected.is_none_or(|n| n as u64 == element.size / width);
+    }
+    let Some(first) = entries.get(&0) else { return false };
+    if entries.len() < 2 || expected.is_some_and(|n| n != entries.len()) {
+        return false;
+    }
+    let mut previous = 0;
+    for (position, (&edit_unit, entry)) in entries.iter().enumerate().skip(1) {
+        let Some(offset) = entry.stream_offset.checked_sub(first.stream_offset) else { return false };
+        if edit_unit != position || offset <= previous || offset >= element.size || offset - previous > u64::from(u32::MAX) {
+            return false;
+        }
+        previous = offset;
+    }
+    element.size - previous <= u64::from(u32::MAX)
+}
+
 fn build_pictures(
     src: &(impl ByteSource + ?Sized),
     t: &mut EssenceTrack,
@@ -1120,11 +1153,14 @@ fn build_pictures(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     let (entries, eubc) = index_entries(index, t.index_sid, required_body);
-    if required_body.is_some() && elements.len() == 1 && entries.is_empty() && eubc == 0 && t.duration != Some(1) {
+    let expected = t.duration.map(|d| d.saturating_add(t.first_edit_unit()).max(0) as usize);
+    if required_body.is_some()
+        && let [element] = elements
+        && !has_recovered_boundaries(element, expected, &entries, eubc)
+    {
         warnings.push("recovered picture element has no verified edit-unit boundaries".into());
         return Ok(());
     }
-    let expected = t.duration.map(|d| d.saturating_add(t.first_edit_unit()).max(0) as usize);
     let clip = elements.len() == 1 && expected.is_none_or(|n| n > 1) && (eubc > 0 || entries.len() > 1);
     let mut samples: Vec<Sample> = Vec::new();
     if clip {

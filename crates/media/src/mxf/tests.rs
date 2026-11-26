@@ -635,3 +635,20 @@ fn damaged_link_clip_wrapped_picture_needs_its_own_frame_boundaries() {
         }
     }
 }
+
+#[test]
+fn partial_picture_a_lone_index_entry_cannot_split_a_two_frame_payload() {
+    let mut base = build_with_packages(1, |_| vec![0; 80], &[], &[], Some(&umid(2)), true);
+    replace_fixture_set(&mut base, &source_clip(31, PICTURE_DEF, 1, umid(3), 2), &source_clip(31, PICTURE_DEF, 1, [0; 32], 2));
+    replace_fixture_set(&mut base, &container_link(umid(2), 1, 2), &container_link(umid(3), 1, 2));
+    for (duration, position) in [(1, 1i64), (2, 0), (2, 1)] {
+        let mut bytes = base.clone();
+        replace_fixture_set(&mut bytes, &sequence(23, PICTURE_DEF, 1, 33), &sequence(23, PICTURE_DEF, duration, 33));
+        let start_tag = [0x3f, 0x0c, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0];
+        let start = bytes.windows(start_tag.len()).rposition(|v| v == start_tag).unwrap();
+        bytes[start + 4..start + 12].copy_from_slice(&position.to_be_bytes());
+        let file = open(&bytes).unwrap();
+        assert_eq!(file.track_of_kind(TrackKind::Picture).is_some(), duration == 1);
+        assert!(file.track_of_kind(TrackKind::Sound).is_some());
+    }
+}
