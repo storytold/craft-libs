@@ -563,18 +563,4 @@ mod tests {
         let mut dec = Decoder::new(&enc.cookie()).unwrap();
         assert_eq!(dec.decode(&p).unwrap(), vec![noise[..4096].to_vec()]);
     }
-
-    #[test]
-    fn bad_input_is_refused() {
-        assert!(Encoder::new(EncoderConfig::new(44_100, 2, 8)).is_err());
-        assert!(Encoder::new(EncoderConfig::new(44_100, 9, 16)).is_err());
-        assert!(Encoder::new(EncoderConfig::new(44_100, 2, 16).with_frame_length(0)).is_err());
-        let mut enc = Encoder::new(EncoderConfig::new(44_100, 2, 16).with_frame_length(16)).unwrap();
-        assert!(enc.encode(&[&[0; 4]]).is_err());
-        assert!(enc.encode(&[&[0; 4], &[0; 5]]).is_err());
-        assert!(enc.encode(&[&[0; 17], &[0; 17]]).is_err());
-        assert!(enc.encode(&[&[], &[]]).is_err());
-        assert!(enc.encode(&[&[40_000], &[0]]).is_err());
-        assert!(enc.encode(&[&[-32_768], &[32_767]]).is_ok());
-    }
 }

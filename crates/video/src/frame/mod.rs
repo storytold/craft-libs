@@ -197,7 +197,8 @@ pub struct ColorTags {
     pub transfer: u8,
     /// `MatrixCoefficients` (0 = identity, used for RGB; 2 = unspecified).
     pub matrix: u8,
-    /// `VideoFullRangeFlag`: full range when true. False when the stream does not say.
+    /// `VideoFullRangeFlag`: full range when true. False when the stream does not say, except
+    /// that an RGB frame that does not signal a range is full range.
     pub full_range: bool,
 }
 
@@ -250,7 +251,8 @@ impl VideoFrame {
     /// A frame from its planes, in the order [`ColorFamily`] gives. Fails when the number of planes
     /// does not fit `family`, a plane's size does not follow from `width`, `height` and
     /// `subsampling`, a shift is above 3, or an RGB or gray frame is subsampled. The alpha plane is
-    /// full size. The colour tags and timing start unset.
+    /// full size. The colour tags and timing start unset, except that an RGB frame starts full
+    /// range.
     pub fn new(
         width: u32,
         height: u32,
@@ -288,7 +290,7 @@ impl VideoFrame {
             subsampling,
             planes,
             alpha,
-            color: ColorTags::UNSPECIFIED,
+            color: ColorTags { full_range: family == ColorFamily::Rgb, ..ColorTags::UNSPECIFIED },
             pts: None,
             sar: None,
             field_order: FieldOrder::Progressive,

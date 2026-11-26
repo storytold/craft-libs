@@ -1,10 +1,10 @@
 //! Compatibility SVG document/CSS interpretation helpers extracted from EffectCraft.
 //!
 //! Provides presentation-attribute + stylesheet + inline-`style` declaration collection
-//! ([`declared`]), property cascading ([`cascade`]), unit/percentage length resolution
-//! ([`length`], [`attr_len`]), paint reference parsing/resolution ([`PaintRef`], [`paint_ref`],
-//! [`resolve_paint`]), and `viewBox` / `preserveAspectRatio` transforms ([`viewbox`],
-//! [`viewbox_transform`]).
+//! ([`declared`](crate::doc_style::declared)), property cascading ([`cascade`](crate::doc_style::cascade)), unit/percentage length resolution
+//! ([`length`](crate::doc_style::length), [`attr_len`](crate::doc_style::attr_len)), paint reference parsing/resolution ([`PaintRef`](crate::doc_style::PaintRef), [`paint_ref`](crate::doc_style::paint_ref),
+//! [`resolve_paint`](crate::doc_style::resolve_paint)), and `viewBox` / `preserveAspectRatio` transforms ([`viewbox`](crate::doc_style::viewbox),
+//! [`viewbox_transform`](crate::doc_style::viewbox_transform)).
 
 use std::collections::HashMap;
 
@@ -193,6 +193,87 @@ pub fn length(s: &str, axis: char, font: f64, vw: f64, vh: f64) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
+/// Parse a strict SVG length in user units, rejecting unknown unit suffixes.
+///
+/// `%` is relative to `reference`; `em`/`ex` assume a 16 px font.
+pub fn length_strict(s: &str, reference: f64) -> Option<f64> {
+    let v = s.trim();
+    let units: [(&str, f64); 9] = [
+        ("%", reference / 100.0),
+        ("px", 1.0),
+        ("pt", 96.0 / 72.0),
+        ("pc", 16.0),
+        ("mm", 96.0 / 25.4),
+        ("cm", 96.0 / 2.54),
+        ("in", 96.0),
+        ("em", 16.0),
+        ("ex", 8.0),
+    ];
+    let (num, k) = units.iter().find_map(|(u, k)| v.strip_suffix(u).map(|n| (n, *k))).unwrap_or((v, 1.0));
+    let n: f64 = num.trim().parse().ok().filter(|n: &f64| n.is_finite())?;
+    Some(n * k).filter(|x| x.is_finite())
+}
+
+/// Parse an SVG opacity or offset value (number or percentage), clamped to `[0.0, 1.0]`.
+pub fn parse_opacity(s: &str) -> Option<f64> {
+    let v = s.trim();
+    let x = match v.strip_suffix('%') {
+        Some(p) => p.parse::<f64>().ok()? / 100.0,
+        None => v.parse::<f64>().ok()?,
+    };
+    x.is_finite().then(|| x.clamp(0.0, 1.0))
+}
+
+/// Parse an SVG `font-size` (keyword, relative `em`/`ex`/`%` to `parent`, or strict length).
+pub fn parse_font_size(s: &str, parent: f64, reference: f64) -> Option<f64> {
+    let v = s.trim();
+    let keyword = match v {
+        "xx-small" => Some(9.0),
+        "x-small" => Some(10.0),
+        "small" => Some(13.0),
+        "medium" => Some(16.0),
+        "large" => Some(18.0),
+        "x-large" => Some(24.0),
+        "xx-large" => Some(32.0),
+        "larger" => Some(parent * 1.2),
+        "smaller" => Some(parent / 1.2),
+        _ => None,
+    };
+    let rel = |suffix: &str, k: f64| v.strip_suffix(suffix).and_then(|n| n.trim().parse::<f64>().ok()).map(|n| n * k);
+    let size = keyword
+        .or_else(|| rel("em", parent))
+        .or_else(|| rel("ex", parent * 0.5))
+        .or_else(|| rel("%", parent / 100.0))
+        .or_else(|| length_strict(v, reference))?;
+    size.is_finite().then(|| size.clamp(0.0, 2000.0))
+}
+
+/// Parse an SVG `stroke-dasharray` list (`none` or empty/negative/invalid returns `None`).
+pub fn parse_dash_array(s: &str, reference: f64) -> Option<Vec<f64>> {
+    if s.trim() == "none" {
+        return None;
+    }
+    let mut out = Vec::new();
+    for part in s.split(|c: char| c == ',' || c.is_whitespace()).filter(|p| !p.trim().is_empty()).take(1024) {
+        let x = length_strict(part, reference)?;
+        if x < 0.0 {
+            return None;
+        }
+        out.push(x);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// What a percentage of geometry attribute `attr_name` is relative to in a `width` x `height` viewport.
+pub fn symbol_percent_basis(attr_name: &str, width: f64, height: f64) -> Option<f64> {
+    match attr_name {
+        "x" | "x1" | "x2" | "cx" | "width" | "rx" => Some(width),
+        "y" | "y1" | "y2" | "cy" | "height" | "ry" => Some(height),
+        "r" => Some(((width * width + height * height) / 2.0).sqrt()),
+        _ => None,
+    }
+}
+
 /// Parse a length attribute on `n`, returning `0.0` if missing or invalid.
 pub fn attr_len(n: roxmltree::Node, name: &str, axis: char, st: &Style, vw: f64, vh: f64) -> f64 {
     n.attribute(name).and_then(|v| length(v, axis, st.font_size, vw, vh)).unwrap_or(0.0)
@@ -315,9 +396,9 @@ pub fn resolve_paint<S>(paint: &PaintRef, st: &Style, resolve_url: impl FnOnce(&
     }
 }
 
-/// Parse an element's `viewBox` attribute into `([min_x, min_y], width, height)`.
-pub fn viewbox(n: roxmltree::Node) -> Option<([f64; 2], f64, f64)> {
-    let (v, exceeded) = numbers_bounded(n.attribute("viewBox")?, 5);
+/// Parse a `viewBox` attribute string into `([min_x, min_y], width, height)`.
+pub fn parse_viewbox(s: &str) -> Option<([f64; 2], f64, f64)> {
+    let (v, exceeded) = numbers_bounded(s, 5);
     if exceeded || !v.iter().all(|x| x.is_finite()) {
         return None;
     }
@@ -325,10 +406,10 @@ pub fn viewbox(n: roxmltree::Node) -> Option<([f64; 2], f64, f64)> {
     (*width > 0.0 && *height > 0.0).then_some(([*x, *y], *width, *height))
 }
 
-/// The `viewBox` -> viewport transform (`preserveAspectRatio`, default `xMidYMid meet`).
-pub fn viewbox_transform(n: roxmltree::Node, w: f64, h: f64) -> Affine {
-    let Some(([x, y], vw, vh)) = viewbox(n) else { return Affine::IDENTITY };
-    let par = n.attribute("preserveAspectRatio").unwrap_or("xMidYMid meet");
+/// Compute the `viewBox` -> viewport transform for `preserveAspectRatio` (default `xMidYMid meet`).
+pub fn viewbox_transform_with(vb: ([f64; 2], f64, f64), w: f64, h: f64, preserve_aspect_ratio: &str) -> Affine {
+    let ([x, y], vw, vh) = vb;
+    let par = if preserve_aspect_ratio.trim().is_empty() { "xMidYMid meet" } else { preserve_aspect_ratio };
     let mut parts = par.split_whitespace();
     let mut align = parts.next().unwrap_or("xMidYMid");
     if align == "defer" {
@@ -357,6 +438,17 @@ pub fn viewbox_transform(n: roxmltree::Node, w: f64, h: f64) -> Affine {
     let tx = (w - vw * s) * fx;
     let ty = (h - vh * s) * fy;
     Affine::translate((tx, ty)) * Affine::scale(s) * Affine::translate((-x, -y))
+}
+
+/// Parse an element's `viewBox` attribute into `([min_x, min_y], width, height)`.
+pub fn viewbox(n: roxmltree::Node) -> Option<([f64; 2], f64, f64)> {
+    parse_viewbox(n.attribute("viewBox")?)
+}
+
+/// The `viewBox` -> viewport transform (`preserveAspectRatio`, default `xMidYMid meet`).
+pub fn viewbox_transform(n: roxmltree::Node, w: f64, h: f64) -> Affine {
+    let Some(vb) = viewbox(n) else { return Affine::IDENTITY };
+    viewbox_transform_with(vb, w, h, n.attribute("preserveAspectRatio").unwrap_or("xMidYMid meet"))
 }
 
 #[cfg(test)]
