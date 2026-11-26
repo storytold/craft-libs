@@ -466,15 +466,16 @@ impl<T: Settings> SettingsStore<T> {
         // writing over the changes this save merges in. An early return releases it.
         let lock = self.files.lock(&path);
         let (on_disk, theirs) = self.check_disk(&path)?;
-        merge_into(&mut self.doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
-        set_schema_version(&mut self.doc, T::SCHEMA_VERSION);
-        // The merge is staged and only kept once the file is written, so a save that fails leaves the
+        // The merge is staged on a copy and only kept once the file is written, so a save that fails leaves the
         // document, the value and the baseline as they were, and the next save merges the disk again.
+        let mut doc = self.doc.clone();
+        merge_into(&mut doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
+        set_schema_version(&mut doc, T::SCHEMA_VERSION);
         let theirs = theirs.map(|mut theirs| {
-            merge_changes::<T>(&self.base, &self.doc, &mut theirs);
+            merge_changes::<T>(&self.base, &doc, &mut theirs);
             theirs
         });
-        let text = document::render(theirs.as_ref().unwrap_or(&self.doc));
+        let text = document::render(theirs.as_ref().unwrap_or(&doc));
         // A file over the limit would not be read back at the next start; keep the old file.
         if text.len() as u64 > MAX_CONFIG_BYTES {
             return Err(SettingsError::Io(too_large()));
@@ -486,6 +487,7 @@ impl<T: Settings> SettingsStore<T> {
         }
         self.files.write(&path, &text)?;
         drop(lock);
+        self.doc = doc;
         if let Some(theirs) = theirs {
             let (ours, _) = document::deserialize_sections::<T>(&self.doc);
             self.doc = theirs;

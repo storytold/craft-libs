@@ -2,7 +2,7 @@
 
 use super::common;
 
-use common::{config_path, open_in, read_config, write_config};
+use common::{config_path, open_in, open_keyed, read_config, write_config};
 use craft_settings::{ReadOnlyReason, SettingsError, Source};
 
 #[test]
@@ -114,6 +114,30 @@ fn rejected_save_keeps_the_adopted_file_as_the_baseline() {
     assert!(text.contains("# note a"), "{text}");
     assert!(!text.contains("# note b"), "{text}");
     assert!(!text.contains("[extra]"), "{text}");
+    assert!(text.contains("language = \"fr\""), "{text}");
+}
+
+#[test]
+fn rejected_save_keeps_the_comment_of_a_removed_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 1\n\n[shortcuts]\n# note on save\nsave = \"Ctrl+S\"\n");
+    let (mut store, _) = open_keyed(tmp.path());
+
+    // The key is removed in a save too large to write, then put back.
+    let huge = "a".repeat(craft_settings::store::MAX_CONFIG_BYTES as usize);
+    store.update(|k| {
+        k.shortcuts.remove("save");
+        k.general.language = huge;
+    });
+    assert!(matches!(store.flush(), Err(SettingsError::Io(e)) if e.kind() == std::io::ErrorKind::FileTooLarge));
+    store.update(|k| {
+        k.shortcuts.insert("save".into(), "Ctrl+S".into());
+        k.general.language = "fr".into();
+    });
+    store.flush().unwrap();
+
+    let text = read_config(tmp.path());
+    assert!(text.contains("# note on save\nsave = \"Ctrl+S\""), "{text}");
     assert!(text.contains("language = \"fr\""), "{text}");
 }
 
