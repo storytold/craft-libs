@@ -28,7 +28,6 @@ pub(crate) mod pickers;
 pub(crate) mod picture;
 pub(crate) mod popover;
 pub(crate) mod runtime;
-pub(crate) mod segmented;
 
 pub(crate) mod suite_rtl;
 pub(crate) mod suite_rules;
