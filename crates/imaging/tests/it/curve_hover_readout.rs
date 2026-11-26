@@ -221,7 +221,8 @@ fn selecting_a_point_shows_its_fields_and_deselecting_returns_to_the_readout() {
     assert_eq!(rig.reading("Output").as_deref(), Some("20"));
 }
 
-/// In pencil mode the Input and Output read out the drawn curve under the pointer.
+/// In pencil mode the Input and Output read out the drawn curve under the pointer, and with the pointer off the graph
+/// there is no Input and Output row, as without the readout.
 #[trial]
 fn in_pencil_mode_the_fields_read_the_drawn_curve_under_the_pointer() {
     let mut rig = Rig::editor(&MEASURED, true);
@@ -230,6 +231,12 @@ fn in_pencil_mode_the_fields_read_the_drawn_curve_under_the_pointer() {
     assert_eq!(rig.reading("Input").as_deref(), Some("100"));
     assert_eq!(rig.reading("Output").as_deref(), Some("155"));
     assert_eq!(rig.field("Input"), None);
+
+    rig.fixture.frame(vec![gone()]);
+    rig.fixture.idle(1);
+    for label in ["Input", "Output"] {
+        assert_eq!((rig.reading(label), rig.field(label)), (None, None), "no {label} once the pointer has left");
+    }
 }
 
 /// With the pointer off the graph the fields keep today's disabled zeros (not measured).

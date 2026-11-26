@@ -258,16 +258,20 @@ impl<'a> CurveEditor<'a> {
                 Some(Mixed::Same(shown)) => Some((**shown).clone()),
                 _ => None,
             };
-            if let Some(now) = now.filter(|now| fields && if pencil { hover_readout } else { now.points().is_some() }) {
+            if let Some(now) = now.filter(|now| fields && (pencil || now.points().is_some())) {
                 let at = selected.filter(|&i| !pencil && now.points().is_some_and(|points| i < points.len()));
                 let reading = hover.filter(|_| hover_readout && at.is_none()).and_then(|input| {
                     let output = *outputs(&now, reading_sampler.as_ref(), rules.levels).get(input as usize)?;
                     Some([input, output.round().clamp(0.0, rules.levels)])
                 });
-                let row = FieldsRow { words: &words, rules, now: &now, at, reading, percent, corners };
-                let lifted = row.show(ui, root, &mut curve);
-                if edit.events.is_empty() {
-                    edit.events = lifted;
+                // Pencil mode has no point fields: its row is the readout alone, there only while the pointer is over
+                // the graph.
+                if !pencil || reading.is_some() {
+                    let row = FieldsRow { words: &words, rules, now: &now, at, reading, percent, corners };
+                    let lifted = row.show(ui, root, &mut curve);
+                    if edit.events.is_empty() {
+                        edit.events = lifted;
+                    }
                 }
             }
             root.memory::<Memory>().selected = selected;
