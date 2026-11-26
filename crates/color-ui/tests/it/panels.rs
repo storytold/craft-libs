@@ -409,6 +409,28 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
     assert_eq!(taken.picked.iter().map(|c| c.to_rgba()).collect::<Vec<_>>(), [swatch("Violet").to_rgba()], "and still reports the pick");
 }
 
+/// The FillStroke layout shows its Recent Colors caption while the host's list is empty, as it does with colors in
+/// it; a host that gives no recent colors gets no row.
+#[trial]
+fn a_fill_stroke_panel_shows_its_recent_colors_row_while_the_list_is_empty() {
+    let caption = |recent: Option<&'static [Srgba]>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let panel = ColorPanel::new(Bind::bound(&mut state), [RED, BLUE]).layout(ColorPanelLayout::FillStroke);
+            let _ = match recent {
+                Some(colors) => panel.recent(colors),
+                None => panel,
+            }
+            .show(ui);
+        });
+        fixture.room(COLOR_ROOM).settle();
+        fixture.texts().iter().any(|run| run.text == "Recent Colors")
+    };
+    assert!(caption(Some(&[])), "an empty list shows the row's caption");
+    assert!(caption(Some(&RECENT)), "a list with a color shows it");
+    assert!(!caption(None), "a host with no recent colors shows no row");
+}
+
 /// A palette over a colour that may be none, bound to no colour: no swatch is selected and Tab enters on the first;
 /// a click writes `Same(Some(colour))` and reports one `Set` from `Mixed`.
 #[trial]
