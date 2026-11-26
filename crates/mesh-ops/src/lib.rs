@@ -23,6 +23,9 @@ pub use mesh::{BaseColor, MAX_TRIANGLES, Mesh, SubMesh};
 pub enum GeomError {
     #[error("invalid mesh: {0}")]
     Invalid(String),
+    /// Memory for the result could not be reserved.
+    #[error("out of memory for {0}")]
+    OutOfMemory(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, GeomError>;

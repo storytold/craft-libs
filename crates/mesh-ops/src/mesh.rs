@@ -51,6 +51,52 @@ pub struct Mesh {
 /// Hard cap on mesh size accepted from files (triangles).
 pub const MAX_TRIANGLES: usize = 20_000_000;
 
+/// Whether an array of `len` entries has one per vertex of a mesh with `n` vertices. A mesh
+/// without vertices has no attributes to pass on to a mesh it is appended to.
+fn per_vertex(len: usize, n: usize) -> bool {
+    n > 0 && len == n
+}
+
+/// An empty vector with room for `len` elements, or `OutOfMemory` naming `what`.
+fn try_vec<T>(len: usize, what: &'static str) -> Result<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| GeomError::OutOfMemory(what))?;
+    Ok(v)
+}
+
+/// A copy of `from` in a reserved array, or `OutOfMemory` naming `what`.
+fn try_copy<T: Copy>(from: &[T], what: &'static str) -> Result<Vec<T>> {
+    let mut v = try_vec(from.len(), what)?;
+    v.extend_from_slice(from);
+    Ok(v)
+}
+
+/// `len` copies of `value` in a reserved array, or `OutOfMemory` naming `what`.
+fn try_filled<T: Copy>(len: usize, value: T, what: &'static str) -> Result<Vec<T>> {
+    let mut v = try_vec(len, what)?;
+    v.resize(len, value);
+    Ok(v)
+}
+
+/// A copy of `name` in a reserved string, or `OutOfMemory` naming `what`.
+fn try_name(name: &str, what: &'static str) -> Result<String> {
+    let mut s = String::new();
+    s.try_reserve_exact(name.len()).map_err(|_| GeomError::OutOfMemory(what))?;
+    #[cfg(test)]
+    tests::name_copy(what)?;
+    s.push_str(name);
+    Ok(s)
+}
+
+/// Copies of `names`, each in a reserved string, or `OutOfMemory` naming `what`.
+fn try_names(names: &[String], what: &'static str) -> Result<Vec<String>> {
+    let mut v = try_vec(names.len(), what)?;
+    for name in names {
+        v.push(try_name(name, what)?);
+    }
+    Ok(v)
+}
+
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
@@ -346,32 +392,160 @@ impl Mesh {
     }
 
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
-    /// this mesh's material count.
+    /// this mesh's material count. Leaves this mesh unchanged when [`Mesh::try_append`] fails.
     pub fn append(&mut self, other: &Mesh) {
-        let base = self.positions.len() as u32;
-        let ibase = self.indices.len() as u32;
-        let mbase = self.materials.len();
-        self.positions.extend_from_slice(&other.positions);
-        self.normals.extend_from_slice(&other.normals);
-        self.tangents.extend_from_slice(&other.tangents);
-        self.uvs.extend_from_slice(&other.uvs);
-        if !(self.colors.is_empty() && other.colors.is_empty()) {
+        let _ = self.try_append(other);
+    }
+
+    /// [`Mesh::append`], or an error when an index of `other` is out of range or a rebased
+    /// index or submesh range would not fit in `u32`. When only one side has normals, UVs or
+    /// tangents for every vertex, the other side gets them (computed normals and tangents, zero
+    /// UVs), so the attribute arrays stay as long as the positions. A side with submeshes and no
+    /// material list gets one unnamed material. The copies and the arrays that grow are reserved
+    /// before this mesh changes, and a reservation that fails is `OutOfMemory`; computing missing
+    /// normals and tangents ([`Mesh::compute_normals`], [`Mesh::compute_tangents`]) allocates
+    /// without reserving. Every error leaves this mesh unchanged.
+    pub fn try_append(&mut self, other: &Mesh) -> Result<()> {
+        if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
+            return Err(GeomError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
+        }
+        let too_large = |what| GeomError::Invalid(format!("the appended {what} do not fit in u32"));
+        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or(too_large("vertices"))?;
+        // The last vertex index is `vertices - 1`.
+        if vertices > 0 && u32::try_from(vertices - 1).is_err() {
+            return Err(too_large("vertices"));
+        }
+        let ibase = u32::try_from(self.indices.len()).map_err(|_| too_large("indices"))?;
+        let index_count = self.indices.len().checked_add(other.indices.len()).ok_or(too_large("indices"))?;
+        u32::try_from(index_count).map_err(|_| too_large("indices"))?;
+        // Submeshes of a mesh without a material list use material 0, which gets an unnamed entry
+        // so that it stays apart from the other mesh's materials.
+        let unnamed = |m: &Mesh| m.materials.is_empty() && !m.submeshes.is_empty();
+        let (self_unnamed, other_unnamed) = (unnamed(self), unnamed(other));
+        let mbase = self.materials.len() + usize::from(self_unnamed);
+        let mut submeshes = try_vec(other.submeshes.len(), "submeshes")?;
+        for s in &other.submeshes {
+            let start = s.start.checked_add(ibase).ok_or(too_large("submeshes"))?;
+            start.checked_add(s.count).ok_or(too_large("submeshes"))?;
+            let material = s.material.checked_add(mbase).ok_or(too_large("submeshes"))?;
+            submeshes.push(SubMesh { name: try_name(&s.name, "submeshes")?, material, start, count: s.count });
+        }
+        let names = try_names(&other.materials, "materials")?;
+
+        let complete = |m: &Mesh| {
+            (
+                per_vertex(m.normals.len(), m.positions.len()),
+                per_vertex(m.uvs.len(), m.positions.len()),
+                per_vertex(m.tangents.len(), m.positions.len()),
+            )
+        };
+        let ((sn, su, st), (on, ou, ot)) = (complete(self), complete(other));
+        let need_tangents = st || ot;
+        let (need_normals, need_uvs) = (sn || on || need_tangents, su || ou || need_tangents);
+        // A side that lacks an attribute the result needs is filled in on a copy of its vertex
+        // arrays, so an error leaves both meshes unchanged.
+        let filled = |m: &Mesh, (has_normals, has_uvs, has_tangents): (bool, bool, bool)| -> Result<Option<Mesh>> {
+            if (has_normals || !need_normals) && (has_uvs || !need_uvs) && (has_tangents || !need_tangents) {
+                return Ok(None);
+            }
+            let mut w = m.vertex_copy()?;
+            if need_normals && !has_normals {
+                w.compute_normals();
+            }
+            if need_uvs && !has_uvs {
+                w.uvs = try_filled(w.positions.len(), Vec2::ZERO, "UVs")?;
+            }
+            if need_tangents && !has_tangents {
+                w.compute_tangents();
+            }
+            Ok(Some(w))
+        };
+        let other_filled = filled(other, (on, ou, ot))?;
+        let mut self_filled = filled(self, (sn, su, st))?;
+        let o = other_filled.as_ref().unwrap_or(other);
+        let base = self_filled.as_ref().map_or(self.positions.len(), |w| w.positions.len());
+        let has_colors = !(self.colors.is_empty() && other.colors.is_empty());
+        let has_diagonals = !(self.diagonals.is_empty() && other.diagonals.is_empty());
+
+        // Reserve every array before changing any of them: reserving leaves their contents as
+        // they are.
+        let wanted = |on: bool, len: usize| if on { len } else { 0 };
+        let reserve_error = |what| GeomError::OutOfMemory(what);
+        let diagonals = wanted(has_diagonals, (ibase as usize / 3 + other.triangle_count()).saturating_sub(self.diagonals.len()));
+        self.diagonals.try_reserve(diagonals).map_err(|_| reserve_error("diagonals"))?;
+        let materials = other.materials.len() + usize::from(self_unnamed) + usize::from(other_unnamed);
+        self.materials.try_reserve(materials).map_err(|_| reserve_error("materials"))?;
+        self.submeshes.try_reserve(submeshes.len()).map_err(|_| reserve_error("submeshes"))?;
+        let target: &mut Mesh = match self_filled.as_mut() {
+            Some(w) => w,
+            None => self,
+        };
+        target.positions.try_reserve(o.positions.len()).map_err(|_| reserve_error("positions"))?;
+        target.normals.try_reserve(wanted(need_normals, o.normals.len())).map_err(|_| reserve_error("normals"))?;
+        target.tangents.try_reserve(wanted(need_tangents, o.tangents.len())).map_err(|_| reserve_error("tangents"))?;
+        target.uvs.try_reserve(wanted(need_uvs, o.uvs.len())).map_err(|_| reserve_error("UVs"))?;
+        let colors = wanted(has_colors, (base + o.positions.len()).saturating_sub(target.colors.len()));
+        target.colors.try_reserve(colors).map_err(|_| reserve_error("colors"))?;
+        target.indices.try_reserve(o.indices.len()).map_err(|_| reserve_error("indices"))?;
+
+        if let Some(w) = self_filled {
+            self.positions = w.positions;
+            self.normals = w.normals;
+            self.tangents = w.tangents;
+            self.uvs = w.uvs;
+            self.colors = w.colors;
+            self.indices = w.indices;
+        }
+        let base = base as u32;
+        self.positions.extend_from_slice(&o.positions);
+        if need_normals {
+            self.normals.extend_from_slice(&o.normals);
+        } else {
+            self.normals.clear();
+        }
+        if need_tangents {
+            self.tangents.extend_from_slice(&o.tangents);
+        } else {
+            self.tangents.clear();
+        }
+        if need_uvs {
+            self.uvs.extend_from_slice(&o.uvs);
+        } else {
+            self.uvs.clear();
+        }
+        if has_colors {
             // Vertices of the side without colors become white.
             self.colors.resize(base as usize, Vec4::ONE);
-            self.colors.extend(other.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(other.positions.len()));
+            self.colors.extend(o.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(o.positions.len()));
         }
-        if !(self.diagonals.is_empty() && other.diagonals.is_empty()) {
+        if has_diagonals {
             self.diagonals.resize(ibase as usize / 3, 0);
             self.diagonals.extend(other.diagonals.iter().copied().chain(std::iter::repeat(0)).take(other.triangle_count()));
         }
-        self.indices.extend(other.indices.iter().map(|i| i + base));
-        self.materials.extend(other.materials.iter().cloned());
-        self.submeshes.extend(other.submeshes.iter().map(|s| SubMesh {
-            name: s.name.clone(),
-            material: s.material + mbase,
-            start: s.start + ibase,
-            count: s.count,
-        }));
+        self.indices.extend(o.indices.iter().map(|i| i + base));
+        if self_unnamed {
+            self.materials.push(String::new());
+        }
+        self.materials.extend(names);
+        if other_unnamed {
+            self.materials.push(String::new());
+        }
+        self.submeshes.extend(submeshes);
+        Ok(())
+    }
+
+    /// A mesh holding reserved copies of this mesh's vertex attributes and indices, and nothing
+    /// else, or `OutOfMemory`.
+    fn vertex_copy(&self) -> Result<Mesh> {
+        Ok(Mesh {
+            positions: try_copy(&self.positions, "positions")?,
+            normals: try_copy(&self.normals, "normals")?,
+            tangents: try_copy(&self.tangents, "tangents")?,
+            uvs: try_copy(&self.uvs, "UVs")?,
+            colors: try_copy(&self.colors, "colors")?,
+            indices: try_copy(&self.indices, "indices")?,
+            ..Mesh::default()
+        })
     }
 
     /// Each triangle split into four at its edge midpoints (shared edges share their midpoint);
@@ -489,6 +663,32 @@ impl mikktspace::Geometry for Mikk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Name copies that succeed before the next one fails as out of memory; `None` lets every
+        /// copy succeed.
+        static NAME_COPIES_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Let `copies` name copies on this thread succeed and fail the next one, or none with `None`.
+    fn fail_name_copy_after(copies: Option<usize>) {
+        NAME_COPIES_LEFT.with(|left| left.set(copies));
+    }
+
+    /// `OutOfMemory` naming `what` when [`fail_name_copy_after`] says this name copy fails.
+    pub(super) fn name_copy(what: &'static str) -> Result<()> {
+        NAME_COPIES_LEFT.with(|left| match left.get() {
+            Some(0) => {
+                left.set(None);
+                Err(GeomError::OutOfMemory(what))
+            }
+            Some(k) => {
+                left.set(Some(k - 1));
+                Ok(())
+            }
+            None => Ok(()),
+        })
+    }
 
     fn quad() -> Mesh {
         Mesh::from_parts(
@@ -621,6 +821,88 @@ mod tests {
         a.validate().unwrap();
         a.colors.pop();
         assert!(a.validate().is_err());
+    }
+
+    #[test]
+    fn append_keeps_attributes_aligned() {
+        // A side without normals, UVs and tangents gets them, so every array has one entry per vertex.
+        let mut bare = quad();
+        bare.normals.clear();
+        bare.uvs.clear();
+        bare.tangents.clear();
+        let mut a = quad();
+        a.append(&bare);
+        a.validate().unwrap();
+        assert_eq!((a.positions.len(), a.normals.len(), a.uvs.len(), a.tangents.len()), (8, 8, 8, 8));
+        assert_eq!(a.uvs[4..], [Vec2::ZERO; 4]);
+        let mut b = bare.clone();
+        b.append(&quad());
+        b.validate().unwrap();
+        assert_eq!((b.positions.len(), b.normals.len(), b.uvs.len(), b.tangents.len()), (8, 8, 8, 8));
+        // Neither side has any: the result has none either.
+        let mut c = bare.clone();
+        c.append(&bare);
+        assert_eq!((c.positions.len(), c.normals.len(), c.uvs.len(), c.tangents.len()), (8, 0, 0, 0));
+        // An index past the other mesh's vertices would point into this one after rebasing.
+        let mut broken = quad();
+        broken.indices[0] = 4;
+        let before = quad();
+        let mut d = quad();
+        assert!(d.try_append(&broken).is_err());
+        assert_eq!(d, before);
+    }
+
+    #[test]
+    fn append_of_an_empty_mesh_passes_no_attributes_on() {
+        let mut a = quad();
+        a.tangents.clear();
+        let before = a.clone();
+        a.append(&Mesh::default());
+        assert_eq!(a, before);
+        let mut e = Mesh::default();
+        e.append(&before);
+        assert_eq!((e.positions.len(), e.normals.len(), e.uvs.len(), e.tangents.len()), (4, 4, 4, 0));
+    }
+
+    #[test]
+    fn append_keeps_unnamed_materials_apart() {
+        // A submesh may use material 0 of an empty material list.
+        let mut unnamed = quad();
+        unnamed.materials.clear();
+        let mut a = unnamed.clone();
+        a.append(&quad());
+        a.validate().unwrap();
+        assert_eq!(a.materials, vec![String::new(), "Default".to_string()]);
+        assert_eq!((a.submeshes[0].material, a.submeshes[1].material), (0, 1));
+        let mut b = quad();
+        b.append(&unnamed);
+        b.validate().unwrap();
+        assert_eq!(b.materials, vec!["Default".to_string(), String::new()]);
+        assert_eq!((b.submeshes[0].material, b.submeshes[1].material), (0, 1));
+    }
+
+    /// A quad whose two triangles are submeshes named `c` and `d`, with materials `a` and `b`.
+    fn named_quad(a: &str, b: &str, c: &str, d: &str) -> Mesh {
+        let mut m = quad();
+        m.materials = vec![a.into(), b.into()];
+        m.submeshes = vec![SubMesh { name: c.into(), material: 1, start: 0, count: 3 }, SubMesh { name: d.into(), material: 0, start: 3, count: 3 }];
+        m
+    }
+
+    #[test]
+    fn append_leaves_the_mesh_unchanged_when_a_name_copy_fails() {
+        let other = named_quad("a", "b", "c", "d");
+        let mut m = quad();
+        let before = m.clone();
+        // The two submesh names are copied first, then the two material names.
+        for (copies, what) in [(0, "submeshes"), (1, "submeshes"), (2, "materials"), (3, "materials")] {
+            fail_name_copy_after(Some(copies));
+            assert_eq!(m.try_append(&other), Err(GeomError::OutOfMemory(what)), "after {copies} copies");
+            assert_eq!(m, before, "after {copies} copies");
+        }
+        fail_name_copy_after(None);
+        m.try_append(&other).unwrap();
+        assert_eq!(m.materials, ["Default", "a", "b"]);
     }
 
     #[test]
