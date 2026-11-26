@@ -8,8 +8,23 @@ use craft_tiff::TiffError;
 use sha2::{Digest, Sha256};
 
 pub(super) const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
-const SCHEMA: u8 = 1;
 const HEADER: &str = "schema\tinput\tstatus\tformat\tsample_type\tsample_count\tsensor_sha256\twidth\theight\tcpp\tbits\tcfa\tactive_area\tcrop\torientation\tbaseline_exposure_bits";
+const LINEARIZATION_HEADER: &str = "\tlinearization_state\tlinearization_table_sha256";
+
+#[derive(Clone, Copy)]
+enum Schema {
+    Original,
+    Linearization,
+}
+
+impl Schema {
+    fn version(self) -> u8 {
+        match self {
+            Self::Original => 1,
+            Self::Linearization => 2,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(super) enum RunError {
@@ -17,12 +32,15 @@ pub(super) enum RunError {
     Output(io::Error),
 }
 
-pub(super) fn run(paths: impl IntoIterator<Item = OsString>, out: &mut impl Write, max_input_bytes: u64, limits: &Limits) -> Result<(), RunError> {
-    let mut paths = paths.into_iter().peekable();
+pub(super) fn run(args: impl IntoIterator<Item = OsString>, out: &mut impl Write, max_input_bytes: u64, limits: &Limits) -> Result<(), RunError> {
+    let mut paths = args.into_iter().peekable();
+    let (schema, extra_header) =
+        if paths.next_if(|arg| arg == "--linearization").is_some() { (Schema::Linearization, LINEARIZATION_HEADER) } else { (Schema::Original, "") };
+    paths.next_if(|arg| arg == "--");
     if paths.peek().is_none() {
         return Err(RunError::Usage);
     }
-    writeln!(out, "{HEADER}").map_err(RunError::Output)?;
+    writeln!(out, "{HEADER}{extra_header}").map_err(RunError::Output)?;
     for (index, path) in paths.enumerate() {
         let input = index + 1;
         let result = read_input(Path::new(&path), max_input_bytes)
@@ -32,8 +50,8 @@ pub(super) fn run(paths: impl IntoIterator<Item = OsString>, out: &mut impl Writ
             })
             .and_then(|bytes| craft_raw::decode_with(&bytes, limits).map_err(decode_status));
         match result {
-            Ok(raw) => write_success(out, input, &raw),
-            Err(status) => write_failure(out, input, status),
+            Ok(raw) => write_success(out, schema, input, &raw),
+            Err(status) => write_failure(out, schema, input, status),
         }
         .map_err(RunError::Output)?;
     }
@@ -79,12 +97,13 @@ fn decode_status(error: RawError) -> &'static str {
     }
 }
 
-fn write_failure(out: &mut impl Write, input: usize, status: &str) -> io::Result<()> {
-    // Keep all 13 success-only fields present and empty.
-    writeln!(out, "{SCHEMA}\t{input}\t{status}\t\t\t\t\t\t\t\t\t\t\t\t\t")
+fn write_failure(out: &mut impl Write, schema: Schema, input: usize, status: &str) -> io::Result<()> {
+    // Keep the success-only fields present and empty in both schemas.
+    let extra_fields = if let Schema::Linearization = schema { "\t\t" } else { "" };
+    writeln!(out, "{}\t{input}\t{status}\t\t\t\t\t\t\t\t\t\t\t\t\t{extra_fields}", schema.version())
 }
 
-fn write_success(out: &mut impl Write, input: usize, raw: &RawImage) -> io::Result<()> {
+fn write_success(out: &mut impl Write, schema: Schema, input: usize, raw: &RawImage) -> io::Result<()> {
     let mut hash = Sha256::new();
     let (sample_type, count) = match &raw.data {
         RawData::U16(samples) => {
@@ -103,7 +122,8 @@ fn write_success(out: &mut impl Write, input: usize, raw: &RawImage) -> io::Resu
     let digest = hash.finalize();
     write!(
         out,
-        "{SCHEMA}\t{input}\tok\t{}\t{sample_type}\t{count}\t{digest:x}\t{}\t{}\t{}\t{}\t",
+        "{}\t{input}\tok\t{}\t{sample_type}\t{count}\t{digest:x}\t{}\t{}\t{}\t{}\t",
+        schema.version(),
         format_label(raw.format),
         raw.width,
         raw.height,
@@ -122,7 +142,23 @@ fn write_success(out: &mut impl Write, input: usize, raw: &RawImage) -> io::Resu
     }
     write_rect(out, raw.active_area)?;
     write_rect(out, raw.crop)?;
-    writeln!(out, "\t{}\t{:016x}", raw.orientation.to_exif(), raw.color.baseline_exposure.to_bits())
+    write!(out, "\t{}\t{:016x}", raw.orientation.to_exif(), raw.color.baseline_exposure.to_bits())?;
+    if let Schema::Linearization = schema {
+        write_linearization(out, raw)?;
+    }
+    writeln!(out)
+}
+
+fn write_linearization(out: &mut impl Write, raw: &RawImage) -> io::Result<()> {
+    let Some(table) = &raw.linearization_table else {
+        return write!(out, "\tabsent\t");
+    };
+    let state = if raw.linearized { "applied" } else { "deferred" };
+    let mut hash = Sha256::new();
+    for entry in table {
+        hash.update(entry.to_le_bytes());
+    }
+    write!(out, "\t{state}\t{:x}", hash.finalize())
 }
 
 fn write_rect(out: &mut impl Write, rect: Rect) -> io::Result<()> {

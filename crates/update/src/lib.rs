@@ -1,5 +1,5 @@
-//! Release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher.
-
+//! Native only (it downloads and installs through ureq): release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod app;
@@ -11,8 +11,8 @@ pub mod http;
 pub mod install;
 pub mod manifest;
 pub mod msi_context;
-mod msi_copy;
-mod msi_migrate;
+pub(crate) mod msi_copy;
+pub(crate) mod msi_migrate;
 pub mod packages;
 pub mod paths;
 pub mod pins;
@@ -32,9 +32,9 @@ pub mod time;
 pub mod translate;
 pub mod version;
 
-#[cfg(feature = "egui")]
-pub mod dialog;
-#[cfg(feature = "egui")]
+#[cfg(feature = "ui")]
+pub mod stack_dialogs;
+#[cfg(feature = "ui")]
 pub mod updater;
 
 pub use app::App;
@@ -48,17 +48,58 @@ pub use suite::SUITE;
 pub use time::parse_rfc3339;
 pub use version::{Version, is_newer, parse as parse_version};
 
-#[cfg(feature = "egui")]
-pub use dialog::{CheckResultDialog, CheckResultResponse, StartupPrompt, StartupPromptResponse};
+#[cfg(feature = "screen-testing")]
+/// The registrations of this package for the integration binary.
+pub mod testing {
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
+}
+
+/// Why a check for an update failed. [`RateLimited`](Self::RateLimited) is a typed reason, so the app
+/// words it in the interface language ([`stack_dialogs::UpdateWords`] has the crate's wording); the text
+/// of [`Failed`](Self::Failed) is data (GitHub's, the network's, or the crate's English) and stays as it came.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckError {
+    /// GitHub refused the request because its quota is used up.
+    RateLimited,
+    /// Any other failure, with its English reason.
+    Failed(String),
+}
+
+impl std::fmt::Display for CheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited => f.write_str("GitHub's request limit was reached"),
+            Self::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+impl From<String> for CheckError {
+    fn from(why: String) -> Self {
+        Self::Failed(why)
+    }
+}
+
+impl From<&str> for CheckError {
+    fn from(why: &str) -> Self {
+        Self::Failed(why.to_owned())
+    }
+}
 
 /// Checks for an update against GitHub releases for the given app.
-pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, String> {
+pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
+    check_releases_at(&format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo), app, http, current_version)
+}
+
+/// [`check_for_update`] against the release list at `url` (a loopback server in tests).
+fn check_releases_at(url: &str, app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
     let version = self_update::current_version(app, current_version).map(|v| v.to_string());
     let current_version = version.as_deref().unwrap_or(current_version);
-    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo);
-    match http.get_api(&url, None)? {
-        crate::http::Fetched::Body { text, .. } => offered_release(&text, app.repo, current_version),
-        crate::http::Fetched::RateLimited { .. } => Err("GitHub's request limit was reached".into()),
+    match http.get_api(url, None)? {
+        crate::http::Fetched::Body { text, .. } => Ok(offered_release(&text, app.repo, current_version)?),
+        crate::http::Fetched::RateLimited { .. } => Err(CheckError::RateLimited),
         crate::http::Fetched::NotModified | crate::http::Fetched::NotFound => Ok(None),
     }
 }
@@ -84,31 +125,26 @@ fn offered_release(json: &str, repo: &str, current_version: &str) -> Result<Opti
 pub(crate) const TEST_AGENT: &str = "ArtCraft-Launcher-Test/0.0";
 
 #[cfg(test)]
+extern crate self as craft_update;
+#[cfg(test)]
+#[path = "../tests/https_only.rs"]
+pub(crate) mod https_only;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+pub(crate) mod integration;
+
+#[cfg(test)]
+fn main() {
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
+}
+
+#[cfg(test)]
 mod offer_tests {
     use super::offered_release;
+    use craft_ui::testing::trial;
 
     const REPO: &str = "storytold/photocraft";
-    const LIST: &str = r#"[{"tag_name":"v0.17.0","prerelease":false,"draft":false,"assets":[]},
-        {"tag_name":"v0.16.4","prerelease":false,"draft":false,"assets":[]}]"#;
-
-    fn offered(running: &str) -> Option<String> {
-        offered_release(LIST, REPO, running).unwrap().map(|release| release.tag)
-    }
-
-    #[test]
-    fn a_build_from_main_is_not_offered_the_release_it_already_contains() {
-        assert_eq!(offered("0.17.0-integration.20261029.f5b3f123"), None);
-        assert_eq!(offered("0.16.5-dev"), Some("v0.17.0".into()));
-    }
-
-    #[test]
-    fn releases_and_release_candidates_are_offered_as_before() {
-        assert_eq!(offered("0.17.0-rc.2"), Some("v0.17.0".into()));
-        assert_eq!(offered("0.16.4"), Some("v0.17.0".into()));
-        assert_eq!(offered("0.17.0"), None);
-        assert_eq!(offered("not a version"), None);
-    }
-
     const PRERELEASES: &str = r#"[{"tag_name":"v0.1.0-alpha.4","prerelease":true,"draft":false,"assets":[]},
         {"tag_name":"v0.1.0-alpha.5","prerelease":true,"draft":true,"assets":[]},
         {"tag_name":"v0.1.0-alpha.3","prerelease":true,"draft":false,"assets":[]},
@@ -118,7 +154,7 @@ mod offer_tests {
         offered_release(json, REPO, running).unwrap().map(|release| release.tag)
     }
 
-    #[test]
+    #[trial]
     fn a_prerelease_build_is_offered_the_next_prerelease() {
         assert_eq!(offered_from(PRERELEASES, "0.1.0-alpha.3"), Some("v0.1.0-alpha.4".into()));
         assert_eq!(offered_from(PRERELEASES, "0.1.0-alpha.4"), None, "a draft is never offered");
@@ -128,7 +164,7 @@ mod offer_tests {
         assert_eq!(offered_from(flagged, "0.1.0-alpha.4"), Some("v0.2.0".into()));
     }
 
-    #[test]
+    #[trial]
     fn stable_copies_and_builds_from_source_are_not_offered_prereleases() {
         assert_eq!(offered_from(PRERELEASES, "0.0.9"), None);
         assert_eq!(offered_from(PRERELEASES, "0.0.8"), Some("v0.0.9".into()));
@@ -139,7 +175,7 @@ mod offer_tests {
     /// The pre-release precedence examples of Semantic Versioning 2.0.0, section 11
     /// (<https://semver.org/#spec-item-11>):
     /// `1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 < 1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0`.
-    #[test]
+    #[trial]
     fn prereleases_are_offered_in_semver_precedence() {
         let order = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0"];
         let list = order

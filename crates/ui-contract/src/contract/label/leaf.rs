@@ -1,0 +1,462 @@
+//! The side label as a leaf component: its node, press state, reset dot and colon.
+
+use super::props::{CaptionInk, FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk, LinkLabelUnderline};
+use super::step::LabelIn;
+use crate::contract::InBar;
+use crate::contract::{Component, Props};
+use crate::contract::{Cx, MeasureCx, PaintUi, PartsCx, Styled as _};
+use crate::primitives::{IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
+use crate::runtime::access::{Access, Name};
+use crate::runtime::env::{Env, Label};
+use crate::runtime::words::CommonWords;
+use crate::style::{ComponentStyle, ResetMarkLook, Stateful, StyleColor, StyleCx, TextLook, TypeRole};
+use craft_behavior::{Flow, Metrics, PartKey, PressState, Sense};
+use craft_theme::States;
+use egui::{Rect, Response, Vec2};
+use std::cell::Cell;
+
+/// The part key of the reset dot.
+const DOT: PartKey = PartKey::new("reset");
+
+/// The style of the label leaf: no padding, and the look of the reset dot.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+pub(super) struct LabelStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    reset: ResetMarkLook,
+    /// The side of the icon before the text.
+    icon: f32,
+    /// The gap between the icon, the text and the detail.
+    gap: f32,
+    /// The detail: `text.muted`, `text.disabled` with a disabled control.
+    detail: Stateful<StyleColor>,
+    /// The name: `TypeRole::Label` in the [`CaptionInk`]; after a check box or a radio, `TypeRole::Body` in
+    /// `text.normal`. `text.disabled` with a disabled control.
+    #[style(text)]
+    name: TextLook,
+    /// The glyph and icon: their own ink (`None`), `text.disabled` with a disabled control.
+    glyph: Stateful<Option<StyleColor>>,
+    /// The width (`stroke.thin`) of a one-line link's underline where the label draws it inside its rect
+    /// ([`LinkLabelUnderline::Inside`]); `None` where egui draws it with the text.
+    underline: Option<f32>,
+}
+
+/// What the label leaf reports.
+pub(super) struct LabelOutput {
+    response: Response,
+    pub(super) press: PressState,
+    pub(super) hovered: bool,
+    pub(super) double_click: bool,
+    pub(super) dot_click: bool,
+    pub(super) activated: bool,
+}
+
+impl crate::contract::Outcome for LabelOutput {
+    type Value = crate::contract::NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// The side label as a leaf: its own node, press state and reset dot.
+#[derive(crate::contract::Component)]
+#[component(sample = LabelLeaf::sample)]
+pub(super) struct LabelLeaf {
+    #[common]
+    common: crate::contract::Common,
+    pub(super) scrub: bool,
+    /// The control behind the label has a reset value.
+    pub(super) resettable: bool,
+    /// The dot shows: the value differs from the reset value.
+    pub(super) differs: bool,
+    /// The reset value as the control words it, which the dot's tooltip names; `None` names no default.
+    pub(super) default: Option<String>,
+    /// The width the dot's slot takes at the end of the label, 0 without one.
+    slot: f32,
+    pub(super) icon: Option<IconSpec<'static>>,
+    /// A glyph shown in place of the name, icon and detail.
+    pub(super) glyph: Option<Glyph>,
+    /// The detail, resolved in the scope's language.
+    pub(super) detail: Option<Label>,
+    /// The colon drawn after the name or the glyph text, in the scope's language; a separate run, so the name stays
+    /// the one text a narrow room elides.
+    pub(super) colon: Option<String>,
+    pub(super) baseline: Cell<f32>,
+    /// The height of the label's first line: the name's line, the icon and the trailing content. A control placed
+    /// after the label is centred on it.
+    pub(super) first_line: Cell<f32>,
+    /// The label sits after its control, as a check box's or a radio's text: the name reads in body type at full ink
+    /// and wraps in its room instead of eliding.
+    #[style_key]
+    pub(super) after: bool,
+    /// The label is a link (`LabelPress::Link`): its name reads in the link look and is underlined.
+    #[style_key]
+    pub(super) link: bool,
+    /// The control the label names takes the label into its own hit target: the label senses nothing itself.
+    pub(super) claimed: bool,
+    /// The size of the content the label step shows after the text, inside the label: 0 without one.
+    pub(super) trailing: Vec2,
+    /// The name shows; false for a label that shows only its content (`SideLabel::content_only`).
+    pub(super) named: bool,
+    /// The words a short label stands for: its accessible name; `None` names it by the text it shows.
+    pub(super) words: Option<String>,
+    double_click: bool,
+    dot_click: bool,
+    activated: bool,
+}
+
+impl LabelLeaf {
+    fn detail_run<'a>(&self, detail: &'a Label, ink: StyleColor) -> TextRun<'a> {
+        TextRun::new(detail.as_str()).color(ink).wrap(Wrap::Wrap)
+    }
+
+    /// The width the trailing content and its gap take at the end of the label.
+    fn trailing_width(&self, gap: f32) -> f32 {
+        if self.trailing.x > 0.0 { gap + self.trailing.x } else { 0.0 }
+    }
+
+    fn sample() -> Self {
+        LabelLeaf::new(Label::from("Opacity"), 0.0)
+    }
+
+    pub(super) fn new(text: Label, slot: f32) -> Self {
+        LabelLeaf {
+            common: crate::contract::Common::new(),
+            scrub: false,
+            resettable: false,
+            differs: false,
+            default: None,
+            slot,
+            icon: None,
+            glyph: None,
+            detail: None,
+            colon: None,
+            baseline: Cell::new(0.0),
+            first_line: Cell::new(0.0),
+            after: false,
+            link: false,
+            claimed: false,
+            trailing: Vec2::ZERO,
+            named: true,
+            words: None,
+            double_click: false,
+            dot_click: false,
+            activated: false,
+        }
+        .label(text)
+    }
+}
+
+impl Component for LabelLeaf {
+    const ROLE: crate::contract::Role = crate::contract::Role::LABEL;
+    // A link label is a link to assistive technology too, not a second name of its control.
+    const ALT_ROLES: &'static [crate::contract::Role] = &[crate::contract::Role::LINK];
+    const OVERLAYS: bool = false;
+    // The label is no key target: Enter and Space go to its control, which a click on the label focuses.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(Self::INPUT).with_activate(crate::runtime::focus::ActivateKeys::Neither);
+    type Style = LabelStyle;
+    type Output = LabelOutput;
+
+    fn shows_label(&self) -> bool {
+        self.glyph.is_none()
+    }
+
+    fn style(cx: &StyleCx<'_>, key: LabelLeafStyleKey) -> LabelStyle {
+        LabelStyle {
+            metrics: Metrics::new(),
+            reset: cx.reset_mark(),
+            icon: cx.control().icon,
+            gap: cx.tokens.space.gap.inline,
+            detail: {
+                let (muted, off) = (cx.color(cx.tokens.color.text.muted), cx.color(cx.tokens.color.text.disabled));
+                Stateful::new(muted).off(States::new(muted, muted, muted, off))
+            },
+            // A caption reads as secondary; a check box's or a radio's text after it is the control's own.
+            name: {
+                let text = &cx.tokens.color.text;
+                let caption = if cx.env::<CaptionInk>() == CaptionInk::Normal { text.normal } else { text.muted };
+                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, caption) };
+                let neutral = cx.env::<LinkLabelInk>() == LinkLabelInk::Neutral;
+                if key.link && !neutral {
+                    // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
+                    TextLook { role, ..cx.link_look(true) }
+                } else {
+                    // A neutral link label reads in the body ink; its underline still marks it.
+                    let ink = if key.link { text.normal } else { ink };
+                    let (ink, off) = (cx.color(ink), cx.color(text.disabled));
+                    TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                }
+            },
+            glyph: {
+                let off = Some(cx.color(cx.tokens.color.text.disabled));
+                Stateful::new(None).off(States::new(None, None, None, off))
+            },
+            underline: (cx.env::<LinkLabelUnderline>() == LinkLabelUnderline::Inside).then_some(cx.tokens.stroke.thin),
+        }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        let line = cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.name.role));
+        let name = line.size();
+        if let Some(glyph) = &self.glyph {
+            let (shown, baseline) = match glyph {
+                Glyph::Icon(_) => {
+                    let height = cx.style.icon.max(name.y);
+                    (Vec2::new(cx.style.icon, height), line.first_baseline + (height - name.y) / 2.0)
+                }
+                Glyph::Text(text) => {
+                    let run = cx.layout(&TextRun::new(text.as_str()));
+                    let colon = self.colon.as_deref().map_or(0.0, |colon| cx.layout(&TextRun::new(colon)).size().x);
+                    (run.size() + Vec2::new(colon, 0.0), run.first_baseline)
+                }
+            };
+            self.baseline.set(baseline);
+            self.first_line.set(shown.y);
+            return Vec2::new(shown.x + self.slot, shown.y);
+        }
+        if !self.named {
+            let height = self.trailing.y.max(name.y);
+            self.baseline.set(line.first_baseline + (height - name.y) / 2.0);
+            self.first_line.set(height);
+            return Vec2::new(self.trailing.x + self.slot, height);
+        }
+        let room = match cx.proposal {
+            craft_behavior::Proposal::Width(width) => Some(width),
+            _ => cx.room,
+        };
+        let colon = self.colon.as_deref().map_or(0.0, |colon| cx.layout(&TextRun::new(colon).role(cx.style.name.role)).size().x);
+        let icon = if self.icon.is_some() { cx.style.icon + cx.style.gap } else { 0.0 };
+        let trailing = self.trailing_width(cx.style.gap);
+        // A name wider than the room the icon, colon, content and slot leave wraps there.
+        let mut name = name;
+        if self.after
+            && let Some(room) = room
+        {
+            let left = (room - self.slot - icon - colon - trailing).max(0.0);
+            if name.x > left {
+                name = cx.layout_at(&TextRun::new(cx.resolved.label).role(cx.style.name.role).wrap(Wrap::Wrap), left).size();
+            }
+        }
+        let wrapped = name.y > line.size().y;
+        let (mut width, mut height) = (name.x + colon + icon, name.y);
+        let first = line.size().y.max(if self.icon.is_some() { cx.style.icon } else { 0.0 }).max(self.trailing.y);
+        if self.icon.is_some() {
+            height = height.max(cx.style.icon);
+        }
+        if let Some(detail) = &self.detail {
+            let run = self.detail_run(detail, cx.style.detail.off.rest);
+            if wrapped {
+                // After a wrapped name the detail starts under it.
+                let left = room.map_or(f32::INFINITY, |room| (room - self.slot - icon - trailing).max(0.0));
+                let detail = cx.layout_at(&run, left).size();
+                width = width.max(icon + detail.x);
+                height += detail.y;
+            } else {
+                // The detail wraps in the room the name and the gap leave.
+                let left = room.map_or(f32::INFINITY, |room| (room - self.slot - width - trailing - cx.style.gap).max(0.0));
+                let detail = cx.layout_at(&run, left).size();
+                width += cx.style.gap + detail.x;
+                height = height.max(detail.y);
+            }
+        }
+        width += trailing;
+        height = height.max(self.trailing.y);
+        if wrapped {
+            // A wrapped name starts on the first line, which the icon and the content share.
+            self.baseline.set(line.first_baseline + (first - line.size().y) / 2.0);
+            self.first_line.set(first);
+        } else {
+            // The text sits at the row's vertical centre, so an icon taller than the text moves the baseline down.
+            self.baseline.set(line.first_baseline + (height - name.y) / 2.0);
+            self.first_line.set(height);
+        }
+        Vec2::new(width + self.slot, height)
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.link {
+            access.role(crate::contract::Role::LINK);
+        }
+        if let Some(words) = &self.words {
+            access.name(Name::Text(words.clone()));
+        }
+    }
+
+    /// A click on the label focuses its control (the scope's `FieldLabel::activated`), so a label takes clicks; a
+    /// claimed label is its control's to sense.
+    fn sense(&self) -> Sense {
+        if self.claimed {
+            Sense::empty()
+        } else if self.scrub {
+            Sense::CLICK | Sense::DRAG
+        } else {
+            Sense::CLICK
+        }
+    }
+
+    fn parts(&mut self, _rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        if self.slot > 0.0 && self.differs {
+            let (slot, _) = cx.flow.take_end(self.slot);
+            let words = cx.env.words::<CommonWords>();
+            let tip = match &self.default {
+                Some(value) => words.reset_to_value.fill(&[("value", value.as_str())]),
+                None => words.reset_to_default.as_str().to_owned(),
+            };
+            cx.part(DOT, slot).sense(Sense::CLICK).state_layer().tooltip(tip).pointer_only("the Reset command");
+        }
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        use crate::contract::Pointer as _;
+        self.double_click = self.resettable && cx.press().double_pressed();
+        self.dot_click = self.slot > 0.0 && self.differs && cx.part(DOT).press.phase.is_click();
+        self.activated = cx.activation().is_some();
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let flow = Flow::new(cx.rect, cx.core.env.direction().is_rtl());
+        let (slot, mut rest) = flow.take_end(self.slot);
+        let draw = ui.draw();
+        let ink = cx.resolve(&cx.style.glyph);
+        let icon_of = |icon: &IconSpec<'static>| IconSpec { color: ink.or(icon.color), ..icon.clone() };
+        // A wrapped name starts on the first line, which the icon and the content share; a one-line label sits at the
+        // row's vertical centre.
+        let line = draw.layout(&TextRun::new(cx.core.resolved.label).role(cx.style.name.role), f32::INFINITY).size();
+        let wrapped = self.after && self.glyph.is_none() && {
+            let colon = self.colon.as_deref().map_or(0.0, |colon| draw.layout(&TextRun::new(colon).role(cx.style.name.role), f32::INFINITY).size().x);
+            let icon = if self.icon.is_some() { cx.style.icon + cx.style.gap } else { 0.0 };
+            line.x > rest.rect().width() - self.trailing_width(cx.style.gap) - icon - colon
+        };
+        let line = line.y;
+        let first = line.max(if self.icon.is_some() { cx.style.icon } else { 0.0 }).max(self.trailing.y);
+        let middle = if wrapped { cx.rect.top() + first / 2.0 } else { cx.rect.center().y };
+        if self.trailing.x > 0.0 {
+            rest = rest.take_end(self.trailing_width(cx.style.gap)).1;
+        }
+        if !self.named {
+            // The content is the label: the step shows it in the label's rect.
+            if self.slot > 0.0 {
+                draw.reset_mark(&cx.style.reset, slot.center(), self.differs);
+            }
+            return;
+        }
+        let centred = |rect: Rect, height: f32| Rect::from_min_size(egui::pos2(rect.min.x, middle - height / 2.0), Vec2::new(rect.width(), height));
+        if let Some(glyph) = &self.glyph {
+            match glyph {
+                Glyph::Icon(icon) => {
+                    draw.icon(centred(rest.take_start(cx.style.icon).0, cx.style.icon), &icon_of(icon));
+                }
+                Glyph::Text(text) => {
+                    let run = inked(text.as_str(), ink);
+                    let size = draw.layout(&run, rest.rect().width()).size();
+                    let (cell, after) = rest.take_start(size.x);
+                    draw.text(centred(cell, size.y), &run);
+                    if let Some(colon) = self.colon.as_deref() {
+                        let run = inked(colon, ink);
+                        let width = draw.layout(&run, f32::INFINITY).size().x;
+                        draw.text(centred(after.take_start(width).0, size.y), &run);
+                    }
+                }
+            }
+        } else {
+            if let Some(icon) = &self.icon {
+                let (cell, after) = rest.take_start(cx.style.icon);
+                draw.icon(centred(cell, cx.style.icon), &icon_of(icon));
+                rest = after.take_start(cx.style.gap).1;
+            }
+            // A name wider than its room elides, or wraps after its control; the full text stays the accessible name.
+            let name_ink = cx.resolve(&cx.style.name.color);
+            let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).role(cx.style.name.role).color(name_ink));
+            let colon_width = colon.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
+            let underline = cx.style.underline.filter(|_| self.link && !wrapped);
+            let named = if self.link && underline.is_none() {
+                TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()])
+            } else {
+                TextRun::new(cx.core.resolved.label)
+            };
+            let run = named.role(cx.style.name.role).color(name_ink);
+            let run = if wrapped { run.wrap(Wrap::Wrap) } else { run.elide() };
+            let name = draw.layout(&run, (rest.rect().width() - colon_width).max(0.0)).size();
+            let (name_rect, after) = rest.take_start(name.x);
+            let name_at =
+                if wrapped { Rect::from_min_size(egui::pos2(name_rect.min.x, middle - line / 2.0), name) } else { centred(name_rect, name.y) };
+            draw.text(name_at, &run);
+            if let Some(width) = underline {
+                // egui's underline lies on the text box's bottom edge, which a rect shorter than the box would clip.
+                let y = name_at.bottom().min(cx.rect.bottom()) - width / 2.0;
+                draw.stroke(&PaintShape::Path(vec![egui::pos2(name_at.left(), y), egui::pos2(name_at.right(), y)]), StrokeWidth::Thin, name_ink);
+            }
+            let after = match colon {
+                Some(run) => {
+                    let (colon_rect, after) = after.take_start(colon_width);
+                    draw.text(centred(colon_rect, name.y), &run);
+                    after
+                }
+                None => after,
+            };
+            if let Some(detail) = &self.detail {
+                let run = self.detail_run(detail, cx.resolve(&cx.style.detail));
+                if wrapped {
+                    let under = Rect::from_min_max(egui::pos2(rest.rect().min.x, name_at.bottom()), rest.rect().max);
+                    let size = draw.layout(&run, under.width()).size();
+                    let at = Flow::new(under, cx.core.env.direction().is_rtl()).take_start(size.x).0;
+                    draw.text(Rect::from_min_size(at.min, size), &run);
+                } else {
+                    let (_, detail_flow) = after.take_start(cx.style.gap);
+                    let size = draw.layout(&run, detail_flow.rect().width()).size();
+                    draw.text(centred(detail_flow.rect(), size.y), &run);
+                }
+            }
+        }
+        if self.slot > 0.0 {
+            draw.reset_mark(&cx.style.reset, slot.center(), self.differs);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> LabelOutput {
+        LabelOutput {
+            response: cx.core.response.clone(),
+            press: cx.core.press,
+            hovered: cx.core.response.hovered(),
+            double_click: self.double_click,
+            dot_click: self.dot_click,
+            activated: self.activated,
+        }
+    }
+}
+
+/// The colon a beside label draws after its shown text in a form (`LabelScheme::Form`), unless that text ends in one:
+/// a text label's, in a bar a glyph text's as well ("X:"), and under `GlyphColon::Form` a glyph caption's. An
+/// inspector's labels draw none. The label's node and the control keep the name as given.
+pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
+    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() == LabelScheme::Inspector {
+        return None;
+    }
+    let text = match &input.side.kind {
+        LabelKind::Text | LabelKind::Short(_) => env.view().resolve(input.side.kind.shown(input.text)),
+        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 || (glyph.caption && env.values.get::<GlyphColon>() == GlyphColon::Form) => {
+            match glyph.resolved(env.view()) {
+                Glyph::Text(text) => text,
+                Glyph::Icon(_) => return None,
+            }
+        }
+        _ => return None,
+    };
+    if text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {
+        return None;
+    }
+    Some(colon_of(&env.words::<CommonWords>()))
+}
+
+/// `text` in `ink`, or in the run's own ink without one.
+fn inked(text: &str, ink: Option<StyleColor>) -> TextRun<'_> {
+    ink.map_or_else(|| TextRun::new(text), |ink| TextRun::new(text).color(ink))
+}
+
+/// The colon of the scope's language that follows a caption's name.
+#[doc(hidden)]
+pub fn colon_of(words: &CommonWords) -> String {
+    words.caption.fill(&[("caption", "")])
+}
