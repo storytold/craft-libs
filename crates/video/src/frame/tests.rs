@@ -373,6 +373,18 @@ fn vp8_picture_converts() {
     assert_eq!(f.pts, Some(1));
 }
 
+/// The planes keep their order and their rounded-up chroma size, and what Bink doesn't signal stays unspecified.
+#[cfg(feature = "bink-decode")]
+#[test]
+fn bink_picture_converts() {
+    let p = crate::bink::Picture { width: 3, height: 5, chroma_width: 2, chroma_height: 3, y: vec![1; 15], u: vec![2; 6], v: vec![3; 6] };
+    let f = VideoFrame::try_from(p).unwrap();
+    assert_eq!((f.width(), f.height()), (3, 5));
+    let planes: Vec<_> = f.planes().iter().map(|p| (p.width(), p.height(), p.row_u8(0).unwrap()[0])).collect();
+    assert_eq!(planes, [(3, 5, 1), (2, 3, 2), (2, 3, 3)]);
+    assert_eq!((f.color, f.pts, f.sar), (ColorTags::UNSPECIFIED, None, None));
+}
+
 #[cfg(feature = "rawvideo")]
 #[test]
 fn rawvideo_frames_convert() {

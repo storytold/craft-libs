@@ -60,6 +60,10 @@ mod mpeg2;
 #[path = "ffv1.rs"]
 mod ffv1;
 
+#[cfg(feature = "bink-decode")]
+#[path = "bink_oracle.rs"]
+mod bink_oracle;
+
 #[cfg(feature = "rawvideo")]
 #[path = "rawvideo.rs"]
 mod rawvideo;
