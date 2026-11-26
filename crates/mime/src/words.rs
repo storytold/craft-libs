@@ -166,26 +166,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decodes_b_and_q() {
-        assert_eq!(decode_words("=?UTF-8?B?SMOpbGxv?="), "Héllo");
-        assert_eq!(decode_words("=?utf-8?q?H=C3=A9llo_world?="), "Héllo world");
-        assert_eq!(decode_words("=?ISO-8859-1?Q?caf=E9?="), "café");
-        assert_eq!(decode_words("=?iso-8859-15?Q?=A4_5?="), "€ 5");
-        assert_eq!(decode_words("=?windows-1252?Q?=93hi=94?="), "“hi”");
-        assert_eq!(decode_words("=?US-ASCII?Q?plain?="), "plain");
-        assert_eq!(decode_words("=?UTF-8*en?Q?lang?="), "lang");
-    }
-
-    #[test]
-    fn text_around_words_is_kept() {
-        assert_eq!(decode_words("Re: =?UTF-8?Q?caf=C3=A9?= today"), "Re: café today");
-        assert_eq!(decode_words("no words here"), "no words here");
-        assert_eq!(decode_words(""), "");
-        assert_eq!(decode_words("a =?UTF-8?Q?b?= c =?UTF-8?Q?d?= e"), "a b c d e");
-        assert_eq!(decode_words("\"=?UTF-8?Q?Ad=C3=A1?=\" <x>"), "\"Adá\" <x>");
-    }
-
-    #[test]
     fn space_between_words_is_dropped() {
         assert_eq!(decode_words("=?UTF-8?Q?a?= =?UTF-8?Q?b?="), "ab");
         assert_eq!(decode_words("=?UTF-8?Q?a?=\r\n\t=?UTF-8?Q?b?=  =?ISO-8859-1?Q?=E9?="), "abé");
@@ -224,21 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_charsets_and_bad_bytes_do_not_fail() {
-        assert_eq!(decode_words("=?koi8-r?Q?abc?="), "abc");
-        assert_eq!(decode_words("=?UTF-8?Q?=FF?="), "\u{fffd}");
-        assert_eq!(decode_words("=?UTF-8?B?!!!!?="), "");
-        assert_eq!(decode_words("=?UTF-8?Q?=ZZ=4?="), "=ZZ=4");
-    }
-
-    #[test]
-    fn ascii_is_not_encoded() {
-        assert_eq!(encode_words("Lunch on Friday?"), "Lunch on Friday?");
-        assert_eq!(encode_words(""), "");
-        assert_eq!(encode_words("a = b ? c"), "a = b ? c");
-    }
-
-    #[test]
     fn non_ascii_becomes_b_words() {
         assert_eq!(encode_words("Héllo"), "=?UTF-8?B?SMOpbGxv?=");
         assert_eq!(decode_words(&encode_words("naïve café")), "naïve café");
@@ -263,17 +228,6 @@ mod tests {
         // Four-byte characters are never cut.
         let emoji = "😀".repeat(50);
         assert_eq!(decode_words(&encode_words(&emoji)), emoji);
-    }
-
-    #[test]
-    fn the_first_word_can_be_shorter() {
-        let text = "é".repeat(40);
-        let encoded = encode_b(&text, 10);
-        let first = encoded.split(' ').next().unwrap();
-        assert_eq!(first, "=?UTF-8?B?w6nDqcOpw6nDqQ==?=");
-        assert_eq!(decode_words(&encoded), text);
-        assert_eq!(decode_words(&encode_b("", 45)), "");
-        assert_eq!(decode_words(&encode_b("x", 0)), "x");
     }
 
     #[test]

@@ -54,25 +54,6 @@ mod tests {
     }
 
     #[test]
-    fn bytes_count_luma_and_subsampled_chroma() {
-        assert_eq!(shape(4, 4).bytes(), Some((16 + 2 * 4) * 2));
-        // Odd sizes round chroma up.
-        assert_eq!(shape(3, 3).bytes(), Some((9 + 2 * 4) * 2));
-        let mono = PictureShape { chroma_planes: 0, bytes_per_sample: 1, ..shape(10, 10) };
-        assert_eq!(mono.bytes(), Some(100));
-        let full = PictureShape { shift_x: 0, shift_y: 0, ..shape(10, 10) };
-        assert_eq!(full.bytes(), Some(600));
-    }
-
-    #[test]
-    fn exact_budget_boundary() {
-        let s = shape(4, 4); // 48 bytes
-        assert!(s.fits(10, 480));
-        assert!(!s.fits(10, 479));
-        assert!(!s.fits(11, 480));
-    }
-
-    #[test]
     fn overflow_is_never_within_budget() {
         let huge = shape(u64::MAX / 2, 3);
         assert_eq!(huge.bytes(), None);

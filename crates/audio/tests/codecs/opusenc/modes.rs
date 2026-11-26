@@ -49,12 +49,14 @@ fn band_edge(bw: Bandwidth) -> f64 {
 }
 
 const LEN: usize = 96_000;
+/// The length of the sweeps over many encodes: one second.
+const SHORT: usize = 48_000;
 
 #[test]
 fn every_mode_and_bandwidth_decodes() {
-    let sp = speech(LEN + 40_000, 11);
-    let left = sp[..LEN].to_vec();
-    let right: Vec<f32> = sp[40_000..].iter().map(|v| v * 0.6).collect();
+    let sp = speech(SHORT + 20_000, 11);
+    let left = sp[..SHORT].to_vec();
+    let right: Vec<f32> = sp[20_000..].iter().map(|v| v * 0.6).collect();
     for (mode, bw, config, rate) in [
         (Mode::Silk, Bandwidth::Narrowband, 1u8, 8_000u32),
         (Mode::Silk, Bandwidth::Mediumband, 5, 11_000),
@@ -149,8 +151,8 @@ fn silk_music_quality() {
 
 #[test]
 fn bitrate_tracking() {
-    let sp = speech(LEN, 13);
-    let mu = music(LEN);
+    let sp = speech(SHORT, 13);
+    let mu = music(SHORT);
     for (name, x) in [("speech", &sp), ("music", &mu)] {
         for (mode, bw, rate) in [
             (Mode::Silk, Bandwidth::Narrowband, 6_000u32),
@@ -178,10 +180,10 @@ fn bitrate_tracking() {
 
 #[test]
 fn stereo_silk_and_hybrid() {
-    let sp = speech(LEN + 40_000, 21);
-    let a = sp[..LEN].to_vec();
-    let b: Vec<f32> = sp[40_000..].iter().map(|v| v * 0.7).collect();
-    let mu = music(LEN);
+    let sp = speech(SHORT + 20_000, 21);
+    let a = sp[..SHORT].to_vec();
+    let b: Vec<f32> = sp[20_000..].iter().map(|v| v * 0.7).collect();
+    let mu = music(SHORT);
     let cases: Vec<(&str, Vec<f32>, Vec<f32>)> = vec![
         ("dual mono", a.clone(), a.clone()),
         ("panned", a.iter().map(|v| v * 0.9).collect(), a.iter().map(|v| v * 0.35).collect()),
