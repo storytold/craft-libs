@@ -31,6 +31,7 @@ use craft_font_catalog::{Catalog, FaceInfo, FontEnv, Os, Source, read_faces};
 use serde::{Deserialize, Serialize};
 
 use super::{Caller, Error, FontStore, InstalledFamily, io};
+use crate::Conflict;
 use crate::source::{safe_dir, safe_file_name};
 use crate::verify::VerifyError;
 
@@ -277,17 +278,6 @@ fn flatpak_can_write(info: &Path, home: Option<&Path>, data: &Path) -> bool {
         base.is_some_and(|b| fonts.starts_with(b))
     };
     grants.iter().any(|(name, write)| *write && covers(name))
-}
-
-/// What stops a family being copied into the OS user font folder: a font that already has one
-/// of its PostScript names, or a file in the way of a copy.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Conflict {
-    /// The PostScript name `path` has too; `None` for a file the store didn't add (another
-    /// family's copy, a link) sitting where a copy would go.
-    pub postscript: Option<String>,
-    /// A system font or another store family's copy with the name, or the file in the way.
-    pub path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
