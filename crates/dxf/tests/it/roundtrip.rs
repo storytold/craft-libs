@@ -23,7 +23,8 @@ fn check(case: &str, body: &[Tag]) {
             let mut current = original.clone();
             for pass in 1..=2 {
                 let context = format!("{case} · {version} · binary={binary} · pass={pass}");
-                let bytes = if binary { write_binary(&current, version.utf8()) } else { write_ascii_as(&current, version.utf8()).into_bytes() };
+                let bytes =
+                    if binary { write_binary(&current, version.utf8()).unwrap() } else { write_ascii_as(&current, version.utf8()).into_bytes() };
                 assert_eq!(is_binary(&bytes), binary, "{context}");
                 let back = parse(&bytes).unwrap_or_else(|e| panic!("{context}: {e}"));
                 assert_eq!(back.len(), original.len(), "{context}: tag count");
