@@ -62,7 +62,8 @@ network I/O and has no `unsafe` code.
   `decode::hdr` and `decode::exr` turn a file's bytes into a plane. Integer samples are divided
   by their maximum (255 or 65535), so a 16-bit file keeps all 65536 levels. Float samples are
   kept as stored, values above 1 and negative values included, and OpenEXR NaN and infinities
-  too. Gray without alpha gives a gray plane, as does an OpenEXR file of exactly one channel
+  too, except that 64-bit TIFF floats are narrowed to 32 bits and lose any precision beyond
+  `f32`. Gray without alpha gives a gray plane, as does an OpenEXR file of exactly one channel
   whatever its name; every other layout gives RGBA, with alpha 1 when the file has none. The
   result's `transfer` is `Encoded` for integer code values whose transfer
   the file does not state, `Linear` for Radiance HDR, OpenEXR and PNG with a linear `cICP`, and

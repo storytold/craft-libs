@@ -1,7 +1,8 @@
 //! Decoding PNG, TIFF, Radiance HDR and OpenEXR bytes into float [`Image`] planes, each format
 //! behind its own Cargo feature. Integer samples are scaled by their own maximum (255 for 8 bits,
 //! 65535 for 16 bits), so a 16-bit file keeps all 65536 levels. Float samples are kept as stored:
-//! values above 1, negative values and, in OpenEXR, NaN and infinities.
+//! values above 1, negative values and, in OpenEXR, NaN and infinities. The one exception is a
+//! 64-bit TIFF float, which is narrowed to `f32` and loses any precision beyond it.
 //!
 //! Every function takes the file's bytes and does no I/O. The size of the result is checked
 //! against [`Limits`] before its plane is reserved, and the reservation is fallible. The format
