@@ -83,7 +83,8 @@ pub fn css_transform_to_svg(value: &str) -> Option<String> {
 
 /// A CSS transform length in user units: `px` or unitless.
 fn css_length(a: &str) -> Option<f64> {
-    let n = a.strip_suffix("px").unwrap_or(a).parse::<f64>().ok()?;
+    let a = a.to_ascii_lowercase();
+    let n = a.strip_suffix("px").unwrap_or(&a).parse::<f64>().ok()?;
     n.is_finite().then_some(n)
 }
 
@@ -154,5 +155,15 @@ mod tests {
         assert_eq!(css_transform_to_svg("translate(50%, 0)"), None);
         assert_eq!(css_transform_to_svg("rotate3d(1, 0, 0, 45deg)"), None);
         assert_eq!(css_transform_to_svg("translate(1px"), None);
+        // CSS Values3 section4.4: unit identifiers are ASCII case-insensitive.
+        // https://www.w3.org/TR/css-values-3/#dimensions
+        for unit in ["px", "PX", "Px", "pX"] {
+            let input = format!("translateX(5{unit}) scale(2)");
+            assert_eq!(
+                css_transform_to_svg(&input).map(|svg| parse_transform(&svg) * kurbo::Point::new(1.0, 2.0)),
+                Some(kurbo::Point::new(7.0, 4.0)),
+                "{input}",
+            );
+        }
     }
 }
