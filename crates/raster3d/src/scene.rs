@@ -88,9 +88,10 @@ impl Default for Material {
 }
 
 impl Material {
-    /// Drawn in the transparent (sorted, blended) pass.
+    /// Drawn in the transparent (sorted, blended) pass: a blended material, a shadows-only one, or
+    /// one whose opacity is below 1.
     pub fn transparent(&self) -> bool {
-        self.alpha_mode == 2 || self.opacity < 0.999 || self.shadows_only
+        self.alpha_mode == 2 || self.opacity < 1.0 || self.shadows_only
     }
 }
 

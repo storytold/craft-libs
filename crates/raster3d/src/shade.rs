@@ -50,7 +50,14 @@ fn scale(a: [f32; 3], k: f32) -> [f32; 3] {
 }
 #[inline]
 fn mix(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
+    let m = a + (b - a) * t;
+    // A difference of large finite values of opposite signs overflows f32, and times a weight of 0
+    // gives NaN; the interpolation is then taken in f64.
+    if m.is_finite() || !(a.is_finite() && b.is_finite() && t.is_finite()) {
+        return m;
+    }
+    let (a, b, t) = (f64::from(a), f64::from(b), f64::from(t));
+    (a + (b - a) * t) as f32
 }
 
 /// sRGB-encoded → linear light. The segment is chosen by magnitude and a negative value keeps
@@ -334,14 +341,34 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     let iz = 1.0 / z;
     let iq = iz / m.focal;
     let open = |xi: i64, yi: i64| -> f32 {
-        let s = at(xi, yi) + bias;
+        let t = at(xi, yi);
+        // An empty texel blocks nothing, whatever the bias and footprint are.
+        if t == f32::INFINITY {
+            return 1.0;
+        }
+        let s = t + bias;
         let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
-        let lit = if m.ortho {
-            z - g * texel <= s
+        let fast = if m.ortho {
+            (s.is_finite() && g.is_finite() && texel.is_finite()).then_some(z - g * texel <= s)
         } else {
             let inv = iz + g * iq;
-            inv <= 0.0 || inv * s >= 1.0
+            (s.is_finite() && inv.is_finite()).then_some(inv <= 0.0 || inv * s >= 1.0)
         };
+        let lit = fast.unwrap_or_else(|| {
+            // The footprint, bias or inverse-depth slope does not fit f32: the compare is made in f64.
+            let (z, focal) = (f64::from(z), f64::from(m.focal));
+            let texel = if m.ortho { 1.0 / focal } else { z.abs() / focal };
+            let bias = f64::from(m.bias) * texel * (1.0 + 3.0 * (1.0 - f64::from(n_l.clamp(0.0, 1.0))));
+            let s = f64::from(t) + bias;
+            let g = f64::from(tx) * (xi as f64 + 0.5 - f64::from(u)) + f64::from(ty) * (yi as f64 + 0.5 - f64::from(v));
+            if m.ortho {
+                z - g * texel <= s
+            } else {
+                let iz = 1.0 / z;
+                let inv = iz + g * (iz / focal);
+                inv <= 0.0 || inv * s >= 1.0
+            }
+        });
         if lit { 1.0 } else { 0.0 }
     };
     // The penumbra in output pixels, converted through the receiver's texel footprint, and at
@@ -425,6 +452,11 @@ fn env_shadow(s: &Scene, e: &EnvInfo, p: [f32; 3], ng: [f32; 3], n: [f32; 3]) ->
     1.0 - e.shadow_darkness * e.key * (1.0 - f)
 }
 
+/// `to − from` in f64.
+fn wide_displacement(to: [f32; 3], from: [f32; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|i| f64::from(to[i]) - f64::from(from[i]))
+}
+
 /// Unit direction from `p` to light `l`, and the distance (infinite for a parallel light).
 fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     if l.kind == 0 {
@@ -432,9 +464,11 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     }
     let d = sub(l.pos, p);
     let len = dot(d, d).sqrt();
-    // The squared distance to a far light overflows f32; such a direction is taken in f64.
-    if len.is_infinite() && d.iter().all(|c| c.is_finite()) {
-        let d = d.map(f64::from);
+    // The squared distance to a far light, or the difference of far positions, overflows f32; such
+    // a direction is taken in f64 from the original positions, and `attenuation` takes the
+    // distance in f64 again when it does not fit f32.
+    if len.is_infinite() && l.pos.iter().chain(&p).all(|c| c.is_finite()) {
+        let d = wide_displacement(l.pos, p);
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         return (d.map(|c| (c / len) as f32), len as f32);
     }
@@ -443,7 +477,25 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
 
 /// Distance attenuation × spot cone of a light at `p`.
 fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f32) -> f32 {
-    let mut k = match l.falloff {
+    // A distance past the f32 range is kept in f64 through the falloff.
+    if dist.is_infinite() && l.kind != 0 && l.falloff != 0 && l.pos.iter().chain(&p).all(|c| c.is_finite()) {
+        let d = wide_displacement(l.pos, p);
+        let wide = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let (radius, span) = (f64::from(l.radius), f64::from(l.falloff_distance));
+        let k = match l.falloff {
+            1 if wide <= radius => 1.0,
+            1 if span <= 0.0 => 0.0,
+            1 => {
+                let t = ((wide - radius) / span).clamp(0.0, 1.0);
+                1.0 - t * t * (3.0 - 2.0 * t)
+            }
+            2 if wide <= radius || (radius <= 0.0 && wide <= 1.0) => 1.0,
+            2 => (radius.max(1.0) / wide).powi(2),
+            _ => 1.0,
+        };
+        return cone(l, to_l, k as f32);
+    }
+    let k = match l.falloff {
         1 if l.kind != 0 => {
             if dist <= l.radius {
                 1.0
@@ -463,7 +515,11 @@ fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f32) -> f32 {
         }
         _ => 1.0,
     };
-    let _ = p;
+    cone(l, to_l, k)
+}
+
+/// `k` times the spot cone of light `l` toward the unit direction `to_l` from the point to the light.
+fn cone(l: &Light, to_l: [f32; 3], mut k: f32) -> f32 {
     if l.kind == 1 {
         let cos_a = dot(scale(to_l, -1.0), l.dir).clamp(-1.0, 1.0);
         k *= if cos_a >= l.cos_inner {
@@ -619,8 +675,56 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::{shadow_coord, shadow_factor};
-    use crate::scene::ShadowMap;
+    use super::{attenuation, mix, shadow_coord, shadow_factor, to_light};
+    use crate::scene::{Light, ShadowMap};
+
+    fn point_light(pos: [f32; 3], falloff: u32, radius: f32) -> Light {
+        Light {
+            kind: 2,
+            pos,
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 0.0,
+            falloff,
+            radius,
+            falloff_distance: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        }
+    }
+
+    #[test]
+    fn mixing_huge_values_of_opposite_signs_keeps_the_selected_end() {
+        assert_eq!(mix(3e38, -3e38, 0.0), 3e38);
+        assert_eq!(mix(3e38, -3e38, 0.5), 0.0);
+        assert_eq!(mix(0.0, 1.0, 0.25), 0.25);
+    }
+
+    #[test]
+    fn a_light_displacement_that_overflows_f32_is_taken_from_the_positions_in_f64() {
+        let l = point_light([0.0, 0.0, 2e38], 0, 0.0);
+        let (dir, _) = to_light(&l, [0.0, 0.0, -2e38]);
+        assert_eq!(dir, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_light_distance_past_f32_is_kept_in_f64_through_the_falloff() {
+        let l = point_light([3e38, 0.0, 3e38], 2, 3e38);
+        let (dir, dist) = to_light(&l, [0.0; 3]);
+        assert!(dir.iter().all(|c| c.is_finite()));
+        let k = attenuation(&l, [0.0; 3], dir, dist);
+        assert!((k - 0.5).abs() < 1e-3, "{k}");
+    }
+
+    #[test]
+    fn empty_shadow_texels_leave_a_receiver_lit_when_the_footprint_overflows() {
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let m = ShadowMap { view, focal: 1e-40, ortho: false, size: 64, offset: 0, bias: 0.0, radius: 0.5 };
+        let texels = vec![f32::INFINITY; 64 * 64];
+        assert_eq!(shadow_factor(&m, &texels, [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], 1.0), 1.0);
+    }
 
     #[test]
     fn a_receiver_plane_far_from_the_light_keeps_its_slope() {

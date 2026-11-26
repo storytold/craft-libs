@@ -101,7 +101,16 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
             if (da >= 0.0) != (db >= 0.0) {
                 let (from_b, k) = f32_crossing(da, db);
                 let (p, q) = if from_b { (b, a) } else { (a, b) };
-                let lerp = |x: f32, y: f32| x + (y - x) * k;
+                // A difference of far-apart finite coordinates overflows f32; the interpolation is
+                // then taken in f64 from the endpoints.
+                let lerp = |x: f32, y: f32| {
+                    let r = x + (y - x) * k;
+                    if r.is_finite() || !(x.is_finite() && y.is_finite()) {
+                        r
+                    } else {
+                        (f64::from(x) + (f64::from(y) - f64::from(x)) * f64::from(k)) as f32
+                    }
+                };
                 // The crossing lies on the near plane; its depth is set to it, since the lerp of
                 // far-apart depths can round to 0 or below.
                 out.push(([lerp(p.0[0], q.0[0]), lerp(p.0[1], q.0[1]), NEAR], [lerp(p.1[0], q.1[0]), lerp(p.1[1], q.1[1])]));
@@ -217,7 +226,15 @@ fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<
             let z = if m.ortho {
                 l[0] * tri[0].2 + l[1] * tri[1].2 + l[2] * tri[2].2
             } else {
-                1.0 / (l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1)
+                let z = 1.0 / (l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1);
+                if z.is_finite() {
+                    z
+                } else {
+                    // A reciprocal that rounds to a subnormal inverts to infinity; the corners'
+                    // depths give the depth in f64.
+                    let inv: f64 = (0..3).map(|k| f64::from(l[k]) / f64::from(tri[k].2)).sum();
+                    (1.0 / inv) as f32
+                }
             };
             let px = &mut d[y * n + x];
             if z >= *px {
@@ -594,4 +611,33 @@ fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
     s.shadows = maps;
     s.shadow_texels = all;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LightCorner, MapCorner, light_poly, raster_triangle};
+    use crate::scene::{Scene, ShadowMap, Vertex};
+
+    fn map(size: u32) -> ShadowMap {
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        ShadowMap { view, focal: 1.0, ortho: false, size, offset: 0, bias: 0.0, radius: 0.0 }
+    }
+
+    #[test]
+    fn a_near_plane_crossing_between_far_apart_coordinates_is_interpolated_in_f64() {
+        let vertex = |pos: [f32; 3]| Vertex { pos, normal: [0.0, 0.0, -1.0], uv: [-2e38, 2e38], tangent: [1.0, 0.0, 0.0, 1.0], material: 0 };
+        let s = Scene { vertices: vec![vertex([-2e38, 0.0, -1.0]), vertex([2e38, 0.0, 1.0]), vertex([0.0, 0.0, 1.0])], ..Scene::default() };
+        let poly: Vec<LightCorner> = light_poly(&s, &map(8), [0, 1, 2]);
+        assert!(poly.len() >= 3);
+        assert!(poly.iter().all(|(p, uv)| p.iter().chain(uv).all(|v| v.is_finite())), "{poly:?}");
+    }
+
+    #[test]
+    fn a_caster_whose_depth_reciprocal_underflows_still_writes_its_depth() {
+        let (m, iz) = (map(8), 1.0 / f32::MAX);
+        let corner = |x: f64, y: f64| -> MapCorner { ([x, y], iz, f32::MAX, [0.0; 2]) };
+        let mut d = vec![f32::INFINITY; 64];
+        raster_triangle(&Scene::default(), &m, [corner(0.0, 0.0), corner(16.0, 0.0), corner(0.0, 16.0)], None, &mut d);
+        assert!(d.iter().all(|z| z.is_finite()), "{d:?}");
+    }
 }

@@ -1,7 +1,7 @@
 //! Elapsed (wall-clock) time of the default filtering:
 //! `cargo test -p craft-pbr --release --test it -- --ignored --nocapture bench`.
-//! The `parallel` feature is on in this test target even without `--features parallel`, since
-//! the crate's dev-dependency on itself enables it, so the times are not a serial baseline.
+//! Add `--features parallel` to time the multi-threaded filtering; without it the times are the
+//! serial baseline.
 
 use std::time::Instant;
 

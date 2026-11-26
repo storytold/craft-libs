@@ -7,6 +7,8 @@
 //! nearer) and each pixel is shaded once; transparent triangles (already sorted back to front)
 //! are then shaded per fragment and blended over, depth-tested against the opaque surfaces.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::scene::{Scene, Vertex, validate, validate_passes, validate_shadow_refs};
 use crate::shade::{Frag, shade};
 use crate::{Limits, RenderError, filled, for_each_chunk_pair, try_with_capacity};
@@ -35,6 +37,9 @@ struct STri {
     p: [[f64; 2]; 3],
     z: [f32; 3],
     inv_w: [f32; 3],
+    /// The corners' 1/w in `f64`, scaled by a common factor, when `inv_w` cannot hold their
+    /// ratios in `f32`.
+    inv_w_wide: Option<[f64; 3]>,
     w: [[f32; 3]; 3],
     tri: u32,
     front: bool,
@@ -44,8 +49,9 @@ struct STri {
 /// A polygon corner: clip coordinates and weights over the original triangle's vertices.
 type Corner = ([f32; 4], [f32; 3]);
 
-/// A screen-space corner: position, ndc z, 1/w and weights.
-type ScreenCorner = ([f64; 2], f32, f32, [f32; 3]);
+/// A screen-space corner: position, ndc z, 1/w, weights and, when projected in `f64`, the scaled
+/// 1/w in `f64`.
+type ScreenCorner = ([f64; 2], f32, f32, [f32; 3], Option<f64>);
 
 #[inline]
 fn mat_mul(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
@@ -182,7 +188,7 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> 
         .map(|(c, wt)| {
             let iw = 1.0 / c[3];
             let (nx, ny) = (c[0] * iw, c[1] * iw);
-            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], c[2] * iw, iw, *wt)
+            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], c[2] * iw, iw, *wt, None)
         })
         .collect();
     let ok = |s: &ScreenCorner| s.0.iter().all(|v| v.is_finite()) && s.1.is_finite() && s.2.is_finite();
@@ -198,7 +204,7 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> 
         .zip(&iw)
         .map(|((c, wt), &iw)| {
             let (nx, ny) = (f64::from(c[0]) * iw, f64::from(c[1]) * iw);
-            ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, (iw / top) as f32, *wt)
+            ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, (iw / top) as f32, *wt, Some(iw / top))
         })
         .collect();
     scr.iter().all(ok).then_some(scr)
@@ -244,6 +250,10 @@ fn fan(s: &Scene, scr: &[ScreenCorner], tri: u32, out: &mut Vec<STri>) {
             p: [c[0].0, c[1].0, c[2].0],
             z: [c[0].1, c[1].1, c[2].1],
             inv_w: [c[0].2, c[1].2, c[2].2],
+            inv_w_wide: match (c[0].4, c[1].4, c[2].4) {
+                (Some(a), Some(b), Some(d)) => Some([a, b, d]),
+                _ => None,
+            },
             w: [c[0].3, c[1].3, c[2].3],
             tri,
             front,
@@ -303,6 +313,17 @@ fn cover(t: &STri, px: f64, py: f64) -> Option<(f32, [f32; 3])> {
     // Back to the stored corner order.
     let l = if swap { [l0, l2, l1] } else { [l0, l1, l2] };
     let z = l[0] * t.z[0] + l[1] * t.z[1] + l[2] * t.z[2];
+    if let Some(iw) = t.inv_w_wide {
+        // Ratios of 1/w that `f32` cannot hold stay in `f64` until the weights are normalized.
+        let (d0, d1, d2) = (e0 / area, e1 / area, e2 / area);
+        let ld = if swap { [d0, d2, d1] } else { [d0, d1, d2] };
+        let q = [ld[0] * iw[0], ld[1] * iw[1], ld[2] * iw[2]];
+        let sum = q[0] + q[1] + q[2];
+        if sum <= 0.0 {
+            return None;
+        }
+        return Some((z, [(q[0] / sum) as f32, (q[1] / sum) as f32, (q[2] / sum) as f32]));
+    }
     let q = [l[0] * t.inv_w[0], l[1] * t.inv_w[1], l[2] * t.inv_w[2]];
     let sum = q[0] + q[1] + q[2];
     if sum <= 0.0 {
@@ -374,6 +395,9 @@ struct Band<'a> {
     y0: i32,
     rows: usize,
     w: usize,
+    /// The coverage tests counted so far over all bands, starting at the work `setup` charged.
+    spent: &'a AtomicU64,
+    limit: u64,
 }
 
 /// The screen triangles of one pass and the indices of those in the current band.
@@ -469,14 +493,16 @@ impl Band<'_> {
     /// For each discarded pixel of the band, the nearest surviving opaque fragment of a screen
     /// triangle other than the pixel's visible one, inside the depth range as in
     /// [`Band::visibility`]: (ndc z, color, camera depth). Triangles are
-    /// visited in index order over their bounding boxes, so this pass tests no more pixels than
-    /// [`Band::visibility`], and among fragments at equal depth the first triangle's is kept.
+    /// visited in index order over their bounding boxes, and among fragments at equal depth the
+    /// first triangle's is kept. Each coverage test counts toward [`Limits::max_work`] next to the
+    /// tests of `setup`, and the pass stops with [`RenderError::TooMuchWork`] once the total is over it.
     #[allow(clippy::type_complexity)]
     fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Result<Vec<Option<(f32, [f32; 4], f32)>>, RenderError> {
         let (s, w, y0, rows) = (self.s, self.w, self.y0, self.rows);
         let mut best: Vec<Option<(f32, [f32; 4], f32)>> = filled(rows * w, None)?;
         for &tj in opaque.bins {
             let t2 = &opaque.tris[tj as usize];
+            let mut tests = 0u64;
             for y in t2.bbox[1].max(y0)..t2.bbox[3].min(y0 + rows as i32) {
                 let r = (y - y0) as usize * w;
                 for x in t2.bbox[0]..t2.bbox[2] {
@@ -484,6 +510,7 @@ impl Band<'_> {
                     if !discarded[i] || vis[i].0 == tj {
                         continue;
                     }
+                    tests += 1;
                     if let Some((z, l2)) = cover(t2, x as f64 + 0.5, y as f64 + 0.5)
                         && nearer(z, best[i].map_or(EMPTY, |b| b.0))
                     {
@@ -493,6 +520,10 @@ impl Band<'_> {
                         }
                     }
                 }
+            }
+            let needed = self.spent.fetch_add(tests, Ordering::Relaxed).saturating_add(tests);
+            if needed > self.limit {
+                return Err(RenderError::TooMuchWork { needed, limit: self.limit });
             }
         }
         Ok(best)
@@ -522,15 +553,16 @@ impl Band<'_> {
 }
 
 /// Rasterize and shade set-up screen triangles into a target of `pixels` pixels.
-fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Result<Target, RenderError> {
+fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize, work: u64, limit: u64) -> Result<Target, RenderError> {
     let (w, h) = (s.width as usize, s.height as usize);
     let bands = (h as i32 + BAND - 1) / BAND;
     let ob = bin(opaque, bands)?;
     let tb = bin(trans, bands)?;
     let mut color = filled(pixels, [0.0f32; 4])?;
     let mut depth = filled(pixels, f32::INFINITY)?;
+    let spent = AtomicU64::new(work);
     for_each_chunk_pair(&mut color, &mut depth, w * BAND as usize, |band, crow, drow| {
-        let b = Band { s, y0: band as i32 * BAND, rows: crow.len() / w, w };
+        let b = Band { s, y0: band as i32 * BAND, rows: crow.len() / w, w, spent: &spent, limit };
         let (op, tp) = (Pass { tris: opaque, bins: &ob[band] }, Pass { tris: trans, bins: &tb[band] });
         let mut vis = b.visibility(op)?;
         b.shade_opaque(op, &mut vis, crow, drow)?;
@@ -552,7 +584,7 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
     let mut work = 0;
     let opaque = setup(s, &clip, 0..s.opaque_count as usize, &mut work, limits.max_work)?;
     let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len(), &mut work, limits.max_work)?;
-    let t = raster(s, &opaque, &trans, pixels)?;
+    let t = raster(s, &opaque, &trans, pixels, work, limits.max_work)?;
     // Finite inputs near the top of the f32 range can still overflow in shading.
     if let Some(i) = t.color.iter().zip(&t.depth).position(|(c, d)| !c.iter().all(|v| v.is_finite()) || d.is_nan()) {
         return Err(RenderError::BadPixel(i));

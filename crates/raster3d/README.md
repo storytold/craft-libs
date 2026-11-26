@@ -126,12 +126,15 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   triangle's clipped polygon, at most nine corners, and the shadow pass's lists of lights and
   maps, a few entries per light, are allocated as usual. The search for a
   surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
-  once more, so it runs no more coverage tests than the visibility pass.
+  once more. Its coverage tests count toward `max_work` next to those charged during setup, and
+  the render returns `TooMuchWork` when the total passes the limit.
 - **Features.** `parallel` rasterizes bands of rows, resolves and encodes rows and pixels, and
   renders shadow maps on several threads with rayon. The default build is serial and builds for
-  `wasm32-unknown-unknown`. Every output and error is the same either way, except the `needed`
-  count of `TooMuchWork` when shadow maps pass the work limit, since each thread stops counting
-  at its own point.
+  `wasm32-unknown-unknown`. A render that succeeds gives the same output either way. Errors are
+  the same either way, except the `needed` count of `TooMuchWork` when shadow maps pass the work
+  limit, since each thread stops counting at its own point, and `OutOfMemory`, since the parallel
+  build can reserve the scratch buffers of two bands at once and so can fail where the serial
+  build succeeds.
 
 ## Origin
 
@@ -157,7 +160,9 @@ overflows `f32`.
 Changes from those files:
 
 - Scenes, resolve factors and pixels are checked, and sizes, triangles, lights and coverage work
-  are bounded, before anything is allocated. EffectCraft panicked on an index or a material
+  are bounded, before the final target is allocated. A render can allocate scratch buffers, such as
+  the clip-position buffer, before a check returns `TooMuchWork`, and the coverage tests of the
+  search under discarded opaque pixels are counted while the target is rendered. EffectCraft panicked on an index or a material
   reference that did not exist, an alpha-masked caster whose texture did not exist, an environment
   level range that overflowed, a zero raster width and a resolve factor of 0. It returned a cropped
   image for a factor that did not divide the size, NaN or infinite pixels for values that were not

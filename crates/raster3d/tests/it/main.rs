@@ -5,6 +5,7 @@
 mod bounds;
 mod differential;
 mod moved;
+mod work;
 
 /// A verbatim copy of the app's previous code, run by `differential`.
 mod reference {

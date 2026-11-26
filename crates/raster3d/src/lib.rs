@@ -22,16 +22,22 @@
 //! - **Textures.** [`Scene::texels`] holds linear straight RGBA, row-major from the top row;
 //!   [`TexInfo`] gives each texture's span and wrap modes.
 //!
-//! Every `try_` function checks the scene against [`Limits`] and returns a [`RenderError`]
-//! before it allocates the target: malformed indices, references and spans, values that are not
-//! finite, sizes, triangle counts, light counts and coverage work over the limits. Buffers whose
+//! [`try_render`], [`try_render_cpu`] and [`try_shadow_maps`] check the scene against [`Limits`]
+//! and return a [`RenderError`] before they allocate the final target or the shadow maps:
+//! malformed indices, references and spans, values that are not finite, sizes, triangle counts,
+//! light counts and the coverage work of setup over the limits. They can allocate scratch buffers
+//! first, and some errors (`OutOfMemory`, a value that overflows while rendering, and
+//! `TooMuchWork` for the search under discarded opaque pixels) arise only during rendering. [`try_resolve`] and [`try_encode`] take no scene or limits and check their own
+//! arguments; [`try_env_shadow_map`] checks its own arguments. Buffers whose
 //! size grows with the raster, the vertex or triangle count or a shadow map's texels are
 //! reserved fallibly and give [`RenderError::OutOfMemory`] when the reservation fails. A
 //! triangle's clipped polygon (at most nine corners) and the shadow pass's lists of lights and
 //! maps (a few entries per light of the scene) are allocated as usual. Rows and shadow maps are
-//! computed on several threads only with the `parallel` feature. The results are the same either
-//! way, except the `needed` count of [`RenderError::TooMuchWork`] for shadow maps past the limit,
-//! which depends on where each thread stops counting.
+//! computed on several threads only with the `parallel` feature. A render that succeeds gives the
+//! same output either way. Errors are the same too, except the `needed` count of
+//! [`RenderError::TooMuchWork`] for shadow maps past the limit, which depends on where each
+//! thread stops counting, and [`RenderError::OutOfMemory`], which the parallel build can return
+//! where the serial build succeeds because it can hold the scratch buffers of two bands at once.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
