@@ -537,13 +537,25 @@ pub(super) fn narrow(lo: f64, hi: f64) -> bool {
     }
 }
 
-/// Lowest and highest value of the plot; stacked series add up per category.
+/// Lowest and highest value of the plot; the series of a stacked chart type add up per
+/// category, each chart type of a combination by its own grouping.
 fn extent(c: &Chart) -> (f64, f64) {
     let mut pts: Vec<f64> = Vec::new();
-    if c.stacked() {
+    let mut kinds: Vec<Kind> = Vec::new();
+    for s in &c.series {
+        if !kinds.contains(&s.kind) {
+            kinds.push(s.kind);
+        }
+    }
+    for k in kinds {
+        let of_kind = || c.series.iter().filter(move |s| s.kind == k);
+        if !c.stacks(k) {
+            pts.extend(of_kind().flat_map(|s| s.values.iter().flatten().copied()));
+            continue;
+        }
         for i in 0..c.n {
             let (mut p, mut q) = (0.0, 0.0);
-            for s in c.series.iter().filter(|s| s.kind == c.kind) {
+            for s in of_kind() {
                 match s.values.get(i).copied().flatten() {
                     Some(v) if v >= 0.0 => p += v,
                     Some(v) => q += v,
@@ -553,10 +565,6 @@ fn extent(c: &Chart) -> (f64, f64) {
             pts.push(p);
             pts.push(q);
         }
-        // The other chart types of a combination chart don't stack.
-        pts.extend(c.series.iter().filter(|s| s.kind != c.kind).flat_map(|s| s.values.iter().flatten().copied()));
-    } else {
-        pts.extend(c.series.iter().flat_map(|s| s.values.iter().flatten().copied()));
     }
     let lo = pts.iter().copied().fold(f64::INFINITY, f64::min);
     let hi = pts.iter().copied().fold(f64::NEG_INFINITY, f64::max);

@@ -110,7 +110,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
                 let (bx, by) = (x * w, y * h);
                 let bw = if bw > 0.0 { bw * w } else { (w - bx - PAD).max(1.0) };
                 let bh = if bh > 0.0 { bh * h } else { chart.text_size * LINE };
-                over = Some((entries, Rect { x: bx, y: by, w: bw, h: bh }, style));
+                over = Some((entries, pos, Rect { x: bx, y: by, w: bw, h: bh }, style));
             }
             None => area = legend(&mut out, &entries, pos, area, chart.text_size, style),
         }
@@ -120,8 +120,10 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
         Kind::Radar => radar(&mut out, &chart, area),
         _ => cartesian(&mut out, &chart, area),
     }
-    if let Some((entries, rect, style)) = over {
-        legend(&mut out, &entries, Pos::Top, rect, chart.text_size, style);
+    // In its box it is laid out as its position says: in a row for top and bottom, a column
+    // for the sides.
+    if let Some((entries, pos, rect, style)) = over {
+        legend(&mut out, &entries, pos, rect, chart.text_size, style);
     }
     out
 }
@@ -240,6 +242,8 @@ struct Chart {
     kind: Kind,
     horizontal: bool,
     grouping: Grouping,
+    /// The grouping of each other chart type of a combination, by kind (at most one per kind).
+    groupings: Vec<(Kind, Grouping)>,
     /// Gap between groups as a fraction of a bar's width.
     gap: f32,
     /// Overlap of clustered bars, -1..1 (1 = all on top of each other).

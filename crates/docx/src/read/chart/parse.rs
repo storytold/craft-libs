@@ -21,8 +21,13 @@ impl Chart {
         let mut series = read_series(ty, scatter, theme, &mut budget);
         // Bar spacing comes from the bar chart type, wherever it is in a combination.
         let mut bar_ty = ty;
+        // The grouping of each other chart type of a combination (the first one's is `grouping`).
+        let mut groupings: Vec<(Kind, Grouping)> = Vec::new();
         if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
             for other in combined_types(plot, ty) {
+                if let Some(k) = Kind::of(&other.name).filter(|k| *k != kind && !groupings.iter().any(|(g, _)| g == k)) {
+                    groupings.push((k, grouping_of(other, k)));
+                }
                 // Past the series limit or the cell budget a chart type is not parsed: each would
                 // cost a pass over series that are dropped.
                 let room = MAX_SERIES.saturating_sub(series.len());
@@ -52,11 +57,7 @@ impl Chart {
         if kind == Kind::Radar {
             series.truncate(MAX_RADAR_SERIES);
         }
-        let grouping = match ty.child("c:grouping").and_then(|g| g.attr("val")) {
-            Some("stacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Stacked,
-            Some("percentStacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Percent,
-            _ => Grouping::Clustered,
-        };
+        let grouping = grouping_of(ty, kind);
         let mut cats = cats;
         cats.resize(n, String::new());
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
@@ -85,8 +86,11 @@ impl Chart {
                 s.raw = s.values.clone();
             }
         }
-        if grouping == Grouping::Percent {
-            to_percent(&mut series, n, kind);
+        // Each 100% stacked chart type turns its own series into shares.
+        for (k, g) in std::iter::once((kind, grouping)).chain(groupings.iter().copied()) {
+            if g == Grouping::Percent {
+                to_percent(&mut series, n, k);
+            }
         }
         let (cat, val) = chart_axes(plot, scatter, theme);
         let text_colour = chart_text_colour(space, theme);
@@ -103,6 +107,7 @@ impl Chart {
             kind,
             horizontal,
             grouping,
+            groupings,
             gap: bar_num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
             overlap: bar_num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
             hole: num("c:holeSize").unwrap_or(50).clamp(10, 90) as f32 / 100.0,
@@ -169,10 +174,11 @@ impl Chart {
         self.grouping != Grouping::Clustered
     }
 
-    /// Whether the series of chart type `kind` stack: only the first chart type's grouping counts
-    /// in a combination chart.
+    /// Whether the series of chart type `kind` stack: each chart type of a combination stacks by
+    /// its own grouping (a line before stacked columns leaves the columns stacked).
     pub(super) fn stacks(&self, kind: Kind) -> bool {
-        self.stacked() && self.kind == kind
+        let grouping = if kind == self.kind { Some(self.grouping) } else { self.groupings.iter().find(|(k, _)| *k == kind).map(|(_, g)| *g) };
+        grouping.is_some_and(|g| g != Grouping::Clustered)
     }
 
     /// Whether any series is drawn as `kind`.
@@ -282,6 +288,16 @@ fn combined_types<'a>(plot: &'a El, ty: &El) -> Vec<&'a El> {
 
 /// Values as their share of each category's total (100% stacked charts). Only the series of the
 /// stacked chart type `kind` count: the other types of a combination keep their values.
+/// How the series of chart type `ty` (of kind `kind`) are grouped (`c:grouping`): only columns,
+/// lines and areas stack.
+fn grouping_of(ty: &El, kind: Kind) -> Grouping {
+    match ty.child("c:grouping").and_then(|g| g.attr("val")) {
+        Some("stacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Stacked,
+        Some("percentStacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Percent,
+        _ => Grouping::Clustered,
+    }
+}
+
 fn to_percent(series: &mut [Series], n: usize, kind: Kind) {
     for i in 0..n {
         let total: f64 = series.iter().filter(|s| s.kind == kind).map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();

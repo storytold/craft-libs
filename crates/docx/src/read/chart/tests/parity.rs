@@ -486,3 +486,42 @@ fn small_values_keep_their_digits_in_a_data_table() {
     let negative = table("General", "-0.0000004");
     assert!(negative.iter().any(|t| t == "-4E-07"), "{negative:?}");
 }
+
+/// Each chart type of a combination keeps its own grouping: with a standard line first, the
+/// stacked columns after it still stack (6 and 7 make one column reaching 13), and the value
+/// axis takes in their sum.
+#[test]
+fn a_line_first_combination_keeps_its_columns_stacked() {
+    let cats = ["A", "B"];
+    let plot = format!(
+        r#"<c:plotArea><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:overlap val="100"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Line", Some("0000FF"), &cats, &["1", "2"]),
+        ser(1, "Low", Some("FF0000"), &cats, &["6", "6"]),
+        ser(2, "High", Some("00FF00"), &cats, &["7", "7"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let ticks: Vec<f64> = chart_texts(&items).iter().filter_map(|(t, _, _)| t.parse().ok()).collect();
+    assert!(ticks.iter().any(|t| *t >= 13.0), "the axis takes in the stack's 13: {ticks:?}");
+    // (colour, top, bottom) of each column: the second series' columns stand on the first's.
+    let columns = filled(&items);
+    let span = |c: Rgb| columns.iter().find(|(k, _, _)| *k == c).map(|(_, top, bottom)| (*top, *bottom));
+    let (Some((low_top, _)), Some((_, high_bottom))) = (span(Rgb(0xFF, 0, 0)), span(Rgb(0, 0xFF, 0))) else { panic!("{columns:?}") };
+    assert!((low_top - high_bottom).abs() < 0.01, "one stack: {columns:?}");
+}
+
+/// A legend placed by hand is laid out as its position says: on the right, as a column, so a
+/// tall box one entry wide lists every entry, not the three rows a row layout allows.
+#[test]
+fn a_hand_placed_side_legend_lists_its_entries_in_a_column() {
+    let legend = r#"<c:legend><c:legendPos val="r"/><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.8"/><c:y val="0.1"/><c:w val="0.15"/><c:h val="0.8"/></c:manualLayout></c:layout></c:legend>"#;
+    let names = ["N1", "N2", "N3", "N4", "N5", "N6"];
+    let sers: String = names.iter().enumerate().map(|(i, n)| ser(i, n, None, &["A"], &["1"])).collect();
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{sers}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>{legend}"#
+    );
+    let texts = chart_texts(&chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0));
+    for n in names {
+        let r = texts.iter().find(|(t, _, _)| t == n).map(|(_, r, _)| *r).unwrap_or_else(|| panic!("{n} missing: {texts:?}"));
+        assert!(r[0] >= 239.0 && r[1] >= 19.0 && r[1] + r[3] <= 181.0, "{n} inside the box: {r:?}");
+    }
+}
