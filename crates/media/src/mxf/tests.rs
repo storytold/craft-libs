@@ -569,3 +569,69 @@ fn partial_recovery_refuses_sound_metadata_that_points_at_an_unclaimed_picture_e
     assert!(file.track_of_kind(TrackKind::Picture).is_some());
     assert!(file.track_of_kind(TrackKind::Sound).is_none());
 }
+
+fn replace_fixture_set(bytes: &mut [u8], original: &[u8], replacement: &[u8]) {
+    let at = bytes.windows(original.len()).position(|v| v == original).unwrap();
+    bytes[at..at + original.len()].copy_from_slice(replacement);
+}
+
+fn container_link(package: [u8; 32], body: u32, index: u32) -> Vec<u8> {
+    let mut link = LocalSet::new(5);
+    link.p(0x2701, &package).p(0x3F07, &body.to_be_bytes()).p(0x3F06, &index.to_be_bytes());
+    link.0
+}
+
+#[test]
+fn damaged_link_material_track_remains_readable_without_claiming_the_wrong_body() {
+    let original = build(2, prores_like, &[], &[]);
+    for body in [0, 7] {
+        let mut bytes = original.clone();
+        replace_fixture_set(&mut bytes, &container_link(umid(2), 1, 2), &container_link(umid(2), body, 2));
+        let file = open(&bytes).unwrap();
+        let sound = file.track_of_kind(TrackKind::Sound).unwrap();
+        assert_eq!(file.tracks[sound].file_package_uid, None);
+        assert!(file.read_pcm(&bytes, sound, 0, 8).unwrap()[0][7] > 0.0);
+    }
+}
+
+#[test]
+fn damaged_link_partial_picture_uses_only_its_own_body_and_index_for_display_order() {
+    let mut base = build_with_packages(2, prores_like, &[1, -1], &[], Some(&umid(2)), true);
+    replace_fixture_set(&mut base, &source_clip(31, PICTURE_DEF, 2, umid(3), 2), &source_clip(31, PICTURE_DEF, 2, [0; 32], 2));
+    for (index, segment_body, reordered) in [(2u32, 1u32, true), (7, 1, false), (0, 1, false), (2, 9, false)] {
+        let mut bytes = base.clone();
+        replace_fixture_set(&mut bytes, &container_link(umid(2), 1, 2), &container_link(umid(3), 1, index));
+        // The IndexTableSegment, at the footer, follows the header container link.
+        let tag = [0x3f, 0x07, 0, 4, 0, 0, 0, 1];
+        let at = bytes.windows(tag.len()).rposition(|v| v == tag).unwrap();
+        bytes[at + 4..at + 8].copy_from_slice(&segment_body.to_be_bytes());
+        let file = open(&bytes).unwrap();
+        let picture = &file.tracks[file.track_of_kind(TrackKind::Picture).unwrap()];
+        assert_eq!(picture.samples.len(), 2);
+        assert_eq!(picture.temporal_offsets, reordered);
+        assert_eq!(picture.display_order, if reordered { [1, 0] } else { [0, 1] });
+    }
+}
+
+#[test]
+fn damaged_link_clip_wrapped_picture_needs_its_own_frame_boundaries() {
+    // Store two 40-byte pictures in one 80-byte KLV. Leave the other KLV as filler.
+    let mut base = build_with_packages(2, |_| vec![0; 80], &[], &[], Some(&umid(2)), true);
+    replace_fixture_set(&mut base, &source_clip(31, PICTURE_DEF, 2, umid(3), 2), &source_clip(31, PICTURE_DEF, 2, [0; 32], 2));
+    let second_picture = base.windows(16).rposition(|v| v == PIC_KEY).unwrap();
+    base[second_picture..second_picture + 16].copy_from_slice(&[6, 14, 43, 52, 1, 1, 1, 2, 3, 1, 2, 16, 1, 0, 0, 0]);
+    let last_offset = base.len() - 8;
+    base[last_offset..].copy_from_slice(&40u64.to_be_bytes());
+    for index in [2, 7] {
+        let mut bytes = base.clone();
+        replace_fixture_set(&mut bytes, &container_link(umid(2), 1, 2), &container_link(umid(3), 1, index));
+        let file = open(&bytes).unwrap();
+        if index == 2 {
+            let picture = &file.tracks[file.track_of_kind(TrackKind::Picture).unwrap()];
+            assert_eq!(picture.samples.iter().map(|s| s.size).collect::<Vec<_>>(), [40, 40]);
+        } else {
+            assert!(file.track_of_kind(TrackKind::Picture).is_none());
+            assert!(file.track_of_kind(TrackKind::Sound).is_some());
+        }
+    }
+}

@@ -857,6 +857,10 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                                 Some(_) => {}
                             }
                         }
+                        if tr.kind == TrackKind::Picture {
+                            // This duration belongs to the file track, independently of material timing.
+                            tr.duration = components(md, t).0.and_then(|seq| seq.i(tag::DURATION)).filter(|d| *d >= 0);
+                        }
                         tr.require_unclaimed_element = true;
                         *candidate_numbers.entry(tr.track_number).or_default() += 1;
                     }
@@ -869,6 +873,13 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
         }
         if partial {
             out.retain(|tr| !tr.require_unclaimed_element || candidate_numbers.get(&tr.track_number) == Some(&1));
+        }
+    }
+    // BodySID zero in an explicit link describes external essence. Absent linkage
+    // is distinct from an explicit contradiction.
+    for tr in &mut out {
+        if tr.file_package_uid.and_then(|id| sids.get(&id)).is_some_and(|&(body, _)| body == 0) {
+            tr.file_package_uid = None;
         }
     }
     (out, timecode, name)
@@ -914,7 +925,7 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
         v.dedup();
         v
     };
-    for r in &refs {
+    for mut r in refs {
         let number = r.track_number.to_be_bytes();
         let mut key4 = all_numbers.iter().find(|n| **n == number).copied();
         if r.require_unclaimed_element && (key4.is_none() || claimed.contains(&number)) {
@@ -933,17 +944,27 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
             continue;
         };
         let mut elements: Vec<Element> = w.elements.iter().filter(|e| e.key.0[12..16] == key4).copied().collect();
-        if r.require_unclaimed_element && r.body_sid != 0 {
-            elements.retain(|e| {
+        if r.body_sid != 0 {
+            let belongs_to_package = |e: &Element| {
                 let end = w.partitions.partition_point(|p| p.offset < e.value_offset);
                 w.partitions[..end].last().is_some_and(|p| p.body_sid == r.body_sid)
-            });
-            if elements.is_empty() {
-                continue;
+            };
+            if r.require_unclaimed_element {
+                elements.retain(belongs_to_package);
+            } else if !elements.iter().all(belongs_to_package) {
+                // A playable stream number alone cannot authenticate the package.
+                r.file_package_uid = None;
             }
         }
+        if elements.is_empty() {
+            continue;
+        }
+        let track = build_track(src, &r, &elements, key4, &w.index, &mut warnings)?;
+        if r.require_unclaimed_element && track.kind == TrackKind::Picture && track.samples.is_empty() {
+            continue;
+        }
         claimed.push(key4);
-        tracks.push(build_track(src, r, &elements, key4, &w.index, &mut warnings)?);
+        tracks.push(track);
     }
     if tracks.is_empty() {
         return Err(Error::Unsupported("no essence of the material package is stored in this file".into()));
@@ -965,10 +986,13 @@ pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<MxfFile> {
     })
 }
 
-/// Index entries per stored edit unit for an index SID (all segments when `sid` is 0 or unmatched).
-fn index_entries(index: &[IndexSegment], sid: u32) -> (std::collections::BTreeMap<usize, IndexEntry>, u32) {
+/// Index entries per stored edit unit. Restricted recovery requires both stream IDs.
+fn index_entries(index: &[IndexSegment], sid: u32, required_body: Option<u32>) -> (std::collections::BTreeMap<usize, IndexEntry>, u32) {
     let any = index.iter().any(|s| s.index_sid == sid);
-    let segs: Vec<&IndexSegment> = index.iter().filter(|s| !any || s.index_sid == sid).collect();
+    let segs = index.iter().filter(|s| match required_body {
+        Some(body) => body != 0 && sid != 0 && s.body_sid == body && s.index_sid == sid,
+        None => !any || s.index_sid == sid,
+    });
     // ST 377-1 segments use absolute edit-unit positions, which need not start at zero.
     // Keep positions sparse so even hostile gaps allocate only for real (already parsed) entries.
     let mut out = std::collections::BTreeMap::new();
@@ -1049,7 +1073,7 @@ fn build_track(
             }
             t.codec = codec;
             t.picture = Some(pi);
-            build_pictures(src, &mut t, elements, index, warnings)?;
+            build_pictures(src, &mut t, elements, index, r.require_unclaimed_element.then_some(r.body_sid), warnings)?;
         }
         TrackKind::Sound => {
             let si = desc.map(|d| sound_info(d)).unwrap_or(SoundInfo { channels: 1, bits: 16, ..Default::default() });
@@ -1092,9 +1116,14 @@ fn build_pictures(
     t: &mut EssenceTrack,
     elements: &[Element],
     index: &[IndexSegment],
+    required_body: Option<u32>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
-    let (entries, eubc) = index_entries(index, t.index_sid);
+    let (entries, eubc) = index_entries(index, t.index_sid, required_body);
+    if required_body.is_some() && elements.len() == 1 && entries.is_empty() && eubc == 0 && t.duration != Some(1) {
+        warnings.push("recovered picture element has no verified edit-unit boundaries".into());
+        return Ok(());
+    }
     let expected = t.duration.map(|d| d.saturating_add(t.first_edit_unit()).max(0) as usize);
     let clip = elements.len() == 1 && expected.is_none_or(|n| n > 1) && (eubc > 0 || entries.len() > 1);
     let mut samples: Vec<Sample> = Vec::new();
@@ -1320,7 +1349,7 @@ mod index_bounds_tests {
         let entry = IndexEntry { flags: 0x80, stream_offset: 1234, ..Default::default() };
         for start_position in [5, 49_999_999, i64::MAX] {
             let segment = IndexSegment { start_position, entries: vec![entry, entry], ..Default::default() };
-            let (entries, _) = index_entries(&[segment], 0);
+            let (entries, _) = index_entries(&[segment], 0, None);
             let start = usize::try_from(start_position).unwrap();
             assert_eq!(entries.get(&start), Some(&entry));
             assert_eq!(entries.len(), if start_position == i64::MAX { 1 } else { 2 });
@@ -1330,7 +1359,7 @@ mod index_bounds_tests {
     #[test]
     fn negative_preroll_positions_do_not_drop_later_valid_entries() {
         let segment = IndexSegment { start_position: -1, entries: vec![IndexEntry::default(); 3], ..Default::default() };
-        let (entries, _) = index_entries(&[segment], 0);
+        let (entries, _) = index_entries(&[segment], 0, None);
         assert_eq!(entries.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
     }
 }
