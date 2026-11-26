@@ -567,10 +567,10 @@ impl GpuContext for WgpuContext {
         #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
         if let Backing::Device(d) = &mut self.backing {
             // A non-blocking poll that also runs after an error other than a loss was recorded,
-            // and records a loss instead of panicking when the device is gone. The loss check
-            // follows it, so a loss the poll found fails the pending reads now.
+            // and records a loss instead of panicking when the device is gone.
             d.health.probe(&d.device);
-            if let Err(fault) = d.health.device_status() {
+            let fault = d.health.device_status().err().or_else(|| d.health.fault().filter(|fault| !fault.is_out_of_memory()).map(GpuFault::from));
+            if let Some(fault) = fault {
                 outcomes.extend(d.pending.drain(..).map(|p| ReadOutcome { request: p.request, handle: p.handle, result: Err(fault.clone()) }));
                 return outcomes;
             }

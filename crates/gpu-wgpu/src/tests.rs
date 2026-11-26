@@ -493,4 +493,33 @@ mod device_from_craft_gpu_device {
         let ctx = WgpuContext::with_caps(WorkerKind::Main, craft_gpu::DeviceCaps::default());
         assert!(ctx.health().is_none());
     }
+
+    #[test]
+    fn polling_faults_complete_all_pending_reads_once() {
+        let device = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);
+        let handle = ctx.upload_buffer("pending", b"abcd").expect("upload");
+        let first = ctx.request_read(handle).expect("first read");
+        let second = ctx.request_read(handle).expect("second read");
+        device.health.mark(Fault::Error("Validation Error".into()));
+        let outcomes = ctx.poll_reads();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().any(|outcome| outcome.request == first));
+        assert!(outcomes.iter().any(|outcome| outcome.request == second));
+        for outcome in outcomes {
+            assert_eq!(outcome.handle, handle);
+            assert_eq!(outcome.result, Err(GpuFault::Operation("Validation Error".into())));
+        }
+        assert!(ctx.poll_reads().is_empty(), "failed requests complete only once");
+
+        let device = opened();
+        let mut ctx = WgpuContext::from_opened(WorkerKind::Main, &device);
+        let handle = ctx.upload_buffer("oom", b"abcd").expect("upload");
+        let request = ctx.request_read(handle).expect("read");
+        device.health.mark(Fault::Error(craft_gpu_device::OUT_OF_MEMORY.into()));
+        let outcomes = ctx.poll_reads();
+        assert!(outcomes.iter().all(|outcome| outcome.request == request && outcome.result.is_ok()));
+        let Backing::Device(backing) = &ctx.backing else { panic!("device backing") };
+        assert_eq!(outcomes.len() + backing.pending.len(), 1, "out of memory does not discard or fail the read");
+    }
 }
