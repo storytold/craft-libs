@@ -35,11 +35,12 @@
 //! [`skip`] decides what a test does when something it needs is missing (a program, a corpus,
 //! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
 //! variable the caller names is `1`. A value other than unset, empty or `1` fails the test as a
-//! configuration error. It is not built for `wasm32`.
+//! configuration error. [`skip::required`] reads such a variable under this rule for any caller.
+//! It is not built for `wasm32`. `skip::craft_fonts_cover` needs the `font-coverage` feature.
 //!
 //! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
 //! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
-//! `corpus::pinned`, which skips or fails under the rule of [`skip`].
+//! `corpus::pinned`, which skips or fails under the rule of `skip`.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
