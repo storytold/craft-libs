@@ -53,13 +53,16 @@ pub use crate::codecs::png::{
     encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
 };
 pub use crate::codecs::tiff::{
-    PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
+    PhotoshopTags as TiffPhotoshopTags, TiffBands, encode_plain_rgba16 as encode_tiff_plain_rgba16, photoshop_tags as tiff_photoshop_tags,
+    writes_little_endian as tiff_writes_little_endian,
 };
 pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
-pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension};
+pub use crate::format::{
+    ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension, ftyp_brands,
+};
 pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, ExtraSample, Image,
     MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
