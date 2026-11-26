@@ -754,8 +754,11 @@ pub trait CanvasTool {
     /// tool ends the drag its own way or goes on with it (the reference application's Red Eye box still applies on
     /// the release after an Escape mid-drag). While such a gesture runs, the host holds that plain Escape from the
     /// app's shortcuts for the next pass, as it holds the chords in [`claims`](Self::claims): a plain Escape the tool
-    /// leaves reaches no other taker. Any other Escape, and every Escape of a gesture whose tool does not keep its
-    /// press, cancels it through [`cancel`](Self::cancel) as before. Default: `false`.
+    /// leaves reaches no other taker. Three bounds. Any other Escape, and every Escape of a gesture whose tool does
+    /// not keep its press, cancels it through [`cancel`](Self::cancel) as before. A layer that owns keys over the app
+    /// (a popup or a modal open while the gesture runs) outranks the claim: the host holds no Escape then, and the
+    /// Escape is the captured press's again. The claim ends with the gesture, so an Escape carried in the same frame
+    /// as the release reaches nobody; the release ends the gesture. Default: `false`.
     fn keeps_press_on_escape(&self) -> bool {
         false
     }

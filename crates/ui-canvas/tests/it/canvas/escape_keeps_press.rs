@@ -1,12 +1,16 @@
 //! [`CanvasTool::keeps_press_on_escape`] (8.3): the Escape of a drag whose tool keeps its press is that tool's key,
 //! not the framework's cancel. The press stays open, its moves and its release keep coming, and the tool ends the
 //! drag its own way or goes on with it. A tool that does not keep its press is cancelled exactly as before, and its
-//! Escape reaches `key` as nothing.
+//! Escape reaches `key` as nothing. A key-owning layer open over the canvas outranks the claim, and an Escape that
+//! arrives in the same frame as the release reaches nobody.
 
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CancelReason, CanvasView, GesturePhase};
+use craft_ui::buttons::Button;
 use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, tool_pass};
-use craft_ui::contract::ShowContainer as _;
+use craft_ui::contract::overlay::{Dismiss, Outside};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::popover::Popover;
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
 use craft_ui::testing::input::key_press;
@@ -197,4 +201,54 @@ fn a_keeping_tool_that_leaves_the_escape_reaches_no_other_taker_and_still_commit
     let seen = tool.borrow().seen();
     assert_eq!(tool.borrow().count(|seen| matches!(seen, Seen::Cancelled(_))), 0, "nothing cancelled the drag: {seen:?}");
     assert_eq!(seen.last(), Some(&Seen::Release), "the release commits: {seen:?}");
+}
+
+/// A layer that owns Escape without holding the focus outranks the claim: the host holds no Escape for a gesture
+/// under an open key-owning layer, so the Escape is the press's again and the drag is cancelled as it is for every
+/// other tool. The layer keeps its own Escape rule, which is to stay while a press is captured.
+#[trial]
+fn a_layer_keeping_escape_over_the_canvas_ends_the_keeping_tools_claim() {
+    let open = Rc::new(Cell::new(false));
+    let shown = Rc::clone(&open);
+    let mut canvas = ToolFixture::with_body("Document", BoxTool { keeps: true, takes: true, seen: Vec::new() }, move |ui, _| {
+        // The button sits in the body's corner and the popover hangs below it, clear of the drag at the centre.
+        let opener = Button::new("Options").show(ui);
+        let mut is_open = shown.get();
+        Popover::new("Kept open", Bind::bound(&mut is_open)).dismiss(Dismiss::new().outside(Outside::Keep)).opened_by(&opener).show(ui, |ui, _| {
+            let _ = Button::new("Row").show(ui);
+        });
+        shown.set(is_open);
+    });
+    canvas.fixture().settle();
+    open.set(true);
+    canvas.fixture().idle(4);
+    assert!(open.get(), "the popover stands by itself");
+    drag_around_escape(&mut canvas);
+    let seen = canvas.tool().seen();
+    assert!(open.get(), "the popover keeps its own Escape rule under a captured press: {seen:?}");
+    assert_eq!(canvas.tool().cancels(), 0, "no Cancel key for the tool under the layer: {seen:?}");
+    assert_eq!(canvas.tool().count(|seen| matches!(seen, Seen::Cancelled(CancelReason::Escape))), 1, "the Escape is the press's: {seen:?}");
+    assert_eq!(canvas.tool().count(|seen| matches!(seen, Seen::Release)), 0, "the release reaches nothing: {seen:?}");
+    let phases = canvas.gestures();
+    assert_eq!(phases.iter().filter(|phase| **phase == GesturePhase::Cancel).count(), 1, "one Cancel phase: {phases:?}");
+    assert_eq!(phases.iter().filter(|phase| **phase == GesturePhase::Commit).count(), 0, "no Commit: {phases:?}");
+}
+
+/// An Escape carried in the same frame as the release: the release ends the gesture, the claim ends with it, and the
+/// Escape reaches nobody - not the tool as a key, and not the framework as a cancel.
+#[trial]
+fn an_escape_in_the_same_frame_as_the_release_of_a_keeping_drag_reaches_nobody() {
+    let mut canvas = ToolFixture::new("Document", BoxTool { keeps: true, takes: true, seen: Vec::new() });
+    let from = canvas.canvas().center();
+    let to = from + BY;
+    canvas.press_at(from);
+    canvas.move_to(from + BY * 0.5);
+    canvas.fixture().frame(vec![key_press(Key::Escape, Modifiers::NONE), pointer::release(to)]).idle(2);
+    let seen = canvas.tool().seen();
+    assert_eq!(canvas.tool().cancels(), 0, "no Cancel key: {seen:?}");
+    assert_eq!(canvas.tool().count(|seen| matches!(seen, Seen::Cancelled(_))), 0, "not a cancel: {seen:?}");
+    assert_eq!(canvas.tool().count(|seen| matches!(seen, Seen::Release)), 1, "the release commits: {seen:?}");
+    let phases = canvas.gestures();
+    assert_eq!(phases.iter().filter(|phase| **phase == GesturePhase::Commit).count(), 1, "one Commit: {phases:?}");
+    assert_eq!(phases.iter().filter(|phase| **phase == GesturePhase::Cancel).count(), 0, "no Cancel phase: {phases:?}");
 }
