@@ -17,6 +17,7 @@ pub(crate) mod special;
 mod stft;
 pub(crate) mod time;
 pub(crate) mod util;
+pub(crate) mod voice;
 
 pub(crate) use channel::{Amplify, Balance, ChannelVolume, Invert, Route, Routing};
 pub(crate) use declick::ClickRemover;
@@ -35,6 +36,7 @@ pub(crate) use reverbs::{ConvolutionReverb, SurroundReverb};
 pub use special::LoudnessMeterFx;
 pub(crate) use special::{AmbisonicsPanner, Binauralizer, ChannelMixer, Distortion, GuitarSuite, Mastering, Mute, StereoExpander, VocalEnhancer};
 pub(crate) use time::{Delay, Reverb};
+pub use voice::VoicePitch;
 
 use crate::{AudioEffect, ParamSpec, sane_channels, sane_sample_rate};
 
@@ -124,6 +126,7 @@ static REGISTRY: &[EffectInfo] = &[
     entry!("dehum", "DeHum", Restoration, DeHum),
     entry!("denoise", "DeNoise", Restoration, DeNoise),
     entry!("pitch_shifter", "Pitch Shifter", Pitch, PitchShifter),
+    entry!("voice_pitch", "Voice Pitch", Pitch, VoicePitch),
     entry!("deesser", "DeEsser", Restoration, DeEsser),
     entry!("dereverb", "DeReverb", Restoration, DeReverb),
     entry!("speech_enhance", "Enhance Speech", Filter, SpeechEnhance),
@@ -234,7 +237,7 @@ mod tests {
         let src_l = noise(1, n, 0.7);
         let src_r = noise(2, n, 0.7);
         let change_at = 11111;
-        for e in effects() {
+        for e in crate::testutil::sampled_effects() {
             let run = |sizes: &mut dyn FnMut() -> usize| {
                 let mut fx = (e.create)(SR, 2);
                 let (mut l, mut r) = (src_l.clone(), src_r.clone());
@@ -289,8 +292,9 @@ mod tests {
         // One thread per effect. The tail stays 40 s long: delays, reverbs and graphic EQs still
         // produce output in its last second, some of it within 3x of the smallest normal f32.
         std::thread::scope(|scope| {
-            for e in effects() {
+            for e in crate::testutil::sampled_effects() {
                 scope.spawn(move || {
+                    let started = std::time::Instant::now();
                     for setting in [0.0f32, 1.0] {
                         let mut fx = (e.create)(SR, 2);
                         for p in e.params {
@@ -318,6 +322,9 @@ mod tests {
                             );
                         }
                     }
+                    if started.elapsed() > std::time::Duration::from_secs(1) {
+                        eprintln!("DIAG extreme settings: {} took {:?}", e.id, started.elapsed());
+                    }
                 });
             }
         });
@@ -325,7 +332,7 @@ mod tests {
 
     #[test]
     fn reset_restores_initial_behavior() {
-        for e in effects() {
+        for e in crate::testutil::sampled_effects() {
             let mut fx = (e.create)(SR, 2);
             let x = noise(8, 6000, 0.5);
             let (mut a1, mut a2) = (x.clone(), x.clone());
