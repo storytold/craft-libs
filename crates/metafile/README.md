@@ -117,12 +117,16 @@ destinations. RLE compression is not decoded.
 
 `write::emf(ops, region, app, title)` and `write::wmf(ops, region)` take `write::Op`s in points,
 y down, in paint order: `Fill` (path, fill rule, colour), `Stroke` (path and `Pen`: colour, width,
-cap, join, miter limit, dashes), `Image` (RGBA pixels, an affine placement, an opacity), `Clip`
-and `Unclip`. `region` is the part of that space the picture covers.
+cap, join, miter limit, dashes), `Image` (RGBA pixels, an affine placement, an opacity), `Text`
+(a run of characters with their offsets, a face, size, weight and colour, and its filled outline),
+`Clip` and `Unclip`. `region` is the part of that space the picture covers.
 
 - EMF keeps curves, writes geometric pens (`EXTCREATEPEN`; dashes as `PS_USERSTYLE` when the pen
   can draw them, else one line per dash), path clips inside `SAVEDC`/`RESTOREDC`, opaque images as
   `STRETCHDIBITS` and translucent ones as `ALPHABLEND`, each under a world transform.
+- EMF writes a `Text` run as a font (`EXTCREATEFONTINDIRECTW`) and a UTF-16 `EXTTEXTOUTW` with
+  one advance per character, when `TextRun::emf_writable` holds; otherwise, and always in WMF, it
+  writes the run's outline.
 - WMF flattens curves, writes 16-bit coordinates behind a placeable header (at most 1440 units an
   inch, fewer for large pictures), and returns what it could not hold in `write::Wmf`
   (`translucent_images`, `turned_images`, `clips_ignored`, `oversized_images`).
@@ -181,8 +185,8 @@ The tests parse every prefix of sample files, files with each byte replaced, and
   WordCraft and DeckCraft keep a picture as a picture.
 - Drawing: rasterising and PDF output of placed items, font lookup, shaping and glyph drawing
   (`Text` only names a font), caching of parsed pictures.
-- For the writers: walking the document into `write::Op`s. Gradients, pattern fills, type as
-  outlines, stroke alignment, width profiles, arrowheads, effects and opacity are decided there,
+- For the writers: walking the document into `write::Op`s. Gradients, pattern fills, which
+  type is passed as `Text`, stroke alignment, width profiles, arrowheads, effects and opacity are decided there,
   as is scaling an image down before it is written and the wording of any warning.
 
 ## Origin

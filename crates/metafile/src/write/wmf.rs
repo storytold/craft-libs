@@ -132,6 +132,7 @@ pub(crate) fn write(ops: &[Op], region: Rect) -> Wmf {
         match op {
             Op::Fill { path, even_odd, rgb } => wr.fill(path, *even_odd, *rgb),
             Op::Stroke { path, pen } => wr.stroke(path, pen),
+            Op::Text { run, outline } => wr.fill(outline, false, run.rgb),
             Op::Image { image, xf, opacity } => {
                 // The record's sizes are 16-bit.
                 if image.width > MAX_POINTS as u32 || image.height > MAX_POINTS as u32 {

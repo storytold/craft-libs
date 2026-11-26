@@ -9,10 +9,13 @@
 //! - **EMF** ([`emf`]): paths keep their Bézier curves; fills are solid brushes; strokes are
 //!   geometric pens with their width, cap, join, miter limit and dashes; clips are path clips
 //!   inside a saved device context; images keep their pixels and their transparency and may be
-//!   turned or skewed. The header's frame is the region in 0.01 mm.
+//!   turned or skewed; type the records can place ([`TextRun::emf_writable`]) is text, drawn by
+//!   the reader with an installed face of the name it gives. The header's frame is the region in
+//!   0.01 mm.
 //! - **WMF** ([`wmf`]): the same operations with curves flattened into polygons and 16-bit
 //!   coordinates, behind a placeable header that gives the size. WMF has no clip paths, no
-//!   transparency and no turned images; [`Wmf`] says which of these the picture lost.
+//!   transparency, no turned images and no text records (type is its outlines); [`Wmf`] says which
+//!   of these the picture lost.
 //!
 //! The reader reads back what the writers write: the tests round-trip both formats through
 //! [`crate::parse`].
@@ -32,6 +35,12 @@ const MAX_FLATTEN_PER_CURVE: f64 = 4096.0;
 /// A curve whose control polygon is longer than this, or has a point further out, is written as
 /// a line: kurbo squares and cubes coordinates when it sizes its work, which overflows there.
 const MAX_FLATTEN_LENGTH: f64 = 1e60;
+/// Most characters one [`TextRun`] writes as text.
+const MAX_TEXT_CHARS: usize = 32_768;
+/// Most UTF-16 units a LOGFONT face name holds before its NUL.
+const MAX_FACE_UNITS: usize = 31;
+/// Text positions and sizes are kept within this many points.
+const MAX_TEXT_PT: f64 = 1e7;
 /// Most dashes one stroke is cut into when its pen cannot draw them (the rest of the path is
 /// then left solid, so a tiny pattern on a long path cannot make an endless file).
 const MAX_DASHES: usize = 100_000;
@@ -57,6 +66,13 @@ pub enum Op {
         xf: Affine,
         opacity: f32,
     },
+    /// A line of type: written as text records when the EMF writer can place it
+    /// ([`TextRun::emf_writable`]), else (and always in WMF) as `outline` filled with the run's
+    /// colour (non-zero).
+    Text {
+        run: TextRun,
+        outline: BezPath,
+    },
     /// What follows, up to the matching [`Op::Unclip`], is clipped to `path` (inside the clips
     /// around it). WMF has no clip paths and writes what follows whole.
     Clip {
@@ -77,6 +93,48 @@ pub struct Pen {
     /// Longest miter as a multiple of the width (for [`Join::Miter`]).
     pub miter: f64,
     pub dash: Option<Dash>,
+}
+
+/// A line of type in one face, size and colour, on one straight baseline.
+///
+/// EMF cannot carry the font: the reader draws each character with an installed face named
+/// `face`, at the position the run gives it. A caller whose face is a symbol font, or one no
+/// reader's system will have, writes the run as its outlines ([`Op::Fill`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRun {
+    /// Each character and its origin's distance along the baseline from `origin`, in points.
+    pub chars: Vec<(char, f64)>,
+    /// The pen position after the last character, along the baseline from `origin`, in points.
+    pub end: f64,
+    /// A point on the baseline, in picture space.
+    pub origin: Point,
+    /// The baseline's direction, degrees counter-clockwise as seen on the page.
+    pub angle: f64,
+    /// The em size, points.
+    pub size: f64,
+    /// The face name the reader asks its system for.
+    pub face: String,
+    /// 100..=900 (400 regular, 700 bold).
+    pub weight: u16,
+    pub italic: bool,
+    pub rgb: [u8; 3],
+}
+
+impl TextRun {
+    /// Whether the EMF writer writes this run as text: 1 to 32,768 characters, each a single
+    /// UTF-16 unit and not a control character; a face name of 1 to 31 UTF-16 units with no NUL;
+    /// a positive size; and every number finite and within 10 million points.
+    pub fn emf_writable(&self) -> bool {
+        let pt = |v: f64| v.is_finite() && v.abs() <= MAX_TEXT_PT;
+        let units = self.face.encode_utf16().count();
+        (1..=MAX_TEXT_CHARS).contains(&self.chars.len())
+            && self.chars.iter().all(|(c, at)| u32::from(*c) <= 0xFFFF && !c.is_control() && pt(*at))
+            && (1..=MAX_FACE_UNITS).contains(&units)
+            && !self.face.contains('\0')
+            && self.size > 0.0
+            && [self.size, self.end, self.origin.x, self.origin.y].into_iter().all(pt)
+            && self.angle.is_finite()
+    }
 }
 
 /// A dash pattern.
@@ -278,6 +336,11 @@ impl Out {
     /// Overwrite the `u32` at `at` (a size or count known only later).
     fn set_u32(&mut self, at: usize, v: u32) {
         if let Some(b) = self.0.get_mut(at..at + 4) {
+            b.copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    fn set_u16(&mut self, at: usize, v: u16) {
+        if let Some(b) = self.0.get_mut(at..at + 2) {
             b.copy_from_slice(&v.to_le_bytes());
         }
     }
