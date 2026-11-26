@@ -125,8 +125,9 @@ fn attribute_name(tag: &[u8]) -> &[u8] {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     fn with_attributes(count: usize, name: &str) -> String {
         let attributes: String = (0..count).map(|i| format!(r#" {name}{i}="v""#)).collect();
@@ -137,14 +138,14 @@ mod tests {
         format!("{}{}", "<a>".repeat(depth), "</a>".repeat(depth))
     }
 
-    #[test]
+    #[trial]
     fn a_document_at_each_limit_parses() {
         assert!(parse(&with_attributes(MAX_ATTRIBUTES, "a")).is_ok());
         assert!(parse(&with_attributes(MAX_NAMESPACES, "xmlns:p")).is_ok());
         assert!(parse(&nested(MAX_DEPTH)).is_ok());
     }
 
-    #[test]
+    #[trial]
     fn a_document_just_past_each_limit_is_refused() {
         let limit = |text: &str| match parse(text) {
             Err(XmlError::Limit(what, _)) => what,
@@ -163,7 +164,7 @@ mod tests {
         assert_eq!(limit(&big), "bytes");
     }
 
-    #[test]
+    #[trial]
     fn markup_inside_comments_cdata_and_values_is_not_counted() {
         let tag = with_attributes(MAX_ATTRIBUTES + 1, "a");
         let deep = "<a>".repeat(MAX_DEPTH + 1);
@@ -175,13 +176,13 @@ mod tests {
         assert!(parse(&quoted).is_ok(), "a > inside a value");
     }
 
-    #[test]
+    #[trial]
     fn empty_and_closed_elements_do_not_deepen_the_nesting() {
         let flat = format!("<r>{}</r>", "<a/><b></b>".repeat(MAX_DEPTH * 2));
         assert!(parse(&flat).is_ok());
     }
 
-    #[test]
+    #[trial]
     fn malformed_xml_is_a_parse_error() {
         assert!(matches!(parse("<a><b></a>"), Err(XmlError::Parse(_))));
     }

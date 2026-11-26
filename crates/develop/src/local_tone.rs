@@ -42,3 +42,46 @@ pub fn apply(img: &mut Rgb32f, lt: &LocalTone, active_uv: impl Fn(usize, usize) 
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_tone_maps_oriented_source_coordinates_in_full_images_and_tiles() {
+        // An original synthetic gain grid: the one-sample tables give g = 1 + 2x + 4y.
+        let lt = LocalTone {
+            map: GainTableMap {
+                points_v: 2,
+                points_h: 2,
+                points_n: 1,
+                spacing_v: 1.0,
+                spacing_h: 1.0,
+                origin_v: 0.0,
+                origin_h: 0.0,
+                weights: [0.0; 5],
+                gamma: 1.0,
+                gains: vec![1.0, 3.0, 5.0, 7.0],
+            },
+            placement: SourcePlacement { rect: [0.25, 0.25, 0.5, 0.5], orientation: craft_geom::Orientation::Rotate90 },
+        };
+        let source_uv = |x, y| match (x, y) {
+            (2, 1) => Some((0.0, 0.0)),
+            (3, 1) => Some((1.0, 1.0)),
+            _ => None,
+        };
+        let pixel = [0.125, 0.25, 0.5];
+        let mut full = Rgb32f { width: 4, height: 3, data: vec![pixel; 12] };
+        apply(&mut full, &lt, source_uv);
+
+        let mut expected = vec![pixel; 12];
+        // The oriented corners land on opposite crop corners in the active area.
+        expected[6] = [0.5625, 1.125, 2.25]; // (0.25, 0.75), gain 4.5
+        expected[7] = [0.4375, 0.875, 1.75]; // (0.75, 0.25), gain 3.5
+        assert_eq!(full.data, expected);
+
+        let mut tile = Rgb32f { width: 2, height: 2, data: vec![pixel; 4] };
+        apply(&mut tile, &lt, |x, y| source_uv(x + 2, y + 1));
+        assert_eq!(tile.data, [full.data[6], full.data[7], full.data[10], full.data[11]]);
+    }
+}

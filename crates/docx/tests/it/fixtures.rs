@@ -2706,6 +2706,42 @@ fn move_revisions_round_trip() {
     check(&craft_docx::read(&out).unwrap());
 }
 
+/// Two insertions by one author with one local `w:date`, told apart (or not) by `dateUtc`.
+fn two_insertions_at_one_local_time(utc: [&str; 2]) -> String {
+    let ins = |id: u32, utc: &str, text: &str| {
+        format!(r#"<w:ins w:id="{id}" w:author="Ada" w:date="2026-11-01T01:30:00Z" {utc}><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:ins>"#)
+    };
+    format!("<w:p>{}{}</w:p>", ins(1, utc[0], " One"), ins(2, utc[1], " Two"))
+}
+
+/// Issue #3206: a tracked change's `dateUtc` is read under any prefix bound to Word's namespace
+/// for it, and saved under that namespace.
+#[test]
+fn a_tracked_change_utc_time_is_read_under_any_prefix_for_its_namespace() {
+    let du = r#"xmlns:du="http://schemas.microsoft.com/office/word/2023/wordml/word16du""#;
+    let body = two_insertions_at_one_local_time([
+        &format!(r#"{du} du:dateUtc="2026-11-01T05:30:00Z""#),
+        &format!(r#"{du} du:dateUtc="2026-11-01T06:30:00Z""#),
+    ]);
+    let d = read_body(&body);
+    let utc: Vec<_> = d.revisions.iter().map(|r| r.date_utc.as_deref()).collect();
+    assert_eq!(utc, [Some("2026-11-01T05:30:00Z"), Some("2026-11-01T06:30:00Z")]);
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert_eq!(attr_values(&xml, "w:ins", "w16du:dateUtc"), ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"]);
+}
+
+/// Issue #3206: an unqualified `dateUtc` doesn't say it's Word's UTC time, so it neither tells
+/// changes apart nor is saved under Word's namespace.
+#[test]
+fn an_unqualified_date_utc_is_not_a_tracked_change_utc_time() {
+    let body = two_insertions_at_one_local_time([r#"dateUtc="2026-11-01T05:30:00Z""#, r#"dateUtc="2026-11-01T06:30:00Z""#]);
+    let d = read_body(&body);
+    assert_eq!(d.revisions.len(), 1, "one author, kind and local date is one change");
+    assert_eq!(d.revisions[0].date_utc, None);
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert!(!xml.contains("dateUtc="), "{xml}");
+}
+
 /// A document's own footnote separators and continuation notice are kept (ECMA-376 §17.11), and
 /// written back as Word numbers them: -1, 0 and 1, the notes after them.
 #[test]

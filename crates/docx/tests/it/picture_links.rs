@@ -601,6 +601,71 @@ fn linked_groups_share_one_retained_member_budget() {
     assert_eq!(count(&doc.body[0].as_para().unwrap().objects[0]), max, "DrawingML must share the same root-wide bound");
 }
 
+/// An omitted linked group returns its reserved slot before the following drawable is read.
+#[test]
+fn empty_linked_groups_release_the_last_member_slot() {
+    let max = craft_wordmodel::para::MAX_GROUP_CHILDREN;
+    let before = r#"<v:shape style="width:1pt;height:1pt" alt="before-empty"><v:imagedata r:id="rIdPic"/></v:shape>"#;
+    let after = r#"<v:shape style="width:1pt;height:1pt" alt="after-empty"><v:imagedata r:id="rIdPic"/></v:shape>"#;
+    let empty = r#"<v:group style="width:1pt;height:1pt" coordsize="1,1" href="https://example.com/Empty"/>"#;
+    let input = |members: &str| {
+        package(&format!(
+            r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:group style="width:24pt;height:12pt" coordsize="24,12">{members}</v:group></w:pict></w:r></w:p>"#,
+        ))
+    };
+    let check = |doc: &Document| {
+        let InlineObject::Group { children, .. } = &doc.body[0].as_para().unwrap().objects[0] else {
+            panic!("the original root group must remain");
+        };
+        assert_eq!(children.len(), max, "the empty linked group must return the last member slot");
+        assert!(children.iter().all(|child| matches!(&child.obj, InlineObject::Image { .. }) && child.link.is_none()));
+        assert!(
+            matches!(&children.last().unwrap().obj, InlineObject::Image { alt, .. } if alt == "after-empty"),
+            "the drawable after the omitted group must survive"
+        );
+    };
+    let vml = input(&format!("{}{empty}{after}", before.repeat(max - 1)));
+    check(&craft_docx::read(&vml).unwrap());
+
+    // Save a small, nonempty linked group to obtain normalized DrawingML with its relationship.
+    // Then remove its drawable and fill the root independently of the VML boundary input.
+    let seed = input(&format!(
+        r#"<v:group style="width:1pt;height:1pt" coordsize="1,1" href="https://example.com/Empty">{before}</v:group>{after}"#,
+    ));
+    let saved = craft_docx::write(&craft_docx::read(&seed).unwrap()).unwrap();
+    let mut xml = craft_xml::parse(part(&saved, "word/document.xml").as_bytes()).unwrap();
+    let group = xml
+        .child_mut("w:body")
+        .unwrap()
+        .child_mut("w:p")
+        .unwrap()
+        .child_mut("w:r")
+        .unwrap()
+        .child_mut("w:drawing")
+        .unwrap()
+        .child_mut("wp:inline")
+        .unwrap()
+        .child_mut("a:graphic")
+        .unwrap()
+        .child_mut("a:graphicData")
+        .unwrap()
+        .child_mut("wpg:wgp")
+        .unwrap();
+    let mut empty = group.child("wpg:grpSp").unwrap().clone();
+    let filler = empty.child("pic:pic").unwrap().clone();
+    let last = group.child("pic:pic").unwrap().clone();
+    assert!(empty.child("wpg:cNvPr").unwrap().child("a:hlinkClick").is_some(), "exercise the linked-group reservation path");
+    empty.children.retain(|n| !matches!(n, craft_xml::Node::El(e) if e.name == "pic:pic"));
+    group.children.retain(|n| !matches!(n, craft_xml::Node::El(e) if matches!(e.name.as_str(), "wpg:grpSp" | "pic:pic")));
+    for _ in 0..max - 1 {
+        group.push(filler.clone());
+    }
+    group.push(empty);
+    group.push(last);
+    let dml = replacing_picture_part(&saved, "word/document.xml", &xml.to_xml());
+    check(&craft_docx::read(&dml).unwrap());
+}
+
 #[test]
 fn linked_group_coordinates_keep_their_scale() {
     fn image_rect(object: &InlineObject, x: f32, scale: f32) -> (f32, f32) {

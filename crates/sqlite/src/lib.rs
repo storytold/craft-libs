@@ -8,6 +8,8 @@
 
 use core::fmt;
 
+pub mod wal;
+
 const MAX_VARINT_BYTES: usize = 9;
 
 /// The b-tree cell layouts that carry payload bytes.

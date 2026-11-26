@@ -2,7 +2,9 @@
 
 use crate::Kind;
 
-/// How many leading bytes [`identify`] reads at most. Every signature it knows lies within them.
+/// How many leading bytes [`identify`] reads at most. Every signature it knows lies within them,
+/// except for container formats like OpenRaster whose distinguishing payload may be pushed past
+/// this window by variable-length ZIP extra fields (which fall back to [`Kind::Zip`]).
 pub const HEAD: usize = 4096;
 
 /// The largest universal Mach-O architecture count taken as Mach-O rather than a Java class.
@@ -24,6 +26,11 @@ const TS_SYNC: u8 = 0x47;
 /// before the weaker ones further in or built from few bits (TAR at byte 257, MP3 and AAC frame
 /// headers, MPEG transport stream packets), so a file is never named by a weak signature when a
 /// strong one matches.
+///
+/// OpenRaster (`.ora`) archives require an uncompressed `mimetype` entry as their first file,
+/// but permit variable-length ZIP extra fields. If ZIP metadata pushes the `image/openraster`
+/// payload beyond [`HEAD`] bytes, `identify` falls back to [`Kind::Zip`] as an intentionally
+/// bounded format hint rather than reading an unbounded stream.
 ///
 /// `CAFEBABE` starts both a universal Mach-O and a Java class file. The next big-endian 32-bit
 /// value is a Mach-O architecture count or a class file's version: up to 44 is taken as
@@ -54,7 +61,8 @@ fn leading(b: &[u8]) -> Option<Kind> {
         (b"Kaydara FBX Binary  ", Kind::Fbx),
         (b"ply\n", Kind::Ply),
         (b"ply\r", Kind::Ply),
-        (b"PK\x03\x04", Kind::Zip),
+        (b"silhouette04;", Kind::Studio),
+        (b"silhouette05;", Kind::Studio),
         (b"PK\x05\x06", Kind::Zip),
         (b"7z\xbc\xaf\x27\x1c", Kind::SevenZip),
         (b"Rar!\x1a\x07\x00", Kind::Rar),
@@ -89,6 +97,7 @@ fn checked(b: &[u8]) -> Option<Kind> {
         return Some(dos(b));
     }
     match b.get(..4)? {
+        b"PK\x03\x04" => Some(zip(b)),
         [0xca, 0xfe, 0xba, 0xbe] => Some(if be32(b, 4)? <= MAX_FAT_ARCHES { Kind::MachOFat } else { Kind::JavaClass }),
         b"II*\0" | b"MM\0*" | b"II+\0" | b"MM\0+" => Some(Kind::Tiff),
         b"8BPS" => matches!(be16(b, 4)?, 1 | 2).then_some(Kind::Psd),
@@ -97,6 +106,83 @@ fn checked(b: &[u8]) -> Option<Kind> {
         [b'B', b'M', ..] => bmp(b),
         _ => None,
     }
+}
+
+/// `PK\x03\x04`: an OpenRaster archive when the first entry is a stored `mimetype` holding
+/// `image/openraster` within [`HEAD`], otherwise [`Kind::Zip`].
+fn zip(b: &[u8]) -> Kind {
+    if is_ora(b) { Kind::Ora } else { Kind::Zip }
+}
+
+fn is_ora(b: &[u8]) -> bool {
+    if le16(b, 8) != Some(0) {
+        return false;
+    }
+    let Some(flags) = le16(b, 6) else {
+        return false;
+    };
+    let Some(name_len) = le16(b, 26).map(usize::from) else {
+        return false;
+    };
+    let Some(extra_len) = le16(b, 28).map(usize::from) else {
+        return false;
+    };
+    if name_len != 8 || b.get(30..38) != Some(b"mimetype") {
+        return false;
+    }
+    let Some(start) = 38usize.checked_add(extra_len) else {
+        return false;
+    };
+
+    let raw_size = le32(b, 18);
+    let size = if raw_size == Some(0xffff_ffff) { b.get(38..start).and_then(zip64_size) } else { raw_size.and_then(|s| usize::try_from(s).ok()) };
+
+    let streamed = (flags & 0x0008) != 0 && (raw_size == Some(0) || (raw_size == Some(0xffff_ffff) && size == Some(0)));
+    if streamed {
+        let Some(payload_end) = start.checked_add(16) else {
+            return false;
+        };
+        if b.get(start..payload_end) != Some(b"image/openraster") {
+            return false;
+        }
+        let Some(rest) = b.get(payload_end..) else {
+            return false;
+        };
+        return validate_descriptor(rest);
+    }
+
+    let Some(sz) = size else {
+        return false;
+    };
+    let Some(end) = start.checked_add(sz) else {
+        return false;
+    };
+    b.get(start..end) == Some(b"image/openraster")
+}
+
+fn zip64_size(mut extra: &[u8]) -> Option<usize> {
+    while extra.len() >= 4 {
+        let id = u16::from_le_bytes(extra.get(..2)?.try_into().ok()?);
+        let len = usize::from(u16::from_le_bytes(extra.get(2..4)?.try_into().ok()?));
+        let next = 4usize.checked_add(len)?;
+        let data = extra.get(4..next)?;
+        if id == 1 {
+            let size = u64::from_le_bytes(data.get(..8)?.try_into().ok()?);
+            return usize::try_from(size).ok();
+        }
+        extra = extra.get(next..)?;
+    }
+    None
+}
+
+fn validate_descriptor(desc: &[u8]) -> bool {
+    let d = if desc.starts_with(b"PK\x07\x08") { desc.get(4..).unwrap_or(desc) } else { desc };
+    if le32(d, 4) == Some(16) && le32(d, 8) == Some(16) {
+        return true;
+    }
+    let comp64 = d.get(4..12).and_then(|s| <[u8; 8]>::try_from(s).ok()).map(u64::from_le_bytes) == Some(16);
+    let uncomp64 = d.get(12..20).and_then(|s| <[u8; 8]>::try_from(s).ok()).map(u64::from_le_bytes) == Some(16);
+    comp64 && uncomp64
 }
 
 /// `MZ`: a PE file when `e_lfanew` (at 0x3C) points at `PE\0\0` within the bytes given.
