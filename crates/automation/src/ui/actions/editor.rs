@@ -42,6 +42,7 @@ pub struct ActionEditorState {
     /// Steps whose host-provided settings summary is expanded.
     pub expanded: BTreeSet<usize>,
     pub(super) icons_open: bool,
+    pub(super) step_order_revision: u64,
     pub(super) include: SweepApply,
     pub(super) dialog: SweepApply,
 }

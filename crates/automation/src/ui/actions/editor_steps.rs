@@ -65,6 +65,7 @@ pub(super) fn show(
     let rows = Rows { action, labels, details, state, editable };
     let mut list = List::new(words.steps.clone())
         .id_salt("action-editor-steps")
+        .rows_stamp(state.step_order_revision)
         .tree(true)
         .select(SelectMode::Single)
         .allow_empty(true)
@@ -147,6 +148,8 @@ pub(super) fn show(
                     let moved = action.steps.remove(from);
                     action.steps.insert(to, moved);
                     step_moves.push(ActionStepMove { from, to });
+                    // Position keys name new occurrences after a move; reseed the cached lead from the remapped selection.
+                    state.step_order_revision = state.step_order_revision.wrapping_add(1);
                     action.remap_steps(|step| Some(moved_index(step, from, to)));
                     state.selected = state.selected.map(|step| moved_index(step, from, to));
                     state.expanded = state.expanded.iter().map(|&step| moved_index(step, from, to)).collect();
