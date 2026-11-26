@@ -619,6 +619,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// Plain data: selection mode, reorder, rename, columns.
     fn items(&self) -> &CollectionProps;
 
+    /// Whether keyboard focus shows a ring on the lead row, or on a populated rows viewport with no visible lead.
+    /// Lists and tables use this with independent item runs and an untransformed viewport.
+    fn shows_row_focus(&self) -> bool {
+        false
+    }
+
     /// The selection binding; `None` keeps it in session memory.
     fn selection(&mut self) -> Option<BindMut<'_, Self::Selection>> {
         None
