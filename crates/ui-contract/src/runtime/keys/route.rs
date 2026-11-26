@@ -629,9 +629,7 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     // of a V the host holds from an earlier pass stays the host's. A fired press that names no key holds the clip's own,
     // which is the chord's (a clip names its chord's key).
     let took = |input: &KeyInput| -> Option<Key> {
-        let Some((taken, _)) = fired.iter().find(|(fired, by_repeat)| !by_repeat && fired.mods == input.mods && clip_same(fired, input)) else {
-            return None;
-        };
+        let (taken, _) = fired.iter().find(|(fired, by_repeat)| !by_repeat && fired.mods == input.mods && clip_same(fired, input))?;
         key_of(taken).or_else(|| key_of(input))
     };
     let mut clips = clips.into_iter().peekable();
