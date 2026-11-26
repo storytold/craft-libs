@@ -1,0 +1,17 @@
+config_version = 1
+
+[[exception]]
+name = "pointer-art-sides"
+kind = "marker"
+rule = "literal-size/vec2"
+path = "crates/ui-contract/src/primitives/pointer_art.rs"
+reason = "Painted pointers are drawn in points around the hotspot like an OS cursor bitmap; their sides are art data, not layout sizes."
+count = 1
+
+[[exception]]
+name = "icon-fixed-layer-tint"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/ui-contract/src/primitives/icon.rs"
+reason = "A fixed layer keeps the colours it is drawn in: a white tint leaves them unchanged."
+count = 1
