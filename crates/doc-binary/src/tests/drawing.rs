@@ -596,7 +596,7 @@ fn compressed_metafile_input_is_charged_to_the_decode_budget() {
     for _ in 0..10 {
         let _ = officeart::blip(&emf, 64 << 20, &mut work);
     }
-    assert!(work.left < raw.len(), "two attempts fit, the rest are refused");
+    assert_eq!(work.left, (3 << 20) - 2 * (raw.len() + 1), "two attempts fit, the rest are refused");
 }
 
 /// An inline `PICFAndOfficeArtData` (shape, FBSE) whose BLIP sits at `fo_delay` in Data; the
