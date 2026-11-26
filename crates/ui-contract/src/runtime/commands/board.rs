@@ -806,8 +806,9 @@ impl Board {
         };
         let state = this.or(last);
         let flags = resolve_flags(this.map(CommandState::flags), last.map(CommandState::flags));
-        // The focused part answers for a declared edit's flags, but its title, icon and hint stay the app's, so the
-        // edit's label does not change language with the focus (#3569).
+        // The focused part answers for a declared edit's flags, but its title and icon stay the app's, so the edit's
+        // label does not change language with the focus (#3569). The hint stays the part's: the app's hint describes
+        // the app's own enable state, which the part's flags override.
         let app_number = matches!(declaring, Some(Declaration::Focused { .. })).then(|| self.numbers.get(command.id.as_str()).copied()).flatten();
         let shown = state.or_else(|| app_number.and_then(|number| self.app_state(number, command)));
         // The resolution reads the app's held state, so a change to it invalidates the kept resolution.
@@ -843,8 +844,8 @@ impl Board {
             refused,
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
-            hint: shown.and_then(|s| s.hint_ref().cloned()),
-            hint_alone: shown.is_some_and(CommandState::is_hint_alone),
+            hint: state.and_then(|s| s.hint_ref().cloned()),
+            hint_alone: state.is_some_and(CommandState::is_hint_alone),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             edit: self.registry.edit_of(&command.id).is_some(),
             command: command.clone(),
