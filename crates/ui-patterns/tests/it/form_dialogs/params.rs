@@ -6,7 +6,7 @@ use craft_ui::contract::{Bind, LabelScheme, Role};
 use craft_ui::dialog::DialogHost;
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field,
+    DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, open_fields, set_color_field, set_param_field,
 };
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::{Label, Scale, UnitKind};
@@ -116,6 +116,37 @@ fn a_short_popup_slider_can_select_its_midpoint_without_explicit_precision() {
 
     let value = values.borrow().number("scale").expect("the selected value");
     assert!((value - 0.0005).abs() <= 0.00002, "linear midpoint: {value}");
+}
+
+/// A range row with a step moves by it on the slider's arrow keys, snaps a typed value to it, and keeps it when its
+/// slider is a popup; a step that is not positive leaves the row as it was.
+#[trial]
+fn a_range_row_moves_and_snaps_by_its_step() {
+    let gain = || Param::new("gain", "Gain", ParamKind::range(-30.0, 30.0, 0.0, SliderScale::Linear));
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![gain().step(0.5)], &values);
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the slider");
+    fixture.click_at(slider.center()).settle();
+    assert_eq!(values.borrow().number("gain"), Some(0.0), "the middle of the track is on a step");
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("gain"), Some(0.5), "Right moves one step");
+
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the number field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("3.3");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("gain"), Some(3.5), "a typed value snaps to the step");
+
+    let popup = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![gain().popup_slider().step(0.5)], &popup);
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the popup row's field");
+    fixture.click(&field).settle();
+    fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    assert_eq!(popup.borrow().number("gain"), Some(0.5), "Up on the popup row's field moves one step");
+
+    assert_eq!(gain().step(0.0), gain(), "a zero step is ignored");
+    assert_eq!(gain().step(f64::NAN), gain(), "a step that is no number is ignored");
+    assert_eq!(Param::new("on", "On", ParamKind::bool(false)).step(0.5), Param::new("on", "On", ParamKind::bool(false)), "other kinds are unchanged");
 }
 
 // A row with `visible_when` is there only while its condition holds, and one with `enabled_when` takes input only
@@ -473,6 +504,71 @@ fn a_pattern_row_picks_its_pattern() {
     fixture.click(&group);
     fixture.idle(3);
     assert_eq!(held().as_deref(), Some("sand"), "a group header writes nothing");
+}
+
+/// A color row with opacity holds four components: its default, an automation set and a picked color carry the
+/// opacity, a row without opacity keeps three, and stored values read back in their own shapes.
+#[trial]
+fn a_color_row_with_opacity_holds_four_components() {
+    let params = vec![
+        Param::new("fill", "Fill", ParamKind::color_with_alpha(Some([1.0, 0.0, 0.0, 0.5]))),
+        Param::new("stroke", "Stroke", ParamKind::color_with_alpha(None)),
+        Param::new("tint", "Tint", ParamKind::color(Some([0.0, 0.0, 1.0]))),
+    ];
+    let mut fields = DialogFields::new();
+    open_fields(&params, &mut fields);
+    assert_eq!(fields.get("fill"), Some(&FieldValue::Rgba([1.0, 0.0, 0.0, 0.5])), "the default opens with its opacity");
+    assert_eq!(fields.get("stroke"), None, "a row without a default stays unset");
+    assert_eq!(fields.get("tint"), Some(&FieldValue::Color([0.0, 0.0, 1.0])), "a row without opacity keeps three components");
+    assert!(!params[0].accepts("fill", &FieldValue::Color([1.0, 0.0, 0.0])), "a row with opacity refuses three components");
+    assert!(!params[2].accepts("tint", &FieldValue::Rgba([0.0, 0.0, 1.0, 0.5])), "a row without opacity refuses four");
+
+    set_param_field(&params, &mut fields, "fill", json!([0.0, 1.0, 0.0, 0.25])).expect("the row takes four components");
+    assert_eq!(fields.rgba("fill"), Some([0.0, 1.0, 0.0, 0.25]));
+    assert!(set_param_field(&params, &mut fields, "fill", json!([0.0, 1.0, 0.0])).is_err(), "three components are refused");
+    assert!(set_param_field(&params, &mut fields, "fill", json!([0.0, 1.0, 0.0, 1.5])).is_err(), "an opacity over 1 is refused");
+    assert!(set_param_field(&params, &mut fields, "fill", json!([0.0, 1.0, 0.0, -0.5])).is_err(), "a negative opacity is refused");
+
+    set_color_field(&params, &mut fields, "fill", craft_theme::Srgba::rgb(0.0, 0.0, 1.0));
+    assert_eq!(fields.rgba("fill"), Some([0.0, 0.0, 1.0, 0.25]), "a picked color keeps the row's opacity");
+    set_color_field(&params, &mut fields, "stroke", craft_theme::Srgba::new(1.0, 1.0, 1.0, 0.1));
+    assert_eq!(fields.rgba("stroke"), Some([1.0, 1.0, 1.0, 1.0]), "an unset row takes its starting opacity, not the picker's");
+
+    fields.set("kernel", FieldValue::Grid(vec![1, 0, 0, 1]));
+    let stored = serde_json::to_string(&fields).expect("the fields serialize");
+    let read: DialogFields = serde_json::from_str(&stored).expect("the fields read back");
+    assert_eq!(read, fields, "four components read back as a color with opacity, four integers as a grid");
+
+    let written: DialogFields = serde_json::from_str(r#"{"fill": [1, 0, 0, 1], "stroke": [0, 0, 1, 2]}"#).expect("the map reads");
+    assert_eq!(written.rgba("fill"), Some([1.0, 0.0, 0.0, 1.0]), "four integers read as a color with opacity");
+    let kept = ParamDialog::remembered(&params, &written);
+    assert_eq!(kept.get("fill"), Some(&FieldValue::Rgba([1.0, 0.0, 0.0, 1.0])), "a stored opaque color written as integers is kept");
+    assert_eq!(kept.get("stroke"), None, "a stored opacity over 1 is dropped");
+}
+
+/// The opacity field beside a color row with opacity sets the alpha and keeps the color, held to 0 to 100 percent;
+/// it takes no input while the row has no color, and a row without opacity has no such field.
+#[trial]
+fn the_opacity_field_of_a_color_row_sets_its_alpha() {
+    let params = vec![
+        Param::new("fill", "Fill", ParamKind::color_with_alpha(Some([1.0, 0.0, 0.0, 0.5]))),
+        Param::new("stroke", "Stroke", ParamKind::color_with_alpha(None)),
+        Param::new("tint", "Tint", ParamKind::color(Some([0.0, 0.0, 1.0]))),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    let enter = |fixture: &mut Fixture, label: &str, text: &str| {
+        let field = fixture.by_label(label).expect("the opacity field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(text).key(Key::Tab, Modifiers::NONE).settle();
+    };
+    enter(&mut fixture, "Fill opacity", "25");
+    assert_eq!(values.borrow().rgba("fill"), Some([1.0, 0.0, 0.0, 0.25]), "the typed opacity sets the alpha");
+    enter(&mut fixture, "Fill opacity", "150");
+    assert_eq!(values.borrow().rgba("fill"), Some([1.0, 0.0, 0.0, 1.0]), "an opacity over 100 percent is held to opaque");
+    enter(&mut fixture, "Stroke opacity", "40");
+    assert_eq!(values.borrow().get("stroke"), None, "an unset row takes no opacity");
+    assert!(fixture.by_label("Tint opacity").is_none(), "a row without opacity has no opacity field");
 }
 
 /// Rows that follow one unit choice show the same base value in the chosen unit and store the base value; a typed

@@ -99,11 +99,16 @@ pub enum ParamKind {
         /// The digits after the decimal point the field keeps; 0 takes whole degrees.
         decimals: u32,
     },
-    /// A colour the host's picker chooses; `None`: unset until picked.
+    /// A color the host's picker chooses; `None`: unset until picked. Without `alpha` the field holds a
+    /// [`FieldValue::Color`]. With it the row adds an opacity field in percent beside the swatch and the field holds a
+    /// [`FieldValue::Rgba`]; the picker and the eyedropper set the color and keep the opacity.
     #[non_exhaustive]
     Color {
         /// The colour as RGB in 0 to 1; `None` leaves it unset.
         default: Option<[f32; 3]>,
+        /// The opacity in 0 to 1 that the default opens with and that a color picked into an unset row takes; `None`
+        /// for a row without opacity.
+        alpha: Option<f32>,
     },
     /// A grid of `cells` integer fields, [`grid_side`](ParamKind::grid_side) per row (`int[25]` is 5×5). A `cells`
     /// that is not square wraps every `round(sqrt(cells))` fields and the last row is short.
@@ -236,7 +241,14 @@ impl ParamKind {
 
     /// A colour the host's picker chooses.
     pub fn color(default: Option<[f32; 3]>) -> Self {
-        ParamKind::Color { default }
+        ParamKind::Color { default, alpha: None }
+    }
+
+    /// A color the host's picker chooses, with an opacity field beside it: a `#rrggbbaa` value. `default` is RGBA in
+    /// 0 to 1; `None` leaves the color unset, and a color picked into it starts opaque.
+    pub fn color_with_alpha(default: Option<[f32; 4]>) -> Self {
+        let alpha = default.map_or(1.0, |[_, _, _, a]| a.clamp(0.0, 1.0));
+        ParamKind::Color { default: default.map(|[r, g, b, _]| [r, g, b]), alpha: Some(alpha) }
     }
 
     /// A grid of `cells` integer fields.
@@ -290,7 +302,11 @@ impl ParamKind {
                 let initial = default.as_deref().or_else(|| options.first().map(|(id, _)| id.as_str()));
                 FieldValue::Text(initial.unwrap_or_default().to_owned())
             }
-            ParamKind::Color { default } => FieldValue::Color((*default)?),
+            ParamKind::Color { default, alpha: None } => FieldValue::Color((*default)?),
+            ParamKind::Color { default, alpha: Some(alpha) } => {
+                let [r, g, b] = (*default)?;
+                FieldValue::Rgba([r, g, b, *alpha])
+            }
             ParamKind::Grid { cells: count, default } => {
                 let mut cells = vec![*default; *count];
                 // A grid that starts at 0 is a kernel: the identity, 1 in the centre.
@@ -334,7 +350,10 @@ impl ParamKind {
             (ParamKind::Choice { options, .. } | ParamKind::Radio { options, .. }, FieldValue::Text(id)) => {
                 options.iter().any(|(option, _)| option == id)
             }
-            (ParamKind::Color { .. }, FieldValue::Color(c)) => c.iter().all(|v| v.is_finite()),
+            (ParamKind::Color { alpha: None, .. }, FieldValue::Color(c)) => c.iter().all(|v| v.is_finite()),
+            (ParamKind::Color { alpha: Some(_), .. }, FieldValue::Rgba([r, g, b, a])) => {
+                [r, g, b].iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(a)
+            }
             (ParamKind::Grid { cells: count, .. }, FieldValue::Grid(cells)) => cells.len() == *count,
             (ParamKind::Point { .. }, FieldValue::Point(p)) => p.iter().all(|v| v.is_finite()),
             (ParamKind::Channel { names, .. }, FieldValue::Int(i)) => usize::try_from(*i).is_ok_and(|i| i < names.len()),
@@ -557,6 +576,8 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    /// The step of a range row's slider and field ([`Param::step`]).
+    range_step: Option<f64>,
     pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
@@ -1230,6 +1251,18 @@ impl Param {
         self
     }
 
+    /// The step of a [`ParamKind::Range`] row, as `SliderField::step`: the slider and the field move by `step` on arrow
+    /// keys, the wheel and a scrub, and drags, clicks on the track and typed values snap to it. It takes the place of
+    /// the step [`decimals`](Param::decimals) implies; the stored value is still rounded to those decimals. A step that
+    /// is not finite and positive leaves the row's step as it was; other kinds are unchanged.
+    #[must_use]
+    pub fn step(mut self, step: f64) -> Self {
+        if matches!(self.kind, ParamKind::Range { .. }) && step.is_finite() && step > 0.0 {
+            self.options.get_or_insert_default().range_step = Some(step);
+        }
+        self
+    }
+
     /// Shows a Range row's slider in a linear popup opened from the number field.
     #[must_use]
     pub fn popup_slider(mut self) -> Self {
@@ -1488,6 +1521,12 @@ impl RowOptions {
         self.range_decimals
     }
 
+    /// The step a range row's slider and field use: the one [`Param::step`] set, else the one its decimals imply, or
+    /// `None` for the controls' own.
+    pub(crate) fn range_step(&self) -> Option<f64> {
+        self.range_step.or_else(|| self.range_decimals.map(|places| 10f64.powi(-(places as i32))))
+    }
+
     /// Whether an int row has a Random button.
     pub(crate) fn randomize(&self) -> bool {
         self.randomize
@@ -1604,10 +1643,18 @@ pub fn encode(component: f32) -> u8 {
 }
 
 /// Writes `color` into the colour parameter `key` of `params`, or into a key no parameter has when a
-/// [`Param::custom`] row can have asked for it; other keys are ignored.
+/// [`Param::custom`] row can have asked for it; other keys are ignored. A row with opacity takes the color's RGB and
+/// keeps its opacity, or takes the row's starting opacity when it had no color; `color`'s alpha is not read.
 pub fn set_color_field(params: &[Param], fields: &mut DialogFields, key: &str, color: Srgba) {
-    let colour_row = params.iter().any(|param| param.key == key && matches!(param.kind, ParamKind::Color { .. }));
-    let custom_request = params.iter().any(|param| matches!(param.kind, ParamKind::Custom(_))) && params.iter().all(|param| param.key != key);
+    let row = params.iter().find(|param| param.key == key);
+    if let Some(ParamKind::Color { alpha: Some(start), .. }) = row.map(|param| &param.kind) {
+        let alpha = fields.rgba(key).map_or(*start, |[_, _, _, a]| a);
+        let [r, g, b] = color.to_rgb_array();
+        fields.set(key, FieldValue::Rgba([r, g, b, alpha]));
+        return;
+    }
+    let colour_row = row.is_some_and(|param| matches!(param.kind, ParamKind::Color { .. }));
+    let custom_request = params.iter().any(|param| matches!(param.kind, ParamKind::Custom(_))) && row.is_none();
     if colour_row || custom_request {
         fields.set(key, FieldValue::Color(color.to_rgb_array()));
     }
