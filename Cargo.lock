@@ -3349,6 +3349,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-video",
  "craft-y4m",
  "serde",
  "serde_json",
