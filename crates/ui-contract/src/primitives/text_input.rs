@@ -73,6 +73,14 @@ pub struct TextOptions {
     /// goes on to the enclosing scope. A live filter keeps its query this way. Ignored with `clear_on_escape`, and on a
     /// disabled or read-only part.
     pub keep_on_escape: bool,
+    /// Escape puts back the value the part had when it took the focus, undoing typed values that applied as they were
+    /// typed and steps alike, and the part gives up the focus: an options bar's field, where tool settings have no
+    /// undo. Ignored with `clear_on_escape` or `keep_on_escape`, on a disabled or read-only part, and in a dialog that
+    /// Escape closes (the dialog's Cancel discards its edits).
+    pub restore_on_escape: bool,
+    /// Enter commits the text as usual and the part then gives up the focus, so the keys that follow reach what is
+    /// around it again (an options bar's field).
+    pub leave_on_submit: bool,
     /// Monospace text.
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
@@ -163,6 +171,8 @@ impl Default for TextOptions {
             live: false,
             clear_on_escape: false,
             keep_on_escape: false,
+            restore_on_escape: false,
+            leave_on_submit: false,
             mono: false,
             role: TypeRole::Body,
             ink: None,

@@ -78,6 +78,9 @@ pub(crate) struct TextState {
     /// The pass time the caret last moved or text was typed, for the blink.
     pub caret_moved: f64,
     pub focused: bool,
+    /// The component's value when the part took the focus (a `K::Value`), kept while it has the focus for
+    /// `TextOptions::restore_on_escape`.
+    pub at_focus: Option<Arc<dyn Any + Send + Sync>>,
     pub completions: completion::Completions,
     /// The draft change `Cx::set_draft` asked for, applied at the start of the next pass.
     pub change: Option<DraftChange>,
@@ -520,6 +523,14 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // in a dialog that Escape closes, modal or modeless, the Escape stays the dialog's and the field keeps the focus.
     let in_closing_dialog = focused_before && crate::runtime::focus::escape_reaches_dialog(ctx);
     let leaves = !input.options.clear_on_escape && !in_closing_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
+    // A part that restores its value on Escape takes Escape with nothing typed too (after steps), and leaves.
+    let restores = input.options.restore_on_escape
+        && !input.options.clear_on_escape
+        && !keep_on_escape
+        && !in_closing_dialog
+        && input.enabled
+        && !input.read_only;
+    let leaves = leaves || restores;
     let takes_escape = keep_on_escape
         || if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
     let list_first = input.list_open && !input.options.clear_on_escape;

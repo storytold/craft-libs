@@ -100,6 +100,29 @@ pub enum NumberPrecision {
     Measured,
 }
 
+/// How the number fields of a scope end an edit with Escape and Enter. A host sets it for a stretch of its interface
+/// (`Overrides::values`, as an options bar sets it around its fields), or a field sets its own ([`NumberField::keys`]);
+/// the default is the plain field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum NumberKeys {
+    /// Escape drops what was typed and puts back the value from before the typing; Enter commits and the field keeps
+    /// the focus.
+    #[default]
+    Plain,
+    /// An options bar's field, whose values take effect as they change and have no undo: Escape puts back the value
+    /// the field had when it took the focus (past typed values that applied as they were typed, and past arrow, wheel
+    /// and Page key steps) and leaves the field; Enter commits and leaves the field, so the next keys are the app's
+    /// again. Tab and a click elsewhere commit as usual. In a dialog that Escape closes, Escape stays the dialog's.
+    Bar,
+}
+
+impl crate::runtime::env::EnvValue for NumberKeys {
+    fn root() -> Self {
+        NumberKeys::Plain
+    }
+}
+
 /// The placeholder of a mixed field.
 const BLANK: &str = "\u{2014}";
 
@@ -233,6 +256,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     look: NumberLook,
     /// The scope's precision, read from the env in measure and parts.
     precision: NumberPrecision,
+    /// The field's own Escape and Enter rule ([`keys`](Self::keys)); `None` follows the scope's.
+    keys: Option<NumberKeys>,
     options: TextOptions,
     positive_only: bool,
     scrub: bool,
@@ -314,6 +339,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             scale: 1.0,
             look: NumberLook::Centred,
             precision: NumberPrecision::Standard,
+            keys: None,
             options: TextOptions::default(),
             positive_only: false,
             scrub: false,
@@ -352,6 +378,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// How the field ends an edit with Escape and Enter, over the scope's [`NumberKeys`]: [`NumberKeys::Bar`] for an
+    /// options bar's field.
+    #[must_use]
+    pub fn keys(mut self, keys: NumberKeys) -> Self {
+        self.keys = Some(keys);
+        self
+    }
+
     /// Zoom typing: a Tab rewrites the draft (with no draft it moves focus) and a press on the field's other parts
     /// keeps it unapplied.
     #[must_use]
@@ -387,6 +421,9 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     fn settle(&mut self, env: &EnvView<'_>) {
         self.look = if self.status_zoom { NumberLook::Centred } else { env.get() };
         self.precision = env.get();
+        let bar = self.keys.unwrap_or_else(|| env.get()) == NumberKeys::Bar;
+        self.options.restore_on_escape = bar;
+        self.options.leave_on_submit = bar;
         if let Some(lengths) = self.lengths {
             self.scale = env.units().length_scale(lengths).unwrap_or(1.0);
         }
