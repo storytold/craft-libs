@@ -20,13 +20,14 @@
 //! The noise power the gains are computed from falls at once and rises by at most 10 dB a
 //! second, so a vowel or a note held for longer than the search window keeps its level for a few
 //! seconds more, and a noise floor that rises by 12 dB is suppressed again within 3 s.
-//! After a reset the floor moves from 0 dB to `reduction` over the first search window of sound,
-//! so a voice that starts at once is not taken for the noise. The first estimate after a reset
-//! sets each bin's noise power no higher than the median bin's, nor more than 30 dB below the
-//! bin's own estimate, and it rises from there by the same 10 dB a second. A vowel held from the
+//! After a reset the gain floor moves from 0 dB toward the attenuation set by `reduction` over
+//! the first search window of sound. The first noise estimate after a reset starts from the
+//! median bin's power. Each bin's value is clamped between 30 dB below its own estimate and its
+//! own estimate. The noise power then rises by at most 10 dB a second. A vowel held from the
 //! first sample keeps its level for a few seconds, like one held after a stretch of noise, while
 //! steady noise of an even spectrum is suppressed as soon as the floor allows; noise whose
-//! spectrum is uneven takes up to 3 s more in the bins well above the median.
+//! spectrum is uneven takes up to 3 s more in the bins well above the median. Continuous voiced
+//! or tonal audio present from startup can eventually enter the noise estimate and be attenuated.
 
 use super::stft::{Pairing, Plan, Spectral, StftChannel, stream};
 use crate::{AudioEffect, MAX_CHANNELS, ParamSpec, ParamValues, Unit, block_len, db_to_gain, flush32, param_plumbing};
@@ -105,8 +106,7 @@ struct Bins {
     /// Total power of each waiting frame, and whether it may enter the estimate.
     queue_total: [f32; OVERLAP],
     queue_ok: [bool; OVERLAP],
-    /// Whether a mute began between a waiting frame and the one before it, so the quiet run ends
-    /// when the frame reaches the estimate.
+    /// Whether a mute began between a waiting frame and the one before it.
     queue_cut: [bool; OVERLAP],
     /// Whether a mute began since the last frame was queued.
     cut_pending: bool,
@@ -204,7 +204,6 @@ impl Bins {
             if self.queued > 0 && self.since_frame < hop {
                 self.queue_ok[(self.head + self.queued - 1) % OVERLAP] = false;
             }
-            // The frames already waiting come before the mute, so the quiet run ends after them.
             self.cut_pending = true;
         }
         self.since_mute = 0;
@@ -326,8 +325,9 @@ impl Bins {
 }
 
 /// Noise suppression for a live voice: lowers steady background noise (fans, hiss, room tone) by
-/// up to `reduction` dB and keeps the voice, with no step that learns the noise first. Its latency
-/// is the STFT size, 256 samples (5.3 ms) at 48 kHz.
+/// up to `reduction` dB, with no step that learns the noise first. Its latency is the STFT size,
+/// 256 samples (5.3 ms) at 48 kHz. Continuous voiced or tonal audio present from startup can
+/// enter the noise estimate and be attenuated after the initial search window.
 pub struct NoiseSuppression {
     pv: ParamValues,
     n: usize,
@@ -826,6 +826,29 @@ mod tests {
         assert_eq!(waiting, bins.queued, "a frame waiting after the mute may not enter the estimate");
         assert!(eligible + 3 < coefs.window, "the test needs the run below its cap");
         assert_eq!(bins.quiet_run, eligible - waiting, "frames from before the mute counted in the new run");
+    }
+
+    #[test]
+    fn a_short_mute_ends_the_queued_quiet_run() {
+        for offset in [0, 17] {
+            let mut s = suppressor(24.0);
+            let (n, hop) = (s.n, s.hop);
+            let mut loud = white(47, SR as usize * 2, 0.05);
+            s.process(&mut [&mut loud]);
+            let mut quiet = white(51, 20 * hop + offset, 0.0005);
+            s.process(&mut [&mut quiet]);
+            assert!(s.bins[0].quiet_run > 0);
+            let mute_end = loud.len() + quiet.len() + hop;
+            let first_clean_frame = (mute_end + n).div_ceil(hop);
+            let commit_end = (first_clean_frame + OVERLAP) * hop;
+            let mut after = white(53, commit_end - loud.len() - quiet.len(), 0.0005);
+            after[..hop].fill(0.0);
+            let before_mute = s.bins[0].quiet_run;
+            s.process(&mut [&mut after[..hop]]);
+            assert_eq!(s.bins[0].quiet_run, before_mute + 1, "offset {offset}: queued pre-mute frames lost their quiet run");
+            s.process(&mut [&mut after[hop..]]);
+            assert_eq!(s.bins[0].quiet_run, 1, "offset {offset}: pre-mute quiet frames contributed to the new run");
+        }
     }
 
     /// A voice that starts with the stream keeps its level within 3 dB over its first 0.25 s and

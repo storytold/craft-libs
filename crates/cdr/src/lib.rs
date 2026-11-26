@@ -10,7 +10,7 @@
 //! and status; code cites the row ids (R1 ...). Reading is bounded by [`Limits`], never recurses and does not
 //! panic.
 //!
-//! [`write`] writes a [`Drawing`] as a `.cdr` file of version 15, laying out each record as the
+//! [`write()`] writes a [`Drawing`] as a `.cdr` file of version 15, laying out each record as the
 //! reader reads it. Nothing here writes `.cmx` files.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]

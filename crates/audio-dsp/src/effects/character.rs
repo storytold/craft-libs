@@ -29,8 +29,6 @@ use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tai
 use crate::{AudioEffect, ParamSpec, ParamValues, Smoothed, Unit, block_len, flush32, param_plumbing};
 use std::f64::consts::TAU;
 
-/// Weighted sum of a dry and a wet sample. A mix of 0 gives the dry sample and a mix of 1 gives the
-/// wet one exactly, however far apart their magnitudes are.
 fn blend(dry: f64, wet: f64, mix: f64) -> f64 {
     (1.0 - mix) * dry + mix * wet
 }
@@ -177,7 +175,6 @@ impl AudioEffect for RingMod {
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
         if n == 0 {
-            // No sample uses the new settings, so the lines keep their state.
             return;
         }
         let nch = channels.len().min(self.lines.len());
@@ -243,7 +240,6 @@ impl AudioEffect for RingMod {
                     _ => dry * carrier,
                 };
                 if ch < nch {
-                    // In f64, so the difference of two large samples of opposite sign stays finite.
                     let (dry, wet) = (dry as f64, wet as f64);
                     channels[ch][i] = blend(dry, wet, f64::from(mix)) as f32;
                 }
@@ -764,6 +760,15 @@ mod tests {
         x[7] = f32::MAX;
         r.process(&mut [&mut x]);
         assert!(x.iter().all(|v| v.is_finite()), "{:?}", x.iter().position(|v| !v.is_finite()));
+    }
+
+    #[test]
+    fn frequency_mod_full_mix_keeps_a_small_delayed_sample() {
+        let mut r = ring(&[("effect", 1.0), ("frequency", 500.0), ("mix", 100.0)], 1);
+        let mut x = vec![0.5f32; 600];
+        x[500] = f32::MAX;
+        r.process(&mut [&mut x]);
+        assert_eq!(x[500], 0.5, "the delayed sample was lost at full mix");
     }
 
     /// Mixing a dry and a wet sample of opposite sign at the largest level stays finite: a mix of

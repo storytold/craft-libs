@@ -974,3 +974,46 @@ fn supported_orf_keeps_unreferenced_jpeg_fallback() {
     assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
     assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
 }
+
+#[cfg(feature = "cr2")]
+/// CR2 capability reporting must not disable preview scanning when preview tags are missing or damaged.
+#[test]
+fn supported_cr2_keeps_unreferenced_jpeg_fallback() {
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    let raw_tiff = TiffWriter::default().write(&[ifd]).unwrap();
+    let mut file = Vec::new();
+    file.extend_from_slice(b"II*\0\x10\0\0\0CR\x02\0\0\0\0\0");
+    file.extend_from_slice(&raw_tiff[8..]);
+    let jpeg = scan_jpeg(3, 900);
+    file.extend_from_slice(&jpeg);
+    let format = crate::probe(&file).unwrap();
+    assert_eq!(format, crate::RawFormat::Cr2);
+    assert!(format.is_supported());
+    assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
+    assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
+}
+
+#[cfg(feature = "dng")]
+/// DNG capability reporting must not disable preview scanning when preview tags are missing or damaged.
+#[test]
+fn supported_dng_keeps_unreferenced_jpeg_fallback() {
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set_image(ImageData::Strips { rows_per_strip: 64, strips: vec![vec![0; 16]] });
+    let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+    let jpeg = scan_jpeg(3, 900);
+    file.extend_from_slice(&jpeg);
+    let format = crate::probe(&file).unwrap();
+    assert_eq!(format, crate::RawFormat::Dng);
+    assert!(format.is_supported());
+    assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
+    assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
+}
