@@ -13,7 +13,7 @@
 //! - Shadows: depth maps per light, percentage-closer filtered.
 
 use crate::scene::{EnvInfo, Light, Material, Scene, ShadowMap, TexInfo};
-use crate::shadow::NEAR;
+use crate::shadow::{NEAR, cube_maps};
 
 pub(crate) const PI: f32 = std::f32::consts::PI;
 
@@ -28,6 +28,12 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 #[inline]
 fn norm(a: [f32; 3]) -> [f32; 3] {
     let l = dot(a, a).sqrt();
+    // The squared length of a large finite vector overflows f32; such a vector is normalized in f64.
+    if l.is_infinite() && a.iter().all(|c| c.is_finite()) {
+        let a = a.map(f64::from);
+        let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        return a.map(|c| (c / l) as f32);
+    }
     if l > 1e-20 { [a[0] / l, a[1] / l, a[2] / l] } else { [0.0, 0.0, -1.0] }
 }
 #[inline]
@@ -47,15 +53,19 @@ fn mix(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// sRGB-encoded → linear light.
+/// sRGB-encoded → linear light. The segment is chosen by magnitude and a negative value keeps
+/// its sign, as in CSS Color 4's conversion code.
 #[inline]
 pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    let a = c.abs();
+    if a <= 0.04045 { c / 12.92 } else { ((a + 0.055) / 1.055).powf(2.4).copysign(c) }
 }
-/// Linear light → sRGB-encoded (over-range values continue the curve).
+/// Linear light → sRGB-encoded. Values above 1 continue the curve; the segment is chosen by
+/// magnitude and a negative value keeps its sign, as in CSS Color 4's conversion code.
 #[inline]
 pub fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    let a = c.abs();
+    if a <= 0.0031308 { c * 12.92 } else { (1.055 * a.powf(1.0 / 2.4) - 0.055).copysign(c) }
 }
 
 /// GGX / Trowbridge–Reitz normal distribution, `a = roughness²`.
@@ -140,8 +150,9 @@ fn wrap(i: i64, n: i64, mode: u32) -> i64 {
     }
 }
 
-/// The smallest `f32` magnitude from which every value is a whole number (2^24).
-const WHOLE: f32 = 16_777_216.0;
+/// The smallest `f32` magnitude whose neighbors are 1 apart (2^23): a scaled coordinate this
+/// large loses the half-texel shift.
+const UNIT_STEP: f32 = 8_388_608.0;
 
 /// Bilinear texture sample at (u, v): 0..1 across the texture, texel centers at +0.5, wrapped
 /// by the texture's modes. A texture with a zero side samples as white, and a texel past the
@@ -151,25 +162,29 @@ pub fn sample(t: &TexInfo, texels: &[[f32; 4]], u: f32, v: f32) -> [f32; 4] {
     if w == 0 || h == 0 {
         return [1.0; 4];
     }
-    // From 2^24 up every f32 is a whole number: a repeated axis is reduced by its period of 1 and a
-    // mirrored axis by its period of 2 before scaling, so the texel index does not saturate.
-    let reduce = |c: f32, mode: u32| {
-        if !c.is_finite() || c.abs() < WHOLE || mode == 1 {
-            c
-        } else if mode == 2 {
-            c.rem_euclid(2.0)
-        } else {
-            c.rem_euclid(1.0)
+    // The first texel index and the weight of the next one along an axis of `n` texels. A finite
+    // coordinate whose scaled value reaches 2^23 is scaled in f64, after a repeated axis is reduced
+    // by its period of 1 and a mirrored axis by its period of 2, so it keeps the half-texel shift
+    // and the texel index does not saturate. A coordinate that is not finite is taken as the
+    // largest finite one, so the weights below stay finite.
+    let axis = |c: f32, n: i64, mode: u32| -> (i64, f32) {
+        if c.is_finite() && (c * n as f32).abs() >= UNIT_STEP {
+            let c = f64::from(c);
+            let c = match mode {
+                1 => c,
+                2 => c.rem_euclid(2.0),
+                _ => c.rem_euclid(1.0),
+            };
+            let x = c * n as f64 - 0.5;
+            let x0 = x.floor();
+            return (x0 as i64, (x - x0) as f32);
         }
+        let x = c * n as f32 - 0.5;
+        let x = if x.is_finite() { x } else { f32::MAX.copysign(x) };
+        let x0 = x.floor();
+        (x0 as i64, x - x0)
     };
-    // A finite coordinate that overflows on scaling is taken as the largest finite one, so the
-    // weights below stay finite.
-    let big = |c: f32| if c.is_finite() { c } else { f32::MAX.copysign(c) };
-    let x = big(reduce(u, t.wrap_u) * w as f32 - 0.5);
-    let y = big(reduce(v, t.wrap_v) * h as f32 - 0.5);
-    let (x0, y0) = (x.floor(), y.floor());
-    let (fx, fy) = (x - x0, y - y0);
-    let (x0, y0) = (x0 as i64, y0 as i64);
+    let ((x0, fx), (y0, fy)) = (axis(u, w, t.wrap_u), axis(v, h, t.wrap_v));
     let get = |xi: i64, yi: i64| -> [f32; 4] {
         let xi = wrap(xi, w, t.wrap_u);
         let yi = wrap(yi, h, t.wrap_v);
@@ -232,10 +247,14 @@ fn shadow_coord(m: &ShadowMap, p: [f32; 3]) -> Option<(f32, f32, f32)> {
         v[2][0] * p[0] + v[2][1] * p[1] + v[2][2] * p[2] + v[2][3],
     ];
     let c = m.size as f32 * 0.5;
+    // A finite coordinate whose product with the focal length overflows f32 is projected in f64.
+    let at = |x: f32, z: f32, fast: f32| {
+        if fast.is_finite() || !x.is_finite() { fast } else { (f64::from(x) * f64::from(m.focal) / f64::from(z) + f64::from(c)) as f32 }
+    };
     if m.ortho {
-        Some((q[0] * m.focal + c, q[1] * m.focal + c, q[2]))
+        Some((at(q[0], 1.0, q[0] * m.focal + c), at(q[1], 1.0, q[1] * m.focal + c), q[2]))
     } else if q[2] > NEAR {
-        Some((q[0] * m.focal / q[2] + c, q[1] * m.focal / q[2] + c, q[2]))
+        Some((at(q[0], q[2], q[0] * m.focal / q[2] + c), at(q[1], q[2], q[1] * m.focal / q[2] + c), q[2]))
     } else {
         None
     }
@@ -329,6 +348,13 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     if !reach.is_finite() {
         reach = 1.0;
     }
+    // Every tap of a receiver more than `reach + 1` texels outside the map reads only texels
+    // outside it, so the light is unblocked there. Returning here also keeps the jitter
+    // lattice finite for map coordinates near `f32::MAX`.
+    let (lo, hi) = (-(reach + 1.0), size as f32 + reach + 1.0);
+    if !(u >= lo && u <= hi && v >= lo && v <= hi) {
+        return 1.0;
+    }
     let n = (reach.ceil() as i32 + 1).clamp(5, PCF_MAX_TAPS);
     let step = reach / (n - 1) as f32;
     let half = (n - 1) as f32 * 0.5;
@@ -360,8 +386,9 @@ fn light_shadow(s: &Scene, l: &Light, p: [f32; 3], ng: [f32; 3], n_l: f32) -> f3
         return 1.0;
     }
     let first = l.shadow as usize;
-    let m = if l.kind == 2 {
-        // Point light: the cube face of the major axis of the light → point direction.
+    let m = if cube_maps(l) {
+        // Point light, or a spot light wider than one map: the cube face of the major axis of
+        // the light → point direction.
         let d = sub(p, l.pos);
         let (ax, ay, az) = (d[0].abs(), d[1].abs(), d[2].abs());
         let face = if ax >= ay && ax >= az {
@@ -403,6 +430,12 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     }
     let d = sub(l.pos, p);
     let len = dot(d, d).sqrt();
+    // The squared distance to a far light overflows f32; such a direction is taken in f64.
+    if len.is_infinite() && d.iter().all(|c| c.is_finite()) {
+        let d = d.map(f64::from);
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        return (d.map(|c| (c / len) as f32), len as f32);
+    }
     if len < 1e-6 { ([0.0, 0.0, -1.0], 0.0) } else { (scale(d, 1.0 / len), len) }
 }
 
@@ -472,14 +505,16 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
             base[k] *= t[k];
         }
     }
-    let alpha = base[3] * m.opacity;
-    if m.alpha_mode == 1 && alpha < m.alpha_cutoff {
+    // Mask mode tests the material's alpha (factor times texture) against the cutoff, and a
+    // fragment that passes keeps only the layer's opacity. Blend mode multiplies the two.
+    if m.alpha_mode == 1 && base[3] < m.alpha_cutoff {
         return None;
     }
-    if alpha <= 1e-5 && m.alpha_mode != 0 {
+    let blend = m.alpha_mode > 1;
+    let alpha = if blend { base[3] * m.opacity } else { m.opacity };
+    if blend && alpha <= 1e-5 {
         return None;
     }
-    let alpha = if m.alpha_mode == 0 { m.opacity } else { alpha };
     let rgb = [base[0], base[1], base[2]];
     let mut emissive = m.emissive;
     if let Some(t) = tex(m.tex_emissive) {
@@ -578,4 +613,19 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
         amount = amount.max(1.0 - env_shadow(s, e, f.pos, n, n));
     }
     [0.0, 0.0, 0.0, alpha * amount]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shadow_coord;
+    use crate::scene::ShadowMap;
+
+    #[test]
+    fn a_receiver_whose_projection_overflows_f32_is_projected_in_f64() {
+        // 1e37 × 400 overflows f32; divided by the depth of 1e38 it is 40 texels from the center.
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let m = ShadowMap { view, focal: 400.0, ortho: false, size: 512, offset: 0, bias: 1.5, radius: 1.0 };
+        let (u, v, z) = shadow_coord(&m, [1e37, 0.0, 1e38]).unwrap_or((f32::NAN, f32::NAN, f32::NAN));
+        assert!((u - 296.0).abs() < 1e-3 && v == 256.0 && z == 1e38, "{u} {v} {z}");
+    }
 }

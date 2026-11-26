@@ -1,6 +1,9 @@
 //! EffectCraft's Advanced 3D renderer at 2f16feb12f (`crates/render/src/three_d/adv.rs`,
 //! `adv/raster.rs` and `adv/shade.rs`; `adv/raster.rs` and `adv/shade.rs` are unchanged since
-//! 8fc2bc99), for the differential tests. `resolve`, `encode` and `render_cpu` are copied from
+//! 8fc2bc99), for the differential tests, with the alpha-mask change of storytold/effectcraft#4075
+//! applied to `shade::shade` and `raster::shadow_raster`: a masked fragment that passes the
+//! cutoff keeps only the layer's opacity, and a masked caster tests the material's alpha against
+//! its cutoff. `resolve`, `encode` and `render_cpu` are copied from
 //! `adv.rs` with `Image` defined here; `encode`'s channel loop iterates over the channels
 //! instead of indexing them, which clippy asks for. `geom` holds the parts of `effectcraft_geom`
 //! and `camera::basis_view` that the shadow maps use.

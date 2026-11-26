@@ -384,6 +384,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   EffectCraft: clipping, rasterization with a top-left fill rule, physically based shading,
   shadow maps, a box resolve of supersampled output and sRGB encoding. Scenes, sizes and work are
   checked and bounded by `Limits` before anything is allocated. Building the scene stays in each app.
+
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
