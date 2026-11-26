@@ -33,7 +33,7 @@ impl MarqueeRect {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum Constraint {
-    /// Sized by the drag; ⇧ makes it square.
+    /// Sized by the drag; ⇧ makes it a square of the drag's shorter side.
     #[default]
     Free,
     /// Width and height keep the ratio `(w, h)`; the larger drag extent wins.
@@ -61,8 +61,9 @@ impl Constraint {
                 let k = (dx.abs() / w).max(dy.abs() / h);
                 Point::new(start.x + sx * k * w, start.y + sy * k * h)
             }
+            // A square takes the shorter side of the drag (from the centre, the shorter half extent).
             _ if square => {
-                let m = dx.abs().max(dy.abs());
+                let m = dx.abs().min(dy.abs());
                 Point::new(start.x + sx * m, start.y + sy * m)
             }
             _ => end,
