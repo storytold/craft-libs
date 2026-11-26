@@ -2,4 +2,5 @@
 
 pub(crate) mod commands;
 pub(crate) mod one_at_a_time;
+pub(crate) mod opener_escape;
 pub(crate) mod popup;
