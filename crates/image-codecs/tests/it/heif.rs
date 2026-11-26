@@ -127,15 +127,14 @@ fn container_rotation_is_applied_once() {
 
 #[test]
 fn exif_and_xmp_survive_and_exif_orientation_is_not_applied_twice() {
-    let img = decode(with_exif()).unwrap();
+    // HEIF's EXIF Orientation repeats what irot says; the container is the authority.
+    let tagged = with_exif_orientation(with_exif(), 6);
+    let img = decode(&tagged).unwrap();
     assert_eq!(img.dimensions(), (2048, 1536));
     let exif = img.meta.exif.as_deref().unwrap();
     assert!(exif.starts_with(b"MM\0*"), "TIFF-structured EXIF, without the HEIF offset header");
     assert!(img.meta.xmp.as_deref().unwrap().contains("x:xmpmeta"));
 
-    // HEIF's EXIF Orientation repeats what irot says; the container is the authority.
-    let tagged = with_exif_orientation(with_exif(), 6);
-    let img = decode(&tagged).unwrap();
     assert_eq!(img.dimensions(), (2048, 1536), "not turned by the EXIF tag");
     assert_eq!(exif_orientation(img.meta.exif.as_deref().unwrap()), 1, "rewritten so exports don't turn it either");
     let raw = decode_with(&tagged, &keep()).unwrap();
