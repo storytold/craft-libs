@@ -128,12 +128,18 @@ fn unedited_style_definitions_are_written_as_read() {
     assert!(s.contains(r#"x:odd="1""#) && s.contains(r#"xmlns:x="urn:example:x""#), "{s}");
     assert_eq!(s.matches("<text:notes-configuration text:note-class=\"footnote\"").count(), 1, "{s}");
     assert_eq!(s.matches(r#"<style:style style:name="Standard""#).count(), 1, "{s}");
-    // A style changed in WordCraft: the definitions are WordCraft's.
-    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Normal") {
+    // A style changed in WordCraft: that one is WordCraft's, the others still the file's.
+    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Quote") {
         st.chr.bold = Some(true);
     }
     let s = styles_of(&export(&d).unwrap());
-    assert!(!s.contains(r#"x:odd="1""#), "{s}");
+    assert!(s.contains(r#"x:odd="1""#), "{s}");
+    assert!(
+        s.split(r#"<style:style style:name="Quotations""#)
+            .nth(1)
+            .is_some_and(|q| q.split("</style:style>").next().is_some_and(|q| q.contains(r#"fo:font-weight="bold""#))),
+        "{s}"
+    );
     assert_eq!(s.matches(r#"<style:style style:name="Standard""#).count(), 1, "{s}");
 }
 
@@ -323,6 +329,460 @@ fn many_pictures_without_their_ends_are_read_in_linear_time() {
     assert!(took.as_secs_f32() < 3.0, "{took:?}");
 }
 
+/// An unused namesake's definition written back as read (`MyCustom` beside an edited
+/// `My_20_Custom`) keeps the picture it names in the package.
+#[test]
+fn an_unused_namesakes_picture_stays_when_the_used_style_is_edited() {
+    use std::sync::Arc;
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[5u8; 64]].concat();
+    let styles = format!(
+        r##"<office:document-styles {NS_T} xmlns:xlink="http://www.w3.org/1999/xlink"><office:styles><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties><style:background-image xlink:href="Pictures/only.png" xlink:type="simple"/></style:paragraph-properties></style:style></office:styles></office:document-styles>"##
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/only.png", &png)]);
+    let mut d = import(&pkg).unwrap();
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = export(&d).unwrap();
+    let s = styles_of(&saved);
+    assert!(def_named(&s, "MyCustom").is_some_and(|d| d.contains(r#"xlink:href="Pictures/only.png""#)), "{s}");
+    let mut z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    assert_eq!(z.read("Pictures/only.png").unwrap(), Some(png));
+    let m = crate::text::tests::entry(&saved, "META-INF/manifest.xml");
+    assert!(m.contains(r#"manifest:full-path="Pictures/only.png""#), "{m}");
+}
+
+/// A file defining what WordCraft doesn't model: a gradient, a paragraph style no text of its
+/// own uses, a default style's writing mode, and a frame style naming them.
+fn file_with_definitions() -> Vec<u8> {
+    let ns = crate::text::tests::NS_T;
+    let draw =
+        r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
+    let styles = format!(
+        r##"<office:document-styles {ns} {draw}><office:styles><draw:gradient draw:name="Sunset" draw:style="linear" draw:start-color="#ff8800" draw:end-color="#ffff00"/><style:default-style style:family="paragraph"><style:paragraph-properties style:writing-mode="page" style:line-break="strict"/><style:text-properties fo:language="de" fo:country="DE"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-bottom="7pt"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="Frame" style:family="graphic"><style:graphic-properties style:wrap="dynamic" style:vertical-pos="top"/></style:style></office:styles></office:document-styles>"##
+    );
+    let content = format!(
+        r#"<office:document-content {ns} {draw}><office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Frame"><style:graphic-properties draw:fill="gradient" draw:fill-gradient-name="Sunset"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="Text_20_body">Text<draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:width="2in" svg:height="1in"><draw:text-box><text:p>In</text:p></draw:text-box></draw:frame></text:p><text:p text:style-name="Eigen">Own</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::text::tests::package(&content, Some(&styles))
+}
+
+#[test]
+fn changing_one_style_leaves_the_files_other_definitions_alone() {
+    use std::sync::Arc;
+    let bytes = file_with_definitions();
+    let as_read = |saved: &[u8]| {
+        let s = crate::text::tests::entry(saved, "styles.xml");
+        assert!(s.contains(r#"draw:gradient draw:name="Sunset""#), "its gradient: {s}");
+        assert!(s.contains(r#"fo:margin-bottom="7pt""#), "a style WordCraft doesn't model: {s}");
+        assert!(s.contains(r#"style:wrap="dynamic""#), "what its frames derive from: {s}");
+        assert!(s.contains(r#"style:writing-mode="page""#) && s.contains(r#"fo:language="de""#), "its default style: {s}");
+        s
+    };
+    // A style no text uses.
+    let mut d = crate::text::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.styles).get_mut("Quote").unwrap().chr.size = Some(13.0);
+    let saved = crate::text::export(&d).unwrap();
+    let s = as_read(&saved);
+    assert!(s.contains(r#"fo:font-size="13pt""#), "the change: {s}");
+    assert_eq!(crate::text::import(&saved).unwrap().styles.get("Quote").unwrap().chr.size, Some(13.0));
+    // A style the file defined: that one is WordCraft's now, the others still the file's.
+    let mut d = crate::text::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.styles).get_mut("Eigen").unwrap().chr.size = Some(21.0);
+    let saved = crate::text::export(&d).unwrap();
+    let s = as_read(&saved);
+    assert!(s.contains(r#"fo:font-size="21pt""#) && !s.contains(r#"fo:font-size="9pt""#), "{s}");
+    // A new list (`para.numbering`): the styles as read, and the list there.
+    let mut d = crate::text::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::numbering::ListKind::Bullet);
+    as_read(&crate::text::export(&d).unwrap());
+    // Normal changed: the default style and Standard are WordCraft's.
+    let mut d = crate::text::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(15.0);
+    let s = crate::text::tests::entry(&crate::text::export(&d).unwrap(), "styles.xml");
+    assert!(s.contains(r#"fo:font-size="15pt""#), "{s}");
+    assert!(s.contains(r#"draw:gradient draw:name="Sunset""#) && s.contains(r#"fo:margin-bottom="7pt""#), "the rest stays: {s}");
+    // Nothing changed: the file's own, and none of WordCraft's over them.
+    let d = crate::text::import(&bytes).unwrap();
+    as_read(&crate::text::export(&d).unwrap());
+}
+
+/// A style deleted in WordCraft stays deleted: the file's own definition doesn't come back with
+/// the definitions that stay as read.
+#[test]
+fn a_deleted_style_stays_deleted() {
+    use std::sync::Arc;
+    let mut d = crate::text::import(&file_with_definitions()).unwrap();
+    assert!(d.styles.get("Eigen").is_some());
+    Arc::make_mut(&mut d.styles).remove("Eigen");
+    d.restyle("Eigen", None);
+    let saved = crate::text::export(&d).unwrap();
+    let s = crate::text::tests::entry(&saved, "styles.xml");
+    assert!(!s.contains(r#"style:name="Eigen""#), "{s}");
+    assert!(s.contains(r#"draw:gradient draw:name="Sunset""#) && s.contains(r#"fo:margin-bottom="7pt""#), "the rest stays: {s}");
+    assert!(!crate::text::tests::entry(&saved, "content.xml").contains("Eigen"));
+    assert!(crate::text::import(&saved).unwrap().styles.get("Eigen").is_none());
+}
+
+/// A file's style whose name has a space (`My_20_Custom`, WordCraft's `MyCustom`) is one style. An
+/// edit reaches its definition under the file's name, a deletion removes it, and left alone it
+/// stays as read with no second definition. A style nothing uses any more keeps its edit.
+#[test]
+fn a_style_named_with_a_space_is_the_files_style() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Base_20_Style" style:display-name="Base Style" style:family="paragraph" style:parent-style-name="Standard"/><style:style style:name="My_20_Custom" style:display-name="My Custom" style:family="paragraph" style:parent-style-name="Base_20_Style"><style:text-properties fo:font-size="9pt"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">One</text:p><text:p text:style-name="My_20_Custom">Two</text:p><text:p text:style-name="Base_20_Style">Three</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = package(&content, Some(&styles));
+    let open = || import(&bytes).unwrap();
+    let def = |xml: &str, name: &str| xml.split("<style:style ").find(|d| d.starts_with(&format!(r#"style:name="{name}""#))).map(String::from);
+    let id = open().body[0].as_para().unwrap().props.style.clone().unwrap();
+
+    let saved = styles_of(&export(&open()).unwrap());
+    assert!(def(&saved, "My_20_Custom").is_some_and(|d| d.contains(r#"fo:font-size="9pt""#)), "as read: {saved}");
+    assert!(def(&saved, "MyCustom").is_none(), "no second one: {saved}");
+
+    // Edited: the paragraphs written as read name the file's definition, so that takes the edit.
+    let mut d = open();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let bytes_saved = export(&d).unwrap();
+    let saved = styles_of(&bytes_saved);
+    let mine = def(&saved, "My_20_Custom").unwrap_or_else(|| panic!("the file's name: {saved}"));
+    assert!(mine.contains(r#"fo:font-size="21pt""#) && !saved.contains(r#"fo:font-size="9pt""#), "{saved}");
+    assert!(mine.contains(r#"style:parent-style-name="Base_20_Style""#), "its parent, by the file's name: {mine}");
+    assert!(content_of(&bytes_saved).contains(r#"text:style-name="My_20_Custom""#));
+    let back = import(&bytes_saved).unwrap();
+    assert_eq!(back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size, 21.0);
+
+    // Deleted: it stays deleted.
+    let mut d = open();
+    Arc::make_mut(&mut d.styles).remove(&id);
+    d.restyle(&id, None);
+    let bytes_saved = export(&d).unwrap();
+    let saved = styles_of(&bytes_saved);
+    assert!(def(&saved, "My_20_Custom").is_none() && def(&saved, "MyCustom").is_none(), "{saved}");
+    assert!(def(&saved, "Base_20_Style").is_some(), "the others stay: {saved}");
+    assert!(import(&bytes_saved).unwrap().styles.get(&id).is_none());
+
+    // Nothing uses it any more, and it is edited: the edit is saved, not the style lost.
+    let mut d = open();
+    d.restyle(&id, None);
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def(&saved, "My_20_Custom").is_some_and(|m| m.contains(r#"fo:font-size="21pt""#)), "{saved}");
+}
+
+/// Two of the file's names WordCraft has as one style (`My_20_Custom` and `My_Custom` are both
+/// `MyCustom`): edited, each is written under its own name, neither lost nor doubled.
+#[test]
+fn two_names_for_one_style_both_stay_when_it_is_edited() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="My_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">One</text:p><text:p text:style-name="My_Custom">Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    for name in ["My_20_Custom", "My_Custom"] {
+        assert_eq!(saved.matches(&format!(r#"style:name="{name}""#)).count(), 1, "{name}: {saved}");
+        let def = saved.split(&format!(r#"style:name="{name}""#)).nth(1).and_then(|d| d.split("</style:style>").next()).unwrap();
+        assert!(def.contains(r#"fo:font-size="21pt""#), "{name}: {def}");
+    }
+}
+
+/// A parent's name goes by its family: a text style's other name isn't a paragraph style's.
+#[test]
+fn a_rewritten_styles_parent_keeps_its_own_familys_name() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="BaseStyle" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt"/></style:style><style:style style:name="Base_20_Style" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="BaseStyle"><style:text-properties fo:font-weight="bold"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="My_20_Custom">One</text:p><text:p>Two <text:span text:style-name="Base_20_Style">three</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let mine = saved.split("<style:style ").find(|t| t.starts_with(r#"style:name="My_20_Custom""#)).and_then(|t| t.split('>').next()).unwrap();
+    assert!(mine.contains(r#"style:parent-style-name="BaseStyle""#), "{mine}");
+    let back = import(&bytes).unwrap();
+    let p = back.body[0].as_para().unwrap();
+    assert_eq!(back.styles.resolve_char(p.props.style.as_deref(), &Default::default()).size, 30.0, "inherited");
+}
+
+/// Whether `xml` reads as XML: tags close in order and every attribute value unescapes.
+fn reads_as_xml(xml: &str) -> bool {
+    // craft-xml's strict read refuses unbalanced tags, malformed attributes and unknown
+    // references, but takes a bare `&` as itself: each `&` must start a reference too.
+    let refs = xml.split('&').skip(1).all(|r| {
+        let name = r.split(';').next().unwrap_or("");
+        r.contains(';') && !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'#')
+    });
+    let mut events = craft_xml::Options::default().strict().events(xml.as_bytes());
+    loop {
+        match events.next() {
+            Ok(Some(_)) => {}
+            Ok(None) => return refs,
+            Err(_) => return false,
+        }
+    }
+}
+
+/// A file's paragraph style `styles` (markup inside `office:styles`) and paragraphs naming
+/// `used`, opened.
+fn opened(styles: &str, used: &[&str]) -> craft_wordmodel::Document {
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{styles}</office:styles></office:document-styles>"#);
+    let body: String = used.iter().map(|n| format!(r#"<text:p text:style-name="{n}">Text</text:p>"#)).collect();
+    let content =
+        format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    import(&package(&content, Some(&styles))).unwrap()
+}
+
+/// The definition of the style named `name` (as written, escaped) in `xml`, up to its end.
+fn def_named(xml: &str, name: &str) -> Option<String> {
+    xml.split("<style:style ")
+        .find(|d| d.starts_with(&format!(r#"style:name="{name}""#)))
+        .and_then(|d| d.split("</style:style>").next())
+        .map(String::from)
+}
+
+/// A file's style whose name has `&`, `"` or `<` in it, edited, is written under its name escaped.
+#[test]
+fn an_edited_styles_name_is_written_escaped() {
+    use std::sync::Arc;
+    for name in ["R&amp;D", "Say&quot;Hi", "A&lt;B"] {
+        let s = format!(
+            r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="{name}" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style>"#
+        );
+        let mut d = opened(&s, &[name]);
+        let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+        Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+        let bytes = export(&d).unwrap();
+        let saved = styles_of(&bytes);
+        assert!(reads_as_xml(&saved), "{name}: {saved}");
+        assert!(def_named(&saved, name).is_some_and(|d| d.contains(r#"fo:font-size="21pt""#)), "{name}: {saved}");
+        let back = import(&bytes).unwrap();
+        assert_eq!(back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size, 21.0, "{name}");
+    }
+}
+
+/// An edited style's parent is the file's style the import read it from, not another of the
+/// file's styles WordCraft would have under the same id (`BaseStyle`, `Base_20_Style`).
+#[test]
+fn a_rewritten_styles_parent_is_the_one_it_was_read_from() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="BaseStyle" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt"/></style:style><style:style style:name="Base_20_Style" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="BaseStyle"/>"#;
+    let mut d = opened(s, &["My_20_Custom"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let mine = def_named(&saved, "My_20_Custom").unwrap_or_else(|| panic!("{saved}"));
+    assert!(mine.contains(r#"style:parent-style-name="BaseStyle""#), "{mine}");
+    assert!(def_named(&saved, "Base_20_Style").is_some_and(|d| d.contains(r#"fo:font-size="9pt""#)), "as read: {saved}");
+    let back = import(&bytes).unwrap();
+    assert_eq!(back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size, 30.0, "inherited");
+}
+
+/// A style nothing in the file uses keeps its own definition when a used one WordCraft has
+/// under the same id (`My_20_Custom`, `My_Custom`) is edited.
+#[test]
+fn an_unused_style_sharing_an_edited_ones_id_keeps_its_definition() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="My_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let mut d = opened(s, &["My_20_Custom"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def_named(&saved, "My_20_Custom").is_some_and(|d| d.contains(r#"fo:font-size="21pt""#)), "{saved}");
+    let theirs = def_named(&saved, "My_Custom").unwrap_or_else(|| panic!("{saved}"));
+    assert!(theirs.contains(r#"fo:font-size="30pt""#) && theirs.contains("#ff0000"), "as read: {theirs}");
+}
+
+/// A style nothing in the file uses, named as WordCraft names a used one (`MyCustom` beside
+/// `My_20_Custom`, which WordCraft has as `MyCustom`), keeps its definition when the used one is
+/// edited or deleted.
+#[test]
+fn an_unused_style_named_as_wordcraft_names_an_edited_one_keeps_its_definition() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let as_read = |saved: &str| {
+        let theirs = def_named(saved, "MyCustom").unwrap_or_else(|| panic!("{saved}"));
+        assert!(theirs.contains(r#"fo:font-size="30pt""#) && theirs.contains("#ff0000"), "as read: {theirs}");
+    };
+
+    let mut d = opened(s, &["My_20_Custom"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def_named(&saved, "My_20_Custom").is_some_and(|d| d.contains(r#"fo:font-size="21pt""#)), "{saved}");
+    as_read(&saved);
+
+    let mut d = opened(s, &["My_20_Custom"]);
+    Arc::make_mut(&mut d.styles).remove(&id);
+    d.restyle(&id, None);
+    let saved = styles_of(&export(&d).unwrap());
+    assert!(def_named(&saved, "My_20_Custom").is_none(), "{saved}");
+    as_read(&saved);
+}
+
+/// A paragraph written from the model names the file's style it was read with (`My_20_Custom`),
+/// not a style of the file's that WordCraft's name for it would land on (`MyCustom`, unused).
+#[test]
+fn an_edited_paragraph_keeps_its_styles_file_name_beside_an_unused_namesake() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    for (edit_style, size) in [(false, 9.0), (true, 21.0)] {
+        let mut d = opened(s, &["My_20_Custom"]);
+        let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+        if edit_style {
+            Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+        }
+        d.insert_text(&Pos::body(0, 0), "New ", &Default::default()).unwrap();
+        let bytes = export(&d).unwrap();
+        let c = content_of(&bytes);
+        assert!(c.contains("New Text"), "{c}");
+        assert!(!c.contains(r#"style-name="MyCustom""#), "{c}");
+        let back = import(&bytes).unwrap();
+        let got = back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size;
+        assert_eq!(got, size, "edited style {edit_style}: {c}\n{}", styles_of(&bytes));
+    }
+}
+
+/// A style made after reading (`NewChild`), based on a file's style beside an unused namesake
+/// (`My_20_Custom`, WordCraft's `MyCustom`, beside `MyCustom`), derives from the file's style it
+/// was based on.
+#[test]
+fn a_new_style_based_on_one_beside_an_unused_namesake_derives_from_it() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let mut d = opened(s, &["My_20_Custom"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    let mut child = d.styles.get(&id).unwrap().clone();
+    (child.id, child.name, child.based_on, child.next) = ("NewChild".into(), "NewChild".into(), Some(id.clone()), None);
+    (child.para, child.chr) = Default::default();
+    Arc::make_mut(&mut d.styles).upsert(child);
+    d.restyle(&id, Some("NewChild".to_string()));
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let new = saved.split("<style:style ").find(|t| t.starts_with(r#"style:name="NewChild""#)).and_then(|t| t.split('>').next());
+    assert!(new.is_some_and(|n| n.contains(r#"style:parent-style-name="My_20_Custom""#)), "{saved}");
+    let theirs = def_named(&saved, "MyCustom").unwrap_or_else(|| panic!("{saved}"));
+    assert!(theirs.contains(r#"fo:font-size="30pt""#), "as read: {theirs}");
+    let back = import(&bytes).unwrap();
+    let got = back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size;
+    assert_eq!(got, 9.0, "{saved}\n{}", content_of(&bytes));
+}
+
+/// A style made after reading (`NewChild`), based on a file's style WordCraft names otherwise
+/// (`Base_20_Style`, WordCraft's `BaseStyle`), derives from the file's style, with what WordCraft
+/// doesn't model of it.
+#[test]
+fn a_new_style_based_on_a_renamed_one_derives_from_the_files() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Base_20_Style" style:display-name="Base Style" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties style:writing-mode="tb-rl"/><style:text-properties fo:font-size="30pt"/></style:style>"#;
+    let mut d = opened(s, &["Base_20_Style"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    let mut child = d.styles.get(&id).unwrap().clone();
+    (child.id, child.name, child.based_on, child.next) = ("NewChild".into(), "NewChild".into(), Some(id.clone()), None);
+    (child.para, child.chr) = Default::default();
+    Arc::make_mut(&mut d.styles).upsert(child);
+    d.restyle(&id, Some("NewChild".to_string()));
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let new = saved.split("<style:style ").find(|t| t.starts_with(r#"style:name="NewChild""#)).and_then(|t| t.split('>').next());
+    assert!(new.is_some_and(|n| n.contains(r#"style:parent-style-name="Base_20_Style""#)), "{saved}");
+    assert!(def_named(&saved, "Base_20_Style").is_some_and(|d| d.contains(r#"style:writing-mode="tb-rl""#)), "as read: {saved}");
+    let back = import(&bytes).unwrap();
+    let got = back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size;
+    assert_eq!(got, 30.0, "{saved}");
+}
+
+/// The same for a character style: edited text's automatic style derives from the file's
+/// character style it was read with (`My_20_Accent`), not an unused namesake (`MyAccent`).
+#[test]
+fn edited_text_keeps_its_character_styles_file_name_beside_an_unused_namesake() {
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Accent" style:family="text"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyAccent" style:family="text"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>One <text:span text:style-name="My_20_Accent">two</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    d.insert_text(&Pos::body(0, 0), "New ", &Default::default()).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains("New One"), "{c}");
+    assert!(c.contains(r#"style:parent-style-name="My_20_Accent""#) && !c.contains(r#"="MyAccent""#), "{c}");
+}
+
+/// An edited style the file names as WordCraft does (`Eigen`), whose parent WordCraft names
+/// otherwise (`Base_20_Style`, WordCraft's `BaseStyle`), still derives from the file's parent.
+#[test]
+fn an_edited_style_under_its_own_name_keeps_its_parents_file_name() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Base_20_Style" style:display-name="Base Style" style:family="paragraph" style:parent-style-name="Standard" style:class="text"><style:paragraph-properties style:writing-mode="tb-rl"/><style:text-properties fo:font-size="30pt"/></style:style><style:style style:name="Eigen" style:family="paragraph" style:parent-style-name="Base_20_Style"/>"#;
+    let mut d = opened(s, &["Eigen"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let mine = def_named(&saved, "Eigen").unwrap_or_else(|| panic!("{saved}"));
+    assert!(mine.contains(r#"style:parent-style-name="Base_20_Style""#), "{mine}");
+    assert!(def_named(&saved, "Base_20_Style").is_some_and(|d| d.contains(r#"style:writing-mode="tb-rl""#)), "as read: {saved}");
+    let back = import(&bytes).unwrap();
+    assert_eq!(back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size, 30.0, "inherited");
+}
+
+/// A character style WordCraft read under another id (`AccentChar`, as a paragraph style has
+/// `Accent`), edited, is written under the file's name: the text written as read names that.
+#[test]
+fn an_edited_character_style_read_under_another_id_keeps_the_files_name() {
+    use std::sync::Arc;
+    let s = r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Accent" style:family="paragraph" style:parent-style-name="Standard"/><style:style style:name="Accent" style:family="text"><style:text-properties fo:font-size="9pt"/></style:style>"#;
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{s}</office:styles></office:document-styles>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Accent">One <text:span text:style-name="Accent">two</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let id =
+        d.styles.styles.iter().find(|s| s.kind == craft_wordmodel::styles::StyleKind::Character && s.name == "Accent").map(|s| s.id.clone()).unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    let text = saved
+        .split("<style:style ")
+        .find(|d| d.starts_with(r#"style:name="Accent""#) && d.split('>').next().is_some_and(|h| h.contains(r#"style:family="text""#)))
+        .and_then(|d| d.split("</style:style>").next())
+        .unwrap_or_else(|| panic!("{saved}"));
+    assert!(text.contains(r#"fo:font-size="21pt""#), "{text}");
+}
+
+/// Many of the file's styles WordCraft has under one id (`My-Custom`, `My.Custom`…), one edited:
+/// editing the shared id rewrites only the definitions that were read into it.
+#[test]
+fn many_styles_sharing_an_id_keep_unedited_definitions() {
+    use std::sync::Arc;
+    let names: Vec<String> =
+        (0..6_000u32).map(|i| format!("My{}Custom", (0..13).map(|b| if i >> b & 1 == 1 { '-' } else { '.' }).collect::<String>())).collect();
+    let mut s = String::from(r#"<style:style style:name="Standard" style:family="paragraph" style:class="text"/>"#);
+    for n in &names {
+        s.push_str(&format!(r#"<style:style style:name="{n}" style:family="paragraph" style:parent-style-name="Standard" style:next-style-name="{n}"><style:text-properties fo:font-size="9pt"/></style:style>"#));
+    }
+    let used: Vec<&str> = names.iter().take(500).map(String::as_str).collect();
+    let mut d = opened(&s, &used);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
+    let saved = styles_of(&export(&d).unwrap());
+    assert_eq!(saved.matches(r#"fo:font-size="21pt""#).count(), 500, "the ones read into it");
+    assert_eq!(saved.matches(r#"fo:font-size="9pt""#).count(), 5_500, "the others as read");
+}
+
 #[test]
 fn the_files_font_declarations_are_kept() {
     // A reader without a font picks its substitute by how the file declares it. WordCraft's own
@@ -479,4 +939,59 @@ fn a_name_space_on_the_font_declarations_goes_with_them() {
         assert!(part.contains(r#"x:odd="1""#), "{part}");
         assert!(part.contains(r#"xmlns:x="urn:example:x""#), "{part}");
     }
+}
+
+/// Line numbering changed in the first of two sections is saved: the file's own definition stays
+/// only while the section the save writes it from is as read (#5702 review).
+#[test]
+fn line_numbering_changed_in_the_first_section_is_saved() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:linenumbering-configuration text:number-lines="true" text:offset="0.25in" style:num-format="1" text:number-position="left" text:increment="5" text:restart-on-page="true"/><style:style style:name="Opening" style:family="paragraph" style:master-page-name="Other"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="11in" fo:page-height="8.5in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Other" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>One.</text:p><text:p text:style-name="Opening">Two.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = package(&content, Some(&styles));
+    let mut d = import(&bytes).unwrap();
+    assert_eq!(d.sections().len(), 2, "two sections");
+    let first = d.body.iter_mut().find_map(|b| match std::sync::Arc::make_mut(b) {
+        craft_wordmodel::Block::Para(p) => p.section.as_deref_mut(),
+        _ => None,
+    });
+    let first = first.expect("the first section");
+    first.line_numbers.as_mut().expect("line numbering as read").count_by = 3;
+    let s = styles_of(&export(&d).unwrap());
+    assert!(s.contains(r#"text:increment="3""#) && !s.contains(r#"text:increment="5""#), "the change: {s}");
+}
+
+#[test]
+fn rewriting_shared_style_names_scales_linearly_in_name_lookups() {
+    use std::{
+        cell::Cell,
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
+    let lookups = |n: usize| {
+        let defs: BTreeMap<String, Arc<str>> = (0..n).map(|i| (format!("common:Name{i}"), Arc::from("<style:style/>"))).collect();
+        let ids = defs.keys().map(|key| (key.clone(), "Shared".to_string())).collect();
+        let changed = BTreeSet::from(["common:Shared".to_string()]);
+        let calls = Cell::new(0usize);
+        let ours = |id: &str| {
+            calls.set(calls.get() + 1);
+            id.to_string()
+        };
+        let rewritten = super::super::kept::rewritten_defs(
+            r#"<office:styles><style:style style:name="Shared" style:family="paragraph"/></office:styles>"#,
+            &defs,
+            &changed,
+            &ids,
+            &ours,
+        );
+        assert_eq!(rewritten.len(), n);
+        calls.get()
+    };
+    let small = lookups(16);
+    let large = lookups(128);
+    assert!(small > 0);
+    assert!(large <= 8 * small, "name lookups grew faster than the input: {small} -> {large}");
 }
