@@ -153,6 +153,33 @@ mod roundtrip {
             let _ = dec.flush();
         }
     }
+
+    #[test]
+    fn retained_pictures_drain_bounded_after_failed_multi_vop_packet() {
+        let mut cfg = EncoderConfig::new(16, 16, 25, 1);
+        cfg.keyint = 1;
+        let mut enc = Encoder::new(cfg).expect("encoder");
+        let (y, u, v) = synth_frame(16, 16, 0);
+        let pkt = enc.encode(&YuvFrame { y: &y, u: &u, v: &v, y_stride: 16, uv_stride: 8 }).expect("encode");
+
+        let mut big = Vec::new();
+        for _ in 0..8 {
+            big.extend_from_slice(&pkt.data);
+        }
+        // Append a truncated VOL unit so the 8-VOP packet fails after decoding all 8 VOPs.
+        big.extend_from_slice(&[0x00, 0x00, 0x01, 0x20, 0x00]);
+
+        let mut dec = Decoder::new();
+        assert!(dec.decode(&big, 0).is_err());
+
+        // Subsequent valid single-VOP packets must progress and deliver all 8 retained pictures + the new ones.
+        let batch1 = dec.decode(&pkt.data, 1).expect("recover after error");
+        assert!(batch1.len() <= 8);
+        let mut total = batch1.len();
+        total += dec.decode(&pkt.data, 2).expect("second packet").len();
+        total += dec.flush().len();
+        assert_eq!(total, 10);
+    }
 }
 
 #[test]

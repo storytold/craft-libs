@@ -276,7 +276,12 @@ impl Decoder {
         }
         let mut out = std::mem::take(&mut self.held);
         match self.decode_inner(packet, pts, &mut out) {
-            Ok(()) => Ok(out),
+            Ok(()) => {
+                if out.len() > MAX_OUTPUT_PICTURES_PER_PACKET {
+                    self.held = out.split_off(MAX_OUTPUT_PICTURES_PER_PACKET);
+                }
+                Ok(out)
+            }
             Err(e) => {
                 out.append(&mut self.held);
                 self.held = out;
@@ -316,11 +321,11 @@ impl Decoder {
         if vop_count > MAX_OUTPUT_PICTURES_PER_PACKET {
             return Err(DecodeError::Invalid("packet contains too many VOPs".into()));
         }
-        // Every picture is returned at most once, so a packet returns at most the pictures already
-        // held, the delayed anchor waiting at entry, and one per VOP. Refuse before any state
-        // changes if that exceeds the limit.
+        // Every picture is returned at most once, so a packet produces at most the delayed anchor
+        // waiting at entry plus one per VOP. Any retained `self.held` pictures beyond the per-call
+        // limit are kept in `self.held` for subsequent calls.
         let pending = self.future_ref.as_ref().is_some_and(|a| !a.shown);
-        let worst_case = out.len() + usize::from(pending) + vop_count;
+        let worst_case = usize::from(pending) + vop_count;
         if worst_case > MAX_OUTPUT_PICTURES_PER_PACKET {
             return Err(DecodeError::Invalid("packet could return too many pictures".into()));
         }
