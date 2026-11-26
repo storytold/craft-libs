@@ -6,7 +6,7 @@ use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, trial};
 use craft_ui::tile_grid::{BadgeVisibility, CardText, Tile, TileFlag};
-use egui::{Rect, Shape, pos2, vec2};
+use egui::{Color32, Rect, Shape, pos2, vec2};
 
 /// The tile's rect and the bounds of the glyphs (stars and flag) and colour dots it paints in a region `width` wide.
 fn badges(width: f32) -> (Rect, Vec<Rect>, Vec<Rect>) {
@@ -170,6 +170,213 @@ fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
     assert!((name.center().x - tile.center().x).abs() <= 1.0, "a preset's name is centred: {name:?} in {tile:?}");
     let (tile, name) = name_in(CardText::File);
     assert!(name.left() - tile.left() < tile.width() / 4.0, "a file's name starts at the tile's start edge: {name:?} in {tile:?}");
+}
+
+/// An icon-only card tile with paper paints the paper fill, draws a crisp frame border, and scales the centered icon.
+#[trial]
+fn card_tile_with_paper_paints_paper_surface_frame_and_large_icon() {
+    let mut frames = Frames::new();
+    let mut tile_rect = Rect::NOTHING;
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+            tile_rect = in_region(ui, region, |ui| {
+                Tile::new("Personal Template").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).show(ui).response.rect
+            });
+        });
+    }
+    // Verify white paper fill exists inside the tile
+    let paper_rect = shapes
+        .iter()
+        .find_map(|s| match s {
+            Shape::Rect(r) if r.fill == Color32::WHITE => Some(r.rect),
+            _ => None,
+        })
+        .expect("the white paper fill is painted");
+    assert!(tile_rect.contains_rect(paper_rect), "paper {paper_rect:?} is inside tile {tile_rect:?}");
+
+    // Verify frame stroke exists around the paper rect
+    let has_frame = shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.rect == paper_rect && r.stroke.width > 0.0));
+    assert!(has_frame, "a frame border is drawn around the paper rect");
+
+    // Verify icon is centered on paper and sized at 44 pt (twice tokens.size.icon.lg = 22 pt in comfortable)
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs.is_empty(), "icon glyph is painted");
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!((icon_bounds.center().x - paper_rect.center().x).abs() <= 2.0, "icon is centered horizontally");
+    assert!((icon_bounds.center().y - paper_rect.center().y).abs() <= 2.0, "icon is centered vertically");
+    // With 2x face side (44 pt), the visual bounding rect of the icon glyph is wider than 22 pt:
+    assert!(icon_bounds.width() > 22.0 || icon_bounds.height() > 22.0, "icon is larger than 22 pt: bounds {icon_bounds:?}");
+}
+
+/// An icon-only card tile without paper paints a sunken well and a standard-size icon.
+#[trial]
+fn card_tile_without_paper_keeps_default_sunken_well_and_standard_icon() {
+    let mut frames = Frames::new();
+    let mut tile_rect = Rect::NOTHING;
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+            tile_rect = in_region(ui, region, |ui| Tile::new("Asset").card().icon(craft_behavior::IconId::new("file")).show(ui).response.rect);
+        });
+    }
+    // Standard icon is clamped to tokens.size.icon.lg (22 pt max side)
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs.is_empty(), "icon glyph is painted");
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!(icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0, "standard icon bounds {icon_bounds:?} <= 22 pt");
+}
+
+/// Dedicated icon_zoom allows explicit scaling.
+#[trial]
+fn card_tile_icon_zoom_scales_icon() {
+    let mut frames = Frames::new();
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+            in_region(ui, region, |ui| Tile::new("Asset").card().icon(craft_behavior::IconId::new("file")).icon_zoom(1.5).show(ui).response.rect);
+        });
+    }
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    // 1.5 * 22 pt = 33 pt
+    assert!(icon_bounds.width() > 22.0 || icon_bounds.height() > 22.0, "icon scaled by zoom factor");
+}
+
+/// Hostile or extreme icon_zoom values (huge, infinity, NaN, negative) are clamped and do not crash or panic.
+#[trial]
+fn card_tile_icon_zoom_hostile_values_handled_safely() {
+    let mut frames = Frames::new();
+    let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+
+    // Test extreme zoom (10000.0) -> capped at picture rect, does not abort
+    let shapes = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Huge Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(10000.0).show(ui);
+        });
+    });
+    let paper_rect = shapes
+        .iter()
+        .find_map(|s| match s {
+            Shape::Rect(r) if r.fill == Color32::WHITE => Some(r.rect),
+            _ => None,
+        })
+        .expect("paper fill exists");
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!(paper_rect.expand(0.5).contains_rect(icon_bounds), "extreme zoom icon is bounded within paper rect: {icon_bounds:?} in {paper_rect:?}");
+
+    // Test capacity overflow candidate (1e9)
+    let _ = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Overflow Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(1e9).show(ui);
+        });
+    });
+
+    // Test NaN and negative zoom on card tile
+    let _ = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("NaN Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(f32::NAN).show(ui);
+        });
+    });
+    let shapes_neg = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Negative Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(-5.0).show(ui);
+        });
+    });
+    let glyphs_neg: Vec<Rect> = shapes_neg.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs_neg.is_empty(), "negative zoom icon is rendered at default size, not 0x0");
+
+    // Test non-card tile with NaN and negative zoom
+    let _ = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Non-card NaN").icon(craft_behavior::IconId::new("file")).icon_zoom(f32::NAN).show(ui);
+        });
+    });
+    let non_card_neg = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Non-card Neg").icon(craft_behavior::IconId::new("file")).icon_zoom(-2.0).show(ui);
+        });
+    });
+    let glyphs_non_card: Vec<Rect> = non_card_neg.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs_non_card.is_empty(), "non-card negative zoom renders icon");
+}
+
+/// A flat_thumbnail tile with paper does not paint paper fill or frame, and keeps standard icon zoom and proper contrast across themes.
+#[trial]
+fn flat_thumbnail_with_paper_keeps_standard_icon_and_no_paper_surface() {
+    use craft_theme::{Contrast, Mode};
+    use craft_ui::runtime::env::RootEnv;
+
+    for (mode, contrast) in [(Mode::Light, Contrast::Standard), (Mode::Dark, Contrast::Standard), (Mode::Dark, Contrast::High)] {
+        let mut frames = Frames::new();
+        frames.root(RootEnv::default().mode(mode).contrast(contrast));
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = frames.frame_shapes(|ui| {
+                let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+                in_region(ui, region, |ui| {
+                    Tile::new("Flat Preset").card().flat_thumbnail().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).show(ui);
+                });
+            });
+        }
+        // No white paper fill painted
+        assert!(
+            !shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::WHITE)),
+            "{mode:?} {contrast:?}: no paper fill painted on flat thumbnail"
+        );
+        // Standard icon is clamped to tokens.size.icon.lg (22 pt max side)
+        let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+        assert!(!glyphs.is_empty(), "{mode:?} {contrast:?}: icon glyph is painted");
+        let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+        assert!(
+            icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0,
+            "{mode:?} {contrast:?}: icon bounds {icon_bounds:?} <= 22 pt on flat thumbnail"
+        );
+
+        // In dark mode, icon ink must NOT be dark text chosen against white paper; it must be light against the dark surface
+        if mode == Mode::Dark {
+            let icon_colors: Vec<Color32> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Mesh(m) if !m.vertices.is_empty() => Some(m.vertices[0].color),
+                    _ => None,
+                })
+                .collect();
+            for color in icon_colors {
+                let lum = f32::from(color.r()) * 0.2126 + f32::from(color.g()) * 0.7152 + f32::from(color.b()) * 0.0722;
+                assert!(lum > 100.0, "{mode:?} {contrast:?}: icon color {color:?} on flat thumbnail should be light in dark mode (lum {lum})");
+            }
+        }
+    }
+}
+
+/// In a narrow room, zoom does not paint the icon outside the paper rect.
+#[trial]
+fn card_tile_in_narrow_room_caps_icon_at_picture_rect() {
+    let mut frames = Frames::new();
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 100.0));
+            in_region(ui, region, |ui| {
+                Tile::new("Narrow").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(20.0).show(ui);
+            });
+        });
+    }
+    let paper_rect = shapes
+        .iter()
+        .find_map(|s| match s {
+            Shape::Rect(r) if r.fill == Color32::WHITE => Some(r.rect),
+            _ => None,
+        })
+        .expect("paper fill exists");
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!(paper_rect.expand(0.5).contains_rect(icon_bounds), "icon {icon_bounds:?} is inside narrow paper {paper_rect:?}");
 }
 
 /// A page card's name wraps onto a second line, centred, where one line would cut it, and the detail follows the name

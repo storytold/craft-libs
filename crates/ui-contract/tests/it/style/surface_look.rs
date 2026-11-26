@@ -53,3 +53,34 @@ fn a_dropdown_box_fills_under_the_pointer_and_while_open() {
         assert_eq!(open, hover, "an open box keeps the hover fill");
     });
 }
+
+#[trial]
+fn icon_ink_on_reaches_non_text_contrast_minimum_under_standard_and_high_contrast() {
+    let ctx = egui::Context::default();
+    let white_paper = craft_ui::style::DataColor::new(Color32::WHITE);
+    let dark_paper = craft_ui::style::DataColor::new(Color32::from_rgb(0x18, 0x18, 0x1b));
+
+    // Standard contrast: at least 3.0:1
+    let standard_tokens = tokens(Mode::Light, Contrast::Standard);
+    with_cx(&ctx, &standard_tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        let ink_white = cx.icon_ink_on(white_paper);
+        let ratio_white = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_white.egui()), craft_theme::Rgba::from(white_paper.0));
+        assert!(ratio_white >= 3.0, "standard contrast icon ink on white paper reaches 3:1: {ratio_white}");
+
+        let ink_dark = cx.icon_ink_on(dark_paper);
+        let ratio_dark = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_dark.egui()), craft_theme::Rgba::from(dark_paper.0));
+        assert!(ratio_dark >= 3.0, "standard contrast icon ink on dark paper reaches 3:1: {ratio_dark}");
+    });
+
+    // High contrast: at least 4.5:1
+    let high_tokens = tokens(Mode::Light, Contrast::High);
+    with_cx(&ctx, &high_tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        let ink_white = cx.icon_ink_on(white_paper);
+        let ratio_white = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_white.egui()), craft_theme::Rgba::from(white_paper.0));
+        assert!(ratio_white >= 4.5, "high contrast icon ink on white paper reaches 4.5:1: {ratio_white}");
+
+        let ink_dark = cx.icon_ink_on(dark_paper);
+        let ratio_dark = craft_theme::contrast_ratio(craft_theme::Rgba::from(ink_dark.egui()), craft_theme::Rgba::from(dark_paper.0));
+        assert!(ratio_dark >= 4.5, "high contrast icon ink on dark paper reaches 4.5:1: {ratio_dark}");
+    });
+}

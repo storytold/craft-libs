@@ -1,3 +1,4 @@
+pub(crate) mod app_measure;
 pub(crate) mod cross_fill;
 pub(crate) mod fill_column;
 pub(crate) mod fill_height;
