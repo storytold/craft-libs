@@ -38,7 +38,8 @@ pub struct Options {
     pub max_coverage: Option<usize>,
     /// Draw fills, strokes, glyph outlines and clips with hard edges, each pixel covered or not,
     /// instead of anti-aliased. Anti-aliased shapes that meet partway across a pixel each cover
-    /// part of it, so the background shows through the join; hard-edged ones tile exactly.
+    /// part of it, so the background shows through the join; two hard-edged shapes that share
+    /// an edge leave no seam (but see the junction note below).
     /// Images and soft masks are drawn as before. [`render_supersampled_into`] sets it.
     ///
     /// Edges are rounded to whole pixels, so thin shapes change width: a hairline centred on a
@@ -47,8 +48,8 @@ pub struct Options {
     ///
     /// Where three or more shapes meet inside one pixel, each can cover less than half of it,
     /// and then none draws it: four boxes meeting at a pixel's centre leave that pixel showing
-    /// the background. [`render_supersampled_into`] bounds the hole to one fine pixel, a
-    /// sixteenth of an output pixel at a factor of 4.
+    /// the background. [`render_supersampled_into`] shrinks such a hole to about one fine pixel
+    /// per junction, a sixteenth of an output pixel at a factor of 4.
     pub hard_edges: bool,
 }
 
@@ -206,8 +207,10 @@ pub const MAX_SUPERSAMPLE: u32 = 8;
 /// [`Options::hard_edges`] at `factor`× the resolution, and each output pixel is the mean of
 /// its `factor × factor` block. The mean of premultiplied samples is the coverage-weighted mix,
 /// so an edge is as smooth as `factor` allows while shapes that share an edge still tile.
-/// Where three or more shapes meet, one fine pixel can be left uncovered (see
-/// [`Options::hard_edges`]), at most `1 / factor²` of an output pixel.
+/// Where three or more shapes meet, a fine pixel can be left uncovered (see
+/// [`Options::hard_edges`]): for one four-shape junction the test sweep measures at most one
+/// fine pixel, `1 / factor²` of an output pixel, but several junctions inside one output pixel
+/// can each leave one.
 ///
 /// `factor` is 1 to [`MAX_SUPERSAMPLE`]; 1 renders hard-edged at the output size. The fine raster
 /// must itself fit [`MAX_SIDE`] and [`MAX_PIXELS`], or the render fails with

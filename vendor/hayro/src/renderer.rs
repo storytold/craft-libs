@@ -880,8 +880,9 @@ pub(crate) struct Renderer {
 /// Craft patch (hard edges): how this renderer draws the edges of fills, strokes, glyph outlines
 /// and clips. Anti-aliased edges are composited one shape at a time, so two shapes that meet
 /// partway across a pixel each cover part of it and the backdrop shows through the join (a grey
-/// seam between two black boxes). Hard edges tile exactly; a caller that renders at `k`× and
-/// box-averages the result gets smooth edges with no seam.
+/// seam between two black boxes). With hard edges two shapes sharing an edge leave no seam,
+/// though a junction of three or more can leave a pixel uncovered; a caller that renders at
+/// `k`× and box-averages the result gets smooth edges with no seam along shared edges.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Edges {
     /// vello_cpu's aliasing threshold: a pixel whose coverage reaches it is covered, any other
