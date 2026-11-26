@@ -63,6 +63,7 @@ struct Config {
     round_handles: bool,
     /// The host's handle side, `None` for the theme's.
     handle_side: Option<f32>,
+    apply_reach: Option<f32>,
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
@@ -124,6 +125,7 @@ fn defaults() -> Config {
         crossed: false,
         round_handles: false,
         handle_side: None,
+        apply_reach: None,
         line: None,
         targets: Vec::new(),
         suspend: SnapSuspend::Control,
@@ -218,6 +220,9 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .crossed(config.crossed)
                     .round_handles(config.round_handles)
             };
+            if let Some(reach) = config.apply_reach.filter(|_| !config.text_frame) {
+                control = control.apply_reach(reach);
+            }
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
             }
@@ -1218,6 +1223,83 @@ fn a_border_zone_rotates_only_within_its_reach_of_the_sides() {
     frame(&mut far, vec![pointer::release(start)]);
     frame(&mut far, Vec::new());
     assert_eq!(far.host.borrow().applied, 0, "a click past the reach applies nothing");
+}
+
+/// With an apply reach, a press that far or further outside the box's bounds applies as the button goes down, with
+/// either button, and its drag turns nothing; a nearer press on the outside still turns the box. The reach is measured
+/// along each axis from the bounds, so a press beside a corner counts by the further of its two distances, and a moved
+/// or scaled box takes its reach along (the reference application, measured 2026-11-26: 201 points at a third and at
+/// full zoom, in every mode).
+#[trial]
+fn a_press_beyond_the_apply_reach_applies_as_it_goes_down() {
+    let reach = 60.0;
+    let corner = |h: &Harness| h.screen(Point::new(RECT.x1, RECT.y1));
+    let side = |h: &Harness| h.screen(Point::new(RECT.x1, RECT.center().y));
+    let with_reach = || harness(BoxState::from_rect(RECT), |config| config.apply_reach = Some(reach));
+
+    // Further than the reach right of the side: applies on the press, before any release, and the drag turns nothing.
+    for secondary in [false, true] {
+        let mut far = with_reach();
+        let start = side(&far) + by(reach + 2.0, 0.0);
+        frame(&mut far, vec![pointer::moved(start)]);
+        frame(&mut far, vec![if secondary { pointer::secondary(start, true) } else { pointer::press(start) }]);
+        assert_eq!(far.host.borrow().applied, 1, "the press applies as it goes down (secondary: {secondary})");
+        frame(&mut far, vec![pointer::moved(start + by(0.0, 30.0))]);
+        frame(&mut far, vec![if secondary { pointer::secondary(start + by(0.0, 30.0), false) } else { pointer::release(start + by(0.0, 30.0)) }]);
+        frame(&mut far, Vec::new());
+        assert!(far.host.borrow().events.is_empty(), "its drag turns nothing: {:?}", far.host.borrow().events);
+        assert_eq!(far.state(), BoxState::from_rect(RECT));
+        assert_eq!(far.host.borrow().applied, 1, "and the release applies nothing more");
+    }
+
+    // Nearer than the reach: the outside turns the box as before, and nothing applies.
+    let mut near = with_reach();
+    let start = side(&near) + by(reach - 6.0, 0.0);
+    frame(&mut near, vec![pointer::moved(start)]);
+    frame(&mut near, vec![pointer::press(start)]);
+    frame(&mut near, vec![pointer::moved(start + by(0.0, 30.0))]);
+    frame(&mut near, vec![pointer::release(start + by(0.0, 30.0))]);
+    frame(&mut near, Vec::new());
+    assert_eq!(near.host.borrow().applied, 0, "a press within the reach applies nothing");
+    let turned = near.state().quad;
+    assert!((turned[1].y - turned[0].y).abs() > 1.0, "it turns the box: {turned:?}");
+
+    // Beside the corner the reach counts along each axis: within it both ways holds on, though further than the
+    // reach from the corner itself; past it along one axis applies.
+    for (offset, applies) in [(by(reach - 6.0, reach - 6.0), 0), (by(reach - 6.0, reach + 2.0), 1), (by(reach + 2.0, 10.0), 1)] {
+        let mut h = with_reach();
+        let start = corner(&h) + offset;
+        frame(&mut h, vec![pointer::moved(start)]);
+        frame(&mut h, vec![pointer::press(start)]);
+        assert_eq!(h.host.borrow().applied, applies, "a press {offset:?} off the corner, before its release");
+    }
+
+    // Without a reach no press applies by its distance; a click outside applies on its release, as before.
+    let mut plain = upright();
+    let start = side(&plain) + by(reach + 2.0, 0.0);
+    frame(&mut plain, vec![pointer::moved(start)]);
+    frame(&mut plain, vec![pointer::press(start)]);
+    assert_eq!(plain.host.borrow().applied, 0, "no reach: the press applies nothing");
+}
+
+/// A box whose rules refuse the outside (Scale mode) leaves it to the tool, but for the press beyond its apply reach:
+/// the reference application ends a transform that way in every mode.
+#[trial]
+fn a_box_that_refuses_the_outside_still_applies_beyond_its_reach() {
+    let reach = 60.0;
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.apply_reach = Some(reach);
+        config.rules = BoxRules::in_mode(TransformMode::Scale);
+    });
+    hover(&mut h, Point::new(RECT.x1 + f64::from(reach) - 10.0, RECT.center().y));
+    assert_eq!(h.host.borrow().hovered, None, "nearer than the reach the outside is the tool's");
+    let far = h.screen(Point::new(RECT.x1, RECT.center().y)) + by(reach + 2.0, 0.0);
+    frame(&mut h, vec![pointer::moved(far)]);
+    frame(&mut h, vec![pointer::press(far)]);
+    assert_eq!(h.host.borrow().applied, 1, "the press beyond the reach applies as it goes down");
+    frame(&mut h, vec![pointer::release(far)]);
+    frame(&mut h, Vec::new());
+    assert!(h.host.borrow().events.is_empty(), "and edits nothing: {:?}", h.host.borrow().events);
 }
 
 /// A level line's ends stand for the side handles they point to.

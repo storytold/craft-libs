@@ -69,6 +69,7 @@ pub struct TransformOverlay<'a, W> {
     menu_rows: &'a [Entry<String>],
     reach: TransformReach,
     rotate_zone: RotateZone,
+    apply_reach: Option<f32>,
     crossed: bool,
     id: IdSource,
 }
@@ -85,6 +86,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             menu_rows: &[],
             reach: TransformReach::Box,
             rotate_zone: RotateZone::Outside,
+            apply_reach: None,
             crossed: false,
             id: IdSource::Auto,
         }
@@ -127,6 +129,14 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     #[must_use]
     pub fn rotate_zone(mut self, zone: RotateZone) -> Self {
         self.rotate_zone = zone;
+        self
+    }
+
+    /// How far from the box a press on its outside applies as the button goes down
+    /// ([`TransformBox::apply_reach`]), in screen points; such a press opens no menu. `None` (the default): none does.
+    #[must_use]
+    pub fn apply_reach(mut self, reach: Option<f32>) -> Self {
+        self.apply_reach = reach;
         self
     }
 
@@ -176,6 +186,9 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);
         }
+        if let Some(reach) = self.apply_reach {
+            tbox = tbox.apply_reach(reach);
+        }
         let shown = tbox.show_at(ui, rect);
         out.edits.extend(shown.edit.events.iter().cloned().map(TransformEdit::Box));
         out.apply = shown.apply;
@@ -183,7 +196,8 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         out.picked = shown.picked;
         out.held = shown.held;
         out.snapped = shown.snapped;
-        if self.reach != TransformReach::Box {
+        // A press that applied ends the session: it opens no menu.
+        if self.reach != TransformReach::Box || matches!(out.apply, Some(ApplyBy::PressOutside { .. })) {
             return out;
         }
         let words = Env::of(ui).words::<TransformMenuWords>();

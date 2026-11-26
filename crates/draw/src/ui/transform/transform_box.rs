@@ -377,6 +377,13 @@ pub enum ApplyBy {
         /// Where the click landed.
         at: Point,
     },
+    /// A press beyond the box's [apply reach](TransformBox::apply_reach), at `at` in document units, reported as the
+    /// button goes down.
+    #[non_exhaustive]
+    PressOutside {
+        /// Where the press landed.
+        at: Point,
+    },
 }
 
 /// What the box reports beyond its edit, from this pass's input only.
@@ -470,6 +477,9 @@ fn past_drag_start(start: Pos2, pos: Pos2) -> bool {
 ///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer); with
 ///   [`session_commit`](Self::session_commit) off Enter and Escape stay the scope's around the canvas (a dialog's OK
 ///   and Cancel). A [`reach`](Self::reach) of [`TransformReach::Shown`] takes no press and no key at all.
+/// - With an [apply reach](Self::apply_reach) a primary or secondary press on the outside, that far or further from
+///   the box's bounds on the screen, applies as the button goes down ([`ApplyBy::PressOutside`]): it starts no drag,
+///   and the pointer there is the arrow.
 /// - A [crossed](Self::crossed) box draws its diagonals under the handles; they take no press of their own.
 /// - A [centre mark](Self::centre_mark) draws the reference point's glyph at the middle of the box and takes no press.
 ///   A [live line's look](Self::line) declares only the line's two ends, each standing for the box handle it points
@@ -500,6 +510,13 @@ pub struct TransformBox<'a> {
     /// Whether a press inside moves the box. Off leaves it to the tool.
     #[prop]
     inside_moves: bool,
+    /// How far from the box a press on its outside ends the session, in screen points: a primary or secondary press
+    /// whose point lies that far or further left, right, above or below the box's bounds on the screen applies at
+    /// once ([`ApplyBy::PressOutside`]). The reference application's reach is 201 at every zoom, in every mode, for a
+    /// scaled, moved or turned box alike (a turned box by its upright bounds). `None` (the default): no press applies
+    /// by its distance.
+    #[prop]
+    apply_reach: Option<f32>,
     /// The modifiers every test of this box reads in place of the pointer's: a touch host's sticky modifiers.
     #[prop]
     mods: Option<Mods>,
@@ -568,6 +585,7 @@ impl<'a> TransformBox<'a> {
             reference_point: true,
             rotate_zone: RotateZone::Outside,
             inside_moves: true,
+            apply_reach: None,
             mods: None,
             overflow: false,
             session_arrows: true,
@@ -641,6 +659,59 @@ impl<'a> TransformBox<'a> {
     /// let it turn.
     fn has_knob(&self) -> bool {
         matches!(self.rotate_zone, RotateZone::Knob) && self.line.is_none() && self.move_only().is_none() && self.rules.allows(BoxPart::Outside)
+    }
+
+    /// Whether a press at `pointer` on the outside of the box `quad`, both on the screen, lies beyond the
+    /// [apply reach](Self::apply_reach): that far or further outside the box's upright bounds along either axis, the
+    /// pointer read where `view` reads it.
+    fn applies_at(&self, view: &CanvasView, quad: &[Point; 4], pointer: Pos2) -> bool {
+        let Some(reach) = self.apply_reach.filter(|reach| reach.is_finite() && *reach >= 0.0) else { return false };
+        if self.move_only().is_some() || quad.iter().any(|corner| !corner.x.is_finite() || !corner.y.is_finite()) {
+            return false;
+        }
+        let (min, max) = quad.iter().fold((quad[0], quad[0]), |(min, max), corner| {
+            (Point::new(min.x.min(corner.x), min.y.min(corner.y)), Point::new(max.x.max(corner.x), max.y.max(corner.y)))
+        });
+        let read = pointer + view.map_vec(view.pointer_offset());
+        let (x, y, reach) = (f64::from(read.x), f64::from(read.y), f64::from(reach));
+        (min.x - x).max(x - max.x) >= reach || (min.y - y).max(y - max.y) >= reach
+    }
+
+    /// The canvas beyond the [apply reach](Self::apply_reach) of the box `quad`, both on the screen, inside `within`: the
+    /// strips left of, right of, above and below its upright bounds grown by the reach, where
+    /// [`applies_at`](Self::applies_at) holds. `None` without a reach. A box whose rules refuse the outside takes only
+    /// these of it, so a nearer press stays the tool's.
+    fn apply_strips(&self, view: &CanvasView, quad: &[Point; 4], within: Rect) -> Option<[Rect; 4]> {
+        let reach = self.apply_reach.filter(|reach| reach.is_finite() && *reach >= 0.0)?;
+        if self.move_only().is_some() || quad.iter().any(|corner| !corner.x.is_finite() || !corner.y.is_finite()) {
+            return None;
+        }
+        let (min, max) = quad.iter().fold((quad[0], quad[0]), |(min, max), corner| {
+            (Point::new(min.x.min(corner.x), min.y.min(corner.y)), Point::new(max.x.max(corner.x), max.y.max(corner.y)))
+        });
+        // The pointer's places whose reading lies that far out: the grown bounds, moved back by the view's offset.
+        let near = Rect::from_min_max(Pos2::new(min.x as f32 - reach, min.y as f32 - reach), Pos2::new(max.x as f32 + reach, max.y as f32 + reach))
+            .translate(-view.map_vec(view.pointer_offset()));
+        Some([
+            Rect::from_min_max(within.min, Pos2::new(near.min.x, within.max.y)),
+            Rect::from_min_max(Pos2::new(near.max.x, within.min.y), within.max),
+            Rect::from_min_max(within.min, Pos2::new(within.max.x, near.min.y)),
+            Rect::from_min_max(Pos2::new(within.min.x, near.max.y), within.max),
+        ])
+    }
+
+    /// Declares the [apply strips](Self::apply_strips) as the outside's parts, each sensing `sense` with a press's drag
+    /// and click.
+    fn declare_apply_strips(&self, cx: &mut PartsCx<'_, Self>, view: &CanvasView, quad: &[Point; 4], within: Rect, sense: Sense) {
+        for (strip, far) in self.apply_strips(view, quad, within).into_iter().flatten().enumerate() {
+            if far.is_positive() {
+                let corners = vec![far.left_top(), far.right_top(), far.right_bottom(), far.left_bottom()];
+                cx.part(OUTSIDE.at(strip as u64), HitShape::Polygon(corners))
+                    .sense(Sense::DRAG | Sense::CLICK | sense)
+                    .priority(HitPriority::new(HitLevel::Background, 0))
+                    .pointer_only(ROTATE_BY_KEY);
+            }
+        }
     }
 
     /// The parts the keyboard walks, in order. A box whose inside does not move has no inside part, so a press or drag
@@ -786,6 +857,7 @@ impl<'a> TransformBox<'a> {
             (BoxDrag::Rotate, BoxPart::Outside) if self.rotate_zone == RotateZone::Handle => {
                 Cursor::from(PaintedCursor::turn(-outward_normals(&screen.quad.map(pos))[0]))
             }
+            (_, BoxPart::Outside) if !dragging && self.applies_at(view, &screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
                 if dragging || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. }) || away <= style.rotate_reach {
@@ -916,6 +988,14 @@ impl<'a> TransformBox<'a> {
                 cx.cursor(cursor, CursorPriority::Part);
             }
             match press.phase {
+                // Beyond the apply reach a press ends the session as it goes down, and holds nothing.
+                PressPhase::Down { start, .. }
+                    if part == BoxPart::Outside
+                        && matches!(start.button, PointerButton::Primary | PointerButton::Secondary)
+                        && self.applies_at(&space.view, &screen.quad, start.origin) =>
+                {
+                    self.report.apply = Some(ApplyBy::PressOutside { at: space.view.to_doc(start.origin) });
+                }
                 // Past a border zone's reach the outside keeps the press and does nothing with it.
                 PressPhase::Down { start, .. } if part == BoxPart::Outside && !self.rotate_zone.rotates_at(&screen.quad, start.origin) => {}
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
@@ -1350,6 +1430,8 @@ impl Component for TransformBox<'_> {
         let screen = on_screen(&space.view, &state);
         let quad: [Pos2; 4] = screen.quad.map(pos);
         let context = if self.own_context_menu { Sense::CONTEXT_CLICK } else { Sense::empty() };
+        // With an apply reach the outside takes the secondary press too: one that far out applies as it goes down.
+        let outside = if self.apply_reach.is_some() { context | Sense::CONTEXT_CLICK } else { context };
         if self.move_only().is_some() {
             if let Some(points) = self.ring_reach() {
                 declare_ring(cx, &quad, points, context);
@@ -1472,7 +1554,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Outside | RotateZone::Border { .. } if self.rules.allows(BoxPart::Outside) => {
                 for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
-                        .sense(Sense::DRAG | Sense::CLICK | context)
+                        .sense(Sense::DRAG | Sense::CLICK | outside)
                         .priority(HitPriority::new(HitLevel::Background, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1480,12 +1562,16 @@ impl Component for TransformBox<'_> {
             RotateZone::Band if self.rules.allows(BoxPart::Outside) => {
                 for (corner, ring) in band_rings(&screen, style).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(ring))
-                        .sense(Sense::DRAG | Sense::CLICK | context)
+                        .sense(Sense::DRAG | Sense::CLICK | outside)
                         .priority(HitPriority::new(HitLevel::Body, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
             }
-            RotateZone::Outside | RotateZone::Border { .. } | RotateZone::Band => {}
+            // A box whose rules refuse the outside leaves it to the tool, but for the press beyond its apply reach,
+            // which applies as it goes down in every mode.
+            RotateZone::Outside | RotateZone::Border { .. } | RotateZone::Band => {
+                self.declare_apply_strips(cx, &space.view, &screen.quad, rect, outside)
+            }
             // The knob alone turns the box; the rest of the outside is the tool's.
             RotateZone::Knob => {
                 if self.has_knob() {
