@@ -1051,9 +1051,7 @@ mod tests {
         // the generic stream unchanged.
         let (data, columns, rows) = codes(cap + 1, 0);
         let past = page(&data, columns).unwrap();
-        assert!(
-            plan_within(&past, columns, rows, 1, None, None, cap).is_none() && plan_within(&past, columns, rows, 2, None, None, cap).is_none()
-        );
+        assert!(plan_within(&past, columns, rows, 1, None, None, cap).is_none() && plan_within(&past, columns, rows, 2, None, None, cap).is_none());
         assert_eq!(capped_encode(&data, columns, rows), encode_jbig2_generic(&data, columns, rows).unwrap());
         // With two of them repeated, the second plan codes those two.
         let (data, columns, rows) = codes(cap + 1, 200);
