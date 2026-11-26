@@ -54,6 +54,14 @@ impl Rig {
         self.fixture.tree().value_of(field.node).unwrap_or_default().to_owned()
     }
 
+    /// Presses `key` with `modifiers` in field `name`.
+    pub fn key_in(&mut self, name: &str, key: Key, modifiers: Modifiers) {
+        let field = self.field(name);
+        self.fixture.click(&field);
+        self.fixture.key(key, modifiers);
+        self.fixture.settle();
+    }
+
     /// Types `text` over field `name` and commits it with Tab (Enter would confirm the dialog).
     pub fn type_tab(&mut self, name: &str, text: &str) {
         let field = self.field(name);

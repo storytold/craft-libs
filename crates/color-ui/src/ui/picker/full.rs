@@ -127,7 +127,8 @@ impl<'a> Body<'a> {
     /// The rows of one model's channels, two cells each: the radio that chooses the area mode (empty where the channel
     /// offers none), then the channel's number field with its letter before it and its unit after it. The radio's
     /// accessible name is the channel's name. A number typed outside the channel's range inserts the closest value and
-    /// is reported as [`HeldInput::Number`].
+    /// is reported as [`HeldInput::Number`]. Up and Down step the channel's step and Shift+Up and Shift+Down ten
+    /// steps from the value itself (182 to 192, not to 190), as the reference does; the range holds the result.
     fn model_rows(&self, ui: &mut Ui, pass: &Pass<'a>, model: &'a dyn ColorModel, choice: ModelChoice<'_>, got: &mut Collected) {
         let ModelChoice { visible, offered, words } = choice;
         let values = pass.shown.values_in(model);
@@ -152,6 +153,7 @@ impl<'a> Body<'a> {
             let letter: &str = &letter;
             let rule = ChannelRule::of(channel);
             let value = f64::from(values.values[i]);
+            let step = rule.step;
             // The unit is the field's kind (typed units, decimals) and its text stands after the field.
             let (kind, unit) = match ChannelUnit::of(channel.unit) {
                 ChannelUnit::None => (None, None),
@@ -168,6 +170,7 @@ impl<'a> Body<'a> {
                     let field = NumberField::new(name.clone(), Bind::given(pass.shows(Some(value))))
                         .range(rule.range.clone())
                         .step(rule.step)
+                        .stepper(move |from: f64, notches: i32, scale: f64| from + f64::from(notches) * step * scale)
                         .snap_typed(true)
                         .commit_decimals(usize::from(rule.decimals))
                         .fixed_decimals(usize::from(rule.decimals))

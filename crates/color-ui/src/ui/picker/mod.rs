@@ -14,6 +14,8 @@ pub(crate) mod hue_wrap_tests;
 #[cfg(all(test, feature = "screen-testing"))]
 pub(crate) mod range_alert_tests;
 pub(crate) mod screen_pick;
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod shift_step_tests;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 #[cfg(all(test, feature = "screen-testing"))]
