@@ -465,6 +465,30 @@ fn one_anchor_shows_handles_only_while_one_anchor_is_selected_over_all_paths() {
     assert!(!matches!(none, Some(BezierHit::Handle { .. })), "{none:?}");
 }
 
+// Under `OneAnchor` the handles of an anchor listed in `others` draw while it is the only selected anchor over all
+// paths, as `Selected` draws them; with an anchor of a third path listed too, neither path's handles draw.
+#[trial]
+fn one_anchor_draws_other_paths_handles_only_while_one_anchor_is_selected_over_all_paths() {
+    let painted_with = |selection: PathSelection, handles: HandlesShown| {
+        let mut other = path_b();
+        other.subpaths[0].knots[0] = Knot::smooth(p(60.0, 200.0), p(90.0, 170.0));
+        let third =
+            EditPath::new(3, vec![EditSubpath::new(vec![Knot::smooth(p(300.0, 220.0), p(330.0, 190.0)), Knot::corner(p(360.0, 260.0))], false)]);
+        let mut h = harness(vec![path_a(), other, third]);
+        h.update(|st| (st.selection, st.handles) = (selection, handles));
+        format!("{:?}", h.fixture.frame_shapes())
+    };
+    let one = || sel(1, &[]).also(2, vec![kr(0)]);
+    assert_eq!(painted_with(one(), HandlesShown::OneAnchor), painted_with(one(), HandlesShown::Selected));
+    let two = || sel(1, &[]).also(2, vec![kr(0)]).also(3, vec![kr(0)]);
+    assert_ne!(painted_with(two(), HandlesShown::OneAnchor), painted_with(two(), HandlesShown::Selected));
+    assert_eq!(
+        painted_with(two(), HandlesShown::OneAnchor),
+        painted_with(sel(1, &[]).also(2, vec![kr(0)]).also(3, vec![kr(0)]), HandlesShown::OneAnchor),
+        "painting is the same from frame to frame"
+    );
+}
+
 // Hovering a segment under Add reports the segment with its parameter, which the preview anchor stands at.
 
 // `AnchorsShown::Hidden` draws outlines only: no anchor, no handle, no part, no AccessKit object.

@@ -55,6 +55,11 @@ impl BezierOverlay<'_> {
 /// The handles to show, in path order, in then out, leaving out retracted ones and those of subpaths the selection
 /// does not show.
 pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: HandlesShown, view: &CanvasView) -> Vec<Shown> {
+    shown_handles_of(paths, sel, sel.selected_len(), handles, view)
+}
+
+/// [`shown_handles`] with `selected` as the number of selected anchors that `OneAnchor` counts.
+fn shown_handles_of(paths: &[EditPath], sel: &PathSelection, selected: usize, handles: HandlesShown, view: &CanvasView) -> Vec<Shown> {
     let mut shown = Vec::new();
     for (index, path) in paths.iter().enumerate() {
         let segment_ends = sel.segment.filter(|_| sel.path == Some(path.key)).and_then(|s| {
@@ -71,7 +76,7 @@ pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: Ha
                 };
                 let wanted = match handles {
                     HandlesShown::All => true,
-                    HandlesShown::OneAnchor => sel.selected_len() == 1 && of_selection(),
+                    HandlesShown::OneAnchor => selected == 1 && of_selection(),
                     HandlesShown::Selected => of_selection(),
                 };
                 if wanted && !knot.retracted(side) {
@@ -85,19 +90,19 @@ pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: Ha
 
 /// The handles to draw for the anchors `sel` lists for the path at index `at` of `paths`, which the overlay does not
 /// edit: [`shown_handles`]' rule applied with that path as the selection's, the other selected anchors still counted.
-/// Empty for `All`, whose handles the scene already holds. The index of each is `at`.
+/// Empty for `All`, whose handles the scene already holds. The index of each is `at`. The overlay calls it once per
+/// path, so it reads the other paths' anchor counts from `sel` and copies none of their anchors.
 pub(super) fn other_handles(paths: &[EditPath], at: usize, sel: &PathSelection, handles: HandlesShown, view: &CanvasView) -> Vec<Shown> {
     let Some(path) = paths.get(at) else { return Vec::new() };
     let listed = sel.others.iter().find(|(key, _)| *key == path.key).filter(|_| sel.path != Some(path.key));
     let (Some((_, anchors)), false) = (listed, handles == HandlesShown::All) else { return Vec::new() };
-    let mut own = PathSelection::new(Some(path.key), anchors.clone(), None);
-    for (key, rest) in sel.others.iter().filter(|(key, _)| *key != path.key) {
-        own = own.also(*key, rest.clone());
-    }
-    if let Some(edited) = sel.path.filter(|edited| *edited != path.key) {
-        own = own.also(edited, sel.anchors.clone());
-    }
-    shown_handles(std::slice::from_ref(path), &own, handles, view).into_iter().map(|shown| Shown { path: at, ..shown }).collect()
+    let rest: usize = sel.others.iter().filter(|(key, _)| *key != path.key).map(|(_, rest)| rest.len()).sum();
+    let edited = sel.path.filter(|edited| *edited != path.key).map_or(0, |_| sel.anchors.len());
+    let own = PathSelection::new(Some(path.key), anchors.clone(), None);
+    shown_handles_of(std::slice::from_ref(path), &own, anchors.len() + rest + edited, handles, view)
+        .into_iter()
+        .map(|shown| Shown { path: at, ..shown })
+        .collect()
 }
 
 /// Whether `side` of `knot` is the handle of a segment that a selected anchor ends: the previous anchor's out
