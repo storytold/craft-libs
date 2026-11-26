@@ -2,7 +2,7 @@
 //!
 //! No operation is executed, no profile interpreted, and no linked resource opened.
 //! Record and argument slices borrow the caller's validated backing bytes. Use one
-//! [`Budget`] across all owners and repeated references: failed work is never refunded.
+//! [`Budget`](crate::effects::Budget) across all owners and repeated references: failed work is never refunded.
 //! Configuration forms are data, not parsed GEGL graphs or native commands.
 
 mod config;
