@@ -1,0 +1,64 @@
+[package]
+name = "craft-automation"
+description = "Drive a running Craft app from tests, agents and the CLI (control channel, screenshot queue and synthetic input on every target; server, client, frame profiler and frame trace native only), and recorded actions with the Actions panel (every target)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[lints]
+workspace = true
+
+[features]
+suite = ["screen-testing", "craft-ui/suite"]
+default = []
+# The egui parts: the Actions panel, the control channel's server side (screenshots, synthetic
+# input) and `ui` stories. Without it the crate has no egui: `ControlOptions`, `ControlClient`,
+# `Params` and the recorded actions' model and files.
+ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:craft-host"]
+# The Actions panel's and the Agents page's stories and mock, and the integration binary `tests/it`.
+screen-testing = ["ui", "agents", "craft-ui/testing"]
+# Agents in the open window (desktop): the ArtCraft Launcher's switch, the connection file an
+# app's `<id>-cli mcp` reads and that CLI's live client (all `craft-control`'s, re-exported), and
+# with `ui` the link host and the Agents page. The agent settings build on every target without it.
+agents = ["craft-control/agents", "dep:craft-host"]
+
+[dependencies]
+# The screenshot reply's PNG and its inline base64 (the control channel builds on every target with `ui`).
+base64 = "0.23"
+craft-behavior = { workspace = true, optional = true }
+# The agents code without a UI toolkit (settings, the launcher's switch, the connection file, the
+# CLI's live client), re-exported by `agents` so every app shares one copy.
+craft-control = { workspace = true }
+# The recorded actions' file picks (`ui`) go through the host on every target.
+craft-host = { workspace = true, optional = true }
+craft-keymap = { workspace = true, optional = true }
+craft-theme = { workspace = true }
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+png = "0.17"
+serde = { workspace = true }
+serde_json = { workspace = true }
+craft-platform = { workspace = true }
+log = "0.4"
+# `std::time::Instant` panics on wasm; this is the same type on native.
+web-time = "1.1"
+
+# The server, client, token files, profiler and trace.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "0.3"
+hmac = "0.12"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+craft-ui = { workspace = true, features = ["suite"] }
+egui = { workspace = true }

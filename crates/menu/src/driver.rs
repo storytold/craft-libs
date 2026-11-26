@@ -5,12 +5,17 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
+use craft_ui::contract::{MemoKey, MemoProps};
+use craft_ui::menu::Alternate;
+use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};
+use crate::modal::ModalRules;
 use crate::model::{Builtin, Item, ItemKind, MenuBar, Node};
 
 /// What the native menu reports.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     /// An item was chosen with the mouse (or the keyboard inside an open menu), or by a key
     /// equivalent the app's key handling doesn't know ([`crate::Item::layout_shortcut`]): the
@@ -24,16 +29,19 @@ pub enum Event {
     /// A click the app's [`NativeMenu::on_command`] hook ran; [`NativeMenu::take_clicks`] leaves it
     /// out.
     Handled(CommandRef),
+    /// The platform began tracking a native menu.
+    Opened,
 }
 
 /// How ⌘C, ⌘X and ⌘V reach egui when the native menu takes them as key equivalents (an Edit
 /// menu with Copy, Cut and Paste items).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClipboardKeys {
     /// As egui-winit makes them without a native menu: ⌘C is [`egui::Event::Copy`], ⌘X
     /// [`egui::Event::Cut`], and ⌘V a [`egui::ViewportCommand::RequestPaste`], which eframe answers
-    /// with an [`egui::Event::Paste`] of the clipboard's text in the next frame. Text fields copy,
-    /// cut and paste.
+    /// with an [`egui::Event::Paste`] of the clipboard's text in the next frame, each in the window
+    /// that has the keys. Text fields copy, cut and paste.
     #[default]
     Egui,
     /// Key presses like any other key equivalent, for an app that runs its clipboard commands
@@ -41,8 +49,10 @@ pub enum ClipboardKeys {
     Raw,
 }
 
-/// What may run from the menus this frame, set by the app.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What may run from the menus this frame, set by the app. As props of the runtime's command gate, every flag feeds
+/// the key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, MemoProps)]
+#[non_exhaustive]
 pub struct Gate {
     /// A modal dialog is open.
     pub modal: bool,
@@ -53,6 +63,24 @@ pub struct Gate {
 }
 
 impl Gate {
+    /// A modal dialog is open.
+    pub fn modal(mut self, on: bool) -> Gate {
+        self.modal = on;
+        self
+    }
+
+    /// The shortcut editor is recording a chord.
+    pub fn recording_shortcut(mut self, on: bool) -> Gate {
+        self.recording_shortcut = on;
+        self
+    }
+
+    /// A text field has the keys.
+    pub fn text_editing(mut self, on: bool) -> Gate {
+        self.text_editing = on;
+        self
+    }
+
     /// Whether `item` may run now: while a modal dialog is open or a shortcut is being recorded,
     /// only the built-in items (Hide, Hide Others, Minimize, Quit) do. The built-in Quit stays
     /// because it asks the window to close, and the app's close guard knows about its dialogs; an
@@ -69,25 +97,25 @@ impl Gate {
 
     /// `bar` with every item the gate forbids disabled, so the menus show them greyed, but the
     /// items whose shortcut a text field handles itself (Undo, Copy, Select All, …).
-    pub(crate) fn grey<'a>(&self, bar: &'a MenuBar) -> Cow<'a, MenuBar> {
-        fn walk(nodes: &mut [Node], gate: &Gate) {
+    pub(crate) fn grey<'a>(&self, rules: &ModalRules, bar: &'a MenuBar) -> Cow<'a, MenuBar> {
+        fn walk(nodes: &mut [Node], gate: &Gate, rules: &ModalRules) {
             for n in nodes {
                 match n {
                     // The field's own keys stay enabled: AppKit doesn't send a disabled item's key
                     // equivalent on, so greyed Copy or Undo would leave ⌘C and ⌘Z dead in a
                     // dialog's text fields. Their clicks are still dropped (`take_clicks`).
-                    Node::Item(it) if !gate.allows(it) && !it.shortcut.as_ref().is_some_and(text_editing_key) => it.enabled = false,
-                    Node::Submenu { children, .. } => walk(children, gate),
+                    Node::Item(it) if !gate.allows_item_under(rules, it) && !it.shortcut.as_ref().is_some_and(text_editing_key) => it.enabled = false,
+                    Node::Submenu { children, .. } => walk(children, gate, rules),
                     _ => {}
                 }
             }
         }
-        if !(self.modal || self.recording_shortcut) {
+        if !(self.modal || self.recording_shortcut || rules.workspace || rules.pending.is_some()) {
             return Cow::Borrowed(bar);
         }
         let mut bar = bar.clone();
         for m in &mut bar.menus {
-            walk(&mut m.children, self);
+            walk(&mut m.children, self, rules);
         }
         Cow::Owned(bar)
     }
@@ -108,23 +136,41 @@ type SharedHook = Arc<dyn Fn(&CommandRef) -> bool + Send + Sync>;
 #[derive(Default)]
 struct Shared {
     gate: Gate,
+    rules: ModalRules,
     hook: Option<SharedHook>,
 }
 
 impl Dispatch {
     /// The event for an item with `command`, its `shortcut` and [`Item::layout_shortcut`],
-    /// chosen with the modifiers `held` for a key-down (⌘, ⌃, ⌥, ⇧ as AppKit reports them) or
-    /// `None` for a mouse click, under the current gate. A click the gate allows on an app command
+    /// chosen by a key press (`key_down`) or a click, with the modifiers `mods` held (⌘, ⌃, ⌥, ⇧ as
+    /// AppKit reports them), under the current gate. A click whose `mods` include the
+    /// `alternate`'s runs the alternate's command instead; a key press never does. A click the
+    /// gate allows on an app command
     /// (not a [`Builtin`]) also goes to the app's [`NativeMenu::on_command`] hook, before this
     /// returns; when the hook ran it, the event is [`Event::Handled`].
-    pub fn chosen(&self, command: &CommandRef, shortcut: Option<&Chord>, layout_shortcut: bool, held: Option<Mods>) -> Event {
-        let (gate, hook) = {
+    pub fn chosen(
+        &self,
+        command: &CommandRef,
+        shortcut: Option<&Chord>,
+        layout_shortcut: bool,
+        key_down: bool,
+        mods: Mods,
+        alternate: Option<&Alternate>,
+    ) -> Event {
+        // Only a click swaps: a key equivalent belongs to the row's own command, so ⌥⇧⌘E on
+        // Merge Visible's ⇧⌘E stays the key the app's key handling sees.
+        let command = match alternate {
+            Some(alternate) if !key_down && alternate.selected_by(mods) => &alternate.command,
+            _ => command,
+        };
+        let held = key_down.then_some(mods);
+        let (gate, rules, hook) = {
             let shared = self.lock();
-            (shared.gate, shared.hook.clone())
+            (shared.gate, shared.rules.clone(), shared.hook.clone())
         };
         let event = chosen_event(command, shortcut, layout_shortcut, held, gate);
         if let (Event::Click(c), Some(hook)) = (&event, hook)
-            && gate.allows_command(c)
+            && gate.allows_under(&rules, c)
             && Builtin::of(c).is_none()
             && hook(c)
         {
@@ -160,8 +206,8 @@ pub trait Backend {
 /// The native menu bar, while the app uses one (its in-window menus are hidden then).
 pub struct NativeMenu {
     backend: Box<dyn Backend>,
-    /// The state the menus were last built from.
-    state: Option<u64>,
+    /// The key the menus were last built from.
+    state: Option<u128>,
     clicks: Vec<CommandRef>,
     /// An event arrived (AppKit may have toggled a check item itself): re-sync.
     dirty: bool,
@@ -169,10 +215,10 @@ pub struct NativeMenu {
     clipboard: ClipboardKeys,
     /// ⌘V arrived: [`NativeMenu::take_clicks`] asks eframe for the paste.
     paste: bool,
-    /// Whether a click may be kept from egui as the one closing an open menu (see
-    /// [`NativeMenu::raw_input`]).
-    armed: bool,
     gate: Gate,
+    rules: ModalRules,
+    /// The revision of the rules last set; `None` before the first call.
+    rules_revision: Option<u64>,
     dispatch: Dispatch,
     /// The menus last laid out, before the gate greyed anything, and the gate they were last
     /// synced with: a gate change re-syncs them without laying them out again.
@@ -181,9 +227,12 @@ pub struct NativeMenu {
     /// The commands whose items were check items in a layout so far: they stay check items, so
     /// that `checked` going from `Some` to `None` doesn't rebuild the menus.
     checkable: HashSet<String>,
+    /// A backend reported [`Event::Opened`] since [`NativeMenu::take_opened`] last answered.
+    opened: bool,
 }
 
 impl NativeMenu {
+    /// A menu driver for `backend`. Calls [`Backend::attach`] once.
     pub fn new(mut backend: Box<dyn Backend>) -> NativeMenu {
         let dispatch = Dispatch::default();
         backend.attach(dispatch.clone());
@@ -195,18 +244,38 @@ impl NativeMenu {
             clashes: Vec::new(),
             clipboard: ClipboardKeys::default(),
             paste: false,
-            armed: true,
             gate: Gate::default(),
+            rules: ModalRules::default(),
+            rules_revision: None,
             dispatch,
             bar: None,
             synced_gate: None,
             checkable: HashSet::new(),
+            opened: false,
         }
     }
 
+    /// Choose how ⌘C, ⌘X and ⌘V reach the app; see [`ClipboardKeys`].
     pub fn clipboard_keys(mut self, keys: ClipboardKeys) -> NativeMenu {
         self.clipboard = keys;
         self
+    }
+
+    /// The per-command rules under the gate ([`Gate::allows_under`]), set beside
+    /// [`NativeMenu::set_gate`] when they change: the items they forbid are greyed, and their
+    /// clicks and key equivalents dropped, as for the gate.
+    ///
+    /// Rules hold a closure and can't be compared: the caller bumps [`ModalRules::revision`] when
+    /// they change, and a call with the revision it last set does nothing.
+    pub fn set_modal_rules(&mut self, rules: ModalRules) {
+        if self.rules_revision == Some(rules.revision) {
+            return;
+        }
+        self.rules_revision = Some(rules.revision);
+        self.dispatch.lock().rules = rules.clone();
+        self.rules = rules;
+        // Sync the greying again without laying out.
+        self.synced_gate = None;
     }
 
     /// What may run from the menus. Call it every frame, before [`NativeMenu::take_clicks`]; it
@@ -242,88 +311,92 @@ impl NativeMenu {
         self.dispatch.lock().hook = Some(Arc::from(hook));
     }
 
-    /// Before egui sees this frame's input: key equivalents become the key presses they were,
-    /// and clicks wait for [`NativeMenu::take_clicks`].
+    /// Once per frame, before [`NativeMenu::set_gate`]: key equivalents become the key presses they were, and
+    /// clicks wait for [`NativeMenu::take_clicks`].
     ///
+    /// The window host's input filter owns the edits to egui's input (`ctx`'s [`WindowHost`]): this hands it the
+    /// key equivalents, for the window that has the keys ([`WindowHost::key_window`]), and whether a native menu is
+    /// open. They reach the frame that is running: called before the frame (eframe's `App::raw_input_hook`), the
+    /// filter reads them when the frame's input is taken; called inside it (`App::update`), the filter repeats the
+    /// pass with them in its input.
     /// A click or Escape in the window closes an open native menu. AppKit can deliver it to the
-    /// window while the menu is still open (asynchronous menu presentation), so while the backend
-    /// reports one open, the click or Escape is taken out of the input: it closes the menu
-    /// without starting a canvas gesture or reaching the active tool. Pointer moves stay. Only
-    /// one such click is kept from egui until the backend reports no menu open again, so a
-    /// backend that wrongly keeps reporting one open costs one click, not every click.
+    /// window while the menu is still open (asynchronous menu presentation), so while the backend reports one
+    /// open, the filter takes the click or Escape out of the input: it closes the menu without starting a canvas
+    /// gesture or reaching the active tool. Pointer moves stay. Only one such click is kept from egui until the
+    /// backend reports no menu open again, so a backend that wrongly keeps reporting one open costs one click, not
+    /// every click. The filter asks for the menu to close here, on the call after the click.
     ///
     /// AppKit takes only the key-down: winit still delivers the key-up (it forwards key-ups while
     /// ⌘ is held). So a key equivalent adds just its press, ahead of its key-up when that is
     /// already queued. Adding a made-up release as well sends two key-ups; in PhotoCraft, which
     /// reads a ⌘V release without a press as an image paste, that made ⌘V paste three times.
     /// ⌘C, ⌘X and ⌘V follow [`ClipboardKeys`].
-    pub fn raw_input(&mut self, raw: &mut egui::RawInput) {
-        // The window's own input, before key equivalents are added to it.
-        if let Some(kept) = dismiss_input(raw, || self.armed && self.backend.tracking()) {
-            if kept {
-                self.armed = false;
-            }
-            // Also without a menu reported open: an asynchronously presented menu can still be
-            // on screen after it reports closing.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        let host = WindowHost::of(ctx);
+        let root = egui::ViewportId::ROOT;
+        if host.take_menu_close(root) {
+            // Also without a menu reported open: an asynchronously presented menu can still be on screen after
+            // it reports closing.
             self.backend.cancel_tracking();
         }
-        if !self.armed && !self.backend.tracking() {
-            self.armed = true;
-        }
+        host.menu_open(root, self.backend.tracking());
         for e in self.backend.drain() {
             match e {
-                Event::Key(chord) => self.add_key(raw, &chord, false),
-                Event::Tap(chord) => self.add_key(raw, &chord, true),
+                Event::Key(chord) => self.add_key(&host, &chord, false),
+                Event::Tap(chord) => self.add_key(&host, &chord, true),
                 Event::Click(command) => self.clicks.push(command),
                 Event::Handled(_) => {}
+                // A menu opening changes nothing the menus show, so it does not re-sync them.
+                Event::Opened => {
+                    self.opened = true;
+                    continue;
+                }
             }
             self.dirty = true;
         }
     }
 
+    /// Whether a backend reported [`Event::Opened`] since the last call; reports it once and clears it.
+    pub fn take_opened(&mut self) -> bool {
+        std::mem::take(&mut self.opened)
+    }
+
     /// `tap`: a press and its release, for a click that stands for the key (no key-up follows).
-    fn add_key(&mut self, raw: &mut egui::RawInput, chord: &Chord, tap: bool) {
-        let pressed_key = chord.key.to_egui();
+    fn add_key(&mut self, host: &WindowHost, chord: &Chord, tap: bool) {
         let clipboard = self.clipboard == ClipboardKeys::Egui && chord.mods == Mods::CMD && !self.gate.recording_shortcut;
-        let event = match chord.key {
-            Key::C if clipboard => egui::Event::Copy,
-            Key::X if clipboard => egui::Event::Cut,
+        let equivalent = match chord.key {
+            Key::C if clipboard => KeyEquivalent::Copy,
+            Key::X if clipboard => KeyEquivalent::Cut,
             Key::V if clipboard => {
                 self.paste = true;
                 return;
             }
-            _ => key_event(chord, true),
+            _ if tap => KeyEquivalent::Tap(*chord),
+            _ => KeyEquivalent::Press(*chord),
         };
-        let at = raw
-            .events
-            .iter()
-            .position(|e| matches!(e, egui::Event::Key { key, pressed: false, .. } if *key == pressed_key))
-            .unwrap_or(raw.events.len());
-        let press = matches!(event, egui::Event::Key { .. });
-        raw.events.insert(at, event);
-        if tap && press {
-            raw.events.insert(at + 1, key_event(chord, false));
-        }
+        host.key_equivalent(host.key_window(), equivalent);
     }
 
     /// The commands clicked since the last call that the gate ([`NativeMenu::set_gate`]) allows
     /// now, for the app to run like in-window menu clicks; the others are dropped.
-    /// [`Builtin::Minimize`] (minimizes the window) and [`Builtin::Quit`] (asks the window to
-    /// close, see [`craft_quit::on_menu_event`]) are run here and left out. A ⌘V from the menu
+    /// [`Builtin::Minimize`] (minimizes the window) and [`Builtin::Quit`] (craft-quit's
+    /// [`craft_quit::on_menu_event`] asks the window to close, so the app's close decision runs) are run here and left out. A ⌘V from the menu
     /// ([`ClipboardKeys::Egui`]) is asked of eframe here too.
     pub fn take_clicks(&mut self, ctx: &egui::Context) -> Vec<CommandRef> {
         if std::mem::take(&mut self.paste) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ctx.send_viewport_cmd_to(WindowHost::of(ctx).key_window(), egui::ViewportCommand::RequestPaste);
         }
         let mut out = Vec::new();
         for command in std::mem::take(&mut self.clicks) {
-            if !self.gate.allows_command(&command) {
+            if !self.gate.allows_under(&self.rules, &command) {
                 continue;
             }
             match Builtin::of(&command) {
-                Some(Builtin::Minimize) => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                Some(Builtin::Minimize) => {
+                    WindowHost::of(ctx).act(egui::ViewportId::ROOT, WindowAction::Minimize);
+                }
                 Some(Builtin::Quit) => {
-                    craft_quit::on_menu_event(ctx, Builtin::Quit.id());
+                    craft_quit::on_menu_event(ctx, craft_quit::QUIT_MENU_ID);
                 }
                 _ => out.push(command),
             }
@@ -331,23 +404,18 @@ impl NativeMenu {
         out
     }
 
-    /// Bring the native menu up to date. `state` is a hash of what the menus show (see
-    /// [`had_input`]); `build` lays them out ([`crate::mac_layout`]) and runs only when `state`
-    /// changed or a menu event arrived since the last sync, since building the rows usually walks
-    /// every command's enabled state. A menu event re-syncs because AppKit flips a check or radio
-    /// item's state itself when it is chosen: the sync sets it back to the app's state. A gate
-    /// change ([`NativeMenu::set_gate`]) re-syncs the menus last laid out, greyed or not, without
-    /// calling `build`.
-    ///
-    /// `state` must cover everything the menus show. A change that comes without input, such as
-    /// a load or save finishing on a worker or a timer, leaves the menus stale until the next
-    /// input or menu event unless it is in the hash. An app that can't keep the hash complete
-    /// uses [`NativeMenu::sync`] instead.
+    /// Bring the native menu up to date. `key` is everything the layout reads, as a [`MemoProps`] value (the
+    /// app's `Tracked` menu model, the language's `Words`, the keymap generation): `build` lays the menus out
+    /// ([`crate::mac_layout`]) and runs only when the key changed or a menu event arrived since the last sync, since
+    /// building the rows usually walks every command's enabled state. A menu event re-syncs because AppKit flips a
+    /// check or radio item's state itself when it is chosen: the sync sets it back to the app's state. A gate change
+    /// ([`NativeMenu::set_gate`]) re-syncs the menus last laid out, greyed or not, without calling `build`.
     ///
     /// Returns the layout's clashes when they differ from the last ones returned, for the app to
     /// log; otherwise nothing.
-    pub fn sync_with(&mut self, state: u64, build: impl FnOnce() -> Layout) -> Vec<Clash> {
-        let relayout = self.state != Some(state) || self.dirty;
+    pub fn sync_with<K: MemoProps + ?Sized>(&mut self, key: &K, build: impl FnOnce() -> Layout) -> Vec<Clash> {
+        let key = MemoKey::of(key);
+        let relayout = self.state != Some(key) || self.dirty;
         if !relayout && self.synced_gate == Some(self.gate) {
             return Vec::new();
         }
@@ -356,23 +424,8 @@ impl NativeMenu {
             let mut layout = build();
             self.keep_kinds(&mut layout.bar);
             clashes = self.keep(layout);
-            self.state = Some(state);
+            self.state = Some(key);
         }
-        self.push();
-        clashes
-    }
-
-    /// [`NativeMenu::sync_with`] without a state hash: the app lays the menus out every frame
-    /// and they are synced when the layout differs from the last one (or a menu event or gate
-    /// change calls for it), so they never go stale. It costs a layout per frame.
-    pub fn sync(&mut self, mut layout: Layout) -> Vec<Clash> {
-        self.keep_kinds(&mut layout.bar);
-        if !self.dirty && self.bar.as_ref() == Some(&layout.bar) && self.clashes == layout.clashes && self.synced_gate == Some(self.gate) {
-            return Vec::new();
-        }
-        let clashes = self.keep(layout);
-        // A later `sync_with` lays the menus out again.
-        self.state = None;
         self.push();
         clashes
     }
@@ -404,27 +457,10 @@ impl NativeMenu {
     /// Sync the backend with the kept menus, greyed by the gate.
     fn push(&mut self) {
         if let Some(bar) = &self.bar {
-            self.backend.sync(&self.gate.grey(bar));
+            self.backend.sync(&self.gate.grey(&self.rules, bar));
         }
         self.synced_gate = Some(self.gate);
     }
-}
-
-/// `Some` when `raw` has a press or Escape that closes an open menu: `Some(true)` when, with
-/// `tracking` (a menu is open), those events were removed, since they belong to the menu.
-pub(crate) fn dismiss_input(raw: &mut egui::RawInput, tracking: impl FnOnce() -> bool) -> Option<bool> {
-    if !raw
-        .events
-        .iter()
-        .any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. } | egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }))
-    {
-        return None;
-    }
-    let kept = tracking();
-    if kept {
-        raw.events.retain(|e| !matches!(e, egui::Event::PointerButton { .. } | egui::Event::Key { key: egui::Key::Escape, .. }));
-    }
-    Some(kept)
 }
 
 /// What a backend reports for an item chosen with `command`, `chord` (its shortcut) and
@@ -473,20 +509,4 @@ fn text_editing_key(c: &Chord) -> bool {
 /// They are shown but not made key equivalents.
 pub(crate) fn native_ok(c: &Chord) -> bool {
     c.has_command()
-}
-
-/// The key press egui would have received for `chord` on macOS: `cmd` is ⌘, `ctrl` the Control
-/// key.
-pub(crate) fn key_event(chord: &Chord, pressed: bool) -> egui::Event {
-    let m = chord.mods;
-    let key = chord.key.to_egui();
-    let modifiers = egui::Modifiers { alt: m.alt, ctrl: m.ctrl, shift: m.shift, mac_cmd: m.cmd, command: m.cmd };
-    egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }
-}
-
-/// A key press or click this frame. It may have changed state an app's menu hash doesn't list,
-/// so apps fold it into the `state` passed to [`NativeMenu::sync_with`], for example as
-/// `had_input(ctx).then_some(ctx.cumulative_frame_nr())`.
-pub fn had_input(ctx: &egui::Context) -> bool {
-    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })))
 }
