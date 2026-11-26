@@ -88,8 +88,10 @@ impl OrbitCamera {
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {
-        self.yaw -= dx;
-        self.pitch = (self.pitch + dy).clamp(-89f32.to_radians(), 89f32.to_radians());
+        let candidate = OrbitCamera { yaw: self.yaw - dx, pitch: (self.pitch + dy).clamp(-89f32.to_radians(), 89f32.to_radians()), ..*self };
+        if candidate.eye() != candidate.target && candidate.view_proj(1.0).is_finite() {
+            *self = candidate;
+        }
     }
 
     /// Pan by a screen fraction (dx, dy in viewport heights).
@@ -118,7 +120,7 @@ impl OrbitCamera {
     /// view-projection is inverted and the points unprojected in `f64`, where the determinant of
     /// a large scene's matrix and the squared length of the ray do not leave the range.
     pub fn ray(&self, ndc: Vec2, aspect: f32) -> Ray {
-        let inv = self.view_proj(aspect).as_dmat4().inverse();
+        let inv = (self.proj(aspect).as_dmat4() * self.view().as_dmat4()).inverse();
         let (x, y) = (f64::from(ndc.x), f64::from(ndc.y));
         let a = inv * DVec4::new(x, y, 0.0, 1.0);
         let b = inv * DVec4::new(x, y, 1.0, 1.0);
@@ -144,6 +146,30 @@ impl OrbitCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orbit_preserves_the_camera_when_the_eye_would_round_to_its_target() {
+        let camera = OrbitCamera { target: Vec3::splat(1e8), distance: 5.0, pitch: 0.0, ..OrbitCamera::default() };
+        assert!(camera.view().is_finite());
+        for (dx, dy) in [(-std::f32::consts::FRAC_PI_4, 0.0), (f32::NAN, 0.0), (0.0, f32::NAN)] {
+            let mut moved = camera;
+            moved.orbit(dx, dy);
+            assert_eq!(moved, camera);
+            assert!(moved.view_proj(1.0).is_finite());
+        }
+    }
+
+    #[test]
+    fn translated_camera_rays_keep_a_finite_origin() {
+        let camera = OrbitCamera { target: Vec3::new(0.0, 0.0, 16_777_212.0), distance: 4.0, pitch: 0.0, ..OrbitCamera::default() };
+        for aspect in [0.5, 1.0, 2.0] {
+            for point in [Vec2::ZERO, Vec2::new(0.5, -0.25)] {
+                let ray = camera.ray(point, aspect);
+                assert!(ray.origin.is_finite() && ray.dir.is_finite(), "{ray:?}");
+                assert!((ray.dir.length() - 1.0).abs() < 0.00001, "{ray:?}");
+            }
+        }
+    }
 
     #[test]
     fn center_ray_points_at_target_and_projection_inverts() {
