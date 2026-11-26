@@ -552,7 +552,9 @@ fn coloured_highlights_keep_their_brightness_at_the_edges() {
     let tubes = [([1.0f32, 0.15, 0.1], 3.5f32), ([1.0, 0.85, 0.15], 2.6), ([0.25, 1.0, 0.4], 2.0)];
     let scenes = suns.map(|(tint, level)| (tint, level, true)).into_iter().chain(tubes.map(|(tint, level)| (tint, level, false)));
     let lum = |p: [f32; 3]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
-    for (tint, level, sun) in scenes {
+    // The gate develops every divisor-th (scene, layout) pair, a different layout per scene; nightly all of them.
+    let divisor = craft_testkit::hostile::divisor();
+    for (scene_index, (tint, level, sun)) in scenes.enumerate() {
         let scene_name = if sun { "sun" } else { "tube" };
         let scene = |x: f32, y: f32| {
             if sun {
@@ -572,7 +574,10 @@ fn coloured_highlights_keep_their_brightness_at_the_edges() {
             })
         });
         let truth = |x: usize, y: usize| -> [f32; 3] { std::array::from_fn(|c| lights[c][y * w + x]) };
-        for (name, cfa, method) in layouts() {
+        for (layout_index, (name, cfa, method)) in layouts().into_iter().enumerate() {
+            if !(scene_index + layout_index).is_multiple_of(divisor) {
+                continue;
+            }
             let raw = raw_of(w, h, &cfa, DAYLIGHT, truth);
             let (mut img, mask) = raw.develop_balanced_masked(method, DAYLIGHT, CLIP).unwrap();
             let mut by_value = img.clone();

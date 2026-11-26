@@ -1,0 +1,398 @@
+//! MenuLevel: the rows of one menu level, their mnemonics, the active row and the open submenu.
+
+use super::popup::MenuStep;
+use crate::contract::{Component, Cx, Remember as _};
+use crate::runtime::env::{AppValues, EnvValue};
+use craft_behavior::NavMove;
+use craft_i18n::Folder;
+use craft_keymap::mnemonic;
+use egui::{Id, Pos2, Rect, pos2};
+use std::sync::{Arc, Mutex, PoisonError};
+
+/// Whether the pointer at `now`, having come from `from`, heads for `submenu`: it lies inside the triangle from
+/// `from` to the submenu's edge nearer to it.
+#[doc(hidden)]
+pub fn heads_toward(from: Pos2, now: Pos2, submenu: Rect) -> bool {
+    let near = if from.x <= submenu.center().x { submenu.min.x } else { submenu.max.x };
+    let (a, b) = (pos2(near, submenu.min.y), pos2(near, submenu.max.y));
+    let side = |p: Pos2, q: Pos2, r: Pos2| (p.x - r.x) * (q.y - r.y) - (q.x - r.x) * (p.y - r.y);
+    let (d1, d2, d3) = (side(now, from, a), side(now, a, b), side(now, b, from));
+    !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+}
+
+/// A row as it registered with its level in one pass.
+pub(super) struct Row {
+    pub(super) id: Id,
+    pub(super) text: String,
+    /// The letter the row asks for in place of the level's pick, shown or not in its text.
+    pub(super) own: Option<char>,
+    pub(super) enabled: bool,
+}
+
+/// A row's mnemonic as the level assigned it when the user last saw the rows: the letter and its character index
+/// in the row's text, none for a letter the text does not show.
+struct Assigned {
+    id: Id,
+    mnemonic: Option<(char, Option<usize>)>,
+    enabled: bool,
+}
+
+/// The one open submenu of a level.
+struct OpenSubmenu {
+    row: Id,
+    rect: Option<Rect>,
+}
+
+/// A row's text and own letter, as the level's letters were assigned for it.
+type Lettered = (String, Option<char>);
+
+/// A level's letters (each row's mnemonic, or none) with the folder and rows they were assigned for.
+type KeptLetters = (Folder, Vec<Lettered>, Vec<Option<(char, Option<usize>)>>);
+
+#[derive(Default)]
+struct LevelState {
+    /// The rows of the pass `pass`, in the order they registered.
+    now: Vec<Row>,
+    pass: u64,
+    /// The letters of the rows as the user last saw them, for a typed letter that arrives before this pass's rows.
+    shown: Vec<Assigned>,
+    /// The interface language's folder when rows get access letters; `None` on a Mac menu.
+    lettered: Option<Folder>,
+    keyboard: bool,
+    /// A value menu: every row is a radio item.
+    values: bool,
+    /// The row a typed letter runs in this pass.
+    run: Option<Id>,
+    close: bool,
+    /// The Left or Right key a row of a top-level level left unhandled.
+    step: Option<MenuStep>,
+    submenu: bool,
+    open_submenu: Option<OpenSubmenu>,
+    active: Option<Id>,
+    pointer: Option<Pos2>,
+    previous_pointer: Option<Pos2>,
+    /// The padding of the popup around the rows, as the menu that set the level has it.
+    pad: f32,
+    /// The last assignment of letters, with the labels and folder it was made for. Every row of a level asks for its
+    /// letter in every pass, and assigning them all for each row made opening a long menu or submenu cost many times
+    /// a plain row's frame: the letters are assigned again only when the labels or the folder change.
+    letters: Option<KeptLetters>,
+}
+
+impl LevelState {
+    /// The letter of each row of this pass, in order, assigned once for these labels.
+    fn letters(&mut self, folder: Folder) -> &[Option<(char, Option<usize>)>] {
+        let same = self.letters.as_ref().is_some_and(|(kept, labels, _)| {
+            *kept == folder
+                && labels.len() == self.now.len()
+                && labels.iter().zip(&self.now).all(|((text, own), row)| *text == row.text && *own == row.own)
+        });
+        if !same {
+            let labels: Vec<&str> = self.now.iter().map(|row| row.text.as_str()).collect();
+            let own: Vec<Option<char>> = self.now.iter().map(|row| row.own).collect();
+            let assigned = mnemonic::assign_with(&labels, &own, &folder);
+            self.letters = Some((folder, self.now.iter().map(|row| (row.text.clone(), row.own)).collect(), assigned));
+        }
+        self.letters.as_ref().map_or(&[], |(_, _, assigned)| assigned.as_slice())
+    }
+}
+
+/// The rows of one menu level: each registers its label, and the level gives every row its mnemonic from the
+/// registrations of this pass. It also holds the level's one open submenu row and its active row. Rows
+/// outside any menu get an inert level.
+#[derive(Clone, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a handle to the level's state, which its rows write during the pass")]
+pub(crate) struct MenuLevel {
+    state: Option<Arc<Mutex<LevelState>>>,
+}
+
+impl PartialEq for MenuLevel {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.state, &other.state) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for MenuLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MenuLevel").finish_non_exhaustive()
+    }
+}
+
+impl EnvValue for MenuLevel {
+    fn root() -> Self {
+        MenuLevel { state: None }
+    }
+}
+
+/// The level's registrations, kept in the menu's shown memory so the rows of the last pass are readable now.
+#[derive(Clone, Default)]
+pub(crate) struct LevelMemory {
+    live: Arc<Mutex<LevelState>>,
+}
+
+impl MenuLevel {
+    pub(crate) fn of(memory: &LevelMemory) -> Self {
+        MenuLevel { state: Some(Arc::clone(&memory.live)) }
+    }
+
+    fn with<R: Default>(&self, f: impl FnOnce(&mut LevelState) -> R) -> R {
+        match &self.state {
+            Some(state) => f(&mut state.lock().unwrap_or_else(PoisonError::into_inner)),
+            None => R::default(),
+        }
+    }
+
+    /// Starts a body run over the level. The rows of this pass register in the measuring run and again in the real
+    /// run; the first row a pass registers drops the rows of the passes before.
+    /// Rows get no mnemonic when `lettered` is `None`: a Mac menu has no access letters.
+    fn begin(&self, submenu: bool, values: bool, keyboard: bool, lettered: Option<Folder>, pointer: Option<Pos2>, pad: f32) {
+        self.with(|state| {
+            state.pad = pad;
+            state.keyboard = keyboard;
+            state.lettered = lettered;
+            state.submenu = submenu;
+            state.values = values;
+            if state.pointer != pointer {
+                state.previous_pointer = state.pointer;
+                state.pointer = pointer;
+            }
+        });
+    }
+
+    /// The padding of the popup around the level's rows.
+    pub(super) fn pad(&self) -> f32 {
+        self.with(|state| state.pad)
+    }
+
+    /// Starts a run of the menu in pass `pass`. A menu that did not run in the pass before (it was closed, and a
+    /// closed menu does not run) drops what its last open run left for the next: the letters shown, a typed row, a
+    /// close or a step not yet taken.
+    pub(crate) fn resume(&self, pass: u64) {
+        self.with(|state| {
+            if state.pass.saturating_add(1) < pass {
+                state.now.clear();
+                state.shown.clear();
+                state.run = None;
+                state.close = false;
+                state.step = None;
+            }
+        });
+    }
+
+    /// Ends a body run of pass `pass`: the rows of this pass give the letters the user sees. A pass that registered no
+    /// rows shows none.
+    pub(crate) fn end(&self, pass: u64) {
+        self.with(|state| {
+            if state.pass != pass {
+                state.pass = pass;
+                state.now.clear();
+            }
+            let letters = if let Some(folder) = state.lettered { state.letters(folder).to_vec() } else { vec![None; state.now.len()] };
+            state.shown = state.now.iter().zip(letters).map(|(row, mnemonic)| Assigned { id: row.id, mnemonic, enabled: row.enabled }).collect();
+        });
+    }
+
+    pub(super) fn register(&self, pass: u64, row: Row) {
+        self.with(|state| {
+            if state.pass != pass {
+                state.pass = pass;
+                state.now.clear();
+            }
+            match state.now.iter_mut().find(|known| known.id == row.id) {
+                Some(known) => *known = row,
+                None => state.now.push(row),
+            };
+        });
+    }
+
+    pub(super) fn mnemonic_of(&self, id: Id) -> Option<(char, Option<usize>)> {
+        self.with(|state| {
+            let folder = state.lettered?;
+            let at = state.now.iter().position(|row| row.id == id)?;
+            state.letters(folder).get(at).copied().flatten()
+        })
+    }
+
+    /// The enabled rows the user last saw with a mnemonic, and the letter of each.
+    pub(crate) fn lettered_rows(&self) -> Vec<(char, Id)> {
+        self.with(|state| state.shown.iter().filter(|row| row.enabled).filter_map(|row| row.mnemonic.map(|(letter, _)| (letter, row.id))).collect())
+    }
+
+    pub(crate) fn values(&self) -> bool {
+        self.with(|state| state.values)
+    }
+
+    /// Whether the keyboard drives a menu: the mnemonics show.
+    pub(super) fn keyboard(&self) -> bool {
+        self.with(|state| state.keyboard)
+    }
+
+    /// The container's typed letter names the row `id` to run in this pass.
+    pub(crate) fn run(&self, id: Id) {
+        self.with(|state| state.run = Some(id));
+    }
+
+    pub(super) fn take_run(&self, id: Id) -> bool {
+        self.with(|state| {
+            let mine = state.run == Some(id);
+            if mine {
+                state.run = None;
+            }
+            mine
+        })
+    }
+
+    pub(super) fn is_submenu(&self) -> bool {
+        self.with(|state| state.submenu)
+    }
+
+    pub(super) fn request_close(&self) {
+        self.with(|state| state.close = true);
+    }
+
+    pub(super) fn request_step(&self, step: MenuStep) {
+        self.with(|state| state.step = Some(step));
+    }
+
+    /// The Left or Right key a row of this top-level level left unhandled.
+    pub(crate) fn take_step(&self) -> Option<MenuStep> {
+        self.with(|state| state.step.take())
+    }
+
+    /// Whether a row asked its submenu level to close.
+    pub(crate) fn take_close(&self) -> bool {
+        self.with(|state| std::mem::take(&mut state.close))
+    }
+
+    /// The submenu row `id` is the level's open submenu, in place of any other. Returns whether that changed it.
+    pub(super) fn open_submenu(&self, id: Id) -> bool {
+        self.with(|state| {
+            let changed = state.open_submenu.as_ref().map(|open| open.row) != Some(id);
+            if changed {
+                state.open_submenu = Some(OpenSubmenu { row: id, rect: None });
+            }
+            changed
+        })
+    }
+
+    /// Closes the open submenu: a row that is not a submenu row rested under the pointer. Returns whether one was open.
+    pub(super) fn clear_submenu(&self) -> bool {
+        self.with(|state| state.open_submenu.take().is_some())
+    }
+
+    pub(super) fn submenu_open(&self, id: Id) -> bool {
+        self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row == id))
+    }
+
+    /// Whether a sibling's submenu is open in this level.
+    pub(super) fn sibling_submenu_open(&self, id: Id) -> bool {
+        self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row != id))
+    }
+
+    /// The submenu of row `id` was shown at `rect`, or closed itself.
+    pub(super) fn note_submenu(&self, id: Id, open: bool, rect: Rect) {
+        self.with(|state| match &mut state.open_submenu {
+            Some(known) if known.row == id && open => known.rect = Some(rect),
+            Some(known) if known.row == id => state.open_submenu = None,
+            _ => {}
+        });
+    }
+
+    /// The row `id` is the level's active row. Returns whether that changed it.
+    pub(super) fn activate_row(&self, id: Id) -> bool {
+        self.with(|state| {
+            let changed = state.active != Some(id);
+            state.active = Some(id);
+            changed
+        })
+    }
+
+    /// Makes the enabled row `under` names, among the rows as the user last saw them, the active row: the row the
+    /// pointer moved onto. Returns whether that changed it.
+    pub(super) fn follow_pointer(&self, under: impl Fn(Id) -> bool) -> bool {
+        self.with(|state| {
+            let Some(row) = state.shown.iter().find(|row| row.enabled && under(row.id)).map(|row| row.id) else { return false };
+            let changed = state.active != Some(row);
+            state.active = Some(row);
+            changed
+        })
+    }
+
+    pub(crate) fn active(&self) -> Option<Id> {
+        self.with(|state| state.active)
+    }
+
+    /// The active row while it is enabled.
+    pub(super) fn active_enabled(&self) -> Option<Id> {
+        self.with(|state| state.active.filter(|active| state.shown.iter().any(|row| row.id == *active && row.enabled)))
+    }
+
+    /// Moves the active row by `mv` among the enabled rows as the user last saw them, without moving the focus (the
+    /// keys of a field that drives the menu): Up and Down wrap, Home and Page Up go to the first, End and Page Down to
+    /// the last. Returns whether it moved.
+    pub(super) fn step_active(&self, mv: NavMove) -> bool {
+        self.with(|state| {
+            let rows: Vec<Id> = state.shown.iter().filter(|row| row.enabled).map(|row| row.id).collect();
+            let n = rows.len();
+            if n == 0 {
+                return false;
+            }
+            let at = state.active.and_then(|active| rows.iter().position(|id| *id == active));
+            let to = match mv {
+                NavMove::Down | NavMove::Forward => at.map_or(0, |at| (at + 1) % n),
+                NavMove::Up | NavMove::Back => at.map_or(n - 1, |at| (at + n - 1) % n),
+                NavMove::Start | NavMove::PageUp => 0,
+                NavMove::End | NavMove::PageDown => n - 1,
+                _ => return false,
+            };
+            state.active = Some(rows[to]);
+            true
+        })
+    }
+
+    /// The row an activation of the menu runs: the active row while it is enabled, else the first enabled row.
+    pub(super) fn active_or_first(&self) -> Option<Id> {
+        self.with(|state| {
+            let enabled = |id: Id| state.shown.iter().any(|row| row.id == id && row.enabled);
+            state.active.filter(|active| enabled(*active)).or_else(|| state.shown.iter().find(|row| row.enabled).map(|row| row.id))
+        })
+    }
+
+    pub(crate) fn has_active(&self) -> bool {
+        self.with(|state| state.active.is_some())
+    }
+
+    pub(super) fn is_active(&self, id: Id) -> bool {
+        self.with(|state| state.active == Some(id))
+    }
+
+    /// Whether the user is in the open submenu of row `id`: the pointer is over it, or the keyboard has left `id` for it.
+    pub(super) fn descended(&self, id: Id, focused: bool) -> bool {
+        self.with(|state| {
+            let Some(OpenSubmenu { row, rect }) = &state.open_submenu else { return false };
+            *row == id && (rect.zip(state.pointer).is_some_and(|(rect, pointer)| rect.contains(pointer)) || (state.keyboard && !focused))
+        })
+    }
+
+    /// Whether the pointer heads for the open submenu, which is not the one of row `id`.
+    pub(super) fn aimed(&self, id: Id) -> bool {
+        self.with(|state| {
+            let Some(OpenSubmenu { row, rect: Some(rect) }) = &state.open_submenu else { return false };
+            let (Some(now), Some(from)) = (state.pointer, state.previous_pointer.or(state.pointer)) else { return false };
+            *row != id && heads_toward(from, now, *rect)
+        })
+    }
+}
+
+/// The level a menu container puts into its body's env: the rows of the body register with it.
+pub(crate) fn level_env<C: Component>(cx: &Cx<'_, C>, values: &mut AppValues, submenu: bool, valued: bool, pad: f32) {
+    let level = MenuLevel::of(&cx.recall::<LevelMemory>());
+    let pointer = cx.core.ctx.input(|input| input.pointer.latest_pos());
+    let keyboard = crate::runtime::focus::keyboard_in_menu(&cx.core.ctx);
+    level.begin(submenu, valued, keyboard, (!cx.env.shell().os.is_mac()).then(|| cx.env.folder()), pointer, pad);
+    values.set(level);
+}

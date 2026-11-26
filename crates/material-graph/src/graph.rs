@@ -5459,6 +5459,38 @@ mod grey_tests {
         pub(super) static GREY_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
+    /// A sample of a sweep of `total` cases: all of them when `craft_testkit::hostile::divisor()` is 1 (nightly), at the
+    /// gate every `per_div * divisor - 1`-th (an odd stride, so every axis of a nested loop varies).
+    struct Sweep {
+        stride: usize,
+        total: usize,
+        seen: usize,
+        visited: usize,
+    }
+
+    impl Sweep {
+        fn new(total: usize, per_div: usize) -> Sweep {
+            #[cfg(not(target_arch = "wasm32"))]
+            let div = craft_testkit::hostile::divisor();
+            #[cfg(target_arch = "wasm32")]
+            let div = 1;
+            Sweep { stride: if div == 1 { 1 } else { per_div * div - 1 }, total, seen: 0, visited: 0 }
+        }
+
+        /// Whether the next case of the sweep is in the sample.
+        fn take(&mut self) -> bool {
+            let take = self.seen.is_multiple_of(self.stride);
+            self.seen += 1;
+            self.visited += usize::from(take);
+            take
+        }
+
+        /// What `full` grey runs over all the cases comes to over the cases visited.
+        fn share(&self, full: usize) -> usize {
+            full * self.visited / self.total
+        }
+    }
+
     fn bits(outs: &BTreeMap<String, Tex>) -> Vec<(String, Vec<u32>)> {
         outs.iter().map(|(k, t)| (k.clone(), t.px.iter().flat_map(|p| p.map(f32::to_bits)).collect())).collect()
     }
@@ -5532,6 +5564,7 @@ mod grey_tests {
             "m00=-1 m01=0 m10=0 m11=1",
         ];
         let bgs = ["", "bg_r=0.5 bg_g=0.5 bg_b=0.5 bg_a=1", "bg_r=0.2 bg_g=0.3 bg_b=0.2 bg_a=1", "bg_a=0.5"];
+        let mut sweep = Sweep::new(2 * mats.len() * bgs.len() * 3 * 4 * 4, 16);
         let n = greys(|| {
             for compiled in [false, true] {
                 for m in mats {
@@ -5544,6 +5577,9 @@ mod grey_tests {
                                     (" osize_log2_x=4 osize_log2_y=5", " ofmt=5"),
                                     (" osize_log2_x=6 osize_log2_y=6", " ofmt=6 offset_x=0.13 offset_y=-0.3"),
                                 ] {
+                                    if !sweep.take() {
+                                        continue;
+                                    }
                                     let body = format!("node 10 transform_matrix in=@2 {m} {bg} {tiles} {filt}{osz}{fmt}\noutput out 10\n");
                                     same(&body, 32, compiled);
                                 }
@@ -5553,7 +5589,7 @@ mod grey_tests {
                 }
             }
         });
-        assert!(n > 300, "{n} grey runs");
+        assert!(n > sweep.share(300), "{n} grey runs in {} of {} cases", sweep.visited, sweep.total);
     }
 
     #[test]
@@ -5663,6 +5699,7 @@ mod grey_tests {
 
     #[test]
     fn blend_grey_is_rgba() {
+        let mut sweep = Sweep::new(2 * 26 * 5 * 10, 16);
         let n = greys(|| {
             for compiled in [false, true] {
                 for mode in (0..=21).chain(32..=35) {
@@ -5679,6 +5716,9 @@ mod grey_tests {
                             ("0.6", " ofmt=1 tile_x=0.25"),
                             ("0.6", " ofmt=7"),
                         ] {
+                            if !sweep.take() {
+                                continue;
+                            }
                             let body = format!("node 10 blend fg=@1 bg=@2 mode={mode} alpha_mode={am} opacity={op}{extra}\noutput out 10\n");
                             same(&body, 24, compiled);
                         }
@@ -5686,7 +5726,7 @@ mod grey_tests {
                 }
             }
         });
-        assert!(n > 300, "{n} grey runs");
+        assert!(n > sweep.share(300), "{n} grey runs in {} of {} cases", sweep.visited, sweep.total);
     }
 
     #[test]

@@ -24,6 +24,7 @@ sha3 = { version = "0.10", default-features = false }
 pgp = { version = "=0.21.0", default-features = false, features = ["wasm"] }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }
 # Keys and signatures made in the tests, from a seed: the random numbers rPGP 0.21 takes.
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
