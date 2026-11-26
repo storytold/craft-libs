@@ -958,6 +958,33 @@ fn rows_show_unit_text_and_milliseconds() {
     assert_eq!(held.number("delay"), Some(120.0), "a row with unit text still reads its kind's spelling");
 }
 
+#[trial]
+fn length_rows_show_custom_unit_text_without_changing_their_readers() {
+    let lengths = craft_ui::runtime::env::LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    let doubled = craft_behavior::NumberCodec::new(craft_behavior::Reader::new().bare(2.0), 2);
+    let params = vec![
+        Param::number("plain", "Plain", 0.0, 1.0, 2).length(lengths).unit_label("length label"),
+        Param::number("coded", "Coded", 0.0, 1.0, 2).length(lengths).codec(doubled).unit_label("codec label"),
+        Param::number("hidden", "Hidden unit", 0.0, 1.0, 2).length(lengths).unit_label(""),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    fixture.room(Vec2::new(1280.0, 800.0)).settle();
+    for unit in ["length label", "codec label"] {
+        assert!(fixture.texts().iter().any(|text| text.text == unit && !text.elided && text.clip.contains_rect(text.rect)), "{unit}");
+    }
+    assert!(!fixture.texts().iter().any(|text| text.text == "pt" && !text.elided));
+    for (label, typed) in [("Plain", "3pt"), ("Coded", "3"), ("Hidden unit", "3pt")] {
+        let field = fixture.by_label(label).expect("the length row");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed).key(Key::Enter, Modifiers::NONE).settle();
+    }
+    let (plain, coded) = (values.borrow().number("plain"), values.borrow().number("coded"));
+    assert_eq!(plain, Some(3.0));
+    assert_eq!(values.borrow().number("hidden"), plain);
+    assert!(plain.zip(coded).is_some_and(|(plain, coded)| coded == 2.0 * plain), "{plain:?}, {coded:?}");
+}
+
 /// A count per inch shows `/in` after its number, apart in the field or in the number's own run in the inline look, and
 /// a typed number or an edit of that run is read back as the count.
 #[trial]

@@ -960,6 +960,9 @@ impl<'p> Pass<'p> {
                 (None, codec) => line.scalar_field(self.units, line.bind(Some(value), default), decimals, codec, self.shaded),
             }
             .step(step);
+            if let Some(text) = line.param.unit_label_text() {
+                field = field.unit(text.clone());
+            }
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
