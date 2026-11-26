@@ -87,6 +87,11 @@ fn a_feet_and_inches_length_counts_feet() {
         let units = Env::of(ui).units();
         assert_eq!(units.show(UnitKind::FeetInches, 1.5), units.show(UnitKind::Feet, 1.5), "both write feet");
         assert_ne!(units.name(UnitKind::FeetInches), units.name(UnitKind::Feet), "a list of units tells them apart");
+        for kind in [UnitKind::Feet, UnitKind::FeetInches] {
+            let reader = units.length_reader(LengthUnits::new(UnitKind::Points, kind, START));
+            let named = reader.read_tagged("1.5 ft", None).ok().and_then(|(_, tag)| tag).and_then(UnitKind::from_tag);
+            assert_eq!(named, Some(kind), "a typed ft names the field's own unit");
+        }
     });
 }
 

@@ -608,7 +608,7 @@ impl Units {
     pub fn length_reader(&self, lengths: LengthUnits) -> Reader {
         let Some(shown) = self.length_per_inch(lengths.shown, lengths.pixels_per_inch) else { return self.reader(None) };
         let factor = |other: UnitKind| Some(shown / self.length_per_inch(other, lengths.pixels_per_inch)?);
-        let reader = self.reader_over(factor);
+        let reader = self.reader_over(Some(lengths.shown), factor);
         match lengths.bare.and_then(factor) {
             Some(bare) => reader.bare(bare),
             None => reader,
@@ -621,8 +621,8 @@ impl Units {
     }
 
     fn build_reader(&self, kind: Option<UnitKind>, points_per_inch: f64) -> Reader {
-        let Some(kind) = kind else { return self.reader_over(|_| None) };
-        self.reader_over(|other| match (kind.per_inch(points_per_inch), other.per_inch(points_per_inch)) {
+        let Some(kind) = kind else { return self.reader_over(None, |_| None) };
+        self.reader_over(Some(kind), |other| match (kind.per_inch(points_per_inch), other.per_inch(points_per_inch)) {
             (Some(of), Some(per)) => Some(of / per),
             _ if other == kind => Some(1.0),
             _ => None,
@@ -636,12 +636,13 @@ impl Units {
     pub fn document_reader(&self, ruler: UnitKind, extent: f64, pixels_per_inch: f64, points_per_inch: f64) -> Reader {
         let pixels = |kind: UnitKind| kind.to_pixels(1.0, extent, pixels_per_inch, points_per_inch);
         let one_ruler = pixels(ruler).filter(|one| *one != 0.0);
-        self.reader_over(|other| Some(pixels(other)? / one_ruler?))
+        self.reader_over(Some(ruler), |other| Some(pixels(other)? / one_ruler?))
     }
 
     /// The locale's separators and, for every unit kind `factor` gives a factor to, its spellings (in the user's
-    /// language and in English) reading as that many of the reader's own unit.
-    fn reader_over(&self, factor: impl Fn(UnitKind) -> Option<f64>) -> Reader {
+    /// language and in English) reading as that many of the reader's own unit. `own`'s spellings come first, so a
+    /// spelling two kinds share (`ft` for Feet and Feet & Inches) names `own` when it is one of them.
+    fn reader_over(&self, own: Option<UnitKind>, factor: impl Fn(UnitKind) -> Option<f64>) -> Reader {
         let (decimal, group) = self.format.separators();
         let mut reader = Reader::new().decimal(decimal);
         if let Some(group) = group {
@@ -649,7 +650,9 @@ impl Units {
         }
         let english = Units::new(self.format.clone(), english_words(), Arc::new(Words::english()), self.point_size);
         let points = factor(UnitKind::Points);
-        for (tag, other) in UnitKind::ALL.into_iter().enumerate() {
+        let order = own.into_iter().chain(UnitKind::ALL.into_iter().filter(|other| Some(*other) != own));
+        for other in order {
+            let Some(tag) = UnitKind::ALL.iter().position(|kind| *kind == other) else { continue };
             let Some(factor) = factor(other) else { continue };
             for spelling in [self.symbol(other), english.symbol(other)] {
                 if is_unit_spelling(&spelling) {
