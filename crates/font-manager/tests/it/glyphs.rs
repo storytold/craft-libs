@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use craft_font_manager::glyphs::{CellInfo, GlyphCell, GlyphSource, GlyphsPanel, GlyphsPanelSettings};
 use craft_ui::contract::Bind;
+use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, Room, trial};
 use egui::{ColorImage, Event};
 
@@ -43,6 +44,8 @@ struct Seen {
     marked: Option<GlyphCell>,
     reveal: Option<GlyphCell>,
     picks: Vec<(GlyphCell, GlyphCell)>,
+    /// Cells a secondary click asked for a menu on, in order.
+    menu: Vec<GlyphCell>,
 }
 
 fn rig() -> (Fixture, Rc<RefCell<Seen>>) {
@@ -62,8 +65,12 @@ fn rig() -> (Fixture, Rc<RefCell<Seen>>) {
         if let Some(cell) = reveal {
             panel = panel.reveal(cell);
         }
-        if let Some(pick) = panel.show(ui).alternate {
+        let out = panel.show(ui);
+        if let Some(pick) = out.alternate {
             shown.borrow_mut().picks.push((pick.cell, pick.glyph));
+        }
+        if let Some(menu) = out.menu {
+            shown.borrow_mut().menu.push(menu.cell);
         }
     });
     fx.in_room(Room::Window);
@@ -123,6 +130,19 @@ fn a_corner_pick_reports_the_cell_and_the_glyph() {
     fx.settle();
     assert_eq!(seen.borrow().picks, vec![(GlyphCell::Char(FIRST), GlyphCell::Char('Ⓑ'))], "one pick, with the cell the popup was opened for");
     assert!(!visible(&fx, 'Ⓑ'), "a pick closes the popup");
+}
+
+#[trial]
+fn a_secondary_click_reports_the_cell_the_menu_is_for() {
+    let (mut fx, seen) = rig();
+    let cell = fx.by_label(&name(FIRST)).expect("the first cell");
+    let at = cell.center();
+    fx.frame(vec![pointer::moved(at), pointer::secondary(at, true)]);
+    fx.frame(vec![pointer::secondary(at, false)]);
+    fx.settle();
+    let menu = seen.borrow().menu.clone();
+    assert!(!menu.is_empty(), "the secondary click names the cell");
+    assert!(menu.iter().all(|cell| *cell == GlyphCell::Char(FIRST)), "the menu is for the clicked cell: {menu:?}");
 }
 
 #[trial]

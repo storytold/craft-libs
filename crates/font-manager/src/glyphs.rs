@@ -1,6 +1,8 @@
 //! [`GlyphsPanel`]: Photoshop's Glyphs panel. A family and style picker, a category list (Entire Font, Punctuation,
 //! Currency, ...), a grid of glyph cells drawn by the app's text engine, a zoom slider, and the recently used
 //! glyphs in a row at the top. Double-click or Enter inserts the glyph where the app can insert.
+//! A secondary click on a grid cell reports that cell ([`GlyphsPanelOutput::menu`]); the app opens
+//! the menu from the grid response.
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -209,6 +211,19 @@ pub struct GlyphsPanelOutput {
     pub alternate: Option<AlternatePick>,
     /// The family or style changed in the panel's own pickers.
     pub font_changed: bool,
+    /// The grid cell a context menu was asked for, with the grid response the menu hangs from.
+    /// Reported on the secondary click and on every later pass while that menu stays open.
+    pub menu: Option<GlyphCellMenu>,
+}
+
+/// A grid cell's context menu: the cell, and the grid response the app hangs the menu from.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct GlyphCellMenu {
+    /// The cell.
+    pub cell: GlyphCell,
+    /// The grid the menu hangs from.
+    pub opener: Response,
 }
 
 /// The cell whose popup was used and the picked glyph.
@@ -483,12 +498,13 @@ impl<'a> GlyphsPanel<'a> {
                 });
             });
             craft_ui::runtime::frame::request_repaint_after(ui.ctx(), SCAN_POLL_SECONDS);
-            return GlyphsPanelOutput { response: shown.output, activated: None, alternate: None, font_changed: false };
+            return GlyphsPanelOutput { response: shown.output, activated: None, alternate: None, font_changed: false, menu: None };
         }
         let ctx = ui.ctx().clone();
         let mut activated_out: Option<GlyphCell> = None;
         let mut picked: Option<AlternatePick> = None;
         let mut font_changed = false;
+        let mut menu: Option<GlyphCellMenu> = None;
         let shown = Stack::new().label(label).command_scope(GlyphsCommand::SCOPE).show(ui, |ui, cx| {
             cx.publish(GlyphsCommand::Alternates, CommandState::new());
             let mut state = read_bind(&mut settings, cx).unwrap_or_default();
@@ -608,6 +624,14 @@ impl<'a> GlyphsPanel<'a> {
                             None => tile,
                         }
                     });
+                    // The collection keeps the request while the menu hung from this response stays open.
+                    let opener = shown_grid.response.response.clone();
+                    menu = shown_grid
+                        .response
+                        .menu
+                        .as_ref()
+                        .and_then(|request| cells.get(request.key).copied())
+                        .map(|cell| GlyphCellMenu { cell, opener });
                     for event in shown_grid.response.events {
                         match event {
                             CollectionEvent::Activate(key) => activated = cells.get(key).copied().or(activated),
@@ -693,6 +717,6 @@ impl<'a> GlyphsPanel<'a> {
                 write_bind(&mut settings, cx, state, "Glyphs panel");
             }
         });
-        GlyphsPanelOutput { response: shown.output, activated: activated_out, alternate: picked, font_changed }
+        GlyphsPanelOutput { response: shown.output, activated: activated_out, alternate: picked, font_changed, menu }
     }
 }
