@@ -220,14 +220,17 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                     // start at the top of its part when the part asks (`top`), whatever room is left below them.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
-                        (true, _) if multiline && top => egui::Align2::CENTER_TOP,
-                        (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, rtl) => match (end_aligned != rtl, multiline && top) {
-                            (true, true) => egui::Align2::RIGHT_TOP,
-                            (true, false) => egui::Align2::RIGHT_CENTER,
-                            (false, true) => egui::Align2::LEFT_TOP,
-                            (false, false) => egui::Align2::LEFT_CENTER,
-                        },
+                        (centred, rtl) => {
+                            let across = match (centred, end_aligned == rtl) {
+                                (true, _) => egui::Align::Center,
+                                (false, true) => egui::Align::Min,
+                                (false, false) => egui::Align::Max,
+                            };
+                            // A multi-line text starts at the part's top when the part asks (`top`), however many of its
+                            // lines the text fills.
+                            let down = if multiline && top { egui::Align::Min } else { egui::Align::Center };
+                            egui::Align2([across, down])
+                        }
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);
