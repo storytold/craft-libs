@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, NoValue, Outcome, Props as _, Scroll, Show as _, ShowContainer as _, SweepApply};
 use craft_ui::display::Text;
@@ -10,7 +11,6 @@ use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::TextField;
-use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 
 use super::editor_picker;
@@ -158,7 +158,9 @@ pub struct ActionEditorOutput {
 
 impl Outcome for ActionEditorOutput {
     type Value = NoValue;
-    fn response(&self) -> &Response { &self.response }
+    fn response(&self) -> &Response {
+        &self.response
+    }
 }
 
 /// A page body, suitable for an app's workspace or typed dialog body. It owns no dialog lifetime.
@@ -181,13 +183,22 @@ impl<'a> ActionEditor<'a> {
     }
 
     /// The host that can answer requests and supply command labels.
-    pub fn host(mut self, host: &'a dyn ActionEditorHost) -> Self { self.host = Some(host); self }
+    pub fn host(mut self, host: &'a dyn ActionEditorHost) -> Self {
+        self.host = Some(host);
+        self
+    }
 
     /// The current acknowledged activity of this draft.
-    pub fn activity(mut self, activity: ActionEditorActivity) -> Self { self.activity = activity; self }
+    pub fn activity(mut self, activity: ActionEditorActivity) -> Self {
+        self.activity = activity;
+        self
+    }
 
     /// A validation or stale-draft refusal from the host, shown without discarding the local value.
-    pub fn refusal(mut self, refusal: impl Into<Label>) -> Self { self.refusal = Some(refusal.into()); self }
+    pub fn refusal(mut self, refusal: impl Into<Label>) -> Self {
+        self.refusal = Some(refusal.into());
+        self
+    }
 
     /// Draw the editor, changing only its borrowed draft and reporting requests to its host.
     pub fn show(self, ui: &mut Ui) -> ActionEditorOutput {
@@ -216,17 +227,26 @@ impl<'a> ActionEditor<'a> {
                 }
                 if Button::new(words.preview_from.clone()).enabled(can_preview && selected.is_some()).show(ui).clicks == 1
                     && let Some(from) = selected
-                { events.push(ActionEditorEvent::Preview { from }); }
+                {
+                    events.push(ActionEditorEvent::Preview { from });
+                }
                 let label = if activity.recording { &words.stop_capture } else { &words.capture };
                 if Button::new(label.clone()).enabled(hosted && !activity.busy && !activity.previewing).show(ui).clicks == 1 {
-                    events.push(if activity.recording { ActionEditorEvent::EndCapture } else { ActionEditorEvent::BeginCapture { at: value.action.steps.len() } });
+                    events.push(if activity.recording {
+                        ActionEditorEvent::EndCapture
+                    } else {
+                        ActionEditorEvent::BeginCapture { at: value.action.steps.len() }
+                    });
                 }
             });
             Row::new().show(ui, |ui, _| {
-                let editable = selected.and_then(|step| value.action.steps.get(step)).is_some_and(|step| host.is_some_and(|host| host.can_edit_step(step)));
+                let editable =
+                    selected.and_then(|step| value.action.steps.get(step)).is_some_and(|step| host.is_some_and(|host| host.can_edit_step(step)));
                 if Button::new(words.edit_step.clone()).enabled(idle && editable).show(ui).clicks == 1
                     && let Some(step) = selected
-                { events.push(ActionEditorEvent::EditStep { step }); }
+                {
+                    events.push(ActionEditorEvent::EditStep { step });
+                }
                 for (label, duplicate) in [(words.duplicate_step.clone(), true), (words.delete_step.clone(), false)] {
                     if Button::new(label).enabled(hosted && idle && selected.is_some()).show(ui).clicks == 1
                         && let Some(step) = selected
@@ -247,12 +267,18 @@ impl<'a> ActionEditor<'a> {
                     (words.discard.clone(), ActionEditorEvent::Discard, true),
                     (words.leave.clone(), ActionEditorEvent::Leave, true),
                 ] {
-                    if Button::new(label).enabled(hosted && idle && enabled).show(ui).clicks == 1 { events.push(event); }
+                    if Button::new(label).enabled(hosted && idle && enabled).show(ui).clicks == 1 {
+                        events.push(event);
+                    }
                 }
             });
         });
         let sizing = ui.is_sizing_pass();
-        if sizing { *value = before.clone(); events.clear(); step_moves.clear(); }
+        if sizing {
+            *value = before.clone();
+            events.clear();
+            step_moves.clear();
+        }
         ActionEditorOutput { response: shown.output, changed: !sizing && *value != before, step_moves, events }
     }
 }

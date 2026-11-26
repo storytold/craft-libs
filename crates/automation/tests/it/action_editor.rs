@@ -244,7 +244,9 @@ fn action_editor_include_and_expanded_step_reorder_keep_flags_and_metadata() {
     assert_eq!(shared.borrow().value, expected, "the dialog cell changes only its flag, retaining opaque metadata and steps");
     shared.borrow_mut().activity.busy = true;
     fixture.settle();
-    for label in ["Duplicate step", "Delete step", "Show dialog during playback: Run first"] { press(&mut fixture, label); }
+    for label in ["Duplicate step", "Delete step", "Show dialog during playback: Run first"] {
+        press(&mut fixture, label);
+    }
     assert!(take(&shared).is_empty());
     assert_eq!(shared.borrow().value, expected, "busy controls cannot mutate the flag or request structural edits");
 }

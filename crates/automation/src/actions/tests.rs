@@ -441,7 +441,9 @@ fn an_actions_options_are_set_and_kept_through_a_duplicate_and_the_file() {
 // A draft snapshot need not be inserted or renamed to satisfy the stored list's identity rules.
 #[trial]
 fn action_snapshot_keeps_unpublished_steps_flags_and_gate_checks() {
-    struct Gated { ran: Vec<(String, bool)> }
+    struct Gated {
+        ran: Vec<(String, bool)>,
+    }
     impl ActionRunner for Gated {
         fn authorize(&mut self, step: &ActionStep) -> Result<(), String> {
             if step.command == "denied" { Err("permission refused".into()) } else { Ok(()) }
@@ -507,7 +509,9 @@ fn action_snapshot_identity_distinguishes_namesakes_and_refuses_the_same_occurre
 #[trial]
 fn action_snapshot_resumes_after_wait_in_the_same_budget() {
     #[derive(Default)]
-    struct Paced { ran: Vec<String> }
+    struct Paced {
+        ran: Vec<String>,
+    }
     impl ActionRunner for Paced {
         fn run_step(&mut self, _: &Action, _: usize, step: &ActionStep, _: bool, _: &mut PlaybackBudget) -> StepOutcome {
             self.ran.push(step.command.clone());
