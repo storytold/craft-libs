@@ -2891,7 +2891,7 @@ mod tests {
     use proptest::prelude::*;
 
     use crate::{
-        Error, FillRule, SegIdx,
+        FillRule, SegIdx,
         geom::Point,
         order::ComparisonCache,
         perturbation::{
@@ -3501,23 +3501,28 @@ mod tests {
     // Checks that the contour walk finishes on a path whose winding numbers
     // come out inconsistent around a point, instead of walking forever:
     // `try_contours` returns an error and `contours` returns no contours.
+    // With `slow-asserts`, `from_path` checks the winding numbers itself and
+    // panics on these paths, so the tests run only without that feature.
+    #[cfg(not(feature = "slow-asserts"))]
     fn contours_finish(svg: &str) {
         let bez = BezPath::from_svg(svg).unwrap();
         let top = Topology::<i32>::from_path(&bez, 1e-6).unwrap();
         let result = top.try_contours(|w| *w != 0);
         assert!(matches!(
             result,
-            Ok(_) | Err(Error::InconsistentWindingNumbers)
+            Ok(_) | Err(crate::Error::InconsistentWindingNumbers)
         ));
         assert_eq!(top.contours(|w| *w != 0), result.unwrap_or_default());
     }
 
     #[test]
+    #[cfg(not(feature = "slow-asserts"))]
     fn contours_finish_with_no_boundary_segment_leaving_a_point() {
         contours_finish("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z");
     }
 
     #[test]
+    #[cfg(not(feature = "slow-asserts"))]
     fn contours_finish_when_the_walk_misses_its_start() {
         contours_finish(
             "M6,5 L3,7 L0,7 L3,6 C3,0 7,6 0,4 L4,2 C4,5 7,4 4,6 L3,3 L3,5 C6,7 2,5 3,1 L2,0 Z \
