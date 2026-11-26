@@ -138,3 +138,29 @@ fn a_host_tint_replaces_the_tone_colour_and_the_share_it_paints() {
         "only the share set: the tone's colour still paints"
     );
 }
+
+#[trial]
+fn a_share_that_is_not_a_number_fails_closed_to_the_tones_share() {
+    let chosen = Color32::from_rgb(0x20, 0x80, 0x60);
+    for share in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        // With the tone's colour: a non-finite share paints exactly like the tone's own share.
+        assert_eq!(
+            trail_ink(TrailTone::Danger, None, Some(share)),
+            trail_ink(TrailTone::Danger, None, None),
+            "a share of {share} fails closed to the tone default"
+        );
+        // With a host colour: the colour stays, only the share falls back to the tone's.
+        assert_eq!(
+            trail_ink(TrailTone::Danger, Some(DataColor::new(chosen)), Some(share)),
+            trail_ink(TrailTone::Danger, Some(DataColor::new(chosen)), None),
+            "a share of {share} keeps the host colour at the tone's share"
+        );
+    }
+}
+
+#[trial]
+fn the_share_clamps_at_both_ends_of_its_range() {
+    assert_eq!(trail_ink(TrailTone::Danger, None, Some(0.0)), Color32::TRANSPARENT, "a share of 0 shows no footprint");
+    assert_eq!(trail_ink(TrailTone::Danger, None, Some(-0.25)), trail_ink(TrailTone::Danger, None, Some(0.0)), "a share below 0 acts as 0");
+    assert_eq!(trail_ink(TrailTone::Danger, None, Some(1.5)), trail_ink(TrailTone::Danger, None, Some(1.0)), "a share above 1 acts as full");
+}
