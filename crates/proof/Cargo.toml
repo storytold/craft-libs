@@ -8,6 +8,17 @@ repository.workspace = true
 description = "Proofing per language for the Craft Apps: spelling, suggestions, grammar checks and hyphenation, a Hunspell .aff/.dic reader, and user and ignored words. Language data is embedded from craft-i18n at build time (CRAFT_I18N_DIR)."
 build = "build.rs"
 
+[features]
+default = ["embed-english", "builtin-moby"]
+# The SCOWL Hunspell dictionaries of the four Englishes (and their notice), embedded from craft-i18n at
+# build time when CRAFT_I18N_DIR is set. Off, an English reads a registered, installed or built-in
+# dictionary instead, and the build is about 2 MB smaller.
+embed-english = []
+# The Moby word list: built into the crate (data/en-words.dic) and embedded from craft-i18n for
+# hyphenation. It is English's last source of spelling and suggestions. Off, an English with no other
+# source is not proofed (no marks, no suggestions) and the build is about 0.4 MB smaller.
+builtin-moby = []
+
 [lints]
 workspace = true
 

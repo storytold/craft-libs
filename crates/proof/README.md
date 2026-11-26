@@ -82,6 +82,31 @@ Tests that pin results of the data run only when every file the build embeds is 
   that publishes and pins `language-packs-1`.
   `craft_proof::packs::embedded_locales()` lists what a build embeds.
 
+## Features
+
+| Feature | Default | What it embeds |
+|---|---|---|
+| `embed-english` | on | The SCOWL Hunspell dictionaries of the four Englishes and their notice, embedded from craft-i18n when `CRAFT_I18N_DIR` is set (about 2.1 MB) |
+| `builtin-moby` | on | The Moby word list: the crate's own copy (`data/en-words.dic`) and craft-i18n's (`en-us.dic`, for hyphenation), English's last source of spelling and suggestions (about 0.4 MB) |
+
+A target that fetches its English dictionaries (the web: [register them as
+bytes](#dictionaries-from-bytes)) turns both off and keeps them out of its binary:
+
+```toml
+craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", default-features = false }
+```
+
+Measured on a `wasm32-unknown-unknown` `cdylib` that links the spelling and suggestion paths
+(`opt-level = "s"`, `lto`), with `CRAFT_I18N_DIR` set: 3,290,035 bytes with both features and
+862,805 without.
+
+Without them an English that has none of the five sources below (a registered pair, a dictionary in
+the folders or on the system, SCOWL, the built-in list) is **not proofed**: `is_proofed()` and
+`has_dictionary` say no, nothing is marked or suggested, `english_source` answers
+`EnglishSource::Missing`, and `missing_dictionary` names the file to register or install (`en_US`,
+`en_GB`, `en_CA`, `en_AU`). Every other language is unchanged. Embedded data is never "missing" for
+`CRAFT_I18N_REQUIRED=1` when a feature leaves it out.
+
 ## Language packs
 
 **API (fixed by `plan/pack-contract.md`, plus the additions marked ＋):**
@@ -270,6 +295,8 @@ CRAFT_I18N_DIR=/abs/path/craft-i18n cargo test -p craft-proof
 CRAFT_PROOF_EMBED=en CRAFT_I18N_DIR=/abs/path/craft-i18n cargo test -p craft-proof    # the English-only build (CP4.4)
 cargo test -p craft-proof   # without Language data
 cargo check -p craft-proof --target wasm32-unknown-unknown
+cargo check -p craft-proof --target wasm32-unknown-unknown --no-default-features   # no SCOWL, no Moby list
+cargo test -p craft-proof --no-default-features --test it                          # what such a build does
 ```
 
 CI: `.github/workflows/proof.yml`.

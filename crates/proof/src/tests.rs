@@ -73,8 +73,12 @@ fn unreadable_english_dictionary_is_reported_and_skipped() {
             let error = dictionary_load_error(lang).unwrap_or_default();
             assert!(error.contains(reason), "{lang:?}: {error}");
         }
-        assert!(!is_correct_in("becuase", lang) && is_correct_in("because", lang) && is_correct_in("houses", lang), "{lang:?}");
-        assert!(suggest_in("becuase", 3, lang).contains(&"because".to_string()), "{lang:?}");
+        // The next source marks `becuase`; a build without the built-in list and with no dictionary
+        // of the system's has none (`tests/it/features.rs`).
+        if cfg!(feature = "builtin-moby") || english_source(lang) != Some(EnglishSource::Missing) {
+            assert!(!is_correct_in("becuase", lang) && is_correct_in("because", lang) && is_correct_in("houses", lang), "{lang:?}");
+            assert!(suggest_in("becuase", 3, lang).contains(&"because".to_string()), "{lang:?}");
+        }
     }
     drop_english_files(&dir, english);
     assert_eq!(dictionary_load_error(ProofLang::EnGb), None, "a new folder forgets the old errors");

@@ -4,5 +4,6 @@
 use craft_proof::affix;
 
 mod affix_compatibility;
+mod features;
 mod french_dictionary;
 mod french_packs;
