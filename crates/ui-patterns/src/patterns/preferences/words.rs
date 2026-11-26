@@ -15,6 +15,8 @@ craft_ui::words! {
         no_matches: "preferences.noMatches" = "No matching settings";
         empty_page: "preferences.emptyPage" = "These settings aren't available yet.";
         apply: "preferences.apply" = "Apply";
+        prev: "preferences.prev" = "Prev";
+        next: "preferences.next" = "Next";
         reset_section: "preferences.resetSection" = "Reset Section";
         hex_label: "preferences.hexLabel" = "Hex color";
         default_hint: "preferences.defaultHint" = "Default";
