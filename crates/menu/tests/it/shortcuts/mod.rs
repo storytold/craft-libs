@@ -2,6 +2,7 @@
 mod fixture;
 pub(crate) mod hold;
 pub(crate) mod import_offer;
+pub(crate) mod keyboard;
 pub(crate) mod lists;
 pub(crate) mod recorder;
 pub(crate) mod review;

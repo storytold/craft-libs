@@ -430,6 +430,46 @@ fn preset_cards_in_the_page_look_paint_paper_and_no_outline() {
     assert!(!rects.iter().any(|rect| rect.stroke.width > 0.0 && above_title(&rect.rect)), "no page outline");
 }
 
+/// Strong preset names belong to the look an app picks: an app that sets no look keeps the outline look's body-type
+/// name, and `PresetCardLook::OutlineStrong` sets the names in the strong body type.
+#[trial]
+fn preset_names_are_strong_only_in_the_strong_look() {
+    use craft_behavior::PixelSize;
+    use craft_ui::patterns::form_dialogs::PresetCardLook;
+    use craft_ui::runtime::env::with_env;
+    use craft_ui::testing::Frames;
+
+    let wide = PixelSize::new(1200, 900);
+    // The width of the Clipboard preset's name in the look `look` asks for; `None` sets no look, as an app that picks
+    // none does.
+    let name_width = |look: Option<PresetCardLook>| {
+        let mut frames = Frames::new();
+        frames.screen(Vec2::new(1440.0, 900.0));
+        // A fixture's context has the suite's fonts without the facts text layout reads of them, so a semibold role
+        // paints in the regular face there and both looks measure alike. Loading them as an app does (`fonts::load`)
+        // records that the semibold family exists, so the strong look's name is wider than the outline look's.
+        craft_ui::fonts::load(&frames.ctx, craft_ui::fonts::deflated_default_definitions());
+        let mut options = DocumentOptions::default();
+        let mut show = |ui: &mut Ui| match look {
+            Some(look) => with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(look);
+                },
+                |ui| drop(NewDocumentDialog::new(Bind::bound(&mut options)).clipboard(wide).show(ui)),
+            ),
+            None => drop(NewDocumentDialog::new(Bind::bound(&mut options)).clipboard(wide).show(ui)),
+        };
+        for _ in 0..30 {
+            frames.frame(Vec::new(), &mut show);
+        }
+        frames.texts().iter().find(|line| line.text == "Clipboard").expect("the preset title is painted").rect.width()
+    };
+    let (unset, outline, strong) = (name_width(None), name_width(Some(PresetCardLook::Outline)), name_width(Some(PresetCardLook::OutlineStrong)));
+    assert!((unset - outline).abs() < 0.5, "an app that picks no look keeps the outline look's name: {unset} against {outline}");
+    assert!(strong > outline, "the strong look sets the preset's name more strongly than the outline look: {strong} against {outline}");
+}
+
 /// A Web card turns Artboards on and a Photo card turns it off again; Artboards the user ticked stays on.
 #[trial]
 fn web_cards_turn_artboards_on_and_only_take_back_their_own() {

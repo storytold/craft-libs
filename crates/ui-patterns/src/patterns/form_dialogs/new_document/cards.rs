@@ -178,6 +178,7 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
             .card()
             .card_text(match look {
                 PresetCardLook::Outline => CardText::Preset,
+                PresetCardLook::OutlineStrong => CardText::PresetStrong,
                 PresetCardLook::Page => CardText::Page,
             })
             .fill_row()
@@ -362,6 +363,8 @@ pub enum PresetCardLook {
     /// A small page outline in content ink on a raised card, the name and size line centred under it.
     #[default]
     Outline,
+    /// `Outline`'s page and card, with the preset's name in the strong body type.
+    OutlineStrong,
     /// Blank paper on its shadow (`Tile::page`) on a flat card (`CardText::Page`): the name strong on up to two lines,
     /// the size line under it. VectorCraft's preset cards, as production drew them.
     Page,
@@ -372,7 +375,7 @@ fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook) ->
     let page = card.settings.page();
     let tile = Tile::new(card.title.clone()).detail(card.line.clone());
     let tile = match look {
-        PresetCardLook::Outline => {
+        PresetCardLook::Outline | PresetCardLook::OutlineStrong => {
             tile.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page))
         }
         PresetCardLook::Page => tile.page(page.0, page.1),
