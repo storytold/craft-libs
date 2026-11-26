@@ -204,8 +204,9 @@ address starts with `https://`, the SHA-256 has 64 hexadecimal digits, and `max_
 least 1.
 
 `curl` runs with `-q` (no `.curlrc`), `--globoff` (brackets and braces in the address are sent as
-they are), `--proto =https` and `--proto-redir =https`, `--fail`, `--max-filesize` set to
-`max_bytes`, a 10-second connect timeout, and a stop when a transfer stays under 1 KiB per second for
+they are), `--path-as-is` (`.` and `..` parts of the address are sent as they are),
+`--proto =https` and `--proto-redir =https`, `--fail`, `--max-filesize` set to
+`max_bytes` (capped at `i64::MAX`, the largest value `curl` reads), a 10-second connect timeout, and a stop when a transfer stays under 1 KiB per second for
 60 seconds. The crate counts the bytes itself as well, so a response of unknown length stops at
 `max_bytes` with any version of `curl`. A body over `max_bytes` is reported as `TooLarge` whether
 `curl` refuses it from its advertised size or the crate stops it while counting; a `Transport`
@@ -218,7 +219,10 @@ part of them, so another process that replaces `dest` or a folder under it with 
 checked can redirect a write. Every folder on the way to a written file (`dest`, the folders above
 it and the folders under it) must be writable only by the user running the fetch or the system.
 
-The archive is held in memory, so the pin's `max_bytes` also bounds its memory. Before anything is
+The archive is held in memory. The pin's `max_bytes` limits the archive's downloaded size only;
+peak memory is higher, because the entries' file data is held as well, up to `max_expanded_bytes`.
+The pin's name labels the archive in messages and must not be empty, longer than 4096 bytes or hold
+a control character. A trailing `/` is accepted on a folder entry only. Before anything is
 written, every entry is checked: a symbolic or hard link, a device, a FIFO or any other special
 entry, a path that is absolute, holds `..`, is not UTF-8 or fails the name rules above, and a file
 name repeated ignoring case and Unicode normalization each stop the extraction. `ExtractOptions` holds the limits:

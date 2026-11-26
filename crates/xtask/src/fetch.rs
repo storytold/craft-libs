@@ -197,6 +197,7 @@ fn curl_args(url: &str, max_bytes: u64) -> Vec<String> {
     let mut args: Vec<String> = [
         "-q",
         "--globoff",
+        "--path-as-is",
         "--fail",
         "--silent",
         "--show-error",
@@ -216,7 +217,8 @@ fn curl_args(url: &str, max_bytes: u64) -> Vec<String> {
     .iter()
     .map(|s| (*s).to_string())
     .collect();
-    args.push(max_bytes.to_string());
+    // `curl` reads the limit as a signed 64-bit number; the crate's own count enforces the rest.
+    args.push(max_bytes.min(i64::MAX.unsigned_abs()).to_string());
     args.extend(["--output", "-", "--url", url].iter().map(|s| (*s).to_string()));
     args
 }
@@ -260,9 +262,12 @@ pub fn fetch_archive(dest: &Path, archive: &Pin<'_>, options: &ExtractOptions) -
 }
 
 /// Downloads the tar archive `archive` through `transport`, checks its size and SHA-256, and
-/// writes its files under `dest` as [`extract`] does. The archive is held in memory, so
-/// `archive.max_bytes` also bounds the memory it takes. Returns the names of the files written.
+/// writes its files under `dest` as [`extract`] does. The archive is held in memory;
+/// `archive.max_bytes` limits its downloaded size, and the files' data is held as well, up to
+/// `options.max_expanded_bytes`. `archive.name` must not be empty, longer than 4096 bytes or hold
+/// a control character. Returns the names of the files written.
 pub fn fetch_archive_with(dest: &Path, archive: &Pin<'_>, options: &ExtractOptions, transport: &dyn Transport) -> Result<Vec<String>, FetchError> {
+    check_label(archive.name).map_err(|reason| invalid(archive.name, reason))?;
     let sha256 = check_fields(archive).map_err(|reason| invalid(archive.name, reason))?;
     let mut sink = Sink::new(Vec::new(), archive.max_bytes);
     let got = transport.download(archive.url, archive.max_bytes, &mut sink);
@@ -368,6 +373,21 @@ fn check_fields(pin: &Pin<'_>) -> Result<String, String> {
         return Err("max_bytes is 0".into());
     }
     Ok(pin.sha256.to_ascii_lowercase())
+}
+
+/// Checks the name that labels an archive in messages: not empty, within [`MAX_NAME_BYTES`] and
+/// free of control characters.
+fn check_label(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("the name is empty".into());
+    }
+    if name.len() > MAX_NAME_BYTES {
+        return Err(format!("the name is longer than {MAX_NAME_BYTES} bytes"));
+    }
+    if let Some(c) = name.chars().find(|c| c.is_control()) {
+        return Err(format!("the name holds {c:?}, a control character"));
+    }
+    Ok(())
 }
 
 /// Splits a relative `/`-separated name into its parts and checks each one.
@@ -516,8 +536,15 @@ fn fold(part: &str) -> String {
 
 /// Creates `dest` when it is missing and checks that it is a folder and not a link.
 fn prepare(dest: &Path) -> Result<(), FetchError> {
+    let checked = without_trailing(dest);
+    match fs::symlink_metadata(&checked) {
+        Ok(m) if m.is_dir() => return Ok(()),
+        Ok(_) => return Err(FetchError::NotRegular(dest.to_path_buf())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io_error(dest, e)),
+    }
     fs::create_dir_all(dest).map_err(|e| io_error(dest, e))?;
-    match fs::symlink_metadata(without_trailing(dest)) {
+    match fs::symlink_metadata(&checked) {
         Ok(m) if m.is_dir() => Ok(()),
         Ok(_) => Err(FetchError::NotRegular(dest.to_path_buf())),
         Err(e) => Err(io_error(dest, e)),
@@ -571,18 +598,19 @@ fn cached(target: &Path, item: &Checked<'_>) -> Result<bool, FetchError> {
     if !meta.is_file() {
         return Err(FetchError::NotRegular(target.to_path_buf()));
     }
-    if meta.len() <= item.pin.max_bytes && hash_file(target, item.pin.max_bytes)? == item.sha256 {
+    if meta.len() <= item.pin.max_bytes && hash_file(target, item.pin.max_bytes)?.is_some_and(|actual| actual == item.sha256) {
         return Ok(true);
     }
     fs::remove_file(target).map_err(|e| io_error(target, e))?;
     Ok(false)
 }
 
-fn hash_file(path: &Path, max_bytes: u64) -> Result<String, FetchError> {
+/// The lowercase SHA-256 of the file, or `None` when it holds more than `max_bytes` bytes.
+fn hash_file(path: &Path, max_bytes: u64) -> Result<Option<String>, FetchError> {
     let file = File::open(path).map_err(|e| io_error(path, e))?;
     let mut hasher = Sha256::new();
-    io::copy(&mut file.take(max_bytes.saturating_add(1)), &mut hasher).map_err(|e| io_error(path, e))?;
-    Ok(hex(&hasher.finalize()))
+    let hashed = io::copy(&mut file.take(max_bytes.saturating_add(1)), &mut hasher).map_err(|e| io_error(path, e))?;
+    Ok((hashed <= max_bytes).then(|| hex(&hasher.finalize())))
 }
 
 fn download_file(target: &Path, item: &Checked<'_>, transport: &dyn Transport) -> Result<(), FetchError> {
@@ -749,7 +777,7 @@ fn read_entries<R: Read>(name: &str, reader: R, options: &ExtractOptions) -> Res
         if expanded > options.max_expanded_bytes {
             return Err(too_large(name, format!("{} bytes of files", options.max_expanded_bytes)));
         }
-        let Some(parts) = entry_parts(&raw, options.strip_components).map_err(|reason| bad(format!("{shown:?}: {reason}")))? else {
+        let Some(parts) = entry_parts(&raw, options.strip_components, folder).map_err(|reason| bad(format!("{shown:?}: {reason}")))? else {
             continue;
         };
         if folder {
@@ -770,12 +798,14 @@ fn read_entries<R: Read>(name: &str, reader: R, options: &ExtractOptions) -> Res
 
 /// The checked parts of an entry's path after `strip` leading folders, or `None` for an entry
 /// that names no file or folder once stripped (such as `./`).
-fn entry_parts(raw: &[u8], strip: usize) -> Result<Option<Vec<String>>, String> {
+fn entry_parts(raw: &[u8], strip: usize, folder: bool) -> Result<Option<Vec<String>>, String> {
     let text = std::str::from_utf8(raw).map_err(|_| "the path is not UTF-8".to_string())?;
     if text.starts_with('/') {
         return Err("the path is absolute".into());
     }
-    let parts = || text.strip_suffix('/').unwrap_or(text).split('/').skip_while(|p| *p == ".");
+    // Only a folder entry may end in `/`; for a file it leaves an empty last part, which is refused.
+    let trimmed = if folder { text.strip_suffix('/').unwrap_or(text) } else { text };
+    let parts = || trimmed.split('/').skip_while(|p| *p == ".");
     if parts().all(str::is_empty) {
         return Ok(None);
     }
@@ -827,16 +857,40 @@ mod tests {
     }
 
     #[test]
+    fn curl_keeps_dot_segments_and_a_limit_it_can_represent() {
+        let args = curl_args("https://example.com/a/../b.png", u64::MAX);
+        assert!(args.iter().any(|a| a == "--path-as-is"), "{args:?}");
+        let at = args.iter().position(|a| a == "--max-filesize").unwrap();
+        assert_eq!(args.get(at + 1).map(String::as_str), Some(i64::MAX.to_string().as_str()));
+    }
+
+    #[test]
+    fn a_cached_file_that_grew_past_the_limit_is_not_hashed_as_a_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        fs::write(&path, b"0123456789").unwrap();
+        assert!(hash_file(&path, 10).unwrap().is_some());
+        assert!(hash_file(&path, 9).unwrap().is_none());
+    }
+
+    #[test]
+    fn only_a_folder_entry_may_end_in_a_slash() {
+        assert_eq!(entry_parts(b"top/", 0, true), Ok(Some(vec!["top".to_string()])));
+        assert!(entry_parts(b"top/", 0, false).is_err());
+        assert_eq!(entry_parts(b"top/a.png", 0, false), Ok(Some(vec!["top".to_string(), "a.png".to_string()])));
+    }
+
+    #[test]
     fn entry_parts_keep_their_results_around_the_length_limit() {
         let long = "a/".repeat(MAX_NAME_BYTES);
-        assert!(entry_parts(long.as_bytes(), 0).is_err());
+        assert!(entry_parts(long.as_bytes(), 0, true).is_err());
         // Stripped folders do not count toward the length, but are still checked.
         let fits = format!("{}b", "a/".repeat(MAX_NAME_BYTES / 2));
         let strip = MAX_NAME_BYTES / 2;
-        assert_eq!(entry_parts(fits.as_bytes(), strip), Ok(Some(vec!["b".to_string()])));
-        assert!(entry_parts(format!("..{}", &fits[1..]).as_bytes(), strip).is_err());
-        assert_eq!(entry_parts(b"./", 0), Ok(None));
-        assert_eq!(entry_parts(b"top/", 1), Ok(None));
+        assert_eq!(entry_parts(fits.as_bytes(), strip, false), Ok(Some(vec!["b".to_string()])));
+        assert!(entry_parts(format!("..{}", &fits[1..]).as_bytes(), strip, false).is_err());
+        assert_eq!(entry_parts(b"./", 0, true), Ok(None));
+        assert_eq!(entry_parts(b"top/", 1, true), Ok(None));
     }
 
     #[test]

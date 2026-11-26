@@ -251,6 +251,36 @@ fn bad_pins_are_refused_before_any_download() {
 }
 
 #[test]
+fn a_destination_that_is_a_file_is_refused_before_any_download() {
+    let dir = Scratch::new("file-dest");
+    let dest = dir.0.join("cache");
+    fs::write(&dest, b"not a folder").unwrap();
+    let body = b"x".to_vec();
+    let sha = sha256_hex(&body);
+    let fake = Fake::default().with(URL, Reply::Body(body));
+
+    let err = fetch_pinned_with(&dest, &[pin("a.png", &sha)], &fake).unwrap_err();
+    assert!(matches!(err, FetchError::NotRegular(_)), "{err}");
+    assert_eq!(fake.calls.get(), 0);
+    assert_eq!(fs::read(&dest).unwrap(), b"not a folder");
+}
+
+#[test]
+fn a_bad_archive_name_is_refused_before_the_download() {
+    let dir = Scratch::new("archive-name");
+    let archive = gzip(&tarball(&[("a.png", b'0', b"aaa")]));
+    let sha = sha256_hex(&archive);
+    let fake = Fake::default().with(URL, Reply::Body(archive.clone()));
+    for name in ["", "suite\n.tar.gz", "suite\u{1b}[0m.tar.gz"] {
+        let pin = Pin { name, url: URL, sha256: &sha, max_bytes: archive.len() as u64 };
+        let err = fetch_archive_with(&dir.0, &pin, &ExtractOptions::default(), &fake).unwrap_err();
+        assert!(matches!(err, FetchError::Invalid { .. }), "{name:?}: {err}");
+    }
+    assert_eq!(fake.calls.get(), 0);
+    assert!(dir.listing().is_empty(), "{:?}", dir.listing());
+}
+
+#[test]
 fn a_folder_at_a_file_name_is_refused() {
     let dir = Scratch::new("folder-target");
     fs::create_dir(dir.0.join("a.png")).unwrap();
@@ -377,7 +407,8 @@ fn an_archive_with_the_wrong_hash_or_size_writes_nothing() {
 
 #[test]
 fn unsafe_archive_entries_write_nothing() {
-    let cases: [&[(&str, u8, &[u8])]; 21] = [
+    let cases: [&[(&str, u8, &[u8])]; 22] = [
+        &[("ok.png", b'0', b"1"), ("file.png/", b'0', b"2")],
         &[("ok.png", b'0', b"1"), ("foo\\bar.png", b'0', b"2")],
         &[("ok.png", b'0', b"1"), ("foo//", b'5', b"")],
         &[("ok.png", b'0', b"1"), ("foo//bar.png", b'0', b"2")],
