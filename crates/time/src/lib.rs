@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub, SubAssign};
+use std::time::Duration;
 
 /// SoundCraft's sample-index, tempo-map, grid, and display-time API, retained verbatim for
 /// session-format compatibility while sharing the broader Craft time primitives above.
@@ -21,6 +22,8 @@ pub mod soundcraft;
 
 /// Clock ticks per second: 254 016 000 000.
 pub const TICKS_PER_SECOND: i64 = 254_016_000_000;
+
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 /// A point or duration in time, in ticks.
 /// Arithmetic saturates at storage limits; representable results remain exact.
@@ -75,6 +78,23 @@ impl Tick {
         let (n, unit) = if unit < 0 { (-n, -unit) } else { (n, unit) };
         let (Some(q), Some(r)) = (n.checked_div_euclid(unit), n.checked_rem_euclid(unit)) else { return 0 };
         clamp_i64(if r * 2 >= unit { q + 1 } else { q })
+    }
+
+    /// A [`Duration`] as ticks, floored to the tick and saturating at `i64::MAX` ticks.
+    pub fn from_duration(d: Duration) -> Tick {
+        let secs = i128::from(d.as_secs()) * i128::from(TICKS_PER_SECOND);
+        let subsec = i128::from(d.subsec_nanos()) * i128::from(TICKS_PER_SECOND) / i128::from(NANOS_PER_SECOND);
+        Tick(clamp_i64(secs + subsec))
+    }
+
+    /// Ticks as a [`Duration`], rounded to the nearest nanosecond (halves up), or `None` for a
+    /// negative tick. `Tick::from_duration(d).to_duration()` returns `d` for every `d` up to
+    /// `i64::MAX` ticks (about 420 days).
+    pub fn to_duration(self) -> Option<Duration> {
+        let ticks = u128::try_from(self.0).ok()?;
+        let tps = u128::from(TICKS_PER_SECOND.unsigned_abs());
+        let nanos = (ticks * u128::from(NANOS_PER_SECOND) + tps / 2) / tps;
+        Some(Duration::from_nanos(u64::try_from(nanos).ok()?))
     }
 
     pub fn abs(self) -> Tick {
@@ -820,6 +840,29 @@ mod tests {
         assert_eq!(Tick::from_rational(1, 1, 1).0, TICKS_PER_SECOND);
         assert_eq!(Tick(TICKS_PER_SECOND).to_rational_floor(1, 1), 1);
         assert_eq!(Tick(TICKS_PER_SECOND).to_rational_round(1, 1), 1);
+    }
+
+    #[test]
+    fn durations_round_trip_through_ticks() {
+        for nanos in [0, 1, 2, 3, 499, 500_000_001, 33_366_667, 1_000_000_000, 86_399_999_999_999] {
+            let d = Duration::from_nanos(nanos);
+            assert_eq!(Tick::from_duration(d).to_duration(), Some(d), "{nanos} ns");
+        }
+        let near_limit = Duration::from_secs(400 * 86_400) + Duration::from_nanos(999_999_999);
+        assert_eq!(Tick::from_duration(near_limit).to_duration(), Some(near_limit));
+    }
+
+    #[test]
+    fn durations_floor_and_saturate() {
+        assert!(Tick::from_duration(Duration::from_nanos(1)) < Tick(TICKS_PER_SECOND / 1_000_000_000 + 1));
+        assert!(Tick::from_duration(Duration::from_nanos(1)) > Tick::ZERO);
+        assert_eq!(Tick::from_duration(Duration::MAX), Tick(i64::MAX));
+        assert!(Tick(i64::MAX).to_duration().is_some_and(|d| d > Duration::from_secs(400 * 86_400)));
+        assert_eq!(Tick(-1).to_duration(), None);
+        assert_eq!(Tick(i64::MIN).to_duration(), None);
+        // Half a nanosecond is 127.008 ticks.
+        assert_eq!(Tick(128).to_duration(), Some(Duration::from_nanos(1)));
+        assert_eq!(Tick(127).to_duration(), Some(Duration::ZERO));
     }
 
     #[test]
