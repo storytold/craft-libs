@@ -36,7 +36,8 @@
 //! `SystemRoot` is unset or not absolute, or `taskkill.exe` does not start, only the child is killed.
 //! A process the child started that outlives it and holds an output pipe keeps that pipe's reader
 //! thread blocked until the process exits. The failed probe waits up to 2 seconds for the readers
-//! and then returns without them. A successful lookup is cached for the process under
+//! and then returns without them. At most 64 pipe readers are alive at once in a process; a probe
+//! that would start more returns [`OracleError::Read`] without reading. A successful lookup is cached for the process under
 //! every input it read (the program, the version argument, the explicit variable and its value,
 //! `PATH`, `PATHEXT`, the current directory, the install folders, the full path of each
 //! drive-relative input and the limits). A failed lookup is
@@ -54,6 +55,7 @@ use std::fmt;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -639,13 +641,42 @@ fn read_capped(mut r: impl Read + Send + 'static, cap: usize) -> Result<Vec<u8>,
 
 type StreamResult = (bool, Result<Vec<u8>, ReadFail>);
 
-/// Read one pipe on its own thread and send the result as `(is_stdout, bytes)`.
+/// How many pipe readers may be alive in one process.
+const MAX_LIVE_READERS: usize = 64;
+
+/// The pipe readers alive in this process.
+static LIVE_READERS: AtomicUsize = AtomicUsize::new(0);
+
+/// One live pipe reader, counted in `live` until it is dropped.
+struct ReaderSlot(&'static AtomicUsize);
+
+impl ReaderSlot {
+    /// Count one more reader in `live`, or return `None` when `max` are already alive.
+    fn take(live: &'static AtomicUsize, max: usize) -> Option<Self> {
+        live.try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < max).then_some(n + 1)).ok()?;
+        Some(Self(live))
+    }
+}
+
+impl Drop for ReaderSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Read one pipe on its own thread and send the result as `(is_stdout, bytes)`. It fails without
+/// reading when [`MAX_LIVE_READERS`] readers are alive, which happens when earlier failed runs left
+/// readers blocked on pipes that a surviving process holds open.
 fn spawn_reader(pipe: Option<impl Read + Send + 'static>, is_stdout: bool, cap: usize, tx: Sender<StreamResult>) -> io::Result<()> {
     let Some(pipe) = pipe else {
         let _ = tx.send((is_stdout, Ok(Vec::new())));
         return Ok(());
     };
+    let Some(slot) = ReaderSlot::take(&LIVE_READERS, MAX_LIVE_READERS) else {
+        return Err(io::Error::other("too many pipe readers are still blocked on earlier probes"));
+    };
     std::thread::Builder::new().name("craft-testkit-oracle-pipe".into()).spawn(move || {
+        let _slot = slot;
         let _ = tx.send((is_stdout, read_capped(pipe, cap)));
     })?;
     Ok(())
@@ -846,6 +877,18 @@ fn wait_for_exit(child: &mut Child, deadline: Instant) -> Result<ExitStatus, Opt
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn reader_slots_stop_at_the_limit_and_come_back_when_dropped() {
+        static LIVE: AtomicUsize = AtomicUsize::new(0);
+        let first = ReaderSlot::take(&LIVE, 2).expect("first slot");
+        let _second = ReaderSlot::take(&LIVE, 2).expect("second slot");
+        assert!(ReaderSlot::take(&LIVE, 2).is_none(), "a third slot must be refused");
+        assert_eq!(LIVE.load(Ordering::Acquire), 2);
+        drop(first);
+        assert_eq!(LIVE.load(Ordering::Acquire), 1);
+        assert!(ReaderSlot::take(&LIVE, 2).is_some(), "a dropped slot must be reusable");
+    }
 
     /// A new folder under the system temporary folder, removed with its contents on drop.
     struct Scratch(PathBuf);
