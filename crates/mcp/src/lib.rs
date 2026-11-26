@@ -5,10 +5,18 @@
 //! that accepted calls before initialization and initialize in a batch; strict mode enforces the
 //! initialization ordering and batch prohibition. Create one session per connection.
 
-use craft_jsonrpc::{Request, RpcError};
+use craft_jsonrpc::{Limits, Request, RpcError};
 use serde_json::{Value, json};
 
 pub const PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// JSON-RPC limits for an MCP connection. MCP requires a string or integer request ID, so
+/// `craft_jsonrpc::process` answers a null or fractional ID with an invalid-request error and does
+/// not call the request handler. The size bounds are `Limits::default()`'s; override them with
+/// struct update syntax, as in `Limits { max_message_bytes, ..jsonrpc_limits() }`.
+pub fn jsonrpc_limits() -> Limits {
+    Limits { integer_ids_only: true, allow_null_ids: false, ..Limits::default() }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Policy {
@@ -263,6 +271,28 @@ mod tests {
         assert_eq!(tool_call(&json!({"name":"open", "arguments":[]})).unwrap_err().code, -32602);
         assert_eq!(tool_call(&json!({})).unwrap_err().code, -32602);
         assert_eq!(text_tool_result("bad", true), json!({"content":[{"type":"text", "text":"bad"}], "isError":true}));
+    }
+
+    #[test]
+    fn jsonrpc_limits_reject_ids_mcp_forbids() {
+        let called = std::cell::Cell::new(0);
+        let reply = |id: Value| {
+            let input = json!({"jsonrpc":"2.0", "id":id, "method":"ping"});
+            let handler = |_: Request<'_>| {
+                called.set(called.get() + 1);
+                Ok(json!({}))
+            };
+            craft_jsonrpc::process(&input, jsonrpc_limits(), handler, |_| {}).unwrap().unwrap()
+        };
+        for id in [json!(null), json!(1.5)] {
+            let r = reply(id);
+            assert_eq!(r["error"]["code"], -32600);
+            assert_eq!(called.get(), 0);
+        }
+        for id in [json!(7), json!("seven")] {
+            assert_eq!(reply(id.clone())["id"], id);
+        }
+        assert_eq!(called.get(), 2);
     }
 
     #[test]
