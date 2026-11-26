@@ -244,9 +244,11 @@ pub(crate) struct Entries {
     replaying: Vec<(Arc<Transcript>, Id, usize)>,
     /// The drafts open, innermost last.
     drafts: Vec<Draft>,
+    /// This pass asked for the frame's discard pass; the end hook requests it.
     ask: bool,
     /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
     asks: u64,
+    /// The frame whose one discard pass the end hook requested.
     asked: Option<u64>,
 }
 
@@ -1175,6 +1177,13 @@ pub(crate) fn ask_discard(ctx: &Context) {
     with(ctx, &moment, Entries::ask_discard);
 }
 
+/// Whether this pass asked for the frame's discard pass and the end hook will request it from egui: no earlier pass of
+/// the frame got it, and egui can still run this one again.
+pub(crate) fn discard_pending(ctx: &Context) -> bool {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.ask && memory.asked != Some(moment.frame)) && sizing::discardable(ctx)
+}
+
 /// Keeps the entries and kept transcripts of `ids` through this frame, for a replayed run that kept them
 /// (`replay::note_layout_keep`): the replay does not reach them, and an entry no pass touched in a frame is dropped.
 pub(crate) fn keep(ctx: &Context, ids: &[Id]) {
@@ -1244,9 +1253,11 @@ pub(crate) mod guard {
         ("layout::column_group::Open", "column groups: frames the run opens and closes; reports go through contribute"),
         ("access::scope::Stack", "label and merge scopes: opened and closed by the run; control minimums go through contribute"),
         ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
+        ("layout::body::ViewFills", "view fills: opened and closed by the memoized view's own run"),
         ("layout::body::HeldWidths", "held children: opened by the column's own first sweep and closed after its last"),
         ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
         ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
+        ("layout::body::WrapRows", "wrapping rows' lines: opened by each sweep of the row and closed after it; the lines go through emit_record"),
         (
             "layout::body::FlowStarts",
             "flow starts: opened by each sweep of the body and closed by its first child in flow; a child reads its body's at its own start, and its measure key holds what it read",
@@ -1255,6 +1266,8 @@ pub(crate) mod guard {
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
         ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),
+        ("layout::body::FillLeasts", "fill leasts: opened and closed by the row's own first sweep; the sum goes through contribute"),
+        ("layout::body::RowShortfalls", "shortfalls: asked and taken by the container around the row in the same measuring sweep"),
         ("runtime::reads::Runs", "measuring runs of the read record: opened and closed by each run; reads go through contribute"),
         ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),
         // Read in measuring runs; written by real runs, the frame hooks or the host.
@@ -1292,6 +1305,10 @@ pub(crate) mod guard {
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
+        (
+            "runtime::memory::FactRecord<craft_ui_contract::runtime::commands::ShownFact>",
+            "where commands were shown: last pass's, read; registered by real runs only (a measuring run is not parted)",
+        ),
         (
             "shell::app_shell::dialogs::Hosts",
             "dialog hosts: one handle per window, made on first use; dialogs open on clicks, which only real runs sense",

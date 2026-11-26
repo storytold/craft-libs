@@ -12,6 +12,8 @@ pub enum FontSlot {
     UiSemibold,
     /// The monospace face.
     Mono,
+    /// The condensed semibold face of document tab titles, where the app embeds one; the semibold face otherwise.
+    UiCondensed,
 }
 
 /// Size, line height and font of one type role.
@@ -48,6 +50,9 @@ pub enum TypeRole {
     Mono,
     /// A brand title: the app's name on its start screen.
     Display,
+    /// Document tab titles in the semibold look: the label's size and line height, in the condensed face
+    /// ([`FontSlot::UiCondensed`]).
+    TabTitle,
 }
 
 /// How a type role sets its letters.
@@ -106,6 +111,7 @@ impl TypeTokens {
             TypeRole::BodyLarge => self.body_large,
             TypeRole::Mono => self.mono,
             TypeRole::Display => self.display,
+            TypeRole::TabTitle => TypeStyle { font: FontSlot::UiCondensed, ..self.label },
         }
     }
 

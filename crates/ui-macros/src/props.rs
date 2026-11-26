@@ -194,8 +194,12 @@ const COLLECTION: &[Forwarded] = &[
     ("marquee", "bool", "A drag on the background selects the rows it covers."),
     ("deletable", "bool", "Delete and Backspace at the lead report the items to delete."),
     ("delete_target", "$ui::contract::DeleteTarget", "Where a deletable collection takes Delete and Backspace."),
-    ("drag_count", "$ui::runtime::env::Counted", "The drag badge reads this count word for the dragged items, one included."),
-    ("drag_badge", "bool", "A row drag shows its badge by the pointer (default on); off, the dragged row shows alone."),
+    ("drag_count", "$ui::runtime::env::Counted", "A row drag's preview reads this count word for the dragged items, one included."),
+    (
+        "drag_preview",
+        "$ui::contract::RowPreview",
+        "What a row drag shows: a badge by the pointer (default), its name inside the drop region, or nothing.",
+    ),
     ("natural_height", "bool", "The collection takes its full content height and owns no scroll: for a short collection inside a scrolling page."),
     ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the row height."),
     ("max_rows", "u16", "The collection shows at most this many rows and scrolls the rest, inside a scrolling body too."),
@@ -231,6 +235,7 @@ const CONTAINER: &[Forwarded] = &[
     ("end", "$ui::contract::EndRegion", "The region at the line's end edge, outside the body scroll."),
     ("position", "$ui::contract::SetPosition", "The component's place in its set, for assistive technology."),
     ("collection_body", "", "The body holds one collection that owns the scroll: a layer's own body scroll is off."),
+    ("fit_rank", "u8", "A member of a shrinking row that leaves it whole, lowest rank first, when the row is short."),
     ("fallback_collection", "egui::Id", "The collection that receives move intents left unused by a focused control in this region."),
     ("least_width", "$ui::contract::LeastWidth", "The least width of the content, from a size role."),
 ];

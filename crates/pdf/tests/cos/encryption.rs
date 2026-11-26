@@ -689,7 +689,7 @@ fn an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone() {
 fn protecting_drops_a_crypt_filter_selected_by_reference() {
     let protected = |doc: &mut Document| {
         doc.set_encryption(&NewEncryption {
-            algorithm: Algorithm::Aes256,
+            algorithm: Algorithm::Aes128,
             user_password: "",
             owner_password: "owner",
             permissions: -1,

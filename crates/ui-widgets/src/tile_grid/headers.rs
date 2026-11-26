@@ -2,6 +2,7 @@
 //! The item step sees this source, so a header or a tail row is a row it can put the lead on, and the layout places
 //! the rows by the same positions.
 
+use super::GroupHeads;
 use super::layout::{Slot, TailRow, TileGroup, group_spans, headers_through, outline_position, slot_at};
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, SizeHint};
 use std::borrow::Cow;
@@ -24,14 +25,16 @@ pub(super) struct Outline<'s, K> {
     /// The keys of the tail rows.
     tail: Vec<K>,
     collapsible: bool,
+    /// Under `Rule` a header is a divider: it is a row of the outline the grid draws, but it never takes the lead.
+    heads: GroupHeads,
 }
 
 impl<'s, K: Clone> Outline<'s, K> {
-    pub(super) fn new(inner: &'s dyn ItemSource<K>, groups: &[TileGroup<K>], tail: &[TailRow<K>], collapsible: bool) -> Self {
+    pub(super) fn new(inner: &'s dyn ItemSource<K>, groups: &[TileGroup<K>], tail: &[TailRow<K>], collapsible: bool, heads: GroupHeads) -> Self {
         let spans = group_spans(groups, inner.len());
         let headers = groups.iter().map(|group| Header { key: group.key.clone(), open: group.open, selectable: group.selectable }).collect();
         let tail = tail.iter().map(|row| row.key.clone()).collect();
-        Outline { inner, headers, starts: spans.iter().map(|span| span.start).collect(), tail, collapsible }
+        Outline { inner, headers, starts: spans.iter().map(|span| span.start).collect(), tail, collapsible, heads }
     }
 
     fn slot(&self, at: usize) -> Slot {
@@ -108,7 +111,8 @@ impl<K: Clone + PartialEq> DisplayOrder<K> for Outline<'_, K> {
 
     fn enabled(&self, at: usize) -> bool {
         match self.slot(at) {
-            Slot::Header(_) | Slot::Tail(_) => true,
+            Slot::Header(_) => self.heads == GroupHeads::Titled,
+            Slot::Tail(_) => true,
             Slot::Tile(tile) => self.inner.enabled(tile),
         }
     }

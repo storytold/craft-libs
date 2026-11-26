@@ -6,7 +6,7 @@ use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
 use crate::runtime::env::{Env, Label, UnitKind};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, EditEvents, ZoomLadder};
+use craft_behavior::{CanvasView, EditEvents, ZoomScheme};
 use egui::{Rect, Response, Ui};
 
 #[cfg(feature = "suite")]
@@ -16,12 +16,13 @@ pub(crate) mod stories;
 const MESSAGE_DECIMALS: usize = 2;
 
 /// A zoom field: a `NumberField` over the view's zoom in percent on its [`ZoomScale`] (device pixels unless set),
-/// with the zoom codec and the zoom ladder's range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
+/// with the zoom codec and the zoom scheme's range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
 /// commit keeps the view.
 ///
 /// - Typing takes digits, `-`, `/` and the decimal separator: `a/b` is the zoom `a ÷ b × 100` %. Non-positive
 ///   entries are rejected; a second separator applies the number before it and reports [`InvalidZoom`].
-/// - Tab writes the typed number in the field's own form and selects it; focus stays and nothing applies.
+/// - Tab writes the typed number in the field's own form and selects it; focus stays and nothing applies. With nothing
+///   typed, Tab and Shift+Tab move focus as in any field.
 /// - A press on a part declared `holds_drafts` (the pasteboard, the title bar) keeps the typed zoom unapplied; the
 ///   next Enter applies it.
 #[derive(crate::contract::Pattern)]
@@ -71,7 +72,7 @@ impl ZoomField {
         self
     }
 
-    /// The arrow keys and the wheel step along the zoom ladder.
+    /// The arrow keys and the wheel step along the zoom scheme's rungs.
     #[must_use]
     pub fn stepper(mut self, on: bool) -> Self {
         self.stepper = on;
@@ -112,11 +113,12 @@ impl ZoomField {
     fn show_in(self, ui: &mut Ui, rect: Option<Rect>) -> ZoomFieldOutput {
         let env = Env::of(ui);
         let pixels_per_point = self.scale.pixels_per_unit(env.scale.0);
+        let scheme = env.view().get::<ZoomScheme>();
         let document = self.document;
         let device = self.view.as_ref().map(|view| zoom::device(view, pixels_per_point));
         // The document's zoom range widened to the current zoom, so the field never pulls the zoom back.
-        let range = device.map(|device| ZoomLadder::percent_range(device, document));
-        let mut field = NumberField::new(self.label, Bind::given(device.map(|device| device * 100.0)))
+        let range = device.map(|device| scheme.percent_range(device, document));
+        let mut field = NumberField::new(self.label, Bind::given(device.map(|device| scheme.percent(device))))
             .codec(env.units().zoom_codec().signed_zoom())
             .unit_kind(UnitKind::Percent)
             .zoom_typing()
@@ -125,7 +127,7 @@ impl ZoomField {
             field = field.range(range);
         }
         if self.stepper {
-            field = field.stepper(move |percent: f64, dir: i32| ZoomLadder::step(percent / 100.0, dir, document) * 100.0);
+            field = field.stepper(move |percent: f64, dir: i32, _scale: f64| scheme.percent(scheme.step(scheme.device(percent), dir, document)));
         }
         if self.scrub {
             field = field.scrub_by_label();
@@ -139,11 +141,9 @@ impl ZoomField {
         };
         let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });
         let view = match self.view {
-            Some(current) => shown
-                .edit
-                .events
-                .clone()
-                .map(|percent| percent.map_or(current, |percent| zoom::with_device(&current, percent / 100.0, document, pixels_per_point))),
+            Some(current) => shown.edit.events.clone().map(|percent| {
+                percent.map_or(current, |percent| zoom::with_device(&current, scheme.device(percent), document, pixels_per_point, &scheme))
+            }),
             None => EditEvents::new(),
         };
         ZoomFieldOutput { response: shown.edit.response.clone(), view, invalid_zoom }

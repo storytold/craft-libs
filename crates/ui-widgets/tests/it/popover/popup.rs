@@ -3,12 +3,15 @@
 use crate::overlay::kit::{Leaf, Opened, Opener, Seen};
 use craft_behavior::{DisplayOrder, ItemSource};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CollectionEvent, Overlay, Props as _, Scroll, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
+use craft_ui::contract::{
+    Bind, CollectionEvent, Overlay, Props as _, Role, Scroll, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked,
+};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
-use craft_ui::popover::{PopupList, PopupListKind};
+use craft_ui::popover::{Popover, PopupList, PopupListKind};
 use craft_ui::testing::pointer::{self, click, moved, press, release};
 use craft_ui::testing::{Fixture, Frames, trial};
+use craft_ui::text::NumberField;
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -75,6 +78,35 @@ fn a_click_on_the_opener_closes_its_open_menu() {
     click(&mut frames, OPENER.center(), &mut show);
     frames.idle(30, &mut show);
     assert!(!opened.shown.get(), "the press on the opener reaches it, and its toggle closes the menu");
+}
+
+#[trial]
+fn a_number_draft_in_a_popover_commits_when_an_outside_press_closes_it() {
+    let (open, value) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(Some(10.0f64))));
+    let (shown_open, shown_value) = (open.clone(), value.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = craft_ui::buttons::Button::new("Stroke").show(ui);
+        let mut is_open = shown_open.get();
+        Popover::new("Stroke options", Bind::bound(&mut is_open)).opened_by(&opener).show(ui, |ui, _| {
+            let mut number = shown_value.get();
+            NumberField::new("Weight", Bind::bound(&mut number)).show(ui);
+            shown_value.set(number);
+        });
+        shown_open.set(is_open);
+    });
+    fixture.settle();
+    let field = fixture.by_label("Weight").expect("the field shows in the popover");
+    fixture.click(&field);
+    fixture.key(Key::A, Modifiers::COMMAND);
+    // An expression applies on commit only, so it stays a draft until the popover closes.
+    fixture.type_text("3+4");
+    fixture.idle(2);
+    assert_eq!(value.get(), Some(10.0), "the expression is a draft before the press");
+    let dialog = fixture.by_role(Role::DIALOG).first().cloned().expect("the popover shows");
+    fixture.click_at(dialog.rect.right_bottom() + Vec2::splat(40.0));
+    fixture.idle(30);
+    assert_eq!(value.get(), Some(7.0), "the draft commits when the outside press closes the popover");
+    assert!(!open.get(), "the outside press closes the popover");
 }
 
 /// The rows of the popup list: more than its share of the window shows.

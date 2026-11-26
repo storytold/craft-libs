@@ -271,8 +271,10 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
 /// the download is checked against. A `+` may be written plainly or as `%2B`
 /// ([`release::same_download_url`]).
 ///
-/// This crate's tests accept a loopback link as well, as their downloads come from a server on
-/// 127.0.0.1.
+/// With this crate's `local-mirror` feature, the developer's loopback mirror is accepted too. The
+/// consumer confines those links (the launcher's feed parser does) and must turn the feature on
+/// itself (`craft-update/local-mirror`): its own feature of that name doesn't. This crate's tests
+/// accept loopback as well, as their downloads come from a server on 127.0.0.1.
 pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
     check_download_link_reason(app, release, asset).map_err(|reason| reason.to_string())
 }
@@ -281,7 +283,7 @@ pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Resul
 pub fn check_download_link_reason(app: &App, release: &Release, asset: &Asset) -> Result<(), Reason> {
     let repo = if release.repo.is_empty() { app.repo } else { release.repo.as_str() };
     let own = |a: &Asset| {
-        (cfg!(test) && crate::http::is_loopback(&a.url))
+        (cfg!(any(test, feature = "local-mirror")) && crate::http::is_loopback(&a.url))
             || release::expected_download_url(repo, &release.tag, &a.name).is_some_and(|expected| release::same_download_url(&a.url, &expected))
     };
     if own(asset) && release.sums_asset().is_none_or(own) {

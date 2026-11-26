@@ -84,8 +84,8 @@ fn a_reopened_find_switches_its_tab_and_keeps_what_the_user_set() {
     fixture.idle(4);
     let fields = dialog.borrow().json_fields().expect("the dialog's fields");
     assert_eq!(fields["tab"], "find", "the tab switches");
-    assert_eq!(fields["query"], "bird", "a given query replaces Find what");
-    assert_eq!(fields["with"], "dog", "Replace with stays");
+    assert_eq!(fields["find"], "bird", "a given query replaces Find what");
+    assert_eq!(fields["replace"], "dog", "Replace with stays");
     assert_eq!(fields["regex"], true, "the options stay");
     assert_eq!(fields["more"], true, "Search Options stays open");
 
@@ -93,6 +93,6 @@ fn a_reopened_find_switches_its_tab_and_keeps_what_the_user_set() {
     dialog.borrow_mut().set_go_to_kinds(vec![GoToKind::named("Bookmark", vec!["Intro".to_owned()], "No bookmarks")]);
     fixture.idle(10);
     let fields = dialog.borrow().json_fields().expect("the dialog's fields");
-    assert_eq!(fields["query"], "bird", "without a query Find what stays");
+    assert_eq!(fields["find"], "bird", "without a query Find what stays");
     assert_eq!(fields["goToTarget"], "Intro", "the new kinds show: the target names the new bookmark");
 }

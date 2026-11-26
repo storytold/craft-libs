@@ -24,6 +24,7 @@ fn with_item_facts<R>(ui: &mut Ui, at: crate::runtime::access::SetPosition, body
         columns: Vec::new(),
         toggles: Vec::new(),
         toggle_keys: Vec::new(),
+        closed_toggles: Vec::new(),
         aligns: Vec::new(),
         pressed: None,
         menu_open: false,
@@ -69,7 +70,7 @@ pub use drag::{SweepApply, SweepStep};
 pub use header::ColumnCommands;
 pub(crate) use header::HeaderFacts;
 #[doc(hidden)]
-pub use header::put_toggle_names;
+pub use header::{RowToggle, put_toggle_names};
 pub use press::item_part_open;
 #[doc(hidden)]
 pub use request::lead_position;
@@ -85,6 +86,7 @@ mod keys;
 mod lead;
 mod measure;
 mod members;
+pub use members::item_node;
 mod output;
 mod press;
 mod rename;
@@ -151,13 +153,15 @@ struct Renaming<K> {
     draft: String,
     gesture: GestureId,
     focused: bool,
+    /// The field has held the focus: losing it afterwards ends the rename.
+    held: bool,
     /// The field opened with a draft the collection proposed that differs from the row's text.
     proposed: bool,
 }
 
 impl<K> Default for Renaming<K> {
     fn default() -> Self {
-        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, proposed: false }
+        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, held: false, proposed: false }
     }
 }
 

@@ -98,14 +98,27 @@ pub struct ComboBox<'a> {
     empty: String,
     /// What this pass did to the preview, reported in [`ComboBoxOutput::preview`].
     preview: Preview<String>,
+    /// Whether the combo box sizes to its options alone, as in a toolbar or ribbon.
+    #[style_key]
+    #[prop]
+    compact: bool,
 }
 
 impl<'a> ComboBox<'a> {
     /// A combo box named `label` over the text `value`, offering `options`; an option's value is the text it puts in
     /// the field.
     pub fn new(label: impl Into<Label>, value: Bind<'a, String>, options: &'a [Entry<String>]) -> Self {
-        ComboBox { common: Common::new(), value, options, placeholder: None, decorate: None, empty: String::new(), preview: Preview::Unchanged }
-            .label(label)
+        ComboBox {
+            common: Common::new(),
+            value,
+            options,
+            placeholder: None,
+            decorate: None,
+            empty: String::new(),
+            preview: Preview::Unchanged,
+            compact: false,
+        }
+        .label(label)
     }
 
     /// Previews `text`, led by the pointer or by the keys. The pass reports it only when the previewed text changes,
@@ -138,6 +151,11 @@ impl<'a> ComboBox<'a> {
         [Adornment::button(CHEVRON, crate::controls::disclosure::DisclosureGlyph::dropdown_of(arrow), name)]
     }
 
+    /// Whether the list has anything to offer: a list of separators and headings opens nothing.
+    fn has_items(&self) -> bool {
+        self.options.iter().any(Entry::is_item)
+    }
+
     /// Whether any option's label matches `query`.
     fn matches_any(&self, cx: &Cx<'_, Self>, query: &str) -> bool {
         let matcher = Matcher::new(&cx.env.folder(), query);
@@ -158,10 +176,13 @@ impl Component for ComboBox<'_> {
     type Style = crate::text::FieldStyle;
     type Output = ComboBoxOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) sized by its options alone, as a ribbon's font size box is.
-    fn style(cx: &crate::style::StyleCx<'_>, _: ComboBoxStyleKey) -> crate::text::FieldStyle {
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) or toolbar (`InBar`), or when `compact` is set,
+    /// sized by its options alone, as a ribbon's font size box is.
+    fn style(cx: &crate::style::StyleCx<'_>, key: ComboBoxStyleKey) -> crate::text::FieldStyle {
         let field = crate::text::FieldStyle::at(cx);
-        if cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon { field.sized_by_content() } else { field }
+        let in_bar = cx.env::<crate::contract::InBar>().0;
+        let ribbon = cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon;
+        if key.compact || ribbon || in_bar { field.sized_by_content() } else { field }
     }
 
     /// The wheel steps the text through the options.
@@ -186,11 +207,16 @@ impl Component for ComboBox<'_> {
         let trailing = Self::trailing(name, cx.env.get());
         let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.flow.is_rtl());
         if let Some(at) = placed.trailing.first() {
-            cx.part(CHEVRON, *at)
-                .sense(Sense::CLICK | Sense::KEEP_FOCUS)
-                .priority(HitPriority::new(HitLevel::Handle, 0))
-                .pointer_only("Alt+Down opens the list")
-                .toggles("options");
+            let chevron = cx.part(CHEVRON, *at);
+            if self.has_items() {
+                chevron
+                    .sense(Sense::CLICK | Sense::KEEP_FOCUS)
+                    .priority(HitPriority::new(HitLevel::Handle, 0))
+                    .pointer_only("Alt+Down opens the list")
+                    .toggles("options");
+            } else {
+                chevron.inactive(true);
+            }
         }
         if let Some(value) = value.or(Some(&self.empty)) {
             cx.text(text_key(), placed.text, &PlainText, value, &self.text_options());

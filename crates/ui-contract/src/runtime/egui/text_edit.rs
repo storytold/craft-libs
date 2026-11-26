@@ -23,6 +23,7 @@ pub(crate) struct Edit<'a> {
     pub multiline: bool,
     pub password: bool,
     pub hint: Option<&'a str>,
+    pub muted_hint: bool,
     pub mono: bool,
     pub role: TypeRole,
     pub ink: Color32,
@@ -84,6 +85,7 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         multiline,
         password,
         hint,
+        muted_hint,
         mono,
         role,
         ink,
@@ -183,9 +185,15 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         if !enabled && !focusable {
             super::style::disable_without_fade(ui);
         }
-        // The placeholder is the faint text colour, the disabled one when the field is off.
+        // The placeholder is the faint text colour, or the muted one on a fill the faint one does not read on, and the
+        // disabled one when the field is off.
         let text_colors = &tokens.color.text;
-        super::style::set_hint_color(ui, crate::style::rgba_color(if enabled { text_colors.faint } else { text_colors.disabled }));
+        let hint_color = match (enabled, muted_hint) {
+            (false, _) => text_colors.disabled,
+            (true, true) => text_colors.muted,
+            (true, false) => text_colors.faint,
+        };
+        super::style::set_hint_color(ui, crate::style::rgba_color(hint_color));
         super::style::set_text_cursor(ui, caret_visible);
         super::style::set_text_selection(ui, crate::style::rgba_color(selection.0), crate::style::rgba_color(selection.1));
         let mut read = text.as_str();
@@ -246,7 +254,10 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         let content = placed.union(output.response.rect).union(text_rect);
         super::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
     }
-    let focused = output.response.has_focus();
+    // The widget's key focus, whether or not the window has the system's: switching to another app is no focus move,
+    // so the typing run, caret and selection carry on (egui's `Response::has_focus` is false while the window is in
+    // the background).
+    let focused = ui.memory(|memory| memory.has_focus(id));
     let caret = output.cursor_range.map(|range| {
         let at = output.galley.pos_from_cursor(range.primary);
         at.translate(output.galley_pos.to_vec2())

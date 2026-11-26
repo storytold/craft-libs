@@ -74,6 +74,9 @@ fn plain_templates() -> Vec<Template> {
     ]
 }
 
+/// An app section a story adds: its title and its body.
+type AppSection<'a> = (&'a str, &'a mut dyn FnMut(&mut Ui));
+
 /// A pinned folder at `path`, named by its last component, not listed.
 fn pinned_folder(path: &str) -> PinnedFolder {
     let name = Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -98,6 +101,7 @@ struct Extras<'a> {
     source: Option<&'a FakeThumbSource<ThumbKey>>,
     links: &'a [StartLink],
     drop_hint: Option<&'a str>,
+    section: Option<AppSection<'a>>,
     /// New is left out (`offers_new(false)`).
     without_new: bool,
     /// A host section before Recent and one after the built-in sections.
@@ -127,6 +131,9 @@ fn screen(
     if let Some(hint) = extras.drop_hint {
         start = start.drop_hint(Label::from(hint.to_owned()));
     }
+    if let Some((title, body)) = extras.section {
+        start = start.app_section(Label::from(title.to_owned()), body);
+    }
     if extras.host_sections {
         start = start
             .section(StartPlace::BeforeRecent, |ui, _| {
@@ -143,6 +150,18 @@ fn screen(
 fn start_screen(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pinned = [pinned_folder("/home/user/Pictures"), pinned_folder("/home/user/Projects")];
     screen(ui, data, Choice::default(), &plain_files(), &pinned, &plain_templates(), Extras::default())
+}
+
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_with_app_section(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let pinned = [pinned_folder("/home/user/Pictures")];
+    let mut buttons = |ui: &mut Ui| {
+        let _ = Button::new(Label::from("Browse Tutorials".to_owned())).id_salt("tutorials").show(ui);
+        let _ = Button::new(Label::from("What's New".to_owned())).id_salt("whats-new").show(ui);
+    };
+    let body: &mut dyn FnMut(&mut Ui) = &mut buttons;
+    let extras = Extras { section: Some(("Learn", body)), ..Extras::default() };
+    screen(ui, data, Choice::default(), &plain_files(), &pinned, &plain_templates(), extras)
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
@@ -177,6 +196,54 @@ fn start_screen_greeting(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .more_templates("More templates")
         .show(ui)
         .into()
+}
+
+/// Templates that stand for page sizes: their cards show the pages.
+fn page_templates() -> Vec<Template> {
+    vec![
+        Template::new("letter", "Letter", "612 × 792 pt").page(612.0, 792.0),
+        Template::new("web", "Web 1920×1080", "1920 × 1080 px").page(1920.0, 1080.0),
+        Template::new("phone", "Phone 390×844", "390 × 844 px").page(390.0, 844.0),
+        Template::new("square", "Square 1080×1080", "1080 × 1080 px").page(1080.0, 1080.0),
+    ]
+}
+
+/// The links of the Column stories: a call to action and two plain links.
+fn column_links() -> [StartLink; 3] {
+    [
+        StartLink::url("Join the community", Some(IconId::new("note")), "https://example.com/chat").primary(),
+        StartLink::url("Website", Some(IconId::new("globe")), "https://example.com"),
+        StartLink::url("Source code", Some(IconId::new("open")), "https://example.com/source"),
+    ]
+}
+
+/// The Column page of `files`: title and subtitle, New and Open, the recent rows, the page templates and the links.
+fn column_screen(ui: &mut Ui, files: &[RecentFile]) -> StoryOutput {
+    let (templates, links) = (page_templates(), column_links());
+    let (mut view, mut sort) = (RecentView::default(), RecentSort::default());
+    StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), files)
+        .max_recent(6)
+        .templates(&templates)
+        .templates_title("Start a new file")
+        .links(&links)
+        .layout(StartLayout::Column)
+        .title("Welcome")
+        .subtitle("Make something today.")
+        .links_title("Community")
+        .show(ui)
+        .into()
+}
+
+/// One centred column, with recent files.
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_column(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    column_screen(ui, &plain_files())
+}
+
+/// One centred column with no recent files: no Recent section.
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_column_without_files(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    column_screen(ui, &[])
 }
 
 #[story(RecentList<'static>, covers = [], drive = Drive::Never)]

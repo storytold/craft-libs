@@ -21,12 +21,21 @@ fn newer() -> Release {
     Release { tag: "v9.0.0".into(), version: craft_update::parse_version("9.0.0"), ..Release::default() }
 }
 
+fn photocraft() -> craft_host::HostBuilder {
+    Host::builder(AppInfo { id: "photocraft", name: "PhotoCraft", version: "1.0" })
+}
+
 /// A fixture running `dialogs` every pass for an app named PhotoCraft.
 fn rig(dialogs: DialogHost) -> (Fixture, Dialogs) {
+    rig_for(dialogs, photocraft().build())
+}
+
+/// A fixture running `dialogs` every pass for the app `host` names.
+fn rig_for(dialogs: DialogHost, host: Host) -> (Fixture, Dialogs) {
     let dialogs: Dialogs = Rc::new(RefCell::new(dialogs));
     let shown = dialogs.clone();
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
-    fixture.host(Arc::new(Host::builder(AppInfo { id: "photocraft", name: "PhotoCraft", version: "1.0" }).build()));
+    fixture.host(Arc::new(host));
     fixture.settle();
     (fixture, dialogs)
 }
@@ -117,6 +126,42 @@ fn check_dialog_shows(status: Status, text: &str) -> bool {
     dialogs.open(dialog);
     let (fixture, _) = rig(dialogs);
     fixture.texts().iter().any(|t| t.text.contains(text)) || fixture.by_label(text).is_some()
+}
+
+/// The check dialog's head for the app `host` names: how many textured shapes the dialog paints (the dialog's own
+/// chrome paints some), and whether it shows the app name's initial in the icon's place.
+fn check_dialog_head(host: Host) -> (usize, bool) {
+    let mut dialog = UpdateCheckDialog::new("0.1.0");
+    dialog.set_status(Status::UpToDate);
+    let mut dialogs = DialogHost::new();
+    dialogs.open(dialog);
+    let (mut fixture, _) = rig_for(dialogs, host);
+    let textured = fixture
+        .frame_shapes()
+        .iter()
+        .filter(|shape| match shape {
+            egui::Shape::Mesh(mesh) => mesh.texture_id != egui::TextureId::default(),
+            egui::Shape::Rect(rect) => rect.brush.is_some(),
+            _ => false,
+        })
+        .count();
+    (textured, fixture.texts().iter().any(|t| t.text == "P"))
+}
+
+/// The app gives its icon once, to its host beside its name, and the check dialog shows it in its head, which the
+/// prompt shares; an app without one shows its name's initial.
+#[trial]
+fn the_update_dialogs_show_the_icon_the_app_gives_its_host() {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([240, 122, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap_or_else(|error| panic!("the icon encodes: {error}"));
+    let icon: &'static [u8] = Box::leak(png.into_boxed_slice());
+    let (with_icon, initial_with_icon) = check_dialog_head(photocraft().icon_png(icon).build());
+    let (without, initial_without) = check_dialog_head(photocraft().build());
+    assert!(with_icon > without, "the icon paints a picture: {with_icon} textured shapes against {without}");
+    assert!(!initial_with_icon, "the icon takes the initial's place");
+    assert!(initial_without, "no icon: the initial");
 }
 
 #[trial]

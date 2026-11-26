@@ -159,6 +159,16 @@ fn tile_grid_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     out.into()
 }
 
+#[story(TileGrid<'static, usize>, covers = [], drive = Drive::Never)]
+fn tile_grid_rule_heads(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let groups = [
+        TileGroup::new(GROUP_KEYS[0], 0, 12, "October 2026"),
+        TileGroup::new(GROUP_KEYS[1], 12, 8, "September 2026"),
+        TileGroup::new(GROUP_KEYS[2], 20, 10, "August 2026"),
+    ];
+    grid(ui, data, TileGrid::new("Library").groups(&groups).group_heads(super::GroupHeads::Rule), 30, 1.0).into()
+}
+
 /// Focuses the grid and steps its zoom in.
 fn zoom_in(fixture: &mut Fixture) {
     fixture.key(Key::Tab, Modifiers::NONE).idle(1);

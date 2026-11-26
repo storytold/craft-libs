@@ -44,7 +44,7 @@ pub use raster_source::{PixelRect, RasterSource};
 
 pub(crate) mod pasteboard;
 pub(crate) mod split;
-pub use pasteboard::{PageBorder, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
+pub use pasteboard::{ArtboardEdge, PageBorder, PageFill, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
 pub use split::{PanePress, SplitAt, SplitLayout, SplitPane, SplitPaneAt, SplitStyle, SplitViews, SplitViewsOutput, TabDrop, TabDropTarget};
 pub use words::SplitWords;
 
@@ -70,7 +70,7 @@ pub(crate) mod rotate;
 mod tools;
 mod zoom_motion;
 
-pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
+pub use momentary::{Momentary, MomentaryCommands, MomentaryShift, MomentaryTool};
 pub use navigate::{
     Autoscroll, FlickPan, MiddleAutoscrollFeel, MiddleButton, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, WheelAction, WheelInput,
     WheelNavigation, WheelScheme, pan,
@@ -82,7 +82,8 @@ pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 pub(crate) mod rulers;
 pub(crate) mod scrollbars;
 pub use rulers::{
-    INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule,
+    CENTIMETRE_LABEL_STEP_MIN, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers,
+    RulersOutput, StepLadder, TickRule,
 };
 pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 
@@ -106,7 +107,7 @@ use crate::contract::{
 };
 use crate::primitives::{EditorPurpose, ImeStamp};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::{EditSet, KeyUse, NudgeMods};
 use crate::runtime::frame;
 use crate::runtime::lock_keys;
@@ -117,7 +118,7 @@ use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
     CanvasTransform, CanvasView, CursorIcon, CursorPriority, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, Mixed,
-    PartKey, PointerButton, PressPhase, PressState, Sense, Wheel, WheelNotch, WheelSource, WheelUnit,
+    MultiTap, PartKey, PointerButton, PressPhase, PressState, Sense, Wheel, WheelNotch, WheelSource, WheelUnit, ZoomScheme,
 };
 use egui::{Context, Pos2, Rect, Response, Vec2};
 use navigate::MiddleAutoscroll;
@@ -231,6 +232,11 @@ pub struct Canvas<'a> {
     /// and Redo fall through to the app command's state. Ignored without [`editor`](Self::editor).
     #[prop]
     inactive_edits: EditSet,
+    /// While the editor part has the keys, chords with the platform's command modifier and function keys still run the
+    /// app's commands, whatever its typing rule ([`KeyUse::command_keys`]): a type tool whose app runs its commands
+    /// while typing. The editor keeps its text editing chords. Ignored without [`editor`](Self::editor).
+    #[prop]
+    editor_command_keys: bool,
     /// The editor part's inputs of this pass, taken once in `update`: `tool_pass` is built from a shared `Cx`.
     editor_input: Arc<[EditorInput]>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
@@ -254,6 +260,8 @@ pub struct Canvas<'a> {
     settled: Option<Settled>,
     /// The Menu key or Shift+F10 reached the focused canvas this pass.
     context_key: bool,
+    /// The text of the paste the editor part takes this pass, taken in `update` with its inputs.
+    pasted: Option<Arc<str>>,
     /// The ease the app asked for from the view it drew ([`ease_from`](Self::ease_from)).
     ease: Option<Steer>,
     /// The app's tool moves the view with the pointer this pass (an image-moving crop slides the view by fractional
@@ -328,6 +336,7 @@ impl<'a> Canvas<'a> {
             body_nudges: NudgeMods::NONE,
             editor: None,
             inactive_edits: EditSet::NONE,
+            editor_command_keys: false,
             editor_input: Arc::from([]),
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
@@ -336,6 +345,7 @@ impl<'a> Canvas<'a> {
             snap: None,
             settled: None,
             context_key: false,
+            pasted: None,
             ease: None,
             follows_pointer: false,
             tool_regions: Vec::new(),
@@ -401,9 +411,10 @@ impl<'a> Canvas<'a> {
     fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, CommandMotion)> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
+        let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
         let target = view.zip(self.document);
         for command in ViewCommands::ALL {
-            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point));
+            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point, &scheme));
             cx.publish(command, CommandState::new().enabled(enabled));
         }
         let (view, document) = target?;
@@ -411,14 +422,14 @@ impl<'a> Canvas<'a> {
         let queued = if measure::active(&cx.core.ctx) { &[][..] } else { self.queued };
         for request in queued {
             let command = request.command();
-            let changed = command.apply(&mut next, &document, self.layer_bounds, pixels_per_point);
+            let changed = command.apply(&mut next, &document, self.layer_bounds, pixels_per_point, &scheme);
             match request {
                 ViewRequest::Command(_) => zoomed |= changed && command.zooms(),
                 ViewRequest::Place(_) => placed |= changed,
             }
         }
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
-            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point) && command.zooms();
+            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point, &scheme) && command.zooms();
         }
         let motion = if placed {
             CommandMotion::Jump
@@ -444,13 +455,14 @@ impl<'a> Canvas<'a> {
         let mut motion = ViewMotion::take(&ctx, id);
         let pixels_per_point = cx.env.scale().0;
         let size = self.document_size().unwrap_or(Size::ZERO);
+        let scheme = Env::of_root(&ctx).view().get::<ZoomScheme>();
         let mut view = given;
         let area = cx.content_rect;
         if area.width() > 0.0 && area.height() > 0.0 {
             let never_shown = !(view.rect.width() > 0.0 && view.rect.height() > 0.0);
             view.rect = area;
             if never_shown && let Some(document) = self.document {
-                ViewCommands::FitOnScreen.apply(&mut view, &document, None, pixels_per_point);
+                ViewCommands::FitOnScreen.apply(&mut view, &document, None, pixels_per_point, &scheme);
             }
         }
         let at_start = view;
@@ -475,7 +487,7 @@ impl<'a> Canvas<'a> {
             zoom_anchor = read.zoom_anchor.or(zoom_anchor);
             halt |= read.zoomed;
         }
-        let paid = pay_wheel_zoom(&ctx, &mut motion, &mut view, size, pixels_per_point, now);
+        let paid = pay_wheel_zoom(&ctx, &mut motion, &mut view, size, pixels_per_point, &scheme, now);
         jumped |= paid.jumped;
         zoom_anchor = paid.zoom_anchor.or(zoom_anchor);
         halt |= paid.zoomed;
@@ -633,7 +645,8 @@ impl<'a> Canvas<'a> {
                     // its body covers it.
                     let at = wheel.at.unwrap_or_else(|| view.rect.center());
                     let (anchor, zoom) = (WheelNavigation::zoom_anchor(view, action, at, size), view.zoom);
-                    read.jumped |= WheelNavigation::apply(view, action, at, size, pixels_per_point);
+                    let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
+                    read.jumped |= WheelNavigation::apply(view, action, at, size, pixels_per_point, &scheme);
                     if view.zoom != zoom {
                         read.zoom_anchor = anchor;
                     }
@@ -746,7 +759,7 @@ impl<'a> Canvas<'a> {
     }
 
     /// The space the body and the tool see in this pass; `caps_lock` is whether Caps Lock is on in it.
-    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool) -> Option<CanvasSpace> {
+    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool, scheme: ZoomScheme) -> Option<CanvasSpace> {
         let (shown, target, easing, keys, wheel, zoom_anchor) = match self.settled {
             Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys, settled.wheel, settled.zoom_anchor),
             None => (self.given?, self.given?, false, BodyKeys::default(), None, None),
@@ -763,6 +776,7 @@ impl<'a> Canvas<'a> {
             .with_pasteboard(self.pasteboard)
             .with_background(background)
             .with_precise(self.precise_cursors != caps_lock)
+            .with_zoom_scheme(scheme)
             .with_wheel(wheel)
             .with_canvas(id);
         Some(match self.picture {
@@ -816,7 +830,8 @@ impl<'a> Canvas<'a> {
         // A press that stopped an autoscroll is the autoscroll's until its release.
         let press = if self.settled.is_some_and(|settled| settled.swallowing) { PressState::IDLE } else { self.background_press(cx).0 };
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
-        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
+        let scheme = Env::of_root(&cx.response.ctx).view().get::<ZoomScheme>();
+        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock, scheme);
         ToolPass {
             id: cx.response.id,
             rect: cx.response.rect,
@@ -828,6 +843,7 @@ impl<'a> Canvas<'a> {
             navigation: self.navigation,
             editor_input: self.editor_input.clone(),
             editor: cx.editor_handle(),
+            pasted: self.pasted.clone(),
         }
     }
 
@@ -855,6 +871,8 @@ pub struct CanvasOutput {
     /// target; the canvas shows the way there itself. [`ToolHost::run`] carries it in [`ToolHostResponse::view`]
     /// when no tool set a view, so an app with a tool host copies that one view.
     pub view: Option<CanvasView>,
+    /// The multi-finger tap this pass ended, from the pointer pass; `None` when there was none.
+    pub multi_tap: Option<MultiTap>,
     /// True while a middle-button autoscroll or a held middle pan runs this pass.
     pub auto_scrolling: bool,
     /// The mark of a running middle-button autoscroll, for captures.
@@ -899,6 +917,11 @@ pub struct ToolPass {
     pub editor_input: Arc<[EditorInput]>,
     /// The editor part of this pass, through which the body reports its editor state; `None` without an editor.
     pub editor: Option<EditorHandle>,
+    /// The text of the paste the editor part takes this pass (its [`EditorInput::Edit`] of
+    /// [`EditCommand::Paste`](craft_behavior::EditCommand::Paste)), as the platform's paste event carried it: Ctrl+V's,
+    /// or the one a Paste command asks the platform for. The framework takes that event out of egui's input, and the
+    /// platform's read can succeed where the installed clipboard can't be opened. `None` in a pass without one.
+    pub pasted: Option<Arc<str>>,
 }
 
 impl ToolPass {
@@ -977,7 +1000,10 @@ impl Component for Canvas<'_> {
     /// nudges. It still marks its window as showing a document.
     fn keys(&self) -> KeyUse {
         match self.editor {
-            Some(_) => KeyUse::of(Input::Editor).with_chrome_key(true).with_moves().with_inactive(self.inactive_edits),
+            Some(_) => {
+                let keys = KeyUse::of(Input::Editor).with_chrome_key(true).with_moves().with_inactive(self.inactive_edits);
+                if self.editor_command_keys { keys.with_command_keys() } else { keys }
+            }
             None => Self::KEYS.with_nudge_mods(NudgeMods::STEPS.union(self.body_nudges)),
         }
     }
@@ -1015,6 +1041,10 @@ impl Component for Canvas<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         // Taken once: `Cx::editor_input` empties the pass's inputs, and the body reads them from the `ToolPass`.
         self.editor_input = cx.editor_input().collect::<Vec<_>>().into();
+        self.pasted = match cx.clipboard().paste() {
+            crate::runtime::pending::Pending::Ready(content) => content.text.clone(),
+            _ => None,
+        };
         // Left untaken: the canvas's generic context request is recorded as for a secondary click.
         self.context_key = cx.intents().untaken(&Intent::ContextMenu);
         // The canvas is no value component: it reads and writes its view's binding itself, as a container does.
@@ -1079,8 +1109,9 @@ impl Component for Canvas<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
+    fn finish(self, mut cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
+        let multi_tap = cx.take_multi_tap();
         let autoscroll = self.settled.and_then(|settled| settled.mark);
         let auto_scrolling = self.settled.is_some_and(|settled| settled.auto_scrolling);
         CanvasOutput {
@@ -1088,6 +1119,7 @@ impl Component for Canvas<'_> {
             press: pass.press,
             space: pass.space,
             view: pass.view,
+            multi_tap,
             auto_scrolling,
             autoscroll,
             rulers: self.ruler_output,
@@ -1113,11 +1145,19 @@ fn clamped(mut view: CanvasView, document: Option<Size>, navigation: &Navigation
 /// Pays this pass's part of what the eased wheel zoom's notches owe (`NavigationOptions::eased_wheel_zoom`) on `view`,
 /// and asks for the next pass while more is owed: whether it zoomed, whether the view moved and the point the zoom kept
 /// still.
-fn pay_wheel_zoom(ctx: &Context, motion: &mut ViewMotion, view: &mut CanvasView, size: Size, pixels_per_point: f32, now: f64) -> WheelRead {
+fn pay_wheel_zoom(
+    ctx: &Context,
+    motion: &mut ViewMotion,
+    view: &mut CanvasView,
+    size: Size,
+    pixels_per_point: f32,
+    scheme: &ZoomScheme,
+    now: f64,
+) -> WheelRead {
     let paid = motion.wheel_zoom.step(now).map(|(factor, at)| {
         let action = WheelAction::Zoom(factor);
         let (anchor, zoom) = (WheelNavigation::zoom_anchor(view, action, at, size), view.zoom);
-        let jumped = WheelNavigation::apply(view, action, at, size, pixels_per_point);
+        let jumped = WheelNavigation::apply(view, action, at, size, pixels_per_point, scheme);
         WheelRead { jumped, zoom_anchor: anchor.filter(|_| view.zoom != zoom), zoomed: true, ..WheelRead::default() }
     });
     if motion.wheel_zoom.owes() {
