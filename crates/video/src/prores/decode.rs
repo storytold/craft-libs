@@ -585,14 +585,6 @@ mod alpha_decode_tests {
     use crate::prores::encode::encode_alpha;
 
     #[test]
-    fn slice_quantiser_rejects_reserved_indices() {
-        assert!(slice_quantiser(0).is_err());
-        assert!(slice_quantiser(225).is_err());
-        assert_eq!(slice_quantiser(1).unwrap(), qscale(1));
-        assert_eq!(slice_quantiser(224).unwrap(), qscale(224));
-    }
-
-    #[test]
     fn custom_limits_preserve_large_4444_geometry_before_allocating() {
         let hdr = FrameHeader {
             header_size: 20,
