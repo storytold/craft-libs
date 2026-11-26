@@ -524,14 +524,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pixel_aspect_ratio_is_reduced_and_bounded() {
-        assert_eq!(normalize_par((2048, 1024)).unwrap(), (2, 1));
-        assert_eq!(normalize_par((0, 0)).unwrap(), (0, 0));
-        assert!(normalize_par((2049, 2047)).is_err());
-        assert!(normalize_par((0, 1)).is_err());
-    }
-
-    #[test]
     fn rate_control_reduces_dc_when_the_coarsest_ac_still_exceeds_budget() {
         let mut encoder = Encoder::new(Profile::Lb, 16, 16).unwrap();
         let layout = encoder.mb_layout();

@@ -166,14 +166,7 @@ pub(crate) fn parse_region_segment_info(reader: &mut Reader<'_>) -> Result<Regio
         bail!(RegionError::InvalidCombinationOperator);
     }
 
-    Ok(RegionSegmentInfo {
-        width,
-        height,
-        x_location,
-        y_location,
-        combination_operator,
-        _colour_extension: colour_extension,
-    })
+    Ok(RegionSegmentInfo { width, height, x_location, y_location, combination_operator, _colour_extension: colour_extension })
 }
 
 /// Adaptive template pixel position for generic and refinement regions (6.2.5.4, Figure 7).
@@ -189,19 +182,14 @@ pub(crate) struct AdaptiveTemplatePixel {
 /// - Symbol dictionary refinement AT flags (7.4.2.1.3): SDRATX1/SDRATY1, SDRATX2/SDRATY2
 /// - Text region refinement AT flags (7.4.3.1.3): SBRATX1/SBRATY1, SBRATX2/SBRATY2
 /// - Generic refinement region AT flags (7.4.7.3): GRATX1/GRATY1, GRATX2/GRATY2
-pub(crate) fn parse_refinement_at_pixels(
-    reader: &mut Reader<'_>,
-) -> Result<Vec<AdaptiveTemplatePixel>> {
+pub(crate) fn parse_refinement_at_pixels(reader: &mut Reader<'_>) -> Result<Vec<AdaptiveTemplatePixel>> {
     let x1 = reader.read_byte().ok_or(ParseError::UnexpectedEof)? as i8;
     let y1 = reader.read_byte().ok_or(ParseError::UnexpectedEof)? as i8;
 
     let x2 = reader.read_byte().ok_or(ParseError::UnexpectedEof)? as i8;
     let y2 = reader.read_byte().ok_or(ParseError::UnexpectedEof)? as i8;
 
-    Ok(vec![
-        AdaptiveTemplatePixel { x: x1, y: y1 },
-        AdaptiveTemplatePixel { x: x2, y: y2 },
-    ])
+    Ok(vec![AdaptiveTemplatePixel { x: x1, y: y1 }, AdaptiveTemplatePixel { x: x2, y: y2 }])
 }
 
 /// Template used for refinement arithmetic coding (7.4.7.2).
@@ -219,11 +207,7 @@ pub(crate) enum RefinementTemplate {
 
 impl RefinementTemplate {
     pub(crate) fn from_byte(value: u8) -> Self {
-        if value & 0x01 == 0 {
-            Template0
-        } else {
-            Template1
-        }
+        if value & 0x01 == 0 { Template0 } else { Template1 }
     }
 
     /// Number of context bits for this template (6.3.5.3).
