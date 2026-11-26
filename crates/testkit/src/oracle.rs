@@ -1349,43 +1349,49 @@ mod tests {
 
     /// The role `tree_member` plays: unset for a normal test run, `parent` or `grandchild` otherwise.
     const TREE_ROLE: &str = "CRAFT_TESTKIT_ORACLE_TREE_ROLE";
-    /// The file the grandchild writes its process id to.
+    /// The file the parent writes the grandchild's process id to.
     const TREE_MARKER: &str = "CRAFT_TESTKIT_ORACLE_TREE_MARKER";
-    /// The longest a grandchild runs when nothing removes its marker.
-    const ORPHAN_LIFETIME: Duration = Duration::from_secs(600);
+    /// The file the test holds locked while the grandchild may run.
+    const TREE_LOCK: &str = "CRAFT_TESTKIT_ORACLE_TREE_LOCK";
+    /// The loopback port the grandchild connects to once its test body runs.
+    const TREE_READY: &str = "CRAFT_TESTKIT_ORACLE_TREE_READY";
 
     /// This test binary run on `oracle::tests::tree_member` alone, with its output inherited.
-    fn tree_member_command(role: &str, marker: &Path) -> Command {
+    fn tree_member_command(role: &str, marker: &Path, lock: &Path) -> Command {
         let mut cmd = Command::new(std::env::current_exe().unwrap());
-        cmd.args(["--exact", "oracle::tests::tree_member", "--nocapture", "--test-threads=1"]).env(TREE_ROLE, role).env(TREE_MARKER, marker);
+        cmd.args(["--exact", "oracle::tests::tree_member", "--nocapture", "--test-threads=1"])
+            .env(TREE_ROLE, role)
+            .env(TREE_MARKER, marker)
+            .env(TREE_LOCK, lock);
         cmd
     }
 
     /// Passes at once in a normal run. As `parent` it starts a `grandchild`, which inherits the
-    /// parent's standard output and error, waits for the grandchild's marker and then writes to
-    /// standard output until a write fails. As `grandchild` it writes its process id to the marker
-    /// and runs until the marker is removed, or for at most [`ORPHAN_LIFETIME`].
+    /// parent's standard output and error, waits until the grandchild connects to its loopback
+    /// listener, writes the grandchild's process id to the marker and then writes to standard output
+    /// until a write fails. As `grandchild` it connects, so the test harness has written its own
+    /// lines by then, and waits to take the lock on the lock file, which the test holds until it
+    /// ends, so a grandchild that outlives a killed test ends when the OS releases the test's lock.
     #[test]
     fn tree_member() {
-        let (Some(role), Some(marker)) = (std::env::var_os(TREE_ROLE), std::env::var_os(TREE_MARKER)) else {
+        let (Some(role), Some(marker), Some(lock)) = (std::env::var_os(TREE_ROLE), std::env::var_os(TREE_MARKER), std::env::var_os(TREE_LOCK)) else {
             return;
         };
-        let marker = PathBuf::from(marker);
+        let (marker, lock) = (PathBuf::from(marker), PathBuf::from(lock));
         if role == "grandchild" {
-            let partial = marker.with_extension("partial");
-            std::fs::write(&partial, std::process::id().to_string()).unwrap();
-            std::fs::rename(&partial, &marker).unwrap();
-            // The cap ends a grandchild whose test was itself killed before it could clean up.
-            let started = Instant::now();
-            while marker.exists() && started.elapsed() < ORPHAN_LIFETIME {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            let port: u16 = std::env::var(TREE_READY).unwrap().parse().unwrap();
+            drop(std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap());
+            std::fs::File::open(&lock).unwrap().lock().unwrap();
             return;
         }
-        let mut grandchild = tree_member_command("grandchild", &marker).spawn().unwrap();
-        while !marker.exists() {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        let ready = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = ready.local_addr().unwrap().port();
+        let mut grandchild = tree_member_command("grandchild", &marker, &lock).env(TREE_READY, port.to_string()).spawn().unwrap();
+        // A grandchild that never connects leaves the parent here until the probe's timeout kills it.
+        drop(ready.accept().unwrap());
+        let partial = marker.with_extension("partial");
+        std::fs::write(&partial, grandchild.id().to_string()).unwrap();
+        std::fs::rename(&partial, &marker).unwrap();
         let mut out = io::stdout().lock();
         while io::Write::write_all(&mut out, &[b'x'; 8192]).is_ok() {}
         let _ = grandchild.wait();
@@ -1428,22 +1434,30 @@ mod tests {
 
     /// A process the child started holds both pipes when the probe fails. Ending the child's process
     /// group (Unix) or process tree (Windows) ends it too, so both pipe readers finish and the
-    /// process is gone. The child passes the output limit only after the grandchild has written its
-    /// marker, so the result does not depend on how fast the processes start. A grandchild that
-    /// survived is killed when the test fails, and removing the scratch folder removes the marker,
-    /// which also ends it.
+    /// process is gone. The child passes the output limit only after the grandchild has connected
+    /// back to it and the marker is written, so the result does not depend on how fast the processes
+    /// start, and the grandchild writes nothing more to the pipes before it ends. The grandchild
+    /// waits on a lock the test holds, so it needs no timer. A grandchild that survived is killed
+    /// when the test fails, and it also ends when the test's lock is released.
     #[cfg(any(unix, windows))]
     #[test]
     fn descendant_holding_the_pipes_ends_when_the_probe_fails() {
         let d = Scratch::new("tree");
         let marker = d.path().join("grandchild-pid");
+        let lock_path = d.path().join("grandchild-lock");
+        let lock = std::fs::File::create(&lock_path).unwrap();
+        lock.lock().unwrap();
+        // The grandchild's wait proves nothing on a file system that does not enforce the lock.
+        let other = std::fs::File::open(&lock_path).unwrap();
+        assert!(matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)), "a second handle took the held lock");
+        drop(other);
         let exe = std::env::current_exe().unwrap();
         let mut seen = Observed::default();
         // The timeout only bounds a broken run; the output limit ends a working one.
         let limits = ProbeLimits { max_output_bytes: 64 * 1024, timeout: Duration::from_secs(60) };
-        let got = run_bounded(tree_member_command("parent", &marker), &exe, limits, &mut seen);
+        let got = run_bounded(tree_member_command("parent", &marker, &lock_path), &exe, limits, &mut seen);
         assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
-        let pid: u32 = std::fs::read_to_string(&marker).expect("the grandchild wrote no marker").trim().parse().unwrap();
+        let pid: u32 = std::fs::read_to_string(&marker).expect("the parent wrote no marker").trim().parse().unwrap();
         let _end = EndOnDrop(pid);
         assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe the grandchild holds");
         assert!(!process_running(pid), "grandchild {pid} is still running");
