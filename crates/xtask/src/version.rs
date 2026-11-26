@@ -7,10 +7,12 @@
 //! [`run`] is the command: the caller passes its workspace root, the Cargo program to run and the
 //! words after `version`.
 //!
-//! The manifest is read and written with `toml_edit`, which keeps every byte outside the changed
-//! strings, comments and line endings included. The root version may be written in any TOML form
+//! The manifest is read with `toml_edit`, and each version string is replaced at its position in the
+//! original text, so every byte outside the changed strings stays as it was, key order, comments and
+//! line endings included. The root version may be written in any TOML form
 //! (`[workspace.package]` with `version = "…"`, a dotted key, an inline table), with double or
-//! single quotes, and keeps its quotes. A manifest that is not valid TOML (a duplicate key
+//! single quotes, and keeps its quotes. A pin may also be a multi-line string and keeps its
+//! delimiters. A manifest that is not valid TOML (a duplicate key
 //! included), a version that is not a one-line string, or a current version that is not valid
 //! returns an error before anything is written.
 
@@ -20,7 +22,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use toml_edit::{DocumentMut, Formatted, Item, Value};
+use toml_edit::{Document, Formatted, Item, Table, Value};
 
 /// The largest root `Cargo.toml` [`run`] reads, in bytes.
 pub const DEFAULT_MAX_MANIFEST_BYTES: u64 = 1 << 20;
@@ -61,7 +63,8 @@ impl Limits {
 
 /// The `version` of `[workspace.package]`.
 pub fn read(manifest: &str) -> Result<String, String> {
-    root_version(&parse(manifest)?)
+    let doc = parse(manifest)?;
+    root_version(&doc)
 }
 
 /// `manifest` with the workspace version set to `new`, and every path dependency in
@@ -70,47 +73,28 @@ pub fn read(manifest: &str) -> Result<String, String> {
 /// every other byte is unchanged.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
-    let mut doc = parse(manifest)?;
+    let doc = parse(manifest)?;
     let old = root_version(&doc)?;
     validate(&old).map_err(|e| format!("the current [workspace.package] version is not valid: {e}"))?;
-    let pins = path_pins(&doc, &old);
-    let root = doc.get_mut("workspace").and_then(|w| w.get_mut("package")).and_then(|p| p.get_mut("version"));
-    set_string(root.ok_or(NO_VERSION)?, new)?;
-    if !pins.is_empty() {
-        let deps = doc.get_mut("workspace").and_then(|w| w.get_mut("dependencies")).and_then(Item::as_table_like_mut);
-        let deps = deps.ok_or("Cargo.toml: [workspace.dependencies] is not a table")?;
-        for (name, prefix) in pins {
-            let pin = deps.get_mut(&name).and_then(Item::as_table_like_mut).and_then(|d| d.get_mut("version"));
-            set_string(pin.ok_or_else(|| format!("Cargo.toml: no version for `{name}`"))?, &format!("{prefix}{new}"))?;
-        }
+    let root = doc.get("workspace").and_then(|w| w.get("package")).and_then(|p| p.get("version")).and_then(as_string);
+    let mut edits = vec![(root.ok_or(NO_VERSION)?, new.to_owned())];
+    for (pin, prefix) in path_pins(&doc, &old) {
+        edits.push((pin, format!("{prefix}{new}")));
     }
-    with_line_endings(manifest, &doc.to_string())
-}
-
-/// `out` with the line endings of `original`, line by line. `toml_edit` writes every line ending as LF
-/// and ends the last line with one, and the replaced strings are on one line, so `out` has the same
-/// lines as `original`.
-fn with_line_endings(original: &str, out: &str) -> Result<String, String> {
-    let out = if original.ends_with('\n') { out } else { out.strip_suffix('\n').unwrap_or(out) };
-    if !original.contains("\r\n") {
-        return Ok(out.to_owned());
+    let mut spans = Vec::with_capacity(edits.len());
+    for (string, text) in edits {
+        let span = string.span().filter(|s| manifest.is_char_boundary(s.start) && manifest.is_char_boundary(s.end));
+        let span = span.ok_or("Cargo.toml: a version to replace has no position in the file")?;
+        let quote = ["\"\"\"", "'''", "\"", "'"].into_iter().find(|q| manifest[span.clone()].starts_with(q));
+        let quote = quote.ok_or("Cargo.toml: a version to replace is not a quoted string")?;
+        spans.push((span, format!("{quote}{text}{quote}")));
     }
-    let before: Vec<&str> = original.split_inclusive('\n').collect();
-    let after: Vec<&str> = out.split_inclusive('\n').collect();
-    if before.len() != after.len() {
-        return Err("Cargo.toml: its line endings could not be kept, nothing was written".into());
+    spans.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
+    let mut out = manifest.to_owned();
+    for (span, text) in spans {
+        out.replace_range(span, &text);
     }
-    let mut text = String::with_capacity(out.len() + before.len());
-    for (was, line) in before.into_iter().zip(after) {
-        match line.strip_suffix('\n') {
-            Some(body) if was.ends_with("\r\n") => {
-                text.push_str(body.strip_suffix('\r').unwrap_or(body));
-                text.push_str("\r\n");
-            }
-            _ => text.push_str(line),
-        }
-    }
-    Ok(text)
+    Ok(out)
 }
 
 /// Semver without build metadata: `MAJOR.MINOR.PATCH` plus an optional `-pre.release` tag.
@@ -162,7 +146,7 @@ pub fn run(root: &Path, cargo_program: &OsStr, args: &[&str]) -> Result<(), Stri
 
 /// [`run`] with the caller's [`Limits`].
 pub fn run_with(root: &Path, cargo_program: &OsStr, args: &[&str], limits: &Limits) -> Result<(), String> {
-    run_to(root, args, limits, None, &mut io::stdout(), || update_lock(root, cargo_program))
+    run_to(root, args, limits, None, &mut io::stdout(), || update_lock(root, cargo_program, limits.max_lock_bytes))
 }
 
 /// The directories of the owner-labeled locks that a `set` in the workspace at `root` holds.
@@ -227,10 +211,7 @@ fn run_to(
         return say(out, &format!("version: {old} (unchanged)"));
     }
     let lock_path = root.join("Cargo.lock");
-    let lock = match std::fs::symlink_metadata(&lock_path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-        _ => Some(read_bounded(&lock_path, limits.max_lock_bytes)?),
-    };
+    let lock = read_lock(&lock_path, limits.max_lock_bytes)?;
     write_file(&manifest, updated.as_bytes())?;
     if let Err(e) = update() {
         return Err(restore(&manifest, &text, &old, &lock_path, lock.as_deref(), e));
@@ -319,17 +300,29 @@ fn restore(manifest: &Path, text: &str, old: &str, lock_path: &Path, lock: Optio
         Ok(()) => format!("{error}; Cargo.toml restored to {old}"),
         Err(r) => format!("{error}; could not restore Cargo.toml: {r}"),
     };
-    let lock_back = match lock {
-        Some(bytes) => write_file(lock_path, bytes),
-        None => match std::fs::remove_file(lock_path) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(format!("remove {}: {e}", lock_path.display())),
-            _ => Ok(()),
-        },
-    };
-    if let Err(r) = lock_back {
+    if let Err(r) = put_lock_back(lock_path, lock) {
         msg.push_str(&format!("; could not restore Cargo.lock: {r}"));
     }
     msg
+}
+
+/// The bytes of `Cargo.lock` at `path`, or `None` when there is no such file.
+fn read_lock(path: &Path, max: u64) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        _ => read_bounded(path, max).map(Some),
+    }
+}
+
+/// Writes `lock` to `path`, or removes the file when `lock` is `None`.
+fn put_lock_back(path: &Path, lock: Option<&[u8]>) -> Result<(), String> {
+    match lock {
+        Some(bytes) => write_file(path, bytes),
+        None => match std::fs::remove_file(path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(format!("remove {}: {e}", path.display())),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// The file at `path`, or an error when it is larger than `max` bytes.
@@ -354,7 +347,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Refreshes the workspace members' entries in `Cargo.lock`, without upgrading dependencies.
-fn update_lock(root: &Path, cargo_program: &OsStr) -> Result<(), String> {
+fn update_lock(root: &Path, cargo_program: &OsStr, max_lock_bytes: u64) -> Result<(), String> {
     let update = |offline: bool| {
         let mut c = Command::new(cargo_program);
         c.current_dir(root).args(["update", "--workspace"]);
@@ -363,13 +356,25 @@ fn update_lock(root: &Path, cargo_program: &OsStr) -> Result<(), String> {
         }
         crate::runner::run(c, if offline { "cargo update --workspace --offline" } else { "cargo update --workspace" })
     };
-    update(true).or_else(|_| update(false))
+    update_lock_with(&root.join("Cargo.lock"), max_lock_bytes, update)
+}
+
+/// Runs `update(true)` (offline) and, when it fails, `update(false)` after putting `Cargo.lock` at
+/// `lock_path` back as it was before the first attempt, so the second attempt never reads a lock file
+/// that the first one left half-written. When the lock file cannot be put back, returns that error.
+fn update_lock_with(lock_path: &Path, max_lock_bytes: u64, mut update: impl FnMut(bool) -> Result<(), String>) -> Result<(), String> {
+    let saved = read_lock(lock_path, max_lock_bytes)?;
+    if update(true).is_ok() {
+        return Ok(());
+    }
+    put_lock_back(lock_path, saved.as_deref())?;
+    update(false)
 }
 
 const NO_VERSION: &str = "no `version` in [workspace.package] of the root Cargo.toml";
 
-fn parse(manifest: &str) -> Result<DocumentMut, String> {
-    manifest.parse::<DocumentMut>().map_err(|e| format!("Cargo.toml: {e}"))
+fn parse(manifest: &str) -> Result<Document<String>, String> {
+    Document::parse(manifest.to_owned()).map_err(|e| format!("Cargo.toml: {e}"))
 }
 
 /// The string value of `item`, when it is one.
@@ -380,17 +385,17 @@ fn as_string(item: &Item) -> Option<&Formatted<String>> {
     }
 }
 
-/// Whether `s` is written as a `"""…"""` or `'''…'''` string.
-fn is_multi_line(s: &Formatted<String>) -> bool {
-    let repr = s.display_repr();
-    repr.starts_with("\"\"\"") || repr.starts_with("'''")
+/// Whether `s`, which was parsed from `raw`, is written as a `"""…"""` or `'''…'''` string.
+fn is_multi_line(s: &Formatted<String>, raw: &str) -> bool {
+    let text = s.span().and_then(|span| raw.get(span)).unwrap_or_default();
+    text.starts_with("\"\"\"") || text.starts_with("'''")
 }
 
 /// The `[workspace.package]` version string.
-fn root_version(doc: &DocumentMut) -> Result<String, String> {
+fn root_version(doc: &Document<String>) -> Result<String, String> {
     let item = doc.get("workspace").and_then(|w| w.get("package")).and_then(|p| p.get("version")).ok_or(NO_VERSION)?;
     let s = as_string(item).ok_or("[workspace.package] version is not a string")?;
-    if is_multi_line(s) {
+    if is_multi_line(s, doc.raw()) {
         return Err("[workspace.package] version is a multi-line string; write it as `version = \"X.Y.Z\"`".into());
     }
     if s.value().is_empty() {
@@ -399,32 +404,22 @@ fn root_version(doc: &DocumentMut) -> Result<String, String> {
     Ok(s.value().clone())
 }
 
-/// The names of the path dependencies in `[workspace.dependencies]` whose one-line `version` requires
-/// `old`, each with the operator in front of the version (`""` or `"="`).
-fn path_pins(doc: &DocumentMut, old: &str) -> Vec<(String, String)> {
+/// The `version` strings of the path dependencies in `[workspace.dependencies]` that require `old`
+/// (single-line or multi-line strings, matched by their decoded value), each with the operator in
+/// front of the version (`""` or `"="`).
+fn path_pins<'a>(doc: &'a Table, old: &str) -> Vec<(&'a Formatted<String>, String)> {
     let Some(deps) = doc.get("workspace").and_then(|w| w.get("dependencies")).and_then(Item::as_table_like) else {
         return Vec::new();
     };
     deps.iter()
-        .filter_map(|(name, dep)| {
+        .filter_map(|(_, dep)| {
             let dep = dep.as_table_like()?;
             dep.get("path")?;
-            let version = dep.get("version").and_then(as_string).filter(|v| !is_multi_line(v))?;
+            let version = dep.get("version").and_then(as_string)?;
             let prefix = version.value().strip_suffix(old)?;
-            matches!(prefix.trim(), "" | "=").then(|| (name.to_owned(), prefix.to_owned()))
+            matches!(prefix.trim(), "" | "=").then(|| (version, prefix.to_owned()))
         })
         .collect()
-}
-
-/// Sets the string at `item` to `text`, keeping its quote character and the comments and spaces
-/// around it. `text` is a version, with an optional operator in front, so it needs no escapes.
-fn set_string(item: &mut Item, text: &str) -> Result<(), String> {
-    let old = as_string(item).ok_or("Cargo.toml: a version to replace is not a string")?;
-    let quoted = if old.display_repr().starts_with('\'') { format!("'{text}'") } else { format!("\"{text}\"") };
-    let mut value: Value = quoted.parse().map_err(|e| format!("Cargo.toml: {e}"))?;
-    *value.decor_mut() = old.decor().clone();
-    *item = Item::Value(value);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -609,6 +604,53 @@ mod tests {
         let expected = manifest.replacen("0.1.0", "0.1.1", 4);
         assert_eq!(out, expected);
         assert!(out.ends_with("[workspace.dependencies.registry]\nversion = \"0.1.0\"\n"), "{out}");
+    }
+
+    #[test]
+    fn keeps_the_order_of_interleaved_dotted_keys() {
+        let manifest = "[workspace]\npackage.version = \"0.1.0\"\nresolver = \"3\"\npackage.edition = \"2024\"\nmembers = [\"a\"]\n";
+        let out = replace(manifest, "0.2.0").unwrap();
+        assert_eq!(out, manifest.replace("0.1.0", "0.2.0"));
+    }
+
+    #[test]
+    fn moves_a_pin_written_as_a_multi_line_string() {
+        let manifest = "[workspace.package]\nversion = \"0.1.0\"\n\n[workspace.dependencies]\n\
+                        a = { path = \"a\", version = \"\"\"=0.1.0\"\"\" }\n\
+                        b = { path = \"b\", version = '''0.1.0''' }\n\
+                        c = { path = \"c\", version = \"\"\"\n0.1.0\"\"\" }\n";
+        let out = replace(manifest, "0.2.0").unwrap();
+        assert!(out.contains("a = { path = \"a\", version = \"\"\"=0.2.0\"\"\" }"), "{out}");
+        assert!(out.contains("b = { path = \"b\", version = '''0.2.0''' }"), "{out}");
+        assert_eq!(read(&out).unwrap(), "0.2.0");
+        assert_eq!(out.matches("0.1.0").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn puts_the_lock_back_before_the_online_attempt() {
+        let dir = workspace(MANIFEST, Some("original\n"));
+        let lock = dir.path().join("Cargo.lock");
+        let mut seen = Vec::new();
+        let result = update_lock_with(&lock, 1 << 20, |offline| {
+            seen.push((offline, std::fs::read_to_string(&lock).unwrap()));
+            std::fs::write(&lock, "half").unwrap();
+            if offline { Err("offline failed".into()) } else { Ok(()) }
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen, [(true, "original\n".to_owned()), (false, "original\n".to_owned())]);
+        // A lock that did not exist is removed before the second attempt.
+        std::fs::remove_file(&lock).unwrap();
+        let mut existed = None;
+        let result = update_lock_with(&lock, 1 << 20, |offline| {
+            if offline {
+                std::fs::write(&lock, "half").unwrap();
+                return Err("offline failed".into());
+            }
+            existed = Some(lock.exists());
+            Ok(())
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(existed, Some(false));
     }
 
     #[test]
