@@ -5,13 +5,14 @@
 
 use craft_behavior::keyed;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, LeastWidth, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow};
 use craft_ui::popover::Popover;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Frames, last_pass_measuring_runs, measuring_runs, trial};
+use craft_ui::text::TextField;
 use egui::{Rect, Ui};
 use std::cell::Cell;
 
@@ -103,6 +104,49 @@ fn a_content_column_in_a_popover_holds_its_fill_children() {
     assert!((hug.column - hug.text).abs() <= SNAP, "the column is as wide as its widest content-sized child");
     assert!((hug.divider - hug.column).abs() <= SNAP, "a divider in it shows across it");
     assert!(hug.button < hug.column, "a button keeps its own width");
+}
+
+/// A box the overlay places at its least width lays the column in it out across that width: a search field in the
+/// column's header and the list under it span the box's inner width, as they do in a column given its width, and the
+/// box keeps its least width rather than its content's.
+#[trial]
+fn a_box_placed_at_a_least_width_lays_its_column_out_across_it() {
+    const SEARCH: &str = "Search";
+    let (frame, column, field, list) = (Cell::new(Rect::NOTHING), Cell::new(0.0), Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+    let least = Cell::new(0.0);
+    let mut query = String::new();
+    Frames::new().idle(4, |ui| {
+        least.set(LeastWidth::Palette.points(craft_ui::runtime::env::Env::of(ui).tokens.tokens()));
+        let shown = Popover::new("Box", Bind::given(true)).least_width(LeastWidth::Palette).show(ui, |ui, _| {
+            let keys = [0_usize, 1];
+            let source = keyed(&keys, |key: &usize| *key);
+            let column_shown = Stack::new()
+                .fill_width()
+                .least_width(LeastWidth::Palette)
+                .id_salt("column")
+                .header(|ui, _| {
+                    let text = TextField::search(SEARCH, Bind::bound(&mut query)).id_salt("search").sizing(Sizing::FillWidth);
+                    field.set(text.show(ui).response.rect);
+                })
+                .show(ui, |ui, _| {
+                    let rows = List::new("Rows").sizing(Sizing::FillWidth).natural_height(true);
+                    list.set(rows.show_items(ui, &source, &mut |key, _| ListRow::new(ROWS[*key])).response.rect);
+                });
+            column.set(column_shown.output.rect.width());
+        });
+        frame.set(shown.output.response.rect);
+    });
+    let (frame, column, field, list) = (frame.get(), column.get(), field.get(), list.get());
+    assert!(frame.is_positive() && field.is_positive() && list.is_positive(), "the box shows its field and rows: {frame:?} {field:?} {list:?}");
+    let pad = field.left() - frame.left();
+    assert!(pad > 0.0 && pad < frame.width() / 10.0, "the field starts inside the box's padding: {field:?} in {frame:?}");
+    assert!((frame.width() - least.get() - 2.0 * pad).abs() <= SNAP, "the box keeps its least width: {} against {}", frame.width(), least.get());
+    assert!((field.right() - frame.right() + pad).abs() <= SNAP, "the field spans the box's inner width: {field:?} in {frame:?}");
+    assert!(
+        (list.left() - field.left()).abs() <= SNAP && (list.right() - field.right()).abs() <= SNAP,
+        "the rows span it too: {list:?} under {field:?}"
+    );
+    assert!((column - field.width()).abs() <= SNAP, "the column is as wide as the field in it: {column} against {}", field.width());
 }
 
 /// Passing the width on runs no measuring run of its own: a content column in a given column measures as often as a

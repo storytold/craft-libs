@@ -87,9 +87,13 @@ impl BodyHooks<'_> {
         scoped.inside_label = None;
         scoped.cell_fills = false;
         // Along a width the container takes from its content, its regions measure at their content widths: a child
-        // that fills takes what it needs, not the whole room. A container that passes its column's width on measures
-        // them across it.
-        if !real && !self.wide() {
+        // that fills takes what it needs, not the whole room. A container given its width (a rect, a column's width it
+        // passes on, or the width its column settled on) lays its regions out across it in both runs: its bands are as
+        // wide as the container, so a child that fills takes the band, whatever column its parent is.
+        if self.wide() {
+            scoped.content_column = false;
+            scoped.content.0 = false;
+        } else if !real {
             scoped.content_column = true;
         }
         if props.header.is_some_and(|header| header.band == DragBand::Reorder) {
