@@ -255,7 +255,8 @@ A variable name that is empty or holds `=` or a NUL character also fails the tes
 environment is read.
 
 `skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
-or a `RequiredError` that names the variable.
+or a `RequiredError` that names the variable. Every module of this crate that reads a required
+variable reads it with `skip::required`, so one rule applies to all of them.
 
 The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
 `CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
@@ -287,9 +288,10 @@ passes the value to return as the third argument, for example `Ok(())`.
 `option_env!` value, or the table `craft-fonts-build` generates. A required failure names
 `CRAFT_FONTS_REQUIRED=1`.
 
-`craft_fonts_cover(text, faces)` returns `true` when one face maps every character of `text` that
-is not whitespace. Each face is font data with its index in a collection (`0` for a single font). A
-face that does not parse covers nothing, and coverage is not combined across faces.
+`craft_fonts_cover(text, faces)` needs the `font-coverage` feature, which adds skrifa. It returns
+`true` when one face maps every character of `text` that is not whitespace. Each face is font data
+with its index in a collection (`0` for a single font). A face that does not parse covers nothing,
+and coverage is not combined across faces.
 
 The module does not change the process environment. Its tests that read a real variable run the
 test binary again as a child process with that variable set.
