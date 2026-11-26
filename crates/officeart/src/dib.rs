@@ -98,35 +98,56 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
         return Some(Dib::Bmp(bmp));
     }
     // The PNG may be at most what is left of `work` (and `limit`); what it takes is charged.
-    match encode_png(&bmp, image::ImageFormat::Bmp, limit, limit.min(work.left)) {
+    match encode_png(&bmp, image::ImageFormat::Bmp, limit, work, cost) {
         Some(png) if work.charge(png.len(), "bitmap") => Some(Dib::Png(png)),
         _ => Some(Dib::Bmp(bmp)),
     }
 }
 
 /// A picture file of `format` decoded (at most [`MAX_SIDE`] pixels a side, and `limit` and
-/// 256 MiB of memory: its pixels are charged by the caller) and encoded as a PNG of at most
-/// `out` bytes. The picture is turned as the file says (a TIFF's or JPEG's orientation), and
-/// floating-point pixels, which PNG can't hold, become 16-bit ones. `None` when it can't be.
-pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize, out: usize) -> Option<Vec<u8>> {
+/// 256 MiB of memory) and encoded as a PNG of at most what is then left of `limit` and `work`.
+/// The picture is turned as the file says (a TIFF's or JPEG's orientation), and floating-point
+/// pixels, which PNG can't hold, become 16-bit ones. Each of those buffers is charged to `work`
+/// before it is made: the decoded pixels, less the `prepaid` bytes the caller charged for them
+/// already, a turned copy, and the 16-bit copy. `None` when it can't be.
+pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize, work: &mut Decode, prepaid: usize) -> Option<Vec<u8>> {
     use image::ImageDecoder;
+    use image::metadata::Orientation;
     let mut reader = image::ImageReader::new(std::io::Cursor::new(file));
     reader.set_format(format);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
     limits.max_alloc = Some((256 << 20).min(limit as u64));
-    reader.limits(limits);
+    reader.limits(limits.clone());
     let mut decoder = reader.into_decoder().ok()?;
-    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    // `ImageReader::decode` holds the pixel buffer to `max_alloc`; decoding through the decoder
+    // (to read its orientation first) doesn't, so the buffer is reserved here.
+    let pixels = decoder.total_bytes();
+    limits.reserve(pixels).ok()?;
+    let pixels = usize::try_from(pixels).ok()?;
+    let more = pixels.saturating_sub(prepaid);
+    if more > 0 && !work.charge(more, "picture") {
+        return None;
+    }
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    // A quarter-turn makes a new buffer; a flip turns the pixels where they are.
+    let turned = matches!(orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH);
+    if turned && !work.charge(pixels, "picture") {
+        return None;
+    }
     let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
     img.apply_orientation(orientation);
+    let floats = matches!(img, image::DynamicImage::ImageRgb32F(_) | image::DynamicImage::ImageRgba32F(_));
+    if floats && !work.charge(img.as_bytes().len() / 2, "picture") {
+        return None;
+    }
     let img = match img {
         image::DynamicImage::ImageRgb32F(_) => image::DynamicImage::ImageRgb16(img.to_rgb16()),
         image::DynamicImage::ImageRgba32F(_) => image::DynamicImage::ImageRgba16(img.to_rgba16()),
         other => other,
     };
-    let mut png = PictureWriter { bytes: Vec::new(), limit: out };
+    let mut png = PictureWriter { bytes: Vec::new(), limit: limit.min(work.left) };
     image::codecs::png::PngEncoder::new(&mut png).write_image(img.as_bytes(), img.width(), img.height(), img.color().into()).ok()?;
     Some(png.bytes)
 }

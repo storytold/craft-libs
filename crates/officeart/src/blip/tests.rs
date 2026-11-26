@@ -363,6 +363,28 @@ fn an_unreadable_embedded_blip_is_not_looked_for_in_the_delay_stream() {
     assert!(store.take(1).is_some(), "the same delay stream offset, pointed at without embedded bytes");
 }
 
+/// An RLE DIB of a few bytes can declare a large bitmap: its pixels are held to `limit` like any
+/// other decode's, however much of the budget is left, and the DIB stays a BMP placeholder.
+#[test]
+fn a_dibs_pixels_are_held_to_the_limit() {
+    let (w, h) = (1000u32, 1000u32);
+    let mut dib = vec![0u8; 40];
+    dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+    dib[4..8].copy_from_slice(&w.to_le_bytes());
+    dib[8..12].copy_from_slice(&h.to_le_bytes());
+    dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&8u16.to_le_bytes());
+    dib[16..20].copy_from_slice(&1u32.to_le_bytes()); // BI_RLE8
+    dib[20..24].copy_from_slice(&2u32.to_le_bytes());
+    dib[32..36].copy_from_slice(&1u32.to_le_bytes()); // one palette colour
+    dib.extend_from_slice(&[0, 0, 255, 0, 0, 1]); // the colour, then end of bitmap
+    let limit = 64 << 10;
+    assert!((w * h) as usize > limit && dib.len() < limit);
+    let roomy = || Decode::new(64 << 20);
+    assert!(matches!(crate::dib::to_png(&dib, usize::MAX, &mut roomy()), Some(crate::dib::Dib::Png(_))), "it decodes when it fits");
+    assert!(matches!(crate::dib::to_png(&dib, limit, &mut roomy()), Some(crate::dib::Dib::Bmp(_))));
+}
+
 /// The store reads at most [`MAX_ENTRIES`] entries.
 #[test]
 fn the_store_holds_at_most_max_entries() {
