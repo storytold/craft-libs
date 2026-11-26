@@ -8,11 +8,17 @@ use crate::{
 };
 
 /// A cache for curve comparisons, so that each pair of curves needs to be compared at most once.
+///
+/// The cache holds the comparisons of one [`Segments`] arena. When it is given
+/// a different arena, a clone included, it drops the comparisons it holds and
+/// starts again with that arena.
 #[derive(Clone, Debug)]
 pub struct ComparisonCache {
     inner: FxHashMap<(SegIdx, SegIdx), (CurveOrder, CurveOrder)>,
     accuracy: f64,
     tolerance: f64,
+    // Craft patch (comparison cache arena): the arena that `inner` describes.
+    arena: Option<u64>,
 }
 
 impl ComparisonCache {
@@ -29,6 +35,7 @@ impl ComparisonCache {
             inner: FxHashMap::default(),
             accuracy,
             tolerance,
+            arena: None,
         }
     }
 
@@ -45,6 +52,7 @@ impl ComparisonCache {
             inner: FxHashMap::default(),
             accuracy,
             tolerance,
+            arena: None,
         }
     }
 
@@ -56,6 +64,14 @@ impl ComparisonCache {
         j: SegIdx,
     ) -> &mut CurveOrder {
         use std::collections::hash_map::Entry;
+
+        // Craft patch (comparison cache arena): comparisons cached for
+        // another arena do not describe this one.
+        let arena = segments.arena_id();
+        if self.arena != Some(arena) {
+            self.inner.clear();
+            self.arena = Some(arena);
+        }
 
         let (i, j, flipped) = if i.0 < j.0 {
             (i, j, false)
@@ -126,5 +142,55 @@ mod tests {
                 .2,
             Order::Left
         );
+    }
+
+    fn first_order(cmp_cache: &mut ComparisonCache, segments: &Segments) -> Order {
+        cmp_cache
+            .compare_segments(segments, SegIdx(0), SegIdx(1))
+            .iter()
+            .next()
+            .unwrap()
+            .2
+    }
+
+    #[test]
+    fn other_arena_is_compared_again() {
+        let mut left_first = Segments::default();
+        left_first.add_points([(0.0, 0.0), (0.0, 1.0)]);
+        left_first.add_points([(1.0, 0.0), (1.0, 1.0)]);
+        let mut right_first = Segments::default();
+        right_first.add_points([(1.0, 0.0), (1.0, 1.0)]);
+        right_first.add_points([(0.0, 0.0), (0.0, 1.0)]);
+
+        let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
+        assert_eq!(first_order(&mut cmp_cache, &left_first), Order::Left);
+        assert_eq!(first_order(&mut cmp_cache, &right_first), Order::Right);
+        assert_eq!(first_order(&mut cmp_cache, &left_first), Order::Left);
+    }
+
+    #[test]
+    fn diverged_clone_is_compared_again() {
+        let mut original = Segments::default();
+        original.add_points([(0.0, 0.0), (0.0, 1.0)]);
+        let mut copy = original.clone();
+        original.add_points([(1.0, 0.0), (1.0, 1.0)]);
+        copy.add_points([(-1.0, 0.0), (-1.0, 1.0)]);
+
+        let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
+        assert_eq!(first_order(&mut cmp_cache, &original), Order::Left);
+        assert_eq!(first_order(&mut cmp_cache, &copy), Order::Right);
+    }
+
+    #[test]
+    fn appending_keeps_cached_comparisons() {
+        let mut segments = Segments::default();
+        segments.add_points([(0.0, 0.0), (0.0, 1.0)]);
+        segments.add_points([(1.0, 0.0), (1.0, 1.0)]);
+        let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
+        assert_eq!(first_order(&mut cmp_cache, &segments), Order::Left);
+
+        segments.add_points([(2.0, 0.0), (2.0, 1.0)]);
+        cmp_cache.compare_segments(&segments, SegIdx(1), SegIdx(2));
+        assert_eq!(cmp_cache.inner.len(), 2);
     }
 }
