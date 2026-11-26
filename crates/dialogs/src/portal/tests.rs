@@ -69,3 +69,19 @@ fn an_answer_of_another_shape_is_not_read() {
         assert!(answer_with(uris, None).is_err(), "{shape}");
     }
 }
+
+/// X11 windows identify themselves to the desktop portal as `x11:<xid>`, while Wayland (which
+/// would require `unsafe` xdg-foreign handles) and unparented dialogs send an empty identifier.
+#[trial]
+fn x11_windows_are_named_to_the_portal() {
+    use std::num::NonZeroU32;
+    use std::ptr::NonNull;
+
+    use raw_window_handle::{RawWindowHandle, WaylandWindowHandle, XcbWindowHandle, XlibWindowHandle};
+
+    assert_eq!(parent_id(Some(RawWindowHandle::Xlib(XlibWindowHandle::new(0x3a0000f)))), "x11:3a0000f");
+    let xcb_id = NonZeroU32::MIN.saturating_add(0x420000f);
+    assert_eq!(parent_id(Some(RawWindowHandle::Xcb(XcbWindowHandle::new(xcb_id)))), "x11:4200010");
+    assert_eq!(parent_id(Some(RawWindowHandle::Wayland(WaylandWindowHandle::new(NonNull::dangling())))), "");
+    assert_eq!(parent_id(None), "");
+}
