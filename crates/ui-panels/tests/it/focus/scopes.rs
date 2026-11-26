@@ -88,3 +88,22 @@ fn tab_onto_the_last_stop_gone_in_the_same_pass_wraps_to_the_first() {
     frames.idle(2, &mut show);
     assert_eq!(focused(&frames.ctx), Some(id("first")), "the last entry gone, Tab wraps to the first, as it does from any last stop");
 }
+
+/// A Tab from no focus at all can land on a stop this pass does not show (one drawn only while it lacks the focus):
+/// the direction is the Tab's own, so the focus goes on to the next shown stop rather than nowhere.
+#[trial]
+fn tab_from_no_focus_onto_a_stop_gone_in_the_same_pass_goes_on() {
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        if focused(ui.ctx()) != Some(id("offer")) {
+            control(ui, "offer");
+        }
+        control(ui, "first");
+        control(ui, "next");
+    };
+    frames.idle(2, &mut show);
+    assert_eq!(focused(&frames.ctx), None, "nothing has the focus");
+    tap(&mut frames, egui::Key::Tab, egui::Modifiers::NONE, &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(focused(&frames.ctx), Some(id("first")), "the Tab goes on past the stop it landed on");
+}

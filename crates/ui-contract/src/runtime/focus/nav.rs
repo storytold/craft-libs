@@ -631,8 +631,8 @@ impl State {
     /// of the Tab, that this pass shows. A stop the focus arrived at by a press, a scope opening or a restoration never
     /// held the focus, so it leaves the focus nowhere as any other removed stop does: only a Tab takes it here.
     fn arrived_unshown(&self, key: StopKey) -> Option<StopRec> {
-        // The Tab this pass made, from the stop it left, and the direction it went.
-        let (_, forward) = self.press.tabbed_from?;
+        // The Tab this pass made and the direction it went; the stop it left may be none at all.
+        let forward = self.press.tabbed?;
         // `end` has moved the frame on: an arrival of this pass is stamped with the frame before.
         let arrived = self.arrived.is_some_and(|(frame, at, origin)| at == key && frame + 1 == self.frame && origin == FocusOrigin::Request);
         if !arrived {
@@ -904,8 +904,11 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
         let from = state.focus_now;
         let moved = state.tab(forward, input.tab_all_controls, input.dialog_tab);
         state.press.by_keys |= !moved.is_empty();
-        if let Some(from) = from.filter(|_| !moved.is_empty()) {
-            state.press.tabbed_from = Some((from, forward));
+        if !moved.is_empty() {
+            // The direction is the Tab's own, whether or not a stop was there to leave: a Tab from no focus can land
+            // on a stop this pass does not show, and the recovery below still needs to know which way it went.
+            state.press.tabbed = Some(forward);
+            state.press.tabbed_from = from.map(|from| (from, forward));
         }
         acts.extend(moved);
     }
