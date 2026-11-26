@@ -356,7 +356,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
 // ---------------------------------------------------------------------------------------------------------------
 // The tile.
 
-/// The style of a gallery tile: the theme's selection fill and edge while it is the current one.
+/// The style of a gallery tile: the accent fill and edge while it is the current one.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct GalleryTileStyle {
@@ -366,14 +366,14 @@ struct GalleryTileStyle {
     focus: FocusLook,
     /// Between the tile's edge and its picture.
     pad: f32,
-    /// The selection edge's width.
-    stroke: f32,
-    /// The current tile's fill.
+    /// The current tile's fill: `accent.soft`, so the tile still reads as current under the focus ring.
     fill: StyleColor,
-    /// The current tile's edge.
+    /// The current tile's edge: `accent.solid`, not the translucent `accent.border`.
     edge: StyleColor,
     /// The ink of the item's name under the picture, in a captioned gallery.
     caption: StyleColor,
+    /// The caption's ink on the current tile's `accent.soft` fill: `accent.on_soft`.
+    caption_current: StyleColor,
     /// Between the picture and the caption.
     gap: f32,
     /// The picture's height at each thumbnail size, small, medium and large (`size.thumb.sm`, `md`, `lg`), as `thumb`
@@ -443,10 +443,10 @@ impl Component for GalleryTile<'_> {
             metrics: Metrics::new().padding(Insets::new(pad, pad, pad, pad)),
             focus: cx.focus_look(),
             pad,
-            stroke: cx.tokens.stroke.thin,
-            fill: cx.color(colors.state.selected),
-            edge: cx.color(colors.line.control_edge),
+            fill: cx.color(colors.accent.soft),
+            edge: cx.color(colors.accent.solid),
             caption: cx.color(colors.text.normal),
+            caption_current: cx.color(colors.accent.on_soft),
             gap: cx.tokens.space.gap.tight,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
         }
@@ -473,8 +473,11 @@ impl Component for GalleryTile<'_> {
         if self.selected {
             let outer = area.expand(cx.style.pad);
             let draw = ui.draw();
-            draw.fill(&PaintShape::Rect(outer, CornerRadius::ZERO), cx.style.edge);
-            draw.fill(&PaintShape::Rect(outer.shrink(cx.style.stroke), CornerRadius::ZERO), cx.style.fill);
+            // The fill goes under the edge, not inside it: `accent.soft` is translucent in some themes, and a solid
+            // edge-coloured fill under it would show through. A rect stroke paints inside its rect.
+            let shape = PaintShape::Rect(outer, CornerRadius::ZERO);
+            draw.fill(&shape, cx.style.fill);
+            draw.stroke(&shape, craft_ui::primitives::StrokeWidth::Thin, cx.style.edge);
         }
         // A captioned tile keeps the picture's height at the top and shows the name in the rest under it.
         let (area, caption) = match self.caption {
@@ -489,7 +492,11 @@ impl Component for GalleryTile<'_> {
             let _ = ui.child("picture", area, picture);
         }
         if let (Some(rect), Some(name)) = (caption, self.caption.as_ref()) {
-            let run = TextRun::new(name.as_str()).role(CAPTION).color(cx.style.caption).align(HAlign::Center).elide();
+            let run = TextRun::new(name.as_str())
+                .role(CAPTION)
+                .color(if self.selected { cx.style.caption_current } else { cx.style.caption })
+                .align(HAlign::Center)
+                .elide();
             let _ = ui.draw().text(rect, &run);
         }
     }
