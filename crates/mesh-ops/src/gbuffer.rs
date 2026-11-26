@@ -7,6 +7,9 @@ use rayon::prelude::*;
 
 use crate::Mesh;
 
+mod angular;
+use angular::VertexCoverage;
+
 /// Texel not covered by any triangle.
 pub const NO_TRI: u32 = u32::MAX;
 
@@ -18,9 +21,9 @@ pub struct UvGBuffer {
     pub height: u32,
     /// Triangle under each texel center, [`NO_TRI`] when uncovered.
     pub tri: Vec<u32>,
-    /// Barycentric weights of the triangle's second and third vertices.
-    pub bary: Vec<[f32; 2]>,
-    /// Texels written by more than one triangle (overlapping UVs).
+    /// Rounded barycentric weights of the triangle's three vertices.
+    pub bary: Vec<[f64; 3]>,
+    /// The count of texels covered by distinct triangles with overlapping interiors.
     pub overlaps: u32,
 }
 
@@ -37,36 +40,138 @@ pub struct Surface {
     pub tri: u32,
 }
 
-/// The edge function of `a → b` at `p`, `(b - a) × (p - a)`, rounded once from the exact value
-/// of its six products. Each product is split into its rounded value and its rounding error,
-/// and the twelve parts are added with Neumaier's compensation, so corners far from `p` do not
-/// cancel the digits that place `p` against the edge.
-fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
-    let products = [(b.x, p.y), (-b.x, a.y), (-a.x, p.y), (-b.y, p.x), (b.y, a.x), (a.y, p.x)];
-    let (mut sum, mut compensation) = (0.0f64, 0.0f64);
-    for (x, y) in products {
-        let high = x * y;
-        for part in [high, x.mul_add(y, -high)] {
-            let next = sum + part;
-            compensation += if sum.abs() >= part.abs() { (sum - next) + part } else { (part - next) + sum };
-            sum = next;
+#[derive(Clone, Copy)]
+struct Expansion<const N: usize> {
+    parts: [f64; N],
+    len: usize,
+}
+
+impl<const N: usize> Expansion<N> {
+    fn new() -> Self {
+        Self { parts: [0.0; N], len: 0 }
+    }
+
+    fn add(&mut self, mut term: f64) {
+        let mut kept = 0;
+        for index in 0..self.len {
+            let mut part = self.parts[index];
+            if term.abs() < part.abs() {
+                std::mem::swap(&mut term, &mut part);
+            }
+            let sum = term + part;
+            let error = part - (sum - term);
+            if error != 0.0 {
+                self.parts[kept] = error;
+                kept += 1;
+            }
+            term = sum;
+        }
+        self.len = kept;
+        if term != 0.0 {
+            self.parts[self.len] = term;
+            self.len += 1;
         }
     }
-    sum + compensation
+
+    fn product(&mut self, left: f64, right: f64) {
+        let high = left * right;
+        self.add(high);
+        self.add(left.mul_add(right, -high));
+    }
+
+    fn value(&self) -> f64 {
+        if self.len == 0 {
+            return 0.0;
+        }
+        let mut remaining = self.len - 1;
+        let mut sum = self.parts[remaining];
+        let mut error = 0.0;
+        while remaining > 0 {
+            remaining -= 1;
+            let previous = sum;
+            sum += self.parts[remaining];
+            error = self.parts[remaining] - (sum - previous);
+            if error != 0.0 {
+                break;
+            }
+        }
+        if remaining > 0 && ((error > 0.0 && self.parts[remaining - 1] > 0.0) || (error < 0.0 && self.parts[remaining - 1] < 0.0)) {
+            let correction = error * 2.0;
+            let rounded = sum + correction;
+            if rounded - sum == correction {
+                sum = rounded;
+            }
+        }
+        sum
+    }
+}
+
+fn edge_terms(a: DVec2, b: DVec2, p: DVec2) -> Expansion<12> {
+    let mut result = Expansion::new();
+    for (x, y) in [(b.x, p.y), (-b.x, a.y), (-a.x, p.y), (-b.y, p.x), (b.y, a.x), (a.y, p.x)] {
+        result.product(x, y);
+    }
+    result
+}
+
+/// The edge function of `a → b` at `p`, `(b - a) × (p - a)`, rounded once from its expansion.
+fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
+    edge_terms(a, b, p).value()
+}
+
+fn interpolate<const N: usize>(weights: &[Expansion<12>; 3], values: [[f64; N]; 3], denominator: f64) -> [f64; N] {
+    std::array::from_fn(|axis| {
+        let mut numerator = Expansion::<72>::new();
+        for (weight, value) in weights.iter().zip(values) {
+            for &part in &weight.parts[..weight.len] {
+                numerator.product(part, value[axis]);
+            }
+        }
+        numerator.value() / denominator
+    })
+}
+
+struct BoundaryOwners {
+    triangles: Vec<u32>,
+    vertex: Option<VertexCoverage>,
+}
+
+impl BoundaryOwners {
+    fn new(previous: u32, face: Option<[DVec2; 3]>, point: DVec2) -> Self {
+        Self { triangles: vec![previous], vertex: face.and_then(|face| VertexCoverage::new(face, point)) }
+    }
+
+    fn insert(&mut self, triangle: u32, face: [DVec2; 3], point: DVec2, mut separate: impl FnMut(u32) -> bool) -> bool {
+        let separated = match self.vertex.as_mut().and_then(|vertex| vertex.insert(face, point)) {
+            Some(separated) => separated,
+            None => {
+                self.vertex = None;
+                self.triangles.iter().all(|&owner| separate(owner))
+            }
+        };
+        if separated {
+            self.triangles.push(triangle);
+        }
+        separated
+    }
 }
 
 impl UvGBuffer {
     /// Rasterize the triangles of material `material` at `width × height`.
     pub fn new(mesh: &Mesh, material: usize, width: u32, height: u32) -> UvGBuffer {
         let (w, h) = (width.max(1), height.max(1));
-        let size = Vec2::new(w as f32, h as f32);
+        let size = DVec2::new(f64::from(w), f64::from(h));
         let bands = h.div_ceil(BAND) as usize;
         let mut bins: Vec<Vec<u32>> = vec![Vec::new(); bands];
+        let mut seen = std::collections::HashSet::new();
         for t in mesh.triangles_of(material) {
+            if !seen.insert(t) {
+                continue;
+            }
             let Some([a, b, c]) = mesh.tri(t) else { continue };
             let (Some(ua), Some(ub), Some(uc)) = (mesh.uvs.get(a), mesh.uvs.get(b), mesh.uvs.get(c)) else { continue };
-            let y0 = (ua.y.min(ub.y).min(uc.y) * size.y).floor().max(0.0) as i64;
-            let y1 = (ua.y.max(ub.y).max(uc.y) * size.y).ceil().min(size.y) as i64;
+            let y0 = (f64::from(ua.y.min(ub.y).min(uc.y)) * size.y).floor().max(0.0) as i64;
+            let y1 = (f64::from(ua.y.max(ub.y).max(uc.y)) * size.y).ceil().min(size.y) as i64;
             if y1 <= y0 || !ua.is_finite() || !ub.is_finite() || !uc.is_finite() {
                 continue;
             }
@@ -77,31 +182,33 @@ impl UvGBuffer {
         }
         let n = w as usize * h as usize;
         let mut tri = vec![NO_TRI; n];
-        let mut bary = vec![[0.0f32; 2]; n];
-        let band_len = (BAND * w) as usize;
+        let mut bary = vec![[0.0f64; 3]; n];
+        let band_len = BAND as usize * w as usize;
         let overlaps: u32 = tri
             .par_chunks_mut(band_len)
             .zip(bary.par_chunks_mut(band_len))
             .enumerate()
             .map(|(bi, (tri, bary))| {
                 let mut overlaps = 0u32;
+                let mut overlapping = vec![false; tri.len()];
+                let mut boundary_owners = std::collections::HashMap::<usize, BoundaryOwners>::new();
                 let row0 = bi as u32 * BAND;
                 let rows = (tri.len() as u32) / w;
                 for &t in bins.get(bi).map(Vec::as_slice).unwrap_or(&[]) {
                     let Some([a, b, c]) = mesh.tri(t as usize) else { continue };
                     let (Some(&ua), Some(&ub), Some(&uc)) = (mesh.uvs.get(a), mesh.uvs.get(b), mesh.uvs.get(c)) else { continue };
-                    let (pa, pb, pc) = (ua * size, ub * size, uc * size);
+                    let (pa, pb, pc) = (ua.as_dvec2() * size, ub.as_dvec2() * size, uc.as_dvec2() * size);
                     if !(pa.is_finite() && pb.is_finite() && pc.is_finite()) {
                         continue;
                     }
-                    let (qa, qb, qc) = (pa.as_dvec2(), pb.as_dvec2(), pc.as_dvec2());
+                    let (qa, qb, qc) = (pa, pb, pc);
                     let area = edge(qa, qb, qc);
                     if area.abs() < 1e-12 {
                         continue;
                     }
                     let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as u32;
-                    let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(w as f32) as u32).min(w);
-                    let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(row0 as f32) as u32).max(row0);
+                    let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(f64::from(w)) as u32).min(w);
+                    let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(f64::from(row0)) as u32).max(row0);
                     let y1 = (pa.y.max(pb.y).max(pc.y).ceil() as u32).min(row0 + rows);
                     if y0 >= y1 || x0 >= x1 {
                         continue;
@@ -119,7 +226,7 @@ impl UvGBuffer {
                     let step = edges.map(|(a, b)| DVec2::new(a.y - b.y, b.x - a.x) * area.signum());
                     let lengths = edges.map(|(a, b)| (b - a).length());
                     let lowest = area.abs() / lengths.iter().copied().fold(0.0, f64::max);
-                    let slack = (1e-6 + 8.0 * f64::EPSILON * f64::from(size.max_element())).min(1e-3 * lowest);
+                    let slack = (1e-6 + 8.0 * f64::EPSILON * size.max_element()).min(1e-3 * lowest);
                     let eps = lengths.map(|length| -slack * length);
                     for y in y0..y1 {
                         for x in x0..x1 {
@@ -130,12 +237,42 @@ impl UvGBuffer {
                             }
                             let i = ((y - row0) * w + x) as usize;
                             if let (Some(slot), Some(bw)) = (tri.get_mut(i), bary.get_mut(i)) {
-                                if *slot != NO_TRI {
-                                    overlaps += 1;
+                                let separate_interiors = |previous| {
+                                    let Some(previous) = mesh.tri(previous as usize) else { return false };
+                                    let [Some(ua), Some(ub), Some(uc)] = previous.map(|v| mesh.uvs.get(v)) else { return false };
+                                    let old = [ua, ub, uc].map(|uv| uv.as_dvec2() * size);
+                                    let separates = |face: [DVec2; 3], other: [DVec2; 3]| {
+                                        let positive = edge(face[0], face[1], face[2]) > 0.0;
+                                        [(face[0], face[1]), (face[1], face[2]), (face[2], face[0])].into_iter().any(|(a, b)| {
+                                            other.into_iter().all(|p| if positive { edge(a, b, p) <= 0.0 } else { edge(a, b, p) >= 0.0 })
+                                        })
+                                    };
+                                    separates([qa, qb, qc], old) || separates(old, [qa, qb, qc])
+                                };
+                                if *slot != NO_TRI && !overlapping[i] {
+                                    let point = DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                                    let first_overlaps = !boundary_owners.contains_key(&i) && !separate_interiors(*slot);
+                                    let separated = if first_overlaps {
+                                        false
+                                    } else {
+                                        let owners = boundary_owners.entry(i).or_insert_with(|| {
+                                            let face = mesh.tri(*slot as usize).and_then(|corners| {
+                                                let [Some(a), Some(b), Some(c)] = corners.map(|v| mesh.uvs.get(v)) else { return None };
+                                                Some([a, b, c].map(|uv| uv.as_dvec2() * size))
+                                            });
+                                            BoundaryOwners::new(*slot, face, point)
+                                        });
+                                        owners.insert(t, [qa, qb, qc], point, separate_interiors)
+                                    };
+                                    if !separated {
+                                        overlaps += 1;
+                                        overlapping[i] = true;
+                                        boundary_owners.remove(&i);
+                                    }
                                 }
                                 *slot = t;
                                 let inv = 1.0 / area.abs();
-                                *bw = [(w1 * inv) as f32, (w2 * inv) as f32];
+                                *bw = [w0 * inv, w1 * inv, w2 * inv];
                             }
                         }
                     }
@@ -159,35 +296,72 @@ impl UvGBuffer {
     }
 
     /// Surface attributes at texel index `i` (None when uncovered).
+    /// Interpolates the surface at texel `i`'s center.
     pub fn surface(&self, mesh: &Mesh, i: usize) -> Option<Surface> {
         let t = *self.tri.get(i)?;
         if t == NO_TRI {
             return None;
         }
-        let [b1, b2] = *self.bary.get(i)?;
-        surface_at(mesh, t, b1, b2)
+        let _ = self.bary.get(i)?;
+        if self.width == 0 || self.height == 0 || i >= (self.width as usize).checked_mul(self.height as usize)? {
+            return None;
+        }
+        let [a, b, c] = mesh.tri(t as usize)?;
+        let [Some(ua), Some(ub), Some(uc)] = [a, b, c].map(|vertex| mesh.uvs.get(vertex)) else { return None };
+        let size = DVec2::new(f64::from(self.width), f64::from(self.height));
+        let [pa, pb, pc] = [ua, ub, uc].map(|uv| uv.as_dvec2() * size);
+        if ![pa, pb, pc].into_iter().all(|point| point.is_finite()) {
+            return None;
+        }
+        let point = DVec2::new((i % self.width as usize) as f64 + 0.5, (i / self.width as usize) as f64 + 0.5);
+        let area = edge(pa, pb, pc);
+        if area == 0.0 || !area.is_finite() {
+            return None;
+        }
+        let weights = [edge_terms(pb, pc, point), edge_terms(pc, pa, point), edge_terms(pa, pb, point)];
+        surface_at_expanded(mesh, t, weights, area)
     }
 }
 
 /// Interpolate triangle `t` at barycentrics (weights of vertices 1 and 2).
 pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
+    let (b1, b2) = (f64::from(b1), f64::from(b2));
+    surface_at_wide(mesh, t, [1.0 - b1 - b2, b1, b2])
+}
+
+fn surface_at_wide(mesh: &Mesh, t: u32, [b0, b1, b2]: [f64; 3]) -> Option<Surface> {
+    if ![b0, b1, b2].into_iter().all(f64::is_finite) {
+        return None;
+    }
+    let weights = [b0, b1, b2].map(|weight| {
+        let mut result = Expansion::new();
+        result.add(weight);
+        result
+    });
+    surface_at_expanded(mesh, t, weights, 1.0)
+}
+
+fn surface_at_expanded(mesh: &Mesh, t: u32, weights: [Expansion<12>; 3], denominator: f64) -> Option<Surface> {
     let [a, b, c] = mesh.tri(t as usize)?;
-    let b0 = 1.0 - b1 - b2;
-    let p = |v: &[Vec3]| -> Option<Vec3> { Some(*v.get(a)? * b0 + *v.get(b)? * b1 + *v.get(c)? * b2) };
-    let pos = p(&mesh.positions)?;
-    let nrm = p(&mesh.normals)?.try_normalize().unwrap_or(Vec3::Y);
-    // In `f64` the edges between any two finite `f32` positions and their cross product neither
-    // overflow nor round to zero.
-    // The edges start at the corner nearest the origin, so a far corner does not absorb a short
-    // edge of the other two; the corners keep their winding order.
+    let p = |values: &[Vec3]| -> Option<glam::DVec3> {
+        let [Some(a), Some(b), Some(c)] = [a, b, c].map(|vertex| values.get(vertex)) else { return None };
+        Some(glam::DVec3::from_array(interpolate(&weights, [a, b, c].map(|value| value.to_array().map(f64::from)), denominator)))
+    };
+    let pos = p(&mesh.positions)?.as_vec3();
+    let nrm = p(&mesh.normals)?.try_normalize().map_or(Vec3::Y, |normal| normal.as_vec3());
     let corners = [mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3()];
-    let anchor = (0..3).min_by(|&i, &j| corners[i].length_squared().total_cmp(&corners[j].length_squared())).unwrap_or(0);
-    let (from, next, last) = (corners[anchor], corners[(anchor + 1) % 3], corners[(anchor + 2) % 3]);
-    let geo_nrm = (next - from).cross(last - from).try_normalize().map_or(nrm, |n| n.as_vec3());
-    let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
-    let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
-    let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
-    let w = mesh.tangents.get(a).map(|t| if t.w < 0.0 { -1.0 } else { 1.0 }).unwrap_or(1.0);
+    let normal = glam::DVec3::from_array(std::array::from_fn(|axis| {
+        let projected = corners.map(|point| DVec2::new(point[(axis + 1) % 3], point[(axis + 2) % 3]));
+        edge(projected[0], projected[1], projected[2])
+    }));
+    let geo_nrm = normal.try_normalize().map_or(nrm, |n| n.as_vec3());
+    let [Some(ta), Some(tb), Some(tc)] = [a, b, c].map(|vertex| mesh.tangents.get(vertex)) else { return None };
+    let tan = glam::DVec4::from_array(interpolate(&weights, [ta, tb, tc].map(|value| value.to_array().map(f64::from)), denominator));
+    let [Some(ua), Some(ub), Some(uc)] = [a, b, c].map(|vertex| mesh.uvs.get(vertex)) else { return None };
+    let uv = DVec2::from_array(interpolate(&weights, [ua, ub, uc].map(|value| value.to_array().map(f64::from)), denominator)).as_vec2();
+    let normal = nrm.as_dvec3();
+    let tdir = normal.cross(tan.truncate()).cross(normal).try_normalize().map_or_else(|| nrm.any_orthonormal_vector(), |tangent| tangent.as_vec3());
+    let w = if tan.w < 0.0 { -1.0 } else { 1.0 };
     Some(Surface { pos, nrm, geo_nrm, tangent: tdir.extend(w), uv, tri: t })
 }
 
@@ -195,6 +369,129 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
 mod tests {
     use super::*;
     use crate::primitives;
+
+    #[test]
+    fn a_large_shared_vertex_fan_uses_bounded_face_comparisons() {
+        let count = 10_000usize;
+        for coordinate in [0.5f32, f32::from_bits(0.5f32.to_bits() + 1)] {
+            let center = DVec2::splat(coordinate as f64);
+            let sample = DVec2::splat(0.5);
+            let ring: Vec<DVec2> = (0..count)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / count as f32;
+                    (Vec2::splat(0.5) + Vec2::new(angle.cos(), angle.sin()) * 0.4).as_dvec2()
+                })
+                .collect();
+            let faces: Vec<[DVec2; 3]> = (0..count).map(|i| [center, ring[i], ring[(i + 1) % count]]).collect();
+            let mut owners = BoundaryOwners::new(0, Some(faces[0]), sample);
+            let mut comparisons = 0usize;
+            for index in (1..count).map(|i| i * 9973 % count) {
+                assert!(owners.insert(index as u32, faces[index], sample, |_| {
+                    comparisons += 1;
+                    assert!(comparisons <= 4 * count, "shared-vertex fan used {comparisons} full-face comparisons");
+                    true
+                }));
+            }
+            let angular = owners.vertex.as_ref().unwrap().comparisons();
+            assert!(angular <= 32 * count * (count.ilog2() as usize + 1), "shared-vertex fan used {angular} angular comparisons");
+            let uv = std::iter::once(center.as_vec2()).chain(ring.iter().map(|point| point.as_vec2())).collect::<Vec<_>>();
+            let positions = uv.iter().map(|point| point.extend(0.0)).collect();
+            let indices = (0..count).map(|i| i * 9973 % count).flat_map(|i| [0, i as u32 + 1, ((i + 1) % count) as u32 + 1]).collect();
+            let mesh = Mesh {
+                positions,
+                uvs: uv,
+                indices,
+                submeshes: vec![crate::SubMesh { name: "m".into(), material: 0, start: 0, count: (count * 3) as u32 }],
+                ..Mesh::default()
+            };
+            let buffer = UvGBuffer::new(&mesh, 0, 1, 1);
+            assert!(buffer.covered(0));
+            assert_eq!(buffer.overlaps, 0);
+        }
+    }
+
+    #[test]
+    fn adjacent_uv_faces_cover_the_square_without_overlapping() {
+        for indices in [vec![0, 1, 2, 0, 2, 3], vec![0, 2, 3, 0, 1, 2], vec![2, 1, 0, 3, 2, 0]] {
+            let mesh = Mesh::from_parts(
+                vec![Vec3::ZERO, Vec3::X, Vec3::X + Vec3::Y, Vec3::Y],
+                None,
+                vec![Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y],
+                indices,
+                "m",
+            )
+            .unwrap();
+            let buffer = UvGBuffer::new(&mesh, 0, 8, 8);
+            assert!(buffer.tri.iter().all(|&triangle| triangle != NO_TRI));
+            assert_eq!(buffer.overlaps, 0);
+        }
+    }
+
+    #[test]
+    fn a_uv_vertex_shared_by_a_fan_is_not_an_overlap() {
+        let uv = vec![Vec2::splat(0.5), Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y];
+        let positions = uv.iter().map(|point| point.extend(0.0)).collect();
+        let mesh = Mesh::from_parts(positions, None, uv, vec![0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1], "m").unwrap();
+        let buffer = UvGBuffer::new(&mesh, 0, 1, 1);
+        assert!(buffer.covered(0));
+        assert_eq!(buffer.overlaps, 0);
+    }
+
+    #[test]
+    fn the_first_vertex_weight_preserves_a_far_corners_offset() {
+        let far = 2.0_f32.powi(60);
+        let mut mesh = mesh_with_uvs([[far, far], [0.0, 0.0], [1.0, 0.0]]);
+        mesh.positions = mesh.uvs.iter().map(|point| point.extend(0.0)).collect();
+        let buffer = UvGBuffer::new(&mesh, 0, 8, 8);
+        let surface = buffer.surface(&mesh, 1).unwrap();
+        let expected = Vec2::new(0.1875, 0.0625);
+        assert!((surface.pos.truncate() - expected).length() < 0.000001, "{}", surface.pos);
+        assert!((surface.uv - expected).length() < 0.000001, "{}", surface.uv);
+    }
+
+    #[test]
+    fn a_neighbor_between_duplicate_faces_keeps_the_overlap_count() {
+        let build = |indices| {
+            Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::X + Vec3::Y, Vec3::Y], None, vec![Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y], indices, "m")
+                .unwrap()
+        };
+        let together = UvGBuffer::new(&build(vec![0, 1, 2, 0, 1, 2, 0, 2, 3]), 0, 8, 8);
+        let separated = UvGBuffer::new(&build(vec![0, 1, 2, 0, 2, 3, 0, 1, 2]), 0, 8, 8);
+        assert!(together.overlaps > 0);
+        assert_eq!(separated.overlaps, together.overlaps);
+        assert_eq!(separated.tri.iter().filter(|&&t| t != NO_TRI).count(), together.covered_count());
+    }
+
+    #[test]
+    fn repeated_submesh_ranges_do_not_overlap_a_triangle_with_itself() {
+        let mut mesh = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], vec![0, 1, 2], "m").unwrap();
+        let first = UvGBuffer::new(&mesh, 0, 8, 8);
+        assert!(first.covered_count() > 0);
+        mesh.submeshes.push(mesh.submeshes[0].clone());
+        let repeated = UvGBuffer::new(&mesh, 0, 8, 8);
+        assert_eq!(repeated.overlaps, 0);
+        assert_eq!(repeated.covered_count(), first.covered_count());
+    }
+
+    #[test]
+    fn repeated_faces_count_each_overlapping_texel_once() {
+        let mesh =
+            Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], vec![0, 1, 2, 0, 1, 2, 0, 1, 2], "m")
+                .unwrap();
+        let buffer = UvGBuffer::new(&mesh, 0, 8, 8);
+        assert!(buffer.covered_count() > 0);
+        assert_eq!(buffer.overlaps as usize, buffer.covered_count());
+    }
+
+    #[test]
+    fn stored_weights_preserve_the_local_surface_offset() {
+        let mut mesh = mesh_with_uvs([[-1_073_741_824.0, 0.0], [1_073_741_824.0, 0.0], [-1_073_741_824.0, 1.0]]);
+        mesh.positions = mesh.uvs.iter().map(|uv| uv.extend(0.0)).collect();
+        let buffer = UvGBuffer::new(&mesh, 0, 8, 2);
+        let surface = buffer.surface(&mesh, 0).unwrap();
+        assert!((surface.pos.x - 0.0625).abs() < 0.000001, "{}", surface.pos);
+        assert!((surface.uv.x - 0.0625).abs() < 0.000001, "{}", surface.uv);
+    }
 
     #[test]
     fn half_triangle_covers_texels_with_centers_inside() {
@@ -226,14 +523,14 @@ mod tests {
 
     #[test]
     fn edge_tolerance_is_a_texel_distance_for_far_corners() {
-        for m in [1_048_576.0_f32, 1e15, 1.25e17, 1e30] {
+        for m in [1_048_576.0_f32, 1e15, 1.25e17, 1e30, f32::MAX / 4.0] {
             // Covers u + v <= 0: no texel center of an 8 x 8 buffer is inside it.
             let g = UvGBuffer::new(&mesh_with_uvs([[-m, -m], [m, -m], [-m, m]]), 0, 8, 8);
             assert_eq!(g.covered_count(), 0, "{m}");
             // The mirrored triangle covers u + v >= 0, which is every texel center.
             let g = UvGBuffer::new(&mesh_with_uvs([[m, m], [-m, m], [m, -m]]), 0, 8, 8);
             assert_eq!(g.covered_count(), 64, "{m}");
-            assert!(g.bary.iter().all(|[b1, b2]| (0.0..=1.0).contains(b1) && (0.0..=1.0).contains(b2)), "{m}: {:?}", g.bary);
+            assert!(g.bary.iter().all(|weights| weights.iter().all(|weight| (0.0..=1.0).contains(weight))), "{m}: {:?}", g.bary);
         }
         // A sliver 0.0125 texel high, 2e14 texels wide: rounding at those coordinates does not
         // widen it to the texel centers at y = 0.5.
@@ -259,8 +556,7 @@ mod tests {
         let m = Mesh { positions: vec![Vec3::ZERO, Vec3::X * tiny, Vec3::Y * tiny], ..m };
         let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
         assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
-        // One far corner next to a short edge: subtracting the far corner from the other two gives
-        // identical edges, so the face normal comes from edges at the corner nearest the origin.
+        // All cyclic orders retain the same face normal near a far corner.
         let far = 2.0_f32.powi(60);
         for positions in [
             vec![Vec3::new(far, far, 0.0), Vec3::ZERO, Vec3::X],
@@ -274,6 +570,86 @@ mod tests {
         // Collinear corners still fall back to the shading normal.
         let m = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0], ..m };
         assert_eq!(surface_at(&m, 0, 0.25, 0.25).unwrap().geo_nrm, Vec3::X);
+    }
+
+    #[test]
+    fn face_normal_preserves_a_short_edge_far_from_the_origin() {
+        let far = 2.0_f32.powi(60);
+        let corners = [Vec3::new(0.0, -far, 0.0), Vec3::new(far, 1.0, 0.0), Vec3::new(far, 2.0, 0.0)];
+        for first in 0..3 {
+            let mesh = Mesh {
+                positions: (0..3).map(|offset| corners[(first + offset) % 3]).collect(),
+                normals: vec![Vec3::X; 3],
+                tangents: vec![Vec4::new(0.0, 1.0, 0.0, 1.0); 3],
+                uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+                indices: vec![0, 1, 2],
+                ..Mesh::default()
+            };
+            let surface = surface_at(&mesh, 0, 0.25, 0.25).unwrap();
+            assert!(surface.geo_nrm.z > 0.999, "{first}: {}", surface.geo_nrm);
+        }
+    }
+
+    #[test]
+    fn projected_normals_preserve_cancellation_across_coordinate_scales() {
+        let small = 2.0_f32.powi(-60);
+        let far = 2.0_f32.powi(60);
+        let height = 2.0_f32.powi(-120);
+        let corners = [Vec3::new(1.0, 1.0, 0.0), Vec3::new(small, small, 0.0), Vec3::new(far, far, height)];
+        let expected = Vec3::new(-1.0, 1.0, 0.0).normalize();
+        for first in 0..3 {
+            let mesh = Mesh {
+                positions: (0..3).map(|offset| corners[(first + offset) % 3]).collect(),
+                normals: vec![Vec3::X; 3],
+                tangents: vec![Vec4::new(0.0, 1.0, 0.0, 1.0); 3],
+                uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+                indices: vec![0, 1, 2],
+                ..Mesh::default()
+            };
+            let surface = surface_at(&mesh, 0, 0.25, 0.25).unwrap();
+            assert!(surface.geo_nrm.dot(expected) > 0.999, "{first}: {}", surface.geo_nrm);
+            let projected = mesh.positions.iter().map(|point| point.truncate().as_dvec2()).collect::<Vec<_>>();
+            assert_eq!(edge(projected[0], projected[1], projected[2]), 0.0);
+        }
+    }
+
+    #[test]
+    fn surface_tangents_are_perpendicular_to_interpolated_normals() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        mesh.normals = vec![Vec3::Z, Vec3::X, Vec3::Z];
+        mesh.tangents = [Vec3::X, Vec3::Y, Vec3::X].map(|tangent| tangent.extend(1.0)).to_vec();
+        let surface = surface_at(&mesh, 0, 0.5, 0.25).unwrap();
+        assert!(surface.nrm.dot(surface.tangent.truncate()).abs() < 1e-6);
+        assert!((surface.tangent.truncate().length() - 1.0).abs() < 1e-6);
+        assert_eq!(surface.tangent.w, 1.0);
+        mesh.normals.fill(Vec3::Z);
+        mesh.tangents.fill(Vec3::Z.extend(-1.0));
+        let surface = surface_at(&mesh, 0, 0.5, 0.25).unwrap();
+        assert!(surface.nrm.dot(surface.tangent.truncate()).abs() < 1e-6);
+        assert_eq!(surface.tangent.w, -1.0);
+    }
+
+    #[test]
+    fn surface_frames_preserve_large_finite_input_directions() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        mesh.normals.fill(Vec3::X * 1e30);
+        mesh.tangents.fill((Vec3::Y * 1e30).extend(-1.0));
+        let surface = surface_at(&mesh, 0, 0.5, 0.25).unwrap();
+        assert_eq!(surface.nrm, Vec3::X);
+        assert_eq!(surface.tangent, Vec3::Y.extend(-1.0));
+    }
+
+    #[test]
+    fn raster_surface_preserves_local_offsets_between_far_uv_corners() {
+        for far in [2.0_f32.powi(60), f32::MAX / 4.0] {
+            let mut mesh = mesh_with_uvs([[-far, 0.0], [far, 0.0], [-far, 1.0]]);
+            mesh.positions = mesh.uvs.iter().map(|uv| uv.extend(0.0)).collect();
+            let buffer = UvGBuffer::new(&mesh, 0, 8, 2);
+            let surface = buffer.surface(&mesh, 0).unwrap();
+            let expected = Vec2::new(0.0625, 0.25);
+            assert_eq!(surface.uv, expected, "{far}");
+            assert_eq!(surface.pos.truncate(), expected, "{far}");
+        }
     }
 
     #[test]

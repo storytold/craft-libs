@@ -13,8 +13,12 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **UV unwrapping.** `unwrap::auto_unwrap` makes a non-overlapping layout per material, splitting
   vertices where charts meet.
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle
-  and barycentrics under the texel center; `surface_at` turns them into a position, normal and
-  tangent frame.
+  and barycentrics under the texel center. `surface` reads its position, normal and tangent frame.
+  `surface_at` interpolates a triangle at supplied barycentric weights.
+  `bary` stores all three corner weights as `[f64; 3]` for each texel. `overlaps` counts each texel
+  once when distinct triangles with overlapping interiors cover its center.
+  `surface` retains local attribute offsets between far UV corners. Its unit tangents are
+  perpendicular to the interpolated normals.
 - **Primitives.** Sphere, rounded box, cube, cylinder, torus and plane with UVs and tangents, and
   the built-in scenes in `primitives::BUILTINS`.
 - **BVH.** `Bvh` is a binned SAH tree on all three axes with a median split when no split beats a
