@@ -7,8 +7,8 @@
 //! This module returns neutral points and segments so consumers can map them to their own
 //! geometry model. Each `!` starts a run that depends on nothing before it, so an unknown or
 //! malformed command ends only its own run: the run's valid prefix is kept and parsing resumes
-//! at the next `!`. [`parse_edges`] reports how many runs were cut short. The segment cap bounds
-//! output allocation.
+//! at the next `!`. [`parse_edges`](crate::edges::parse_edges) reports how many runs were cut
+//! short. The segment cap bounds output allocation.
 
 /// Most segments parsed from one edge attribute.
 pub const MAX_EDGE_SEGMENTS: usize = 2_000_000;
