@@ -320,18 +320,19 @@ pub fn encode_jpeg_rgb8(
     enc.set_sampling_factor(if subsampled { jpeg_encoder::SamplingFactor::R_4_2_0 } else { jpeg_encoder::SamplingFactor::R_4_4_4 });
     if let Some(d) = dpi.filter(|d| *d >= 1.0) {
         let v = d.round().min(65535.0) as u16;
-        enc.set_density(jpeg_encoder::Density::Inch { x: v, y: v });
+        enc.set_density(jpeg_encoder::PixelDensity { density: (v, v), unit: jpeg_encoder::PixelDensityUnit::Inches });
     }
     let ppi = dpi.filter(|d| *d >= 1.0).map(|d| (d, d));
     // Upright, without the source's thumbnail, at the JFIF resolution, as Save As writes it.
     if let Some(seg) = exif.and_then(|x| crate::codecs::jpeg::exif_segment(x, ppi)) {
-        enc.add_app_segment(1, &seg).map_err(e)?;
+        // Complete APP1 payload includes Exif\0\0; add_exif_metadata would duplicate it.
+        enc.add_app_segment(1, seg).map_err(e)?;
     }
     // Its `tiff:` resolution, if any, says what the JFIF density says. A packet past one segment
     // loses its layered-document properties, else is left out, as the other JPEG paths do; see
     // [`jpeg_xmp_fits`].
     if let Some(seg) = xmp.and_then(|x| crate::codecs::jpeg::xmp_segment(x, ppi)) {
-        enc.add_app_segment(1, &seg).map_err(e)?;
+        enc.add_app_segment(1, seg).map_err(e)?;
     }
     if let Some(icc) = icc {
         enc.add_icc_profile(icc).map_err(e)?;
