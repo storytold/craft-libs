@@ -720,6 +720,23 @@ fn predefined_quit_reads_target_folders_below_the_package_folder_only() {
     let lib = "extern crate other_menu as menu;\n#[path = \"nested/src/lib.rs\"]\nmod nested;\n";
     let found = predefined_quit([("src/lib.rs", lib), ("src/nested/src/lib.rs", local)]);
     assert!(found.is_empty(), "{found:?}");
+    // A nested package's library that only its own binary loads stays a crate root, so its alias reaches its modules.
+    let nested = "extern crate muda as menu;\nmod child;\n";
+    let found = predefined_quit([
+        ("src/lib.rs", ""),
+        ("src/nested/src/lib.rs", nested),
+        ("src/nested/src/child.rs", "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n"),
+        ("src/nested/src/bin/tool.rs", "#[path = \"../lib.rs\"]\nmod lib;\n"),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("src/nested/src/child.rs", 1)]);
+    // One that a module beside its `src` folder loads is a module of the outer crate.
+    let found = predefined_quit([
+        ("src/lib.rs", "mod nested;\n"),
+        ("src/nested/mod.rs", "#[path = \"src/lib.rs\"]\nmod inner;\n"),
+        ("src/nested/src/lib.rs", nested),
+        ("src/nested/src/child.rs", "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n"),
+    ]);
+    assert!(found.is_empty(), "{found:?}");
 }
 
 #[test]

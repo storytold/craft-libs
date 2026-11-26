@@ -1517,7 +1517,7 @@ fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, u
 /// to the crate's extern prelude, so that a path starting with `::m` names muda anywhere in the crate.
 ///
 /// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`, except one below another package's
-/// `src` folder that a declaration names; each file that [`cargo_target`]
+/// `src` folder that a declaration outside its own package folder names; each file that [`cargo_target`]
 /// accepts; another `build.rs`, `lib.rs` or `main.rs` when no `mod` declaration in another of the files names
 /// it, plainly or through a `#[path]` attribute; and each other file directly in a `bin`, `examples`, `tests`
 /// or `benches` folder other than `mod.rs` when no package folder holds it and no declaration without a
@@ -1553,6 +1553,9 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
     // through a `#[path]` attribute. Each node lists the nodes its declarations name.
     let mut named = vec![false; paths.len()];
     let mut named_plainly = vec![false; paths.len()];
+    // Whether a `src/lib.rs` or `src/main.rs` is named by a declaration in a file other than its package's
+    // `build.rs` and the files in its `src`, `tests`, `examples` and `benches` folders.
+    let mut named_from_outside = vec![false; paths.len()];
     let edges: Vec<Vec<usize>> = (0..paths.len() * 2)
         .map(|node| {
             let (file, path_loaded) = (node / 2, node % 2 == 1);
@@ -1564,6 +1567,13 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
                         if j != file {
                             named[j] = true;
                             named_plainly[j] |= by_path == 0;
+                            let package = paths[j].strip_suffix("src/lib.rs").or_else(|| paths[j].strip_suffix("src/main.rs"));
+                            let own = |package: &str| {
+                                paths[file].strip_prefix(package).is_some_and(|rest| {
+                                    rest == "build.rs" || ["src/", "tests/", "examples/", "benches/"].iter().any(|dir| rest.starts_with(dir))
+                                })
+                            };
+                            named_from_outside[j] |= package.is_none_or(|package| !own(package));
                             targets.push(2 * j + by_path);
                         }
                     }
@@ -1587,7 +1597,7 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
         let mut segments = paths[file].rsplit('/');
         match (segments.next(), segments.next()) {
             // A `src/lib.rs` that a declaration in a package's `src` folder loads is a module there.
-            (Some("lib.rs" | "main.rs"), Some("src")) => !(named[file] && in_package_src(&paths[file])),
+            (Some("lib.rs" | "main.rs"), Some("src")) => !(named_from_outside[file] && in_package_src(&paths[file])),
             (Some("lib.rs" | "main.rs" | "build.rs"), _) => !named[file],
             // In a known package, `cargo_target` has already placed the target folders.
             (Some(name), Some("bin" | "examples" | "tests" | "benches")) => {
