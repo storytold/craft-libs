@@ -1,6 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
-
 //! Source-level platform regression guards and verification utilities for the Craft application suite.
 //!
 //! This crate provides non-panicking source analysis guards that detect known platform hazards
@@ -18,6 +17,9 @@
 //!   `u16` planes, tolerances with an optional 3×3 neighborhood, a difference image, PNG reading
 //!   and writing with size limits, golden reference checks and `assert_similar!`.
 //!
+//! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
+//! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
+//!
 //! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
 //! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
 //! polls a condition until it holds and fails the test when the limit passes first. Both read an
@@ -27,6 +29,11 @@
 //! target. On targets other than `wasm32`, [`hostile::hammer`] runs a parser on the seed, every
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
+//!
+//! On targets other than `wasm32`, [`serial`] holds [`serial::TestLock`], a lock that a `static`
+//! can hold and that the thread holding it can take again, and [`serial::gpu_lock`], the one lock
+//! for GPU tests. Every GPU test in a process must take this lock, because a test that takes a
+//! different lock can run at the same time as one that takes this one.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
@@ -44,7 +51,10 @@ pub mod guards;
 pub mod hostile;
 #[cfg(feature = "image")]
 pub mod image;
+pub mod rng;
 pub mod sample_damage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod serial;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};

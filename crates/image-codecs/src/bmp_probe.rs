@@ -2,6 +2,8 @@
 
 use crate::error::CodecError;
 
+pub use crate::codecs::bmp::pixels_per_meter;
+
 /// Recognize a BMP file header with a supported DIB header kind.
 ///
 /// This is a format-routing check, not full validation: dimensions and pixel data may still
@@ -615,5 +617,49 @@ mod tests {
         let copy = odd[40..52].to_vec();
         odd.extend_from_slice(&copy);
         assert_eq!(dib_layout(odd.clone()), odd);
+    }
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::pixels_per_meter;
+
+    fn header(dib: u32, x: i32, y: i32) -> [u8; 46] {
+        let mut b = [0; 46];
+        b[..2].copy_from_slice(b"BM");
+        b[14..18].copy_from_slice(&dib.to_le_bytes());
+        b[38..42].copy_from_slice(&x.to_le_bytes());
+        b[42..46].copy_from_slice(&y.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn raw_density_preserves_axes_and_integer_extremes() {
+        for dib in [40, 41, 52, 56, 64, 108, 124, u32::MAX] {
+            assert_eq!(pixels_per_meter(&header(dib, 10000, 20000)), Some((10000, 20000)));
+        }
+        assert_eq!(pixels_per_meter(&header(40, i32::MAX, 1)), Some((i32::MAX, 1)));
+        assert_eq!(pixels_per_meter(&header(40, 11811, 11811)), Some((11811, 11811)));
+    }
+
+    #[test]
+    fn raw_density_rejects_missing_or_nonpositive_fields() {
+        let valid = header(40, 10000, 20000);
+        for len in 0..valid.len() {
+            assert_eq!(pixels_per_meter(&valid[..len]), None, "prefix {len}");
+        }
+        for dib in [0, 12, 16, 39] {
+            assert_eq!(pixels_per_meter(&header(dib, 10000, 20000)), None);
+        }
+        for bad in [0, -1, i32::MIN] {
+            assert_eq!(pixels_per_meter(&header(40, bad, 20000)), None);
+            assert_eq!(pixels_per_meter(&header(40, 10000, bad)), None);
+        }
+        let mut wrong = valid;
+        wrong[0] = b'X';
+        assert_eq!(pixels_per_meter(&wrong), None);
+        let mut trailing = valid.to_vec();
+        trailing.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(pixels_per_meter(&trailing), Some((10000, 20000)));
     }
 }

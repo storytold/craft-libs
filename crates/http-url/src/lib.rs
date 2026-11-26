@@ -177,10 +177,37 @@ impl Url {
     }
 }
 
+/// Parses an HTTP `Content-Range` header value (`bytes a-b/total`) into `(a, total)`,
+/// where `*` as the total length yields `None`.
+#[must_use]
+pub fn parse_content_range(v: &str) -> Option<(u64, Option<u64>)> {
+    let v = v.trim().strip_prefix("bytes")?.trim();
+    let (range, total) = v.split_once('/')?;
+    let (a, b) = range.split_once('-')?;
+    let (a, b) = (digits(a)?, digits(b)?);
+    if b < a {
+        return None;
+    }
+    let total = match total.trim() {
+        "*" => None,
+        t => Some(digits(t)?),
+    };
+    Some((a, total))
+}
+
+/// A non-empty run of ASCII digits as a `u64` (no sign, unlike `str::parse`).
+fn digits(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-    use super::{Url, UrlError};
+    use super::{Url, UrlError, parse_content_range};
 
     #[test]
     fn fragment_only_or_empty_location_keeps_file_name_and_query() {
@@ -273,5 +300,17 @@ mod tests {
         let plain = Url::parse("http://127.0.0.1:8080/a").unwrap();
         assert!(!plain.join("http://127.0.0.1:9/b").unwrap().tls);
         assert!(plain.join("https://b.example/z").unwrap().tls);
+    }
+
+    #[test]
+    fn parses_content_ranges() {
+        assert_eq!(parse_content_range("bytes 100-299/300"), Some((100, Some(300))));
+        assert_eq!(parse_content_range("bytes 0-0/*"), Some((0, None)));
+        assert_eq!(parse_content_range("bytes 9-1/300"), None);
+        assert_eq!(parse_content_range("items 1-2/3"), None);
+        assert_eq!(parse_content_range("bytes +100-+299/+300"), None);
+        assert_eq!(parse_content_range("bytes 100-+299/300"), None);
+        assert_eq!(parse_content_range("bytes 100-299/+300"), None);
+        assert_eq!(parse_content_range("bytes 1-/3"), None);
     }
 }

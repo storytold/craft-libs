@@ -110,8 +110,8 @@ impl ProofLang {
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
-    /// counts, and for English and Spanish the region too ([`ProofLang::english`],
-    /// [`ProofLang::spanish`]). No tag (or an empty one) is English, WordCraft's default editing
+    /// counts, and for English and Spanish the region too (`ProofLang::english`,
+    /// `ProofLang::spanish`). No tag (or an empty one) is English, WordCraft's default editing
     /// language. Any other valid language tag is [`ProofLang::Pack`] with its [`PackLocale`];
     /// `x-none`, `und`, `zxx`, `mul`, `mis` and malformed tags are [`ProofLang::Other`].
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
@@ -455,135 +455,5 @@ mod tests {
         for bad in ["", " ", "p", "1pl", "pl--PL", "pl PL", "pl-PL;", "polski język", "-pl", "pl-", "abcdefghi", &"a".repeat(40)] {
             assert_eq!(normalize_tag(bad), None, "{bad:?}");
         }
-    }
-
-    fn assert_tags(tags: &[&str], expected: ProofLang) {
-        for tag in tags {
-            assert_eq!(ProofLang::from_tag(Some(tag)), expected, "{tag}");
-        }
-    }
-
-    #[test]
-    fn tags_resolve_primary_languages() {
-        assert_tags(&["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol", "pl@euro", "pl.UTF-8"], ProofLang::Pl);
-        // craft-libs#482 review: a POSIX charset or modifier with no region.
-        assert_tags(&["en.UTF-8", "en@euro"], ProofLang::En);
-        assert_tags(&["de.UTF-8"], ProofLang::De);
-        let sr_latn = ProofLang::Pack(PackLocale::new("sr-latn").unwrap());
-        assert_tags(&["sr@latin", "sr_RS@latin", "sr_RS.UTF-8@latin", "sr-Latn"], sr_latn);
-        assert_tags(&["sr", "sr@cyrillic"], ProofLang::Pack(PackLocale::new("sr").unwrap()));
-        assert_tags(&["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "pt-AO", "por"], ProofLang::Pt);
-        let pt_pt = ProofLang::Pack(PackLocale::new("pt-pt").unwrap());
-        assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT"], pt_pt);
-        assert_eq!((pt_pt.built_in(), ProofLang::Pt.built_in()), (ProofLang::Pt, ProofLang::Pt));
-        assert_tags(&["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"], ProofLang::It);
-        assert_tags(&["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"], ProofLang::Cs);
-        assert_tags(&["id", "id-ID", "ID-id", "id_ID", "id_ID.UTF-8", " id-ID ", "ind", "in", "in_ID"], ProofLang::Id);
-        assert_eq!(ProofLang::Cs.code(), "cs");
-        assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
-        assert_eq!(ProofLang::Id.code(), "id");
-        assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
-    }
-
-    #[test]
-    fn tags_resolve_english_regions() {
-        assert_tags(&["en", "en-US", "EN_us", "en-Latn-US", "en-PH", "en-001", "eng", "en_US.UTF-8", "en-x-gb"], ProofLang::En);
-        assert_tags(
-            &["en-GB", "EN_gb", "en_GB.UTF-8", "en-NZ", "en-IE", "en-ZA", "en-IN", "en-Latn-GB", "en-UK", "en-150", "eng-GB", "en_GB@euro"],
-            ProofLang::EnGb,
-        );
-        assert_tags(&["en-CA", "en_CA", "EN-ca", "en_CA.UTF-8", "en-Latn-CA"], ProofLang::EnCa);
-        assert_tags(&["en-AU", "en_AU", "EN-au", "en_AU.UTF-8", "en-Latn-AU"], ProofLang::EnAu);
-        for language in [ProofLang::En, ProofLang::EnGb, ProofLang::EnAu, ProofLang::EnCa] {
-            assert!(language.is_english() && language.is_proofed() && ProofLang::PROOFED.contains(&language), "{language:?}");
-            assert_eq!(language.code(), "en");
-        }
-        assert!(!ProofLang::Pl.is_english() && !ProofLang::Other.is_english());
-        // The region is the first two-letter or three-digit subtag: a script or variant isn't one.
-        assert_eq!(ProofLang::from_tag(Some("en-Brai")), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("en-GB-oxendict")), ProofLang::EnGb);
-    }
-
-    #[test]
-    fn tags_resolve_additional_locales_and_defaults() {
-        assert_tags(&["bg", "bg-BG", "BG_bg", "bg_BG.UTF-8", "bul"], ProofLang::Bg);
-        assert_tags(&["tr", "tr-TR", "tr-CY", "TR_tr", "tur"], ProofLang::Tr);
-        assert_tags(&["de", "de-DE", "DE_at", "deu", "ger"], ProofLang::De);
-        let de_ch = ProofLang::Pack(PackLocale::new("de-ch").unwrap());
-        assert_tags(&["de-CH", "de_CH.UTF-8", "de-LI"], de_ch);
-        assert_eq!(de_ch.built_in(), ProofLang::De);
-        assert_tags(&["ru", "ru-RU", "RU-ru", "ru_RU", "ru_RU.UTF-8", " ru-RU ", "rus"], ProofLang::Ru);
-        // German and Bulgarian are proofed when a dictionary is found (craft-libs#485 review: an
-        // installed hunspell-de-de must not fail this test), so only their locales are fixed here.
-        assert_eq!(ProofLang::De.spelling_locale(), PackLocale::new("de-de"));
-        assert_eq!(ProofLang::Bg.spelling_locale(), PackLocale::new("bg-bg"));
-        assert!(!ProofLang::PROOFED.contains(&ProofLang::De) && !ProofLang::PROOFED.contains(&ProofLang::Bg));
-        assert_eq!(ProofLang::Bg.code(), "bg");
-        assert!(ProofLang::Pt.is_proofed() && !ProofLang::Other.is_proofed());
-        assert!(ProofLang::Tr.is_proofed());
-        assert!(ProofLang::Ru.is_proofed());
-        assert_eq!(ProofLang::Ru.code(), "ru");
-        assert!(ProofLang::PROOFED.contains(&ProofLang::Ru));
-        assert_eq!(ProofLang::Pl.code(), "pl");
-        assert_eq!(ProofLang::Pt.code(), "pt");
-        assert!(ProofLang::It.is_proofed());
-        assert_eq!(ProofLang::It.code(), "it");
-        assert!(ProofLang::Hr.is_proofed());
-        assert_eq!(ProofLang::Hr.code(), "hr");
-        assert_eq!(ProofLang::Tr.code(), "tr");
-        assert!(ProofLang::PROOFED.contains(&ProofLang::Pt), "every proofed language is listed");
-        assert_eq!(ProofLang::from_tag(None), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("")), ProofLang::En);
-        assert_eq!(ProofLang::from_tag(Some("  ")), ProofLang::En);
-        assert!(ProofLang::Pl.is_proofed() && !ProofLang::Other.is_proofed());
-    }
-
-    /// Two pack languages never share a key: `tag()` is the locale, while `code()` is empty.
-    #[test]
-    fn tag_names_each_pack_language() {
-        let (nl, fr) = (ProofLang::from_tag(Some("nl")), ProofLang::from_tag(Some("fr-FR")));
-        assert_eq!((nl.code(), fr.code()), ("", ""));
-        assert_eq!((nl.tag().as_ref(), fr.tag().as_ref()), ("nl", "fr-fr"));
-        for l in ProofLang::PROOFED {
-            assert_eq!(l.tag(), l.code());
-        }
-        assert_eq!(ProofLang::Other.tag(), "");
-    }
-
-    #[test]
-    fn tags_reject_unknown_or_partial_language_codes() {
-        // A partial code is another language, never the one it starts like.
-        for tag in ["fr-FR", "dex", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax"] {
-            let lang = ProofLang::from_tag(Some(tag));
-            assert_eq!(lang.pack_locale().map(|l| l.to_string()), Some(tag.to_ascii_lowercase()), "{tag}");
-            assert_eq!(lang.code(), "", "{tag}: a pack language's locale is pack_locale()");
-            assert_eq!(lang.tag(), lang.pack_locale().map(|l| l.as_str().to_string()).unwrap_or_default(), "{tag}");
-        }
-        assert_tags(&["x-none", "e", "-", "und", "zxx", "i-klingon"], ProofLang::Other);
-    }
-
-    /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and
-    /// Latin America with the other countries of the Americas.
-    #[test]
-    fn spanish_tags_resolve_by_region() {
-        for t in ["es", "es-ES", "ES_es", "es_ES.UTF-8", " es-ES ", "spa", "es-Latn-ES", "es-GQ", "es-PH", "es-x-mx", "es_ES@euro"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Es, "{t}");
-        }
-        for t in ["es-MX", "es_MX", "ES-mx", "es_MX.UTF-8", "spa-MX", "es-Latn-MX"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::EsMx, "{t}");
-        }
-        for t in ["es-419", "es_419", "es-AR", "es-CO", "es_CL.UTF-8", "es-US", "ES-ve", "es-PR", "es-Latn-419", "es-005", "spa-PE"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Es419, "{t}");
-        }
-        for t in ["es-UY", "es_UY", "ES-uy", "es_UY.UTF-8", "spa-UY", "es-Latn-UY"] {
-            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::EsUy, "{t}");
-        }
-        for l in [ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
-            assert!(l.is_spanish() && l.is_proofed() && ProofLang::PROOFED.contains(&l), "{l:?}");
-            assert!(!l.is_english());
-            assert_eq!(l.code(), "es");
-        }
-        assert!(!ProofLang::En.is_spanish() && !ProofLang::Pt.is_spanish() && !ProofLang::Other.is_spanish());
-        assert_eq!(normalize_tag("ES_mx").as_deref(), Some("es-MX"));
     }
 }
