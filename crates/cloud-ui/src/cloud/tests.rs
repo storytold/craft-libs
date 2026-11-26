@@ -480,6 +480,31 @@ fn a_sign_in_that_drops_a_listing_leaves_no_folder_loading() {
 }
 
 #[test]
+fn a_listing_asked_for_before_the_sign_in_answers_is_not_sent() {
+    let (mut app, jobs, ctx) = wired();
+    sign_in(&mut app);
+    jobs.lock().unwrap().clear();
+
+    // Asked for after the sign-in and before its answer. A listing sent now
+    // could answer after the account does, and its files may be the previous
+    // account's.
+    browse(&mut app, "");
+    load_shared(&mut app);
+    assert!(
+        !jobs.lock().unwrap().iter().any(|j| matches!(j, Job::List(_) | Job::SharedWithMe)),
+        "no listing goes out while the sign-in is outstanding"
+    );
+    pumped(&mut app, &ctx);
+    assert!(!app.cloud.mine.loaded && !app.cloud.mine.loading, "the folder waits to be listed for the new account");
+    assert!(!app.cloud.shared.loaded && !app.cloud.shared.loading, "and so does the shared one");
+
+    // Once the sign-in has answered, a listing goes through.
+    browse(&mut app, "");
+    pumped(&mut app, &ctx);
+    assert!(app.cloud.mine.loaded);
+}
+
+#[test]
 fn bytes_are_said_the_way_a_person_reads_them() {
     assert_eq!(size_text(None), "");
     assert_eq!(size_text(Some(512)), "512 bytes");

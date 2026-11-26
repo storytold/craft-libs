@@ -419,17 +419,22 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
 }
 
 /// Lists one folder. An empty path is the user's root.
+///
+/// Nothing is sent while a sign-in waits for its answer. A listing sent then
+/// can answer after the account does, and its files may be the previous
+/// account's; the answer empties the folder so it is listed again.
 pub fn browse<A: CloudApp>(app: &mut A, path: &str) {
-    if !available(app) {
+    if !available(app) || app.cloud().relist_after_sign_in {
         return;
     }
     app.cloud_mut().mine.begin(path);
     submit(app, Job::List(path.to_owned()));
 }
 
-/// Lists what other people have shared with this user.
+/// Lists what other people have shared with this user. Like [`browse`], it
+/// sends nothing while a sign-in waits for its answer.
 pub fn load_shared<A: CloudApp>(app: &mut A) {
-    if !available(app) {
+    if !available(app) || app.cloud().relist_after_sign_in {
         return;
     }
     app.cloud_mut().shared.begin("");
