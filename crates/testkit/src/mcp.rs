@@ -8,15 +8,18 @@
 //! call does not hang.
 //!
 //! After a deadline, a protocol error, an over-long line or the end of the child's output, the
-//! connection is closed: the child is stopped and reaped, and later calls return
-//! [`McpError::Closed`]. A JSON-RPC error reply returns [`McpError::Rpc`] and the connection stays
-//! usable. A tool result with `isError: true` is a successful reply and is returned unchanged.
+//! connection is closed, and later calls return [`McpError::Closed`]. A child is stopped and
+//! reaped on failure, except that an I/O error or the end of stdout leaves it for
+//! [`McpChild::close`] or a drop to reap. A JSON-RPC error reply returns [`McpError::Rpc`] and the
+//! connection stays usable. A tool result with `isError: true` is a successful reply and is
+//! returned unchanged.
 
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -369,6 +372,7 @@ pub struct McpChild {
     /// Lines for the writer thread. `None` once the connection is closed, which ends the thread
     /// and closes the child's stdin.
     writer: Option<SyncSender<Vec<u8>>>,
+    failed: Arc<AtomicBool>,
     rx: Receiver<Incoming>,
     next_id: u64,
     limits: McpLimits,
@@ -494,9 +498,14 @@ impl McpChild {
             }
         })?;
         let (wtx, wrx) = sync_channel::<Vec<u8>>(WRITE_QUEUE);
+        let failed = Arc::new(AtomicBool::new(false));
+        let write_stopped = Arc::clone(&failed);
         start_thread("craft-testkit-mcp-write", move || {
             let mut w = writer;
             for line in wrx {
+                if write_stopped.load(Ordering::Acquire) {
+                    return;
+                }
                 if let Err(e) = w.write_all(&line).and_then(|()| w.flush()) {
                     // Wakes a request waiting for its reply. Ends when the client is dropped.
                     let _ = write_failed.send(Incoming::WriteFailed(e));
@@ -504,7 +513,18 @@ impl McpChild {
                 }
             }
         })?;
-        Ok(Self { writer: Some(wtx), rx, next_id: 1, limits, child: None, exit: None, closed: None, notifications: VecDeque::new(), stderr: None })
+        Ok(Self {
+            writer: Some(wtx),
+            failed,
+            rx,
+            next_id: 1,
+            limits,
+            child: None,
+            exit: None,
+            closed: None,
+            notifications: VecDeque::new(),
+            stderr: None,
+        })
     }
 
     /// The message of the failure that closed the connection, or `None` while it is usable.
@@ -534,6 +554,15 @@ impl McpChild {
         };
         if returned != version {
             return Err(self.fail(McpError::UnsupportedVersion { requested: version.to_string(), returned }));
+        }
+        if !result.get("capabilities").is_some_and(Value::is_object) {
+            return Err(self.fail(McpError::Protocol("the `initialize` result has no `capabilities` object".into())));
+        }
+        let valid_info = result.get("serverInfo").is_some_and(|info| {
+            info.is_object() && info.get("name").is_some_and(Value::is_string) && info.get("version").is_some_and(Value::is_string)
+        });
+        if !valid_info {
+            return Err(self.fail(McpError::Protocol("the `initialize` result has no valid `serverInfo` name and version".into())));
         }
         self.notify("notifications/initialized", Value::Null)?;
         Ok(result)
@@ -729,6 +758,10 @@ impl McpChild {
         }
         match (v.get("method"), v.get("id")) {
             (Some(Value::String(method)), Some(id)) => {
+                let integer = id.as_i64().is_some() || id.as_u64().is_some();
+                if !id.is_string() && !integer {
+                    return Err(self.fail(McpError::Protocol("a request has an `id` that is not a string or an integer".into())));
+                }
                 let reply = if method == "ping" {
                     json!({"jsonrpc": "2.0", "id": id, "result": {}})
                 } else {
@@ -774,20 +807,21 @@ impl McpChild {
         }
     }
 
-    /// Closes the connection with `err`: ends the writer, which closes the child's stdin, and stops
-    /// and reaps the child. A child that closed its output or input gets
-    /// [`McpLimits::close_grace`] to exit first.
+    /// Closes the connection with `err` and discards queued writes and unread messages. A write
+    /// already in progress may finish. After an I/O error or the end of stdout, `close` or a drop
+    /// reaps the child; other failures stop and reap it without a grace period.
     fn fail(&mut self, err: McpError) -> McpError {
         if self.closed.is_none() {
             self.closed = Some(err.to_string());
         }
+        self.failed.store(true, Ordering::Release);
         self.writer = None;
+        self.rx = sync_channel(0).1;
+        if matches!(err, McpError::Ended | McpError::Io { .. }) {
+            return err;
+        }
         if let Some(mut child) = self.child.take() {
-            let grace = match err {
-                McpError::Ended | McpError::Io { .. } => self.limits.close_grace,
-                _ => Duration::ZERO,
-            };
-            match reap(&mut child, grace) {
+            match reap(&mut child, Duration::ZERO) {
                 Ok(exit) => self.exit = Some(exit),
                 Err(_) => {
                     let _ = child.kill();
@@ -857,6 +891,54 @@ fn reap(child: &mut Child, grace: Duration) -> io::Result<(ExitStatus, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_writes_stop_on_failure_but_drain_on_close() {
+        struct GateWriter {
+            started: Option<SyncSender<()>>,
+            resume: Receiver<()>,
+            lines: Vec<Vec<u8>>,
+            done: SyncSender<Vec<Vec<u8>>>,
+        }
+        impl Write for GateWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if let Some(started) = self.started.take() {
+                    started.send(()).unwrap();
+                    self.resume.recv().unwrap();
+                }
+                self.lines.push(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Drop for GateWriter {
+            fn drop(&mut self) {
+                self.done.send(std::mem::take(&mut self.lines)).unwrap();
+            }
+        }
+        for failure in [false, true] {
+            let (started_tx, started) = sync_channel(1);
+            let (resume, resume_rx) = sync_channel(1);
+            let (done_tx, done) = sync_channel(1);
+            let writer = GateWriter { started: Some(started_tx), resume: resume_rx, lines: Vec::new(), done: done_tx };
+            let mut client = McpChild::connect(io::empty(), writer, McpLimits::default()).unwrap();
+            client.notify("first", Value::Null).unwrap();
+            started.recv().unwrap();
+            client.notify("queued", Value::Null).unwrap();
+            if failure {
+                client.fail(McpError::Protocol("bad reply".into()));
+            } else {
+                client.close().unwrap();
+            }
+            resume.send(()).unwrap();
+            let lines = done.recv().unwrap();
+            let methods: Vec<String> =
+                lines.iter().map(|line| serde_json::from_slice::<Value>(line).unwrap()["method"].as_str().unwrap().to_string()).collect();
+            assert_eq!(methods, if failure { vec!["first"] } else { vec!["first", "queued"] });
+        }
+    }
 
     #[test]
     fn capped_line_reader() {

@@ -275,7 +275,7 @@ use craft_testkit::mcp::{McpChild, PROTOCOL_VERSION};
 let mut mcp = McpChild::spawn(env!("CARGO_BIN_EXE_my-cli"), ["mcp"], [("MYCRAFT_CONFIG_DIR", dir.path())])?;
 mcp.initialize(PROTOCOL_VERSION)?;
 let result = mcp.call_tool("doc.new", serde_json::json!({}))?;
-assert_eq!(result["isError"], false);
+assert!(!result["isError"].as_bool().unwrap_or(false));
 assert!(mcp.close()?.status.is_some_and(|s| s.success()));
 ```
 

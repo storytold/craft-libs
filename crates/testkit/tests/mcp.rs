@@ -57,7 +57,10 @@ fn handshake_list_and_call() {
     let initialized = Arc::new(AtomicBool::new(false));
     let seen = initialized.clone();
     let mut c = fake(move |m, req| match m {
-        "initialize" => Some(vec![result(req, json!({"protocolVersion": req["params"]["protocolVersion"]}))]),
+        "initialize" => Some(vec![result(
+            req,
+            json!({"protocolVersion": req["params"]["protocolVersion"], "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}),
+        )]),
         "notifications/initialized" => {
             assert!(req.get("id").is_none(), "a notification has no id");
             seen.store(true, Ordering::SeqCst);
@@ -75,6 +78,52 @@ fn handshake_list_and_call() {
     assert!(initialized.load(Ordering::SeqCst));
     let r = c.call_tool_within("doc.new", json!({}), Duration::from_secs(5)).unwrap();
     assert_eq!(r["content"][0]["text"], "doc.new");
+}
+
+#[test]
+fn initialize_requires_capabilities_and_server_info() {
+    for fields in [
+        json!({}),
+        json!({"capabilities": []}),
+        json!({"capabilities": {}}),
+        json!({"capabilities": {}, "serverInfo": []}),
+        json!({"capabilities": {}, "serverInfo": {}}),
+        json!({"capabilities": {}, "serverInfo": {"name": "fake"}}),
+        json!({"capabilities": {}, "serverInfo": {"name": 1, "version": "0"}}),
+        json!({"capabilities": {}, "serverInfo": {"name": "fake", "version": 1}}),
+    ] {
+        let mut c = fake(move |_, req| {
+            let mut reply = fields.clone();
+            reply["protocolVersion"] = json!(PROTOCOL_VERSION);
+            Some(vec![result(req, reply)])
+        });
+        assert!(matches!(c.initialize(PROTOCOL_VERSION), Err(McpError::Protocol(_))));
+        assert!(c.closed().is_some());
+    }
+}
+
+#[test]
+fn server_requests_require_string_or_integer_ids() {
+    for id in [Value::Null, json!(1.5), json!(1.0), json!(1e2)] {
+        let mut c = fake(move |method, req| match method {
+            "x" => Some(vec![json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string(), result(req, json!(true))]),
+            _ => None,
+        });
+        assert!(matches!(c.request("x", Value::Null), Err(McpError::Protocol(_))));
+        assert!(c.closed().is_some());
+    }
+    for id in [json!("server"), json!(-1), json!(u64::MAX)] {
+        let expected = id.clone();
+        let mut c = fake(move |method, req| match method {
+            "x" => Some(vec![json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string()]),
+            "" => {
+                assert_eq!(req["id"], expected);
+                Some(vec![json!({"jsonrpc": "2.0", "id": 1, "result": true}).to_string()])
+            }
+            _ => None,
+        });
+        assert_eq!(c.request("x", Value::Null).unwrap(), json!(true));
+    }
 }
 
 #[test]

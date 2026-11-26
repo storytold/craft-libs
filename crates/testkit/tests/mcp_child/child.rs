@@ -21,6 +21,7 @@ const TESTS: &[(&str, Test)] = &[
     ("stderr_flood_does_not_block", stderr_flood_does_not_block),
     ("close_forces_and_reaps_unresponsive_child", close_forces_and_reaps_unresponsive_child),
     ("close_keeps_stderr_written_before_exit", close_keeps_stderr_written_before_exit),
+    ("skip_filters_exclude_tests_from_the_child_runner", skip_filters_exclude_tests_from_the_child_runner),
 ];
 
 pub fn run() -> ExitCode {
@@ -28,8 +29,28 @@ pub fn run() -> ExitCode {
         return serve(&mode.to_string_lossy());
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let filters: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
-    let chosen: Vec<&(&str, Test)> = TESTS.iter().filter(|(name, _)| filters.iter().all(|f| name.contains(f.as_str()))).collect();
+    let mut filters = Vec::new();
+    let mut skipped = Vec::new();
+    let mut options = args.iter();
+    while let Some(arg) = options.next() {
+        if arg == "--skip" {
+            let Some(filter) = options.next().filter(|value| !value.is_empty() && !value.starts_with('-')) else {
+                eprintln!("--skip requires a test name");
+                return ExitCode::FAILURE;
+            };
+            skipped.push(filter.as_str());
+        } else if let Some(filter) = arg.strip_prefix("--skip=") {
+            if filter.is_empty() || filter.starts_with('-') {
+                eprintln!("--skip requires a test name");
+                return ExitCode::FAILURE;
+            }
+            skipped.push(filter);
+        } else if !arg.starts_with('-') {
+            filters.push(arg.as_str());
+        }
+    }
+    let chosen: Vec<&(&str, Test)> =
+        TESTS.iter().filter(|(name, _)| filters.iter().all(|f| name.contains(*f)) && !skipped.iter().any(|f| name.contains(*f))).collect();
     if args.iter().any(|a| a == "--list") {
         for (name, _) in chosen {
             println!("{name}: test");
@@ -107,6 +128,24 @@ fn start(mode: &str, limits: McpLimits) -> Result<McpChild, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     McpChild::spawn_with_limits(exe, std::iter::empty::<&str>(), [(CHILD_VAR, mode), (ECHO_VAR, "hello from the child")], limits)
         .map_err(|e| format!("spawn {mode}: {e}"))
+}
+
+fn skip_filters_exclude_tests_from_the_child_runner() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    for args in [vec!["--list", "--skip", "stderr_flood_does_not_block"], vec!["--list", "--skip=stderr_flood_does_not_block"]] {
+        let output = std::process::Command::new(&exe).args(args).output().map_err(|e| e.to_string())?;
+        check(output.status.success(), || String::from_utf8_lossy(&output.stderr).into_owned())?;
+        let listed = String::from_utf8_lossy(&output.stdout);
+        check(!listed.contains("stderr_flood_does_not_block"), || format!("the skipped test was selected: {listed}"))?;
+        check(listed.lines().count() == TESTS.len() - 1, || format!("other tests were filtered out: {listed}"))?;
+    }
+    for args in
+        [vec!["--list", "--skip"], vec!["--skip", "--list"], vec!["--list", "--skip", ""], vec!["--list", "--skip="], vec!["--list", "--skip=--list"]]
+    {
+        let output = std::process::Command::new(&exe).args(&args).output().map_err(|e| e.to_string())?;
+        check(!output.status.success(), || format!("an invalid skip filter was accepted: {args:?}"))?;
+    }
+    Ok(())
 }
 
 fn check(ok: bool, what: impl FnOnce() -> String) -> Result<(), String> {
