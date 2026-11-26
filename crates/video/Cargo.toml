@@ -57,7 +57,7 @@ mjpeg = ["dep:craft-jpeg"]
 prores = ["craft-media/bitstream"]
 # Bink video (Bink 1): decoder (`bink-decode`).
 bink = ["bink-decode"]
-bink-decode = []
+bink-decode = ["dep:craft-media"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
 h264 = ["h264-decode", "h264-encode"]
 h264-decode = ["craft-media/bitstream"]
