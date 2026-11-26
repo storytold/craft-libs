@@ -6,7 +6,11 @@
 //! reused. On Unix the folder is made with mode 0o700, and before [`TempDir::new`] returns it checks
 //! that the folder is a real folder, not a link, with no access for other users, and owned by the
 //! user running the test. The checks apply to the created folder only, so a temporary directory
-//! reached through a link (`/var` on macOS links to `/private/var`) works.
+//! reached through a link (`/var` on macOS links to `/private/var`) works. On Windows the folder
+//! gets the inheritable access entries of the temporary directory, which is the user's own
+//! `%LOCALAPPDATA%\Temp` by default, and no access check is made. When `TMP` or `TEMP` names a
+//! shared folder, other users may be able to open the new folder, depending on that folder's
+//! access entries.
 //!
 //! [`TempDir::path`] returns the canonical path of the folder: `/private/var/...` on macOS, and a
 //! `\\?\` path on Windows. Compare it with another canonical path, not with a join of
