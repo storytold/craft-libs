@@ -243,8 +243,8 @@ impl NumberCodec {
         self
     }
 
-    /// The same codec with the typing rules of a zoom field: digits, `/` and the decimal separator, `a/b` as the
-    /// percentage `a ÷ b × 100`, and a second separator cutting the text.
+    /// The same codec with the typing rules of a zoom field: digits, `/`, `:` and the decimal separator, `a/b` and `a:b`
+    /// as the percentage `a ÷ b × 100`, and a second separator cutting the text.
     pub fn zoom_typing(mut self) -> Self {
         self.zoom = true;
         self
@@ -256,8 +256,8 @@ impl NumberCodec {
         self
     }
 
-    /// The zoom reading of trimmed, non-empty `text`: the text before a second decimal separator, then `a/b` as a
-    /// percentage or a plain number. The filter keeps `+` and `*` out, so the reader's expressions never run.
+    /// The zoom reading of trimmed, non-empty `text`: the text before a second decimal separator, then `a/b` or the
+    /// ratio `a:b` as a percentage, or a plain number. The filter keeps `+` and `*` out, so the reader's expressions never run.
     fn read_zoom(&self, text: &str) -> Result<(f64, ParseNote), NotAValue> {
         let separator = self.reader.decimal_separator();
         let second = text.char_indices().filter(|&(_, c)| c == separator).nth(1).map(|(at, _)| at);
@@ -268,7 +268,7 @@ impl NumberCodec {
         if kept.strip_prefix('-').unwrap_or(kept).contains('-') {
             return Err(NotAValue);
         }
-        let number = match kept.split_once('/') {
+        let number = match kept.split_once(['/', ':']) {
             Some((part, whole)) => {
                 let part = self.reader.read(part, None)?;
                 let whole = self.reader.read(whole, None)?;
@@ -383,9 +383,10 @@ impl Codec for NumberCodec {
         }
     }
 
-    /// Zoom typing takes ASCII digits, `/` and the decimal separator, with an optional minus; other fields take every character.
+    /// Zoom typing takes ASCII digits, `/`, `:` and the decimal separator, with an optional minus; other fields take every
+    /// character.
     fn filter(&self, c: char) -> bool {
-        !self.zoom || c.is_ascii_digit() || (self.signed_zoom && c == '-') || c == '/' || c == self.reader.decimal_separator()
+        !self.zoom || c.is_ascii_digit() || (self.signed_zoom && c == '-') || c == '/' || c == ':' || c == self.reader.decimal_separator()
     }
 
     fn sample(&self, _current: &Option<f64>) -> Cow<'_, str> {
