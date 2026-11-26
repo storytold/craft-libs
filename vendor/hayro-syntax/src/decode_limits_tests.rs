@@ -206,6 +206,30 @@ fn image_limits_default_and_caller_figures() {
     assert_eq!(crate::filter::decode_limit(&small, true, limits.with_max_decoded_image(100)), 100);
 }
 
+/// A document's pixel limit reaches the CCITT decoder: an 8 × 4 Group 4 image decodes with the
+/// default limit and with one of 32 pixels, and is refused with one of 31.
+#[cfg(feature = "images")]
+#[test]
+fn a_documents_pixel_limit_reaches_the_ccitt_decoder() {
+    // One horizontal-mode row, three V0 rows, then EOFB: all black.
+    const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+    let (mut out, mut offsets) = base();
+    let mut image = format!("<< /Length {} /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 >> >>\nstream\n", ALL_BLACK_8X4.len()).into_bytes();
+    image.extend_from_slice(&ALL_BLACK_8X4);
+    image.extend_from_slice(b"\nendstream");
+    object(&mut out, &mut offsets, 4, &image);
+    table(&mut out, &offsets, "");
+    let params = ImageDecodeParams { width: 8, height: 4, ..Default::default() };
+    let decoded = |limits: DecodeLimits| {
+        let pdf = Pdf::new_with_limits(out.clone(), limits).unwrap();
+        let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+        stream.decoded_image(&params).map(|r| r.data.len()).ok()
+    };
+    assert_eq!(decoded(DecodeLimits::default()), Some(32));
+    assert_eq!(decoded(DecodeLimits::default().with_max_image_pixels(32)), Some(32));
+    assert_eq!(decoded(DecodeLimits::default().with_max_image_pixels(31)), None);
+}
+
 #[test]
 fn object_stream_limit_applies_after_successful_root_xref() {
     let (bytes, _, _) = object_stream_pdf(false);

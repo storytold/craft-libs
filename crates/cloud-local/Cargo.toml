@@ -1,0 +1,25 @@
+[package]
+name = "craft-cloud-local"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A reference CloudBackend over a local folder, proving the contract needs no specific provider"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Resolution-time confinement: every path this crate resolves goes through a `Dir` capability
+# opened on the configured root, never through an absolute OS path this crate builds itself.
+# `craft-font-store` already depends on the lower-level `cap-primitives` for the same family of
+# guarantee; this crate uses the ergonomic `cap-std` built on top of it instead of hand-rolling
+# the equivalent `Dir`-style API again.
+cap-std = "4"
+craft-cloud = { workspace = true }
+craft-ui = { workspace = true, features = ["cloud"] }
+
+[dev-dependencies]
+tempfile = "3"
+egui = { workspace = true }
