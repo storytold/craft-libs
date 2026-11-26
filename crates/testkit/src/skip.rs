@@ -115,7 +115,9 @@ fn skip_with(required: bool, reason: &str, required_var: &str) -> bool {
     if required {
         panic!("{reason}, and {required_var}=1 forbids skipping this test");
     }
-    eprint!("{}", skip_line(reason));
+    // Written to the process's stderr directly: `eprint!` is captured by the test harness and
+    // would hide the line from a default run.
+    let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), skip_line(reason).as_bytes());
     false
 }
 
@@ -383,6 +385,20 @@ mod tests {
         assert!(err.contains("CRAFT_TEST_REQUIRED=1"), "{err}");
         assert!(!err.contains("SKIPPED:"), "{err}");
         assert!(!err.contains("ran on"), "{err}");
+    }
+
+    #[test]
+    fn the_skip_line_shows_in_a_run_that_captures_test_output() {
+        let exe = std::env::current_exe().expect("the test binary's path");
+        let out = Command::new(exe)
+            .args(["skip::tests::child", "--exact", "--test-threads=1"])
+            .env(CHILD_CASE, "skip")
+            .env_remove(REQUIRED_VAR)
+            .output()
+            .expect("run the test binary");
+        let err = stderr(&out);
+        assert!(out.status.success(), "{err}");
+        assert!(err.contains("SKIPPED: probe absent\n"), "{err}");
     }
 
     #[test]
