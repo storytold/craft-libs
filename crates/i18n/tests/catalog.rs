@@ -39,6 +39,11 @@ fn parse_row_checks_one_row() {
     assert_eq!(parse_row("@id\tlanguage.name\tDeutsch", 2), Ok(entry("@id", "language.name", "Deutsch")));
     assert_eq!(parse_row("\t{n} left\t{m} übrig", 2), Err("placeholders differ from the source text".into()));
     assert_eq!(parse_row("@plural\t{n} file|{n} files\t{n} файл|{n} файла", plural_forms("ru")), Err("expected 3 nonempty plural forms".into()));
+    assert_eq!(
+        parse_row("@msgplural\t{n} file|{n} files\t{n} Datei|{n} Dateien", plural_forms("de")),
+        Ok(entry("@msgplural", "{n} file|{n} files", "{n} Datei|{n} Dateien"))
+    );
+    assert_eq!(parse_row("@msgplural\t{n}|{n}\t{n}|{n}", plural_forms("de")), Err("unmatchable message template".into()));
 }
 
 #[test]

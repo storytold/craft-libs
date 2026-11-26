@@ -14,11 +14,12 @@ use crate::message::Template;
 /// A row that passed, with its columns unescaped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
-    /// The context column: empty, a context such as `menu`, or `@plural`, `@id` or `@msg`.
+    /// The context column: empty, a context such as `menu`, or `@plural`, `@id`, `@msg` or
+    /// `@msgplural`.
     pub context: String,
-    /// The English source text.
+    /// The English source text; for `@plural` and `@msgplural`, its two forms joined by `|`.
     pub source: String,
-    /// The translation; for `@plural`, its forms joined by `|`.
+    /// The translation; for `@plural` and `@msgplural`, its forms joined by `|`.
     pub translation: String,
 }
 
