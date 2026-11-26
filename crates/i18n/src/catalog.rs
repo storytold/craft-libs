@@ -134,7 +134,7 @@ pub(crate) fn parse_row(text: &str, shape: &Shape<'_>) -> Result<Parsed, String>
         _ => RowKind::Plain,
     };
     match row.context.as_str() {
-        "@id" | "@msgplural" if complex => return Err("a selector message is not supported in this kind of row".into()),
+        "@id" | "@msg" | "@msgplural" if complex => return Err("a selector message is not supported in this kind of row".into()),
         "@id" => {}
         "@plural" => {
             check_plural_source(&row.source)?;
@@ -170,9 +170,6 @@ pub(crate) fn parse_row(text: &str, shape: &Shape<'_>) -> Result<Parsed, String>
         }
         _ => {
             if complex {
-                if row.context == "@msg" {
-                    check_matchable(&row.source)?;
-                }
                 return selector(row, kind, shape);
             }
             if placeholders(&row.source) != placeholders(&row.translation) {

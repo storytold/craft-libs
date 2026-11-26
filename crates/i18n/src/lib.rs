@@ -234,7 +234,7 @@ impl Locale {
             let shape = catalog::Shape {
                 cardinal: self.forms,
                 ordinal: self.ordinal_forms,
-                locale: select::Locale { rules: rules.as_ref(), grammar: &grammar, rtl: direction(&self.code) == Direction::Rtl },
+                locale: select::Locale { rules: rules.as_ref(), grammar: &grammar },
             };
             for (name, text) in [("common", &self.shared), ("app", &self.app)] {
                 let read = catalog::parse(text, &shape);

@@ -34,8 +34,7 @@ fn grammar(genders: &str, forms: &str) -> Grammar {
 /// `message` as a translation in `code` with `grammar`: the rules' verdict.
 fn check(kind: RowKind, source: &str, message: &str, code: &str, grammar: &Grammar) -> Result<Message, String> {
     let rules = LocaleRules::for_locale(code);
-    let rtl = matches!(code, "ar" | "he" | "fa");
-    check_message(kind, source, message, &Locale { rules: rules.as_ref(), grammar, rtl })
+    check_message(kind, source, message, &Locale { rules: rules.as_ref(), grammar })
 }
 
 fn plural_ok(code: &str, message: &str) -> Result<Message, String> {
@@ -216,6 +215,19 @@ fn the_rules_of_a_locale_come_from_the_data() {
         assert_eq!(rules.ordinal, [Category::Other], "German, Polish, Arabic and Japanese have one ordinal category");
     }
     assert!(LocaleRules::for_locale("xx").is_none());
+    // The whole numbers of each category, from the same data.
+    assert_eq!(en.whole_numbers(Select::Plural, Category::One), [1]);
+    assert_eq!(de.whole_numbers(Select::Plural, Category::One), [1]);
+    assert_eq!(ar.whole_numbers(Select::Plural, Category::Zero), [0]);
+    assert_eq!(ar.whole_numbers(Select::Plural, Category::Two), [2]);
+    assert_eq!(pl.whole_numbers(Select::Plural, Category::One), [1]);
+    assert_eq!(&pl.whole_numbers(Select::Plural, Category::Few)[..7], [2, 3, 4, 22, 23, 24, 32]);
+    assert!(pl.whole_numbers(Select::Plural, Category::Other).is_empty(), "Polish other is reached only by fractions");
+    assert_eq!(fr.whole_numbers(Select::Ordinal, Category::One), [1]);
+    assert_eq!(en.whole_numbers(Select::Ordinal, Category::Two)[..3], [2, 22, 32]);
+    assert_eq!(ja.whole_numbers(Select::Plural, Category::Other).len(), 1001);
+    let total: usize = Category::ALL.iter().map(|c| ar.whole_numbers(Select::Plural, *c).len()).sum();
+    assert_eq!(total, 1001, "every whole number from 0 to 1,000 is in one category");
     assert_eq!(Category::from_key("few"), Some(Category::Few));
     assert_eq!(Category::from_key("many").map(Category::key), Some("many"));
     assert_eq!(Category::from_key("1"), None);
@@ -244,6 +256,28 @@ fn a_key_must_be_a_category_the_language_reaches() {
     assert!(error.contains("key \"many\" is not a plural category the language reaches"), "{error}");
     let error = plural_ok("ja", ".input {$n :number} .match $n one {{{$n}}} * {{{$n}}}").unwrap_err();
     assert!(error.contains("\"one\""), "{error}");
+}
+
+// `other` is never a key: `*` is the `other` category.
+#[test]
+fn other_is_never_written_as_a_key() {
+    let error = plural_ok("en", ".input {$n :number} .match $n one {{One}} other {{{$n}}} * {{{$n}}}").unwrap_err();
+    assert!(error.contains("`other` is never written as a key"), "{error}");
+}
+
+// A category needs a variant of its own, or else an exact variant for each of its whole numbers: German and English `one` is only 1.
+#[test]
+fn exact_variants_for_every_number_of_a_category_stand_for_it() {
+    for code in ["de", "en"] {
+        plural_ok(code, ".input {$n :number} .match $n 1 {{Eine Datei}} * {{{$n} Dateien}}").unwrap();
+    }
+    // Polish `few` has 3 numbers below 5 and more above: some of them is not all of them.
+    let polish = ".input {$n :number} .match $n one {{{$n} a}} 2 {{{$n} b}} 3 {{{$n} c}} 4 {{{$n} d}} many {{{$n} e}} * {{{$n} f}}";
+    let error = plural_ok("pl", polish).unwrap_err();
+    assert!(error.contains("no variant for `few`") && error.contains("one for each of its whole numbers"), "{error}");
+    // Arabic `zero`, `one` and `two` each hold one number, `few` and `many` many.
+    let arabic = ".input {$n :number} .match $n 0 {{a}} 1 {{b}} 2 {{c}} few {{{$n} d}} many {{{$n} e}} * {{{$n} f}}";
+    plural_ok("ar", arabic).unwrap();
 }
 
 #[test]
@@ -347,17 +381,20 @@ fn a_variant_agrees_with_the_source_on_a_trailing_ellipsis() {
 }
 
 #[test]
-fn a_translation_holds_no_bidi_embedding_or_override_and_marks_only_in_a_right_to_left_language() {
+fn a_translation_holds_no_bidi_embedding_override_or_isolate_and_the_marks_are_free() {
     let g = Grammar::default();
     let message = |c: char| format!(".input {{$n :number}} {{{{{c}{{$n}}}}}}");
     for c in ['\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}'] {
-        let error = check(RowKind::Plain, "{n :number}", &message(c), "ar", &g).unwrap_err();
-        assert!(error.contains("bidi embedding or override"), "U+{:04X}: {error}", c as u32);
+        for code in ["ar", "de"] {
+            let error = check(RowKind::Plain, "{n :number}", &message(c), code, &g).unwrap_err();
+            assert!(error.contains("bidi embedding, override or isolate"), "U+{:04X}: {error}", c as u32);
+        }
     }
+    // The marks LRM and RLM, in any language: the format's rule names only embeddings, overrides and isolates.
     for c in ['\u{200E}', '\u{200F}'] {
-        check(RowKind::Plain, "{n :number}", &message(c), "ar", &g).unwrap();
-        let error = check(RowKind::Plain, "{n :number}", &message(c), "de", &g).unwrap_err();
-        assert!(error.contains("only in a right-to-left language"), "{error}");
+        for code in ["ar", "de"] {
+            check(RowKind::Plain, "{n :number}", &message(c), code, &g).unwrap();
+        }
     }
 }
 

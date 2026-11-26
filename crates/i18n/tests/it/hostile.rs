@@ -87,7 +87,7 @@ fn message_case(bytes: &[u8]) {
         let mut grammar = Grammar::default();
         let _ = grammar.set("genders", "masculine feminine neuter");
         let _ = grammar.set("forms", "accusative genitive");
-        let locale = Locale { rules: rules.as_ref(), grammar: &grammar, rtl: code == "ar" };
+        let locale = Locale { rules: rules.as_ref(), grammar: &grammar };
         for (kind, source) in [
             (RowKind::Plain, "K {n :number} {item :noun} {k :integer}"),
             (RowKind::Plural, "{n} shape|{n} shapes"),

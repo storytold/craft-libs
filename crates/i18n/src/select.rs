@@ -2,7 +2,8 @@
 //! number, an ordinal or a noun's gender.
 //!
 //! A translation is a selector message when it begins with `.input`, `.local` or `.match` ([`Message::is_complex`]); any other
-//! translation is plain text with `{name}` placeholders, or the `|` forms of a `@plural` or `@ordinal` row. The subset:
+//! translation is plain text with `{name}` placeholders, or the `|` forms of a `@plural` or `@ordinal` row. A selector message is
+//! allowed in a plain row (a context that does not start with `@`) and in a `@plural` or `@ordinal` row, and in no other. The subset:
 //!
 //! - declarations `.input {$x :number}`, `.input {$x :integer}`, `.input {$x :number select=ordinal}`, `.input {$x :noun}` and
 //!   `.local $y = {$x :noun form=genitive}`;
@@ -76,8 +77,9 @@ pub(crate) fn from_icu(category: PluralCategory) -> Category {
 }
 
 /// What a language's plural rules say about whole numbers 0 to 1,000, from the CLDR data this crate embeds: the categories
-/// they reach and the ones that hold exactly one such number. A checker takes its counts from here, so it and the runtime agree.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// they reach, the whole numbers of each ([`LocaleRules::whole_numbers`]) and the categories that hold exactly one. A checker
+/// takes its counts from here, so it and the runtime agree.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct LocaleRules {
     /// The cardinal categories whole numbers reach, in CLDR order: the forms of a `@plural` row.
@@ -89,6 +91,8 @@ pub struct LocaleRules {
     pub cardinal_single: Vec<Category>,
     /// The ordinal categories that hold exactly one whole number from 0 to 1,000 (French `one`).
     pub ordinal_single: Vec<Category>,
+    /// The whole numbers 0 to 1,000 of each category, cardinal then ordinal, each list in order.
+    whole: [[Vec<u16>; 6]; 2],
 }
 
 impl LocaleRules {
@@ -101,35 +105,61 @@ impl LocaleRules {
     pub(crate) fn from_rules(cardinal: Option<&Rules>, ordinal: Option<&Rules>) -> Option<LocaleRules> {
         let (cardinal_rules, cardinal_categories) = cardinal?;
         let cardinal_categories: Vec<Category> = cardinal_categories.iter().copied().map(from_icu).collect();
-        let (ordinal_categories, ordinal_single) = match ordinal {
-            Some((rules, categories)) => {
-                let categories: Vec<Category> = categories.iter().copied().map(from_icu).collect();
-                let single = singles(rules, &categories);
-                (categories, single)
-            }
-            None => (vec![Category::Other], Vec::new()),
+        let cardinal_whole = whole_numbers_of(cardinal_rules);
+        let (ordinal_categories, ordinal_whole) = match ordinal {
+            Some((rules, categories)) => (categories.iter().copied().map(from_icu).collect(), whole_numbers_of(rules)),
+            None => (vec![Category::Other], whole_numbers_of_other()),
         };
         Some(LocaleRules {
-            cardinal_single: singles(cardinal_rules, &cardinal_categories),
-            ordinal_single,
+            cardinal_single: singles(&cardinal_whole, &cardinal_categories),
+            ordinal_single: singles(&ordinal_whole, &ordinal_categories),
             cardinal: cardinal_categories,
             ordinal: ordinal_categories,
+            whole: [cardinal_whole, ordinal_whole],
         })
     }
+
+    /// The whole numbers from 0 to 1,000 that are in `category` under the cardinal (`Select::Plural`) or ordinal
+    /// (`Select::Ordinal`) rules, in order: the German `one` is `[1]`, the Polish `few` starts `[2, 3, 4, 22, 23, 24, 32, …]`.
+    pub fn whole_numbers(&self, select: Select, category: Category) -> &[u16] {
+        let set = match select {
+            Select::Plural => self.whole.first(),
+            Select::Ordinal => self.whole.get(1),
+        };
+        set.and_then(|set| set.get(category_index(category))).map_or(&[], Vec::as_slice)
+    }
+}
+
+fn category_index(category: Category) -> usize {
+    Category::ALL.iter().position(|c| *c == category).unwrap_or(5)
 }
 
 /// A locale's rules and the categories whole numbers reach.
 pub(crate) type Rules = (PluralRules, Vec<PluralCategory>);
 
-fn singles(rules: &PluralRules, reached: &[Category]) -> Vec<Category> {
-    let mut counts = [0_u32; 6];
-    for n in 0..=1000_u32 {
-        let category = from_icu(rules.category_for(n));
-        if let Some(count) = counts.get_mut(Category::ALL.iter().position(|c| *c == category).unwrap_or(5)) {
-            *count += 1;
+/// Each category's whole numbers 0 to 1,000 under `rules`.
+fn whole_numbers_of(rules: &PluralRules) -> [Vec<u16>; 6] {
+    let mut whole: [Vec<u16>; 6] = Default::default();
+    for n in 0..=1000_u16 {
+        if let Some(list) = whole.get_mut(category_index(from_icu(rules.category_for(u32::from(n))))) {
+            list.push(n);
         }
     }
-    reached.iter().copied().filter(|c| Category::ALL.iter().position(|a| a == c).and_then(|i| counts.get(i)) == Some(&1)).collect()
+    whole
+}
+
+/// Every whole number 0 to 1,000 is in `other`: the rules of a language with no ordinal data.
+fn whole_numbers_of_other() -> [Vec<u16>; 6] {
+    let mut whole: [Vec<u16>; 6] = Default::default();
+    if let Some(list) = whole.get_mut(category_index(Category::Other)) {
+        list.extend(0..=1000_u16);
+    }
+    whole
+}
+
+/// The categories of `reached` that hold exactly one whole number.
+fn singles(whole: &[Vec<u16>; 6], reached: &[Category]) -> Vec<Category> {
+    reached.iter().copied().filter(|c| whole.get(category_index(*c)).is_some_and(|numbers| numbers.len() == 1)).collect()
 }
 
 /// A typed value a message takes: the arguments of [`crate::I18n::tm`], and the values `trn` and `tord` bind to `n`.
@@ -657,15 +687,13 @@ pub enum RowKind {
     Ordinal,
 }
 
-/// What a locale provides to the rules: its plural rules, its declared grammar and its direction.
+/// What a locale provides to the rules: its plural rules and its declared grammar.
 #[derive(Clone, Copy, Debug)]
 pub struct Locale<'a> {
     /// The plural rules; `None` for a language CLDR has none for (only exact numbers and `*` can select there).
     pub rules: Option<&'a LocaleRules>,
     /// The genders and forms the language's `@grammar` rows declare.
     pub grammar: &'a Grammar,
-    /// Whether the language is written right to left (a left-to-right or right-to-left mark is allowed only then).
-    pub rtl: bool,
 }
 
 /// Applies the rules of a selector message `translation` of `source` in `locale`, and returns it parsed:
@@ -674,23 +702,21 @@ pub struct Locale<'a> {
 /// 2. every variable is a placeholder of the source or declared; every `.input` names a source placeholder; every selector is
 ///    declared with a function that fits the source's type (`:number` or `:integer` for a number, `:noun` for a noun);
 /// 3. keys are the locale's categories (cardinal, or ordinal with `select=ordinal`) or exact whole numbers for a number, and its
-///    declared genders for a noun; a variant of only `*` exists; **every category whole numbers 0 to 1,000 reach, except
-///    `other`, has a variant of its own**;
+///    declared genders for a noun; `other` is never a key (`*` is the `other` category); a variant of only `*` exists; **every
+///    category whole numbers 0 to 1,000 reach, except `other`, has a variant of its own**, or else an exact variant for each of
+///    its whole numbers (German `one` is only 1);
 /// 4. every placeholder of the source appears in every variant, but the selector's own number may be left out when the key is an
 ///    exact number or a category that holds exactly one such number;
 /// 6. a `form=` names a form the locale declares;
-/// 7. every pattern agrees with the source on a trailing `…`, and the text holds no bidi embedding or override, and no LRM or
-///    RLM in a left-to-right language.
+/// 7. every pattern agrees with the source on a trailing `…`, and the text holds no bidi embedding, override or isolate (the
+///    runtime adds the isolates).
 ///
 /// (Rule 5, the form lists of `@plural` and `@ordinal` rows, is [`crate::I18n`]'s own check of those rows.)
 pub fn check_message(kind: RowKind, source: &str, translation: &str, locale: &Locale<'_>) -> Result<Message, String> {
     let message = Message::parse(translation)?;
     // Rule 7: bidi controls.
     if let Some(c) = translation.chars().find(|c| matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')) {
-        return Err(format!("U+{:04X} is a bidi embedding or override: the runtime adds the isolates", u32::from(c)));
-    }
-    if !locale.rtl && translation.chars().any(|c| matches!(c, '\u{200E}' | '\u{200F}')) {
-        return Err("a left-to-right or right-to-left mark belongs only in a right-to-left language".into());
+        return Err(format!("U+{:04X} is a bidi embedding, override or isolate: the runtime adds the isolates", u32::from(c)));
     }
     // The source's placeholders, from the last form of a count row.
     let shown = match kind {
@@ -780,7 +806,7 @@ pub fn check_message(kind: RowKind, source: &str, translation: &str, locale: &Lo
             }
             chosen.push((k, k.function == Function::Noun));
         }
-        let none = LocaleRules { cardinal: vec![Category::Other], ordinal: vec![Category::Other], cardinal_single: vec![], ordinal_single: vec![] };
+        let none = LocaleRules { cardinal: vec![Category::Other], ordinal: vec![Category::Other], ..LocaleRules::default() };
         let rules = locale.rules.unwrap_or(&none);
         for (position, (k, is_noun)) in chosen.iter().enumerate() {
             let allowed: Vec<&str> = if *is_noun {
@@ -793,6 +819,9 @@ pub fn check_message(kind: RowKind, source: &str, translation: &str, locale: &Lo
             };
             for variant in variants {
                 match variant.keys.get(position) {
+                    Some(Key::Name(name)) if name == "other" && !*is_noun => {
+                        return Err("`other` is never written as a key: `*` is the `other` category".into());
+                    }
                     Some(Key::Name(name)) if !allowed.contains(&name.as_str()) => {
                         let what = if *is_noun { "a gender the language declares" } else { "a plural category the language reaches" };
                         return Err(format!("key {name:?} is not {what} (it has: {})", allowed.join(", ")));
@@ -802,9 +831,17 @@ pub fn check_message(kind: RowKind, source: &str, translation: &str, locale: &Lo
                 }
             }
             if !*is_noun {
-                for category in allowed.iter().filter(|c| **c != "other") {
-                    if !variants.iter().any(|v| matches!(v.keys.get(position), Some(Key::Name(n)) if n == category)) {
-                        return Err(format!("no variant for `{category}`, which whole numbers reach in this language: `*` stands for `other`"));
+                for category in rules_categories(rules, k.select).iter().filter(|c| **c != Category::Other) {
+                    let named = variants.iter().any(|v| matches!(v.keys.get(position), Some(Key::Name(n)) if n == category.key()));
+                    let by_number = rules
+                        .whole_numbers(k.select, *category)
+                        .iter()
+                        .all(|n| variants.iter().any(|v| matches!(v.keys.get(position), Some(Key::Number(exact)) if *exact == u64::from(*n))));
+                    if !named && !by_number {
+                        return Err(format!(
+                            "no variant for `{}`, which whole numbers reach in this language (or one for each of its whole numbers): `*` stands for `other`",
+                            category.key()
+                        ));
                     }
                 }
             }
@@ -843,6 +880,13 @@ pub fn check_message(kind: RowKind, source: &str, translation: &str, locale: &Lo
         }
     }
     Ok(message)
+}
+
+fn rules_categories(rules: &LocaleRules, select: Select) -> &[Category] {
+    match select {
+        Select::Plural => &rules.cardinal,
+        Select::Ordinal => &rules.ordinal,
+    }
 }
 
 fn describe(ty: Type) -> &'static str {

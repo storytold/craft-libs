@@ -353,3 +353,59 @@ mod dates {
         assert!(shown.starts_with("Changed Oct 31, 2026"), "{shown}");
     }
 }
+
+// With two selectors the best variant is chosen comparing them left to right: an exact number beats a category, and a category or
+// a gender beats `*`, whatever the other selector says.
+#[test]
+fn the_best_variant_is_chosen_selector_by_selector_from_the_left() {
+    let source = "Row {n :number} {item :noun}";
+    let message = ".input {$n :number} .input {$item :noun} .match $n $item \
+        1 * {{exact {$n} {$item}}} one feminine {{one-feminine {$n} {$item}}} one * {{one-any {$n} {$item}}} \
+        * feminine {{any-feminine {$n} {$item}}} * * {{any-any {$n} {$item}}}";
+    let de = rows(&[
+        "@grammar\tgenders\tmasculine feminine neuter",
+        "@noun\tpage\tfeminine: Seite",
+        "@noun\tconnector\tmasculine: Verbinder",
+        &format!("\t{source}\t{message}"),
+    ]);
+    let (i18n, _) = build(&[("de", &de, "")]);
+    assert!(i18n.check_all().is_empty(), "{:?}", i18n.check_all());
+    let de = lang(&i18n, "de");
+    let row = |n: u64, noun: &str| strip_isolates(&i18n.tm(de, "", source, &[("n", Arg::Count(n)), ("item", Arg::Noun(noun))]));
+    // 1 is exact: that beats `one`, whatever the noun.
+    assert_eq!(row(1, "page"), "exact 1 Seite");
+    assert_eq!(row(1, "connector"), "exact 1 Verbinder");
+    // 5 is neither: the noun decides between the two variants that match, a gender over `*`.
+    assert_eq!(row(5, "page"), "any-feminine 5 Seite");
+    assert_eq!(row(5, "connector"), "any-any 5 Verbinder");
+    // The first selector outranks the second: `one * ` has a category on the left, `* feminine` a gender on the right.
+    let only_categories = ".input {$n :number} .input {$item :noun} .match $n $item one * {{category-first {$n} {$item}}} * feminine {{gender-second {$n} {$item}}} * * {{any {$n} {$item}}}";
+    let de = rows(&["@grammar\tgenders\tmasculine feminine", "@noun\tpage\tfeminine: Seite", &format!("\t{source}\t{only_categories}")]);
+    let (i18n, _) = build(&[("de", &de, "")]);
+    assert!(i18n.check_all().is_empty(), "{:?}", i18n.check_all());
+    let shown = strip_isolates(&i18n.tm(lang(&i18n, "de"), "", source, &[("n", Arg::Count(1)), ("item", Arg::Noun("page"))]));
+    assert_eq!(shown, "category-first 1 Seite", "`one` on the left beats `feminine` on the right");
+}
+
+// A selector message belongs in a plain row, a `@plural` or an `@ordinal` row: not in `@msg`, `@id` or `@msgplural`.
+#[test]
+fn a_selector_message_is_refused_in_the_rows_that_may_not_hold_one() {
+    let message = ".input {$n :number} .match $n one {{{$n} Datei}} * {{{$n} Dateien}}";
+    let de = rows(&[
+        &format!("@msg\tOpened {{n :number}}\t{message}"),
+        &format!("@id\tfile.open\t{message}"),
+        &format!("@msgplural\t{{n}} file|{{n}} files\t{message}"),
+        &format!("\tOpened {{n :number}}\t{message}"),
+    ]);
+    let (i18n, _) = build(&[("de", &de, "")]);
+    let problems = i18n.check_all();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(problems.iter().all(|p| p.contains("a selector message is not supported in this kind of row")), "{problems:?}");
+    assert!(
+        problems.iter().any(|p| p.contains("line 1:"))
+            && problems.iter().any(|p| p.contains("line 2:"))
+            && problems.iter().any(|p| p.contains("line 3:")),
+        "{problems:?}"
+    );
+    assert_eq!(i18n.tm(lang(&i18n, "de"), "", "Opened {n :number}", &[("n", Arg::Count(2))]), "2 Dateien", "the plain row is read");
+}

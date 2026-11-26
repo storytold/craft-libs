@@ -61,8 +61,9 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   (`{n :number}`, `{n :integer}`, `{when :date}`, `{item :noun}`; English shows it without the annotation). The row is the
   (context, source) of the catalogs along the locale chain, else the plain row; its translation is plain text with `{name}`
   placeholders, or **a selector message**, a small subset of MessageFormat 2 that begins with `.input`, `.local` or `.match`
-  and chooses its words by a number, an ordinal or a noun's gender (`select`, below). `trn`, `trn_decimal` and `tord` take a
-  selector message as their row's translation too, with `$n` the count. A message the language cannot show (a noun it has no row
+  and chooses its words by a number, an ordinal or a noun's gender (`select`, below). It is allowed in a plain row (any
+  context that does not start with `@`) and in a `@plural` or `@ordinal` row, not in `@id`, `@msg`, `@msgplural`, `@noun` or
+  `@grammar` rows. `trn`, `trn_decimal` and `tord` take a selector message as their row's translation too, with `$n` the count. A message the language cannot show (a noun it has no row
   for, a value of the wrong type) shows in English, whole.
 - **Nouns:** `@grammar ⇥ genders ⇥ masculine feminine neuter` and `@grammar ⇥ forms ⇥ accusative genitive` declare what a language
   has (from either of its catalogs, in any order); `@noun ⇥ page ⇥ feminine: strona; accusative=stronę` gives a noun's
@@ -73,23 +74,29 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   `:number select=ordinal`, `:noun` and `.local $y = {$x :noun form=genitive}`; one `.match` of one to three declared variables;
   variants (a key for each selector: a plural or ordinal category, an exact whole number, a gender, or `*`, then a quoted pattern
   `{{…}}`); patterns of text, `{$x}`, `{$x :noun form=<name>}` and the escapes `\{`, `\}`, `\|`, `\\`. No markup, no other
-  function, no option beyond `select` and `form`. An exact number is the best match for that number, then its category, then
-  `*`. `check_message(kind, source, translation, locale)` applies the rules a translation must meet, which the runtime applies
+  function, no option beyond `select` and `form`. Of the variants that match, the best wins, comparing the selectors from the
+  left: an exact number beats a category, and a category or a gender beats `*`. `other` is never written as a key: `*` is the
+  `other` category. `check_message(kind, source, translation, locale)` applies the rules a translation must meet, which the runtime applies
   to every row it reads and a checker can apply to a file: variables are placeholders of the source or declared, a selector's
   function fits the source's type, keys are the language's categories or genders, a variant of only `*` exists, **every
-  category whole numbers 0 to 1,000 reach (other than `other`) has a variant of its own** (a Polish message without `many` is an
-  error, not a wrong form), every placeholder is in every variant (a selector's own number may be left out for an exact number
+  category whole numbers 0 to 1,000 reach (other than `other`) has a variant of its own**, or else an exact variant for each of
+  its whole numbers (German `one` is only 1); a Polish message without `many` is an error, not a wrong form, every placeholder is in every variant (a selector's own number may be left out for an exact number
   or a category that holds exactly one such number: Arabic `zero`, `one` and `two`, Polish `one`, English `one`, so a
-  translation can say "one shape" in words), forms are declared, a trailing `…` agrees with the source, and no bidi embedding or
-  override is in the text (the runtime adds the isolates; a left-to-right or right-to-left mark only in a right-to-left
-  language). `LocaleRules::for_locale(code)` gives the categories and the single-valued ones from the same CLDR data, so a
-  checker and the runtime cannot disagree.
+  translation can say "one shape" in words), forms are declared, a trailing `…` agrees with the source, and no bidi embedding,
+  override or isolate is in the text (the runtime adds the isolates; the marks LRM and RLM are free). `LocaleRules::for_locale(code)`
+  gives the categories, the whole numbers of each (`whole_numbers`) and the single-valued ones from the same CLDR data, so a
+  checker and the runtime cannot disagree. The classic rows keep the runtime's own rules: a plain or `@plural` translation with
+  a bidi control is read as it always was.
 - **Caps (`craft_i18n::limits`):** a catalog file is at most 2 MiB (`MAX_CATALOG_BYTES`), 20,000 rows (`MAX_ROWS`; the rest are
   skipped) of 16 KiB each (`MAX_ROW_BYTES`); a selector message at most 4 KiB, 3 selectors, 64 variants, 8 declarations and 64
   parts in a pattern; 2,000 nouns a locale and 16 forms a noun; a person's text 1,024 characters and a filled message 4,096
   (cut, ending with `…`); 64 locales; a language tag 35 bytes and 16 preferred languages. Past a cap the row, the rest of the
   file, or the file is skipped and reported (`check_all`), and the English shows. Work is linear in a catalog's bytes and a
   message's parts.
+- **Balance:** a message of `tm`, or a selector message of `trn` or `tord`, never ends with a bidi isolate, embedding or override
+  open, whatever its values or its translation open and wherever the 4,096-character cap cuts it: a cut inside an isolated value
+  ends with `…` and the closers of what the kept text opens (within the cap), so the text after the message in a window is
+  not reordered by it.
 - **Isolation:** when a message or a value inserted into it has a right-to-left letter (bidi
   class R or AL), or a value has a bidi control (LRE, RLE, PDF, LRO, RLO, LRI, RLI, FSI, PDI,
   LRM, RLM, ALM), `fmt` wraps each inserted value in a first-strong isolate (FSI…PDI), and `trn`,
