@@ -13,6 +13,7 @@ pub(crate) mod contract;
 pub(crate) mod disabled_fade;
 pub(crate) mod field_text_centred;
 pub(crate) mod focus_ring;
+pub(crate) mod form;
 pub(crate) mod keys;
 pub(crate) mod label;
 pub(crate) mod layer;

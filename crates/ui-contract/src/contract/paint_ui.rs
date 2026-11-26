@@ -150,6 +150,13 @@ impl PaintUi<'_> {
         self.child_with(id, rect, child, None, None)
     }
 
+    /// Makes the child shown with `key` the one a click on the composite's label focuses, in place of the composite's
+    /// first stop, such as the number field of a row whose slider comes first in Tab order. A child with no stop this
+    /// pass leaves the first stop.
+    pub fn label_target(&mut self, key: impl Hash + Debug) {
+        access::scope::label_target(self.ui.ctx(), self.id, self.id.with(key));
+    }
+
     /// Shows a child with rich tooltip content.
     pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output {
         self.child_with(self.id.with(key), rect, child, Some(Box::new(tip)), None)

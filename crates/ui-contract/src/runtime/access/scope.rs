@@ -181,6 +181,8 @@ struct Open {
     stops: usize,
     /// The nodes that registered inside it and in no node component inside it.
     held: Vec<ScopeNode>,
+    /// The child whose stop a click on the label focuses, in place of the first stop inside it (`label_target`).
+    label_target: Option<Id>,
 }
 
 /// A control that reported its node in a scope: the name and description its node got at its own report.
@@ -193,7 +195,8 @@ pub(crate) struct ScopeNode {
     pub description: Option<String>,
     /// The missing-name finding of a node that may still be named by the scope: reported when it is not.
     pub unnamed: Option<Finding>,
-    /// The first focus stop inside a control that has none of its own: where a click on its label moves focus.
+    /// The first focus stop inside a control that has none of its own, or the stop of the child it named
+    /// (`label_target`): where a click on its label moves focus.
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
     /// The control takes key focus, at its own stop or at a part's (a segmented control's segments).
     pub focusable: bool,
@@ -271,7 +274,17 @@ pub(crate) fn field_label(ctx: &Context) -> Option<FieldLabel> {
 pub(crate) fn enter(ctx: &Context, id: Id) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.last_mut() {
-            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new() });
+            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new(), label_target: None });
+        }
+    });
+}
+
+/// Names `child` as the component whose stop a click on the label of the node component `id` focuses, in place of
+/// the first stop inside `id`. Read at `id`'s step 16; a child with no stop this pass leaves the first stop.
+pub(crate) fn label_target(ctx: &Context, id: Id, child: Id) {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        if let Some(open) = stack.0.iter_mut().rev().find_map(|scope| scope.open.iter_mut().rfind(|open| open.id == id)) {
+            open.label_target = Some(child);
         }
     });
 }
@@ -284,7 +297,7 @@ pub(crate) fn register(ctx: &Context, mut node: ScopeNode) {
         let Some(scope) = stack.0.last_mut() else { return node.unnamed.take().into_iter().collect() };
         let mut unnamed = Vec::new();
         if let Some(at) = scope.open.iter().rposition(|open| open.id == node.id) {
-            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops);
+            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops, scope.open[at].label_target);
             // What the node held sits inside it: none of it is a control of the scope.
             unnamed.extend(scope.open.drain(at..).flat_map(|open| open.held).filter_map(|held| held.unnamed));
         }
