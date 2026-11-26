@@ -1,0 +1,25 @@
+# The dev-build tuning every craft-libs test build uses: `tools/cl` passes it to each cargo command locally, and
+# scripts/ci-workspace-tests.sh passes it (`--config .config/cargo-dev.toml`) to the Workspace gate's builds, so local
+# and CI builds are the same. It lives here and not in Cargo.toml's `[profile]` table, which the CI cache key hashes;
+# the per-crate levels Cargo.toml sets (craft-video, craft-affinity) still apply.
+#
+# lto off: with cargo's default, rustc runs thin-local LTO across every optimised crate's codegen units on each rebuild;
+# off, a one-line edit re-optimises only the changed units. Dependencies build at opt-level 2, once per target dir and
+# cache entry: egui, text shaping, hashing and codecs run in nearly every test.
+# craft-theme, craft-behavior and craft-proof run in every screen-test frame or in dictionary-sized tests and are rarely
+# edited, so they build at opt-level 1; every other workspace crate stays at 0, where rustc shares generic
+# instantiations across crates and an edit to the runtime (craft-ui-contract) rebuilds in seconds.
+[profile.dev]
+lto = "off"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.craft-theme]
+opt-level = 1
+
+[profile.dev.package.craft-behavior]
+opt-level = 1
+
+[profile.dev.package.craft-proof]
+opt-level = 1

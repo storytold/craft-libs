@@ -1,0 +1,216 @@
+# API map of the "Browse: places and compare" family: old path to new path and setter renames.
+
+family = "Browse: places and compare"
+new_module = "craft_browse::ui::places"
+
+[[type]]
+name = "PlacesTree"
+old = "craft_browse::ui::places::PlacesTree"
+new = "craft_browse::ui::places::PlacesTree"
+status = "replaced"
+note = "A pattern, `PlacesTree::new(label, &Places, &mut FolderCache)`, over one `List` tree; `show(ui) -> PlacesOutput`. The open state is the pattern's, kept in its container's slot. The type has no key parameter: the drop of a foreign `ListDrag<K>` on a folder row is a contract gap (a collection takes only a drag of its own key type), so the `accepts` setter and `PlacesEvent::Dropped` are not built."
+
+[[type]]
+name = "PlacesEvent"
+old = "craft_browse::ui::places::PlacesEvent"
+new = "craft_browse::ui::places::PlacesEvent"
+status = "replaced"
+note = "Gains `Reveal(PathBuf)` (the app runs the platform reveal); loses `Dropped` and the key parameter."
+
+[[type]]
+name = "PlacesOutput"
+old = "craft_browse::ui::places::PlacesOutput"
+new = "craft_browse::ui::places::PlacesOutput"
+status = "replaced"
+note = "`{ response, events }` without the key parameter; it is an `Outcome`."
+
+[[type]]
+name = "PlacesLabels"
+old = "craft_browse::ui::places::PlacesLabels"
+new = ""
+status = "removed"
+note = "Renamed `PlacesWords`."
+
+[[type]]
+name = "PlacesWords"
+old = ""
+new = "craft_browse::ui::places::PlacesWords"
+status = "replaced"
+note = "Replaces `PlacesLabels`. Ids `placesTree.<name>`; the old `browse.places.*` ids go. The hidden-places count is the `hidden` count row."
+
+[[type]]
+name = "PlacesStyle"
+old = "craft_browse::ui::places::PlacesStyle"
+new = ""
+status = "removed"
+note = "The rows, headings and indent are the list's; the folder glyph and the faint text are the row's ink."
+
+[[type]]
+name = "HIDDEN_PLACES"
+old = "craft_browse::ui::places::HIDDEN_PLACES"
+new = ""
+status = "removed"
+note = "The `hidden` count row of `PlacesWords`."
+
+[[type]]
+name = "CompareTile"
+old = "craft_browse::ui::compare::CompareTile"
+new = "craft_browse::ui::compare::CompareTile"
+status = "replaced"
+note = "A container component over a `PreviewPane`: `CompareTile::new(label, Bind<PreviewView>, CompareImage)`, shown with `show(ui, rect) -> CompareOutput`. `toggle_zoom(&PreviewView) -> PreviewView` is pure over the view. Pending and failed renders are the pane's pending line and failed message."
+
+[[type]]
+name = "CompareImage"
+old = "craft_browse::ui::compare::CompareImage"
+new = "craft_browse::ui::compare::CompareImage"
+status = "replaced"
+note = "`Texture` holds a `craft_ui::primitives::textures::CachedTexture`; `Picture` uploads through a `TextureStore` keyed by `(key, revision)`."
+
+[[type]]
+name = "RenderState"
+old = "craft_browse::ui::compare::RenderState"
+new = "craft_browse::ui::compare::RenderState"
+status = "same"
+
+[[type]]
+name = "CompareResponse"
+old = "craft_browse::ui::compare::CompareResponse"
+new = ""
+status = "removed"
+note = "Renamed `CompareOutput`."
+
+[[type]]
+name = "CompareOutput"
+old = ""
+new = "craft_browse::ui::compare::CompareOutput"
+status = "replaced"
+note = "Replaces `CompareResponse`. `{ response, clicked, double_clicked, view: Option<PreviewView> }`; `view_changed` is `view.is_some()`, `image_rect` is gone (the overlay gets the picture's rect)."
+
+[[type]]
+name = "CompareCaption"
+old = "craft_browse::ui::compare::CompareCaption"
+new = "craft_browse::ui::compare::CompareCaption"
+status = "replaced"
+note = "`label_color` is a `craft_theme::Srgba`; the flag is `craft_ui::tile_grid::TileFlag`."
+
+[[type]]
+name = "ComparePair"
+old = "craft_browse::ui::compare::ComparePair"
+new = "craft_browse::ui::compare::ComparePair"
+status = "replaced"
+note = "`ComparePair::new(ArrangeSpace)`, `.rtl(bool)`, `rects(area)`; the divider rect is gone (a rule between the panes is the caller's `Divider`)."
+
+[[type]]
+name = "survey_columns"
+old = "craft_browse::ui::compare::survey_columns"
+new = "craft_browse::ui::compare::survey_columns"
+status = "replaced"
+note = "Takes the pictures' aspect: `survey_columns(n, area, aspect)`."
+
+[[type]]
+name = "CompareLabels"
+old = "craft_browse::ui::compare::CompareLabels"
+new = ""
+status = "removed"
+note = "Renamed `CompareWords`."
+
+[[type]]
+name = "CompareWords"
+old = ""
+new = "craft_browse::ui::compare::CompareWords"
+status = "replaced"
+note = "Replaces `CompareLabels`. Ids `compareTile.<name>`; the old `browse.compare.*` ids go. The star count is the `stars` count row."
+
+[[type]]
+name = "CompareStyle"
+old = "craft_browse::ui::compare::CompareStyle"
+new = ""
+status = "removed"
+note = "Renamed `CompareTileStyle`."
+
+[[type]]
+name = "CompareTileStyle"
+old = ""
+new = "craft_browse::ui::compare::CompareTileStyle"
+status = "replaced"
+note = "Replaces `CompareStyle`. Only the tile's own marks (veil, ring, halo); the caption, margin, gap and name room are not style values."
+
+[[setter]]
+type = "PlacesTree"
+old = "new(id_salt, &Places, &mut FolderCache)"
+new = "new(label, &Places, &mut FolderCache)"
+
+[[setter]]
+type = "PlacesTree"
+old = "current(Option<&Path>)"
+new = "current(&Path)"
+note = "Leave the setter out for no current folder."
+
+[[setter]]
+type = "PlacesTree"
+old = "row_menu(Fn(&Path) -> Vec<MenuEntry<String>>)"
+new = "row_menu(Fn(&Path) -> Vec<Entry<String>>)"
+
+[[setter]]
+type = "PlacesTree"
+old = "accepts(Fn(&Path, &ListDrag<K>) -> bool)"
+new = ""
+note = "Not built: a collection takes only a drag of its own key type (contract gap, reported)."
+
+[[setter]]
+type = "PlacesTree"
+old = "labels(PlacesLabels)"
+new = ""
+note = "The words come from the environment."
+
+[[setter]]
+type = "CompareTile"
+old = "new(id_salt, &mut CanvasView, CompareImage)"
+new = "new(label, Bind<PreviewView>, CompareImage)"
+
+[[setter]]
+type = "CompareTile"
+old = "caption(CompareCaption)"
+new = "caption(CompareCaption)"
+
+[[setter]]
+type = "CompareTile"
+old = "state(RenderState)"
+new = "state(RenderState)"
+
+[[setter]]
+type = "CompareTile"
+old = "active(bool)"
+new = "active(bool)"
+
+[[setter]]
+type = "CompareTile"
+old = "rejected(bool)"
+new = "rejected(bool)"
+
+[[setter]]
+type = "CompareTile"
+old = "survey(bool)"
+new = "survey(bool)"
+
+[[setter]]
+type = "CompareTile"
+old = "overlay(FnOnce(&Painter, &CanvasView, Rect))"
+new = "overlay(FnOnce(&ContentPainterCx, CanvasTransform, Rect))"
+note = "Through `PreviewPane::overlay` (`PaneOverlay`); the rect is the picture's."
+
+[[setter]]
+type = "CompareTile"
+old = "labels(CompareLabels)"
+new = ""
+note = "The words come from the environment."
+
+[[setter]]
+type = "CompareTile"
+old = "show(ui, rect) -> CompareResponse"
+new = "show(ui, rect) -> CompareOutput"
+
+[[setter]]
+type = "CompareTile"
+old = "toggle_zoom(&mut CanvasView, size, area, pixels_per_point)"
+new = "toggle_zoom(&PreviewView) -> PreviewView"
