@@ -83,7 +83,10 @@ impl<'a> FormXObject<'a> {
 
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
         let decoded = crate::context::decode_content(stream)?;
-        let resources = dict.get::<Dict<'_>>(RESOURCES);
+        // PdfCraft patch: retain absence; present malformed dictionaries stay local-empty.
+        let resources = dict
+            .contains_key(RESOURCES)
+            .then(|| dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default());
 
         let matrix = Affine::new(
             dict.get::<[f64; 6]>(MATRIX)
@@ -571,10 +574,11 @@ impl<'a> ImageXObject<'a> {
 
     /// PdfCraft patch (#3018): an image in a device space is drawn in its default color space
     /// from `defaults`. Masks have none to replace, and `resolve_cs` (an inline image's named
-    /// color space) substitutes its own.
+    /// color space) substitutes its own. Craft patch (default spaces): `resolve_cs` also gives the
+    /// cache key of the default it substituted, if it did (see `default_color_space`).
     pub(crate) fn new(
         stream: &Stream<'a>,
-        resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
+        resolve_cs: impl FnOnce(&Name<'_>) -> Option<(ColorSpace, Option<u128>)>,
         warning_sink: &WarningSinkFn,
         extended_warning_sink: Option<&ExtendedWarningSinkFn>,
         cache: &Cache,
@@ -611,14 +615,21 @@ impl<'a> ImageXObject<'a> {
                 default_space = Some(key);
                 Some(space)
             } else {
+                // PdfCraft patch (80): an Indexed space given in place whose `hival` has no
+                // reading cannot be built and falls back below, as upstream; it is reported.
+                malformed_indexed = cs_obj
+                    .as_ref()
+                    .is_some_and(crate::color::has_unusable_hival);
                 cs_obj
                     .clone()
-                    .and_then(|c| ColorSpace::new(c, cache))
+                    .and_then(|c| ColorSpace::new_allowing_tableless(c, cache))
                     // Inline images can also refer to color spaces by name.
                     .or_else(|| {
-                        cs_obj
+                        let (space, key) = cs_obj
                             .and_then(|c| c.into_name())
-                            .and_then(|n| resolve_cs(&n))
+                            .and_then(|n| resolve_cs(&n))?;
+                        default_space = key;
+                        Some(space)
                     })
             }
         };
@@ -860,6 +871,13 @@ impl<'a> ImageXObject<'a> {
 
     pub(crate) fn stream(&self) -> &Stream<'a> {
         &self.stream
+    }
+
+    /// Craft patch (default spaces): the default color space this draw uses in place of the
+    /// image's device space (PdfCraft patch #3018), if one is, with the cache key of the object
+    /// it was read from.
+    pub(crate) fn default_color_space(&self) -> Option<(&ColorSpace, u128)> {
+        Some((self.color_space.as_ref()?, self.default_space?))
     }
 
     /// PdfCraft patch (review on #3884): whether `resolve_alpha` takes this image's alpha from

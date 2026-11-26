@@ -1,4 +1,4 @@
-use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_PICT, St};
+use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_LEVEL_TEXT, MAX_PICT, St};
 use super::{Fmt, Inline, Reader, Rgb, make_img, model};
 use std::sync::Arc;
 
@@ -309,8 +309,18 @@ impl Reader {
                     }
                 }
             }
+            Dest::LevelText => {
+                if let Some(level) = self.list_cur.last_mut() {
+                    for c in s.chars() {
+                        if level.text.chars().count() >= MAX_LEVEL_TEXT {
+                            break;
+                        }
+                        level.text.push(c);
+                    }
+                }
+            }
             Dest::ShpSn | Dest::ShpSv => self.shape_text(s),
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
+            Dest::Skip | Dest::InfoRoot | Dest::Created | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

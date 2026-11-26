@@ -20,20 +20,15 @@ impl ImageColorSpace {
 /// image dictionary's size, which a decoder may round differently from the codestream's.
 const MIN_LIMIT: usize = 64 << 20;
 
-/// Decode a JPEG 2000 image (JP2 file or raw codestream) for an image XObject described by
-/// `params`, refusing codestreams over `max_pixels` or `limit` bytes; `None` when it can't be decoded.
-///
 /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
-/// `max_pixels` the most pixels the codestream may decode to (the document's
-/// [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels), 2^28 by default).
+/// `max_pixels` the most pixels the codestream may decode to. A codestream's size comes from the
+/// SIZ marker, not the image dictionary, and the decoder allocates it infallibly, so a tiny file
+/// could ask for tens of gigabytes and abort the process (#5078).
 ///
-/// PdfCraft patch (47): a codestream's size comes from the SIZ marker, not the image dictionary,
-/// and the decoder allocates it infallibly: a tiny file could ask for tens of gigabytes and abort
-/// the process (#5078). `max_pixels` is checked against `Image::width()` x `height()` at full
-/// resolution: the SIZ image area, divided by a component subsampling (`XRsiz`, `YRsiz`) that
-/// every component shares, the size the decoder allocates each channel and component tile at.
-/// Components sampled differently leave the area undivided. So a 2x2-subsampled 32768 x 32768 area
-/// decodes to, and counts as, 2^28.
+/// The count is checked against `Image::width()` x `height()` at full resolution: the SIZ image
+/// area, divided by a component subsampling (`XRsiz`, `YRsiz`) that every component shares, the
+/// size the decoder allocates each channel and component tile at. Components sampled differently
+/// leave the area undivided.
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams, limit: usize, max_pixels: u64) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
@@ -564,8 +559,16 @@ mod tests {
     /// precision; an image without a palette keeps its own (1 bit here).
     #[test]
     fn palette_colours_are_eight_bit_and_other_samples_keep_their_precision() {
-        let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
-        let bpc = |data: &[u8]| decode(data, &params, usize::MAX, 1 << 28).and_then(|r| r.image_data).map(|d| d.bits_per_component);
+        let params = ImageDecodeParams {
+            width: 1,
+            height: 1,
+            ..ImageDecodeParams::default()
+        };
+        let bpc = |data: &[u8]| {
+            decode(data, &params, usize::MAX, 1 << 28)
+                .and_then(|r| r.image_data)
+                .map(|d| d.bits_per_component)
+        };
         let mut palette = Vec::new();
         for (kind, body) in [(&b"pclr"[..], &[0, 2, 3, 7, 7, 7, 255, 0, 0, 64, 128, 192][..]), (b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2])] {
             palette.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());

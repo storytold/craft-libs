@@ -34,17 +34,9 @@ pub(crate) struct GrayScaleParams<'a> {
 ///
 /// Returns `GSVALS`: the decoded gray-scale image array, GSW × GSH pixels.
 #[inline(always)]
-pub(crate) fn decode_gray_scale_image(
-    data: &[u8],
-    params: &GrayScaleParams<'_>,
-    ctx: &mut ScratchBuffers,
-) -> Result<Vec<u32>> {
+pub(crate) fn decode_gray_scale_image(data: &[u8], params: &GrayScaleParams<'_>, ctx: &mut ScratchBuffers) -> Result<Vec<u32>> {
     // Table C.1: "GSMMR specifies whether MMR is used."
-    if params.use_mmr {
-        decode_mmr(data, params)
-    } else {
-        decode_arithmetic(data, params, ctx)
-    }
+    if params.use_mmr { decode_mmr(data, params) } else { decode_arithmetic(data, params, ctx) }
 }
 
 /// The gray-scale image decoding procedure using MMR (Annex C, C.5).
@@ -71,11 +63,7 @@ fn decode_mmr(data: &[u8], params: &GrayScaleParams<'_>) -> Result<Vec<u32>> {
 /// The gray-scale image decoding procedure using arithmetic coding (Annex C, C.5).
 ///
 /// Table C.4: "GBTEMPLATE = GSTEMPLATE, TPGDON = 0, USESKIP = GSUSESKIP, SKIP = GSKIP"
-fn decode_arithmetic(
-    data: &[u8],
-    params: &GrayScaleParams<'_>,
-    ctx: &mut ScratchBuffers,
-) -> Result<Vec<u32>> {
+fn decode_arithmetic(data: &[u8], params: &GrayScaleParams<'_>, ctx: &mut ScratchBuffers) -> Result<Vec<u32>> {
     // `GSW` - The width of the gray-scale image.
     let width = params.width;
     // `GSH` - The height of the gray-scale image.
@@ -125,10 +113,7 @@ fn decode_arithmetic(
 
     let mut decoder = ArithmeticDecoder::new(data);
     ctx.contexts.clear();
-    ctx.contexts.resize(
-        1 << template.context_bits(),
-        ArithmeticDecoderContext::default(),
-    );
+    ctx.contexts.resize(1 << template.context_bits(), ArithmeticDecoderContext::default());
 
     macro_rules! gs_decode_loop {
         ($gather:expr) => {
@@ -180,26 +165,11 @@ fn decode_arithmetic(
 /// The closure `decode_next` is called for each bitplane, receiving the bitplane
 /// index (`GSBPP`-1 down to 0) and a zeroed bitmap to decode into. Craft patch: the image has at
 /// most `max_cells` values, checked before any of them is allocated.
-fn decode_bitplanes<F>(
-    width: u32,
-    height: u32,
-    stride: u32,
-    bits_per_pixel: u32,
-    max_cells: u64,
-    decode_next: F,
-) -> Result<Vec<u32>>
+fn decode_bitplanes<F>(width: u32, height: u32, stride: u32, bits_per_pixel: u32, max_cells: u64, decode_next: F) -> Result<Vec<u32>>
 where
     F: FnMut(u32, &mut Bitmap) -> Result<()>,
 {
-    decode_bitplanes_within(
-        width,
-        height,
-        stride,
-        bits_per_pixel,
-        max_cells,
-        isize::MAX as u64,
-        decode_next,
-    )
+    decode_bitplanes_within(width, height, stride, bits_per_pixel, max_cells, isize::MAX as u64, decode_next)
 }
 
 /// Craft patch: `decode_bitplanes` with the most bytes the array of values may take. Both the
@@ -279,15 +249,7 @@ fn xor_planes<S: Simd>(simd: S, plane: &mut [u32], prev: &[u32]) {
 }
 
 #[inline(always)]
-fn extract_bits<S: Simd>(
-    simd: S,
-    data: &[u32],
-    values: &mut [u32],
-    width: u32,
-    height: u32,
-    stride: u32,
-    j: u32,
-) {
+fn extract_bits<S: Simd>(simd: S, data: &[u32], values: &mut [u32], width: u32, height: u32, stride: u32, j: u32) {
     /// Bit masks for extracting individual bits from a packed u32 word (MSB-first).
     /// `BIT_MASKS[i] = 1 << (31 - i)`.
     const BIT_MASKS: [u32; 32] = {
@@ -314,8 +276,7 @@ fn extract_bits<S: Simd>(
             let bit_offset = x % 32;
 
             let splatted = u32x8::splat(simd, word);
-            let masks =
-                u32x8::from_slice(simd, &BIT_MASKS[bit_offset..bit_offset + simd::SIMD_WIDTH]);
+            let masks = u32x8::from_slice(simd, &BIT_MASKS[bit_offset..bit_offset + simd::SIMD_WIDTH]);
             let extracted = splatted & masks;
             let nonzero = extracted.simd_gt(zero);
             let contribution = nonzero.select(bit_value, zero);
@@ -359,11 +320,7 @@ mod pdfcraft_limit_tests {
         };
         let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
         assert_eq!(decode(MAX_DIMENSION + 1, 1), limit, "a side");
-        assert_eq!(
-            decode(1 << 13, (1 << 12) + 1),
-            limit,
-            "the cells, each side within its bound"
-        );
+        assert_eq!(decode(1 << 13, (1 << 12) + 1), limit, "the cells, each side within its bound");
     }
 
     /// Craft patch: values whose array would take more bytes than one allocation may are refused
@@ -374,11 +331,7 @@ mod pdfcraft_limit_tests {
         let max_bytes = i32::MAX as u64;
         let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
         assert_eq!(value_count(1 << 15, 1 << 14, max_bytes), limit, "2^31 bytes");
-        assert_eq!(
-            value_count(1 << 15, (1 << 14) - 1, max_bytes),
-            Ok((1 << 15) * ((1 << 14) - 1)),
-            "just under 2^31 bytes"
-        );
+        assert_eq!(value_count(1 << 15, (1 << 14) - 1, max_bytes), Ok((1 << 15) * ((1 << 14) - 1)), "just under 2^31 bytes");
     }
 
     /// Craft patch: `decode_bitplanes` refuses values past the byte limit before it decodes a
@@ -387,16 +340,14 @@ mod pdfcraft_limit_tests {
     #[test]
     fn decode_bitplanes_refuses_values_past_the_byte_limit_before_decoding() {
         let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
-        let grids: [(u32, u32, u64); 2] =
-            [(64, 64, 64 * 64 * 4 - 1), (1 << 15, 1 << 14, i32::MAX as u64)];
+        let grids: [(u32, u32, u64); 2] = [(64, 64, 64 * 64 * 4 - 1), (1 << 15, 1 << 14, i32::MAX as u64)];
         for (width, height, max_bytes) in grids {
             let stride = width.div_ceil(WORD_BITS);
             let mut decoded = 0;
-            let result =
-                decode_bitplanes_within(width, height, stride, 1, 1 << 29, max_bytes, |_, _| {
-                    decoded += 1;
-                    Ok(())
-                });
+            let result = decode_bitplanes_within(width, height, stride, 1, 1 << 29, max_bytes, |_, _| {
+                decoded += 1;
+                Ok(())
+            });
             assert_eq!(result.map(|_| ()), limit, "{width} by {height}");
             assert_eq!(decoded, 0, "{width} by {height}: no bitplane is decoded");
         }

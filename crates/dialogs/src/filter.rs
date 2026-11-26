@@ -7,11 +7,14 @@
 /// A file type a dialog offers: its name and its extensions, without the dot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Filter {
+    /// The name shown in the dialog's type menu.
     pub name: String,
+    /// The extensions, without the dot, in any letter case.
     pub extensions: Vec<String>,
 }
 
 impl Filter {
+    /// A filter named `name` that matches `extensions` (without the dot).
     pub fn new(name: impl Into<String>, extensions: &[&str]) -> Self {
         Self { name: name.into(), extensions: extensions.iter().map(|e| (*e).to_owned()).collect() }
     }
