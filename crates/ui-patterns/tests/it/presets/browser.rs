@@ -65,6 +65,41 @@ fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
     }
 }
 
+/// Find matches a row's `search_name` beside its label: in both views, a preset shown as "Rot" with the search name
+/// "Red" is found by either name, and a preset without a search name is still found by its label.
+#[trial]
+fn find_matches_a_preset_by_its_search_name_or_its_label() {
+    // (query, the presets shown, the presets hidden)
+    type Case = (&'static str, &'static [&'static str], &'static [&'static str]);
+    let cases: [Case; 3] = [("Red", &["Rot"], &["Blau"]), ("Rot", &["Rot"], &["Blau"]), ("Blau", &["Blau"], &["Rot"])];
+    for view in [PresetView::List, PresetView::Grid] {
+        for (query, shown, hidden) in cases {
+            let rows = PresetSource::new(
+                (),
+                PresetFns::new(|_, _| {
+                    let mut red = PresetRow::item(ALPHA, "Rot", 1);
+                    red.search_name = Some(String::from("Red"));
+                    vec![PresetRow::group(GROUP, "Group", 0), red, PresetRow::item(2, "Blau", 1)]
+                }),
+            );
+            let mut state = PresetState::<u32>::new();
+            state.filter = String::from(query);
+            let mut fixture = Fixture::new(move |ui| {
+                ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                    let _ = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows).view_lock(view).show(ui);
+                });
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            for name in shown {
+                assert!(fixture.by_label(name).is_some(), "{view:?}: Find \"{query}\" shows {name}");
+            }
+            for name in hidden {
+                assert!(fixture.by_label(name).is_none(), "{view:?}: Find \"{query}\" hides {name}");
+            }
+        }
+    }
+}
+
 /// A browser over `presets` presets in a room as narrow as a docked panel and 300 high, with a footer and
 /// `room_height` set when given, and where its New Group button and its last preset are.
 fn footer_rig(presets: u32, room_height: Option<f32>) -> (Rect, Option<Rect>) {

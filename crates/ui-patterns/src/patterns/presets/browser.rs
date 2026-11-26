@@ -510,14 +510,15 @@ impl<K: Clone> DisplayOrder<BrowserKey<K>> for Shown<'_, K> {
 impl<K: Clone> ItemSource<BrowserKey<K>> for Shown<'_, K> {}
 
 /// The positions of the rows to show: without a search, the rows outside closed groups; with one, the presets whose
-/// name matches and their groups.
+/// label or `search_name` matches and their groups.
 fn shown_rows<K>(rows: &[PresetRow<K>], open: &[bool], matcher: Option<&Matcher>) -> Vec<usize> {
     if let Some(matcher) = matcher {
+        let found = |text: &str| matcher.score(text).is_some();
         let mut keep = vec![false; rows.len()];
         let mut path: Vec<usize> = Vec::new();
         for (at, row) in rows.iter().enumerate() {
             path.truncate(row.depth);
-            if !row.is_group() && matcher.score(&row.label).is_some() {
+            if !row.is_group() && (found(&row.label) || row.search_name.as_deref().is_some_and(found)) {
                 keep[at] = true;
                 for &ancestor in &path {
                     keep[ancestor] = true;
