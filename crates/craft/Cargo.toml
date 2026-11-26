@@ -229,6 +229,8 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-pbr = { workspace = true, optional = true }
+craft-raster3d = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -680,6 +682,9 @@ pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
 
+pbr = ["dep:craft-pbr"]
+pbr-parallel = ["pbr", "craft-pbr/parallel"]
+
 pcap = ["dep:craft-pcap"]
 
 pcraft-bundle = ["dep:craft-pcraft-bundle"]
@@ -764,6 +769,9 @@ pst-test-writer = ["pst", "craft-pst/test-writer"]
 quit = ["dep:craft-quit"]
 
 raster-codecs = ["dep:craft-raster-codecs"]
+
+raster3d = ["dep:craft-raster3d"]
+raster3d-parallel = ["raster3d", "craft-raster3d/parallel"]
 
 raw = ["dep:craft-raw"]
 raw-arw = ["raw", "craft-raw/arw"]

@@ -267,6 +267,8 @@ pub use craft_ora as ora;
 pub use craft_pages as pages;
 #[cfg(feature = "palette")]
 pub use craft_palette as palette;
+#[cfg(feature = "pbr")]
+pub use craft_pbr as pbr;
 #[cfg(feature = "pcap")]
 pub use craft_pcap as pcap;
 #[cfg(feature = "pcraft-bundle")]
@@ -317,6 +319,8 @@ pub use craft_pst as pst;
 pub use craft_quit as quit;
 #[cfg(feature = "raster-codecs")]
 pub use craft_raster_codecs as raster_codecs;
+#[cfg(feature = "raster3d")]
+pub use craft_raster3d as raster3d;
 #[cfg(feature = "raw")]
 pub use craft_raw as raw;
 #[cfg(feature = "review")]
