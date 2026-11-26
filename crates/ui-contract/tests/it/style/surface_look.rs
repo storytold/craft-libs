@@ -74,6 +74,23 @@ fn a_quiet_field_takes_the_background_fill_and_a_lighter_edge_at_rest_and_keeps_
     });
 }
 
+/// A quiet field keeps the field's own edge where the quieter one would not show at rest: at high contrast, and in a
+/// theme whose `line.border` is the window background (Artcraft dark), where the field would have no edge at all.
+#[trial]
+fn a_quiet_field_keeps_its_own_edge_where_the_quiet_one_would_not_show() {
+    let ctx = egui::Context::default();
+    for (mode, contrast) in [(Mode::Light, Contrast::High), (Mode::Dark, Contrast::High), (Mode::Dark, Contrast::Standard)] {
+        let tokens = tokens(mode, contrast);
+        with_cx(&ctx, &tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+            let (plain, quiet) = (cx.field(), cx.quiet_field());
+            let rest = StateSet::new(State::Rest, Flags::empty(), StateMix::REST);
+            let edge = rest.resolve(quiet.border.as_ref().expect("a quiet field draws an edge"));
+            assert_ne!(edge, rest.resolve(&quiet.fill), "{mode:?} {contrast:?}: the edge differs from the fill at rest");
+            assert_eq!(edge, rest.resolve(plain.border.as_ref().expect("so does a field")), "{mode:?} {contrast:?}: the field's own edge");
+        });
+    }
+}
+
 #[trial]
 fn icon_ink_on_reaches_non_text_contrast_minimum_under_standard_and_high_contrast() {
     let ctx = egui::Context::default();
