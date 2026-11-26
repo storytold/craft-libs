@@ -113,11 +113,14 @@ impl Document {
         whole
     }
 
-    /// The document in the first `end` bytes of `data`, with a repair note on what follows it;
-    /// `None` if there is none. A password error stands: the document is there and encrypted.
+    /// The document with pages in the first `end` bytes of `data`, with a repair note on what
+    /// follows it; `None` if there is none, so the caller tries the next earlier end, as the
+    /// renderer does (hayro-syntax `load_before`). A password error stands: the document is there
+    /// and encrypted.
     fn open_before(data: &[u8], end: usize, credentials: &Credentials<'_>, stream_limit: usize) -> Result<Option<Self>, CosError> {
         let Some(document) = data.get(..end) else { return Ok(None) };
         match Self::open_document(Arc::new(document.to_vec()), credentials, stream_limit) {
+            Ok(doc) if !doc.has_pages() => Ok(None),
             Ok(mut doc) => {
                 Arc::make_mut(&mut doc.repair_log).insert(
                     0,
@@ -260,6 +263,46 @@ impl Document {
         let Object::Dict(catalog) = &*catalog else { return false };
         // The page tree first: the scan for an earlier `startxref` reads the whole file.
         !catalog.get(b"Pages").is_some_and(|pages| matches!(&*self.resolve(pages), Object::Dict(_))) && earlier_sections(&self.data)
+    }
+
+    /// Whether the page tree holds a page, read as the renderer reads it (hayro-syntax
+    /// `resolve_pages`): from the catalog's `/Pages`, every kid that is a dictionary and not a
+    /// `/Pages` node is a page, each object visited once, within [`MAX_PAGE_TREE_WORK`] kids. A
+    /// document cut off at an earlier end whose page tree names no page is not taken, so a later
+    /// end with none doesn't hide an earlier one with the pages.
+    fn has_pages(&self) -> bool {
+        let Some(root) = self.root() else { return false };
+        let catalog = self.resolve(&Object::Ref(root));
+        let Some(pages) = catalog.as_dict().and_then(|c| c.get(b"Pages")) else { return false };
+        let mut visited = HashSet::new();
+        if let Object::Ref(r) = pages {
+            visited.insert(*r);
+        }
+        let root_node = self.resolve(pages);
+        let Some(kids) = root_node.as_dict().and_then(|d| d.get(b"Kids")).map(|k| self.resolve(k)) else { return false };
+        let Object::Array(kids) = &*kids else { return false };
+        let mut stack: Vec<Object> = kids.iter().rev().cloned().collect();
+        let mut work = MAX_PAGE_TREE_WORK;
+        while let Some(kid) = stack.pop() {
+            let Some(left) = work.checked_sub(1) else { return false };
+            work = left;
+            if let Object::Ref(r) = &kid
+                && !visited.insert(*r)
+            {
+                continue;
+            }
+            let node = self.resolve(&kid);
+            let Object::Dict(dict) = &*node else { continue };
+            if dict.get(b"Type").and_then(Object::as_name) != Some(&b"Pages"[..]) {
+                return true;
+            }
+            if let Some(kids) = dict.get(b"Kids").map(|k| self.resolve(k))
+                && let Object::Array(kids) = &*kids
+            {
+                stack.extend(kids.iter().rev().cloned());
+            }
+        }
+        false
     }
 
     fn authenticate(&mut self, enc: &Object, credentials: &Credentials<'_>) -> Result<(), CosError> {
@@ -578,6 +621,10 @@ const MAX_EARLIER_ENDS: usize = 8;
 /// `startxref`s that end nothing doesn't stop the search before the ends it would have found. The
 /// renderer uses the same bounds (hayro-syntax `xref.rs`), so the two find the same ends.
 const MAX_STARTXREF_CANDIDATES: usize = 4096;
+
+/// The most page-tree kids [`Document::has_pages`] reads, as the renderer bounds its walk
+/// (hayro-syntax `MAX_PAGE_TREE_WORK`).
+const MAX_PAGE_TREE_WORK: usize = 100_000;
 
 /// The most white space [`document_end_at`] skips between `startxref`, its offset and `%%EOF`,
 /// and the most digits it reads for the offset, so each candidate's check is bounded.

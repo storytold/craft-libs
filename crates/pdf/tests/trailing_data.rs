@@ -121,3 +121,37 @@ fn an_appended_update_after_a_stray_number_still_reads_the_update() {
     assert!(!doc.repair_log().iter().any(|l| l.contains("ends at byte")), "{:?}", doc.repair_log());
     assert_eq!(renderer_widths(&file), [500.0], "the renderer reads the same page");
 }
+
+/// A later end whose document has a catalog but no page, before fragments with which the whole
+/// file gives no document: both readers pass that end by and read the earlier one that holds the
+/// page, so they read the same document.
+#[test]
+fn a_later_end_without_pages_gives_way_to_an_earlier_one_with_them() {
+    let (mut file, end) = document();
+    // An update that empties the page tree, with its own valid footer.
+    let update = file.len();
+    file.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n");
+    let xref = file.len();
+    file.extend_from_slice(
+        format!(
+            "xref\n2 1\n{update:010} 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R /Prev {} >>\nstartxref\n{xref}\n%%EOF\n",
+            previous_xref(&file[..end])
+        )
+        .as_bytes(),
+    );
+    file.extend_from_slice(b"\0\0\x13\x88 fragment\n1 0 obj\n<< /Length 4 >>\nstream\nabcd\nendstream\nendobj\n");
+    file.extend_from_slice(b"2 0 obj\n(not a page tree)\nendobj\n3 0 obj\n[1 2 3]\nendobj\n");
+    file.extend_from_slice(PROGRAM_TEXT);
+
+    let doc = Document::open(Arc::new(file.clone())).expect("the object layer finds the document");
+    assert_eq!(object_layer_widths(&doc), [Some(200)], "{:?}", doc.repair_log());
+    assert!(says_where_the_document_ends(&doc, end), "{:?}", doc.repair_log());
+    assert_eq!(renderer_widths(&file), [200.0], "the renderer reads the same page");
+}
+
+/// The offset the last `startxref` in `document` names.
+fn previous_xref(document: &[u8]) -> usize {
+    let text = String::from_utf8_lossy(document);
+    let at = text.rfind("startxref").expect("a startxref");
+    text[at + 9..].split_whitespace().next().and_then(|n| n.parse().ok()).expect("an offset")
+}
