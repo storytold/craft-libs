@@ -9,7 +9,7 @@ fn group_code_255_is_an_ordinary_code_in_binary_dxf() {
     // Code 255 used to be read as an R12 escape (`FF 00 <code>`), so a file with that code could
     // not be read back.
     let tags = vec![Tag::s(255, "x"), Tag::s(0, "EOF")];
-    let back = parse(&write_binary(&tags, true)).unwrap();
+    let back = parse(&write_binary(&tags, true).unwrap()).unwrap();
     assert_eq!(back.len(), 2);
     assert_eq!((back[0].code, back[0].str()), (255, "x".to_string()));
 }
@@ -117,7 +117,7 @@ fn escapes_next_to_other_text_and_backslashes() {
     assert_eq!(parse(&file).unwrap()[0].str(), "éA\\ ü");
     // And the writer keeps the literal text literal.
     let tags = [Tag::s(1, "é\\U+0041\\ ü"), Tag::s(0, "EOF")];
-    assert_eq!(parse(&write_binary(&tags, true)).unwrap()[0].str(), "é\\U+0041\\ ü");
+    assert_eq!(parse(&write_binary(&tags, true).unwrap()).unwrap()[0].str(), "é\\U+0041\\ ü");
 }
 
 #[test]
