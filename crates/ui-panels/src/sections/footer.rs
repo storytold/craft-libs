@@ -88,7 +88,7 @@ pub struct FooterAction {
     icon: IconSpec<'static>,
     label: Label,
     enabled: bool,
-    pressed: bool,
+    pressed: Option<bool>,
     tone: Option<Tone>,
     popup: Option<PopupKind>,
     expanded: Option<bool>,
@@ -121,7 +121,7 @@ impl FooterAction {
             icon: icon.into(),
             label: label.into(),
             enabled: true,
-            pressed: false,
+            pressed: None,
             tone: None,
             popup: None,
             expanded: None,
@@ -139,11 +139,11 @@ impl FooterAction {
         self
     }
 
-    /// Whether the action shows the host's state, as the on look: Button Mode while the panel is in it, Record
-    /// while recording. A click is reported as usual; the host changes its state or ignores the click.
+    /// The host's on or off state for a stateful action, reported to assistive technology and shown in its face.
+    /// A click is reported as usual; the host changes its state or ignores the click.
     #[must_use]
     pub fn pressed(mut self, on: bool) -> Self {
-        self.pressed = on;
+        self.pressed = Some(on);
         self
     }
 
@@ -201,7 +201,10 @@ impl FooterAction {
 
     /// The button, enabled when the action is or when `accepting` lifts it for an accepted drag over it.
     fn icon_button(&self, accepting: bool) -> IconButton<'static> {
-        let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting).selected(self.pressed);
+        let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting);
+        if let Some(on) = self.pressed {
+            button = button.selected(on);
+        }
         if let Some(tone) = self.tone {
             button = button.variant(Variant::look(Emphasis::Ghost, tone));
         }
