@@ -1,0 +1,10 @@
+config_version = 1
+
+[[module]]
+path = "contract"
+layer = 4
+
+# memo depends only on std and runtime::env, so it sits with the runtime modules that use it.
+[[module]]
+path = "contract::memo"
+layer = 2

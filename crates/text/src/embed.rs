@@ -41,10 +41,11 @@ impl Embedding {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::Embedding;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn fs_type_flags_decide_the_embedding() {
         assert_eq!(Embedding::from_fs_type(0), Embedding::Subset, "installable");
         assert_eq!(Embedding::from_fs_type(0x0004), Embedding::Subset, "preview & print");

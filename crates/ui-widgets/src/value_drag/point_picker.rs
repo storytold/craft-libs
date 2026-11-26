@@ -1,0 +1,477 @@
+//! `PointPicker`: a point on a well, over an image or a checkerboard. A press on the well jumps the point there, a drag
+//! on the point or the well follows the pointer, and the arrow keys and the wheel move it along one axis each; Page Up
+//! and Page Down move it a tenth of the height, Home and End to the left and right edges. The X and Y fields are
+//! `NumberField`s the caller shows beside it, bound to the same value.
+
+use crate::contract::{
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx,
+    Pointer as _, Props as _, Role, WordSetCx as _,
+};
+use crate::primitives::{ContentPainterCx, Marker, PaintShape};
+use crate::runtime::access::Name;
+use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
+use crate::style::{ComponentStyle, FocusLook, MarkerLook, StyleCx};
+use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_until_changed, step_value};
+use craft_behavior::{
+    AccessAction, Axis, CursorIcon, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, Sense, ValueDrag, Wheel, decimals_for_step,
+    wheel_step,
+};
+use egui::{Pos2, Rect, Vec2, pos2};
+use std::ops::RangeInclusive;
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+/// The point: a drag on it follows the pointer.
+const THUMB: PartKey = PartKey::new("thumb");
+
+/// The accessible sub-node of the x value.
+const AXIS_X: PartKey = PartKey::new("axis_x");
+/// The accessible sub-node of the y value.
+const AXIS_Y: PartKey = PartKey::new("axis_y");
+const AXES: [PartKey; 2] = [AXIS_X, AXIS_Y];
+
+/// The value of a picker whose point is not shown: every axis mixed.
+const ALL_MIXED: [Mixed<f64>; 2] = [Mixed::Mixed, Mixed::Mixed];
+
+craft_ui::words! {
+    /// The words of point pickers.
+    pub struct PointPickerWords {
+        axis_x: "pointPicker.axisX" = "X";
+        axis_y: "pointPicker.axisY" = "Y";
+        named_axis_x: template "pointPicker.namedAxisX" = "{name} X";
+        named_axis_y: template "pointPicker.namedAxisY" = "{name} Y";
+        value: template "pointPicker.value" = "{x}, {y}";
+    }
+}
+
+/// The style of a point picker.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct PointPickerStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
+    /// The length of the cross at the point.
+    thumb: f32,
+    /// The ring at the point.
+    marker: MarkerLook,
+    /// The side of the square that grabs the point.
+    hit: f32,
+}
+
+/// How a point picker marks its point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointMark {
+    /// A cross, for a point over an image.
+    #[default]
+    Cross,
+    /// A ring that leaves the colour under the point in view, for a colour field.
+    Ring,
+}
+
+/// Whether two points are the same value to the caller: `PointPicker::same`.
+pub struct SamePoint<'a>(SameFn<'a>);
+
+type SameFn<'a> = Box<dyn Fn([f64; 2], [f64; 2]) -> bool + 'a>;
+
+impl<'a> SamePoint<'a> {
+    /// The test that runs `same`.
+    pub fn new(same: impl Fn([f64; 2], [f64; 2]) -> bool + 'a) -> Self {
+        SamePoint(Box::new(same))
+    }
+}
+
+/// Paints the image under the point into the plot rect through the content painter: `PointPicker::backdrop`.
+pub struct Backdrop<'a>(BackdropFn<'a>);
+
+type BackdropFn<'a> = Box<dyn FnOnce(&ContentPainterCx, Rect) + 'a>;
+
+impl<'a> Backdrop<'a> {
+    /// The backdrop that runs `paint`.
+    pub fn new(paint: impl FnOnce(&ContentPainterCx, Rect) + 'a) -> Self {
+        Backdrop(Box::new(paint))
+    }
+}
+
+/// A point `[x, y]` picked on a well: x grows to the right and y downwards, as image coordinates do, in either
+/// reading direction. Each axis can be mixed on its own: an arrow key or a wheel notch on a mixed axis starts from
+/// where the point sits on it (the middle of its range) and leaves the other axis as it is.
+#[derive(crate::contract::Component, crate::contract::Props)]
+#[component(content_painter)]
+pub struct PointPicker<'a> {
+    #[common]
+    common: Common,
+    value: Bind<'a, [Mixed<f64>; 2]>,
+    /// Each axis's range with its smaller bound first.
+    x: RangeInclusive<f64>,
+    y: RangeInclusive<f64>,
+    /// Whether the axis runs from its larger bound at the start edge (left, top) to its smaller one.
+    flipped: [bool; 2],
+    /// The step the point snaps to and one arrow key moves it on each axis; the default is a hundredth of the range
+    /// with no snapping.
+    #[prop(quantity = "step")]
+    step: Option<f64>,
+    /// The step of each axis, for axes that step differently (a colour area over chroma and hue); it replaces `step`.
+    #[prop(quantity = "step")]
+    steps: Option<[f64; 2]>,
+    /// The width over the height of the image the well shows; the plot is the image fitted in the well.
+    #[prop(quantity = "aspect ratio")]
+    aspect: Option<f32>,
+    /// Paints the image under the point; without one the well shows a checkerboard.
+    #[prop(func = "FnOnce(&ContentPainterCx, Rect)")]
+    backdrop: Option<Backdrop<'a>>,
+    /// Whether two points are the same value to the caller (two points of a quantised colour field that give the same
+    /// colour). A relative move (an arrow, Page Up or Down, a wheel notch, an assistive step) that lands on a point
+    /// the same as the one it started from moves on until the point differs or the axis can go no further. Without
+    /// it, every distinct point differs.
+    #[prop(func = "Fn([f64; 2], [f64; 2]) -> bool")]
+    same: Option<SamePoint<'a>>,
+    /// How the point is marked.
+    #[prop]
+    mark: PointMark,
+}
+
+impl<'a> PointPicker<'a> {
+    /// The value pair at `pos` in `rect`, on the step grid: the plot, the two `ValueDrag`s and the settle in one
+    /// function, which the drag calls, so the picker and a host that maps its own pointer (the colour HUD) share one
+    /// mapping. Modifiers change nothing: the point is where the pointer is. `None` when the picker has no area.
+    pub fn value_at(&self, rect: Rect, pos: Pos2) -> Option<[f64; 2]> {
+        let plot = self.plot(rect);
+        let drags = [
+            ValueDrag::absolute(plot.left()..plot.right(), self.along(0)),
+            ValueDrag::absolute(plot.top()..plot.bottom(), self.along(1)).axis(Axis::Y),
+        ];
+        let axis = |axis: usize| drags[axis].at(pos, false).map(|value| self.settle(axis, value, self.grid(axis, false)));
+        Some([axis(0)?, axis(1)?])
+    }
+
+    /// The well: a press on it moves the point there, and a drag from it follows the pointer.
+    pub const WELL: PartKey = PartKey::new("well");
+
+    /// A picker of `value` over `x` and `y`. A range written from its larger bound to its smaller (`100..=0`) puts the
+    /// larger bound at the left or top edge: `0..=100` over `100..=0` is a plot with y up.
+    pub fn new(value: Bind<'a, [Mixed<f64>; 2]>, x: RangeInclusive<f64>, y: RangeInclusive<f64>) -> Self {
+        let order = |range: RangeInclusive<f64>| {
+            let (start, end) = (*range.start(), *range.end());
+            if start > end { (end..=start, true) } else { (range, false) }
+        };
+        let ((x, flip_x), (y, flip_y)) = (order(x), order(y));
+        PointPicker {
+            common: Common::new(),
+            value,
+            x,
+            y,
+            flipped: [flip_x, flip_y],
+            step: None,
+            steps: None,
+            aspect: None,
+            backdrop: None,
+            same: None,
+            mark: PointMark::Cross,
+        }
+        .ltr_axis()
+    }
+
+    fn ranges(&self) -> [&RangeInclusive<f64>; 2] {
+        [&self.x, &self.y]
+    }
+
+    fn middle(&self) -> [f64; 2] {
+        self.ranges().map(|range| (range.start() + range.end()) / 2.0)
+    }
+
+    /// The step set for `axis`: its own, else the picker's.
+    fn set_step(&self, axis: usize) -> Option<f64> {
+        self.steps.map(|steps| steps[axis]).or(self.step)
+    }
+
+    /// The step of one arrow press on `axis`.
+    fn small(&self, axis: usize) -> f64 {
+        let range = self.ranges()[axis];
+        self.set_step(axis).unwrap_or((range.end() - range.start()) * STEP_SHARE)
+    }
+
+    /// The steps of `axis` from `value`.
+    fn value_steps(&self, axis: usize, value: f64) -> ValueSteps {
+        let range = self.ranges()[axis];
+        let small = self.small(axis);
+        ValueSteps::new(value, *range.start(), *range.end(), small, small * LARGE_STEPS)
+    }
+
+    /// The grid values snap to on `axis`: its step, or a tenth of it for a fine move; none without a step.
+    fn grid(&self, axis: usize, fine: bool) -> Option<f64> {
+        self.set_step(axis).filter(|step| *step > 0.0).map(|step| if fine { step / LARGE_STEPS } else { step })
+    }
+
+    /// `value` on `axis` in its range, and on `grid`.
+    fn settle(&self, axis: usize, value: f64, grid: Option<f64>) -> f64 {
+        let (min, max) = (*self.ranges()[axis].start(), *self.ranges()[axis].end());
+        grid.map_or(value.clamp(min, max), |step| snap_to_step(value, step, min, min..=max))
+    }
+
+    /// Where the point stands on each axis: a mixed axis stands in the middle of its range.
+    fn placed(&self, value: &[Mixed<f64>; 2]) -> [f64; 2] {
+        let middle = self.middle();
+        [0, 1].map(|axis| *value[axis].or(&middle[axis]))
+    }
+
+    /// The range of `axis` as the drag reads it: from the value at the start edge to the value at the end edge.
+    fn along(&self, axis: usize) -> RangeInclusive<f64> {
+        let range = self.ranges()[axis];
+        if self.flipped[axis] { *range.end()..=*range.start() } else { range.clone() }
+    }
+
+    /// The value of `axis` after a key that goes `toward` the end edge (1) or the start edge (-1) on screen as far as
+    /// `reach`.
+    fn stepped(&self, axis: usize, from: f64, toward: f64, reach: Reach, mods: MoveMods) -> f64 {
+        let raises = (toward > 0.0) != self.flipped[axis];
+        let axes = if axis == 0 { ValueAxes::Horizontal } else { ValueAxes::Vertical };
+        let mv = match (reach, axis, raises) {
+            (Reach::Step, 0, true) => NavMove::Forward,
+            (Reach::Step, 0, false) => NavMove::Back,
+            (Reach::Step, _, true) => NavMove::Up,
+            (Reach::Step, _, false) => NavMove::Down,
+            (Reach::Page, _, true) => NavMove::PageUp,
+            (Reach::Page, _, false) => NavMove::PageDown,
+            (Reach::Edge, _, true) => NavMove::End,
+            (Reach::Edge, _, false) => NavMove::Start,
+        };
+        let mut steps = self.value_steps(axis, from);
+        if reach == Reach::Page {
+            steps.large = (steps.max - steps.min) / LARGE_STEPS;
+        }
+        match step_value(&steps, axes, mv, mods) {
+            StepResult::Set(next) => self.settle(axis, next, self.grid(axis, mods.fine && !mods.extend)),
+            _ => from,
+        }
+    }
+
+    /// `axis` of `from` after `step`, stepped again while the point is the same as `from` to the caller (`same`).
+    fn moved(&self, from: [f64; 2], axis: usize, step: impl Fn(f64) -> f64) -> f64 {
+        let Some(SamePoint(same)) = &self.same else { return step(from[axis]) };
+        step_until_changed(from[axis], step, |value| {
+            let mut to = from;
+            to[axis] = value;
+            same(from, to)
+        })
+    }
+
+    /// The axis a wheel turn steps and its new value: vertical scroll steps y and horizontal scroll x. Scrolling up
+    /// moves the point up, as the Up key does, and right moves it right.
+    fn wheeled(&self, wheel: &Wheel, placed: [f64; 2]) -> Option<(usize, f64)> {
+        let (axis, scroll) = if wheel.scroll.y != 0.0 {
+            let up = if self.flipped[1] { 1.0 } else { -1.0 };
+            (1, Vec2::new(0.0, wheel.scroll.y * up))
+        } else {
+            let right = if self.flipped[0] { -1.0 } else { 1.0 };
+            (0, Vec2::new(wheel.scroll.x * right, 0.0))
+        };
+        let mut turned = *wheel;
+        turned.scroll = scroll;
+        let notch = |from: f64| match wheel_step(&self.value_steps(axis, from), ValueAxes::Both, &turned, false) {
+            StepResult::Set(next) => Some(self.settle(axis, next, self.grid(axis, wheel.mods.alt && !wheel.mods.shift))),
+            _ => None,
+        };
+        notch(placed[axis])?;
+        Some((axis, self.moved(placed, axis, |from| notch(from).unwrap_or(from))))
+    }
+
+    /// The image fitted in `well`, else the well.
+    pub fn plot(&self, well: Rect) -> Rect {
+        match self.aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) {
+            Some(aspect) => {
+                let width = well.width().min(well.height() * aspect);
+                Rect::from_center_size(well.center(), Vec2::new(width, width / aspect))
+            }
+            None => well,
+        }
+    }
+
+    /// Where `value` stands in `plot`.
+    pub fn position(&self, value: [f64; 2], plot: Rect) -> Pos2 {
+        let at = |axis: usize| {
+            let range = self.ranges()[axis];
+            let span = range.end() - range.start();
+            let share = if span > 0.0 { ((value[axis] - range.start()) / span).clamp(0.0, 1.0) as f32 } else { 0.0 };
+            if self.flipped[axis] { 1.0 - share } else { share }
+        };
+        pos2(plot.left() + at(0) * plot.width(), plot.top() + at(1) * plot.height())
+    }
+}
+
+/// How far a key moves the point along its axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// One step: an arrow.
+    Step,
+    /// A tenth of the range: Page Up and Page Down.
+    Page,
+    /// To the edge: Home and End.
+    Edge,
+}
+
+/// The axis a key moves, the way on screen (1 towards the end edge, right or bottom; -1 towards the start edge) and
+/// how far. The arrows step their axis, Page Up and Page Down page y, and Home and End take x to the left and right
+/// edges. The picker keeps its axis order (`ltr_axis`), so its moves are the physical keys.
+fn key_move(mv: NavMove) -> Option<(usize, f64, Reach)> {
+    match mv {
+        NavMove::Forward => Some((0, 1.0, Reach::Step)),
+        NavMove::Back => Some((0, -1.0, Reach::Step)),
+        NavMove::Down => Some((1, 1.0, Reach::Step)),
+        NavMove::Up => Some((1, -1.0, Reach::Step)),
+        NavMove::PageDown => Some((1, 1.0, Reach::Page)),
+        NavMove::PageUp => Some((1, -1.0, Reach::Page)),
+        NavMove::End => Some((0, 1.0, Reach::Edge)),
+        NavMove::Start => Some((0, -1.0, Reach::Edge)),
+        _ => None,
+    }
+}
+
+/// `value` with `axis` set to `to`; the other axis stays as it is, mixed or not.
+fn with_axis(value: &[Mixed<f64>; 2], axis: usize, to: f64) -> [Mixed<f64>; 2] {
+    let mut next = *value;
+    next[axis] = Mixed::Same(to);
+    next
+}
+
+impl Component for PointPicker<'_> {
+    const ROLE: Role = Role::GROUP;
+    const OVERLAYS: bool = false;
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
+    const DISABLED: DisabledLook = DisabledLook::Faded;
+    type Style = PointPickerStyle;
+    type Output = EditResponse<[Mixed<f64>; 2]>;
+
+    fn style(cx: &StyleCx<'_>, _: PointPickerStyleKey) -> PointPickerStyle {
+        PointPickerStyle {
+            metrics: Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, cx.tokens.size.plot.height)),
+            focus: cx.focus_look(),
+            thumb: cx.tokens.size.icon.md,
+            marker: cx.marker(),
+            hit: cx.tokens.size.hit.target,
+        }
+    }
+
+    /// The well takes the width its row leaves after the fields beside it, and all the room where it is alone.
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        Some(craft_behavior::Axis::X)
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(cx.tokens.size.plot.width, 0.0)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::FOCUS | Sense::WHEEL_X | Sense::WHEEL_Y
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        let placed = self.placed(cx.value().unwrap_or(&ALL_MIXED));
+        let thumb = Rect::from_center_size(self.position(placed, self.plot(rect)), Vec2::splat(cx.style.hit));
+        cx.part(Self::WELL, rect)
+            .sense(Sense::CLICK | Sense::DRAG | Sense::SETS_ON_PRESS | Sense::TAKE_FOCUS)
+            .value_part()
+            .cursor(CursorIcon::Crosshair)
+            .pointer_only("the arrow keys move the point");
+        cx.part(THUMB, thumb)
+            .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::TAKE_FOCUS)
+            .priority(HitPriority::new(HitLevel::Handle, 0))
+            .value_part()
+            .pointer_only("the arrow keys move the point");
+    }
+
+    fn bind(&mut self) -> Option<BindMut<'_, [Mixed<f64>; 2]>> {
+        Some(self.value.reborrow())
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let rect = cx.rect;
+        for key in [THUMB, Self::WELL] {
+            cx.follow_press(key, |pos| self.value_at(rect, pos).map(Mixed::each));
+        }
+        let running = cx.gesture().is_some();
+        let mut now = cx.value().cloned().unwrap_or(ALL_MIXED);
+        // While a drag runs, keys, the wheel and screen-reader requests change nothing; they are still taken.
+        while let Some((mv, mods)) = cx.intents().take_move() {
+            let Some((axis, toward, reach)) = key_move(mv).filter(|_| !running) else { continue };
+            let next = self.moved(self.placed(&now), axis, |from| self.stepped(axis, from, toward, reach, mods));
+            now = with_axis(&now, axis, next);
+            cx.set(now);
+        }
+        if let Some(wheel) = cx.take_wheel()
+            && !running
+            && let Some((axis, next)) = self.wheeled(&wheel, self.placed(&now))
+        {
+            now = with_axis(&now, axis, next);
+            cx.set(now);
+        }
+        for (axis, key) in AXES.into_iter().enumerate() {
+            if let Some(next) = cx.intents().take_set_value_at(key).filter(|next| next.is_finite() && !running) {
+                now = with_axis(&now, axis, self.settle(axis, next, self.grid(axis, false)));
+                cx.set(now);
+            }
+        }
+        while let Some(request) = cx.intents().take_access() {
+            let Some(axis) = AXES.iter().position(|key| request.target == Some((*key).into())) else { continue };
+            let steps = match request.action {
+                AccessAction::Increment => 1.0,
+                AccessAction::Decrement => -1.0,
+                _ => continue,
+            };
+            if !running {
+                let next = self.moved(self.placed(&now), axis, |from| self.settle(axis, from + steps * self.small(axis), self.grid(axis, false)));
+                now = with_axis(&now, axis, next);
+                cx.set(now);
+            }
+        }
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        let words = cx.words::<PointPickerWords>();
+        let value = cx.value().unwrap_or(&ALL_MIXED);
+        let number = |axis: usize| value[axis].same().map(|n| cx.format().number(*n, decimals_for_step(self.small(axis))));
+        if let (Some(x), Some(y)) = (number(0), number(1)) {
+            access.value(words.value.fill(&[("x", x.as_str()), ("y", y.as_str())]));
+        }
+        let label = cx.resolved.label;
+        for (axis, key) in AXES.into_iter().enumerate() {
+            let range = self.ranges()[axis].clone();
+            let numeric = match (value[axis].same(), number(axis)) {
+                (Some(n), Some(text)) => Numeric::new(*n, range).text(text),
+                _ => Numeric::empty(range),
+            };
+            let (plain, named) = if axis == 0 { (&words.axis_x, &words.named_axis_x) } else { (&words.axis_y, &words.named_axis_y) };
+            let node = access.node(key, Role::SLIDER);
+            node.name = Name::Text(if label.is_empty() { plain.as_str().to_owned() } else { named.fill(&[("name", label)]) });
+            node.numeric = Some(numeric.step(self.small(axis)));
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let painter = ui.content_painter(cx);
+        let inside = painter.plot_frame(cx.rect);
+        let plot = self.plot(cx.rect);
+        match self.backdrop.take() {
+            Some(Backdrop(paint)) => paint(&painter, plot),
+            None => painter.checker(plot.intersect(inside)),
+        }
+        if let Some(value) = cx.value() {
+            let (center, arm) = (self.position(self.placed(value), plot), cx.style.thumb / 2.0);
+            match self.mark {
+                PointMark::Cross => {
+                    for (from, to) in [(Vec2::new(arm, 0.0), Vec2::new(-arm, 0.0)), (Vec2::new(0.0, arm), Vec2::new(0.0, -arm))] {
+                        painter.outline(&PaintShape::Path(vec![center + from, center + to]));
+                    }
+                }
+                PointMark::Ring => ui.draw().marker(&cx.style.marker, &Marker::hollow(center)),
+            }
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<[Mixed<f64>; 2]> {
+        cx.edit_response()
+    }
+}
