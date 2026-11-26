@@ -282,6 +282,77 @@ pub fn is_text_code_page(code_page: u16) -> bool {
     is_byte_code_page(code_page) || is_multibyte_code_page(code_page)
 }
 
+/// The character Word on Windows types for an Alt+numpad code (decimal digits, as typed):
+/// - with a leading 0 and a value up to 255, the ANSI code page's character (`ansi`, one of
+///   [`SINGLE_BYTE_CODE_PAGES`]): `0233` → é and `0128` → € in Windows-1252, `0185` → ą in 1250;
+/// - without one, 1–255 is the OEM code page's character (`oem`, one of [`OEM_CODE_PAGES`]):
+///   `233` → Θ in 437, Ú in 850 (é is `130` in both), `165` → ą in 852; 1–31 and 127 are the
+///   code page's glyphs (`1` → ☺, `7` → •);
+/// - above 255, with or without the 0, the Unicode character with that decimal value
+///   (`8364` → €), as Word inserts it.
+///
+/// `None` for an empty or non-numeric code, 0, a control character, a byte the code page leaves
+/// unassigned or a value past Unicode.
+pub fn alt_code_char(code: &str, ansi: u16, oem: u16) -> Option<char> {
+    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let digits = code.trim_start_matches('0');
+    // More than seven significant digits is past U+10FFFF (1114111).
+    if digits.len() > 7 {
+        return None;
+    }
+    let value: u32 = if digits.is_empty() { 0 } else { digits.parse().ok()? };
+    let c = match u8::try_from(value) {
+        Ok(0) => return None,
+        Ok(b) if code.starts_with('0') => windows_byte(ansi, b),
+        Ok(b) => oem_byte(oem, b),
+        Err(_) => char::from_u32(value)?,
+    };
+    Some(c).filter(|c| codeable(*c) && *c != '\u{FFFD}')
+}
+
+/// The (ANSI, OEM) code pages Windows uses for a locale (BCP 47 tag or POSIX name; `None` for
+/// none), limited to the pages [`alt_code_char`] decodes: Windows-1252 and OEM 437 for US
+/// English, unknown locales and those with other pages (Asian double-byte pages, OEM
+/// 775/720/862…).
+pub fn windows_code_pages(locale: Option<&str>) -> (u16, u16) {
+    let Some(tag) = locale else { return (1252, 437) };
+    let parts: Vec<&str> = tag.split(['-', '_', '.', '@']).collect();
+    let lang = parts.first().copied().unwrap_or_default().to_ascii_lowercase();
+    let rest = parts.get(1..).unwrap_or_default();
+    let region = rest.iter().find(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())).map(|r| r.to_ascii_uppercase());
+    let script = rest.iter().find(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_alphabetic())).map(|r| r.to_ascii_lowercase());
+    const WESTERN: [&str; 18] = ["ca", "da", "de", "es", "eu", "fi", "fo", "fr", "ga", "gl", "is", "it", "nb", "nl", "nn", "no", "pt", "sv"];
+    match lang.as_str() {
+        "en" => match region.as_deref() {
+            None | Some("US") => (1252, 437),
+            Some(_) => (1252, 850),
+        },
+        l if WESTERN.contains(&l) => (1252, 850),
+        "pl" | "cs" | "sk" | "hu" | "sl" | "hr" | "ro" | "sq" | "bs" => (1250, 852),
+        "sr" if script.as_deref() == Some("latn") => (1250, 852),
+        "ru" | "uk" | "be" | "bg" => (1251, 866),
+        // Macedonian and Cyrillic Serbian use OEM 855, which isn't decoded.
+        "sr" | "mk" => (1251, 437),
+        "el" => (1253, 737),
+        "az" if script.as_deref() == Some("cyrl") => (1251, 866),
+        "tr" | "az" => (1254, 857),
+        "he" => (1255, 437),
+        "ar" | "fa" | "ur" => (1256, 437),
+        "et" | "lv" | "lt" => (1257, 437),
+        "vi" => (1258, 437),
+        "th" => (874, 437),
+        _ => (1252, 437),
+    }
+}
+
+/// Characters Alt+numpad types: not control characters (breaks included) and not the object
+/// placeholder U+FFFC, which a document reserves for embedded objects.
+fn codeable(c: char) -> bool {
+    !c.is_control() && c != '\u{FFFC}'
+}
+
 /// The code page of an RTF or Word font charset (`\fcharset`): 204 Russian → 1251, 238 Eastern
 /// European → 1250, 77 Mac → 10000, 254 PC / 255 OEM → 437, 128 Japanese → 932, 129 Korean → 949,
 /// 134 Simplified Chinese → 936, 136 Traditional Chinese → 950, 2 Symbol → [`SYMBOL_CODE_PAGE`]…
@@ -436,5 +507,70 @@ mod tests {
                 let _ = oem_byte(cp, b);
             }
         }
+    }
+
+    #[test]
+    fn alt_numpad_codes_map_like_word_on_windows() {
+        let c = |code| alt_code_char(code, 1252, 437);
+        // Leading 0: Windows-1252.
+        assert_eq!(c("0233"), Some('é'));
+        assert_eq!(c("0128"), Some('€'));
+        assert_eq!(c("0150"), Some('–'));
+        assert_eq!(c("065"), Some('A'));
+        assert_eq!(c("0032"), Some(' '));
+        assert_eq!(c("0255"), Some('ÿ'));
+        // No leading 0: the OEM code page (437 here, 850 in Western Europe).
+        assert_eq!(c("233"), Some('Θ'));
+        // The CP850 mapping file has Ú at 0xE9 (é is 130 in both).
+        assert_eq!(alt_code_char("233", 1252, 850), Some('Ú'));
+        assert_eq!(alt_code_char("130", 1252, 850), Some('é'));
+        assert_eq!(c("130"), Some('é'));
+        assert_eq!(alt_code_char("155", 1252, 850), Some('ø'));
+        assert_eq!(c("155"), Some('¢'));
+        assert_eq!(c("65"), Some('A'));
+        assert_eq!(c("1"), Some('☺'));
+        assert_eq!(c("7"), Some('•'));
+        assert_eq!(c("127"), Some('⌂'));
+        assert_eq!(c("176"), Some('░'));
+        // Above 255: the Unicode character with that decimal value.
+        assert_eq!(c("8364"), Some('€'));
+        assert_eq!(c("09733"), Some('★'));
+        assert_eq!(c("128512"), Some('😀'));
+        // Nothing for junk, 0, control characters, surrogates or values past Unicode.
+        for bad in ["", "0", "000", "0009", "0013", "0127", "0129", "x1", "-5", "55296", "1114112", "99999999999999999999", "4294967361"] {
+            assert_eq!(c(bad), None, "{bad:?}");
+        }
+        // The object placeholder is not typed.
+        assert_eq!(c("65532"), None);
+    }
+
+    #[test]
+    fn alt_numpad_codes_follow_the_system_code_pages() {
+        // Polish (1250/852): Alt+0185 and Alt+165 are both ą, not ¹ / Ñ.
+        assert_eq!(alt_code_char("0185", 1250, 852), Some('ą'));
+        assert_eq!(alt_code_char("165", 1250, 852), Some('ą'));
+        assert_eq!(alt_code_char("0185", 1252, 437), Some('¹'));
+        // Russian (1251/866), Greek (1253/737), Turkish (1254/857).
+        assert_eq!(alt_code_char("0207", 1251, 866), Some('П'));
+        assert_eq!(alt_code_char("143", 1251, 866), Some('П'));
+        assert_eq!(alt_code_char("0193", 1253, 737), Some('Α'));
+        assert_eq!(alt_code_char("128", 1253, 737), Some('Α'));
+        assert_eq!(alt_code_char("0253", 1254, 857), Some('ı'));
+        assert_eq!(alt_code_char("141", 1254, 857), Some('ı'));
+        // Above 255 the code page doesn't matter.
+        assert_eq!(alt_code_char("8364", 1251, 866), Some('€'));
+        // A byte the code page leaves unassigned types nothing.
+        assert_eq!(alt_code_char("213", 1254, 857), None);
+        assert_eq!(alt_code_char("0219", 874, 437), None);
+        assert_eq!(windows_code_pages(None), (1252, 437));
+        assert_eq!(windows_code_pages(Some("en-US")), (1252, 437));
+        assert_eq!(windows_code_pages(Some("en_GB.UTF-8")), (1252, 850));
+        assert_eq!(windows_code_pages(Some("de-DE")), (1252, 850));
+        assert_eq!(windows_code_pages(Some("pl-PL")), (1250, 852));
+        assert_eq!(windows_code_pages(Some("sr-Latn-RS")), (1250, 852));
+        assert_eq!(windows_code_pages(Some("ru_RU.UTF-8")), (1251, 866));
+        assert_eq!(windows_code_pages(Some("el-GR")), (1253, 737));
+        assert_eq!(windows_code_pages(Some("tr-TR")), (1254, 857));
+        assert_eq!(windows_code_pages(Some("ja-JP")), (1252, 437));
     }
 }

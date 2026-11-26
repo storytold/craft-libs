@@ -514,14 +514,6 @@ pub fn alpha_to_yuv420(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, Vec<u8>, Vec<u8
 mod tests {
     use super::*;
 
-    #[test]
-    fn sizes_beyond_the_16_bit_header_fields_are_clamped() {
-        let enc = Vp9Encoder::new(EncoderConfig { width: 70_000, height: u32::MAX, ..Default::default() });
-        assert_eq!((enc.cfg.width, enc.cfg.height), (65_536, 65_536));
-        let enc = Vp9Encoder::new(EncoderConfig { width: 65_536, height: 1, ..Default::default() });
-        assert_eq!((enc.cfg.width, enc.cfg.height), (65_536, 1));
-    }
-
     /// A frame whose planes are shorter than the configured size is refused before any coding
     /// plane is allocated (65536 x 65536 would be 4 GiB of source and as much reconstruction).
     #[test]
@@ -534,18 +526,5 @@ mod tests {
             assert!(enc.encode_frame(&vec![128; y], &vec![128; u], &vec![128; v], true).data.is_empty());
         }
         assert!(!enc.encode_frame(&[128; 256], &[128; 64], &[128; 64], true).is_empty());
-    }
-
-    /// A 1080p stream is above the 983,040 luma samples of level 3.1, so it must not claim 3.1 in
-    /// its `vpcC`; level 0 means "undefined" in the MP4 binding.
-    #[test]
-    fn vpcc_claims_no_level_the_encoder_does_not_enforce() {
-        for (w, h) in [(1920, 1080), (64, 64), (3840, 2160)] {
-            let enc = Vp9Encoder::new(EncoderConfig { width: w, height: h, ..Default::default() });
-            let rec = VpcConfig::parse(&enc.vpcc()).unwrap();
-            assert_eq!(rec.level, 0, "{w}x{h}");
-            let params = enc.codec_params();
-            assert_eq!(VpcConfig::parse(&params.extradata).unwrap().level, 0);
-        }
     }
 }

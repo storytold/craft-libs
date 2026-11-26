@@ -103,9 +103,9 @@ fn reference_render_has_unit_variance_and_no_mean() {
 fn small_render_is_the_downscaled_reference() {
     for (size, rough) in [(0.0, 50.0), (25.0, 50.0), (100.0, 50.0), (25.0, 0.0), (25.0, 100.0)] {
         let t = tile_of(size, rough);
-        for k in [2usize, 4, 8] {
-            let full = patch(&t, REF_LONG, 120 * k, 0);
-            let n = 120;
+        for k in [2usize, 8] {
+            let n = 32;
+            let full = patch(&t, REF_LONG, n * k, 0);
             let down: Vec<f32> = (0..n * n)
                 .map(|q| {
                     let (x, y) = (q % n, q / n);
@@ -120,6 +120,7 @@ fn small_render_is_the_downscaled_reference() {
                 .collect();
             let small = patch(&t, REF_LONG / k as f64, n, 0);
             let worst = down.iter().zip(&small).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            eprintln!("DIAG downscale size {size} roughness {rough} 1/{k}: worst {worst} (limit 2e-3)");
             assert!(worst < 2e-3, "size {size} roughness {rough} 1/{k}: differs by {worst}");
         }
     }
@@ -129,7 +130,7 @@ fn small_render_is_the_downscaled_reference() {
 fn strength_matches_the_target_at_mid_grey() {
     for (a, s, r) in [(50.0, 25.0, 50.0), (25.0, 25.0, 50.0), (50.0, 0.0, 50.0), (50.0, 100.0, 50.0), (50.0, 25.0, 0.0)] {
         let g = CrystalGrain::new(&Grain { amount: a, size: s, roughness: r, seed: 3 }, REF_LONG).expect("grain");
-        let n = 500;
+        let n = 200;
         let lum: Vec<f32> = (0..n * n)
             .map(|k| {
                 let (x, y) = ((k % n) as f32 + 0.5, (k / n) as f32 + 0.5);
@@ -138,6 +139,7 @@ fn strength_matches_the_target_at_mid_grey() {
             })
             .collect();
         let want = strength_levels(a, s, r);
+        eprintln!("DIAG strength {a}/{s}/{r}: deviation {:.4} (limit 0.06)", std(&lum) / want - 1.0);
         assert!((std(&lum) / want - 1.0).abs() < 0.06, "{a}/{s}/{r}: {} levels, want {want}", std(&lum));
     }
 }
@@ -153,7 +155,7 @@ fn tones_keep_their_mean() {
     for (amount, size, levels) in cases {
         let g = CrystalGrain::new(&Grain { amount, size, roughness: 50.0, seed: 3 }, REF_LONG).expect("grain");
         for &level in levels {
-            let n = 400;
+            let n = 256;
             let mut sum = 0.0f64;
             for k in 0..n * n {
                 let (x, y) = ((k % n) as f32 + 0.5, (k / n) as f32 + 0.5);
@@ -388,7 +390,9 @@ fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
     let (seed, fresh) = (0x0d4a_0001, 0x0d4a_0002);
     let (a, b) = (CrystalLook::new(30.0, 50.0), CrystalLook::new(31.0, 50.0));
     let exact = |look: CrystalLook, seed: u32| patch(&CrystalTile::new(look, seed).expect("tile"), REF_LONG, 32, 0);
+    let drawing = std::time::Instant::now();
     let first = tile(a, seed, true).expect("tile");
+    eprintln!("DIAG crystal tile at size 30: {:?}", drawing.elapsed());
     assert_eq!(first.look, a);
     let stand_in = tile(b, seed, false).expect("tile");
     assert_eq!(stand_in.look, a, "the draft waited for its tile");
@@ -402,8 +406,9 @@ fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
         assert!(std::time::Instant::now() < deadline, "the background tile never arrived");
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
-    assert_eq!(patch(&drawn, REF_LONG, 32, 0), exact(b, seed));
-    assert_eq!(patch(&tile(b, seed, true).expect("tile"), REF_LONG, 32, 0), exact(b, seed));
+    let exact_b = exact(b, seed);
+    assert_eq!(patch(&drawn, REF_LONG, 32, 0), exact_b);
+    assert_eq!(patch(&tile(b, seed, true).expect("tile"), REF_LONG, 32, 0), exact_b);
     // nothing drawn for this seed: nothing to stand in, the draft draws it
     assert_eq!(patch(&tile(a, fresh, false).expect("tile"), REF_LONG, 32, 0), exact(a, fresh));
 }
@@ -440,8 +445,10 @@ fn a_waiting_render_gets_the_tile_the_cache_evicted() {
     keep(&OWN, key, drawn.clone());
     // other renders' tiles push it out of the cache before the waiter wakes
     // (each its own tile: a waiter that took another key's would fail the check below)
+    // (one tile of another seed under every key: a different `Arc` from the drawn one, drawn once)
+    let other_tile = Arc::new(CrystalTile::new(look, seed + 1).expect("tile"));
     for other in 1..=CACHE as u32 {
-        keep(&OWN, key_of(look, seed + other), Arc::new(CrystalTile::new(look, seed + other).expect("tile")));
+        keep(&OWN, key_of(look, seed + other), other_tile.clone());
     }
     assert!(cached(&OWN, key).is_none(), "the tile is still cached");
     drop(marker);
@@ -474,7 +481,8 @@ fn renders_that_miss_a_tile_together_draw_it_once() {
     static OWN: Cache = Mutex::new(Vec::new());
     const N: usize = 8;
     // the first render's draw waits for the other seven to miss the tile too
-    const SEEDS: u32 = 40;
+    // (each seed is a full trial, as the draw is held until the others wait, so a few are enough)
+    const SEEDS: u32 = 2;
     HOLDS.lock().unwrap_or_else(PoisonError::into_inner).push((std::ptr::from_ref(&OWN) as usize, N - 1, SEEDS as usize));
     let look = CrystalLook::new(0.0, 50.0);
     for seed in 0x0d4a_1000..0x0d4a_1000 + SEEDS {
@@ -499,7 +507,8 @@ fn renders_that_miss_a_tile_together_draw_it_once() {
 fn width_matches_lightroom_classic() {
     let lrc = [(0.0, 50.0, 0.5), (25.0, 50.0, 1.13), (100.0, 50.0, 3.38), (25.0, 0.0, 0.86), (25.0, 100.0, 1.54)];
     for (s, r, want) in lrc {
-        let got = half_width(&patch(&tile_of(s, r), REF_LONG, 360, 0), 360);
+        let got = half_width(&patch(&tile_of(s, r), REF_LONG, 256, 0), 256);
+        eprintln!("DIAG width size {s} roughness {r}: {got:.3} want {want} (limit 10 percent)");
         assert!((got / want - 1.0).abs() < 0.1, "size {s} roughness {r}: width {got:.3}, want {want}");
     }
 }

@@ -168,7 +168,7 @@ impl RawDevelopExt for RawImage {
 
     fn develop_balanced_masked(&self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
         let n = self.normalized()?;
-        let mask = clip_mask(self, &n, method, clip);
+        let mask = raw_clip_mask(self, &n, method, clip);
         Ok((develop_full(self, n, method, Some(wb)), mask))
     }
 
@@ -253,17 +253,34 @@ fn scale_mosaic(n: &mut Normalized, method: Method, gains: [f32; 3]) -> bool {
     true
 }
 
-fn clip_mask(raw: &RawImage, n: &Normalized, method: Method, clip: f32) -> Option<Vec<u8>> {
+fn raw_clip_mask(raw: &RawImage, n: &Normalized, method: Method, clip: f32) -> Option<Vec<u8>> {
+    let crop = raw.develop_crop(n.width, n.height);
+    if !raw.opcodes.list3.is_empty() || stretched_height(crop.height, raw.pixel_aspect) != crop.height {
+        return None;
+    }
+    clip_mask(n, crop, method, clip)
+}
+
+/// The [`highlight::reconstruct_masked`] mask for the output of [`demosaic()`] with `method` on the single-plane CFA
+/// mosaic `n`, cropped to `crop` (one entry per pixel of `crop`, row-major). `n` holds sensor values normalised so
+/// that 1.0 is white and before white balance; samples at or above `clip` count as clipped. Use it when the mosaic
+/// is demosaicked by the caller (for example white-balanced first) rather than through [`RawDevelopExt`].
+/// `None` when nothing is clipped, `n` is not a single-plane RGB CFA mosaic, `crop` does not fit inside it, or `clip`
+/// is not a positive finite level.
+pub fn clip_mask(n: &Normalized, crop: Rect, method: Method, clip: f32) -> Option<Vec<u8>> {
     use highlight::{CLIPPED_BITS, FROM_CLIPPED_BITS};
 
     // This radius covers samples read directly by the directional interpolators. Estimates
     // that build on interpolated green can depend on samples farther away.
     const REACH: usize = 2;
 
-    let cfa = n.cfa.as_ref().filter(|_| n.cpp == 1)?;
+    let cfa = n.cfa.as_ref().filter(|c| n.cpp == 1 && cfa_valid(c) && c.pattern.iter().all(|&p| p <= 2))?;
     let (w, h) = (n.width, n.height);
-    let crop = raw.develop_crop(w, h);
-    if !clip.is_finite() || clip <= 0.0 || !raw.opcodes.list3.is_empty() || stretched_height(crop.height, raw.pixel_aspect) != crop.height {
+    let fits = crop.width > 0
+        && crop.height > 0
+        && crop.x.checked_add(crop.width).is_some_and(|r| r <= w)
+        && crop.y.checked_add(crop.height).is_some_and(|b| b <= h);
+    if !clip.is_finite() || clip <= 0.0 || !fits || w.checked_mul(h) != Some(n.data.len()) {
         return None;
     }
     let is_clipped = |v: &f32| *v >= clip;
