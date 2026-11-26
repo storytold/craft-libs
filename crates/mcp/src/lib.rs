@@ -106,12 +106,9 @@ impl Session {
                 let version = asked
                     .filter(|v| self.versions.iter().any(|supported| supported == v))
                     .unwrap_or_else(|| self.versions.first().map(String::as_str).unwrap_or(PROTOCOL_VERSION));
-                let mut result = json!({"protocolVersion": version, "capabilities": self.capabilities, "serverInfo": self.server_info});
-                if let Some(instructions) = &self.instructions {
-                    result["instructions"] = json!(instructions);
-                }
+                let result = json!({"protocolVersion": version, "capabilities": self.capabilities, "serverInfo": self.server_info});
                 self.state = State::AwaitingInitialized;
-                return Some(Ok(result));
+                return Some(Ok(self.with_instructions(result)));
             }
             let Some(params) = request.params.and_then(Value::as_object) else {
                 return Some(Err(invalid_initialize()));
@@ -126,14 +123,20 @@ impl Session {
                 return Some(Err(invalid_initialize()));
             }
             self.state = State::AwaitingInitialized;
-            return Some(Ok(
-                json!({"protocolVersion": PROTOCOL_VERSION, "capabilities": self.capabilities, "serverInfo": {"name": self.name, "version": self.version}}),
-            ));
+            let result = json!({"protocolVersion": PROTOCOL_VERSION, "capabilities": self.capabilities, "serverInfo": {"name": self.name, "version": self.version}});
+            return Some(Ok(self.with_instructions(result)));
         }
         if self.policy == Policy::Strict && self.state == State::New {
             return Some(Err(RpcError::new(-32600, "Server not initialized")));
         }
         None
+    }
+
+    fn with_instructions(&self, mut result: Value) -> Value {
+        if let Some(instructions) = &self.instructions {
+            result["instructions"] = json!(instructions);
+        }
+        result
     }
 
     /// Observe a JSON-RPC notification; notifications never receive replies.
@@ -229,6 +232,19 @@ mod tests {
         let params = json!({"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {}});
         let result = session.request(call("initialize", Some(&params)), false).unwrap().unwrap();
         assert_eq!(result["capabilities"], json!({"resources": {"subscribe": true}}));
+    }
+
+    #[test]
+    fn validated_initialization_returns_instructions() {
+        let p = json!({"protocolVersion":PROTOCOL_VERSION, "capabilities":{}, "clientInfo":{"name":"client", "version":"1"}});
+        for policy in [Policy::Compatible, Policy::Strict] {
+            let mut s = Session::new("test", "1", policy);
+            assert!(s.request(call("initialize", Some(&p)), false).unwrap().unwrap().get("instructions").is_none());
+            let mut s = Session::new("test", "1", policy);
+            s.set_instructions("help".into());
+            let result = s.request(call("initialize", Some(&p)), false).unwrap().unwrap();
+            assert_eq!(result["instructions"], "help");
+        }
     }
 
     #[test]
