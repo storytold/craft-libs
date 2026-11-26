@@ -122,10 +122,12 @@ jobs:
       cache-version: &cache-version v2-${{ needs.platforms.outputs.profile }}
       cold-build: ${{ github.event.schedule == '17 0 * * *' || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/next' }}
       lint-cache: false
-      # The vendored crates are on the workspace `exclude` list, so unreached-rs has no module tree for them.
+      # The vendored crates are on the workspace `exclude` list and craft-pdf's read-only contract is a
+      # workspace of its own (pdf.yml tests it), so unreached-rs has no module tree for them.
       unreached-rs-allow: |
         **/fixtures/**
         vendor/**
+        crates/pdf/read-only-contract/**
       timeout-minutes: &timeout 120
       # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: &tools cargo-nextest@0.9.150
@@ -167,8 +169,8 @@ jobs:
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # A selection that reaches a replay-audit crate builds once in a `build` job, which writes
       # three nextest archives and then runs the doctests; three shard legs run them in parallel:
-      # every selected test outside the replay audit's crates, those crates (run plainly, then with the
-      # audit), and craft-image-codecs with default features. Any other selection
+      # every selected test outside the replay audit's crates and craft-draw, those crates (run plainly,
+      # then the audit crates with the audit), and craft-image-codecs with default features. Any other selection
       # (and every macOS and Windows leg) builds and runs in one leg. scripts/ci-workspace-tests.sh
       # holds every step.
       test-shards: ${{ needs.platforms.outputs.audit == 'true' && 3 || 0 }}

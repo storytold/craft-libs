@@ -54,6 +54,7 @@ pub use crate::runtime::pending::{Job, Pending, Progress};
 pub use body::REORDER_BAND;
 #[doc(hidden)]
 pub use body::grip_band;
+pub use body::keep_inside;
 pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};
@@ -69,8 +70,8 @@ pub use container::InBar;
 pub use container::InMenu;
 pub use container::{
     BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
-    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, QuietHeader, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, SectionRhythm,
-    ShellPane, Sizing, ThemeScope, WrapWidth,
+    LeastWidth, Mount, MoveBandCursor, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, QuietHeader, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator,
+    SectionRhythm, ShellPane, Sizing, ThemeScope, WrapWidth,
 };
 pub use craft_tracked::{PlainData, Revision, Tracked};
 pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};

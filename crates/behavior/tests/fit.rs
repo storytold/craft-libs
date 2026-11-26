@@ -64,6 +64,37 @@ fn short_items_shorten_from_the_end_before_any_item_leaves() {
     assert_eq!(squeezed.short.len(), 2, "pinned items shorten as free ones do: {squeezed:?}");
 }
 
+/// Guards the host's order of short forms: a lower `short_order` shortens first wherever its item sits, and a
+/// `short_late` item keeps its full form until every free item has gone to the menu, then shortens in rank order.
+#[test]
+fn short_forms_follow_their_rank_and_late_ones_wait_for_the_free_items() {
+    let item = |extent| FitItem::new(extent, 0, FitKeep::Free);
+    let ranked = [item(50.0).short(20.0), item(50.0), item(50.0).short(20.0).short_order(1)];
+    let fit = fit_items(&ranked, 120.0, 0.0, 0.0, 10.0);
+    assert_eq!(fit.short, [0], "the lower rank shortens before the later item: {fit:?}");
+    assert!(fit.overflow.is_empty(), "{fit:?}");
+
+    // Two free items in one section, then two pinned ones that shorten only late, the first ranked before the second.
+    let pinned = |extent| FitItem::new(extent, 1, FitKeep::Pinned).short(20.0).short_late();
+    let bar = [item(40.0), item(40.0), pinned(60.0), pinned(60.0).short_order(1)];
+    let at = |available| fit_items(&bar, available, 0.0, 0.0, 10.0);
+
+    let roomy = at(180.0);
+    assert_eq!(roomy.overflow, [1], "a free item leaves before any late item shortens: {roomy:?}");
+    assert!(roomy.short.is_empty(), "{roomy:?}");
+
+    let tight = at(130.0);
+    assert_eq!(tight.overflow, [0, 1], "every free item leaves first: {tight:?}");
+    assert!(tight.short.is_empty(), "{tight:?}");
+
+    let narrow = at(100.0);
+    assert_eq!(narrow.short, [2], "then the lower-ranked late item shortens: {narrow:?}");
+    assert_eq!(narrow.overflow, [0, 1], "items that left stay in the menu: {narrow:?}");
+
+    let narrowest = at(50.0);
+    assert_eq!(narrowest.short, [2, 3], "then the next rank: {narrowest:?}");
+}
+
 #[test]
 fn kept_selection_keeps_its_width_and_overflow_starts_at_the_end() {
     let natural = [80.0, 90.0, 85.0, 95.0, 70.0];

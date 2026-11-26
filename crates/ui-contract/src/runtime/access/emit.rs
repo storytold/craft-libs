@@ -49,6 +49,9 @@ pub(crate) struct Own<'a> {
     /// Parts of the component open its popups: their sub-nodes report the expanded state and serve Expand and
     /// Collapse, so the component's own node does not.
     pub popups_by_part: bool,
+    /// The one part that opens the component's popup when that part has no node of its own (a corner mark): Expand
+    /// and Collapse on the component's node go to it instead of activating the component.
+    pub toggle: Option<PartRef>,
     /// The component's horizontal axis keeps its left-to-right order under a right-to-left interface.
     pub ltr_axis: bool,
 }
@@ -330,7 +333,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
         true,
     );
     keys::register_node(ctx, own.id, own.id, None, own.focusable);
-    keys::register_expanded(ctx, own.id, expanded);
+    keys::register_expanded(ctx, own.id, expanded, own.toggle);
     scope::register(
         ctx,
         scope::ScopeNode {
@@ -424,7 +427,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
         false,
     );
     keys::register_node(ctx, id, decl.owner, Some(node.part), decl.focusable);
-    keys::register_expanded(ctx, id, expanded);
+    keys::register_expanded(ctx, id, expanded, None);
     if decl.active {
         adapter::set_focus(ctx, id);
     }
