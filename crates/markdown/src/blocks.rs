@@ -1,5 +1,6 @@
-use super::inlines::parse_inlines;
+use super::inlines::parse_inlines_with;
 use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, MAX_COLS, MAX_ROWS, Para, model};
+use super::{ImageLoader, Images};
 
 /// Nesting limit for block containers (quotes, list items) and inline links.
 pub(super) const MAX_NEST: usize = 32;
@@ -17,6 +18,29 @@ pub fn import(text: &str) -> Document {
 pub fn import_on(text: &str, page: &craft_wordmodel::SectionProps) -> Document {
     model::begin_import();
     model::to_doc_in(&parse(text), page.clone())
+}
+
+/// [`import`] with `images` loading the pictures `![alt](path)` names, as HTML import loads a
+/// relative `<img src>`: an image `images` returns bytes for (and that are a picture) is placed
+/// with its alt text; one it doesn't, or that isn't a picture, stays its alt text. `data:` URIs
+/// don't ask `images`.
+pub fn import_with(text: &str, images: ImageLoader<'_>) -> Document {
+    model::begin_import();
+    model::to_doc(&parse_with(text, Some(images)))
+}
+
+/// [`import_with`] onto `page`.
+pub fn import_on_with(text: &str, page: &craft_wordmodel::SectionProps, images: ImageLoader<'_>) -> Document {
+    model::begin_import();
+    model::to_doc_in(&parse_with(text, Some(images)), page.clone())
+}
+
+/// What block parsing hands down to the inlines: the reference definitions and the picture
+/// loader.
+#[derive(Clone, Copy)]
+struct Cx<'a> {
+    refs: &'a Refs,
+    images: Images<'a>,
 }
 
 /// Link reference definitions: the normalised label to its destination.
@@ -140,11 +164,16 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
 
 /// Parse Markdown text into the flow model.
 pub fn parse(text: &str) -> model::Flow {
+    parse_with(text, None)
+}
+
+/// [`parse`], loading pictures with `images` (see [`import_with`]).
+pub fn parse_with(text: &str, images: Images<'_>) -> model::Flow {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
     let refs = take_definitions(&mut lines);
     let budget = std::cell::Cell::new(super::MAX_TABLE_CELLS);
-    let mut blocks = parse_blocks(&lines, 0, 0, &refs, &budget);
+    let mut blocks = parse_blocks(&lines, 0, 0, Cx { refs: &refs, images }, &budget);
     // A leading "Title" from front matter isn't supported; a first-level heading stays a heading.
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
@@ -369,13 +398,13 @@ fn interrupts(l: &str) -> bool {
         || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
 }
 
-fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, refs: &Refs) {
+fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, cx: Cx<'_>) {
     if lines.is_empty() {
         return;
     }
     let text = join_lines(lines);
     lines.clear();
-    let inlines = parse_inlines(&text, &Fmt::default(), depth, refs);
+    let inlines = parse_inlines_with(&text, &Fmt::default(), depth, cx.refs, cx.images);
     if inlines.is_empty() {
         return;
     }
@@ -413,13 +442,13 @@ fn code_para(line: &str) -> FBlock {
 
 /// Parse block structure. `level` is the list nesting level for lists found here.
 /// `budget`: the table cells the document may still make ([`super::MAX_TABLE_CELLS`]).
-fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: &std::cell::Cell<usize>) -> Vec<FBlock> {
+fn parse_blocks(lines: &[String], depth: usize, level: u8, cx: Cx<'_>, budget: &std::cell::Cell<usize>) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
     let mut i = 0;
     while let Some(line) = lines.get(i) {
         if is_blank(line) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut out, depth, cx);
             i += 1;
             continue;
         }
@@ -442,28 +471,28 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
                 let text = join_lines(&para);
                 para.clear();
                 let mut p = Para::new(Kind::Heading(lvl));
-                p.inlines = parse_inlines(&text, &Fmt::default(), depth, refs);
+                p.inlines = parse_inlines_with(&text, &Fmt::default(), depth, cx.refs, cx.images);
                 out.push(FBlock::Para(p));
                 i += 1;
                 continue;
             }
         }
         if let Some((n, body)) = atx_heading(t) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut out, depth, cx);
             let mut p = Para::new(Kind::Heading(n));
-            p.inlines = parse_inlines(body, &Fmt::default(), depth, refs);
+            p.inlines = parse_inlines_with(body, &Fmt::default(), depth, cx.refs, cx.images);
             out.push(FBlock::Para(p));
             i += 1;
             continue;
         }
         if thematic_break(t) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut out, depth, cx);
             out.push(FBlock::Para(Para::new(Kind::Rule)));
             i += 1;
             continue;
         }
         if let Some((fc, fl)) = fence(t) {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut out, depth, cx);
             i += 1;
             while let Some(l) = lines.get(i) {
                 i += 1;
@@ -476,7 +505,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
             continue;
         }
         if t.starts_with("<!--") {
-            flush_para(&mut para, &mut out, depth, refs);
+            flush_para(&mut para, &mut out, depth, cx);
             while let Some(l) = lines.get(i) {
                 i += 1;
                 if l.contains("-->") {
@@ -486,8 +515,8 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
             continue;
         }
         if t.starts_with('>') {
-            flush_para(&mut para, &mut out, depth, refs);
-            parse_quote(lines, &mut i, depth, level, refs, budget, &mut out);
+            flush_para(&mut para, &mut out, depth, cx);
+            parse_quote(lines, &mut i, depth, level, cx, budget, &mut out);
             continue;
         }
         if para.is_empty()
@@ -498,7 +527,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
             if head_width == width {
                 let mut table = FTable::default();
                 let cell = |s: &str, header: bool, a: Option<Align>| {
-                    let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth, refs), ..Default::default() };
+                    let p = Para { align: a, inlines: parse_inlines_with(s, &Fmt::default(), depth, cx.refs, cx.images), ..Default::default() };
                     Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
                 };
                 // The document keeps no more columns or rows than this, nor cells past its budget,
@@ -539,14 +568,14 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: 
         if let Some(m) = list_marker(t)
             && (para.is_empty() || ((!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or(""))))
         {
-            flush_para(&mut para, &mut out, depth, refs);
-            i = parse_list(lines, i, depth, level, &mut out, refs, budget);
+            flush_para(&mut para, &mut out, depth, cx);
+            i = parse_list(lines, i, depth, level, &mut out, cx, budget);
             continue;
         }
         para.push(line.clone());
         i += 1;
     }
-    flush_para(&mut para, &mut out, depth, refs);
+    flush_para(&mut para, &mut out, depth, cx);
     out
 }
 
@@ -568,7 +597,7 @@ fn parse_indented_code(lines: &[String], i: &mut usize, out: &mut Vec<FBlock>) {
     out.extend(code.into_iter().map(code_para));
 }
 
-fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &Refs, budget: &std::cell::Cell<usize>, out: &mut Vec<FBlock>) {
+fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, cx: Cx<'_>, budget: &std::cell::Cell<usize>, out: &mut Vec<FBlock>) {
     let mut inner = Vec::new();
     while let Some(line) = lines.get(*i) {
         let trimmed = line.trim_start_matches([' ', '\t']);
@@ -588,7 +617,7 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
         out.push(FBlock::Para(p));
         return;
     }
-    for mut block in parse_blocks(&inner, depth + 1, level, refs, budget) {
+    for mut block in parse_blocks(&inner, depth + 1, level, cx, budget) {
         if let FBlock::Para(p) = &mut block
             && p.kind == Kind::Normal
         {
@@ -626,7 +655,7 @@ fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
 }
 
 /// Parse a list starting at `lines[i]`; returns the index after it.
-fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>, refs: &Refs, budget: &std::cell::Cell<usize>) -> usize {
+fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>, cx: Cx<'_>, budget: &std::cell::Cell<usize>) -> usize {
     let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start_matches([' ', '\t']))) else { return i + 1 };
     while let Some(line) = lines.get(i) {
         let ind = indent(line);
@@ -673,7 +702,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             p.push_text(&item.join(" "), &Fmt::default());
             vec![FBlock::Para(p)]
         } else {
-            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), refs, budget)
+            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), cx, budget)
         };
         let mut placed = false;
         if inner.is_empty() {

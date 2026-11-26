@@ -7,7 +7,8 @@
 //! style), fenced and indented code (→ one Code paragraph per line), thematic breaks (→ a
 //! bottom-border paragraph), bullet and ordered lists (nested by indentation), GFM pipe tables,
 //! and inlines: emphasis/strong (the CommonMark delimiter algorithm), `~~strike~~`, code spans,
-//! inline links, autolinks, images (`data:` URIs become pictures, others their alt text),
+//! inline links, autolinks, images (`data:` URIs become pictures; with [`import_with`] a loader
+//! reads the others, such as a path beside the file; else they are their alt text),
 //! backslash escapes, entities, HTML comments (`<!-- ... -->`), `<br>` and `<a id>` anchors.
 //!
 //! Export writes the same constructs; pictures become `![alt](media-name)` placeholders.
@@ -37,7 +38,15 @@ fn decode_entity(body: &str) -> Option<String> {
     craft_html::decode_entity(body).map(String::from)
 }
 
-pub use blocks::{Refs, import, import_on, parse};
+pub use blocks::{Refs, import, import_on, import_on_with, import_with, parse, parse_with};
+/// Reads the bytes of the picture an image names (`![alt](path)`), or `None`: the same shape as
+/// `craft_html::doc::ImageLoader`, so one loader serves both importers. It is called while an
+/// import is under way, so it should read bytes and not start another import on the same
+/// thread: an import begins by clearing the thread's record of the warnings already logged.
+pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
+
+/// The loader pictures are read with, when there is one.
+type Images<'a> = Option<ImageLoader<'a>>;
 pub use export::escape;
 pub use export::export;
 #[cfg(test)]
