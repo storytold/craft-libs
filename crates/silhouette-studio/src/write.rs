@@ -1,9 +1,10 @@
 //! Writer for Silhouette Studio `.studio3` documents (header `silhouette05;`).
 //!
-//! It writes a page and closed or open polygon outlines with line colour, line width and fill.
+//! It writes a page and shapes made of one or more contours of straight and Bézier segments,
+//! with line colour, line width and fill.
 //! Every byte is generated from the field layout learned by saving documents in Silhouette
 //! Studio 5.0.556 that differ in one thing and comparing them; nothing is copied from
-//! Silhouette's files, and every record was checked by opening written files in Silhouette. Curves are written as their flattened polylines.
+//! Silhouette's files, and every record was checked by opening written files in Silhouette.
 //!
 //! Only section 0 (the objects) is written: Silhouette Studio opens a document whose other
 //! twelve sections are absent.
@@ -18,17 +19,109 @@ pub struct WriteDocument {
     pub shapes: Vec<WriteShape>,
 }
 
-/// One outline: its points, whether it is closed, and its look.
+/// One shape: its contours (a compound path has several) and its look.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteShape {
-    pub points: Vec<(f64, f64)>,
-    pub closed: bool,
+    pub contours: Vec<WriteContour>,
     /// Line colour (R, G, B); `None` is Silhouette's default red cut line.
     pub line_rgb: Option<[u8; 3]>,
     /// Fill colour; `None` is no fill.
     pub fill_rgb: Option<[u8; 3]>,
     /// Line width in millimetres (0 is a hairline).
     pub width_mm: f64,
+}
+
+/// One contour: its nodes in order, and whether it closes back to the first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WriteContour {
+    pub nodes: Vec<WriteNode>,
+    pub closed: bool,
+}
+
+/// A node and its Bézier handles, as offsets from the node in millimetres: `incoming` shapes
+/// the segment arriving here, `outgoing` the one leaving. `None` is a straight segment end.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WriteNode {
+    pub x: f64,
+    pub y: f64,
+    pub incoming: Option<(f64, f64)>,
+    pub outgoing: Option<(f64, f64)>,
+}
+
+impl WriteNode {
+    /// A corner node with no handles.
+    pub fn corner(x: f64, y: f64) -> Self {
+        Self { x, y, incoming: None, outgoing: None }
+    }
+}
+
+impl WriteContour {
+    /// The contours of `path` (page millimetres, y down) as nodes with handles. Quadratic
+    /// segments become their exact cubics; a closing segment that ends on the first node
+    /// gives that node its incoming handle.
+    pub fn from_path(path: &kurbo::BezPath) -> Vec<WriteContour> {
+        use kurbo::PathEl;
+        let mut out: Vec<WriteContour> = Vec::new();
+        let mut current: Option<WriteContour> = None;
+        let mut last = kurbo::Point::ZERO;
+        let push_curve = |c: &mut WriteContour, from: kurbo::Point, c1: kurbo::Point, c2: kurbo::Point, to: kurbo::Point| {
+            if let Some(prev) = c.nodes.last_mut() {
+                prev.outgoing = Some((c1.x - from.x, c1.y - from.y));
+            }
+            c.nodes.push(WriteNode { x: to.x, y: to.y, incoming: Some((c2.x - to.x, c2.y - to.y)), outgoing: None });
+        };
+        for el in path.elements() {
+            match *el {
+                PathEl::MoveTo(p) => {
+                    out.extend(current.take());
+                    current = Some(WriteContour { nodes: vec![WriteNode::corner(p.x, p.y)], closed: false });
+                    last = p;
+                }
+                PathEl::LineTo(p) => {
+                    if let Some(c) = current.as_mut() {
+                        c.nodes.push(WriteNode::corner(p.x, p.y));
+                    }
+                    last = p;
+                }
+                PathEl::QuadTo(q, p) => {
+                    if let Some(c) = current.as_mut() {
+                        let c1 = last + (q - last) * (2.0 / 3.0);
+                        let c2 = p + (q - p) * (2.0 / 3.0);
+                        push_curve(c, last, c1, c2, p);
+                    }
+                    last = p;
+                }
+                PathEl::CurveTo(c1, c2, p) => {
+                    if let Some(c) = current.as_mut() {
+                        push_curve(c, last, c1, c2, p);
+                    }
+                    last = p;
+                }
+                PathEl::ClosePath => {
+                    if let Some(mut c) = current.take() {
+                        c.closed = true;
+                        // A last node on top of the first is the same node: fold it in.
+                        if c.nodes.len() > 2
+                            && let (Some(first), Some(end)) = (c.nodes.first().copied(), c.nodes.last().copied())
+                            && (first.x - end.x).hypot(first.y - end.y) < 1e-9
+                        {
+                            c.nodes.pop();
+                            if let Some(first) = c.nodes.first_mut() {
+                                first.incoming = end.incoming;
+                            }
+                        }
+                        if let Some(first) = c.nodes.first() {
+                            last = kurbo::Point::new(first.x, first.y);
+                        }
+                        out.push(c);
+                    }
+                }
+            }
+        }
+        out.extend(current);
+        out.retain(|c| c.nodes.len() >= 2);
+        out
+    }
 }
 
 /// The most shapes one written document holds.
@@ -56,14 +149,22 @@ pub fn write(doc: &WriteDocument) -> Result<Vec<u8>, Error> {
     if doc.shapes.len() > MAX_WRITE_SHAPES {
         return Err(Error::Malformed(format!("more than {MAX_WRITE_SHAPES} shapes")));
     }
+    let mut total = 0usize;
     for shape in &doc.shapes {
-        let n = shape.points.len();
-        if !(2..=MAX_WRITE_POINTS).contains(&n) {
-            return Err(Error::Malformed(format!("a shape needs 2 to {MAX_WRITE_POINTS} points, not {n}")));
+        if shape.contours.is_empty() {
+            return Err(Error::Malformed("a shape needs a contour".to_string()));
         }
-        let point_ok = |v: f64| v.is_finite() && v.abs() <= MAX_PAGE_MM;
-        if !shape.points.iter().all(|&(x, y)| point_ok(x) && point_ok(y)) {
-            return Err(Error::Malformed("a point is not a finite page coordinate".to_string()));
+        for contour in &shape.contours {
+            let n = contour.nodes.len();
+            total = total.saturating_add(n);
+            if n < 2 || total > MAX_WRITE_POINTS {
+                return Err(Error::Malformed(format!("a contour needs 2 nodes, and a document at most {MAX_WRITE_POINTS}")));
+            }
+            let ok = |v: f64| v.is_finite() && v.abs() <= MAX_PAGE_MM;
+            let handle_ok = |h: Option<(f64, f64)>| h.is_none_or(|(x, y)| ok(x) && ok(y));
+            if !contour.nodes.iter().all(|n| ok(n.x) && ok(n.y) && handle_ok(n.incoming) && handle_ok(n.outgoing)) {
+                return Err(Error::Malformed("a node is not a finite page coordinate".to_string()));
+            }
         }
         if !(shape.width_mm.is_finite() && (0.0..=100.0).contains(&shape.width_mm)) {
             return Err(Error::Malformed("line width must be 0 to 100 mm".to_string()));
@@ -412,19 +513,52 @@ fn inner_tail(w: &mut W) {
     w.zeros(14);
 }
 
-fn polygon(w: &mut W, shape: &WriteShape, ident: u32, id_seed: u32) {
-    let pts = &shape.points;
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for &(x, y) in pts {
-        x0 = x0.min(x);
-        y0 = y0.min(y);
-        x1 = x1.max(x);
-        y1 = y1.max(y);
+/// A handle: absent (`00`) or an offset from its node (`01`, f32 dx, dy).
+fn handle(w: &mut W, h: Option<(f64, f64)>) {
+    match h {
+        Some((dx, dy)) => {
+            w.u8(1);
+            w.f32s(&[dx, dy]);
+        }
+        None => w.u8(0),
     }
+}
+
+/// The exact bounds of a shape's outline (curves included).
+fn bounds(shape: &WriteShape) -> kurbo::Rect {
+    use kurbo::Shape as _;
+    let mut path = kurbo::BezPath::new();
+    for c in &shape.contours {
+        let mut nodes = c.nodes.iter();
+        let Some(first) = nodes.next() else { continue };
+        path.move_to((first.x, first.y));
+        let mut prev = *first;
+        let segment = |path: &mut kurbo::BezPath, a: WriteNode, b: WriteNode| {
+            if a.outgoing.is_none() && b.incoming.is_none() {
+                path.line_to((b.x, b.y));
+            } else {
+                let (ox, oy) = a.outgoing.unwrap_or((0.0, 0.0));
+                let (ix, iy) = b.incoming.unwrap_or((0.0, 0.0));
+                path.curve_to((a.x + ox, a.y + oy), (b.x + ix, b.y + iy), (b.x, b.y));
+            }
+        };
+        for &n in nodes {
+            segment(&mut path, prev, n);
+            prev = n;
+        }
+        if c.closed {
+            segment(&mut path, prev, *first);
+        }
+    }
+    path.bounding_box()
+}
+
+fn polygon(w: &mut W, shape: &WriteShape, ident: u32, id_seed: u32) {
+    let b = bounds(shape);
+    let (x0, y0, x1, y1) = (b.x0, b.y0, b.x1, b.y1);
     // The visible line colour is the style's first colour; the cut style keeps its own.
     let line = shape.line_rgb.map_or([1.0, 0.0, 0.0, 1.0], rgb);
     let fill = shape.fill_rgb.map(rgb);
-    let count = pts.len() as u32 - 1;
     w.rec(|w| {
         w.u8(0);
         w.rec(|w| {
@@ -434,20 +568,26 @@ fn polygon(w: &mut W, shape: &WriteShape, ident: u32, id_seed: u32) {
                 w.rec(|w| style(w, line, shape.width_mm, [1.0, 0.6, 0.6, 1.0], fill));
                 inner_tail(w);
             });
-            // The outline in the object's own coordinates (identity transform).
+            // The outline in the object's own coordinates (identity transform): the contour
+            // count minus one, then per contour its closed flag, node count minus one and
+            // nodes (position, handles, then 0, smooth flag, 0).
             w.rec(|w| {
-                w.u32(0);
-                w.rec(|w| {
-                    w.u8(u8::from(shape.closed));
-                    w.u32(count);
-                    for &(x, y) in pts {
-                        w.rec(|w| {
-                            w.f32s(&[x, y]);
-                            w.u32(0);
-                            w.u8(0);
-                        });
-                    }
-                });
+                w.u32(shape.contours.len() as u32 - 1);
+                for c in &shape.contours {
+                    w.rec(|w| {
+                        w.u8(u8::from(c.closed));
+                        w.u32(c.nodes.len() as u32 - 1);
+                        for n in &c.nodes {
+                            w.rec(|w| {
+                                w.f32s(&[n.x, n.y]);
+                                handle(w, n.incoming);
+                                handle(w, n.outgoing);
+                                let smooth = n.incoming.is_some() && n.outgoing.is_some();
+                                w.raw(&[0, u8::from(smooth), 0]);
+                            });
+                        }
+                    });
+                }
             });
         });
         // Transform (identity), the selection frame, the fill mode.
@@ -460,15 +600,18 @@ fn polygon(w: &mut W, shape: &WriteShape, ident: u32, id_seed: u32) {
         w.u8(0);
         // The page-coordinate outline the reader reads.
         w.rec(|w| {
-            w.u32(0);
-            w.sized(|w| {
-                w.u8(u8::from(shape.closed));
-                w.u32(count);
-                for &(x, y) in pts {
-                    w.f32s(&[x, y]);
-                    w.zeros(2);
-                }
-            });
+            w.u32(shape.contours.len() as u32 - 1);
+            for c in &shape.contours {
+                w.sized(|w| {
+                    w.u8(u8::from(c.closed));
+                    w.u32(c.nodes.len() as u32 - 1);
+                    for n in &c.nodes {
+                        w.f32s(&[n.x, n.y]);
+                        handle(w, n.incoming);
+                        handle(w, n.outgoing);
+                    }
+                });
+            }
         });
         w.u8(1);
         w.u32(ident);
@@ -820,7 +963,8 @@ mod tests {
     use kurbo::Shape as _;
 
     fn shape(points: &[(f64, f64)], closed: bool, line: Option<[u8; 3]>) -> WriteShape {
-        WriteShape { points: points.to_vec(), closed, line_rgb: line, fill_rgb: None, width_mm: 0.0 }
+        let nodes = points.iter().map(|&(x, y)| WriteNode::corner(x, y)).collect();
+        WriteShape { contours: vec![WriteContour { nodes, closed }], line_rgb: line, fill_rgb: None, width_mm: 0.0 }
     }
 
     #[test]
@@ -852,6 +996,24 @@ mod tests {
     }
 
     #[test]
+    fn curves_and_compound_paths_round_trip() {
+        let mut path = kurbo::BezPath::from_svg("M10 50 C10 20 90 20 90 50 C90 80 10 80 10 50 Z M40 45 L60 45 L50 60 Z").unwrap();
+        path.apply_affine(kurbo::Affine::IDENTITY);
+        let contours = WriteContour::from_path(&path);
+        assert_eq!(contours.len(), 2);
+        assert_eq!(contours[0].nodes.len(), 2, "the closing curve folds into the first node");
+        assert!(contours[0].nodes[0].incoming.is_some() && contours[0].nodes[0].outgoing.is_some());
+        let doc = WriteDocument { page_mm: (100.0, 100.0), shapes: vec![WriteShape { contours, line_rgb: None, fill_rgb: None, width_mm: 0.0 }] };
+        let back = crate::import(&write(&doc).unwrap()).unwrap();
+        assert_eq!(back.shapes.len(), 1, "one compound shape");
+        let b = back.shapes[0].path.bounding_box();
+        // The ellipse-like curve reaches y = 27.5 at its top, beyond its nodes at y = 50.
+        assert!((b.y0 - 27.5).abs() < 0.01 && (b.x0 - 10.0).abs() < 1e-4, "{b:?}");
+        let curves = back.shapes[0].path.elements().iter().filter(|e| matches!(e, kurbo::PathEl::CurveTo(..))).count();
+        assert_eq!(curves, 2);
+    }
+
+    #[test]
     fn an_empty_document_has_the_layout_silhouette_reads() {
         let bytes = write(&WriteDocument { page_mm: (304.8, 304.8), shapes: Vec::new() }).unwrap();
         let section = u64::from_le_bytes(bytes[0x10..0x18].try_into().unwrap()) as usize;
@@ -870,6 +1032,10 @@ mod tests {
             WriteDocument { page_mm: (0.0, 10.0), shapes: Vec::new() },
             WriteDocument { page_mm: (1e9, 10.0), shapes: Vec::new() },
             WriteDocument { page_mm: (10.0, 10.0), shapes: vec![shape(&[(0.0, 0.0)], false, None)] },
+            WriteDocument {
+                page_mm: (10.0, 10.0),
+                shapes: vec![WriteShape { contours: Vec::new(), ..shape(&[(0.0, 0.0), (1.0, 1.0)], false, None) }],
+            },
             WriteDocument { page_mm: (10.0, 10.0), shapes: vec![shape(&[(0.0, f64::INFINITY), (1.0, 1.0)], false, None)] },
             WriteDocument { page_mm: (10.0, 10.0), shapes: vec![WriteShape { width_mm: -1.0, ..ok.clone() }] },
         ] {
