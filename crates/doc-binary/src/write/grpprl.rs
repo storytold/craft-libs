@@ -467,6 +467,8 @@ pub(crate) fn papx(p: &ParaProps, ctx: &dyn ParaCtx) -> Grpprl {
             Align::Right => 2,
             Align::Justify => 3,
             Align::Distribute => 4,
+            // [MS-DOC] sprmPJc: 9 is thaiDistribute; Word has no value for Khmer Justify.
+            Align::ThaiDistribute | Align::KhmerJustify => 9,
         };
         g.u8(P_JC80, jc);
         g.u8(P_JC, jc);

@@ -209,6 +209,7 @@ pub(super) fn is_format_word(w: &str) -> bool {
             | "qr"
             | "qj"
             | "qd"
+            | "qt"
             | "s"
             | "outlinelevel"
             | "pagebb"

@@ -479,7 +479,10 @@ impl PropCtx {
                 }
                 "w:jc" => {
                     if let Some(v) = k.attr("w:val") {
-                        p.align = Some(align(v));
+                        p.align = Some(match (v, k.attr("wc:khmer")) {
+                            ("thaiDistribute", Some("1" | "true")) => Align::KhmerJustify,
+                            _ => align(v),
+                        });
                         if let Some(kashida) = Kashida::from_jc(v) {
                             p.kashida = Some(kashida);
                         }
@@ -499,7 +502,8 @@ pub fn align(v: &str) -> Align {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
         "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "distribute" => Align::Distribute,
+        "thaiDistribute" => Align::ThaiDistribute,
         _ => Align::Left,
     }
 }

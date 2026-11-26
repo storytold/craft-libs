@@ -349,6 +349,7 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 2 => Some(Align::Right),
                 3 => Some(Align::Justify),
                 4 => Some(Align::Distribute),
+                9 => Some(Align::ThaiDistribute),
                 _ => Some(Align::Left),
             };
         }
@@ -576,6 +577,21 @@ fn apply_chain_para(para: &mut ParaProps, grpprl: &[u8]) {
     for prl in sprm::iter(grpprl) {
         if prl.sgc() == 1 {
             apply_para(para, &prl);
+        }
+    }
+}
+
+#[cfg(test)]
+mod thai_distribute_tests {
+    use super::*;
+
+    /// [MS-DOC] sprmPJc: 9 is thaiDistribute, 4 is distribute.
+    #[test]
+    fn jc_nine_is_thai_distributed() {
+        let mut p = ParaProps::default();
+        for (value, want) in [(4u8, Align::Distribute), (9, Align::ThaiDistribute)] {
+            apply_para(&mut p, &Prl { op: P_JC, operand: &[value] });
+            assert_eq!(p.align, Some(want));
         }
     }
 }
