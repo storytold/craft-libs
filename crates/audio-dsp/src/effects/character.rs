@@ -231,10 +231,11 @@ impl AudioEffect for RingMod {
 /// the holds average it. Each held sample is rounded to the nearest multiple of the step
 /// `2^(1 - bits)`, so silence stays silence and the range -1 ..= 1 takes `2^bits + 1` levels;
 /// fractional bits give steps between the whole-bit ones. Bits and Rate Divide take effect from
-/// the next sample, and a shorter hold cuts the one in progress short. Mix moves to a new value
-/// over 20 ms.
+/// the next sample: a new Bits rounds the sample being held again, and a shorter hold cuts the
+/// one in progress short. Mix moves to a new value over 20 ms.
 pub struct Bitcrusher {
     pv: ParamValues,
+    /// The input sample each channel holds, before rounding.
     held: Vec<f32>,
     /// Samples since the last capture, counted so that a capture happens when it reaches the hold
     /// length. Infinite after a reset, so the next sample is captured.
@@ -300,17 +301,21 @@ impl AudioEffect for Bitcrusher {
             self.since += 1.0;
             let mix = f64::from(self.mix.tick());
             for (ch, held) in self.held.iter_mut().enumerate() {
-                // A non-finite sample is taken as silence. A channel the block leaves out is fed
-                // silence, so it holds none of its earlier audio when it comes back.
+                // A non-finite sample is taken as silence. A channel the block leaves out holds
+                // silence from its first left-out sample on, so it holds none of its earlier audio
+                // when it comes back.
                 let dry = match channels.get(ch).filter(|_| ch < nch) {
                     Some(c) if c[i].is_finite() => f64::from(c[i]),
                     _ => 0.0,
                 };
-                if capture {
-                    *held = ((dry / step).round() * step).clamp(-limit, limit) as f32;
+                if capture || ch >= nch {
+                    *held = dry as f32;
                 }
                 if ch < nch {
-                    channels[ch][i] = (dry + mix * (f64::from(*held) - dry)) as f32;
+                    // The held input is rounded at the current step, so a change of Bits also
+                    // applies to the hold in progress.
+                    let crushed = ((f64::from(*held) / step).round() * step).clamp(-limit, limit);
+                    channels[ch][i] = (dry + mix * (crushed - dry)) as f32;
                 }
             }
         }
@@ -720,11 +725,16 @@ mod tests {
             let mut c = crush(&[("bits", 16.0), ("rate_divide", divide)], 1);
             let mut y = x.clone();
             c.process(&mut [&mut y]);
-            let at = changes(&y);
-            for (k, w) in at.windows(2).enumerate() {
-                assert_eq!(w[1] - w[0], want[k % want.len()], "divide {divide}: hold {k}");
+            let mut expected = vec![0usize];
+            while let Some(&last) = expected.last() {
+                let next = last + want[(expected.len() - 1) % want.len()];
+                if next >= x.len() {
+                    break;
+                }
+                expected.push(next);
             }
-            assert!(at.iter().all(|&i| y[i] == x[i]), "divide {divide}: a hold does not start with the input");
+            assert_eq!(changes(&y), expected, "divide {divide}");
+            assert!(expected.iter().all(|&i| y[i] == x[i]), "divide {divide}: a hold does not start with the input");
         }
     }
 
@@ -736,12 +746,48 @@ mod tests {
         let mut a: Vec<f32> = (0..10).map(|i| (i + 1) as f32 / 1024.0).collect();
         c.process(&mut [&mut a]);
         assert!(c.set_param("rate_divide", 2.0));
-        let x: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
-        let mut b = x.clone();
+        let input: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
+        let mut b = input.clone();
         c.process(&mut [&mut b]);
-        // The first sample after the change is captured, and each capture is held for two.
-        let want: Vec<f32> = (0..x.len()).map(|i| x[i - i % 2]).collect();
-        assert_eq!(b, want);
+        // `changes` counts the first sample whatever it holds, so the capture is checked apart.
+        assert_eq!(b[0], input[0], "the hold in progress was not cut short");
+        assert_eq!(changes(&b), (0..30).step_by(2).collect::<Vec<_>>());
+        assert!((0..30).step_by(2).all(|i| b[i] == input[i]));
+    }
+
+    /// A new Bits rounds the sample being held again from the next sample on, from the input it
+    /// took rather than from its rounded value, and the hold keeps its length.
+    #[test]
+    fn bitcrusher_rounds_the_hold_in_progress_at_new_bits() {
+        let mut c = crush(&[("bits", 16.0), ("rate_divide", 4.0)], 1);
+        let mut a = [0.3f32];
+        c.process(&mut [&mut a]);
+        assert!((a[0] - 0.3).abs() < 1e-4);
+        assert!(c.set_param("bits", 1.0));
+        let mut b = [0.9f32];
+        c.process(&mut [&mut b]);
+        assert_eq!(b[0], 0.0, "1 bit did not round the held 0.3 to 0");
+        assert!(c.set_param("bits", 16.0));
+        let mut d = [0.9f32, 0.9, 0.7];
+        c.process(&mut [&mut d]);
+        assert!((d[0] - 0.3).abs() < 1e-4 && d[0] == d[1], "the held input was lost: {d:?}");
+        assert_eq!(changes(&[a[0], b[0], d[0], d[1], d[2]]), vec![0, 1, 2, 4], "the hold did not keep its length");
+    }
+
+    /// A channel left out of one block of a single sample, between two captures, holds silence
+    /// when it comes back instead of the sample it held before.
+    #[test]
+    fn bitcrusher_clears_a_channel_left_out_for_one_sample() {
+        let mut c = crush(&[("bits", 8.0), ("rate_divide", 4.0)], 2);
+        let (mut l, mut r) = ([1.0f32], [1.0f32]);
+        c.process(&mut [&mut l, &mut r]);
+        assert_eq!(r[0], 1.0);
+        let mut l = [0.0f32];
+        c.process(&mut [&mut l]);
+        let (mut l, mut r) = ([0.0f32; 2], [0.0f32; 2]);
+        c.process(&mut [&mut l, &mut r]);
+        assert_eq!(r, [0.0, 0.0], "the channel came back with its earlier hold");
+        assert_eq!(l, [1.0, 1.0], "the channel kept in the block lost its hold");
     }
 
     /// A held sample sounds for no longer than the tail reports after the input ends.
