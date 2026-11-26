@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::ffi::OsString;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -70,13 +70,26 @@ impl Settings for Prefs {
     }
 }
 
+/// Settings with a free-form map beside a section, as an app's shortcut overrides or tool options are.
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct Keyed {
+    pub general: General,
+    pub shortcuts: BTreeMap<String, String>,
+}
+
+impl Settings for Keyed {
+    const APP_ID: &'static str = "keyedcraft";
+    const SCHEMA_VERSION: u32 = 1;
+}
+
+pub fn open_keyed(dir: &Path) -> (SettingsStore<Keyed>, craft_settings::LoadReport) {
+    SettingsStore::open_with(OpenOptions::new(Location::Dir(dir.to_path_buf())).probe(empty_probe()))
+}
+
 /// A probe that sees no environment, no executable and no platform folder.
 pub fn empty_probe() -> Probe {
     Probe { env: Box::new(|_| None), exe_dir: None, platform_config_dir: None }
-}
-
-pub fn probe_with_env(name: &'static str, value: &'static str) -> Probe {
-    Probe { env: Box::new(move |n| (n == name).then(|| OsString::from(value))), exe_dir: None, platform_config_dir: None }
 }
 
 pub fn open_in(dir: &Path) -> (SettingsStore<Prefs>, craft_settings::LoadReport) {
@@ -93,22 +106,4 @@ pub fn write_config(dir: &Path, text: &str) {
 
 pub fn read_config(dir: &Path) -> String {
     std::fs::read_to_string(config_path(dir)).unwrap()
-}
-
-#[cfg(unix)]
-pub fn restrict_directory_writes(dir: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    let permissions = std::fs::metadata(dir).unwrap().permissions();
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-    match tempfile::NamedTempFile::new_in(dir) {
-        Ok(probe) => {
-            drop(probe);
-            std::fs::set_permissions(dir, permissions).unwrap();
-            eprintln!("skipping permission test: environment permits writes into a 0500 directory");
-            false
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => true,
-        Err(error) => panic!("unexpected directory write-probe failure: {error}"),
-    }
 }

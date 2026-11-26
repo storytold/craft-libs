@@ -1,0 +1,840 @@
+#!/usr/bin/env -S python3 -I
+"""The craft-libs build loop: cargo with one resolution of features, so every local build shares one build of each crate.
+
+    cl check <crate> [cargo args]                 cargo check of the crate's lib, bins and tests
+    cl test <crate> [cargo args] [-- test args]   build the crate's tests (cargo test --no-run), then run each test binary
+    cl build gallery [cargo args]                 the debug gallery binary (target/debug/craft-ui-gallery)
+    cl build <crate> [cargo args]                 cargo build of the crate's lib and bins
+    cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N] [--theme <id>] [--mode light|dark] [--density compact|comfortable] [--contrast standard|high]
+                                                  the component's stories (--card: its Overview cards) as PNGs through the story-render bin
+    cl features <crate>                           print the --features value cl adds for <crate>
+    cl doctor                                     check the manifests for drift from the one feature resolution
+    cl cargo <args...>                            cargo through the job pool, the dev profile settings added
+
+In an app workspace (one whose root Cargo.toml has `[workspace.metadata.cl]`) the commands are different; see "App
+workspaces" below:
+
+    cl test <crate|all> [--unit] [--no-run] [cargo args] [-- test args]
+    cl check <crate>                              the same selection, cargo check
+    cl build <example>                            the example, on the same selection
+    cl doctor                                     the selected packages exist; the target holds one build of each expected crate
+
+Every cargo command runs through the command in CL_LAUNCHER when it is set (for example a wrapper that gives several
+builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. The binaries cl runs
+after a build (test binaries, the story renderer) run through the command in CL_RUNNER when it is set (for example a
+wrapper that limits how many run at once), else directly; a test binary runs from its package's directory, as cargo
+runs it. CARGO_TARGET_DIR defaults to <worktree>-target when that directory exists beside the worktree.
+
+Why one resolution: cargo builds a crate once per distinct feature set, and everything above it again, and it unifies
+features only over the packages a command selects. A framework crate's tests, a domain crate's tests, the gallery and
+the story renderer each pull in different crates, which turn on different features of egui, wgpu, craft-window and
+others below the framework, so each would build its own copy of the framework (minutes, and wgpu again). cl selects
+the `feature-root` package beside every command's package: its dependencies are the gallery's, with every domain
+crate, so every command resolves features as the gallery does and builds only the targets it names. The crate's own
+test feature (`suite`, else `screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
+`--all-features`, wasm checks) belong on GitHub. docs/development.md has the whole picture.
+
+Records: every build cl composes passes cargo's --timings (a report per build in <target>/cargo-timings/, the newest
+200 kept), and every cl command appends one line to <target>/cl.log: when it started, the command, the build's and
+the test runs' wall time, the exit code and the build's report.
+
+App workspaces: cl finds its workspace with `git rev-parse --show-toplevel` from the current directory, so
+`/path/to/craft-libs/tools/cl` run inside an app's tree works on that tree. An app declares its settings in its root
+Cargo.toml's `[workspace.metadata.cl]` (APP_KEYS; docs/development.md "App workspaces" has each key). Every command
+selects the same packages (`selection`), in test mode and without `--features` (the test features come from
+dev-dependencies), because each package brings features the others lack and a selection that drops one builds a second
+copy of the shared crates below them and everything above. Every command runs with `set_env` set and `unset_env`
+removed. Test binaries run `run_slots` at a time, longest first (`default_seconds` before a run has recorded times),
+with `--test-threads <test_threads>`; a binary named in `shard` runs as that many shards.
+
+Guards: `--all-features`, `--bins` and workspace-wide builds are refused with the reason; after every command, a new
+build of a framework crate (in an app workspace also of each `tracked` crate) in the target directory is named, with its
+feature set; CL_DRY_RUN=1 prints the composed cargo command (and an app's environment) and runs nothing; `cl doctor`
+(also run before every command, it reads a few manifests) reports manifest lines that would bring a second build back.
+"""
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import tomllib
+from concurrent.futures import ThreadPoolExecutor
+
+FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-canvas", "craft-ui-patterns", "craft-ui-shell", "craft-ui"]
+# Selected beside every command's package; its dependencies decide every shared crate's features (its manifest).
+ROOT = "feature-root"
+# Domain crates the story renderer can link, by the crate's short name.
+RENDER_FEATURES = {
+    "automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
+    "theme-editor", "theme-store", "timeline", "dialogs", "font-manager", "update",
+}
+# The egui crates every framework crate builds on: a feature only a dev-dependency line asks of one rebuilds the framework.
+EGUI_FAMILY = {"egui", "epaint", "epaint_default_fonts", "emath", "ecolor"}
+REFUSED = {
+    "--all-features": "it enables snapshot, system_fonts, color_fonts, all-languages and more, a set no loop uses, which rebuilds every dependency and the whole framework once; CI runs it",
+    "--bins": "the gallery's binaries are 1 GB links each; build the one you need (`cl build gallery`)",
+    "--workspace": "a workspace-wide build or test takes the better part of an hour; build the crate you changed, CI runs the rest",
+    "--all": "a workspace-wide build or test takes the better part of an hour; build the crate you changed, CI runs the rest",
+    "--all-targets": "it builds every binary and benchmark too; use `cl check` or `cl test` (--tests)",
+}
+TIMING_REPORTS_KEPT = 200
+# An app workspace's `[workspace.metadata.cl]`: each key, its type and its value when the table leaves it out.
+APP_KEYS = {
+    "selection": (list, None),
+    "tracked": (list, []),
+    "expected_features": (dict, {}),
+    "unset_env": (list, []),
+    "set_env": (dict, {}),
+    "shard": (dict, {}),
+    "default_seconds": (dict, {}),
+    "run_slots": (int, 1),
+    "test_threads": (int, None),
+}
+APP_BUILDING = {"test", "check", "build", "run", "bench", "clippy", "doc", "rustc"}
+# cargo's own subcommands that resolve a profile; `cargo()` passes the dev settings after them.
+CARGO_BUILDING = {"test", "check", "build", "run", "bench", "doc", "rustc", "metadata", "tree"}
+APP_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
+# Set by main() from the workspace's `[workspace.metadata.cl]` in an app workspace; None in craft-libs.
+APP = None
+DRY_RUN = bool(os.environ.get("CL_DRY_RUN"))
+# The dev-build tuning of craft-libs (.config/cargo-dev.toml, which the CI gate passes too), as the `--config`
+# KEY=VALUE pairs passed to every cargo command.
+DEV_PROFILE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), ".config", "cargo-dev.toml")
+
+
+def dev_profile_config():
+    def key(part):
+        return part if re.fullmatch(r"[A-Za-z0-9_-]+", part) else json.dumps(part)
+
+    def flatten(table, path):
+        for name, value in table.items():
+            if isinstance(value, dict):
+                yield from flatten(value, path + [key(name)])
+            else:
+                yield ".".join(path + [key(name)]) + "=" + json.dumps(value)
+
+    with open(DEV_PROFILE_FILE, "rb") as f:
+        return list(flatten(tomllib.load(f), []))
+
+
+# What cl.log records about this command; filled in as it runs.
+RECORD = {"start": time.time(), "target": None, "build": None, "run": 0.0, "report": ""}
+# The manifest lines the one feature set rests on: (file, regex that must match, what its absence brings back).
+PINS = [
+    ("crates/ui-macros/Cargo.toml", r'^syn = \{[^\n]*"full"[^\n]*"visit"[^\n]*"visit-mut"[^\n]*"fold"[^\n]*"extra-traits"',
+     "craft-ui-macros must ask syn for full, visit, visit-mut, fold and extra-traits, or any derive crate in a build changes the shared syn and rebuilds the framework"),
+    ("crates/ui-macros/Cargo.toml", r'^proc-macro2 = \{[^\n]*"span-locations"',
+     "craft-ui-macros must ask proc-macro2 for span-locations, or a build with design-lint in it changes the shared proc-macro2 and rebuilds the framework"),
+    ("crates/ui-contract/Cargo.toml", r'^craft-window = \{[^\n]*features = \[[^\]]*"ui"',
+     "craft-ui-contract must depend on craft-window with ui, or the shell's app flips craft-window under the whole framework"),
+]
+
+
+def fail(message):
+    print(f"cl: {message}", file=sys.stderr)
+    sys.exit(2)
+
+
+def worktree():
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode != 0:
+        fail("not inside a git worktree")
+    return top.stdout.strip()
+
+
+def metadata(top):
+    """The workspace's packages by name, and its `[workspace.metadata.cl]` table (None when it has none)."""
+    out = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=top, capture_output=True, text=True
+    )
+    if out.returncode != 0:
+        fail("cargo metadata failed:\n" + out.stderr)
+    data = json.loads(out.stdout)
+    return {p["name"]: p for p in data["packages"]}, (data.get("metadata") or {}).get("cl")
+
+
+def app_config(table):
+    """The app mode's settings from `[workspace.metadata.cl]`, every key filled in; refuses unknown keys and wrong types."""
+    unknown = sorted(set(table) - set(APP_KEYS))
+    if unknown:
+        fail(f"[workspace.metadata.cl]: unknown keys {unknown}; the keys are {', '.join(APP_KEYS)} (docs/development.md)")
+    config = {}
+    for key, (kind, default) in APP_KEYS.items():
+        value = table.get(key, default)
+        if key == "selection" and value is None:
+            fail("[workspace.metadata.cl]: `selection` is missing; it lists the packages every cl command selects")
+        if value is not None and (not isinstance(value, kind) or isinstance(value, bool)):
+            fail(f"[workspace.metadata.cl]: `{key}` must be {({list: 'a list', dict: 'a table', int: 'an integer'})[kind]}")
+        config[key] = value
+    for key in ("shard", "default_seconds"):
+        for name, value in config[key].items():
+            if "/" not in name or not isinstance(value, (int, float)) or isinstance(value, bool):
+                fail(f"[workspace.metadata.cl.{key}]: `{name}` must be \"<package>/<test target>\" with a number")
+    if any(not isinstance(v, list) for v in config["expected_features"].values()):
+        fail("[workspace.metadata.cl.expected_features]: each crate's value is a list of features")
+    if any(not isinstance(v, str) for v in config["set_env"].values()):
+        fail("[workspace.metadata.cl.set_env]: each value is a string")
+    return config
+
+
+def package(packages, name):
+    if name in packages:
+        return packages[name]
+    if "craft-" + name in packages:
+        return packages["craft-" + name]
+    fail(f"no workspace package named {name}")
+
+
+def canonical(packages, name):
+    """The package's name and the features cl adds for it, qualified: its own test feature."""
+    p = package(packages, name)
+    if "suite" in p["features"]:
+        return p["name"], [p["name"] + "/suite"]
+    if "screen-testing" in p["features"]:
+        return p["name"], [p["name"] + "/screen-testing"]
+    if "testing" in p["features"] and p["name"] != "craft-ui-test-kit":
+        return p["name"], [p["name"] + "/testing"]
+    return p["name"], []
+
+
+def own_targets(p):
+    """Target-selection flags naming the package's lib and bins, so the root's bin is never selected."""
+    flags = []
+    for t in p["targets"]:
+        if "lib" in t["kind"] or "rlib" in t["kind"] or "proc-macro" in t["kind"]:
+            flags.append("--lib")
+        elif "bin" in t["kind"]:
+            flags += ["--bin", t["name"]]
+    return flags
+
+
+def implied(p, features):
+    """The features a dependency line turns on in workspace package `p`: `features` and every feature of `p`'s own that
+    they imply. Without `p` (a crate outside the workspace) just `features`."""
+    on, todo = set(), list(features)
+    while todo:
+        f = todo.pop()
+        if f not in on:
+            on.add(f)
+            todo += [e for e in (p["features"].get(f, []) if p else []) if "/" not in e and not e.startswith("dep:")]
+    return on
+
+
+def doctor(top, packages, quiet=False):
+    """Manifest lines that would bring the variant churn back. Returns the number of problems."""
+    if APP:
+        return app_doctor(top, packages, quiet)
+    problems = []
+    for path, pattern, why in PINS:
+        text = open(os.path.join(top, path)).read()
+        if not re.search(pattern, text, re.M):
+            problems.append(f"{path}: {why}")
+    asked = {}
+    for p in packages.values():
+        for d in p["dependencies"]:
+            if d["name"] in EGUI_FAMILY and d["kind"] is None:
+                asked.setdefault(d["name"], set()).update(d["features"])
+    for p in packages.values():
+        manifest = os.path.relpath(p["manifest_path"], top)
+        for d in p["dependencies"]:
+            extra = set(d["features"]) - asked.get(d["name"], set())
+            if d["name"] in EGUI_FAMILY and d["kind"] == "dev" and extra:
+                problems.append(f"{manifest}: the {d['name']} dev-dependency asks for {sorted(extra)}, which no normal line "
+                                f"(feature-root's included) asks for; it changes {d['name']} under the framework between the "
+                                "crate's tests and every other build")
+    gallery = packages.get("craft-ui-gallery")
+    if gallery:
+        for d in gallery["dependencies"]:
+            domain = d["name"].startswith("craft-") and d["name"] not in FRAMEWORK
+            if domain and "suite" in d["features"] and not d["optional"]:
+                problems.append(f"crates/ui-gallery/Cargo.toml: {d['name']} must be optional (one feature per domain crate), or the story renderer links every crate")
+    root = packages.get(ROOT)
+    if not root:
+        problems.append(f"crates/{ROOT}: missing; without it every kind of command builds its own copy of the framework")
+    elif gallery:
+        mine = {d["name"]: d for d in root["dependencies"] if d["kind"] is None}
+        g = mine.get("craft-ui-gallery")
+        if not g or g["uses_default_features"] or g["features"]:
+            problems.append(f"crates/{ROOT}/Cargo.toml: must depend on craft-ui-gallery with default-features = false and no "
+                            "features, or every render links all domain crates")
+        for d in gallery["dependencies"]:
+            if d["kind"] is None and d["optional"] and d["name"].startswith("craft-"):
+                r = mine.get(d["name"])
+                if not r or not set(d["features"]) <= set(r["features"]):
+                    problems.append(f"crates/{ROOT}/Cargo.toml: must depend on {d['name']} with {d['features']} as the gallery "
+                                    "does, or a domain crate's tests and the gallery build different copies of the framework")
+    render = packages.get("story-render")
+    if gallery and render:
+        theirs = {d["name"]: d for d in gallery["dependencies"] if d["kind"] is None}
+        for d in render["dependencies"]:
+            g = theirs.get(d["name"])
+            if d["kind"] is None and g:
+                extra = set(d["features"]) - implied(packages.get(d["name"]), g["features"])
+                if extra:
+                    problems.append(f"crates/story-render/Cargo.toml: {d['name']} asks for {sorted(extra)} beyond what the "
+                                    "gallery's line turns on, so renders build a second copy of it and everything above")
+    for problem in problems:
+        print(f"cl doctor: {problem}", file=sys.stderr)
+    if not problems and not quiet:
+        print("cl doctor: the manifests keep the one feature set", file=sys.stderr)
+    return len(problems)
+
+
+def target_dir(top, env):
+    if "CARGO_TARGET_DIR" not in env and os.path.isdir(top + "-target"):
+        env["CARGO_TARGET_DIR"] = top + "-target"
+    return env.get("CARGO_TARGET_DIR", os.path.join(top, "target"))
+
+
+def tracked():
+    return FRAMEWORK + (APP["tracked"] if APP else [])
+
+
+def variants(target):
+    """The tracked crates' lib builds in the target dir's debug profile: {(crate, hash): (features, mode)}, mode
+    "check" for a metadata-only build (`cargo check`, no rlib) and "build" otherwise."""
+    found = {}
+    fp = os.path.join(target, "debug", ".fingerprint")
+    if not os.path.isdir(fp):
+        return found
+    names = tracked()
+    for d in os.listdir(fp):
+        m = re.match(r"(.+)-([0-9a-f]{16})$", d)
+        if not m or m.group(1) not in names:
+            continue
+        for f in os.listdir(os.path.join(fp, d)):
+            if f.startswith("lib-") and f.endswith(".json"):
+                try:
+                    j = json.load(open(os.path.join(fp, d, f)))
+                except (OSError, ValueError):
+                    continue
+                rlib = os.path.join(target, "debug", "deps", f"lib{m.group(1).replace('-', '_')}-{m.group(2)}.rlib")
+                found[(m.group(1), m.group(2))] = (j.get("features", ""), "build" if os.path.exists(rlib) else "check")
+    return found
+
+
+def report_new_variants(before, after):
+    """Names each new build of a tracked crate. A check and a build of a crate are separate by design; within each,
+    a target dir should hold one."""
+    new = {k: v for k, v in after.items() if k not in before}
+    for crate in tracked():
+        for mode in ("build", "check"):
+            mine = sorted({f for (c, _), (f, m) in new.items() if c == crate and m == mode})
+            if not mine:
+                continue
+            olds = {f for (c, _), (f, m) in before.items() if c == crate and m == mode}
+            if not olds:
+                continue
+            why = ("same features as one already here, so a crate below it changed its features (a dev-dependency line, "
+                   "a manifest change, or a command run outside cl)" if any(f in olds for f in mine)
+                   else "a feature set this target dir had not built")
+            print(f"cl: another {mode} of {crate}, features {' | '.join(mine)}: {why}; {len(olds)} were there before. "
+                  "Expected once per target dir after a manifest change (docs/development.md); otherwise run `cl doctor`.",
+                  file=sys.stderr)
+
+
+def timing_report(target, since):
+    """The timing report cargo wrote after `since`, and the older ones beyond the newest TIMING_REPORTS_KEPT removed."""
+    folder = os.path.join(target, "cargo-timings")
+    try:
+        reports = sorted((e.stat().st_mtime, e.path) for e in os.scandir(folder) if e.name.startswith("cargo-timing-"))
+    except OSError:
+        return ""
+    for _, path in reports[:-TIMING_REPORTS_KEPT]:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return os.path.basename(reports[-1][1]) if reports and reports[-1][0] >= since else ""
+
+
+def log_command(rc):
+    """One line in <target>/cl.log for this cl command."""
+    if not RECORD["target"]:
+        return
+    took = lambda seconds: "-" if seconds is None else f"{seconds:.1f} s"
+    line = (f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(RECORD['start']))} cl {' '.join(sys.argv[1:])} | "
+            f"build {took(RECORD['build'])} | run {took(RECORD['run'])} | rc {rc} | {RECORD['report'] or '-'}\n")
+    try:
+        with open(os.path.join(RECORD["target"], "cl.log"), "a") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
+def cargo(top, cargo_args, json_out=False, timings=True):
+    """Runs cargo through CL_LAUNCHER, with a timing report unless `timings` is off, and reports new framework builds.
+    Returns (return code, target dir, the JSON messages cargo printed on stdout when `json_out`)."""
+    # cargo fmt builds nothing, so its `--all` is the usual whole-workspace format.
+    for arg in ([] if cargo_args[:1] == ["fmt"] else cargo_args):
+        if arg in REFUSED:
+            fail(f"{arg} refused: {REFUSED[arg]}")
+    env = dict(os.environ)
+    if APP:
+        app_guard(cargo_args)
+        app_env(env)
+    target = target_dir(top, env)
+    if not DRY_RUN:
+        RECORD["target"] = target
+    if timings:
+        cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
+    # An app workspace keeps its own profile settings. For cargo's own build commands they go after the subcommand:
+    # cargo lets a `--config` given there replace every `--config` given before it, so a caller's own `--config`
+    # (.config/cargo-ci.toml) would otherwise drop the dev settings and build every crate, dependencies included, at
+    # opt-level 0. An external subcommand (fmt) would read them as its own options, so they stay before it.
+    config = [] if APP else [x for c in dev_profile_config() for x in ("--config", c)]
+    split = 1 if cargo_args[:1] and cargo_args[0] in CARGO_BUILDING else 0
+    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args[:split] + config + cargo_args[split:]
+    print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
+    sys.stdout.flush()
+    if DRY_RUN:
+        if APP:
+            print("cl: env " + " ".join(f"{k}={v}" for k, v in APP["set_env"].items()) + "; unset " + " ".join(APP["unset_env"]), file=sys.stderr)
+        print("cl: CL_DRY_RUN set, nothing run", file=sys.stderr)
+        return 0, target, []
+    before = variants(target)
+    started = time.time()
+    messages = []
+    if json_out:
+        proc = subprocess.Popen(cmd, cwd=top, env=env, stdout=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            try:
+                messages.append(json.loads(line))
+            except ValueError:
+                sys.stdout.write(line)
+        rc = proc.wait()
+    else:
+        rc = subprocess.run(cmd, cwd=top, env=env).returncode
+    RECORD["build"] = time.time() - started
+    if timings:
+        RECORD["report"] = timing_report(target, started)
+    report_new_variants(before, variants(target))
+    return rc, target, messages
+
+
+def run_binary(cmd, cwd, env=None):
+    """Runs a built binary through CL_RUNNER."""
+    sys.stdout.flush()
+    started = time.time()
+    rc = subprocess.run(shlex.split(os.environ.get("CL_RUNNER", "")) + cmd, cwd=cwd, env=env).returncode
+    RECORD["run"] += time.time() - started
+    return rc
+
+
+def shown(path, top):
+    """A path as cargo shows it: relative to the worktree when inside it."""
+    return os.path.relpath(path, top) if path.startswith(top + os.sep) else path
+
+
+def test(top, packages, cargo_args, test_args):
+    """Builds the tests with `cargo test --no-run`, then runs each test binary as cargo would: from its package's
+    directory, the lib's unit tests first, stopping at the first that fails."""
+    no_run = "--no-run" in cargo_args
+    quiet = "-q" in cargo_args or "--quiet" in cargo_args
+    # cl reads cargo's JSON messages itself (diagnostics still render), so a caller's own --message-format is dropped.
+    kept = []
+    skip = False
+    for a in cargo_args:
+        if skip:
+            skip = False
+        elif a == "--message-format":
+            skip = True
+        elif a != "--no-run" and not a.startswith("--message-format="):
+            kept.append(a)
+    cargo_args = kept
+    rc, target, messages = cargo(top, cargo_args[:1] + ["--no-run", "--message-format=json-render-diagnostics"] + cargo_args[1:], json_out=True)
+    if rc != 0:
+        sys.exit(rc)
+    by_manifest = {p["manifest_path"]: p for p in packages.values()}
+    tests = []
+    for m in messages:
+        if m.get("reason") != "compiler-artifact" or not m.get("executable") or not m["profile"]["test"]:
+            continue
+        root = os.path.dirname(m["manifest_path"])
+        source = os.path.relpath(m["target"]["src_path"], root)
+        lib = any(k in ("lib", "rlib", "proc-macro") for k in m["target"]["kind"])
+        tests.append((not lib, m["target"]["name"], "unittests " + source if lib else source, m["executable"], m["manifest_path"]))
+    tests.sort()
+    for _, _, source, exe, manifest in tests:
+        print(f"{'Executable':>12} {source} ({shown(exe, top)})", file=sys.stderr)
+    if no_run:
+        sys.exit(0)
+    for _, _, source, exe, manifest in tests:
+        if not quiet:
+            print(f"{'Running':>12} {source} ({shown(exe, top)})", file=sys.stderr)
+        package = by_manifest.get(manifest, {})
+        env = dict(os.environ, CARGO_MANIFEST_DIR=os.path.dirname(manifest), CARGO_PKG_NAME=package.get("name", ""))
+        rc = run_binary([exe] + test_args + (["--quiet"] if quiet else []), os.path.dirname(manifest), env)
+        if rc != 0:
+            print(f"cl: test failed: {source} ({shown(exe, top)}) exited with {rc}", file=sys.stderr)
+            sys.exit(rc)
+    sys.exit(0)
+
+
+def app_env(env):
+    """The one environment every command of an app workspace runs in: `set_env` set, `unset_env` removed."""
+    env.update(APP["set_env"])
+    for name in APP["unset_env"]:
+        env.pop(name, None)
+    return env
+
+
+def app_selected():
+    return [x for p in APP["selection"] for x in ("-p", p)]
+
+
+def app_package(name):
+    """The selected package named `name`, or named `<word>-<name>` (`engine` for `photocraft-engine`)."""
+    selection = APP["selection"]
+    if name in selection:
+        return name
+    matches = [p for p in selection if p.partition("-")[2] == name]
+    if len(matches) == 1:
+        return matches[0]
+    fail(f"{name} {'names several' if matches else 'is not one'} of the selected packages: all, " + ", ".join(matches or selection))
+
+
+def app_guard(args):
+    """Refuses the commands that bring a second copy of a shared crate: a selection other than the app's, or features."""
+    sub = args[0] if args else ""
+    if sub not in APP_BUILDING:
+        return
+    own = args[:args.index("--")] if "--" in args else args
+    named = []
+    for i, a in enumerate(own):
+        if a in ("-p", "--package") and i + 1 < len(own):
+            named.append(own[i + 1])
+        elif a.startswith("--package="):
+            named.append(a.split("=", 1)[1])
+        elif a.startswith("-p") and len(a) > 2:
+            named.append(a[2:])
+    if set(named) != set(APP["selection"]):
+        fail(f"a cargo command in this workspace names all {len(APP['selection'])} packages of [workspace.metadata.cl] `selection` "
+             "or none of cl's: one package alone (or the default members) resolves the shared crates with other features and "
+             "builds a second copy of each and of everything above them; use `cl test <crate>`, `cl check <crate>`, `cl build <example>`")
+    for a in own:
+        if a in APP_FEATURE_FLAGS or a.startswith("--features=") or a.startswith("-F"):
+            fail(f"{a} refused: the test features come from the dev-dependencies; a feature on the command line changes the resolution of every crate above it")
+    if sub == "test" and not any(a in ("--lib", "--tests", "--example") for a in own):
+        fail("a plain `cargo test` also builds doc tests, bins and examples in a different mode; pass `--lib --tests` (`cl test <crate>`)")
+
+
+def app_builds(target):
+    """Feature sets of the `expected_features` crates' builds in the target dir: {crate: {frozenset(features): builds}}."""
+    found = {}
+    fp = os.path.join(target, "debug", ".fingerprint")
+    if not os.path.isdir(fp):
+        return found
+    for d in os.listdir(fp):
+        m = re.match(r"(.+)-([0-9a-f]{16})$", d)
+        if not m or m.group(1) not in APP["expected_features"]:
+            continue
+        for f in os.listdir(os.path.join(fp, d)):
+            if not (f.startswith("lib-") and f.endswith(".json")):
+                continue
+            try:
+                j = json.load(open(os.path.join(fp, d, f)))
+                features = j.get("features", "[]")
+                features = json.loads(features) if isinstance(features, str) else features
+            except (OSError, ValueError):
+                continue
+            sets = found.setdefault(m.group(1), {})
+            sets[frozenset(features)] = sets.get(frozenset(features), 0) + 1
+    return found
+
+
+def app_doctor(top, packages, quiet=False):
+    """The selected packages exist; unless `quiet`, the target holds one build of each `expected_features` crate, with
+    those features."""
+    problems = [f"{p}: not a package of this workspace; the selection of every cl command names it" for p in APP["selection"] if p not in packages]
+    if not quiet:
+        target = target_dir(top, dict(os.environ))
+        for crate, sets in sorted(app_builds(target).items()):
+            expected = APP["expected_features"][crate]
+            if len(sets) > 1:
+                problems.append(f"{target}: {len(sets)} builds of {crate} with different features: " +
+                                " | ".join(",".join(sorted(f)) or "-" for f in sets) + "; a second copy of everything above it came with them")
+            for f in sets:
+                if f != frozenset(expected) and len(sets) == 1:
+                    problems.append(f"{target}: {crate} was built with {sorted(f)}, expected {sorted(expected)}")
+    for problem in problems:
+        print(f"cl doctor: {problem}", file=sys.stderr)
+    if not problems and not quiet:
+        print(f"cl doctor: the {len(APP['selection'])} selected packages exist and the target holds one build of each "
+              "expected_features crate", file=sys.stderr)
+    return len(problems)
+
+
+def app_shards(names, n):
+    """Splits a test binary's tests into `n` shards of about the same size by module. Returns [(filters, skips)]: shard i
+    runs the tests matching its filters and none of its skips (libtest filters are substrings); the last shard has no
+    filter and skips every other shard's, so each test runs exactly once. None when no exact split is found."""
+    total = len(names)
+    groups = {}
+    for name in names:
+        parts = name.split("::")
+        groups.setdefault(parts[0] + "::" if len(parts) > 1 else None, []).append(parts)
+    keyed = {}
+    rest = 0
+    for key, tests in groups.items():
+        if key is None or len(tests) <= total / n:
+            if key is None:
+                rest += len(tests)
+            else:
+                keyed[key] = len(tests)
+            continue
+        for parts in tests:
+            if len(parts) > 2:
+                k = parts[0] + "::" + parts[1] + "::"
+                keyed[k] = keyed.get(k, 0) + 1
+            else:
+                rest += 1
+    bins = [{"keys": [], "load": 0} for _ in range(n)]
+    for key, count in sorted(keyed.items(), key=lambda kv: -kv[1]):
+        b = min(bins, key=lambda x: x["load"])
+        b["keys"].append(key)
+        b["load"] += count
+    # The catch-all shard is the lightest one: it also takes the tests directly in a split module and the unmodulated ones.
+    last = min(bins, key=lambda x: x["load"])
+    ordered = [b for b in bins if b is not last and b["keys"]] + [last]
+    plan, earlier = [], []
+    for b in ordered[:-1]:
+        plan.append((list(b["keys"]), list(earlier)))
+        earlier += b["keys"]
+    plan.append(([], list(earlier)))
+    for name in names:
+        hits = sum(1 for filters, skips in plan
+                   if (not filters or any(f in name for f in filters)) and not any(k in name for k in skips))
+        if hits != 1:
+            return None
+    return plan if len(plan) > 1 else None
+
+
+def app_times_path(target):
+    return os.path.join(target, "cl-test-times.json")
+
+
+def app_run_one(job, env, runner, target_args):
+    """Runs one binary (or shard) and returns (job, return code, seconds, output)."""
+    cmd = shlex.split(runner) + [job["exe"]] + target_args + job["args"]
+    started = time.time()
+    proc = subprocess.run(cmd, cwd=job["cwd"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    return job, proc.returncode, time.time() - started, proc.stdout
+
+
+def app_parse(output):
+    """(passed, failed, failed test names, overflowed stacks) from a libtest output."""
+    passed = failed = 0
+    for m in re.finditer(r"^test result: [A-Za-z]+\. (\d+) passed; (\d+) failed", output, re.M):
+        passed += int(m.group(1))
+        failed += int(m.group(2))
+    names = []
+    for block in re.findall(r"^failures:\n((?:    \S.*\n)+)", output, re.M):
+        names += [line.strip() for line in block.splitlines()]
+    return passed, failed, names, output.count("overflowed its stack")
+
+
+def app_test(top, packages, rest):
+    if not rest:
+        fail("cl test <crate|all> [--unit] [--no-run] [cargo args] [-- test args]")
+    name, args = rest[0], rest[1:]
+    mine, theirs = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args else (args, [])
+    unit, no_run = "--unit" in mine, "--no-run" in mine
+    mine = [a for a in mine if a not in ("--unit", "--no-run")]
+    only = None if name == "all" else app_package(name)
+    build = ["test", "--no-run", "--message-format=json-render-diagnostics", "--lib"] + ([] if unit else ["--tests"]) + ["--no-fail-fast"] + app_selected() + mine
+    rc, target, messages = cargo(top, build, json_out=True)
+    if rc != 0:
+        sys.exit(rc)
+    env = app_env(dict(os.environ))
+    runner = env.get("CL_RUNNER", "")
+    filtered = any(not a.startswith("-") for a in theirs)
+    threads = APP["test_threads"]
+    thread_args = [] if threads is None or any(a.startswith("--test-threads") for a in theirs) else ["--test-threads", str(threads)]
+    slots = APP["run_slots"]
+    if DRY_RUN:
+        shards = "" if filtered else "".join(f"; {k} in {n} shards" for k, n in APP["shard"].items() if not only or k.split("/")[0] == only)
+        print(f"cl: would run {only or 'every binary'}{' through `' + runner + '`' if runner else ''} ({slots} at a time, longest first), "
+              f"arguments: {' '.join(theirs + thread_args)}{shards}", file=sys.stderr)
+        sys.exit(0)
+    by_manifest = {p["manifest_path"]: p["name"] for p in packages.values()}
+    binaries = []
+    for m in messages:
+        if m.get("reason") != "compiler-artifact" or not m.get("executable") or not m["profile"]["test"]:
+            continue
+        package = by_manifest.get(m["manifest_path"], "")
+        if package not in APP["selection"] or (only and package != only):
+            continue
+        lib = any(k in ("lib", "rlib", "proc-macro") for k in m["target"]["kind"])
+        binaries.append((package, m["target"]["name"], lib, m["executable"], os.path.dirname(m["manifest_path"])))
+    if not binaries:
+        fail(f"no test binary built for {name}")
+    for package, tname, lib, exe, cwd in sorted(binaries, key=lambda b: (not b[2], b[1])):
+        print(f"{'Executable':>12} {package} {'lib' if lib else tname} ({shown(exe, top)})", file=sys.stderr)
+    if no_run:
+        sys.exit(0)
+    run_env = dict(env)
+    run_env.setdefault("RUST_BACKTRACE", "1")
+    try:
+        times = json.load(open(app_times_path(target)))
+    except (OSError, ValueError):
+        times = {}
+    jobs = []
+    for package, tname, lib, exe, cwd in binaries:
+        job_env = dict(run_env, CARGO_MANIFEST_DIR=cwd, CARGO_PKG_NAME=package)
+        key = f"{package}/{tname}"
+        base = {"exe": exe, "cwd": cwd, "env": job_env, "label": f"{package} {'lib' if lib else tname}", "key": key, "args": list(theirs)}
+        plan = None
+        shards = int(APP["shard"].get(key, 1))
+        if shards > 1 and not filtered:
+            listing = subprocess.run([exe, "--list", "--format", "terse"], cwd=cwd, env=job_env, capture_output=True, text=True, errors="replace")
+            tests = [l[:-len(": test")] for l in listing.stdout.splitlines() if l.endswith(": test")]
+            plan = app_shards(tests, shards) if listing.returncode == 0 and tests else None
+        if plan:
+            for i, (filters, skips) in enumerate(plan):
+                extra = filters + [x for k in skips for x in ("--skip", k)]
+                jobs.append(dict(base, key=f"{key}#{i}", label=f"{base['label']} shard {i + 1}/{len(plan)}", args=extra + list(theirs)))
+        else:
+            jobs.append(base)
+
+    def expected_seconds(job):
+        key = job["key"]
+        if key in times:
+            return times[key]
+        whole = key.split("#")[0]
+        return APP["default_seconds"].get(whole, 0.0) / (int(APP["shard"].get(whole, 1)) if "#" in key else 1)
+
+    jobs.sort(key=lambda j: -expected_seconds(j))
+    started = time.time()
+    tests_passed = tests_failed = overflows = 0
+    failures = []
+    new_times = dict(times)
+
+    def work(job):
+        return app_run_one(job, job["env"], runner, thread_args)
+
+    with ThreadPoolExecutor(max_workers=slots) as pool:
+        for job, code, seconds, output in pool.map(work, jobs):
+            passed, failed, names, overflowed = app_parse(output)
+            tests_passed, tests_failed, overflows = tests_passed + passed, tests_failed + failed, overflows + overflowed
+            new_times[job["key"]] = seconds
+            bad = code != 0
+            if bad:
+                failures += [f"{job['label']} {n}" for n in names] or [f"{job['label']} (exit {code}, no test result)"]
+            print(f"{'FAILED' if bad else 'ok':>8} {job['label']}: {passed} passed, {failed} failed, {seconds:.0f} s", file=sys.stderr)
+            if bad or only:
+                sys.stderr.write(output)
+    wall = time.time() - started
+    RECORD["run"] = wall
+    try:
+        json.dump(new_times, open(app_times_path(target), "w"))
+    except OSError:
+        pass
+    print(f"cl: {tests_passed} passed, {tests_failed} failed, {len(jobs)} binaries, {overflows} overflowed stacks, {wall:.0f} s", file=sys.stderr)
+    for f in failures:
+        print(f"  {f}", file=sys.stderr)
+    sys.exit(1 if failures else 0)
+
+
+def app_main(top, packages, command, rest):
+    if command == "cargo":
+        run(top, rest, timings=False)
+    if command in ("features", "render"):
+        fail(f"cl {command} belongs to the craft-libs workspace")
+    if not rest:
+        fail(f"cl {command} <crate> [args]")
+    name, args = rest[0], rest[1:]
+    if command == "test":
+        app_test(top, packages, rest)
+    if command == "check":
+        if name != "all":
+            app_package(name)
+        run(top, ["check", "--lib", "--tests"] + app_selected() + args)
+    if command == "build":
+        # An example builds in the dev profile with the dev-dependencies' features, the units the test build resolved.
+        rc, target, _ = cargo(top, ["test", "--no-run", "--example", name] + app_selected() + args)
+        if rc == 0:
+            print(f"cl: {os.path.join(target, 'debug', 'examples', name)}", file=sys.stderr)
+        sys.exit(rc)
+    fail(f"unknown command {command}; see cl --help")
+
+
+def run(top, cargo_args, then=None, timings=True):
+    """Runs cargo; `then` (a binary in the target's debug dir and its arguments) runs after a successful cargo. Exits
+    with the last return code."""
+    rc, target, _ = cargo(top, cargo_args, timings=timings)
+    if rc == 0 and then and not DRY_RUN:
+        rc = run_binary([os.path.join(target, "debug", then[0])] + then[1:], top)
+    sys.exit(rc)
+
+
+def with_features(args, features):
+    return args + (["--features", ",".join(features)] if features else [])
+
+
+def selected(pkg):
+    return ["-p", pkg, "-p", ROOT]
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0)
+    command, rest = sys.argv[1], sys.argv[2:]
+    top = worktree()
+    packages, table = metadata(top)
+    global APP
+    APP = None if table is None else app_config(table)
+    if command == "doctor":
+        sys.exit(1 if doctor(top, packages) else 0)
+    if doctor(top, packages, quiet=True) and APP:
+        sys.exit(1)
+    if APP:
+        app_main(top, packages, command, rest)
+    if command == "cargo":
+        run(top, rest, timings=False)
+    if command == "features":
+        if not rest:
+            fail("cl features <crate>")
+        print(",".join(canonical(packages, rest[0])[1]))
+        return
+    if command in ("check", "test", "build"):
+        if not rest:
+            fail(f"cl {command} <crate> [args]")
+        name, args = rest[0], rest[1:]
+        if command == "build" and name == "gallery":
+            run(top, ["build"] + selected("craft-ui-gallery") + ["--bin", "craft-ui-gallery"] + args)
+        pkg, features = canonical(packages, name)
+        if command == "check":
+            run(top, with_features(["check"] + selected(pkg) + ["--tests"] + own_targets(packages[pkg]), features) + args)
+        if command == "test":
+            mine, theirs = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args else (args, [])
+            test(top, packages, with_features(["test"] + selected(pkg) + ["--tests"], features) + mine, theirs)
+        run(top, with_features(["build"] + selected(pkg) + own_targets(packages[pkg]), features) + args)
+    if command == "render":
+        if len(rest) < 2:
+            fail("cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N] [--theme <id>] [--mode light|dark] [--density compact|comfortable] [--contrast standard|high]")
+        crate, component, options = rest[0], rest[1], rest[2:]
+        short = crate.removeprefix("craft-")
+        features = []
+        if short != "ui":
+            if short not in RENDER_FEATURES:
+                fail(f"{crate} is not a crate the story renderer links; one of: ui, " + ", ".join(sorted(RENDER_FEATURES)))
+            features = ["story-render/" + short]
+        if "--out" not in options:
+            options += ["--out", os.path.join(os.environ.get("CL_RENDER_DIR", os.path.expanduser("~/.cache/story-render")), component)]
+        # `cargo run` takes one package, so the bin is built with the root selected and then run.
+        run(top, with_features(["build", "-q"] + selected("story-render") + ["--bin", "story-render"], features),
+            then=["story-render", "--only", component] + options)
+    fail(f"unknown command {command}; see cl --help")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit as done:
+        log_command(done.code if isinstance(done.code, int) else 1)
+        raise
