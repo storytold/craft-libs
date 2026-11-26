@@ -19,6 +19,16 @@ No feature is enabled by default.
 | `test-support` | `cos` plus `testing::Pdf`, a builder of small synthetic PDF files for tests |
 | `content` | `cos` plus `cos::content`: parse content streams into operators with source spans, write them back, and the matrix arithmetic. Uses hayro-syntax's tokenizer for inline images |
 
+## Export settings
+
+`settings` (always available, no dependencies) holds the PDF export settings a shared export
+dialog edits and a preset stores: `PdfSettings` with its sections, the choice enums (each with a
+stable `id`, `from_id` and English `label`, listed by the `Choice` trait), the built-in presets
+(`builtin_presets(app)`), and the checks that refuse settings a writer can't honour
+(`PdfSettings::check`, `check_values`, `warnings`). Errors and warnings are English text with a
+stable `id` each. Checks that depend on colour profiles ask an app-supplied `ProfileCatalog`.
+The settings types derive `Serialize` and `Deserialize` (camelCase, every field optional, passwords never written); apps can also save settings through the ids.
+
 ## Reading and rendering
 
 `open` accepts shared bytes without copying. `open_slice` reserves storage fallibly before
@@ -376,7 +386,7 @@ one directory using the listed names, then run:
 ```sh
 CRAFT_PDF_TEST_FONT_DIR=/absolute/path/to/licensed-fonts \
 RUSTFLAGS="--cfg craft_pdf_unicode_fixtures" \
-cargo test -p craft-pdf --all-features --test unicode_writing
+cargo test -p craft-pdf --all-features -- integration::unicode_writing
 ```
 
 Repeat with `--target wasm32-unknown-unknown` and the matching test runner for

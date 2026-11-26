@@ -138,3 +138,84 @@ fn hard_edges_and_text_like_content_keep_their_structure() {
     assert!(wrong * 100 < total * 2, "{wrong} of {total} pixels flipped side of mid-gray");
     assert!(psnr(&img, &back) > 30.0, "{:.1}", psnr(&img, &back));
 }
+
+/// Integer-only test content, so the bytes do not depend on floating point: gradients with
+/// xorshift grain, a flat band, and thin dark strokes, so the encoder picks both the whole-block
+/// modes and the sub-block modes.
+fn mixed(w: u32, h: u32, seed: u32) -> Image {
+    let mut s = seed | 1;
+    let mut data = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            let stroke = (x % 23 < 2 && y % 40 > 6) || (y % 29 < 2 && x % 50 > 4);
+            let flat = y * 4 / h.max(1) == 2;
+            for c in 0..3u32 {
+                let v = if stroke {
+                    20
+                } else if flat {
+                    180 + c * 10
+                } else {
+                    ((x * (c + 1) * 3 + y * (3 - c) * 2) / 3 + (s >> (8 * c)) % 9) % 256
+                };
+                data.push(v as u8);
+            }
+        }
+    }
+    Image::from_u8(w, h, ChannelLayout::Rgb, data).unwrap()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn encoder_output_bytes_are_unchanged() {
+    // SHA-256 of each lossy WebP file as the encoder wrote it before the B_PRED trial stopped
+    // copying the luma plane for every macroblock. Each file must also decode with `image-webp`.
+    let cases: [(u32, u32, u8, &str); 10] = [
+        (1, 1, 80, "039d134b25d490c799df0819880b52dd2650799b91a556fa8ec0a789c19abde9"),
+        (2, 3, 80, "f6bba710b503a8b53c12a7704b8aba6e448d18ca7990e2f01b4e5e1870768c82"),
+        (17, 9, 90, "e723e08ef9a8bf811f6dfbe034bcb4e4cdc9c18304750f1a1a6f29d6767549b2"),
+        (31, 15, 50, "c3d15c6228e9fb1aae8fad4e6cb212eb8fee03b967b422d277ed0f6c6a745f40"),
+        (33, 47, 75, "40b09871821c938e9d12d3bb24be36dffeb1d109b86654e9ab5013e75d9fc1a5"),
+        (100, 75, 10, "1a0bc0e7dab44a41597fed103f195babe1db9e7e83afe703acd14dd7e444eafa"),
+        (100, 75, 95, "d1088a31aeb0697ac6d153a6849cadfaf6d26be9166b55d0be8815aaafbac49a"),
+        (257, 129, 80, "39f4229783ae45952e1000f6e8fd26f24dca8dcda0c19d5836eef37881a7e294"),
+        (640, 480, 75, "7dedafa23f4f003c84f3898a77b2a3ffdeb59d0c42d0ae2a0470a6270cb19589"),
+        (640, 480, 30, "ff32e3ee3c3bdf7b0e50815aabc84449bdeb771b5e6c5e5d5758e5e0fdcb8554"),
+    ];
+    let mut actual = Vec::new();
+    for (w, h, q, _) in cases {
+        let img = mixed(w, h, w * 31 + h);
+        let bytes = encode(&img, Format::WebP, &lossy(q)).unwrap();
+        let mut dec = image_webp::WebPDecoder::new(std::io::Cursor::new(&bytes[..])).unwrap_or_else(|e| panic!("{w}x{h} q{q}: {e}"));
+        assert_eq!(dec.dimensions(), (w, h));
+        let mut rgb = vec![0u8; dec.output_buffer_size().unwrap()];
+        dec.read_image(&mut rgb).unwrap_or_else(|e| panic!("{w}x{h} q{q}: {e}"));
+        assert_eq!(rgb.len(), (w * h * 3) as usize);
+        actual.push(sha256_hex(&bytes));
+    }
+    let expected: Vec<&str> = cases.iter().map(|c| c.3).collect();
+    assert_eq!(actual, expected);
+}
+
+/// Encode timings for squares of growing size. Ignored by default; run in release:
+///
+/// ```sh
+/// cargo test --release -p craft-image-codecs --test it -- webp_lossy::encode_time_by_size --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn encode_time_by_size() {
+    for side in [512u32, 1024, 2048, 4096] {
+        let img = mixed(side, side, 7);
+        let start = std::time::Instant::now();
+        let bytes = encode(&img, Format::WebP, &lossy(75)).unwrap();
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        println!("{side}x{side}: {ms:.0} ms, {:.1} ns per pixel, {} bytes", ms * 1e6 / f64::from(side * side), bytes.len());
+    }
+}

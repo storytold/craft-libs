@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "document-tabs-trailing-slot"
+kind = "marker"
+rule = "contract/allocate"
+path = "crates/ui-widgets/src/tabs/document.rs"
+reason = "The document tabs are a plain `show`, not a component: a slot as wide as last pass's trailing area keeps its room, so the area follows the last tab while every tab shows."
+count = 1
