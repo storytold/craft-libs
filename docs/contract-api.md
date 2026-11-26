@@ -37,13 +37,13 @@ Pure UI behaviours (layer 1): press lifecycle, `ValueDrag`, navigation, item lay
   - `pub fn to_screen(&self, p: Point) -> Pos2`. Where the view draws document point `p`.
   - `pub fn to_doc(&self, p: Pos2) -> Point`. The document point under screen position `p`.
   - `pub fn map_vec(&self, v: Vec2) -> ScreenVec`. A document vector as the view draws it: stretched, turned, zoomed and mirrored.
-  - `pub fn unmap_vec(&self, v: ScreenVec) -> Vec2`. The document vector a screen vector shows: the inverse of [`map_vec`](Self::map_vec).
+  - `pub fn unmap_vec(&self, v: ScreenVec) -> Vec2`. The document vector a screen vector shows: the inverse of [`map_vec`].
   - `pub fn zoom_x(&self) -> f64`. Screen points per document unit along the document's x axis: `zoom × aspect`.
   - `pub fn extent(&self, r: Rect) -> ScreenVec`. The screen size of the box that holds document rect `r` at the view's zoom, rotation, aspect and flip: the bounding box of [`CanvasView::quad`].
   - `pub fn quad(&self, r: Rect) -> [Pos2; 4]`. The screen corners of document rect `r`, in order round it: (x0, y0), (x1, y0), (x1, y1), (x0, y1).
   - `pub fn visible(&self) -> Rect`. The document bounds of the screen rect: every document point the view can show.
-  - `pub fn doc_len(&self, points: f32) -> f64`. A screen distance in document units along the document's y axis (divide by [`zoom_x`](Self::zoom_x) for its x axis).
-  - `pub fn layer_transform(&self) -> Option<CanvasTransform>`. The transform a canvas body is shown through when this view only scales and moves the document: unturned, unmirrored and square. `None` for any other view; its controls register parts in screen space through [`to_screen`](Self::to_screen) instead.
+  - `pub fn doc_len(&self, points: f32) -> f64`. A screen distance in document units along the document's y axis (divide by [`zoom_x`] for its x axis).
+  - `pub fn layer_transform(&self) -> Option<CanvasTransform>`. The transform a canvas body is shown through when this view only scales and moves the document: unturned, unmirrored and square. `None` for any other view; its controls register parts in screen space through [`to_screen`] instead.
   - `pub fn axis_aligned(&self) -> bool`. Whether the rotation is a multiple of 90°, so document axes are screen axes.
   - `pub fn level(&self, zero: Point) -> CanvasView`. The view without its rotation, moved so it draws `zero` where this view does: the same zoom, flip and aspect, so ticks measured with it never stretch.
 - `craft_behavior::Caret`: re-export of `craft_behavior::codec::Caret`.
@@ -314,13 +314,13 @@ The transform a canvas body is shown through, and the canvas view with its zoom 
   - `pub fn to_screen(&self, p: Point) -> Pos2`. Where the view draws document point `p`.
   - `pub fn to_doc(&self, p: Pos2) -> Point`. The document point under screen position `p`.
   - `pub fn map_vec(&self, v: Vec2) -> ScreenVec`. A document vector as the view draws it: stretched, turned, zoomed and mirrored.
-  - `pub fn unmap_vec(&self, v: ScreenVec) -> Vec2`. The document vector a screen vector shows: the inverse of [`map_vec`](Self::map_vec).
+  - `pub fn unmap_vec(&self, v: ScreenVec) -> Vec2`. The document vector a screen vector shows: the inverse of [`map_vec`].
   - `pub fn zoom_x(&self) -> f64`. Screen points per document unit along the document's x axis: `zoom × aspect`.
   - `pub fn extent(&self, r: Rect) -> ScreenVec`. The screen size of the box that holds document rect `r` at the view's zoom, rotation, aspect and flip: the bounding box of [`CanvasView::quad`].
   - `pub fn quad(&self, r: Rect) -> [Pos2; 4]`. The screen corners of document rect `r`, in order round it: (x0, y0), (x1, y0), (x1, y1), (x0, y1).
   - `pub fn visible(&self) -> Rect`. The document bounds of the screen rect: every document point the view can show.
-  - `pub fn doc_len(&self, points: f32) -> f64`. A screen distance in document units along the document's y axis (divide by [`zoom_x`](Self::zoom_x) for its x axis).
-  - `pub fn layer_transform(&self) -> Option<CanvasTransform>`. The transform a canvas body is shown through when this view only scales and moves the document: unturned, unmirrored and square. `None` for any other view; its controls register parts in screen space through [`to_screen`](Self::to_screen) instead.
+  - `pub fn doc_len(&self, points: f32) -> f64`. A screen distance in document units along the document's y axis (divide by [`zoom_x`] for its x axis).
+  - `pub fn layer_transform(&self) -> Option<CanvasTransform>`. The transform a canvas body is shown through when this view only scales and moves the document: unturned, unmirrored and square. `None` for any other view; its controls register parts in screen space through [`to_screen`] instead.
   - `pub fn axis_aligned(&self) -> bool`. Whether the rotation is a multiple of 90°, so document axes are screen axes.
   - `pub fn level(&self, zero: Point) -> CanvasView`. The view without its rotation, moved so it draws `zero` where this view does: the same zoom, flip and aspect, so ticks measured with it never stretch.
 - `craft_behavior::canvas::RulerUnits`: `pub struct RulerUnits { pub per_doc: f64, pub ticks: Ticks, pub labels: TickLabels }`. The ruler unit of one document axis: its size, its ticks and how it labels them.
@@ -359,7 +359,7 @@ Zoom rules as pure functions on a [`CanvasView`]: the zoom scheme's range and Zo
   - `pub fn max_device(&self) -> f64`. The greatest device zoom.
   - `pub fn clamp(&self, device: f64, size: Size) -> f64`. `device` within the range for a document of `size`; a zoom that is not a finite number becomes 100 %.
   - `pub fn step(&self, device: f64, dir: i32, size: Size) -> f64`. Zoom In (`dir` > 0) or Zoom Out (`dir` < 0) from `device`: the next rung past it (a zoom within 0.1 % of a rung counts as on it), within the document's range.
-  - `pub fn step_in_range(&self, device: f64, dir: i32, range: RangeInclusive<f64>) -> f64`. [`step`](Self::step) within an explicit range of device zoom (a navigator or a zoom field with bounds of its own).
+  - `pub fn step_in_range(&self, device: f64, dir: i32, range: RangeInclusive<f64>) -> f64`. [`step`] within an explicit range of device zoom (a navigator or a zoom field with bounds of its own).
   - `pub fn percent_range(&self, device: f64, size: Size) -> RangeInclusive<f64>`. A zoom field's range in percent: the document's range widened to include `device` itself.
   - `pub fn percent(&self, device: f64) -> f64`. `device` zoom as percent of the scheme's 100 %.
   - `pub fn device(&self, percent: f64) -> f64`. The device zoom of `percent` of the scheme's 100 %.
@@ -636,7 +636,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn hidden(&self) -> &[(P, Location<P>)]`. The closed panels, and panels the application does not register now, with where each one goes back.
   - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels, and the closed panels that were floating, with the docked location each one left.
   - `pub fn revision(&self) -> Revision`. The revision of this workspace value: it moves with every write, and no other value has it.
-  - `pub fn generation(&self) -> u64`. The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
+  - `pub fn generation(&self) -> u64`. The generation of this live workspace: it moves with every [`replace`] and nothing else.
   - `pub fn raise_window_floor(&mut self, floor: u64)`. Keeps the ids of new floating windows at or above `floor`.
   - `pub fn forget_hidden(&mut self, forget: impl Fn(&P) -> bool)`. Drops the closed-panel records of the panels `forget` names, so reopening them does not restore their place.
   - `pub fn replace(&mut self, with: Workspace<P>)`. Replaces the arrangement with `with` and moves to the next generation.
@@ -655,7 +655,7 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn layout(&self) -> Option<&Workspace<P>>`. The layout the current workspace shows: what it was left with, else its stored one.
   - `pub fn select(&mut self, id: &str, live: &mut Workspace<P>) -> Result<(), WorkspaceError>`. Switch to `id` and replace `live` with the layout it shows; the current workspace's live layout is kept under its id first (Photoshop remembers the state of each workspace until Reset).
   - `pub fn check_name<'n>(&self, name: &'n str) -> Result<(&'n str, Option<&str>), WorkspaceError>`. Whether `name` can be saved: the trimmed name, and the id of the saved workspace it would replace (any case), if any.
-  - `pub fn save(&mut self, name: &str, live: Workspace<P>, chrome: WorkspaceChrome, keeps: WorkspaceKeeps) -> Result<String, WorkspaceError>`. Save `live` under `name`, capturing `keeps`, and make it current; [`check_name`](Self::check_name) refuses the name or names the saved workspace it replaces.
+  - `pub fn save(&mut self, name: &str, live: Workspace<P>, chrome: WorkspaceChrome, keeps: WorkspaceKeeps) -> Result<String, WorkspaceError>`. Save `live` under `name`, capturing `keeps`, and make it current; [`check_name`] refuses the name or names the saved workspace it replaces.
   - `pub fn delete(&mut self, id: &str) -> Result<(), WorkspaceError>`. Delete a saved workspace; the current one can't be deleted (Photoshop greys it).
   - `pub fn reset(&mut self, live: &mut Workspace<P>) -> Result<(), WorkspaceError>`. Reset the current workspace: drop what it was left with and replace `live` with its stored layout (a built-in's code layout, or the layout it was saved with).
 - `craft_behavior::dock::ZoneSize`: `pub enum ZoneSize { Depth(f32), Fraction }`. How deep the side zones of a body are.
@@ -857,7 +857,7 @@ The crop frame's pure geometry: the box, where a press lands on it, what each ge
   - `pub fn crop_size(&self) -> Option<(f64, f64)>`. The size Enter would crop to: the frame's own width and height in whole document units, at least 1; `None` when they are not finite.
   - `pub fn size_ok(&self, min: f64) -> bool`. Whether both sides are at least `min`, and never under one document unit whatever `min` says (a `min` that is not a number counts as one unit).
   - `pub fn resized(&self, part: BoxPart, by: Vec2, hold: AspectHold, alt: bool) -> Self`. The frame with `part` dragged by the page vector `by`: along the frame's own axes, the opposite edges kept on the page (or the centre with `alt`), the proportions held as `hold` says.
-  - `pub fn resized_centred(&self, part: BoxPart, by: Vec2, hold: AspectHold, alt: bool) -> Option<Self>`. [`resized`](Self::resized) for Auto Center Preview in image mode: `part` dragged by `by` grows or shrinks the frame about its centre, so the handle stays under the pointer while the frame stays centred on screen.
+  - `pub fn resized_centred(&self, part: BoxPart, by: Vec2, hold: AspectHold, alt: bool) -> Option<Self>`. [`resized`] for Auto Center Preview in image mode: `part` dragged by `by` grows or shrinks the frame about its centre, so the handle stays under the pointer while the frame stays centred on screen.
   - `pub fn turned_to(&self, grab: f64, to: Point, step: Option<f64>, image: bool) -> Self`. The frame turned from this one's angle by the pointer's sweep about the centre, from direction `grab` (radians, see [`direction`]) to `to`; `step` snaps the angle (⇧).
   - `pub fn within(self, bounds: Rect, resizing: bool, held: bool) -> Option<Self>`. The frame kept inside `bounds`: an unturned frame is cut to it; a turned one is moved by the least that brings its bounds in, and left as it is when it cannot fit. `None` when a frame that changes size (`resizing`) cannot be kept inside (the caller keeps its last frame).
   - `pub fn kept_inside(&self, bounds: Rect) -> Option<Self>`. The frame at its angle kept inside `bounds` (#10869, an image-mode turn): `self`, bit for bit, when its turned corners are inside (also when a rounding error puts them a hair past an edge); else moved the shortest way in on each axis, its size kept; else shrunk about its centre to the largest size with its proportions that fits, then moved in. `None` when a size or the angle is not finite or a size is not positive.
@@ -906,15 +906,15 @@ An outline being drawn by a selection or freeform tool, and how it closes: [`Out
   - `pub fn hover(&mut self, at: DraftPoint) -> Option<DraftEvent>`. The pointer moved to `at` with the button up: only the rubber band follows, to where a click would place the point (`shift_step`); hover moves never become vertices. [`DraftEvent::Changed`] while an outline is open.
   - `pub fn release(&mut self, at: DraftPoint) -> Option<DraftEvent>`. The primary button went up at `at`.
   - `pub fn mods_changed(&mut self, mods: Mods) -> Option<DraftEvent>`. The held modifiers changed.
-  - `pub fn retract(&mut self) -> Option<DraftEvent>`. Removes the last vertex while [`takes_retract`](Self::takes_retract); removing the only one cancels the outline.
+  - `pub fn retract(&mut self) -> Option<DraftEvent>`. Removes the last vertex while [`takes_retract`]; removing the only one cancels the outline.
   - `pub fn close(&mut self) -> Option<DraftEvent>`. Closes an open outline (Enter, a double-click): [`DraftEvent::Closed`] with 3 or more points, else [`DraftEvent::Cancelled`]. `None` with no outline.
   - `pub fn cancel(&mut self) -> Option<DraftEvent>`. Drops an open outline: [`DraftEvent::Cancelled`]; `None` with no outline.
   - `pub fn points(&self) -> &[Point]`. The outline's points so far, in document units; empty with no outline.
-  - `pub fn straight(&self) -> &[usize]`. Indices into [`points`](Self::points) whose incoming segment is straight.
+  - `pub fn straight(&self) -> &[usize]`. Indices into [`points`] whose incoming segment is straight.
   - `pub fn rubber_band(&self) -> Option<[Point; 2]>`. The rubber band from the last vertex to the pointer while straight segments are on and the button is up, for the tool to paint; `None` otherwise.
   - `pub fn is_open(&self) -> bool`. Whether an outline is open.
   - `pub fn is_down(&self) -> bool`. Whether the primary button is down on an open outline.
-  - `pub fn takes_retract(&self) -> bool`. Whether [`retract`](Self::retract) acts: an outline is open and the button is up (between clicks).
+  - `pub fn takes_retract(&self) -> bool`. Whether [`retract`] acts: an outline is open and the button is up (between clicks).
 
 ## `craft_behavior::geometry::geom`
 
@@ -966,9 +966,9 @@ A move by drag: direction lock, stroke lock and snapping along a ray.
 - `craft_behavior::geometry::move_gesture::MoveGesture`: `pub struct MoveGesture`. A Move-tool drag in progress: the press, whether ⌥ was held at it, and the last locked offset.
   - `pub fn press(style: &ConstrainStyle, start: Point, mods: Mods, directions: Directions) -> MoveGesture`. Starts a drag at `start` (document units) with the keys held at the press.
   - `pub fn follow(&mut self, at: Point, mods: Mods, zoom: f64) -> Option<MoveValue>`. The pointer moved to `at` (document units) with `mods` at `zoom` screen points per document unit. ⇧ locks the offset to the gesture's directions with hysteresis from the last locked offset; without ⇧ the offset is free and the lock is forgotten. `copy` turns on when ⌥ was held at the press and `|delta| × zoom ≥ copy_reach`.
-  - `pub fn release(mut self, at: Point, mods: Mods, zoom: f64) -> MoveValue`. The release at `at`: the same lock as [`follow`](Self::follow) applies, so a release where the last value was ends there.
-  - `pub fn value(&self) -> MoveValue`. The value of the last [`follow`](Self::follow): the offset and whether it copies.
-  - `pub fn left_press(&self) -> bool`. Whether the pointer, at a [`follow`](Self::follow), has been half a document unit or more from the press on either axis (before the ⇧ lock), so a move of whole units has moved off its press.
+  - `pub fn release(mut self, at: Point, mods: Mods, zoom: f64) -> MoveValue`. The release at `at`: the same lock as [`follow`] applies, so a release where the last value was ends there.
+  - `pub fn value(&self) -> MoveValue`. The value of the last [`follow`]: the offset and whether it copies.
+  - `pub fn left_press(&self) -> bool`. Whether the pointer, at a [`follow`], has been half a document unit or more from the press on either axis (before the ⇧ lock), so a move of whole units has moved off its press.
   - `pub fn locked(&self) -> Option<Vec2>`. The direction ⇧ holds the offset to, as the last locked offset; `None` while the move is free.
 - `craft_behavior::geometry::move_gesture::MoveValue`: `pub struct MoveValue { pub delta: Vec2, pub copy: bool }`. The value of a move drag.
   - `pub fn changed(&self) -> bool`. Whether the drag changes anything: an offset or a copy.
@@ -995,7 +995,7 @@ Box geometry of transform boxes: where the box goes when a part of it is dragged
 - `craft_behavior::geometry::quad::BoxHandles`: `pub enum BoxHandles { All, Corners, Sides }`. Which handles of a box are shown.
 - `craft_behavior::geometry::quad::BoxPart`: `pub enum BoxPart { Corner(u8), Edge(u8), Pivot, Inside, Outside }`. A part of a box under the pointer or picked from the keyboard.
   - `pub const fn index(self) -> u64`. The number a part is keyed by in a canvas control's part keys: 0 inside or outside, 1 to 4 the corners, 5 to 8 the edges, 9 the pivot.
-  - `pub const fn from_index(index: u64) -> Option<BoxPart>`. The part keyed by `index`: the inverse of [`index`](Self::index), with 0 the inside.
+  - `pub const fn from_index(index: u64) -> Option<BoxPart>`. The part keyed by `index`: the inverse of [`index`], with 0 the inside.
 - `craft_behavior::geometry::quad::BoxRules`: `pub struct BoxRules { pub mode: TransformMode, pub scale: ScaleRule, pub aspect_linked: bool, pub allow: BoxAllow, pub rotate_step: f64, pub min_side: f64, pub handles: BoxHandles, pub edge_band: f32 }`. How drags change a box.
   - `pub fn in_mode(mode: TransformMode) -> BoxRules`. The rules of `mode` with the default scale rule, a linked aspect, everything allowed and a 15 degree rotation step.
   - `pub fn with_scale(mut self, scale: ScaleRule) -> BoxRules`. The rules with `scale` as the plain corner and edge drag rule.
@@ -1003,11 +1003,11 @@ Box geometry of transform boxes: where the box goes when a part of it is dragged
   - `pub fn with_allow(mut self, allow: BoxAllow) -> BoxRules`. The rules with `allow` as what the content permits.
   - `pub fn with_min_side(mut self, side: f64) -> BoxRules`. The rules with `side` as the minimum side of a scaled box, in document units.
   - `pub fn with_handles(mut self, handles: BoxHandles) -> BoxRules`. The rules with `handles` as the handles the box shows.
-  - `pub fn with_edge_band(mut self, points: f32) -> BoxRules`. The rules with each side grabbed within `points` of its line ([`edge_band`](Self::edge_band)).
+  - `pub fn with_edge_band(mut self, points: f32) -> BoxRules`. The rules with each side grabbed within `points` of its line ([`edge_band`]).
   - `pub fn shows(&self, part: BoxPart) -> bool`. Whether the box shows `part`: `Corners` shows the four corners and no side, `Sides` the right and left sides and no corner.
   - `pub fn effective_mode(&self) -> TransformMode`. The mode drags follow: a mode the content refuses scales as Free Transform does.
-  - `pub fn allows(&self, part: BoxPart) -> bool`. Whether a drag of `part` changes the box: in Distort only the corners, the inside and the reference point; in Skew everything but the outside; the outside only where rotating is allowed; and never a handle the box does not [show](Self::shows).
-  - `pub fn drag_kind(&self, part: BoxPart, mods: Mods) -> Option<BoxDrag>`. What a drag of `part` with `mods` held (as the host has them, before `drag_modifiers`) does to the box, or `None` where the rules refuse the part ([`allows`](Self::allows)). [`drag`] acts on this kind.
+  - `pub fn allows(&self, part: BoxPart) -> bool`. Whether a drag of `part` changes the box: in Distort only the corners, the inside and the reference point; in Skew everything but the outside; the outside only where rotating is allowed; and never a handle the box does not [show].
+  - `pub fn drag_kind(&self, part: BoxPart, mods: Mods) -> Option<BoxDrag>`. What a drag of `part` with `mods` held (as the host has them, before `drag_modifiers`) does to the box, or `None` where the rules refuse the part ([`allows`]). [`drag`] acts on this kind.
 - `craft_behavior::geometry::quad::BoxState`: `pub struct BoxState { pub quad: [Point; 4], pub pivot: Point }`. A transform box: its four corners clockwise from the top left (as the box was before any transform) and its reference point, in document space.
   - `pub fn origin_of_pivot(&self, rect: Rect) -> Point`. The reference point's place within the box, carried to `rect`: the pivot through the inverse homography onto the unit square, then onto `rect` (the relative X and Y fields' origin).
   - `pub const fn new(quad: [Point; 4], pivot: Point) -> Self`. A box with the corners `quad`, clockwise from the top left, and the reference point `pivot`.
@@ -1047,7 +1047,7 @@ Box geometry of transform boxes: where the box goes when a part of it is dragged
 - `craft_behavior::geometry::selection_op::SelectionOperation`: `pub enum SelectionOperation { New, Add, Subtract, Intersect }`. How a selection made by a click or a drag combines with the current one: the rule the Channels panel's ⌘-click, a mask thumbnail's ⌘-click and the selection tools share (Photoshop's).
   - `pub const ALL: [SelectionOperation; 4]`. Every operation, in Photoshop's options-bar order.
   - `pub fn from_mods(mods: Mods) -> SelectionOperation`. The operation `mods` ask for: Shift and Alt `Intersect`, Shift `Add`, Alt `Subtract`, else `New`.
-  - `pub fn resolve(bar: SelectionOperation, mods: Mods, has_selection: bool) -> SelectionOperation`. The operation a selection tool's gesture uses (Photoshop's): the options bar's `bar`, overridden by `mods` as [`from_mods`](Self::from_mods) reads them (⇧ add, ⌥ subtract, ⇧⌥ intersect).
+  - `pub fn resolve(bar: SelectionOperation, mods: Mods, has_selection: bool) -> SelectionOperation`. The operation a selection tool's gesture uses (Photoshop's): the options bar's `bar`, overridden by `mods` as [`from_mods`] reads them (⇧ add, ⌥ subtract, ⇧⌥ intersect).
   - `pub fn badge(self) -> Option<CursorBadge>`. The badge beside the selection pointer: `Add` a plus, `Subtract` a minus, `Intersect` a cross, `New` none.
   - `pub const fn name(self) -> &'static str`. The operation's stable name for commands and settings: `"new"`, `"add"`, `"subtract"`, `"intersect"` (PhotoCraft's `select.loadSelection` operation values).
 
@@ -1076,17 +1076,17 @@ Box geometry of transform boxes: where the box goes when a part of it is dragged
   - `pub fn new() -> Self`. No targets.
   - `pub fn reach_past_spans(mut self) -> Self`. These targets with every span reaching past its extent: a target catches a point or box anywhere along its line, and its span only shapes the drawn smart guide between the two objects.
   - `pub fn add(&mut self, target: SnapTarget)`. Add one target.
-  - `pub fn add_rect(&mut self, rect: Rect, edge: SnapKind, center: SnapKind)`. Add a rectangle's four edges as `edge` targets and its two centre lines as `center` targets, each spanning the rectangle: how the app adds each layer (`LayerEdge`, `LayerCenter`) and the selection (`Selection` for both) to the targets [`with_document`](Self::with_document) built.
+  - `pub fn add_rect(&mut self, rect: Rect, edge: SnapKind, center: SnapKind)`. Add a rectangle's four edges as `edge` targets and its two centre lines as `center` targets, each spanning the rectangle: how the app adds each layer (`LayerEdge`, `LayerCenter`) and the selection (`Selection` for both) to the targets [`with_document`] built.
   - `pub fn with_document(self, options: &SnapOptions, bounds: Rect, guides: impl IntoIterator<Item =(Axis, f64)>, grid: Option<(Point, Vec2)>,) -> Self`. Guides as full-height targets, grid lines of `spacing` from `origin` over `bounds`, the document bounds and centre: what every app has.
   - `pub fn filtered(&self, keep: impl Fn(SnapKind) -> bool) -> SnapTargets`. Only the targets `keep` accepts (Snap To with one kind off).
   - `pub fn is_empty(&self) -> bool`. Whether there is no target.
   - `pub fn nearest_of(&self, along: Axis, value: f64, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget>`. The nearest target of a kind in `kinds` among the lines that run `along` an axis, within `tolerance` of `value` across them; [`SnapTargets::nearest`] is this with [`SnapKinds::ALL`].
-  - `pub fn nearest_within(&self, along: Axis, value: f64, across: Option<(f64, f64)>, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget>`. [`nearest_of`](Self::nearest_of) that also takes the query's extent `across` the other axis: a target with a span catches only a point or box overlapping that span there; without `across`, or for a target without a span, it is `nearest_of`.
+  - `pub fn nearest_within(&self, along: Axis, value: f64, across: Option<(f64, f64)>, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget>`. [`nearest_of`] that also takes the query's extent `across` the other axis: a target with a span catches only a point or box overlapping that span there; without `across`, or for a target without a span, it is `nearest_of`.
   - `pub fn nearest(&self, along: Axis, value: f64, tolerance: f64) -> Option<SnapTarget>`. The nearest target among the lines that run `along` an axis, within `tolerance` of `value` across them.
   - `pub fn snap_point(&self, point: Point, tolerance: f64) -> (Point, Vec<SnapLine>)`. `point` snapped on each axis independently, with the lines to draw.
-  - `pub fn snap_point_of(&self, point: Point, tolerance: f64, kinds: SnapKinds) -> (Point, Vec<SnapLine>)`. [`snap_point`](Self::snap_point) to the targets of a kind in `kinds` only (a Distort corner snaps to guides only).
+  - `pub fn snap_point_of(&self, point: Point, tolerance: f64, kinds: SnapKinds) -> (Point, Vec<SnapLine>)`. [`snap_point`] to the targets of a kind in `kinds` only (a Distort corner snaps to guides only).
   - `pub fn snap_rect(&self, rect: Rect, tolerance: f64) -> (Vec2, Vec<SnapLine>)`. The offset that moves `rect` so its nearest edge or centre meets a target on each axis, with the lines to draw.
-  - `pub fn snap_rect_of(&self, rect: Rect, tolerance: f64, kinds: SnapKinds) -> (Vec2, Vec<SnapLine>)`. [`snap_rect`](Self::snap_rect) to the targets of a kind in `kinds` only (moving a selection skips the selection's own edges).
+  - `pub fn snap_rect_of(&self, rect: Rect, tolerance: f64, kinds: SnapKinds) -> (Vec2, Vec<SnapLine>)`. [`snap_rect`] to the targets of a kind in `kinds` only (moving a selection skips the selection's own edges).
 - `craft_behavior::geometry::snap::across_axis`: `pub const fn across_axis(along: Axis) -> Axis`. The axis across `along`: a line running along `Axis::Y` (vertical) is placed on `Axis::X`.
 - `craft_behavior::geometry::snap::coordinate_across`: `pub const fn coordinate_across(along: Axis, p: Point) -> f64`. The coordinate of `p` a line running `along` an axis is placed by: x for a line along `Axis::Y`.
 - `craft_behavior::geometry::snap::motion_across`: `pub fn motion_across(along: Axis) -> Vec2`. The document direction a line running `along` an axis moves in: x for a line along `Axis::Y`.
@@ -1368,7 +1368,7 @@ The connected monitors, as every window placement reads them.
 
 - `craft_behavior::monitor::Monitor`: `pub struct Monitor { pub key: MonitorKey, pub pos_px: [i32; 2], pub size_px: [u32; 2], pub scale: f32, pub work_px: Option<([i32; 2], [u32; 2])> }`. A connected monitor, in physical pixels of the desktop's coordinate space (negative for a monitor left of or above the primary).
   - `pub fn new(key: MonitorKey, pos_px: [i32; 2], size_px: [u32; 2], scale: f32) -> Self`. A monitor at `pos_px` of `size_px` pixels with `scale`, usable in full.
-  - `pub fn with_work_px(mut self, pos_px: [i32; 2], size_px: [u32; 2]) -> Self`. Sets the usable area (see [`work_px`](Self::work_px)).
+  - `pub fn with_work_px(mut self, pos_px: [i32; 2], size_px: [u32; 2]) -> Self`. Sets the usable area (see [`work_px`]).
   - `pub fn rect_px(&self) -> Rect`. The monitor's area in pixels.
   - `pub fn points_at(&self, window_scale: f32) -> Rect`. The monitor's area in points of a window whose scale is `window_scale`.
 - `craft_behavior::monitor::MonitorKey`: `pub struct MonitorKey { pub name: String, pub size_px: [u32; 2] }`. Identifies a monitor across launches: the name the platform reports and its size in pixels.
@@ -1662,9 +1662,9 @@ Selection models: what a collection's selection holds and how a change applies t
   - `pub fn extend_to(&mut self, c: CellAt<K>, space: &CellSpace<'_, K>) -> bool`. Shift+click and a drag: the current range runs from the anchor to `c`, covered over merges; the active cell stays (Excel keeps it at the anchor).
   - `pub fn add(&mut self, c: CellAt<K>, space: &CellSpace<'_, K>) -> bool`. Cmd+click (Ctrl+click) on a cell no range holds: a new range at `c` (its merged cell whole) after the others; `c` becomes active and the anchor.
   - `pub fn add_range(&mut self, range: CellRange<K>, space: &CellSpace<'_, K>) -> bool`. Cmd+click (Ctrl+click) on a row or column header: `range` joins as a new range after the others, covered over merges unless it is whole lines ([`CellSpace::cover`]); the active cell and the anchor at its top-left.
-  - `pub fn extend_current(&mut self, range: CellRange<K>, space: &CellSpace<'_, K>) -> bool`. Shift+click on a header and a drag over the headers: the current range becomes `range`, covered as [`select_range`](Self::select_range) covers it; the other ranges, the active cell and the anchor stay.
-  - `pub fn toggle(&mut self, c: CellAt<K>, space: &CellSpace<'_, K>) -> bool`. Cmd+click (Ctrl+click) on any cell: a cell a range holds is taken out of the selection (and joins it again when it was taken out); any other cell joins as a new range ([`add`](Self::add)).
-  - `pub fn step(&mut self, direction: CellDirection, space: &CellSpace<'_, K>) -> bool`. An arrow: the selection collapses to the active cell's neighbour toward `direction` ([`CellSpace::neighbour`]), as [`select`](Self::select) does.
+  - `pub fn extend_current(&mut self, range: CellRange<K>, space: &CellSpace<'_, K>) -> bool`. Shift+click on a header and a drag over the headers: the current range becomes `range`, covered as [`select_range`] covers it; the other ranges, the active cell and the anchor stay.
+  - `pub fn toggle(&mut self, c: CellAt<K>, space: &CellSpace<'_, K>) -> bool`. Cmd+click (Ctrl+click) on any cell: a cell a range holds is taken out of the selection (and joins it again when it was taken out); any other cell joins as a new range ([`add`]).
+  - `pub fn step(&mut self, direction: CellDirection, space: &CellSpace<'_, K>) -> bool`. An arrow: the selection collapses to the active cell's neighbour toward `direction` ([`CellSpace::neighbour`]), as [`select`] does.
   - `pub fn change(&self) -> SelectionChange<K>`. The change that reports this selection: [`SelectionChange::Cells`] when one range says it (the anchor cell and the active cell at its opposite corners), [`SelectionChange::Clear`] for the empty selection, else [`SelectionChange::CellSet`].
 - `craft_behavior::selection::RowAt`: `pub struct RowAt<'a, K> { pub key: &'a K, pub at: usize, pub order: &'a dyn DisplayOrder<K> }`. A row as the item step reads it: its key, its position and the order that places other keys.
   - `pub fn new(key: &'a K, at: usize, order: &'a dyn DisplayOrder<K>) -> Self`. The row `key` at position `at` of `order`.
@@ -1680,7 +1680,7 @@ Selection models: what a collection's selection holds and how a change applies t
   - `fn apply(&mut self, change: SelectionChange<K>)`. Applies a change.
   - `fn lead_column(&self) -> Option<u32>`. The column position of the lead cell; `None` for a model of rows.
   - `fn contains_cell(&self, row: RowAt<'_, K>, _column: u32) -> bool`. Whether the cell of row `row` in column position `column` is selected.
-  - `fn cells(&self) -> Option<&CellSelection<K>>`. The cell rules of a model of cells, which the item step runs on a copy over the collection's `CellSpace`; the result goes back through [`apply`](Self::apply). `None` for a model of rows.
+  - `fn cells(&self) -> Option<&CellSelection<K>>`. The cell rules of a model of cells, which the item step runs on a copy over the collection's `CellSpace`; the result goes back through [`apply`]. `None` for a model of rows.
   - `fn placed(&self, order: &dyn DisplayOrder<K>) -> PlacedSelection`. The selection by position in `order`, placed once so that the reads of a pass scan no keys.
 - `craft_behavior::selection::CellAdvance`: `pub enum CellAdvance { Enter, Tab }`. Which key moves the active cell after an entry: Enter goes down the rows, Tab along a row.
 - `craft_behavior::selection::CellDirection`: `pub enum CellDirection { Up, Down, Left, Right }`. A move of one cell.
@@ -1742,7 +1742,7 @@ The library's sense set, for a root or a part.
   - `pub fn edit(&self, run: &mut EditRun<C::Value>, start: &C::Value, text: &str) -> (Typed<C::Value>, bool)`. The draft is now `text`: characters the codec refuses and characters past the limit drop out.
   - `pub fn rewrite(&self, run: &mut EditRun<C::Value>) -> bool`. Replaces the draft with the codec's normal form of the value it reads (`Codec::normalise`, as a commit shows it); whether it read one.
   - `pub fn commit(&self, run: &mut EditRun<C::Value>) -> Ended<C::Value>`. Commits the draft: a value closes the run, a draft that is no value keeps it open.
-  - `pub fn commit_tagged(&self, run: &mut EditRun<C::Value>) -> (Ended<C::Value>, ParseNote)`. [`commit`](Self::commit), with the note of the committed text (`Codec::parse_tagged`); the default note for a rejected or idle run.
+  - `pub fn commit_tagged(&self, run: &mut EditRun<C::Value>) -> (Ended<C::Value>, ParseNote)`. [`commit`], with the note of the committed text (`Codec::parse_tagged`); the default note for a rejected or idle run.
   - `pub fn cancel(&self, run: &mut EditRun<C::Value>) -> Option<C::Value>`. Closes the run without a commit and returns the value from before it; `None` when no run was open.
   - `pub fn escape(&self, run: &mut EditRun<C::Value>) -> Escaped<C::Value>`. Applies the escape rule.
 
@@ -1850,7 +1850,7 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
 - `craft_behavior::wheel::WheelFocus`: `pub struct WheelFocus<O> { pub taker: Option<O>, pub app_field: bool, pub by_position: bool }`. Who holds key focus, as the split reads it.
   - `pub const fn new(taker: Option<O>) -> Self`. Focus on `taker`, or on nothing that takes the wheel.
   - `pub const fn app_field(mut self, on: bool) -> Self`. The same focus, in a text field the app drew itself when `on`.
-  - `pub const fn by_position(mut self, on: bool) -> Self`. The same focus, with the pointer over a layer that takes the wheel by position when `on` ([`by_position`](Self::by_position)).
+  - `pub const fn by_position(mut self, on: bool) -> Self`. The same focus, with the pointer over a layer that takes the wheel by position when `on` ([`by_position`]).
 - `craft_behavior::wheel::WheelGesture`: `pub struct WheelGesture<O> { pub owner: Option<O>, pub last: f64 }`. A wheel gesture: events closer than [`GESTURE_GAP`] seconds, or inside one device phase. `owner` is `None` while no taker took it. [`split`] keeps it across events; its caller calls [`WheelGesture::end`] before each split.
   - `pub fn runs(&self, now: f64) -> bool`. Whether an event at `now` continues the gesture: one is open, the device has not ended it and the gap since its last event is shorter than [`GESTURE_GAP`].
   - `pub fn end(&mut self, now: f64) -> Option<O>`. Closes the gesture once `now - last` reaches [`GESTURE_GAP`], or at once after a device end, and returns the owner it had.
@@ -2017,7 +2017,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::ShowContainer`: `pub trait ShowContainer: Container + sealed::ShowContainer`. Shows a container with its body.
   - `fn show<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R>`. Shows the container in the flow of `ui`.
   - `fn show_at<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R>`. Shows the container at `rect`, with no allocation: a frame over a split or a layer the parent places.
-  - `fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R>`. Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies past it, as after [`show`](Self::show).
+  - `fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R>`. Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies past it, as after [`show`].
   - `fn measure_in<R>(&mut self, ui: &Ui, proposal: Proposal, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Vec2`. Measures the container with `body` without allocating: steps 1 to 5 under the id `show` would use next, with the body, header, footer and end regions run once in an invisible sizing pass, laid out as `show` lays them out.
   - `fn show_with_tip<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R>`. Shows the container with rich tooltip content.
   - `fn show_at_with_tip<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui),) -> Inner<Self::Output, R>`. Shows the container at `rect` with rich tooltip content.
@@ -2040,7 +2040,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn kept() -> Self`. No caller value: the component keeps it in session memory under its id.
   - `pub fn saved(mut self, key: SaveKey) -> Self where T: Savable,`. A kept value that is also saved across runs under `key`.
   - `pub fn policy(mut self, policy: EditPolicy) -> Self`. When a write-through source is written.
-  - `pub fn check(self, check: fn(&T) -> Validity<T>) -> Self where T: 'a,`. The check on a value: `Fix` replaces it; `Warn`, `Refuse` and `Error` set the component's state, and `Refuse` also refuses a commit. `check` is a `fn`, which captures nothing; a check that reads other values takes them as inputs ([`check_with`](Self::check_with)).
+  - `pub fn check(self, check: fn(&T) -> Validity<T>) -> Self where T: 'a,`. The check on a value: `Fix` replaces it; `Warn`, `Refuse` and `Error` set the component's state, and `Refuse` also refuses a commit. `check` is a `fn`, which captures nothing; a check that reads other values takes them as inputs ([`check_with`]).
   - `pub fn check_with<I: MemoProps + 'a>(mut self, inputs: I, check: fn(&I, &T) -> Validity<T>) -> Self where T: 'a,`. The check `check` on a value, reading `inputs` beside it (a limit, the names already taken).
   - `pub fn reset(mut self, default: T) -> Self`. The value a reset gesture restores, and the value a kept binding reads while nothing is stored.
   - `pub fn reborrowed(&mut self) -> Bind<'_, T>`. A binding with the same source, check, policy and reset that borrows this one, so a composite can hand its own binding to a child component for the length of one pass.
@@ -2181,8 +2181,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn pad(mut self, pad: Pad) -> Self`. The padding tier.
   - `pub const fn pad_edges(mut self, edges: PadEdges) -> Self`. The edges the padding tier applies to.
   - `pub const fn sizing(mut self, sizing: Sizing) -> Self`. How the size follows the content.
-  - `pub const fn content_in_bar(mut self) -> Self`. Takes the content width among the members of a bar ([`content_in_bar`](Self::content_in_bar)).
-  - `pub const fn room_height(mut self, height: f32) -> Self`. The height the body offers its children in flow ([`room_height`](Self::room_height)).
+  - `pub const fn content_in_bar(mut self) -> Self`. Takes the content width among the members of a bar ([`content_in_bar`]).
+  - `pub const fn room_height(mut self, height: f32) -> Self`. The height the body offers its children in flow ([`room_height`]).
   - `pub fn layout(mut self, layout: BodyLayout) -> Self`. How the body lays out its children.
   - `pub const fn header(mut self, header: HeaderRegion) -> Self`. A header region.
   - `pub const fn scroll(mut self, scroll: Scroll) -> Self`. A scroll region.
@@ -2196,7 +2196,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn collapse(mut self, collapse: Collapse) -> Self`. Collapse configuration.
   - `pub const fn body_gap(mut self, gap: Gap) -> Self`. The spacing between the children of the body.
   - `pub const fn least_width(mut self, least: LeastWidth) -> Self`. The least width of the content, from a size role.
-  - `pub const fn least_height(mut self, points: f32) -> Self`. The least height of an unwrapped `Row` body's line ([`least_height`](Self::least_height)).
+  - `pub const fn least_height(mut self, points: f32) -> Self`. The least height of an unwrapped `Row` body's line ([`least_height`]).
   - `pub const fn wrap_width(mut self, wrap: WrapWidth) -> Self`. The line length of the body's paragraphs while the container takes its width from its content, from a size role.
   - `pub const fn edge_rule(mut self, on: bool) -> Self`. Draws a divider along the inner edge of a container mounted as an edge pane.
   - `pub const fn child_size(mut self, size: ControlSize) -> Self`. A scope size for the regions: header, body, end region and footer.
@@ -2214,7 +2214,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn save(mut self, key: SaveKey) -> Self`. Saves placement, size and open state under `key`.
   - `pub const fn outer_edit(mut self, on: bool) -> Self`. One outer gesture over the body's fields, from open to close.
   - `pub const fn label_column(mut self, on: bool) -> Self`. The labelled rows of the body share the widest label as one column.
-  - `pub const fn bracket(mut self, bracket: Bracket) -> Self`. The bracket of a `Row` from its first child's labelled rows to the child after them ([`bracket`](Self::bracket)).
+  - `pub const fn bracket(mut self, bracket: Bracket) -> Self`. The bracket of a `Row` from its first child's labelled rows to the child after them ([`bracket`]).
   - `pub const fn labels(mut self, scheme: LabelScheme) -> Self`. The labelled rows under the container show their labels in `scheme`: its regions, its body and every container inside, until one sets a scheme of its own.
 - `craft_ui::contract::ContextMenuRequest`: `pub struct ContextMenuRequest<K> { pub key: K, pub at: Pos2, pub column: Option<ColumnKey>, pub part: Option<PartRef> }`. A request for the context menu of an item.
   - `pub fn new(key: K, at: Pos2) -> Self`. A request for the menu of `key` that opens at `at`, from the item itself: no column and no part.
@@ -2259,7 +2259,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn value(&self) -> Option<&Self::Value>`. The shown value: the running gesture's proposal, else the binding's. `None` for a mixed binding, a kept binding with nothing in it, and a component with no value.
   - `fn validity(&self) -> Validity<Self::Value>`. What the binding's check says about the shown value.
   - `fn gesture(&self) -> Option<GesturePhase>`. Where this pass's gesture stands.
-  - `fn gesture_before(&self) -> Option<Mixed<Self::Value>>`. The value the running gesture began with, as its `Begin` reported it: the same in every pass of the gesture, while [`value`](Self::value) follows each proposal.
+  - `fn gesture_before(&self) -> Option<Mixed<Self::Value>>`. The value the running gesture began with, as its `Begin` reported it: the same in every pass of the gesture, while [`value`] follows each proposal.
   - `fn adopt<V: Value>(&self, child: &EditResponse<V>, start: &Self::Value, map: impl Fn(&V, &mut Self::Value))`. Maps each of the child's events onto a clone of this component's shown value and queues the resulting events, in the child's order, for step 15.
   - `fn edit_response(&self) -> EditResponse<Self::Value>`. The `EditResponse` a value component returns from `finish`.
   - `fn propose(&mut self, v: Self::Value)`. Sets the running gesture's value, beginning a gesture if none runs and the press that carries it has had no gesture cancelled.
@@ -2550,7 +2550,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::PaintUi`: `pub struct PaintUi<'a> { pub env: &'a Env }`. What `paint` and `paint_over` get instead of a `Ui`.
   - `pub fn draw(&self) -> Draw<'_>`. The content-paint API: text, rules, surfaces and shapes, recorded for the later steps.
   - `pub fn selectable_text(&mut self, part: impl Into<PartRef>, rect: Rect, run: &TextRun<'_>)`. Shows the selection part `part` (`PartsCx::selectable_text`): `run` in `rect`, painted as `Draw::text` paints it, with the selection behind its characters; a line wider than `rect` is cut at its edge.
-  - `pub fn draw_part(&self, part: impl Into<PartRef>) -> Draw<'_>`. The content-paint API for painting `part`: as [`draw`](Self::draw), and when the part was declared [`inactive`](super::PartBuilder::inactive) its data colours use the theme's disabled fill.
+  - `pub fn draw_part(&self, part: impl Into<PartRef>) -> Draw<'_>`. The content-paint API for painting `part`: as [`draw`], and when the part was declared [`inactive`](super::PartBuilder::inactive) its data colours use the theme's disabled fill.
   - `pub fn clipped<R>(&mut self, rect: Rect, paint: impl FnOnce(&mut Self) -> R) -> R`. Runs `paint` with this `PaintUi` cut to `rect` (inside the clip already in force), as `Draw::clipped` does for a `Draw`: content painted whole over one pane of the component, such as a sheet's merged cell under a frozen row.
   - `pub fn with_style<R>(&self, variant: Variant, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of this component's env, so app hooks called from `paint` pick colours and sizes through tokens as `style` does.
   - `pub fn child<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output`. Shows a child component at a physical rect, with id `cx.key(key)`.
@@ -2559,7 +2559,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn labelled<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, label: Label, side: SideLabel, child: C) -> C::Output`. Runs the label step (B2) for one leaf child at `rect`: the label's placement beside or above the child, the label scope, scrub and the reset dot.
   - `pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C)`. Paints `face` as the look of `part`: its style, surface and state fill from the part's state merged with the instance's `flags()` and the host's validity flags, then its own `paint`.
   - `pub fn face_in<C: Show>(&mut self, part: impl Into<PartRef>, face: C, ink: &Stateful<StyleColor>)`. `face`, for a face on a fill the composite draws for that part alone (a plate over a picture): the face reads `ink` through `StyleCx::host_ink` instead of the composite's text colour.
-  - `pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32)`. [`face`](Self::face) painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a component fading in or out as the one component that draws it.
+  - `pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32)`. [`face`] painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a component fading in or out as the one component that draws it.
   - `pub fn reserve_slot(&self, clip: Rect) -> PaintSlot`. Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code that holds no painter (`PaintSlot::extend`).
   - `pub fn content_painter<C: ContentPainter>(&self, cx: &Cx<'_, C>) -> ContentPainterCx<'_>`. The raw painter for an allowlisted content painter, clipped to the component's own rect.
 - `craft_ui::contract::PaneEdge`: `pub enum PaneEdge { Center, Start, End, Top, Bottom }`. Where a shell pane sits.
@@ -3074,7 +3074,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn text(&self, rect: Rect, run: &TextRun<'_>) -> TextLayout`. Lays `run` out in `rect`'s width and paints it placed in `rect`'s width by the run's alignment (Start at the reading start).
   - `pub fn text_x(&self, rect: Rect, run: &TextRun<'_>, layout: &TextLayout) -> f32`. Where `layout` of `run` starts in `rect`'s width: the free room shared out by the run's alignment, the reading start being the right edge in a right-to-left paragraph.
   - `pub fn text_on_centre_line(&self, rect: Rect, run: &TextRun<'_>) -> TextLayout`. Paints a one-line `run` as `text` does, with the middle of its lowercase letters (the x-height) on the middle of `rect`'s height.
-  - `pub fn text_on_line(&self, rect: Rect, run: &TextRun<'_>, line: TypeRole) -> TextLayout`. Paints a one-line `run` as `text` does, on the baseline of a line of `line` centred on the middle of `rect`'s height ([`line_baseline`](Self::line_baseline)): a field's unit, in a smaller role than the field's text, sits on the text's baseline.
+  - `pub fn text_on_line(&self, rect: Rect, run: &TextRun<'_>, line: TypeRole) -> TextLayout`. Paints a one-line `run` as `text` does, on the baseline of a line of `line` centred on the middle of `rect`'s height ([`line_baseline`]): a field's unit, in a smaller role than the field's text, sits on the text's baseline.
   - `pub fn line_baseline(&self, centre: f32, role: TypeRole) -> f32`. The baseline of a control's line of `role` whose centre line lies at `centre`: every text in the line sits on it, whatever its face or size (`text::line_baseline`).
   - `pub fn doc(&self, rect: Rect, text: &DocText<'_>) -> TextLayout`. Lays `text` out in `rect`'s width and paints it top aligned, its block placed in `rect` by `text.align` (Start and End swap sides under right-to-left).
   - `pub fn face_run(&self, start: Pos2, run: &FaceRun<'_>, load: impl FnOnce() -> Option<FaceBytes>) -> TextLayout`. Paints `run` in its document face with the start of its first baseline at `start`, and returns its layout, whose top lies at `start.y - layout.first_baseline` ([`FaceRun`] says how the face, its fallback and the size are chosen). `load` gives the face's bytes and index, which the caller holds, the first time `run.key` is drawn while the face is kept; a `None` leaves the run in the interface face.
@@ -3100,12 +3100,12 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn surface_look(&self, rect: Rect, look: &crate::style::SurfaceLook, state: &crate::style::StateSet)`. Paints `look` over `rect` in `state`, as the paint step paints a component's surface: a part's own surface (an indicator's well) keeps the kind's edge and bevel.
   - `pub fn fill(&self, shape: &PaintShape, color: StyleColor)`. Fills `shape`.
   - `pub fn stroke(&self, shape: &PaintShape, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>)`. Strokes `shape` at a theme width or a width from the document, in a theme colour or a colour from data (a chart series, a curve).
-  - `pub fn stroke_placed(&self, shape: &PaintShape, place: StrokePlace, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>)`. Strokes `shape` as [`stroke`](Self::stroke) does, with the stroke `place`d against the shape's edge: an outline around a selected item that must not cover it strokes `Outside`.
+  - `pub fn stroke_placed(&self, shape: &PaintShape, place: StrokePlace, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>)`. Strokes `shape` as [`stroke`] does, with the stroke `place`d against the shape's edge: an outline around a selected item that must not cover it strokes `Outside`.
   - `pub fn data_fill(&self, shape: &PaintShape, color: DataColor)`. Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar).
   - `pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor)`. Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour from data as `data_fill` paints it.
   - `pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect)`. Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted.
   - `pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect)`. Paints `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), untinted, as data: a disabled component paints it at `Opacity::DISABLED`, and for an inactive part the quad is filled with the theme's disabled fill.
-  - `pub fn cached_texture<K: std::hash::Hash + 'static>(&self, key: K, image: impl FnOnce() -> egui::ColorImage) -> TextureId`. The texture for `key` from the `TextureCache` of the context this painter paints in, for [`texture`](Self::texture):
+  - `pub fn cached_texture<K: std::hash::Hash + 'static>(&self, key: K, image: impl FnOnce() -> egui::ColorImage) -> TextureId`. The texture for `key` from the `TextureCache` of the context this painter paints in, for [`texture`]:
   - `pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius)`. Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left.
   - `pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: impl Into<WellFill>)`. Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is translucent; else the empty well in `surface.sunken`, with a `text.muted` dash for `Mixed`, a `status.bad` diagonal from the bottom start to the top end for `None`, and nothing for `Empty`.
   - `pub fn swatch_polygon_well(&self, corners: &[Pos2], fill: impl Into<WellFill>)`. [`Self::swatch_well`] over the convex polygon `corners` (a honeycomb cell): the same parts, the checkerboard and the marks cut to the polygon.
@@ -3130,7 +3130,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::FaceRun`: `pub struct FaceRun<'a> { pub text: &'a str, pub key: &'a str, pub size: f32, pub color: DataColor }`. A run of text in one face of a document's fonts, which [`Draw::face_run`](super::Draw::face_run) draws on a baseline: an input method's composition in the face and size of the text it goes into, as Word draws it.
   - `pub const fn new(text: &'a str, key: &'a str, size: f32, color: DataColor) -> Self`. `text` in the face `key` at `size` points in `color`.
   - `pub fn largest_size(ctx: &Context) -> f32`. The largest size, in points, a face run is drawn at on `ctx`'s display: a glyph stays within a quarter of the font atlas's side and at most 1,024 pixels.
-  - `pub fn drawn_size(&self, ctx: &Context) -> f32`. The size the run is drawn at on `ctx`'s display: its own, within 1 point and [`largest_size`](Self::largest_size).
+  - `pub fn drawn_size(&self, ctx: &Context) -> f32`. The size the run is drawn at on `ctx`'s display: its own, within 1 point and [`largest_size`].
 - `craft_ui::primitives::FacesCx`: `pub trait FacesCx`. Where a document face is asked for: a component's context, its measure or a content painter.
   - `fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState where L: FnOnce() -> Option<FaceBytes> + Send + 'static`. The face registered under `key` as a family of its own, read from a font catalog. `job` is called only for a key the registry does not know (a ready face costs nothing) and makes the load, which runs as a background job, once while the face is kept; the face is ready from the pass after it ends.
   - `fn document_face_bytes(&self, key: &str) -> Option<FaceBytes>`. The bytes of the face `document_face` registered under `key`, once it is ready: for reading its tables without loading the file again.
@@ -3187,7 +3187,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn swatch(color: Srgba) -> Self`. A swatch of `color`, painted as [`Draw::swatch_well`](super::Draw::swatch_well) paints a well.
   - `pub fn empty_swatch() -> Self`. The empty swatch of a colour the theme decides (a "Default" pasteboard colour): it keeps a swatch's place, so the labels after a column of swatches line up.
   - `pub fn initial(name: &str) -> Self`. The first letter of `name` in capitals, in an outlined box, in the panel ink: the icon of something that has none.
-  - `pub fn disc() -> Self`. A filled circle in the panel ink, or in the colour [`color`](Self::color) or [`data_color`](Self::data_color) sets (a status dot, a person's dot).
+  - `pub fn disc() -> Self`. A filled circle in the panel ink, or in the colour [`color`] or [`data_color`] sets (a status dot, a person's dot).
   - `pub fn ink(mut self, ink: Ink) -> Self`. Sets the ink.
   - `pub fn color(mut self, color: StyleColor) -> Self`. Sets the colour, in place of the ink's.
   - `pub fn data_color(mut self, color: DataColor) -> Self`. Sets the colour from data, in place of the ink's: an icon drawn in document content (an annotation pictogram), whose colour belongs to the document and not to a state.
@@ -3347,7 +3347,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub const fn pages() -> Self`. Document pages: 128 MiB and 64 entries.
   - `pub const fn frames() -> Self`. Video frames and other named images: 64 MiB and 512 entries.
   - `pub const fn packed(mut self, max_side: u32) -> Self`. Puts pictures up to `max_side` texels per side on a few shared page textures written in place, so browsing many small pictures creates and frees no textures.
-  - `pub const fn packed_small(self) -> Self`. [`packed`](Self::packed) for the small pictures of an interface (a style tile, a font sample row): those up to a quarter of a page side share pages, so a few large ones never fill a page alone; a larger picture takes a texture of its own.
+  - `pub const fn packed_small(self) -> Self`. [`packed`] for the small pictures of an interface (a style tile, a font sample row): those up to a quarter of a page side share pages, so a few large ones never fill a page alone; a larger picture takes a texture of its own.
   - `pub const fn filter(mut self, filter: TextureOptions) -> Self`. The sampling of every texture.
   - `pub const fn budget(mut self, budget: TextureBudget) -> Self`. Other limits.
 - `craft_ui::primitives::TextureWords`: re-export of `craft_ui::primitives::textures::TextureWords` (defined outside these crates).
@@ -3514,7 +3514,7 @@ Frosted backdrops: a bounded blurred composition of the layers under a surface, 
   - `pub const fn pages() -> Self`. Document pages: 128 MiB and 64 entries.
   - `pub const fn frames() -> Self`. Video frames and other named images: 64 MiB and 512 entries.
   - `pub const fn packed(mut self, max_side: u32) -> Self`. Puts pictures up to `max_side` texels per side on a few shared page textures written in place, so browsing many small pictures creates and frees no textures.
-  - `pub const fn packed_small(self) -> Self`. [`packed`](Self::packed) for the small pictures of an interface (a style tile, a font sample row): those up to a quarter of a page side share pages, so a few large ones never fill a page alone; a larger picture takes a texture of its own.
+  - `pub const fn packed_small(self) -> Self`. [`packed`] for the small pictures of an interface (a style tile, a font sample row): those up to a quarter of a page side share pages, so a few large ones never fill a page alone; a larger picture takes a texture of its own.
   - `pub const fn filter(mut self, filter: TextureOptions) -> Self`. The sampling of every texture.
   - `pub const fn budget(mut self, budget: TextureBudget) -> Self`. Other limits.
 - `craft_ui::primitives::textures::TextureWords`: re-export of `craft_ui::primitives::textures::words::TextureWords` (defined outside these crates).
@@ -3693,8 +3693,8 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `pub fn icon(mut self, icon: impl Into<Cow<'static, str>>) -> Self`. An icon for this frame in place of the command's own, by catalogue name or registered app set name.
   - `pub fn hint(mut self, hint: impl Into<Arc<str>>) -> Self`. The accessible description and second tooltip line.
   - `pub fn hint_alone(mut self, alone: bool) -> Self`. Opt-in: on a control whose label shows whole and that has no tooltip of its own, the hint is the whole tooltip, with the chord after it, in place of the label and chord over the hint (the default).
-  - `pub fn is_enabled(&self) -> bool`. Whether the command can fire, as [`enabled`](Self::enabled) set it.
-  - `pub fn is_checked(&self) -> Option<bool>`. The checked state [`checked`](Self::checked) set; `None` for a command that is not a toggle or radio.
+  - `pub fn is_enabled(&self) -> bool`. Whether the command can fire, as [`enabled`] set it.
+  - `pub fn is_checked(&self) -> Option<bool>`. The checked state [`checked`] set; `None` for a command that is not a toggle or radio.
 - `craft_ui::runtime::commands::CommandStates`: `pub struct CommandStates`. The app-scope command states an app holds, in a [`Tracked`] it hands to [`CommandInput::states`] every frame.
   - `pub fn new() -> Self`. No states.
   - `pub fn set(&mut self, command: impl Into<CommandRef>, state: CommandState)`. Gives `command` `state`, in place of the state it had.
@@ -3741,7 +3741,7 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `pub fn holds_ours(&self) -> bool`. Whether the clipboard still holds what this app last offered.
   - `pub fn formats(&self) -> Vec<String>`. The MIME names of the formats on the clipboard.
   - `pub fn arrived(&self) -> bool`. Whether a late paste offer arrived this frame; true in every pass of that frame.
-  - `pub fn put(&self, items: &[ClipItem])`. Offers `items` as one offer ([`offer`](Self::offer)), for a caller that does not ask what was kept.
+  - `pub fn put(&self, items: &[ClipItem])`. Offers `items` as one offer ([`offer`]), for a caller that does not ask what was kept.
   - `pub fn paste(&self) -> &Pending<ClipContent, ClipError>`. The pasted content: ready in the pass that delivers the paste to the focused component that lists Paste.
 - `craft_ui::runtime::commands::CommandDef`: re-export of `craft_keymap::CommandDef` (outside these crates).
 - `craft_ui::runtime::commands::CommandDefError`: `pub enum CommandDefError { Binding { command: &'static str, error: BindingError }, Scope { command: &'static str }, Duplicate { command: String }, NotApp { command: String } }`. Why a command definition is unusable.
@@ -3794,7 +3794,7 @@ The drag session (8.4): one per context.
   - `fn accept(&self, payload: &P, at: Pos2, op: DropOperation) -> Option<Self::Drop>`. `None` rejects. `at` is the pointer in the component's egui layer space, so a target picks its sub-area (a port, a split side) from it; `op` is the operation the held modifiers pick, which a target may refuse.
   - `fn mark(&self, drop: &Self::Drop) -> DropMark`. Where `drop` would land, a value the ghost layer paints.
   - `fn under_modal(&self) -> bool`. Whether the target takes OS file drops (`OsFiles`) while a modal layer above it holds input, as an app whose alerts let files through (VectorCraft placed files dropped under its alert).
-  - `fn copy_keys(&self) -> CopyKeys`. The held key that makes a drop on this target a copy: the `op` that [`accept`](Self::accept) gets, and the pointer over the target, follow it.
+  - `fn copy_keys(&self) -> CopyKeys`. The held key that makes a drop on this target a copy: the `op` that [`accept`] gets, and the pointer over the target, follow it.
 - `craft_ui::runtime::drag::DropZone`: `pub struct DropZone`. Where a drop target lies: a rect on an egui layer, in that layer's space.
   - `pub const fn new(layer: crate::runtime::egui::areas::Layer, rect: Rect) -> Self`. The zone `rect` on `layer` (the `layer_id` of the `Ui` that draws the area), in that layer's space.
   - `pub const fn rect(&self) -> Rect`. The zone's rect, in its layer's space.
@@ -3967,7 +3967,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::ColumnSize`: `pub struct ColumnSize { pub width: f64, pub gutter: f64 }`. The column size of a document: `n` columns are `n·(width + gutter) − gutter` points.
   - `pub const fn new(width: f64, gutter: f64) -> Self`. The column size with columns `width` points wide `gutter` points apart.
   - `pub fn points(self, columns: f64, relative: bool) -> f64`. `columns` columns as points; a `relative` change converts the span of `|columns|` with its sign, and 0 stays 0.
-  - `pub fn columns(self, points: f64, relative: bool) -> f64`. `points` as columns; the inverse of [`points`](Self::points).
+  - `pub fn columns(self, points: f64, relative: bool) -> f64`. `points` as columns; the inverse of [`points`].
 - `craft_ui::runtime::env::Count`: re-export of `craft_i18n::Count` (outside these crates).
 - `craft_ui::runtime::env::Counted`: re-export of `craft_i18n::Counted` (outside these crates).
 - `craft_ui::runtime::env::Direction`: re-export of `craft_i18n::Direction` (outside these crates).
@@ -4055,7 +4055,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn slot_visible(&self, key: SlotKey) -> bool`. Is the slot with this key shown on this pass?
   - `pub fn with_reveals_key(mut self, id: egui::Id) -> Self`. The same skeleton with its revealed rects registered under `id`, which stays the same across passes.
   - `pub fn reveal_rect(&self, ctx: &egui::Context, edge: RevealEdge, rect: Rect)`. Registers `rect`, a revealed panel the body drew on this pass, as part of the revealed `edge`: the edge reveal lasts while the pointer is over it, as it does over a revealed slot.
-  - `pub fn revealed_rects(&self, ctx: &egui::Context) -> Vec<(RevealEdge, Rect)>`. The rects registered with [`reveal_rect`](Self::reveal_rect) on this pass, in registration order.
+  - `pub fn revealed_rects(&self, ctx: &egui::Context) -> Vec<(RevealEdge, Rect)>`. The rects registered with [`reveal_rect`] on this pass, in registration order.
   - `pub fn dialogs_shown(&self) -> u32`. How many times a container in this shell showed on this pass as a dialog (a layer with a dialog's focus scope, modal or not), a full-window layer or an OS window: open, or closed and still fading out.
   - `pub fn tabs_visible(&self) -> bool`. Whether the document tabs show: the host's flag in normal mode, never in body-only mode.
   - `pub fn edge_revealed(&self, edge: RevealEdge) -> bool`. Is the edge reveal on for `edge`?
@@ -4077,13 +4077,13 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn contrast(mut self, contrast: Contrast) -> Self`. Resolves under `contrast`.
   - `pub fn density(mut self, density: Size) -> Self`. Resolves at the density preset `density`.
 - `craft_ui::runtime::env::UnitKind`: `pub enum UnitKind { Pixels, Percent, Degrees, Points, Times, Inches, Centimetres, Millimetres, Picas, PixelsPerInch, PixelsPerCentimetre, Minutes, Columns, LinesPerInch, LinesPerCentimetre, Feet, Yards, Metres, Q, Ha, Letters, Hyphens }`. What a number counts.
-  - `pub const LENGTHS: [UnitKind; 5]`. The lengths a unit choice offers. [`per_inch`](Self::per_inch) answers for more kinds (feet, yards, metres, Q, Ha), which a typed number still reads.
+  - `pub const LENGTHS: [UnitKind; 5]`. The lengths a unit choice offers. [`per_inch`] answers for more kinds (feet, yards, metres, Q, Ha), which a typed number still reads.
   - `pub const fn decimals(self) -> RangeInclusive<usize>`. The digits after the decimal mark a number of this kind shows by default, at most.
   - `pub const fn step(self) -> f64`. What one arrow press, wheel notch or scrub point changes a number of this kind by, where the control that shows the kind steps by the kind's rule.
   - `pub const POINTS_PER_INCH: f64`. The points in an inch of PostScript points, the default of Points and Picas.
   - `pub fn per_inch(self, points_per_inch: f64) -> Option<f64>`. How many units of this kind make an inch, for the kinds that measure length; `points_per_inch` sets the size of Points and Picas (72, or 72.27 for traditional points). `None` for a kind that is not a length.
-  - `pub fn from_pixels(self, pixels: f64, extent: f64, pixels_per_inch: f64, points_per_inch: f64) -> Option<f64>`. `pixels` in this unit: Pixels as they are, Percent of `extent` pixels, a length through `pixels_per_inch` (`extent` and `pixels_per_inch` clamped to at least 1; `points_per_inch` as in [`per_inch`](Self::per_inch)).
-  - `pub fn to_pixels(self, value: f64, extent: f64, pixels_per_inch: f64, points_per_inch: f64) -> Option<f64>`. A value in this unit as pixels; the inverse of [`from_pixels`](Self::from_pixels).
+  - `pub fn from_pixels(self, pixels: f64, extent: f64, pixels_per_inch: f64, points_per_inch: f64) -> Option<f64>`. `pixels` in this unit: Pixels as they are, Percent of `extent` pixels, a length through `pixels_per_inch` (`extent` and `pixels_per_inch` clamped to at least 1; `points_per_inch` as in [`per_inch`]).
+  - `pub fn to_pixels(self, value: f64, extent: f64, pixels_per_inch: f64, points_per_inch: f64) -> Option<f64>`. A value in this unit as pixels; the inverse of [`from_pixels`].
 - `craft_ui::runtime::env::UnitWords`: re-export of `craft_ui::runtime::env::units::UnitWords` (defined outside these crates).
 - `craft_ui::runtime::env::Units`: `pub struct Units`. Reads and writes numbers with their unit in the user's language and digits.
   - `pub fn zoom_codec(&self) -> NumberCodec`. The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads typed text by the same rules.
@@ -4240,8 +4240,8 @@ The frame plugin: the per-pass and per-frame steps, with the inputs the app sets
   - `pub fn window_input(mut self, window_input: WindowInput) -> Self`. Sets whether the window system's input reaches the hosted windows.
   - `pub fn commands(mut self, commands: CommandInput) -> Self`. Sets the command input.
   - `pub fn latched(mut self, mods: Mods) -> Self`. Sets the modifiers latched beyond the window's input.
-  - `pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self`. Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`](Self::app_modal)).
-  - `pub fn host(mut self, host: Arc<Host>) -> Self`. Sets the host: the same `Arc<Host>` every frame, a new one to switch (see [`FrameInput::host`](Self::host)).
+  - `pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self`. Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`]).
+  - `pub fn host(mut self, host: Arc<Host>) -> Self`. Sets the host: the same `Arc<Host>` every frame, a new one to switch (see [`FrameInput::host`]).
 - `craft_ui::runtime::frame::FrameOutput`: `pub struct FrameOutput { pub fired: Vec<Fired>, pub delivered: Vec<Fired>, pub dimmed: Vec<Fired>, pub declined: Vec<Fired>, pub announcements: Vec<String>, pub chrome_toggles: Vec<(ViewportId, ChromeToggle)>, pub removed_gestures: Vec<GestureId>, pub outer_edits: Vec<OuterEdit>, pub refused: bool, pub ended_previews: Vec<egui::Id> }`. What the runtime accumulated since the last `take_output`, across passes and discarded passes.
 - `craft_ui::runtime::frame::OuterEdit`: `pub enum OuterEdit { Begin { id: GestureId, label: Arc<str>, doc_key: Option<DocKey> }, Commit { id: GestureId }, Cancel { id: GestureId } }`. A step of the outer gesture of a container whose `ContainerProps::outer_edit` is on: one undo step over the edits of its body's fields, from open to close.
 - `craft_ui::runtime::frame::WindowInput`: `pub enum WindowInput { Live, Dropped }`. Whether the window system's input reaches the OS windows the runtime hosts beside the root (a panel floated into its own window). eframe gives the host only the root's raw input (`App::raw_input_hook`), so the host applies its policy to the root there and gives it here for the rest.
@@ -4570,9 +4570,9 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn access_tree(&self, viewport: ViewportId) -> Option<std::sync::Arc<crate::runtime::egui::access::AccessTree>>`. The access tree of `viewport`'s latest settled pass, a host fact of the window as its screenshot facts are; `None` while AccessKit is off or before the viewport has run.
   - `pub fn inject_release(&self, viewport: ViewportId, at: Option<Pos2>, released: Released)`. Queues the release of what `released` names, at `at` or where the injected pointer is.
   - `pub fn inject_pointer(&self, viewport: ViewportId, step: InjectedPointer)`. Queues one pointer step in `viewport` as a device would send it, one pass per event, with the pen's reading for a pen: its pass reads the reading in place of the tablet's.
-  - `pub fn inject_hold(&self, viewport: ViewportId, key: Key)`. Queues `key` held down in `viewport` with no key event, on a pass of its own: no shortcut or key stage sees it, only [`injected_holds`](Self::injected_holds), until [`inject_let_go`](Self::inject_let_go).
-  - `pub fn inject_let_go(&self, viewport: ViewportId, key: Key)`. Queues the release of a key [`inject_hold`](Self::inject_hold) holds, on a pass of its own.
-  - `pub fn injected_holds(&self, viewport: ViewportId) -> Vec<Key>`. The keys [`inject_hold`](Self::inject_hold) holds in `viewport`, as of its running pass.
+  - `pub fn inject_hold(&self, viewport: ViewportId, key: Key)`. Queues `key` held down in `viewport` with no key event, on a pass of its own: no shortcut or key stage sees it, only [`injected_holds`], until [`inject_let_go`].
+  - `pub fn inject_let_go(&self, viewport: ViewportId, key: Key)`. Queues the release of a key [`inject_hold`] holds, on a pass of its own.
+  - `pub fn injected_holds(&self, viewport: ViewportId) -> Vec<Key>`. The keys [`inject_hold`] holds in `viewport`, as of its running pass.
   - `pub fn set_caps_lock(&self, on: Option<bool>)`. Holds Caps Lock on or off in place of the platform's state; `None` returns to the platform's.
   - `pub fn injected_caps_lock(&self) -> Option<bool>`. The Caps Lock state injected input holds, when it holds one.
   - `pub fn injected_pass(&self) -> bool`. Whether the running pass's input carries injected input: what it triggers acts for an automation client.
@@ -4583,14 +4583,14 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn inject_ime(&self, viewport: ViewportId, event: egui::ImeEvent)`. Queues `event` as the platform's input method would deliver it (a preedit or a commit), behind earlier injected input.
   - `pub fn inject_files(&self, viewport: ViewportId, at: Option<Pos2>, paths: Vec<std::path::PathBuf>, drop: bool)`. Hovers the files over `at` and, with `drop`, drops them in the following injected step, through the same hovered and dropped file input a window's drag session fills.
   - `pub fn inject_access(&self, viewport: ViewportId, node: NodeKey, action: Declared)`. Queues one AccessKit action request (click, focus or context menu) on `node` as one injected step behind earlier injected input.
-  - `pub fn keep_access_tree(&self)`. Turns AccessKit output on, so [`access_tree`](Self::access_tree) and [`access_tree_view`](Self::access_tree_view) have each viewport's settled tree from then on.
-  - `pub fn access_tree_view(&self, viewport: ViewportId) -> Option<AccessTree>`. [`access_tree`](Self::access_tree) as a tree to walk: `None` before the viewport's first pass or while AccessKit is off ([`keep_access_tree`](Self::keep_access_tree) turns it on).
-  - `pub fn set_root_frame(&self, decision: Decision) -> bool`. Changes the open root window's frame to `decision`'s and returns true: the window gets the commands [`policy::reframe`](craft_window::policy::reframe) gives, and [`frame`](Self::frame), [`desktop`](Self::desktop) and the root shell's chrome follow at once.
-  - `pub fn withdraw_injected(&self, viewport: ViewportId)`. Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass has not run and the queue behind it; what is dropped counts as withdrawn ([`take_injected_withdrawn`](Self::take_injected_withdrawn)).
-  - `pub fn cancel_injected(&self) -> bool`. Drops every injected queue and step in flight, and the keys [`inject_hold`](Self::inject_hold) holds; true when anything was pending.
+  - `pub fn keep_access_tree(&self)`. Turns AccessKit output on, so [`access_tree`] and [`access_tree_view`] have each viewport's settled tree from then on.
+  - `pub fn access_tree_view(&self, viewport: ViewportId) -> Option<AccessTree>`. [`access_tree`] as a tree to walk: `None` before the viewport's first pass or while AccessKit is off ([`keep_access_tree`] turns it on).
+  - `pub fn set_root_frame(&self, decision: Decision) -> bool`. Changes the open root window's frame to `decision`'s and returns true: the window gets the commands [`policy::reframe`](craft_window::policy::reframe) gives, and [`frame`], [`desktop`] and the root shell's chrome follow at once.
+  - `pub fn withdraw_injected(&self, viewport: ViewportId)`. Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass has not run and the queue behind it; what is dropped counts as withdrawn ([`take_injected_withdrawn`]).
+  - `pub fn cancel_injected(&self) -> bool`. Drops every injected queue and step in flight, and the keys [`inject_hold`] holds; true when anything was pending.
   - `pub fn end_injection(&self)`. Ends the injection session: the automation connection that fed it is gone.
   - `pub fn injected_idle(&self) -> bool`. Whether no injected step is queued or awaits its pass: the application may answer its waiters.
-  - `pub fn injected_idle_at_pass_end(&self) -> bool`. [`injected_idle`](Self::injected_idle) asked at the end of a pass, after its UI ran: the step the running pass carried counts as run, unless egui runs the pass again.
+  - `pub fn injected_idle_at_pass_end(&self) -> bool`. [`injected_idle`] asked at the end of a pass, after its UI ran: the step the running pass carried counts as run, unless egui runs the pass again.
   - `pub fn take_injected_withdrawn(&self) -> bool`. Whether an injected step was withdrawn since the last call.
   - `pub fn repaint_in(&self, viewport: ViewportId, seconds: f64)`. Asks for one pass of `viewport` after `seconds`; a negative time means now, a non-finite one asks for nothing.
   - `pub fn act(&self, viewport: ViewportId, action: WindowAction) -> bool`. Sends `action` to `viewport`; see [`act`].
@@ -4599,7 +4599,7 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn warp_pointer(&self, to: Pos2) -> bool`. Moves the system pointer to `to` in desktop points; false where the platform cannot.
   - `pub fn facts(&self, viewport: ViewportId) -> Option<WindowFacts>`. `viewport`'s window facts, once it has reported its inner rect.
   - `pub fn key_window(&self) -> ViewportId`. The window that has the keys: the one the platform reports focused, else the main window.
-  - `pub fn typing(&self) -> bool`. Whether a text field has the keys in [`key_window`](Self::key_window), as its last pass ended: the focused stop types text, or egui focus is on a text edit the app drew itself.
+  - `pub fn typing(&self) -> bool`. Whether a text field has the keys in [`key_window`], as its last pass ended: the focused stop types text, or egui focus is on a text edit the app drew itself.
   - `pub fn monitors(&self) -> Vec<Monitor>`. The connected monitors, in desktop pixels; none where the platform does not list them.
   - `pub fn monitor_of(&self, viewport: ViewportId) -> Option<Monitor>`. The monitor `viewport`'s window lies on: the one its top-left corner is on, the rule its scale ([`WindowFacts::scale`]) falls back to. `None` before the window has reported its rect, or where the platform lists no monitor under the corner.
   - `pub fn set_outer(&self, viewport: ViewportId, outer: Rect) -> bool`. Places `viewport`'s outer rect at `outer`: its position, and the inner size that leaves the window's decoration as it is.
@@ -4714,11 +4714,11 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn color(&self, color: Rgba) -> StyleColor`. The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour here.
   - `pub fn ink_on(&self, fill: DataColor) -> StyleColor`. The ink for text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill, pushed to the contrast the text needs.
   - `pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor`. The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill, pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
-  - `pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor`. The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text needs: the inverse of [`ink_on`](Self::ink_on).
+  - `pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor`. The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text needs: the inverse of [`ink_on`].
   - `pub fn focus_look(&self) -> FocusLook`. The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
   - `pub fn tone(&self, tone: Tone) -> StyleColor`. The colour text and icons of `tone` read in.
   - `pub fn tone_fill(&self, tone: Tone) -> StyleColor`. The tinted background text and icons of `tone` sit on: the status or accent background, and the sunken surface for no status.
-  - `pub fn tone_on_fill(&self, tone: Tone) -> StyleColor`. The colour text and icons read in on [`tone_fill`](Self::tone_fill): `accent.on_soft`, the status foreground, and the normal text for no status.
+  - `pub fn tone_on_fill(&self, tone: Tone) -> StyleColor`. The colour text and icons read in on [`tone_fill`]: `accent.on_soft`, the status foreground, and the normal text for no status.
   - `pub fn host_ink(&self, base: Stateful<StyleColor>) -> Stateful<StyleColor>`. A text or icon colour that is `base` when the component stands alone and the text colour of the host part when it is shown as that part's face, so a face reads on whatever fill the host draws under it.
   - `pub fn host_muted_ink(&self, base: Stateful<StyleColor>) -> Stateful<StyleColor>`. A muted text colour that is `base` when the component stands alone and the muted text colour of the host part when it is shown as that part's face and the host has one.
   - `pub fn quiet_ink(&self) -> Stateful<StyleColor>`. The ink of a glyph that acts on a click without a face of its own (a disclosure, a list row's toggle cell):
@@ -4950,12 +4950,12 @@ Text dumps for tests: ordered `key = value` lines compared exactly with a file, 
 - `craft_ui::testing::dump::Dump`: `pub struct Dump`. Ordered `key = value` lines.
   - `pub fn new() -> Self`. An empty dump.
   - `pub fn comment(&mut self, text: &str) -> &mut Self`. A `# text` line, e.g. naming the test that writes the file.
-  - `pub fn line(&mut self, key: &str, value: impl DumpValue) -> &mut Self`. Appends `key = value`, with `key` under the current [`group`](Self::group) prefix.
+  - `pub fn line(&mut self, key: &str, value: impl DumpValue) -> &mut Self`. Appends `key = value`, with `key` under the current [`group`] prefix.
   - `pub fn group(&mut self, prefix: &str, f: impl FnOnce(&mut Dump)) -> &mut Self`. Runs `f` with `prefix.` put before every key it writes.
   - `pub fn text(&self) -> &str`. The lines written so far.
   - `pub fn entries(&self) -> impl Iterator<Item =(String, &str)>`. The `(key, value)` pairs written so far, keys with their group prefixes; comments are skipped.
   - `pub fn compare(&self, path: impl AsRef<Path>) -> Result<(), String>`. Compares with the file at `path`, or rewrites it when [`update_requested`].
-  - `pub fn check(&self, path: impl AsRef<Path>)`. [`compare`](Self::compare), failing the test on a mismatch.
+  - `pub fn check(&self, path: impl AsRef<Path>)`. [`compare`], failing the test on a mismatch.
 - `craft_ui::testing::dump::DumpValue`: `pub trait DumpValue`. A value's text in a dump.
   - `fn dump_value(&self) -> String`. The value as dump text.
 - `craft_ui::testing::dump::Entries`: `pub type Entries = Vec<(String, String)>`. The `(key, value)` lines of one theme, collected to be written with the other themes' (see [`Themed`]).
@@ -5146,7 +5146,7 @@ A fixed-rate frame driver over a context.
   - `pub fn commands(&mut self, commands: CommandInput)`. The command input every following frame is given.
   - `pub fn frame(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> usize`. One frame with `events`; `ui` runs once per pass.
   - `pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize`. One frame of `viewport`, a child window of the root while the root stays live, with `events`; `ui` runs once per pass.
-  - `pub fn frame_closing(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool`. One frame with `events`, as [`frame`](Self::frame); returns whether the frame sent a window a close command.
+  - `pub fn frame_closing(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool`. One frame with `events`, as [`frame`]; returns whether the frame sent a window a close command.
   - `pub fn frame_without_input(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool`. One frame with no `set_input`, as an app that never calls it would drive it: the root values and the interface scale stay as they were.
   - `pub fn frame_shapes(&mut self, mut ui: impl FnMut(&mut Ui)) -> Vec<egui::Shape>`. One frame with no events; returns the shapes it painted, nested shapes flattened.
   - `pub fn hold(&mut self, modifiers: egui::Modifiers)`. The modifiers held in every following frame.
@@ -5156,7 +5156,7 @@ A fixed-rate frame driver over a context.
   - `pub fn drop_files(&mut self, names: &[&str])`. The hovering files drop on the window in the next frame; `names` are what the OS reports as dropped.
   - `pub fn read_dropped(&mut self, name: &str, bytes: &[u8])`. The hovering files drop on the window in the next frame as a web page drops them, with neither path nor bytes:
   - `pub fn drop_with_bytes(&mut self, name: &str, bytes: &[u8])`. The hovering files drop on the window in the next frame as a browser on the desktop hands a file over: by the relative name `name`, which locates no file, with its `bytes` at hand.
-  - `pub fn still_clock(&mut self)`. Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls [`advance`](Self::advance).
+  - `pub fn still_clock(&mut self)`. Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls [`advance`].
   - `pub fn advance(&mut self, seconds: f64)`. Moves the clock on by `seconds` before the next frame.
   - `pub fn close_viewport(&mut self, viewport: egui::ViewportId)`. Closes the child window `viewport`, as its user would: later frames no longer list it.
   - `pub fn idle(&mut self, n: usize, mut ui: impl FnMut(&mut Ui))`. `n` frames with no events.
@@ -5384,8 +5384,8 @@ Stories: named ways to show one registered type, and the data and output the run
   - `pub fn ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> &mut T`. Like [`StoryData::value`] for a number the Properties editor keeps inside `range`.
   - `pub fn choice<T: Value>(&mut self, name: &'static str, init: T, options: &[(&'static str, T)]) -> &mut T`. Like [`StoryData::value`] for a value that is one of `options`, which the Properties editor offers by label.
   - `pub fn restore(&mut self, before: &StorySnapshot)`. Puts every value that was there in `before` back to what it was then.
-  - `pub fn settle(&mut self)`. Moves the [`revision`](Self::revision) when a value was added or changed since the last call.
-  - `pub fn revision(&self) -> Revision`. The revision of the values: unique to this data, and moved by every [`settle`](Self::settle) that finds a change, so equal revisions mean the values a memoized view showed.
+  - `pub fn settle(&mut self)`. Moves the [`revision`] when a value was added or changed since the last call.
+  - `pub fn revision(&self) -> Revision`. The revision of the values: unique to this data, and moved by every [`settle`] that finds a change, so equal revisions mean the values a memoized view showed.
   - `pub fn changed_since(&self, before: &StorySnapshot) -> Vec<&'static str>`. The names of the values that differ from `before`; a value added since counts as changed.
   - `pub fn snapshot(&self) -> StorySnapshot`. A copy of every value.
 - `craft_ui::testing::story::StoryOutput`: `pub struct StoryOutput { pub id: Option<Id>, pub edits: Vec<EditKind>, pub clicked: bool, pub fired: Vec<CommandRef>, pub collection: Vec<CollectionKind>, pub visible: Option<Range<usize>>, pub value_text: Option<String>, pub readout: Option<String> }`. What a story showed, type-erased: the response id, the kinds of its edit events and of its collection events.

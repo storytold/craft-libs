@@ -57,7 +57,10 @@ use std::sync::Arc;
 ///   window facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the requests to collections,
 ///   the scroll view of a nested `Lazy`): a change of one runs only the views that read it;
 /// - the clock, read through `frame::stepped_clock`: the view runs at the next step;
-/// - commands sent to a command scope instance inside it: it runs while one waits.
+/// - commands sent to a command scope instance inside it: it runs while one waits;
+/// - whether an inspected region is open around it (`runtime::inspect`): a run in one records the region's steps for
+///   its components, and a replay adds only the steps its run took, so a run made outside a region is not replayed
+///   inside one, nor a run made inside one outside it.
 ///
 /// Its content is a layout room of its own, as a pane's is: the flow of the body around it (a column's sweep, a grid's
 /// cursor) does not reach in, so the room it is given reaches it only through its place. To the body
@@ -164,6 +167,9 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
         let mut key = MemoKey::of_view(ctx);
         key.feed_hash(&P::identity());
         key.write(&(show as usize).to_le_bytes());
+        // An inspected region records the steps its components ran (`runtime::inspect`), and a replay adds the steps
+        // its run took: the view a region shows records them, and the same view shown outside one records none.
+        key.write(&[u8::from(crate::runtime::inspect::recording(ctx))]);
         key.write(&env.scope_key().to_le_bytes());
         props.key(&mut key);
         #[cfg(feature = "testing")]

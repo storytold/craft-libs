@@ -3,6 +3,7 @@
 pub(crate) mod fixes;
 pub(crate) mod gesture;
 pub(crate) mod hit_order;
+pub(crate) mod inspect_region;
 pub(crate) mod level;
 pub(crate) mod memo_key;
 pub(crate) mod memo_row;

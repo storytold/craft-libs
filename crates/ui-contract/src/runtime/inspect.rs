@@ -257,6 +257,10 @@ const KEEP_PASSES: u64 = 4;
 ///
 /// A record that differs from the kept one, after something earlier in the pass read it, reruns the pass, so a
 /// reader shown before the region gets this pass's record.
+///
+/// The steps a run records are only recorded while a region is open, and a replay adds only the steps its run took:
+/// whether a region is open is part of a memoized view's key (`contract::MemoView`), so a view settled outside a
+/// region runs again in the pass that shows it inside one, and its run records the region's elements.
 pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, Option<Arc<Recorded>>) {
     let ctx = ui.ctx().clone();
     if ui.is_sizing_pass() || measure::active(&ctx) {

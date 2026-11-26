@@ -157,7 +157,22 @@ fn doc_summary(attrs: &[Attribute]) -> String {
             None => summary.push_str(&line),
         }
     }
-    summary
+    drop_self_links(&summary)
+}
+
+/// `summary` with a link that names an item of its own type left as the reference the file writes for a name it cannot
+/// link: `Self::zoom_x` names a method of the page the doc comment belongs to, which rustdoc resolves in the source,
+/// and this file has no page to link to, so the link keeps its text and loses its target.
+fn drop_self_links(summary: &str) -> String {
+    let mut out = String::with_capacity(summary.len());
+    let mut rest = summary;
+    while let Some(at) = rest.find("](Self::") {
+        let Some(end) = rest[at..].find(')') else { break };
+        out.push_str(&rest[..=at]);
+        rest = &rest[at + end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn is_hidden(attrs: &[Attribute]) -> bool {
