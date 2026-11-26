@@ -529,6 +529,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         wrap: None,
         index: None,
         group: None,
+        item: p.props.list_item.filter(|_| list.is_none()).map(|l| l.min(8)),
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -579,6 +580,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         wrap: None,
                         index: None,
                         group: None,
+                        // A list item's further paragraph, each piece of it.
+                        item: out.item,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -952,9 +955,50 @@ fn kept_index(doc: &Document, bl: &Blocks, i: usize) -> Option<(usize, std::sync
     (paras.len() == *n && craft_wordmodel::kept::run_fingerprint(paras.into_iter()) == *run).then(|| (*n, xml.clone()))
 }
 
+/// Where the text of each level's last numbered paragraph starts, points.
+type ItemText = [Option<f32>; 9];
+
+/// The flow paragraphs of `p`, a list item's further paragraph only while it still sits at its
+/// item's text: one moved out of it (Enter, then Decrease Indent to the margin, the ruler, the
+/// Paragraph dialog…) is body text after the list. Asked of the paragraph itself, so whichever
+/// command moved it, the paragraph is where it shows.
+fn flow_paras_at(doc: &Document, p: &Paragraph, opts: FlowOpts, at: &mut ItemText) -> Vec<Para> {
+    let rp = doc.styles.resolve_para(&p.props);
+    // (Its own indent, or its style's.)
+    let left = rp.indent_left;
+    let mut paras = flow_paras_in(doc, p, opts);
+    if let Some(n) = rp.numbering.filter(|n| n.num != 0) {
+        // The paragraph's own indent, else its level's, else its style's (as Word places it).
+        let level = doc.numbering.level(n.num, n.level).map(|l| l.indent);
+        // Nonzero character indents override point indents, including an explicit zero.
+        let text = if rp.indent_chars[0] != 0.0 { left } else { p.props.indent_left.or(level).unwrap_or(left) };
+        if let Some(t) = at.get_mut(usize::from(n.level)) {
+            *t = Some(text);
+        }
+    } else if let Some(l) = p.props.list_item {
+        // Before any numbered paragraph, an explicit header has no prior baseline to outdent from.
+        let kept = match at.get(usize::from(l)).copied().flatten() {
+            Some(text) => left >= text - 0.5,
+            None => true,
+        };
+        if !kept {
+            for q in &mut paras {
+                q.item = None;
+            }
+            // Moved out of its item, it is body text: the lists before it have ended.
+            *at = [None; 9];
+        }
+    } else {
+        // Body text: the lists before it have ended, and where their items' text was with them.
+        *at = [None; 9];
+    }
+    paras
+}
+
 fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut skip = 0usize;
+    let mut at: ItemText = [None; 9];
     for (i, b) in bl.iter().enumerate() {
         if skip > 0 {
             skip -= 1;
@@ -969,7 +1013,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
             let from = out.len();
             for b in bl.get(i..i + ix.0).unwrap_or(&[]) {
                 if let Block::Para(p) = &**b {
-                    out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para));
+                    out.extend(flow_paras_at(doc, p, tracked, &mut at).into_iter().map(FBlock::Para));
                 }
             }
             let n = out.len() - from;
@@ -980,7 +1024,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
             continue;
         }
         match &**b {
-            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para)),
+            Block::Para(p) => out.extend(flow_paras_at(doc, p, tracked, &mut at).into_iter().map(FBlock::Para)),
             Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked))),
             Block::Table(t) => {
                 for r in &t.rows {
@@ -1105,6 +1149,8 @@ fn with_cell_text(doc: &Document, blocks: &Blocks, chr: &CharProps, align: Optio
                 if !table.is_empty() {
                     let mut props = doc.styles.table_para_patch(&p.props, &table);
                     props.overlay(&p.props);
+                    // Direct only, so no overlay carries it: a list item's further paragraph stays one.
+                    props.list_item = p.props.list_item;
                     p.props = props;
                 }
                 Arc::new(Block::Para(p))

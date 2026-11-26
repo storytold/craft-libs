@@ -56,8 +56,29 @@ included), line spacing, space before and after (in lines or points), bullet cha
 indents of the text's ruler, and runs with their font, size, bold, italic, underline and colour
 (an RGB or a colour scheme slot). The text is Windows-1252. The master's placeholders set where the
 default master's placeholders go, and its date, footer and slide number those of every layout. The
-master's text styles become its title, body and other styles, level by level. Shapes without text,
-the shapes' own fill and line, pictures and notes come later.
+master's text styles become its title, body and other styles, level by level. Shapes and lines
+read too: all 24 of PowerPoint 95's shapes (rectangle, rounded rectangle, ellipse, diamond, the
+two triangles, parallelogram, trapezoid, hexagon, octagon, plus, five-point star, the arrow and
+the thick arrow in their four directions, home plate, cube, balloon and seal) as DrawingML presets
+with their adjust values (the trapezoid, wide at the top in PowerPoint 95, as its own outline, so
+its text stays upright), each with its fill (or none), its line (or none) with its colour, its
+width (the six line styles, 1 to 10 pt) and its dots or dashes, and its shadow with the shadow's
+colour, offset and transparency; and lines from their start to their end, with their arrowheads.
+A shape code no probe showed reads as a rectangle. PowerPoint 95 measures angles
+counter-clockwise, DrawingML clockwise, so each is negated. A shape's geometry holds its outline
+as drawn, quarter-turns and mirror included, so its angle and flips come from there (a box turned
+by an odd number of quarter-turns is turned back); the rectangle, rounded rectangle and ellipse
+take the angle the user set. A shape that draws nothing but text is a text box; a shape's text is
+read as a text box's is. PowerPoint 95 lays it out in the box the geometry holds, turned by the
+text's own angle, so the text of a shape turned before it was typed stays upright: such text is
+`upright`, at its own angle, with its insets on that box's edges (a balloon's measured from its
+body). A preset with a text rectangle of its own, such as an arrow's shaft, applies the insets
+inside that rectangle, where PowerPoint 95 measures them from the whole box, so such text can sit
+off from where PowerPoint 95 puts it. Freeforms read as custom paths through their points, in
+their box, with
+their format's fill, line and shadow, and open ones with their arrowheads. Groups read as groups
+of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip a
+group), nested up to 32 deep. Pictures and notes come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
