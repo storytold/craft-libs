@@ -1254,32 +1254,39 @@ fn escape_in_a_text_field_closes_the_form_dialog_typed_or_not() {
     }
 }
 
-/// A modeless form keeps its other edits when Escape cancels an active text edit.
+/// A modeless form keeps its other edits when Escape cancels an active text edit. The field keeps the focus through
+/// that Escape, also where Escape otherwise takes a field's focus (`escape_leaves_fields`), so the next Escape closes
+/// the window.
 #[trial]
 fn escape_in_a_modeless_form_restores_the_field_before_closing() {
-    let open = Rc::new(Cell::new(true));
-    let value = Rc::new(RefCell::new(String::from("Original")));
-    let (shown, text) = (Rc::clone(&open), Rc::clone(&value));
-    let mut fixture = Fixture::new(move |ui| {
-        let mut is_open = shown.get();
-        let mut text = text.borrow_mut();
-        craft_ui::patterns::form_dialogs::FormDialog::new("Tool", Bind::bound(&mut *text))
-            .opened(Bind::bound(&mut is_open))
-            .shaped(|dialog| dialog.modeless())
-            .show(ui, |ui, _, text| {
-                craft_ui::text::TextField::new("Name", Bind::bound(text)).show(ui);
-                true
-            });
-        shown.set(is_open);
-    });
-    fixture.idle(10);
-    let field = fixture.by_label("Name").expect("the field is shown");
-    fixture.click(&field).idle(2);
-    fixture.type_text("x").idle(2);
-    assert_ne!(&*value.borrow(), "Original", "typing changed the value");
-    fixture.key(Key::Escape, Modifiers::NONE).idle(2);
-    assert!(open.get(), "the first Escape leaves the window open");
-    assert_eq!(&*value.borrow(), "Original", "the field's edit is restored");
-    fixture.key(Key::Escape, Modifiers::NONE).idle(6);
-    assert!(!open.get(), "the second Escape closes the window");
+    for leaves in [false, true] {
+        let open = Rc::new(Cell::new(true));
+        let value = Rc::new(RefCell::new(String::from("Original")));
+        let (shown, text) = (Rc::clone(&open), Rc::clone(&value));
+        let mut fixture = Fixture::new(move |ui| {
+            let mut is_open = shown.get();
+            let mut text = text.borrow_mut();
+            craft_ui::patterns::form_dialogs::FormDialog::new("Tool", Bind::bound(&mut *text))
+                .opened(Bind::bound(&mut is_open))
+                .shaped(|dialog| dialog.modeless())
+                .show(ui, |ui, _, text| {
+                    craft_ui::text::TextField::new("Name", Bind::bound(text)).show(ui);
+                    true
+                });
+            shown.set(is_open);
+        });
+        let mut root = craft_ui::runtime::env::RootEnv::new();
+        root.escape_leaves_fields = leaves;
+        fixture.root(root).idle(10);
+        let field = fixture.by_label("Name").expect("the field is shown");
+        fixture.click(&field).idle(2);
+        fixture.type_text("x").idle(2);
+        assert_ne!(&*value.borrow(), "Original", "leaves {leaves}: typing changed the value");
+        fixture.key(Key::Escape, Modifiers::NONE).idle(2);
+        assert!(open.get(), "leaves {leaves}: the first Escape leaves the window open");
+        assert_eq!(&*value.borrow(), "Original", "leaves {leaves}: the field's edit is restored");
+        assert!(fixture.focused().is_some(), "leaves {leaves}: the field keeps the focus");
+        fixture.key(Key::Escape, Modifiers::NONE).idle(6);
+        assert!(!open.get(), "leaves {leaves}: the second Escape closes the window");
+    }
 }

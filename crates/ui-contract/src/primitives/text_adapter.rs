@@ -517,8 +517,9 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     let draft_takes = state.draft.is_some() && !dialog_escape && !(focused_before && keys::focus_in_modal_dialog(ctx));
     // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus;
-    // in a dialog that Escape closes, the Escape stays the dialog's.
-    let leaves = !input.options.clear_on_escape && !closes_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
+    // in a dialog that Escape closes, modal or modeless, the Escape stays the dialog's and the field keeps the focus.
+    let in_closing_dialog = focused_before && crate::runtime::focus::escape_reaches_dialog(ctx);
+    let leaves = !input.options.clear_on_escape && !in_closing_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
     let takes_escape = keep_on_escape
         || if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
     let list_first = input.list_open && !input.options.clear_on_escape;
