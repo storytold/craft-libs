@@ -252,6 +252,13 @@ impl<'a> Lexer<'a> {
                     out.push(b);
                 }
                 b'\\' => self.string_escape(&mut out)?,
+                // PLRM §3.8 treats an unescaped CR or CRLF as one LF inside a string.
+                b'\r' => {
+                    if self.peek() == Some(b'\n') {
+                        self.pos += 1;
+                    }
+                    out.push(b'\n');
+                }
                 _ => out.push(b),
             }
         }
@@ -389,6 +396,17 @@ mod tests {
         assert_eq!(lex.data(), b"DATA");
         lex.advance(2);
         assert_eq!(lex.rest(), b"TA");
+    }
+
+    #[test]
+    fn literal_string_line_endings_preserve_currentfile_data() {
+        for eol in [b"\n".as_slice(), b"\r", b"\r\n"] {
+            let source = [b"(first".as_slice(), eol, b"second\\", eol, b"third\\r\\015)", b"\r\nA\r\nB"].concat();
+            let mut lex = Lexer::new(&source);
+            assert_eq!(lex.next(), Ok(Some(Token::Str(b"first\nsecondthird\r\r".to_vec()))), "line ending {eol:?}");
+            assert_eq!(lex.rest(), b"\r\nA\r\nB");
+            assert_eq!(lex.data(), b"A\r\nB");
+        }
     }
 
     #[test]
