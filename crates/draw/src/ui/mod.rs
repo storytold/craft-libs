@@ -86,12 +86,15 @@ pub use measure::{
     MIN_LINE, RulerBar, RulerBarOutput, RulerLine, RulerOverlay, RulerPass, RulerTool, RulerWords, box_distances, ruler_line_form, show_ruler,
 };
 pub use paint_bar::{
-    EraserMode, MIXER_COMBINATIONS, MIXER_GROUP_STARTS, MixerValues, PaintBar, PaintBarOutput, PaintBarWords, PaintTool, PaintValues, Smoothing,
+    EraserMode, MIXER_COMBINATIONS, MIXER_GROUP_STARTS, MixerLoad, MixerValues, PaintBar, PaintBarOutput, PaintBarWords, PaintTool, PaintValues,
+    Smoothing,
 };
 pub use paths::{PathKind, PathRow, PathsCommands, PathsEvent, PathsFooterButton, PathsOutput, PathsPanel, PathsWords};
 pub use pattern::{PatternColors, PatternFillDialog, PatternFillEditor, PatternFillOptions, PatternFillOutput, PatternSwatch, PatternWords};
 pub use pen::{AnchorDelete, AnchorTool, PenEnd};
-pub use pen::{AnchorsShown, HitMark, PATH_OPTIONS_COLOR_KEY, PathMode, PathOptionsPopover, PathOptionsSettings, PathTool, PenMode, SegmentMark};
+pub use pen::{
+    AnchorsShown, HandleStyle, HitMark, PATH_OPTIONS_COLOR_KEY, PathMode, PathOptionsPopover, PathOptionsSettings, PathTool, PenMode, SegmentMark,
+};
 pub use pen::{
     BezierHit, BezierOverlay, BezierStyle, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, MAX_ANCHORS, PathEdit,
     PathSelection, PenStyle,
@@ -110,12 +113,14 @@ pub use shape_drag::{
 };
 pub use shape_presets::{ShapeMenu, ShapePresetWords};
 pub use slice::{
-    DivideBy, DivideSlices, DivideSlicesDialog, SliceBar, SliceBarOutput, SliceCommand, SliceEvent, SliceItem, SliceKind, SliceMode, SliceOptions,
-    SliceOptionsDialog, SliceOverlay, SliceTool, SliceToolSettings,
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceBackground, SliceBar, SliceBarOutput, SliceCellAlign, SliceCellVAlign, SliceCommand, SliceEvent,
+    SliceItem, SliceKind, SliceMode, SliceOptions, SliceOptionsDialog, SliceOverlay, SliceTool, SliceToolSettings,
 };
 pub use stroke::{DashAlign, DashUnit, LineCap, LineJoin, LineStyle, StrokeAlign, StrokeButton, StrokeEditor, StrokePreview, StrokeStyle};
 pub use symmetry::{Symmetry, SymmetryChoice, SymmetryCommand, SymmetryEvent, SymmetryMenu, SymmetryMode, SymmetryOverlay, SymmetryTransform};
-pub use transform::{ApplyBy, RotateZone, SizeUnit, TransformBox, TransformField, TransformFields, TransformGroups, TransformRow};
+pub use transform::{
+    ApplyBy, FieldArrangement, RotateZone, SizeUnit, TransformBox, TransformField, TransformFields, TransformGroups, TransformRow, TransformSource,
+};
 pub use transform::{
     Interpolation, TransformBar, TransformBarOutput, TransformChoice, TransformEdit, TransformOverlay, TransformPhase, TransformPreset,
     TransformRequest, TransformResult, TransformSession, TransformSettings, TransformWarp,

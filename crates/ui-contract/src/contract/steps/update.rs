@@ -45,7 +45,9 @@ pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
 }
 
 /// Step 9, the edit intents the library takes before `C::update`: Escape or a cancelled press ends a running gesture
-/// (Escape as `C::ESCAPE` says), and a reset becomes a `Set` of the binding's reset value.
+/// (Escape as `C::ESCAPE` says), and a reset becomes a `Set` of the binding's reset value, unless the value is already
+/// that. In a dialog Escape is the dialog's Cancel, which discards the gesture with the dialog's other edits: a gesture
+/// there ends on a cancelled press only.
 pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     if cx.gesture().is_some_and(|phase| matches!(phase, GesturePhase::Begin | GesturePhase::Update)) {
@@ -55,10 +57,16 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
             && matches!(C::INPUT, Input::Text)
             && cx.core.intents.untaken(&Intent::Cancel)
             && focus::escape_closes_dialog(&cx.core.ctx);
+        let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_modal_dialog(&cx.core.ctx);
         let reason = if dialog_escape {
-            cx.cancel(CancelReason::Escape);
+            // A dialog that keeps typing on Escape (`FocusPolicy::escape_keeps_typing`) commits it instead.
+            if focus::escape_keeps_typing(&cx.core.ctx) {
+                cx.commit();
+            } else {
+                cx.cancel(CancelReason::Escape);
+            }
             None
-        } else if !cx.core.escape_to_list && cx.core.intents.take(Intent::Cancel) {
+        } else if escapes && cx.core.intents.take(Intent::Cancel) {
             Some(CancelReason::Escape)
         } else {
             cx.core.press_cancelled().map(|reason| match reason {
@@ -83,7 +91,9 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
         };
         if let Some(part) = part.filter(|part| cx.core.own_reset_parts.contains(&(part.key, part.index))) {
             cx.core.reset_part = Some(part);
-        } else if let Some(reset) = comp.bind().and_then(|bind| bind.reset_value().cloned()) {
+        } else if let Some(reset) = comp.bind().and_then(|bind| bind.reset_value().cloned())
+            && cx.value() != Some(&reset)
+        {
             cx.set(reset);
         }
     }

@@ -7,8 +7,10 @@ use craft_ui::patterns::preferences::{
     CustomSettings, PageInfo, PrefValue, PreferencesDraft, PreferencesModel, RowKind, SettingRule, SettingsDocument, SettingsDraft, StandardPage,
     list_pages, row_shown,
 };
-use craft_ui::testing::trial;
+use craft_ui::testing::{Fixture, trial};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::rc::Rc;
 use toml::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,7 +265,7 @@ struct MemoryPrefs {
 struct TurnOff;
 
 impl CustomSettings<MemoryPrefs> for TurnOff {
-    fn nested(&mut self, _: &egui::Context, draft: &mut SettingsDraft) {
+    fn nested(&mut self, _: &mut egui::Ui, draft: &mut SettingsDraft) {
         draft.remove("memory.percent");
     }
 }
@@ -272,8 +274,12 @@ impl CustomSettings<MemoryPrefs> for TurnOff {
 #[trial]
 fn a_removed_draft_value_applies_as_no_value() {
     let saved = MemoryPrefs { memory: Memory { percent: Some(70) } };
-    let mut doc = SettingsDocument::new(saved).expect("serializes").custom(TurnOff);
-    doc.nested(&egui::Context::default());
+    let doc = Rc::new(RefCell::new(SettingsDocument::new(saved).expect("serializes").custom(TurnOff)));
+    let shown = Rc::clone(&doc);
+    // P3(pdf-dialogs-w8): L-176 `PreferencesModel::nested` takes the window's `Ui`.
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().nested(ui));
+    fixture.idle(1);
+    let mut doc = doc.borrow_mut();
     doc.apply().expect("the draft fits the struct");
     let edits = doc.take_applied_edits().expect("applied");
     assert_eq!(edits, vec![("memory.percent".to_owned(), None)]);

@@ -8,8 +8,11 @@
 //! idle for [`IO_TIMEOUT`] is closed. Tokens are 64 hex characters in either case, kept
 //! lower-cased by the server and compared in constant time with hex letters folded. None of this depends on the transport: the TCP server and a test channel share it.
 
+#[cfg(not(windows))]
 use std::fs::OpenOptions;
-use std::io::{BufRead, Write};
+use std::io::BufRead;
+#[cfg(not(windows))]
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -271,11 +274,15 @@ fn token_conflict() -> AutomationError {
     AutomationError::BadRequest("use either a control token or a control token file, not both".into())
 }
 
+/// The most a Windows token file read takes: a token, its newline and room for stray whitespace.
+#[cfg(windows)]
+const TOKEN_FILE_MAX_BYTES: u64 = 4096;
+
 /// Validates what was opened, not just the name: the file must be a regular file that no other
 /// local principal can read, so a group- or world-readable token is refused rather than trusted.
 fn read_token_file(path: &Path) -> Result<String, AutomationError> {
     let io = |e: std::io::Error| AutomationError::Io(format!("{}: {e}", path.display()));
-    let mut file = std::fs::File::open(path).map_err(io)?;
+    let file = std::fs::File::open(path).map_err(io)?;
     let meta = file.metadata().map_err(io)?;
     if !meta.is_file() {
         return Err(AutomationError::Io(format!("{}: control token file is not a regular file", path.display())));
@@ -291,25 +298,58 @@ fn read_token_file(path: &Path) -> Result<String, AutomationError> {
             )));
         }
     }
-    let token = std::io::read_to_string(&mut file).map_err(io)?;
+    // A Windows file inherits its folder's access list, so the owner and the access list are read with the contents
+    // through one handle: nothing swapped in at the path between the check and the read gets through.
+
+    #[cfg(windows)]
+    let token = {
+        use craft_platform::owner_only;
+        drop(file);
+        let me = owner_only::current_user_sid().map_err(io)?;
+        let (sddl, bytes) = owner_only::read_with_sddl(path, TOKEN_FILE_MAX_BYTES).map_err(io)?;
+        if let Some(problem) = owner_only::foreign_access(&sddl, &me) {
+            return Err(AutomationError::Io(format!(
+                "{}: control token file can be reached by others: {problem}; restrict it to its owner",
+                path.display()
+            )));
+        }
+        String::from_utf8(bytes).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?
+    };
+    #[cfg(not(windows))]
+    let token = std::io::read_to_string(&file).map_err(io)?;
     let token = token.trim().to_owned();
     validate_token(&token)?;
     Ok(token)
 }
 
-fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
+/// Create the token file `path` holding `token` and a newline. An error keeps the kind of the one
+/// that caused it, with the path in its message.
+fn create_token_file(path: &Path, token: &str) -> std::io::Result<()> {
+    let at = |p: &Path, e: std::io::Error| std::io::Error::new(e.kind(), format!("{}: {e}", p.display()));
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|e| AutomationError::Io(format!("{}: {e}", parent.display())))?;
+        std::fs::create_dir_all(parent).map_err(|e| at(parent, e))?;
     }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+    // On Windows the file is created with an access list of its user and SYSTEM only, so it never has its folder's
+    // access list, and the token is written through the handle that created it.
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        use craft_platform::owner_only;
+        owner_only::current_user_sid()
+            .and_then(|me| owner_only::create_private_file(path, &me, format!("{token}\n").as_bytes()))
+            .map_err(|e| std::io::Error::new(e.kind(), format!("{}: cannot create the control token file for its owner only: {e}", path.display())))
     }
-    let mut file = options.open(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
-    writeln!(file, "{token}").map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| at(path, e))?;
+        writeln!(file, "{token}").map_err(|e| at(path, e))
+    }
 }
 
 /// The server's token, lower-cased. Both given is
@@ -317,11 +357,24 @@ fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
 /// validated. Neither given: a generated token. A `token_file` that exists is read: it must be a
 /// regular file (`I/O: <path>: control token file is not a regular file`) and on Unix have no
 /// group or other permission bits (`I/O: <path>: control token file is readable by group or
-/// others (mode {mode & 0o777:o}); restrict it to its owner (e.g. chmod 600)`), and its trimmed
-/// content is validated. A missing one is created with a generated token (parent directories
-/// created, `create_new`, mode 0600 on Unix, the token and a newline); losing that create race to
-/// another process reads the winner's file instead.
+/// others (mode {mode & 0o777:o}); restrict it to its owner (e.g. chmod 600)`), on Windows be
+/// owned by the user with an access list of the user and SYSTEM only (`I/O: <path>: control token
+/// file can be reached by others: <why>; restrict it to its owner`), and its trimmed content is
+/// validated. A missing one is created with a generated token (parent directories created,
+/// `create_new`, mode 0600 on Unix, the user and SYSTEM only on Windows, the token and a
+/// newline); losing that create race to another process reads the winner's file instead. On
+/// Windows a create that does not finish in time fails (`I/O: <path>: cannot create the control
+/// token file for its owner only: <why>`), and a file it left at the path is not read as a winner's.
 pub fn server_token(supplied: Option<&str>, token_file: Option<&Path>) -> Result<String, AutomationError> {
+    server_token_with(supplied, token_file, create_token_file)
+}
+
+/// [`server_token`], with `create` making a missing token file.
+fn server_token_with(
+    supplied: Option<&str>,
+    token_file: Option<&Path>,
+    create: impl FnOnce(&Path, &str) -> std::io::Result<()>,
+) -> Result<String, AutomationError> {
     if supplied.is_some() && token_file.is_some() {
         return Err(token_conflict());
     }
@@ -335,11 +388,11 @@ pub fn server_token(supplied: Option<&str>, token_file: Option<&Path>) -> Result
     };
     match read_token_file(path) {
         Ok(existing) => Ok(existing.to_ascii_lowercase()),
-        Err(AutomationError::Io(_)) if !path.exists() => match create_token_file(path, &token) {
+        Err(AutomationError::Io(_)) if !path.exists() => match create(path, &token) {
             Ok(()) => Ok(token),
-            // Another process won the create-new race.
-            Err(AutomationError::Io(_)) if path.exists() => read_token_file(path).map(|v| v.to_ascii_lowercase()),
-            Err(e) => Err(e),
+            // Another process won the create-new race. A file left by a create that ran out of time is this one's.
+            Err(e) if e.kind() != std::io::ErrorKind::TimedOut && path.exists() => read_token_file(path).map(|v| v.to_ascii_lowercase()),
+            Err(e) => Err(AutomationError::Io(e.to_string())),
         },
         Err(e) => Err(e),
     }

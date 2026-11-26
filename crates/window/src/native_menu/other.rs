@@ -2,13 +2,23 @@
 
 use std::convert::Infallible;
 
-use super::{Bar, Handler, Options};
+use super::{Bar, Handler, Options, Wake};
+
+/// No menu bar here, so no menu is ever open.
+pub(super) fn menu_tracking() -> bool {
+    false
+}
+
+/// No menu bar here, so no menu ever begins tracking.
+pub(super) fn take_menu_began() -> bool {
+    false
+}
 
 /// Never built: [`Installed::install`] returns `None`.
 pub(super) struct Installed(Infallible);
 
 impl Installed {
-    pub(super) fn install(_: &Bar, _: Options) -> Option<Installed> {
+    pub(super) fn install(_: &Bar, _: Options, _: Wake) -> Option<Installed> {
         None
     }
 
@@ -20,7 +30,15 @@ impl Installed {
         match self.0 {}
     }
 
+    pub(super) fn failed(&self) -> bool {
+        match self.0 {}
+    }
+
     pub(super) fn tracking(&self) -> bool {
+        match self.0 {}
+    }
+
+    pub(super) fn take_began(&self) -> bool {
         match self.0 {}
     }
 

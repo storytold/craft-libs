@@ -34,6 +34,7 @@ craft-draw = { workspace = true, optional = true }
 craft-ecproj-format = { workspace = true, optional = true }
 craft-font-catalog = { workspace = true, optional = true }
 craft-font-manager = { workspace = true, optional = true }
+craft-font-os-windows = { workspace = true, optional = true }
 craft-font-store = { workspace = true, optional = true }
 craft-font-subset = { workspace = true, optional = true }
 craft-imaging = { workspace = true, optional = true }
@@ -66,8 +67,10 @@ craft-ui = { workspace = true, optional = true }
 craft-aaf = { workspace = true, optional = true }
 craft-aep = { workspace = true, optional = true }
 craft-affinity = { workspace = true, optional = true }
+craft-android-res = { workspace = true, optional = true }
 craft-assuan = { workspace = true, optional = true }
 craft-captions = { workspace = true, optional = true }
+craft-cdr = { workspace = true, optional = true }
 craft-cfb = { workspace = true, optional = true }
 craft-codepage = { workspace = true, optional = true }
 craft-crs = { workspace = true, optional = true }
@@ -107,6 +110,7 @@ craft-kra = { workspace = true, optional = true }
 craft-latex = { workspace = true, optional = true }
 craft-lottie = { workspace = true, optional = true }
 craft-markdown = { workspace = true, optional = true }
+craft-material-graph = { workspace = true, optional = true }
 craft-materialx = { workspace = true, optional = true }
 craft-math = { workspace = true, optional = true }
 craft-mesh = { workspace = true, optional = true }
@@ -125,6 +129,7 @@ craft-pdn = { workspace = true, optional = true }
 craft-penpot = { workspace = true, optional = true }
 craft-pkcs7 = { workspace = true, optional = true }
 craft-plotter = { workspace = true, optional = true }
+craft-png = { workspace = true, optional = true }
 craft-pptx = { workspace = true, optional = true }
 craft-prc = { workspace = true, optional = true }
 craft-psd = { workspace = true, optional = true }
@@ -204,6 +209,7 @@ craft-jsonc = { workspace = true, optional = true }
 craft-pcap = { workspace = true, optional = true }
 craft-sourcemap = { workspace = true, optional = true }
 craft-wasm = { workspace = true, optional = true }
+craft-wayland = { workspace = true, optional = true }
 craft-xfdf = { workspace = true, optional = true }
 craft-color-transform = { workspace = true, optional = true }
 craft-develop = { workspace = true, optional = true }
@@ -223,6 +229,7 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-shared-vec = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -303,6 +310,8 @@ ai-local = ["ai", "craft-ai/local"]
 
 ai-core = ["dep:craft-ai-core"]
 
+android-res = ["dep:craft-android-res"]
+
 anicraft-format = ["dep:craft-anicraft-format"]
 
 assuan = ["dep:craft-assuan"]
@@ -360,6 +369,9 @@ browse = ["dep:craft-browse"]
 
 captions = ["dep:craft-captions"]
 captions-mov-text = ["captions", "craft-captions/mov-text"]
+
+cdr = ["dep:craft-cdr"]
+cdr-synth = ["cdr", "craft-cdr/synth"]
 
 cfb = ["dep:craft-cfb"]
 
@@ -449,6 +461,7 @@ ews = ["dep:craft-ews"]
 
 exr = ["dep:craft-exr"]
 exr-decode = ["exr", "craft-exr/decode"]
+exr-zlib-inflate = ["exr", "craft-exr/zlib-inflate"]
 
 fcproj-format = ["dep:craft-fcproj-format"]
 
@@ -488,6 +501,8 @@ font-catalog = ["dep:craft-font-catalog"]
 font-catalog-system = ["font-catalog", "craft-font-catalog/system"]
 
 font-manager = ["dep:craft-font-manager"]
+
+font-os-windows = ["dep:craft-font-os-windows"]
 
 font-store = ["dep:craft-font-store"]
 font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
@@ -599,6 +614,8 @@ macho-serde = ["macho", "craft-macho/serde"]
 
 markdown = ["dep:craft-markdown"]
 
+material-graph = ["dep:craft-material-graph"]
+
 materialx = ["dep:craft-materialx"]
 
 math = ["dep:craft-math"]
@@ -621,6 +638,7 @@ media-serde = ["media", "craft-media/serde"]
 media-vmd = ["media", "craft-media/vmd"]
 
 media-source = ["dep:craft-media-source"]
+media-source-y4m = ["media-source", "craft-media-source/y4m"]
 
 menu = ["dep:craft-menu"]
 
@@ -711,6 +729,8 @@ plist = ["dep:craft-plist"]
 plotter = ["dep:craft-plotter"]
 plotter-serde = ["plotter", "craft-plotter/serde"]
 
+png = ["dep:craft-png"]
+
 ppt-binary = ["dep:craft-ppt-binary"]
 
 pptx = ["dep:craft-pptx"]
@@ -784,6 +804,9 @@ settings-testing = ["settings", "craft-settings/testing"]
 
 sf2 = ["dep:craft-sf2"]
 sf2-test-support = ["sf2", "craft-sf2/test-support"]
+
+shared-vec = ["dep:craft-shared-vec"]
+shared-vec-serde = ["shared-vec", "craft-shared-vec/serde"]
 
 sheet = ["dep:craft-sheet"]
 
@@ -902,6 +925,7 @@ theme-editor = ["dep:craft-theme-editor"]
 theme-store = ["dep:craft-theme-store"]
 
 tiff = ["dep:craft-tiff"]
+tiff-plain-rgba16 = ["tiff", "craft-tiff/plain-rgba16"]
 
 time = ["dep:craft-time"]
 
@@ -922,6 +946,7 @@ ui-system_fonts = ["ui", "craft-ui/system_fonts"]
 ui-testing = ["ui", "craft-ui/testing"]
 
 update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
+update-local-mirror = ["update", "craft-update/local-mirror"]
 update-oci_migration = ["update", "craft-update/oci_migration"]
 
 usd = ["dep:craft-usd"]
@@ -968,6 +993,8 @@ video-vp9-decode = ["video", "craft-video/vp9-decode"]
 video-vp9-encode = ["video", "craft-video/vp9-encode"]
 
 wasm = ["dep:craft-wasm"]
+
+wayland = ["dep:craft-wayland"]
 
 web-api = ["dep:craft-web-api"]
 

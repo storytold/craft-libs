@@ -3,6 +3,7 @@
 
 use crate::layout::flow_region;
 use crate::runtime::egui::alloc;
+use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
 use crate::runtime::lazy;
 use crate::runtime::memory::sub;
@@ -42,6 +43,8 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
         let base = sub(ui.scope_id(), ("pages", self.salt));
         let region = flow_region(ui);
         let layout = *ui.layout();
+        // Each page runs in the env of `ui`, as the direct children of the body around it.
+        let env = Env::of(ui);
         let hidden = self.pages.iter().filter(|key| *key != self.current).fold(Vec2::ZERO, |largest, key| {
             let id = sub(base, hash(key));
             let kept = lazy::measured(&ctx, id).map(|(size, reads)| {
@@ -53,13 +56,13 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
             });
             let size = kept.unwrap_or_else(|| {
                 replay::open_in_pass(&ctx);
-                let size = measure::run(&ctx, || {
+                let size = measure::measuring(&ctx, || {
                     // What the hidden page measures joins no transcript around it: the run that shows the pages does
                     // not show it, so nothing there checks it.
                     layout_memory::boundary(&ctx, true, || {
                         let room = Rect::from_min_size(region.min, Vec2::new(region.width(), f32::INFINITY));
                         let mut child = alloc::child(ui, UiBuilder::new().max_rect(room).layout(layout).scope_id(id).sizing_pass().invisible());
-                        page(&mut child, key);
+                        Env::run_in(&mut child, env.clone(), |child| page(child, key));
                         child.min_rect().size()
                     })
                 });
@@ -72,7 +75,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
         let id = sub(base, hash(self.current));
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(region).layout(layout).scope_id(id));
         child.set_min_size(hidden.min(region.size()));
-        let out = page(&mut child, self.current);
+        let out = Env::run_in(&mut child, env, |child| page(child, self.current));
         let rect = child.min_rect();
         drop(child);
         // What the place took comes from the hidden pages' measures as well as from the shown page's components.

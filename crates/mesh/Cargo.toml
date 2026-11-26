@@ -29,3 +29,6 @@ craft-zip = { workspace = true, optional = true }
 # 3MF is an OPC package of XML parts.
 craft-opc = { workspace = true, optional = true }
 craft-xml = { workspace = true, optional = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }

@@ -85,15 +85,12 @@ pub struct GridCursor {
 impl GridCursor {
     /// A cursor over `columns` in `flow`'s rect, with `gap` between columns (x) and rows (y), placed by `last`. A
     /// column is never narrower than its least in `last`: a `Content` column starts there, and a `Fill` column's share
-    /// does not go below it.
+    /// does not go below it. A `Fill` column raised to its least takes the difference from the other `Fill` columns.
     pub fn new(flow: Flow, columns: &[ColumnWidth], gap: Vec2, last: &GridMeasure) -> Self {
         let least = |i: usize| last.least.get(i).copied().unwrap_or(0.0);
         let content: Vec<f32> = (0..columns.len()).map(|i| last.columns.get(i).copied().unwrap_or(0.0).max(least(i))).collect();
-        let widths = resolve_columns(columns, &content, flow.rect().width(), gap.x)
-            .into_iter()
-            .enumerate()
-            .map(|(i, width)| if matches!(columns[i], ColumnWidth::Fill { .. }) { width.max(least(i)) } else { width })
-            .collect();
+        let mut widths = resolve_columns(columns, &content, flow.rect().width(), gap.x);
+        keep_fill_least(columns, &mut widths, least);
         let fills = columns.iter().map(|kind| matches!(kind, ColumnWidth::Fill { .. })).collect();
         GridCursor {
             flow,
@@ -119,10 +116,11 @@ impl GridCursor {
         cursor
     }
 
-    /// A cursor for the sweep that asks each column for its least: every column but a `Fixed` one is placed as a
-    /// `Content` column whose cells measure in no bound along x, so each column measures its widest cell.
+    /// A cursor for the sweep that asks each column for its least: the cells of every `Content` and `Fill` column
+    /// measure in no bound along x, so each column measures its widest cell. A `Fill` column stays one, so a child
+    /// that fills its width measures its own width there, where a `Content` column would hold it and take none.
     pub fn unbounded(flow: Flow, columns: &[ColumnWidth], gap: Vec2) -> Self {
-        let mut cursor = Self::new(flow, &as_content(columns), gap, &GridMeasure::default());
+        let mut cursor = Self::new(flow, columns, gap, &GridMeasure::default());
         cursor.unbounded = true;
         cursor
     }
@@ -185,7 +183,7 @@ impl GridCursor {
         let count = self.columns.len().max(1);
         let (column, _, _, top) = self.next_place();
         let width = match self.columns.get(column) {
-            Some(ColumnWidth::Content) if self.unbounded => f32::INFINITY,
+            Some(ColumnWidth::Content | ColumnWidth::Fill { .. }) if self.unbounded => f32::INFINITY,
             Some(ColumnWidth::Content) => {
                 // Every other column keeps at least its least: a column that fills keeps only that, and so does a
                 // content column when each column measures alone.
@@ -265,6 +263,44 @@ impl GridCursor {
     }
 }
 
+/// Shares the room the `Fill` columns of `widths` hold among them again so that none is narrower than its `least`: a
+/// column whose share by weight is below its least takes its least, and the columns left share the rest by weight.
+/// The fill columns together take more than their room only when their least widths do not fit in it.
+fn keep_fill_least(columns: &[ColumnWidth], widths: &mut [f32], least: impl Fn(usize) -> f32) {
+    let fills: Vec<(usize, f32)> = columns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, column)| if let ColumnWidth::Fill { weight } = column { Some((i, *weight)) } else { None })
+        .collect();
+    let room: f32 = fills.iter().map(|(i, _)| widths[*i]).sum();
+    if !room.is_finite() {
+        // Room with no bound leaves every share above its least.
+        for (i, _) in &fills {
+            widths[*i] = widths[*i].max(least(*i));
+        }
+        return;
+    }
+    let mut raised = vec![false; columns.len()];
+    loop {
+        let left = room - fills.iter().filter(|(i, _)| raised[*i]).map(|(i, _)| least(*i)).sum::<f32>();
+        let weights: f32 = fills.iter().filter(|(i, _)| !raised[*i]).map(|(_, weight)| weight).sum();
+        let share = |weight: f32| if weights > 0.0 { left.max(0.0) * weight / weights } else { 0.0 };
+        let mut more = false;
+        for (i, weight) in &fills {
+            if !raised[*i] && share(*weight) < least(*i) {
+                raised[*i] = true;
+                more = true;
+            }
+        }
+        if !more {
+            for (i, weight) in &fills {
+                widths[*i] = if raised[*i] { least(*i) } else { share(*weight).max(least(*i)) };
+            }
+            return;
+        }
+    }
+}
+
 /// `columns` with each `Fill` column as a `Content` column.
 fn as_content(columns: &[ColumnWidth]) -> Vec<ColumnWidth> {
     columns.iter().map(|kind| if matches!(kind, ColumnWidth::Fill { .. }) { ColumnWidth::Content } else { *kind }).collect()
@@ -286,5 +322,44 @@ mod tests {
         assert_eq!(cursor.room(), Vec2::new(150.0, 100.0), "the fill cell measures in its own column");
         cursor.cell(Vec2::new(150.0, 100.0));
         assert_eq!(cursor.room(), Vec2::new(200.0, 100.0), "the content cell may take what the fill column holds");
+    }
+
+    /// The widths of one row of `columns` placed by `last`, read from the cells.
+    fn row_widths(columns: &[ColumnWidth], last: &GridMeasure) -> Vec<f32> {
+        let mut cursor = GridCursor::new(flow(false), columns, Vec2::ZERO, last);
+        columns.iter().map(|_| cursor.cell(Vec2::new(10.0, 10.0)).width()).collect()
+    }
+
+    #[test]
+    fn a_fill_column_raised_to_its_least_takes_the_difference_from_the_other_fill_columns() {
+        let columns = [ColumnWidth::fill(1.0), ColumnWidth::fill(2.0), ColumnWidth::fill(1.0), ColumnWidth::Content];
+        let fitting = GridMeasure::new(vec![0.0, 0.0, 0.0, 60.0], vec![10.0]);
+        let shares = row_widths(&columns, &fitting);
+        let raised = row_widths(&columns, &fitting.clone().with_least(vec![120.0, 0.0, 0.0, 0.0]));
+        assert!(shares[0] < 120.0, "the first column's share is below its least");
+        assert!(raised[0] >= 120.0, "the first column keeps its least");
+        assert!(raised[1] < shares[1] && raised[2] < shares[2], "the other fill columns narrow");
+        assert_eq!(raised[1], 2.0 * raised[2], "the other fill columns keep their weights");
+        assert_eq!(raised[3], shares[3], "the content column keeps its width");
+        assert_eq!(raised.iter().sum::<f32>(), 300.0, "the row fills the grid and no more");
+    }
+
+    #[test]
+    fn fill_columns_whose_least_widths_do_not_fit_take_their_least_widths() {
+        let columns = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0), ColumnWidth::fill(1.0), ColumnWidth::Content];
+        let last = GridMeasure::new(vec![0.0, 0.0, 0.0, 60.0], vec![10.0]).with_least(vec![200.0, 70.0, 0.0, 0.0]);
+        let widths = row_widths(&columns, &last);
+        assert!(widths[0] >= 200.0 && widths[1] >= 70.0, "each fill column keeps its least");
+        assert_eq!(widths[2], 0.0, "the fill column with no least gives up its room");
+        assert_eq!(widths.iter().sum::<f32>(), 330.0, "the row is as wide as the least widths and no wider");
+    }
+
+    #[test]
+    fn fill_columns_whose_shares_cover_their_least_widths_keep_their_shares() {
+        let columns = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0), ColumnWidth::fill(1.0), ColumnWidth::Content];
+        let last = GridMeasure::new(vec![0.0, 0.0, 0.0, 60.0], vec![10.0]);
+        let shares = row_widths(&columns, &last);
+        let kept = row_widths(&columns, &last.clone().with_least(vec![50.0, 50.0, 50.0, 0.0]));
+        assert_eq!(kept, shares);
     }
 }

@@ -2,7 +2,9 @@
 //! (`DockWords`).
 
 use super::targets::ZoneRule;
-use craft_behavior::DockSide;
+use super::{ColumnCards, IconicMode};
+use crate::tabs::PanelTabLook;
+use craft_behavior::{DockSide, IconId};
 
 /// A set of the sides of the layout's outer edge or of a group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -65,25 +67,63 @@ pub struct DockConfig {
     /// the drag; only Ctrl/Cmd held at the release or a release outside the window floats.
     pub float_on_empty_drop: bool,
     /// Dragging a floating window's title bar onto a drop target docks the whole window there. Off: the title bar
-    /// only moves the window; tabs and drag bars dock.
+    /// only moves the window; tabs and drag bars dock, and so does a window that took over a panel's drag
+    /// (`DockArea::continue_move`).
     pub title_bar_docks: bool,
     /// Shows the built-in Close items in tab and group menus for closable panels. A host that draws its own Close
     /// items turns this off.
     pub close_menu_items: bool,
     /// Shows a close action on the title bar of a floating window whose panels are all closable.
     pub close_button: bool,
+    /// A floating window's title row is a bare grip (no menu, float or close action, no column arrow): a quick-action
+    /// strip's look.
+    pub floating_grip: bool,
+    /// The surfaces inside a floating window keep to its rounded corners, and its edge shows over them along its
+    /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
+    /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
+    pub floating_rounded_body: bool,
+    /// Which docked columns show as cards on the dock's `surface.background` ([`ColumnCards`]), each
+    /// painted `surface.panel` with `shape.radius.surface` corners and no frame, inset by `space.gap.stack` on its top
+    /// and bottom and, for the column at the window edge, on its outer side; each further column stands
+    /// `space.gap.tight` from its outer neighbour's card. A column is wider by its inset, so it keeps its content's
+    /// width (a tool rail its steps); its dividers, drop bands and edge handle stay on its outer rect. Off: a column
+    /// fills its cell.
+    pub column_cards: ColumnCards,
+    /// Docks stand flush against the node beside them, with no gap, and their columns collapsed to icons show the
+    /// `line.border` frame expanded columns show, so one rule parts a dock from the canvas; the flyouts of those columns
+    /// stand square on the panel surface with that frame and no shadow ([`Flyout::docked`](super::Flyout::docked)):
+    /// VectorCraft 0.24's dock.
+    /// Off: a `space.gap.tight` gap of the window's background parts them.
+    pub flush_docks: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
     pub tab_close_buttons: bool,
+    /// A group's header shows the shown panel's title, its count and a close button in place of a tab strip, as a
+    /// single titled panel does; the panels are shown from a rail or a menu instead. Closing follows
+    /// `tab_close_buttons`.
+    pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
+    /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), on a
+    /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
+    /// ([`PanelTabLook::Block`]).
+    pub tab_look: PanelTabLook,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
-    /// with this off, it shows in the app window.
+    /// with this off, it shows in the app window. A window that takes over a held press (`DockArea::continue_move`)
+    /// opens its OS window once that press ends.
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// Every group shows its panel menu button, whose menu holds the dock's own rows when the shown panel has none of
+    /// its own (`DockPanels::panel_rows`). Off: only a group whose shown panel has rows of its own shows the button.
+    pub panel_menu_always: bool,
+    /// The panel menu button's icon: `more` (the default), or `menu` for the three-line mark.
+    pub panel_menu_icon: IconId,
+    /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
+    /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
+    pub iconic_mode: IconicMode,
 }
 
 impl Default for DockConfig {
@@ -98,19 +138,49 @@ impl Default for DockConfig {
             title_bar_docks: true,
             close_menu_items: true,
             close_button: true,
+            floating_grip: false,
+            floating_rounded_body: false,
+            column_cards: ColumnCards::None,
+            flush_docks: false,
             tab_close_buttons: false,
+            titled_headers: false,
             wheel_selects_tabs: false,
+            tab_look: PanelTabLook::Plain,
             native_windows: true,
             group_order_items: false,
+            panel_menu_always: false,
+            panel_menu_icon: IconId::new("more"),
+            iconic_mode: IconicMode::Flyouts,
         }
     }
 }
 
 impl DockConfig {
+    /// What the icons of docked iconic columns open.
+    #[must_use]
+    pub fn iconic_mode(mut self, mode: IconicMode) -> Self {
+        self.iconic_mode = mode;
+        self
+    }
+
     /// The Minimize and Move Group Up and Down items of docked groups' menus on or off.
     #[must_use]
     pub fn group_order_items(mut self, on: bool) -> Self {
         self.group_order_items = on;
+        self
+    }
+
+    /// The panel menu button on every group on or off ([`panel_menu_always`](Self::panel_menu_always)).
+    #[must_use]
+    pub fn panel_menu_always(mut self, on: bool) -> Self {
+        self.panel_menu_always = on;
+        self
+    }
+
+    /// The panel menu button's icon ([`panel_menu_icon`](Self::panel_menu_icon)).
+    #[must_use]
+    pub fn panel_menu_icon(mut self, icon: IconId) -> Self {
+        self.panel_menu_icon = icon;
         self
     }
 
@@ -177,6 +247,41 @@ impl DockConfig {
         self
     }
 
+    /// A floating window's title row as a bare grip on or off.
+    #[must_use]
+    pub fn floating_grip(mut self, on: bool) -> Self {
+        self.floating_grip = on;
+        self
+    }
+
+    /// A floating window's body keeping to its rounded corners on or off ([`floating_rounded_body`](Self::floating_rounded_body)).
+    #[must_use]
+    pub fn floating_rounded_body(mut self, on: bool) -> Self {
+        self.floating_rounded_body = on;
+        self
+    }
+
+    /// Which docked columns show as cards ([`column_cards`](Self::column_cards)).
+    #[must_use]
+    pub fn column_cards(mut self, cards: ColumnCards) -> Self {
+        self.column_cards = cards;
+        self
+    }
+
+    /// The look of the groups' panel tabs ([`tab_look`](Self::tab_look)).
+    #[must_use]
+    pub fn tab_look(mut self, look: PanelTabLook) -> Self {
+        self.tab_look = look;
+        self
+    }
+
+    /// Flush docks on or off ([`flush_docks`](Self::flush_docks)).
+    #[must_use]
+    pub fn flush_docks(mut self, on: bool) -> Self {
+        self.flush_docks = on;
+        self
+    }
+
     /// Close buttons on tabs on or off.
     #[must_use]
     pub fn tab_close_buttons(mut self, on: bool) -> Self {
@@ -184,7 +289,14 @@ impl DockConfig {
         self
     }
 
-    /// Wheel selection of tabs on or off.
+    /// Titled group headers on or off.
+    #[must_use]
+    pub fn titled_headers(mut self, on: bool) -> Self {
+        self.titled_headers = on;
+        self
+    }
+
+    /// See [`DockConfig::wheel_selects_tabs`].
     #[must_use]
     pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
         self.wheel_selects_tabs = on;

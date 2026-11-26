@@ -20,13 +20,15 @@ pub use regions::{Slot, SlotSize};
 pub(crate) mod app_shell;
 pub(crate) mod canvas_shell;
 pub(crate) mod opening;
+pub(crate) mod options_place;
 mod reveal;
 mod screen_mode;
 pub(crate) mod screen_mode_button;
 
-pub use app_shell::{AppShell, AppShellOutput, ShellDialogsCx, ShellRegion, ShellRegionOutput, WindowDialogs};
+pub use app_shell::{AppShell, AppShellOutput, ChromeState, ShellDialogsCx, ShellRegion, ShellRegionOutput, WindowDialogs, chrome_state};
 pub use canvas_shell::{CanvasPanel, CanvasPanelOutput, slots};
 pub use opening::{OpeningCard, OpeningCardOutput};
+pub use options_place::{BarGrip, OptionsBarDrag, OptionsBarPlace};
 pub use screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeSet};
 pub use screen_mode_button::{ScreenModeButton, ScreenModeButtonOutput};
 pub use words::ShellWords;
@@ -39,7 +41,10 @@ pub(crate) mod viewport_window;
 
 pub use recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
 pub use recent_list::RecentList;
-pub use start::{StartAction, StartLayout, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands, StartRecentCommands, StartScreen};
+pub use start::{
+    FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, StartAction, StartLayout, StartLink, StartLinkTarget, StartOutput,
+    StartPinnedCommands, StartPlace, StartRecentCommands, StartScreen,
+};
 pub use viewport_window::{ViewportWindow, ViewportWindowOutput};
 
 // Caption buttons: the four families' button, its slot layout and the icon-theme glyphs.

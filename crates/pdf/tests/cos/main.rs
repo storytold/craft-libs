@@ -12,6 +12,6 @@ mod oracle;
 mod proptests;
 mod serialize_format;
 mod shared_streams;
-#[path = "../../src/cos/testkit.rs"]
-mod testkit;
 mod writer;
+
+use crate::cos::testkit;

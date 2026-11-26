@@ -1,10 +1,11 @@
 //! Stories of `LayerFilterBar`: each filter type in one card, with the count of a document's layers it lets through.
 
-use super::{EffectKind, FilterBy, FilterKind, LayerAttribute, LayerFilter, LayerFilterBar, SmartKind};
+use super::{EffectKind, FilterBy, FilterKind, FilterObject, FilterState, LayerAttribute, LayerFilter, LayerFilterBar, ObjectsSearch, SmartKind};
 use crate::ui::mock::FakeLayers;
 use crate::ui::tree::LayerTree as _;
 use craft_theme::LabelColor;
-use craft_ui::testing::{Drive, StoryData, StoryOutput, ValueAt, story};
+use craft_ui::runtime::env::with_env;
+use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
 use egui::Ui;
 
 /// The bar over `filter`, with the count of `tree`'s layers the filter lists.
@@ -85,4 +86,35 @@ fn by_artboard(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn by_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Group, ..LayerFilter::default() });
     show(ui, filter, filter_at)
+}
+
+/// The drive of the Objects story: a click on the Filter button opens the popover.
+fn open_filter(fixture: &mut Fixture) {
+    if let Some(button) = fixture.by_label("Filter") {
+        fixture.click(&button);
+    }
+}
+
+/// The Objects filter with Paths and Locked ticked; the popover starts closed.
+#[story(LayerFilterBar<'static>, covers = [], drive = Drive::Custom(open_filter), group = "Types", title = "Filter by Objects")]
+fn layer_filter_objects(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (filter, filter_at) = data.value_at(
+        "filter",
+        LayerFilter { by: FilterBy::Objects, objects: vec![FilterObject::Paths], states: vec![FilterState::Locked], ..LayerFilter::default() },
+    );
+    show(ui, filter, filter_at)
+}
+
+/// The Objects filter in an app whose search field fills the bar (`ObjectsSearch::Fill`, VectorCraft's Layers panel):
+/// the Filter button at the end edge.
+#[story(LayerFilterBar<'static>, covers = [], drive = Drive::Never, group = "Types", title = "Filter by Objects, filling search")]
+fn layer_filter_objects_fill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Objects, ..LayerFilter::default() });
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ObjectsSearch::Fill);
+        },
+        |ui| show(ui, filter, filter_at),
+    )
 }

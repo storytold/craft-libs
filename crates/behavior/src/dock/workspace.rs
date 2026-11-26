@@ -41,8 +41,8 @@ pub struct Workspace<P> {
     /// goes back.
     #[serde(default)]
     hidden: Vec<(P, Location<P>)>,
-    /// Floating panels with the docked location each one left, so Dock Panel can return it. Saved with the
-    /// workspace.
+    /// Floating panels with the docked location each one left, so Dock Panel can return it; a closed panel that
+    /// floats records the place it would reopen at. Saved with the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     floated: Vec<(P, Location<P>)>,
     /// Counts the replacements of this live workspace. Not saved, and not part of equality.
@@ -162,6 +162,44 @@ impl<P> Workspace<P> {
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
+    /// Renames a panel in `layout`, `hidden` and `floated` (keys and anchors), keeping its place; all or nothing.
+    /// An edit: it moves the revision and keeps the generation. `MissingPanel` when `from` is in none of them, `DuplicatePanel` when `to` is
+    /// already there.
+    pub fn rename(&mut self, from: &P, to: P) -> Result<(), DockError> {
+        if !self.holds(from) {
+            return Err(DockError::MissingPanel);
+        }
+        if self.holds(&to) {
+            return Err(DockError::DuplicatePanel);
+        }
+        let swap = |panel: &mut P| {
+            if *panel == *from {
+                *panel = to.clone();
+            }
+        };
+        let mut proposed = self.clone();
+        if let Some(root) = proposed.layout.root.as_mut() {
+            rename_in_tree(root, &swap);
+        }
+        for window in &mut proposed.layout.floating {
+            rename_in_column(&mut window.column, &swap);
+        }
+        for (panel, location) in proposed.hidden.iter_mut().chain(&mut proposed.floated) {
+            swap(panel);
+            rename_in_location(location, &swap);
+        }
+        proposed.validate()?;
+        let Workspace { layout, hidden, floated, .. } = proposed;
+        (self.layout, self.hidden, self.floated) = (layout, hidden, floated);
+        self.touch();
+        Ok(())
+    }
+
+    /// Whether `panel` is in the layout or is the key of a hidden or floated record.
+    fn holds(&self, panel: &P) -> bool {
+        self.layout.contains(panel) || self.hidden.iter().chain(&self.floated).any(|(held, _)| held == panel)
+    }
+
     /// Check the version, the layout, that every hidden panel is hidden once and absent
     /// from the layout and its record is bounded, and that the floated records are bounded and one per panel.
     pub fn validate(&self) -> Result<(), DockError> {
@@ -226,6 +264,16 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
                 Action::Open { panel, .. } if proposed.hidden.iter().any(|(p, _)| p == panel) => proposed.reopen(panel, &policy)?,
                 _ => false,
             };
+            // Floating a hidden panel records the docked place it would reopen at, without reopening it there. A panel
+            // that would reopen in a floating window has no docked place.
+            let hidden_place = match &action {
+                Action::Float { panel, .. } if !proposed.layout.contains(panel) && proposed.hidden.iter().any(|(p, _)| p == panel) => proposed
+                    .restored(panel, &policy)
+                    .filter(|restored| !floats(&restored.layout, panel))
+                    .and_then(|restored| restored.layout.location(panel).ok())
+                    .map(|location| (panel.clone(), location)),
+                _ => None,
+            };
             if !reopened {
                 // SetNative records where the window system has a floating window, so a lock
                 // does not refuse it.
@@ -240,6 +288,12 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
                 proposed.hidden.push((panel, location));
             }
             proposed.track_floated(&before);
+            if let Some((panel, location)) = hidden_place
+                && floats(&proposed.layout, &panel)
+                && !proposed.floated.iter().any(|(p, _)| p == &panel)
+            {
+                proposed.floated.push((panel, location));
+            }
             all_closed.extend(closed);
         }
         let visible: HashSet<P> = proposed.layout.panels().into_iter().cloned().collect();
@@ -583,6 +637,37 @@ fn dock_columns_mut<P>(root: &mut Node<P>) -> Vec<&mut Column<P>> {
         }
     }
     out
+}
+
+/// Applies `swap` to every panel of `root`, walking the tree with a stack: a loaded tree can be deeper than the call
+/// stack.
+fn rename_in_tree<P>(root: &mut Node<P>, swap: &impl Fn(&mut P)) {
+    let mut visit = vec![root];
+    while let Some(node) = visit.pop() {
+        match node {
+            Node::Split { first, second, .. } => {
+                visit.push(second);
+                visit.push(first);
+            }
+            Node::Tabs { panels, .. } => panels.iter_mut().for_each(swap),
+            Node::Stack { entries } => entries.iter_mut().for_each(|entry| swap(&mut entry.panel)),
+            Node::Dock { columns, .. } => columns.iter_mut().for_each(|column| rename_in_column(column, swap)),
+        }
+    }
+}
+
+/// Applies `swap` to every panel of the groups of `column`.
+fn rename_in_column<P>(column: &mut Column<P>, swap: &impl Fn(&mut P)) {
+    column.groups.iter_mut().for_each(|group| group.panels.iter_mut().for_each(swap));
+}
+
+/// Applies `swap` to the panels a location names: its anchor, its siblings and the tab it goes before.
+fn rename_in_location<P>(location: &mut Location<P>, swap: &impl Fn(&mut P)) {
+    location.anchor.iter_mut().for_each(swap);
+    location.sibling.iter_mut().for_each(swap);
+    if let DockPlacement::Tab { before: Some(panel) } = &mut location.placement {
+        swap(panel);
+    }
 }
 
 /// Whether `panel` is in a floating window of `layout`.

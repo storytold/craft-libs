@@ -42,6 +42,8 @@ pub(crate) trait TextResult {
     fn tab(&self) -> Option<bool>;
     /// The part's caret as a byte offset into its text after the pass; `None` while its widget has no caret.
     fn caret(&self) -> Option<usize>;
+    /// Whether the part lost key focus this pass, edited or not.
+    fn text_lost_focus(&self) -> bool;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -51,6 +53,7 @@ pub(crate) struct RecordedText<V> {
     pub(crate) left_by_tab: Option<bool>,
     pub(crate) tab: Option<bool>,
     pub(crate) caret: Option<usize>,
+    pub(crate) text_lost_focus: bool,
 }
 
 impl<V: 'static> TextResult for RecordedText<V> {
@@ -68,6 +71,10 @@ impl<V: 'static> TextResult for RecordedText<V> {
 
     fn caret(&self) -> Option<usize> {
         self.caret
+    }
+
+    fn text_lost_focus(&self) -> bool {
+        self.text_lost_focus
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -101,9 +108,9 @@ pub struct CxCore<'a> {
     pub(crate) state: StateSet,
     /// True once step 12 wrote `state` in this pass.
     pub(crate) stated: bool,
-    /// True once the run reached step 7. A measuring run, a sizing pass of the parent or host `Ui`, and a host that
-    /// shows nothing (a layer in its parent's sizing pass) stop before it: their core is blank and every part reads
-    /// idle.
+    /// True once the run reached step 7 with something to show. A measuring run, a sizing pass of the parent or host
+    /// `Ui`, and a host that shows nothing (a layer in its parent's sizing pass) stop before it, and an inert run (a
+    /// size the guard refuses) declares no parts: their core is blank and every part reads idle.
     pub(crate) parted: bool,
     /// Read with `Styled::ink`, valid from step 12.
     pub(crate) ink: Ink,
@@ -196,12 +203,15 @@ pub struct CxCore<'a> {
     pub(crate) fade: Option<crate::contract::steps::Fade>,
     /// The focus ring shape each part declared (`focus_shape`), in which step 13 draws the active part's ring.
     pub(crate) focus_shapes: Vec<((PartKey, Option<u64>), focus::FocusShape)>,
+    /// The focus ring shape the component declared for its own ring (`Cx::focus_shape`); its rect when `None`.
+    pub(crate) focus_shape: Option<focus::FocusShape>,
     /// Where the text part reserved the surface in the painter, so the field's surface paints beneath its text.
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.
     pub(crate) editor: Option<crate::contract::editor::EditorInfo>,
-    /// The editor part's inputs of this pass, until `editor_input` takes them.
-    pub(crate) editor_inputs: Vec<craft_behavior::EditorInput>,
+    /// The editor part's inputs of this pass, each with its order among the pass's events, until `editor_input` or
+    /// `editor_steps` takes them.
+    pub(crate) editor_inputs: Vec<(crate::contract::editor::Order, craft_behavior::EditorInput)>,
     /// The text part's draft is not a value of its codec.
     pub(crate) text_invalid: bool,
     /// The text part's `TextOptions::unparsed` while its draft does not parse: the refusal the pass reports when the
@@ -238,6 +248,11 @@ impl<C: Component> Cx<'_, C> {
         text.layout(&self.core.ctx, &Env::of_root(&self.core.ctx).tokens, craft_i18n::Direction::Ltr)
     }
 
+    /// Whether the control's link label was clicked in this pass.
+    pub fn link_activated(&self) -> bool {
+        crate::runtime::access::scope::field_label(&self.core.ctx).is_some_and(|label| label.link)
+    }
+
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
     pub fn open_url(&mut self, url: &str, new_tab: bool) {
         crate::runtime::egui::output::open_url(&self.core.ctx, url, new_tab);
@@ -250,12 +265,20 @@ impl<C: Component> Cx<'_, C> {
         self.core.roving_member = true;
     }
 
+    /// The shape the component's own focus ring takes this pass, as a part's `focus_shape` shapes the part's: the
+    /// circle inside its rect, or a polygon of points on screen. Called from `update`; a component that does not call
+    /// it gets the ring round its rect.
+    pub fn focus_shape(&mut self, shape: focus::FocusShape) {
+        self.core.focus_shape = Some(shape);
+    }
+
     /// Runs `command` as this component's own activation would, for a command that is not the component's bound
     /// one: resolved against the instances above the component, and not fired when disabled. `source` is where the
     /// activation came from (`part_activated` gives it). Returns whether the command was queued.
     pub fn fire(&mut self, command: impl Into<CommandRef>, source: FireSource) -> bool {
         let Some(resolved) = commands::resolve_scoped(&self.core.ctx, self.core.env.command_chain(), &command.into()) else { return false };
-        commands::fire_resolved(&self.core.ctx, &resolved, source)
+        let mods = self.core.activation.map_or(craft_keymap::Mods::NONE, |activation| activation.mods);
+        commands::fire_resolved(&self.core.ctx, &resolved, source, mods)
     }
 
     /// Where an activation of `part` came from this pass: `Key` for a keyboard activation while `part` is the
@@ -419,12 +442,13 @@ impl Under {
 }
 
 /// An env derived for children `PaintUi` builds: the composite's resolved `enabled` and `size`, and only the inside
-/// label `under` gives.
+/// label `under` gives. The composite places its children itself, so they are in no egui grid's cell.
 pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
     env.derive_local(|scoped| {
         scoped.enabled &= under.enabled;
         scoped.size = under.size;
         scoped.inside_label = under.inside.clone().map(|inside| inside as crate::runtime::env::Held);
         scoped.cell_fills = false;
+        scoped.egui_cell = false;
     })
 }

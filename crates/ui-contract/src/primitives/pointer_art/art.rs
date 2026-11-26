@@ -37,6 +37,24 @@ pub(crate) enum Mark {
 }
 
 impl Mark {
+    /// The mark `factor` times its size about the hotspot, its lines included.
+    fn scaled(self, factor: f32) -> Self {
+        let line = |stroke: Stroke| Stroke::new(stroke.width * factor, stroke.color);
+        let rect = |rect: Rect| Rect::from_min_max((rect.min.to_vec2() * factor).to_pos2(), (rect.max.to_vec2() * factor).to_pos2());
+        let points = |points: Vec<Vec2>| points.into_iter().map(|p| p * factor).collect();
+        match self {
+            Mark::Line(a, b, stroke) => Mark::Line(a * factor, b * factor, line(stroke)),
+            Mark::Rule(a, b, stroke) => Mark::Rule(a * factor, b * factor, line(stroke)),
+            Mark::Ring(centre, radius, stroke) => Mark::Ring(centre * factor, radius * factor, line(stroke)),
+            Mark::Frame(r, stroke) => Mark::Frame(rect(r), line(stroke)),
+            Mark::Disc(centre, radius, color) => Mark::Disc(centre * factor, radius * factor, color),
+            Mark::Block(r, round, color) => Mark::Block(rect(r), round * factor, color),
+            Mark::Polygon(p, fill, stroke) => Mark::Polygon(points(p), fill, line(stroke)),
+            Mark::Path(p, closed, stroke) => Mark::Path(points(p), closed, line(stroke)),
+            Mark::Icon(r, icon, color) => Mark::Icon(rect(r), icon, color),
+        }
+    }
+
     /// The rect the mark covers, its line included.
     fn bounds(&self) -> Rect {
         let around =
@@ -64,6 +82,14 @@ impl Art {
     /// Adds `mark` above the marks so far.
     pub(crate) fn push(&mut self, mark: Mark) {
         self.marks.push(mark);
+    }
+
+    /// The art `factor` times its size about the hotspot; the art unchanged for a factor of one.
+    pub(crate) fn scaled(self, factor: f32) -> Self {
+        if factor == 1.0 {
+            return self;
+        }
+        Art { marks: self.marks.into_iter().map(|mark| mark.scaled(factor)).collect() }
     }
 
     /// The rect the marks cover, around the hotspot at the origin; `None` for art with no marks.
