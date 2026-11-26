@@ -238,6 +238,36 @@ fn with_rulers_on_the_tool_and_a_canvas_control_paint_inside_the_view_and_the_ru
     assert!(strips_keep_the_canvas, "the rulers paint inside the top strip under the canvas's rect: {strip:?} in {shapes:?}");
 }
 
+/// The units menu names each unit as a list of units does ("Points", "Millimetres"), not by the symbol a number
+/// carries ("pt", "mm").
+#[trial]
+fn the_units_menu_names_each_unit() {
+    const UNITS: [UnitKind; 4] = [UnitKind::Points, UnitKind::Picas, UnitKind::Inches, UnitKind::Millimetres];
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let shown_zero = Rc::clone(&zero);
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let mut fixture = Fixture::new(move |ui| {
+        let at = ui.available_rect_before_wrap();
+        shown_room.set(at);
+        let view = CanvasView::new(at, Point::new(f64::from(at.center().x), f64::from(at.center().y)), 1.0);
+        let mut zero = shown_zero.borrow_mut();
+        let _ =
+            Canvas::new("Document").view(view).with_rulers(Some(Rulers::new("Rulers", Bind::bound(&mut *zero)).units(&UNITS))).show(ui, |_, _| {});
+    });
+    fixture.room(Vec2::new(500.0, 400.0)).settle();
+    let at = egui::pos2(room.get().center().x, room.get().min.y + 4.0);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+    fixture.frame(vec![craft_ui::testing::pointer::secondary(at, true)]);
+    fixture.frame(vec![craft_ui::testing::pointer::secondary(at, false)]);
+    fixture.settle();
+    assert!(fixture.by_label("Reset Zero Point").is_some(), "the units menu is open");
+    for (name, symbol) in [("Points", "pt"), ("Picas", "pica"), ("Inches", "in"), ("Millimetres", "mm")] {
+        assert!(fixture.by_label(name).is_some(), "the menu lists {name}");
+        assert!(fixture.by_label(symbol).is_none(), "no row reads {symbol}");
+    }
+}
+
 /// A drag of the rulers' corner with one move past the drag threshold, released there, moves the zero point to where it
 /// was released: the drag proposes its landing at its start and at its release, not only on the moves between.
 #[trial]
