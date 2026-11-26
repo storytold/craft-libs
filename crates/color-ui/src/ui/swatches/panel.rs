@@ -1,6 +1,6 @@
 //! `SwatchesPanel`: the panel body, its state and what it reports.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Count, Env};
 use egui::{AsIdSalt, IdSalt, Response, Ui};
 
-use super::library::{HostThumb, find_swatch, has, panel_source};
+use super::library::{HostThumb, find_swatch, group_of, has, panel_source};
 use super::menu::event_edits;
 use super::{SWATCH_ZOOM, SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords};
 use crate::palette::{SwatchGroup, SwatchNote, SwatchReport};
@@ -99,6 +99,7 @@ pub struct SwatchesPanel<'a> {
     payloads: Vec<PayloadAdder<'a>>,
     row_items: Option<RowItemsFn<'a>>,
     document: Option<IdSalt>,
+    select_groups: bool,
 }
 
 /// What the body decided; `show` stores the state and reports the rest after the real run.
@@ -130,6 +131,7 @@ impl<'a> SwatchesPanel<'a> {
             payloads: Vec::new(),
             row_items: None,
             document: None,
+            select_groups: false,
         }
     }
 
@@ -228,6 +230,12 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
+    /// Lets panel interactions select group rows alongside swatches in both views. Off by default.
+    pub fn select_groups(mut self, enabled: bool) -> Self {
+        self.select_groups = enabled;
+        self
+    }
+
     /// Draws the panel and returns the user's actions this pass.
     pub fn show(self, ui: &mut Ui) -> SwatchesPanelOutput {
         let SwatchesPanel {
@@ -247,6 +255,7 @@ impl<'a> SwatchesPanel<'a> {
             payloads,
             row_items,
             document,
+            select_groups,
         } = self;
         let cmyk = cmyk.unwrap_or_else(|| CmykConverter::coated());
         let words = Env::of(ui).words::<SwatchesWords>();
@@ -280,6 +289,7 @@ impl<'a> SwatchesPanel<'a> {
                     .toolbar(true)
                     .search(search)
                     .select(select)
+                    .select_groups(select_groups)
                     .reorder(PresetReorder::items_and_groups())
                     .selection(Bind::bound(&mut st.selection));
                 if let Some(id) = document_id {
@@ -311,7 +321,21 @@ impl<'a> SwatchesPanel<'a> {
             let mut used = None;
             let mut edits = Vec::new();
             let mut events = Vec::new();
+            let deleting_groups: BTreeSet<_> = out
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    PresetEvent::Delete(key @ SwatchKey::Group(_)) => group_of(groups, key),
+                    _ => None,
+                })
+                .collect();
             for event in out.events {
+                if !deleting_groups.is_empty()
+                    && let PresetEvent::Delete(key @ SwatchKey::Swatch(_)) = &event
+                    && group_of(groups, key).is_some_and(|group| deleting_groups.contains(&group))
+                {
+                    continue;
+                }
                 if let PresetEvent::Select { key: SwatchKey::Swatch(name), mods, .. } = &event
                     && let Some(at) = find_swatch(groups, name)
                     && let Some(entry) = groups.get(at.group).and_then(|g| g.entries.get(at.index))
