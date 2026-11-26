@@ -721,11 +721,14 @@ impl<T: Copy> PressMachine<T> {
                 }
                 PointerEvent::Pressed { button, pos: at, time, clicks } => {
                     pos = at;
-                    // A release held for the next pass gives way to a new press; it ends in this pass.
+                    // A release held for the next pass gives way to a new press; it ends in this pass. A drag whose
+                    // start that pass still owed was never reported, so the release is no drag either: every part reads
+                    // `Down`, a `Release`, or `DragStart` then `Drag`, never a drag's end that never began. The press's
+                    // target hears where the button went up in `Release::pos`, and no click is at that distance.
                     if let Some(open) = self.open
                         && let Some((up, click)) = open.released_at
                     {
-                        released = Some((open.target, open.start, up, open.dragging, click, open.silent));
+                        released = Some((open.target, open.start, up, open.drag_reported, click, open.silent));
                         self.open = None;
                     }
                     // A secondary press during an open primary press goes beside it, to the context target `pick` gives
@@ -1181,6 +1184,41 @@ mod tests {
             assert_eq!(end.activated, None, "{events:?}: a passed press is no click");
         }
         assert_eq!(phases(&[&[press(0.0, 1.0)], &[up(SLOP / 2.0)]], PASSES), "D R!", "a jump within slop is the shape's click");
+    }
+
+    /// A press whose button jumped far and came up in a batch that also pressed again: the release ends the press in
+    /// that pass, so the `DragStart` the jump owed never comes. The release is then no drag either, and the parts read
+    /// `Down` then a `Release` with no drag between them: a drag's end that never began would leave a part that tracks
+    /// a drag holding a press forever. The new press reports its `Down` in the next pass.
+    #[test]
+    fn a_jump_release_that_gives_way_to_a_new_press_reports_no_drag() {
+        let sense = Sense::CLICK | Sense::DRAG;
+        let far = SLOP * 4.0;
+        let jumped = [up(far), press(far, 1.1)];
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &jumped[..], &[]], sense), "D R D", "the release ends the press with no drag of its own");
+
+        let mut machine = PressMachine::new();
+        pass(&mut machine, &[press(0.0, 1.0)], sense);
+        let end = pass(&mut machine, &jumped, sense);
+        assert!(
+            matches!(end.phase, Some(PressPhase::Release { start, pos, click: false }) if start.origin == pos2(0.0, 0.0) && pos == pos2(far, 0.0)),
+            "{:?}",
+            end.phase
+        );
+        assert!(!end.dragging, "the press never reported its drag's start, so its release claims none");
+        assert_eq!(end.activated, None, "a jump release past slop is no click");
+        assert!(!machine.dragging(), "the new press is no drag either");
+        pass(&mut machine, &[], sense);
+        let next = machine.open.map(|open| open.start.origin);
+        assert!(matches!(next, Some(place) if place == pos2(far, 0.0)), "the new press is open from where it went down");
+
+        // A press that did report its drag's start keeps its drag's end, whatever gives way to it.
+        let mut machine = PressMachine::new();
+        pass(&mut machine, &[press(0.0, 1.0)], sense);
+        assert!(matches!(pass(&mut machine, &[up(far)], sense).phase, Some(PressPhase::DragStart { .. })), "the jump starts the drag");
+        let end = pass(&mut machine, &[up(far), press(far, 1.3)], sense);
+        assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
+        assert!(end.dragging, "the release ends the drag the part saw start");
     }
 
     /// A jump release past slop on a target that only clicks abandons the click as a move past slop does: the release
