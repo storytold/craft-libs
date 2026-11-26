@@ -17,16 +17,16 @@
 //! `/` between their parts.
 //!
 //! [`pinned`] is the gate a test calls: it returns the corpus folder named by a variable after
-//! checking every listed file, prints one `SKIPPED:` line and returns `None` when the variable is
-//! unset and the corpus is optional, and fails the test otherwise. [`verify`] runs the same check
-//! and returns a [`VerifyError`] instead of failing. No function here downloads a file or changes
-//! the process environment.
+//! checking every listed file. When the variable is unset it skips or fails the test under the
+//! rule of [`skip`](crate::skip::skip), and it fails the test on any other failure. [`verify`]
+//! runs the same check and returns a [`VerifyError`] instead of failing. No function here
+//! downloads a file or changes the process environment.
 //!
 //! Every input has a size limit, set by [`Limits`]: a manifest of at most 1 MiB and 10,000 rows,
 //! and files of at most 8 GiB each, read 64 KiB at a time.
 
 use std::collections::HashSet;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
@@ -525,13 +525,12 @@ fn open_for_reading(path: &Path) -> io::Result<File> {
 /// The corpus folder the variable `var` names (default [`DEFAULT_VAR`]), after every file
 /// `manifest` lists has been checked with [`verify`].
 ///
-/// The corpus is required when the variable named `var` plus [`REQUIRED_SUFFIX`] (by default
-/// `CRAFT_CORPUS_REQUIRED`) is exactly `1`; unset, empty, `0`, `true` and any other value leave it
-/// optional.
-///
-/// - Folder variable unset and the corpus optional: prints one line,
-///   `SKIPPED: corpus not given: set <var> to its folder`, to stderr and returns `None`.
-/// - Folder variable unset and the corpus required: fails the test.
+/// - Folder variable unset: calls [`skip`](crate::skip::skip) with the reason
+///   `corpus not given: set <var> to its folder` and the variable named `var` plus
+///   [`REQUIRED_SUFFIX`] (by default `CRAFT_CORPUS_REQUIRED`). When that variable is unset or
+///   empty, it prints `SKIPPED: corpus not given: set <var> to its folder` to stderr and returns
+///   `None`. When it is `1`, it fails the test. Any other value, `0` included, fails the test as a
+///   configuration error.
 /// - Folder variable set, even to an empty value: fails the test unless the manifest parses and
 ///   every listed file matches.
 ///
@@ -539,23 +538,23 @@ fn open_for_reading(path: &Path) -> io::Result<File> {
 #[allow(clippy::panic)]
 pub fn pinned(var: Option<&str>, manifest: &str) -> Option<PathBuf> {
     let var = var.unwrap_or(DEFAULT_VAR);
-    let required_var = format!("{var}{REQUIRED_SUFFIX}");
-    let required = std::env::var_os(&required_var).as_deref() == Some(OsStr::new("1"));
-    match gate(std::env::var_os(var), required, var, &required_var, manifest) {
+    match gate(std::env::var_os(var), var, manifest) {
         Ok(Some(dir)) => Some(dir),
         Ok(None) => {
-            eprintln!("SKIPPED: corpus not given: set {var} to its folder");
+            let required_var = format!("{var}{REQUIRED_SUFFIX}");
+            let _ = crate::skip::skip(&format!("corpus not given: set {var} to its folder"), &required_var);
             None
         }
         Err(message) => panic!("{message}"),
     }
 }
 
-/// The decision of [`pinned`], without reading the environment or printing: `Ok(None)` skips and
-/// `Err` holds the message the test fails with.
-fn gate(folder: Option<OsString>, required: bool, var: &str, required_var: &str, manifest: &str) -> Result<Option<PathBuf>, String> {
+/// The decision of [`pinned`] on the folder variable's value, without reading the environment or
+/// printing: `Ok(None)` when the variable is unset, which [`pinned`] passes to
+/// [`skip`](crate::skip::skip), and `Err` holds the message the test fails with.
+fn gate(folder: Option<OsString>, var: &str, manifest: &str) -> Result<Option<PathBuf>, String> {
     let Some(folder) = folder else {
-        return if required { Err(format!("corpus not given: {var} is unset and {required_var}=1 forbids skipping")) } else { Ok(None) };
+        return Ok(None);
     };
     if folder.is_empty() {
         return Err(format!("{var} is set but empty"));
@@ -921,19 +920,17 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_skips_only_an_optional_unset_corpus() {
+    fn the_gate_leaves_only_an_unset_folder_to_skip() {
         let (scratch, _) = hello_corpus();
         let manifest = format!("{HELLO_SHA}\thello.txt\n");
-        assert_eq!(gate(None, false, VAR, REQUIRED, &manifest), Ok(None));
-        let required = gate(None, true, VAR, REQUIRED, &manifest).expect_err("required");
-        assert!(required.contains(&format!("{REQUIRED}=1")), "{required}");
+        assert_eq!(gate(None, VAR, &manifest), Ok(None));
         let dir = scratch.0.clone().into_os_string();
-        assert_eq!(gate(Some(dir.clone()), false, VAR, REQUIRED, &manifest), Ok(Some(scratch.0.clone())));
-        let empty = gate(Some(OsString::new()), false, VAR, REQUIRED, &manifest).expect_err("empty");
+        assert_eq!(gate(Some(dir.clone()), VAR, &manifest), Ok(Some(scratch.0.clone())));
+        let empty = gate(Some(OsString::new()), VAR, &manifest).expect_err("empty");
         assert!(empty.contains("empty"), "{empty}");
-        let bad = gate(Some(dir.clone()), false, VAR, REQUIRED, "# c\nnot a row\n").expect_err("bad manifest");
+        let bad = gate(Some(dir.clone()), VAR, "# c\nnot a row\n").expect_err("bad manifest");
         assert!(bad.contains("line 2"), "{bad}");
-        let missing = gate(Some(dir), false, VAR, REQUIRED, &format!("{EMPTY_SHA}\tabsent.bin\n")).expect_err("missing");
+        let missing = gate(Some(dir), VAR, &format!("{EMPTY_SHA}\tabsent.bin\n")).expect_err("missing");
         assert!(missing.contains("absent.bin"), "{missing}");
     }
 
@@ -967,8 +964,8 @@ mod tests {
     }
 
     #[test]
-    fn required_variable_unset_fails() {
-        for value in [None, Some(""), Some("0"), Some("true"), Some(" 1"), Some("1\n")] {
+    fn an_unset_folder_follows_the_skip_rule() {
+        for value in [None, Some("")] {
             let vars: Vec<(&str, &str)> = value.map(|v| (REQUIRED, v)).into_iter().collect();
             let out = run_child("named", &vars);
             let err = String::from_utf8_lossy(&out.stderr);
@@ -979,9 +976,17 @@ mod tests {
         let out = run_child("named", &[(REQUIRED, "1")]);
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{err}");
-        assert!(err.contains(&format!("{REQUIRED}=1 forbids skipping")), "{err}");
+        assert!(err.contains(&format!("corpus not given: set {VAR} to its folder, and {REQUIRED}=1 forbids skipping")), "{err}");
         assert!(!err.contains("SKIPPED:"), "{err}");
         assert!(!err.contains("pinned returned"), "{err}");
+        for value in ["0", "true", " 1", "1\n"] {
+            let out = run_child("named", &[(REQUIRED, value)]);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{value:?}: {err}");
+            assert!(err.contains(&format!("{REQUIRED}={value:?} is not empty or 1")), "{value:?}: {err}");
+            assert!(!err.contains("SKIPPED:"), "{value:?}: {err}");
+            assert!(!err.contains("pinned returned"), "{value:?}: {err}");
+        }
     }
 
     #[test]
