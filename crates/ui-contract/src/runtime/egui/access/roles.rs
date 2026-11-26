@@ -59,6 +59,8 @@ impl Role {
     pub const TEXT_INPUT: Role = Role::Node(accesskit::Role::TextInput);
     /// A multi-line text input.
     pub const MULTILINE_TEXT_INPUT: Role = Role::Node(accesskit::Role::MultilineTextInput);
+    /// A single-line text input that searches or filters.
+    pub const SEARCH_INPUT: Role = Role::Node(accesskit::Role::SearchInput);
     /// Static text.
     pub const LABEL: Role = Role::Node(accesskit::Role::Label);
     /// A heading.

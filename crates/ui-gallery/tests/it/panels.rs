@@ -109,7 +109,7 @@ fn an_idle_viewer_runs_no_panel_body() {
 #[trial]
 fn a_filter_edit_runs_the_tree_and_the_overview_only() {
     let mut fixture = fixture("Slider", "", &side_by_side());
-    let field = fixture.by_role(Role::TEXT_INPUT).into_iter().next().expect("the filter field").center();
+    let field = fixture.by_role(Role::SEARCH_INPUT).into_iter().next().expect("the filter field").center();
     let ran = ran_over(
         &mut fixture,
         vec![vec![pointer::moved(field)], vec![pointer::press(field)], vec![pointer::release(field)], vec![input::text("x")]],

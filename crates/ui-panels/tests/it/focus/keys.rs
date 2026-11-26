@@ -347,7 +347,7 @@ fn a_field_that_drives_a_list_hands_it_its_list_keys_inline_and_in_a_modal() {
     for in_modal in [false, true] {
         let (mut fixture, activated) = drive_fixture(in_modal);
         fixture.settle();
-        let field = fixture.by_role(Role::TEXT_INPUT).pop().expect("the search field shows");
+        let field = fixture.by_role(Role::SEARCH_INPUT).pop().expect("the search field shows");
         fixture.click(&field);
         fixture.idle(2);
         fixture.type_text("b");
