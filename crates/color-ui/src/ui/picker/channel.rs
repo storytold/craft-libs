@@ -3,6 +3,7 @@
 
 use std::ops::RangeInclusive;
 
+use craft_behavior::press::MULTI_CLICK_TIME;
 use craft_behavior::{Axis, Metrics, PartKey, PressPhase, Sense};
 use craft_theme::{Channel, ColorModel, Srgba};
 use craft_ui::contract::{
@@ -347,8 +348,18 @@ impl Component for UnitsCell {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if let PressPhase::Release { start, click: true, .. } = cx.part(UNITS).press.phase {
-            self.double_clicked = start.clicks >= 2;
+        let PressPhase::Release { start, click: true, .. } = cx.part(UNITS).press.phase else { return };
+        // The click count also counts a press just beside the cell, on the number field, so a click is the second of a
+        // double click only when the click just before it, by the count, was a click on this cell.
+        let first = cx.id.with("units-first-click");
+        let ctx = &cx.response.ctx;
+        let earlier = ctx.data(|data| data.get_temp::<(f64, u32)>(first));
+        let follows = earlier.is_some_and(|(time, clicks)| start.clicks == clicks + 1 && start.time - time <= MULTI_CLICK_TIME);
+        if start.clicks >= 2 && follows {
+            self.double_clicked = true;
+            ctx.data_mut(|data| data.remove::<(f64, u32)>(first));
+        } else {
+            ctx.data_mut(|data| data.insert_temp(first, (start.time, start.clicks)));
         }
     }
 

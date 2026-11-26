@@ -256,6 +256,24 @@ fn only_a_double_click_on_the_units_cell_switches_the_rgb_units() {
     assert!(!rig.state.borrow().rgb_percent, "a double click on the G field switches nothing");
 }
 
+/// A click at the right edge of an RGB field followed at once by a click on the units cell beside it is not a double
+/// click on the cell, though the two presses are close enough to count as one, nor are two clicks on the cell with a
+/// click on the field between them.
+#[trial]
+fn a_click_on_the_field_then_one_on_the_units_cell_switches_nothing() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).remove(0);
+    let (edge, cell) = (egui::pos2(field.rect.right() - 0.4, field.rect.center().y), egui::pos2(field.rect.right() + 2.4, field.rect.center().y));
+    rig.fixture.click_at(cell).click_at(cell).settle();
+    assert!(rig.state.borrow().rgb_percent, "a double click at {cell:?} is on the units cell");
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(edge).click_at(cell).settle();
+    assert!(rig.state.borrow().rgb_percent, "a click on the field's edge and one on the cell switch nothing");
+    rig.fixture.advance(1.0);
+    rig.fixture.click_at(cell).click_at(edge).click_at(cell).settle();
+    assert!(rig.state.borrow().rgb_percent, "two clicks on the cell with one on the field between them switch nothing");
+}
+
 /// Rows of other modes have no units cell, nor do the RGB rows of a panel whose host did not ask for them, and Web
 /// Color keeps 0 to 255 while the RGB rows show percent.
 #[trial]
