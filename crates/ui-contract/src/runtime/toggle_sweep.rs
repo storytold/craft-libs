@@ -10,7 +10,7 @@ use std::sync::Arc;
 use craft_behavior::{PointerButton, PointerEvent, PressPhase, PressStart};
 use egui::{Context, Id, IdSet, Pos2, Rect};
 
-use crate::runtime::egui::{areas, pass};
+use crate::runtime::egui::{areas, pass, sizing};
 use crate::runtime::frame::{PerViewport, Stored};
 use crate::runtime::pointer::{self, PassPointer};
 
@@ -177,8 +177,9 @@ impl Record {
 
     /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group and the
     /// owner takes the value too: only a toggle that takes the sweep in this pass counts as crossed. An owner that asked
-    /// in this pass before the sibling gets the value in the next pass, which the caller repaints to run; a sweep released
-    /// before then is kept for the owner's check in that pass. Returns whether to repaint for that pass.
+    /// in this pass before the sibling gets the value in the pass that runs again for it, which the caller asks for; a
+    /// sweep released before then is kept for the owner's check in that pass. Returns whether the pass runs again: the
+    /// owner read the sweep unengaged.
     fn accept(&mut self, sibling: Id) -> bool {
         let Some(sweep) = &mut self.sweep else { return false };
         sweep.visited.insert(sibling);
@@ -198,13 +199,14 @@ impl Record {
         }
     }
 
-    /// `sibling` took the finished sweep's value. An owner that asked in this pass before it takes the value in the next
-    /// pass, so the finished sweep waits for it there. Returns whether to repaint for that pass.
+    /// `sibling` took the finished sweep's value. An owner that asked in this pass before it takes the value in the pass
+    /// that runs again for it, so the finished sweep waits for it there. Returns whether the pass runs again: the owner
+    /// read the finished sweep unengaged.
     fn completed_taken(&mut self, sibling: Id) -> bool {
         let Some(finished) = &mut self.completed else { return false };
         finished.sweep.visited.insert(sibling);
+        let late = !finished.sweep.engaged && self.asked.contains(&finished.sweep.owner);
         finished.sweep.engaged = true;
-        let late = self.asked.contains(&finished.sweep.owner);
         finished.owner_late |= late;
         late
     }
@@ -220,6 +222,18 @@ impl Record {
         sweep.travel.advance(after_press(&input.events, press), input.frame.as_ref().map_or(0.0, |frame| frame.slop), path);
         self.replay_first_path = !path.is_empty();
         self.sweep = Some(sweep);
+    }
+}
+
+/// Asks for the pass to run again, so the owner's value is current in the frame its sibling took the sweep: the owner
+/// checked the sweep before the sibling in this pass and found it unengaged, so only a pass that runs again shows it
+/// engaged. The record keeps a finished sweep for that pass (`owner_late`). A pass egui will not run again gets a
+/// repaint, which runs the owner's check in the next frame.
+fn rerun_for_owner(ctx: &Context) {
+    if sizing::discardable(ctx) {
+        sizing::request_discard(ctx, sizing::Rerun::Edit);
+    } else {
+        ctx.request_repaint();
     }
 }
 
@@ -266,7 +280,7 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
                 return None;
             }
             if PerViewport::<Record>::with(ctx, viewport, |record| record.completed_taken(id)) {
-                ctx.request_repaint();
+                rerun_for_owner(ctx);
             }
             Some(on)
         }
@@ -306,7 +320,7 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
                 return completed;
             }
             if PerViewport::<Record>::with(ctx, viewport, |record| record.accept(id)) {
-                ctx.request_repaint();
+                rerun_for_owner(ctx);
             }
             Some(on)
         }
