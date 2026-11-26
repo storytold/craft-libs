@@ -65,9 +65,14 @@ pub(crate) fn steps_of(ctx: &Context, id: Id) -> Vec<&'static str> {
     pass_state::with::<Log, _>(ctx, |log| log.steps.get(&id).cloned().unwrap_or_default())
 }
 
+/// Whether a finding reported now is kept.
+pub(crate) fn reports(ctx: &Context) -> bool {
+    fixture_frame() || recording(ctx)
+}
+
 /// Reports a finding.
 pub(crate) fn finding(ctx: &Context, finding: Finding) {
-    if !fixture_frame() && !recording(ctx) {
+    if !reports(ctx) {
         return;
     }
     pass_state::with::<Log, _>(ctx, |log| {
@@ -86,7 +91,7 @@ pub(crate) fn findings(ctx: &Context) -> Vec<Finding> {
 /// Records that the canvas control `type_name` showed in this pass, so the canvas-control cases can check that a
 /// press away from its parts reaches the tool.
 pub(crate) fn canvas_control(ctx: &Context, type_name: &'static str) {
-    if !fixture_frame() && !recording(ctx) {
+    if !reports(ctx) {
         return;
     }
     pass_state::with::<Log, _>(ctx, |log| {
