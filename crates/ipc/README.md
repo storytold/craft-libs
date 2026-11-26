@@ -31,7 +31,7 @@
 
 ## Schemas and fixtures
 
-`schemas/instance-record.schema.json` and `schemas/link-record.schema.json` describe the stored records. `tests/schemas.rs` checks that each schema and its Rust type agree, and that the stored records in `tests/fixtures/` stay valid.
+`schemas/instance-record.schema.json` and `schemas/link-record.schema.json` describe the stored records. `tests/it/schemas.rs` checks that each schema and its Rust type agree, and that the stored records in `tests/fixtures/` stay valid.
 
 ## Tests
 
