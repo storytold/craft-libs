@@ -16,6 +16,8 @@ use craft_video::prores::*;
 let frame: Frame = decode_frame(&sample)?;                 // 10-bit 4:2:2 / 12-bit 4:4:4
 let f10 = decode_frame_with(&sample, &DecodeOptions { bit_depth: Some(10), threads: true })?;
 decode_frame_into(&sample, &DecodeOptions::default(), &mut frame_buf)?; // reuses planes
+let limits = DecodeLimits { max_pixels: 8192 * 8192, max_frame_bytes: 512 * 1024 * 1024 };
+let bounded = decode_frame_with_limits(&sample, &DecodeOptions::default(), &limits)?;
 let hdr: FrameHeader = probe(&sample)?;                    // header only
 
 // Encode (progressive).
@@ -27,6 +29,11 @@ let sample: Vec<u8> = enc.encode(&frame)?;                 // the QuickTime samp
 alpha: Option<Vec<u16>>, interlace: Interlace, color: ColorInfo { primaries, transfer, matrix },
 aspect_ratio, frame_rate_code }` holds planar samples with no row padding (`chroma_width()` is
 `ceil(width/2)` for 4:2:2). The colour codes are H.273 code points straight from the frame header.
+
+`DecodeLimits` bounds both frame area and aggregate decoded plane storage before allocation.
+`decode_frame_with` uses an aggregate limit of 300 MiB and does not impose an additional area
+limit; use `decode_frame_with_limits` when the application needs a stricter pixel policy or a
+different finite memory ceiling.
 
 `Profile` = `Proxy` (`apco`), `Lt` (`apcs`), `Standard` (`apcn`), `Hq` (`apch`), `P4444` (`ap4h`),
 `P4444Xq` (`ap4x`). The frame itself doesn't say which profile it is (only the container fourcc
@@ -61,7 +68,7 @@ does), so the decoder doesn't need to know.
   rayon task directly into the output planes.
 - Robustness: every size field is validated before allocation, codewords longer than 56 bits are
   rejected, and arithmetic is overflow-safe. Mutated streams return `Err`, never panic (see
-  [`tests/prores/fuzz_hostile.rs`](../../tests/prores/fuzz_hostile.rs)).
+  [`tests/it/prores/fuzz_hostile.rs`](../../tests/it/prores/fuzz_hostile.rs)).
 
 ## Encoder
 
@@ -94,7 +101,7 @@ Every alpha difference is followed by a run code, including a final singleton
 (RDD 36:2022 §5.3.3, Tables 12–14). Omitting the final run produces a truncated
 alpha payload: FFmpeg may accept it, while macOS native HD decoding fails with AVFoundation `-11821` / underlying `-12137`.
 
-The encoder tests check exact singleton codewords at 8 and 16 bits, run-length
+The encoder tests read the alpha runs back with a spec reader: final singletons at 8 and 16 bits, run-length
 boundaries through 2048 and split runs, final-value bit alignments, and complete
 encoded slices for both profiles and all four slice widths.
 

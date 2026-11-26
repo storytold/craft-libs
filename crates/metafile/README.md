@@ -7,11 +7,13 @@ Windows metafiles for the Craft apps: one reader for WMF, EMF and EMF+, and writ
 - `size(bytes)` gives the picture's size from the header alone when the header decides it.
 - `sniff(bytes) -> Option<Kind>` and `is_metafile(bytes)` recognise the formats.
 - `Picture::fit` and `Picture::place` fit a picture (with crop fractions) into a rectangle for
-  callers that draw it; `crop_window` is the crop rule they share with bitmaps.
+  callers that draw it; `crop_window` is the crop rule they share with bitmaps (a negative crop
+  side pads the picture).
 - `write::emf` and `write::wmf` (feature `write`) write a list of drawing operations.
 
-The crate depends on `kurbo`, `thiserror` and `image` (PNG, JPEG, GIF, TIFF and BMP decoders, for
-the image files that EMF+ and `BI_JPEG`/`BI_PNG` bitmaps carry). It knows no fonts, no file system
+The crate depends on `kurbo`, `thiserror`, `encoding_rs` (the code pages of 8-bit text) and `image`
+(PNG, JPEG, GIF, TIFF and BMP decoders, for the image files that EMF+ and `BI_JPEG`/`BI_PNG`
+bitmaps carry). It knows no fonts, no file system
 and no application.
 
 ## The model
@@ -31,7 +33,19 @@ Every item carries the clip it was drawn under: `region` (the GDI clip region as
 `Arc<ClipPath>`). An item shows inside its region and inside each of its clip paths.
 
 `Picture::skipped_records` counts records of a type the reader does not play, so a caller can say
-that part of a file was not read.
+that part of a file was not read. The other fields report what the reader left out or drew
+differently:
+
+| Field | Reports |
+|---|---|
+| `truncated` | The parse stopped at a limit that ends it (items, bytes kept, `SAVEDC` depth, clip paths), in the file or in an EMF+ metafile image drawn in it. |
+| `dropped_images` | Images that were not read: bitmaps past a size, item, byte or decode limit or not decodable, EMF+ metafile images that do not parse or are nested too deep, and pattern or texture brushes whose bitmap was not read, a pen's brush included (counted when the brush or pen is created). An image with no pixels, or drawn from a source rectangle that selects none, is not counted. |
+| `ignored_clips` | Clip changes not applied as the file asks: `SELECTCLIPPATH` with `RGN_OR`, `RGN_XOR` or `RGN_DIFF`, EMF+ clips combined with XOR, exclude or complement, EMF+ unions drawn as the rectangle around both areas, and EMF+ clips whose area stands in for the one the file gives (a path that is not one convex figure, drawn as its rectangle, or a region built with XOR, exclude or complement). A change that cannot alter the clip is not counted: an area whose figures all lie on a line (except in an EMF+ complement of a clip that encloses some area, which would empty it), `RGN_OR` on a clip that is still the whole surface, and a union whose rectangle is no larger than the union. |
+| `unplayed_raster_ops` | Raster operations not played: bitmaps drawn as plain copies because their operation is not one of `SRCCOPY`, `SRCAND`, `SRCPAINT` and `SRCINVERT`, and operations without a source (such as `DSTINVERT` or `PATINVERT`) that are left out. |
+
+An EMF+ metafile image adds its own counts, `skipped_records` included, once, the first time it is
+drawn. A metafile image that the byte limit refuses is counted in `dropped_images`, and its own
+counts are not added.
 
 ### Why this model
 
@@ -51,14 +65,14 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Group | Records |
 |---|---|
 | Headers | Placeable header, memory and disk metafile headers. |
-| Mapping | `SETMAPMODE`, `SETWINDOWORG`, `SETWINDOWEXT`, `SETVIEWPORTORG`, `SETVIEWPORTEXT`, all map modes (text, metric, isotropic, anisotropic). A placeable file is played into its box the way Office plays it. |
+| Mapping | `SETMAPMODE`, `SETWINDOWORG`, `SETWINDOWEXT`, `SETVIEWPORTORG`, `SETVIEWPORTEXT`, `OFFSETWINDOWORG`, `OFFSETVIEWPORTORG`, `SCALEWINDOWEXT`, `SCALEVIEWPORTEXT`, all map modes (text, metric, isotropic, anisotropic). A placeable file is played into its box the way Office plays it. |
 | State | `SAVEDC`, `RESTOREDC`, `SETPOLYFILLMODE`, `SETROP2`, `SETBKMODE`, `SETBKCOLOR`, `SETTEXTCOLOR`, `SETTEXTALIGN`. |
 | Objects | `CREATEPENINDIRECT` (style, cap and join bits), `CREATEBRUSHINDIRECT` (solid, null, hatched), `DIBCREATEPATTERNBRUSH`, `CREATEFONTINDIRECT`, `SELECTOBJECT`, `DELETEOBJECT`, stock objects. `CREATEPALETTE`, `CREATEPATTERNBRUSH` and `CREATEREGION` take their handle slot. |
 | Drawing | `MOVETO`, `LINETO`, `POLYLINE`, `POLYGON`, `POLYPOLYGON`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `PIE`, `CHORD`, `PATBLT`. |
 | Bitmaps | `STRETCHDIB`, `DIBSTRETCHBLT`, `DIBBITBLT` (with or without a source). |
-| Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`; code pages 1250, 1251, 1252, the symbol character set, double-byte lead bytes as blanks. |
+| Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`, decoded in the selected font's character set: code pages 1250 to 1258 and 874, Shift_JIS, UHC, GBK and Big5 (a double-byte character takes the advances of both its bytes), and the symbol character set (also the Symbol font under `DEFAULT_CHARSET`), whose codes stay in the private-use area at U+F000. Face names are read in the font's code page. Johab pairs are blanks. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`. |
-| Not read | `OFFSETWINDOWORG`, `OFFSETVIEWPORTORG`, `SCALEWINDOWEXT`, `SCALEVIEWPORTEXT`, flood fills, `SETPIXEL`, region records (`FILLREGION`, `FRAMEREGION`, `PAINTREGION`, `INVERTREGION`, `SELECTCLIPREGION`, `OFFSETCLIPRGN`), the device-dependent `BITBLT`, `STRETCHBLT` and `SETDIBTODEV`. They are counted in `skipped_records`. |
+| Not read | Flood fills, `SETPIXEL`, region records (`FILLREGION`, `FRAMEREGION`, `PAINTREGION`, `INVERTREGION`, `SELECTCLIPREGION`, `OFFSETCLIPRGN`), the device-dependent `BITBLT`, `STRETCHBLT` and `SETDIBTODEV`. They are counted in `skipped_records`. |
 
 ### EMF (MS-EMF)
 
@@ -71,13 +85,16 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Drawing | `MOVETOEX`, `LINETO`, `POLYLINE(16)`, `POLYLINETO(16)`, `POLYGON(16)`, `POLYBEZIER(16)`, `POLYBEZIERTO(16)`, `POLYPOLYLINE(16)`, `POLYPOLYGON(16)`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `CHORD`, `PIE`. |
 | Paths | `BEGINPATH`, `ENDPATH`, `CLOSEFIGURE`, `FILLPATH`, `STROKEPATH`, `STROKEANDFILLPATH`, `ABORTPATH`, `SELECTCLIPPATH` (`RGN_AND`, `RGN_COPY`). |
 | Bitmaps | `BITBLT`, `STRETCHBLT`, `STRETCHDIBITS`, `SETDIBITSTODEVICE`, `ALPHABLEND` (constant and per-pixel alpha); source-less raster operations fill with the brush, black or white; `SRCAND`, `SRCPAINT` and `SRCINVERT` are drawn as they look over white. |
-| Text | `EXTTEXTOUTA`, `EXTTEXTOUTW`, `SMALLTEXTOUT`; glyph-index strings are left out. |
+| Text | `EXTTEXTOUTA`, `EXTTEXTOUTW`, `SMALLTEXTOUT`; 8-bit strings are decoded as WMF text is; glyph-index strings are left out. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`, `EXTSELECTCLIPRGN` (all five modes, on rectangles), `SELECTCLIPPATH`. |
 | Not read | `ANGLEARC`, `ARCTO`, `POLYDRAW(16)`, `SETPIXELV`, flood fills, region paints, `MASKBLT`, `PLGBLT`, `TRANSPARENTBLT`, `GRADIENTFILL`, `POLYTEXTOUT`, `WIDENPATH`, `SETMETARGN`, `OFFSETCLIPRGN`, `SETLAYOUT`, `SELECTCLIPPATH` with `RGN_OR`, `RGN_XOR` or `RGN_DIFF` (the clip stays as it was). Unknown types are counted in `skipped_records`. |
 
 ### EMF+ (MS-EMFPLUS)
 
-An EMF+ only file is played from its EMF+ records. A dual file is played from its EMF records.
+A file with EMF+ records is played from them, as GDI+ plays it. In a dual file (one that also
+draws the picture with plain EMF records, as a fallback for GDI) the plain records are skipped,
+except those between an `EmfPlusGetDC` record and the next EMF+ record. What the EMF+ reader does
+not read (the table's last row) is therefore lost in a dual file even where its EMF records carry it.
 
 | Feature | Read |
 |---|---|
@@ -121,7 +138,7 @@ it never panics and never allocates from an unchecked count. Each limit has a te
 | Limit | Value | Past it |
 |---|---|---|
 | Items in a picture | 200,000 | The parse stops. |
-| Bytes of path points and pixels kept (pattern brushes and clip paths included) | 256 MiB | The parse stops. |
+| Bytes of path points and pixels kept (pattern brushes, clip paths, EMF+ objects with the nested pictures they hold, and EMF+ clips included) | 256 MiB | The parse stops; an EMF+ object past it is not stored. |
 | Points in one path bracket; points in one record | 2,000,000 | The bracket stops growing; the record is left out. |
 | Object table slots | 4,096 | The object is not stored. |
 | `SAVEDC` depth | 1,024 | The parse stops. |
@@ -142,10 +159,17 @@ it never panics and never allocates from an unchecked count. Each limit has a te
 | Nested metafiles | 3 levels | The inner picture is not read. |
 | Clipping work per item, and per clip area | 1,000,000 and 4,000,000 steps | The item is left out; the clip keeps its previous area. |
 | Masking a bitmap to a clip that is not a rectangle | 5,000,000 point tests | The bitmap is left out. |
-| Placed path elements (`Picture::place`) | 500,000 | Placing stops. |
+| Placed path elements, clip regions included (`Picture::place`) | 500,000 | Placing stops. |
 | Placed coordinates (`Picture::place`) | ±1,000,000 | The item is left out. |
+| Placed pen width (`Picture::place`) | Twice the diagonal of the frame and the path together | The width is held there. |
 | Writers: dashes cut from one stroke | 100,000 | The stroke is written solid. |
 | Writers: segments from one curve | about 4,096 | The tolerance is raised. |
+
+A limit that stops the parse sets `Picture::truncated`, and a bitmap, metafile image or pattern
+brush whose pixels were not read is counted in `Picture::dropped_images`. These are not reported:
+the limits that cut a path, a string, a clip region, a pen style or an EMF+ point list or gradient
+short, items left out by the clipping and masking limits, and an EMF+ continued object whose pieces
+never complete.
 
 The tests parse every prefix of sample files, files with each byte replaced, and random bytes.
 

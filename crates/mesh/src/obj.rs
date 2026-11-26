@@ -14,7 +14,7 @@
 //! `map_Kd`, `map_Ke`, `map_Bump`/`bump`/`norm` name base colour, emissive and normal images.
 //! An image is only named ([`Image::uri`]); reading and decoding it is the caller's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::{
@@ -32,10 +32,42 @@ pub fn sibling_name(name: &str) -> Option<&str> {
     (!file.is_empty() && file.len() < name.len()).then_some(file)
 }
 
-/// The image a `map_*` line names: the rest of the line (a name with spaces is one name),
-/// or its final token when the line carries options (`-bm 1 file.png`).
-fn map_name(rest: &str) -> &str {
-    if rest.starts_with('-') { rest.split_whitespace().last().unwrap_or(rest) } else { rest }
+/// The image a `map_*` line names: the rest of the line after its options
+/// (`-bm 1 -o 0.5 0.5 my file.png`). Options are passed over by their argument counts, so a
+/// name with spaces is one name; after an option this reader does not know, the name is the
+/// final token.
+fn map_name(args: &str) -> &str {
+    fn split(s: &str) -> (&str, &str) {
+        s.split_once(char::is_whitespace).map_or((s, ""), |(a, b)| (a, b.trim_start()))
+    }
+    let mut rest = args.trim();
+    loop {
+        let (token, after) = split(rest);
+        if after.is_empty() {
+            break;
+        }
+        // How many arguments the option takes, and from which one they may be left out:
+        // `-o`, `-s` and `-t` take one to three numbers.
+        let (count, optional_from) = match token {
+            "-blendu" | "-blendv" | "-bm" | "-boost" | "-cc" | "-clamp" | "-imfchan" | "-texres" | "-type" => (1, 1),
+            "-mm" => (2, 2),
+            "-o" | "-s" | "-t" => (3, 1),
+            t if t.strip_prefix('-').is_some_and(|o| o.starts_with(|c: char| c.is_ascii_alphabetic())) => {
+                return args.split_whitespace().last().unwrap_or(args);
+            }
+            _ => break,
+        };
+        rest = after;
+        for i in 0..count {
+            let (arg, after) = split(rest);
+            // The last token is always the name.
+            if after.is_empty() || (i >= optional_from && arg.parse::<f32>().is_err()) {
+                break;
+            }
+            rest = after;
+        }
+    }
+    rest.trim_end()
 }
 
 /// Materials of an MTL library and the images they name. `TextureRef::image` indexes the
@@ -135,8 +167,22 @@ struct Object {
     slots: HashMap<(String, Option<usize>, u32), usize>,
 }
 
+/// Options for callers that need strict parsing or original face-run order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadOptions {
+    /// Return an error when a vertex or face line cannot be read.
+    pub strict: bool,
+    /// Keep separate runs when groups, materials or smoothing change.
+    pub preserve_runs: bool,
+    /// Do not resolve or report material libraries; `usemtl` names remain available.
+    pub ignore_material_libraries: bool,
+    /// Treat each group declaration as an object boundary, retaining repeated names.
+    pub groups_as_objects: bool,
+}
+
 struct Reader<'a> {
     limits: &'a Limits,
+    options: ReadOptions,
     v: Vec<[f64; 3]>,
     colors: Vec<[f32; 4]>,
     vt: Vec<[f32; 2]>,
@@ -144,6 +190,8 @@ struct Reader<'a> {
     objects: Vec<Object>,
     scene: Scene,
     material_ids: HashMap<String, usize>,
+    /// The `mtllib` names already read: exporters repeat the line for every object.
+    libraries: HashSet<String>,
     material: Option<usize>,
     group: String,
     smoothing: u32,
@@ -202,6 +250,13 @@ impl Reader<'_> {
 
     fn use_material(&mut self, name: &str) -> Result<()> {
         self.slot = None;
+        if name.trim().is_empty() {
+            // A bare `usemtl` selects no named material. In particular, do not create a
+            // material with an empty name: callers can map the missing material to their own
+            // default, and writers need not emit a meaningless empty material name.
+            self.material = None;
+            return Ok(());
+        }
         self.material = match self.material_ids.get(name) {
             Some(i) => Some(*i),
             None if self.scene.materials.len() >= self.limits.max_materials => {
@@ -218,7 +273,9 @@ impl Reader<'_> {
     }
 
     fn library(&mut self, name: &str, resolve: Resolver) -> Result<()> {
-        if name.is_empty() {
+        // A library named again is already read: reading it again would add its materials and
+        // images a second time and count its bytes against the limit once per line.
+        if name.is_empty() || !self.libraries.insert(name.to_string()) {
             return Ok(());
         }
         if self.scene.external.len() >= self.limits.max_materials {
@@ -271,7 +328,7 @@ impl Reader<'_> {
         let Some(object) = self.objects.last_mut() else { return Ok(None) };
         let slot = match self.slot {
             Some(s) => s,
-            None => match object.slots.get(&(self.group.clone(), self.material, self.smoothing)) {
+            None => match (!self.options.preserve_runs).then(|| object.slots.get(&(self.group.clone(), self.material, self.smoothing))).flatten() {
                 Some(s) => *s,
                 None => {
                     if self.parts >= self.limits.max_parts {
@@ -288,15 +345,26 @@ impl Reader<'_> {
         Ok(object.parts.get_mut(slot))
     }
 
-    fn face(&mut self, rest: &[&str]) -> Result<()> {
-        if rest.len() > self.limits.max_face_corners {
-            return Err(too_large(KIND, format!("a face of more than {} corners", self.limits.max_face_corners)));
+    fn face<'a>(&mut self, rest: impl Iterator<Item = &'a str>) -> Result<()> {
+        let mut corners = Vec::new();
+        let mut invalid = false;
+        for token in rest {
+            // Check before collecting tokens or corners: one line can hold millions of them.
+            if corners.len() >= self.limits.max_face_corners {
+                return Err(too_large(KIND, format!("a face of more than {} corners", self.limits.max_face_corners)));
+            }
+            match self.corner(token) {
+                Some(corner) => corners.push(corner),
+                None => {
+                    invalid = true;
+                    corners.push(Corner::at(0));
+                }
+            }
         }
-        let corners: Option<Vec<Corner>> = rest.iter().map(|t| self.corner(t)).collect();
-        let Some(corners) = corners.filter(|c| c.len() >= 3) else {
+        if invalid || corners.len() < 3 {
             self.bad_lines += 1;
             return Ok(());
-        };
+        }
         self.triangles = self.triangles.saturating_add(corners.len() - 2);
         if self.triangles > self.limits.max_triangles {
             return Err(too_large(KIND, format!("more than {} triangles", self.limits.max_triangles)));
@@ -318,7 +386,7 @@ impl Reader<'_> {
         let Some(key) = it.next() else { return Ok(()) };
         let after = line.get(key.len()..).unwrap_or("").trim();
         match key {
-            "v" => self.vertex(&it.collect::<Vec<_>>())?,
+            "v" => self.vertex(&it.take(6).collect::<Vec<_>>())?,
             "vt" => {
                 self.pool_room(self.vt.len(), "texture coordinates")?;
                 // `vt u` alone is a 1D coordinate; OBJ's v axis points up the image.
@@ -332,6 +400,7 @@ impl Reader<'_> {
                 self.vn.push(n.unwrap_or(NAN3));
                 self.bad_lines += usize::from(n.is_none());
             }
+            "s" if self.options.groups_as_objects => {}
             "s" => {
                 self.slot = None;
                 self.smoothing = match it.next() {
@@ -341,13 +410,17 @@ impl Reader<'_> {
                 };
             }
             "o" => self.start_object(after.to_string())?,
+            "g" if self.options.groups_as_objects => {
+                self.group.clear();
+                self.start_object(after.to_string())?;
+            }
             "g" => {
                 self.slot = None;
                 self.group = after.to_string();
             }
             "usemtl" => self.use_material(after)?,
-            "mtllib" => self.library(after, resolve)?,
-            "f" => self.face(&it.collect::<Vec<_>>())?,
+            "mtllib" if !self.options.ignore_material_libraries => self.library(after, resolve)?,
+            "f" => self.face(it)?,
             _ => {}
         }
         Ok(())
@@ -402,9 +475,19 @@ impl Reader<'_> {
 /// writes; every name asked, and every image a library names, is listed in
 /// [`Scene::external`].
 pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
+    read_with_options(bytes, limits, resolve, &ReadOptions::default())
+}
+
+/// Read an OBJ using the selected compatibility behavior.
+pub fn read_with_options(bytes: &[u8], limits: &Limits, resolve: Resolver, options: &ReadOptions) -> Result<Scene> {
+    // Lossy UTF-8 conversion can allocate, so bound it before copying invalid input.
+    if std::str::from_utf8(bytes).is_err() && bytes.len() > limits.max_data_bytes {
+        return Err(too_large(KIND, "invalid UTF-8 text exceeds the memory limit"));
+    }
     let text = String::from_utf8_lossy(bytes);
     let mut r = Reader {
         limits,
+        options: *options,
         v: vec![],
         colors: vec![],
         vt: vec![],
@@ -412,6 +495,7 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
         objects: vec![],
         scene: Scene::default(),
         material_ids: HashMap::new(),
+        libraries: HashSet::new(),
         material: None,
         group: String::new(),
         smoothing: 0,
@@ -423,8 +507,12 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     };
     // A line ending in `\` continues on the next.
     let mut joined = String::new();
-    for raw in text.lines() {
+    for (i, raw) in text.lines().enumerate() {
+        let raw = if i == 0 { raw.trim_start_matches('\u{feff}') } else { raw };
         let line = raw.split('#').next().unwrap_or("");
+        if line.len() > limits.max_data_bytes || joined.len().checked_add(line.len()).is_none_or(|n| n > limits.max_data_bytes) {
+            return Err(too_large(KIND, "a continued line exceeds the memory limit"));
+        }
         if let Some(head) = line.trim_end().strip_suffix('\\') {
             joined.push_str(head);
             joined.push(' ');
@@ -439,6 +527,9 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
         }
     }
     r.line(joined.trim(), resolve)?;
+    if options.strict && r.bad_lines > 0 {
+        return Err(malformed(KIND, "invalid vertex or face line"));
+    }
     r.finish()
 }
 
@@ -448,7 +539,7 @@ fn token(name: &str) -> String {
     if t.is_empty() { "material".into() } else { t }
 }
 
-/// The name each material is written with: its [`token`], made unique with `_2`, `_3`… where
+/// The name each material is written with: its `token`, made unique with `_2`, `_3`… where
 /// two would be the same, also ignoring case (the names may become file names).
 pub fn material_names(scene: &Scene) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
@@ -481,6 +572,7 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     // OBJ indices run on across objects.
     let (mut vbase, mut tbase, mut nbase) = (1u64, 1u64, 1u64);
     let mut smoothing = 0;
+    let mut current_material: Option<Option<usize>> = None;
     for (index, world) in scene.instances(limits)? {
         let Some(mesh) = scene.meshes.get(index) else { continue };
         mesh.validate()?;
@@ -509,8 +601,17 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
             if !part.name.trim().is_empty() {
                 let _ = writeln!(text, "g {}", part.name.trim().replace(|c: char| c.is_control(), " "));
             }
-            if let Some(m) = part.material.and_then(|m| materials.get(m)) {
-                let _ = writeln!(text, "usemtl {m}");
+            if current_material != Some(part.material) {
+                match part.material.and_then(|m| materials.get(m)) {
+                    Some(m) => {
+                        let _ = writeln!(text, "usemtl {m}");
+                    }
+                    None if current_material.is_some() => {
+                        let _ = writeln!(text, "usemtl");
+                    }
+                    None => {}
+                }
+                current_material = Some(part.material);
             }
             if part.smoothing != smoothing {
                 smoothing = part.smoothing;
@@ -545,9 +646,15 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     Ok(text)
 }
 
-/// The scene's materials as an MTL library, named as [`write`] names them: `Kd`, `d`, `Ke`,
-/// `Ns` (for readers without the PBR extension) with `Pr` and `Pm`, and `map_Kd`, `map_Ke`
-/// and `norm` for images that have a [`Image::uri`].
+/// The scene as OBJ text and its MTL material library (`(obj, mtl)`), with `mtllib` naming
+/// the material library file to write next to the OBJ.
+pub fn write_with_mtl(scene: &Scene, mtllib: &str, limits: &Limits) -> Result<(String, String)> {
+    Ok((write(scene, Some(mtllib), limits)?, write_mtl(scene)))
+}
+
+/// The scene's materials as an MTL library, named as [`fn@write`] names them: `Kd`, `d`, `Ke`,
+/// `Ns` (for readers without the PBR extension) with `Pr` and `Pm`, and `map_Kd`, `map_Ke`,
+/// `norm`, `map_Pc`, and `map_Pcr` for images that have an [`Image::uri`].
 pub fn write_mtl(scene: &Scene) -> String {
     let mut mtl = String::new();
     for (m, name) in scene.materials.iter().zip(material_names(scene)) {
@@ -560,7 +667,13 @@ pub fn write_mtl(scene: &Scene) -> String {
             "newmtl {name}\nKd {} {} {}\nd {}\nKe {} {} {}\nNs {ns}\nPr {r}\nPm {}",
             kd[0], kd[1], kd[2], m.base_color[3], ke[0], ke[1], ke[2], m.metallic
         );
-        for (key, tex) in [("map_Kd", m.base_color_texture), ("map_Ke", m.emissive_texture), ("norm", m.normal_texture)] {
+        for (key, tex) in [
+            ("map_Kd", m.base_color_texture),
+            ("map_Ke", m.emissive_texture),
+            ("norm", m.normal_texture),
+            ("map_Pc", m.clearcoat_texture),
+            ("map_Pcr", m.clearcoat_roughness_texture),
+        ] {
             if let Some(uri) = tex.and_then(|t| scene.images.get(t.image)).and_then(|i| i.uri.as_deref()) {
                 let _ = writeln!(mtl, "{key} {}", uri.replace(['\n', '\r'], " "));
             }

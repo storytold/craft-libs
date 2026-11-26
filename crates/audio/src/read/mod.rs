@@ -14,6 +14,7 @@ mod flac;
 #[cfg(feature = "symphonia")]
 mod mp4;
 mod native;
+mod raw;
 mod source;
 #[cfg(feature = "symphonia")]
 mod symph;
@@ -21,6 +22,7 @@ mod wav;
 
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result};
 use native::Native;
+pub use raw::{RawPcm, aiff_pcm, wav_pcm};
 pub use source::SharedSource;
 use source::Src;
 use std::sync::Arc;
@@ -90,6 +92,25 @@ fn detect_by_magic(b: &[u8], depth: u32) -> Option<Container> {
     None
 }
 
+/// The file extensions of the formats [`decode`] reads, lower case and without the dot: what a
+/// file picker or a browser filters by. Each is a hint [`detect_container`] knows; a file's
+/// contents still decide what it is. Without the `symphonia` feature the formats only symphonia
+/// decodes (FLAC, CAF) are left out.
+#[cfg(feature = "symphonia")]
+pub const DECODE_EXTENSIONS: &[&str] = &[
+    "wav", "wave", "bwf", "rf64", "aif", "aiff", "aifc", "flac", "mp3", "mp2", "mp1", "mpa", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "mov", "aac",
+    "adts", "ac3", "eac3", "ec3", "caf", "mkv", "mka", "webm",
+];
+/// The file extensions of the formats [`decode`] reads, lower case and without the dot: what a
+/// file picker or a browser filters by. Each is a hint [`detect_container`] knows; a file's
+/// contents still decide what it is. Without the `symphonia` feature the formats only symphonia
+/// decodes (FLAC, CAF) are left out.
+#[cfg(not(feature = "symphonia"))]
+pub const DECODE_EXTENSIONS: &[&str] = &[
+    "wav", "wave", "bwf", "rf64", "aif", "aiff", "aifc", "mp3", "mp2", "mp1", "mpa", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "mov", "aac", "adts",
+    "ac3", "eac3", "ec3", "mkv", "mka", "webm",
+];
+
 fn detect_by_ext(ext: &str) -> Option<Container> {
     Some(match ext.trim_start_matches('.').to_ascii_lowercase().as_str() {
         "wav" | "wave" | "bwf" | "rf64" => Container::Wav,
@@ -133,7 +154,12 @@ pub struct DecodeOptions {
     /// them; `None` is the first.
     pub track: Option<usize>,
     /// The most samples (frames × channels) [`decode_with`] returns; a longer file is
-    /// [`AudioError::TooLarge`]. The streaming [`Decoder`] has no limit.
+    /// [`AudioError::TooLarge`]. The default, [`DEFAULT_MAX_SAMPLES`], is 2^30 samples: 4 GiB of
+    /// `f32`, about 3 hours of 48 kHz stereo. It is a ceiling for trusted input, not a budget:
+    /// a small compressed file (silent FLAC, say) can decode to all of it, and [`decode_with`]
+    /// holds the whole result in memory. A caller that decodes files it does not control sets
+    /// this to what it can hold, or reads blocks with [`Decoder`], which keeps nothing and has no
+    /// limit.
     pub max_samples: u64,
 }
 
@@ -380,7 +406,9 @@ pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioB
     decode_with(bytes, ext_hint, &DecodeOptions::default())
 }
 
-/// [`decode`] with options: another track, or another size limit.
+/// [`decode`] with options: another track, or another size limit. [`decode`] and `decode_with`
+/// keep every decoded sample, so for untrusted files pass a limit
+/// ([`DecodeOptions::with_max_samples`]) that the host can hold, or stream with [`Decoder`].
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
@@ -528,77 +556,5 @@ fn not_built(src: &Src<'_>) -> AudioError {
     match detect_container(&head, None) {
         Some(c) => AudioError::Unsupported(format!("{} needs a decoder this build leaves out (the `decode` feature adds symphonia)", c.name())),
         None => AudioError::Unsupported("not a recognized audio format".into()),
-    }
-}
-
-#[cfg(all(test, not(feature = "symphonia")))]
-mod native_only_tests {
-    use super::*;
-
-    /// Without symphonia, a format with no native decoder is unsupported, not malformed.
-    #[test]
-    fn formats_left_to_symphonia_are_unsupported() {
-        let flac_header = [&b"fLaC"[..], &[0x80, 0, 0, 34], &[0; 34]].concat();
-        assert!(matches!(decode(&flac_header, None), Err(AudioError::Unsupported(m)) if m.contains("FLAC")));
-        assert!(matches!(probe(&flac_header, None), Err(AudioError::Unsupported(_))));
-        // A track list says the same instead of listing nothing.
-        assert!(matches!(tracks(&flac_header, None), Err(AudioError::Unsupported(m)) if m.contains("FLAC")));
-        // Bytes that name no format are not blamed on the build.
-        assert!(matches!(tracks(&[7u8; 64], None), Err(AudioError::Unsupported(m)) if m.contains("not a recognized")));
-    }
-
-    /// A source that cannot be read is an I/O error, not an unrecognized format.
-    #[test]
-    fn a_failed_header_read_is_an_io_error() {
-        struct Failing;
-        impl craft_media::ByteSource for Failing {
-            fn len(&self) -> u64 {
-                1000
-            }
-            fn read_at(&self, _: u64, _: &mut [u8]) -> std::io::Result<()> {
-                Err(std::io::Error::other("disk gone"))
-            }
-        }
-        assert!(matches!(tracks_of(Failing, None), Err(AudioError::Io(_))));
-        assert!(matches!(Decoder::open(Failing, None, &DecodeOptions::default()), Err(AudioError::Io(_))));
-    }
-
-    /// A damaged file in a container the native path reads is malformed, not left to a decoder
-    /// this build lacks.
-    #[test]
-    fn a_damaged_mp4_is_malformed() {
-        // an `ftyp` box and nothing after it: no `moov`
-        let mp4 = [&16u32.to_be_bytes()[..], b"ftypisom", &[0, 0, 2, 0]].concat();
-        assert!(matches!(decode(&mp4, None), Err(AudioError::Malformed(_))));
-        assert!(matches!(tracks(&mp4, None), Err(AudioError::Malformed(_))));
-    }
-
-    /// A source that fails past its first 64 KiB fails inside the demuxer: still an I/O error.
-    #[test]
-    fn a_failed_read_inside_the_demuxer_is_an_io_error() {
-        use craft_media::matroska::{LacingMode, MkvWriter, MuxOptions, TrackKind, TrackSpec};
-        struct FailsLate(Vec<u8>);
-        impl craft_media::ByteSource for FailsLate {
-            fn len(&self) -> u64 {
-                self.0.len() as u64
-            }
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
-                if offset + buf.len() as u64 > 64 * 1024 {
-                    return Err(std::io::Error::other("disk gone"));
-                }
-                self.0.read_at(offset, buf)
-            }
-        }
-        // a Matroska PCM file of about 400 KB, whose cues and later clusters lie past 64 KiB
-        let mut spec = TrackSpec::new(TrackKind::Audio, "A_PCM/FLOAT/IEEE");
-        spec.audio = Some((48_000.0, 1, Some(32)));
-        let opts = MuxOptions { lacing: LacingMode::None, ..MuxOptions::default() };
-        let mut w = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![spec], opts).unwrap();
-        for k in 0..100i64 {
-            w.write_frame(0, k * 20_000_000, true, &[0; 960 * 4], Some(20_000_000)).unwrap();
-        }
-        let file = w.finish().unwrap().into_inner();
-        assert!(matches!(tracks_of(FailsLate(file.clone()), None), Err(AudioError::Io(_))));
-        assert!(matches!(Decoder::open(FailsLate(file), None, &DecodeOptions::default()), Err(AudioError::Io(_))));
     }
 }

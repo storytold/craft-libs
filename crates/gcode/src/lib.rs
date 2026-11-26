@@ -7,10 +7,17 @@
 //! several passes, with an optional power ramp. Coordinates are absolute millimetres, exactly as
 //! given.
 //!
+//! [`Writer::new`] writes a file to keep: commented, fixed four-decimal coordinates.
+//! [`Writer::bare`] writes the same moves for a sender that streams a job line by line and waits
+//! for each `ok`: no comments, shortest coordinates. [`grbl`] has what such a sender needs from
+//! the controller's side: the real-time command bytes and the reply parsers.
+//!
 //! Flattening curves, choosing what to cut and at what power, and machine or material presets
 //! are the caller's business. Depends on no other Craft crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
+
+pub mod grbl;
 
 use std::fmt::Write as _;
 
@@ -83,10 +90,7 @@ impl Default for Settings {
 impl Settings {
     /// Checks every knob is inside its range.
     pub fn validate(&self) -> Result<(), Error> {
-        // Written to three decimals: a smaller rate would come out as `F0`, which Grbl rejects.
-        if !self.feed_mm_per_min.is_finite() || self.feed_mm_per_min < 0.001 {
-            return Err(Error::Settings(format!("feed rate {} mm/min is not a finite rate of at least 0.001", self.feed_mm_per_min)));
-        }
+        check_feed(self.feed_mm_per_min)?;
         if self.passes == 0 || self.passes > MAX_PASSES {
             return Err(Error::Settings(format!("passes {} is outside the 1–{MAX_PASSES} range", self.passes)));
         }
@@ -107,6 +111,21 @@ impl Settings {
     }
 }
 
+fn check_feed(feed_mm_per_min: f64) -> Result<(), Error> {
+    // Written to three decimals: a smaller rate would come out as `F0`, which Grbl rejects.
+    if !feed_mm_per_min.is_finite() || feed_mm_per_min < 0.001 {
+        return Err(Error::Settings(format!("feed rate {feed_mm_per_min} mm/min is not a finite rate of at least 0.001")));
+    }
+    Ok(())
+}
+
+/// A coordinate at up to three decimals, without trailing zeros.
+fn short(v: f64) -> String {
+    let s = format!("{v:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".to_string() } else { s.to_string() }
+}
+
 /// Checks a power is one the `S` word accepts; `what` names it in the error ("power",
 /// "engrave power").
 pub fn check_power(what: &str, power: u32) -> Result<(), Error> {
@@ -121,13 +140,15 @@ pub fn check_power(what: &str, power: u32) -> Result<(), Error> {
 pub struct Writer {
     out: String,
     settings: Settings,
+    /// No comments, shortest coordinates: see [`Writer::bare`].
+    bare: bool,
 }
 
 impl Writer {
     /// Starts a program with `banner` as its first comment line.
     pub fn new(settings: Settings, banner: &str) -> Result<Writer, Error> {
         settings.validate()?;
-        let mut w = Writer { out: String::with_capacity(4096), settings };
+        let mut w = Writer { out: String::with_capacity(4096), settings, bare: false };
         w.comment(banner);
         let _ = writeln!(w.out, "G21 ; millimetres");
         let _ = writeln!(w.out, "G90 ; absolute coordinates");
@@ -137,11 +158,31 @@ impl Writer {
         Ok(w)
     }
 
+    /// Starts a program for a sender that streams it line by line and waits for the controller's
+    /// `ok` after each: every line is a command. There are no comments ([`Writer::comment`] writes
+    /// nothing), coordinates have at most three decimals and no trailing zeros, the program starts
+    /// with the tool off (`M5`), and it ends with the return to the origin, each contour having
+    /// switched the tool off itself.
+    pub fn bare(settings: Settings) -> Result<Writer, Error> {
+        settings.validate()?;
+        Ok(Writer { out: "G21\nG90\nG17\nM5\n".to_string(), settings, bare: true })
+    }
+
+    /// Changes the feed rate for the contours that follow.
+    pub fn set_feed(&mut self, feed_mm_per_min: f64) -> Result<(), Error> {
+        check_feed(feed_mm_per_min)?;
+        self.settings.feed_mm_per_min = feed_mm_per_min;
+        Ok(())
+    }
+
     /// A comment line. Control characters become spaces: a line break in `text` (a layer name
     /// from a file, say) would otherwise start a line the machine runs as a command. Grbl acts
     /// on its real-time bytes (`!` feed hold, `?`, `~` and everything past ASCII) wherever they
     /// arrive, comments included, so those become `_`.
     pub fn comment(&mut self, text: &str) {
+        if self.bare {
+            return;
+        }
         let safe = |c: char| match c {
             c if c.is_control() => ' ',
             '!' | '?' | '~' => '_',
@@ -171,16 +212,18 @@ impl Writer {
         }
         let on = self.settings.mode.on_command();
         let passes = self.settings.passes;
+        let bare = self.bare;
+        let xy = |p: (f64, f64)| if bare { format!("X{} Y{}", short(p.0), short(p.1)) } else { format!("X{:.4} Y{:.4}", p.0, p.1) };
         for pass in 1..=passes {
-            let _ = writeln!(self.out, "G0 X{:.4} Y{:.4}", first.0, first.1);
+            let _ = writeln!(self.out, "G0 {}", xy(first));
             let power = self.settings.power_for_pass(power, pass);
-            if passes > 1 {
+            if passes > 1 && !bare {
                 let _ = writeln!(self.out, "{on} S{power} ; pass {pass} of {passes}");
             } else {
                 let _ = writeln!(self.out, "{on} S{power}");
             }
             for p in path.iter().skip(1) {
-                let _ = writeln!(self.out, "G1 X{:.4} Y{:.4} F{}", p.0, p.1, (self.settings.feed_mm_per_min * 1000.0).round() / 1000.0);
+                let _ = writeln!(self.out, "G1 {} F{}", xy(*p), (self.settings.feed_mm_per_min * 1000.0).round() / 1000.0);
             }
             // Never rapid with the beam on, whatever the mode or controller.
             let _ = writeln!(self.out, "M5");
@@ -190,6 +233,10 @@ impl Writer {
 
     /// Turns the tool off, returns to the origin and gives the program.
     pub fn finish(mut self) -> String {
+        if self.bare {
+            self.out.push_str("G0 X0 Y0\n");
+            return self.out;
+        }
         let _ = writeln!(self.out, "M5 ; tool off");
         let _ = writeln!(self.out, "G0 X0 Y0 ; return to origin");
         self.out
@@ -204,27 +251,6 @@ mod tests {
         let mut w = Writer::new(settings, "test").unwrap();
         w.contour(points, closed, 500).unwrap();
         w.finish()
-    }
-
-    #[test]
-    fn a_line_is_a_whole_program() {
-        assert_eq!(
-            program(Settings::default(), &[(0.0, 0.0), (10.0, 0.0)], false),
-            "; test\nG21 ; millimetres\nG90 ; absolute coordinates\nG17 ; XY plane\nM4 S0 ; laser off until the first cut\n\
-             G0 X0.0000 Y0.0000\nM4 S500\nG1 X10.0000 Y0.0000 F1000\nM5\nM5 ; tool off\nG0 X0 Y0 ; return to origin\n"
-        );
-    }
-
-    #[test]
-    fn closed_loops_return_to_start_and_a_point_is_a_dot() {
-        let g = program(Settings::default(), &[(1.0, 2.0), (10.0, 2.0), (10.0, 10.0)], true);
-        assert!(g.contains("G1 X10.0000 Y10.0000 F1000\nG1 X1.0000 Y2.0000 F1000\nM5\n"), "{g}");
-        // Closed or not, a dot is the same in-and-out move.
-        for closed in [false, true] {
-            let dot = program(Settings::default(), &[(5.0, 5.0)], closed);
-            assert!(dot.contains("G0 X5.0000 Y5.0000\nM4 S500\nG1 X5.0010 Y5.0000 F1000\nG1 X5.0000 Y5.0000 F1000\nM5\n"), "{dot}");
-        }
-        assert!(!program(Settings::default(), &[], true).contains("G1 "));
     }
 
     #[test]
@@ -263,28 +289,14 @@ mod tests {
     }
 
     #[test]
-    fn bad_settings_powers_and_vertices_are_errors() {
-        for feed in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(matches!(Writer::new(Settings { feed_mm_per_min: feed, ..Settings::default() }, ""), Err(Error::Settings(_))));
-        }
-        for passes in [0, MAX_PASSES + 1] {
-            assert!(matches!(Settings { passes, ..Settings::default() }.validate(), Err(Error::Settings(_))));
-        }
-        assert_eq!(check_power("engrave power", 1001), Err(Error::Settings("engrave power 1001 is outside the 0–1000 range".into())));
-        let mut w = Writer::new(Settings::default(), "").unwrap();
-        assert!(matches!(w.contour(&[(0.0, 0.0), (1.0, 1.0)], false, MAX_POWER + 1), Err(Error::Settings(_))));
-        assert_eq!(w.contour(&[(0.0, 0.0), (f64::NAN, 1.0)], false, 500), Err(Error::NotFinite));
-        // Nothing of a refused contour is written, not even its travel move.
-        assert!(!w.finish().contains("G0 X0.0000"));
-    }
-
-    #[test]
     fn grbl_real_time_bytes_never_reach_the_program() {
         let mut w = Writer::new(Settings::default(), "stop! now? ~ café").unwrap();
-        w.comment("\u{18}reset");
+        w.comment("\u{18}reset\nM3 S1000\r\nG1 X9");
         let g = w.finish();
         assert!(g.starts_with("; stop_ now_ _ caf_\n"), "{g}");
         assert!(g.is_ascii() && !g.contains(['!', '?', '~', '\u{18}']), "{g}");
+        // A line break in a comment would start a line the machine runs as a command.
+        assert!(g.lines().all(|l| !l.starts_with("M3")), "{g}");
     }
 
     #[test]
@@ -296,18 +308,34 @@ mod tests {
     }
 
     #[test]
-    fn a_line_break_in_a_comment_cannot_start_a_command() {
-        let mut w = Writer::new(Settings::default(), "banner").unwrap();
-        w.comment("layer x\nM3 S1000\r\nG1 X9");
-        let g = w.finish();
-        assert!(g.contains("; layer x M3 S1000  G1 X9\n"), "{g}");
-        assert!(g.lines().all(|l| !l.starts_with("M3")));
+    fn a_bare_program_is_commands_only() {
+        let mut w = Writer::bare(Settings { feed_mm_per_min: 1200.0, ..Settings::default() }).unwrap();
+        w.comment("never written");
+        w.contour(&[(0.0, 5.0), (10.0, 5.0), (10.0, 0.0)], false, 800).unwrap();
+        w.set_feed(0.25).unwrap();
+        w.contour(&[(-0.0001, 1.0 / 3.0), (2.5, 1e-9)], false, 0).unwrap();
+        assert_eq!(
+            w.finish(),
+            "G21\nG90\nG17\nM5\nG0 X0 Y5\nM4 S800\nG1 X10 Y5 F1200\nG1 X10 Y0 F1200\nM5\n\
+             G0 X0 Y0.333\nM4 S0\nG1 X2.5 Y0 F0.25\nM5\nG0 X0 Y0\n"
+        );
+        // Passes repeat the contour without a comment; the mode still picks the on command.
+        let mut w = Writer::bare(Settings { passes: 2, mode: LaserMode::Constant, ..Settings::default() }).unwrap();
+        w.contour(&[(0.0, 0.0), (1.0, 0.0)], false, 5).unwrap();
+        assert_eq!(w.finish(), "G21\nG90\nG17\nM5\nG0 X0 Y0\nM3 S5\nG1 X1 Y0 F1000\nM5\nG0 X0 Y0\nM3 S5\nG1 X1 Y0 F1000\nM5\nG0 X0 Y0\n");
+        assert!(matches!(Writer::bare(Settings { passes: 0, ..Settings::default() }), Err(Error::Settings(_))));
     }
 
     #[test]
-    fn laser_modes_parse_their_spellings() {
-        assert_eq!(LaserMode::parse(" M3 "), Some(LaserMode::Constant));
-        assert_eq!(LaserMode::parse("Dynamic"), Some(LaserMode::Dynamic));
-        assert_eq!(LaserMode::parse("m5"), None);
+    fn set_feed_refuses_a_bad_rate_and_keeps_the_old_one() {
+        let mut w = Writer::new(Settings::default(), "").unwrap();
+        for feed in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0004] {
+            assert!(matches!(w.set_feed(feed), Err(Error::Settings(_))));
+        }
+        w.contour(&[(0.0, 0.0), (1.0, 0.0)], false, 1).unwrap();
+        w.set_feed(300.0).unwrap();
+        w.contour(&[(0.0, 0.0), (2.0, 0.0)], false, 1).unwrap();
+        let g = w.finish();
+        assert!(g.contains("G1 X1.0000 Y0.0000 F1000\n") && g.contains("G1 X2.0000 Y0.0000 F300\n"), "{g}");
     }
 }

@@ -19,14 +19,14 @@ use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities,
 
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
-use crate::{Cancel, Error, Job, Printer, Scaling};
+use crate::{Cancel, Error, Job, Printer, Scaling, rgb};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
 }
 
 /// The user's default printer; `None` when there is none.
-fn default_printer() -> Option<String> {
+pub(crate) fn default_printer() -> Option<String> {
     winsafe::GetDefaultPrinter().ok().filter(|n| !n.is_empty())
 }
 
@@ -148,7 +148,61 @@ fn hold(job: &Job, title: &str) {
     }
 }
 
+/// The job's [`Job::driver_settings`] as a ticket for `device`, without what the job's own ticket
+/// decides ([`ticket::driver_settings_xml`]); `None` when the job has none, or has settings
+/// chosen for another printer ([`crate::settings_for`]).
+fn chosen_settings(device: &PrinterDevice, job: &Job) -> Result<Option<PrintTicket>, Error> {
+    let Some(settings) = crate::settings_for(job, device.name()) else { return Ok(None) };
+    let converted = {
+        let _provider = print_ticket_provider();
+        PrintTicket::from_dev_mode(device, settings.dev_mode().as_bytes())
+    }
+    .map_err(|e| spool_error(format!("the printer's driver could not read the settings chosen in its dialog; choose them again: {e}")))?;
+    let xml = std::str::from_utf8(converted.get_xml()).map_err(spool_error)?;
+    Ok(Some(PrintTicket::from_xml(ticket::driver_settings_xml(xml, job)?)))
+}
+
+/// The settings [`crate::driver_settings_dialog`] opens the driver's dialog on, for the queue
+/// named `printer`: the job's earlier choices in that dialog, without what the job decides,
+/// when they are for this printer and the driver still reads and merges them, else the settings the driver
+/// gives a new job, with the job's copies and collation merged in, validated by the driver and
+/// converted to its DEVMODE.
+pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Error> {
+    let device = select_device(PrinterDevice::all().map_err(spool_error)?, Some(printer), None)?;
+    // Earlier settings the driver no longer reads (after a driver update, or restored from an
+    // app's own copy) are left out, so the dialog still opens and can replace them.
+    let earlier = chosen_settings(&device, job);
+    let replaces_unreadable = earlier.is_err();
+    let chosen = earlier.ok().flatten();
+    let options = ticket::dialog_xml(job)?;
+    let unreadable = |e: &dyn std::fmt::Display| spool_error(format!("the printer driver's settings could not be read: {e}"));
+    let seed = |chosen: Option<PrintTicket>| -> Result<rgb::DevMode, Error> {
+        let _provider = print_ticket_provider();
+        let seed = {
+            let mut builder = PrintTicketBuilder::new(&device).map_err(|e| unreadable(&e))?;
+            if let Some(chosen) = chosen {
+                builder.merge(chosen).map_err(|e| unreadable(&e))?;
+            }
+            builder.merge(PrintTicket::from_xml(options.clone())).map_err(|e| unreadable(&e))?;
+            builder.build().map_err(|e| unreadable(&e))?
+        };
+        let bytes = seed.to_dev_mode(&device).map_err(|e| unreadable(&e))?;
+        let whole = crate::whole_dev_mode(bytes).ok_or_else(|| unreadable(&"the driver's settings are shorter than they say"))?;
+        rgb::DevMode::from_bytes(whole).map_err(|e| unreadable(&e))
+    };
+    // Earlier settings the driver reads but then refuses to merge or convert back are left out
+    // the same way; an error with the job's own options alone is returned.
+    let had_earlier = chosen.is_some();
+    match seed(chosen) {
+        Ok(dev_mode) => Ok(crate::Seed { dev_mode, replaces_unreadable }),
+        Err(_) if had_earlier => Ok(crate::Seed { dev_mode: seed(None)?, replaces_unreadable: true }),
+        Err(e) => Err(e),
+    }
+}
+
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
+    let chosen = chosen_settings(device, job)?;
+    let chosen_xml = chosen.as_ref().map(|chosen| chosen.get_xml().to_vec());
     let capabilities_xml = {
         let _provider = print_ticket_provider();
         #[cfg(test)]
@@ -170,7 +224,28 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         .collect();
     let media = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
     let wanted = match (media, job.scaling) {
-        (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
+        (Some(m), _) => {
+            let size = (m.size().width_in_micron(), m.size().height_in_micron());
+            // INV-6: a driver that keeps one side of the paper metric in its DEVMODE extension
+            // (storytold/craft-libs#7230) reports a zero side; the wanted size then is the sheet
+            // the job asked for, not the zero record, which would poison the cross-check and hand
+            // `sheets::plan` a width of zero.
+            if size.0 == 0 || size.1 == 0 {
+                match (ticket::micrometres(sheet.0), ticket::micrometres(sheet.1)) {
+                    (Some(w), Some(h)) => Some((w, h)),
+                    _ => {
+                        return Err(spool_error(format!(
+                            "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
+                            device.name(),
+                            sheet.0 / 72.0,
+                            sheet.1 / 72.0
+                        )));
+                    }
+                }
+            } else {
+                Some(size)
+            }
+        }
         (None, Scaling::ShrinkToFit) => None,
         (None, Scaling::Exact) => {
             return Err(spool_error(format!(
@@ -200,12 +275,20 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         let _provider = print_ticket_provider();
         // The builder closes its provider when it is dropped, before the guard.
         let mut builder = PrintTicketBuilder::new(device).map_err(spool_error)?;
+        // The driver dialog's settings first, so the job's own options are merged over them.
+        if let Some(chosen) = chosen {
+            builder.merge(chosen).map_err(|e| spool_error(format!("the printer's driver refused the settings chosen in its dialog: {e}")))?;
+        }
         builder.merge(PrintTicket::from(document)).map_err(spool_error)?;
         builder.build().map_err(spool_error)?
     };
     let validated = in_drivers_spelling(device, built);
     let xml = std::str::from_utf8(validated.get_xml()).map_err(spool_error)?;
     let paper = ticket::verify_ticket(xml, wanted, landscape)?;
+    // A media type, resolution or quality the driver replaced to resolve a conflict with the job's paper.
+    if let Some(chosen_xml) = &chosen_xml {
+        ticket::verify_chosen_options(std::str::from_utf8(chosen_xml).map_err(spool_error)?, xml)?;
+    }
     Ok((validated, paper))
 }
 
@@ -355,65 +438,11 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    /// Exact option support determines scope, including asymmetric duplex and simplex drivers.
-    #[test]
-    fn simplex_job_feature_does_not_hide_document_duplex() {
-        for (job_option, document_option, duplex, expected) in [
-            ("OneSided", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), true),
-            ("OneSided", "TwoSidedShortEdge", Some(crate::Duplex::ShortEdge), true),
-            ("TwoSidedLongEdge", "TwoSidedShortEdge", Some(crate::Duplex::ShortEdge), true),
-            ("TwoSidedShortEdge", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), true),
-            ("TwoSidedLongEdge", "OneSided", Some(crate::Duplex::Off), true),
-            ("TwoSidedLongEdge", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), false),
-            ("OneSided", "TwoSidedLongEdge", None, false),
-            ("OneSided", "OneSided", Some(crate::Duplex::Off), false),
-        ] {
-            let xml = format!(
-                r#"<psf:PrintCapabilities version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="{NS_PSK}">
-                <psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:{job_option}"/></psf:Feature>
-                <psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:{document_option}"/></psf:Feature>
-                </psf:PrintCapabilities>"#
-            );
-            assert_eq!(ticket::document_duplex_only(&xml, duplex), expected, "job={job_option}, document={document_option}");
-            let job = Job { duplex, ..Job::default() };
-            let ticket = ticket::ticket_xml_for_duplex(&job, false, ticket::document_duplex_only(&xml, duplex));
-            assert_eq!(ticket.contains("psk:DocumentDuplex"), expected);
-        }
-    }
-
-    /// Vendor options with standard-looking local names cannot claim Print Schema support.
-    #[test]
-    fn duplex_scope_requires_standard_option_namespaces() {
-        for (job_options, document_options, expected) in [
-            ("<psf:Option name='vendor:TwoSidedLongEdge'/>", "<psf:Option name='psk:TwoSidedLongEdge'/>", true),
-            ("<psf:Option name='psk:OneSided'/>", "<psf:Option name='vendor:TwoSidedLongEdge'/>", false),
-            (
-                "<psf:Option name='vendor:TwoSidedLongEdge'/><psf:Option name='psk:TwoSidedLongEdge'/>",
-                "<psf:Option name='psk:TwoSidedLongEdge'/>",
-                false,
-            ),
-        ] {
-            let xml = format!(
-                r#"<psf:PrintCapabilities version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="{NS_PSK}" xmlns:vendor="urn:vendor">
-                <psf:Feature name="psk:JobDuplexAllDocumentsContiguously">{job_options}</psf:Feature>
-                <psf:Feature name="psk:DocumentDuplex">{document_options}</psf:Feature>
-                </psf:PrintCapabilities>"#
-            );
-            assert_eq!(ticket::document_duplex_only(&xml, Some(crate::Duplex::LongEdge)), expected);
-        }
-    }
-
-    /// Missing queues fail instead of sending private output to a different printer.
-    #[test]
-    fn a_missing_printer_never_falls_back_to_another_queue() {
-        assert!(select_device(Vec::new(), Some("missing"), Some("default")).is_err());
-        assert!(select_device(Vec::new(), None, None).is_err());
-    }
-
-    #[test]
+    #[trial]
     fn one_thread_at_a_time_is_in_the_print_ticket_provider() {
         use std::sync::Barrier;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -435,121 +464,5 @@ mod tests {
             }
         });
         assert_eq!(most.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn a_panic_inside_the_print_ticket_provider_does_not_lock_it_out() {
-        let panicked = std::thread::spawn(|| {
-            let _provider = print_ticket_provider();
-            panic!("a driver call panicked");
-        })
-        .join();
-        assert!(panicked.is_err());
-        drop(print_ticket_provider());
-    }
-
-    /// What a real driver makes of a job's ticket: Letter, portrait, two copies. Checks explicit
-    /// option retention separately; unsupported options must fail before submission. Sends no job.
-    /// `CRAFT_PRINT_TEST_PRINTER` names the queue;
-    /// `CRAFT_PRINT_TEST_TICKET_OUTPUT` keeps the validated ticket, to see which options it kept.
-    #[test]
-    #[ignore = "needs CRAFT_PRINT_TEST_PRINTER naming an installed printer; sends no job"]
-    fn an_installed_driver_validates_the_ticket() {
-        let name = std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap();
-        let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
-        let job = Job { copies: 2, ..Job::default() };
-        let (ticket, paper) = driver_ticket(&device, &job, (612.0, 792.0), false).unwrap();
-        ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &job, 1, ticket::Offered::default()).unwrap();
-        assert_eq!(paper, (215_900, 279_400));
-        // The ticket names the driver's vendor namespaces as the driver does (the merge renamed them).
-        // `respell` returning `None` would not show it: it also does when it refused the ticket.
-        let own = {
-            let _provider = print_ticket_provider();
-            let mut own = PrintTicketBuilder::new(&device).unwrap();
-            own.merge(PrintTicket::from_xml(ticket::empty_ticket())).unwrap();
-            own.build().unwrap()
-        };
-        let unlike =
-            ticket::prefixes_unlike_the_drivers(std::str::from_utf8(ticket.get_xml()).unwrap(), std::str::from_utf8(own.get_xml()).unwrap()).unwrap();
-        assert!(unlike.is_empty(), "vendor namespaces under another prefix than the driver's (namespace, ticket, driver): {unlike:?}");
-        eprintln!("unprintable margin: {} pt", imageable_margin(&device, &ticket));
-        if let Ok(path) = std::env::var("CRAFT_PRINT_TEST_TICKET_OUTPUT") {
-            std::fs::write(path, ticket.get_xml()).unwrap();
-        }
-        let capabilities = {
-            let _provider = print_ticket_provider();
-            PrintCapabilities::fetch(&device)
-        }
-        .unwrap();
-        for (feature, wanted, requested) in [
-            ("PageOutputColor", "Monochrome", Job { grayscale: true, ..Job::default() }),
-            ("JobDuplexAllDocumentsContiguously", "TwoSidedLongEdge", Job { duplex: Some(crate::Duplex::LongEdge), ..Job::default() }),
-            ("DocumentCollate", "Collated", Job { copies: 2, ..Job::default() }),
-        ] {
-            let (ticket, _) = driver_ticket(&device, &requested, (612.0, 792.0), false).unwrap();
-            let retained = ticket::verify_job_options(std::str::from_utf8(ticket.get_xml()).unwrap(), &requested, 3, ticket::Offered::default());
-            eprintln!("{feature}={wanted}: {retained:?}");
-            let offered =
-                [feature, if feature == "JobDuplexAllDocumentsContiguously" { "DocumentDuplex" } else { feature }].into_iter().any(|name| {
-                    capabilities.options_for_feature(OwnedName::qualified(name, NS_PSK, Some("psk"))).any(|o| {
-                        o.name.as_ref().is_some_and(|n| {
-                            n.namespace_ref() == Some(NS_PSK) && n.local_name == wanted
-                                || (feature == "PageOutputColor" && n.local_name == "Grayscale")
-                        })
-                    })
-                });
-            if !offered {
-                assert!(retained.is_err(), "unsupported explicit option must not be silently dropped");
-            }
-        }
-    }
-
-    /// A real job, for checking a printer by hand (paper, or a paused queue's spool file):
-    /// `CRAFT_PRINT_TEST_FILE` printed on `CRAFT_PRINT_TEST_PRINTER`, shrink-to-fit when
-    /// `CRAFT_PRINT_TEST_SCALING=shrink`, two-sided on the long edge when
-    /// `CRAFT_PRINT_TEST_DUPLEX=long`.
-    #[test]
-    #[ignore = "sends a real job: needs CRAFT_PRINT_TEST_PRINTER and CRAFT_PRINT_TEST_FILE"]
-    fn an_installed_printer_prints_a_file() {
-        let pdf = std::fs::read(std::env::var("CRAFT_PRINT_TEST_FILE").unwrap()).unwrap();
-        let job = Job {
-            printer: Some(std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap()),
-            scaling: if std::env::var("CRAFT_PRINT_TEST_SCALING").as_deref() == Ok("shrink") { Scaling::ShrinkToFit } else { Scaling::Exact },
-            duplex: (std::env::var("CRAFT_PRINT_TEST_DUPLEX").as_deref() == Ok("long")).then_some(crate::Duplex::LongEdge),
-            title: "craft-print test".into(),
-            ..Job::default()
-        };
-        let sent = crate::submit(&pdf, &job);
-        eprintln!("{sent:?}");
-        assert!(sent.is_ok());
-    }
-
-    /// A colour chosen in the driver's own preferences (Properties…) reaches the job when the job
-    /// doesn't ask for grayscale: the validated ticket has the colour of the user's preferences,
-    /// whatever they are (storytold/pdfcraft#2422; it was always Color before). Set the queue to
-    /// black and white in its preferences to see the case that failed. Sends no job.
-    #[test]
-    #[ignore = "needs CRAFT_PRINT_TEST_PRINTER naming an installed printer; sends no job"]
-    fn the_preferences_colour_reaches_a_job_without_grayscale() {
-        fn colour(ticket: &PrintTicket) -> Option<String> {
-            let xml = std::str::from_utf8(ticket.get_xml()).ok()?;
-            let document = roxmltree::Document::parse(xml).ok()?;
-            let feature = document
-                .root_element()
-                .children()
-                .find(|n| n.has_tag_name((ticket::NS_PSF, "Feature")) && n.attribute("name").is_some_and(|a| a.ends_with(":PageOutputColor")))?;
-            feature.children().find(|n| n.has_tag_name((ticket::NS_PSF, "Option")))?.attribute("name").map(str::to_owned)
-        }
-        let name = std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap();
-        let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
-        let preferences = {
-            let _provider = print_ticket_provider();
-            let mut builder = PrintTicketBuilder::new(&device).unwrap();
-            builder.merge(PrintTicket::from_xml(winprint::ticket::DEFAULT_PRINT_TICKET_XML.as_bytes().to_vec())).unwrap();
-            colour(&builder.build().unwrap())
-        };
-        eprintln!("the preferences' colour: {preferences:?}");
-        let (ticket, _) = driver_ticket(&device, &Job::default(), (595.28, 841.89), false).unwrap();
-        assert_eq!(colour(&ticket), preferences, "a job without grayscale keeps the preferences' colour");
     }
 }

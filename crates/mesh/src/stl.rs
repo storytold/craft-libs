@@ -238,7 +238,7 @@ fn ascii(bytes: &[u8], limits: &Limits) -> Result<Scene> {
 fn triangles(scene: &Scene, limits: &Limits, mut each: impl FnMut([f64; 3], [[f64; 3]; 3])) -> Result<()> {
     for (index, world) in scene.instances(limits)? {
         let Some(mesh) = scene.meshes.get(index) else { continue };
-        for t in mesh.parts.iter().flat_map(Part::triangles) {
+        for t in mesh.parts.iter().flat_map(|p| p.triangles_in(&mesh.positions)) {
             let p = t.map(|c| mesh.positions.get(c.position as usize).copied());
             let [Some(a), Some(b), Some(c)] = p else { return Err(malformed(KIND, "a corner index is out of range")) };
             // A mirrored placement turns the winding; turn it back so the facet faces out.

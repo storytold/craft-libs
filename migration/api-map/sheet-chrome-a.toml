@@ -1,0 +1,269 @@
+# API map of the "Sheet: field list, conditions, filter, slicer, reference picker" family: old path to new path and setter renames.
+
+family = "Sheet: field list, conditions, filter, slicer, reference picker"
+new_module = "craft_table::ui"
+
+[[type]]
+name = "FieldListPane"
+old = "craft_table::ui::fields::FieldListPane"
+new = "craft_table::ui::fields::FieldListPane"
+status = "replaced"
+note = "A pattern over `Panel` and `Section`s of `List`s: `FieldListPane::new(&[PivotField], &[(FieldArea, Vec<String>)])` and `.values_row(..)`, shown with `show(ui) -> FieldListPaneOutput`; the id salt and `.labels(..)` go (the pane takes its id from its place, words from `FieldListWords`). The checklist is a `List` with a check toggle column, the areas are `List`s with a reorder rule."
+
+[[type]]
+name = "FieldListPaneOutput"
+old = "craft_table::ui::fields::FieldListPaneOutput"
+new = "craft_table::ui::fields::FieldListPaneOutput"
+status = "same"
+
+[[type]]
+name = "FieldListLabels"
+old = "craft_table::ui::fields::FieldListLabels"
+new = ""
+status = "removed"
+note = "Replaced by `FieldListWords`; the ids stay (`fieldList.*`), and `fieldList.moveTo` is a template word."
+
+[[type]]
+name = "FieldListWords"
+old = ""
+new = "craft_table::ui::fields::FieldListWords"
+status = "replaced"
+note = "The `words!` set of the pane; read through `Env::words`."
+
+[[type]]
+name = "FieldArea"
+old = "craft_table::ui::fields::FieldArea"
+new = "craft_table::ui::fields::FieldArea"
+status = "same"
+
+[[type]]
+name = "PivotField"
+old = "craft_table::ui::fields::PivotField"
+new = "craft_table::ui::fields::PivotField"
+status = "replaced"
+note = "`#[non_exhaustive]`: build with `PivotField::new(name, numeric)` and `.samples(..)`."
+
+[[type]]
+name = "ValuesRow"
+old = "craft_table::ui::fields::ValuesRow"
+new = "craft_table::ui::fields::ValuesRow"
+status = "replaced"
+note = "`#[non_exhaustive]`: build with `ValuesRow::new(area, at)`."
+
+[[type]]
+name = "Summary"
+old = "craft_table::ui::fields::Summary"
+new = "craft_table::ui::fields::Summary"
+status = "same"
+
+[[type]]
+name = "ShowAs"
+old = "craft_table::ui::fields::ShowAs"
+new = "craft_table::ui::fields::ShowAs"
+status = "same"
+
+[[type]]
+name = "ValueSetting"
+old = "craft_table::ui::fields::ValueSetting"
+new = "craft_table::ui::fields::ValueSetting"
+status = "same"
+
+[[type]]
+name = "FieldSort"
+old = "craft_table::ui::fields::FieldSort"
+new = "craft_table::ui::fields::FieldSort"
+status = "same"
+
+[[type]]
+name = "FieldGroup"
+old = "craft_table::ui::fields::FieldGroup"
+new = "craft_table::ui::fields::FieldGroup"
+status = "same"
+
+[[type]]
+name = "ReportLayout"
+old = "craft_table::ui::fields::ReportLayout"
+new = "craft_table::ui::fields::ReportLayout"
+status = "same"
+
+[[type]]
+name = "FieldMove"
+old = ""
+new = "craft_table::ui::fields::FieldMove"
+status = "replaced"
+note = "The payload of `FieldListEdit::Move`: the moved fields and the place of the first one among the area's fields. It replaces the kernel's `Move<String>` with its target and drop position."
+
+[[type]]
+name = "FieldListEdit"
+old = "craft_table::ui::fields::FieldListEdit"
+new = "craft_table::ui::fields::FieldListEdit"
+status = "replaced"
+note = "`Move` carries `EditEvent<FieldMove>` in place of `EditEvent<Move<String>>`; a tick reports `Add` and `Remove` once per row, and Delete on a list row reports `Remove` with the area."
+
+[[type]]
+name = "ConditionBuilder"
+old = "craft_table::ui::conditions::ConditionBuilder"
+new = "craft_table::ui::conditions::ConditionBuilder"
+status = "replaced"
+note = "A pattern over `Row`s and `Stack`s of the built controls: `ConditionBuilder::new(label, Bind<ConditionGroup>, &dyn ConditionFields)`, shown with `show(ui) -> ConditionBuilderOutput`. The group is edited through the binding as one edit a pass; the id salt, `&mut ConditionGroup` and `.labels(..)` go."
+
+[[type]]
+name = "ConditionBuilderOutput"
+old = ""
+new = "craft_table::ui::conditions::ConditionBuilderOutput"
+status = "replaced"
+note = "`{ response, changed }`; it is an `Outcome`. The legacy `show` returned a `Response` marked changed."
+
+[[type]]
+name = "ConditionLabels"
+old = "craft_table::ui::conditions::ConditionLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ConditionWords`; the ids stay (`conditions.*`)."
+
+[[type]]
+name = "ConditionWords"
+old = ""
+new = "craft_table::ui::conditions::ConditionWords"
+status = "replaced"
+note = "The `words!` set of the builder."
+
+[[type]]
+name = "Match"
+old = "craft_table::ui::conditions::Match"
+new = "craft_table::ui::conditions::Match"
+status = "same"
+
+[[type]]
+name = "ConditionKind"
+old = "craft_table::ui::conditions::ConditionKind"
+new = "craft_table::ui::conditions::ConditionKind"
+status = "same"
+
+[[type]]
+name = "ConditionValue"
+old = "craft_table::ui::conditions::ConditionValue"
+new = "craft_table::ui::conditions::ConditionValue"
+status = "replaced"
+note = "`Date` and `DateRange` hold `craft_ui::pickers::PickedDate`."
+
+[[type]]
+name = "Condition"
+old = "craft_table::ui::conditions::Condition"
+new = "craft_table::ui::conditions::Condition"
+status = "replaced"
+note = "`#[non_exhaustive]`: build with `Condition::new(field, operator, value)`."
+
+[[type]]
+name = "ConditionGroup"
+old = "craft_table::ui::conditions::ConditionGroup"
+new = "craft_table::ui::conditions::ConditionGroup"
+status = "replaced"
+note = "`#[non_exhaustive]`: build with `ConditionGroup::new(matching, items)`."
+
+[[type]]
+name = "ConditionItem"
+old = "craft_table::ui::conditions::ConditionItem"
+new = "craft_table::ui::conditions::ConditionItem"
+status = "same"
+
+[[type]]
+name = "ConditionFields"
+old = "craft_table::ui::conditions::ConditionFields"
+new = "craft_table::ui::conditions::ConditionFields"
+status = "same"
+
+[[type]]
+name = "FilterButton"
+old = "craft_table::ui::filter::FilterButton"
+new = "craft_table::ui::filter::FilterButton"
+status = "replaced"
+note = "A leaf `Component`: `FilterButton::new(column)` with `.filtered(bool)` and `.sort(Option<ColumnSort>)`, placed by the grid. The id salt, the rect and `.labels(..)` go; it measures itself at the control's icon side."
+
+[[type]]
+name = "FilterButtonEvent"
+old = "craft_table::ui::filter::FilterButtonEvent"
+new = "craft_table::ui::filter::FilterButtonEvent"
+status = "same"
+
+[[type]]
+name = "FilterButtonOutput"
+old = "craft_table::ui::filter::FilterButtonOutput"
+new = "craft_table::ui::filter::FilterButtonOutput"
+status = "same"
+
+[[type]]
+name = "FilterButtonLabels"
+old = "craft_table::ui::filter::FilterButtonLabels"
+new = ""
+status = "removed"
+note = "Replaced by `FilterButtonWords`; the ids stay (`filterButton.*`), both are template words."
+
+[[type]]
+name = "FilterButtonWords"
+old = ""
+new = "craft_table::ui::filter::FilterButtonWords"
+status = "replaced"
+note = "The `words!` set of the button."
+
+[[type]]
+name = "filter_button_rect"
+old = "craft_table::ui::filter::filter_button_rect"
+new = ""
+status = "removed"
+note = "Placement is the grid's: it puts the button at the end corner of the column's header cell."
+
+[[type]]
+name = "Slicer"
+old = "craft_table::ui::slicer::Slicer"
+new = "craft_table::ui::slicer::Slicer"
+status = "replaced"
+note = "A pattern: a raised card holding a caption, a funnel `IconButton` and a collection of value tiles. `Slicer::new(caption, &[(String, bool)])` with `.columns`, `.filtered`, `.zoom`, shown with `show(ui, rect) -> SlicerOutput`; the id salt and `.labels(..)` go."
+
+[[type]]
+name = "SlicerAction"
+old = "craft_table::ui::slicer::SlicerAction"
+new = "craft_table::ui::slicer::SlicerAction"
+status = "same"
+
+[[type]]
+name = "SlicerOutput"
+old = "craft_table::ui::slicer::SlicerOutput"
+new = "craft_table::ui::slicer::SlicerOutput"
+status = "replaced"
+note = "`{ response, action: Option<SlicerAction> }`; it is an `Outcome`. The legacy output listed every action of the pass."
+
+[[type]]
+name = "SlicerLabels"
+old = "craft_table::ui::slicer::SlicerLabels"
+new = ""
+status = "removed"
+note = "Replaced by `SlicerWords`; the id stays (`slicer.clear`)."
+
+[[type]]
+name = "SlicerWords"
+old = ""
+new = "craft_table::ui::slicer::SlicerWords"
+status = "replaced"
+note = "The `words!` set of the slicer."
+
+[[type]]
+name = "SlicerLayout"
+old = "craft_table::ui::slicer::SlicerLayout"
+new = ""
+status = "removed"
+note = "The tile collection's layout replaces it; nothing in the app reads the geometry."
+
+[[type]]
+name = "slicer_layout"
+old = "craft_table::ui::slicer::slicer_layout"
+new = ""
+status = "removed"
+note = "The tile collection's layout replaces it; nothing in the app reads the geometry."
+
+[[type]]
+name = "ReferencePicker"
+old = "craft_table::ui::refpick::ReferencePicker"
+new = "craft_table::ui::refpick::ReferencePicker"
+status = "replaced"
+note = "The logic is unchanged; it reads `CellAt<u32>` and `CellRange::cells` in place of the legacy `CellRef` and `CellRange::new`."

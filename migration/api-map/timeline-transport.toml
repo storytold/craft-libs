@@ -1,0 +1,285 @@
+# API map of the "Timeline: timecode and transport" family: old path to new path and setter renames.
+
+family = "Timeline: timecode and transport"
+new_module = "craft_timeline::ui"
+
+[[type]]
+name = "TimecodeField"
+old = "craft_timeline::ui::TimecodeField"
+new = "craft_timeline::ui::TimecodeField"
+status = "replaced"
+note = "A leaf over one text part: `TimecodeField::new(label, Bind<Tick>, TimeFormat)`, `.min(Tick)`; `show` returns `TimecodeFieldOutput` (the old `show` and `show_full` are one). The width comes from `TimecodeCodec::sample`."
+
+[[type]]
+name = "TimecodeFieldOutput"
+old = "craft_timeline::ui::TimecodeFieldOutput"
+new = "craft_timeline::ui::TimecodeFieldOutput"
+status = "same"
+
+[[type]]
+name = "TimecodeCodec"
+old = ""
+new = "craft_timeline::ui::TimecodeCodec"
+status = "replaced"
+note = "New public type: `TimecodeCodec::new(TimeFormat).min(Tick)`, a `Codec` of `Tick`. The old private codec with its labels is gone."
+
+[[type]]
+name = "TimecodePanel"
+old = "craft_timeline::ui::TimecodePanel"
+new = "craft_timeline::ui::TimecodePanel"
+status = "replaced"
+note = "A `Pattern`: `TimecodePanel::new(label, Bind<TimecodePanelSettings>, TimecodeText::new(|row| ..))`. Rows are a `List`; the row menu opens on the selected row."
+
+[[type]]
+name = "TimecodePanelSettings"
+old = "craft_timeline::ui::TimecodePanelSettings"
+new = "craft_timeline::ui::TimecodePanelSettings"
+status = "same"
+
+[[type]]
+name = "TimecodePanelOutput"
+old = "craft_timeline::ui::TimecodePanelOutput"
+new = "craft_timeline::ui::TimecodePanelOutput"
+status = "same"
+
+[[type]]
+name = "TimecodeRow"
+old = "craft_timeline::ui::TimecodeRow"
+new = "craft_timeline::ui::TimecodeRow"
+status = "same"
+
+[[type]]
+name = "TimecodeRowKind"
+old = "craft_timeline::ui::TimecodeRowKind"
+new = "craft_timeline::ui::TimecodeRowKind"
+status = "same"
+
+[[type]]
+name = "TimecodeSource"
+old = "craft_timeline::ui::TimecodeSource"
+new = "craft_timeline::ui::TimecodeSource"
+status = "same"
+
+[[type]]
+name = "TimeDisplayLabels"
+old = "craft_timeline::ui::TimeDisplayLabels"
+new = ""
+status = "removed"
+note = "Words struct; the words are `TimecodeWords::display_name(display)`. Components read them from the scope; the `labels(..)` setters are gone."
+
+[[type]]
+name = "TimecodeFieldLabels"
+old = "craft_timeline::ui::TimecodeFieldLabels"
+new = ""
+status = "removed"
+note = "Words struct; the words are `TimecodeWords::message(error)`. Components read them from the scope; the `labels(..)` setters are gone."
+
+[[type]]
+name = "TimecodePanelLabels"
+old = "craft_timeline::ui::TimecodePanelLabels"
+new = ""
+status = "removed"
+note = "Words struct; the words are `TimecodeWords`. Components read them from the scope; the `labels(..)` setters are gone."
+
+[[type]]
+name = "TransportLabels"
+old = "craft_timeline::ui::TransportLabels"
+new = ""
+status = "removed"
+note = "Words struct; the words are `TransportWords`. Components read them from the scope; the `labels(..)` setters are gone."
+
+[[type]]
+name = "RenderQueueLabels"
+old = "craft_timeline::ui::RenderQueueLabels"
+new = ""
+status = "removed"
+note = "Words struct; the words are `RenderQueueWords`. Components read them from the scope; the `labels(..)` setters are gone."
+
+[[type]]
+name = "TransportBar"
+old = "craft_timeline::ui::TransportBar"
+new = "craft_timeline::ui::TransportBar"
+status = "replaced"
+note = "A `Pattern` over a tool `Bar`: `TransportBar::new(label, &buttons)`, `.settings(Bind<TransportBarSettings>)`, flags `playing`, `looping`, `editable`."
+
+[[type]]
+name = "TransportBarOutput"
+old = "craft_timeline::ui::TransportBarOutput"
+new = "craft_timeline::ui::TransportBarOutput"
+status = "same"
+
+[[type]]
+name = "TransportBarSettings"
+old = "craft_timeline::ui::TransportBarSettings"
+new = "craft_timeline::ui::TransportBarSettings"
+status = "same"
+
+[[type]]
+name = "TransportButton"
+old = "craft_timeline::ui::TransportButton"
+new = "craft_timeline::ui::TransportButton"
+status = "same"
+
+[[type]]
+name = "MediaControls"
+old = "craft_timeline::ui::MediaControls"
+new = "craft_timeline::ui::MediaControls"
+status = "replaced"
+note = "A `Pattern` over a toolbar `Bar`: `MediaControls::new(label, position, duration)`, `.playing(bool)`, `.trim(start, end)`."
+
+[[type]]
+name = "MediaControlsOutput"
+old = "craft_timeline::ui::MediaControlsOutput"
+new = "craft_timeline::ui::MediaControlsOutput"
+status = "same"
+
+[[type]]
+name = "FramePreview"
+old = "craft_timeline::ui::FramePreview"
+new = "craft_timeline::ui::FramePreview"
+status = "replaced"
+note = "A leaf: `FramePreview::new(label, Option<(TextureId, Vec2)>)`, `.fit(FrameFit)`, `.status(text)`; `show` returns a `Response`."
+
+[[type]]
+name = "FrameFit"
+old = "craft_timeline::ui::FrameFit"
+new = "craft_timeline::ui::FrameFit"
+status = "same"
+
+[[type]]
+name = "paint_frame"
+old = "craft_timeline::ui::paint_frame"
+new = ""
+status = "removed"
+note = "The fit is the pure function `frame_rect(area, size, fit) -> (Rect, Rect)` (draw rect, uv); the frame is painted with the content painter kit picture."
+
+[[type]]
+name = "RenderQueueList"
+old = "craft_timeline::ui::RenderQueueList"
+new = "craft_timeline::ui::RenderQueueList"
+status = "replaced"
+note = "A `Pattern` over a `List`: `RenderQueueList::new(label, &items, Bind<Selection<RenderItemId>>)`, `.running(bool)`."
+
+[[type]]
+name = "RenderQueueListOutput"
+old = "craft_timeline::ui::RenderQueueListOutput"
+new = "craft_timeline::ui::RenderQueueListOutput"
+status = "same"
+
+[[type]]
+name = "RenderQueueItem"
+old = "craft_timeline::ui::RenderQueueItem"
+new = "craft_timeline::ui::RenderQueueItem"
+status = "same"
+
+[[type]]
+name = "RenderQueueEvent"
+old = "craft_timeline::ui::RenderQueueEvent"
+new = "craft_timeline::ui::RenderQueueEvent"
+status = "same"
+
+[[type]]
+name = "RenderItemId"
+old = "craft_timeline::ui::RenderItemId"
+new = "craft_timeline::ui::RenderItemId"
+status = "same"
+
+[[type]]
+name = "RenderStatus"
+old = "craft_timeline::ui::RenderStatus"
+new = "craft_timeline::ui::RenderStatus"
+status = "same"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "TimecodeField"
+old = "new(id_salt, time: Tick, &TimeFormat)"
+new = "new(label, Bind<Tick>, TimeFormat)"
+
+[[setter]]
+type = "TimecodeField"
+old = "show(ui) and show_full(ui)"
+new = "show(ui)"
+note = "One entry point returning `TimecodeFieldOutput`."
+
+[[setter]]
+type = "TimecodeField"
+old = "width(f32)"
+new = ""
+note = "Removed: the width comes from `Codec::sample`."
+
+[[setter]]
+type = "TimecodeField"
+old = "typing(text)"
+new = ""
+note = "Removed: the preset typing state is gone."
+
+[[setter]]
+type = "TimecodeField"
+old = "large(bool)"
+new = ""
+note = "Not built: the text part has no type role or ink yet (see the track report)."
+
+[[setter]]
+type = "TimecodeField"
+old = "labels(..) and display_labels(..)"
+new = ""
+note = "Removed: words come from the scope."
+
+[[setter]]
+type = "TimecodePanel"
+old = "new(id_salt, &mut settings, &text)"
+new = "new(label, Bind<TimecodePanelSettings>, TimecodeText)"
+
+[[setter]]
+type = "TransportBar"
+old = "new(id_salt, &buttons)"
+new = "new(label, &buttons)"
+
+[[setter]]
+type = "TransportBar"
+old = "settings(&mut TransportBarSettings)"
+new = "settings(Bind<TransportBarSettings>)"
+
+[[setter]]
+type = "MediaControls"
+old = "new(id_salt, position, duration)"
+new = "new(label, position, duration)"
+
+[[setter]]
+type = "FramePreview"
+old = "new(id_salt, frame)"
+new = "new(label, frame)"
+
+[[setter]]
+type = "FramePreview"
+old = "status(&str)"
+new = "status(impl Into<Label>)"
+
+[[setter]]
+type = "RenderQueueList"
+old = "new(id_salt, &items, &mut selection, running)"
+new = "new(label, &items, Bind<Selection<RenderItemId>>).running(bool)"
+
+
+[[type]]
+name = "FrameRate"
+old = "craft_timeline::FrameRate"
+new = "craft_timeline::FrameRate"
+status = "replaced"
+note = "`#[non_exhaustive]`: build one with `FrameRate::new(num, den)` (a `const fn`, reduced by the gcd) instead of a struct literal; `num` and `den` stay readable."
+
+[[type]]
+name = "SampleRate"
+old = "craft_timeline::SampleRate"
+new = "craft_timeline::SampleRate"
+status = "replaced"
+note = "The field is private: build one with `SampleRate::new(hz)` (a `const fn`) and read it with `hz()`."
+
+[[type]]
+name = "PixelAspect"
+old = "craft_timeline::PixelAspect"
+new = "craft_timeline::PixelAspect"
+status = "replaced"
+note = "`#[non_exhaustive]`: build one with `PixelAspect::new(num, den)` (a `const fn`) instead of a struct literal; `num` and `den` stay readable."

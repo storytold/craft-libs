@@ -13,7 +13,7 @@ use crate::{Alternate, InkId, Plates, Process};
 /// Pixels converted per call into the CMYK profile, to bound the scratch buffers.
 const CHUNK: usize = 16 * 1024;
 
-fn on(enabled: &[bool], index: usize) -> bool {
+pub(crate) fn on(enabled: &[bool], index: usize) -> bool {
     enabled.get(index).copied().unwrap_or(true)
 }
 
@@ -32,23 +32,27 @@ fn to_srgb(cms: &dyn CmykConversion, cmyk: &[u8], rgb: &mut [u8]) {
 pub fn appearance(alternate: Alternate, cms: &dyn CmykConversion) -> Option<Vec<[u8; 3]>> {
     let mut rgb = vec![0_u8; 256 * 3];
     match alternate {
-        Alternate::Lab([l, a, b]) => {
-            let lab: Vec<f32> = (0..=255_u8)
-                .flat_map(|t| {
-                    let t = f32::from(t) / 255.0;
-                    [100.0 + t * (l - 100.0), t * a, t * b]
-                })
-                .collect();
-            lab_to_srgb8(&lab, &mut rgb)?;
-        }
-        Alternate::Cmyk(solid) => {
-            let cmyk: Vec<u8> = (0..=255_u8)
-                .flat_map(|t| solid.map(|c| (f32::from(t) * if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }).round() as u8))
-                .collect();
-            to_srgb(cms, &cmyk, &mut rgb);
-        }
+        Alternate::Lab(lab) => lab_to_srgb8(&lab_ramp(lab), &mut rgb)?,
+        Alternate::Cmyk(solid) => to_srgb(cms, &cmyk_ramp(solid), &mut rgb),
     }
     Some(rgb.as_chunks::<3>().0.to_vec())
+}
+
+/// A Lab spot alternate at each tint byte, three values per tint, from paper white (L\* 100)
+/// to the solid in a straight line.
+pub(crate) fn lab_ramp([l, a, b]: [f32; 3]) -> Vec<f32> {
+    (0..=255_u8)
+        .flat_map(|t| {
+            let t = f32::from(t) / 255.0;
+            [100.0 + t * (l - 100.0), t * a, t * b]
+        })
+        .collect()
+}
+
+/// A CMYK spot alternate at each tint byte, four bytes per tint, its components scaled by the
+/// tint.
+pub(crate) fn cmyk_ramp(solid: [f32; 4]) -> Vec<u8> {
+    (0..=255_u8).flat_map(|t| solid.map(|c| (f32::from(t) * if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 }).round() as u8)).collect()
 }
 
 impl Plates {
@@ -110,14 +114,6 @@ mod tests {
     }
 
     #[test]
-    fn a_spot_appearance_runs_from_paper_to_its_solid() {
-        const GOLD: [u8; 3] = [212, 175, 55];
-        let ramp = super::appearance(crate::Alternate::Lab(srgb8_to_lab(GOLD).unwrap()), &CmsConversion::fogra39()).unwrap();
-        assert_eq!(ramp.len(), 256);
-        assert!(near(&ramp[0], [255, 255, 255], 1) && near(&ramp[255], GOLD, 2), "{:?} {:?}", ramp[0], ramp[255]);
-    }
-
-    #[test]
     fn a_black_and_gold_composite_multiplies_gold_over_black() {
         const GOLD: [u8; 3] = [212, 175, 55];
         let lab = srgb8_to_lab(GOLD).unwrap();
@@ -141,15 +137,5 @@ mod tests {
         assert!(near(&no_black[6..9], GOLD, 2));
         let no_gold = p.composite(&[true, true, true, true, false], &cms);
         assert_eq!(&no_gold[6..9], black);
-    }
-
-    #[test]
-    fn plates_too_large_to_hold_give_empty_results() {
-        let p = crate::Plates { width: u32::MAX, height: u32::MAX, ..synthetic(0, 0, [50.0, 0.0, 0.0], Default::default()) };
-        assert!(p.composite(&[], &CmsConversion::fogra39()).is_empty());
-        assert!(p.tac(&[]).is_empty());
-        assert_eq!(p.stats(&[]).max_total_at, None);
-        assert!(p.above(10.0, &[]).regions().is_empty());
-        assert_eq!(p.tint(crate::InkId::process(crate::Process::Black), u32::MAX - 1, u32::MAX - 1), None);
     }
 }

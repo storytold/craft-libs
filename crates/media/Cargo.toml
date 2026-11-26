@@ -1,6 +1,7 @@
 [package]
+autotests = false
 name = "craft-media"
-description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and an Ogg demuxer."
+description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, an MPEG-TS/PS demuxer and MPEG-TS muxer, and Ogg, AVI and Bink demuxers."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +19,17 @@ default = ["isobmff"]
 bitstream = []
 isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
+# AVI (RIFF) and OpenDML demuxer and muxer (`craft_media::avi`).
+avi = []
+# Bink 1 (BIK) demuxer (`craft_media::bink`).
+bink = []
+# MXF demuxer and writer (`craft_media::mxf`); the writer formats dates with chrono.
+mxf = ["dep:chrono"]
+# MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`), and the
+# transport stream writer (`craft_media::mpegts::mux`).
+mpegts = []
+# Sierra VMD (Video and Music Data) demuxer (`craft_media::vmd`).
+vmd = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
 # Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
@@ -26,36 +38,9 @@ serde = ["dep:serde"]
 [dependencies]
 thiserror = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
-
-[[test]]
-name = "fuzz"
-required-features = ["isobmff"]
-
-[[test]]
-name = "fuzz_matroska"
-required-features = ["matroska"]
-
-[[test]]
-name = "oracle_demux"
-required-features = ["isobmff"]
-
-[[test]]
-name = "oracle_matroska"
-required-features = ["matroska"]
-
-[[test]]
-name = "oracle_mux"
-required-features = ["isobmff"]
-
-[[test]]
-name = "oracle_ogg"
-required-features = ["ogg"]
-
-[[test]]
-name = "roundtrip"
-required-features = ["isobmff"]

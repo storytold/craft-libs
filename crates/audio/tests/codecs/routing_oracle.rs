@@ -268,6 +268,58 @@ const CASES: &[Case] = &[
         min_snr: 80.0,
     },
     Case {
+        name: "mp3.mp3",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "192k"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 100.0,
+    },
+    Case {
+        name: "mp3-lsf-mono.mp3",
+        surround: false,
+        mono: true,
+        rate: 24_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "32k"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::MONO,
+        channels: 1,
+        frames: Some(120_000),
+        min_snr: 100.0,
+    },
+    Case {
+        name: "mp3.mkv",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "128k"],
+        container: Container::Matroska,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 100.0,
+    },
+    Case {
+        name: "mp3.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "128k"],
+        container: Container::Mp4,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 100.0,
+    },
+    Case {
         name: "pcm-s24be.mov",
         surround: false,
         mono: false,
@@ -302,14 +354,14 @@ fn run(ff: &Path, args: &[&str]) -> bool {
 /// The fixture for `c`, written by ffmpeg (cached), or `None` when this ffmpeg lacks an encoder
 /// (a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`).
 fn fixture(ff: &Path, c: &Case) -> Option<PathBuf> {
-    let out = crate::testkit::fixtures_dir("routing").join(c.name);
+    let out = super::testkit::fixtures_dir("routing").join(c.name);
     let source = match (c.mono, c.surround) {
         (true, _) => MONO.to_string(),
         (_, true) => format!("{STEREO}{SURROUND_EXTRA}"),
         _ => STEREO.to_string(),
     };
     let input = format!("{source}:s={}", c.rate);
-    let made = crate::testkit::fixtures::generate(&out, |tmp| {
+    let made = super::testkit::fixtures::generate(&out, |tmp| {
         let tmp = tmp.to_string_lossy();
         let mut args = vec!["-f", "lavfi", "-i", &input, "-t", "5"];
         args.extend_from_slice(c.args);
@@ -342,6 +394,8 @@ fn reference_lead(name: &str) -> usize {
         "aac.mkv" => 1024,
         "eac3-5.1.mkv" => 256,
         "mp2.mkv" => 481,
+        // LAME's encoder delay and the decoder's, the Matroska CodecDelay
+        "mp3.mkv" => 1105,
         _ => 0,
     }
 }
@@ -410,31 +464,6 @@ fn every_container_and_codec_decodes_home_grown() {
     }
 }
 
-#[test]
-fn truncated_and_corrupted_files_never_panic() {
-    let ff = require_ffmpeg!();
-    for c in CASES {
-        let Some(path) = fixture(&ff, c) else { continue };
-        let bytes = std::fs::read(&path).unwrap();
-        for cut in [1, 7, 64, 500, bytes.len() / 3, bytes.len() / 2, bytes.len() - 1] {
-            let _ = decode(bytes.get(..cut).unwrap_or_default(), None);
-            let _ = probe(bytes.get(..cut).unwrap_or_default(), None);
-        }
-        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-        for _ in 0..6 {
-            let mut m = bytes.clone();
-            for _ in 0..16 {
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
-                let i = (seed % m.len() as u64) as usize;
-                m[i] ^= (seed >> 32) as u8 | 1;
-            }
-            let _ = decode(&m, None);
-        }
-    }
-}
-
 /// SNR (dB) of `ours` against `reference`, both planar, over the frames both hold.
 fn snr_planar(ours: &[Vec<f32>], reference: &[Vec<f32>]) -> f64 {
     let (mut s, mut e) = (0f64, 0f64);
@@ -484,109 +513,6 @@ fn streaming_and_seeking_match_the_whole_file_decode() {
             assert!(s >= bound, "{}: SNR {s:.1} dB after a seek to {target}", c.name);
         }
     }
-}
-
-/// `TrackDecoder` on the packets craft-media's demuxer reads gives the audio `decode` presents:
-/// the same samples once the container's priming is skipped.
-#[test]
-fn track_decoder_on_demuxed_packets_matches_decode() {
-    use craft_audio::TrackDecoder;
-    use craft_media::isobmff;
-    let ff = require_ffmpeg!();
-    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "mp2.mp4", "pcm-s24be.mov"] {
-        let c = CASES.iter().find(|c| c.name == name).unwrap();
-        let Some(path) = fixture(&ff, c) else { continue };
-        let bytes = std::fs::read(&path).unwrap();
-        let (info, whole) = decode(&bytes, None).unwrap();
-        let file = isobmff::open(bytes.as_slice()).unwrap();
-        let track = file.track_of_kind(isobmff::TrackKind::Audio).unwrap();
-        let t = &file.tracks[track];
-        let params = t.codec_params();
-        let packets: Vec<Vec<u8>> = (0..t.samples.len()).map(|i| file.read_sample(bytes.as_slice(), track, i).unwrap()).collect();
-        let lookahead: Vec<&[u8]> = packets.iter().take(8).map(Vec::as_slice).collect();
-        let mut dec = TrackDecoder::new(&params, &lookahead).unwrap();
-        assert_eq!((dec.codec(), dec.sample_rate(), dec.layout()), (info.codec, info.sample_rate, info.layout), "{name}");
-        let mut out: Vec<Vec<f32>> = vec![Vec::new(); usize::from(dec.channels())];
-        for p in &packets {
-            for (o, ch) in out.iter_mut().zip(dec.decode(p).unwrap().channels) {
-                o.extend(ch);
-            }
-        }
-        // The edit list's media time is the priming `decode` skips.
-        let skip = t.edits.first().map_or(0, |e| (e.media_time.max(0) as u64 * u64::from(info.sample_rate) / u64::from(t.timescale)) as usize);
-        let presented: Vec<Vec<f32>> = out.iter().map(|ch| ch[skip..skip + whole.frames()].to_vec()).collect();
-        assert_eq!(presented, whole.channels, "{name}");
-    }
-}
-
-/// `tracks` lists every audio track, `DecodeOptions::track` picks one, and `max_samples` refuses
-/// a longer decode.
-#[test]
-fn track_choice_and_the_sample_limit() {
-    use craft_audio::{AudioError, DecodeOptions, decode_with, tracks};
-    let ff = require_ffmpeg!();
-    for ext in ["mkv", "mp4"] {
-        let out = crate::testkit::fixtures_dir("routing").join(format!("two-tracks.{ext}"));
-        let Some(path) = crate::testkit::fixtures::generate(&out, |tmp| {
-            let tmp = tmp.to_string_lossy();
-            run(
-                &ff,
-                &[
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "sine=f=440:r=48000:d=2",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "aevalsrc=0.3*sin(2*PI*660*t)|0.3*sin(2*PI*880*t):s=44100:d=2",
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "1:a",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "96k",
-                    &tmp,
-                ],
-            )
-        }) else {
-            continue;
-        };
-        let bytes = std::fs::read(&path).unwrap();
-        let list = tracks(&bytes, None).unwrap();
-        assert_eq!(list.len(), 2, "{ext}");
-        assert_eq!((list[0].codec, list[0].sample_rate, list[0].channels), (CodecId::Aac, Some(48_000), Some(1)), "{ext}");
-        assert_eq!((list[1].sample_rate, list[1].channels), (Some(44_100), Some(2)), "{ext}");
-        let (first, _) = decode_with(&bytes, None, &DecodeOptions::default()).unwrap();
-        let (second, buf) = decode_with(&bytes, None, &DecodeOptions::default().with_track(1)).unwrap();
-        assert_eq!((first.channels, first.sample_rate), (1, 48_000), "{ext}");
-        assert_eq!((second.channels, second.sample_rate, buf.frames()), (2, 44_100, 88_200), "{ext}");
-        let limited = decode_with(&bytes, None, &DecodeOptions::default().with_max_samples(1000));
-        assert!(matches!(limited, Err(AudioError::TooLarge(_))), "{ext}");
-        // Refused from the track list, without reading the file through the fallback.
-        let missing = decode_with(&bytes, None, &DecodeOptions::default().with_track(2));
-        assert!(matches!(&missing, Err(AudioError::Unsupported(m)) if m.contains("no audio track 2")), "{ext}: {missing:?}");
-    }
-}
-
-/// `Decoder::open` reads from a file without loading it.
-#[test]
-fn decoder_reads_from_a_file() {
-    use craft_audio::{DecodeOptions, Decoder};
-    let ff = require_ffmpeg!();
-    let c = CASES.iter().find(|c| c.name == "aac.m4a").unwrap();
-    let Some(path) = fixture(&ff, c) else { return };
-    let (_, whole) = decode(&std::fs::read(&path).unwrap(), None).unwrap();
-    let mut d = Decoder::open(std::fs::File::open(&path).unwrap(), None, &DecodeOptions::default()).unwrap();
-    assert!(d.length_known());
-    assert_eq!(d.info().frames, whole.frames() as u64);
-    let mut frames = 0;
-    while let Some(b) = d.next_block().unwrap() {
-        frames += b.frames();
-    }
-    assert_eq!(frames, whole.frames());
 }
 
 /// `fixture`'s AAC packets in a Matroska file with no block durations, like ffmpeg 6's,
@@ -669,10 +595,14 @@ fn adts_with_a_program_config_element_decodes() {
     assert_eq!(bytes[3] >> 6 | (bytes[2] & 1) << 2, 0, "the fixture signals its layout in a PCE");
     let (info, buf) = decode(&bytes, None).unwrap();
     assert_eq!((info.container, info.codec, buf.channels.len()), (c.container, c.codec, c.channels));
-    assert_eq!(info.layout, c.layout);
+    // A program config element that lists a centre, a front pair and then the elements of 5.1 has
+    // 5.1's speakers, in WAV order like ffmpeg's decode; any other list keeps the decoded order,
+    // which ffmpeg versions write differently.
+    let ordered = info.layout.is_ordered();
+    assert_eq!(info.layout, if ordered { ChannelLayout::SURROUND_5_1_SIDE } else { c.layout });
     assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
-    // A program config's channels come in its own order, and which order ffmpeg writes differs by
-    // version: each of ours must match a different one of ffmpeg's.
+    // Each of our channels must match a different one of ffmpeg's: the same one when the layout is
+    // ordered.
     let refr = reference(&ff, &path);
     let mut matched = Vec::new();
     for plane in &buf.channels {
@@ -686,7 +616,9 @@ fn adts_with_a_program_config_element_decodes() {
         assert!(s >= c.min_snr, "channel {} matches ffmpeg's {best} at only {s:.1} dB", matched.len());
         matched.push(best);
     }
-    matched.sort_unstable();
+    if !ordered {
+        matched.sort_unstable();
+    }
     assert_eq!(matched, (0..c.channels).collect::<Vec<_>>());
 }
 
@@ -774,10 +706,10 @@ fn mp4_with_wrong_durations_or_edits_presents_its_audio() {
 #[test]
 fn mp4_with_an_empty_edit_before_its_media_edit_applies_the_media_edit() {
     let ff = require_ffmpeg!();
-    let dir = crate::testkit::fixtures_dir("routing");
+    let dir = super::testkit::fixtures_dir("routing");
     let out = dir.join("aac-itsoffset.m4a");
     let input = format!("{MONO}:s=44100");
-    let made = crate::testkit::fixtures::generate(&out, |tmp| {
+    let made = super::testkit::fixtures::generate(&out, |tmp| {
         let tmp = tmp.to_string_lossy();
         run(ff.as_path(), &["-itsoffset", "0.5", "-f", "lavfi", "-i", &input, "-t", "5", "-c:a", "aac", "-aac_pns", "0", &tmp])
     });

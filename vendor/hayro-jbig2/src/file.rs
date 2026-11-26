@@ -5,11 +5,36 @@
 
 use alloc::vec::Vec;
 
-use crate::error::{FormatError, ParseError, Result, bail};
+use crate::error::{FormatError, OverflowError, ParseError, Result, bail};
 use crate::reader::Reader;
-use crate::segment::{
-    Segment, SegmentType, parse_segment, parse_segment_data, parse_segment_header,
-};
+use crate::segment::{Segment, SegmentType, parse_segment, parse_segment_data, parse_segment_header};
+
+/// PdfCraft patch: the most segments a stream, with its globals, may have. They are all parsed and
+/// sorted before the first is decoded, at about 64 bytes for 11 of input, so behind nested Flate a
+/// 4,765-byte PDF reached 5 GB and failed only afterwards.
+const MAX_SEGMENTS: usize = 1 << 20;
+
+/// PdfCraft patch: the most references those segments may make, 4 bytes each for 1 of input.
+const MAX_REFERENCES: usize = 1 << 22;
+
+/// PdfCraft patch: the segments of a stream so far (see [`MAX_SEGMENTS`], [`MAX_REFERENCES`]).
+#[derive(Default)]
+pub(crate) struct SegmentCount {
+    segments: usize,
+    references: usize,
+}
+
+impl SegmentCount {
+    /// Count one more segment, making `references` references.
+    fn add(&mut self, references: usize) -> Result<()> {
+        self.segments = self.segments.saturating_add(1);
+        self.references = self.references.saturating_add(references);
+        if self.segments > MAX_SEGMENTS || self.references > MAX_REFERENCES {
+            bail!(OverflowError::SegmentCount);
+        }
+        Ok(())
+    }
+}
 
 /// "There are two standalone file organizations possible for a JBIG2 bitstream."
 /// (Annex D)
@@ -61,6 +86,19 @@ pub(crate) struct File<'a> {
 /// (D.4.1)
 const FILE_HEADER_ID: [u8; 8] = [0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A];
 
+/// PdfCraft patch (17): an embedded stream that starts with a file header (D.4), which some
+/// producers write into a PDF's `JBIG2Decode` data although ISO 32000-1 7.4.7 has the embedded
+/// organization (D.3) there. Returns the reader past the header and the organization the header
+/// declares, or `None` when the data doesn't start with the header's ID string.
+pub(crate) fn after_file_header(data: &[u8]) -> Result<Option<(Reader<'_>, FileOrganization)>> {
+    if !data.starts_with(&FILE_HEADER_ID) {
+        return Ok(None);
+    }
+    let mut reader = Reader::new(data);
+    let header = parse_file_header(&mut reader)?;
+    Ok(Some((reader, header.organization)))
+}
+
 /// Parse a standalone JBIG2 file.
 pub(crate) fn parse_file(data: &[u8]) -> Result<File<'_>> {
     let mut reader = Reader::new(data);
@@ -72,10 +110,7 @@ pub(crate) fn parse_file(data: &[u8]) -> Result<File<'_>> {
     // are in sorted order, but just to be safe.
     segments.sort_by_key(|seg| seg.header.segment_number);
 
-    Ok(File {
-        _header: header,
-        segments,
-    })
+    Ok(File { _header: header, segments })
 }
 
 fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
@@ -91,11 +126,7 @@ fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
     // "Bit 0: File organization type. If this bit is 0, the file uses the
     // random-access organization. If this bit is 1, the file uses the
     // sequential organization." (D.4.2)
-    let organization = if flags & 0x01 != 0 {
-        FileOrganization::Sequential
-    } else {
-        FileOrganization::RandomAccess
-    };
+    let organization = if flags & 0x01 != 0 { FileOrganization::Sequential } else { FileOrganization::RandomAccess };
 
     // "Bit 1: Unknown number of pages. If this bit is 0, then the number of
     // pages contained in the file is known. If this bit is 1, then the number
@@ -119,11 +150,7 @@ fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
     // D.4.3: Number of pages
     // "This is a 4-byte field, and is not present if the 'unknown number of
     // pages' bit was 1." (D.4.3)
-    let number_of_pages = if unknown_page_count {
-        None
-    } else {
-        Some(reader.read_u32().ok_or(ParseError::UnexpectedEof)?)
-    };
+    let number_of_pages = if unknown_page_count { None } else { Some(reader.read_u32().ok_or(ParseError::UnexpectedEof)?) };
 
     Ok(FileHeader {
         organization,
@@ -133,15 +160,16 @@ fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
     })
 }
 
-fn parse_segments<'a>(
-    reader: &mut Reader<'a>,
-    organization: FileOrganization,
-) -> Result<Vec<Segment<'a>>> {
+fn parse_segments<'a>(reader: &mut Reader<'a>, organization: FileOrganization) -> Result<Vec<Segment<'a>>> {
     let mut segments = Vec::new();
 
     match organization {
-        FileOrganization::Sequential => parse_segments_sequential(reader, &mut segments)?,
-        FileOrganization::RandomAccess => parse_segments_random_access(reader, &mut segments)?,
+        FileOrganization::Sequential => {
+            parse_segments_sequential(reader, &mut segments, &mut SegmentCount::default())?;
+        }
+        FileOrganization::RandomAccess => {
+            parse_segments_random_access(reader, &mut segments, &mut SegmentCount::default())?;
+        }
     }
 
     Ok(segments)
@@ -152,16 +180,14 @@ fn parse_segments<'a>(
 /// "In this organization, the file structure looks like Figure D.1. A file header
 /// is followed by a sequence of segments. The two parts of each segment are stored
 /// together: first the segment header then the segment data." (D.1)
-pub(crate) fn parse_segments_sequential<'a>(
-    reader: &mut Reader<'a>,
-    segments: &mut Vec<Segment<'a>>,
-) -> Result<()> {
+pub(crate) fn parse_segments_sequential<'a>(reader: &mut Reader<'a>, segments: &mut Vec<Segment<'a>>, count: &mut SegmentCount) -> Result<()> {
     loop {
         if reader.at_end() {
             break;
         }
 
         let segment = parse_segment(reader)?;
+        count.add(segment.header.referred_to_segments.len())?;
 
         // "If a file contains an end of file segment, it must be the last segment."
         // (7.4.11)
@@ -182,10 +208,7 @@ pub(crate) fn parse_segments_sequential<'a>(
 /// is followed by a sequence of segments headers; the last segment header is
 /// followed by the data for the first segment, then the data for the second
 /// segment, and so on." (D.2)
-fn parse_segments_random_access<'a>(
-    reader: &mut Reader<'a>,
-    segments: &mut Vec<Segment<'a>>,
-) -> Result<()> {
+pub(crate) fn parse_segments_random_access<'a>(reader: &mut Reader<'a>, segments: &mut Vec<Segment<'a>>, count: &mut SegmentCount) -> Result<()> {
     let mut headers = Vec::new();
 
     loop {
@@ -194,6 +217,7 @@ fn parse_segments_random_access<'a>(
         }
 
         let header = parse_segment_header(reader)?;
+        count.add(header.referred_to_segments.len())?;
 
         // "If a file contains an end of file segment, it must be the last segment."
         // (7.4.11)

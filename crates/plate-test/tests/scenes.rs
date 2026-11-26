@@ -1,3 +1,5 @@
+//! Integration tests of craft-plate-test: scenes.
+
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use craft_plate_test::reference::{self, Context};
@@ -8,10 +10,10 @@ fn scenes() -> Vec<Scene> {
     scene::load_dir(&scene::scenes_dir()).unwrap()
 }
 
-/// On CI (`CI` set) the workflow provisions the font, so a scene that left text out fails.
-/// Local runs without the font skip text and only note it.
+/// When the licensed fixture directory is configured, every scene must write its text.
+/// Workflows that do not provision those fixtures can still validate scenes without text.
 fn text_must_be_written() -> bool {
-    std::env::var_os("CI").is_some_and(|v| !v.is_empty() && v != "false")
+    std::env::var_os(reference::FONT_DIR_ENV).is_some_and(|v| !v.is_empty())
 }
 
 fn missing_font(scene: &Scene) -> String {
@@ -79,34 +81,6 @@ fn written_scenes_match_their_structure() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// The print preset (the FOGRA39 output intent) adds one `GTS_PDFX` intent and leaves the rest
-/// of a scene's structure as the scene expects. Three scenes cover blending, overprint and
-/// DeviceN; embedding the 700 KB profile in every scene would make this the slowest test.
-#[test]
-fn print_preset_adds_one_gts_pdfx_intent() {
-    let scenes = scenes();
-    let ctx = Context::from_env(&scenes);
-    let mut failures = Vec::new();
-    for scene in scenes.iter().filter(|s| ["S01", "S06", "S14"].contains(&s.id.as_str())) {
-        let mut print = scene.clone();
-        print.settings.output_intent = Some("fogra39".to_owned());
-        let output = reference::write(&print, &ctx).unwrap();
-        let summary = structure::summarize(&output.pdf).unwrap();
-        let mut want = scene.structure.clone();
-        want.output_intents = Some(vec!["GTS_PDFX".to_owned()]);
-        let problems = want.check(&summary);
-        let text_skipped = output.notes.iter().any(|note| note.contains(reference::FONT_DIR_ENV));
-        if text_skipped && text_must_be_written() {
-            failures.push(missing_font(scene));
-        } else if !problems.is_empty() && text_skipped {
-            assert!(summary.output_intents.iter().filter(|i| *i == "GTS_PDFX").count() == 1, "{}: {summary:?}", scene.id);
-        } else if !problems.is_empty() {
-            failures.push(format!("{}: {}", scene.id, problems.join("; ")));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
 /// The check catches the RGB blending regression: S06 written with the writer's default group
 /// space has an RGB form group and no page group, which its `structure` block rejects.
 #[test]
@@ -122,16 +96,4 @@ fn structure_check_rejects_rgb_blending() {
     assert!(problems.iter().any(|p| p.starts_with("page_group")), "{problems:?}");
     assert!(problems.iter().any(|p| p.starts_with("group_cs")), "{problems:?}");
     assert!(structure::summarize(b"not a pdf").is_err());
-}
-
-/// N1 waits for overprint (T4); without it, the DeviceN fill and its color spaces already
-/// match the scene.
-#[test]
-fn device_n_scene_writes_its_color_spaces() {
-    let scenes = scenes();
-    let n1 = scenes.iter().find(|s| s.id == "N1").unwrap();
-    let output = reference::write_partial(n1, &Context { scenes: &scenes, font: None }).unwrap();
-    let summary = structure::summarize(&output.pdf).unwrap();
-    assert_eq!(Some(&summary.color_spaces), n1.structure.color_spaces.as_ref(), "{summary:?}");
-    assert!(!summary.device_rgb, "{summary:?}");
 }

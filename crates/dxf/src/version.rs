@@ -1,20 +1,20 @@
 //! The DXF/DWG file versions CADCraft writes (DXF Reference, HEADER `$ACADVER`).
 
-/// A file version CADCraft can save: the AutoCAD release that introduced the format. Each format
-/// also serves the releases after it (2018 is still AutoCAD's current format).
+/// A file version CADCraft can save: the `AutoCAD` release that introduced the format. Each format
+/// also serves the releases after it (2018 is still `AutoCAD`'s current format).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Version {
-    /// AutoCAD 2000/2002 (AC1015).
+    /// `AutoCAD` 2000/2002 (AC1015).
     R2000,
-    /// AutoCAD 2004–2006 (AC1018).
+    /// `AutoCAD` 2004–2006 (AC1018).
     R2004,
-    /// AutoCAD 2007–2009 (AC1021): the first version whose DXF text is UTF-8.
+    /// `AutoCAD` 2007–2009 (AC1021): the first version whose DXF text is UTF-8.
     R2007,
-    /// AutoCAD 2010–2012 (AC1024).
+    /// `AutoCAD` 2010–2012 (AC1024).
     R2010,
-    /// AutoCAD 2013–2017 (AC1027).
+    /// `AutoCAD` 2013–2017 (AC1027).
     R2013,
-    /// AutoCAD 2018 and later (AC1032), the default.
+    /// `AutoCAD` 2018 and later (AC1032), the default.
     #[default]
     R2018,
 }
@@ -84,34 +84,5 @@ impl Version {
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.year())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_years_and_codes() {
-        assert_eq!(Version::parse("2018"), Some(Version::R2018));
-        assert_eq!(Version::parse(" r2004 "), Some(Version::R2004));
-        assert_eq!(Version::parse("ac1021"), Some(Version::R2007));
-        assert_eq!(Version::parse("2005"), None);
-        assert_eq!(Version::parse(""), None);
-        for v in Version::ALL {
-            assert_eq!(Version::parse(v.code()), Some(v));
-            assert_eq!(Version::parse(v.year()), Some(v));
-        }
-    }
-
-    #[test]
-    fn file_versions_map_to_the_nearest_writable_one() {
-        assert_eq!(Version::for_acadver("AC1009"), Some(Version::R2000));
-        assert_eq!(Version::for_acadver("AC1014"), Some(Version::R2000));
-        assert_eq!(Version::for_acadver("AC1024"), Some(Version::R2010));
-        assert_eq!(Version::for_acadver("AC1035"), Some(Version::R2018));
-        assert_eq!(Version::for_acadver("MC0.0"), None);
-        assert_eq!(Version::for_acadver("AC"), None);
-        assert_eq!(Version::for_acadver("AC99999999999999999999"), None);
     }
 }

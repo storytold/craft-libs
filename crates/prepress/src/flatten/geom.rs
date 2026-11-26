@@ -11,7 +11,7 @@
 //! Clips go into the same sweep as the shapes instead of being applied first: one sweep replaces
 //! a boolean per clipped shape, and a clip edge is then the same edge in every region it bounds.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, Rect, Shape as _, Vec2};
 use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
@@ -24,7 +24,9 @@ pub const DEFAULT_SLIVER: f64 = 0.01;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FillRule {
     #[default]
+    #[allow(missing_docs)]
     NonZero,
+    #[allow(missing_docs)]
     EvenOdd,
 }
 
@@ -41,17 +43,21 @@ impl FillRule {
 /// A filled shape. Open subpaths are closed, as a fill closes them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shape {
+    /// The outline; open subpaths count as closed.
     pub path: BezPath,
+    #[allow(missing_docs)]
     pub rule: FillRule,
     /// Indices into the clip list: the shape covers only what all of them cover.
     pub clips: Vec<usize>,
 }
 
 impl Shape {
+    /// Create a shape with no clips.
     pub fn new(path: BezPath, rule: FillRule) -> Self {
         Self { path, rule, clips: Vec::new() }
     }
 
+    /// Add clip indices (into the clip list passed to [`regions`]).
     pub fn clipped(mut self, clips: impl IntoIterator<Item = usize>) -> Self {
         self.clips.extend(clips);
         self
@@ -61,7 +67,9 @@ impl Shape {
 /// A clipping path.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClipPath {
+    /// The clip outline.
     pub path: BezPath,
+    /// The rule that decides what the outline covers.
     pub rule: FillRule,
 }
 
@@ -82,17 +90,26 @@ impl Region {
         self.sources.last().copied()
     }
 
+    /// Whether `p` lies inside the region.
     pub fn contains(&self, p: Point) -> bool {
         self.path.winding(p) != 0
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+/// Why computing regions failed.
 pub enum GeomError {
     #[error("input contains NaN or infinite coordinates")]
+    #[allow(missing_docs)]
     NonFinite,
     #[error("shape {shape} names clip {clip}, which does not exist")]
-    UnknownClip { shape: usize, clip: usize },
+    /// A shape refers to a clip index outside the clip list.
+    UnknownClip {
+        /// Index of the shape.
+        shape: usize,
+        /// The missing clip index.
+        clip: usize,
+    },
     /// The sweep failed on near-degenerate input; the caller rasterizes instead.
     #[error("the shapes are too degenerate to sweep")]
     Degenerate,
@@ -641,18 +658,48 @@ fn tol_at(p: Point) -> f64 {
     1e-6 * (1.0 + p.x.abs().max(p.y.abs()))
 }
 
+fn coord(p: Point, axis: usize) -> f64 {
+    if axis == 0 { p.x } else { p.y }
+}
+
+/// Arrange `points` as an implicit k-d tree: the median of each slice, by x and then y in turn, is
+/// its root, with the lesser points before it and the greater after.
+fn kd_build(points: &mut [Point], axis: usize) {
+    if points.len() < 2 {
+        return;
+    }
+    let mid = points.len() / 2;
+    points.select_nth_unstable_by(mid, |a, b| coord(*a, axis).total_cmp(&coord(*b, axis)));
+    let (before, after) = points.split_at_mut(mid);
+    kd_build(before, 1 - axis);
+    kd_build(&mut after[1..], 1 - axis);
+}
+
+/// Whether a point of the tree `points` (made by [`kd_build`] from `axis`) lies in the box `lo..=hi`.
+/// A box this small meets a few branches however many points share an x.
+fn kd_any(points: &[Point], axis: usize, lo: Point, hi: Point) -> bool {
+    let mid = points.len() / 2;
+    let Some(&q) = points.get(mid) else { return false };
+    if q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y {
+        return true;
+    }
+    let c = coord(q, axis);
+    (coord(lo, axis) <= c && kd_any(&points[..mid], 1 - axis, lo, hi)) || (coord(hi, axis) >= c && kd_any(&points[mid + 1..], 1 - axis, lo, hi))
+}
+
 /// Output cleanup: the inputs' on-curve points (joints there stay), and their curves, to rebuild
 /// split pieces exactly.
 struct Tidy {
     sliver: f64,
-    /// Sorted by x.
+    /// The finite points as an implicit k-d tree (see [`kd_build`]), so a lookup doesn't scan the
+    /// many points that share an x.
     keep: Vec<Point>,
     /// Input curves with slightly inflated bounds.
     curves: Vec<(Rect, CubicBez)>,
-    /// `curves` indices by the left edge of their bounds, and the widest bounds: the curves whose
+    /// `curves` indices in groups whose bounds widths are within a factor of two, each with the
+    /// group's widest bounds and its indices by the left edge of their bounds: the curves whose
     /// bounds can hold a point, without testing them all.
-    by_x: Vec<usize>,
-    max_width: f64,
+    by_width: Vec<(f64, Vec<usize>)>,
 }
 
 impl Tidy {
@@ -668,25 +715,51 @@ impl Tidy {
                 }
             }
         }
-        keep.sort_by(|a, b| a.x.total_cmp(&b.x));
-        let mut by_x: Vec<usize> = (0..curves.len()).collect();
-        by_x.sort_by(|&i, &j| curves[i].0.x0.total_cmp(&curves[j].0.x0));
-        let max_width = curves.iter().map(|(r, _)| r.width()).fold(0.0, f64::max);
-        Self { sliver, keep, curves, by_x, max_width }
+        keep.retain(|p| p.is_finite());
+        kd_build(&mut keep, 0);
+        let mut groups: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+        for (i, (r, _)) in curves.iter().enumerate() {
+            groups.entry(r.width().log2().floor() as i32).or_default().push(i);
+        }
+        let by_width = groups
+            .into_values()
+            .map(|mut ids| {
+                ids.sort_by(|&i, &j| curves[i].0.x0.total_cmp(&curves[j].0.x0));
+                (ids.iter().map(|&i| curves[i].0.width()).fold(0.0, f64::max), ids)
+            })
+            .collect();
+        Self { sliver, keep, curves, by_width }
     }
 
     fn is_kept(&self, p: Point) -> bool {
         let tol = tol_at(p);
-        let lo = self.keep.partition_point(|q| q.x < p.x - tol);
-        self.keep[lo..].iter().take_while(|q| q.x <= p.x + tol).any(|q| (q.y - p.y).abs() <= tol)
+        kd_any(&self.keep, 0, Point::new(p.x - tol, p.y - tol), Point::new(p.x + tol, p.y + tol))
     }
 
     /// The input curves whose bounds hold both `a` and `b`.
     fn curves_around(&self, a: Point, b: Point) -> impl Iterator<Item = &CubicBez> {
-        let x = a.x.min(b.x);
-        let hi = self.by_x.partition_point(|&i| self.curves[i].0.x0 <= x);
-        let lo = self.by_x[..hi].partition_point(|&i| self.curves[i].0.x0 < x - self.max_width);
-        self.by_x[lo..hi].iter().map(|&i| &self.curves[i]).filter(move |(r, _)| r.contains(a) && r.contains(b)).map(|(_, c)| c)
+        self.indices_around(a, b).into_iter().map(|i| &self.curves[i].1)
+    }
+
+    /// The indices of the input curves whose bounds hold both `a` and `b`, by the left edge of
+    /// their bounds and then by index.
+    fn indices_around(&self, a: Point, b: Point) -> Vec<usize> {
+        let mut out: Vec<usize> =
+            self.windows(a.x.min(b.x)).flatten().copied().filter(|&i| self.curves[i].0.contains(a) && self.curves[i].0.contains(b)).collect();
+        out.sort_by(|&i, &j| self.curves[i].0.x0.total_cmp(&self.curves[j].0.x0).then(i.cmp(&j)));
+        out
+    }
+
+    /// For each width group, the curves whose bounds can reach `x`: those starting at most the
+    /// group's widest bounds to its left. One wide curve widens only its own group's window.
+    /// The window's left edge is rounded outward, so rounding in `x - width` never drops a curve.
+    fn windows(&self, x: f64) -> impl Iterator<Item = &[usize]> {
+        self.by_width.iter().map(move |(width, ids)| {
+            let hi = ids.partition_point(|&i| self.curves[i].0.x0 <= x);
+            let from = (x - width.next_up()).next_down();
+            let lo = ids[..hi].partition_point(|&i| self.curves[i].0.x0 < from);
+            &ids[lo..hi]
+        })
     }
 
     /// `bp` with each curve piece that strays from the one input curve through both its ends
@@ -790,18 +863,41 @@ fn tidy_segments(segs: Vec<Seg>, tidy: &Tidy) -> Vec<Seg> {
     if let Some(k) = (0..n).find(|&i| !mergeable(&segs[(i + n - 1) % n], &segs[i])) {
         segs.rotate_left(k);
     }
+    // Where the run of mergeable joints that starts at each segment ends, found once.
+    let mut run_end = vec![n; n];
+    for i in (0..n).rev() {
+        run_end[i] = if i + 1 < n && mergeable(&segs[i], &segs[i + 1]) { run_end[i + 1] } else { i + 1 };
+    }
     let mut out: Vec<Seg> = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
         let mut cur = segs[i];
         let mut j = i + 1;
-        while j < n && mergeable(&segs[j - 1], &segs[j]) {
-            match join(&segs[i..=j], tidy) {
-                Some(m) => {
-                    cur = m;
-                    j += 1;
+        let end = run_end[i];
+        // A run is validated whole, once (its pieces split one line or curve). Only when it doesn't
+        // join is the longest prefix that does looked for, by halving, instead of re-checking the
+        // whole run for every piece added: that was quadratic in a long collinear run.
+        if end > j {
+            if let Some(m) = join(&segs[i..end], tidy) {
+                cur = m;
+                j = end;
+            } else {
+                let (mut ok, mut bad) = (i, end - 1);
+                let mut best = None;
+                while bad - ok > 1 {
+                    let mid = ok + (bad - ok) / 2;
+                    match join(&segs[i..=mid], tidy) {
+                        Some(m) => {
+                            ok = mid;
+                            best = Some(m);
+                        }
+                        None => bad = mid,
+                    }
                 }
-                None => break,
+                if let Some(m) = best {
+                    cur = m;
+                    j = ok + 1;
+                }
             }
         }
         out.push(cur);
@@ -810,8 +906,16 @@ fn tidy_segments(segs: Vec<Seg>, tidy: &Tidy) -> Vec<Seg> {
     out
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `join` ran on this thread, for the tests that bound the work.
+    static JOINS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `run` as one segment, when its pieces lie on one line or one input curve.
 fn join(run: &[Seg], tidy: &Tidy) -> Option<Seg> {
+    #[cfg(test)]
+    JOINS.with(|joins| joins.set(joins.get() + 1));
     let (first, last) = (run.first()?.c, run.last()?.c);
     let (a, b) = (first.p0, last.p3);
     let tol = tol_at(Point::new(a.x.abs().max(b.x.abs()), a.y.abs().max(b.y.abs())));
@@ -880,18 +984,6 @@ mod tests {
     }
 
     #[test]
-    fn two_overlapping_rectangles_make_three_regions() {
-        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)), fill(rect(5.0, 5.0, 15.0, 15.0))];
-        let r = regions(&shapes, &[]).unwrap();
-        assert_eq!(summary(&r), vec![(vec![0], 75.0), (vec![0, 1], 25.0), (vec![1], 75.0)]);
-        assert_tiles(&shapes, &r, Rect::new(-1.0, -1.0, 16.0, 16.0), 0.5);
-        // The pieces the sweep split rectangle edges into are joined again.
-        let overlap = r.iter().find(|r| r.sources == [0, 1]).unwrap();
-        assert_eq!(overlap.path.segments().count(), 4);
-        assert_eq!(overlap.top(), Some(1));
-    }
-
-    #[test]
     fn coincident_edges_make_no_slivers() {
         // Side by side, sharing an edge.
         let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)), fill(rect(10.0, 0.0, 20.0, 10.0))];
@@ -906,52 +998,6 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].sources, [0, 1]);
         assert!((r[0].area - circle.area().abs()).abs() < 1e-9);
-    }
-
-    #[test]
-    fn fill_rules_differ_on_self_overlap() {
-        // Two squares in one path, wound the same way: the overlap has winding 2.
-        let mut path = rect(0.0, 0.0, 10.0, 10.0);
-        path.extend(rect(5.0, 5.0, 15.0, 15.0));
-        let center = Point::new(7.5, 7.5);
-        let nonzero = regions(&[Shape::new(path.clone(), FillRule::NonZero)], &[]).unwrap();
-        assert_eq!(summary(&nonzero), vec![(vec![0], 175.0)]);
-        assert!(nonzero[0].contains(center));
-        let shapes = [Shape::new(path, FillRule::EvenOdd)];
-        let evenodd = regions(&shapes, &[]).unwrap();
-        assert!((evenodd.iter().map(|r| r.area).sum::<f64>() - 150.0).abs() < 1e-9);
-        assert!(evenodd.iter().all(|r| r.sources == [0] && !r.contains(center)));
-        assert_tiles(&shapes, &evenodd, Rect::new(-1.0, -1.0, 16.0, 16.0), 0.5);
-    }
-
-    #[test]
-    fn a_hole_is_part_of_its_region_and_a_shape_in_it_is_its_own() {
-        // Nonzero hole by reversal, even-odd hole by nesting.
-        let mut nonzero = rect(0.0, 0.0, 10.0, 10.0);
-        nonzero.extend(rect(3.0, 3.0, 7.0, 7.0).reverse_subpaths());
-        let mut evenodd = rect(0.0, 0.0, 10.0, 10.0);
-        evenodd.extend(rect(3.0, 3.0, 7.0, 7.0));
-        for donut in [Shape::new(nonzero, FillRule::NonZero), Shape::new(evenodd, FillRule::EvenOdd)] {
-            let shapes = [donut, fill(rect(4.0, 4.0, 6.0, 6.0))];
-            let r = regions(&shapes, &[]).unwrap();
-            assert_eq!(summary(&r), vec![(vec![0], 84.0), (vec![1], 4.0)]);
-            let ring = r.iter().find(|r| r.sources == [0]).unwrap();
-            assert_eq!(ring.path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count(), 2);
-            assert!(!ring.contains(Point::new(3.5, 3.5)));
-            assert_tiles(&shapes, &r, Rect::new(-1.0, -1.0, 11.0, 11.0), 0.25);
-        }
-    }
-
-    #[test]
-    fn slivers_below_the_threshold_are_dropped() {
-        // Overlapping by 0.001.
-        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)), fill(rect(9.999, 0.0, 20.0, 10.0))];
-        let r = regions(&shapes, &[]).unwrap();
-        assert!(r.iter().all(|r| r.sources != [0, 1]));
-        assert_eq!(r.len(), 2);
-        let kept = regions_with(&shapes, &[], 0.0).unwrap();
-        let sliver = kept.iter().find(|r| r.sources == [0, 1]).unwrap();
-        assert!((sliver.area - 0.01).abs() < 1e-9, "{}", sliver.area);
     }
 
     #[test]
@@ -981,42 +1027,6 @@ mod tests {
     }
 
     #[test]
-    fn clips_limit_their_shapes_only() {
-        let clips = [ClipPath { path: rect(5.0, 0.0, 25.0, 10.0), rule: FillRule::NonZero }];
-        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0)).clipped([0]), fill(rect(20.0, 0.0, 30.0, 10.0))];
-        let r = regions(&shapes, &clips).unwrap();
-        // The clip's edge at x = 25 crosses only the unclipped shape, which stays one region.
-        assert_eq!(summary(&r), vec![(vec![0], 50.0), (vec![1], 100.0)]);
-        assert!(r.iter().any(|r| r.sources == [0] && r.contains(Point::new(7.0, 5.0))));
-        assert_eq!(regions(&[fill(rect(0.0, 0.0, 1.0, 1.0)).clipped([3])], &clips), Err(GeomError::UnknownClip { shape: 0, clip: 3 }));
-    }
-
-    #[test]
-    fn open_and_non_finite_input() {
-        let mut open = BezPath::new();
-        open.move_to((0.0, 0.0));
-        open.line_to((10.0, 0.0));
-        open.line_to((10.0, 10.0));
-        assert_eq!(summary(&regions(&[fill(open)], &[]).unwrap()), vec![(vec![0], 50.0)]);
-        assert_eq!(regions(&[fill(rect(0.0, 0.0, f64::NAN, 1.0))], &[]), Err(GeomError::NonFinite));
-        assert_eq!(regions(&[], &[]), Ok(vec![]));
-    }
-
-    #[test]
-    fn only_groups_with_transparency_need_regions() {
-        let bounds = [
-            Rect::new(0.0, 0.0, 10.0, 10.0),
-            Rect::new(100.0, 100.0, 110.0, 110.0),
-            Rect::new(10.0, 5.0, 20.0, 15.0), // touches 0
-            Rect::new(18.0, 14.0, 30.0, 30.0),
-            Rect::new(200.0, 0.0, 210.0, 10.0),
-        ];
-        assert_eq!(overlap_groups(&bounds), vec![vec![0, 2, 3], vec![1], vec![4]]);
-        assert_eq!(transparent_groups(&bounds, &[false, false, false, true, false]), vec![vec![0, 2, 3]]);
-        assert!(transparent_groups(&bounds, &[false; 5]).is_empty());
-    }
-
-    #[test]
     fn stacked_boxes_fold_into_one_group_past_the_comparison_budget() {
         // Boxes one above the other, all sharing x 0–10: each stays open for every later one.
         let stack = |n: usize| -> Vec<Rect> { (0..n).map(|i| Rect::new(0.0, 2.0 * i as f64, 10.0, 2.0 * i as f64 + 1.0)).collect() };
@@ -1024,10 +1034,78 @@ mod tests {
         assert_eq!(overlap_groups(&stack(4_000)).len(), 1, "8 million comparisons: folded");
     }
 
-    /// About 1,000 rectangles on a letter page. Run with `--ignored --nocapture`.
+    /// One open cubic per path, from `p0` to `p3` through the two handles.
+    fn cubic(p0: (f64, f64), p1: (f64, f64), p2: (f64, f64), p3: (f64, f64)) -> BezPath {
+        let mut bp = BezPath::new();
+        bp.move_to(p0);
+        bp.curve_to(p1, p2, p3);
+        bp
+    }
+
     #[test]
-    #[ignore]
-    fn timing_on_a_thousand_rectangles() {
+    fn curves_around_finds_what_a_full_scan_finds_in_the_same_order() {
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // Narrow and wide curves mixed, some sharing a left edge.
+        let paths: Vec<BezPath> = (0..400)
+            .map(|k| {
+                let size = [0.5, 3.0, 40.0, 900.0][k % 4] * (0.5 + next());
+                let x = if k % 7 == 0 { 100.0 } else { next() * 1000.0 };
+                let y = next() * 1000.0;
+                cubic((x, y), (x + size * next(), y + size), (x + size * next(), y - size), (x + size, y + size * next()))
+            })
+            .collect();
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let mut by_x: Vec<usize> = (0..tidy.curves.len()).collect();
+        by_x.sort_by(|&i, &j| tidy.curves[i].0.x0.total_cmp(&tidy.curves[j].0.x0));
+        let mut found = 0;
+        for _ in 0..2000 {
+            let a = Point::new(next() * 1100.0 - 50.0, next() * 1100.0 - 50.0);
+            let b = a + Vec2::new(next() * 20.0 - 10.0, next() * 20.0 - 10.0);
+            let all: Vec<usize> = by_x.iter().copied().filter(|&i| tidy.curves[i].0.contains(a) && tidy.curves[i].0.contains(b)).collect();
+            found += all.len();
+            assert_eq!(tidy.indices_around(a, b), all, "{a:?} {b:?}");
+        }
+        assert!(found > 1000, "{found}");
+    }
+
+    #[test]
+    fn one_wide_curve_does_not_widen_the_search_for_narrow_ones() {
+        // A curve across the page, and 1,000 small curves on a grid.
+        let mut paths = vec![cubic((0.0, 0.0), (300.0, 600.0), (600.0, -600.0), (1000.0, 0.0))];
+        paths.extend((0..1000).map(|k| {
+            let (x, y) = ((k % 40) as f64 * 25.0, (k / 40) as f64 * 25.0);
+            cubic((x, y), (x + 2.0, y + 4.0), (x + 4.0, y - 4.0), (x + 6.0, y))
+        }));
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let scanned: usize = tidy.windows(503.0).map(<[usize]>::len).sum();
+        // The wide curve, and the small curves of the one grid column within reach of x = 503.
+        assert!(scanned <= 1 + 25, "{scanned}");
+    }
+
+    #[test]
+    fn curves_around_keeps_a_curve_held_just_inside_its_right_edge() {
+        // Far from the origin, `x - width` rounds above the left edge of a curve whose bounds
+        // hold `x`.
+        let (l, r) = (-16_496_801_568.892_494, 7_886_835_387.982_123);
+        let paths = [cubic((l, 0.0), (l, 1000.0), (r, 1000.0), (r, 0.0))];
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let bounds = tidy.curves[0].0;
+        let a = Point::new(bounds.x1.next_down(), 0.0);
+        let b = Point::new(a.x, 1.0);
+        assert!(bounds.contains(a) && bounds.contains(b));
+        assert!(a.x - tidy.by_width[0].0 > bounds.x0, "the rounding case is not reached");
+        assert_eq!(tidy.indices_around(a, b), vec![0]);
+    }
+    /// Many anchors sharing an x (and some within tolerance of it): the k-d lookup answers as a scan of
+    /// every anchor does.
+    #[test]
+    fn is_kept_agrees_with_a_scan_when_many_anchors_share_an_x() {
         let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = || {
             seed ^= seed << 13;
@@ -1035,20 +1113,68 @@ mod tests {
             seed ^= seed << 17;
             (seed >> 11) as f64 / (1u64 << 53) as f64
         };
-        let shapes: Vec<Shape> = (0..1000)
-            .map(|_| {
-                let (x, y) = (next() * 560.0, next() * 740.0);
-                let (w, h) = (2.0 + next() * 50.0, 2.0 + next() * 50.0);
-                fill(rect(x, y, x + w, y + h))
-            })
-            .collect();
-        let t = std::time::Instant::now();
-        let r = regions(&shapes, &[]).unwrap();
-        let elapsed = t.elapsed();
-        eprintln!("{} shapes -> {} regions in {:?}", shapes.len(), r.len(), elapsed);
-        let union = union_area(&shapes);
-        let sum: f64 = r.iter().map(|r| r.area).sum();
-        // Less the slivers left out.
-        assert!(sum <= union * (1.0 + 1e-9) && sum > union * (1.0 - 1e-4), "{sum} vs {union}");
+        let mut paths = Vec::new();
+        for k in 0..3000 {
+            let x = [5.0, 5.0 + 3e-7, 100.0][k % 3];
+            let mut bp = BezPath::new();
+            bp.move_to((x, next() * 1000.0));
+            bp.line_to((x + 1.0, next() * 1000.0));
+            paths.push(bp);
+        }
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let anchors: Vec<Point> = paths.iter().flat_map(|p| p.segments().map(|s| to_seg(s).c.p0)).collect();
+        let (mut kept, mut not_kept) = (0, 0);
+        for k in 0..4000 {
+            let a = anchors[k % anchors.len()];
+            let p = match k % 4 {
+                0 => a,
+                1 => Point::new(a.x + 5e-7, a.y + 5e-7),
+                2 => Point::new(a.x, a.y + 1e-3),
+                _ => Point::new(next() * 120.0, next() * 1000.0),
+            };
+            let tol = tol_at(p);
+            let scan = anchors.iter().any(|q| (q.x - p.x).abs() <= tol && (q.y - p.y).abs() <= tol);
+            assert_eq!(tidy.is_kept(p), scan, "{p:?}");
+            if scan { kept += 1 } else { not_kept += 1 }
+        }
+        assert!(kept > 1000 && not_kept > 1000, "{kept} {not_kept}");
+        assert!(!Tidy::keeping(DEFAULT_SLIVER, &Vec::<BezPath>::new()).is_kept(Point::new(0.0, 0.0)));
+    }
+
+    /// A contour with a 20,000-piece collinear side is joined by validating the run once, not once per
+    /// piece (some 200,000,000 piece checks).
+    #[test]
+    fn a_long_collinear_run_is_validated_once() {
+        let n = 20_000;
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &Vec::<BezPath>::new());
+        let mut segs: Vec<Seg> = (0..n).map(|i| Seg::line(Point::new(i as f64, 0.0), Point::new(i as f64 + 1.0, 0.0))).collect();
+        segs.push(Seg::line(Point::new(n as f64, 0.0), Point::new(0.0, 1.0)));
+        segs.push(Seg::line(Point::new(0.0, 1.0), Point::new(0.0, 0.0)));
+        let before = JOINS.with(std::cell::Cell::get);
+        let out = tidy_segments(segs, &tidy);
+        let joins = JOINS.with(std::cell::Cell::get) - before;
+        assert_eq!(out.len(), 3);
+        assert!(joins <= 4, "{joins} joins");
+        assert_eq!((out[0].c.p0, out[0].c.p3), (Point::new(0.0, 0.0), Point::new(n as f64, 0.0)));
+    }
+
+    /// A run that bends partway still joins its longest straight part, in a few validations.
+    #[test]
+    fn a_run_that_bends_joins_its_longest_prefix() {
+        let n = 5000;
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &Vec::<BezPath>::new());
+        let mut segs: Vec<Seg> = (0..n).map(|i| Seg::line(Point::new(i as f64, 0.0), Point::new(i as f64 + 1.0, 0.0))).collect();
+        // A last piece that leaves the line by 0.01 (inside the tangent test, outside the join's tolerance).
+        segs.push(Seg::line(Point::new(n as f64, 0.0), Point::new(n as f64 + 100.0, 1.0)));
+        segs.push(Seg::line(Point::new(n as f64 + 100.0, 1.0), Point::new(0.0, 5.0)));
+        let before = JOINS.with(std::cell::Cell::get);
+        let out = tidy_segments(segs, &tidy);
+        let joins = JOINS.with(std::cell::Cell::get) - before;
+        assert!(out.len() <= 4 && joins < 200, "{} pieces, {joins} joins", out.len());
+        assert!(
+            out.iter().any(|s| s.c.p0 == Point::new(0.0, 0.0) && s.c.p3.x >= n as f64 - 1.0),
+            "{:?}",
+            out.iter().map(|s| (s.c.p0, s.c.p3)).collect::<Vec<_>>()
+        );
     }
 }

@@ -13,13 +13,31 @@
 //! format (bit rate index 0, whose frame length is only known from the next sync word) and the
 //! CRC (read, not checked, like most decoders).
 //!
+//! # Encoder (feature `mpa-encode`)
+//!
+//! [`encoder::Encoder`] writes Layer II streams, written from ISO/IEC 11172-3 (§2.4.1.6 bit stream
+//! syntax, Annex B tables, Annex C encoding process) and ISO/IEC 13818-3.
+//!
+//! - Constant bit rate: 32-192 kbit/s mono and 64-384 kbit/s stereo at 32 / 44.1 / 48 kHz (the
+//!   rate and mode pairs of Table 3-B.2), 8-160 kbit/s at 16 / 22.05 / 24 kHz. Mono, or stereo with
+//!   each channel allocated on its own (no joint stereo, no dual channel).
+//! - The polyphase analysis filterbank of Annex C.1.3 (shared with the Layer III encoder), a
+//!   scalefactor per 12 samples with the `scfsi` sharing of §2.4.1.6, and a bit allocation chosen by
+//!   spending the frame's bits where the quantization noise is furthest above a simple masking
+//!   estimate (the band energies spread over the neighbouring subbands, never below the threshold
+//!   in quiet). It is not one of the psychoacoustic models of Annex D.
+//! - Output: frames only, no CRC, no ID3 tag. Frames written one after another are a playable
+//!   `.mp2` file. A decoder's output lags the input by [`encoder::DELAY`] samples.
+//!
 //! From FilmCraft's `filmcraft-mpa` (storytold/filmcraft@8fda2f2). Public items keep their names, so
 //! FilmCraft can re-export this module.
 
 // Index loops follow the specification's pseudo-code (FilmCraft allows this lint workspace-wide).
 #![allow(clippy::needless_range_loop)]
 
-mod tables;
+#[cfg(feature = "mpa-encode")]
+pub mod encoder;
+pub(crate) mod tables;
 
 use craft_media::bitstream::BitReader;
 use tables::AllocTable;
@@ -418,7 +436,7 @@ fn layer2(r: &mut BitReader, h: &Header, out: &mut Subbands) -> Result<()> {
 
 /// The synthesis subband filter (§2.4.3.2, Figure A.2) for one time slot: 32 subband samples in,
 /// 32 PCM samples out.
-fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 32], d: &[f32; 512], s: &[f32; 32], out: &mut [f32; 32]) {
+pub(crate) fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 32], d: &[f32; 512], s: &[f32; 32], out: &mut [f32; 32]) {
     // shift V by 64: move the ring's start back instead of copying 960 values
     *pos = (*pos + 1024 - 64) % 1024;
     let p = *pos;
@@ -456,6 +474,3 @@ fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 32], d: &[f3
     }
     *out = o;
 }
-
-#[cfg(test)]
-mod tests;

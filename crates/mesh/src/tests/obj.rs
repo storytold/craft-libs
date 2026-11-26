@@ -1,6 +1,6 @@
 use super::hammer;
 use crate::obj::{material_names, read, read_mtl, sibling_name, write, write_mtl};
-use crate::{AlphaMode, Corner, Error, Limits, Material, Mesh, NONE, Part, Scene, no_external};
+use crate::{AlphaMode, Corner, Error, Image, Limits, Material, Mesh, NONE, Part, Scene, TextureRef, no_external};
 
 /// A unit cube with texture coordinates, normals, two materials and one face written with
 /// negative references.
@@ -52,15 +52,6 @@ fn cube_with_its_material_library() {
     // The negative references of the last face name the same vertices as positive ones would.
     let last: Vec<u32> = m.parts[1].faces().last().unwrap().iter().map(|c| c.position).collect();
     assert_eq!(last, [4, 5, 1, 0]);
-}
-
-#[test]
-fn a_library_that_is_not_supplied_leaves_named_defaults() {
-    let s = parse(CUBE.as_bytes()).unwrap();
-    assert_eq!(s.external, ["cube.mtl"]);
-    assert_eq!(s.warnings.len(), 1);
-    assert_eq!(s.materials.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Red", "Gold"]);
-    assert_eq!(s.materials[0].base_color, [0.8, 0.8, 0.8, 1.0]);
 }
 
 #[test]
@@ -123,6 +114,30 @@ fn objects_groups_quads_and_negative_indices() {
     // Without `o`, the file is one unnamed mesh.
     let s = parse(b"v 0 0 0\nv 1 0 0\nv 0 1 0\ng a\nf 1 2 3\ng b\nf 3 2 1\n").unwrap();
     assert_eq!((s.meshes.len(), s.meshes[0].name.as_str(), s.meshes[0].parts.len()), (1, "", 2));
+}
+
+#[test]
+fn bare_usemtl_does_not_create_an_empty_named_material() {
+    for line in ["usemtl", "usemtl "] {
+        let src = format!("v 0 0 0\nv 1 0 0\nv 0 1 0\n{line}\nf 1 2 3\n");
+        let scene = read(src.as_bytes(), &Limits::default(), &mut |_| None).unwrap();
+        assert!(scene.materials.is_empty(), "{line:?}: {:?}", scene.materials);
+        assert_eq!(scene.meshes.iter().map(Mesh::triangle_count).sum::<usize>(), 1);
+        assert_eq!(scene.meshes[0].parts[0].material, None);
+        scene.validate().unwrap();
+    }
+}
+
+#[test]
+fn writing_a_bare_usemtl_preserves_a_material_reset() {
+    let src = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nusemtl Named\nf 1 2 3\nusemtl\nf 2 4 3\n";
+    let scene = read(src, &Limits::default(), &mut no_external).unwrap();
+    assert_eq!(scene.meshes[0].parts.iter().map(|p| p.material).collect::<Vec<_>>(), [Some(0), None]);
+
+    let text = write(&scene, None, &Limits::default()).unwrap();
+    assert!(text.contains("usemtl Named\n") && text.contains("usemtl\nf 2 4 3\n"), "{text}");
+    let roundtrip = read(text.as_bytes(), &Limits::default(), &mut no_external).unwrap();
+    assert_eq!(roundtrip.meshes[0].parts.iter().map(|p| p.material).collect::<Vec<_>>(), [Some(0), None]);
 }
 
 #[test]
@@ -280,4 +295,83 @@ fn writer_places_meshes_keeps_colours_and_names_materials_apart() {
     assert!(write(&empty, None, &Limits::default()).is_err());
     scene.meshes[0].parts[0].corners[0].position = 9;
     assert!(write(&scene, None, &Limits::default()).is_err());
+}
+
+#[test]
+fn map_options_are_passed_over_by_their_argument_counts() {
+    // `-o` takes one to three numbers, so the name after it may hold spaces; the final token alone
+    // would be `checker.png`.
+    let mtl = "newmtl A\nmap_Kd -o 0.5 0.5 my checker.png\nmap_Bump -bm 0.3 -clamp on rough bump.png\nmap_Ke -s 2 2 2 -mm 0 1 glow.png\n\
+               newmtl B\nmap_Kd -o 1 wood.png\nmap_Bump -unknown 3 my bump.png\nmap_Ke -bm\n";
+    let (materials, images) = read_mtl(mtl.as_bytes(), &Limits::default()).unwrap();
+    let name = |t: Option<crate::TextureRef>| t.map(|t| images[t.image].uri.clone().unwrap());
+    assert_eq!(name(materials[0].base_color_texture).as_deref(), Some("my checker.png"));
+    assert_eq!(name(materials[0].normal_texture).as_deref(), Some("rough bump.png"));
+    assert_eq!(name(materials[0].emissive_texture).as_deref(), Some("glow.png"));
+    assert_eq!(name(materials[1].base_color_texture).as_deref(), Some("wood.png"));
+    // an option this reader does not know: the final token
+    assert_eq!(name(materials[1].normal_texture).as_deref(), Some("bump.png"));
+    // a lone token is the name, whatever it looks like
+    assert_eq!(name(materials[1].emissive_texture).as_deref(), Some("-bm"));
+}
+
+#[test]
+fn a_library_named_again_is_read_once() {
+    // Exporters repeat `mtllib` for every object. Each repeat used to read the library again:
+    // its materials and images twice, and its bytes counted against the limit once per line.
+    let mtl = "newmtl Red\nKd 1 0 0\nmap_Kd red.png\n";
+    let src = "mtllib m.mtl\no a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Red\nf 1 2 3\nmtllib m.mtl\no b\nusemtl Red\nf 1 2 3\nmtllib m.mtl\n";
+    let mut asked = 0;
+    let limits = Limits { max_data_bytes: mtl.len() * 2, ..Limits::default() };
+    let s = read(src.as_bytes(), &limits, &mut |_| {
+        asked += 1;
+        Some(mtl.as_bytes().to_vec())
+    })
+    .unwrap();
+    assert_eq!(asked, 1);
+    assert_eq!((s.materials.len(), s.images.len()), (1, 1));
+    assert_eq!(s.external, ["m.mtl", "red.png"]);
+}
+
+#[test]
+fn face_tokens_and_continued_lines_are_bounded_before_collection() {
+    let limits = Limits { max_face_corners: 3, max_data_bytes: 1024, ..Limits::default() };
+    let face = format!("v 0 0 0\nf {}\n", "1 ".repeat(100));
+    assert!(matches!(read(face.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+    let long_line = format!("v {}\\\n{}\n", "1 ".repeat(300), "1 ".repeat(300));
+    assert!(matches!(read(long_line.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+    let invalid = b"v 0 0 0\nf 1 1 1\n\xff";
+    assert!(matches!(read(invalid, &Limits { max_data_bytes: 4, ..Limits::default() }, &mut no_external), Err(Error::TooLarge(_))));
+}
+
+#[test]
+fn compatibility_options_keep_runs_and_skip_material_libraries() {
+    let input = b"\xef\xbb\xbf v 0 0 0\nv 1 0 0\nv 0 1 0\nmtllib missing.mtl\nusemtl Red\nf 1 2 3\nusemtl Blue\nf 1 2 3\nusemtl Red\nf 1 2 3\n";
+    let options = crate::obj::ReadOptions { strict: true, preserve_runs: true, ignore_material_libraries: true, ..Default::default() };
+    let scene = crate::obj::read_with_options(input, &Limits::default(), &mut no_external, &options).unwrap();
+    let parts = &scene.meshes[0].parts;
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].material, parts[2].material);
+    assert!(scene.warnings.is_empty());
+    assert!(crate::obj::read_with_options(b"v NaN 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &Limits::default(), &mut no_external, &options).is_err());
+}
+
+#[test]
+fn group_boundaries_keep_repeated_names_separate() {
+    let input = b"v 0 0 0\nv 1 0 0\nv 0 1 0\ng Same\nusemtl M\nf 1 2 3\ng Same\nf 1 3 2\n";
+    let options = crate::obj::ReadOptions { groups_as_objects: true, ..Default::default() };
+    let scene = crate::obj::read_with_options(input, &Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(scene.meshes.len(), 2);
+    assert!(scene.meshes.iter().all(|m| m.name == "Same"));
+}
+
+#[test]
+fn write_with_mtl_links_library_and_clearcoat_maps() {
+    let mut scene = cube();
+    scene.images = vec![Image { uri: Some("coat.png".into()), ..Image::default() }];
+    scene.materials[0].clearcoat_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    scene.materials[0].clearcoat_roughness_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    let (obj, mtl) = crate::obj::write_with_mtl(&scene, "cube.mtl", &Limits::default()).unwrap();
+    assert!(obj.contains("mtllib cube.mtl\n"));
+    assert!(mtl.contains("map_Pc coat.png\n") && mtl.contains("map_Pcr coat.png\n"), "{mtl}");
 }

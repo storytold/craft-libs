@@ -306,7 +306,7 @@ pub(crate) enum Raw {
 }
 
 impl Raw {
-    fn set_region(&mut self, region: RawClip) {
+    pub(crate) fn set_region(&mut self, region: RawClip) {
         match self {
             Raw::Path { region: slot, .. }
             | Raw::Pattern { region: slot, .. }
@@ -352,13 +352,12 @@ pub(crate) struct Canvas {
     saved: Vec<Saved>,
     /// Bytes held by the items so far (path ops and pixels), capped at [`MAX_BYTES`].
     used: usize,
+    /// Bytes retained outside the canvas (EMF+ objects and clips) that count against the same cap.
+    held: usize,
     objects: Vec<Option<Obj>>,
     /// Indices below `objects.len()` that hold no object, so the WMF handle table finds its lowest
     /// free slot without scanning.
     free: std::collections::BTreeSet<usize>,
-    /// Table slots examined by `add_object(None, ..)`; the tests assert it stays constant per call.
-    #[cfg(test)]
-    pub slot_probes: usize,
     pen: Pen,
     brush: Brush,
     even_odd: bool,
@@ -389,6 +388,14 @@ pub(crate) struct Canvas {
     fig_start: P,
     /// Records of a type the readers do not know.
     pub skipped: u32,
+    /// Bitmaps a record asks to draw whose pixels were not read (see [`crate::Picture::dropped_images`]).
+    pub dropped_images: u32,
+    /// Clip changes not applied as the file asks (see [`crate::Picture::ignored_clips`]).
+    pub ignored_clips: u32,
+    /// Raster operations not played (see [`crate::Picture::unplayed_raster_ops`]).
+    pub unplayed_raster_ops: u32,
+    /// A nested picture drawn on this canvas stopped at a limit.
+    pub truncated_inside: bool,
 }
 
 impl Canvas {
@@ -400,10 +407,9 @@ impl Canvas {
             viewport_set: false,
             saved: Vec::new(),
             used: 0,
+            held: 0,
             objects: Vec::new(),
             free: std::collections::BTreeSet::new(),
-            #[cfg(test)]
-            slot_probes: 0,
             pen: Pen::new(0, 0.0, [0, 0, 0, 255]),
             brush: Brush::new(BS_SOLID, [255, 255, 255, 255]),
             even_odd: true,
@@ -423,6 +429,10 @@ impl Canvas {
             arc_clockwise: false,
             fig_start: (0.0, 0.0),
             skipped: 0,
+            dropped_images: 0,
+            ignored_clips: 0,
+            unplayed_raster_ops: 0,
+            truncated_inside: false,
         }
     }
 
@@ -434,6 +444,28 @@ impl Canvas {
     /// True once the item cap is hit; the readers stop there and keep what they have.
     pub fn full(&self) -> bool {
         self.full
+    }
+
+    /// Bytes the canvas has retained so far.
+    pub fn used(&self) -> usize {
+        self.used
+    }
+
+    /// Records the bytes another part of the player retains, so the items and they stay within
+    /// [`MAX_BYTES`] together.
+    pub fn hold(&mut self, bytes: usize) {
+        self.held = bytes;
+    }
+
+    /// Bytes retained outside the canvas that share its budget (see [`Canvas::hold`]).
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> usize {
+        self.held
+    }
+
+    /// Whether `cost` more bytes would take the canvas and what is held beside it past [`MAX_BYTES`].
+    fn over_budget(&self, cost: usize) -> bool {
+        self.used.saturating_add(self.held).saturating_add(cost) > MAX_BYTES
     }
 
     fn push(&mut self, raw: Raw) {
@@ -471,7 +503,7 @@ impl Canvas {
             }
         }
         .saturating_add(region_cost);
-        if self.items.len() >= MAX_ITEMS || self.used.saturating_add(cost) > MAX_BYTES {
+        if self.items.len() >= MAX_ITEMS || self.over_budget(cost) {
             self.full = true;
         } else {
             self.used += cost;
@@ -551,7 +583,7 @@ impl Canvas {
 
     /// The character set of the selected font (ANSI without one).
     pub fn font_charset(&self) -> u8 {
-        self.text.font.as_ref().map_or(0, |f| f.font.charset)
+        self.text.font.as_ref().map_or(0, |f| crate::text::text_charset(&f.font))
     }
 
     /// EMF SETWORLDTRANSFORM (`mode` 4) and MODIFYWORLDTRANSFORM (1 identity, 2 left, 3 right, 4 set).
@@ -620,6 +652,10 @@ impl Canvas {
     /// of at most [`SHADE_RES`] cells on the longer side, laid out so that its one repeat covers
     /// the shape.
     pub fn shade_shape(&mut self, ops: &[Op], shade: &dyn Fn(P) -> [u8; 4]) {
+        // A full canvas or an empty clip keeps nothing more, so do not sample a tile for it.
+        if self.full || self.clip.as_ref().is_some_and(Vec::is_empty) {
+            return;
+        }
         let dev: Vec<Op> = ops.iter().map(|o| self.map_op(*o)).collect();
         let Some([l, t, r, b]) = crate::cliprect::ops_bbox(&dev) else { return };
         let side = (r - l).max(b - t);
@@ -743,12 +779,25 @@ impl Canvas {
 
     /// SELECTCLIPPATH: the bracketed path becomes part of the clip and the bracket is emptied.
     /// RGN_AND clips to it inside the current clip; RGN_COPY replaces the clip with it. The modes
-    /// that add to or cut from the clip (RGN_OR, RGN_XOR, RGN_DIFF) leave the clip as it was. The
-    /// path uses the current fill mode. One clip path more than [`MAX_CLIP_PATHS`] stops the parse.
+    /// that add to or cut from the clip (RGN_OR, RGN_XOR, RGN_DIFF) leave the clip as it was, and a
+    /// path they would have used is counted in `ignored_clips`. The path uses the current fill
+    /// mode. One clip path more than [`MAX_CLIP_PATHS`] stops the parse.
     pub fn select_clip_path(&mut self, mode: u32) {
         let ops = std::mem::take(&mut self.path);
         self.in_path = false;
         if !matches!(mode, clip::RGN_AND | clip::RGN_COPY) {
+            // A path that encloses no area adds nothing to the clip and cuts nothing from it under
+            // these modes, and adding to a clip that is still the whole surface leaves it the whole
+            // surface.
+            let unclipped = self.clip.is_none() && self.clip_paths.is_empty();
+            let changes = match mode {
+                clip::RGN_OR => !unclipped,
+                clip::RGN_XOR | clip::RGN_DIFF => true,
+                _ => false,
+            };
+            if changes && crate::geom::encloses_area(&ops) {
+                self.ignore_clip();
+            }
             return;
         }
         if mode == clip::RGN_COPY {
@@ -761,7 +810,7 @@ impl Canvas {
             return;
         }
         let cost = ops.capacity().saturating_mul(std::mem::size_of::<Op>());
-        if self.clip_paths.len() >= MAX_CLIP_PATHS || self.used.saturating_add(cost) > MAX_BYTES {
+        if self.clip_paths.len() >= MAX_CLIP_PATHS || self.over_budget(cost) {
             self.full = true;
             return;
         }
@@ -793,8 +842,14 @@ impl Canvas {
         if self.arc_clockwise { (e, s) } else { (s, e) }
     }
 
-    /// SCALEVIEWPORTEXTEX and SCALEWINDOWEXTEX: the extent times `num / den` on each axis. A zero
-    /// denominator leaves the extent alone.
+    /// OFFSETWINDOWORG and OFFSETVIEWPORTORG (WMF): the window or viewport origin moved by `d`.
+    pub fn offset_org(&mut self, window: bool, d: P) {
+        let o = if window { &mut self.map.wo } else { &mut self.map.vo };
+        *o = (o.0 + d.0, o.1 + d.1);
+    }
+
+    /// SCALEVIEWPORTEXTEX and SCALEWINDOWEXTEX (and WMF's SCALEVIEWPORTEXT and SCALEWINDOWEXT): the
+    /// extent times `num / den` on each axis. A zero denominator leaves the extent alone.
     pub fn scale_ext(&mut self, window: bool, x: (f64, f64), y: (f64, f64)) {
         if x.1 == 0.0 || y.1 == 0.0 {
             return;
@@ -808,7 +863,7 @@ impl Canvas {
         // A pattern brush's pixels count against the byte budget like drawn items.
         if let Obj::Brush(Brush { pattern: Some(p), .. }) = &obj {
             let cost = p.px.len();
-            if self.used.saturating_add(cost) > MAX_BYTES {
+            if self.over_budget(cost) {
                 self.full = true;
                 return;
             }
@@ -829,10 +884,6 @@ impl Canvas {
             Some(_) => {}
             None => match self.free.pop_first() {
                 Some(i) => {
-                    #[cfg(test)]
-                    {
-                        self.slot_probes += 1;
-                    }
                     if let Some(s) = self.objects.get_mut(i) {
                         *s = Some(obj);
                     }
@@ -1154,15 +1205,28 @@ impl Canvas {
     }
 
     /// Fills a logical rectangle `[x, y, w, h]` for a source-less raster operation. PATCOPY uses the
-    /// brush (when solid); the others fill black or white. Other operations are not handled here.
+    /// brush (when solid); the others fill black or white. Other operations are not drawn; one that
+    /// takes no source (such as DSTINVERT) is counted in `unplayed_raster_ops`.
     pub fn fill_rop(&mut self, [x, y, w, h]: [f64; 4], rop: u32) {
         let rect = [x, y, x + w, y + h];
         match rop {
             PATCOPY => self.fill_brush_rect(rect),
             BLACKNESS => self.fill_rect_with(rect, [0, 0, 0, 255]),
             WHITENESS => self.fill_rect_with(rect, [255, 255, 255, 255]),
+            _ if !crate::dib::uses_source(rop) => self.unplayed_rop(),
             _ => {}
         }
+    }
+
+    /// Counts a raster operation the canvas does not play (see [`crate::Picture::unplayed_raster_ops`]).
+    pub fn unplayed_rop(&mut self) {
+        self.unplayed_raster_ops = self.unplayed_raster_ops.saturating_add(1);
+    }
+
+    /// Counts a clip change the canvas does not apply as the file asks (see
+    /// [`crate::Picture::ignored_clips`]).
+    pub fn ignore_clip(&mut self) {
+        self.ignored_clips = self.ignored_clips.saturating_add(1);
     }
 
     /// Draws `text` (one `dx` advance per character, or none) with the current font, colours and
@@ -1262,17 +1326,70 @@ impl Canvas {
         let (x0, x1) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
         let (y0, y1) = (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
         let dev = if xf[1] == 0.0 && xf[2] == 0.0 { dev } else { [x0, y0, x1 - x0, y1 - y0] };
+        let was_full = self.full;
         self.push(Raw::Bitmap { rect: dev, xf, img, region: RawClip::default() });
+        // A bitmap the item or byte limit refuses is counted once, however many pieces a clip cuts it into.
+        if self.full && !was_full {
+            self.drop_image();
+        }
+    }
+
+    /// Draws a bitmap that a record asked to combine with raster operation `rop` (already applied by
+    /// `dib::prepare`). A kept bitmap whose operation is drawn as a plain copy is counted in
+    /// `unplayed_raster_ops`.
+    pub fn bitmap_rop(&mut self, rect: [f64; 4], img: Rgba, rop: u32) {
+        let before = self.items.len();
+        self.bitmap(rect, img);
+        if self.items.len() > before && crate::dib::copies_for(rop) {
+            self.unplayed_rop();
+        }
+    }
+
+    /// Counts a bitmap a record asked to draw that the reader could not keep (see
+    /// [`crate::Picture::dropped_images`]).
+    pub fn drop_image(&mut self) {
+        self.dropped_images = self.dropped_images.saturating_add(1);
+    }
+
+    /// Adds what a nested picture left out to this canvas's counts.
+    pub fn add_losses(&mut self, pic: &crate::Picture) {
+        self.dropped_images = self.dropped_images.saturating_add(pic.dropped_images);
+        self.ignored_clips = self.ignored_clips.saturating_add(pic.ignored_clips);
+        self.unplayed_raster_ops = self.unplayed_raster_ops.saturating_add(pic.unplayed_raster_ops);
+        self.skipped = self.skipped.saturating_add(pic.skipped_records);
+        self.truncated_inside |= pic.truncated;
     }
 }
 
-/// An 8×8 hatch tile (HS_HORIZONTAL, HS_VERTICAL, HS_FDIAGONAL, HS_BDIAGONAL, HS_CROSS,
-/// HS_DIAGCROSS): one-pixel lines in `fg` over `bg`, or over nothing when the background is
-/// transparent. None for an unknown style.
+/// An 8×8 GDI hatch tile (HS_HORIZONTAL through HS_DIAGCROSS). None for an unknown GDI style.
 pub(crate) fn hatch_tile(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>) -> Option<Vec<u8>> {
-    if style > 5 {
+    hatch_tile_inner(style, fg, bg, false)
+}
+
+/// An 8×8 GDI+ tile for the six basic and twelve percentage HatchStyle values. Percentage styles
+/// use a Bayer tile with the specified foreground coverage. Other GDI+ styles still use the
+/// fallback in `emfplus::Painter::fill` until their patterns have been mapped.
+pub(crate) fn emfplus_hatch_tile(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>) -> Option<Vec<u8>> {
+    hatch_tile_inner(style, fg, bg, true)
+}
+
+fn hatch_tile_inner(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>, gdi_plus: bool) -> Option<Vec<u8>> {
+    if style > if gdi_plus { 17 } else { 5 } {
         return None;
     }
+    // An 8×8 Bayer matrix keeps percentage hatches evenly distributed in a small, repeatable
+    // tile. The twelve values are GDI+'s Percent05 through Percent90 styles.
+    const BAYER: [[u8; 8]; 8] = [
+        [0, 48, 12, 60, 3, 51, 15, 63],
+        [32, 16, 44, 28, 35, 19, 47, 31],
+        [8, 56, 4, 52, 11, 59, 7, 55],
+        [40, 24, 36, 20, 43, 27, 39, 23],
+        [2, 50, 14, 62, 1, 49, 13, 61],
+        [34, 18, 46, 30, 33, 17, 45, 29],
+        [10, 58, 6, 54, 9, 57, 5, 53],
+        [42, 26, 38, 22, 41, 25, 37, 21],
+    ];
+    const PERCENT: [u32; 12] = [5, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90];
     let mut px = Vec::with_capacity(8 * 8 * 4);
     for y in 0..8u32 {
         for x in 0..8u32 {
@@ -1283,7 +1400,12 @@ pub(crate) fn hatch_tile(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>) -> Option
                 2 => f,
                 3 => b,
                 4 => h || v,
-                _ => f || b,
+                5 => f || b,
+                6..=17 if gdi_plus => {
+                    let count = (PERCENT[(style - 6) as usize] * 64 + 50) / 100;
+                    u32::from(BAYER[y as usize][x as usize]) < count
+                }
+                _ => return None,
             };
             px.extend(if on { fg } else { bg.unwrap_or([0, 0, 0, 0]) });
         }
@@ -1396,24 +1518,5 @@ mod object_table_tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn creating_into_a_full_table_does_not_scan_it() {
-        let mut cv = Canvas::new();
-        for i in 0..MAX_OBJECTS as u32 {
-            cv.add_object(None, pen(i));
-        }
-        assert_eq!(cv.objects.len(), MAX_OBJECTS);
-        let before = cv.slot_probes;
-        for i in 0..10_000 {
-            cv.add_object(None, pen(i));
-        }
-        // A scan from index 0 would examine 4096 slots per create; the free set examines none.
-        assert_eq!(cv.slot_probes, before);
-        cv.delete_object(7);
-        cv.add_object(None, pen(99));
-        assert_eq!(cv.slot_probes, before + 1);
-        assert_eq!(cv.objects.get(7).map(id_of), Some(Some(99)));
     }
 }

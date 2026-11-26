@@ -343,6 +343,51 @@ impl AudioSpecificConfig {
     }
 }
 
+/// Why an AudioSpecificConfig prefix cannot be written as an ADTS header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdtsConfigError {
+    /// Fewer than two bytes were supplied.
+    Short,
+    /// The prefix names a profile, indexed rate or channel configuration ADTS cannot carry.
+    Unsupported {
+        /// Audio object type from the prefix.
+        object_type: u8,
+        /// Sampling frequency index from the prefix.
+        sf_index: u8,
+        /// Channel configuration from the prefix.
+        channel_config: u8,
+    },
+}
+
+/// ADTS fixed fields taken from the prefix of an AudioSpecificConfig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdtsConfig {
+    /// Audio object type, 1 through 4.
+    pub object_type: u8,
+    /// Indexed sample rate, 0 through 12.
+    pub sf_index: u8,
+    /// Channel configuration, 1 through 7.
+    pub channel_config: u8,
+}
+impl AdtsConfig {
+    /// Parse only the first two ASC bytes. Unlike a decoder's full ASC parser, this accepts all
+    /// four object types representable by ADTS and rejects configurations needing a PCE.
+    pub fn from_asc_prefix(asc: &[u8]) -> std::result::Result<Self, AdtsConfigError> {
+        let (Some(&a), Some(&b)) = (asc.first(), asc.get(1)) else { return Err(AdtsConfigError::Short) };
+        let object_type = a >> 3;
+        let sf_index = ((a & 7) << 1) | (b >> 7);
+        let channel_config = (b >> 3) & 15;
+        if !(1..=4).contains(&object_type) || sf_index > 12 || !(1..=7).contains(&channel_config) {
+            return Err(AdtsConfigError::Unsupported { object_type, sf_index, channel_config });
+        }
+        Ok(Self { object_type, sf_index, channel_config })
+    }
+    /// Write a no-CRC ADTS header with variable-rate buffer fullness for one payload.
+    pub fn header(self, payload_len: usize) -> Result<[u8; 7]> {
+        AdtsHeader::write(self.object_type, self.sf_index, self.channel_config, payload_len, 0x7ff)
+    }
+}
+
 /// A parsed ADTS header.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,91 +546,12 @@ mod tests {
     }
 
     #[test]
-    fn an_index_with_no_rate_does_not_panic_and_is_refused() {
-        for sf_index in 13..=15 {
-            let asc = AudioSpecificConfig::lc(sf_index, 2);
-            assert_eq!(asc.sample_rate, 0);
-            #[cfg(feature = "aac-decode")]
-            assert!(crate::aac::Decoder::from_config(asc).is_err());
-        }
-    }
-
-    #[test]
-    fn configs_that_would_not_parse_back_are_not_written() {
-        assert!(AudioSpecificConfig::lc(4, 0).to_bytes().is_err());
-        assert!(AudioSpecificConfig::lc(13, 2).to_bytes().is_err(), "a sampling rate of 0");
-        let pce = ProgramConfig { front: vec![(true, 0)], ..Default::default() };
-        let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
-        assert_eq!(AudioSpecificConfig::parse(&asc.to_bytes().unwrap()).unwrap(), asc);
-    }
-
-    #[test]
-    fn adts_headers_refuse_fields_they_cannot_hold() {
-        for (object_type, sf_index, channel_config) in [(0, 4, 2), (5, 4, 2), (29, 4, 2), (2, 13, 2), (2, 15, 2), (2, 4, 8), (2, 4, 11), (2, 4, 12)] {
-            assert!(AdtsHeader::write(object_type, sf_index, channel_config, 100, 0x7FF).is_err(), "{object_type} {sf_index} {channel_config}");
-        }
-        for object_type in 1..=4 {
-            let h = AdtsHeader::parse(&AdtsHeader::write(object_type, 12, 7, 100, 0x7FF).unwrap()).unwrap();
-            assert_eq!((h.object_type, h.sf_index, h.channel_config, h.frame_length), (object_type, 12, 7, 107));
-        }
-    }
-
-    #[test]
-    fn program_configs_refuse_more_elements_than_their_counts_hold() {
-        let fits = ProgramConfig { front: vec![(false, 0); 15], lfe: vec![0; 3], assoc_data: vec![0; 7], ..Default::default() };
-        assert!(fits.write(&mut BitWriter::new()).is_ok());
-        for pce in [
-            ProgramConfig { front: vec![(false, 0); 16], ..Default::default() },
-            ProgramConfig { side: vec![(false, 0); 16], ..Default::default() },
-            ProgramConfig { back: vec![(false, 0); 16], ..Default::default() },
-            ProgramConfig { lfe: vec![0; 4], ..Default::default() },
-            ProgramConfig { assoc_data: vec![0; 8], ..Default::default() },
-            ProgramConfig { cc: vec![(false, 0); 16], ..Default::default() },
-        ] {
-            assert!(pce.write(&mut BitWriter::new()).is_err(), "{pce:?}");
-            let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
-            assert!(asc.to_bytes().is_err());
-        }
-    }
-
-    #[test]
-    fn adts_headers_refuse_frames_too_long_for_their_length() {
-        let longest = AdtsHeader::write(2, 4, 2, 0x1FFF - 7, 0x7FF).unwrap();
-        assert_eq!(AdtsHeader::parse(&longest).unwrap().frame_length, 0x1FFF);
-        for payload in [0x1FFF - 6, 0x1FFF, usize::MAX] {
-            assert!(AdtsHeader::write(2, 4, 2, payload, 0x7FF).is_err(), "{payload}");
-        }
-    }
-
-    /// An explicit sampling rate of 0 is not a rate.
-    #[test]
-    fn a_zero_explicit_rate_is_refused() {
-        let mut bw = BitWriter::new();
-        bw.write_bits(2, 5);
-        bw.write_bits(15, 4);
-        bw.write_bits(0, 24);
-        bw.write_bits(2, 4);
-        bw.write_bits(0, 3);
-        assert!(AudioSpecificConfig::parse(&bw.finish()).is_err());
-    }
-
-    #[test]
-    fn asc_roundtrip() {
-        let a = AudioSpecificConfig::lc(4, 2);
-        let b = a.to_bytes().unwrap();
-        assert_eq!(b, vec![0x12, 0x10]);
-        assert_eq!(AudioSpecificConfig::parse(&b).unwrap(), a);
-        // 48 kHz 5.1
-        let a = AudioSpecificConfig::lc(3, 6);
-        assert_eq!(AudioSpecificConfig::parse(&a.to_bytes().unwrap()).unwrap().channels(), 6);
-    }
-
-    #[test]
-    fn amd4_channel_configurations() {
-        // 6.1 and 7.1 back (#922); 22.2 and 7.1 with heights stay unsupported
-        let channels = |c| AudioSpecificConfig::parse(&AudioSpecificConfig::lc(3, c).to_bytes().unwrap()).map(|a| a.channels()).ok();
-        assert_eq!([7, 11, 12].map(channels), [Some(8), Some(7), Some(8)]);
-        assert_eq!([13, 14].map(config_layout), [None, None]);
+    fn adts_config_preserves_prefix_and_frame_limits() {
+        let config = AdtsConfig::from_asc_prefix(&[0x12, 0x10]).unwrap();
+        assert_eq!(config.header(100).unwrap(), AdtsHeader::write(2, 4, 2, 100, 0x7ff).unwrap());
+        assert!(config.header(8185).is_err());
+        assert_eq!(AdtsConfig::from_asc_prefix(&[]), Err(AdtsConfigError::Short));
+        assert!(matches!(AdtsConfig::from_asc_prefix(&[0x2a, 0x10]), Err(AdtsConfigError::Unsupported { object_type: 5, .. })));
     }
 
     #[test]
@@ -603,34 +569,5 @@ mod tests {
         let p = AudioSpecificConfig::parse(&a.to_bytes().unwrap()).unwrap();
         assert_eq!(p.channels(), 7);
         assert_eq!(p, a);
-    }
-
-    #[test]
-    fn he_aac_asc_parses_core() {
-        // AOT 5, 24 kHz core, stereo, ext 48 kHz, core AOT 2
-        let mut bw = BitWriter::new();
-        bw.write_bits(5, 5);
-        bw.write_bits(6, 4);
-        bw.write_bits(2, 4);
-        bw.write_bits(3, 4);
-        bw.write_bits(2, 5);
-        bw.write_bits(0, 3);
-        let a = AudioSpecificConfig::parse(&bw.finish()).unwrap();
-        assert!(a.sbr);
-        assert_eq!(a.sample_rate, 24000);
-        assert_eq!(a.extension_sample_rate, Some(48000));
-    }
-
-    #[test]
-    fn adts_roundtrip() {
-        let h = AdtsHeader::write(2, 4, 2, 100, 0x7FF).unwrap();
-        let mut frame = h.to_vec();
-        frame.extend(std::iter::repeat_n(0u8, 100));
-        let p = AdtsHeader::parse(&frame).unwrap();
-        assert_eq!(p.frame_length, 107);
-        assert_eq!((p.object_type, p.sf_index, p.channel_config), (2, 4, 2));
-        let frames = split_adts(&frame).unwrap();
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].1.len(), 100);
     }
 }

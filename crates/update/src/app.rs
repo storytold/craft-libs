@@ -20,9 +20,11 @@ pub struct App {
     /// Its accent colour (sRGB), for the update prompt's buttons and highlights: the app's brand
     /// colour, as ArtCraft Launcher shows it. `None`: the default blue.
     pub accent: Option<[u8; 3]>,
-    /// Who makes it, shown as "by <developer>" in the update prompt. [`DEVELOPER`] unless the app
+    /// Who makes it, shown as "by `<developer>`" in the update prompt. [`DEVELOPER`] unless the app
     /// says otherwise.
     pub developer: &'static str,
+    /// Existing package identity when it differs from the suite's `ai.storyteller.<id>` convention.
+    pub bundle_id_override: Option<&'static str>,
 }
 
 /// The developer of every app in the storytold organisation.
@@ -31,18 +33,31 @@ pub const DEVELOPER: &str = "ArtCraft";
 impl App {
     /// An app with no former names and no icon.
     pub const fn new(id: &'static str, name: &'static str, tagline: &'static str, repo: &'static str) -> Self {
-        Self { id, name, tagline, repo, former_ids: &[], former_names: &[], icon_png: None, accent: None, developer: DEVELOPER }
+        Self {
+            id,
+            name,
+            tagline,
+            repo,
+            former_ids: &[],
+            former_names: &[],
+            icon_png: None,
+            accent: None,
+            developer: DEVELOPER,
+            bundle_id_override: None,
+        }
     }
 
-    /// `ai.storyteller.<id>`: macOS bundle id, Flatpak id and Linux desktop-file id.
+    /// macOS bundle id, Flatpak id and Linux desktop-file id; defaults to `ai.storyteller.<id>`.
     pub fn bundle_id(&self) -> String {
-        format!("ai.storyteller.{}", self.id)
+        self.bundle_id_override.map_or_else(|| format!("ai.storyteller.{}", self.id), str::to_owned)
     }
 
+    /// The app's GitHub releases page.
     pub fn releases_url(&self) -> String {
         format!("https://github.com/{}/releases", self.repo)
     }
 
+    /// The app's GitHub repository page.
     pub fn repo_url(&self) -> String {
         format!("https://github.com/{}", self.repo)
     }
@@ -69,16 +84,15 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
-    fn former_names_follow_the_current_one() {
-        let pdf =
-            App { former_ids: &["printcraft"], former_names: &["PrintCraft"], ..App::new("pdfcraft", "PdfCraft", "PDFs", "storytold/pdfcraft") };
-        assert_eq!(pdf.stems().collect::<Vec<_>>(), ["pdfcraft", "printcraft"]);
-        assert_eq!(pdf.names().collect::<Vec<_>>(), ["PdfCraft", "PrintCraft"]);
-        assert_eq!(pdf.bundle_id(), "ai.storyteller.pdfcraft");
-        assert_eq!(pdf.releases_url(), "https://github.com/storytold/pdfcraft/releases");
+    #[trial]
+    fn an_existing_package_identity_does_not_change_its_release_stem() {
+        let app = App { bundle_id_override: Some("ai.artcraft.app"), ..App::new("artcraft", "ArtCraft", "Create", "storytold/artcraft") };
+        assert_eq!(app.bundle_id(), "ai.artcraft.app");
+        assert_eq!(app.stems().collect::<Vec<_>>(), ["artcraft"]);
+        assert_eq!(App::new("photocraft", "PhotoCraft", "Photos", "storytold/photocraft").bundle_id(), "ai.storyteller.photocraft");
     }
 }

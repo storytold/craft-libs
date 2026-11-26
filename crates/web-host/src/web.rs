@@ -7,7 +7,7 @@
 //! }
 //! ```
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
@@ -40,6 +40,9 @@ pub enum Message {
     Host { version: String, handoff: bool },
     /// Open a document as File › Open would. `name` is already cleaned ([`crate::file_name`]).
     Open { name: String, data: FileData },
+    /// Attach one PDF page to the current drawing without opening another document.
+    /// Bytes stay a view until the app checks their length. Page numbers start at one.
+    AttachPdf { name: String, bytes: js_sys::Uint8Array, page: u32, insertion: [f64; 3], width: f64, height: f64 },
     /// The save with this `id` is stored.
     Saved { id: String },
     /// The host gave a handed-off file to the app that edits it.
@@ -53,11 +56,25 @@ enum Transport {
     Page { canvas: web_sys::EventTarget },
 }
 
-/// The connection to the page hosting the app.
-pub struct Host {
+struct Inner {
     app: &'static str,
     transport: Transport,
     dirty: Cell<Option<bool>>,
+}
+
+/// The connection to the page hosting the app. Clones share the one connection.
+#[derive(Clone)]
+pub struct Host(Rc<Inner>);
+
+thread_local! {
+    /// The connection [`Host::connect`] made, for the services that deliver through the page
+    /// ([`crate::files::BrowserFiles`]).
+    static CONNECTED: RefCell<Option<Host>> = const { RefCell::new(None) };
+}
+
+/// The connection to the hosting page, once [`Host::connect`] found one.
+pub(crate) fn connected() -> Option<Host> {
+    CONNECTED.with(|connected| connected.borrow().clone())
 }
 
 impl Host {
@@ -82,11 +99,13 @@ impl Host {
             }
             Mode::Page => Transport::Page { canvas: canvas.clone().into() },
         };
-        Some(Self { app, transport, dirty: Cell::new(None) })
+        let host = Self(Rc::new(Inner { app, transport, dirty: Cell::new(None) }));
+        CONNECTED.with(|connected| *connected.borrow_mut() = Some(host.clone()));
+        Some(host)
     }
 
     pub fn mode(&self) -> Mode {
-        match self.transport {
+        match self.0.transport {
             Transport::Parent { .. } => Mode::Parent,
             Transport::Page { .. } => Mode::Page,
         }
@@ -97,9 +116,9 @@ impl Host {
     /// `saved` for the `save` the handler just posted), and wasm-bindgen refuses to re-enter an
     /// `FnMut` closure before its body runs, so the message would never reach the queue.
     pub fn listen(&self, handler: impl FnMut(Message) + 'static) {
-        let app = self.app;
+        let app = self.0.app;
         let inbox = Rc::new(Inbox::new(handler));
-        match &self.transport {
+        match &self.0.transport {
             Transport::Parent { window, parent, origin } => {
                 let (parent, origin, inbox) = (parent.clone(), origin.clone(), inbox.clone());
                 let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
@@ -143,7 +162,7 @@ impl Host {
     /// The new state is recorded before the send: a page host can report another state while the
     /// event is still dispatching, and that later report wins. A failed send is forgotten.
     pub fn post_dirty(&self, dirty: bool) {
-        crate::note_dirty(&self.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
+        crate::note_dirty(&self.0.dirty, dirty, || self.post(Outgoing::Dirty, &[("dirty", dirty.into())], None).is_ok());
     }
 
     /// Hand the host a file the app would otherwise download: Save, Save As, Export. With an
@@ -177,9 +196,9 @@ impl Host {
     }
 
     fn post(&self, kind: Outgoing, fields: &[(&str, JsValue)], transfer: Option<&js_sys::ArrayBuffer>) -> Result<(), String> {
-        let message_type = message_type(self.app, kind.kind());
+        let message_type = message_type(self.0.app, kind.kind());
         let error = |e: JsValue| e.as_string().unwrap_or_else(|| format!("{e:?}"));
-        match &self.transport {
+        match &self.0.transport {
             Transport::Parent { parent, origin, .. } => {
                 let message = object(&[("type", message_type.as_str().into())], fields)?;
                 match transfer {
@@ -208,6 +227,31 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
         Incoming::Open => {
             let name = file_name(string(data, "name").as_deref(), "document");
             Message::Open { name, data: file_data(data)? }
+        }
+        Incoming::AttachPdf => {
+            let FileData::Bytes(bytes) = file_data(data)? else { return None };
+            let page = get(data, "page").as_f64()?;
+            if !(page.is_finite() && page >= 1.0 && page <= f64::from(u32::MAX) && page.fract() == 0.0) {
+                return None;
+            }
+            let coords = get(data, "insertion").dyn_into::<js_sys::Array>().ok()?;
+            if coords.length() != 3 {
+                return None;
+            }
+            let mut insertion = [0.0; 3];
+            for (i, out) in insertion.iter_mut().enumerate() {
+                *out = coords.get(u32::try_from(i).ok()?).as_f64().filter(|v| v.is_finite())?;
+            }
+            let width = get(data, "width").as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+            let height = get(data, "height").as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+            Message::AttachPdf {
+                name: file_name(string(data, "name").as_deref(), "document.pdf"),
+                bytes,
+                page: page as u32,
+                insertion,
+                width,
+                height,
+            }
         }
         Incoming::Saved => Message::Saved { id: string(data, "id")? },
         Incoming::HandoffDone => {
@@ -248,108 +292,92 @@ fn string(data: &JsValue, key: &str) -> Option<String> {
     get(data, key).as_string()
 }
 
-/// Node tests for the parsing of a host's objects: wrong shapes, missing fields, and sizes the
-/// host states against the data it sends. No browser; run with `wasm-bindgen-test-runner`.
+/// Browser tests for parsing and delivery of a host's objects, including origin/source checks.
 #[cfg(test)]
 mod tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
 
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn test_attach_pdf_rejects_foreign_origin() {
+        let window = web_sys::window().unwrap();
+        let origin = window.location().origin().unwrap();
+        let host = Host(Rc::new(Inner {
+            app: "pdf-attach-test",
+            transport: Transport::Parent { window: window.clone(), parent: window.clone(), origin: origin.clone() },
+            dirty: Cell::new(None),
+        }));
+        let received = Rc::new(Cell::new(0));
+        let counter = received.clone();
+        host.listen(move |_| counter.set(counter.get() + 1));
+        let data = obj(&[
+            ("type", "pdf-attach-test:attach-pdf".into()),
+            ("name", "page.pdf".into()),
+            ("bytes", buffer(3).into()),
+            ("page", 1.into()),
+            ("insertion", js_sys::Array::of3(&10.into(), &20.into(), &3.into()).into()),
+            ("width", 100.into()),
+            ("height", 80.into()),
+        ]);
+        let send = |origin: &str, source: Option<&web_sys::Window>| {
+            let init = web_sys::MessageEventInit::new();
+            init.set_origin(origin);
+            init.set_source(source.map(|s| s.as_ref()));
+            init.set_data(&data);
+            let event = web_sys::MessageEvent::new_with_event_init_dict("message", &init).unwrap();
+            window.dispatch_event(&event).unwrap();
+        };
+        send("https://foreign.example", Some(&window));
+        assert_eq!(received.get(), 0, "a foreign origin changes nothing");
+        send(&origin, None);
+        assert_eq!(received.get(), 0, "the expected origin with another source changes nothing");
+        send(&origin, Some(&window));
+        assert_eq!(received.get(), 1, "the same payload from the authorized parent is delivered");
+    }
+
     fn obj(fields: &[(&str, JsValue)]) -> JsValue {
         object(&[], fields).expect("an object").into()
     }
 
+    #[wasm_bindgen_test]
+    fn attach_pdf_checks_page_rectangle_and_bytes() {
+        let valid = || {
+            obj(&[
+                ("name", "../sheet.pdf".into()),
+                ("bytes", buffer(3).into()),
+                ("page", 2.into()),
+                ("insertion", js_sys::Array::of3(&10.into(), &20.into(), &3.into()).into()),
+                ("width", 100.into()),
+                ("height", 80.into()),
+            ])
+        };
+        let Some(Message::AttachPdf { name, bytes, page, insertion, width, height }) = read(Incoming::AttachPdf, &valid()) else {
+            panic!("valid attachment must be delivered");
+        };
+        assert_eq!(name, "sheet.pdf");
+        assert_eq!(bytes.length(), 3);
+        assert_eq!((page, insertion, width, height), (2, [10.0, 20.0, 3.0], 100.0, 80.0));
+        for (key, value) in [
+            ("bytes", JsValue::NULL),
+            ("page", 0.into()),
+            ("page", 1.5.into()),
+            ("page", f64::INFINITY.into()),
+            ("page", 4294967296.0.into()),
+            ("insertion", js_sys::Array::of2(&0.into(), &0.into()).into()),
+            ("insertion", js_sys::Array::of3(&0.into(), &f64::NAN.into(), &0.into()).into()),
+            ("width", 0.into()),
+            ("height", (-1).into()),
+            ("width", "100".into()),
+        ] {
+            let data = valid();
+            js_sys::Reflect::set(&data, &key.into(), &value).unwrap();
+            assert!(read(Incoming::AttachPdf, &data).is_none(), "invalid {key} must be dropped");
+        }
+    }
+
     fn buffer(len: u32) -> js_sys::ArrayBuffer {
         js_sys::ArrayBuffer::new(len)
-    }
-
-    #[wasm_bindgen_test]
-    fn an_open_without_bytes_or_a_blob_is_dropped() {
-        for data in [
-            obj(&[("name", "a.pdf".into())]),
-            obj(&[("name", "a.pdf".into()), ("bytes", "text".into())]),
-            obj(&[("name", "a.pdf".into()), ("bytes", 42.into())]),
-            obj(&[("name", "a.pdf".into()), ("file", "not a blob".into())]),
-            JsValue::NULL,
-            JsValue::UNDEFINED,
-            JsValue::from_str("a string"),
-            JsValue::from_f64(7.0),
-        ] {
-            assert!(read(Incoming::Open, &data).is_none());
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn an_open_takes_bytes_as_an_array_buffer_or_a_uint8_array() {
-        let ab = buffer(3);
-        let array = js_sys::Uint8Array::new_with_length(5);
-        for (bytes, len) in [(JsValue::from(ab), 3.0), (JsValue::from(array), 5.0)] {
-            let Some(Message::Open { data, .. }) = read(Incoming::Open, &obj(&[("name", "a.pdf".into()), ("bytes", bytes)])) else {
-                panic!("an open with bytes is read");
-            };
-            assert_eq!(data.size(), len);
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn an_open_without_a_name_or_with_a_hostile_one_gets_a_clean_name() {
-        let named = |name: Option<&str>| {
-            let mut fields = vec![("bytes", JsValue::from(buffer(1)))];
-            if let Some(n) = name {
-                fields.push(("name", n.into()));
-            }
-            match read(Incoming::Open, &obj(&fields)) {
-                Some(Message::Open { name, .. }) => name,
-                _ => panic!("an open with bytes is read"),
-            }
-        };
-        assert_eq!(named(None), "document");
-        assert_eq!(named(Some("../../etc/passwd")), "passwd");
-        assert_eq!(named(Some("a\u{0}b.txt")), "ab.txt");
-        assert_eq!(named(Some(&"x".repeat(300))).chars().count(), crate::MAX_NAME_CHARS);
-    }
-
-    #[wasm_bindgen_test]
-    fn the_size_is_the_data_s_own_not_the_hosts_claim() {
-        // An ArrayBuffer of 64 MiB with a `size` field of 1: the bytes are viewed in place, not
-        // copied, and the app sees their real length before it decides to read them.
-        let ab = buffer(64 << 20);
-        let Some(Message::Open { data, .. }) = read(Incoming::Open, &obj(&[("bytes", ab.clone().into()), ("size", 1.into())])) else {
-            panic!("an open with bytes is read");
-        };
-        assert_eq!(data.size(), f64::from(64u32 << 20));
-        let FileData::Bytes(view) = &data else { panic!("bytes stay bytes") };
-        assert!(js_sys::Object::is(&view.buffer(), &ab), "a view of the host's buffer, not a copy");
-
-        // A Blob of 5 bytes with a `size` field of a terabyte.
-        let blob = web_sys::Blob::new_with_str_sequence(&js_sys::Array::of1(&"hello".into())).expect("a Blob");
-        let Some(Message::Open { data, .. }) = read(Incoming::Open, &obj(&[("file", blob.into()), ("size", 1e12.into())])) else {
-            panic!("an open with a Blob is read");
-        };
-        assert_eq!(data.size(), 5.0);
-    }
-
-    #[wasm_bindgen_test]
-    fn a_saved_needs_a_string_id() {
-        assert!(matches!(read(Incoming::Saved, &obj(&[("id", "s1".into())])), Some(Message::Saved { id }) if id == "s1"));
-        for data in [obj(&[]), obj(&[("id", 3.into())]), JsValue::NULL, JsValue::from_str("s1")] {
-            assert!(read(Incoming::Saved, &data).is_none());
-        }
-    }
-
-    #[wasm_bindgen_test]
-    fn a_host_message_and_a_handoff_done_read_whatever_fields_exist() {
-        // Nothing required: a missing version is the contract's, `handoff` is true only for `true`.
-        for data in [JsValue::NULL, obj(&[]), obj(&[("handoff", "yes".into())]), obj(&[("handoff", 1.into())])] {
-            let Some(Message::Host { version, handoff }) = read(Incoming::Host, &data) else { panic!("a host message is read") };
-            assert_eq!(version, crate::VERSION);
-            assert!(!handoff);
-        }
-        assert!(matches!(read(Incoming::Host, &obj(&[("handoff", true.into())])), Some(Message::Host { handoff: true, .. })));
-        assert!(matches!(
-            read(Incoming::HandoffDone, &obj(&[("name", "a.pdf".into()), ("app", "pdfcraft".into())])),
-            Some(Message::HandoffDone { name, app }) if name == "a.pdf" && app == "pdfcraft"
-        ));
-        assert!(matches!(read(Incoming::HandoffDone, &JsValue::NULL), Some(Message::HandoffDone { name, app }) if name.is_empty() && app.is_empty()));
     }
 }

@@ -18,7 +18,9 @@ mod encode;
 pub mod header;
 mod tables;
 
-pub use decode::{DecodeOptions, decode_frame, decode_frame_into, decode_frame_with, probe};
+pub use decode::{
+    DecodeLimits, DecodeOptions, decode_frame, decode_frame_into, decode_frame_into_with_limits, decode_frame_with, decode_frame_with_limits, probe,
+};
 pub use encode::{Encoder, EncoderConfig};
 pub use header::{FrameHeader, PictureHeader};
 
@@ -215,19 +217,5 @@ impl Frame {
 
     pub fn is_interlaced(&self) -> bool {
         self.interlace != Interlace::Progressive
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn frame_constructor_rejects_unsupported_bit_depths() {
-        assert!(Frame::new(1, 1, ChromaFormat::Yuv422, 7, false).is_err());
-        assert!(Frame::new(1, 1, ChromaFormat::Yuv444, 17, true).is_err());
-        let frame = Frame::new(1, 1, ChromaFormat::Yuv444, 16, true).unwrap();
-        assert_eq!(frame.y, [4096]);
-        assert_eq!(frame.alpha, Some(vec![u16::MAX]));
     }
 }

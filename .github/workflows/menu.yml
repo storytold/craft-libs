@@ -1,0 +1,34 @@
+name: Menu
+
+on:
+  push:
+    branches: [main, next]
+    paths: ["crates/menu/**", "crates/keymap/**", "crates/quit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/menu.yml"]
+  pull_request:
+    paths: ["crates/menu/**", "crates/keymap/**", "crates/quit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/menu.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: menu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    timeout-minutes: 15
+    # fmt, native clippy and the tests run in the Workspace gate on every OS.
+    name: Menu macOS and WASM lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-darwin, wasm32-unknown-unknown
+      # The macOS backend type-checks from Linux; it needs no linker or SDK.
+      - run: cargo clippy -p craft-menu --lib --locked --target aarch64-apple-darwin -- -D warnings
+      - run: cargo clippy -p craft-menu --lib --locked --target wasm32-unknown-unknown -- -D warnings
