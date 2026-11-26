@@ -14,16 +14,18 @@ mod footer;
 mod menu;
 #[cfg(feature = "screen-testing")]
 pub mod mock;
-mod panel;
+pub(crate) mod panel;
 mod prompt;
 mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use body::{ActionMove, ActionPlace};
 pub use menu::{ActionsMenuAction, ActionsMenuFacts, ActionsPanelCommands, panel_rows};
-pub use panel::{ActionSelection, ActionsEvent, ActionsHost, ActionsPanel, ActionsPanelOutput, ActionsPanelState, ActionsSettings, ShortcutChoice};
+pub use panel::{
+    ActionSelection, ActionsEvent, ActionsHost, ActionsPanel, ActionsPanelOutput, ActionsPanelState, ActionsSettings, ShortcutChoice, StepCells,
+};
 pub use prompt::LibraryPrompt;
 pub use rows::{DIALOG_COLUMN, INCLUDE_COLUMN};
 pub use words::ActionsWords;

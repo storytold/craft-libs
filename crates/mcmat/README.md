@@ -1,17 +1,10 @@
 # craft-mcmat
 
-A bounded reader and writer for portable MaterialCraft `.mcmat` ZIP packages. A package
-contains `material.json`, named texture maps and a source package. Applications interpret
-parameter values and cook or render maps themselves; this crate does not depend on an app's
-model. It supports callers that read either version 1 or version 2 of the manifest, or both.
+The MCMAT v3 portable material is a ZIP containing a version-only `material.json`, one
+`source.sbs`, and the required source assets under `resources/`. The sole root-level
+material graph in the SBS is the entry. Applications inspect its exposed controls and
+cook its outputs through MaterialCraft. Texture maps and MaterialX documents are generated
+by exporters. Earlier archives must be republished from their original projects.
 
-`is_material` checks for a manifest with a bounded ZIP index; `Material::open` takes caller-provided version, entry-count, map-count, per-entry and total
-expanded-byte limits. Each subsequent `read` and `read_source` shares that budget, including
-repeated references to the same ZIP member. Duplicate member names are refused. The manifest
-preserves unknown fields at the top level and on maps; parameter, input and preset objects are
-kept as JSON values so their unknown fields survive too. `write` preserves the caller's source
-entry name and map names, and rejects duplicate archive member names through `craft-zip`.
-
-The source package is opaque. Version 1 commonly names `source.mcraft`; MaterialCraft's version 2
-writer names `source.sbs`. Callers that invoke another application must preserve the source's
-format and extension rather than infer it from `.mcmat` alone.
+`Material::open` checks archive entries and expansion budgets before returning source
+files. `write` compresses the XML and version marker and preserves source asset bytes.

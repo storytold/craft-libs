@@ -8,7 +8,8 @@
 //!
 //! The crash log is `<dir>/crash-<days since 1970>.log`, appended to, one entry per panic:
 //! `=== <App> <version> (unix <secs>)`, the summary, the backtrace. On the web there is no file;
-//! the previous hook still prints to the browser console.
+//! the previous hook still prints to the browser console. Text a panic message quotes between
+//! backticks is left out everywhere the message goes: it can be the user's writing.
 //!
 //! ```ignore
 //! crash::install("PhotoCraft", env!("CARGO_PKG_VERSION"), Some(log_dir));
@@ -66,7 +67,8 @@ fn write_log(_summary: &str) {}
 /// A panic caught by [`catch`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Panicked {
-    /// The panic message (`"panic"` when it carried no text).
+    /// The panic message with its backticked spans replaced by `…` (`"panic"` when it carried no
+    /// text).
     pub message: String,
 }
 
@@ -82,27 +84,64 @@ impl std::error::Error for Panicked {}
 /// Install the panic hook, once per process; later calls only change `app`, `version` and the
 /// crash log directory (`None`: standard error and the log only, as on the web and in tests).
 ///
-/// The hook stores `<message> (at <file>:<line>, thread <name>)` for [`take_last`], logs it with
-/// `log::error!("<app> internal error: …")`, appends it with a forced backtrace to the crash log,
-/// then calls the previous hook, so the panic still reaches standard error or the console.
+/// The hook stores `<message> (at <file>:<line>, thread <name>)` for [`take_last`], with the
+/// message's backticked spans replaced by `…` (std quotes the text it was handling there, which
+/// can be the user's), and appends it with a forced backtrace
+/// to the crash log. It reports the summary once as `<app> internal error: …`: through
+/// `log::error!` when a logger takes errors (the app's logger also prints it to standard error),
+/// otherwise straight to standard error. On the web it logs and then calls the previous hook, so
+/// the panic still reaches the browser console.
 pub fn install(app: &'static str, version: &'static str, dir: Option<PathBuf>) {
     // filmcraft: crates/ui-egui/src/crash.rs:15 with pc: apps/photocraft/src/crash_guard.rs:11 (log::error!)
     *lock(&STATE) = Some(State { app, version, dir });
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
+        #[cfg(target_arch = "wasm32")]
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let message = payload_message(info.payload());
+            let message = redact_quoted(&payload_message(info.payload()));
             let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
             let thread = std::thread::current().name().unwrap_or("unnamed").to_owned();
             let summary = format!("{message} (at {at}, thread {thread})");
             *lock(&LAST) = Some(summary.clone());
             let app = lock(&STATE).as_ref().map_or("app", |s| s.app);
-            log::error!("{app} internal error: {summary}");
-            write_log(&summary);
-            prev(info);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if log::log_enabled!(log::Level::Error) {
+                    log::error!("{app} internal error: {summary}");
+                } else {
+                    use std::io::Write as _;
+                    // `eprintln!` panics on a closed standard error, and a panic inside the hook aborts.
+                    let _ = writeln!(std::io::stderr(), "{app} internal error: {summary}");
+                }
+                write_log(&summary);
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                log::error!("{app} internal error: {summary}");
+                prev(info);
+            }
         }));
     });
+}
+
+/// `message` with each backticked span replaced by `…`, so a panic text carries no quoted user
+/// data: std quotes the string it was slicing (``byte index 5 is not a char boundary; … of `<the
+/// string>` ``), and that string can be the user's writing. An unpaired backtick leaves the rest
+/// of the message out too.
+fn redact_quoted(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    for (i, part) in message.split('`').enumerate() {
+        if i % 2 == 1 {
+            out.push_str("`…");
+        } else {
+            if i > 0 {
+                out.push('`');
+            }
+            out.push_str(part);
+        }
+    }
+    out
 }
 
 /// Write a fatal error that isn't a panic (the window could not be created) to the crash log.
@@ -130,12 +169,14 @@ pub fn log_path() -> Option<PathBuf> {
     None
 }
 
-/// Run `f`; a panic inside it is logged by the hook and comes back as [`Panicked`]. The caller
-/// reports that error, so the panic is not kept for [`take_last`] as well.
+/// Run `f`; a panic inside it is logged by the hook and comes back as [`Panicked`], its message
+/// redacted as the hook redacts it. The caller reports that error, so the panic is not kept for
+/// [`take_last`] as well.
 pub fn catch<T>(f: impl FnOnce() -> T) -> Result<T, Panicked> {
     // pc: apps/photocraft/src/crash_guard.rs:20
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|payload| {
-        let message = payload_message(&*payload);
+        // The hook stored the redacted message; comparing the raw one would keep a quoted panic.
+        let message = redact_quoted(&payload_message(&*payload));
         let mut last = lock(&LAST);
         if last.as_deref().is_some_and(|summary| summary.starts_with(&message)) {
             *last = None;

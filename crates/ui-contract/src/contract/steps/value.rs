@@ -2,7 +2,7 @@
 
 use crate::contract::cx::gesture_key;
 use crate::contract::values::reuse_arc;
-use crate::contract::{Component, ValueOf};
+use crate::contract::{BindMut, Component, ValueOf};
 use crate::runtime::commands::{CommandKind, ResolvedCommand};
 use crate::runtime::memory::MemoryStage;
 use crate::runtime::motion::StateTweens;
@@ -10,12 +10,11 @@ use craft_behavior::{CancelReason, EditEvent, Gesture, Mixed, Value};
 use egui::{Context, Id};
 use std::sync::Arc;
 
-/// What a component showed last pass, in one shown slot under its id: the shown copy of its value, the pass its value
-/// step last ran in, the `(hovered, focus_visible)` that `PartsCx::hovered` and `focus_visible` read, and its eased
+/// What a component showed last pass, in one shown slot under its id: the shown copy of its value, the
+/// `(hovered, focus_visible)` that `PartsCx::hovered` and `focus_visible` read, and its eased
 /// hover, press and on.
 pub(crate) struct Shown<V> {
     pub copy: Option<Arc<V>>,
-    pub drawn: u64,
     pub state: ShownState,
 }
 
@@ -23,18 +22,28 @@ pub(crate) struct Shown<V> {
 #[derive(Clone, Default)]
 pub(crate) struct ShownState {
     pub last_state: (bool, bool),
+    /// A pointer click on the control, while the pointer has stayed over it since.
+    pub clicked_over: bool,
     pub tweens: Option<StateTweens>,
+}
+
+impl ShownState {
+    /// The shown slot under which step 12 leaves the pass's `Hover` report of component `id`, for `Pointer::hover`:
+    /// the core that answers it cannot name the typed `Shown` record this state lives in.
+    pub(crate) fn hover_slot(id: Id) -> Id {
+        crate::runtime::memory::sub(id, "hover")
+    }
 }
 
 impl<V> Clone for Shown<V> {
     fn clone(&self) -> Self {
-        Shown { copy: self.copy.clone(), drawn: self.drawn, state: self.state.clone() }
+        Shown { copy: self.copy.clone(), state: self.state.clone() }
     }
 }
 
 impl<V> Default for Shown<V> {
     fn default() -> Self {
-        Shown { copy: None, drawn: 0, state: ShownState::default() }
+        Shown { copy: None, state: ShownState::default() }
     }
 }
 
@@ -61,26 +70,47 @@ fn command_given<V: Value>(command: Option<&ResolvedCommand>) -> Option<V> {
     (&checked as &dyn std::any::Any).downcast_ref::<V>().cloned()
 }
 
+/// The two component-specific operations used while resolving a shown value.
+trait ValueSource<V: Value> {
+    fn binding(&mut self) -> Option<BindMut<'_, V>>;
+    fn matches_host(&self, proposed: &V, host: &V) -> bool;
+}
+
+impl<C: Component> ValueSource<ValueOf<C>> for C {
+    fn binding(&mut self) -> Option<BindMut<'_, ValueOf<C>>> {
+        self.bind()
+    }
+
+    fn matches_host(&self, proposed: &ValueOf<C>, host: &ValueOf<C>) -> bool {
+        self.same_value(proposed, host)
+    }
+}
+
 /// Step 4, value: the shown value is the running gesture's proposal, else the binding's value. The one shown copy is
 /// replaced only when the binding differs from it. A gesture ends here when `cancel_all` ran, or when the app changed the
 /// value under it.
 pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id, command: Option<&ResolvedCommand>) -> ValueStep<ValueOf<C>> {
-    type V<C> = ValueOf<C>;
-    let held = stage.shown::<Shown<V<C>>>(id).copy.clone();
+    resolve_value(comp, stage, id, command)
+}
+
+fn resolve_value<V: Value>(comp: &mut dyn ValueSource<V>, stage: &mut MemoryStage, id: Id, command: Option<&ResolvedCommand>) -> ValueStep<V> {
+    let held = stage.shown::<Shown<V>>(id).copy.clone();
     let slot = gesture_key(id);
     let (serial, all_reason) = crate::runtime::edit::latest(stage.ctx());
     let mut cancelled = None;
-    // A component not drawn for a pass loses its press at the end hook; its running gesture ends here, the first pass it is
-    // drawn again.
-    let pass_nr = crate::runtime::pointer::pass_of(stage.ctx());
-    let removed = std::mem::replace(&mut stage.shown::<Shown<V<C>>>(id).drawn, pass_nr).saturating_add(1) < pass_nr;
-    if stage.shown::<Gesture<V<C>>>(slot).is_running() {
+    // A component not shown for a pass, by a run or a replay of one, loses its press at the end hook; its running gesture
+    // ends here, the first pass it is shown again.
+    let removed = !crate::runtime::memory::shown_last_pass(stage.ctx(), id);
+    if stage.shown::<Gesture<V>>(slot).is_running() {
+        // A typing run cut short by the removal is forgotten: its text reached the binding as it was typed, and the value
+        // from before it may be long stale by the time the component is shown again.
+        let typing_cut_short = removed && crate::contract::text::run_open(stage, id);
         // `(given, value)` of a single-valued binding the app owns.
-        let host = comp.bind().and_then(|bind| match bind.get() {
+        let host = comp.binding().and_then(|bind| match bind.get() {
             Some(Mixed::Same(value)) if !bind.is_kept() => Some((bind.is_given(), value)),
             _ => None,
         });
-        let gesture = stage.shown::<Gesture<V<C>>>(slot);
+        let gesture = stage.shown::<Gesture<V>>(slot);
         let reason = match all_reason.filter(|_| serial > gesture.cancel_seen) {
             _ if removed => Some(CancelReason::Removed),
             Some(reason) => Some(reason),
@@ -91,9 +121,9 @@ pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id,
                 let changed = match &host {
                     Some((true, value)) => {
                         gesture.last_given.as_ref().is_some_and(|last| last != value)
-                            && gesture.emitted.as_ref().is_some_and(|emitted| !comp.same_value(emitted, value))
+                            && gesture.emitted.as_ref().is_some_and(|emitted| !comp.matches_host(emitted, value))
                     }
-                    Some((false, value)) => gesture.emitted.as_ref().is_some_and(|emitted| !comp.same_value(emitted, value)),
+                    Some((false, value)) => gesture.emitted.as_ref().is_some_and(|emitted| !comp.matches_host(emitted, value)),
                     None => false,
                 };
                 changed.then_some(CancelReason::HostChanged)
@@ -103,16 +133,16 @@ pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id,
             gesture.last_given = Some(value.clone());
         }
         if let Some(reason) = reason {
-            // The document moved under the gesture, so there is nothing to restore.
-            let before = gesture.before.clone().filter(|_| !reason.document_moved());
+            // The document moved under the gesture, so there is nothing to restore; nor for a typing run cut short.
+            let before = gesture.before.clone().filter(|_| !reason.document_moved() && !typing_cut_short);
             cancelled = Some(EditEvent::cancel(gesture.id, reason, before));
             *gesture = gesture.ended(true);
         }
     }
-    stage.shown::<Gesture<V<C>>>(slot).cancel_seen = serial;
-    let proposal = stage.shown::<Gesture<V<C>>>(slot).proposal.clone();
+    stage.shown::<Gesture<V>>(slot).cancel_seen = serial;
+    let proposal = stage.shown::<Gesture<V>>(slot).proposal.clone();
     // A binding equal to the held copy is not read: no clone, no new copy.
-    let bound = comp.bind().map(|bind| {
+    let bound = comp.binding().map(|bind| {
         let unchanged = held.as_deref().is_some_and(|held| bind.shown_matches(held));
         let got = if unchanged { None } else { bind.get() };
         (unchanged, got, bind.is_kept())
@@ -125,11 +155,11 @@ pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id,
         (None, Some((false, Some(Mixed::Mixed), ..))) => out.mixed = true,
         // A kept binding with a `SaveKey` reads the saved tier, one without reads session memory under the id.
         (None, Some((false, None, _))) => {
-            out.value = comp.bind().and_then(|bind| bind.kept(stage, id, &held));
+            out.value = comp.binding().and_then(|bind| bind.kept(stage, id, &held));
         }
-        (None, None) => out.value = command_given::<V<C>>(command).map(|value| reuse_arc(&held, &value)),
+        (None, None) => out.value = command_given::<V>(command).map(|value| reuse_arc(&held, &value)),
     }
-    let shown = &mut stage.shown::<Shown<V<C>>>(id).copy;
+    let shown = &mut stage.shown::<Shown<V>>(id).copy;
     let same = match (&*shown, &out.value) {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
         (None, None) => true,

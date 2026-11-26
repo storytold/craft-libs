@@ -101,11 +101,15 @@ fn linked_keys(result: &DialogResult<RelinkOutcome<u32>>) -> (Vec<u32>, Vec<u32>
     (outcome.linked.iter().map(|(key, _)| *key).collect(), outcome.offline.clone())
 }
 
+/// A folder path is absolute only with a drive on Windows.
+const DRIVE: &str = if cfg!(windows) { "D:" } else { "" };
+
 #[trial]
 fn relink_others_offers_the_rows_the_remap_fits() {
-    let files = files(&[("/T7/shoot/a.mov", SAME), ("/T7/shoot/b.mov", SAME), ("/T7/shoot/c.mov", OTHER)]);
+    let files =
+        files(&[(&format!("{DRIVE}/T7/shoot/a.mov"), SAME), (&format!("{DRIVE}/T7/shoot/b.mov"), SAME), (&format!("{DRIVE}/T7/shoot/c.mov"), OTHER)]);
     let rows = vec![row(1, "Clip A", "C:\\shoot\\a.mov"), row(2, "Clip B", "C:\\shoot\\b.mov"), row(3, "Clip C", "C:\\shoot\\c.mov")];
-    let mut rig = rig(rows, &files, "/T7/shoot", true, true);
+    let mut rig = rig(rows, &files, &format!("{DRIVE}/T7/shoot"), true, true);
     rig.search();
     rig.click("Link");
     rig.jobs.run_all();

@@ -10,6 +10,8 @@ use std::sync::Arc;
 /// different logical heights at different interface scales (14.5 at scale 2, 15 at scale 1), and a wrapped text would
 /// change height with the scale.
 pub(crate) fn layout(ctx: &Context, job: LayoutJob) -> Arc<Galley> {
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_text_layout(ctx);
     ctx.fonts_mut(|fonts| layout_with(fonts, job))
 }
 

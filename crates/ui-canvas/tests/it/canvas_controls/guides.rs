@@ -3,10 +3,10 @@
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{Axis, CancelReason, CanvasView};
-use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Rulers, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::canvas_controls::reading::{GuideReading, running};
-use craft_ui::contract::{Bind, BodyCx, Show as _};
+use craft_ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::{ToolFixture, pointer, tool_fixture, trial};
 use egui::{Id, Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
@@ -136,29 +136,30 @@ fn the_running_guide_reading_follows_the_drag_and_goes_when_it_ends() {
 /// Where guides may live, in document units.
 const BOUNDS: DocRect = DocRect::new(100.0, 100.0, 600.0, 400.0);
 
-/// A canvas at `zoom` that snaps to horizontal guide targets at y = 224.3 and y = 250.3, its body showing rulers and
-/// interactive guides kept inside [`BOUNDS`], in a room that holds the bounds with a margin, so a release outside them
-/// still lands on the canvas; the body's rect, read each pass.
-fn ruled(zoom: f64, guides: &Shared<Vec<Guide>>) -> (ToolFixture<Recorder>, Rc<Cell<Rect>>) {
+/// A canvas at `zoom` that snaps to horizontal guide targets at y = 224.3 and y = 250.3, its rulers shown by the canvas and its body
+/// showing interactive guides kept inside [`BOUNDS`], in a room that holds the bounds with a margin, so a release outside them
+/// still lands on the canvas.
+fn ruled(zoom: f64, guides: &Shared<Vec<Guide>>) -> ToolFixture<Recorder> {
     let mut targets = SnapTargets::new();
     targets.add(SnapTarget::new(Axis::X, 224.3, SnapKind::Guide));
     targets.add(SnapTarget::new(Axis::X, 250.3, SnapKind::Guide));
     let snap = Snap::new(Arc::new(targets), SnapOptions::default());
     let (shown, zero) = (Rc::clone(guides), Rc::new(RefCell::new(Point::ZERO)));
-    let body = Rc::new(Cell::new(Rect::NOTHING));
-    let seen = Rc::clone(&body);
-    let mut fixture = ToolFixture::with_snap("Document", Recorder::default(), view_at(zoom), snap, move |ui, cx| {
-        seen.set(cx.rect);
-        let rulers = Rulers::new("Rulers", Bind::bound(&mut *zero.borrow_mut())).show_at(ui, cx.rect);
+    // The view lies inside the strips: it keeps the document point under the screen point it was given, so at zoom 1
+    // document and screen points coincide, from the second pass on (the strips' inset is the first pass's body).
+    let inset = Rc::new(Cell::new(Vec2::ZERO));
+    let moved = Rc::clone(&inset);
+    let view = move |room: Rect| {
+        let centre = room.center() + inset.get() / 2.0;
+        CanvasView::new(room, Point::new(f64::from(centre.x), f64::from(centre.y)), zoom)
+    };
+    let mut fixture = ToolFixture::with_rulers("Document", Recorder::default(), view, snap, zero, move |ui, cx| {
+        moved.set(cx.rect.min.to_vec2());
         let mut guides = shown.borrow_mut();
-        let mut control = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *guides)).interactive(true).bounds(BOUNDS);
-        if let Some(drag) = rulers.guide {
-            control = control.pending(drag);
-        }
-        let _ = control.show_at(ui, cx.rect);
+        let _ = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *guides)).interactive(true).bounds(BOUNDS).show_at(ui, cx.rect);
     });
     fixture.fixture().room(Vec2::new(700.0, 500.0)).settle();
-    (fixture, body)
+    fixture
 }
 
 /// A drag with `mods` held from `from` to `to`.
@@ -176,8 +177,8 @@ fn drag_with(fixture: &mut ToolFixture<Recorder>, mods: Modifiers, from: Pos2, t
 #[trial]
 fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_change_where_it_lands() {
     let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
-    let (mut fixture, body) = ruled(1.0, &guides);
-    let rect = body.get();
+    let mut fixture = ruled(1.0, &guides);
+    let rect = fixture.canvas().rect;
     // Inside the top strip, clear of the corner, and inside the left strip.
     let top = |x: f32| pos2(x, rect.min.y + 4.0);
     let left = |y: f32| pos2(rect.min.x + 4.0, y);
@@ -219,12 +220,47 @@ fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_cha
     assert_eq!(guides.borrow().len(), count - 1);
 
     let deep: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
-    let (mut fixture, body) = ruled(8.0, &deep);
-    let rect = body.get();
+    let mut fixture = ruled(8.0, &deep);
+    let rect = fixture.canvas().rect;
     let centre = rect.center();
     drag_with(&mut fixture, Modifiers::SHIFT, pos2(centre.x, rect.min.y + 4.0), centre + Vec2::new(0.0, 13.0));
     let landed: Vec<f64> = deep.borrow().iter().map(|guide| guide.position).collect();
     assert!(matches!(landed.as_slice(), [tick] if tick.fract() == 0.0), "Shift deep in lands on a whole pixel: {landed:?}");
+}
+
+// A double press on a strip places a guide at once, at the pointer, with the drag-out's Alt and Shift rules. The
+// pointer lies on the strip, so the guide lands only where the bounds take it: Alt turns it to the strip's across
+// axis, which runs inside them. A press and drag out of a strip still adds exactly one guide.
+#[trial]
+fn a_double_press_on_a_ruler_places_a_guide_at_once() {
+    let placed = |mods: Modifiers, at: &dyn Fn(Rect) -> Pos2| -> Vec<Guide> {
+        let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
+        let mut fixture = ruled(1.0, &guides);
+        let rect = fixture.canvas().rect;
+        fixture.fixture().hold(mods);
+        fixture.double_press_at(at(rect));
+        fixture.fixture().hold(Modifiers::NONE);
+        guides.borrow().clone()
+    };
+    let top = |x: f32| move |rect: Rect| pos2(x, rect.min.y + 4.0);
+    let left = |y: f32| move |rect: Rect| pos2(rect.min.x + 4.0, y);
+
+    let turned = placed(Modifiers::ALT, &top(300.4));
+    assert!(
+        matches!(turned.as_slice(), [one] if one.along == Axis::Y && (one.position - 300.4).abs() < 1e-3),
+        "Alt on the top ruler places a vertical guide at the pointer: {turned:?}"
+    );
+    let ticked = placed(Modifiers::ALT | Modifiers::SHIFT, &top(300.4));
+    assert!(matches!(ticked.as_slice(), [one] if one.position.fract() == 0.0), "Shift lands on a whole pixel: {ticked:?}");
+    let side = placed(Modifiers::ALT, &left(300.4));
+    assert!(matches!(side.as_slice(), [one] if one.along == Axis::X), "Alt on the left ruler places a horizontal guide: {side:?}");
+    assert!(placed(Modifiers::ALT, &top(650.0)).is_empty(), "a double press outside the bounds adds none");
+
+    let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
+    let mut fixture = ruled(1.0, &guides);
+    let rect = fixture.canvas().rect;
+    drag_with(&mut fixture, Modifiers::NONE, pos2(300.0, rect.min.y + 4.0), pos2(300.0, 247.6));
+    assert_eq!(guides.borrow().len(), 1, "a press and drag out of a strip adds exactly one guide: {:?}", guides.borrow());
 }
 
 // Delete on a focused guide removes it, and the focus the removal hands to the next guide selects nothing: no guide is
@@ -236,11 +272,8 @@ fn a_deleted_guide_hands_focus_on_without_selecting_the_next_guide() {
     let (shown, picked) = (Rc::clone(&guides), Rc::clone(&selected));
     let mut fixture = ToolFixture::with_view("Document", Recorder::default(), view_at(1.0), move |ui, cx| {
         let mut list = shown.borrow_mut();
-        let mut built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *list)).interactive(true);
-        let current = *picked.borrow();
-        if let Some(key) = current {
-            built = built.selected_guide(key);
-        }
+        let current: Vec<GuideKey> = picked.borrow().iter().copied().collect();
+        let built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *list)).interactive(true).selected_guides(&current);
         if let Some(select) = built.show_at(ui, cx.rect).select {
             *picked.borrow_mut() = select;
         }
@@ -250,4 +283,40 @@ fn a_deleted_guide_hands_focus_on_without_selecting_the_next_guide() {
     fixture.fixture().key(Key::Delete, Modifiers::NONE).idle(3);
     assert!(at(&guides, Axis::Y, 200.0).is_none(), "Delete removes it: {:?}", guides.borrow());
     assert_eq!(*selected.borrow(), None, "and selects no other guide");
+}
+
+// A right-click on an unlocked guide is the guide's: the guides report its menu request and the tool host under them
+// reports none. Off the guide the right-click reaches the host, which asks for its own menu.
+#[trial]
+fn a_right_click_on_a_guide_asks_for_the_guide_menu_not_the_tools() {
+    use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::tool_fixture::DOCUMENT;
+    let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(vec![guide(1, Axis::Y, 200.0)]));
+    let asked: Shared<(Option<GuideKey>, bool)> = Rc::new(RefCell::new((None, false)));
+    let (shown, seen) = (Rc::clone(&guides), Rc::clone(&asked));
+    let tool = RefCell::new(Recorder::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").id(tool_fixture::canvas_id("Document")).document(DOCUMENT).view(view_at(1.0)(room));
+        let _ = canvas.show(ui, |ui, body| {
+            let out = Guides::new("Guides", canvas_of(body), Bind::bound(&mut *shown.borrow_mut())).interactive(true).show_at(ui, body.rect);
+            let mut seen = seen.borrow_mut();
+            seen.0 = seen.0.or(out.context.map(|(key, _)| key));
+            if let Some(pass) = tool_pass(&body.env) {
+                seen.1 |= ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()).context.is_some();
+            }
+        });
+    });
+    fixture.settle();
+    let mut right_click = |at: Pos2| {
+        *asked.borrow_mut() = (None, false);
+        fixture.frame(vec![pointer::moved(at)]);
+        fixture.frame(vec![pointer::secondary(at, true)]);
+        fixture.frame(vec![pointer::secondary(at, false)]);
+        fixture.settle();
+        *asked.borrow()
+    };
+    assert_eq!(right_click(pos2(200.0, 300.0)), (Some(GuideKey::new(1)), false), "on the guide: its menu, not the tool's");
+    assert_eq!(right_click(pos2(400.0, 300.0)), (None, true), "off the guide: the tool's menu");
 }

@@ -1,8 +1,10 @@
-//! The XDG Settings portal: reading colour scheme, contrast, motion, button layout and icons, and watching for changes.
+//! The XDG Settings portal: reading colour scheme, contrast, motion, text scale, button layout and icons, and
+//! watching for changes.
 
+use super::files::{kde_factor_reduces, reduced_motion_from_files};
 use super::{Contrast, Shared, Theme};
 use futures_lite::{StreamExt, future::zip};
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use zbus::zvariant::{OwnedValue, Value};
 const DEST: &str = "org.freedesktop.portal.Desktop";
 const PATH: &str = "/org/freedesktop/portal/desktop";
@@ -16,6 +18,13 @@ const ICONS_KEY: &str = "icon-theme";
 const CONTRAST_KEY: &str = "contrast";
 const MOTION_KEY: &str = "reduced-motion";
 const ANIMATIONS_KEY: &str = "enable-animations";
+const KDE: &str = "org.kde.kdeglobals.KDE";
+const KDE_MOTION_KEY: &str = "AnimationDurationFactor";
+// Read on GNOME-like sessions only (`Shared::gnome`): elsewhere the schema's key holds its default
+// or a GNOME session's value, not what this desktop applies to its own text.
+const TEXT_SCALE_KEY: &str = "text-scaling-factor";
+/// The text scales applied; outside them a desktop's factor is no scaling, never clamped.
+const TEXT_SCALES: std::ops::RangeInclusive<f64> = 0.5..=3.0;
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 // Outer None means unknown/malformed; Some(None) is an explicit no-preference answer.
@@ -60,11 +69,15 @@ fn contrast_reply(value: &Value<'_>, legacy: bool) -> Option<Contrast> {
     decode_contrast(STANDARD, unwrap_legacy(value, legacy)?)
 }
 // Whether motion is reduced: the portal's `reduced-motion` (1 reduced; other values are no
-// preference) or GNOME's `enable-animations` boolean, inverted. `None` means malformed.
+// preference), GNOME's `enable-animations` boolean, inverted, or KDE's `AnimationDurationFactor`
+// (0 makes every animation instant). `None` means malformed.
 fn decode_motion(namespace: &str, value: &Value<'_>) -> Option<bool> {
     match (namespace, value) {
         (STANDARD, Value::U32(n)) => Some(*n == 1),
         (GNOME, Value::Bool(enabled)) => Some(!enabled),
+        (KDE, Value::F64(factor)) => kde_factor_reduces(*factor),
+        // KConfig hands an entry read without a type over as its text.
+        (KDE, Value::Str(text)) => text.as_str().trim().parse::<f64>().ok().and_then(kde_factor_reduces),
         _ => None,
     }
 }
@@ -87,6 +100,19 @@ fn decode_icons(value: &Value<'_>) -> Option<String> {
 }
 fn icons_reply(value: &Value<'_>, legacy: bool) -> Option<String> {
     decode_icons(unwrap_legacy(value, legacy)?)
+}
+// GNOME's `text-scaling-factor`, a double. Outer `None` means malformed; `Some(None)` is a
+// factor that is not finite or outside `TEXT_SCALES`, which means no scaling.
+fn decode_text_scale(value: &Value<'_>) -> Option<Option<f32>> {
+    let Value::F64(factor) = value else { return None };
+    Some((factor.is_finite() && TEXT_SCALES.contains(factor)).then_some(*factor as f32))
+}
+fn text_scale_reply(value: &Value<'_>, legacy: bool) -> Option<Option<f32>> {
+    decode_text_scale(unwrap_legacy(value, legacy)?)
+}
+// `gsettings get` prints the double as text (`1.25`); text that isn't a number is malformed.
+fn gsettings_text_scale(text: &str) -> Option<Option<f32>> {
+    decode_text_scale(&Value::F64(text.trim().parse().ok()?))
 }
 fn combined(standard: Option<Option<Theme>>, gnome: Option<Option<Theme>>) -> Option<Option<Theme>> {
     if standard.is_none() && gnome.is_none() { None } else { Some(standard.flatten().or(gnome.flatten())) }
@@ -131,17 +157,44 @@ fn owner_rule() -> zbus::Result<zbus::MatchRule<'static>> {
         .arg(0, DEST)?
         .build())
 }
-/// The one-shot `gsettings` reads used when the portal can't answer, each at most once per
-/// watcher, and the `PATH` they search.
+/// The one-shot reads used when the portal can't answer, each at most once per watcher: the
+/// `gsettings` reads and the `PATH` they search, and the motion settings files under the config
+/// folder.
 pub(super) struct Fallbacks {
     theme_used: bool,
     layout_used: bool,
     icons_used: bool,
+    motion_used: bool,
+    text_scale_used: bool,
     path: Option<std::ffi::OsString>,
+    /// `$XDG_CONFIG_HOME`, or `~/.config` when that is empty or unset.
+    config_home: Option<PathBuf>,
 }
 impl Fallbacks {
     fn from_env() -> Self {
-        Self { theme_used: false, layout_used: false, icons_used: false, path: std::env::var_os("PATH") }
+        let config_home = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".config")));
+        Self {
+            theme_used: false,
+            layout_used: false,
+            icons_used: false,
+            motion_used: false,
+            text_scale_used: false,
+            path: std::env::var_os("PATH"),
+            config_home,
+        }
+    }
+    /// The settings files' motion answer, for a session with no bus or a portal that knows none
+    /// of the three motion keys.
+    fn motion(&mut self, shared: &Shared) {
+        if std::mem::replace(&mut self.motion_used, true) {
+            return;
+        }
+        if let Some(reduced) = self.config_home.as_deref().and_then(reduced_motion_from_files) {
+            shared.publish_motion(reduced);
+        }
     }
     async fn get(&self, schema: &str, key: &str) -> Option<String> {
         let exe = gsettings_exe(self.path.as_deref())?;
@@ -178,6 +231,16 @@ impl Fallbacks {
             shared.publish_layout(answer);
         }
     }
+    async fn text_scale(&mut self, shared: &Shared) {
+        if std::mem::replace(&mut self.text_scale_used, true) || !shared.gnome {
+            return;
+        }
+        if let Some(text) = self.get(GNOME, TEXT_SCALE_KEY).await
+            && let Some(answer) = gsettings_text_scale(&text)
+        {
+            shared.publish_text_scale(answer);
+        }
+    }
 }
 pub(super) async fn watch(shared: Arc<Shared>) {
     let mut retry = Duration::from_secs(5);
@@ -206,9 +269,12 @@ async fn session(shared: &Shared, fallbacks: &mut Fallbacks, connected: &mut boo
         Err(_) => None,
     };
     let Some(connection) = connection else {
+        // Motion first: it is a file read, and `wait_first` settles with the theme.
+        fallbacks.motion(shared);
         fallbacks.theme(shared).await;
         fallbacks.layout(shared).await;
         fallbacks.icons(shared).await;
+        fallbacks.text_scale(shared).await;
         return None;
     };
     watch_connection(shared, fallbacks, connected, connection).await
@@ -217,18 +283,30 @@ enum Event {
     Setting(zbus::Result<zbus::Message>),
     Owner(zbus::Result<zbus::Message>),
 }
-/// The latest valid answer from each source of a setting that combines two namespaces.
+/// The latest valid answer from each source of a setting that combines several namespaces.
 struct Answers {
     standard: Option<Option<Theme>>,
     gnome: Option<Option<Theme>>,
     motion: Option<bool>,
     gnome_motion: Option<bool>,
+    kde_motion: Option<bool>,
 }
 impl Answers {
+    /// The three motion keys as one: any asking for reduced motion wins, then any answering at
+    /// all; `None` when none answers.
+    fn reduced_motion(&self) -> Option<bool> {
+        let answers = [self.motion, self.gnome_motion, self.kde_motion];
+        if answers.contains(&Some(true)) { Some(true) } else { answers.into_iter().flatten().next() }
+    }
     fn publish_motion(&self, shared: &Shared) {
-        if let Some(reduced) = self.motion.or(self.gnome_motion) {
+        if let Some(reduced) = self.reduced_motion() {
             shared.publish_motion(reduced);
         }
+    }
+    /// Replaces the three motion answers with a fresh read and publishes them.
+    fn reread_motion(&mut self, shared: &Shared, (motion, gnome_motion, kde_motion): MotionReads) {
+        (self.motion, self.gnome_motion, self.kde_motion) = (motion, gnome_motion, kde_motion);
+        self.publish_motion(shared);
     }
     /// Apply one `SettingChanged`; malformed values and other settings change nothing.
     fn apply(&mut self, shared: &Shared, namespace: &str, key: &str, value: &Value<'_>) {
@@ -248,12 +326,17 @@ impl Answers {
                     shared.publish_contrast(contrast);
                 }
             }
-            (STANDARD, MOTION_KEY) | (GNOME, ANIMATIONS_KEY) => {
+            (GNOME, TEXT_SCALE_KEY) if shared.gnome => {
+                if let Some(scale) = decode_text_scale(value) {
+                    shared.publish_text_scale(scale);
+                }
+            }
+            (STANDARD, MOTION_KEY) | (GNOME, ANIMATIONS_KEY) | (KDE, KDE_MOTION_KEY) => {
                 let Some(reduced) = decode_motion(namespace, value) else { return };
-                if namespace == STANDARD {
-                    self.motion = Some(reduced);
-                } else {
-                    self.gnome_motion = Some(reduced);
+                match namespace {
+                    STANDARD => self.motion = Some(reduced),
+                    GNOME => self.gnome_motion = Some(reduced),
+                    _ => self.kde_motion = Some(reduced),
                 }
                 self.publish_motion(shared);
             }
@@ -272,6 +355,22 @@ impl Answers {
         }
     }
 }
+/// The three motion keys as read: the portal's, GNOME's and KDE's.
+type MotionReads = (Option<bool>, Option<bool>, Option<bool>);
+async fn read_motion(connection: &zbus::Connection) -> MotionReads {
+    let (motion, (gnome_motion, kde_motion)) = zip(
+        read_with(connection, STANDARD, MOTION_KEY, |value, legacy| motion_reply(STANDARD, value, legacy)),
+        zip(
+            read_with(connection, GNOME, ANIMATIONS_KEY, |value, legacy| motion_reply(GNOME, value, legacy)),
+            read_with(connection, KDE, KDE_MOTION_KEY, |value, legacy| motion_reply(KDE, value, legacy)),
+        ),
+    )
+    .await;
+    (motion, gnome_motion, kde_motion)
+}
+fn is_motion_key(namespace: &str, key: &str) -> bool {
+    matches!((namespace, key), (STANDARD, MOTION_KEY) | (GNOME, ANIMATIONS_KEY) | (KDE, KDE_MOTION_KEY))
+}
 async fn subscribe(connection: &zbus::Connection, rule: zbus::Result<zbus::MatchRule<'static>>, capacity: usize) -> Option<zbus::MessageStream> {
     bounded(zbus::MessageStream::for_match_rule(rule.ok()?, connection, Some(capacity))).await?.ok()
 }
@@ -286,6 +385,24 @@ async fn next_event(settings: &mut [zbus::MessageStream], owners: &mut zbus::Mes
     });
     futures_lite::future::race(setting, async { owners.next().await.map(Event::Owner) }).await
 }
+/// GNOME's text scale, read on GNOME-like sessions only (`TEXT_SCALE_KEY`).
+async fn read_text_scale(connection: &zbus::Connection, gnome: bool) -> Option<Option<f32>> {
+    if gnome { read_with(connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None }
+}
+/// Publishes the contrast, motion and text scale of the first concurrent read.
+fn publish_first_reads(shared: &Shared, fallbacks: &mut Fallbacks, contrast: Option<Contrast>, answers: &Answers, text_scale: Option<Option<f32>>) {
+    if let Some(contrast) = contrast {
+        shared.publish_contrast(contrast);
+    }
+    match answers.reduced_motion() {
+        Some(reduced) => shared.publish_motion(reduced),
+        // A portal that knows none of the keys (a bare window manager's) leaves the files to answer.
+        None => fallbacks.motion(shared),
+    }
+    if let Some(scale) = text_scale {
+        shared.publish_text_scale(scale);
+    }
+}
 async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected: &mut bool, connection: zbus::Connection) -> Option<()> {
     // MatchRule installs before activation: unlike a proxy subscription it needs no current owner.
     let mut settings = [
@@ -295,26 +412,22 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         subscribe(&connection, rule(CONTRAST_KEY), 8).await?,
         subscribe(&connection, rule(MOTION_KEY), 8).await?,
         subscribe(&connection, rule(ANIMATIONS_KEY), 8).await?,
+        subscribe(&connection, rule(KDE_MOTION_KEY), 8).await?,
+        subscribe(&connection, rule(TEXT_SCALE_KEY), 8).await?,
     ];
     let mut owners = subscribe(&connection, owner_rule(), 8).await?;
-    // Concurrent reads, so contrast and motion are known by the time the theme settles
-    // `wait_first` without adding round trips before it.
-    let ((standard, gnome), (contrast, (motion, gnome_motion))) = zip(
-        zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
+    // Concurrent reads, so contrast, motion and text scale are known by the time the theme
+    // settles `wait_first` without adding round trips before it.
+    let (((standard, gnome), (contrast, (motion, gnome_motion, kde_motion))), text_scale) = zip(
         zip(
-            read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply),
-            zip(
-                read_with(&connection, STANDARD, MOTION_KEY, |value, legacy| motion_reply(STANDARD, value, legacy)),
-                read_with(&connection, GNOME, ANIMATIONS_KEY, |value, legacy| motion_reply(GNOME, value, legacy)),
-            ),
+            zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
+            zip(read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply), read_motion(&connection)),
         ),
+        read_text_scale(&connection, shared.gnome),
     )
     .await;
-    let mut answers = Answers { standard, gnome, motion, gnome_motion };
-    if let Some(contrast) = contrast {
-        shared.publish_contrast(contrast);
-    }
-    answers.publish_motion(shared);
+    let mut answers = Answers { standard, gnome, motion, gnome_motion, kde_motion };
+    publish_first_reads(shared, fallbacks, contrast, &answers, text_scale);
     match combined(standard, gnome) {
         Some(answer) => {
             *connected = true;
@@ -324,6 +437,7 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
             fallbacks.theme(shared).await;
             fallbacks.layout(shared).await;
             fallbacks.icons(shared).await;
+            fallbacks.text_scale(shared).await;
             return None;
         }
     }
@@ -336,8 +450,22 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         Some(icons) => shared.publish_icons(icons),
         None => fallbacks.icons(shared).await,
     }
+    // A portal without GNOME's keys answered nothing for the text scale either.
+    if text_scale.is_none() {
+        fallbacks.text_scale(shared).await;
+    }
+    follow(shared, &connection, &mut settings, &mut owners, &mut answers).await
+}
+/// Follows the settings after the first read until the portal's owner goes away or a stream ends.
+async fn follow(
+    shared: &Shared,
+    connection: &zbus::Connection,
+    settings: &mut [zbus::MessageStream],
+    owners: &mut zbus::MessageStream,
+    answers: &mut Answers,
+) -> Option<()> {
     loop {
-        let message = match next_event(&mut settings, &mut owners).await? {
+        let message = match next_event(settings, owners).await? {
             Event::Owner(message) => {
                 // Activation is already covered by the initial read. Loss/replacement reconnects.
                 if let Ok((_, old, _)) = message.ok()?.body().deserialize::<(String, String, String)>()
@@ -350,17 +478,75 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
             Event::Setting(message) => message.ok()?,
         };
         if let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, OwnedValue)>() {
-            answers.apply(shared, &namespace, &key, &value);
+            if is_motion_key(&namespace, &key) {
+                // KDE announces a new animation speed only as `reduced-motion`, and its own key has
+                // no value while the speed is at its default, so all three keys are read again
+                // rather than kept at what they last said; one answer is published per change.
+                answers.reread_motion(shared, read_motion(connection).await);
+            } else {
+                answers.apply(shared, &namespace, &key, &value);
+            }
         }
     }
 }
 #[cfg(test)]
 mod tests {
-    use super::{GNOME, STANDARD, decode};
+    use super::{ANIMATIONS_KEY, Answers, GNOME, KDE, KDE_MOTION_KEY, MOTION_KEY, STANDARD, decode, decode_motion};
     use crate::appearance::is_gnome_session;
     use crate::appearance::{Theme, Watcher};
     use std::time::Duration;
     use zbus::zvariant::Value;
+    // The portal's, GNOME's and KDE's keys each decode to reduced or not; malformed values say
+    // nothing. Combined, any one asking for reduced motion wins, all answering otherwise is not
+    // reduced, and none answering publishes nothing.
+    #[test]
+    fn motion_answers_combine_any_off_wins() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(decode_motion(STANDARD, &Value::U32(1)), Some(true));
+        assert_eq!(decode_motion(STANDARD, &Value::U32(0)), Some(false));
+        assert_eq!(decode_motion(STANDARD, &Value::U32(2)), Some(false), "a value not defined yet is no preference");
+        assert_eq!(decode_motion(GNOME, &Value::Bool(false)), Some(true), "GNOME's switch is inverted");
+        assert_eq!(decode_motion(GNOME, &Value::Bool(true)), Some(false));
+        assert_eq!(decode_motion(KDE, &Value::F64(0.0)), Some(true), "KDE's factor 0 makes animations instant");
+        assert_eq!(decode_motion(KDE, &Value::F64(0.5)), Some(false));
+        assert_eq!(decode_motion(KDE, &Value::from("0")), Some(true));
+        for malformed in [Value::F64(f64::NAN), Value::F64(f64::INFINITY), Value::from("fast"), Value::Bool(false)] {
+            assert_eq!(decode_motion(KDE, &malformed), None, "{malformed:?} is malformed");
+        }
+        assert_eq!(decode_motion(STANDARD, &Value::Bool(true)), None);
+        assert_eq!(decode_motion(GNOME, &Value::U32(0)), None);
+
+        let (send, sent) = std::sync::mpsc::channel();
+        let watcher = Watcher::spawn(
+            false,
+            || {},
+            move |shared| async move {
+                let _ = send.send(shared);
+            },
+        )
+        .ok_or("worker creation failed")?;
+        let shared = sent.recv_timeout(Duration::from_secs(2))?;
+        let mut answers = Answers { standard: None, gnome: None, motion: None, gnome_motion: None, kde_motion: None };
+        answers.apply(&shared, KDE, "SingleClick", &Value::F64(0.0));
+        answers.apply(&shared, KDE, KDE_MOTION_KEY, &Value::from("fast"));
+        assert_eq!(watcher.reduced_motion(), None, "no key answered, so nothing is published");
+
+        let keys = [
+            (STANDARD, MOTION_KEY, Value::U32(1), Value::U32(0)),
+            (GNOME, ANIMATIONS_KEY, Value::Bool(false), Value::Bool(true)),
+            (KDE, KDE_MOTION_KEY, Value::F64(0.0), Value::F64(1.0)),
+        ];
+        for (namespace, key, _, not_reduced) in &keys {
+            answers.apply(&shared, namespace, key, not_reduced);
+        }
+        assert_eq!(watcher.reduced_motion(), Some(false), "every key answering 'not reduced' is not reduced");
+        for (namespace, key, reduced, not_reduced) in &keys {
+            answers.apply(&shared, namespace, key, reduced);
+            assert_eq!(watcher.reduced_motion(), Some(true), "{namespace} {key} alone asking for reduced motion wins");
+            answers.apply(&shared, namespace, key, not_reduced);
+            assert_eq!(watcher.reduced_motion(), Some(false), "{namespace} {key} back to 'not reduced'");
+        }
+        Ok(())
+    }
     #[test]
     fn gnome_light_setting_reads_as_light_and_zero_is_no_preference_elsewhere() {
         assert_eq!(decode(GNOME, &Value::from("default"), true), Some(Some(Theme::Light)));
@@ -390,6 +576,28 @@ mod tests {
         assert!(!gnome(&[("SWAYSOCK", "/run/sway.sock"), ("XDG_CURRENT_DESKTOP", "GNOME")]));
         assert!(!gnome(&[]));
     }
+    // A desktop's text scale is applied only when it is a usable factor: Large Text's 1.25 and the
+    // ends of the range are, while a factor that isn't finite or lies outside 0.5..=3.0 is no
+    // scaling (not a clamped one), and text `gsettings` prints that isn't a number is no answer.
+    #[test]
+    fn gnome_text_scaling_factor_reads_in_range_or_not_at_all() {
+        use super::{decode_text_scale, gsettings_text_scale, text_scale_reply};
+        for (text, scale) in [("1.25\n", 1.25), ("1.0", 1.0), ("0.5", 0.5), ("3.0", 3.0)] {
+            assert_eq!(gsettings_text_scale(text), Some(Some(scale)), "{text}");
+            assert_eq!(decode_text_scale(&Value::F64(f64::from(scale))), Some(Some(scale)), "{text}");
+        }
+        for out_of_range in ["nan", "inf", "-2", "0", "0.49", "3.01", "100"] {
+            assert_eq!(gsettings_text_scale(out_of_range), Some(None), "{out_of_range}");
+        }
+        for not_a_number in ["", "uint32 0", "'1.25'", "1,25"] {
+            assert_eq!(gsettings_text_scale(not_a_number), None, "{not_a_number}");
+        }
+        // The portal answers a double; any other type is malformed. The legacy `Read` wraps it once more.
+        assert_eq!(decode_text_scale(&Value::U32(1)), None);
+        assert_eq!(decode_text_scale(&Value::from("1.25")), None);
+        assert_eq!(text_scale_reply(&Value::Value(Box::new(Value::F64(1.5))), true), Some(Some(1.5)));
+        assert_eq!(text_scale_reply(&Value::F64(1.5), true), None);
+    }
     #[test]
     fn the_generation_rises_once_per_appearance_change_and_never_for_the_layout() -> Result<(), Box<dyn std::error::Error>> {
         use crate::appearance::{Contrast, SystemReader};
@@ -403,14 +611,17 @@ mod tests {
                 shared.publish_contrast(Contrast::High);
                 shared.publish_contrast(Contrast::High);
                 shared.publish_motion(true);
+                shared.publish_text_scale(Some(1.25));
+                shared.publish_text_scale(Some(1.25));
                 shared.publish_layout("appmenu:close".to_owned());
                 let _ = done.send(());
             },
         )
         .ok_or("worker creation failed")?;
         finished.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(watcher.generation(), 3, "theme, contrast and motion each changed once");
+        assert_eq!(watcher.generation(), 4, "theme, contrast, motion and text scale each changed once");
         assert_eq!((watcher.current(), watcher.contrast()), (Some(Theme::Dark), Some(Contrast::High)));
+        assert_eq!(watcher.text_scale(), Some(1.25));
 
         let reader = SystemReader::unwatched();
         let before = reader.generation();

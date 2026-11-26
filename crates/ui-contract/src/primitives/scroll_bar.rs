@@ -11,6 +11,9 @@ pub struct ScrollBar;
 /// The opacity of an edge fade at the view's edge, once at least the fade's length of content is hidden past it.
 const FADE_STRENGTH: f32 = 0.5;
 
+/// The length of an edge fade, in points, in every density.
+const FADE_LENGTH: f32 = 20.0;
+
 /// How far a scroll view's content runs past each of its edges, in points.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -62,13 +65,13 @@ impl ScrollBar {
         }
     }
 
-    /// The fades over `view` at each edge past which content is hidden: `look.fade` long, from `background` at the
+    /// The fades over `view` at each edge past which content is hidden: `FADE_LENGTH` long, from `background` at the
     /// edge to clear inward, the more opaque the more is hidden, up to `FADE_STRENGTH` once a fade's length is.
-    pub fn fades(look: &ScrollBarLook, view: Rect, hidden: HiddenContent, background: Color32) -> Vec<Shape> {
+    pub fn fades(view: Rect, hidden: HiddenContent, background: Color32) -> Vec<Shape> {
         let across = |hidden: f32, extent: f32, edge: fn(Rect, f32) -> Rect, direction: Direction| {
-            let length = look.fade.min(extent);
+            let length = FADE_LENGTH.min(extent);
             (hidden > 0.0 && length > 0.0).then(|| {
-                let at = background.gamma_multiply((hidden / look.fade).clamp(0.0, 1.0) * FADE_STRENGTH);
+                let at = background.gamma_multiply((hidden / FADE_LENGTH).clamp(0.0, 1.0) * FADE_STRENGTH);
                 Shape::gradient_rect(edge(view, length), direction, [at, Color32::TRANSPARENT])
             })
         };
@@ -86,8 +89,12 @@ impl ScrollBar {
 
     /// The shapes of the bar in `track` along `axis` for `span`, in `state` (the bar's: hovered while the pointer is
     /// anywhere on it): the track and the fully round thumb, `look.thumb_width` thick along the track's outer edge (its
-    /// bottom, or its end side in the reading direction).
+    /// bottom, or its end side in the reading direction). No shapes when the track has no room: a view shorter or
+    /// narrower than its padding gives its bar a track of no length, or one whose ends cross.
     pub fn shapes(look: &ScrollBarLook, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan, state: &StateSet) -> Vec<Shape> {
+        if !track.is_positive() {
+            return Vec::new();
+        }
         let full = Self::thumb(look.min_thumb, track, axis, rtl, span);
         let thumb = Self::along_edge(full, state.resolve(&look.thumb_width), axis, rtl);
         let round = |rect: Rect| CornerRadius::from(rect.width().min(rect.height()) / 2.0);

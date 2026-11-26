@@ -14,7 +14,7 @@ use crate::runtime::egui::areas::{self};
 use crate::runtime::env::Env;
 use crate::runtime::memory::sub;
 use crate::runtime::motion::{self};
-use crate::runtime::overlay::{self, CloseReason};
+use crate::runtime::overlay::{self, CloseReason, LayerRole};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, PartRef, Sense};
 use egui::{Context, Id, IdMap, Rect, Response, Ui};
@@ -60,10 +60,10 @@ impl<'a> OverlayUi<'a> {
         self.closed.iter().find(|(id, _)| *id == popup.id).map(|(_, reason)| *reason)
     }
 
-    /// Whether the owner lays out right to left: a layer its caller places by position mirrors its own geometry by it,
-    /// as an anchored placement mirrors the side.
+    /// Whether a layer the owner opens lays out right to left (`Scoped::layer_direction`): a layer its caller places by
+    /// position mirrors its own geometry by it, as an anchored placement mirrors the side.
     pub fn is_rtl(&self) -> bool {
-        self.env.direction.is_rtl()
+        self.env.layer_direction().is_rtl()
     }
 
     /// The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
@@ -76,12 +76,14 @@ impl<'a> OverlayUi<'a> {
     }
 
     /// Keeps the popups this component shows from here on, and every popup opened from them, below the component:
-    /// inside the safe rect less the part above the component's bottom edge. A menu bar's menus and their submenus
-    /// never cover the bar.
+    /// inside the layer room less the part above the component's bottom edge, and above the bottom of the inherited
+    /// `PopupRegion` when one is set (the bottom slots of a shell). A menu bar's menus and their submenus never cover
+    /// the bar.
     pub fn contain_popups_below(&mut self) {
-        let safe = areas::safe_rect(self.ctx);
-        let top = (self.to_screen * self.anchor).bottom().clamp(safe.top(), safe.bottom());
-        let region = Rect::from_min_max(egui::pos2(safe.left(), top), safe.max);
+        let room = super::layer_room(self.ctx);
+        let bottom = self.env.get::<PopupRegion>().0.map_or(room.bottom(), |region| region.bottom().min(room.bottom())).max(room.top());
+        let top = (self.to_screen * self.anchor).bottom().clamp(room.top(), bottom);
+        let region = Rect::from_min_max(egui::pos2(room.left(), top), egui::pos2(room.right(), bottom));
         self.env = self.env.derive(|scoped| {
             scoped.inherited_mut().values.set(PopupRegion(Some(region)));
         });
@@ -94,7 +96,11 @@ impl<'a> OverlayUi<'a> {
     /// placed, so a popup whose content changes is placed by its new size in the pass that shows it. A child that fills
     /// the width takes the width the popup settles on, not the window's. The popup's memory belongs to the component
     /// that shows it (or to the opener its overlay names), so what its body keeps lasts while that component shows.
-    pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
+    pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
+        self.show_with(popup, overlay, &mut body)
+    }
+
+    fn show_with<R>(&mut self, popup: PopupHandle, overlay: Overlay, body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
         let Some(open) = self.open.get(&popup.id).copied() else {
             debug_assert!(false, "popup {:?} is shown but was not registered with `cx.popup` this pass", popup.name);
             return None;
@@ -102,7 +108,9 @@ impl<'a> OverlayUi<'a> {
         let owner = overlay.opener.as_ref().map_or(self.owner, |opener| opener.id);
         // A closed popup that no longer fades runs nothing: no container run for each closed popup of every pass.
         if !open && !motion::layer_fading(self.ctx, sub(popup.id, "presence")) {
-            with_popups(self.ctx, |popups| popups.anchors.push((self.owner, PopupShown { id: popup.id, kind: overlay.popup, open })));
+            if overlay.role != LayerRole::InPlaceEditor {
+                with_popups(self.ctx, |popups| popups.anchors.push((self.owner, PopupShown { id: popup.id, kind: overlay.popup, open })));
+            }
             forget_layer(self.ctx, popup.id, owner);
             return None;
         }
@@ -116,7 +124,7 @@ impl<'a> OverlayUi<'a> {
         let label = self.resolved.label_value.clone();
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(overlay));
         let container = PopupBody { common: Common::new(), props: ContainerProps { owner: Some(owner), ..props } }.label(label);
-        self.show_container(popup, container, body).and_then(|shown| shown.inner)
+        self.show_container_with(popup, container, body).and_then(|shown| shown.inner)
     }
 
     /// Shows `container` as the layer of `popup`, through the container pipeline: its body step with the move band
@@ -130,7 +138,16 @@ impl<'a> OverlayUi<'a> {
         &mut self,
         popup: PopupHandle,
         container: C,
-        body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+        mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    ) -> Option<Inner<C::Output, R>> {
+        self.show_container_with(popup, container, &mut body)
+    }
+
+    fn show_container_with<C: ShowContainer, R>(
+        &mut self,
+        popup: PopupHandle,
+        container: C,
+        body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     ) -> Option<Inner<C::Output, R>> {
         let Some(open) = self.open.get(&popup.id).copied() else {
             debug_assert!(false, "popup {:?} is shown but was not registered with `cx.popup` this pass", popup.name);
@@ -140,10 +157,18 @@ impl<'a> OverlayUi<'a> {
             debug_assert!(false, "`show_container` shows a container mounted as `Mount::Layer`");
             return None;
         };
-        let (kind, peers) = (overlay.popup, overlay.opener.is_none());
+        // An in-place editor is part of its owner: the owner's node reports no popup of it.
+        let (kind, peers, reported) = (overlay.popup, overlay.opener.is_none(), overlay.role != LayerRole::InPlaceEditor);
+        // A popup with no recorded opener hangs from this component: when the component goes disabled, its anchor is
+        // gone, as for an explicit opener that goes disabled (`dismissal`).
+        if open && peers && overlay.dismiss.anchor_gone && !self.resolved.enabled {
+            crate::runtime::overlay::request_close(self.ctx, popup.id, CloseReason::AnchorGone);
+        }
         let ctx = self.ctx.clone();
         with_popups(&ctx, |popups| {
-            popups.anchors.push((self.owner, PopupShown { id: popup.id, kind, open }));
+            if reported {
+                popups.anchors.push((self.owner, PopupShown { id: popup.id, kind, open }));
+            }
             popups.layers.push(PopupLayer { id: popup.id, open, closed: None });
         });
         // The container runs in the env the owner's popups take (`contain_popups_below`), not the owner's parent's.
@@ -154,18 +179,21 @@ impl<'a> OverlayUi<'a> {
             let at = popups.layers.iter().rposition(|layer| layer.id == popup.id)?;
             popups.layers.remove(at).closed
         });
-        self.record_shown(popup, open, peers, closed);
+        self.record_shown(popup, open, peers, reported, closed);
         open.then_some(shown)
     }
 
     /// What every shown popup records after its layer ran: the owner's toggling parts as the layer's peers (a press on
-    /// them is not outside it) unless openers name its anchor, the owner's `OPEN` flag, and the close the layer decided.
-    fn record_shown(&mut self, popup: PopupHandle, open: bool, peers: bool, closed: Option<CloseReason>) {
+    /// them is not outside it) unless openers name its anchor, the owner's `OPEN` flag unless the layer is not
+    /// `reported` (an in-place editor), and the close the layer decided.
+    fn record_shown(&mut self, popup: PopupHandle, open: bool, peers: bool, reported: bool, closed: Option<CloseReason>) {
         if peers && !self.parts.is_empty() {
             overlay::note_peers(self.ctx, popup.id, self.parts.iter().map(|(_, rect)| self.to_screen * *rect).collect());
         }
         if open {
-            with_popups(self.ctx, |popups| popups.shown.push((self.owner, popup.id)));
+            if reported {
+                with_popups(self.ctx, |popups| popups.shown.push((self.owner, popup.id)));
+            }
             if let Some(reason) = closed {
                 self.closed.push((popup.id, reason));
             }

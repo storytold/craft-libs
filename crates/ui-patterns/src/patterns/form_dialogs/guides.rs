@@ -8,12 +8,12 @@
 //! the same `canvas::Guide`s.
 
 mod layout;
-mod new_guide;
+pub(crate) mod new_guide;
 
-#[cfg(feature = "testing")]
-mod stories;
-#[cfg(feature = "testing")]
-mod trials;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
 
 pub use layout::{GuideGroup, GuideLayoutError, GuideLayoutOptions, GuideLayoutPreset, GuideLength, GuideRect, GuideTarget, GuideUnits, MAX_COUNT};
 
@@ -28,7 +28,7 @@ use crate::canvas_data::{Guide, GuideColor};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, EditResponse, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing};
 
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use crate::dialog::{ButtonPlace, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -331,7 +331,8 @@ impl<'a> GuideLayoutDialog<'a> {
         let env = Env::of(ui);
         let words = env.words::<GuideDialogWords>();
         let number_units = env.units();
-        let mut dialog = FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview).side_buttons(true);
+        let mut dialog =
+            FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview).button_place(ButtonPlace::Side);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -712,8 +713,10 @@ impl StackDialog for HostedGuideLayoutDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<GuideLayoutResult>> {
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let shown = (self.build)(Bind::bound(&mut self.values))
-            .answers(self.requests.take_answers())
+            .answers(answers)
             .opened(Bind::bound(&mut self.open))
             .preview(Bind::bound(&mut self.preview_on))
             .show(ui);

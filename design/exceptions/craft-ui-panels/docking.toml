@@ -16,3 +16,10 @@ path = "crates/ui-panels/src/docking/iconic/stories.rs"
 reason = "A story sizes its stage from the rail token."
 count = 1
 
+[[exception]]
+name = "iconic-trial-rooms"
+kind = "exempt"
+rule = "literal-size"
+path = "crates/ui-panels/src/docking/iconic/trials.rs"
+reason = "Trial rooms, not looks."
+count = 1

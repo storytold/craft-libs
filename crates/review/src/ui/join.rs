@@ -12,8 +12,8 @@ use egui::{Response, Ui};
 
 use crate::collab::{CollabRequest, CollabTransport, JoinState};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The field's words, English by default.

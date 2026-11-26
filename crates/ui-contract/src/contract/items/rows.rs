@@ -2,7 +2,7 @@
 //! lead column (17.7) and auto-height rows measured into `LayoutMemory` (17.3, I1).
 
 use super::{ItemsHooks, key_hash};
-use crate::contract::{Collection, Cx, SelectMode};
+use crate::contract::{Collection, Cx, Internal, Meta, SelectMode, Sizing};
 use crate::runtime::egui::memory as store;
 use crate::runtime::memory::sub;
 use crate::runtime::{focus, lazy};
@@ -46,7 +46,14 @@ pub(super) fn measured_id<K: std::hash::Hash>(collection: Id, key: &K) -> Id {
 /// Runs `f` with a reader of the heights the auto rows of the collection `collection` had in the last pass that built
 /// them: the rows the pass does not build, out of view, are placed by them (`runtime::lazy`).
 pub(super) fn measured_heights<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<f32>) -> R) -> R {
-    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|size| size.y)))
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|(size, _)| size.y)))
+}
+
+/// Runs `f` with a reader of what this pass measured of the rows of the collection `collection`, by the ids
+/// `measured_id` and `measured_width_id` give: the row's width and height, or its ideal and minimum widths; `None` for
+/// a row this pass has not measured. A row measured this pass is not measured again in it.
+pub(super) fn measured_this_pass<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).and_then(|(size, now)| now.then_some(size))))
 }
 
 /// The id an auto-width item's measured widths (ideal, then minimum) are kept under.
@@ -57,13 +64,59 @@ pub(super) fn measured_width_id<K: std::hash::Hash>(collection: Id, key: &K) -> 
 /// Runs `f` with a reader of the `(ideal, min)` widths the auto-width items of the collection `collection` had in the
 /// last pass that built them.
 pub(super) fn measured_widths<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<(f32, f32)>) -> R) -> R {
-    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|size| (size.x, size.y))))
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|(size, _)| (size.x, size.y))))
 }
 
-/// Records the size an auto row of the collection `collection` measured this pass; the row is placed by it in the same
-/// pass.
+/// Records the size an auto row of the collection `collection` measured this pass (its width and height, or its ideal
+/// and minimum widths); the row is placed by it in the same pass.
 pub(super) fn record_measure(ctx: &Context, collection: Id, id: Id, size: Vec2) {
     lazy::remember(ctx, collection, id, size);
+}
+
+/// Whether a row measured as `item` is as wide as it measured: it is sized to its content (`Sizing::Content`).
+pub(super) fn fits(item: &impl Meta) -> bool {
+    item.common(Internal::new()).sizing == Some(Sizing::Content)
+}
+
+/// The id the width of an auto row as wide as it measured is kept under; 0 once it is not.
+fn measured_fit_id(collection: Id, key: u64) -> Id {
+    sub(collection, ("row_fit", key))
+}
+
+/// The id of the mark that a row of the collection `collection` was as wide as it measured.
+fn fits_id(collection: Id) -> Id {
+    sub(collection, "row_fits")
+}
+
+/// Keeps that the auto row `key` (its key hash) of the collection `collection` is `fit` wide, the width it measured, or
+/// no longer as wide as it measured, for the passes that place the row without measuring it (`restore_fits`). Returns
+/// whether that differs from what was kept, which this pass's layout took: only then does the caller set it there.
+pub(super) fn keep_fit(ctx: &Context, collection: Id, key: u64, fit: Option<f32>) -> bool {
+    let id = measured_fit_id(collection, key);
+    let kept = lazy::reading(ctx, collection, |read| read(id).map(|(size, _)| size.x).filter(|width| *width > 0.0));
+    if kept == fit {
+        return false;
+    }
+    record_measure(ctx, collection, id, Vec2::new(fit.unwrap_or(0.0), 0.0));
+    if fit.is_some() {
+        record_measure(ctx, collection, fits_id(collection), Vec2::splat(1.0));
+    }
+    true
+}
+
+/// Sets in `layout` the widths of the rows of the collection `collection` that were as wide as they measured when last
+/// measured, `key(at)` giving each row's key hash. Only a collection that had such a row reads them.
+pub(super) fn restore_fits<L: ItemLayout + ?Sized>(ctx: &Context, collection: Id, layout: &mut L, rows: usize, key: impl Fn(usize) -> u64) {
+    lazy::reading(ctx, collection, |read| {
+        if read(fits_id(collection)).is_none() {
+            return;
+        }
+        for at in 0..rows {
+            if let Some((fit, _)) = read(measured_fit_id(collection, key(at))).filter(|(fit, _)| fit.x > 0.0) {
+                layout.set_fit(at, Some(fit.x));
+            }
+        }
+    });
 }
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
@@ -87,17 +140,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Whether the row at position `at` is selected.
     pub(super) fn holds(&self, at: usize) -> bool {
         let key = self.source.key(at);
-        self.selection.contains(RowAt::new(&key, at, self.source))
+        self.selection.contains(RowAt::new(&key, at, &*self.source))
     }
 
     /// The selection placed once in the source's order; the reads of a pass go by position.
     pub(super) fn placed(&self) -> PlacedSelection {
-        self.selection.placed(self.source)
+        self.selection.placed(&*self.source)
     }
 
     /// The keys of the selected rows of `selection`, in the display order.
     pub(super) fn selected_keys(&self, selection: &C::Selection) -> Vec<C::Key> {
-        selection.placed(self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
+        selection.placed(&*self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
     }
 
     /// The positions a gesture on the row at `at` (a drag, a stacking key, Delete) acts on, in the display order: the
@@ -120,10 +173,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// of the layout), active and anchored at its first cell.
     pub(super) fn select_rows(&mut self, comp: &C, from: usize, to: usize) {
         let Some(mut cells) = self.selection.cells().cloned() else { return };
-        let source = self.source;
-        let space = comp.cell_space(CellSpace::new(source, self.columns));
-        let range = space.keyed_range(space.whole_rows(from as u32, to as u32));
-        if cells.select_range(range, &space) {
+        // The space borrows the source the hooks own: it ends before the change takes the hooks mutably.
+        let picked = {
+            let space = comp.cell_space(CellSpace::new(&*self.source, self.columns));
+            let range = space.keyed_range(space.whole_rows(from as u32, to as u32));
+            cells.select_range(range, &space)
+        };
+        if picked {
             self.change(cells.change());
         }
     }
@@ -131,7 +187,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Runs `f` with the grid of the collection's cells (17.7): the source's rows, the layout's columns with the rows
     /// and columns it hides left out, and what the collection adds (`Collection::cell_space`).
     fn with_cell_space<R>(&self, comp: &C, layout: &C::ItemLayout, f: impl FnOnce(&CellSpace<'_, C::Key>) -> R) -> R {
-        let source = self.source;
+        let source = &*self.source;
         let row_hidden = |row: u32| !layout.shown(row as usize);
         let column_hidden = |column: u32| !layout.column_shown(column as usize);
         let space = comp.cell_space(CellSpace::new(source, layout.column_count() as u32).hidden_rows(&row_hidden).hidden_columns(&column_hidden));

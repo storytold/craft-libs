@@ -1,11 +1,11 @@
 //! `ToolFixture` (22.4, the tool row): drives a [`CanvasTool`] on a [`Canvas`] through press, drag, release and
 //! Escape, and checks what every tool owes the canvas.
 
-use crate::canvas::{Canvas, CanvasTool, Snap, ToolHost, ToolPath, tool_pass};
-use crate::contract::{BodyCx, Props as _, ShowContainer as _};
+use crate::canvas::{Canvas, CanvasTool, Rulers, Snap, ToolHost, ToolPath, tool_pass};
+use crate::contract::{Bind, BodyCx, Props as _, ShowContainer as _};
 use crate::runtime::access::Role;
 use crate::testing::{Fixture, Target, pointer};
-use craft_behavior::kurbo::Size;
+use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CanvasView, GesturePhase};
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -45,7 +45,7 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
     /// A canvas named `label` whose body `body` fills: canvas controls shown at the body's rect join the canvas's
     /// arena, and a press on one of their parts never reaches the tool.
     pub fn with_body(label: &'static str, tool: T, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'static) -> Self {
-        Self::shown(label, tool, None, None, body)
+        Self::shown(label, tool, None, None, None, body)
     }
 
     /// [`ToolFixture::with_body`] over a canvas given the view `view` makes of the canvas's room, so the body's
@@ -56,7 +56,7 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
         view: impl Fn(Rect) -> CanvasView + 'static,
         body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'static,
     ) -> Self {
-        Self::shown(label, tool, Some(Box::new(view)), None, body)
+        Self::shown(label, tool, Some(Box::new(view)), None, None, body)
     }
 
     /// [`ToolFixture::with_view`] over a canvas that snaps with `snap` ([`Canvas::snap`]): the tool's
@@ -68,7 +68,21 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
         snap: Snap,
         body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'static,
     ) -> Self {
-        Self::shown(label, tool, Some(Box::new(view)), Some(snap), body)
+        Self::shown(label, tool, Some(Box::new(view)), Some(snap), None, body)
+    }
+
+    /// [`ToolFixture::with_snap`] over a canvas that shows rulers whose zero point is `zero`
+    /// ([`Canvas::with_rulers`]): the body is the view inside the strips, and the guide a drag out of a strip places
+    /// reaches the body's controls through [`ruler_guide`](crate::canvas::ruler_guide).
+    pub fn with_rulers(
+        label: &'static str,
+        tool: T,
+        view: impl Fn(Rect) -> CanvasView + 'static,
+        snap: Snap,
+        zero: Rc<RefCell<Point>>,
+        body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'static,
+    ) -> Self {
+        Self::shown(label, tool, Some(Box::new(view)), Some(snap), Some(zero), body)
     }
 
     fn shown(
@@ -76,6 +90,7 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
         tool: T,
         view: Option<Box<dyn Fn(Rect) -> CanvasView>>,
         snap: Option<Snap>,
+        zero: Option<Rc<RefCell<Point>>>,
         mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'static,
     ) -> Self {
         let tool = Rc::new(RefCell::new(tool));
@@ -85,6 +100,7 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
         let (shown, seen, id, on) = (Rc::clone(&tool), Rc::clone(&gestures), Rc::clone(&canvas), Rc::clone(&enabled));
         let mut fixture = Fixture::new(move |ui| {
             // The tool's claims for the pass, asked before the canvas shows, as an app does.
+            let mut held = zero.as_ref().map(|zero| zero.borrow_mut());
             let regions = shown.borrow().regions();
             let mut shown_canvas = Canvas::new(label).id(canvas_id(label)).document(DOCUMENT).tool_regions(regions);
             if let Some(view) = &view {
@@ -92,6 +108,9 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
             }
             if let Some(snap) = &snap {
                 shown_canvas = shown_canvas.snap(snap.clone());
+            }
+            if let Some(zero) = held.as_mut() {
+                shown_canvas = shown_canvas.with_rulers(Some(Rulers::new("Rulers", Bind::bound(&mut **zero))));
             }
             let canvas = shown_canvas.show(ui, |ui, body_cx| {
                 body(ui, body_cx);

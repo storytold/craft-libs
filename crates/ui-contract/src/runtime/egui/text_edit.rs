@@ -23,6 +23,7 @@ pub(crate) struct Edit<'a> {
     pub multiline: bool,
     pub password: bool,
     pub hint: Option<&'a str>,
+    pub muted_hint: bool,
     pub mono: bool,
     pub role: TypeRole,
     pub ink: Color32,
@@ -33,6 +34,8 @@ pub(crate) struct Edit<'a> {
     pub rtl: bool,
     /// The text sits in the middle of the rect.
     pub centred: bool,
+    /// The text sits at the end edge of the rect (unless `centred`).
+    pub end_aligned: bool,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -43,6 +46,13 @@ pub(crate) struct Edit<'a> {
     /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
     /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
     pub baseline: Option<f32>,
+    /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
+    /// (`text_adapter`), and a single line or a laid-out galley ignores it.
+    pub scroll: f32,
+    /// The modifiers of the Enter chord that breaks the line of a multi-line text. egui inserts the line break itself
+    /// before the adapter sees the Enter, so the adapter passes the chord its submit key leaves free: Shift under a plain
+    /// Enter submit, none under Cmd or Ctrl+Enter.
+    pub line_break: egui::Modifiers,
 }
 
 /// What the widget did in one pass.
@@ -58,10 +68,12 @@ pub(crate) struct Shown {
     pub galley: std::sync::Arc<egui::Galley>,
     /// Where the galley sits on screen.
     pub galley_pos: egui::Pos2,
+    /// The height the widget's text takes, margins included: more than the rect's when a multi-line text scrolls.
+    pub content: f32,
 }
 
-/// Runs the widget at `edit.rect`.
-pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
+/// Runs the widget at `edit.rect`, under `env`, the env of the `Ui` the caller shows the field in.
+pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) -> Shown {
     let Edit {
         id,
         rect,
@@ -73,6 +85,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         multiline,
         password,
         hint,
+        muted_hint,
         mono,
         role,
         ink,
@@ -81,13 +94,15 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         preedit,
         rtl,
         centred,
+        end_aligned,
         caret_visible,
         underline,
         galley,
         baseline,
+        scroll,
+        line_break,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
-    let env = crate::runtime::env::Env::of(ui);
     let tokens = &env.tokens;
     // Behind selected text and the selected text itself: the field's roles.
     let selection = (tokens.color.accent.soft, tokens.color.text.normal);
@@ -127,6 +142,8 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
             }
             None => job.append(text, 0.0, plain),
         }
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_text_layout(ui.ctx());
         ui.fonts_mut(|fonts| crate::runtime::egui::text_layout::layout_with(fonts, job))
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
@@ -155,8 +172,11 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     };
     // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
     // parent's cursor stays past the root, not past the text part inside it.
+    // A scrolled multi-line text runs moved up by its offset and shows only inside `rect` (the clip below), so the
+    // widget's own hit test, caret and selection follow the text where it is drawn.
+    let placed = if multiline && galley.is_none() && scroll > 0.0 { rect.translate(egui::vec2(0.0, -scroll)) } else { rect };
     let output = {
-        let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
+        let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(placed));
         super::style::set_text_edit_unfloored(ui);
         // The text shows only inside the text part, however wide the line is.
         if galley.is_none() {
@@ -165,9 +185,15 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         if !enabled && !focusable {
             super::style::disable_without_fade(ui);
         }
-        // The placeholder is the faint text colour, the disabled one when the field is off.
-        let text_colors = &crate::runtime::env::Env::of(ui).tokens.color.text;
-        super::style::set_hint_color(ui, crate::style::rgba_color(if enabled { text_colors.faint } else { text_colors.disabled }));
+        // The placeholder is the faint text colour, or the muted one on a fill the faint one does not read on, and the
+        // disabled one when the field is off.
+        let text_colors = &tokens.color.text;
+        let hint_color = match (enabled, muted_hint) {
+            (false, _) => text_colors.disabled,
+            (true, true) => text_colors.muted,
+            (true, false) => text_colors.faint,
+        };
+        super::style::set_hint_color(ui, crate::style::rgba_color(hint_color));
         super::style::set_text_cursor(ui, caret_visible);
         super::style::set_text_selection(ui, crate::style::rgba_color(selection.0), crate::style::rgba_color(selection.1));
         let mut read = text.as_str();
@@ -186,14 +212,16 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .desired_rows(1)
                     .password(password)
                     .event_filter(filter)
-                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
+                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(line_break, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
                     // A laid-out galley sits at the rect's corner, as a painted run does.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, true) => egui::Align2::RIGHT_CENTER,
-                        (false, false) => egui::Align2::LEFT_CENTER,
+                        (false, rtl) => match (end_aligned, rtl) {
+                            (true, false) | (false, true) => egui::Align2::RIGHT_CENTER,
+                            (true, true) | (false, false) => egui::Align2::LEFT_CENTER,
+                        },
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);
@@ -219,7 +247,17 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         }
         shown
     };
-    let focused = output.response.has_focus();
+    // A multi-line text taller than its part scrolls inside it: the part is the view, and the text, which the clip
+    // above cuts to the view, the content (S-L186: the text adapter owns the offset).
+    if multiline && galley.is_none() && output.response.rect.height() > rect.height() {
+        let text_rect = egui::Rect::from_min_size(output.galley_pos, output.galley.rect.size());
+        let content = placed.union(output.response.rect).union(text_rect);
+        super::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
+    }
+    // The widget's key focus, whether or not the window has the system's: switching to another app is no focus move,
+    // so the typing run, caret and selection carry on (egui's `Response::has_focus` is false while the window is in
+    // the background).
+    let focused = ui.memory(|memory| memory.has_focus(id));
     let caret = output.cursor_range.map(|range| {
         let at = output.galley.pos_from_cursor(range.primary);
         at.translate(output.galley_pos.to_vec2())
@@ -231,6 +269,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         entered,
         clicked: output.response.clicked(),
         caret,
+        content: output.response.rect.height(),
         galley: output.galley,
         galley_pos: output.galley_pos,
     }
@@ -246,6 +285,16 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     let mut state = TextEditState::load(ctx, id).unwrap_or_default();
     state.cursor.set_char_range(Some(CCursorRange { primary: CCursor::new(caret), secondary: CCursor::new(anchor), h_pos: None }));
     state.store(ctx, id);
+}
+
+/// Whether the widget's field has an undo step and a redo step, as `(undo, redo)`, against its current text `text`
+/// (egui's undoer compares its steps with the text, which the widget's state does not hold). It reads the undoer and
+/// steps nothing, so it agrees with what [`undo`] would do now.
+pub(crate) fn history(ctx: &Context, id: Id, text: &str) -> (bool, bool) {
+    let Some(state) = TextEditState::load(ctx, id) else { return (false, false) };
+    let now = (state.cursor.char_range().unwrap_or_default(), text.to_owned());
+    let undoer = state.undoer();
+    (undoer.has_undo(&now), undoer.has_redo(&now))
 }
 
 /// The undo steps of the widget: `Some(text)` when `step` changed it.

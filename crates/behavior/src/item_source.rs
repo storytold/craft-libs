@@ -59,10 +59,15 @@ pub trait DisplayOrder<K> {
     }
 
     /// Whether section `at` is a stop of navigation: it holds the lead, takes Enter, the context-menu key and a
-    /// press, and opens or closes with Forward and Back when it has children. A move stops on it, and it is never
-    /// selected, extended over, toggled, marqueed, dragged, renamed or reached by type-ahead. Only meaningful for a
-    /// section.
+    /// press, and opens or closes with Forward and Back when it has children. A move stops on it. By default it is
+    /// not selected or extended over; see `selectable_section`. It is not toggled, marqueed, dragged, renamed or
+    /// reached by type-ahead. Only meaningful for a section.
     fn section_stop(&self, _at: usize) -> bool {
+        false
+    }
+
+    /// Whether a section stop also represents an item that keyboard selection can pick or extend over.
+    fn selectable_section(&self, _at: usize) -> bool {
         false
     }
 
@@ -176,6 +181,10 @@ impl<K> NavOutline for Outline<'_, K> {
 
     fn row_len(&self, row: usize) -> Option<usize> {
         self.layout.and_then(|layout| layout.row_len(row))
+    }
+
+    fn column_shift(&self, from: usize, to: usize) -> isize {
+        self.layout.map_or(0, |layout| layout.column_shift(from, to))
     }
 
     fn columns(&self) -> usize {

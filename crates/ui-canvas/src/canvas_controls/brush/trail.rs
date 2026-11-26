@@ -2,25 +2,22 @@
 
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
-use crate::primitives::{Revision, TextureState, TextureStore, TextureStoreOptions};
+use crate::primitives::{Revision, Serials, TextureState, TextureStore, TextureStoreOptions};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Input, Metrics};
 use egui::epaint::{Mesh, Vertex};
 use egui::{Color32, ColorImage, Response, Shape, pos2};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The share of the tone's colour a full-coverage texel shows; the texture holds coverage only.
 const LIGHT_SHARE: f32 = 0.25;
 const SHADE_SHARE: f32 = 0.5;
 const DANGER_SHARE: f32 = 0.45;
 
-/// The texture store's salt: one store for every trail of the context, keyed by the mask's id.
+/// The texture store's salt: one store for every trail of the context, keyed by the trail's component id and the
+/// mask's serial (serials are unique per owner, not per context).
 const STORE_SALT: &str = "canvas_controls.stroke_trail";
-
-/// Hands out the ids that keep two masks' textures apart.
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A coverage raster over a document rect: one byte per texel, `scale` document units wide, stamped by the tool as the
 /// stroke grows and uploaded by [`StrokeTrail`] by its changed rows.
@@ -58,8 +55,9 @@ fn byte(coverage: f32) -> u8 {
 }
 
 impl CoverageMask {
-    /// A mask over `bounds` with no side longer than `max_side` texels.
-    pub fn new(bounds: Rect, max_side: u32) -> Self {
+    /// A mask over `bounds` with no side longer than `max_side` texels. Its texture's key comes from `serials`, which
+    /// the masks of one owner share.
+    pub fn new(serials: &mut Serials, bounds: Rect, max_side: u32) -> Self {
         let bounds = bounds.abs();
         let finite = [bounds.x0, bounds.y0, bounds.x1, bounds.y1].iter().all(|v| v.is_finite());
         let bounds = if finite { bounds } else { Rect::ZERO };
@@ -68,16 +66,7 @@ impl CoverageMask {
         let extent = |side: f64| (side / scale).ceil().max(1.0) as u32;
         let size = (extent(bounds.width()), extent(bounds.height()));
         let len = size.0 as usize * size.1 as usize;
-        CoverageMask {
-            bounds,
-            scale,
-            size,
-            texels: vec![0; len],
-            base: vec![0; len],
-            dirty: None,
-            revision: 0,
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-        }
+        CoverageMask { bounds, scale, size, texels: vec![0; len], base: vec![0; len], dirty: None, revision: 0, id: serials.mint() }
     }
 
     /// Stamps the capsule from `from` to `to` (document units) of radius `radius`, keeping the larger coverage.
@@ -270,8 +259,8 @@ impl Component for StrokeTrail<'_> {
         }
         let painter = ui.content_painter(cx);
         let ctx = painter.painter.ctx();
-        let store = TextureStore::<u64>::in_context(ctx, STORE_SALT, TextureStoreOptions::frames());
-        let (key, revision) = (self.mask.id, Revision::new(self.mask.revision));
+        let store = TextureStore::<(egui::Id, u64)>::in_context(ctx, STORE_SALT, TextureStoreOptions::frames());
+        let (key, revision) = ((cx.id, self.mask.id), Revision::new(self.mask.revision));
         // A second paint of the pass finds the entry at this revision and nothing dirty.
         let texture = match store.state(ctx, &key, revision) {
             TextureState::Ready(texture) => texture,

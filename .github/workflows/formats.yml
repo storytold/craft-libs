@@ -16,6 +16,7 @@ on:
       - "crates/tiff/**"
       - "crates/heif/**"
       - "crates/cms/**"
+      - "crates/cdr/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formats.yml"
@@ -33,6 +34,7 @@ on:
       - "crates/tiff/**"
       - "crates/heif/**"
       - "crates/cms/**"
+      - "crates/cdr/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formats.yml"
@@ -42,11 +44,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
-  # always gets to save the cache.
-  group: shared-formats-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-formats-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -68,7 +69,10 @@ jobs:
           - { crate: craft-tiff, features: "" }
           - { crate: craft-heif, features: "testdata" }
           - { crate: craft-cms, features: "" }
-    name: ${{ matrix.crate }} lint, tests, WASM
+          - { crate: craft-cdr, features: "synth" }
+    # fmt, clippy with default and with all features, and the tests run in the Workspace gate on
+    # every OS; this lints each feature alone and checks the web build.
+    name: ${{ matrix.crate }} feature sets, WASM
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
@@ -80,32 +84,19 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2.9.3
-        with:
-          key: ${{ matrix.crate }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p "$CRATE" --check
-        env:
-          CRATE: ${{ matrix.crate }}
-      - name: Clippy, default features and each feature alone
+      - name: Clippy, each feature alone
+        if: matrix.features != ''
         env:
           CRATE: ${{ matrix.crate }}
           FEATURES: ${{ matrix.features }}
         run: |
-          cargo clippy -p "$CRATE" --all-targets --locked -- -D warnings
           for f in $FEATURES; do
             echo "::group::feature: $f"
             cargo clippy -p "$CRATE" --all-targets --locked --no-default-features --features "$f" -- -D warnings
             echo "::endgroup::"
           done
-      - run: cargo clippy -p "$CRATE" --all-targets --locked --all-features -- -D warnings
-        env:
-          CRATE: ${{ matrix.crate }}
-      - run: cargo test -p "$CRATE" --all-features --locked
-        env:
-          CRATE: ${{ matrix.crate }}
       - run: cargo check -p "$CRATE" --all-features --locked --target wasm32-unknown-unknown
         env:
           CRATE: ${{ matrix.crate }}

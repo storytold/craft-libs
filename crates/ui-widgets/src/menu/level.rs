@@ -24,14 +24,16 @@ pub fn heads_toward(from: Pos2, now: Pos2, submenu: Rect) -> bool {
 pub(super) struct Row {
     pub(super) id: Id,
     pub(super) text: String,
+    /// The letter the row asks for in place of the level's pick, shown or not in its text.
+    pub(super) own: Option<char>,
     pub(super) enabled: bool,
 }
 
 /// A row's mnemonic as the level assigned it when the user last saw the rows: the letter and its character index
-/// in the row's text.
+/// in the row's text, none for a letter the text does not show.
 struct Assigned {
     id: Id,
-    mnemonic: Option<(char, usize)>,
+    mnemonic: Option<(char, Option<usize>)>,
     enabled: bool,
 }
 
@@ -40,6 +42,12 @@ struct OpenSubmenu {
     row: Id,
     rect: Option<Rect>,
 }
+
+/// A row's text and own letter, as the level's letters were assigned for it.
+type Lettered = (String, Option<char>);
+
+/// A level's letters (each row's mnemonic, or none) with the folder and rows they were assigned for.
+type KeptLetters = (Folder, Vec<Lettered>, Vec<Option<(char, Option<usize>)>>);
 
 #[derive(Default)]
 struct LevelState {
@@ -65,12 +73,35 @@ struct LevelState {
     previous_pointer: Option<Pos2>,
     /// The padding of the popup around the rows, as the menu that set the level has it.
     pad: f32,
+    /// The last assignment of letters, with the labels and folder it was made for. Every row of a level asks for its
+    /// letter in every pass, and assigning them all for each row made opening a long menu or submenu cost many times
+    /// a plain row's frame: the letters are assigned again only when the labels or the folder change.
+    letters: Option<KeptLetters>,
+}
+
+impl LevelState {
+    /// The letter of each row of this pass, in order, assigned once for these labels.
+    fn letters(&mut self, folder: Folder) -> &[Option<(char, Option<usize>)>] {
+        let same = self.letters.as_ref().is_some_and(|(kept, labels, _)| {
+            *kept == folder
+                && labels.len() == self.now.len()
+                && labels.iter().zip(&self.now).all(|((text, own), row)| *text == row.text && *own == row.own)
+        });
+        if !same {
+            let labels: Vec<&str> = self.now.iter().map(|row| row.text.as_str()).collect();
+            let own: Vec<Option<char>> = self.now.iter().map(|row| row.own).collect();
+            let assigned = mnemonic::assign_with(&labels, &own, &folder);
+            self.letters = Some((folder, self.now.iter().map(|row| (row.text.clone(), row.own)).collect(), assigned));
+        }
+        self.letters.as_ref().map_or(&[], |(_, _, assigned)| assigned.as_slice())
+    }
 }
 
 /// The rows of one menu level: each registers its label, and the level gives every row its mnemonic from the
 /// registrations of this pass. It also holds the level's one open submenu row and its active row. Rows
 /// outside any menu get an inert level.
-#[derive(Clone)]
+#[derive(Clone, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a handle to the level's state, which its rows write during the pass")]
 pub(crate) struct MenuLevel {
     state: Option<Arc<Mutex<LevelState>>>,
 }
@@ -160,12 +191,7 @@ impl MenuLevel {
                 state.pass = pass;
                 state.now.clear();
             }
-            let letters = if let Some(folder) = state.lettered {
-                let labels: Vec<&str> = state.now.iter().map(|row| row.text.as_str()).collect();
-                mnemonic::assign(&labels, &folder)
-            } else {
-                vec![None; state.now.len()]
-            };
+            let letters = if let Some(folder) = state.lettered { state.letters(folder).to_vec() } else { vec![None; state.now.len()] };
             state.shown = state.now.iter().zip(letters).map(|(row, mnemonic)| Assigned { id: row.id, mnemonic, enabled: row.enabled }).collect();
         });
     }
@@ -183,12 +209,11 @@ impl MenuLevel {
         });
     }
 
-    pub(super) fn mnemonic_of(&self, id: Id) -> Option<(char, usize)> {
+    pub(super) fn mnemonic_of(&self, id: Id) -> Option<(char, Option<usize>)> {
         self.with(|state| {
             let folder = state.lettered?;
             let at = state.now.iter().position(|row| row.id == id)?;
-            let labels: Vec<&str> = state.now.iter().map(|row| row.text.as_str()).collect();
-            mnemonic::assign(&labels, &folder)[at]
+            state.letters(folder).get(at).copied().flatten()
         })
     }
 
@@ -263,6 +288,11 @@ impl MenuLevel {
         self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row == id))
     }
 
+    /// Whether a sibling's submenu is open in this level.
+    pub(super) fn sibling_submenu_open(&self, id: Id) -> bool {
+        self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row != id))
+    }
+
     /// The submenu of row `id` was shown at `rect`, or closed itself.
     pub(super) fn note_submenu(&self, id: Id, open: bool, rect: Rect) {
         self.with(|state| match &mut state.open_submenu {
@@ -294,6 +324,11 @@ impl MenuLevel {
 
     pub(crate) fn active(&self) -> Option<Id> {
         self.with(|state| state.active)
+    }
+
+    /// The active row while it is enabled.
+    pub(super) fn active_enabled(&self) -> Option<Id> {
+        self.with(|state| state.active.filter(|active| state.shown.iter().any(|row| row.id == *active && row.enabled)))
     }
 
     /// Moves the active row by `mv` among the enabled rows as the user last saw them, without moving the focus (the

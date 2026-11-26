@@ -16,6 +16,7 @@ test = false
 workspace = true
 
 [features]
+suite = ["testing", "craft-ui-contract/suite", "craft-ui-widgets/suite", "craft-ui-panels/suite", "craft-ui-canvas/suite", "craft-ui-patterns/suite", "craft-ui-shell/suite"]
 default = []
 # `shell::app`: the eframe entry point.
 app = ["craft-ui-shell/app"]
@@ -34,6 +35,12 @@ snapshot = ["testing", "craft-ui-contract/snapshot"]
 color_fonts = ["craft-ui-contract/color_fonts"]
 # Find installed fonts for characters the app's faces lack (desktop only).
 system_fonts = ["craft-ui-contract/system_fonts"]
+# `share`, `account`: the share dialog and the account menu (craft-cloud-ui).
+share = ["craft-cloud-ui/share"]
+# `cloud`: Open and Save against cloud storage (craft-cloud-ui).
+cloud = ["share", "craft-cloud-ui/cloud"]
+# `esign`: the request-signatures dialog (craft-cloud-ui).
+esign = ["craft-cloud-ui/esign"]
 
 [dependencies]
 craft-ui-contract = { workspace = true }
@@ -42,9 +49,10 @@ craft-ui-panels = { workspace = true }
 craft-ui-canvas = { workspace = true }
 craft-ui-patterns = { workspace = true }
 craft-ui-shell = { workspace = true }
+craft-cloud-ui = { workspace = true }
 
 [dev-dependencies]
-craft-ui = { path = ".", features = ["testing"] }
+craft-ui = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 egui = { workspace = true }

@@ -6,7 +6,7 @@ use super::ramp::Mode;
 use super::scale::{Easing, Elevation};
 use super::sizes;
 use super::theme::{Appearance, Contrast, ContrastIntent, PinLayer, Pins, ThemeDef};
-use super::tokens::{ColorToken, Edge, ElevationTokens, Motion, MotionTokens, RadiusSet, ShapeTokens, SizeTokens, Tokens};
+use super::tokens::{ColorToken, Edge, ElevationTokens, GripShape, LocatorShape, Motion, MotionTokens, RadiusSet, ShapeTokens, SizeTokens, Tokens};
 use super::values;
 use crate::AppId;
 
@@ -180,7 +180,8 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let mut preset = set.base;
     sizes.apply_base(appearance.size, &mut preset);
 
-    let seed = theme.shape;
+    // An app's own shape replaces the theme's for that app.
+    let seed = app.and_then(|id| theme.apps.get(id)).and_then(|own| own.shape).or(theme.shape);
     let radius = seed.and_then(|s| s.radius).unwrap_or(preset.radius);
     let radius = seed.and_then(|s| s.radius_offset).map_or(radius, |o| o.apply(radius));
     let radius = RadiusSet { button: seed.and_then(|s| s.button_radius).unwrap_or(radius.button), ..radius };
@@ -200,8 +201,17 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let motion_ms = |millis: u32, easing: Easing| Motion { millis: if appearance.reduced_motion { 0 } else { millis }, easing };
 
     let radius = RadiusSet { sm: (radius.control / 2.0).round(), ..radius };
-    let shape =
-        ShapeTokens { radius, edge, knob: seed.and_then(|s| s.knob).unwrap_or_default(), wells: seed.and_then(|s| s.wells).unwrap_or_default() };
+    let shape = ShapeTokens {
+        radius,
+        edge,
+        knob: seed.and_then(|s| s.knob).unwrap_or_default(),
+        wells: seed.and_then(|s| s.wells).unwrap_or_default(),
+        grip: seed.and_then(|s| s.grip).map_or(GripShape::DEFAULT, |g| g.shape()),
+        locator: {
+            let own = seed.and_then(|s| s.locator).unwrap_or_default();
+            LocatorShape { cell: own.cell.unwrap_or(preset.size.handle.md), square: own.square.unwrap_or(preset.size.handle.sm) }
+        },
+    };
     let text_factor = sizes.text_steps.factor(appearance.text_size);
     let typography = preset.typography.scaled(text_factor, values::TYPE_ROUNDING);
 
@@ -219,6 +229,7 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
             r#move: motion(move_),
             caret: motion_ms(values::MOTION_CARET_MS, values::MOTION_CARET_EASING),
             outline: motion_ms(values::MOTION_OUTLINE_MS, values::MOTION_OUTLINE_EASING),
+            slide: values::MOTION_SLIDE_PT,
             reduced: appearance.reduced_motion,
         },
     };

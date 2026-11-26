@@ -11,7 +11,7 @@ use crate::canvas::testing::tool_story::{StoryHost, ToolScript, ToolStory, tool_
 use crate::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use crate::canvas_controls::CanvasControlWords;
 use crate::contract::Show as _;
-use crate::primitives::Draw;
+use crate::primitives::{Draw, Serials};
 use crate::runtime::env::Env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
@@ -56,8 +56,8 @@ fn hard_tip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 /// A drag-shaped mask whose stroke runs at height `y`.
-fn stamped(y: f64) -> CoverageMask {
-    let mut mask = CoverageMask::new(DocRect::new(40.0, 60.0, 160.0, 140.0), 256);
+fn stamped(serials: &mut Serials, y: f64) -> CoverageMask {
+    let mut mask = CoverageMask::new(serials, DocRect::new(40.0, 60.0, 160.0, 140.0), 256);
     mask.begin_stroke();
     mask.stamp_capsule(Point::new(60.0, y), Point::new(100.0, y + 6.0), 5.0);
     mask.stamp_capsule(Point::new(100.0, y + 6.0), Point::new(140.0, y - 4.0), 5.0);
@@ -66,7 +66,8 @@ fn stamped(y: f64) -> CoverageMask {
 
 /// The footprint of one tone. The mask is kept across passes (stamped once), so the trail uploads only what changed.
 fn footprint_of(ui: &mut Ui, data: &mut StoryData, label: &'static str, tone: TrailTone, y: f64) -> StoryOutput {
-    let mask = data.note::<Option<CoverageMask>>("footprint", None).get_or_insert_with(|| stamped(y));
+    let (serials, mask) = data.note::<(Serials, Option<CoverageMask>)>("footprint", (Serials::default(), None));
+    let mask = mask.get_or_insert_with(|| stamped(serials, y));
     on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| StrokeTrail::new(label, mask).tone(tone).show_at(ui, rect))
 }
 

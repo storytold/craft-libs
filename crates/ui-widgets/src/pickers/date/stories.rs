@@ -1,7 +1,11 @@
 //! Stories of `DatePicker` and `Calendar`.
 
-use super::{Calendar, CalendarView, DatePicker, DatePrecision, PickedDate};
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use super::{Calendar, CalendarPopover, CalendarView, DatePicker, DatePrecision, PickedDate};
+use crate::buttons::Button;
+use crate::contract::overlay::Anchor;
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity, clicked};
+use crate::display::Text;
+use crate::layout_components::Stack;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -19,17 +23,17 @@ fn today() -> PickedDate {
 fn date_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
     let disabled = *data.value("disabled", false);
-    DatePicker::new("From", Bind::bound(data.value("from", Some(today())))).today(today()).size(size).enabled(!disabled).show(ui).into()
+    DatePicker::new("From", data.bind("from", Some(today()))).today(today()).size(size).enabled(!disabled).show(ui).into()
 }
 
 #[story(DatePicker<'static>, covers = [LongText], drive = Drive::Never)]
 fn date_picker_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    DatePicker::new("From", Bind::bound(data.value("long", Some(PickedDate::day(9999, 12, 28))))).show(ui).into()
+    DatePicker::new("From", data.bind("long", Some(PickedDate::day(9999, 12, 28)))).show(ui).into()
 }
 
 #[story(DatePicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn date_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    DatePicker::new("From", Bind::bound_mixed(data.value("mixed", Mixed::<Option<PickedDate>>::Mixed))).show(ui).into()
+    DatePicker::new("From", data.bind_mixed("mixed", Mixed::<Option<PickedDate>>::Mixed)).show(ui).into()
 }
 
 #[story(DatePicker<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -40,7 +44,7 @@ fn date_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
         _ => Validity::Ok,
     };
-    DatePicker::new("From", Bind::bound(data.value("early", Some(today()))).check(refuse_past)).show(ui).into()
+    DatePicker::new("From", data.bind("early", Some(today())).check(refuse_past)).show(ui).into()
 }
 
 /// Focuses the field and opens the calendar with Alt+Down.
@@ -52,19 +56,72 @@ fn open_calendar(fixture: &mut Fixture) {
 
 #[story(DatePicker<'static>, covers = [Open], drive = Drive::Custom(open_calendar))]
 fn date_picker_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    DatePicker::new("From", Bind::bound(data.value("open", Some(today())))).today(today()).show(ui).into()
+    DatePicker::new("From", data.bind("open", Some(today()))).today(today()).show(ui).into()
 }
 
-#[story(DatePicker<'static>, covers = [], drive = Drive::Custom(open_calendar))]
+#[story(DatePicker<'static>, covers = [Open], drive = Drive::Custom(open_calendar))]
 fn date_picker_days_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let min = PickedDate::day(EARLIEST.0, EARLIEST.1, EARLIEST.2);
-    DatePicker::new("From", Bind::bound(data.value("days", None))).precisions(&[DatePrecision::Day]).min(min).today(today()).show(ui).into()
+    DatePicker::new("From", data.bind("days", None)).precisions(&[DatePrecision::Day]).min(min).today(today()).show(ui).into()
 }
 
 #[story(DatePicker<'static>, covers = [], disabled_text = "The date is fixed by the template")]
 fn date_picker_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tooltip = data.tooltip("The date the photo was taken");
-    DatePicker::new("Captured", Bind::bound(data.value("captured", Some(today())))).tooltip(tooltip).show(ui).into()
+    DatePicker::new("Captured", data.bind("captured", Some(today()))).tooltip(tooltip).show(ui).into()
+}
+
+/// The button opens the calendar, which hangs from the date shown above it rather than from the button.
+#[story(CalendarPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn calendar_popover_at_rect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    let mut picked = *data.value("picked", Some(today()));
+    let shown = Stack::new().show(ui, |ui, _| {
+        let date = Text::new(picked.map_or_else(|| "No date".to_owned(), |date| date.iso())).show(ui);
+        let opener = Button::new("Choose a date").show(ui);
+        open |= clicked(&opener);
+        CalendarPopover::new("Due date", Bind::bound(&mut open), Bind::bound(&mut picked))
+            .today(today())
+            .opened_by(&opener)
+            .overlay(|overlay| overlay.opener_anchor(Anchor::Rect(date.rect)))
+            .show(ui, |_, _| {})
+            .output
+    });
+    *data.value("open", false) = open;
+    *data.value("picked", Some(today())) = picked;
+    match shown.inner {
+        Some(output) => output.into(),
+        None => shown.output.into(),
+    }
+}
+
+/// Focuses the opener and presses Enter, which opens the popover.
+fn open_popover(fixture: &mut Fixture) {
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.idle(4);
+}
+
+/// The calendar popover, opened by its opener and hanging from it.
+#[story(CalendarPopover<'static>, covers = [Open], drive = Drive::Custom(open_popover))]
+fn calendar_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    let mut picked = *data.value("picked", Some(today()));
+    let shown = Stack::new().show(ui, |ui, _| {
+        let opener = Button::new("Choose a date").show(ui);
+        open |= clicked(&opener);
+        CalendarPopover::new("Due date", Bind::bound(&mut open), Bind::bound(&mut picked))
+            .today(today())
+            .opened_by(&opener)
+            .show(ui, |_, _| {})
+            .output
+    });
+    *data.value("open", false) = open;
+    *data.value("picked", Some(today())) = picked;
+    match shown.inner {
+        Some(output) => output.into(),
+        None => shown.output.into(),
+    }
 }
 
 #[story(Calendar, covers = [Default], drive = Drive::Never)]

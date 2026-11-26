@@ -62,7 +62,7 @@ impl PathMode {
     /// | Pen | ⇧ or ⌥, drawing; ⇧, not drawing | `Anchors` | `Pen` | true |
     /// | Curvature | none or ⇧ or ⌥, not drawing | `Curvature` | `Curvature` | true |
     /// | Curvature | drawing | `Anchors` | `Curvature` | true |
-    /// | Add Anchor, Delete Anchor | no ⌘ | `AddAnchor`, `DeleteAnchor` (the overlay swaps them with ⌥) | `Pen` if `drawing` (shown, not sensing), else `None` | false |
+    /// | Add Anchor, Delete Anchor | no ⌘ | `AddAnchor`, `DeleteAnchor` (with ⌥ the overlay makes Delete add and Add take whole subpaths) | `Pen` if `drawing` (shown, not sensing), else `None` | false |
     /// | Convert Point | no ⌘ | `Convert` | as Add Anchor | false |
     /// | Direct Selection | any | `Direct` | as Add Anchor | false |
     ///

@@ -7,11 +7,13 @@
 //! caller converts [`SNAP_PX`] screen points with the zoom. Results carry [`SnapLine`]s the
 //! caller draws.
 //!
-//! Snapping is on when View › Snap is; holding Ctrl while dragging turns it off, except when Ctrl
-//! is the tool's own modifier (the caller reads the keys). Smart guides follow View › Show ›
+//! Snapping is on when View › Snap is; holding the suspend key ([`SnapSuspend`], Ctrl by default)
+//! while dragging turns it off, except when that key is the tool's own modifier (the caller reads
+//! the keys). Smart guides follow View › Show ›
 //! Smart Guides and also snap the Move tool to other layers' edges and centres.
 
 use crate::flow::Axis;
+use craft_keymap::{Mods, Platform};
 use kurbo::{Point, Rect, Vec2};
 
 /// Screen points within which a position snaps (Photoshop).
@@ -158,12 +160,51 @@ pub struct SnapOptions {
     pub selection: bool,
     /// View › Show › Smart Guides.
     pub smart_guides: bool,
+    /// The key that suspends snapping.
+    pub suspend: SnapSuspend,
 }
 
 impl Default for SnapOptions {
     /// Photoshop's defaults: everything on.
     fn default() -> Self {
-        Self { on: true, guides: true, grid: true, layers: true, document_bounds: true, selection: true, smart_guides: true }
+        Self {
+            on: true,
+            guides: true,
+            grid: true,
+            layers: true,
+            document_bounds: true,
+            selection: true,
+            smart_guides: true,
+            suspend: SnapSuspend::default(),
+        }
+    }
+}
+
+/// The key that suspends snapping.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SnapSuspend {
+    /// The Control key.
+    #[default]
+    Control,
+    /// The Alt key.
+    Alt,
+}
+
+impl SnapSuspend {
+    /// Whether this key is held in `mods` on `os`: Control is the Control key without ⌘ on macOS and Ctrl
+    /// elsewhere (where it is `Mods::cmd`); Alt is Alt (⌥).
+    pub fn is_held(self, mods: Mods, os: Platform) -> bool {
+        match self {
+            SnapSuspend::Control => {
+                if os.is_mac() {
+                    mods.ctrl && !mods.cmd
+                } else {
+                    mods.cmd
+                }
+            }
+            SnapSuspend::Alt => mods.alt,
+        }
     }
 }
 
@@ -192,10 +233,23 @@ pub enum SnapGesture {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SnapTargets {
     targets: Vec<SnapTarget>,
+    /// Whether a target with a span catches a point or box anywhere along its line, the span only shaping the drawn
+    /// smart guide ([`reach_past_spans`](Self::reach_past_spans)).
+    past_spans: bool,
 }
 
 /// Distances closer than this are equal.
 const TIE: f64 = 1e-9;
+
+/// Whether `target` reaches a point or box spanning `across` on the other axis: a target with a span (a layer's
+/// edge on its page) only where the two overlap, unless `past_spans`; a target without a span, or a query without an
+/// extent, always.
+fn reaches(target: &SnapTarget, across: Option<(f64, f64)>, past_spans: bool) -> bool {
+    match (target.span, across) {
+        (Some((a, b)), Some((lo, hi))) if !past_spans => lo <= b && a <= hi,
+        _ => true,
+    }
+}
 
 /// The line through `target` reaching the snapped object at `a..b` along the line; a target
 /// without a span stays full height.
@@ -208,6 +262,17 @@ impl SnapTargets {
     /// No targets.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// These targets with every span reaching past its extent: a target catches a point or box anywhere along its
+    /// line, and its span only shapes the drawn smart guide between the two objects. Photoshop snaps a moved layer's
+    /// edge to another layer's edge on the same line even when the two do not overlap across it (boxes side by side
+    /// align their tops); without this, a spanned target catches only what overlaps its span (a layer's edge on its
+    /// page).
+    #[must_use]
+    pub fn reach_past_spans(mut self) -> Self {
+        self.past_spans = true;
+        self
     }
 
     /// Add one target.
@@ -280,7 +345,7 @@ impl SnapTargets {
 
     /// Only the targets `keep` accepts (Snap To with one kind off).
     pub fn filtered(&self, keep: impl Fn(SnapKind) -> bool) -> SnapTargets {
-        SnapTargets { targets: self.targets.iter().copied().filter(|t| keep(t.kind)).collect() }
+        SnapTargets { targets: self.targets.iter().copied().filter(|t| keep(t.kind)).collect(), past_spans: self.past_spans }
     }
 
     /// Whether there is no target.
@@ -291,8 +356,15 @@ impl SnapTargets {
     /// The nearest target of a kind in `kinds` among the lines that run `along` an axis, within `tolerance` of
     /// `value` across them; [`SnapTargets::nearest`] is this with [`SnapKinds::ALL`].
     pub fn nearest_of(&self, along: Axis, value: f64, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
+        self.nearest_within(along, value, None, tolerance, kinds)
+    }
+
+    /// [`nearest_of`](Self::nearest_of) that also takes the query's extent `across` the other axis: a target with a
+    /// span catches only a point or box overlapping that span there; without `across`, or for a target without a
+    /// span, it is `nearest_of`.
+    pub fn nearest_within(&self, along: Axis, value: f64, across: Option<(f64, f64)>, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
         let mut best: Option<(f64, SnapTarget)> = None;
-        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind)) {
+        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind) && reaches(t, across, self.past_spans)) {
             let distance = (target.position - value).abs();
             if distance > tolerance {
                 continue;
@@ -325,11 +397,11 @@ impl SnapTargets {
     pub fn snap_point_of(&self, point: Point, tolerance: f64, kinds: SnapKinds) -> (Point, Vec<SnapLine>) {
         let mut out = point;
         let mut lines = Vec::new();
-        if let Some(t) = self.nearest_of(Axis::Y, point.x, tolerance, kinds) {
+        if let Some(t) = self.nearest_within(Axis::Y, point.x, Some((point.y, point.y)), tolerance, kinds) {
             out.x = t.position;
             lines.push(line(&t, point.y, point.y));
         }
-        if let Some(t) = self.nearest_of(Axis::X, point.y, tolerance, kinds) {
+        if let Some(t) = self.nearest_within(Axis::X, point.y, Some((out.x, out.x)), tolerance, kinds) {
             out.y = t.position;
             lines.push(line(&t, out.x, out.x));
         }
@@ -359,7 +431,7 @@ impl SnapTargets {
             let anchors = [lo, hi, (lo + hi) / 2.0];
             let mut best: Option<f64> = None;
             for anchor in anchors {
-                if let Some(t) = self.nearest_of(along, anchor, tolerance, kinds) {
+                if let Some(t) = self.nearest_within(along, anchor, Some(other), tolerance, kinds) {
                     let d = t.position - anchor;
                     if best.is_none_or(|b| d.abs() < b.abs() - TIE) {
                         best = Some(d);
@@ -376,7 +448,9 @@ impl SnapTargets {
                 let hit = self
                     .targets
                     .iter()
-                    .filter(|t| t.along == along && kinds.contains(t.kind) && (t.position - moved).abs() < 1e-6)
+                    .filter(|t| {
+                        t.along == along && kinds.contains(t.kind) && reaches(t, Some(other), self.past_spans) && (t.position - moved).abs() < 1e-6
+                    })
                     .min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
                 if let Some(t) = hit {
                     lines.push(line(t, other.0, other.1));

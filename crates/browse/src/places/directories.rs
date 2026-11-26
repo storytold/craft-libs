@@ -50,6 +50,26 @@ pub struct Folder {
     pub name: String,
 }
 
+/// A file or folder in a [`FolderEntries`] listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// Its path.
+    pub path: PathBuf,
+    /// Its name.
+    pub name: String,
+    /// Whether it is a folder.
+    pub folder: bool,
+}
+
+/// The files and folders of one folder, as [`Directories::entries`] lists them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderEntries {
+    /// The entries read, hidden ones left out, in `natural_cmp` order of their names.
+    pub entries: Vec<Entry>,
+    /// The listing stopped at the limit before the folder ended.
+    pub truncated: bool,
+}
+
 /// The folder lookups a places tree needs (owner question 4: a small trait in this crate, with a
 /// system implementation and a fake). Every call can block on a slow or network disk:
 /// [`FolderCache`](super::FolderCache) calls them only in jobs.
@@ -70,6 +90,11 @@ pub trait Directories: Send + Sync {
     /// The hidden folders among `path` and its ancestors, innermost first (LightCraft's
     /// `unlisted_ancestors`); a tree never opens through one.
     fn unlisted_ancestors(&self, path: &Path) -> Vec<PathBuf>;
+
+    /// The files and folders of `folder`, with the hidden rule and the `natural_cmp` order of
+    /// [`subfolders`](Self::subfolders). Stops after `limit` entries read and reports
+    /// `truncated`; checks `cancel` between entries.
+    fn entries(&self, folder: &Path, limit: usize, cancel: &Cancel) -> io::Result<FolderEntries>;
 }
 
 /// [`Directories`] over the file system.
@@ -79,7 +104,7 @@ pub trait Directories: Send + Sync {
 /// - `volumes`: macOS the entries of `/Volumes`; Linux `/media/$USER/*`, `/run/media/$USER/*` and
 ///   `/mnt/*`; Windows the drive letters `A:` to `Z:` whose root exists. `network` and `removable`
 ///   stay false where `std` can't tell (a platform service may add them later).
-/// - `subfolders`: `std::fs::read_dir`, as the trait says.
+/// - `subfolders` and `entries`: `std::fs::read_dir`, as the trait says.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemDirectories;
@@ -162,6 +187,33 @@ impl Directories for SystemDirectories {
         Ok(out)
     }
 
+    fn entries(&self, folder: &Path, limit: usize, cancel: &Cancel) -> io::Result<FolderEntries> {
+        // ui-egui: crates/ui-egui/src/file_browser.rs:58 (`list_dir`: `MAX_SCANNED` entries read, hidden left out, links to folders are folders).
+        let mut out = FolderEntries::default();
+        for (read, entry) in std::fs::read_dir(folder)?.enumerate() {
+            if cancel.is_cancelled() {
+                break;
+            }
+            // Hidden entries count as read too: the limit bounds the time a huge folder takes.
+            if read >= limit {
+                out.truncated = true;
+                break;
+            }
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            let folder = match entry.file_type() {
+                Ok(t) if t.is_symlink() => path.is_dir(),
+                Ok(t) => t.is_dir(),
+                Err(_) => continue,
+            };
+            if !is_hidden(&path, || entry.metadata()) {
+                out.entries.push(Entry { name: entry.file_name().to_string_lossy().into_owned(), path, folder });
+            }
+        }
+        out.entries.sort_by(|a, b| craft_platform::open::natural_cmp(&a.name, &b.name));
+        Ok(out)
+    }
+
     fn unlisted_ancestors(&self, path: &Path) -> Vec<PathBuf> {
         // lightcraft: crates/ui-egui/src/panels/left/local.rs:201 (`unlisted_ancestors`).
         path.ancestors().filter(|p| is_hidden(p, || std::fs::symlink_metadata(p))).map(Path::to_path_buf).collect()
@@ -177,7 +229,7 @@ fn home() -> Option<PathBuf> {
 // lightcraft: crates/engine/src/walk.rs:56 (`hidden_with_metadata`).
 #[cfg(not(target_arch = "wasm32"))]
 fn is_hidden(path: &Path, metadata: impl FnOnce() -> io::Result<std::fs::Metadata>) -> bool {
-    if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+    if dotted(path) {
         return true;
     }
     #[cfg(windows)]
@@ -199,6 +251,12 @@ fn is_hidden(path: &Path, metadata: impl FnOnce() -> io::Result<std::fs::Metadat
     }
 }
 
+/// Whether the path's name starts with a dot: the part of the hidden rule a name alone tells, so
+/// [`FakeDirectories`] hides what [`SystemDirectories`] hides on every platform.
+fn dotted(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+}
+
 /// [`Directories`] over an in-memory tree, for tests and stories. Folders are added with
 /// [`folder`](Self::folder) (their ancestors are implied) and can be added or removed through a
 /// shared reference while a cache holds it.
@@ -207,6 +265,10 @@ pub struct FakeDirectories {
     standard: Vec<(StandardFolder, PathBuf)>,
     volumes: Vec<Volume>,
     children: Mutex<BTreeMap<PathBuf, BTreeSet<String>>>,
+    /// Files, by their folder; only [`entries`](Directories::entries) lists them.
+    files: Mutex<BTreeMap<PathBuf, BTreeSet<String>>>,
+    /// Links, by path, to their target.
+    links: BTreeMap<PathBuf, PathBuf>,
     unlisted: Vec<PathBuf>,
     failing: Vec<PathBuf>,
     calls: AtomicUsize,
@@ -236,6 +298,41 @@ impl FakeDirectories {
     #[must_use]
     pub fn folder(self, path: impl AsRef<Path>) -> Self {
         self.add_folder(path);
+        self
+    }
+
+    /// The file at `path`, with its folder and that folder's ancestors.
+    /// [`entries`](Directories::entries) lists it; [`subfolders`](Directories::subfolders) does
+    /// not.
+    #[must_use]
+    pub fn file(self, path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
+        if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+            self.add_folder(parent);
+            let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            files.entry(parent.to_path_buf()).or_default().insert(name.to_string_lossy().into_owned());
+        }
+        self
+    }
+
+    /// Removes the file at `path`; later listings leave it out.
+    pub fn remove_file(&self, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else { return };
+        if let Some(names) = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(parent) {
+            names.remove(&*name.to_string_lossy());
+        }
+    }
+
+    /// A link at `path` to `target`. [`entries`](Directories::entries) lists it as a folder when
+    /// `target` is a folder of this tree, else as a file.
+    #[must_use]
+    pub fn link(mut self, path: impl AsRef<Path>, target: impl Into<PathBuf>) -> Self {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            self.add_folder(parent);
+        }
+        self.links.insert(path.to_path_buf(), target.into());
         self
     }
 
@@ -296,6 +393,39 @@ impl Directories for FakeDirectories {
         let mut out: Vec<Folder> =
             children.get(folder).map(|names| names.iter().map(|n| Folder { path: folder.join(n), name: n.clone() }).collect()).unwrap_or_default();
         out.sort_by(|a, b| craft_platform::open::natural_cmp(&a.name, &b.name));
+        Ok(out)
+    }
+
+    fn entries(&self, folder: &Path, limit: usize, cancel: &Cancel) -> io::Result<FolderEntries> {
+        if self.failing.iter().any(|p| p == folder) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"));
+        }
+        let children = self.children.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let is_folder = |path: &Path| {
+            children.contains_key(path)
+                || matches!((path.parent(), path.file_name()), (Some(parent), Some(name)) if children.get(parent).is_some_and(|names| names.contains(&*name.to_string_lossy())))
+        };
+        // The read order of this fake: folders, files, then links, each by name.
+        let folders = children.get(folder).into_iter().flatten().map(|n| (folder.join(n), true));
+        let file_names = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let files = file_names.get(folder).into_iter().flatten().map(|n| (folder.join(n), false));
+        let links = self.links.iter().filter(|(path, _)| path.parent() == Some(folder)).map(|(path, target)| (path.clone(), is_folder(target)));
+        let mut out = FolderEntries::default();
+        for (read, (path, is_dir)) in folders.chain(files).chain(links).enumerate() {
+            if cancel.is_cancelled() {
+                break;
+            }
+            if read >= limit {
+                out.truncated = true;
+                break;
+            }
+            if dotted(&path) {
+                continue;
+            }
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            out.entries.push(Entry { path, name, folder: is_dir });
+        }
+        out.entries.sort_by(|a, b| craft_platform::open::natural_cmp(&a.name, &b.name));
         Ok(out)
     }
 

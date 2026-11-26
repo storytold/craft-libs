@@ -14,7 +14,9 @@ Grouped by gallery level, then shape, then name.
 | `CanvasScrollbars` | Leaf | `craft_ui_canvas::canvas::scrollbars` | The scroll bars of a canvas |
 | `CropOverlay` | Leaf | `craft_ui_canvas::canvas::crop` | The crop frame of a document, edited by dragging it as Photoshop's Classic crop does (or moving and turning the image behind it in image mode) and by the keyboard |
 | `Divider` | Leaf | `craft_ui_widgets::display::divider` | A separator line in the divider colour, snapped to the pixel grid |
+| `FaceRuns` | Leaf | `craft_ui_contract::testing::face_runs` | Three runs in a document face, as an input method's composition is drawn in the text's own font: at its own size, with kana the face lacks drawn by the interface fonts, and a run asked at 4,000 points drawn at the atlas's cap |
 | `FalloffPreview` | Leaf | `craft_ui_canvas::canvas_controls::brush::falloff` | A tip's falloff centred at a document point, with the circle of the brush's size round it: the preview a brush resize and a hover show |
+| `FooterSlot` | Leaf | `craft_ui_contract::contract::footer_slot` | The cell where a container whose footer stands in its body (`FooterPlace::Body`) draws that footer: a dialog's buttons in the cell its body's arrangement keeps for them, as the Color Picker keeps one above its second field group |
 | `Guides` | Leaf | `craft_ui_canvas::canvas_controls::guides` | The ruler guides of a canvas: drawn, taken by the pointer and moved with the keyboard |
 | `HeaderText` | Leaf | `craft_ui_contract::contract::items::header` | A header cell's label |
 | `HoverOutline` | Leaf | `craft_ui_canvas::canvas_controls::outline` | The outline of the object under the pointer: decoration over the canvas, drawn after the document and before the tool's own marks |
@@ -24,7 +26,7 @@ Grouped by gallery level, then shape, then name.
 | `Marquee` | Leaf | `craft_ui_canvas::canvas_controls::marquee` | An outline over the document, shown at the canvas's rect with `show_at` and mapped through the canvas's view |
 | `Navigator` | Leaf | `craft_ui_canvas::canvas::navigator::preview` | The preview box of the Navigator panel with the proxy rectangle of the view |
 | `Pasteboard` | Leaf | `craft_ui_canvas::canvas::pasteboard` | The pasteboard and page frames under a document |
-| `Picture` | Leaf | `craft_ui_widgets::display::picture` | A picture of an image the caller makes (`new`) or of what a content painter paints (`painter`); both sit in a rect of the same token sizes |
+| `Picture` | Leaf | `craft_ui_widgets::display::picture` | A picture of an image the caller makes (`new`), of what a content painter paints (`painter`) or of an SVG asset (`svg`); all sit in a rect of the same token sizes |
 | `PixelGrid` | Leaf | `craft_ui_canvas::canvas_controls::pixel_grid` | The pixel grid over a raster document |
 | `RasterDisplay` | Leaf | `craft_ui_canvas::canvas::raster` | The document display of one canvas: the document drawn through the view of the [`Canvas`](super::Canvas) it is shown in, at the canvas rect |
 | `RotateView` | Leaf | `craft_ui_canvas::canvas::rotate` | The compass of a turned view: a dial whose needle points where the document's up lies on screen |
@@ -57,11 +59,12 @@ Grouped by gallery level, then shape, then name.
 | `Checkbox` | Leaf | `craft_ui_widgets::choice::check` | A check box over a bool; a `Mixed` binding shows the mixed state and a click makes it checked |
 | `ChipField` | Leaf | `craft_ui_widgets::text::chips` | A field of removable chips and a draft text part |
 | `ComboBox` | Leaf | `craft_ui_widgets::pickers::combo_box` | A text field with a list of options |
+| `CommandSearch` | Leaf | `craft_ui_widgets::buttons::command_search` | The command-search opener: a search field's face showing the search glyph, a placeholder and the chord of its command at the reading end |
 | `DatePicker` | Leaf | `craft_ui_widgets::pickers::date` | A text field for a date with a calendar popover |
 | `Disclosure` | Leaf | `craft_ui_widgets::controls::disclosure` | A button bound to an open state, with the expanded state |
 | `IconButton` | Leaf | `craft_ui_widgets::buttons::icon_button` | A square button showing only an icon |
 | `Kbd` | Leaf | `craft_ui_widgets::display::kbd` | A key chord |
-| `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue |
+| `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue (`LinkLook::Plain` drops the underline of a link standing alone) |
 | `LinkedFields` | Leaf | `craft_ui_widgets::text::linked` | `N` number fields joined by a link toggle |
 | `NumberField` | Leaf | `craft_ui_widgets::text::number` | A number field: a text part over [`NumberCodec`]; empty text is `None` |
 | `PointPicker` | Leaf | `craft_ui_widgets::value_drag::point_picker` | A point `[x, y]` picked on a well: x grows to the right and y downwards, as image coordinates do, in either reading direction |
@@ -85,6 +88,8 @@ Grouped by gallery level, then shape, then name.
 | `ToggleButton` | Leaf | `craft_ui_widgets::buttons::toggle_button` | A secondary-looking button that stays pressed while on: it takes the accent fill and edge, and its raised surface draws pressed in |
 | `TreePicker` | Leaf | `craft_ui_widgets::pickers::tree_picker` | A field that opens a tree of items and folders and sets the binding to the picked item's key |
 | `UnitSelect` | Leaf | `craft_ui_widgets::pickers::unit_select` | A number field with a select of units after it |
+| `WordRun` | Leaf | `craft_ui_widgets::text::word_run` | A wrapping run of pickable words in one Tab stop: the arrows move focus over the words in reading order, Home and End to the first and last, and Space, Enter or a click picks the focused word into `selected` |
+| `CalendarPopover` | Body | `craft_ui_widgets::pickers::date::popover` | A calendar hung from any rect, with `DatePicker`'s calendar body: the precision switch, the page, Today and Clear |
 | `RadioGroup` | Body | `craft_ui_widgets::choice::radio` | A group of radio buttons over one value: one Tab stop, arrows move focus, Space, Enter or a click selects |
 | `SwatchTable` | Items | `craft_ui_widgets::choice::swatch_table` | A table of touching colour cells, one per entry, wrapping to the width or to a fixed count per row |
 
@@ -95,6 +100,7 @@ Grouped by gallery level, then shape, then name.
 | `FindingsSummary` | Leaf | `craft_ui_widgets::list::findings` | The line over a list of findings: a status dot that says whether there are errors, then the counts |
 | `ListRow` | Leaf | `craft_ui_widgets::list::row` | One row of a list |
 | `MenuBar` | Leaf | `craft_ui_widgets::menu::bar` | A menu bar |
+| `MenuIconRow` | Leaf | `craft_ui_widgets::menu::icon_row` | A menu row of icons that is one stop: Left and Right rove among the icons, Up and Down leave the row to the neighbouring menu rows as from any row |
 | `MenuItem` | Leaf | `craft_ui_widgets::menu::item` | A row of a menu: a label, an optional icon, a check or radio mark, shortcut text and a detail line under the label |
 | `Node` | Leaf | `craft_ui_widgets::graph::node` | A node of a kind: a title, ports, the kind's inline controls and its body paint |
 | `Notice` | Leaf | `craft_ui_widgets::notices::notice` | A message in a tone |
@@ -104,7 +110,7 @@ Grouped by gallery level, then shape, then name.
 | `ThumbnailSlider` | Leaf | `craft_ui_widgets::tile_grid::slider` | The tile size slider: a small picture glyph button, a `Slider` over [`TileZoom::range`] and a large picture glyph button |
 | `Tile` | Leaf | `craft_ui_widgets::tile_grid::tile` | One tile of a tile grid |
 | `TitleFace` | Leaf | `craft_ui_widgets::menu::bar` | The face of a menu title: lit while its menu is open or the keyboard is on it, its mnemonic underlined while Alt is held or the bar has focus |
-| `TitleRow` | Leaf | `craft_ui_panels::sections::title_row` | An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional subtitle at the band's end (muted caption text: the target's kind), a lead (a disclosure bound to the container's open state, or a check box bound to its gate) and action parts |
+| `TitleRow` | Leaf | `craft_ui_panels::sections::title_row` | An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional subtitle at the band's end (faint caption text: the target's kind), a lead (a disclosure bound to the container's open state, or a check box bound to its gate) and action parts |
 | `DropAction` | Body | `craft_ui_panels::sections::footer` | A container that is as large as its one child and takes drops of payload type `P` over that child |
 | `Field` | Body | `craft_ui_widgets::form::field` | One control with a side label: beside it, above it, as a caption or after it (`Field::layout`) |
 | `FieldGroup` | Body | `craft_ui_widgets::form::group` | A stack of `Field`s (and `LinkedFields`) named `label`, filling the width offered |
@@ -131,8 +137,9 @@ Grouped by gallery level, then shape, then name.
 | `GroupGrip` | Leaf | `craft_ui_panels::docking::group` | The handle a group is dragged by: an unmarked band over the empty room of the group's header |
 | `PreviewPane` | Leaf | `craft_ui_patterns::patterns::form_dialogs::preview` | A picture in a well, over a checkerboard where it is transparent |
 | `Splitter` | Leaf | `craft_ui_panels::docking::splitter` | A line between two panes, as thick across as the pointer's grab distance |
+| `TearOffBar` | Leaf | `craft_ui_panels::rails::flyout` | The bar down a flyout's end edge that tears the group off, as tall as the rows it runs beside: a press on it dragged past the press slop reports where the drag began, a click where it ended, so a press reports once |
 | `VeilCard` | Leaf | `craft_ui_widgets::popover::drop_veil` | The card of a veil: a popup surface around the label's `Text`, as wide and high as the text with its padding |
-| `Bar` | Body | `craft_ui_widgets::bars::bar` | A bar over a chrome surface whose body holds the members in reading order: a tool bar's at the standard control size, an options or status bar's at the small one |
+| `Bar` | Body | `craft_ui_widgets::bars::bar` | A bar over a chrome surface whose body holds the members in reading order: a tool or options bar's at the standard control size, a status bar's at the small one |
 | `BlockingOverlay` | Body | `craft_ui_panels::dialog::blocking` | A modal layer that takes the window's input while it is shown, with the wait cursor |
 | `Dialog` | Body | `craft_ui_panels::dialog::modal` | A dialog on its own layer |
 | `DialogFrame` | Body | `craft_ui_panels::dialog::frame` | The look of a dialog in the flow of its parent: the dialog surface, a title row, the body and a footer |
@@ -145,6 +152,7 @@ Grouped by gallery level, then shape, then name.
 | `FullWindowSide` | Body | `craft_ui_canvas::canvas::full_window_parts::side` | A side column of a full-window dialog: Liquify's and Select and Mask's Properties, Content-Aware Fill's Preview and settings panels, Filter Gallery's settings |
 | `IconicColumn` | Body | `craft_ui_panels::docking::iconic` | A column collapsed to icons: the column bar over icon groups, one cell per panel |
 | `ModalDragStrip` | Body | `craft_ui_panels::dialog::modal` | The chrome a modal dialog puts over a drag area of the window it covers, so that the window still moves by it |
+| `PageBand` | Body | `craft_ui_shell::shell::title_bar::page_band` | The band over a shown page that moves the window, with the window's ends: the traffic lights' room or the caption buttons |
 | `PaneFrame` | Body | `craft_ui_patterns::patterns::dock::panes` | A docked pane: a shell pane on one edge of the area, with a title row and a scrolling body |
 | `Panel` | Body | `craft_ui_panels::sections::panel` | A panel of a workspace: scrolling body, optional footer, optional title row |
 | `Popover` | Body | `craft_ui_widgets::popover::anchored` | A non-modal popup that hangs from the control that opened it and holds the app's body (a colour picker, a stroke editor, a settings form) |
@@ -152,14 +160,14 @@ Grouped by gallery level, then shape, then name.
 | `SplitArea` | Body | `craft_ui_panels::docking` | The docked tree of a layout, with a handle between neighbouring groups |
 | `StackSections` | Body | `craft_ui_panels::docking::stack` | An accordion laid out in the rect it is shown at (`section_heights` with the strip height of the docking sizes), with a divider between its open sections |
 | `TitleBar` | Body | `craft_ui_shell::shell::title_bar::bar` | The bar of a window whose frame the app draws |
-| `ToolRail` | Body | `craft_ui_panels::rails::tool` | The rail of tool slots in a grid of as many columns as its width holds: one `FlyoutButton` per visible slot showing the slot's shown tool, the slot with the current tool toggled on; its dock column is whole tool columns wide and as tall as its rows and footer |
+| `ToolRail` | Body | `craft_ui_panels::rails::tool` | The rail of tool slots, laid out in a grid of columns: one `FlyoutButton` per visible slot showing the slot's shown tool, the slot with the current tool toggled on |
 | `AboutDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::about` | Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button |
 | `Alert` | Pattern | `craft_ui_panels::dialog::alert` | A modal notice with one OK button: a prompt whose only answer is OK, which OK, Enter, Escape and the close action all give |
 | `AlignBar` | Pattern | `craft_ui_widgets::bars::align` | The two sections of four align and distribute buttons, then the menu button, shown as children of a `Bar` |
 | `BarHome` | Pattern | `craft_ui_widgets::bars::lead` | The Home button at the start of an options bar: a toggle with the home icon at the standard control size, as tall as a bar's tool icons, then a rule |
 | `BarTool` | Pattern | `craft_ui_widgets::bars::lead` | The active tool's icon at the start of an options bar, after Home: the icon, the dropdown arrow that tells it has a menu, then a rule |
 | `CanvasSize` | Pattern | `craft_ui_patterns::patterns::form_dialogs::sizing::canvas` | Canvas Size: the current size, the new width and height with a unit each (no chain: the sides are independent), the Relative box, the 3 by 3 anchor and the colour that fills a larger canvas |
-| `CommandPalette` | Pattern | `craft_ui_patterns::patterns::panels::palette` | A search over the app's commands in a centred modal box: a search field over the matching commands |
+| `CommandPalette` | Pattern | `craft_ui_patterns::patterns::panels::palette` | A search over the app's commands: a search field over the matching commands, in a centred modal box or in place |
 | `ConstraintFields` | Pattern | `craft_ui_widgets::bars::constraint_fields` | The Style, Width, swap and Height cells of an options `Bar` that read and write a marquee's [`Constraint`] (Photoshop's Rectangular Marquee bar, the Slice tool's) |
 | `DeleteWorkspaceDialog` | Pattern | `craft_ui_patterns::patterns::dock::workspace_dialogs` | Window › Workspace › Delete Workspace…: one of the saved workspaces |
 | `DockArea` | Pattern | `craft_ui_patterns::patterns::dock::area` | The docking pattern over a workspace |
@@ -178,6 +186,7 @@ Grouped by gallery level, then shape, then name.
 | `IconPicker` | Pattern | `craft_ui_widgets::pickers::icon_picker` | A searchable grid of icons in named groups |
 | `ImageSize` | Pattern | `craft_ui_patterns::patterns::form_dialogs::sizing::image` | Image Size: the width, height and resolution with a unit each, the chain that keeps the proportions, Resample with its method list and Scale Styles, over a readout of the file size and the dimensions |
 | `Inspector` | Pattern | `craft_ui_patterns::patterns::panels::inspector` | A properties panel: a `Panel` whose header names the target (icon and name, and the kind at the end), and whose body the caller fills with the target's controls, labelled as inspector rows (`LabelScheme::Inspector`) |
+| `JobProgress` | Pattern | `craft_ui_panels::dialog::job_progress` | Modal progress window for a running job: a progress bar (or an indeterminate one), counts and the percentage, the queued line, and Cancel (and Hide, when `can_hide`) |
 | `ListManager` | Pattern | `craft_ui_patterns::patterns::form_dialogs::list_manager` | A named list with a name box and a column of action buttons (after Excel's Macros dialog) |
 | `MetadataTable` | Pattern | `craft_ui_widgets::table::metadata` | A key and value table in groups: a search field over the rows keeps the fields whose name or value matches the typed text, and a check column marks the keys the app shows as columns |
 | `ModifierKeysPanel` | Pattern | `craft_ui_patterns::patterns::panels::modifier_keys` | A panel of latching modifier-key toggles: a press on one holds that modifier for the next click or key |
@@ -193,12 +202,15 @@ Grouped by gallery level, then shape, then name.
 | `OutputPathRow` | Pattern | `craft_ui_patterns::patterns::form_dialogs::export::path_row` | "Output To", a list of name templates (`[Comp Name].[fileExtension]`) and the resulting file name as a link, for render queues and export dialogs (After Effects' Render Queue) |
 | `PaneArea` | Pattern | `craft_ui_patterns::patterns::dock::panes` | The app's side panes, bottom panes and floating panes around its document |
 | `PanelMenu` | Pattern | `craft_ui_widgets::menu::panel` | The rows of one panel's menu: the host's rows, a separator, then the dock's rows |
+| `PanePager` | Pattern | `craft_ui_patterns::patterns::form_dialogs::preview` | The pager row of a preview: a previous button, the caption ("Page {p} of {n}", "Sheet {p} of {n}"; "No pages" or "No sheets" for a count of 0) and a next button |
 | `ParamDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::dialog` | A dialog from a parameter list: one row per [`Param`], the Preview check box when it [`previews`](ParamDialog::previews), with a preview pane when the host gives a picture, and OK, Cancel, extra buttons and a footer note |
 | `ParamRows` | Pattern | `craft_ui_patterns::patterns::form_dialogs::rows` | The rows of a parameter list: a group of one labelled field per visible [`Param`], the control chosen by its [`ParamKind`], in a panel the host lays out or inside a dialog |
 | `PasswordDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::password` | A question with a lock icon, the message, the masked field and the buttons |
+| `PasswordFields` | Pattern | `craft_ui_patterns::patterns::form_dialogs::password` | The password fields: the masked field with the reveal toggle that hands the focus back, the Re-type field with the mismatch help, the strength help and meter, and an error line |
 | `PathRow` | Pattern | `craft_ui_patterns::patterns::form_dialogs::path_row` | A text field with the path, taking the row's room, and a Browse button after it, for a row whose enclosing `Field` shows the label |
 | `PathSetting` | Pattern | `craft_ui_patterns::patterns::preferences::path_setting` | A path setting for a custom row or page of Preferences ([`CustomSettings`](super::CustomSettings)): the label, then a text field with the path and a Browse… button, over the draft value at `key` |
 | `PdfExportDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::pdf_export` | File > Save as PDF: a preset row, Standard and Compatibility, and a list of sections (General, Compression, Marks and Bleeds, Output, Advanced, Security and Summary) beside the shown section |
+| `PreferencesPage` | Pattern | `craft_ui_patterns::patterns::preferences::page` | A preferences page that applies each value at once, with search and Reset Section |
 | `PreferencesWindow` | Pattern | `craft_ui_patterns::patterns::preferences::window` | The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them |
 | `PresetBrowser` | Pattern | `craft_ui_patterns::patterns::presets::browser` | A library of named presets shown as thumbnails |
 | `PresetFooter` | Pattern | `craft_ui_patterns::patterns::presets::footer` | The footer of a preset panel: the host's own controls, the thumbnail size slider and the count, then the action buttons Delete, New and New Group and the host's own actions |
@@ -206,16 +218,17 @@ Grouped by gallery level, then shape, then name.
 | `PresetPicker` | Pattern | `craft_ui_patterns::patterns::presets::picker` | A field that shows the current preset and opens its presets |
 | `PreviewZoom` | Pattern | `craft_ui_patterns::patterns::form_dialogs::preview` | The zoom row of a preview: a zoom-out button, the zoom as a percentage field and a zoom-in button |
 | `Prompt` | Pattern | `craft_ui_panels::dialog::prompt` | A question with answers: a dialog on the modal preset, centred and not movable, with a message, optional extras and one footer button per answer |
-| `PropertiesDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::properties` | A properties dialog: a `TabStrip` over the tabs (none with one tab) and the rows of the shown tab as one `ParamRows` over the values of all of them |
+| `PropertiesDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::properties` | A properties dialog: a builder over a tabbed [`ParamDialog`] ([`into_param_dialog`](PropertiesDialog::into_param_dialog)), a `TabStrip` over the tabs (none with one tab) and the rows of the shown tab over the values of all of them |
 | `ReorderableSections` | Pattern | `craft_ui_panels::sections::reorderable` | Sidebar sections the user folds, hides, pins and reorders, over the host's [`SectionLayout`] |
 | `ReportDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::report` | A report: the title, one summary line, the count of notes, the notes with their tone icons and, in the footer, Copy and OK |
 | `SaveForWebDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::save_for_web` | The Save for Web dialog: the view tabs over a row of preview panes that share one view, the zoom row, the animation row, and the settings column |
+| `SectionList` | Pattern | `craft_ui_patterns::patterns::form_dialogs::section_list` | A single-select, click-activated, content-sized list at its natural height without a header and a vertical divider at the start edge, and the body of the shown section in a filling, vertically scrolled stack beside them; the list stays put while the body scrolls |
 | `SettingsNotices` | Pattern | `craft_ui_widgets::notices::settings` | The notices a `SettingsNoticeState` calls for, newest problem first: an error notice when saving keeps failing and a warning when stored settings were reset |
 | `StandardPrompt` | Pattern | `craft_ui_panels::dialog::prompts` | A standard confirmation on the dialog host: a prompt with the platform's button order, a letter on every answer and, with `dont_show_again`, a check box under the message |
 | `StatusMessage` | Pattern | `craft_ui_widgets::bars::status` | A message for the status bar and its tone |
 | `StatusProgress` | Pattern | `craft_ui_widgets::bars::status` | A background task's progress, for a status bar's trailing group: the task's name, a progress bar that moves a segment while the extent is unknown, the percentage and an optional cancel button |
 | `StatusReadout` | Pattern | `craft_ui_widgets::bars::status_readout` | The zoom field, the chosen item's text and the menu that chooses it, shown as children of a status `Bar` |
-| `TaskBar` | Pattern | `craft_ui_canvas::canvas_controls::task_bar` | The contextual task bar: a movable modeless layer hung below the screen bounds of `anchor` while its place is unset, with a body of members and a More menu (Hide, Reset, Pin) |
+| `TaskBar` | Pattern | `craft_ui_canvas::canvas_controls::task_bar` | The contextual task bar: a movable modeless layer hung on a side of the screen bounds of `anchor`, with a body of members and a More menu (Hide, Pin, Reset, then the host's rows) |
 | `ToastStack` | Pattern | `craft_ui_widgets::notices::toasts` | The cards of a window's toast queue |
 | `ToolbarDrawer` | Pattern | `craft_ui_panels::rails::drawer` | The All Tools drawer: a popover beside the rail with one list over all groups, a heading row for each group |
 | `Tour` | Pattern | `craft_ui_patterns::patterns::panels::tour` | A guided tour of the interface: a card with the step count and a close button, the step's heading and text, Skip, Back and Next (Done on the last step), beside the part the step points at, which a pulsing ring marks |
@@ -223,20 +236,22 @@ Grouped by gallery level, then shape, then name.
 | `Watermark` | Pattern | `craft_ui_patterns::patterns::form_dialogs::watermark` | The watermark rows of an export dialog: Style (Text, Graphic), the text field or the image path with Choose…, Orientation, Position as the 3 by 3 reference point, Rotation, Size, Opacity, Inset X and Y, and Shadow |
 | `WindowMenuRows` | Pattern | `craft_ui_panels::docking::window_menu` | One check row per panel in the order the app gives, for a Window menu |
 | `WorkspaceSwitcher` | Pattern | `craft_ui_patterns::patterns::dock::switcher` | The switcher at the end of an options bar: a small select showing the current workspace's name |
-| `ZoomField` | Pattern | `craft_ui_widgets::text::zoom_field` | A zoom field: a `NumberField` over the view's device zoom in percent, with the zoom codec and the zoom ladder's range |
+| `ZoomField` | Pattern | `craft_ui_widgets::text::zoom_field` | A zoom field: a `NumberField` over the view's zoom in percent on its [`ZoomScale`] (device pixels unless set), with the zoom codec and the zoom scheme's range |
 | `RecoveryDialog` | Dialog | `craft_ui_panels::dialog::recovery` | Recover Unsaved Work, one document at a time: a prompt saying when the document was autosaved, with Discard and Recover (the accepting answer) |
 
 ### Shells
 
 | Type | Shape | Module | Purpose |
 |---|---|---|---|
+| `BarGrip` | Leaf | `craft_ui_shell::shell::options_place` | The grip of an options bar: a drag on it starts a drag session that moves the bar and docks or floats it on the release |
 | `CaptionButton` | Leaf | `craft_ui_shell::shell::caption_button` | One caption button of a title bar |
 | `DocumentWindow` | Body | `craft_ui_shell::shell::document_window` | A document's window: the container of one entry of the app's window list, in its own OS window |
 | `ShellRegion` | Body | `craft_ui_shell::shell::app_shell` | A region of the window skeleton: the root window's content, the scope that carries the shell to its slots, or one pane (a bar, a rail or the body) |
 | `AppShell` | Pattern | `craft_ui_shell::shell::app_shell` | The window skeleton |
-| `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the document tab strip flush against the document; then the document area, over the canvas surround |
+| `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the document tab strip flush against the document, then the document area, over the canvas surround |
 | `OpeningCard` | Pattern | `craft_ui_shell::shell::opening` | A centred card: "Opening {name}…" elided on one line with the full text on hover, the muted message, a progress bar (indeterminate without a fraction), the percentage at the start and Cancel at the end of the last row |
-| `ScreenModeButton` | Pattern | `craft_ui_shell::shell::screen_mode_button` | A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away or a right click lists the three modes without cycling |
+| `RecentList` | Pattern | `craft_ui_shell::shell::recent_list` | The recent files as rows, with the commands of a recent file and its context menu |
+| `ScreenModeButton` | Pattern | `craft_ui_shell::shell::screen_mode_button` | A flyout button over the screen modes of the shell's set, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away or a right click lists the modes without cycling |
 | `StartScreen` | Pattern | `craft_ui_shell::shell::start` | The start screen, shown in a shell's body when no document is open |
 | `ViewportWindow` | Pattern | `craft_ui_shell::shell::viewport_window` | A window of the app with a body the app fills |
 
@@ -258,9 +273,11 @@ Grouped by gallery level, then shape, then name.
 | `craft_behavior::eviction` | When a component's remembered state is due for eviction |
 | `craft_behavior::fit` | The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu |
 | `craft_behavior::flow` | `Insets`, `Flow` and `Axis`: start and end geometry resolved once for the layout direction |
-| `craft_behavior::focus` | Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, focus after removal, the Escape order and the focus-on-press kinds |
+| `craft_behavior::focus` | Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, the Escape order and the focus-on-press kinds |
+| `craft_behavior::frame_step` | The step of one pass of motion: a Hand glide, a held Zoom press and an autoscroll integrate over it |
 | `craft_behavior::grid` | The `Grid` cursor: columns resolved from last pass's measurements, and the cell each child takes |
 | `craft_behavior::hit` | Hit shapes, their priority and the arena's resolve rule (8.3) |
+| `craft_behavior::hold_repeat` | Steps due while a press is held, as a spinner button repeats |
 | `craft_behavior::input` | What a component takes from the user, which decides its default key use |
 | `craft_behavior::intent` | Intents: a key, an AccessKit action or typed text turned into meaning (spec 9.2) |
 | `craft_behavior::item_layout` | Item geometry: where each item of a collection sits for a scroll offset and viewport |
@@ -269,6 +286,7 @@ Grouped by gallery level, then shape, then name.
 | `craft_behavior::keys` | The key table (spec 9.2): the one place that maps a key press to an intent and modifiers to `MoveMods` |
 | `craft_behavior::label_column` | `LabelColumn`: label-then-control geometry for one row |
 | `craft_behavior::layout_memory` | The tolerance rule of layout memory: when a measured size asks for a discard pass |
+| `craft_behavior::middle_scroll` | The middle button's auto-scroll latch: the gesture state of one middle press |
 | `craft_behavior::monitor` | The connected monitors, as every window placement reads them |
 | `craft_behavior::motion` | The motion level an animation runs at |
 | `craft_behavior::nav` | The navigation core (spec 9.5): shapes, the key-free outline, stepping, roving groups, type-ahead and single-value keys |

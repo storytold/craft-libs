@@ -61,11 +61,13 @@ fn crw() -> Vec<u8> {
 #[test]
 fn every_truncation_and_single_byte_mutation_survives() {
     let good = crw();
-    for n in 0..good.len() {
+    // The gate runs every divisor-th position; nightly runs all.
+    let step = craft_testkit::hostile::divisor();
+    for n in (0..good.len()).step_by(step) {
         let _ = header(&good[..n], &Limits::default());
         let _ = decode(&good[..n], &Limits::default());
     }
-    for i in 0..good.len() {
+    for i in (0..good.len()).step_by(step) {
         let mut bad = good.clone();
         bad[i] ^= 0xa5;
         let _ = decode(&bad, &Limits::default());

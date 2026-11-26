@@ -131,7 +131,8 @@ impl ThemeMenu {
         nodes.extend(self.mode_groups(|_| true));
         nodes.push(Node::Separator);
         nodes.push(Node::Item(Item::new(ThemeChoice::NextMode.command(), labels.toggle.as_str())));
-        tidy(nodes)
+        tidy(&mut nodes);
+        nodes
     }
 
     /// The rows for a quick menu: the Appearance Settings row running `settings`, then the
@@ -139,7 +140,8 @@ impl ThemeMenu {
     pub fn favorite_items(&self, labels: &ThemeLabels, settings: CommandRef) -> Vec<Node> {
         let mut nodes = vec![Node::Item(Item::new(settings, labels.settings.as_str())), Node::Separator];
         nodes.extend(self.mode_groups(|r| self.favorites.contains(&r.id)));
-        tidy(nodes)
+        tidy(&mut nodes);
+        nodes
     }
 
     /// The "Appearance" submenu, tagged [`crate::ItemRole::Appearance`].

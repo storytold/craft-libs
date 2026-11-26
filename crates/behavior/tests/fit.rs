@@ -1,6 +1,6 @@
-//! The fit rules: tab widths (`fit`).
+//! The fit rules: tab widths (`fit`) and strip items (`fit_items`).
 
-use craft_behavior::fit::{TabFit, fit};
+use craft_behavior::fit::{FitItem, FitKeep, TabFit, fit, fit_items};
 
 fn total(fit: &TabFit) -> f32 {
     fit.shown.iter().map(|&(_, width)| width).sum::<f32>() + fit.overflow_width
@@ -23,6 +23,76 @@ fn overflow_retains_selection_and_partitions_all_tabs() {
             assert!(total(&f) <= available + 0.001, "{available}: {f:?}");
         }
     }
+}
+
+/// Guards the shortening stage of `fit_items`: short forms go last first, before any free item leaves, a leaving item
+/// is not reported short, and items without a short form fit exactly as before (the menu bar, bar items and
+/// breadcrumbs build no short forms).
+#[test]
+fn short_items_shorten_from_the_end_before_any_item_leaves() {
+    let item = |extent| FitItem::new(extent, 0, FitKeep::Free);
+    let shortening = [item(50.0).short(20.0), item(50.0), item(50.0).short(20.0)];
+    let plain = [item(50.0), item(50.0), item(50.0)];
+    let at = |items: &[FitItem], available| fit_items(items, available, 0.0, 0.0, 10.0);
+
+    let wide = at(&shortening, 150.0);
+    assert!(wide.short.is_empty() && wide.overflow.is_empty(), "a run that fits keeps every full form: {wide:?}");
+
+    let narrower = at(&shortening, 120.0);
+    assert!(narrower.overflow.is_empty(), "shortening comes before any item leaves: {narrower:?}");
+    assert!(narrower.short.contains(&2) && !narrower.short.contains(&0), "the last short item goes first: {narrower:?}");
+
+    let narrow = at(&shortening, 90.0);
+    assert!(narrow.overflow.is_empty(), "every short form is taken before an item leaves: {narrow:?}");
+    assert!(narrow.short.contains(&0) && narrow.short.contains(&2), "then the earlier ones: {narrow:?}");
+
+    let narrowest = at(&shortening, 80.0);
+    assert!(narrowest.overflow.contains(&2) && narrowest.shown.contains(&0), "then the last free item leaves: {narrowest:?}");
+    assert!(narrowest.short.iter().all(|i| narrowest.shown.contains(i)), "a leaving item is not short: {narrowest:?}");
+
+    for available in [0.0, 40.0, 80.0, 90.0, 120.0, 150.0] {
+        let fit = at(&plain, available);
+        assert!(fit.short.is_empty(), "no short form, no short item: {fit:?}");
+        let shown = shortening.len() - fit.overflow.len();
+        assert_eq!(fit.shown, (0..shown).collect::<Vec<_>>(), "items without short forms leave from the end: {fit:?}");
+    }
+    assert!(!at(&plain, 120.0).overflow.is_empty(), "without short forms the narrower run overflows");
+
+    let pinned = [FitItem::new(80.0, 0, FitKeep::Pinned).short(30.0), FitItem::new(90.0, 0, FitKeep::Pinned).short(30.0)];
+    let squeezed = fit_items(&pinned, 40.0, 0.0, 0.0, 0.0);
+    assert!(squeezed.overflow.is_empty(), "pinned items never leave: {squeezed:?}");
+    assert_eq!(squeezed.short.len(), 2, "pinned items shorten as free ones do: {squeezed:?}");
+}
+
+/// Guards the host's order of short forms: a lower `short_order` shortens first wherever its item sits, and a
+/// `short_late` item keeps its full form until every free item has gone to the menu, then shortens in rank order.
+#[test]
+fn short_forms_follow_their_rank_and_late_ones_wait_for_the_free_items() {
+    let item = |extent| FitItem::new(extent, 0, FitKeep::Free);
+    let ranked = [item(50.0).short(20.0), item(50.0), item(50.0).short(20.0).short_order(1)];
+    let fit = fit_items(&ranked, 120.0, 0.0, 0.0, 10.0);
+    assert_eq!(fit.short, [0], "the lower rank shortens before the later item: {fit:?}");
+    assert!(fit.overflow.is_empty(), "{fit:?}");
+
+    // Two free items in one section, then two pinned ones that shorten only late, the first ranked before the second.
+    let pinned = |extent| FitItem::new(extent, 1, FitKeep::Pinned).short(20.0).short_late();
+    let bar = [item(40.0), item(40.0), pinned(60.0), pinned(60.0).short_order(1)];
+    let at = |available| fit_items(&bar, available, 0.0, 0.0, 10.0);
+
+    let roomy = at(180.0);
+    assert_eq!(roomy.overflow, [1], "a free item leaves before any late item shortens: {roomy:?}");
+    assert!(roomy.short.is_empty(), "{roomy:?}");
+
+    let tight = at(130.0);
+    assert_eq!(tight.overflow, [0, 1], "every free item leaves first: {tight:?}");
+    assert!(tight.short.is_empty(), "{tight:?}");
+
+    let narrow = at(100.0);
+    assert_eq!(narrow.short, [2], "then the lower-ranked late item shortens: {narrow:?}");
+    assert_eq!(narrow.overflow, [0, 1], "items that left stay in the menu: {narrow:?}");
+
+    let narrowest = at(50.0);
+    assert_eq!(narrowest.short, [2, 3], "then the next rank: {narrowest:?}");
 }
 
 #[test]

@@ -4,11 +4,12 @@
 
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{GesturePhase, Sense};
-use craft_ui::contract::overlay::{Anchor, Place, PlacementChange, PlacementKind};
+use craft_ui::contract::overlay::{Anchor, FloatPlace, Place, PlacementChange, PlacementKind};
 use craft_ui::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _,
     ShowContainer as _, Sizing,
 };
+use craft_ui::layout::BodyLayout;
 use craft_ui::runtime::commands::{self, CommandSet, FireSource, WindowCommand};
 use craft_ui::runtime::env::{Direction, with_env};
 use craft_ui::style::StyleCx;
@@ -16,7 +17,7 @@ use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::{Frames, pointer, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
-use egui::{Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Align2, Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
 const SLACK: f32 = 1.5;
@@ -230,4 +231,170 @@ fn a_layer_with_bounds_shows_inside_them_hung_or_placed() {
         assert!(rect.is_positive(), "{name}: the layer shows: {rect:?}");
         assert!(BOUNDS.expand(SLACK).contains_rect(rect), "{name}: the layer lies inside {BOUNDS:?}: {rect:?}");
     }
+}
+
+/// A layer anchored `Parent` hangs from the placed panel of the layer whose body opened it, not from its own cursor.
+#[trial]
+fn a_layer_anchored_parent_hangs_on_the_parent_panel() {
+    let (parent_rect, child_rect) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+    let (log, seen, kid) = (RefCell::new(Vec::new()), RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let mut show = |ui: &mut Ui| {
+        let props = ContainerProps::new().mount(Mount::Layer(Overlay::floating().placed(START))).sizing(Sizing::Content);
+        let out = Pane { common: Common::new(), props, log: &log }.id_salt("parent").show(ui, |ui, _| {
+            Probe::new(&seen).size(BODY).show(ui);
+            let overlay = Overlay::popover().place(Place::anchored(Anchor::Parent, Side::Below, Align::Start));
+            let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
+            let inner = Pane { common: Common::new(), props, log: &log }.id_salt("child").show(ui, |ui, _| {
+                Probe::new(&kid).size(Vec2::new(60.0, 20.0)).show(ui);
+            });
+            child_rect.set(inner.output.rect);
+        });
+        parent_rect.set(out.output.rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(6, &mut show);
+    let (parent, child) = (parent_rect.get(), child_rect.get());
+    assert!(parent.is_positive() && child.is_positive(), "both layers show: {parent:?} {child:?}");
+    assert!((child.left() - parent.left()).abs() < SLACK, "the child lines up with the parent panel's start: {parent:?} {child:?}");
+    assert!((child.top() - parent.bottom()).abs() < SLACK, "the child hangs below the parent panel: {parent:?} {child:?}");
+}
+
+/// Under a right-to-left interface, a row inside a container whose axis keeps its left-to-right order (`ltr_axis`)
+/// flows from the left, and a popover that container opens flows from the right: its first member is right of its
+/// second.
+#[trial]
+fn a_layer_opened_inside_an_ltr_axis_flows_in_the_interface_direction() {
+    let anchor = Rect::from_min_size(Pos2::new(200.0, 120.0), Vec2::new(40.0, 20.0));
+    let log = RefCell::new(Vec::new());
+    let seen = [(); 4].map(|()| RefCell::new(Seen::default()));
+    let mut show = |ui: &mut Ui| {
+        with_env(
+            ui,
+            |o| o.direction = Some(Direction::Rtl),
+            |ui| {
+                let axis = ContainerProps::new().layout(BodyLayout::row()).sizing(Sizing::Content);
+                Pane { common: Common::new(), props: axis, log: &log }.ltr_axis().id_salt("axis").show(ui, |ui, _| {
+                    Probe::new(&seen[0]).id_salt("axis first").show(ui);
+                    Probe::new(&seen[1]).id_salt("axis second").show(ui);
+                    let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start));
+                    let props = ContainerProps::new().mount(Mount::Layer(overlay)).layout(BodyLayout::row()).sizing(Sizing::Content);
+                    Pane { common: Common::new(), props, log: &log }.id_salt("popover").show(ui, |ui, _| {
+                        Probe::new(&seen[2]).id_salt("layer first").show(ui);
+                        Probe::new(&seen[3]).id_salt("layer second").show(ui);
+                    });
+                });
+            },
+        );
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, &mut show);
+    let [axis_first, axis_second, first, second] = seen.each_ref().map(|seen| seen.borrow().rect);
+    assert!(axis_first.is_positive() && first.is_positive(), "the axis and the popover show: {axis_first:?} {first:?}");
+    assert!(axis_first.center().x < axis_second.center().x, "the axis keeps its order: {axis_first:?} {axis_second:?}");
+    assert!(first.center().x > second.center().x, "the popover flows from the right: {first:?} {second:?}");
+}
+
+/// Under a right-to-left interface, a start-aligned popover lines its right edge up with its anchor's right edge, and
+/// one opened from inside a container whose axis keeps its left-to-right order (`ltr_axis`) is placed the same way.
+#[trial]
+fn a_layer_opened_inside_an_ltr_axis_aligns_to_its_anchor_in_the_interface_direction() {
+    let anchor = Rect::from_min_size(Pos2::new(200.0, 120.0), Vec2::new(40.0, 20.0));
+    let placed = |inside: bool| {
+        let log = RefCell::new(Vec::new());
+        let rect = Cell::new(Rect::NOTHING);
+        let seen = RefCell::new(Seen::default());
+        let popover = |ui: &mut Ui| {
+            let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start));
+            let props = ContainerProps::new().mount(Mount::Layer(overlay)).layout(BodyLayout::row()).sizing(Sizing::Content);
+            let out = Pane { common: Common::new(), props, log: &log }.id_salt("popover").show(ui, |ui, _| {
+                Probe::new(&seen).size(Vec2::new(120.0, 30.0)).show(ui);
+            });
+            rect.set(out.output.rect);
+        };
+        let mut show = |ui: &mut Ui| {
+            with_env(
+                ui,
+                |o| o.direction = Some(Direction::Rtl),
+                |ui| {
+                    if inside {
+                        let axis = ContainerProps::new().layout(BodyLayout::row()).sizing(Sizing::Content);
+                        Pane { common: Common::new(), props: axis, log: &log }.ltr_axis().id_salt("axis").show(ui, |ui, _| popover(ui));
+                    } else {
+                        popover(ui);
+                    }
+                },
+            );
+        };
+        let mut frames = Frames::new();
+        frames.idle(4, &mut show);
+        rect.get()
+    };
+    let (outside, inside) = (placed(false), placed(true));
+    assert!(outside.is_positive() && inside.is_positive(), "both popovers show: {outside:?} {inside:?}");
+    assert!((outside.right() - anchor.right()).abs() < SLACK, "the popover's right edge is the anchor's: {outside:?} {anchor:?}");
+    assert!(near(inside, outside), "the popover opened inside the axis is placed as the one outside it: {inside:?} {outside:?}");
+}
+
+/// A float placed by its right-top corner has that corner at the position, its width reaching back from it; near the
+/// start edge of its bounds, where the corner's place would put the layer outside them, it is kept inside.
+#[trial]
+fn a_float_places_its_corner_at_the_position() {
+    let free = Pos2::new(500.0, 120.0);
+    let near_edge = Pos2::new(BOUNDS.left() + 20.0, BOUNDS.top() + 20.0);
+    for (name, at, bounds) in [("free", free, None), ("kept", near_edge, Some(BOUNDS))] {
+        let (shown, log, seen) = (Cell::new(Rect::NOTHING), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+        let mut show = |ui: &mut Ui| {
+            let overlay = Overlay::floating().place(Place::Float(FloatPlace::corner_at(at, Align2::RIGHT_TOP)));
+            let overlay = match bounds {
+                Some(bounds) => overlay.bounds(bounds),
+                None => overlay,
+            };
+            let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
+            let out = Pane { common: Common::new(), props, log: &log }.id_salt(name).show(ui, |ui, _| {
+                Probe::new(&seen).size(BODY).show(ui);
+            });
+            shown.set(out.output.rect);
+        };
+        let mut frames = Frames::new();
+        frames.idle(4, &mut show);
+        let rect = shown.get();
+        assert!(rect.width() >= BODY.x - SLACK, "{name}: the layer shows its body: {rect:?}");
+        match bounds {
+            None => {
+                assert!((rect.right_top() - at).abs().max_elem() < SLACK, "{name}: the right-top corner sits at {at:?}: {rect:?}");
+                assert!((rect.left() - (at.x - rect.width())).abs() < SLACK, "{name}: the layer reaches back its width: {rect:?}");
+            }
+            Some(bounds) => {
+                assert!(bounds.expand(SLACK).contains_rect(rect), "{name}: the layer lies inside {bounds:?}: {rect:?}");
+                assert!((rect.left() - bounds.left()).abs() < SLACK, "{name}: the layer is kept at the start edge: {rect:?}");
+                assert!((rect.top() - at.y).abs() < SLACK, "{name}: the corner's top stays at {at:?}: {rect:?}");
+            }
+        }
+    }
+}
+
+/// An anchored layer that stays open takes the side its host asks for now: asked for End after Above, it hangs at the
+/// anchor's end; asked for Above again, it sits above. Guards against a layer that kept the side an earlier pass took
+/// while it stayed open, whatever side the host asked for since.
+#[trial]
+fn an_open_layer_takes_the_side_its_host_asks_for_now() {
+    let anchor = Rect::from_min_size(Pos2::new(200.0, 300.0), Vec2::new(40.0, 20.0));
+    let (shown, asked, log, seen) = (Cell::new(Rect::NOTHING), Cell::new(Side::Above), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+    let mut show = |ui: &mut Ui| {
+        let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), asked.get(), Align::Start));
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
+        let out = Pane { common: Common::new(), props, log: &log }.id_salt("bar").show(ui, |ui, _| {
+            Probe::new(&seen).size(Vec2::new(60.0, 20.0)).show(ui);
+        });
+        shown.set(out.output.rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, &mut show);
+    assert!(shown.get().bottom() <= anchor.top() + SLACK, "asked for Above, the layer sits above: {:?}", shown.get());
+    asked.set(Side::End);
+    frames.idle(4, &mut show);
+    assert!(shown.get().left() >= anchor.right() - SLACK, "asked for End, the layer hangs at the anchor's end: {:?}", shown.get());
+    asked.set(Side::Above);
+    frames.idle(4, &mut show);
+    assert!(shown.get().bottom() <= anchor.top() + SLACK, "asked for Above again, the layer sits above: {:?}", shown.get());
 }

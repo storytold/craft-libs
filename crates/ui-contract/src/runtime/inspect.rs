@@ -1,5 +1,5 @@
-//! Decision records and findings: what each pipeline step did, kept in frames a test fixture drives and inside an
-//! inspected region ([`record`]). The region's record is what the debug inspector draws: every component shown in it
+//! Decision records and findings. Inspected regions ([`record`]) collect pipeline steps. Fixture frames also collect
+//! contract findings. The region's record is what the debug inspector draws: every component shown in it
 //! with its box and access facts, the hit areas the sensing core registered and the focus stops in Tab order.
 
 use crate::runtime::egui::areas;
@@ -8,6 +8,7 @@ use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, measure, pass_state, pointer};
 use craft_behavior::PartRef;
+use craft_keymap::CommandRef;
 use egui::{Context, Id, IdMap, IdSet, Rect, Ui};
 use std::sync::Arc;
 
@@ -35,9 +36,9 @@ pub(crate) struct Log {
     kept: IdMap<Kept>,
 }
 
-/// Whether records are kept: in frames a test fixture drives, and inside an inspected region in any build.
+/// Whether an explicit inspector region is collecting elements and their pipeline steps.
 pub(crate) fn recording(ctx: &Context) -> bool {
-    fixture_frame() || pass_state::with::<Log, _>(ctx, |log| !log.open.is_empty())
+    pass_state::with::<Log, _>(ctx, |log| !log.open.is_empty())
 }
 
 #[cfg(feature = "testing")]
@@ -50,16 +51,12 @@ fn fixture_frame() -> bool {
 
 /// Starts the step record of `id` for a new show.
 pub(crate) fn begin(ctx: &Context, id: Id) {
-    if recording(ctx) {
-        pass_state::with::<Log, _>(ctx, |log| log.steps.insert(id, Vec::new()));
-    }
+    pass_state::with::<Log, _>(ctx, |log| log.steps.insert(id, Vec::new()));
 }
 
 /// Records that `step` ran for `id`.
 pub(crate) fn step(ctx: &Context, id: Id, step: &'static str) {
-    if recording(ctx) {
-        pass_state::with::<Log, _>(ctx, |log| log.steps.entry(id).or_default().push(step));
-    }
+    pass_state::with::<Log, _>(ctx, |log| log.steps.entry(id).or_default().push(step));
 }
 
 /// The steps the latest show of `id` ran, in order.
@@ -68,9 +65,14 @@ pub(crate) fn steps_of(ctx: &Context, id: Id) -> Vec<&'static str> {
     pass_state::with::<Log, _>(ctx, |log| log.steps.get(&id).cloned().unwrap_or_default())
 }
 
+/// Whether a finding reported now is kept.
+pub(crate) fn reports(ctx: &Context) -> bool {
+    fixture_frame() || recording(ctx)
+}
+
 /// Reports a finding.
 pub(crate) fn finding(ctx: &Context, finding: Finding) {
-    if !recording(ctx) {
+    if !reports(ctx) {
         return;
     }
     pass_state::with::<Log, _>(ctx, |log| {
@@ -89,7 +91,7 @@ pub(crate) fn findings(ctx: &Context) -> Vec<Finding> {
 /// Records that the canvas control `type_name` showed in this pass, so the canvas-control cases can check that a
 /// press away from its parts reaches the tool.
 pub(crate) fn canvas_control(ctx: &Context, type_name: &'static str) {
-    if !recording(ctx) {
+    if !reports(ctx) {
         return;
     }
     pass_state::with::<Log, _>(ctx, |log| {
@@ -145,6 +147,16 @@ pub struct Element {
     pub facts: Option<Facts>,
     /// Its place in Tab order within the region, from 1, when keyboard focus reaches it.
     pub stop: Option<usize>,
+    /// The command bound to the control, when it has one.
+    pub command: Option<CommandRef>,
+}
+
+impl Element {
+    /// The id of the access node the element stands for: the component's own id, or the sub-node of its part. A
+    /// member of a collection's run is recorded as such a part of the collection.
+    pub fn node(&self) -> Id {
+        self.part.map_or(self.id, |part| crate::runtime::access::sub_node_id(self.id, part))
+    }
 }
 
 /// A hit area the sensing core registered for a component of the region.
@@ -160,13 +172,38 @@ pub struct HitArea {
 }
 
 /// What an inspected region showed in a pass.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Recorded {
+    /// The region's layer, which the rects of its elements and hit areas are in.
+    pub layer: areas::LayerKey,
     /// The elements in tree order: a component before what it shows, its parts right after it.
     pub elements: Vec<Element>,
     /// The hit areas, in the tree order of their components, a component's from the top start.
     pub hits: Vec<HitArea>,
+}
+
+/// A replay at another place keeps the record its run made, moved with it.
+impl crate::runtime::Shift for Arc<Recorded> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        let elements =
+            self.elements.iter().map(|element| Element { rect: by.rect(element.rect), content: by.rect(element.content), ..element.clone() });
+        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), ..hit.clone() });
+        Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        if self.elements.len() != to.elements.len() || self.hits.len() != to.hits.len() {
+            return Arc::clone(self);
+        }
+        let elements = self.elements.iter().zip(&to.elements).map(|(element, to)| Element {
+            rect: element.rect.snapped(&to.rect, within),
+            content: element.content.snapped(&to.content, within),
+            ..element.clone()
+        });
+        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea { rect: hit.rect.snapped(&to.rect, within), ..hit.clone() });
+        Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
+    }
 }
 
 impl Recorded {
@@ -175,6 +212,19 @@ impl Recorded {
         let element = self.elements.get(index)?;
         let hit = self.hits.iter().find(|hit| hit.owner == element.id && hit.part == element.part);
         Some(hit.map_or(element.rect, |hit| hit.rect))
+    }
+
+    /// The stop rect of the element at `index` (as [`Recorded::stop_rect`]) mapped into the layer `target`.
+    ///
+    /// A region on another layer than its reader (a title bar's toolbar read from the ribbon's layer) has rects in
+    /// its own layer's points; this maps them through the screen, so the reader never composes transforms itself.
+    pub fn rect_in(&self, ctx: &Context, index: usize, target: areas::LayerKey) -> Option<Rect> {
+        let rect = self.stop_rect(index)?;
+        if target == self.layer {
+            return Some(rect);
+        }
+        let to_target = areas::layer_to_screen(ctx, target).inverse() * areas::layer_to_screen(ctx, self.layer);
+        Some(to_target * rect)
     }
 }
 
@@ -215,12 +265,19 @@ pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, O
     let out = body(ui);
     let Some(open) = pass_state::with::<Log, _>(&ctx, |log| log.open.pop()) else { return (out, None) };
     let recorded = Arc::new(finish(&ctx, open));
-    write(&ctx, key, |kept| {
-        let changed = kept.recorded.as_deref() != Some(&*recorded);
-        kept.recorded = Some(Arc::clone(&recorded));
+    keep(&ctx, key, &recorded);
+    // A memoized view that replays this region keeps its record as the run left it.
+    crate::runtime::replay::journal(&ctx, || (key, Arc::clone(&recorded)), |ctx, (key, recorded)| keep(ctx, *key, recorded));
+    (out, Some(recorded))
+}
+
+/// Keeps `recorded` as the record of the region `key`.
+fn keep(ctx: &Context, key: Id, recorded: &Arc<Recorded>) {
+    write(ctx, key, |kept| {
+        let changed = kept.recorded.as_deref() != Some(&**recorded);
+        kept.recorded = Some(Arc::clone(recorded));
         changed
     });
-    (out, Some(recorded))
 }
 
 /// The latest record of the region `key`, read as a value: when the region shows later in the pass with a different
@@ -273,9 +330,9 @@ fn write(ctx: &Context, key: Id, edit: impl FnOnce(&mut Kept) -> bool) {
     }
 }
 
-/// Notes an edit of the record `read` that `editor` made: a settled region that read it runs, and so does the pass when
-/// something read it earlier in the pass.
-fn edited(ctx: &Context, read: BindKey, editor: Id) {
+/// Notes an edit of the record `read` that `editor` made: a settled memoized view that read it runs, and so does the
+/// pass when something read it earlier in the pass.
+pub(crate) fn edited(ctx: &Context, read: BindKey, editor: Id) {
     crate::runtime::lazy::note_edit(ctx, read);
     if reads::earlier(ctx, read, editor).other {
         log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "{editor:?} edited {read:?}, read earlier in the pass");
@@ -307,8 +364,13 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
         .into_iter()
         .map(|(owner, part, rect)| HitArea { owner, part, rect: from_screen * rect })
         .collect();
+    // Keep the first occurrence, matching the tree-order lookup when an id appears more than once.
+    let mut index = std::collections::HashMap::new();
+    for (at, element) in elements.iter().enumerate() {
+        index.entry((element.id, element.part)).or_insert(at);
+    }
     for (node, label) in labels {
-        let facts = elements.iter_mut().find(|element| element.id == node && element.part.is_none()).and_then(|element| element.facts.as_mut());
+        let facts = index.get(&(node, None)).and_then(|&at| elements[at].facts.as_mut());
         if let Some(facts) = facts {
             facts.labelled_by.push(label);
         }
@@ -320,22 +382,30 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
         let key = |hit: &HitArea| (place.get(&hit.owner).copied(), hit.rect.min.y, hit.rect.min.x);
         key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
     });
-    for (at, (id, part)) in focus::tab_order(ctx, |id| ids.contains(&id)).into_iter().enumerate() {
-        let index = match elements.iter().position(|element| element.id == id && element.part == part) {
-            Some(index) => index,
+    for (stop, (id, part)) in focus::tab_order(ctx, |id| ids.contains(&id)).into_iter().enumerate() {
+        let at = match index.get(&(id, part)).copied() {
+            Some(at) => at,
             None => {
                 // A part with no node of its own: listed after its component, where its hit area is.
-                let Some(owner) = elements.iter().position(|element| element.id == id && element.part.is_none()) else { continue };
+                let Some(owner) = index.get(&(id, None)).copied() else { continue };
                 let rect = hits.iter().find(|hit| hit.owner == id && hit.part == part).map_or(elements[owner].rect, |hit| hit.rect);
                 let depth = elements[owner].depth + 1;
-                let element = Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None };
-                elements.insert(owner + 1, element);
-                owner + 1
+                let element =
+                    Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None, command: None };
+                let at = owner + 1;
+                elements.insert(at, element);
+                for old in index.values_mut() {
+                    if *old >= at {
+                        *old += 1;
+                    }
+                }
+                index.insert((id, part), at);
+                at
             }
         };
-        elements[index].stop = Some(at + 1);
+        elements[at].stop = Some(stop + 1);
     }
-    Recorded { elements, hits }
+    Recorded { layer: open.layer, elements, hits }
 }
 
 /// Names each node without a name of its own by the nodes of the region that label it, as a screen reader reads it.
@@ -381,8 +451,17 @@ pub(crate) fn open_element(ui: &Ui, id: Id, component: &'static str) -> bool {
         let Some(open) = log.open.last_mut() else { return false };
         let component = component.rsplit("::").next().unwrap_or(component);
         let component = component.split('<').next().unwrap_or(component);
-        let element =
-            Element { id, part: None, component, depth: open.stack.len(), rect: Rect::NOTHING, content: Rect::NOTHING, facts: None, stop: None };
+        let element = Element {
+            id,
+            part: None,
+            component,
+            depth: open.stack.len(),
+            rect: Rect::NOTHING,
+            content: Rect::NOTHING,
+            facts: None,
+            stop: None,
+            command: None,
+        };
         open.stack.push(open.elements.len());
         open.elements.push((element, layer));
         true
@@ -402,6 +481,17 @@ pub(crate) fn close_element(ctx: &Context, id: Id, rect: Rect, content: Rect) {
     });
 }
 
+/// Notes the command bound to the control `id` in the open region's record; the report step calls it with the
+/// component's resolved command. It does nothing outside a region or for a component whose record is not open.
+pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
+    pass_state::with::<Log, _>(ctx, |log| {
+        let Some(open) = log.open.last_mut() else { return };
+        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
+        let index = open.stack[at];
+        open.elements[index].0.command = command;
+    });
+}
+
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.
 pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rect, facts: Facts) {
     pass_state::with::<Log, _>(ctx, |log| {
@@ -412,7 +502,17 @@ pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rec
             Some(part) => {
                 let (component, depth) = (owner.0.component, owner.0.depth + 1);
                 open.parts.retain(|element| !(element.id == id && element.part == Some(part)));
-                open.parts.push(Element { id, part: Some(part), component, depth, rect, content: rect, facts: Some(facts), stop: None });
+                open.parts.push(Element {
+                    id,
+                    part: Some(part),
+                    component,
+                    depth,
+                    rect,
+                    content: rect,
+                    facts: Some(facts),
+                    stop: None,
+                    command: None,
+                });
             }
         }
     });

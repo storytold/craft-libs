@@ -2,8 +2,8 @@
 //! each ruler is the margin, the white the text area; the pointer over an edge shows a resize cursor and the margin's
 //! name, and a drag moves the margin as one edit gesture (one undo step).
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::ops::RangeInclusive;
 
@@ -449,13 +449,17 @@ impl Component for MarginHandles<'_> {
         Some(self.edges.reborrow())
     }
 
-    /// The edges: drag parts on the strips at edge priority, each its own Tab stop that the arrow keys move.
+    /// The edges: drag parts on the strips at edge priority, each its own Tab stop that the arrow keys move, and each
+    /// with a tooltip that names its edge (Word's "Left Margin" over the edge). The handles' rect is the whole canvas,
+    /// so only an edge shows a tooltip: as a canvas control the handles show no label of their own over the page.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(edges) = cx.value().copied() else { return };
         let rules = self.rules(edges, 0.0);
         let (grab, strip) = (cx.style.grab, cx.style.strip);
+        let words = cx.words::<MarginHandlesWords>();
         for &visible in self.edges_shown() {
-            divider::declare(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip)));
+            divider::declare_focusing(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip)))
+                .tooltip(visible.name(&words).clone());
         }
     }
 
@@ -474,7 +478,8 @@ impl Component for MarginHandles<'_> {
             let press = cx.part(EDGE.at(visible.index())).press;
             let snap = if press.mods.alt { 0.0 } else { self.snap };
             let origin = if visible.horizontal() { self.page.rect.min.x } else { self.page.rect.min.y };
-            match divider::pointer(cx, EDGE, visible.index(), &divider) {
+            let dragged = divider::pointer(cx, EDGE, visible.index(), &divider);
+            match dragged {
                 Some(Drag::Start) => {
                     *cx.press_slot::<Anchor>() = Some(Anchor(edges));
                     cx.begin();

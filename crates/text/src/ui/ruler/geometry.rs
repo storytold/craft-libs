@@ -1,8 +1,9 @@
 //! Where the column and the markers sit on the strip.
 
+use super::GapEdge;
 use super::RulerValues;
 use super::TabAlign;
-use super::items::Item;
+use super::items::RulerItem;
 use egui::{Rect, pos2, vec2};
 
 /// Where the column sits on the strip: positions are points from the column's start edge, which
@@ -14,17 +15,41 @@ pub(super) struct Geometry {
     pub scale: f32,
     pub right_to_left: bool,
     pub width: f32,
+    /// Where zero sits, points from the strip's start edge (its end edge in a right-to-left paragraph).
+    pub origin: f32,
+    /// The points from the strip's start edge the ruler covers; the whole strip when unset.
+    pub extent: Option<egui::Rangef>,
 }
 
 impl Geometry {
     /// The screen x of the distance `d` from the start edge.
     pub(super) fn x(&self, d: f32) -> f32 {
-        if self.right_to_left { self.strip.max.x - d * self.scale } else { self.strip.min.x + d * self.scale }
+        let from_edge = (self.origin + d) * self.scale;
+        if self.right_to_left { self.strip.max.x - from_edge } else { self.strip.min.x + from_edge }
     }
 
     /// The distance from the start edge at the screen x.
     pub(super) fn at(&self, x: f32) -> f32 {
-        if self.right_to_left { (self.strip.max.x - x) / self.scale } else { (x - self.strip.min.x) / self.scale }
+        let from_edge = if self.right_to_left { (self.strip.max.x - x) / self.scale } else { (x - self.strip.min.x) / self.scale };
+        from_edge - self.origin
+    }
+
+    /// The part of the strip the ruler covers: the strip cut to [`extent`](Self::extent).
+    pub(super) fn visible(&self) -> Rect {
+        let Some(extent) = self.extent else { return self.strip };
+        let (a, b) = if self.right_to_left {
+            (self.strip.max.x - extent.max * self.scale, self.strip.max.x - extent.min * self.scale)
+        } else {
+            (self.strip.min.x + extent.min * self.scale, self.strip.min.x + extent.max * self.scale)
+        };
+        Rect::from_x_y_ranges(a.min(b)..=a.max(b), self.strip.y_range()).intersect(self.strip)
+    }
+
+    /// The distances from the start edge over the covered part of the strip, lowest first.
+    pub(super) fn shown_span(&self) -> (f32, f32) {
+        let visible = self.visible();
+        let (a, b) = (self.at(visible.min.x), self.at(visible.max.x));
+        (a.min(b), a.max(b))
     }
 
     /// The part of the strip over the column.
@@ -96,15 +121,30 @@ impl Shapes {
         Rect::from_min_max(pos2(x - self.column / 2.0, strip.min.y), pos2(x + self.column / 2.0, strip.max.y))
     }
 
+    /// The grab box of one edge of the gap from `start` to `end` (points): a handle wide, centred on the edge, or, when
+    /// the gap is narrower than two handles, the half of the gap that edge is nearer, split at its middle.
+    pub(super) fn gap_edge(&self, g: &Geometry, gap: (f32, f32), edge: GapEdge) -> Rect {
+        let (a, b) = (g.x(gap.0), g.x(gap.1));
+        let (lo, hi) = (a.min(b), a.max(b));
+        let at = g.x(if edge == GapEdge::End { gap.0 } else { gap.1 });
+        let (from, to) = if hi - lo < 2.0 * self.column {
+            let middle = (lo + hi) / 2.0;
+            if at <= middle { (lo, middle) } else { (middle, hi) }
+        } else {
+            (at - self.column / 2.0, at + self.column / 2.0)
+        };
+        Rect::from_x_y_ranges(from..=to, g.strip.y_range())
+    }
+
     /// The box the item occupies on the strip.
-    pub(super) fn rect(&self, g: &Geometry, item: Item, values: &RulerValues) -> Rect {
+    pub(super) fn rect(&self, g: &Geometry, item: RulerItem, values: &RulerValues) -> Rect {
         let x = g.x(item.position(values, g.width));
         match item {
-            Item::FirstLine => self.first_line(g.strip, x),
-            Item::Hanging => self.hanging(g.strip, x),
-            Item::LeftBox => self.left_box(g.strip, x),
-            Item::Right => self.right(g.strip, x),
-            Item::Stop(_) => self.stop(g.strip, x),
+            RulerItem::FirstLine => self.first_line(g.strip, x),
+            RulerItem::Hanging => self.hanging(g.strip, x),
+            RulerItem::LeftBox => self.left_box(g.strip, x),
+            RulerItem::Right => self.right(g.strip, x),
+            RulerItem::Stop(_) => self.stop(g.strip, x),
         }
     }
 }

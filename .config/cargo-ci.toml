@@ -1,0 +1,37 @@
+# The Workspace gate's additions to .config/cargo-dev.toml (scripts/ci-workspace-tests.sh passes both). The gate runs
+# every test of these crates, and their tests spend nearly all their time in sample and pixel loops, which run several
+# times faster at opt-level 1; locally they stay at 0, so an edit to them rebuilds fast. craft-pdf (R6 hash and AES-CBC
+# loops), craft-pkcs7 and craft-odf (PBKDF2 rounds, monomorphised in the crate) and craft-cms (CLUT builds) run their
+# own hot loops in tests, so they take part too.
+[profile.dev.package.craft-audio-dsp]
+opt-level = 1
+
+[profile.dev.package.craft-audio]
+opt-level = 1
+
+[profile.dev.package.craft-media]
+opt-level = 1
+
+[profile.dev.package.craft-image-codecs]
+opt-level = 1
+
+[profile.dev.package.craft-imaging]
+opt-level = 1
+
+[profile.dev.package.craft-pdf]
+opt-level = 1
+
+[profile.dev.package.craft-pkcs7]
+opt-level = 1
+
+[profile.dev.package.craft-odf]
+opt-level = 1
+
+[profile.dev.package.craft-cms]
+opt-level = 1
+
+# The runtime under every screen test: each frame of a fixture runs its pass, layout, focus and access tree. At
+# opt-level 2 a suite trial runs about 40 percent fewer instructions than at 0 (Table activation 19.8 G to 11.9 G);
+# opt-level 1 gives about 30 percent. Every UI crate waits for its compile, which grows by about a minute.
+[profile.dev.package.craft-ui-contract]
+opt-level = 2

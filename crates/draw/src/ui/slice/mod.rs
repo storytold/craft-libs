@@ -35,16 +35,18 @@ use craft_behavior::{Axis, CancelReason, EditEvent, GestureId, Mixed};
 use craft_keymap::Mods;
 use std::sync::Arc;
 
-mod bar;
-mod dialogs;
-mod overlay;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod bar;
+pub(crate) mod dialogs;
+pub(crate) mod overlay;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod tool;
 mod words;
 
 pub use bar::{SliceBar, SliceBarOutput};
-pub use dialogs::{DivideBy, DivideSlices, DivideSlicesDialog, SliceKind, SliceOptions, SliceOptionsDialog};
+pub use dialogs::{
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceBackground, SliceCellAlign, SliceCellVAlign, SliceKind, SliceOptions, SliceOptionsDialog,
+};
 pub use overlay::{SliceOverlay, SliceOverlayOutput};
 pub use tool::SliceTool;
 pub use words::{SliceToolWords, SliceWords};

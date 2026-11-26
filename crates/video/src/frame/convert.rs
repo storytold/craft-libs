@@ -178,6 +178,49 @@ impl TryFrom<crate::av1::decode::Picture> for VideoFrame {
     }
 }
 
+#[cfg(feature = "mjpeg")]
+impl TryFrom<crate::mjpeg::Frame> for VideoFrame {
+    type Error = FrameError;
+
+    /// A gray or RGB frame, full range (a JPEG's YCbCr is converted to RGB by the decoder, so RGB
+    /// frames carry the identity matrix). 8-bit pictures keep 8-bit storage; 12-bit ones are
+    /// stored scaled to 16 bits and say so. The decoder returns interleaved samples, so this is
+    /// the one conversion that copies them, into planes.
+    fn try_from(p: crate::mjpeg::Frame) -> Result<Self, FrameError> {
+        use crate::mjpeg::Samples as S;
+        let (w, h) = (p.width, p.height);
+        let channels = usize::from(p.channels);
+        let family = match channels {
+            1 => ColorFamily::Gray,
+            3 => ColorFamily::Rgb,
+            _ => return Err(FrameError::Shape("a Motion JPEG frame has 1 or 3 channels")),
+        };
+        let pixels = usize::try_from(w)
+            .ok()
+            .zip(usize::try_from(h).ok())
+            .and_then(|(w, h)| w.checked_mul(h))
+            .ok_or(FrameError::Plane("plane size overflows"))?;
+        let stored = match &p.samples {
+            S::U8(v) => v.len(),
+            S::U16(v) => v.len(),
+        };
+        if pixels.checked_mul(channels) != Some(stored) {
+            return Err(FrameError::Shape("sample count does not fit the frame"));
+        }
+        let planes = match p.samples {
+            S::U8(v) => (0..channels)
+                .map(|c| Plane::packed(w, h, 8, Samples::U8(v.iter().skip(c).step_by(channels).copied().collect())))
+                .collect::<Result<Vec<_>, _>>()?,
+            S::U16(v) => (0..channels)
+                .map(|c| Plane::packed(w, h, 16, Samples::U16(v.iter().skip(c).step_by(channels).copied().collect())))
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        let mut f = VideoFrame::new(w, h, family, Subsampling::S444, planes, None)?;
+        f.color = ColorTags { matrix: if family == ColorFamily::Rgb { 0 } else { 2 }, full_range: true, ..ColorTags::UNSPECIFIED };
+        Ok(f)
+    }
+}
+
 #[cfg(feature = "mpeg2-decode")]
 impl TryFrom<crate::mpeg2::Picture> for VideoFrame {
     type Error = FrameError;
@@ -368,4 +411,38 @@ impl TryFrom<crate::ffv1::Frame> for VideoFrame {
         }
         Ok(f)
     }
+}
+
+#[cfg(feature = "vmd-decode")]
+impl TryFrom<&crate::vmd::Decoder> for VideoFrame {
+    type Error = FrameError;
+
+    /// The decoder's current picture, its palette indices looked up in its palette: 8-bit R, G, B
+    /// planes at full size (the samples are copied, as VMD stores none of them as planes). VMD
+    /// signals no colour description beyond RGB, nor timing.
+    fn try_from(d: &crate::vmd::Decoder) -> Result<Self, FrameError> {
+        paletted(d.width(), d.height(), d.indices(), d.palette())
+    }
+}
+
+/// A picture of palette indices, `width` a row, as 8-bit R, G, B planes. Matrix 0 (identity), the
+/// other colour tags unspecified.
+#[cfg(feature = "vmd-decode")]
+fn paletted(width: usize, height: usize, indices: &[u8], palette: &[[u8; 3]; 256]) -> Result<VideoFrame, FrameError> {
+    let too_large = FrameError::Shape("picture size does not fit in u32");
+    let (w, h) = (u32::try_from(width).map_err(|_| too_large.clone())?, u32::try_from(height).map_err(|_| too_large)?);
+    let n = width.checked_mul(height).ok_or(FrameError::Shape("picture size overflows"))?;
+    let indices = indices.get(..n).ok_or(FrameError::Plane("fewer palette indices than pixels"))?;
+    let mut planes = [Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n)];
+    for &i in indices {
+        let [r, g, b] = palette[usize::from(i)];
+        planes[0].push(r);
+        planes[1].push(g);
+        planes[2].push(b);
+    }
+    let [r, g, b] = planes;
+    let planes = vec![Plane::packed(w, h, 8, Samples::U8(r))?, Plane::packed(w, h, 8, Samples::U8(g))?, Plane::packed(w, h, 8, Samples::U8(b))?];
+    let mut f = VideoFrame::new(w, h, ColorFamily::Rgb, Subsampling::S444, planes, None)?;
+    f.color.matrix = 0;
+    Ok(f)
 }

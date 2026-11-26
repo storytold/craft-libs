@@ -321,7 +321,7 @@ fn elements_usvg_leaves_out_are_listed() {
 fn local_text_is_placed_and_bounded_in_its_parents_frame() {
     let mut options = usvg::Options::default();
     let fonts = options.fontdb_mut();
-    fonts.load_font_data(include_bytes!("../../../ui/tests/fonts/NotoSans-test.ttf").to_vec());
+    fonts.load_font_data(include_bytes!("../../../ui-contract/tests/fonts/NotoSans-test.ttf").to_vec());
     let family = fonts.faces().next().unwrap().families[0].0.clone();
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="move" transform="translate(50 0)"><text id="t" x="5" y="20" font-family="{family}" font-size="10">Hi</text></g></svg>"#

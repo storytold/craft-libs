@@ -68,6 +68,20 @@ fn consts_resolve_by_module_and_impl_scope() {
 }
 
 #[test]
+fn documented_consts_are_component_constants() {
+    // A documented module or impl const is a named value, its initializer included; arithmetic on it reads like a token.
+    let src = "/// The tick.\nconst TICK: f32 = 3.0;\n/// The room.\nconst ROOM: Vec2 = vec2(30.0, 40.0);\nstruct A;\nimpl A {\n    /// The pad.\n    const PAD: f32 = 6.0;\n    fn f(&self, ui: &mut Ui) { ui.add_space(Self::PAD); ui.add_space(TICK * 2.0); let v = vec2(TICK, ROOM.y); }\n}\n";
+    assert!(clean(src));
+
+    // An undocumented const, a documented const in a fn body and a literal stay flagged.
+    let src = "const GAP: f32 = 4.0;\nfn f(ui: &mut Ui) { ui.add_space(GAP); }\nfn g(ui: &mut Ui) {\n    /// The gap.\n    const LOCAL: f32 = 4.0;\n    ui.add_space(LOCAL);\n}\nfn h(ui: &mut Ui) { ui.add_space(4.0); }\n";
+    assert_eq!(run(src).iter().map(|f| f.line).collect::<Vec<_>>(), [2, 6, 8]);
+
+    // The initializer of an undocumented const is a call site.
+    assert!(flagged("const ROOM: Vec2 = vec2(30.0, 40.0);\n", "literal-size/vec2"));
+}
+
+#[test]
 fn clippy_allow_attributes_are_counted_and_inner_ones_flagged() {
     let src = "#![allow(clippy::disallowed_methods, reason = \"stock widgets\")]\n#[expect(clippy::disallowed_types)]\nstruct S;\n#[allow(clippy::too_many_arguments)]\nfn f() {}\nmod m {\n    #![expect(clippy::disallowed_methods)]\n}\n";
     let analysis = analyze_source(src, false);

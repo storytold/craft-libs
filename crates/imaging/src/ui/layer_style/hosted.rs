@@ -10,9 +10,9 @@ use craft_ui::choice::SwatchMetrics;
 use craft_ui::contract::{
     Bind, CanvasGesture, Common, Component, Cx, DisabledLook, Entry, MeasureCx, PaintUi, Props as _, Role, Sampler as _, Show as _,
 };
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::FormDialog;
-use craft_ui::patterns::presets::{PresetRow, ThumbInfo};
+use craft_ui::patterns::presets::PresetSource;
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
@@ -20,9 +20,9 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Context, Rect, Response, Ui, Vec2};
 
-use super::contour::SharedSampler;
+use super::contour::ContourSampler;
 use super::labels::LayerStyleWords;
-use super::{ContourAction, ContourRequest, LayerStyleDialog, LayerStyleOutput, StylePresets};
+use super::{ContourAction, ContourRequest, LayerStyleDialog, LayerStyleOutput};
 use crate::layer_style::{
     Contour, EffectId, EffectKind, EffectSpec, FieldKind, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams, StyleValue,
 };
@@ -65,9 +65,6 @@ impl LayerStyleOutput {
         .flatten()
     }
 }
-
-/// Paints a style preset's thumbnail.
-type Thumb = dyn Fn(&ContentPainterCx, Rect, ThumbInfo<'_, String>) + Send;
 
 /// Paints the preview swatch beside the footer buttons from the draft.
 type PreviewPaint = dyn Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync;
@@ -158,10 +155,10 @@ pub struct HostedLayerStyle {
     specs: Option<Vec<EffectSpec>>,
     blend_keys: Option<HashMap<String, String>>,
     blend_modes: Vec<Entry<String>>,
-    patterns: Vec<PresetRow<String>>,
+    patterns: Option<PresetSource<'static, String>>,
     user_contours: Vec<Contour>,
-    sampler: Option<SharedSampler>,
-    styles: Option<(Vec<PresetRow<String>>, Box<Thumb>)>,
+    sampler: Option<ContourSampler>,
+    styles: Option<PresetSource<'static, String>>,
     gradient_presets: Vec<(String, GradientStops)>,
     canvas: Option<egui::Id>,
     preview_thumb: Option<Arc<PreviewPaint>>,
@@ -187,7 +184,7 @@ impl HostedLayerStyle {
             specs: None,
             blend_keys: None,
             blend_modes: Vec::new(),
-            patterns: Vec::new(),
+            patterns: None,
             user_contours: Vec::new(),
             sampler: None,
             styles: None,
@@ -224,8 +221,8 @@ impl HostedLayerStyle {
 
     /// [`LayerStyleDialog::patterns`].
     #[must_use]
-    pub fn patterns(mut self, patterns: Vec<PresetRow<String>>) -> Self {
-        self.patterns = patterns;
+    pub fn patterns(mut self, patterns: PresetSource<'static, String>) -> Self {
+        self.patterns = Some(patterns);
         self
     }
 
@@ -238,19 +235,15 @@ impl HostedLayerStyle {
 
     /// [`LayerStyleDialog::sampler`].
     #[must_use]
-    pub fn sampler(mut self, sample: impl Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync + 'static) -> Self {
-        self.sampler = Some(std::sync::Arc::new(sample));
+    pub fn sampler(mut self, sample: ContourSampler) -> Self {
+        self.sampler = Some(sample);
         self
     }
 
-    /// The Styles page's presets `rows`, each thumbnail painted by `thumb` ([`StylePresets::new`]).
+    /// [`LayerStyleDialog::style_presets`].
     #[must_use]
-    pub fn style_presets(
-        mut self,
-        rows: Vec<PresetRow<String>>,
-        thumb: impl Fn(&ContentPainterCx, Rect, ThumbInfo<'_, String>) + Send + 'static,
-    ) -> Self {
-        self.styles = Some((rows, Box::new(thumb)));
+    pub fn style_presets(mut self, presets: PresetSource<'static, String>) -> Self {
+        self.styles = Some(presets);
         self
     }
 
@@ -363,7 +356,7 @@ impl StackDialog for HostedLayerStyle {
         let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft))
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut preview)))
-            .side_buttons(true)
+            .button_place(ButtonPlace::Side)
             .extra_buttons([FooterButton::new(new_style, DialogRole::Other)])
             .footer_extra(|ui| {
                 if let (Some(paint), Some(draft)) = (preview_thumb.as_deref(), snapshot.as_ref()) {
@@ -379,18 +372,22 @@ impl StackDialog for HostedLayerStyle {
                 }
                 let mut body = LayerStyleDialog::new(label.clone(), draft, channel_names.as_slice())
                     .blend_modes(blend_modes.as_slice())
-                    .patterns(patterns.as_slice())
                     .user_contours(user_contours.as_slice())
-                    .shared_sampler(sampler.clone())
                     .gradient_presets(gradient_presets.as_slice());
+                if let Some(patterns) = patterns.as_ref() {
+                    body = body.patterns(patterns);
+                }
+                if let Some(sampler) = *sampler {
+                    body = body.sampler(sampler);
+                }
                 if let Some(specs) = specs.as_deref() {
                     body = body.specs(specs);
                 }
                 if let Some(map) = blend_keys.as_ref() {
                     body = body.blend_keys(map);
                 }
-                if let Some((rows, thumb)) = styles.as_ref() {
-                    body = body.style_presets(StylePresets::new(rows, |cx, rect, info| thumb(cx, rect, info)));
+                if let Some(presets) = styles.as_ref() {
+                    body = body.style_presets(presets);
                 }
                 let out = body.show(ui);
                 #[cfg(feature = "screen-testing")]
