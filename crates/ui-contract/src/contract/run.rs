@@ -1266,7 +1266,7 @@ fn paint_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &mut HostStep
     e.content_env(&mut h.values);
     steps::unfade(ui, e.core(), fade);
     ui.set_clip_rect(h.outer_clip);
-    steps::paint_focus(ui, e.core_ref(), p.style);
+    steps::paint_focus(ui, e.core_ref(), p.style, e.shape() != ShapeKind::Item);
     // A rule a bar's view shows waits for the member after it.
     if let Some((line, from)) = rule_from {
         hold_rule(ui, line, from);
