@@ -1,6 +1,6 @@
 //! Stories of `NewDocumentDialog`.
 
-use super::{CardCx, CardSource, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, NewDocumentDialog};
+use super::{CardCx, CardSource, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, NewDocumentDialog, PresetCardLook};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, clicked};
@@ -8,6 +8,7 @@ use crate::form::Field;
 use crate::patterns::presets::{GroupPath, PresetLibrary};
 use crate::pickers::Select;
 use crate::popover::Popover;
+use crate::runtime::env::with_env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;
 use egui::Ui;
@@ -21,6 +22,20 @@ fn new_document_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         dialog = dialog.clipboard(PixelSize::new(1920, 1080));
     }
     dialog.opened(data.bind("open", true)).show(ui).into()
+}
+
+/// The preset cards in `PresetCardLook::Page`, which an app sets at its root (VectorCraft's): blank paper on flat
+/// cards, the selected one with the hover fill and an accent edge.
+#[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never, title = "Page cards")]
+fn new_document_dialog_page_cards(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let opened = data.bind("open", true);
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(PresetCardLook::Page);
+        },
+        |ui| NewDocumentDialog::new(Bind::kept()).clipboard(PixelSize::new(1920, 1080)).opened(opened).show(ui).into(),
+    )
 }
 
 #[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never)]

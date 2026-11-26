@@ -322,16 +322,16 @@ fn stacked_sizes<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, lines
         .collect()
 }
 
-/// The metrics of a button with a face: the control's, with the horizontal padding at least the corner radius plus
-/// the gap, so the label and icons of a capsule clear its round ends.
+/// The metrics of a button with a face: a button high (`StyleCx::button_height`), with the control's horizontal padding
+/// at least the corner radius plus the gap, so the label and icons of a capsule clear its round ends.
 pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
-    let control = cx.control();
-    let round = f32::from(parts.radius.nw).min(control.height / 2.0);
+    let (control, height) = (cx.control(), cx.button_height());
+    let round = f32::from(parts.radius.nw).min(height / 2.0);
     // The sides clear the corner round, so an edge never crosses the label. A ribbon's flat button has no edge at rest
     // (`ControlPlace::Ribbon`): its sides take the control's padding, as a ribbon's controls sit close.
     let side = if super::flat_in_ribbon(cx) { control.pad_x } else { control.pad_x.max(round + control.gap) };
-    // A ribbon look's row height (`RibbonLook::row`) stands in for the control's.
-    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, control.height))).gap(control.gap)
+    // A ribbon look's row height (`RibbonLook::row`) stands in for the button's.
+    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, height))).gap(control.gap)
 }
 
 /// The metrics of a stacked face: `metrics`, with the control's gap above and below the stack, so its height is the
@@ -398,7 +398,8 @@ pub(crate) struct IconFace {
 pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
     let on = match cx.env::<ActiveLook>() {
         ActiveLook::Accent => on_parts(cx),
-        ActiveLook::Pressed => pressed_parts(cx),
+        ActiveLook::Pressed => filled_parts(cx, cx.tokens.color.state.pressed),
+        ActiveLook::Control => filled_parts(cx, cx.tokens.color.surface.control),
     };
     let off = cx.variant_look();
     let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
@@ -406,9 +407,10 @@ pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
         GlyphRole::Tool => (icon.md, None),
         GlyphRole::ToolRail => (icon.lg, Some(text.muted)),
         GlyphRole::PanelRail => (cx.glyph(), Some(text.faint)),
+        GlyphRole::Compact => (icon.glyph_sm, None),
         _ => (cx.glyph(), None),
     };
-    let side = super::small_icon(cx, side);
+    let side = if cx.glyph_role() == GlyphRole::Compact { side } else { super::small_icon(cx, side) };
     let mut ink = off.text.clone();
     if let Some(rest) = rest {
         ink.off.rest = cx.color(rest);
@@ -430,11 +432,10 @@ pub(super) fn on_parts(cx: &StyleCx<'_>) -> VariantParts {
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), ..soft }
 }
 
-/// The on look under `ActiveLook::Pressed`: the pressed state's fill with no edge, the normal text colour.
-fn pressed_parts(cx: &StyleCx<'_>) -> VariantParts {
+/// The on look under `ActiveLook::Pressed` and `ActiveLook::Control`: `fill` with no edge, the normal text colour.
+fn filled_parts(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> VariantParts {
     let soft = on_parts(cx);
-    let colors = &cx.tokens.color;
-    let (fill, ink) = (cx.color(colors.state.pressed), cx.color(colors.text.normal));
+    let (fill, ink) = (cx.color(fill), cx.color(cx.tokens.color.text.normal));
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), edge: None, ..soft }
 }
 

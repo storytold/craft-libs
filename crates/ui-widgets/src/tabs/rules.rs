@@ -15,8 +15,23 @@ pub enum DocumentTabLook {
     /// PdfCraft's tabs: they shrink before they overflow (a name at most 22 digits wide, at its least a readable
     /// prefix), stand the inline gap apart, and a modified tab shows the marker dot in place of the `*`.
     Shrinking,
-    /// VectorCraft's tabs: whole titles as [`Whole`](Self::Whole), the title and its `*` in the label's semibold face.
+    /// VectorCraft's tabs: whole titles as [`Whole`](Self::Whole), the title and its `*` in the label's semibold face,
+    /// or in the tab-title family's condensed face (`craft_theme::TypeRole::TabTitle`) where the app's font stack has it.
     Semibold,
+}
+
+/// The look of a tab's close button app-wide. An app sets it once at its root (`RootEnv::values`); the default is
+/// `Button`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum TabCloseLook {
+    /// An icon button as tall as the tab's content, which the pointer fills.
+    #[default]
+    Button,
+    /// The × alone, a small icon (`size.icon.sm`) in the muted ink that turns to the text colour under the pointer, with
+    /// no fill; it takes clicks in a square of the button's width. Production VectorCraft's.
+    Glyph,
 }
 
 /// The look of panel tabs ([`TabKind::Panel`]): a strip's choice ([`TabStrip::panel_look`](super::TabStrip)), which a
@@ -31,6 +46,10 @@ pub enum PanelTabLook {
     /// small control high in the middle of the strip; a tab under the pointer shows the pill too. A dock group's panel
     /// menu button stands in the strip's middle with them.
     Pill,
+    /// VectorCraft 0.24's tabs: the shown tab a square `surface.control` block as tall as the strip, a tab under the
+    /// pointer `state.hover`. A dock group's strip lies on `surface.canvas`, and its panel menu button stands in the
+    /// strip's middle.
+    Block,
 }
 
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.

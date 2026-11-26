@@ -99,8 +99,9 @@ pub(crate) fn run_selections(core: &mut super::cx::CxCore<'_>, selections: &[Sel
 
 pub(crate) struct TextDecl {
     pub part: TextPart,
-    /// A `Resolve<V>` for the component's value type, invoked after the adapter records the pass.
-    resolve: Box<dyn Any>,
+    /// A `Resolve<V>` for the component's value type, which the text step takes and invokes after the adapter records
+    /// the pass; the part stays declared, so the stops read its keys as the pass's edits left them.
+    resolve: Option<Box<dyn Any>>,
     values: ValueOps,
 }
 
@@ -309,7 +310,7 @@ impl<C: Component> PartsCx<'_, C> {
                 shown,
                 options: declared,
             },
-            resolve,
+            resolve: Some(resolve),
             values: ValueOps::of::<K::Value>(),
         });
     }
@@ -590,8 +591,9 @@ pub(crate) fn run<C: Component>(
     ink: egui::Color32,
     underline: f32,
 ) {
-    let Some(decl) = step.decl.take() else { return };
-    let Ok(resolve) = decl.resolve.downcast::<Resolve<ValueOf<C>>>() else {
+    let Some(decl) = step.decl.as_mut() else { return };
+    let Some(resolve) = decl.resolve.take() else { return };
+    let Ok(resolve) = resolve.downcast::<Resolve<ValueOf<C>>>() else {
         debug_assert!(false, "the text part's codec value is the component's value");
         return;
     };

@@ -2,7 +2,7 @@
 
 use super::placement::Sizes;
 use crate::display::divider::SeparatorRule;
-use crate::style::{ComponentStyle, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
+use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::Metrics;
 use craft_theme::{Contrast, Rgba, Stateful, States, contrast_ratio, identifiable_outline, over};
 
@@ -17,6 +17,8 @@ pub struct ListRowStyle {
     pub(super) surface: SurfaceLook,
     #[style(metrics)]
     pub(super) metrics: Metrics,
+    #[style(focus)]
+    pub(super) focus: FocusLook,
     /// The label.
     #[style(text)]
     pub(super) text: TextLook,
@@ -85,6 +87,21 @@ pub enum CommandHighlight {
     Accent,
     /// The hover tint (`state.hover`) with the row's own ink, as a row with an open submenu shows it.
     Hover,
+}
+
+/// How tall a row with a thumbnail stands, and how far a tree row indents per level. An app sets it at its root or on
+/// the scope of a list (`with_env`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ThumbRows {
+    /// The thumbnail with `space.gap.stack` around it, at least a standard control and the panel padding high; a level
+    /// of indent is an icon slot.
+    #[default]
+    Roomy,
+    /// The thumbnail with `space.gap.tight` around it, at least the row's own height; a level of indent is a small
+    /// icon and `space.gap.tight`: VectorCraft's Layers panel.
+    Tight,
 }
 
 /// What the row fill depends on.

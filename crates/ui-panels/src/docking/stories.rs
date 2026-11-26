@@ -170,6 +170,22 @@ fn pill_tabs_and_the_panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// VectorCraft 0.24's group header (`DockConfig::tab_look(PanelTabLook::Block)`): the shown tab a square
+/// `surface.control` block as tall as the strip, the strip on `surface.canvas`, and the panel menu button in the
+/// strip's middle at its end.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn block_tabs_and_the_panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
+        .menu(move || rows.clone())
+        .panel_menu_icon(IconId::new("menu"))
+        .tab_look(PanelTabLook::Block)
+        .show(ui, |_, _| ())
+        .output
+        .into()
+}
+
 #[story(GroupGrip<usize>, covers = [Default])]
 fn a_group_grip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     GroupGrip::new(DragUnit::Group(LAYERS), PanelKey::of(&LAYERS)).label("Move tab group").show(ui).into()

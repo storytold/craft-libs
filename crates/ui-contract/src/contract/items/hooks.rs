@@ -401,6 +401,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         focus::registration::record_tree(&ctx, id, tree);
         let focused = focus::is_focused(&ctx, id);
         let lead = self.lead.key.clone();
+        focus::registration::record_lead(&ctx, id, lead.as_ref().is_some_and(|key| self.index_of(key).is_some()));
         let mut lead_child = None;
         let striped = comp.items().striped;
         let mut stripe: Option<(usize, usize)> = None;

@@ -46,7 +46,7 @@ pub struct GroupGripStyle {
 /// (photocraft#16426): ticks, dots or one level bar, how many, how large and how far apart; by default eleven upright ticks, a thin
 /// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
 /// under its column bar and the grip above each icon group of a collapsed column paint the same marks, unless the app
-/// separates icon groups by a rule (`IconGroupSeparator::Rule`).
+/// separates icon groups by a rule (`IconGroupSeparator::Rule`), where the groups have no grip strips.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GripMarks {
     ink: StyleColor,
@@ -221,6 +221,15 @@ const GRIP: PartKey = PartKey::new("grip");
 fn grip_width(tokens: &Tokens) -> f32 {
     tokens.size.icon.lg + 2.0 * tokens.space.pad.regular
 }
+
+/// The least the drag band narrows to in a header too narrow for it and the shown tab: an icon's room.
+fn grip_least(tokens: &Tokens) -> f32 {
+    tokens.size.icon.lg
+}
+
+/// How many of the shown tab's first letters the header keeps room for before the drag band narrows, as many as a
+/// shrunk panel tab shows.
+const SHOWN_TAB_LETTERS: usize = 3;
 /// The panel menu button at the header's end edge.
 pub(super) const MENU: PartKey = PartKey::new("panel_menu");
 /// Where the group menu hangs while a context request on a tab holds it open: the request's point.
@@ -302,6 +311,8 @@ pub struct DockGroupOutput {
     pub tabs: Vec<(PanelKey, Rect, Id)>,
     /// The band the group is dragged by this pass, with the id of its accessibility node.
     pub grip: Option<(Rect, Id)>,
+    /// The strip's overflow button, when some tabs do not fit, with the id of its accessibility node.
+    pub overflow: Option<(Rect, Id)>,
 }
 
 impl Outcome for DockGroupOutput {
@@ -337,6 +348,7 @@ struct Reported {
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
     empty_drag: bool,
     tabs: Vec<(PanelKey, Rect, Id)>,
+    overflow: Option<(Rect, Id)>,
 }
 
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
@@ -369,8 +381,7 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
-    /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)).
-    #[prop]
+    /// The look of the tabs: [`tab_look`](DockGroup::tab_look).
     tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
     /// single titled panel does: the panels are shown from a rail, not by tabs.
@@ -419,8 +430,10 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
     pub fn new(anchor: P, panels: Titles, active: PanelKey) -> Self {
-        let props =
-            ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new().fill(SurfaceKind::Background)).command_scope(DockCommands::SCOPE);
+        let props = ContainerProps::new()
+            .sizing(Sizing::Fill)
+            .header(HeaderRegion::new().fill(strip_surface(PanelTabLook::Plain)))
+            .command_scope(DockCommands::SCOPE);
         let title = panels.as_slice().iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
         DockGroup {
             common: Common::new(),
@@ -469,6 +482,15 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         DockGroup { take_focus: true, ..self }
     }
 
+    /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)). [`PanelTabLook::Block`] tabs
+    /// lie on a strip of `surface.canvas`, the others on the window's background.
+    #[must_use]
+    pub fn tab_look(mut self, look: PanelTabLook) -> Self {
+        self.props = self.props.header(HeaderRegion::new().fill(strip_surface(look)));
+        self.tab_look = look;
+        self
+    }
+
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
     fn shows_menu_button(&self) -> bool {
         self.panel_menu_shown && self.menu.is_some()
@@ -477,6 +499,34 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     /// The panel menu button's face.
     fn menu_face(&self, name: Label) -> IconButton<'static> {
         IconButton::new(self.panel_menu_icon.clone()).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
+    }
+
+    /// The room the panel menu button takes past the drag band, with the gap before it; none when it does not show.
+    fn menu_room(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        if self.shows_menu_button() { cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x } else { 0.0 }
+    }
+
+    /// The least room the strip takes to show the shown tab's first letters: the tab as the strip builds it (icon,
+    /// count, mark and close button) with only those letters of its title, and beside other tabs the overflow
+    /// button, which is as wide as the tab is high.
+    fn shown_tab_least(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        let panels = self.panels.as_slice();
+        let tabs = strip_tabs(panels, self.closable);
+        let shown = shown_tab(panels, self.active);
+        let Some(tab) = tabs.iter().find(|tab| tab.key == shown) else { return 0.0 };
+        let letters: String = tab.title.as_str().chars().take(SHOWN_TAB_LETTERS).collect();
+        let marked = tab_marks(cx.ui.ctx(), panels).iter().any(|(key, _)| *key == shown);
+        let mut face = Tab::new(letters).kind(TabKind::Panel).panel_look(self.tab_look).closable(tab.closes).marked(marked);
+        if let Some(count) = tab.count {
+            face = face.detail(cx.env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+        }
+        match tab.swatch {
+            Some(Some(color)) => face = face.icon(IconSpec::swatch(color)),
+            Some(None) => face = face.icon(IconSpec::empty_swatch()),
+            None => {}
+        }
+        let size = cx.face(face);
+        if tabs.len() > 1 { size.x + size.y } else { size.x }
     }
 
     /// Starts a drag of the whole group: its drop region shows the group's name.
@@ -502,20 +552,22 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     /// The band the group is dragged by and the panel menu button, at the end of the header: the band first. The
     /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
-    /// [`PanelTabLook::Pill`] tabs, in the strip's middle with their pills.
+    /// [`PanelTabLook::Pill`] and [`PanelTabLook::Block`] tabs, in the strip's middle.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
         let flow = craft_behavior::Flow::new(slot, cx.flow.is_rtl());
-        let (band, rest) = flow.take_start(grip_width(cx.tokens));
+        // The band takes what the slot leaves past the panel menu button, which a narrowed header takes from the band.
+        let width = (slot.width() - self.menu_room(cx)).clamp(0.0, grip_width(cx.tokens));
+        let (band, rest) = flow.take_start(width);
         let sense = if self.movable { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS };
         let _ = cx.header_part(HeaderEdge::End, GRIP, band).sense(sense).focusable();
         if self.shows_menu_button() {
             // An icon button is square: its side is the slot's room past the band and the gap.
-            let side = (slot.width() - grip_width(cx.tokens) - cx.tokens.space.gap.item).max(0.0);
+            let side = (slot.width() - width - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
             let height = side.min(slot.height());
-            let top = if self.tab_look == PanelTabLook::Pill { slot.center().y - height / 2.0 } else { slot.top() };
+            let top = if self.tab_look == PanelTabLook::Plain { slot.top() } else { slot.center().y - height / 2.0 };
             let button = Rect::from_min_size(egui::Pos2::new(end.left(), top), Vec2::new(end.width(), height));
             let _ = cx
                 .header_part(HeaderEdge::End, MENU, button)
@@ -627,7 +679,19 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         }
         let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
         let Reported {
-            picked, closed, picked_document, closed_documents, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, ..
+            picked,
+            closed,
+            picked_document,
+            closed_documents,
+            menu,
+            item,
+            commands,
+            toggle_minimized,
+            torn_off,
+            drag_started,
+            tabs,
+            overflow,
+            ..
         } = self.reported;
         DockGroupOutput {
             response: cx.response.clone(),
@@ -643,6 +707,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             drag_started,
             tabs,
             grip,
+            overflow,
         }
     }
 }
@@ -654,15 +719,12 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         Some(self.open.reborrow())
     }
 
-    /// The drag band, then the panel menu button when it shows, at the header's end edge.
+    /// The drag band, then the panel menu button when it shows, at the header's end edge. In a header too narrow for
+    /// them and the shown tab's least room, the band narrows to an icon's room, so the shown tab stays visible.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
-        let band = grip_width(cx.tokens);
-        let button = if self.shows_menu_button() {
-            cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x
-        } else {
-            0.0
-        };
-        HeaderParts::NONE.end(band + button)
+        let button = self.menu_room(cx);
+        let parts = HeaderParts::NONE.end(grip_width(cx.tokens) + button);
+        if self.titled { parts } else { parts.end_narrows(grip_least(cx.tokens) + button, self.shown_tab_least(cx)) }
     }
 
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -749,12 +811,13 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         // A press on the group's empty body focuses its panel, as in Photoshop; an app's own egui body keeps its presses.
         if surface_pressed
             && !self.host_body
-            && let Some((strip, _)) = &strip
+            && let Some((strip, _, _)) = &strip
         {
             focus::request(ui.ctx(), FocusTarget::Id(*strip));
         }
-        if let Some((strip, tabs)) = &strip {
+        if let Some((strip, tabs, overflow)) = &strip {
             self.reported.tabs = tabs.iter().map(|(key, rect)| (*key, *rect, crate::contract::item_node(*strip, key))).collect();
+            self.reported.overflow = *overflow;
         }
         let size = self.size;
         let (titles, reported) = (&self.panels, &mut self.reported);
@@ -806,6 +869,11 @@ enum TabEvent {
     EmptyDouble,
     /// A tab's drag started.
     DragStarted,
+}
+
+/// The surface a dock's strips lie on with tabs in `look`: its groups' tab strips and its columns' bars.
+pub(crate) fn strip_surface(look: PanelTabLook) -> SurfaceKind {
+    if look == PanelTabLook::Block { SurfaceKind::Canvas } else { SurfaceKind::Background }
 }
 
 /// The props of a group's tab row: the tabs and how they show, the group's size where a tab's drag starts, and the
@@ -888,10 +956,13 @@ fn shown_tab(panels: &[PanelTitle], active: PanelKey) -> PanelKey {
         .unwrap_or(active)
 }
 
-/// A group's tab strip with its tab insertion spots. Returns the strip's id and the rect of each tab it shows, which a
-/// replay returns again, moved with the row. The panels' documents are tabs of the same strip after the panel tabs: one
+/// What a group's tab row shows: the strip's id, each shown tab's rect and the overflow button with its node id.
+type TabRowShown = (Id, Vec<(PanelKey, Rect)>, Option<(Rect, Id)>);
+
+/// A group's tab strip with its tab insertion spots. Returns the strip's id, the rect of each tab it shows and the
+/// overflow button with its node id, which a replay returns again, moved with the row. The panels' documents are tabs of the same strip after the panel tabs: one
 /// fit, one overflow menu and one keyboard order for both. Only panel tabs drag and take tab insertions.
-fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> (Id, Vec<(PanelKey, Rect)>) {
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> TabRowShown {
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
@@ -978,7 +1049,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if strip.empty_double {
         row.sent.send(TabEvent::EmptyDouble);
     }
-    (strip.response.response.id, strip.tab_rects)
+    (strip.response.response.id, strip.tab_rects, strip.overflow)
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before

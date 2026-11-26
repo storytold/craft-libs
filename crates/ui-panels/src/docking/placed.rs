@@ -50,12 +50,13 @@ impl<'a, P> Placing<'a, P> {
 }
 
 /// Runs `f` with the rules a dock area lays its docked tree out by: each panel's limits from `spec`, a dock as wide as
-/// its columns' natural widths ([`DockSizes::natural`]), and no strip on a canvas alone in its group.
+/// its columns' natural widths ([`DockSizes::natural`]) and [`DockSizes::dock_gap`] from the node beside it, and no
+/// strip on a canvas alone in its group.
 pub fn with_area_rules<P, R>(sizes: &DockSizes, spec: &dyn Fn(&P) -> PanelSpec, f: impl FnOnce(FrameRules<'_, P>) -> R) -> R {
     let limits = |panel: &P| spec(panel).limits;
     let dock_width = |columns: &[Column<P>]| sizes.natural(columns, spec).iter().map(|(width, _)| *width).sum::<f32>();
     let stripless = |panel: &P| spec(panel).canvas;
-    f(FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless))
+    f(FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(sizes.dock_gap))
 }
 
 /// The rect the panels `moved` take in `layout`, the layout after a drop, laid out in `room` (the room the dock

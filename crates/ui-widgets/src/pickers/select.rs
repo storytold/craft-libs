@@ -71,6 +71,9 @@ pub enum SelectLook {
     /// and padding): at least `size.length.short`, at most a field length, where a longer text elides. It changes
     /// width with the pick (a workspace switcher at the end of an app bar).
     Quiet,
+    /// A field filled with `surface.control`, with no edge until it has focus, as wide as its widest entry:
+    /// VectorCraft 0.24's status bar selects.
+    Filled,
 }
 
 /// The icon of the button in the popup header that opens the header menu.
@@ -111,7 +114,8 @@ impl<'a> HeaderMenu<'a> {
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
-/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only).
+/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only); the picture is
+/// square unless [`picture_aspect`](Select::picture_aspect) sets its width.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(Select<'static, u8>))]
 pub struct Select<'a, T: Value + 'static> {
@@ -146,6 +150,9 @@ pub struct Select<'a, T: Value + 'static> {
     /// The face shows the picked entry's picture alone; its label stays the accessible value.
     #[prop(flag)]
     picture_only: bool,
+    /// The picture's width as a multiple of its height, in the rows and on the face; square without it.
+    #[prop]
+    picture_aspect: ThumbAspect,
     /// The row under the pointer is proposed as the value while the list is open, as the rows the keys reach are;
     /// closing the list without a pick restores the value.
     #[prop(flag)]
@@ -175,6 +182,7 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             decorate: None,
             picture: None,
             picture_only: false,
+            picture_aspect: ThumbAspect::SQUARE,
             preview: false,
             header_menu: None,
             look: SelectLook::Field,
@@ -204,7 +212,7 @@ impl<'a, T: Value + 'static> Select<'a, T> {
     /// The face of `text`, with the picture's room before it, or the picture alone, when the select has a picture.
     fn sized_face(&self, text: Label, picture: bool, fit: bool) -> SelectFace<'static> {
         let face = SelectFace::new(text).fit(fit);
-        if self.picture.is_some() && picture { face.thumb(ThumbAspect::SQUARE, |_, _| {}).name(!self.picture_only) } else { face }
+        if self.picture.is_some() && picture { face.thumb(self.picture_aspect, |_, _| {}).name(!self.picture_only) } else { face }
     }
 
     /// Sets the value to the entry at `at` unless it is the value already.
@@ -260,12 +268,12 @@ fn fits(sizing: Option<Sizing>, in_bar: bool) -> bool {
     }
 }
 
-/// The closed box of a quiet select: the panel surface at the control radius, the hover fill under the pointer, and
-/// an edge only in the focus colour while it has focus.
-fn quiet(cx: &StyleCx<'_>) -> SurfaceLook {
+/// The closed box of a quiet or filled select: `fill` at the well radius, the hover fill under the pointer, and an edge
+/// only in the focus colour while it has focus.
+fn borderless(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> SurfaceLook {
     let colors = &cx.tokens.color;
-    let (panel, hover) = (cx.color(colors.surface.panel), cx.color(colors.state.hover));
-    let fill = Stateful::new(panel).off(States::new(panel, hover, hover, panel));
+    let (rest, hover) = (cx.color(fill), cx.color(colors.state.hover));
+    let fill = Stateful::new(rest).off(States::new(rest, hover, hover, rest));
     // The edge takes the fill's colour in every state, so it shows only with focus.
     let edge = fill.clone().when(Flags::FOCUSED, cx.color(colors.line.focus));
     SurfaceLook::new(fill).radius(cx.surface(SurfaceKind::Well).radius).border(edge, cx.tokens.stroke.thin).border_replaces_edge()
@@ -294,7 +302,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
         let (surface, least_width) = match key.look {
             SelectLook::Field => (cx.dropdown(), 0.0),
-            SelectLook::Quiet => (quiet(cx), cx.tokens.size.length.short),
+            SelectLook::Quiet => (borderless(cx, cx.tokens.color.surface.panel), cx.tokens.size.length.short),
+            SelectLook::Filled => (borderless(cx, cx.tokens.color.surface.control), 0.0),
         };
         SelectStyle {
             surface,
@@ -405,7 +414,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let name = cx.label();
         let words = cx.words::<PickerWords>();
         let held = self.position(cx.value());
-        let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
+        let (searchable, dress, picture) =
+            (self.searchable, self.decorate.as_ref(), self.picture.as_ref().map(|picture| (picture, self.picture_aspect)));
         let kept =
             |at: usize| self.search_kept.as_ref().is_some_and(|kept| entries.get(at).and_then(Entry::value).is_some_and(|value| (kept.0)(value)));
         let (search_label, no_matches, wide) = (self.search_label.clone(), self.no_matches.clone(), self.list_width.is_some());
@@ -500,7 +510,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             face = face.leading(icon.clone());
         }
         if let (Some(picture), Some(value)) = (self.picture.as_ref(), held.and_then(|at| self.entries[at].value())) {
-            face = face.thumb(ThumbAspect::SQUARE, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
+            face = face.thumb(self.picture_aspect, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
         }
         ui.face(FACE, if muted { face.placeholder() } else { face });
     }

@@ -6,7 +6,7 @@ use crate::display::Text;
 use crate::layout_components::Stack;
 use crate::runtime::env::with_env;
 use crate::sections::sample::body;
-use crate::sections::{HeaderAction, HeaderStrength};
+use crate::sections::{HeaderAction, HeaderStrength, QuietTitleRow};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -45,6 +45,19 @@ fn section_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn section_subheading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let shown = Section::fixed("Shape modes").strength(HeaderStrength::Subheading).show(ui, |ui, _| body(ui));
     shown.output.into()
+}
+
+/// A sub-heading of an app that sets `QuietTitleRow::Text` at its root: a text row high over its controls, not a
+/// control high.
+#[story(Section<'static>, covers = [], drive = Drive::Never)]
+fn section_subheading_text_row(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(QuietTitleRow::Text);
+        },
+        |ui| Section::fixed("Shape modes").strength(HeaderStrength::Subheading).show(ui, |ui, _| body(ui)).output.into(),
+    )
 }
 
 #[story(Section<'static>, covers = [], drive = Drive::Never)]
