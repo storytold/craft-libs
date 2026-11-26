@@ -87,6 +87,18 @@ pub enum PaletteFace {
     InPlace,
 }
 
+/// What a [`CommandPalette`] lists while its query is empty and it has no `suggested` commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EmptyQuery {
+    /// The few newest commands last run that have an entry, else the first entries.
+    #[default]
+    Recent,
+    /// Every entry, in the order given, however many and whatever has run; picks still go into `recents` and still
+    /// rank a query's matches.
+    Catalogue,
+}
+
 /// What a palette reports: its response, the command picked in this pass and how it closed.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -124,13 +136,14 @@ impl crate::contract::Outcome for PaletteOutput {
 ///   out, showing the `placeholder`; it opens to the field with the key focus in the pass that opens it and lists the
 ///   results in a popup under the field. The in-place field is the palette's face, so it is named by the palette's
 ///   `label`, closed and open; the dialog face's field, inside a box named `label`, keeps the generic search name.
-/// - Empty query: with `suggested`, its heading and those commands; else the commands last run, newest first (the
-///   `recents` binding), else the first entries.
+/// - Empty query: with `suggested`, its heading and those commands; else, as `empty_query` says, the commands last run,
+///   newest first (the `recents` binding), else the first entries, or ([`EmptyQuery::Catalogue`]) every entry in order.
 /// - Fallback: with `fallback`, a last row follows the matches of a query, or stands alone when nothing matches. Picking
 ///   it closes the palette and reports the query in the output's `fallback`; no command runs.
 /// - Keys: the field keeps the focus; Up, Down, Page Up, Page Down move the active row (Up and Down wrap at the ends),
-///   Enter picks it, Escape clears the query and, on an empty query, closes the box; a press outside closes it. The
-///   number of results is announced politely.
+///   Enter picks it, Escape clears the query and, on an empty query, closes the box (with `escape_closes`, the dialog
+///   face closes on the first Escape whatever the query); a press outside closes the dialog face and presses nothing
+///   under it. The number of results is announced politely.
 /// - Callout (dialog face): the control that shows the active row's command gets a ring and a box beside it; when the
 ///   control is out of view or under the palette, the footer names the entry's home instead. The footer also says why
 ///   a disabled active row does not run, else how many results there are. The in-place list says when nothing matches.
@@ -138,6 +151,12 @@ impl crate::contract::Outcome for PaletteOutput {
 ///   and goes first in `recents`; [`CommandPalette::remember`] is the rule. The output's `picked` names it. Without a
 ///   binding the palette keeps `recents` for the session. The dialog face returns the focus to where it was before the
 ///   palette opened; the in-place face leaves it where the host puts it after the popup closes.
+/// - Shortcuts: a row's chord is the command's own, from the runtime keymap ([`commands::chord`]): its `default` keys
+///   under the user's overrides. A [`HelpEntry`] carries none. An app that still dispatches its own shortcuts shows them
+///   here by giving its commands the same keys as defaults.
+/// - Legacy dispatch: a pick both fires as `FireSource::Palette` and is named in the output's `picked`. An app moving to
+///   commands a piece at a time can forward `picked` to its old dispatcher for the commands it does not handle as fired
+///   commands yet; a command handled both ways runs twice.
 #[derive(Pattern, Props)]
 pub struct CommandPalette<'a> {
     label: Label,
@@ -162,6 +181,12 @@ pub struct CommandPalette<'a> {
     /// The row that hands the query back; its text is the template filled with the query as `{text}`.
     #[prop]
     fallback: Option<WordTemplate>,
+    /// What an empty query lists when there are no `suggested` commands, on either face.
+    #[prop]
+    empty_query: EmptyQuery,
+    /// The dialog face closes on Escape with a query too, instead of clearing it first.
+    #[prop]
+    escape_closes: bool,
 }
 
 impl<'a> CommandPalette<'a> {
@@ -179,6 +204,8 @@ impl<'a> CommandPalette<'a> {
             placeholder: None,
             suggested: None,
             fallback: None,
+            empty_query: EmptyQuery::default(),
+            escape_closes: false,
         }
     }
 
@@ -198,7 +225,8 @@ impl<'a> CommandPalette<'a> {
     }
 
     fn show_dialog(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, index, open, uses, mut recents, placeholder, suggested, fallback, .. } = self;
+        let CommandPalette { label, entries, index, open, uses, mut recents, placeholder, suggested, fallback, empty_query, escape_closes, .. } =
+            self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -229,10 +257,10 @@ impl<'a> CommandPalette<'a> {
                         if opening {
                             *state = Session::default();
                         }
-                        TextField::search(words.palette_search.clone(), Bind::bound(&mut state.query))
-                            .placeholder(hint.clone())
-                            .drives(list_id)
-                            .show(ui);
+                        let field =
+                            TextField::search(words.palette_search.clone(), Bind::bound(&mut state.query)).placeholder(hint.clone()).drives(list_id);
+                        // Keeping the query leaves the Escape to the modal box, which closes on it.
+                        if escape_closes { field.keeps_on_escape() } else { field }.show(ui);
                     })
                     .footer(|ui, stack| {
                         let format = stack.env.format();
@@ -262,6 +290,7 @@ impl<'a> CommandPalette<'a> {
                             suggested: suggested.as_ref(),
                             fallback: fallback.as_ref(),
                             recent: &recent,
+                            empty_query,
                             fill: true,
                             callout: Some(palette_rect),
                         };
@@ -276,7 +305,7 @@ impl<'a> CommandPalette<'a> {
     }
 
     fn show_in_place(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, index, mut open, uses, mut recents, placeholder, suggested, fallback, .. } = self;
+        let CommandPalette { label, entries, index, mut open, uses, mut recents, placeholder, suggested, fallback, empty_query, .. } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -330,6 +359,7 @@ impl<'a> CommandPalette<'a> {
                         suggested: suggested.as_ref(),
                         fallback: fallback.as_ref(),
                         recent: &recent,
+                        empty_query,
                         fill: false,
                         callout: None,
                     };
@@ -366,6 +396,7 @@ struct RowsInput<'a> {
     suggested: Option<&'a (Label, Vec<CommandRef>)>,
     fallback: Option<&'a WordTemplate>,
     recent: &'a [CommandRef],
+    empty_query: EmptyQuery,
     /// The list fills the room its box leaves (the capped dialog) instead of the width alone (a popup that sizes to it).
     fill: bool,
     /// The dialog's box: the active row's control gets a callout clear of it, and the footer says what the list does
@@ -502,17 +533,18 @@ impl Listing {
 }
 
 /// The entries the list shows, by position in `entries`, and how many matched in all: the matches for a query, best
-/// first and at most `RESULTS`, else the newest `RECENT` commands last run that have an entry, else the first entries.
-/// A command appears once. `active` is the entry the user is on: when better matches would push it past the cap it
-/// takes the last row, so the list does not move under it.
+/// first and at most `RESULTS`, else the newest `RECENT` commands last run that have an entry, else the first entries,
+/// else ([`EmptyQuery::Catalogue`]) every entry. A command appears once. `active` is the entry the user is on: when
+/// better matches would push it past the cap it takes the last row, so the list does not move under it.
 fn listing(input: &RowsInput<'_>, query: &str, active: Option<usize>) -> (Vec<usize>, usize) {
     let entries = input.entries;
     let empty = query.trim().is_empty();
     let last: Vec<usize> =
         input.recent.iter().filter_map(|command| entries.iter().position(|entry| entry.command() == command)).take(RECENT).collect();
+    let catalogue = empty && input.empty_query == EmptyQuery::Catalogue;
     let candidates: Vec<usize> = if !empty {
         rank(input.index, query, &last, &|at: usize| (input.uses)(entries[at].command()))
-    } else if last.is_empty() {
+    } else if last.is_empty() || catalogue {
         (0..entries.len()).collect()
     } else {
         last
@@ -528,7 +560,9 @@ fn listing(input: &RowsInput<'_>, query: &str, active: Option<usize>) -> (Vec<us
         })
         .collect();
     if empty {
-        keys.truncate(RECENT.max(FIRST_ROWS));
+        if !catalogue {
+            keys.truncate(RECENT.max(FIRST_ROWS));
+        }
         let total = keys.len();
         return (keys, total);
     }

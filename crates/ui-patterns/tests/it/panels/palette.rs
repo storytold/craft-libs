@@ -5,7 +5,7 @@
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, CommandSet, Overlay, Role, Show as _, ShowContainer as _, clicked};
 use craft_ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
-use craft_ui::patterns::panels::{CommandPalette, PaletteFace};
+use craft_ui::patterns::panels::{CommandPalette, EmptyQuery, PaletteFace};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::{self, CommandRef, CommandState, EditCommands, FireSource};
 use craft_ui::runtime::env::{Label, WordTemplate};
@@ -527,4 +527,68 @@ fn enter_on_a_disabled_first_match_runs_nothing() {
     assert_eq!(*refused.borrow(), Some(CommandRef::from(EditCommands::Undo)), "the output names the refused command");
     assert!(open.get(), "the palette stays open");
     assert!(take_output(fixture.ctx()).fired.is_empty(), "nothing ran");
+}
+
+/// A dialog palette over `entries` with its empty-query and Escape options; it starts open.
+fn optioned(entries: Vec<HelpEntry>, empty_query: EmptyQuery, escape_closes: bool) -> PaletteRig {
+    let open = Rc::new(Cell::new(true));
+    let picked = Rc::new(RefCell::new(None::<CommandRef>));
+    let (shown_open, shown_picked) = (open.clone(), picked.clone());
+    let fixture = Fixture::new(move |ui| {
+        let mut is_open = shown_open.get();
+        let env = craft_ui::runtime::env::Env::of(ui);
+        let view = env.view();
+        let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
+        let output = CommandPalette::new("Commands", &entries, &index, Bind::bound(&mut is_open))
+            .empty_query(empty_query)
+            .escape_closes(escape_closes)
+            .show(ui);
+        shown_open.set(is_open);
+        if let Some(command) = output.picked {
+            *shown_picked.borrow_mut() = Some(command);
+        }
+    });
+    (fixture, open, picked)
+}
+
+#[trial]
+fn a_catalogue_palette_lists_every_entry_in_order_and_closes_on_one_escape_with_a_query() {
+    let entries: Vec<HelpEntry> = (0..20).map(|n| entry(&format!("all{n}"), &format!("Item {n:02}"))).collect();
+    let (mut fixture, open, picked) = optioned(entries.clone(), EmptyQuery::Catalogue, true);
+    // Room for every row: the list builds only the rows in view.
+    fixture.room(Vec2::new(800.0, 4000.0)).settle();
+    let in_order = |listed: &[String]| {
+        listed.len() == entries.len() && listed.iter().zip(&entries).all(|(name, entry)| name.starts_with(entry.label().as_str()))
+    };
+    let listed = names(&fixture);
+    assert!(in_order(&listed), "the empty query lists the whole catalogue in its order: {listed:?}");
+
+    // Up from the first row wraps to the last, and Enter runs it.
+    fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    let last = entries.last().expect("a last entry").command().clone();
+    assert_eq!(*picked.borrow(), Some(last), "Up then Enter ran the last entry");
+    assert!(!open.get(), "picking closed the palette");
+
+    // Opened again, the catalogue keeps its order: the command just run does not move to the top.
+    open.set(true);
+    fixture.settle();
+    let listed = names(&fixture);
+    assert!(in_order(&listed), "the catalogue is not reordered by what ran: {listed:?}");
+
+    // One Escape with a typed query closes it and takes focus out of the field.
+    fixture.type_text("item").settle();
+    let field = fixture.focused();
+    assert!(field.is_some(), "the field has focus while typing");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(!open.get(), "one Escape closed the palette with a query typed");
+    assert_ne!(fixture.focused(), field, "focus left the field");
+
+    // Without the options, the empty query lists fewer and the same press only clears the query.
+    let (mut fixture, open, _) = optioned(entries.clone(), EmptyQuery::Recent, false);
+    fixture.room(Vec2::new(800.0, 4000.0)).settle();
+    assert!(names(&fixture).len() < entries.len(), "the default empty query lists fewer than the catalogue");
+    fixture.type_text("item").settle();
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(open.get(), "by default Escape on a typed query only clears it");
 }
