@@ -223,7 +223,7 @@ impl<'a> ColorRangeDialog<'a> {
         let preview_words = env.words::<SelectionWords>();
         // Holding ⌘ (Ctrl off macOS; `Mods` folds Ctrl into `cmd` there) shows the other view while held: view only,
         // `show_image` does not change.
-        let swapped = pointer::frame(ui.ctx()).mods.cmd;
+        let swapped = pointer::mods(ui.ctx()).cmd;
         let image_shown = show_image != swapped;
         let source = if image_shown { image } else { mask };
         let state = match (&error, source) {
@@ -288,7 +288,7 @@ impl<'a> ColorRangeDialog<'a> {
                         f64::from(p.x.floor().max(0.0)) * f64::from(k) + f64::from(k / 2),
                         f64::from(p.y.floor().max(0.0)) * f64::from(k) + f64::from(k / 2),
                     ];
-                    let mods = pointer::frame(ui.ctx()).mods;
+                    let mods = pointer::mods(ui.ctx());
                     let mut next = pass.current.clone();
                     next.samples.pick(at, document, tool, mods);
                     pass.set(&words.eyedropper, next);

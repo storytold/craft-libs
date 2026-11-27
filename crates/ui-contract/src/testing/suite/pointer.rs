@@ -1,14 +1,14 @@
 //! The pointer rows of 22.4: slop, hit areas and the arena winner.
 
 use super::drive::{Plan, input_fixture, root_target};
-use super::{ANY, Case, Subject};
+use super::{ANY, Case, Subject, nodes};
 use crate::contract::ShapeKind;
 use crate::runtime::egui::access::Declared;
 use crate::testing::fixture::{Fixture, Target};
 use crate::testing::sensing::{ProbeMember, ProbePart, ProbeRoot, RootReport, show};
 use crate::testing::story::{EditKind, Grip, Required};
 use crate::testing::{Frames, input, pointer};
-use craft_behavior::{HitLevel, PartKey, Sense};
+use craft_behavior::{HitLevel, PartKey, PartRef, Sense};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -47,7 +47,7 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                     let target = target(&fixture);
                     fixture.take_outputs();
                     gesture(&mut fixture, &target, by);
-                    let clicks = fixture.take_outputs().iter().filter(|output| output.clicked).count();
+                    let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
                     if clicks != expected {
                         return Err(format!("{}: a press moved {by} points (slop {slop}) gave {clicks} clicks, expected {expected}", story.name));
                     }
@@ -96,8 +96,17 @@ fn at(target: &Target, point: Pos2) -> Target {
     Target { node: target.node, rect: Rect::from_center_size(point, Vec2::ZERO) }
 }
 
+/// The visible piece of `part` of the shown component, where a press on it lands, when it is enabled and not empty: one
+/// past the window's edge cannot be seen, so not pressed.
+fn pressable(fixture: &Fixture, part: PartRef) -> Option<Target> {
+    let target = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|target| fixture.visible(&target))?;
+    let enabled = fixture.tree().data_of(target.node).is_some_and(|node| !node.is_disabled());
+    (enabled && target.rect.area() > 0.0).then_some(target)
+}
+
 /// A press inside the visible piece of a part's hit area (inside the root's clip), also where it lies outside the root's
-/// rect, is taken by the component; on the part a drag moves, a press off its middle moves the value.
+/// rect, is taken by the component; on the part a drag moves, a press off its middle moves the value. A repeated part
+/// runs on a fixed sample of its repeats under the gate's fraction ([`nodes::sampled_parts`]).
 fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String> {
     let probe = subject.probe;
     for story in &subject.stories {
@@ -109,15 +118,11 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
                 parts.push(part);
             }
         }
-        for part in parts {
+        // A part the settled base shows no pressable piece of gets no fixture, and the sample is taken of the rest.
+        parts.retain(|part| pressable(fixture, *part).is_some());
+        for part in nodes::sampled_parts(parts) {
             let mut fixture = input_fixture(story);
-            // A press lands on the part's visible piece: one past the window's edge cannot be seen, so not pressed.
-            let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|target| fixture.visible(&target)) else {
-                continue;
-            };
-            if fixture.tree().data_of(target.node).is_none_or(|node| node.is_disabled()) || target.rect.area() <= 0.0 {
-                continue;
-            }
+            let Some(target) = pressable(&fixture, part) else { continue };
             let point = probe_point(target.rect, root_target(&fixture).rect);
             fixture.press(&at(&target, point));
             if !pointer::press_captured(fixture.ctx()) {

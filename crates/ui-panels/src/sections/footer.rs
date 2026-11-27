@@ -11,16 +11,19 @@ use crate::primitives::{IconSpec, RectSide};
 use crate::runtime::access::Name;
 use crate::runtime::env::{Env, EnvValue, Label};
 use crate::runtime::focus;
+use crate::runtime::frame;
 use crate::runtime::keys;
+use crate::runtime::memory::Remember as _;
+use crate::runtime::windows::WindowHost;
 use crate::style::{ComponentStyle, GlyphRole, RuleKind, StyleCx};
 use craft_behavior::{Insets, Metrics, OwnerClass, Sense};
 use craft_host::target::Os;
-use craft_keymap::{Chord, Key};
+use craft_keymap::{Chord, Key, Mods};
 use craft_theme::{
     Variant,
     variant::{Emphasis, Tone},
 };
-use egui::{Context, Pos2, Rect, Response, Ui};
+use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -59,6 +62,10 @@ pub struct FooterBar {
     column: bool,
     /// How many of the first actions sit at the start edge; the rest sit at the end edge.
     start: usize,
+    /// The `armed_after` seconds of the buttons that have one.
+    arms: Vec<f64>,
+    /// The seconds the footer has been shown, as this pass counted them.
+    armed_for: f64,
 }
 
 /// The payload a dropped-on action reports, type-erased so actions of different payload types share one footer.
@@ -73,7 +80,13 @@ struct DropShown {
 }
 
 /// Shows an action's drop slot around its button.
-type DropShow = dyn Fn(&mut Ui, &FooterAction) -> DropShown + Send + Sync;
+type DropShow = dyn Fn(&mut Ui, &FooterAction, Id) -> DropShown + Send + Sync;
+
+/// One payload type accepted by an action, and the drop slot that can report it.
+struct ActionDrop {
+    matches: Box<dyn Fn(&Context) -> bool + Send + Sync>,
+    show: Box<DropShow>,
+}
 
 /// An icon action of a panel footer: an `IconButton` named by its label.
 #[derive(Clone)]
@@ -81,13 +94,13 @@ pub struct FooterAction {
     icon: IconSpec<'static>,
     label: Label,
     enabled: bool,
-    pressed: bool,
+    pressed: Option<bool>,
     tone: Option<Tone>,
     popup: Option<PopupKind>,
     expanded: Option<bool>,
     takes_drops_disabled: bool,
     drop_hint: Option<Label>,
-    drops: Option<Arc<DropShow>>,
+    drops: Vec<Arc<ActionDrop>>,
 }
 
 impl fmt::Debug for FooterAction {
@@ -102,7 +115,7 @@ impl fmt::Debug for FooterAction {
             .field("expanded", &self.expanded)
             .field("takes_drops_disabled", &self.takes_drops_disabled)
             .field("drop_hint", &self.drop_hint)
-            .field("accepts_drops", &self.drops.is_some())
+            .field("accepts_drops", &!self.drops.is_empty())
             .finish()
     }
 }
@@ -114,13 +127,13 @@ impl FooterAction {
             icon: icon.into(),
             label: label.into(),
             enabled: true,
-            pressed: false,
+            pressed: None,
             tone: None,
             popup: None,
             expanded: None,
             takes_drops_disabled: false,
             drop_hint: None,
-            drops: None,
+            drops: Vec::new(),
         }
     }
 
@@ -132,11 +145,11 @@ impl FooterAction {
         self
     }
 
-    /// Whether the action shows the host's state, as the on look: Button Mode while the panel is in it, Record
-    /// while recording. A click is reported as usual; the host changes its state or ignores the click.
+    /// The host's on or off state for a stateful action, reported to assistive technology and shown in its face.
+    /// A click is reported as usual; the host changes its state or ignores the click.
     #[must_use]
     pub fn pressed(mut self, on: bool) -> Self {
-        self.pressed = on;
+        self.pressed = Some(on);
         self
     }
 
@@ -178,23 +191,43 @@ impl FooterAction {
 
     /// Lets drags carrying a `P` that `accepts` takes drop on the action. The action shows the drop outline while
     /// such a drag is over it, and the drop comes back in [`FooterOutput::dropped`]. `accepts` may capture: a caller
-    /// checks that the drag comes from its own list.
+    /// checks that the drag comes from its own list. This replaces any predicates already set on the action.
     #[must_use]
     pub fn accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
+        self.drops.clear();
+        self.also_accepts_drops(accepts)
+    }
+
+    /// Adds a predicate for a dropped payload of type `P`. If a drag carries multiple payloads that the action
+    /// accepts, the first matching predicate determines which payload appears in [`FooterOutput::dropped`].
+    #[must_use]
+    pub fn also_accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
         let accepts: Arc<dyn Fn(&P) -> bool + Send + Sync> = Arc::new(accepts);
-        self.drops = Some(Arc::new(move |ui, action| {
+        let matches = Arc::clone(&accepts);
+        let matches = Box::new(move |ctx: &Context| crate::runtime::drag::active::<P>(ctx).is_some_and(|payload| matches(&payload)));
+        let show = Box::new(move |ui: &mut Ui, action: &FooterAction, id: Id| {
             let accepts = Arc::clone(&accepts);
-            let slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled);
+            let slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled).id(id);
             let shown = slot.show(ui, |ui, _| action.icon_button(DropAction::<P>::accepting(ui)).show(ui).response);
             let response = shown.inner.unwrap_or_else(|| shown.output.response.clone());
             DropShown { response, dropped: shown.output.dropped.map(|payload| Arc::new(payload) as Dropped), over: shown.output.over }
-        }));
+        });
+        self.drops.push(Arc::new(ActionDrop { matches, show }));
         self
+    }
+
+    fn drop_slot(&self, ctx: &Context) -> Option<&ActionDrop> {
+        let first = self.drops.first()?;
+        let slot = if self.drops.len() > 1 { self.drops.iter().find(|drop| (drop.matches)(ctx)).unwrap_or(first) } else { first };
+        Some(slot)
     }
 
     /// The button, enabled when the action is or when `accepting` lifts it for an accepted drag over it.
     fn icon_button(&self, accepting: bool) -> IconButton<'static> {
-        let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting).selected(self.pressed);
+        let mut button = IconButton::new(self.icon.clone()).label(self.label.clone()).enabled(self.enabled || accepting);
+        if let Some(on) = self.pressed {
+            button = button.selected(on);
+        }
         if let Some(tone) = self.tone {
             button = button.variant(Variant::look(Emphasis::Ghost, tone));
         }
@@ -226,6 +259,8 @@ pub struct DropActionOutput<P> {
     pub dropped: Option<P>,
     /// Whether a drag the slot accepts is over it.
     pub over: bool,
+    /// The modifiers held at the release that dropped; none when nothing was dropped this pass.
+    pub mods: craft_keymap::Mods,
 }
 
 impl<P> Outcome for DropActionOutput<P> {
@@ -259,13 +294,14 @@ pub struct DropAction<P: Clone + Send + Sync + 'static> {
     accepts: Arc<dyn Fn(&P) -> bool + Send + Sync>,
     over: bool,
     dropped: Option<P>,
+    mods: craft_keymap::Mods,
 }
 
 impl<P: Clone + Send + Sync + 'static> DropAction<P> {
     /// A slot that takes the payloads `accepts` takes.
     pub fn new(accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
         let props = ContainerProps::new().pad(Pad::None).sizing(Sizing::Content);
-        DropAction { common: Common::new(), props, accepts: Arc::new(accepts), over: false, dropped: None }
+        DropAction { common: Common::new(), props, accepts: Arc::new(accepts), over: false, dropped: None, mods: craft_keymap::Mods::NONE }
     }
 
     /// Whether a drag the enclosing slot accepts is over it: a body shows its child enabled then, as the slot takes
@@ -315,6 +351,7 @@ impl<P: Clone + Send + Sync + 'static> Component for DropAction<P> {
         self.over = live && cx.dragging::<P>().is_some_and(|(payload, at)| cx.rect.contains(at) && (self.accepts)(&payload));
         let target = OnSlot { rect: cx.rect, live, accepts: &*self.accepts };
         self.dropped = cx.drop_target(&target);
+        self.mods = if self.dropped.is_some() { crate::runtime::pointer::frame(&cx.ctx).pick_mods } else { craft_keymap::Mods::NONE };
     }
 
     fn content_env(&self, _: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
@@ -322,7 +359,7 @@ impl<P: Clone + Send + Sync + 'static> Component for DropAction<P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> DropActionOutput<P> {
-        DropActionOutput { response: cx.response.clone(), dropped: self.dropped, over: self.over }
+        DropActionOutput { response: cx.response.clone(), dropped: self.dropped, over: self.over, mods: self.mods }
     }
 }
 
@@ -342,7 +379,7 @@ pub struct FooterOutput {
     pub drop_hint: Option<Label>,
     /// The response of each action, in the order given; a caller opens a menu from one with `Menu::opened_by`.
     pub responses: Vec<Response>,
-    /// The modifiers held at the pick; none when nothing was picked.
+    /// The modifiers held at the release of the pick or the drop; none when neither happened this pass.
     pub mods: craft_keymap::Mods,
 }
 
@@ -370,31 +407,61 @@ impl FooterDrop {
     }
 }
 
+/// How a dialog footer draws the buttons that do not commit. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum DialogButtonLook {
+    /// Every button but the accepting and the destructive one in the secondary look.
+    #[default]
+    Standard,
+    /// PdfCraft's: Cancel and an Alternate answer (Don't Save, No) are plain text (the ghost look) beside the accented
+    /// accepting button, as production's prompts show them.
+    Quiet,
+    /// VectorCraft's: every button but the accepting and the destructive one is a filled neutral tile with no edge
+    /// (`buttons::FILLED`).
+    Filled,
+}
+
 /// What a dialog button means; it decides the button's look and its place in the row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DialogRole {
     /// The default outcome: the primary look, last in the row (first on Windows).
     Accept,
-    /// An outcome that destroys something: the danger look.
+    /// An outcome that destroys something (Delete, Replace): the danger look. It proceeds, so Windows puts it with the
+    /// accepting button, before Cancel.
     Destructive,
     /// Leaves without an outcome.
     Cancel,
+    /// Another answer that closes the question: No, Don't Save, Discard. It stands with the other outcomes on macOS
+    /// and Linux and next to the accepting button on Windows.
+    Alternate,
     /// Any other outcome.
     Other,
+    /// A second answer to the question the dialog asks ("Save as…" beside "Save anyway"): between Cancel and the
+    /// accepting button, as a document app's prompt orders them.
+    Alternative,
 }
 
 impl DialogRole {
-    /// The position in the row: later roles stand nearer the end. Windows puts the accepting button first and the
-    /// others after it; macOS and Linux put it last.
+    /// The position in the row: later roles stand nearer the end. Windows puts the committing buttons first (the
+    /// accepting one, then a destructive proceed) and the answers that close the question after them, before Cancel;
+    /// macOS and Linux put the accepting button last.
     fn rank(self, windows: bool) -> u8 {
-        let rank = match self {
-            DialogRole::Other => 0,
-            DialogRole::Destructive => 1,
-            DialogRole::Cancel => 2,
-            DialogRole::Accept => 3,
-        };
-        if windows { 3 - rank } else { rank }
+        match (windows, self) {
+            (false, DialogRole::Other | DialogRole::Alternate) => 0,
+            (false, DialogRole::Destructive) => 1,
+            (false, DialogRole::Cancel) => 2,
+            (false, DialogRole::Alternative) => 3,
+            (false, DialogRole::Accept) => 4,
+            (true, DialogRole::Accept) => 0,
+            (true, DialogRole::Destructive) => 1,
+            (true, DialogRole::Alternative) => 2,
+            (true, DialogRole::Alternate) => 3,
+            (true, DialogRole::Cancel) => 4,
+            (true, DialogRole::Other) => 5,
+        }
     }
 }
 
@@ -403,15 +470,26 @@ impl DialogRole {
 pub struct FooterButton {
     label: Label,
     role: DialogRole,
+    tag: Option<Id>,
     letter: Option<char>,
     chord: Option<Chord>,
     enabled: bool,
     disabled_reason: Option<Label>,
     tooltip: Option<Label>,
     stays_open: bool,
+    armed_after: Option<f64>,
 }
 
 impl FooterButton {
+    /// Until its footer has been shown in the focused window on every frame for `seconds`, the button takes no click,
+    /// letter, chord, Enter or Space, and it looks disabled; a frame that skips the footer, or an unfocused window,
+    /// starts the count over. A pointer button, Enter or Space held while the count runs holds it until released.
+    #[must_use]
+    pub fn armed_after(mut self, seconds: f64) -> Self {
+        self.armed_after = Some(seconds);
+        self
+    }
+
     /// The meaning of the button.
     pub const fn role(&self) -> DialogRole {
         self.role
@@ -424,11 +502,37 @@ impl FooterButton {
 
     /// A button named `label` with the meaning `role`.
     pub fn new(label: impl Into<Label>, role: DialogRole) -> Self {
-        FooterButton { label: label.into(), role, letter: None, chord: None, enabled: true, disabled_reason: None, tooltip: None, stays_open: false }
+        FooterButton {
+            label: label.into(),
+            role,
+            tag: None,
+            letter: None,
+            chord: None,
+            enabled: true,
+            disabled_reason: None,
+            tooltip: None,
+            stays_open: false,
+            armed_after: None,
+        }
     }
 
-    /// The letter that activates the button while its dialog holds focus and no text part owns the keys. The
-    /// button reports it as its `access_key`.
+    /// Associates a generated button with the dialog body that handles it.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn tagged(mut self, tag: Id) -> Self {
+        self.tag = Some(tag);
+        self
+    }
+
+    /// The generated button's identity, preserved through footer settlement and picking.
+    #[doc(hidden)]
+    pub const fn tag(&self) -> Option<Id> {
+        self.tag
+    }
+
+    /// The letter that activates the button while its dialog holds focus and no text part owns the keys. On Windows
+    /// and Linux, Alt with the letter also activates it while its dialog is the top modal, whatever has the focus. The
+    /// button reports the letter as its `access_key`.
     #[must_use]
     pub const fn letter(mut self, letter: char) -> Self {
         self.letter = Some(letter);
@@ -487,6 +591,11 @@ impl FooterButton {
     pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
+
+    /// Whether the button takes input once its footer has been shown for `shown` seconds: enabled and armed.
+    fn live(&self, shown: f64) -> bool {
+        self.enabled && self.armed_after.is_none_or(|seconds| shown >= seconds)
+    }
 }
 
 /// Whether a bare letter reaches the footer being shown: focus is inside the focus scope the footer sits in (the
@@ -506,6 +615,26 @@ fn enter_reaches_footer(ctx: &Context) -> bool {
     })
 }
 
+/// The seconds the enclosing footer has been shown in the focused window, which its buttons read to know whether they
+/// are armed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
+struct ArmedFor(f64);
+
+impl EnvValue for ArmedFor {
+    fn root() -> Self {
+        ArmedFor(0.0)
+    }
+}
+
+/// What a footer with armed buttons keeps between frames: the seconds it has been shown, the frame it last was, and
+/// the host's dialog it was shown for.
+#[derive(Clone, Copy, Default)]
+struct Arming {
+    shown: f64,
+    frame: Option<u64>,
+    dialog: Option<Id>,
+}
+
 #[derive(Default)]
 enum Content {
     #[default]
@@ -515,14 +644,16 @@ enum Content {
 }
 
 /// The indexes of `roles` in display order: by role rank, and in the given order within a rank. A column puts
-/// `Accept` on top and `Cancel` under it on every platform, then the others.
+/// `Accept` on top, `Alternate`, `Cancel` and `Alternative` under it on every platform, then the others.
 pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..roles.len()).collect();
     if column {
         order.sort_by_key(|&at| match roles[at] {
             DialogRole::Accept => 0,
-            DialogRole::Cancel => 1,
-            DialogRole::Destructive | DialogRole::Other => 2,
+            DialogRole::Alternate => 1,
+            DialogRole::Cancel => 2,
+            DialogRole::Alternative => 3,
+            DialogRole::Destructive | DialogRole::Other => 4,
         });
     } else {
         order.sort_by_key(|&at| roles[at].rank(windows));
@@ -542,11 +673,13 @@ impl FooterBar {
             enter: false,
             column: false,
             start: 0,
+            arms: Vec::new(),
+            armed_for: 0.0,
         }
     }
 
     /// The members stand in a column at the top of the bar, each as wide as the widest: the buttons of a dialog whose
-    /// footer stands beside the body. Buttons go `Accept`, `Cancel`, then the others in the given order.
+    /// footer stands beside the body. Buttons go `Accept`, `Alternate`, `Cancel`, then the others in the given order.
     #[must_use]
     pub fn column(mut self) -> Self {
         self.props = self.props.layout(BodyLayout::stack());
@@ -577,7 +710,9 @@ impl FooterBar {
     /// A footer bar of dialog buttons, in the order of the platform's dialog convention, each at least
     /// `size.dialog.button` wide (`size.dialog.side_button` in a column). Show it with `show_footer`.
     pub fn buttons(buttons: impl IntoIterator<Item = FooterButton>) -> Self {
-        FooterBar { content: Content::Buttons(buttons.into_iter().collect()), ..FooterBar::body() }
+        let buttons: Vec<FooterButton> = buttons.into_iter().collect();
+        let arms = buttons.iter().filter_map(|button| button.armed_after).collect();
+        FooterBar { content: Content::Buttons(buttons), arms, ..FooterBar::body() }
     }
 
     /// Shows the bar with the actions or buttons it was made with and reports what happened to them.
@@ -624,18 +759,27 @@ impl FooterBar {
                 let lettered = letters_reach_footer(&ctx);
                 // A text part does not own modified chords, so a focused field does not stop a button's chord.
                 let chorded = crate::runtime::overlay::drawing_top_modal(&ctx);
+                let os = crate::runtime::windows::os_of(&ctx);
                 // Initial focus lands on the first enabled Accept button on every OS.
-                let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
+                let armed_for = Env::of(&*ui).get::<ArmedFor>().0;
+                let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.live(armed_for));
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
+                let look = Env::of(ui).get::<DialogButtonLook>();
                 let place = |ui: &mut Ui, shown: &mut Shown| {
-                    for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
+                    for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-                            DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
+                            // Production shows Cancel and Don't Save as plain text beside the accented answer.
+                            DialogRole::Cancel | DialogRole::Alternate if look == DialogButtonLook::Quiet => Variant::GHOST,
+                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => match look {
+                                DialogButtonLook::Filled => crate::buttons::FILLED,
+                                DialogButtonLook::Standard | DialogButtonLook::Quiet => Variant::SECONDARY,
+                            },
                         };
-                        let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
+                        let live = button.live(armed_for);
+                        let mut widget = Button::new(button.label.clone()).variant(variant).enabled(live).least_width(least);
                         if column {
                             widget = widget.sizing(Sizing::FillWidth);
                         }
@@ -650,15 +794,21 @@ impl FooterBar {
                         if default_at == Some(at) {
                             widget = widget.default_stop();
                         }
-                        if crate::contract::clicked(&widget.show(ui)) {
+                        let clicked = crate::contract::clicked(&widget.show(ui));
+                        if live && clicked {
                             shown.picked = Some(at);
                         }
                         // The capture, renewed each pass, holds the chord from every other component from the next input
                         // hook on; `take_claimed` consumes the held press, so a second pass of the frame finds nothing
                         // left and does not press the button again.
-                        let letter = button.letter.and_then(Key::from_char).map(Chord::plain).filter(|_| lettered);
+                        // Windows and Linux dialogs also take Alt with the letter, as their mnemonics do; on macOS Option
+                        // with a letter types a character.
+                        let key = button.letter.and_then(Key::from_char);
+                        let letter = key.map(Chord::plain).filter(|_| lettered);
+                        let alt = key.map(|key| Chord::new(Mods::ALT, key)).filter(|_| chorded && os != Os::Mac);
                         let modified = button.chord.filter(|_| chorded);
-                        for chord in letter.into_iter().chain(modified).filter(|_| button.enabled && !ui.is_sizing_pass()) {
+                        let chords = letter.into_iter().chain(alt).chain(modified);
+                        for chord in chords.filter(|_| live && !ui.is_sizing_pass()) {
                             keys::capture(&ctx, owner, chord);
                             if keys::take_claimed(&ctx, owner, chord) {
                                 shown.picked = Some(at);
@@ -681,7 +831,11 @@ impl FooterBar {
             }
         });
         let inner = shown.inner.unwrap_or_default();
-        let mods = if inner.picked.is_some() { crate::runtime::pointer::frame(ui.ctx()).mods } else { craft_keymap::Mods::NONE };
+        let mods = if inner.picked.is_some() || inner.dropped.is_some() {
+            crate::runtime::pointer::frame(ui.ctx()).pick_mods
+        } else {
+            craft_keymap::Mods::NONE
+        };
         let output = FooterOutput {
             response: shown.output,
             picked: inner.picked,
@@ -698,9 +852,11 @@ impl FooterBar {
 fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item = usize>, shown: &mut Shown) {
     for at in order {
         let action = &actions[at];
-        let response = match &action.drops {
+        let response = match action.drop_slot(ui.ctx()) {
             Some(drops) => {
-                let slot = drops(ui, action);
+                // All payload types share this slot and its child button. A different type can be over it next pass.
+                let id = ui.scope_id().with(("footer-action-drop", at));
+                let slot = (drops.show)(ui, action, id);
                 if let Some(payload) = slot.dropped {
                     shown.dropped = Some(FooterDrop { index: at, payload });
                 }
@@ -741,6 +897,41 @@ impl Component for FooterBar {
         } else {
             FooterBarStyle::default()
         }
+    }
+
+    /// Counts the seconds the footer has been shown in the focused window, for the buttons with an `armed_after`. A
+    /// pass adds its own elapsed time, which is zero on a frame's later passes; a pointer button, Enter or Space held
+    /// before every button armed holds the count.
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let Some(longest) = self.arms.iter().copied().reduce(f64::max) else { return };
+        let ctx = cx.ctx.clone();
+        if crate::runtime::measure::active(&ctx) {
+            return;
+        }
+        let Some(pass) = frame::running(&ctx) else { return };
+        let focused = WindowHost::of(&ctx).facts(pass.viewport).is_some_and(|facts| facts.focused);
+        let held =
+            !crate::runtime::pointer::frame(&ctx).buttons.is_empty() || keys::held(&ctx).iter().any(|key| matches!(key, Key::Enter | Key::Space));
+        let dialog = crate::runtime::overlay::running_dialog(&ctx);
+        let arming = cx.keep::<Arming>();
+        // A host's next dialog shown in the same place with the same ids waits its own delay.
+        let continues = arming.dialog == dialog && arming.frame.is_some_and(|last| pass.frame_nr == last || pass.frame_nr == last + 1);
+        if !(continues && focused) {
+            arming.shown = 0.0;
+        }
+        arming.frame = Some(pass.frame_nr);
+        arming.dialog = dialog;
+        if focused && !(held && arming.shown < longest) {
+            arming.shown += pass.elapsed;
+        }
+        self.armed_for = arming.shown;
+        if let Some(next) = self.arms.iter().copied().filter(|seconds| *seconds > self.armed_for).reduce(f64::min) {
+            frame::request_repaint_after(&ctx, next - self.armed_for);
+        }
+    }
+
+    fn content_env(&self, _: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
+        values.set(ArmedFor(self.armed_for));
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

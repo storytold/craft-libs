@@ -18,7 +18,7 @@ use egui::Ui;
 
 use super::{
     EffectChange, EffectLayer, EffectParameters, EffectStack, FilterCatalog, FilterCategory, FilterGalleryEvent, FilterGalleryOpen,
-    FilterGallerySession, FilterGallerySource, FilterGalleryWorkspace, FilterIndex, FilterTree, GalleryFilter, GalleryThumb,
+    FilterGallerySession, FilterGallerySource, FilterGalleryWorkspace, FilterIndex, FilterTree, FilterTreeLayout, GalleryFilter, GalleryThumb,
 };
 use crate::ui::mock_image::MockImage;
 use crate::ui::wide_angle::PreviewDone;
@@ -179,6 +179,13 @@ fn filter_tree(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let index = FilterIndex::of(&MockGallery);
     let thumbs = Thumbnails::<GalleryThumb>::in_context(ui.ctx(), "gallery-story-tree-thumbs", ThumbnailOptions::default());
     FilterTree::new(&index, "sponge", &thumbs, &FakeThumbSource::<GalleryThumb>::new()).show(ui).into()
+}
+
+#[story(FilterTree<'static>, covers = [], drive = Drive::Never)]
+fn filter_tree_lists(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let index = FilterIndex::of(&MockGallery);
+    let thumbs = Thumbnails::<GalleryThumb>::in_context(ui.ctx(), "gallery-story-tree-lists-thumbs", ThumbnailOptions::default());
+    FilterTree::new(&index, "sponge", &thumbs, &FakeThumbSource::<GalleryThumb>::new()).layout(FilterTreeLayout::Lists).show(ui).into()
 }
 
 #[story(EffectStack<'static>, covers = [Default], drive = Drive::Never)]

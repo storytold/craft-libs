@@ -11,7 +11,7 @@ use craft_ui::contract::{
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::primitives::textures::{Priority, TextureKey, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails};
-use craft_ui::tile_grid::{CaptionPlace, Tile, TileGrid, TilePartEvent};
+use craft_ui::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid, TilePartEvent};
 use egui::{Rect, Ui};
 
 use super::list::{drop_items, inside_any, item_of, open_event, rename_event, reorder_event, sort_entries, stack_event};
@@ -152,7 +152,7 @@ where
     let (entries, user_order) = entries_of(model, state, collator);
     let searching = !state.search.trim().is_empty();
     let cards = Cards::new(model, entries);
-    let mods = craft_ui::runtime::pointer::frame(ui.ctx()).mods;
+    let mods = craft_ui::runtime::pointer::mods(ui.ctx());
     if let Some(key) = rename {
         request_rename(ui.ctx(), id, &key);
     }
@@ -172,7 +172,7 @@ where
         .caption(CaptionPlace::Below)
         .detail_line()
         .aspect(ASPECT)
-        .zoom(state.settings.zoom as f32)
+        .zoom(GridZoom::Fixed(state.settings.zoom))
         .rename(true)
         .deletable(true)
         .rows_stamp(stamp_of(state.shown.as_ref(), &state.search, state.settings.icon_sort.as_ref()))
@@ -189,7 +189,7 @@ where
     }
     for event in out.response.events {
         match event {
-            CollectionEvent::Selection(change) => events.push(BinEvent::Selection(change)),
+            CollectionEvent::Selection { change, .. } => events.push(BinEvent::Selection(change)),
             CollectionEvent::Activate(key) => events.push(open_event(model, key, mods.cmd, mods.shift || mods.alt)),
             CollectionEvent::ContextMenu(request) => events.push(BinEvent::ContextMenu(request)),
             CollectionEvent::Delete(keys) => events.push(BinEvent::Remove(keys)),

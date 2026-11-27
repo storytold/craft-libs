@@ -12,13 +12,15 @@ mod words;
 // Panel.
 pub(crate) mod panel;
 
-pub use footer::{DialogRole, DropAction, DropActionOutput, DropActionStyle, FooterAction, FooterBar, FooterButton, FooterDrop, FooterOutput};
+pub use footer::{
+    DialogButtonLook, DialogRole, DropAction, DropActionOutput, DropActionStyle, FooterAction, FooterBar, FooterButton, FooterDrop, FooterOutput,
+};
 pub use group_box::{GroupBox, GroupBoxStyle};
 pub use section::{Section, SectionOutput, SectionStyle};
 pub use stack::{SectionStack, SectionStackOutput, SectionStackStyle, StackRows, StackSlot};
 #[doc(hidden)]
 pub use title_row::MenuRows;
-pub use title_row::{HeaderAction, HeaderCommand, HeaderStrength, TitleOutput, TitleRow, TitleRowStyle};
+pub use title_row::{HeaderAction, HeaderCommand, HeaderStrength, QuietTitleRow, TitleOutput, TitleRow, TitleRowStyle};
 pub use words::SectionWords;
 
 pub use panel::{Panel, PanelOutput, PanelStyle};

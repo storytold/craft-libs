@@ -13,8 +13,8 @@ use crate::controls::disclosure::Disclosure;
 use crate::menu::Menu;
 use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::commands::CommandRef;
-use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
+use crate::runtime::env::{EnvValue, Label};
+use crate::style::{ComponentStyle, FocusLook, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use craft_behavior::{CursorIcon, Flow, IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Stateful, States};
@@ -37,8 +37,39 @@ pub enum HeaderStrength {
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
+    /// A sub-heading inside a section, over a group of its controls: label text in the normal ink, as written, with no
+    /// rule.
+    Subheading,
+    /// A muted line over the sections or controls it names: the caption role in the muted ink, as written, with no
+    /// rule. An inspector's kind line over its sections ("Ellipse").
+    Quiet,
     /// A window's drag bar: one text row high (`size.row.text`), with label text; its action parts shrink to the row.
     Bar,
+    /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
+    /// dialog's group names ("PAGES TO PRINT").
+    Overline,
+}
+
+impl HeaderStrength {
+    /// Whether a header of this weight stands with a rule beside it: every weight but the quiet ones over a group
+    /// of controls (`Caption`, `Subheading`, `Quiet`, `Overline`).
+    pub(crate) const fn ruled(self) -> bool {
+        !matches!(self, HeaderStrength::Caption | HeaderStrength::Subheading | HeaderStrength::Quiet | HeaderStrength::Overline)
+    }
+}
+
+/// The row a title of a quiet weight (`Caption`, `Subheading`, `Quiet`, `Overline`) stands in. An app sets it once at
+/// its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum QuietTitleRow {
+    /// A control high, as the rows of controls under it.
+    #[default]
+    Control,
+    /// A text row (`size.row.text`): VectorCraft's, whose sub-headings and kind line are a line of text over their
+    /// fields.
+    Text,
 }
 
 /// What a title row's action parts ask the container to do.
@@ -155,14 +186,20 @@ pub struct TitleRowStyle {
     icon: IconLook,
     /// The kind at the band's end: caption text in the faint text colour.
     subtitle: TextLook,
+    /// The ring around the lead, command or action part that has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     /// The side of an action part: the control height, which is below a tall header's height.
     action: f32,
+    /// Whether the row is a quiet title's text row (`QuietTitleRow::Text`), as tall as it must be to hold its title
+    /// on its centre line.
+    text_row: bool,
 }
 
 /// An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional
 /// subtitle at the band's end (faint caption text: the target's kind), a lead (a disclosure bound to the container's
 /// open state, or a check box bound to its gate) and action parts. A row too narrow for all its texts drops the
-/// subtitle, then the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
+/// subtitle, then cuts the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
 /// band toggles a disclosure lead, as a click on the lead does.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct TitleRow<'a> {
@@ -188,6 +225,10 @@ pub struct TitleRow<'a> {
     /// An icon before the title, painted in the style's icon colour unless the spec names another.
     #[prop]
     icon: Option<IconSpec<'a>>,
+    /// The ink of that icon: the accent for a dialog's lock or warning mark.
+    #[style_key]
+    #[prop]
+    icon_ink: Ink,
     /// Whether the row takes the whole width offered, so its actions sit at the end edge; off, it is as wide as its
     /// parts.
     #[prop]
@@ -233,6 +274,7 @@ impl<'a> TitleRow<'a> {
             note: None,
             subtitle: None,
             icon: None,
+            icon_ink: Ink::OnPanel,
             fill: true,
             lead_name: None,
             handle: false,
@@ -285,7 +327,7 @@ impl<'a> TitleRow<'a> {
     }
 
     /// Divides the room left between the lead and the actions: the icon, the title, the note after it and the subtitle
-    /// at the end. The subtitle shows when every text fits whole, the note when the title and the note do.
+    /// at the end. The subtitle shows when every text fits whole; the note uses the room after the title.
     fn place(&self, mut band: Flow, cx: &PartsCx<'_, Self>) -> Placed {
         // A disclosure's glyph sits a gap before the title, as a title's own icon does; the gap is part of the title band,
         // so a click beside the glyph toggles too.
@@ -319,7 +361,7 @@ impl<'a> TitleRow<'a> {
                 band = rest.take_end(cx.gap()).1;
             }
         }
-        if self.note.is_some() && title + note <= band.rect().width() {
+        if self.note.is_some() && title + cx.gap() < band.rect().width() {
             let (title, rest) = band.take_start(title);
             let (_, rest) = rest.take_start(cx.gap());
             return Placed { icon, handle, title, note: Some(rest.rect()), subtitle };
@@ -335,16 +377,21 @@ impl Component for TitleRow<'_> {
 
     fn style(cx: &StyleCx<'_>, key: TitleRowStyleKey) -> TitleRowStyle {
         let text = &cx.tokens.color.text;
+        let text_row = !key.strength.ruled() && cx.env::<QuietTitleRow>() == QuietTitleRow::Text;
+        let quiet = if text_row { cx.tokens.size.row.text } else { cx.control().height };
         let (height, role, shade) = match key.strength {
             HeaderStrength::Normal => (cx.control().height, TypeRole::Label, text.normal),
             HeaderStrength::Strong => (cx.tokens.size.panel_header, TypeRole::Title, text.normal),
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
-            HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
+            HeaderStrength::Caption => (quiet, TypeRole::Label, text.faint),
+            HeaderStrength::Subheading => (quiet, TypeRole::Label, text.normal),
+            HeaderStrength::Quiet => (quiet, TypeRole::Caption, text.muted),
             HeaderStrength::Bar => (cx.tokens.size.row.text, TypeRole::Label, text.normal),
+            HeaderStrength::Overline => (quiet, TypeRole::Caption, text.faint),
         };
         let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
-        let (ink, disabled) = (cx.ink(Ink::OnPanel), cx.color(text.disabled));
+        let (ink, disabled) = (cx.ink(key.icon_ink), cx.color(text.disabled));
         TitleRowStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, height)).gap(cx.control().gap),
             text: TextLook::new(role, Stateful::new(shade).off(States::new(shade, shade, shade, disabled))),
@@ -353,7 +400,9 @@ impl Component for TitleRow<'_> {
                 let faint = cx.color(text.faint);
                 TextLook::new(TypeRole::Caption, Stateful::new(faint).off(States::new(faint, faint, faint, disabled)))
             },
+            focus: cx.focus_look(),
             action: cx.control().height,
+            text_row,
         }
     }
 
@@ -372,7 +421,13 @@ impl Component for TitleRow<'_> {
         let natural = text + (side + cx.gap()) * parts as f32 + (cx.style.icon.side + cx.gap()) * glyphs as f32 + lead;
         // A row takes the room it is offered, a filling row all of it, and never more: the title elides to what is left.
         let width = cx.room.map_or(natural, |room| if self.fill { room } else { natural.min(room) });
-        Vec2::new(width, title.y)
+        if !cx.style.text_row {
+            return Vec2::new(width, title.y);
+        }
+        // The title's x-height sits on the row's centre line (`text_on_centre_line`), so a text row no taller than its
+        // text holds it there.
+        let centre = cx.layout(&TextRun::new("x").role(role)).galley.mesh_bounds.center().y;
+        Vec2::new(width, title.y.max(2.0 * centre).max(2.0 * (title.y - centre)))
     }
 
     fn sense(&self) -> Sense {
@@ -494,13 +549,15 @@ impl Component for TitleRow<'_> {
             }
             ui.draw().icon(rect, icon);
         }
-        let mut title = TextRun::new(cx.resolved.label).role(role).elide();
-        if self.strength == HeaderStrength::Caption {
+        let overline = self.strength == HeaderStrength::Overline;
+        let capitals = overline.then(|| cx.resolved.label.to_uppercase());
+        let mut title = TextRun::new(capitals.as_deref().unwrap_or(cx.resolved.label)).role(role).elide();
+        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Quiet | HeaderStrength::Overline) {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
         ui.draw().text_on_centre_line(placed.title, &title);
         if let (Some(rect), Some(note)) = (placed.note, &self.note) {
-            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()));
+            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()).elide());
         }
         if let (Some(rect), Some(subtitle)) = (placed.subtitle, &self.subtitle) {
             let run = subtitle_run(subtitle.as_str(), cx.style.subtitle.role).color(cx.resolve(&cx.style.subtitle.color));
@@ -510,6 +567,9 @@ impl Component for TitleRow<'_> {
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
         access.level(self.level);
+        if let Some(note) = &self.note {
+            access.description(format!("\u{b7} {}", note.as_str()));
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleOutput {

@@ -103,6 +103,66 @@
         "text.normal": "#eeeeee",
         "text.on_accent": "#11162e"
       }
+    },
+    "pdfcraft": {
+      "light": {
+        "accent.soft": "#e3ecfd",
+        "accent.solid": "#1b63e0",
+        "accent.text": "#1755c4",
+        "line.border": "#dadade",
+        "line.divider": "#e8e8eb",
+        "state.hover": "#f0f0f3",
+        "state.pressed": "#e4e4e9",
+        "state.selected": "#e6eefd",
+        "surface.background": "#e9e9eb",
+        "surface.canvas": "#f1f1f3",
+        "surface.chrome": "#ffffff",
+        "surface.panel": "#ffffff",
+        "surface.raised": "#ffffff",
+        "surface.sunken": "#ffffff",
+        "text.faint": "#6b6b73",
+        "text.muted": "#5e5e66",
+        "text.normal": "#222226"
+      },
+      "dark": {
+        "accent.solid": "#4b8bf5",
+        "accent.text": "#8cb6fa",
+        "line.border": "#3c3c43",
+        "line.divider": "#333339",
+        "surface.background": "#1b1b1e",
+        "surface.canvas": "#19191c",
+        "surface.chrome": "#26262a",
+        "surface.panel": "#26262a",
+        "surface.raised": "#2e2e33",
+        "surface.sunken": "#1e1e22",
+        "text.faint": "#97979e",
+        "text.muted": "#aeaeb6",
+        "text.normal": "#ececef"
+      }
+    },
+    "deckcraft": {
+      "light": {
+        "accent.solid": "#d95a1a",
+        "accent.text": "#b54b16",
+        "text.on_accent": "#ffffff"
+      },
+      "dark": {
+        "accent.solid": "#f26b1d",
+        "accent.text": "#fbcdb2",
+        "text.on_accent": "#ffffff"
+      }
+    },
+    "soundcraft": {
+      "light": {
+        "accent.solid": "#3e74b4",
+        "accent.text": "#3b6eab",
+        "text.on_accent": "#ffffff"
+      },
+      "dark": {
+        "accent.solid": "#4084c4",
+        "accent.text": "#c4d9ed",
+        "text.on_accent": "#ffffff"
+      }
     }
   }
 }

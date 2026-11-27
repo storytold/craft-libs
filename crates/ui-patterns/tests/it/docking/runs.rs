@@ -512,3 +512,37 @@ fn idle_key_bytes(tabs: usize) -> usize {
 fn a_docks_idle_key_bytes_do_not_grow_with_its_panels() {
     assert_eq!(idle_key_bytes(4), idle_key_bytes(32), "the tab row's key follows the dock's revisions, not its titles");
 }
+
+/// In the pass a click on another tab of the focused group picks its panel, `focused` names that panel, and so do the
+/// passes after it. Guards against a dock that named the panel the group drew in that pass, the one before the click.
+#[trial]
+fn a_tab_picked_in_the_focused_group_is_the_focused_panel() {
+    let labels = Tracked::new(Labels((0..32).map(|panel| format!("Panel {panel}")).collect()));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(side_by_side(2)))));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let (shown, seen) = (Rc::clone(&workspace), Rc::clone(&reported));
+    let mut panels = Memo { plain: None, plain_runs: Rc::new(Cell::new(0)) };
+    let mut fixture = Fixture::new(move |ui| {
+        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &labels, &mut panels, DockConfig::default()).show(ui);
+        seen.borrow_mut().push((output.focused, output.picked));
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
+    // A click on a tab leaves key focus where it is: Tab moves it into the first group, whose shown panel is panel 0.
+    for _ in 0..4 {
+        if reported.borrow().last() == Some(&(Some(0), None)) {
+            break;
+        }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(1);
+    }
+    assert_eq!(reported.borrow().last(), Some(&(Some(0), None)), "Tab reaches the first group");
+    let tab = |fixture: &Fixture, name: &str| fixture.by_label(name).expect("the first group's tab");
+    let second = tab(&fixture, "Panel 1");
+    fixture.click(&second).idle(3);
+    assert_eq!(reported.borrow().last(), Some(&(Some(1), None)), "the clicked tab's group holds the focus");
+    reported.borrow_mut().clear();
+    let first = tab(&fixture, "Panel 0");
+    fixture.click(&first).idle(3);
+    let reported = reported.borrow();
+    let at = reported.iter().position(|(_, picked)| *picked == Some(0)).expect("the click picks panel 0");
+    assert!(reported[at..].iter().all(|(focused, _)| *focused == Some(0)), "from the pick on, panel 0 is focused: {reported:?}");
+}

@@ -1,16 +1,19 @@
 //! `ParamDialog` and `HostedParamDialog`: the dialog's own undo history, the Preview box's hold-to-compare, Enter in
-//! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, reopening under the same key, the
-//! request slots, disabled options and the remembered values a row refuses.
+//! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, the host's notes, OK state and row
+//! labels and shown states, reopening under the same key, the
+//! request slots and the rows an edit changed, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult,
+    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, PagerStep, PanePager, Param, ParamDialog, ParamKind, ParamLayout,
+    ParamResult, PreviewState,
 };
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::Label;
+use craft_ui::runtime::memory::{Lifetime, saved_value};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::testing::relations::{above, left_of};
@@ -18,7 +21,6 @@ use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, TextureId, Vec2, vec2};
 use serde_json::json;
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -62,7 +64,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
     let out = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(picture).show(ui);
+        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).show(ui);
         out.set((shown.preview_on, shown.comparing));
     });
     fixture.settle();
@@ -84,7 +86,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
 fn laid_out(layout: ParamLayout) -> [egui::Rect; 4] {
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(picture).layout(layout).show(ui);
+        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).layout(layout).show(ui);
     });
     fixture.settle();
     let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the radius row has a slider");
@@ -359,6 +361,71 @@ fn a_form_without_ok_shows_none_and_enter_picks_its_accept_extra() {
     assert!(!closed.get(), "the extra keeps the dialog open");
 }
 
+/// A note the host's job gives the dialog.
+const CHECKING: &str = "Checking pages…";
+
+/// Why the host holds OK back.
+const NOT_READY: &str = "The pages are still being checked.";
+
+// The notes and the OK state the host sets between passes show in the next pass: the note under the rows and OK
+// disabled, with `confirm` refused too; `Ok` and an empty list put OK and the rows back in the pass after.
+#[trial]
+fn notes_and_the_ok_state_the_host_sets_show_in_the_next_pass() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(4);
+    on_dialog(&host, |dialog| {
+        dialog.set_notes(vec![Label::from(CHECKING)]);
+        dialog.set_ready(Err(Label::from(NOT_READY)));
+    });
+    fixture.idle(1);
+    assert!(fixture.by_label(CHECKING).is_some(), "the note shows in the next pass");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK is disabled in the next pass");
+    let ctx = fixture.ctx().clone();
+    assert!(!host.borrow_mut().confirm::<HostedParamDialog>(&ctx), "confirm answers nothing while the host holds OK");
+    assert!(host.borrow().is_open::<HostedParamDialog>(), "the dialog stays open");
+
+    on_dialog(&host, |dialog| {
+        dialog.set_notes(Vec::new());
+        dialog.set_ready(Ok(()));
+    });
+    fixture.idle(1);
+    assert!(fixture.by_label(CHECKING).is_none(), "an empty list shows no note");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(!fixture.tree().is_disabled_key(ok.node), "`Ok` leaves OK to the build again");
+}
+
+/// A row label the host's job words.
+const PAGES_3_TO_5: &str = "Smooth pages 3–5";
+
+// A row label and a hidden row the host sets between passes show in the next pass, over what `build` gives: the row
+// takes the host's words, and a hidden row is gone and refuses a set through automation until the host shows it.
+#[trial]
+fn a_row_label_and_shown_state_the_host_sets_show_in_the_next_pass() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(4);
+    on_dialog(&host, |dialog| dialog.set_param_label("smooth", PAGES_3_TO_5));
+    fixture.idle(1);
+    assert!(fixture.by_label(PAGES_3_TO_5).is_some(), "the row shows the host's label");
+    assert!(fixture.by_label("Smooth").is_none(), "the build's label is replaced");
+
+    on_dialog(&host, |dialog| dialog.set_param_shown("smooth", false));
+    fixture.idle(1);
+    assert!(fixture.by_label(PAGES_3_TO_5).is_none(), "the hidden row is gone");
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "smooth", json!(true)).is_err(), "a hidden row refuses a set");
+    assert!(fixture.by_label("Radius").is_some(), "the other rows stay");
+
+    on_dialog(&host, |dialog| dialog.set_param_shown("smooth", true));
+    fixture.idle(1);
+    assert!(fixture.by_label(PAGES_3_TO_5).is_some(), "the row shows again");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "smooth", json!(true)), Ok(()));
+}
+
 // A dialog the app opens again under the same key, in the pass it takes the first one's Cancel, shows and answers.
 #[trial]
 fn a_hosted_dialog_reopened_under_the_same_key_opens() {
@@ -387,11 +454,23 @@ fn a_hosted_dialog_reopened_under_the_same_key_opens() {
     assert!(matches!(*answered.borrow(), Some(DialogResult::Ok(_))), "the reopened dialog answers OK");
 }
 
-/// A dialog with a files row and two footer buttons that keep it open.
+/// A previewing dialog with a files row, a custom row whose button asks for the `reload` action and two footer
+/// buttons that keep it open.
 fn stack_dialog(fields: &mut DialogFields) -> ParamDialog<'_> {
-    ParamDialog::new("stack", "Load Files into Stack", vec![Param::files("sources", "Source Files").folder_mode(true)])
+    let reload = Param::custom("reload", "Reload Sources", |ui, _, cx| {
+        let shown = Button::new("Reload Sources").show(ui);
+        if clicked(&shown) {
+            cx.request_action("reload");
+        }
+        shown.response().clone()
+    });
+    ParamDialog::new("stack", "Load Files into Stack", vec![Param::files("sources", "Source Files").folder_mode(true), reload])
         .values(Bind::bound(fields))
-        .extra_buttons(vec![("load".to_owned(), Label::from("Load…")), ("save".to_owned(), Label::from("Save…"))])
+        .extra_buttons(vec![
+            ("load".to_owned(), FooterButton::new(Label::from("Load…"), DialogRole::Other)),
+            ("save".to_owned(), FooterButton::new(Label::from("Save…"), DialogRole::Other)),
+        ])
+        .previews(true)
 }
 
 /// The `{files, folder, useFolder}` value of a files row that lists `folder`.
@@ -399,23 +478,40 @@ fn folder_value(folder: &str) -> serde_json::Value {
     json!({ "files": [], "folder": folder, "useFolder": true })
 }
 
-// A footer button that keeps the dialog open is reported once by its id, in a frame that runs twice too; a folder
-// listing is asked for once; `cancel_requests` drops both.
+// A footer button and a custom row's button that keep the dialog open are reported once by their id on the one
+// action channel, and a press on the preview pager once as its step, in a frame that runs twice too; a folder listing
+// is asked for once; `cancel_requests` drops them all.
 #[trial]
 fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "stack", DialogFields::new(), stack_dialog));
+    let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
+    let pager = PanePager { shown: 1, count: 3, back: false, next: true, ..PanePager::default() };
+    on_dialog(&host, |dialog| {
+        dialog.set_preview(Some(PreviewState::Ready(picture)));
+        dialog.set_preview_pager(Some(pager));
+    });
     fixture.idle(10);
+    let press_twice = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} button"));
+        twice.set(true);
+        fixture.click(&target);
+        assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+        twice.set(false);
+        fixture.idle(4);
+    };
 
-    let save = fixture.by_label("Save…").expect("the Save… button");
-    twice.set(true);
-    fixture.click(&save);
-    twice.set(false);
-    fixture.idle(4);
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_footer_action).flatten().as_deref(), Some("save"), "the press is reported by its id");
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_footer_action).flatten(), None, "the press is reported once");
+    press_twice(&mut fixture, "Save…");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten().as_deref(), Some("save"), "the footer press is reported by its id");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "the footer press is reported once");
     assert!(host.borrow().is_open::<HostedParamDialog>(), "the button keeps the dialog open");
+    press_twice(&mut fixture, "Reload Sources");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten().as_deref(), Some("reload"), "the row's press is reported by its id");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "the row's press is reported once");
+    press_twice(&mut fixture, "Next");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_preview_step).flatten(), Some(PagerStep::Next), "the pager press is its step");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_preview_step).flatten(), None, "the step is reported once");
 
     let ctx = fixture.ctx().clone();
     host.borrow_mut().set_json_field(&ctx, dialog_id("stack"), "sources", folder_value("/photos/shoot")).expect("the files row takes a folder");
@@ -426,11 +522,68 @@ fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
 
     let load = fixture.by_label("Load…").expect("the Load… button");
     fixture.click(&load).idle(2);
+    let next = fixture.by_label("Next").expect("the pager's Next button");
+    fixture.click(&next).idle(2);
     host.borrow_mut().set_json_field(&ctx, dialog_id("stack"), "sources", folder_value("/photos/other")).expect("the files row takes a folder");
     fixture.idle(4);
     on_dialog(&host, HostedParamDialog::cancel_requests);
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_footer_action).flatten(), None, "a cancel drops the footer press");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "a cancel drops the footer press");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_preview_step).flatten(), None, "a cancel drops the pager step");
     assert_eq!(on_dialog(&host, HostedParamDialog::take_listing).flatten(), None, "a cancel drops the listing request");
+}
+
+/// A dialog with a custom row whose button asks the host to run the action `pen`.
+fn pen_dialog(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let pen = Param::custom("pen", "Pen", |ui, _, cx| {
+        let pressed = Button::new("Pen…").show(ui);
+        if clicked(&pressed) {
+            cx.request_action("pen");
+        }
+        pressed.response().clone()
+    });
+    ParamDialog::new("pens", "Pens", vec![pen]).values(Bind::bound(fields))
+}
+
+// A custom row's action request reaches the host once, in a frame that runs twice too.
+#[trial]
+fn a_custom_rows_action_request_reaches_the_host_once() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "pens", DialogFields::new(), pen_dialog));
+    fixture.idle(10);
+    let pen = fixture.by_label("Pen").expect("the row's button, named by the row");
+    twice.set(true);
+    fixture.click(&pen);
+    twice.set(false);
+    fixture.idle(4);
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_actions), Some(vec!["pen".to_owned()]), "the press asks for the action");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_actions), Some(Vec::new()), "the request is taken once");
+}
+
+// An edit of a row reports its key once, in a frame that runs twice too, and a set through automation reports its
+// key; passes with no edit report none.
+#[trial]
+fn a_hosted_dialog_reports_the_rows_an_edit_changed_once() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(10);
+    let edited = || on_dialog(&host, HostedParamDialog::take_edited).unwrap_or_default();
+    assert_eq!(edited(), Vec::<String>::new(), "opening and passes with no edit report none");
+
+    let smooth = fixture.by_label("Smooth").expect("the smooth row has a check box");
+    twice.set(true);
+    fixture.click(&smooth);
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    twice.set(false);
+    fixture.idle(4);
+    assert_eq!(edited(), ["smooth"], "the edit reports its row");
+    fixture.idle(4);
+    assert_eq!(edited(), Vec::<String>::new(), "the edit is reported once");
+
+    let ctx = fixture.ctx().clone();
+    host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "radius", json!(40)).expect("the radius row takes a number");
+    assert_eq!(edited(), ["radius"], "a set through automation reports its row");
 }
 
 /// A dialog with a radio row whose second option is disabled.
@@ -477,12 +630,11 @@ fn filter_params(narrow: bool) -> Vec<Param> {
 
 /// A remembering filter dialog; `narrow` offers fewer patterns.
 fn filter(fields: &mut DialogFields, narrow: bool) -> ParamDialog<'_> {
-    let ids: &[&str] = if narrow { &["dots"] } else { &["dots", "stripes"] };
-    let patterns: Vec<PresetRow<String>> = ids.iter().map(|id| PresetRow::item((*id).to_owned(), *id, 0)).collect();
+    let ids: &'static [&'static str] = if narrow { &["dots"] } else { &["dots", "stripes"] };
     ParamDialog::new("filter", "Filter", filter_params(narrow))
         .values(Bind::bound(fields))
         .remember(SaveKey::new("trial.filter"))
-        .patterns(Cow::Owned(patterns))
+        .patterns(PresetSource::new(ids, PresetFns::new(|ids, _| ids.iter().map(|id| PresetRow::item((*id).to_owned(), *id, 0)).collect())))
 }
 
 fn wide_filter(fields: &mut DialogFields) -> ParamDialog<'_> {
@@ -558,26 +710,40 @@ fn enter_on_a_focused_cancel_cancels_the_form() {
 }
 
 // One Escape in a number field holding typed text cancels the dialog, as in Word and the old apps: the draft does
-// not take the Escape first, and the dialog answers no OK, so the typing goes with it.
+// not take the Escape first, and the dialog answers no OK, so the typing goes with it. A field with nothing typed
+// leaves the Escape to the dialog too, also where Escape otherwise takes a field's focus (`escape_leaves_fields`).
 #[trial]
 fn one_escape_over_a_typed_draft_cancels_the_dialog() {
-    let seen = Rc::new(Cell::new(None::<(CloseReason, bool)>));
-    let out = seen.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).show(ui);
-        if let Some(closed) = dialog.closed {
-            out.set(Some((closed, dialog.result.is_some())));
+    for leaves in [false, true] {
+        for typed in [true, false] {
+            let seen = Rc::new(Cell::new(None::<(CloseReason, bool)>));
+            let out = seen.clone();
+            let mut fixture = Fixture::new(move |ui| {
+                let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).show(ui);
+                if let Some(closed) = dialog.closed {
+                    out.set(Some((closed, dialog.result.is_some())));
+                }
+            });
+            let mut root = craft_ui::runtime::env::RootEnv::new();
+            root.escape_leaves_fields = leaves;
+            fixture.root(root).settle();
+            let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the radius row has a number field");
+            fixture.click(&field).settle();
+            if typed {
+                fixture.key(Key::A, Modifiers::COMMAND);
+                fixture.type_text("55").settle();
+                let draft =
+                    fixture.by_role(Role::SPIN_BUTTON).into_iter().next().and_then(|field| fixture.tree().value_of(field.node).map(str::to_owned));
+                assert_eq!(draft.as_deref(), Some("55"), "the field shows the typing as a draft");
+            }
+            fixture.key(Key::Escape, Modifiers::NONE).settle();
+            assert!(
+                matches!(seen.get(), Some((CloseReason::Escape, false))),
+                "leaves {leaves}, typed {typed}: one Escape cancels the dialog: {:?}",
+                seen.get()
+            );
         }
-    });
-    fixture.settle();
-    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the radius row has a number field");
-    fixture.click(&field).settle();
-    fixture.key(Key::A, Modifiers::COMMAND);
-    fixture.type_text("55").settle();
-    let typed = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().and_then(|field| fixture.tree().value_of(field.node).map(str::to_owned));
-    assert_eq!(typed.as_deref(), Some("55"), "the field shows the typing as a draft");
-    fixture.key(Key::Escape, Modifiers::NONE).settle();
-    assert!(matches!(seen.get(), Some((CloseReason::Escape, false))), "one Escape cancels the dialog: {:?}", seen.get());
+    }
 }
 
 // Alt turns Cancel into Reset, which restores the opening values with the `reset_to` ones over them: a key `reset_to`
@@ -643,13 +809,13 @@ fn a_preview_that_centres_on_clicks_passes_a_press_on_the_canvas_under_it() {
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 0, "no pane yet: the modal layer blocks the press");
-    on_dialog(&host, |dialog| dialog.set_preview(Some(picture)));
+    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture))));
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "with the pane shown the press reaches the canvas");
 
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), locating(id, false)));
-    on_dialog(&host, |dialog| dialog.set_preview(Some(picture)));
+    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture))));
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "a pane that does not centre on clicks leaves the press blocked");
@@ -767,8 +933,13 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     let mut fixture = host_fixture(&host, &twice);
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "light", DialogFields::new(), light));
     fixture.idle(6);
+    // The number field named `label`: a range row's slider, before it on the line, carries the same name.
     let enter = |fixture: &mut Fixture, label: &str, text: &str| {
-        let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+        let field = fixture
+            .by_role(Role::SPIN_BUTTON)
+            .into_iter()
+            .find(|target| fixture.tree().name_of(target.node) == Some(label))
+            .unwrap_or_else(|| panic!("the {label} field"));
         fixture.click(&field).settle();
         fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
         fixture.key(Key::Tab, Modifiers::NONE).settle();
@@ -808,4 +979,396 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     enter(&mut fixture, "Size", "abc");
     assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "text that is no number leaves the value");
     assert!(!alert(), "and raises no alert");
+}
+
+/// Runs a one-row dialog for `row`; the values of its answer are filed in the returned cell.
+fn single_row(row: Param) -> (Fixture, Rc<RefCell<Option<DialogFields>>>) {
+    let answered = Rc::new(RefCell::new(None::<DialogFields>));
+    let out = Rc::clone(&answered);
+    let fixture = Fixture::new(move |ui| {
+        if let Some(result) = ParamDialog::new("row", "Row", vec![row.clone()]).show(ui).result {
+            *out.borrow_mut() = Some(result.fields);
+        }
+    });
+    (fixture, answered)
+}
+
+// Text that does not parse in a number row holds OK: it is disabled and Enter answers nothing; text that parses
+// answers OK with the new value.
+#[trial]
+fn a_row_whose_text_does_not_parse_holds_ok() {
+    let (mut fixture, answered) = single_row(Param::new("size", "Size", ParamKind::int(Some(1), Some(100), 10)));
+    fixture.settle();
+    let field = fixture.by_label("Size").expect("the size row has a field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("abc");
+    fixture.idle(2);
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK waits while the text does not parse");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(answered.borrow().is_none(), "Enter answers nothing while the text does not parse");
+
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("42");
+    fixture.idle(2);
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    assert!(!fixture.tree().is_disabled_key(ok.node), "text that parses frees OK");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(answered.borrow().as_ref().and_then(|fields| fields.int("size")), Some(42), "OK answers the typed value");
+}
+
+// Shift+Enter in a row's field confirms the dialog with the typed value.
+#[trial]
+fn shift_enter_in_a_row_answers_ok() {
+    let (mut fixture, answered) = single_row(Param::new("notes", "Notes", ParamKind::text("")));
+    fixture.settle();
+    let field = fixture.by_label("Notes").expect("the notes row has a field");
+    fixture.click(&field).settle();
+    fixture.type_text("a");
+    fixture.key(Key::Enter, Modifiers::SHIFT).settle();
+    assert_eq!(answered.borrow().as_ref().and_then(|fields| fields.text("notes").map(str::to_owned)).as_deref(), Some("a"));
+}
+
+// Enter in an open select picks the highlighted option; it does not answer OK, and the dialog stays open with the pick.
+#[trial]
+fn an_open_select_takes_enter_and_the_dialog_stays_open() {
+    let options = vec![("spin".to_owned(), Label::from("Spin")), ("zoom".to_owned(), Label::from("Zoom"))];
+    let (mut fixture, answered) = single_row(Param::new("method", "Method", ParamKind::choice(options, None)));
+    fixture.settle();
+    let select = fixture.by_label("Method").expect("the method row has a select");
+    fixture.click(&select).settle();
+    fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(answered.borrow().is_none(), "Enter in the open select does not answer OK");
+    assert!(fixture.by_label("Row").is_some(), "the dialog stays open");
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    fixture.click(&ok).settle();
+    assert_eq!(answered.borrow().as_ref().and_then(|fields| fields.text("method").map(str::to_owned)).as_deref(), Some("zoom"), "the pick stood");
+}
+
+// A dialog that previews lists its Preview box as the `preview` field, and the field sets it; one that does not
+// preview refuses the field as unknown.
+#[trial]
+fn a_previewing_dialog_takes_preview_as_a_field() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), |fields| blur(fields).previews(true)));
+    fixture.idle(4);
+    let preview = |host: &Rc<RefCell<DialogHost>>| {
+        host.borrow()
+            .open_dialogs()
+            .into_iter()
+            .find(|dialog| dialog.id == id)
+            .and_then(|dialog| dialog.fields)
+            .map(|fields| fields["preview"].clone())
+    };
+    assert_eq!(preview(&host), Some(json!(true)), "the box lists as on");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "preview", json!(false)), Ok(()));
+    assert_eq!(on_dialog(&host, |dialog| dialog.is_previewing()), Some(false), "the field turned the preview off");
+    assert_eq!(preview(&host), Some(json!(false)));
+
+    let plain = host.borrow_mut().open(HostedParamDialog::new(&ctx, "sharpen", DialogFields::new(), sharpen));
+    fixture.idle(4);
+    let refused = host.borrow_mut().set_json_field(&ctx, plain, "preview", json!(true));
+    assert!(refused.is_err(), "a dialog that does not preview has no preview field: {refused:?}");
+}
+
+// A refusal the host keeps turns OK off with its reason and survives a changed value until the host withdraws it.
+#[trial]
+fn a_host_refusal_keeps_ok_off_until_a_value_changes() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(6);
+    let ok_off = |fixture: &Fixture| {
+        let ok = fixture.by_label("OK").expect("the OK button");
+        fixture.tree().is_disabled_key(ok.node)
+    };
+    on_dialog(&host, |dialog| dialog.refuse(Some(Label::from(REFUSED))));
+    fixture.idle(4);
+    assert!(ok_off(&fixture), "the refusal turns OK off");
+    assert!(fixture.by_label(REFUSED).is_some(), "the reason shows under the rows");
+    assert_eq!(host.borrow().held_state(dialog_id("blur")), Some(HeldOk::Refused(Label::from(REFUSED))));
+
+    let smooth = fixture.by_label("Smooth").expect("the smooth row has a check box");
+    fixture.click(&smooth).idle(4);
+    assert!(ok_off(&fixture), "a changed value does not lift the refusal the host keeps");
+    assert!(fixture.by_label(REFUSED).is_some(), "and the reason stays");
+
+    on_dialog(&host, |dialog| dialog.refuse(None));
+    fixture.idle(4);
+    assert!(!ok_off(&fixture), "the host withdrew the refusal");
+    assert!(fixture.by_label(REFUSED).is_none());
+}
+
+/// A dialog whose Show Grid row stands in the footer.
+fn gridded(fields: &mut DialogFields) -> ParamDialog<'_> {
+    ParamDialog::new("grid", "Grid", footer_params()).values(Bind::bound(fields))
+}
+
+/// The rows of [`gridded`].
+fn footer_params() -> Vec<Param> {
+    vec![
+        Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, Default::default())),
+        Param::new("grid", "Show Grid", ParamKind::bool(false)).in_footer("Hide Grid"),
+    ]
+}
+
+// A footer row is a footer button: a press flips its value and the dialog stays open, its label follows, automation
+// sets the value, the remembered values leave it out, and the rows draw no body row for it.
+#[trial]
+fn a_footer_row_flips_its_value_and_automation_sets_it() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded));
+    fixture.idle(6);
+    let grid = || on_dialog(&host, |dialog| dialog.fields().bool("grid")).flatten();
+    assert_eq!(grid(), Some(false));
+    assert!(!fixture.by_role(Role::CHECK_BOX).iter().any(|target| fixture.tree().name_of(target.node) == Some("Show Grid")), "no body row");
+
+    let button = fixture.by_label("Show Grid").expect("the footer has the row's button");
+    fixture.click(&button).idle(6);
+    assert_eq!(grid(), Some(true), "the press flips the value");
+    assert!(host.borrow().is_open::<HostedParamDialog>(), "the dialog stays open");
+    assert!(fixture.by_label("Hide Grid").is_some(), "the label follows the value");
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "grid", json!(false)), Ok(()));
+    assert_eq!(grid(), Some(false), "automation sets it");
+    let fields = on_dialog(&host, |dialog| dialog.fields().clone()).expect("open");
+    assert!(!ParamDialog::remembered(&footer_params(), &fields).contains("grid"), "the footer key is not remembered");
+}
+
+#[trial]
+fn a_footer_toggle_takes_input_only_while_all_its_conditions_hold() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    fn build(fields: &mut DialogFields) -> ParamDialog<'_> {
+        let rows = vec![
+            Param::new("custom", "Custom", ParamKind::bool(false)),
+            Param::new("advanced", "Advanced", ParamKind::bool(false)),
+            Param::new("grid", "Show Grid", ParamKind::bool(false))
+                .enabled_when("custom", true)
+                .and_enabled_when_in("advanced", [true])
+                .in_footer("Hide Grid"),
+        ];
+        ParamDialog::new("conditional-grid", "Grid", rows).values(Bind::bound(fields))
+    }
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "conditional-grid", DialogFields::new(), build));
+    let grid = || on_dialog(&host, |dialog| dialog.fields().bool("grid")).flatten();
+    fixture.idle(6);
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "custom", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button stays visible");
+    assert!(fixture.tree().is_disabled_key(button.node));
+    fixture.click(&button).idle(6);
+    assert_ne!(grid(), Some(true), "a disabled footer button does not flip the value");
+    assert!(host.borrow_mut().set_json_field(&ctx, id, "grid", json!(true)).is_err());
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button");
+    assert!(!fixture.tree().is_disabled_key(button.node));
+    fixture.press(&button).release(&button);
+    assert_ne!(grid(), Some(true), "the flip waits for the next pass");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(false)), Ok(()));
+    fixture.idle(6);
+    assert_ne!(grid(), Some(true), "a queued flip is dropped once its condition no longer holds");
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button is enabled again");
+    fixture.click(&button).idle(6);
+    assert_eq!(grid(), Some(true));
+    assert!(fixture.by_label("Hide Grid").is_some());
+}
+
+#[trial]
+fn a_queued_footer_press_follows_its_dialog_when_the_stack_changes() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let lower = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("lower"));
+    let top = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("top"));
+    fixture.idle(6);
+    let top_button = fixture.by_label("Show Grid").expect("the top dialog's toggle");
+    fixture.press(&top_button).release(&top_button);
+    assert!(host.borrow_mut().cancel_by_id(&ctx, lower));
+    let new = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("new"));
+    fixture.idle(6);
+    let grid = |id| host.borrow().get_by_id::<HostedParamDialog>(id).and_then(|dialog| dialog.fields().bool("grid"));
+    assert_eq!(grid(top), Some(true), "the press follows the original dialog");
+    assert_eq!(grid(new), Some(false), "the new dialog does not inherit the press");
+}
+
+#[trial]
+fn a_replacement_footer_button_keeps_its_own_enablement() {
+    let mut fixture = Fixture::new(|ui| {
+        ParamDialog::new("custom-footer", "Custom Footer", footer_params())
+            .shaped(|dialog| {
+                dialog.buttons([
+                    FooterButton::new("OK", DialogRole::Accept),
+                    FooterButton::new("Cancel", DialogRole::Cancel),
+                    FooterButton::new("Unavailable", DialogRole::Other).enabled(false),
+                ])
+            })
+            .show(ui);
+    });
+    fixture.settle();
+    let replacement = fixture.by_label("Unavailable").expect("the caller's replacement button");
+    assert!(fixture.tree().is_disabled_key(replacement.node));
+    assert!(fixture.by_label("Show Grid").is_none());
+}
+
+// The presets row lists the presets; a pick writes the preset's values as one edit, and a value edited after it
+// leaves the values matching no preset.
+#[trial]
+fn a_preset_row_fills_the_values_and_names_new_presets() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), blur));
+    let rows = vec![PresetRow::item("soft".to_owned(), "Soft", 0), PresetRow::item("hard".to_owned(), "Hard", 0)];
+    let values =
+        vec![("soft".to_owned(), DialogFields::from_pairs([("radius", 2.0)])), ("hard".to_owned(), DialogFields::from_pairs([("radius", 60.0)]))];
+    on_dialog(&host, |dialog| dialog.set_presets(rows, values, vec!["soft".to_owned()]));
+    fixture.idle(6);
+    let preset = |host: &Rc<RefCell<DialogHost>>| {
+        host.borrow()
+            .open_dialogs()
+            .into_iter()
+            .find(|dialog| dialog.id == id)
+            .and_then(|dialog| dialog.fields)
+            .map(|fields| fields["preset"].clone())
+    };
+    let picker = fixture.by_label("Preset").expect("the dialog has a presets row");
+    fixture.click(&picker).idle(4);
+    let hard = fixture.by_label("Hard").expect("the picker lists the preset");
+    fixture.click(&hard).idle(6);
+    assert_eq!(on_dialog(&host, |dialog| dialog.fields().number("radius")).flatten(), Some(60.0), "the pick wrote the preset's values");
+    assert_eq!(preset(&host), Some(json!("hard")), "the values are the preset's");
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "radius", json!(5)), Ok(()));
+    fixture.idle(4);
+    assert_eq!(preset(&host), Some(json!(null)), "after an edit the values are no preset's");
+    assert!(on_dialog(&host, HostedParamDialog::take_preset_events).is_some_and(|events| events.is_empty()), "a pick reports no edit of the presets");
+}
+
+/// A Blur dialog that keeps its values for the run.
+fn run_only(fields: &mut DialogFields) -> ParamDialog<'_> {
+    blur(fields).remember(SaveKey::new("trial.run-only")).remember_for(Lifetime::Run)
+}
+
+// A dialog that remembers for the run reopens with the values the app stored after its command, and nothing reaches
+// the saved tier.
+#[trial]
+fn a_run_only_remember_reopens_with_its_values_and_stores_nothing() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), run_only));
+    fixture.idle(4);
+    host.borrow_mut().set_json_field(&ctx, id, "radius", json!(33.0)).expect("the radius row takes a number");
+    assert!(host.borrow_mut().confirm::<HostedParamDialog>(&ctx), "OK answers");
+    let result = host.borrow_mut().take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::ok).expect("the answer");
+    result.remember(&ctx);
+    fixture.idle(2);
+
+    host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), run_only));
+    fixture.idle(4);
+    assert_eq!(on_dialog(&host, |dialog| dialog.fields().number("radius")).flatten(), Some(33.0), "the run's values come back");
+    assert_eq!(saved_value::<Option<DialogFields>>(&ctx, &SaveKey::new("trial.run-only")), None, "a run-only value never reaches the saved tier");
+}
+
+// A host's reset restores the opening values with `reset_to` over them, keeps the dialog open and answers false for an
+// unknown id. Whether it can reset compares with that target: values that opened off it can be reset, and none at it.
+#[trial]
+fn a_hosted_dialogs_reset_through_the_host_restores_the_opening_values() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), |fields| {
+        blur(fields).reset_to(DialogFields::from_pairs([("smooth", true)]))
+    }));
+    fixture.idle(6);
+    assert!(host.borrow().can_reset_by_id(id), "Smooth opened off its reset target");
+    host.borrow_mut().set_json_field(&ctx, id, "radius", json!(60.0)).expect("the radius row takes a number");
+    assert!(host.borrow().can_reset_by_id(id), "an edit can be reset");
+    assert!(host.borrow_mut().reset_by_id(&ctx, id), "the reset happened");
+    fixture.idle(4);
+    let fields = on_dialog(&host, |dialog| dialog.fields().clone()).expect("the dialog stays open");
+    assert_eq!((fields.number("radius"), fields.bool("smooth")), (Some(10.0), Some(true)), "the opening values with reset_to over them");
+    assert!(!host.borrow().can_reset_by_id(id), "at the reset target there is nothing to reset");
+    assert!(!host.borrow_mut().reset_by_id(&ctx, dialog_id("unknown")), "an unknown id answers false");
+}
+
+/// Escape with the focus in a form's text field, plain or masked (a password), cancels the dialog at once, typed text or
+/// not, as Escape does from any other control of the dialog: the dialog's Cancel discards the field's draft with the
+/// rest, so the draft does not hold Escape (production closed its Protect dialog on one Escape after typing).
+#[trial]
+fn escape_in_a_text_field_closes_the_form_dialog_typed_or_not() {
+    for masked in [false, true] {
+        for typed in ["", "secret"] {
+            let open = Rc::new(Cell::new(true));
+            let closed = Rc::new(Cell::new(false));
+            let (shown, seen, value) = (Rc::clone(&open), Rc::clone(&closed), Rc::new(RefCell::new(String::new())));
+            let mut fixture = Fixture::new(move |ui| {
+                let mut is_open = shown.get();
+                let mut text = value.borrow_mut();
+                let out = craft_ui::patterns::form_dialogs::FormDialog::new("Protect", Bind::bound(&mut *text))
+                    .opened(Bind::bound(&mut is_open))
+                    .show(ui, |ui, _, text| {
+                        let field = craft_ui::text::TextField::new("Type Password", Bind::bound(text));
+                        let _ = if masked { field.masked() } else { field }.show(ui);
+                        true
+                    });
+                shown.set(is_open);
+                seen.set(seen.get() || out.closed.is_some());
+            });
+            fixture.idle(10);
+            let field = fixture.by_label("Type Password").expect("the field is shown");
+            fixture.click(&field).idle(2);
+            fixture.type_text(typed).idle(2);
+            fixture.key(Key::Escape, Modifiers::NONE).idle(6);
+            assert!(closed.get() && !open.get(), "Escape in the field closes the dialog (masked {masked}, typed {typed:?})");
+        }
+    }
+}
+
+/// A modeless form keeps its other edits when Escape cancels an active text edit. The field keeps the focus through
+/// that Escape, also where Escape otherwise takes a field's focus (`escape_leaves_fields`), so the next Escape closes
+/// the window.
+#[trial]
+fn escape_in_a_modeless_form_restores_the_field_before_closing() {
+    for leaves in [false, true] {
+        let open = Rc::new(Cell::new(true));
+        let value = Rc::new(RefCell::new(String::from("Original")));
+        let (shown, text) = (Rc::clone(&open), Rc::clone(&value));
+        let mut fixture = Fixture::new(move |ui| {
+            let mut is_open = shown.get();
+            let mut text = text.borrow_mut();
+            craft_ui::patterns::form_dialogs::FormDialog::new("Tool", Bind::bound(&mut *text))
+                .opened(Bind::bound(&mut is_open))
+                .shaped(|dialog| dialog.modeless())
+                .show(ui, |ui, _, text| {
+                    craft_ui::text::TextField::new("Name", Bind::bound(text)).show(ui);
+                    true
+                });
+            shown.set(is_open);
+        });
+        let mut root = craft_ui::runtime::env::RootEnv::new();
+        root.escape_leaves_fields = leaves;
+        fixture.root(root).idle(10);
+        let field = fixture.by_label("Name").expect("the field is shown");
+        fixture.click(&field).idle(2);
+        fixture.type_text("x").idle(2);
+        assert_ne!(&*value.borrow(), "Original", "leaves {leaves}: typing changed the value");
+        fixture.key(Key::Escape, Modifiers::NONE).idle(2);
+        assert!(open.get(), "leaves {leaves}: the first Escape leaves the window open");
+        assert_eq!(&*value.borrow(), "Original", "leaves {leaves}: the field's edit is restored");
+        assert!(fixture.focused().is_some(), "leaves {leaves}: the field keeps the focus");
+        fixture.key(Key::Escape, Modifiers::NONE).idle(6);
+        assert!(!open.get(), "leaves {leaves}: the second Escape closes the window");
+    }
 }

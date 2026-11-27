@@ -5,7 +5,9 @@ use craft_behavior::geometry::{
 };
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-use craft_ui::canvas::{Canvas, CanvasTool, CropOverlay, CropScope, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass};
+use craft_ui::canvas::{
+    Canvas, CanvasTool, CropApply, CropOutside, CropOverlay, CropScope, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass,
+};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
@@ -40,6 +42,9 @@ struct Setup {
     straighten: bool,
     guide: Option<(CropGuide, u8)>,
     guide_show: GuideShow,
+    outside: CropOutside,
+    area: Option<[Point; 4]>,
+    min_side: Option<f64>,
     view: CanvasView,
     /// The overlay crops one placed picture with this source.
     object: Option<Rect>,
@@ -60,6 +65,9 @@ impl Setup {
             straighten: false,
             guide: None,
             guide_show: GuideShow::Auto,
+            outside: CropOutside::default(),
+            area: None,
+            min_side: None,
             view: CanvasView::new(egui::Rect::ZERO, Point::new(200.0, 150.0), 1.0),
             object: None,
         }
@@ -87,7 +95,7 @@ impl Setup {
 /// What the overlay reported across the passes.
 #[derive(Default)]
 struct Seen {
-    applied: bool,
+    applied: Option<CropApply>,
     discarded: bool,
     straightened: Option<f64>,
     snapped: Vec<SnapLine>,
@@ -112,6 +120,19 @@ struct Rig {
     rerun: Rc<Cell<bool>>,
 }
 
+#[trial]
+fn crop_body_shows_grab_and_grabbing_during_move() {
+    use craft_behavior::{Cursor, CursorIcon};
+    let mut rig = Rig::upright();
+    let at = rig.at(200.0, 150.0);
+    rig.move_to(at);
+    assert_eq!(craft_ui::runtime::cursor::current(&rig.frames.ctx), Some(Cursor::System(CursorIcon::Grab)));
+    rig.press(at);
+    rig.move_to(at + Vec2::new(30.0, 0.0));
+    assert_eq!(craft_ui::runtime::cursor::current(&rig.frames.ctx), Some(Cursor::System(CursorIcon::Grabbing)));
+    rig.release(at + Vec2::new(30.0, 0.0));
+}
+
 impl Rig {
     fn new(crop: CropBox, setup: Setup) -> Self {
         let (crop, setup, seen) = (Rc::new(RefCell::new(crop)), Rc::new(RefCell::new(setup)), Rc::new(RefCell::new(Seen::default())));
@@ -131,7 +152,13 @@ impl Rig {
             let snap = Snap::new(Arc::new(targets), SnapOptions::default());
             let _ = Canvas::new("Document").view(s.view).snap(snap).show(ui, |ui, body| {
                 let mut value = c.borrow_mut();
-                let mut overlay = CropOverlay::new("Crop", Bind::bound(&mut *value)).guide_show(s.guide_show);
+                let mut overlay = CropOverlay::new("Crop", Bind::bound(&mut *value)).guide_show(s.guide_show).outside(s.outside);
+                if let Some(area) = s.area {
+                    overlay = overlay.area(area);
+                }
+                if let Some(min_side) = s.min_side {
+                    overlay = overlay.min_side(min_side);
+                }
                 if let Some(ratio) = s.ratio {
                     overlay = overlay.ratio(ratio);
                 }
@@ -184,7 +211,7 @@ impl Rig {
                         seen.events.push(kind);
                     }
                 }
-                seen.applied |= out.apply;
+                seen.applied = out.apply.or(seen.applied);
                 seen.discarded |= out.discard;
                 seen.straightened = out.straightened.or(seen.straightened);
                 seen.snapped = out.snapped;
@@ -246,6 +273,20 @@ impl Rig {
             .flat_map(|mesh| mesh.vertices.iter().map(|v| v.pos))
             .collect();
         (!points.is_empty()).then(|| egui::Rect::from_points(&points))
+    }
+
+    /// The shield's meshes this frame: those with a translucent vertex.
+    fn shield_meshes(&mut self) -> Vec<egui::Mesh> {
+        let room = egui::Rect::from_min_size(Pos2::ZERO, ROOM);
+        let show = &mut self.show;
+        let shapes = self.frames.frame_shapes(|ui| layout::in_region(ui, room, |ui| show(ui)));
+        shapes
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| (1..255).contains(&v.color.a())) => Some((*mesh).clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn view(&self) -> CanvasView {
@@ -410,6 +451,7 @@ fn a_quick_drag_in_one_frame_starts_at_the_press() {
     assert_eq!((events.first(), events.last()), (Some(&"begin"), Some(&"commit")), "{events:?}");
 }
 
+/// Control is pressed once the resize has started: on macOS a press with Control held is a secondary click.
 #[trial]
 fn the_control_key_held_during_a_resize_turns_snapping_off() {
     for (held, right) in [(Modifiers::NONE, 310.0), (Modifiers::CTRL, 307.0)] {
@@ -418,7 +460,13 @@ fn the_control_key_held_during_a_resize_turns_snapping_off() {
             s.snap_x = Some(310.0);
             s
         });
-        rig.drag(rig.at(300.0, 220.0), rig.at(307.0, 220.0), held);
+        let (from, to) = (rig.at(300.0, 220.0), rig.at(307.0, 220.0));
+        rig.press(from);
+        rig.frames.hold(held);
+        rig.move_to(from.lerp(to, 0.5));
+        rig.move_to(to);
+        rig.release(to);
+        rig.frames.hold(Modifiers::NONE);
         assert!((rig.rect().x1 - right).abs() < 1e-6, "{held:?}: {:?}", rig.rect());
     }
 }
@@ -753,6 +801,97 @@ fn a_default_turn_keeps_the_frame_inside_the_turned_image() {
 }
 
 #[trial]
+fn a_placed_picture_crop_applies_on_a_click_away_keeps_the_cut_area_and_stops_at_its_minimum_side() {
+    // An 80 x 60 frame at 100 %: its corners and edges reach at most a quarter of its short side, 15 points, past it.
+    let start = CropBox::upright(Rect::new(160.0, 120.0, 240.0, 180.0));
+    let mut setup = Setup::new();
+    setup.outside = CropOutside::Apply;
+    // The placed picture, turned 8 degrees about the frame's centre.
+    setup.area = Some(CropBox::new(Rect::new(100.0, 70.0, 300.0, 230.0), 8.0).corners());
+    setup.min_side = Some(6.0);
+    let mut rig = Rig::new(start, setup);
+    // Between the frame and the picture's outline: a click and a drag are taken, and nothing applies, turns or moves.
+    let cut = rig.at(200.0, 95.0);
+    rig.click(cut);
+    rig.drag(cut, cut + Vec2::new(30.0, 0.0), Modifiers::NONE);
+    assert_eq!(rig.seen.borrow().applied, None, "a press in the cut-away area does not apply");
+    assert_eq!(rig.crop(), start, "nothing turned or moved");
+    assert!(rig.events().is_empty(), "{:?}", rig.events());
+    // Away from the picture: a click applies, the frame as it was.
+    rig.click(rig.at(40.0, 40.0));
+    assert_eq!(rig.seen.borrow().applied, Some(CropApply::Away), "a click away from the picture applies and says it was an away click");
+    assert_eq!(rig.crop(), start);
+    // A corner dragged past the minimum side stops at the last step that kept it: narrower than it was, not under the
+    // minimum, the opposite corner where it was.
+    rig.drag(rig.at(240.0, 180.0), rig.at(164.0, 190.0), Modifiers::NONE);
+    let kept = rig.rect();
+    assert!(kept.width() >= 6.0 && kept.width() < 80.0, "{kept:?}");
+    assert!((kept.x0 - 160.0).abs() < 1e-9 && (kept.y0 - 120.0).abs() < 1e-9, "the opposite corner stayed: {kept:?}");
+    assert_eq!(rig.events().last(), Some(&"commit"), "{:?}", rig.events());
+}
+
+#[trial]
+fn a_resize_and_a_move_toward_the_outside_of_a_turned_area_stop_at_its_edge() {
+    let start = CropBox::upright(Rect::new(160.0, 120.0, 240.0, 180.0));
+    let mut setup = Setup::new();
+    setup.outside = CropOutside::Apply;
+    setup.area = Some(CropBox::new(Rect::new(100.0, 70.0, 300.0, 230.0), 8.0).corners());
+    let mut rig = Rig::new(start, setup);
+    // A move far past the picture keeps the frame where it was.
+    rig.drag(rig.at(200.0, 150.0), rig.at(400.0, 150.0), Modifiers::NONE);
+    assert_eq!(rig.crop(), start, "a move out of the area");
+    // A resize inside the area follows the pointer; one past it keeps the frame as the last step left it.
+    rig.drag(rig.at(240.0, 150.0), rig.at(270.0, 150.0), Modifiers::NONE);
+    let grown = rig.rect();
+    assert!(grown.x1 > 240.0 && (grown.x0 - 160.0).abs() < 1e-9, "a resize inside the area: {grown:?}");
+    let edge = rig.at(grown.x1, 150.0);
+    rig.drag(edge, rig.at(500.0, 150.0), Modifiers::NONE);
+    assert_eq!(rig.rect(), grown, "a resize out of the area");
+}
+
+#[trial]
+fn a_press_outside_a_new_frame_crop_draws_a_new_frame_inside_the_bounds() {
+    let start = CropBox::upright(RECT);
+    let mut setup = Setup::new();
+    setup.outside = CropOutside::NewFrame;
+    setup.bounds = Some(Rect::new(50.0, 30.0, 350.0, 270.0));
+    let mut rig = Rig::new(start, setup);
+    // Outside the frame, past the reach of its corners and edges.
+    let from = rig.at(60.0, 40.0);
+    rig.click(from);
+    assert_eq!(rig.crop(), start, "a click with no drag changes nothing");
+    assert!(rig.events().is_empty(), "{:?}", rig.events());
+    // A drag draws a new frame from the press, cut to the bounds; nothing turns.
+    rig.drag(from, rig.at(380.0, 290.0), Modifiers::NONE);
+    let drawn = CropBox::upright(Rect::new(60.0, 40.0, 350.0, 270.0));
+    assert!(near(&rig.crop(), &drawn), "{:?} vs {drawn:?}", rig.crop());
+    assert_eq!(rig.crop().angle, start.angle, "no turn");
+    let events = rig.events();
+    assert_eq!((events.first(), events.last()), (Some(&"begin"), Some(&"commit")), "{events:?}");
+}
+
+#[trial]
+fn a_corner_drag_on_an_area_smaller_than_the_minimum_side_changes_nothing_and_does_not_panic() {
+    // A 5 x 5 placed picture cropped to itself, under the 6-unit minimum, zoomed in so its grips show.
+    let tiny = Rect::new(100.0, 100.0, 105.0, 105.0);
+    let start = CropBox::upright(tiny);
+    let mut setup = Setup::new();
+    setup.outside = CropOutside::Apply;
+    setup.area = Some(start.corners());
+    setup.min_side = Some(6.0);
+    setup.view = CanvasView::new(egui::Rect::ZERO, tiny.center(), 8.0);
+    let mut rig = Rig::new(start, setup);
+    // The bottom right grip across the frame to the opposite corner.
+    rig.drag(rig.at(105.0, 105.0), rig.at(100.0, 100.0), Modifiers::NONE);
+    assert_eq!(rig.crop(), start, "the frame is as it was");
+    let events = rig.events();
+    assert_eq!(events.first(), Some(&"begin"), "the grip was taken: {events:?}");
+    assert_eq!(events.last(), Some(&"cancel"), "a release under the minimum cancels: {events:?}");
+    assert!(!events.contains(&"commit"), "{events:?}");
+    assert_eq!(rig.seen.borrow().applied, None, "a grip drag does not apply");
+}
+
+#[trial]
 fn a_shift_corner_follows_the_diagonal_and_snaps_along_it() {
     // An 800 x 500 frame at 100 %, its bottom right corner on screen.
     let whole = CropBox::upright(Rect::new(0.0, 0.0, 800.0, 500.0));
@@ -804,7 +943,7 @@ fn a_shift_corner_follows_the_diagonal_and_snaps_along_it() {
 }
 
 #[trial]
-fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
+fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag() {
     // The canvas as the bounds, as the Crop tool sets them with Delete Cropped Pixels on.
     let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
     for (what, base) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false))] {
@@ -821,13 +960,55 @@ fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
         let r = rig.rect();
         assert!(r.x1 > canvas.x1 + 1.0 && r.y1 > canvas.y1 + 1.0, "{what}: the corner follows past the canvas: {r:?}");
     }
-    // A classic move still stops at the canvas.
+}
+
+/// photocraft#16404: moving an upright document crop past the canvas takes in the area there, as an edge drag does; a
+/// turned frame's move still stays inside the canvas (#10869).
+#[trial]
+fn a_document_crop_moved_past_its_bounds_takes_in_the_area_there() {
+    let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
+    // Classic Mode moves the frame with the pointer: to the right, past the canvas's right edge.
     let mut setup = Setup::new();
     setup.bounds = Some(canvas);
     let mut rig = Rig::new(CropBox::upright(RECT), setup);
     rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
     let r = rig.rect();
-    assert!(r.x1 <= canvas.x1 + 1e-6 && (r.width() - RECT.width()).abs() < 1e-6, "a move stays inside: {r:?}");
+    assert!(r.x1 > canvas.x1 + 1.0 && (r.width() - RECT.width()).abs() < 1e-6, "classic: the frame moves past the canvas: {r:?}");
+    // Image mode moves the image under the frame: a drag to the right takes the frame past the canvas's left edge, with
+    // Auto Center Preview off and on (the view then follows the frame).
+    for auto_center in [false, true] {
+        let mut setup = Setup::image(0.0, auto_center);
+        setup.bounds = Some(canvas);
+        let mut rig = Rig::new(CropBox::upright(RECT), setup);
+        rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+        let r = rig.rect();
+        assert!(
+            r.x0 < canvas.x0 - 1.0 && (r.width() - RECT.width()).abs() < 1e-6,
+            "image mode, auto centre {auto_center}: the frame moves past the canvas: {r:?}"
+        );
+    }
+    // A turned frame moves past the canvas too (photocraft#16460): in Classic Mode past the right edge, in image mode
+    // (the image turned under an upright frame on screen) past the left edge.
+    let mut setup = Setup::new();
+    setup.bounds = Some(canvas);
+    let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
+    rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+    let b = rig.crop().turned_bounds();
+    assert!(b.x1 > canvas.x1 + 1.0, "classic: a turned frame moves past the canvas: {b:?}");
+    assert!((rig.rect().width() - RECT.width()).abs() < 1e-6, "classic: a turned frame keeps its size: {:?}", rig.rect());
+    for auto_center in [false, true] {
+        let mut setup = Setup::image(10.0, auto_center);
+        setup.bounds = Some(canvas);
+        let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
+        rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+        let b = rig.crop().turned_bounds();
+        assert!(b.x0 < canvas.x0 - 1.0, "image mode, auto centre {auto_center}: a turned frame moves past the canvas: {b:?}");
+        assert!(
+            (rig.rect().width() - RECT.width()).abs() < 1e-6,
+            "image mode, auto centre {auto_center}: a turned frame keeps its size: {:?}",
+            rig.rect()
+        );
+    }
 }
 
 #[trial]
@@ -864,7 +1045,22 @@ fn an_object_crop_is_bounded_by_its_source_and_a_press_outside_it_reaches_what_l
     assert_eq!(rig.events(), events, "and sends no edit");
     // Enter applies and Escape discards.
     rig.frame(vec![input::key_press(egui::Key::Enter, Modifiers::NONE)]);
-    assert!(rig.seen.borrow().applied, "Enter applies");
+    assert_eq!(rig.seen.borrow().applied, Some(CropApply::Enter), "Enter applies");
     rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
     assert!(rig.seen.borrow().discarded, "Escape discards");
+}
+
+/// photocraft#16410: the shield is one unfeathered mesh. Its pieces used to be feathered one by one, so each faded
+/// out along the edges it shares with the next and the canvas showed through as a line under the translucent shield,
+/// from the frame's corners to the canvas's edges.
+#[trial]
+fn the_shield_is_one_unfeathered_mesh_with_no_seam_between_its_pieces() {
+    for (what, setup) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false)), ("turned", Setup::image(10.0, false))] {
+        let angle = if what == "turned" { 10.0 } else { 0.0 };
+        let mut rig = Rig::new(CropBox::new(RECT, angle), setup);
+        let meshes = rig.shield_meshes();
+        assert_eq!(meshes.len(), 1, "{what}: the shield is one mesh: {} meshes", meshes.len());
+        let alpha = meshes[0].vertices[0].color.a();
+        assert!(meshes[0].vertices.iter().all(|v| v.color.a() == alpha), "{what}: no vertex of the shield fades out (a feathered edge)");
+    }
 }

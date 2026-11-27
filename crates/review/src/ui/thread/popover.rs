@@ -3,14 +3,14 @@
 use craft_behavior::IconId;
 use craft_theme::variant::{Tone, Variant};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
-use craft_ui::contract::overlay::Anchor;
+use craft_ui::contract::overlay::{Anchor, Dismiss, Outside};
 use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, RowAlign, Show as _, ShowContainer as _, Trigger, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::popover::Popover;
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::style::TypeRole;
 use craft_ui::text::TextField;
@@ -234,20 +234,96 @@ impl ThreadPopover<'_> {
     }
 }
 
-/// The floating composer card for a new comment at a point: a multi-line field with the focus, Post and
-/// Cancel (Escape).
+/// The floating composer card for a comment at a point: an optional title and author row, a multi-line field
+/// with the focus, Post and Cancel (Escape). What Post sends follows the [`ComposerDraft`]; when the card closes
+/// follows the [`ComposerClose`].
 #[must_use = "show the composer with `show`"]
 #[derive(Pattern)]
 pub struct CommentComposer<'a> {
     anchor: Option<Pos2>,
     draft: &'a mut String,
+    header: Option<(Label, &'a str)>,
+    hint: Option<Label>,
+    kind: ComposerDraft,
+    close: ComposerClose,
+    fixed_rows: bool,
 }
 
 impl<'a> CommentComposer<'a> {
     /// A composer at `anchor` (screen points; `None` hides it) that edits `draft`.
     pub fn new(anchor: Option<Pos2>, draft: &'a mut String) -> Self {
-        CommentComposer { anchor, draft }
+        CommentComposer { anchor, draft, header: None, hint: None, kind: ComposerDraft::New, close: ComposerClose::OnOutsidePress, fixed_rows: false }
     }
+
+    /// A header of `title` and the `author` above the field; the card is named `title`.
+    pub fn header(mut self, title: impl Into<Label>, author: &'a str) -> Self {
+        self.header = Some((title.into(), author));
+        self
+    }
+
+    /// The field keeps its three rows and scrolls longer text inside them (`TextField::max_lines`), so the card keeps
+    /// one size. Off (the default), the field grows with its text, which the card's measure, taken before the text
+    /// wraps, does not see: near the bottom of the window the card is placed shorter than it lays out and clips its
+    /// buttons.
+    pub fn fixed_rows(mut self) -> Self {
+        self.fixed_rows = true;
+        self
+    }
+
+    /// What the field asks for, in place of "Add a comment": its name and its placeholder ("Text to insert" for an
+    /// insertion).
+    pub fn hint(mut self, hint: impl Into<Label>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// The rule the post applies to the draft.
+    pub fn draft_kind(mut self, kind: ComposerDraft) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// When the composer closes.
+    pub fn close(mut self, close: ComposerClose) -> Self {
+        self.close = close;
+        self
+    }
+}
+
+/// The rule a composer applies to its draft at the post.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ComposerDraft {
+    /// A new comment: trailing whitespace trimmed; Post needs text.
+    #[default]
+    New,
+    /// An edit: trailing whitespace trimmed; empty text clears the comment.
+    Edit,
+    /// An edit posted as typed (a typewriter comment); empty text clears the comment.
+    EditVerbatim,
+}
+
+impl ComposerDraft {
+    /// The text a post of `draft` sends, or `None` while this kind cannot post it: the one rule of the composer's Post
+    /// button and its Cmd/Ctrl+Enter.
+    fn posted(self, draft: &str) -> Option<String> {
+        match self {
+            ComposerDraft::New => Some(draft.trim_end()).filter(|text| !text.is_empty()).map(str::to_owned),
+            ComposerDraft::Edit => Some(draft.trim_end().to_owned()),
+            ComposerDraft::EditVerbatim => Some(draft.to_owned()),
+        }
+    }
+}
+
+/// When a composer closes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ComposerClose {
+    /// On a press outside, as well as Post and Cancel.
+    #[default]
+    OnOutsidePress,
+    /// Only on Post or Cancel.
+    OnPostOrCancel,
 }
 
 /// What the composer did this pass.
@@ -264,38 +340,53 @@ pub struct CommentComposerOutput {
 impl CommentComposer<'_> {
     /// Shows the composer and reports whether the user posted or closed it.
     pub fn show(self, ui: &mut Ui) -> CommentComposerOutput {
-        let CommentComposer { anchor, draft } = self;
+        let CommentComposer { anchor, draft, header, hint, kind, close, fixed_rows } = self;
         let mut output = CommentComposerOutput::default();
         let Some(anchor) = anchor else { return output };
         let words = Env::of(ui).words::<ThreadWords>();
         let mut open = true;
         let mut posted = None;
         let mut cancel = false;
-        let shown =
-            Popover::new(words.add_comment.clone(), Bind::bound(&mut open)).at_point(anchor).initial_focus(Initial::Default).show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
-                    let field = TextField::new(words.add_comment.clone(), Bind::bound(&mut *draft))
-                        .lines(COMPOSER_ROWS)
-                        .placeholder(words.add_comment.clone())
-                        .submits()
-                        .default_stop()
-                        .show(ui);
-                    cancel |= field.escaped;
-                    let text = draft.trim().to_owned();
-                    // The multi-line field submits on Cmd/Ctrl+Enter; plain Enter adds a line.
-                    if field.submitted && field.submit_mods.cmd && !text.is_empty() {
-                        posted = Some(text.clone());
-                    }
-                    Row::new().show(ui, |ui, _| {
-                        let post = Button::new(words.post.clone()).enabled(!text.is_empty()).show(ui);
-                        if clicked(&post) && !text.is_empty() {
-                            posted = Some(text.clone());
-                        }
-                        let close = Button::new(words.cancel.clone()).show(ui);
-                        cancel |= clicked(&close);
+        let name = header.as_ref().map_or_else(|| words.add_comment.clone(), |(title, _)| title.clone());
+        let mut popover = Popover::new(name, Bind::bound(&mut open)).at_point(anchor).initial_focus(Initial::Default);
+        if close == ComposerClose::OnPostOrCancel {
+            popover = popover.overlay(|overlay| overlay.dismiss(Dismiss::new().outside(Outside::Keep)));
+        }
+        let shown = popover.show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                if let Some((title, author)) = &header {
+                    Row::new().fill_width().show(ui, |ui, _| {
+                        let _ = Avatar::new(*author).show(ui);
+                        Stack::new().fill_width().show(ui, |ui, _| {
+                            Text::new(title.clone()).role(TypeRole::BodyStrong).show(ui);
+                            Text::new(author.to_string()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                        });
                     });
+                }
+                let hint = hint.clone().unwrap_or_else(|| words.add_comment.clone());
+                let field = TextField::new(hint.clone(), Bind::bound(&mut *draft)).lines(COMPOSER_ROWS).placeholder(hint).submits().default_stop();
+                let field = if fixed_rows { field.max_lines(COMPOSER_ROWS) } else { field };
+                // An edit opens with the caret after the comment's text, so typing adds to it; a new comment's empty
+                // field has nothing to replace either way.
+                let field = if kind == ComposerDraft::New { field } else { field.keep_caret_on_open() }.show(ui);
+                cancel |= field.escaped;
+                let text = kind.posted(draft);
+                // The multi-line field submits on Cmd/Ctrl+Enter; plain Enter adds a line.
+                if field.submitted && field.submit_mods.cmd && text.is_some() {
+                    posted.clone_from(&text);
+                }
+                Row::new().show(ui, |ui, _| {
+                    // An edit saves; a new comment posts.
+                    let word = if kind == ComposerDraft::New { &words.post } else { &words.save };
+                    let post = Button::new(word.clone()).enabled(text.is_some()).show(ui);
+                    if clicked(&post) && text.is_some() {
+                        posted.clone_from(&text);
+                    }
+                    let cancelled = Button::new(words.cancel.clone()).show(ui);
+                    cancel |= clicked(&cancelled);
                 });
             });
+        });
         let closed = !open || shown.output.closed.is_some();
         if posted.is_some() || cancel || closed {
             draft.clear();

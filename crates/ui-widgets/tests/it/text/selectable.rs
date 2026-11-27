@@ -2,15 +2,18 @@
 //! (`SelectableText`, a notice's title and message, a toast's text, a metadata table's values).
 
 use craft_theme::variant::Tone;
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, CollectionEvent, Props as _, Show as _};
 use craft_ui::notices::{Notice, NoticeAction, ToastStack};
-use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::env::{RootEnv, WindowKey};
+use craft_ui::runtime::focus::{KeyUse, host_canvas};
+use craft_ui::runtime::frame::{ChromeToggle, take_output};
 use craft_ui::runtime::toast;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::{SelectableText, TextField};
-use egui::{Event, Id, Key, Modifiers, Rect, Vec2};
-use std::cell::Cell;
+use egui::{Event, Id, Key, Modifiers, Rect, Sense, Vec2, ViewportId};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 fn stop(fixture: &Fixture) -> Option<Id> {
@@ -18,7 +21,8 @@ fn stop(fixture: &Fixture) -> Option<Id> {
 }
 
 /// Tab goes from the field before the text to the one after it; a press on the text focuses it, and Select All then
-/// Copy puts the whole text on the clipboard.
+/// Copy puts the whole text on the clipboard. Cut copies it too, as a label's selection does: read-only text removes
+/// nothing, and the Cut is the text's, not the app's.
 #[trial]
 fn tab_passes_over_read_only_text_and_a_press_selects_it_for_copy() {
     let ids = Rc::new([Cell::new(Id::NULL), Cell::new(Id::NULL), Cell::new(Id::NULL)]);
@@ -40,11 +44,75 @@ fn tab_passes_over_read_only_text_and_a_press_selects_it_for_copy() {
     fixture.key(Key::A, Modifiers::COMMAND);
     fixture.frame(vec![Event::Copy]);
     assert_eq!(fixture.copied(), ["/projects/poster.indd"]);
+    fixture.frame(vec![Event::Cut]);
+    assert_eq!(fixture.copied(), ["/projects/poster.indd"], "Cut copies the selected text");
 }
 
 /// Where `text` was painted.
 fn painted(fixture: &Fixture, text: &str) -> Rect {
     fixture.texts().iter().find(|painted| painted.text == text).unwrap_or_else(|| panic!("{text:?} is painted")).rect
+}
+
+#[trial]
+fn selectable_text_response_reports_its_clicks_and_modifiers() {
+    let clicks = Rc::new(RefCell::new(Vec::new()));
+    let seen = clicks.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let response = SelectableText::new("Length", "234 pt").show(ui);
+        assert_eq!(craft_ui::contract::clicked(&response), response.clicked());
+        if response.clicked() {
+            seen.borrow_mut().push((response.double_clicked(), craft_ui::runtime::pointer::frame(ui.ctx()).pick_mods));
+        }
+    });
+    fixture.settle();
+    let at = painted(&fixture, "234 pt").center();
+    fixture.click_at(at);
+    assert_eq!(&*clicks.borrow(), &[(false, craft_keymap::Mods::NONE)]);
+    clicks.borrow_mut().clear();
+    fixture.advance(1.0);
+    let button = |pressed, modifiers| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers };
+    fixture.frame_through(vec![
+        button(true, Modifiers::NONE),
+        button(false, Modifiers::NONE),
+        button(true, Modifiers::NONE),
+        button(false, Modifiers::NONE),
+    ]);
+    assert_eq!(&*clicks.borrow(), &[(false, craft_keymap::Mods::NONE), (true, craft_keymap::Mods::NONE)]);
+    clicks.borrow_mut().clear();
+    fixture.advance(1.0);
+    fixture.frame_through(vec![button(true, Modifiers::SHIFT), button(false, Modifiers::SHIFT), Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_eq!(&*clicks.borrow(), &[(false, craft_keymap::Mods { shift: true, ..craft_keymap::Mods::NONE })]);
+    clicks.borrow_mut().clear();
+    let rect = painted(&fixture, "234 pt");
+    fixture.drag_at(rect.left_center() + Vec2::new(1.0, 0.0), Vec2::new(rect.width() * 0.75, 0.0));
+    assert!(clicks.borrow().is_empty());
+    fixture.frame_through(vec![
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    assert!(clicks.borrow().is_empty());
+}
+
+#[trial]
+fn read_only_selectable_text_keeps_selection_without_reporting_activation() {
+    for inherited in [false, true] {
+        let clicked = Rc::new(Cell::new(false));
+        let seen = clicked.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            craft_ui::runtime::env::with_env(
+                ui,
+                |scope| scope.read_only = Some(inherited),
+                |ui| {
+                    let response = SelectableText::new("Length", "234 pt").read_only(!inherited).show(ui);
+                    seen.set(seen.get() || response.clicked());
+                },
+            );
+        });
+        fixture.settle();
+        fixture.click_at(painted(&fixture, "234 pt").center());
+        assert!(!clicked.get(), "inherited read-only: {inherited}");
+        assert_eq!(copy_all(&mut fixture), ["234 pt"]);
+    }
 }
 
 /// Select All then Copy in the focused text.
@@ -123,7 +191,7 @@ fn metadata_value_copies_without_selecting_the_row() {
     let groups = vec![MetadataGroup::new("Camera", vec![MetadataRow::new("Make", "FUJIFILM"), MetadataRow::new("Model", "X100V")])];
     let mut fixture = Fixture::new(move |ui| {
         let out = MetadataTable::new("Metadata", &groups).show(ui);
-        if out.table.iter().flat_map(|table| &table.events).any(|event| matches!(event, CollectionEvent::Selection(_))) {
+        if out.table.iter().flat_map(|table| &table.events).any(|event| matches!(event, CollectionEvent::Selection { .. })) {
             seen.set(true);
         }
     });
@@ -137,4 +205,44 @@ fn metadata_value_copies_without_selecting_the_row() {
     fixture.click_at(value.center());
     assert_eq!(copy_all(&mut fixture), ["X100V"]);
     assert!(!selected.get(), "the press on the value selected no row");
+}
+
+/// In a window with a document canvas whose Tab toggles the panels, read-only text a press or a drag focused to select
+/// from is no text field: Tab toggles the panels from it, as from the button a press focused, and leaves the focus on
+/// it. Guards the press that focuses a selection part, which no framework shape wins (egui's text widget takes it), being
+/// recorded as a press.
+#[trial]
+fn tab_toggles_the_panels_from_read_only_text_a_press_or_drag_focused() {
+    let text = Rc::new(Cell::new(Id::NULL));
+    let seen = text.clone();
+    let canvas = Id::unique("document canvas");
+    let mut fixture = Fixture::new(move |ui| {
+        Button::new("Save").show(ui);
+        seen.set(SelectableText::new("Path", "/projects/poster.indd").show(ui).id);
+        ui.interact(ui.available_rect_before_wrap(), canvas, Sense::click());
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+    });
+    let mut root = RootEnv::default();
+    root.tab_toggles_chrome = true;
+    fixture.root(root);
+    fixture.settle();
+    let tab = |fixture: &mut Fixture| {
+        take_output(fixture.ctx());
+        fixture.key(Key::Tab, Modifiers::NONE);
+        take_output(fixture.ctx()).chrome_toggles
+    };
+    let path = painted(&fixture, "/projects/poster.indd");
+    for dragged in [false, true] {
+        let button = fixture.by_label("Save").expect("the button has a node");
+        fixture.click(&button);
+        assert_eq!(tab(&mut fixture), [(ViewportId::ROOT, ChromeToggle::Panels)], "the pressed button (dragged {dragged})");
+        if dragged {
+            fixture.drag_at(path.left_center() + Vec2::new(1.0, 0.0), Vec2::new(path.width() / 2.0, 0.0));
+        } else {
+            fixture.click_at(path.center());
+        }
+        assert_eq!(stop(&fixture), Some(text.get()), "the gesture focused the text (dragged {dragged})");
+        assert_eq!(tab(&mut fixture), [(ViewportId::ROOT, ChromeToggle::Panels)], "the pressed text (dragged {dragged})");
+        assert_eq!(stop(&fixture), Some(text.get()), "the toggle moved no focus (dragged {dragged})");
+    }
 }

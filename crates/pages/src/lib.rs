@@ -36,7 +36,7 @@ pub use layout::{
     parse_display_token, place_pages, shown_row, spread_first,
 };
 pub use numbering::{NumberStyle, PAGE_NUMBER_STYLES, PageNumbering};
-pub use range::{PageRange, PageRangeError, Subset, format_pages, parse_pages};
+pub use range::{PageRange, PageRangeError, PageScope, Subset, format_pages, parse_pages};
 pub use setup::{
     DocumentGrid, GridKind, MARGIN_PRESETS, MAX_GRID_COUNT, MarginPreset, Margins, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize,
     paper_named,

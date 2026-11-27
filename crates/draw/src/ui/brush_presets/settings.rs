@@ -23,7 +23,7 @@ pub enum BrushCardPart {
 ///
 /// - The tip alone is the browser's grid of thumbnails with the size as each caption.
 /// - The name or the stroke is the browser's list: the stroke as the row's picture while it is on, else the tip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct BrushCardParts {
@@ -80,7 +80,7 @@ impl BrushCardParts {
 /// scale. The app saves it in its settings (serde) when
 /// [`BrushPresetPickerOutput::settings`](super::BrushPresetPickerOutput::settings) is set and restores it with
 /// [`BrushPickerState::restore`]; the search text, open groups and an open rename are not saved.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui::contract::MemoProps)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct BrushPickerSettings {

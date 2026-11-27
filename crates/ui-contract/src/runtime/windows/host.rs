@@ -5,7 +5,8 @@ use super::native::{WindowAction, act};
 use super::placement::placement_of;
 use super::shell::{base_shell, shell_of, window_info};
 use super::spec::frame_of;
-use super::{Record, shared};
+use super::{Record, keep_root_frame, shared};
+use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::runtime::egui::injected::{self, InjectedPointer, Released};
 use crate::runtime::egui::input_filter;
 use crate::runtime::egui::screenshot::{ScreenshotFacts, ScreenshotSlot};
@@ -16,7 +17,7 @@ use craft_behavior::{Monitor, PointerButton};
 use craft_host::target::{Caps, ShellInfo, WindowState};
 use craft_keymap::{Chord, Key, Mods};
 use craft_window::desktop::Desktop;
-use craft_window::policy::Frame;
+use craft_window::policy::{Decision, Frame, LayoutWatch};
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 
 /// What the OS tells about a window, in desktop points.
@@ -117,12 +118,6 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
-    /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
-    /// while AccessKit is off.
-    pub fn access_tree(&self, viewport: ViewportId) -> Option<crate::runtime::egui::access::TreeUpdate> {
-        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
-    }
-
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
     /// held after it, and a button held by earlier injected input stays down, so the move drags. With `rest` (seconds)
     /// the input counts as processed only once the pointer has rested that long. As a window never reports a NaN or
@@ -144,9 +139,24 @@ impl WindowHost {
         injected::inject_key(&self.ctx, viewport, key, mods, hold);
     }
 
-    /// Queues a move to `at`, then a wheel turn of `delta` points with `mods` held. A non-finite `delta` queues nothing.
-    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
-        injected::inject_wheel(&self.ctx, viewport, at, delta, mods);
+    /// Queues a move to `at`, then a wheel turn of `delta` in `unit` with `mods` held. A non-finite `delta` queues
+    /// nothing.
+    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, unit: egui::MouseWheelUnit, mods: Mods) {
+        // PLAN: `injected::inject_wheel` (injected.rs:477) takes `unit` after `delta` once shell-w1 writes it (sh.K4)
+        injected::inject_wheel(&self.ctx, viewport, at, delta, unit, mods);
+    }
+
+    /// Turns AccessKit on, idempotent and off by default; from then the settled tree of every finished pass is kept
+    /// per viewport (`access_tree`).
+    pub fn keep_access_trees(&self) {
+        self.ctx.enable_accesskit();
+    }
+
+    /// The access tree of `viewport`'s latest settled pass, a host fact of the window as its screenshot facts are;
+    /// `None` while AccessKit is off or before the viewport has run.
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<std::sync::Arc<crate::runtime::egui::access::AccessTree>> {
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
+            .map(|update| std::sync::Arc::new(crate::runtime::egui::access::AccessTree::new(update)))
     }
 
     /// Queues the release of what `released` names, at `at` or where the injected pointer is.
@@ -220,6 +230,53 @@ impl WindowHost {
         injected::inject_ime(&self.ctx, viewport, event);
     }
 
+    /// Hovers the files over `at` and, with `drop`, drops them in the following injected step, through the same
+    /// hovered and dropped file input a window's drag session fills.
+    pub fn inject_files(&self, viewport: ViewportId, at: Option<Pos2>, paths: Vec<std::path::PathBuf>, drop: bool) {
+        injected::inject_files(&self.ctx, viewport, at, paths, drop);
+    }
+
+    /// Queues one AccessKit action request (click, focus or context menu) on `node` as one injected step behind
+    /// earlier injected input.
+    pub fn inject_access(&self, viewport: ViewportId, node: NodeKey, action: Declared) {
+        injected::inject_access(&self.ctx, viewport, node, action);
+    }
+
+    /// Turns AccessKit output on, so [`access_tree`](Self::access_tree) and
+    /// [`access_tree_view`](Self::access_tree_view) have each viewport's settled tree from then on.
+    pub fn keep_access_tree(&self) {
+        crate::runtime::egui::access::keep_trees(&self.ctx);
+    }
+
+    /// [`access_tree`](Self::access_tree) as a tree to walk: `None` before the viewport's first pass or while
+    /// AccessKit is off ([`keep_access_tree`](Self::keep_access_tree) turns it on).
+    pub fn access_tree_view(&self, viewport: ViewportId) -> Option<AccessTree> {
+        crate::runtime::egui::access::kept_tree(&self.ctx, viewport)
+    }
+
+    /// Changes the open root window's frame to `decision`'s and returns true: the window gets the commands
+    /// [`policy::reframe`](craft_window::policy::reframe) gives, and [`frame`](Self::frame),
+    /// [`desktop`](Self::desktop) and the root shell's chrome follow at once. A change of caption buttons alone sends
+    /// no command, and the decision in force changes nothing. A change to or from the inset frame cannot reach an open
+    /// window: it keeps the current decision and returns false. Call it when the app's decision changes (the user's
+    /// title bar setting); between calls the caption layout follows the desktop.
+    pub fn set_root_frame(&self, decision: Decision) -> bool {
+        let (installed, desktop) = shared(&self.ctx, |shared| (shared.root_frame.clone(), shared.desktop.clone()));
+        let current = installed.unwrap_or_else(|| frame_in(&self.ctx, ViewportId::ROOT));
+        let Some(commands) = craft_window::policy::reframe(&current, &decision.frame) else { return false };
+        if current == decision.frame && desktop.as_ref() == Some(&decision.desktop) {
+            return true;
+        }
+        // The watch may read the desktop's settings, so it is built outside the lock.
+        let layouts = LayoutWatch::new(&decision);
+        shared(&self.ctx, |shared| keep_root_frame(shared, decision, layouts));
+        for command in commands {
+            viewports::command(&self.ctx, ViewportId::ROOT, command);
+        }
+        self.ctx.request_repaint_of(ViewportId::ROOT);
+        true
+    }
+
     /// Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass
     /// has not run and the queue behind it; what is dropped counts as withdrawn
     /// ([`take_injected_withdrawn`](Self::take_injected_withdrawn)). Called from the raw input hook, so every
@@ -274,6 +331,13 @@ impl WindowHost {
     /// started in saw it.
     pub fn desktop_pointer(&self) -> Option<Pos2> {
         shared(&self.ctx, |shared| shared.system_pointer.or(shared.source_pointer))
+    }
+
+    /// The main window's native handle (the Win32 `HWND` value, read through the safe `HasWindowHandle` API), `None` on
+    /// other platforms and where no window is open. A driver dialog takes it as its owner.
+    pub fn main_window_handle(&self) -> Option<std::num::NonZeroIsize> {
+        // The root window's OS window comes from eframe's handle (`route_root`), read through `HasWindowHandle`.
+        PerViewport::<Record>::with(&self.ctx, ViewportId::ROOT, |record| record.native.clone())?.raw_handle()
     }
 
     /// Moves the system pointer to `to` in desktop points; false where the platform cannot.
@@ -373,16 +437,35 @@ impl WindowHost {
         under.into_iter().map(|(viewport, _)| viewport).collect()
     }
 
-    /// Who draws the running viewport's frame, and the caption buttons it shows.
+    /// Who draws the running viewport's frame, and the caption buttons it shows. An inset frame whose window was
+    /// measured with the traffic lights at the right end says so ([`MacInset::lights_right`](craft_window::policy::MacInset)).
     pub fn frame(&self) -> Frame {
         let viewport = pass::current_viewport(&self.ctx);
-        if viewport == ViewportId::ROOT
-            && let Some(frame) = shared(&self.ctx, |shared| shared.root_frame.clone())
-        {
-            return frame;
+        let frame = match shared(&self.ctx, |shared| shared.root_frame.clone()) {
+            Some(frame) if viewport == ViewportId::ROOT => frame,
+            _ => frame_in(&self.ctx, viewport),
+        };
+        match frame {
+            Frame::Inset(inset) if !inset.lights_right => {
+                let right = PerViewport::<Record>::with_existing(&self.ctx, viewport, |record| record.lights.lights_right()).unwrap_or(false);
+                Frame::Inset(inset.with_lights_right(right))
+            }
+            frame => frame,
         }
-        let captions = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.captions.clone());
-        frame_of(window_info(&self.ctx, viewport, &base_shell(&self.ctx)).chrome, captions)
+    }
+
+    /// The room the macOS traffic lights take over the running viewport's content: `leading` wide at the end they sit
+    /// at, twice their centre's distance from the top high. `None` for any other frame and in full screen, where the
+    /// lights are not over the content.
+    pub fn lights_room(&self) -> Option<Rect> {
+        let Frame::Inset(inset) = self.frame() else { return None };
+        if shell_of(&self.ctx, pass::current_viewport(&self.ctx)).window.state == WindowState::Fullscreen {
+            return None;
+        }
+        let window = self.ctx.viewport_rect();
+        let size = Vec2::new(inset.leading.min(window.width()), (2.0 * inset.centre_from_top).min(window.height()));
+        let min = if inset.lights_right { Pos2::new(window.right() - size.x, window.top()) } else { window.min };
+        Some(Rect::from_min_size(min, size))
     }
 
     /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app
@@ -408,9 +491,27 @@ impl WindowHost {
     /// The desktop pointer in the coordinates of `viewport`, when it lies inside that window.
     pub fn pointer_in(&self, viewport: ViewportId) -> Option<Pos2> {
         let desktop = self.desktop_pointer()?;
-        let inner = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))?;
+        let inner = self.inner_on_desktop(viewport)?;
         inner.contains(desktop).then(|| Pos2::ZERO + (desktop - inner.min))
     }
+
+    /// What a point of `from`'s window adds to land at the same desktop place in `to`'s window, by the inner rects
+    /// the windows last reported, as [`Self::pointer_in`] maps the desktop pointer.
+    pub(crate) fn offset_between(&self, from: ViewportId, to: ViewportId) -> Option<Vec2> {
+        Some(self.inner_on_desktop(from)?.min - self.inner_on_desktop(to)?.min)
+    }
+
+    /// The inner rect of `viewport`'s window on the desktop, as the window last reported it.
+    fn inner_on_desktop(&self, viewport: ViewportId) -> Option<Rect> {
+        PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))
+    }
+}
+
+/// The frame of `viewport`'s window as its chrome and the caption buttons it was opened with tell it, for a window
+/// with no installed decision.
+fn frame_in(ctx: &Context, viewport: ViewportId) -> Frame {
+    let captions = PerViewport::<Record>::with(ctx, viewport, |record| record.captions.clone());
+    frame_of(window_info(ctx, viewport, &base_shell(ctx)).chrome, captions)
 }
 
 /// The connected monitors in physical pixels; none where the platform does not list them.
