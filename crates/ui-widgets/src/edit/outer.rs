@@ -48,7 +48,18 @@ fn slot(body: Id) -> Id {
 /// region hook of its body (the header), so the gesture begins before any field of the body edits.
 #[doc(hidden)]
 pub fn keep(ctx: &Context, cx: &mut BodyCx<'_>) {
-    if !overlay::opening(ctx, cx.resolved.id) {
+    if overlay::opening(ctx, cx.resolved.id) {
+        keep_inline(ctx, cx);
+    }
+}
+
+/// Opens the outer gesture of a container shown in the flow of its parent, without a layer whose opening would begin
+/// it (a bare dialog in a window of its own): in the first pass its body runs with no gesture open. The close ends it
+/// through [`settle`], as for a layer.
+#[doc(hidden)]
+pub fn keep_inline(ctx: &Context, cx: &mut BodyCx<'_>) {
+    // A sizing or measuring pass keeps nothing; the shown pass begins the gesture.
+    if cx.memory.is_peek() || crate::runtime::measure::active(ctx) {
         return;
     }
     let outer = cx.memory.shown::<Outer>(slot(cx.id));
