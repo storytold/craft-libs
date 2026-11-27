@@ -89,3 +89,26 @@ bounded, checked against the declared size and CRC-32, and decode stored and DEF
 bzip2 (`lenient-bzip2`), ZIP LZMA and XZ (`lenient-lzma`) and Zstandard (`lenient-zstd`).
 `lenient::file::read_named_entry` reads one entry from a seekable file without loading the
 archive. With `serde`, the listing types are `Serialize`.
+
+Entry reads compare the local header's decoded, slash-normalized name, compression method and
+encryption bit with the central entry before exposing compressed bytes or decoding them. This
+also applies when CRC verification is explicitly disabled. The comparison preserves the existing
+UTF-8/CP437 fallback and slash normalization; it is not a raw-byte filename equality check. A
+validated central Unicode Path extra field can still supply the displayed name when the local
+header retains the original name, including when that extra field appears only in the directory.
+The fields follow [PKWARE APPNOTE 6.3.10](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT),
+sections 4.3.7, 4.3.12, 4.4.4, 4.4.5 and 4.6.9.
+
+### Source migration for local-header validation
+
+`lenient::ZipEntry` retains the pre-alias decoded name in `header_name` only when a Unicode Path
+field changes it. `parse` fills this automatically. A caller constructing a `ZipEntry` directly
+must add `header_name: None` when `name` is also the decoded header name, or provide the original
+decoded, slash-normalized name when `name` is a Unicode Path alias. Serialized listings omit this
+metadata and keep their existing shape.
+
+Adding the public field changes Rust struct literals and requires consumer action. Under the
+[versioning policy](../../docs/versioning.md), this belongs in a minor release rather than a
+compatible patch release. The known downstream constructor in Craft Anything's
+`crates/formats/tests/zip_decoded_size.rs` must be adapted when its shared-library revision moves;
+its separate `zip_legacy_tests.rs` defines its own test-only type. Existing commit pins are unchanged.

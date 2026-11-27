@@ -8,9 +8,13 @@ fn deflated(body: &[u8]) -> (Vec<u8>, ZipEntry) {
     let compressed = miniz_oxide::deflate::compress_to_vec(body, 6);
     let mut data = vec![0; 30];
     data[..4].copy_from_slice(b"PK\x03\x04");
+    data[8..10].copy_from_slice(&8u16.to_le_bytes());
+    data[26] = 7;
+    data.extend_from_slice(b"payload");
     data.extend_from_slice(&compressed);
     let entry = ZipEntry {
         name: "payload".into(),
+        header_name: None,
         method: 8,
         flags: 0,
         crc32: zip::crc32(body),
