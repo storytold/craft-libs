@@ -93,6 +93,26 @@ impl RulerItem {
             RulerItem::Stop(at) => values.stops.get(at).map_or(0.0, |stop| stop.position),
         }
     }
+
+    /// The positions the item takes, points from the column's start edge, lowest first: a stop stays in the column; the
+    /// first-line, hanging and left markers reach `span.0` past its start edge, the right marker `span.1` past its end,
+    /// and without a span they keep to the column. With a span, the left box, which carries the first line, also stops
+    /// where a hanging first line reaches `span.0`, though never above where `values` have it, so a box already past
+    /// there doesn't jump.
+    pub(super) fn bounds(self, values: &RulerValues, width: f32, span: Option<(f32, f32)>) -> (f32, f32) {
+        let width = width.max(0.0);
+        let (start, end) = span.unwrap_or((0.0, width));
+        let least = start.min(0.0);
+        match self {
+            RulerItem::Stop(_) => (0.0, width),
+            RulerItem::Right => (0.0, end.max(width)),
+            RulerItem::LeftBox if span.is_some() => {
+                let carried = (least - values.first_line_indent.min(0.0)).max(least).min(width);
+                (carried.min(values.left_indent), width)
+            }
+            RulerItem::FirstLine | RulerItem::Hanging | RulerItem::LeftBox => (least, width),
+        }
+    }
 }
 
 /// `values` with `stop` set: stops within [`SAME_POSITION`] of it go, the rest stay sorted. The
@@ -133,13 +153,16 @@ pub(super) fn moved_all(values: &RulerValues, grab: usize, to: f32, width: f32) 
     next
 }
 
-/// `values` with `item` moved to `to` points (kept within the column), and where the item is
-/// afterwards (a stop moved past another has a new index).
-pub(super) fn moved(values: &RulerValues, item: RulerItem, to: f32, width: f32) -> (RulerValues, RulerItem) {
+/// `values` with `item` moved to `to` points, kept within its [`RulerItem::bounds`] (past the column's edges an indent
+/// is negative), and where the item is afterwards (a stop moved past another has a new index). The right marker stays
+/// right of the left indent.
+pub(super) fn moved(values: &RulerValues, item: RulerItem, to: f32, width: f32, span: Option<(f32, f32)>) -> (RulerValues, RulerItem) {
     if !to.is_finite() {
         return (values.clone(), item);
     }
-    let to = to.clamp(0.0, width.max(0.0));
+    let (least, most) = item.bounds(values, width, span);
+    let to = to.clamp(least, most);
+    let width = width.max(0.0);
     let mut next = values.clone();
     match item {
         RulerItem::FirstLine => next.first_line_indent = to - values.left_indent,
@@ -148,7 +171,7 @@ pub(super) fn moved(values: &RulerValues, item: RulerItem, to: f32, width: f32) 
             next.left_indent = to;
             next.first_line_indent = values.left_indent + values.first_line_indent - to;
         }
-        RulerItem::Right => next.right_indent = (width - to).clamp(0.0, (width - values.left_indent).max(0.0)),
+        RulerItem::Right => next.right_indent = (width - to).clamp(width - most, (width - values.left_indent).max(width - most)),
         RulerItem::Stop(at) => {
             let Some(stop) = values.stops.get(at).copied() else { return (next, item) };
             let (placed, now) = place(&without(values, at), TabStop { position: to, ..stop });

@@ -229,6 +229,83 @@ fn a_new_salt_during_a_tab_drag_commits_nothing() {
     assert_eq!(commits.get(), 1, "the drag open when the paragraph changed commits nothing");
 }
 
+/// The indent markers move into the page's margins as negative indents, in either paragraph direction: the left marker's
+/// accessible range reaches the page's edge, the arrows move the first-line marker past the column's start edge, the left
+/// marker drags into the start margin and stops at the page's edge, and so does the right marker at the other edge. A tab
+/// stop dragged into the margin stays in the column.
+#[trial]
+fn indent_markers_move_into_the_margins_up_to_the_page_edges() {
+    const MARGIN: f32 = 72.0;
+    const INDENT: f32 = 36.0;
+    let words = TextRulerWords::default();
+    for rtl in [false, true] {
+        // The left and right markers start inside the column, clear of the margin edges' handles; the first line hangs
+        // back to the column's start edge.
+        let mut start = RulerValues::default();
+        start.stops.push(TabStop::new(STOP_AT, TabAlign::Left, TabLeader::None));
+        (start.left_indent, start.first_line_indent, start.right_indent) = (INDENT, -INDENT, INDENT);
+        let values = Rc::new(RefCell::new(start));
+        let shown = Rc::clone(&values);
+        let mut fixture = Fixture::new(move |ui| {
+            let full = craft_ui::testing::stage(ui);
+            let page = demo_placed(1, pos2(full.min.x + PAGE_AT.0, full.min.y + PAGE_AT.1)).remove(0);
+            let mut edges = PageEdges::new(Margins::uniform(f64::from(MARGIN)));
+            PageRulers::new("Rulers", &page, Bind::bound(&mut edges), Bind::bound(&mut *shown.borrow_mut()))
+                .right_to_left(Some(rtl))
+                .show_at(ui, full);
+        });
+        fixture.room(vec2(900.0, 600.0));
+        fixture.settle();
+        // The start margin is on the left, or on the right of a right-to-left paragraph; the page is at scale 1.
+        let (outward, toward_start) = if rtl { (1.0, Key::ArrowRight) } else { (-1.0, Key::ArrowLeft) };
+        let at = |fixture: &Fixture, name: &str| fixture.by_label(name).expect(name).rect.center();
+        // A screen reader is given the same reach: the hanging marker's range starts at the page's edge, the box's where
+        // the hanging first line it carries would reach that edge.
+        let range = |fixture: &Fixture, name: &str| fixture.tree().numeric_of(fixture.by_label(name).expect(name).node).expect(name).range;
+        let (hanging, left) = (range(&fixture, words.hanging_indent.as_str()), range(&fixture, words.left_indent.as_str()));
+        assert!((hanging.start() + f64::from(MARGIN)).abs() < 0.01, "rtl {rtl}: the hanging marker's range starts at the page's edge: {hanging:?}");
+        let floor = -f64::from(MARGIN - INDENT);
+        assert!((left.start() - floor).abs() < 0.01, "rtl {rtl}: the box's range stops where its first line meets the page's edge: {left:?}");
+
+        fixture.key(Key::Tab, Modifiers::NONE).idle(2);
+        fixture.key(toward_start, Modifiers::NONE).idle(2);
+        let first = values.borrow().left_indent + values.borrow().first_line_indent;
+        assert!(first < 0.0, "rtl {rtl}: the arrow moves the first line into the start margin: {first}");
+
+        let left = at(&fixture, words.left_indent.as_str());
+        fixture.drag_at(left, vec2(2.0 * INDENT * outward, 0.0));
+        let dragged = values.borrow().left_indent;
+        assert!(dragged < 0.0, "rtl {rtl}: the left indent drags into the start margin: {dragged}");
+        // The box carries the hanging first line, so it stops where that line reaches the page's edge.
+        let left = at(&fixture, words.left_indent.as_str());
+        fixture.drag_at(left, vec2(300.0 * outward, 0.0));
+        let first = values.borrow().left_indent + values.borrow().first_line_indent;
+        assert!((first + MARGIN).abs() < 0.01, "rtl {rtl}: the box stops with the first line at the page's edge: {first}");
+        // The hanging marker moves the left indent alone, on to the page's edge, where it stops.
+        let hanging = at(&fixture, words.hanging_indent.as_str());
+        fixture.drag_at(hanging, vec2(300.0 * outward, 0.0));
+        let (farthest, first) = (values.borrow().left_indent, values.borrow().left_indent + values.borrow().first_line_indent);
+        assert!((farthest + MARGIN).abs() < 0.01, "rtl {rtl}: the left indent stops at the page's edge: {farthest}");
+        assert!(first >= -MARGIN - 0.01, "rtl {rtl}: the first line stays on the page: {first}");
+
+        let right = at(&fixture, words.right_indent.as_str());
+        fixture.drag_at(right, vec2(-300.0 * outward, 0.0));
+        let farthest = values.borrow().right_indent;
+        assert!((farthest + MARGIN).abs() < 0.01, "rtl {rtl}: the right indent stops at the page's other edge: {farthest}");
+
+        let stop = fixture
+            .by_role(Role::SLIDER)
+            .into_iter()
+            .find(|target| craft_ui::testing::access::name(fixture.tree(), target.node).is_some_and(|name| name.starts_with(words.left_tab.as_str())))
+            .expect("the ruler shows the stop")
+            .rect
+            .center();
+        fixture.drag_at(stop, vec2(300.0 * outward, 0.0));
+        let stops: Vec<f32> = values.borrow().stops.iter().map(|stop| stop.position).collect();
+        assert!(stops.len() == 1 && stops[0] < STOP_AT && stops[0] >= 0.0, "rtl {rtl}: the stop moved and stays in the column: {stops:?}");
+    }
+}
+
 /// The tab selector shows in the canvas's corner, where the top and left strips meet, in either interface direction:
 /// the host places it, so it never lies over the horizontal ruler.
 #[trial]

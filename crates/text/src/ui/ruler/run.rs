@@ -195,10 +195,15 @@ impl TextRuler<'_> {
     ) {
         let (Some(anchor), Some(from)) = (held.anchor.clone(), held.from) else { return };
         let start = from.position(&anchor, g.width);
-        let target = snap_stop(start + (pos.x - origin.x) / g.scale * g.sign(), step, g.width, free);
+        let to = start + (pos.x - origin.x) / g.scale * g.sign();
+        let span = self.indent_span();
+        let target = match from {
+            RulerItem::Stop(_) => snap_stop(to, step, g.width, free),
+            _ => snap_within(to, step, from.bounds(&anchor, g.width, span), free),
+        };
         let moved = match from {
             RulerItem::Stop(grab) if held.all => (moved_all(&anchor, grab, target, g.width), from),
-            _ => moved(&anchor, from, target, g.width),
+            _ => moved(&anchor, from, target, g.width, span),
         };
         held.off = matches!(from, RulerItem::Stop(_)) && dropped_off(pos.y, g.strip);
         self.follow(cx, g, held, text, pos, moved);
@@ -368,9 +373,10 @@ impl TextRuler<'_> {
             return;
         }
         let values = cx.value().cloned().unwrap_or_default();
+        let span = self.indent_span();
         for item in RulerItem::all(&values) {
             if let Some(to) = cx.intents().take_set_value_at(item.part()) {
-                let (value, now) = moved(&values, item, to as f32, g.width);
+                let (value, now) = moved(&values, item, to as f32, g.width, span);
                 cx.set(value);
                 cx.focus_part(now.part());
                 return;
@@ -395,7 +401,7 @@ impl TextRuler<'_> {
         let Some(item) = RulerItem::of_part(part) else { return };
         let by = take_steps(cx, g, step);
         if by != 0.0 {
-            let (value, now) = moved(&values, item, item.position(&values, g.width) + by, g.width);
+            let (value, now) = moved(&values, item, item.position(&values, g.width) + by, g.width, span);
             cx.set(value);
             cx.focus_part(now.part());
         }
