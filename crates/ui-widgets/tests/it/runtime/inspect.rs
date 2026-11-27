@@ -287,3 +287,79 @@ fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
         assert!((thumb().bounds.center().x - at.x).abs() < 0.01, "the clicked value is drawn at the same position");
     }
 }
+
+/// A kept inspected slider moves both the original thumb and its expanded hit area with the memo room.
+#[trial]
+fn a_replayed_inspection_moves_both_thumb_rectangles() {
+    use craft_ui::contract::{MemoProps, MemoView};
+    use craft_ui::runtime::env::RootEnv;
+    use craft_ui::runtime::inspect::HitArea;
+    use craft_ui::testing::layout::in_region;
+    use craft_ui::testing::{Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs};
+    use craft_ui::value_drag::Slider;
+    use egui::{pos2, vec2};
+    use std::cell::Cell;
+
+    #[derive(MemoProps)]
+    struct InspectedThumb {}
+
+    thread_local! {
+        static AUDITED_HIT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn key() -> Id {
+        Id::NULL.with("trial.inspect.replayed-thumb")
+    }
+
+    fn thumb(record: &Recorded) -> &HitArea {
+        record.hits.iter().find(|hit| hit.part.is_some_and(|part| part.key == Slider::THUMB)).expect("a pointer-only thumb")
+    }
+
+    fn show(_: &mut InspectedThumb, ui: &mut egui::Ui) {
+        let (_, record) = inspect::record(ui, key(), |ui| {
+            Slider::new(Bind::given(0.0), 0.0..=100.0).label("Position").show(ui);
+        });
+        if in_audit_run(ui.ctx())
+            && let Some(record) = record
+        {
+            let hit = thumb(&record);
+            AUDITED_HIT.set(hit.rect.width() > hit.bounds.width());
+        }
+    }
+
+    let mut frames = Frames::new();
+    let mut root = RootEnv::new();
+    root.sizes = Arc::new(craft_theme::AppSizes::parse(br#"{ "all": { "size.hit.target": 32 } }"#).expect("valid enlarged hit target"));
+    frames.root(root);
+    frames.ctx.disable_accesskit();
+    audit_replays(&frames.ctx, false);
+
+    let draw = |frames: &mut Frames, y: f32| {
+        let room = Rect::from_min_size(pos2(30.0, y), vec2(250.0, 80.0));
+        let mut hit = None;
+        frames.frame(vec![], |ui| {
+            in_region(ui, room, |ui| MemoView::new("thumb", InspectedThumb {}, show).show(ui));
+            hit = inspect::recorded(ui.ctx(), key()).map(|record| thumb(&record).clone());
+        });
+        hit.expect("the inspector recorded the thumb")
+    };
+    for _ in 0..3 {
+        draw(&mut frames, 40.0);
+    }
+    let original = draw(&mut frames, 40.0);
+    assert!(original.rect.width() > original.bounds.width(), "the hit area is larger than the original thumb");
+    let moved = draw(&mut frames, 72.0);
+    let runs = last_frame_memo_runs(&frames.ctx);
+    assert!(runs.iter().any(|(name, _, run)| name.ends_with("InspectedThumb") && *run == MemoRun::Replayed), "the view replayed: {runs:?}");
+    let shift = vec2(0.0, 32.0);
+    assert_eq!(moved.owner, original.owner);
+    assert_eq!(moved.part, original.part);
+    assert_eq!(moved.bounds, original.bounds.translate(shift), "original geometry follows the view");
+    assert_eq!(moved.rect, original.rect.translate(shift), "expanded hit geometry follows the view");
+
+    // The audit compares that kept journal with a real run at the new place, including both hit rectangles.
+    AUDITED_HIT.set(false);
+    audit_replays(&frames.ctx, true);
+    assert_eq!(draw(&mut frames, 72.0), moved, "the replay agrees with the real inspection at the new place");
+    assert!(AUDITED_HIT.get(), "the audit compared a real record with an expanded thumb hit");
+}
