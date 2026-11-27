@@ -6,8 +6,8 @@ use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{GesturePhase, Sense};
 use craft_ui::contract::overlay::{Anchor, FloatPlace, Place, PlacementChange, PlacementKind};
 use craft_ui::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _,
-    ShowContainer as _, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MemoProps, MemoView, Mount, Overlay, Props as _, Role,
+    Show as _, ShowContainer as _, Sizing,
 };
 use craft_ui::layout::BodyLayout;
 use craft_ui::runtime::commands::{self, CommandSet, FireSource, WindowCommand};
@@ -15,7 +15,7 @@ use craft_ui::runtime::env::{Direction, with_env};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::allocate;
-use craft_ui::testing::{Frames, pointer, trial};
+use craft_ui::testing::{Frames, MemoRun, audit_replays, last_frame_memo_runs, pointer, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
 use egui::{Align2, Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -397,4 +397,36 @@ fn an_open_layer_takes_the_side_its_host_asks_for_now() {
     asked.set(Side::Above);
     frames.idle(4, &mut show);
     assert!(shown.get().bottom() <= anchor.top() + SLACK, "asked for Above again, the layer sits above: {:?}", shown.get());
+}
+
+/// A memoized view holding a layer whose body is `width` points wide.
+#[derive(MemoProps)]
+struct HeldLayer {
+    width: f32,
+}
+
+fn held_layer(held: &mut HeldLayer, ui: &mut Ui) {
+    let log = RefCell::new(Vec::new());
+    let props = ContainerProps::new().mount(Mount::Layer(Overlay::floating().modeless().placed_at(START.min))).sizing(Sizing::Content);
+    let width = held.width;
+    Pane { common: Common::new(), props, log: &log }.id_salt("held").show(ui, |ui, _| allocate(ui, Vec2::new(width, BODY.y)));
+}
+
+/// A layer that grows inside a memoized view senses its background over the rect it shows from the run that grows it,
+/// so that run's record is what the view replays: the replay audit finds the replay the same as a run. egui's `Area`
+/// started each pass at the size it kept from the last one, so the run that grew the layer kept its background at the
+/// old size (a canvas task bar showing new members).
+#[trial]
+fn a_memoized_layer_that_grows_replays_as_it_runs() {
+    let width = Cell::new(BODY.x);
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let mut show = |ui: &mut Ui| {
+        MemoView::new("held layer", HeldLayer { width: width.get() }, held_layer).show(ui);
+    };
+    frames.idle(4, &mut show);
+    width.set(2.0 * BODY.x);
+    frames.idle(4, &mut show);
+    let runs = last_frame_memo_runs(&frames.ctx);
+    assert!(runs.iter().any(|(name, _, run)| name.contains("HeldLayer") && *run == MemoRun::Replayed), "the grown layer's view replays: {runs:?}");
 }
