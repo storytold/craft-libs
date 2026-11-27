@@ -202,23 +202,13 @@ fn put_service<S: Send + 'static>(data: &mut Map, handle: Removed) -> Option<Rem
 
 /// Whether `from` and `to` are one context: two handles to the same egui `Context` share their data, so a fork would
 /// copy a context onto itself and detach the original's own state instead of a copy's.
+///
+/// `Context::ptr_eq` answers exactly that: the handles are `Clone` around one `Arc`, so a clone compares equal and any
+/// two contexts an app built separately do not, whatever either holds. (A probe written into one context and read from
+/// the other would answer the same question, but two forks running in opposite directions at once would each see the
+/// other's probe and both would refuse a pair that is not aliased.)
 pub(crate) fn aliased(from: &Context, to: &Context) -> bool {
-    /// A slot only a probe writes, so it names no other state.
-    #[derive(Clone, Copy, Default)]
-    struct Probe;
-    let slot = unique("craft_ui.fork.probe");
-    let seen = locked(to, |data| {
-        let had = data.get_temp::<Probe>(slot).is_some();
-        data.insert_temp(slot, Probe);
-        had
-    });
-    let same = from.data(|data| data.get_temp::<Probe>(slot).is_some());
-    locked(to, |data| {
-        if !seen {
-            let _ = data.remove_temp::<Probe>(slot);
-        }
-    });
-    same
+    from.ptr_eq(to)
 }
 
 /// Replaces `to`'s egui memory with a copy of `from`'s, and leaves `to` with its own runtime services (see
