@@ -1,9 +1,10 @@
 //! The sensing core over probe roots: the press lifecycle, arenas, press targets, parts and the shape record.
 
 use craft_behavior::{CanvasTransform, HitLevel, PartKey, PointerButton, PressPhase, Sense};
+use craft_ui::contract::{MemoProps, MemoView};
 use craft_ui::testing::pointer::{self, drag};
 use craft_ui::testing::sensing::{ProbeMember, ProbePart, ProbeRoot, RootReport, SenseReport, egui_click_target, show};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -75,6 +76,42 @@ fn a_press_uses_its_event_modifiers_when_the_frame_has_released_them() {
         &mut show,
     );
     assert!(log.borrow().last().root.press.mods.shift, "the press reads Shift even after the frame has released it");
+}
+
+/// A view that shows whether a button is held, from the press state.
+#[derive(MemoProps)]
+struct Held {}
+
+fn held(_: &mut Held, ui: &mut Ui) {
+    let state = craft_ui::runtime::pointer::press_state(ui.ctx());
+    ui.label(if state.buttons.is_empty() { "Up" } else { "Down" });
+}
+
+/// Whether the press-state reader ran in any pass of the last frame.
+fn held_ran(frames: &Frames) -> bool {
+    last_frame_memo_runs(&frames.ctx).iter().any(|(name, _, run)| name.ends_with("Held") && *run == MemoRun::Ran)
+}
+
+/// A view that reads the press state runs on a press and on a release, wherever they land, and replays while the
+/// pointer only moves, with a button held or not.
+#[trial]
+fn a_press_state_reader_runs_on_a_press_or_release_and_replays_on_a_move() {
+    let mut show = |ui: &mut Ui| {
+        MemoView::new("held", Held {}, held).show(ui);
+    };
+    let away = Pos2::new(300.0, 300.0);
+    let mut frames = Frames::new();
+    frames.frame(vec![pointer::moved(away)], &mut show);
+    frames.idle(30, &mut show);
+    frames.frame(vec![pointer::moved(away + Vec2::new(20.0, 0.0))], &mut show);
+    assert!(!held_ran(&frames), "a pointer move replays the reader: {:?}", last_frame_memo_runs(&frames.ctx));
+    frames.frame(vec![pointer::press(away)], &mut show);
+    assert!(held_ran(&frames), "a press runs the reader");
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(away + Vec2::new(0.0, 20.0))], &mut show);
+    assert!(!held_ran(&frames), "a move with the button held replays the reader: {:?}", last_frame_memo_runs(&frames.ctx));
+    frames.frame(vec![pointer::release(away + Vec2::new(0.0, 20.0))], &mut show);
+    assert!(held_ran(&frames), "a release runs the reader");
 }
 
 /// A hover-revealed part must remain identifiable when a drag leaves its shape.
