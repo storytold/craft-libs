@@ -138,19 +138,23 @@ impl<'r, E: 'static> Node<'r, E> {
     }
 
     /// What a drag from `port` carries (the detach rule): a fed input that takes one wire gives that wire up, so the
-    /// drag runs from the wire's source with it detached; any other input starts a reverse wire; an output or a
-    /// port of either way starts a wire from itself.
-    fn wire_from(&self, port: usize) -> WireDrag {
+    /// drag runs from the wire's source with it detached, or starts nothing when its kind keeps the wire
+    /// (`NodeKind::port_detaches`); any other input starts a reverse wire; an output or a port of either way starts a
+    /// wire from itself.
+    fn wire_from(&self, port: usize) -> Option<WireDrag> {
         let here = PortRef::new(self.id, port);
-        match self.kind.port_direction(port) {
+        Some(match self.kind.port_direction(port) {
             PortDirection::Input => match self.fed.get(port).copied().flatten() {
                 Some((wire, source)) if !self.kind.port_takes_many(port) => {
+                    if !self.kind.port_detaches(port) {
+                        return None;
+                    }
                     WireDrag { from: source, detached: Some(wire), from_direction: PortDirection::Output }
                 }
                 _ => WireDrag { from: here, detached: None, from_direction: PortDirection::Input },
             },
             direction => WireDrag { from: here, detached: None, from_direction: direction },
-        }
+        })
     }
 }
 
@@ -330,7 +334,9 @@ impl<E: 'static> Component for Node<'_, E> {
         for port in 0..ports {
             let press = cx.part(PORT.at(port as u64)).press;
             if matches!(press.phase, PressPhase::DragStart { .. }) {
-                cx.start_drag(self.wire_from(port), DragPreview::None);
+                if let Some(wire) = self.wire_from(port) {
+                    cx.start_drag(wire, DragPreview::None);
+                }
             } else if primary_click(&press) || matches!(cx.part_activated(PORT.at(port as u64)), Some(crate::runtime::commands::FireSource::Access)) {
                 // An assistive technology's click is a primary click with no modifiers.
                 self.event = Some(NodeEvent::Clicked { port: Some(port), mods: press.mods });

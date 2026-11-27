@@ -21,6 +21,8 @@ struct Kind {
     title: &'static str,
     ports: [&'static str; 2],
     takes_many: bool,
+    /// Whether a drag from its fed input detaches the wire (`NodeKind::port_detaches`).
+    detaches: bool,
     shape: NodeShape,
     tooltip: Option<&'static str>,
     footer: Option<&'static str>,
@@ -28,7 +30,7 @@ struct Kind {
 
 impl Kind {
     fn new(title: &'static str, ports: [&'static str; 2]) -> Self {
-        Kind { title, ports, takes_many: false, shape: NodeShape::Card, tooltip: None, footer: None }
+        Kind { title, ports, takes_many: false, detaches: true, shape: NodeShape::Card, tooltip: None, footer: None }
     }
 }
 
@@ -55,6 +57,10 @@ impl NodeKind for Kind {
 
     fn port_takes_many(&self, port: usize) -> bool {
         port == 0 && self.takes_many
+    }
+
+    fn port_detaches(&self, _port: usize) -> bool {
+        self.detaches
     }
 
     fn shape(&self) -> NodeShape {
@@ -228,6 +234,23 @@ impl Rig {
 
 fn port(node: u32, port: usize) -> PortRef {
     PortRef::new(NodeId::new(node), port)
+}
+
+/// A drag from the fed input of a kind that keeps its wires starts no wire: nothing detaches, connects or ends. Beside
+/// it, a fed input of a kind that detaches still gives its wire up.
+#[trial]
+fn a_kind_that_keeps_its_wires_leaves_a_press_on_its_fed_input_alone() {
+    let keeps = Kind { detaches: false, ..Kind::new("B", ["B in", "B out"]) };
+    let kinds = vec![Kind::new("A", ["A in", "A out"]), keeps, Kind::new("C", ["C in", "C out"]), Kind::new("D", ["D in", "D out"])];
+    let places = vec![Pos2::new(40.0, 40.0), Pos2::new(240.0, 40.0), Pos2::new(40.0, 180.0), Pos2::new(240.0, 180.0)];
+    let wires = vec![Wire::new(7, port(0, 1), port(1, 0)), Wire::new(8, port(0, 1), port(3, 0))];
+    let mut graph = rig(Setup { wires, ..Setup::cards(kinds, places) });
+
+    graph.drag(graph.at("B in"), graph.at("C in"));
+    assert!(graph.wired().is_empty() && graph.ended().is_empty(), "the wire stays: {:?} {:?}", graph.wired(), graph.ended());
+
+    graph.drag(graph.at("D in"), graph.at("C in"));
+    assert_eq!(graph.wired(), [(port(0, 1), port(2, 0), Some(8))], "a kind that detaches gives its wire up");
 }
 
 /// A drag from an unfed input is a reverse wire reported output end first; one from a fed input carries the wire it

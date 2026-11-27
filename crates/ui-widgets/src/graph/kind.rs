@@ -254,6 +254,12 @@ pub trait NodeKind<E: 'static = ()> {
         false
     }
 
+    /// Whether a drag from input port `port`, fed by a wire and taking one, detaches that wire; yes by default. A kind
+    /// answering no leaves a press on its connected input alone: the drag starts no wire.
+    fn port_detaches(&self, _port: usize) -> bool {
+        true
+    }
+
     /// The tone of port `port`'s handle; `None` keeps the handle look.
     fn port_tone(&self, _port: usize, _cx: &StyleCx<'_>) -> Option<DataColor> {
         None
