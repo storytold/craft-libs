@@ -381,8 +381,8 @@ fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
 /// The room of the memoized view `id` in the flow region `room` of `ui`. Its content starts a layout room of its own
 /// (`Env::start_room`), so it would sit at the top of the unwrapped `Row` around it; as a child placed in flow
 /// (`place_in_cell`), a view of one line sits with its centre on the row's line instead: its room moves down by the
-/// whole pixels that put the centre of the extent it took (in this pass's measuring run, else its last run) there. A
-/// view taller than that reaches, and a view no run showed yet, stays at the row's top. The room keeps its size, so a
+/// whole pixels that put the centre of the extent it took (in this pass's measuring run, else its last real run) there.
+/// A view taller than that reaches, and a view no run measured yet, stays at the row's top. The room keeps its size, so a
 /// kept run replays moved with it.
 fn on_row_line(ui: &Ui, id: egui::Id, room: Rect) -> Rect {
     let Some(centre) = Env::of(ui).row_line.and_then(|line| line.centre) else {
