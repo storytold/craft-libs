@@ -505,6 +505,11 @@ impl<'a> Ctx<'a> {
                 PhType::Date => field("", format!("datetime{}", hf.format.min(12) + 1)),
                 _ => TextBody::from_text(&hf.footer_text),
             };
+            // A footer repeats on every slide, and its text splits into a paragraph per line.
+            let text = self.within_budget(text);
+            if text.paragraphs.is_empty() {
+                continue;
+            }
             let Some(id) = self.alloc() else { return };
             shapes.push(Shape {
                 id: ShapeId(id),
@@ -514,6 +519,24 @@ impl<'a> Ctx<'a> {
                 ..Default::default()
             });
         }
+    }
+
+    /// `body`, made here rather than read from a text block, cut to the paragraphs and runs the
+    /// presentation's text budget still allows.
+    fn within_budget(&self, mut body: TextBody) -> TextBody {
+        let mut kept = 0;
+        for para in &mut body.paragraphs {
+            if !text::take_text_item(&self.text_items) {
+                break;
+            }
+            kept += 1;
+            if let Some(runs) = (0..para.runs.len()).find(|_| !text::take_text_item(&self.text_items)) {
+                para.runs.truncate(runs);
+                break;
+            }
+        }
+        body.paragraphs.truncate(kept);
+        body
     }
 
     /// The text of a notes page's notes placeholder.

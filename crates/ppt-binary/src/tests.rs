@@ -1168,6 +1168,18 @@ fn a_slides_own_footer_wins_over_the_documents() {
     assert_eq!(p.header_footer.footer_text, "Every slide");
 }
 
+/// A footer's text counts against the presentation's text budget too: it becomes a paragraph per
+/// line, on every slide that shows it.
+#[test]
+fn footer_text_counts_against_the_text_budget() {
+    let many = "a\r".repeat(40_000);
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[]), footer_record(0, &many)]);
+    let p = open_streams(streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], &[]));
+    let footer = p.slides[0].shapes.iter().find(|s| s.ph_type() == Some(PhType::Footer)).expect("a footer");
+    let items: usize = footer.text.as_ref().unwrap().paragraphs.iter().map(|para| 1 + para.runs.len()).sum();
+    assert!(items > 0 && items <= crate::text::MAX_TEXT_ITEMS, "{items} paragraphs and runs");
+}
+
 /// A text box that points at an outline block keeps its own `TextRulerAtom`: the margin it sets
 /// (one inch at level 1) wins over the block's. It used to be dropped with the reference.
 #[test]
