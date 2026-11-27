@@ -269,5 +269,10 @@ fn the_tab_stop_position_box_shows_the_selected_stop() {
     fixture.idle(4);
     assert!(shown_in_box(&fixture).contains("144"), "the box follows the selection: {:?}", shown_in_box(&fixture));
     press(&mut fixture, "Clear");
-    assert!(!shown_in_box(&fixture).contains("144"), "Clear empties the box: {:?}", shown_in_box(&fixture));
+    assert!(shown_in_box(&fixture).starts_with('0'), "Clear empties the box, which shows 0: {:?}", shown_in_box(&fixture));
+    // The 0 an empty box shows is no position: leaving the box and Set add the next step, not a stop at 0.
+    press(&mut fixture, "Tab stop position:");
+    press(&mut fixture, "Set");
+    let positions: Vec<f32> = dialog.borrow_mut().result().stops.iter().map(|stop| stop.position).collect();
+    assert_eq!(positions, vec![72.0, 108.0], "Set stepped past the last stop");
 }

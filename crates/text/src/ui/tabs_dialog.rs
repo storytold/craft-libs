@@ -561,7 +561,8 @@ impl TabStopsDialog {
 
     /// The Tab stop position box: Enter there is Set, a stop at the typed position.
     fn position_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut Vec<FieldPass>) {
-        let points = Mixed::Same(self.typed_position.map(f64::from));
+        // An empty box shows 0; it stays empty (Set steps, Enter sets nothing) until a value is typed.
+        let points = Mixed::Same(Some(self.typed_position.map_or(0.0, f64::from)));
         let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
         let unit = self.unit;
         let Some(out) =
@@ -571,7 +572,11 @@ impl TabStopsDialog {
         };
         fields.push(FieldPass::of(ui.ctx(), NumberField::Position, out.response.id, &out.edit));
         for event in &out.edit.events {
-            if matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. })
+            let typed = matches!(event, EditEvent::Update { .. });
+            // Leaving an empty box commits the 0 it shows, which is no position typed.
+            let kept = matches!(event, EditEvent::Commit { .. } | EditEvent::Set { .. })
+                && (self.typed_position.is_some() || event.value() != Some(&Some(0.0)));
+            if (typed || kept)
                 && let Some(Some(points)) = event.value()
             {
                 self.typed_position = Some(*points as f32);
