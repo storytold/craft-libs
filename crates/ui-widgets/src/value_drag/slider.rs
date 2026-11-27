@@ -12,7 +12,9 @@ use crate::contract::{
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
-use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense, WheelPhase};
+use crate::text::NumberStepper;
+use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_value, wheel_step};
+use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, NavMove, PartKey, PressPhase, Proposal, Sense, WheelPhase};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
@@ -22,6 +24,16 @@ pub(crate) mod stories;
 
 /// The track the thumb rides on.
 pub(crate) const TRACK: PartKey = PartKey::new("track");
+
+/// Resolve navigation to a signed multiplier for the caller's stepper.
+const STEPPER_STEPS: ValueSteps = ValueSteps::new(0.0, f64::NEG_INFINITY, f64::INFINITY, 1.0, LARGE_STEPS);
+
+fn custom_step(stepper: &NumberStepper<'_>, value: f64, (min, max): (f64, f64), delta: StepResult) -> Option<f64> {
+    let StepResult::Set(delta) = delta else { return None };
+    let direction = if delta.is_sign_positive() { 1 } else { -1 };
+    let next = stepper.next(value, direction, delta.abs());
+    (!next.is_nan()).then(|| next.clamp(min, max))
+}
 
 /// The style of a slider.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -70,6 +82,11 @@ pub struct Slider<'a> {
     /// no stops.
     #[prop(quantity = "step")]
     step: Option<f64>,
+    /// Chooses the next value for keys, the wheel and accessibility increments. The callback receives the current
+    /// value, direction (1 or -1) and step multiplier. Pointer travel and direct value input keep using the scale
+    /// and step. Home and End still choose the range limits.
+    #[prop(func = "Fn(f64, i32, f64) -> f64")]
+    stepper: Option<NumberStepper<'a>>,
     /// How positions along the track map to values.
     #[prop]
     scale: SliderScale,
@@ -143,6 +160,7 @@ impl<'a> Slider<'a> {
             value,
             range,
             step: None,
+            stepper: None,
             scale: SliderScale::Linear,
             fill: true,
             thumb: SliderThumb::Round,
@@ -362,7 +380,17 @@ impl Component for Slider<'_> {
             if cx.in_wheel_run() {
                 cx.commit();
             }
-            if let Some(next) = scale.stepped(current(&*cx), bounds, mv, mods) {
+            let value = current(&*cx);
+            let next = match (&self.stepper, mv) {
+                (Some(_), NavMove::Start) => Some(scale.min),
+                (Some(_), NavMove::End) => Some(scale.max),
+                (Some(stepper), _) => {
+                    let delta = step_value(&STEPPER_STEPS, ValueAxes::Both, mv, mods);
+                    custom_step(stepper, value, bounds, delta)
+                }
+                (None, _) => scale.stepped(value, bounds, mv, mods),
+            };
+            if let Some(next) = next {
                 cx.set(next);
             }
         }
@@ -374,7 +402,15 @@ impl Component for Slider<'_> {
         }
         if let Some(wheel) = wheel {
             // The end share carries no scroll: it closes the run.
-            let next = if wheel.phase == WheelPhase::End { None } else { scale.wheeled(current(&*cx), bounds, &wheel, rtl, self.wheel_step) };
+            let value = current(&*cx);
+            let next = match (&self.stepper, wheel.phase) {
+                (_, WheelPhase::End) => None,
+                (Some(stepper), _) => {
+                    let delta = wheel_step(&STEPPER_STEPS, ValueAxes::Both, &wheel, rtl);
+                    custom_step(stepper, value, bounds, delta)
+                }
+                (None, _) => scale.wheeled(value, bounds, &wheel, rtl, self.wheel_step),
+            };
             cx.wheel_run(wheel.phase, next);
         }
     }
@@ -386,7 +422,14 @@ impl Component for Slider<'_> {
             Some(value) => Numeric::new(*value, range),
             None => Numeric::empty(range),
         };
-        access.numeric(numeric.step(scale.small()));
+        let step = self.stepper.as_ref().and_then(|stepper| {
+            let value = cx.value().copied().unwrap_or_else(|| scale.middle());
+            let direction = if value < scale.max { 1.0 } else { -1.0 };
+            custom_step(stepper, value, (scale.min, scale.max), StepResult::Set(direction))
+                .map(|next| (next - value).abs())
+                .filter(|step| *step > 0.0)
+        });
+        access.numeric(numeric.step(step.unwrap_or_else(|| scale.small())));
     }
 
     /// The app's words for the shown value when it gives them, else the value as the slider words it.

@@ -184,6 +184,36 @@ fn a_leaf_at_a_degenerate_rect_neither_panics_nor_changes_its_value() {
     }
 }
 
+#[trial]
+fn a_log_slider_uses_its_stepper_for_keys_and_wheel() {
+    let value = Rc::new(RefCell::new(0.02));
+    let shown = value.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Slider::new(Bind::bound(&mut *shown.borrow_mut()), 0.01..=10.0)
+            .scale(SliderScale::Log)
+            .stepper(|from, direction, scale| from + f64::from(direction) * scale * 0.01)
+            .label("Fidelity")
+            .show_at(ui, FIELD);
+    });
+    fixture.motion(MotionMode::Off).settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    assert!((*value.borrow() - 0.03).abs() < 1e-9);
+    fixture.key(Key::ArrowRight, Modifiers::SHIFT);
+    assert!((*value.borrow() - 0.13).abs() < 1e-9);
+    fixture.frame(vec![pointer::moved(FIELD.center())]);
+    fixture.frame(vec![pointer::wheel_lines(-2.0)]);
+    fixture.settle();
+    assert!((*value.borrow() - 0.11).abs() < 1e-9);
+    fixture.key(Key::End, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 10.0);
+    fixture.key(Key::Home, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 0.01);
+    fixture.frame(vec![pointer::press(FIELD.center())]);
+    fixture.frame(vec![pointer::release(FIELD.center())]);
+    assert!((*value.borrow() - 0.1_f64.sqrt()).abs() < 1e-6);
+}
+
 /// The wheel over a value control in a scrolling panel (a slider, a number field, a select) scrolls the panel while the
 /// control has no focus; it steps the control once the control has focus, or without focus inside a `WheelScope::Free`
 /// scope (an adjustment dialog, an options bar). An outer `WheelScope::Gated` scope (a card in the Overview) wins over a
