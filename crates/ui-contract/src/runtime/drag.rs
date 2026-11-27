@@ -894,14 +894,14 @@ pub(crate) fn ended<P: Clone + 'static>(ctx: &Context, source: Id) -> Option<(Op
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let position = os_files_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
-    // A modal holds input: targets on layers below it, and on the window, never accept, except OS files on a target
-    // that takes them there.
+    // A modal this pass showed holds input: targets on layers below it, and on the window, never accept, except OS
+    // files on a target that takes them there.
     let os = carries_os_files(ctx);
     let scopes: Vec<(Option<Id>, bool)> = PerViewport::<Targets>::with(ctx, viewport, |targets| {
         targets.this.iter().map(|registration| (registration.scope, os && registration.reach.under_modal)).collect()
     });
     let open: Vec<bool> =
-        scopes.iter().map(|(scope, through)| *through || overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
+        scopes.iter().map(|(scope, through)| *through || overlay::key_layer_at_end(ctx, scope.as_slice()) != LayerKeys::Blocked).collect();
     let mut refused = None;
     let winner = PerViewport::<Targets>::with(ctx, viewport, |targets| {
         // The topmost layer in the order the overlay host handed egui wins, then the target registered last: a target

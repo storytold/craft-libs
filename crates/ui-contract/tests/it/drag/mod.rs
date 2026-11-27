@@ -778,6 +778,44 @@ fn files_dropped_under_a_modal_land_only_on_targets_that_take_them_there() {
     assert_eq!(taken.window, vec![vec!["b.png".to_owned()]], "the window takes the file dropped beside the row");
 }
 
+/// A drop is judged by the layers of the pass it lands in: a file hovered over a row while a modal is open, then
+/// dropped in the pass the modal stops showing in, lands on the row; one dropped in the pass a modal starts showing
+/// in is refused.
+#[trial]
+fn a_drop_follows_the_modal_state_of_its_own_pass() {
+    let landed = RefCell::new(Landed::default());
+    let modal = std::cell::Cell::new(true);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        FileList { common: Common::new(), landed: &landed, under_modal: false }.id_salt("files").show_at(ui, LIST);
+        if modal.get() {
+            let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+            Modal { common: Common::new(), props }.id_salt("alert").show(ui, |_, _| {});
+        }
+    };
+    let row = LIST.min + Vec2::new(LIST.width() / 2.0, ROW / 2.0);
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(row)], &mut show);
+    frames.frame(vec![], &mut show);
+    modal.set(false);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.frame(vec![], &mut show);
+    assert_eq!(landed.borrow().rows, vec![(0, vec!["a.png".to_owned()])], "the drop in the pass the modal closed lands on the row");
+
+    landed.borrow_mut().rows.clear();
+    frames.idle(2, &mut show);
+    frames.hover_files(&["b.png"]);
+    frames.frame(vec![moved(row)], &mut show);
+    frames.frame(vec![], &mut show);
+    modal.set(true);
+    frames.drop_files(&["b.png"]);
+    frames.frame(vec![], &mut show);
+    frames.frame(vec![], &mut show);
+    assert!(landed.borrow().rows.is_empty(), "the drop in the pass a modal opened is refused: {:?}", landed.borrow().rows);
+}
+
 /// A drop of files anywhere in the window, with each file's content.
 struct ReadOnWindow;
 

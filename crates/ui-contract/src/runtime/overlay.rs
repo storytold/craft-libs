@@ -1039,14 +1039,24 @@ pub(crate) enum LayerKeys {
 /// focus is in (or above the window when it is in none), else that layer's key class. With `below`, only the layers
 /// under the layer `below` count: the stack as it is once that layer closes.
 pub(crate) fn key_layer(ctx: &Context, scopes: &[Id], below: Option<Id>) -> LayerKeys {
+    layer_keys(ctx, scopes, below, |pass| &pass.last)
+}
+
+/// [`key_layer`] for a hook at the end of a pass, after every layer of the pass has shown: judged by the layers this
+/// pass showed, so a modal that stopped showing in it no longer blocks and one that started does.
+pub(crate) fn key_layer_at_end(ctx: &Context, scopes: &[Id]) -> LayerKeys {
+    layer_keys(ctx, scopes, None, |pass| &pass.current)
+}
+
+fn layer_keys(ctx: &Context, scopes: &[Id], below: Option<Id>, shown: impl Fn(&Pass) -> &Vec<OpenEntry>) -> LayerKeys {
     let viewport = pass::current_viewport(ctx);
     let stack = with_persist(ctx, viewport, |persist| persist.stack.clone());
     let at = |id: Id| stack.iter().position(|layer| *layer == id);
     let under = |id: Id| below.is_none_or(|top| id != top && at(top).is_none_or(|ceiling| at(id).is_none_or(|layer| layer < ceiling)));
     let (inside, modals) = with_pass(ctx, |pass| {
-        let inside = scopes.iter().find_map(|scope| pass.last.iter().find(|entry| entry.id == *scope && !entry.exiting && under(entry.id)).cloned());
-        let modals: Vec<Id> =
-            pass.last.iter().filter(|entry| entry.blocks_window() && !entry.exiting && under(entry.id)).map(|entry| entry.id).collect();
+        let shown = shown(pass);
+        let inside = scopes.iter().find_map(|scope| shown.iter().find(|entry| entry.id == *scope && !entry.exiting && under(entry.id)).cloned());
+        let modals: Vec<Id> = shown.iter().filter(|entry| entry.blocks_window() && !entry.exiting && under(entry.id)).map(|entry| entry.id).collect();
         (inside, modals)
     });
     let floor = inside.as_ref().and_then(|entry| at(entry.id));
