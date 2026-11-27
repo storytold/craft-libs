@@ -162,7 +162,7 @@ pub(super) fn ruler_slot(container: &Rec) -> Option<u32> {
 
 /// A slot list's entries of `kind`, read by `read`: an entry is the slot of the 2017 records
 /// before it.
-fn slots<T>(list: &Rec, kind: u32, read: impl Fn(&Rec) -> Option<T>) -> Vec<Option<T>> {
+pub(super) fn slots<'a, T>(list: &Rec<'a>, kind: u32, read: impl Fn(&Rec<'a>) -> Option<T>) -> Vec<Option<T>> {
     let mut out = vec![];
     let mut current = None;
     for r in list.children() {
