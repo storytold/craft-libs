@@ -1,21 +1,24 @@
 //! The app shell's named slots: a bar in a top or bottom slot fills it with its members on the slot's middle, and a
 //! slot whose content is a memoized view runs only when its props change. A full-window page hides the slots and the
-//! body, and its band keeps the window's ends and moves the window.
+//! body, and its band keeps the window's ends and moves the window. What the body opens stops above the bottom slots.
 
-use craft_host::target::ShellInfo;
+use craft_host::target::{Os, ShellInfo};
 use craft_theme::Size;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, CommandSet, Entry, MemoProps, MemoView, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::menu::bar::{MenuBar, MenuTitle};
+use craft_ui::menu::{Menu, MenuItem};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
 use craft_ui::runtime::env::{Env, PageBandRoom, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::windows::NoWindows;
@@ -695,4 +698,117 @@ fn a_page_takes_the_windows_keys_with_nothing_focused() {
         frame(&mut frames, vec![]);
     }
     assert_eq!(printed.get(), 1, "Enter with nothing focused runs the page's command once");
+}
+
+/// A window shell with a status slot and `body`, 400 x 300, and the status slot's rect.
+fn shell_with_status(body: fn(&mut Ui)) -> (Fixture, Rc<Cell<Rect>>) {
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&slot);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .status(true, |ui, _, _: &mut ()| {
+                Text::new("Ready").show(ui);
+            })
+            .body(|ui, _, _| body(ui))
+            .show(ui, &mut ());
+        if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == slots::STATUS).map(|(_, rect)| *rect) {
+            seen.set(rect);
+        }
+    });
+    // The in-window menu bar is PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
+    fixture.room(Vec2::new(400.0, 300.0)).settle();
+    (fixture, slot)
+}
+
+fn button_menu(ui: &mut Ui) {
+    let opener = Button::new("Open").show(ui);
+    Menu::new("Long").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        for at in 0..40 {
+            MenuItem::new(format!("Row {at}")).show(ui);
+        }
+    });
+}
+
+fn menu_bar(ui: &mut Ui) {
+    let titles = vec![MenuTitle::new("&File", |ui| {
+        for at in 0..40 {
+            MenuItem::new(format!("Row {at}")).show(ui);
+        }
+    })];
+    MenuBar::new("Main menu", titles).show(ui);
+}
+
+fn select_list(ui: &mut Ui) {
+    let entries: Vec<Entry<u8>> = (0..60u8).map(|at| Entry::new(at, format!("Item {at}"))).collect();
+    let mut value = 0u8;
+    Select::new("Pick", Bind::bound(&mut value), &entries).show(ui);
+}
+
+/// What a shell's body opens (a menu, a menu bar's menu, a select's list) ends above the shell's bottom slot, so the
+/// status bar is never covered.
+#[trial]
+fn popups_stop_above_the_bottom_slots_in_each_window() {
+    type Case = (&'static str, fn(&mut Ui));
+    let cases: [Case; 3] = [("Open", button_menu), ("File", menu_bar), ("Pick", select_list)];
+    for (opener, body) in cases {
+        let (mut fixture, slot) = shell_with_status(body);
+        let opener_node = fixture.by_label(opener).unwrap_or_else(|| panic!("the opener {opener:?} shows"));
+        fixture.click(&opener_node).settle();
+        let popups: Vec<Rect> = [Role::MENU, Role::LIST_BOX]
+            .into_iter()
+            .flat_map(|role| fixture.by_role(role).iter().map(|node| node.rect).collect::<Vec<_>>())
+            .collect();
+        let slot = slot.get();
+        assert!(!popups.is_empty() && slot.height() > 0.0, "{opener:?} opens a popup over a shown status slot");
+        for popup in popups {
+            assert!(popup.bottom() <= slot.top() + 0.5, "{opener:?}: the popup {popup:?} ends above the status slot {slot:?}");
+        }
+    }
+}
+
+/// What a memoized options bar shows: one text button, as an app's tool options.
+#[derive(MemoProps)]
+struct MemoBar {
+    version: u64,
+}
+
+thread_local! {
+    /// The rect the memoized bar's button took when it last ran.
+    static MEMO_BUTTON: Cell<Rect> = const { Cell::new(Rect::NOTHING) };
+}
+
+fn memo_bar(_: &mut MemoBar, ui: &mut Ui) {
+    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        let rect = Button::new("Straighten").show(ui).rect;
+        MEMO_BUTTON.with(|button| button.set(rect));
+    });
+}
+
+/// photocraft#16405: an options bar the app shows through a memoized view sits on the slot's line as one shown directly
+/// does: its text button is drawn whole, centred in the slot, not cut off at the bottom.
+#[trial]
+fn a_memoized_options_bar_centres_its_button_in_the_slot() {
+    for ppp in [1.0, 1.25, 1.5] {
+        let seen = Rc::new(Cell::new(None::<Rect>));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .options_bar(true, |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("options", MemoBar { version: 0 }, memo_bar).show(ui);
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {
+                out.set(Some(slot));
+            }
+        });
+        fixture.ctx().set_pixels_per_point(ppp);
+        fixture.room(Vec2::new(600.0, 300.0)).settle();
+        let slot = seen.get().expect("the options slot shows");
+        let button = MEMO_BUTTON.with(Cell::get);
+        assert!(button.height() > 0.0, "{ppp}: the button shows: {button:?}");
+        assert!(button.max.y <= slot.max.y + 0.01 && button.min.y >= slot.min.y - 0.01, "{ppp}: the button {button:?} lies inside the slot {slot:?}");
+        assert!((button.center().y - slot.center().y).abs() <= 1.0, "{ppp}: the button {button:?} sits on the slot's middle {slot:?}");
+    }
 }

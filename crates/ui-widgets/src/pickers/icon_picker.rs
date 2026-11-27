@@ -205,7 +205,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
                 .shown(category)
                 .show_items(ui, &source, &mut |key, _| Tab::new(tabs[*key].1.clone()));
             for event in &strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.last()
                 {
                     category = (*key).min(groups.len());

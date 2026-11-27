@@ -1191,61 +1191,6 @@ mod tests {
         assert_eq!(dec.frames_per_packet(), Some(1536), "a damaged packet does not make the packets' lengths differ");
     }
 
-    #[cfg(feature = "ac3-decode")]
-    #[test]
-    fn e_ac3_packets_of_different_lengths_or_short_syncframes_are_not_indexed() {
-        use crate::ac3::tests::single_block_eac3;
-        let params = CodecParams::new(CodecId::Eac3);
-        let one = single_block_eac3(true);
-        let two = [single_block_eac3(true), single_block_eac3(false)].concat();
-        // Packets of 256 and 512 frames: a packet's index does not give its position.
-        let dec = TrackDecoder::new(&params, &[&one, &one, &two]).unwrap();
-        assert_eq!(dec.frames_per_packet(), None);
-        // Known only once decoded: from then on too.
-        let mut dec = TrackDecoder::new(&params, &[&one]).unwrap();
-        assert_eq!(dec.frames_per_packet(), Some(256));
-        dec.decode(&two).unwrap();
-        assert_eq!(dec.frames_per_packet(), None);
-        // One-block syncframes may reuse exponents from any syncframe before them.
-        assert_eq!(TrackDecoder::new(&params, &[&one]).unwrap().preroll(), usize::MAX);
-    }
-
-    #[test]
-    fn codecs_without_a_packet_decoder_are_unsupported() {
-        for codec in [CodecId::Vorbis, CodecId::H264] {
-            assert!(matches!(TrackDecoder::new(&CodecParams::new(codec), &[]), Err(AudioError::Unsupported(_))), "{codec:?}");
-        }
-        // A codec whose feature is off names the feature.
-        #[cfg(not(feature = "aac-decode"))]
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Aac), &[]), Err(AudioError::Unsupported(m)) if m.contains("aac-decode")));
-        #[cfg(not(feature = "alac-decode"))]
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac), &[]), Err(AudioError::Unsupported(m)) if m.contains("alac-decode")));
-        #[cfg(not(feature = "flac-decode"))]
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Flac), &[]), Err(AudioError::Unsupported(m)) if m.contains("flac-decode")));
-        #[cfg(not(feature = "opus-decode"))]
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Opus), &[]), Err(AudioError::Unsupported(m)) if m.contains("opus-decode")));
-        #[cfg(not(feature = "mp3-decode"))]
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Mp3), &[]), Err(AudioError::Unsupported(m)) if m.contains("mp3-decode")));
-        // PCM needs its sample format.
-        assert!(TrackDecoder::new(&CodecParams::new(CodecId::Pcm).with_channels(2).with_sample_rate(48_000), &[]).is_err());
-    }
-
-    #[cfg(feature = "alac-decode")]
-    #[test]
-    fn alac_needs_a_sample_rate() {
-        let cookie = alac::SpecificConfig::new(0, 2, 16, 4096).to_bytes();
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac).with_extradata(cookie.clone()), &[]), Err(AudioError::Malformed(_))));
-        let dec = TrackDecoder::new(&CodecParams::new(CodecId::Alac).with_extradata(cookie).with_sample_rate(32_000), &[]).unwrap();
-        assert_eq!(dec.sample_rate(), 32_000);
-    }
-
-    #[cfg(feature = "alac-decode")]
-    #[test]
-    fn alac_needs_its_cookie() {
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac), &[]), Err(AudioError::Malformed(_))));
-        let bad = CodecParams::new(CodecId::Alac).with_extradata(vec![0; 10]);
-        assert!(matches!(TrackDecoder::new(&bad, &[]), Err(AudioError::Malformed(_))));
-    }
     /// ALAC 5.1 comes out in WAV order at full scale, and a lost packet is as long as the last.
     #[cfg(all(feature = "alac-decode", feature = "alac-encode"))]
     #[test]

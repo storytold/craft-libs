@@ -5,17 +5,18 @@
 //! them to document units with the canvas's view ([`ToolContext::space`]), so it holds no copy of the view.
 
 use super::{CanvasSpace, MARCH_SECONDS, MARCH_TICK, Snap, ToolPath, march_shift};
-use crate::contract::{Pattern, PatternKind, PatternProbe, Tooltip};
+use crate::contract::{DragPreview, Pattern, PatternKind, PatternProbe, Tooltip};
 use crate::primitives::{ContentPainterCx, Draw};
 use crate::runtime::env::{Direction, Env, Label, MotionPolicy, PointSize, UnitWords, Units, WordSet, Words};
 use crate::runtime::motion::loop_phase;
 use crate::style::StyleCx;
 use craft_behavior::geometry::{SnapKinds, SnapLine};
 use craft_behavior::kurbo::{self, Point};
-use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GestureId, PointerButton, PointerSample};
+use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GestureId, PointerButton, PointerKind, PointerSample};
 use craft_i18n::{Digits, Format, Region};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Pos2, Rect, Vec2};
+use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 /// A pointer sample delivered to a tool, in screen points, with the pen's reading. A mouse reports pressure 1, no
@@ -37,12 +38,14 @@ pub struct ToolPointer {
     /// The time of the sample, in seconds: the pass that took it. A press carries the time the button went down,
     /// and a drag or release sample the time of the pass it arrived in.
     pub time: f64,
+    /// Mouse, pen or touch, from the pass's pointer frame.
+    pub kind: PointerKind,
 }
 
 impl ToolPointer {
     /// A mouse sample of `button` at `pos` and `time`, with no modifiers and no press.
     pub const fn new(pos: Pos2, button: PointerButton, time: f64) -> Self {
-        ToolPointer { pos, mods: Mods::NONE, sample: PointerSample::new(1.0), button, clicks: 0, time }
+        ToolPointer { pos, mods: Mods::NONE, sample: PointerSample::new(1.0), button, clicks: 0, time, kind: PointerKind::Mouse }
     }
 
     /// The modifiers held.
@@ -56,6 +59,13 @@ impl ToolPointer {
     #[must_use]
     pub const fn sample(mut self, sample: PointerSample) -> Self {
         self.sample = sample;
+        self
+    }
+
+    /// The device kind of the sample.
+    #[must_use]
+    pub const fn kind(mut self, kind: PointerKind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -83,13 +93,20 @@ pub enum ToolAction {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ToolKey {
-    /// An arrow key: a unit direction on screen (not mirrored in a right-to-left interface) and the modifiers.
+    /// An arrow key: a unit direction on screen (not mirrored in a right-to-left interface), the modifiers and the
+    /// keys held with it.
     #[non_exhaustive]
     Nudge {
         /// The direction.
         direction: Vec2,
         /// The modifiers held.
         mods: Mods,
+        /// The keys down when the arrow went down, the arrow not among them ([`Intents::nudge_held`]): a key held
+        /// with the arrow (Backtick, to move only a fill's pattern), read in the order of the frame's events, where
+        /// [`ToolContext::held`] is the state after them.
+        ///
+        /// [`Intents::nudge_held`]: crate::runtime::keys::Intents::nudge_held
+        held: Vec<Key>,
     },
     /// Delete (`forward`) or Backspace, while the tool claims the deletes ([`ToolClaims::deletes`]).
     #[non_exhaustive]
@@ -105,13 +122,15 @@ pub enum ToolKey {
     /// still run, but Enter, Escape, Delete and Backspace, which arrive as `Submit`, `Cancel` and `Delete`. It carries
     /// no release; [`ToolContext::held`] says whether the key is still down.
     Kept(Chord),
+    /// Alt (Option) pressed and let go with nothing between, while the tool claims it ([`ToolClaims::alt_tap`]).
+    AltTap,
 }
 
 impl ToolKey {
-    /// An arrow key: a unit direction on screen and the modifiers held; what the host passes for an arrow, built by
-    /// a test of a tool.
+    /// An arrow key: a unit direction on screen and the modifiers held, with no other key held; what the host passes
+    /// for an arrow, built by a test of a tool.
     pub fn nudge(direction: Vec2, mods: Mods) -> Self {
-        ToolKey::Nudge { direction, mods }
+        ToolKey::Nudge { direction, mods, held: Vec::new() }
     }
 
     /// Delete (`forward`) or Backspace.
@@ -222,8 +241,18 @@ pub(crate) struct ToolRequests {
     pub(crate) pan: Option<bool>,
     /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
     pub(crate) hud: Option<Vec<(Label, String)>>,
+    /// The content a tool handed to a drag session, from [`ToolContext::start_drag`].
+    pub(crate) drag: Option<DragRequest>,
     /// The pointer tip, from [`ToolContext::tip`].
     pub(crate) tip: Option<Tooltip>,
+}
+
+/// A drag session a tool asked for: the payload, the extra content some targets read, and the ghost.
+#[derive(Clone, Debug)]
+pub(crate) struct DragRequest {
+    pub(crate) payload: Arc<dyn Any + Send + Sync>,
+    pub(crate) also: Option<Arc<dyn Any + Send + Sync>>,
+    pub(crate) preview: DragPreview,
 }
 
 /// What a tool sees and may ask for during a call.
@@ -252,6 +281,7 @@ pub struct ToolContext<'a> {
     snap: Option<&'a Snap>,
     march: Option<March>,
     requests: ToolRequests,
+    over_drop_target: bool,
 }
 
 /// What a paint call needs to march ants: the motion mode and the ants' dash length.
@@ -281,6 +311,7 @@ impl<'a> ToolContext<'a> {
             snap: None,
             march: None,
             requests: ToolRequests::default(),
+            over_drop_target: false,
         }
     }
 
@@ -329,6 +360,14 @@ impl<'a> ToolContext<'a> {
     /// Whether the tool shows its precise cursor now: the canvas's [`CanvasSpace::precise`]; never without a space.
     pub fn precise(&self) -> bool {
         self.space.is_some_and(|space| space.precise())
+    }
+
+    /// Whether a drag session the running gesture started has a target that would take it now; the host sets it from
+    /// the session's mark.
+    #[must_use]
+    pub(crate) fn over_target(mut self, over: bool) -> Self {
+        self.over_drop_target = over;
+        self
     }
 
     /// The press arena's slop.
@@ -399,6 +438,14 @@ impl<'a> ToolContext<'a> {
         let (Some(painter), Some(march)) = (self.painter, self.march) else { return };
         let turn = loop_phase(painter.painter.ctx(), march.policy, MARCH_SECONDS, Some(MARCH_TICK));
         painter.marching_ants(points, closed, march_shift(turn, march.dash));
+    }
+
+    /// Paints a swath `width` points wide along `points` in the theme's text-selection fill in a paint call; it paints
+    /// nothing in any other.
+    pub fn swath(&self, points: &[Pos2], width: f32) {
+        if let Some(painter) = self.painter {
+            painter.swath(points, width);
+        }
     }
 
     /// `point`, a document point under the pointer, moved to what the canvas snaps it to (View > Snap To) with the
@@ -529,6 +576,22 @@ impl<'a> ToolContext<'a> {
         self.requests.hud = Some(rows);
     }
 
+    /// Hands `payload` to a drag session shown with `preview`: the content of the gesture the tool runs. The gesture
+    /// goes on; the tool keeps its `drag` calls until the release.
+    pub fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview) {
+        self.requests.drag = Some(DragRequest { payload: Arc::new(payload), also: None, preview });
+    }
+
+    /// [`start_drag`](Self::start_drag) with `also`, extra content that some targets read beside the payload.
+    pub fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn Any + Send + Sync>, preview: DragPreview) {
+        self.requests.drag = Some(DragRequest { payload: Arc::new(payload), also: Some(also), preview });
+    }
+
+    /// While a drag session this tool started runs, whether a target would take it at the pointer now.
+    pub fn over_drop_target(&self) -> bool {
+        self.over_drop_target
+    }
+
     /// A tip to show at the pointer where it rests (a link's address and the key that follows it), asked from
     /// [`CanvasTool::hover`]. The host shows it through the framework tooltip, with its look and delay, while no
     /// gesture runs, and drops it when the pointer leaves the canvas or a press starts. The last request of a pass
@@ -571,13 +634,15 @@ pub struct ToolClaims {
     /// Decrement on the tool's node and turns them into [`ToolKey::Nudge`], so a tool that claims the nudges
     /// describes what they move in [`CanvasTool::access`]. The arrows reach [`CanvasTool::key`] either way.
     pub nudges: bool,
+    /// The tool takes a lone Alt tap, delivered as [`ToolKey::AltTap`].
+    pub alt_tap: bool,
     /// Single chords the tool takes while the rest of the keyboard stays the app's, delivered as [`ToolKey::Kept`].
     pub keys: &'static [Chord],
 }
 
 impl ToolClaims {
     /// No keys: every key stays the app's.
-    pub const NONE: ToolClaims = ToolClaims { keyboard: false, deletes: false, nudges: false, keys: &[] };
+    pub const NONE: ToolClaims = ToolClaims { keyboard: false, deletes: false, nudges: false, alt_tap: false, keys: &[] };
 
     /// The same claims with the single chords `keys`.
     #[must_use]
@@ -604,6 +669,13 @@ impl ToolClaims {
     #[must_use]
     pub const fn nudges(mut self) -> Self {
         self.nudges = true;
+        self
+    }
+
+    /// The same claims with the lone Alt tap.
+    #[must_use]
+    pub const fn alt_tap(mut self) -> Self {
+        self.alt_tap = true;
         self
     }
 }
@@ -690,8 +762,8 @@ pub trait CanvasTool {
         button == PointerButton::Primary
     }
 
-    /// Whether a drag past the canvas edge asks the app to scroll the view (marquees, lassos, brushes, crop: yes;
-    /// the Hand and Zoom tools: no). Default: `true`.
+    /// Whether a drag into the band inside the canvas edge or past it asks the app to scroll the view (marquees,
+    /// lassos, brushes, crop: yes; the Hand and Zoom tools: no). Default: `true`.
     fn autoscrolls(&self) -> bool {
         true
     }

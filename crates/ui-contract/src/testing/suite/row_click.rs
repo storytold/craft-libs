@@ -1,27 +1,38 @@
 //! The point at which the suite presses a collection row to give it the lead or pick it: a point of the row's own
 //! area (17.5). A row that holds child components (a switch, a select), or that the collection draws controls over (a
-//! grid's filter buttons in its header cells), is pressed where none of them is, so the press reaches the row.
+//! grid's filter buttons in its header cells, its pointer-only column edges), is pressed where none of them is, so the
+//! press reaches the row.
 
 use super::nodes::subtree;
-use crate::runtime::egui::access::Declared;
+use crate::runtime::access::sub_node_id;
+use crate::runtime::egui::access::{Declared, NodeKey};
 use crate::testing::fixture::{Fixture, Target};
 use egui::{Pos2, Rect};
 
 /// The point of `row` to press: its centre when no focusable or clickable node of its collection (the row's parent:
-/// the row's own children and the controls the collection shows beside or over its rows) covers it, else the middle of
-/// the widest stretch of the row's centre line that none covers, and the centre when they cover the whole line. Nodes
-/// outside the collection, such as the field a popup list opens over, lie under it and are not counted.
+/// the row's own children and the controls the collection shows beside or over its rows) and no pointer-only part of
+/// the collection, its children or its ancestors (a press part with no node, such as a grid's column edge) covers it,
+/// else the middle of the widest stretch of the row's centre line that none covers, and the centre when they cover the
+/// whole line. Nodes outside the collection, such as the field a popup list opens over, lie under it and are not
+/// counted.
 pub(super) fn point(fixture: &Fixture, row: &Target) -> Pos2 {
     let tree = fixture.tree();
     let centre = row.rect.center();
     let collection = tree.parent_of_key(row.node).unwrap_or(row.node);
-    let mut covered: Vec<Rect> = subtree(tree, collection)
-        .into_iter()
+    let inside = subtree(tree, collection);
+    let nodes = inside
+        .iter()
+        .copied()
         .filter(|node| *node != collection && *node != row.node)
         .filter(|node| tree.declares_key(*node, Declared::Focus) || tree.declares_key(*node, Declared::Click))
-        .filter_map(|node| tree.bounds_of(node))
-        .filter(|bounds| bounds.min.y <= centre.y && centre.y <= bounds.max.y)
-        .collect();
+        .filter_map(|node| tree.bounds_of(node));
+    let owners: Vec<NodeKey> =
+        inside.iter().copied().chain(std::iter::successors(tree.parent_of_key(collection), |node| tree.parent_of_key(*node))).collect();
+    let pointer_only = crate::runtime::pointer::press_parts(fixture.ctx())
+        .into_iter()
+        .filter(|(owner, part, _)| owners.contains(&NodeKey::of(*owner)) && tree.bounds_of(NodeKey::of(sub_node_id(*owner, *part))).is_none())
+        .map(|(_, _, bounds)| bounds);
+    let mut covered: Vec<Rect> = nodes.chain(pointer_only).filter(|bounds| bounds.min.y <= centre.y && centre.y <= bounds.max.y).collect();
     if !covered.iter().any(|bounds| bounds.contains(centre)) {
         return centre;
     }

@@ -1,6 +1,7 @@
-//! `Button`, `IconButton`, `ToggleButton`, `SplitButton` and `Link`.
+//! `Button`, `IconButton`, `ToggleButton`, `SplitButton`, `Link` and `CommandSearch`.
 
 pub mod button;
+pub mod command_search;
 pub(crate) mod face;
 pub mod icon_button;
 pub mod link;
@@ -13,9 +14,10 @@ mod words;
 use crate::contract::MemoProps;
 use crate::runtime::env::EnvValue;
 
-pub use button::{Button, ButtonOutput, ButtonStyle};
+pub use button::{Button, ButtonChord, ButtonOutput, ButtonStyle};
+pub use command_search::{CommandSearch, CommandSearchStyle};
 pub use face::Arrangement;
-pub use icon_button::{IconButton, IconButtonStyle, PopupMark};
+pub use icon_button::{IconButton, IconButtonStyle, PopupMark, PressFocus};
 pub use link::{Link, LinkStyle};
 pub use split_button::{SplitButton, SplitButtonStyle, SplitMenu, SplitOutput};
 pub use toggle_button::{ToggleButton, ToggleButtonStyle};
@@ -35,6 +37,19 @@ pub enum GroupLevel {
     Collapsed,
 }
 
+/// How a `Link` that stands alone marks itself beside its colour. An app sets it once at its root (`RootEnv::values`);
+/// a link in a sentence stays underlined, since the text around it shares its line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum LinkLook {
+    /// Underlined, so colour is not its only cue.
+    #[default]
+    Underlined,
+    /// The link colour alone, as a list of links under its heading on a start page (VectorCraft's).
+    Plain,
+}
+
 /// Where controls are shown. A ribbon group sets `Ribbon` for its content (and for its collapsed button and the
 /// popover that holds its content), and styles keyed on the env follow it:
 ///
@@ -48,6 +63,12 @@ pub enum GroupLevel {
 /// A page's side menu (a File page's list of pages) sets `SideMenu` for its rows: a `Button` there shows its label in
 /// the large body role (`TypeRole::BodyLarge`), with `space.pad.segment` above and below it and `space.pad.roomy`
 /// at its sides, so the menu reads as a list of places rather than a row of controls.
+///
+/// A page's call to action (a start page's primary link) sets `CallToAction`: a `Button` there stands
+/// `size.page.action` high, its label strong.
+///
+/// A start page's New and Open stand in `PageAction`: a `Button` there stands at least `size.page.button` high, with at
+/// least `size.page.button_side` at each side of its label.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
@@ -59,10 +80,55 @@ pub enum ControlPlace {
     Ribbon,
     /// In a page's side menu.
     SideMenu,
+    /// A page's call to action.
+    CallToAction,
+    /// A start page's New and Open.
+    PageAction,
 }
 
-/// The style context a push or split button draws in: in a ribbon (`ControlPlace::Ribbon`) the default variant
-/// becomes the ghost one, so the button is flat at rest; any other variant, and any other place, stays as it is.
+/// How an icon button or a segment that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`),
+/// so the current tool can show the look an app's tools had; an app sets it at its root (`RootEnv::values`) for its
+/// segmented pickers as well.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ActiveLook {
+    /// The accent's soft fill and edge, with the accent's text colour.
+    #[default]
+    Accent,
+    /// The pressed state's fill with no edge, and the glyph in the normal text colour.
+    Pressed,
+    /// The `surface.control` fill with no edge, and the glyph in the normal text colour: the open panel's icon of a
+    /// dock in VectorCraft 0.24's block look (`PanelTabLook::Block`).
+    Control,
+}
+
+/// The look of a push or split button that asks for no variant. An app sets it once at its root (`RootEnv::values`);
+/// the default is the outline. A button that asks for a variant, `Variant::SECONDARY` included, keeps it; a ribbon's
+/// flat look (`ControlPlace::Ribbon`) wins over it, and toggles keep the outline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum PushButtonLook {
+    /// The outline, filled only by state.
+    #[default]
+    Outline,
+    /// The filled neutral tile with no edge at rest (`Emphasis::Filled`): VectorCraft's buttons.
+    Filled,
+}
+
+/// The filled neutral variant a push button takes under [`PushButtonLook::Filled`]: `surface.control` with no edge at
+/// rest.
+pub const FILLED: craft_theme::Variant = craft_theme::Variant::look(craft_theme::Emphasis::Filled, craft_theme::variant::Tone::Neutral);
+
+/// The variant a push or split button that asks for none takes in `env` (`Component::default_variant`): the filled one
+/// under [`PushButtonLook::Filled`], outside a ribbon.
+pub(crate) fn push_default(env: &crate::runtime::env::Env) -> Option<craft_theme::Variant> {
+    (env.get::<PushButtonLook>() == PushButtonLook::Filled && env.get::<ControlPlace>() != ControlPlace::Ribbon).then_some(FILLED)
+}
+
+/// The style context a push, split or labelled toggle button draws in: in a ribbon (`ControlPlace::Ribbon`) the default
+/// variant becomes the ghost one, so the button is flat at rest; any other variant, and any other place, stays as it is.
 pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleCx<'a> {
     if cx.variant == craft_theme::Variant::SECONDARY && cx.env::<ControlPlace>() == ControlPlace::Ribbon {
         cx.with_variant(craft_theme::Variant::GHOST)

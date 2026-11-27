@@ -1,6 +1,10 @@
 //! `Slider` and `RangeSlider`: the value maths that is the family's own: stepping in the reading direction, the scales
 //! that spread a range over a track, and thumbs that never cross.
 
+pub(crate) mod primary_down;
+
+pub(crate) mod mark_labels;
+
 pub(crate) mod dials;
 
 pub(crate) mod thumb_row;
@@ -9,7 +13,7 @@ use craft_behavior::{EditEvent, MotionMode};
 use craft_ui::contract::{Bind, Props as _, Show as _};
 use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, Frames, trial};
-use craft_ui::value_drag::Slider;
+use craft_ui::value_drag::{Slider, SliderScale};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,6 +26,7 @@ const FIELD: Rect = Rect { min: Pos2::new(20.0, 20.0), max: Pos2::new(220.0, 50.
 struct Slide {
     value: RefCell<f64>,
     range: std::ops::RangeInclusive<f64>,
+    scale: SliderScale,
     step: Option<f64>,
     wheel_step: Option<f64>,
     trim: Option<(f64, f64)>,
@@ -30,12 +35,20 @@ struct Slide {
 
 impl Slide {
     fn new(value: f64) -> Self {
-        Slide { value: RefCell::new(value), range: 0.0..=100.0, step: None, wheel_step: None, trim: None, events: RefCell::default() }
+        Slide {
+            value: RefCell::new(value),
+            range: 0.0..=100.0,
+            scale: SliderScale::Linear,
+            step: None,
+            wheel_step: None,
+            trim: None,
+            events: RefCell::default(),
+        }
     }
 
     fn show(&self, ui: &mut Ui) {
         let mut value = self.value.borrow_mut();
-        let mut slider = Slider::new(Bind::bound(&mut *value), self.range.clone()).label("Opacity");
+        let mut slider = Slider::new(Bind::bound(&mut *value), self.range.clone()).scale(self.scale).label("Opacity");
         if let Some(step) = self.step {
             slider = slider.step(step);
         }
@@ -82,6 +95,59 @@ fn dragged(slide: &Slide, offset: f32, travel: f32) -> f64 {
 }
 
 #[trial]
+fn a_log_slider_steps_in_the_callers_values() {
+    use craft_ui::testing::access::Declared;
+    use craft_ui::testing::focus::AccessActionKind;
+
+    let value = Rc::new(RefCell::new(0.01));
+    let shown = value.clone();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let reported = events.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let slider = Slider::new(Bind::bound(&mut *shown.borrow_mut()), 0.01..=20.0)
+            .label("Distance")
+            .scale(SliderScale::Log)
+            .stepper(|from, direction, steps| {
+                let unit = if from < 0.1 || from == 0.1 && direction < 0 { 1.0 } else { 10.0 };
+                let next = (from * 100.0 + f64::from(direction) * steps * unit).round() / 100.0;
+                if direction > 0 { next.min(0.12).max(from) } else { next }
+            })
+            .show_at(ui, FIELD);
+        reported.borrow_mut().extend(slider.events);
+    });
+    fixture.motion(MotionMode::Off).settle();
+    let slider = fixture.by_label("Distance").expect("accessible slider");
+    let original_text = fixture.tree().value_of(slider.node).unwrap().to_owned();
+    assert_eq!(fixture.tree().numeric_of(slider.node).unwrap().step, None);
+    assert!(fixture.tree().declares_key(slider.node, Declared::Increment));
+    assert!(!fixture.tree().declares_key(slider.node, Declared::Decrement));
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 0.02);
+    assert_ne!(fixture.tree().value_of(slider.node), Some(original_text.as_str()), "a fine step changes the reported value");
+    assert!(fixture.tree().declares_key(slider.node, Declared::Decrement));
+    fixture.frame(vec![pointer::moved(FIELD.center())]);
+    fixture.frame(vec![pointer::wheel_lines(-1.0)]);
+    assert_eq!(*value.borrow(), 0.01);
+    fixture.access(AccessActionKind::Increment, &slider).settle();
+    assert_eq!(*value.borrow(), 0.02);
+    fixture.access(AccessActionKind::Decrement, &slider).settle();
+    assert_eq!(*value.borrow(), 0.01);
+    fixture.key(Key::ArrowUp, Modifiers::SHIFT);
+    assert_eq!(*value.borrow(), 0.11);
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 0.12);
+    assert!(!fixture.tree().declares_key(slider.node, Declared::Increment), "the ladder ends before the slider's range");
+    events.borrow_mut().clear();
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    fixture.settle();
+    assert!(events.borrow().is_empty(), "a step at the end of the ladder makes no edit");
+    fixture.key(Key::End, Modifiers::NONE);
+    assert_eq!(*value.borrow(), 20.0);
+}
+
+#[trial]
 fn a_grabbed_slider_thumb_moves_by_the_pointer_travel_and_a_click_on_it_changes_nothing() {
     let centred = dragged_from(0.0, 10.0);
     assert!(centred > START, "the drag moved the value: {centred}");
@@ -96,6 +162,32 @@ fn a_grabbed_slider_thumb_moves_by_the_pointer_travel_and_a_click_on_it_changes_
     frames.idle(3, &mut show);
     pointer::click(&mut frames, FIELD.center() + Vec2::new(3.0, 0.0), &mut show);
     assert_eq!(slide.value(), START, "a click on the thumb leaves the value");
+}
+
+/// A log slider changes its value by equal ratios for equal travels (a linear one by equal differences), and a travel
+/// far past either end lands on the range's end.
+#[trial]
+fn a_log_slider_spreads_equal_ratios_evenly() {
+    let (min, max) = (0.01, 20.0);
+    let log = |value: f64| Slide { range: min..=max, scale: SliderScale::Log, ..Slide::new(value) };
+    let travel = 20.0;
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-3 * a.abs().max(b.abs());
+
+    let v0 = (min * max).sqrt();
+    let v1 = dragged(&log(v0), 0.0, travel);
+    let v2 = dragged(&log(v1), travel, travel);
+    assert!(v1 > v0 && v2 > v1, "the drags moved the value up: {v0} {v1} {v2}");
+    assert!(close(v1 / v0, v2 / v1), "equal travels give equal ratios: {v0} {v1} {v2}");
+
+    let l1 = dragged_from(0.0, travel);
+    let l2 = dragged(&Slide::new(l1), travel, travel);
+    assert!(close(l1 - START, l2 - l1), "a linear slider gives equal differences: {START} {l1} {l2}");
+
+    let far = 4.0 * FIELD.width();
+    let top = dragged(&log(v0), 0.0, far);
+    let bottom = dragged(&log(v0), 0.0, -far);
+    assert!((top - max).abs() < 1e-2 * max, "a travel past the end lands on the maximum: {top}");
+    assert!((bottom - min).abs() < 1e-2 * min, "a travel past the start lands on the minimum: {bottom}");
 }
 
 /// A trimmed span's ends are drawn across the track, not stops: a drag that ends beside one lands where the drag

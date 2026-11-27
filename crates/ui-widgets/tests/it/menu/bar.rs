@@ -1,4 +1,4 @@
-//! The menu bar: what the help search finds.
+//! The menu bar: what the help search finds, and the width its titles take.
 
 use craft_host::target::Os;
 use craft_i18n::Direction;
@@ -95,6 +95,40 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
     fixture.settle();
     assert_eq!(saved.get(), 1, "the letter runs the row it marks");
     assert!(fixture.by_label("Save").is_none(), "and the run closes the menu");
+}
+
+/// The output's `natural` is the width of every title side by side: the titles' width in a room that holds them all, and
+/// the same width in a room that folds some into "…", where the drawn titles are narrower.
+#[trial]
+fn the_output_reports_the_width_every_title_takes_in_any_room() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let seen = Rc::new(Cell::new([(0.0, 0.0); 2]));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = || {
+            ["&File", "&Edit", "&Image", "&Layer", "&Select", "&View", "&Window", "&Help"]
+                .into_iter()
+                .map(|title| {
+                    MenuTitle::new(title, |ui: &mut egui::Ui| {
+                        MenuItem::new("&New").show(ui);
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let top = ui.max_rect().left_top();
+        let wide = MenuBar::new("Wide menu", titles()).show_at(ui, egui::Rect::from_min_size(top, egui::vec2(800.0, 24.0)));
+        let below = top + egui::vec2(0.0, 40.0);
+        let narrow = MenuBar::new("Narrow menu", titles()).show_at(ui, egui::Rect::from_min_size(below, egui::vec2(120.0, 24.0)));
+        out.set([(wide.natural, wide.titles.width()), (narrow.natural, narrow.titles.width())]);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let [(wide, wide_titles), (narrow, narrow_titles)] = seen.get();
+    assert!(wide > 0.0, "the bar reports a width");
+    assert!((wide - wide_titles).abs() < 0.5, "with room for every title the natural width {wide} is the titles' width {wide_titles}");
+    assert!((narrow - wide).abs() < 0.5, "a narrow bar reports the same natural width {narrow} as a wide one {wide}");
+    assert!(narrow_titles < narrow, "a narrow bar draws titles {narrow_titles} narrower than its natural width {narrow}");
 }
 
 /// The pass a pointer move over a menu's rows runs paints the row under the pointer as the active row and no other,
@@ -272,6 +306,84 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
+}
+
+/// An Alt+letter the keymap binds to an enabled command runs that command and opens no menu, as a shortcut comes before
+/// a mnemonic; without the binding the same chord opens the menu.
+#[trial]
+fn a_bound_alt_letter_runs_its_command_instead_of_the_mnemonic() {
+    use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
+    use craft_ui::runtime::frame::take_output;
+    const RULERS: &str = "barTrial.rulers";
+    let mut rig = rig(Direction::Ltr);
+    let binding = Binding::parse("Alt+F").expect("the trial's chord parses");
+    let catalog = AppCatalog::new(vec![CommandDef::new(RULERS, "Rulers", Scope::app()).with_default(binding)], 1).expect("the trial's catalog");
+    rig.fixture.commands(CommandInput::new().catalog(catalog)).settle();
+    take_output(rig.fixture.ctx());
+    rig.fixture.key(Key::F, Modifiers::ALT);
+    rig.fixture.settle();
+    let fired: Vec<String> = take_output(rig.fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+    assert_eq!(fired, [RULERS], "the bound Alt+F runs its command once");
+    assert!(!rig.open("New"), "and does not also open File");
+
+    rig.fixture.commands(CommandInput::new()).settle();
+    rig.fixture.key(Key::F, Modifiers::ALT);
+    rig.fixture.settle();
+    assert!(rig.open("New"), "unbound, Alt+F opens File");
+}
+
+/// `MenuBarOutput::opened` is true in the one pass where a menu opened while none was open: a held menu, a switch from
+/// one title to another and the passes a frame reruns report false.
+#[trial]
+fn a_bar_menu_opening_is_reported_once() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let passes: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let seen = passes.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![
+            MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            }),
+            MenuTitle::new("&Edit", |ui| {
+                MenuItem::new("&Undo").show(ui);
+            }),
+        ];
+        let out = MenuBar::new("Main menu", titles).show(ui);
+        seen.borrow_mut().push(out.opened);
+    });
+    fixture.os(Os::Linux);
+    let reports = || {
+        let count = passes.borrow().iter().filter(|opened| **opened).count();
+        passes.borrow_mut().clear();
+        count
+    };
+    fixture.settle();
+    assert_eq!(reports(), 0, "a closed bar reports no opening");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "File is open");
+    assert_eq!(reports(), 1, "the click that opened File reports once across every pass it ran");
+
+    fixture.settle().idle(2);
+    assert_eq!(reports(), 0, "a menu held open reports nothing");
+
+    fixture.key(Key::E, Modifiers::ALT);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_some() && fixture.by_label("New").is_none(), "Alt+E switches to Edit");
+    assert_eq!(reports(), 0, "a switch from one open title to another reports nothing");
+
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_none(), "Edit is closed");
+    assert_eq!(reports(), 0, "closing reports nothing");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert_eq!(reports(), 1, "opening again reports once more");
 }
 
 /// A view beside the menu bar that reads nothing the menu changes.
@@ -495,4 +607,65 @@ fn space_on_a_bar_focused_from_nothing_goes_to_the_document_canvas() {
         assert_eq!(hands.get(), before + 1, "Space reaches the canvas's command (alt {alt})");
         assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(canvas), "and the keyboard goes to the canvas (alt {alt})");
     }
+}
+
+/// Tc-9 (3): the selection of a focused field holds while a menu the window's menu bar opened has the keyboard, which
+/// goes back to the field: the bar's Edit menu shows Copy enabled for it. The field kept its selection only for its own
+/// edit menu, so Copy was disabled there.
+#[trial]
+fn a_fields_selection_holds_while_the_menu_bar_has_the_keyboard() {
+    use craft_ui::contract::{Bind, Props as _};
+    use craft_ui::text::TextField;
+    use std::cell::RefCell;
+    let text = RefCell::new("hello".to_owned());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&Edit", |ui| {
+            MenuItem::command(EditCommands::Copy).show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).id_salt("name").show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let field = fixture.by_label("Name").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::CTRL).settle();
+    let edit = fixture.by_label("Edit").expect("the Edit title");
+    fixture.click(&edit).settle();
+    let copy = fixture.by_label("Copy").expect("the Edit menu is open");
+    assert!(!fixture.tree().is_disabled_key(copy.node), "Copy applies to the field's selection");
+}
+
+/// Whether the latest frame paints a focus ring (a stroke at least two points wide) close around `target`, not around
+/// the whole bar.
+fn ringed(fixture: &mut Fixture, target: egui::Rect) -> bool {
+    let around = |ring: egui::Rect| ring.expand(1.0).contains_rect(target) && target.expand(4.0).contains_rect(ring);
+    fixture.frame_shapes().iter().any(|shape| match shape {
+        egui::Shape::Rect(rect) if rect.stroke.width >= 2.0 => around(rect.rect),
+        egui::Shape::Path(path) if path.stroke.width >= 2.0 => around(egui::Rect::from_points(&path.points)),
+        _ => false,
+    })
+}
+
+/// The title that Tab, F10 or an arrow key moves the keyboard to is ringed, as a focused button is, and the title the
+/// keyboard left is not.
+#[trial]
+fn the_focused_title_shows_the_focus_ring() {
+    let mut rig = rig(Direction::Ltr);
+    let fixture = &mut rig.fixture;
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let (bar, file) = fixture.focused_stop().and_then(|(bar, part)| Some((bar, part?))).expect("Tab focuses a title");
+    let file_rect = fixture.part_rect(bar, file).expect("the focused title's rect");
+    assert!(ringed(fixture, file_rect), "Tab rings the title it focuses");
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    let edit = fixture.focused_stop().and_then(|(_, part)| part).expect("Right focuses the next title");
+    assert_ne!(edit, file, "Right moves to another title");
+    let edit_rect = fixture.part_rect(bar, edit).expect("the next title's rect");
+    assert!(ringed(fixture, edit_rect), "Right rings the title it moves to");
+    assert!(!ringed(fixture, file_rect), "the title the keyboard left loses its ring");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    fixture.key(Key::F10, Modifiers::NONE).settle();
+    let first = fixture.focused_stop().and_then(|(_, part)| part).expect("F10 focuses the first title");
+    let first_rect = fixture.part_rect(bar, first).expect("the first title's rect");
+    assert!(ringed(fixture, first_rect), "F10 rings the title it focuses");
 }

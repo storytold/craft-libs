@@ -120,6 +120,35 @@ fn document_bars_show_arrows_and_an_inset_thumb_for_a_fitting_image() {
     );
 }
 
+/// #2980: docked canvas scrollbars (without document chrome) provide comfortable thickness
+/// (`size.icon.md` / 16 pt) and a breathing margin along the viewport edge.
+#[trial]
+fn docked_canvas_scrollbars_provide_comfortable_thickness_and_edge_margin() {
+    let large = Size::new(4000.0, 3000.0);
+    let view = Rc::new(Cell::new(CanvasView::new(DOCUMENT_WINDOW, Point::new(2000.0, 1500.0), 1.0)));
+    let observed = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut next = observed.get();
+        let doc = DocRect::from_origin_size(Point::ZERO, large);
+        let _ = CanvasScrollbars::new("Scroll bars", Bind::bound(&mut next), doc).show_at(ui, DOCUMENT_WINDOW);
+        observed.set(next);
+    });
+    fixture.room(vec2(760.0, 560.0)).settle();
+
+    let horizontal = fixture.by_label("Horizontal scroll bar").expect("the horizontal bar").rect;
+    let vertical = fixture.by_label("Vertical scroll bar").expect("the vertical bar").rect;
+
+    // Comfortable desktop thickness (16 pt in standard compact density, matching size.icon.md):
+    assert!(vertical.width() >= 14.0, "vertical bar width should be comfortable (>= 14 pt): {vertical:?}");
+    assert!(horizontal.height() >= 14.0, "horizontal bar height should be comfortable (>= 14 pt): {horizontal:?}");
+
+    // Breathing room along viewport edge (not merging directly into window border):
+    assert!(vertical.right() < DOCUMENT_WINDOW.right(), "vertical bar has margin from right edge: {vertical:?} vs {DOCUMENT_WINDOW:?}");
+    assert!(vertical.right() >= DOCUMENT_WINDOW.right() - 4.0, "vertical bar margin is subtle: {vertical:?}");
+    assert!(horizontal.bottom() < DOCUMENT_WINDOW.bottom(), "horizontal bar has margin from bottom edge: {horizontal:?} vs {DOCUMENT_WINDOW:?}");
+    assert!(horizontal.bottom() >= DOCUMENT_WINDOW.bottom() - 4.0, "horizontal bar margin is subtle: {horizontal:?}");
+}
+
 /// #15529: a press is one small step, a held press repeats, and the rest of the track still pages.
 #[trial]
 fn a_document_scroll_arrow_steps_and_repeats_while_its_track_pages() {
@@ -443,4 +472,35 @@ fn a_thumb_dragged_past_the_end_and_back_follows_the_pointer_in_the_same_drag() 
     fixture.frame(vec![pointer::release(start + vec2(60.0, 0.0))]).settle();
     assert!(back.iter().any(|&x| x < at_end - 1.0), "the drag moves back: past the end {seen:?}, back {back:?}");
     assert!((view.get().center.x - straight).abs() < 1.0, "back where a straight drag puts it: {} vs {straight}", view.get().center.x);
+}
+
+/// A thumb's pressed extent lasts only as long as its press: after the release the bars follow the view again. Here
+/// the view zooms out after a thumb drag, and page presses on the track reach the new end (100 screen points of the
+/// document left in view), as they do when no drag came first. The kept extent used to hold the range at the drag's
+/// zoom (photocraft#16328).
+#[trial]
+fn after_a_thumb_drag_the_bars_follow_a_new_zoom() {
+    let large = Size::new(4000.0, 3000.0);
+    let zoomed_out = |view: CanvasView| CanvasView::new(view.rect, Point::new(large.width / 2.0, large.height / 2.0), 0.25);
+    let page_to_the_end = |fixture: &mut Fixture| {
+        let track = fixture.by_label("Horizontal scroll bar").expect("the track").rect;
+        for _ in 0..40 {
+            fixture.click_at(pos2(track.right() - 3.0, track.center().y));
+            fixture.settle();
+        }
+    };
+    let (mut fixture, view) = centred_scrollbars(large, 1.0, true);
+    view.set(zoomed_out(view.get()));
+    fixture.settle();
+    page_to_the_end(&mut fixture);
+    let fresh = shown_range(&view.get(), Axis::X).0;
+    assert!((fresh - (large.width - 400.0)).abs() < 1.0, "paging reaches the end: the last 400 units stay in view, shows from {fresh}");
+
+    let (mut fixture, view) = centred_scrollbars(large, 1.0, true);
+    drag_thumb(&mut fixture, "Horizontal scroll bar", vec2(40.0, 0.0));
+    view.set(zoomed_out(view.get()));
+    fixture.settle();
+    page_to_the_end(&mut fixture);
+    let first = shown_range(&view.get(), Axis::X).0;
+    assert!((first - fresh).abs() < 1.0, "after a thumb drag paging reaches the same end: shows from {first}, without the drag {fresh}");
 }

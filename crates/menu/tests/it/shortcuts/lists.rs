@@ -1,11 +1,12 @@
 //! The Customize Keyboard layout: each change is applied at once and Escape closes without rolling back.
 
-use craft_keymap::{Binding, CommandRef, Platform};
+use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Platform, Scope, Scopes, Trigger};
 use craft_menu::shortcuts::{Layout, Outcome};
+use craft_ui::contract::Role;
 use craft_ui::testing::trial;
 use egui::{Key, Modifiers};
 
-use super::fixture::Rig;
+use super::fixture::{Rig, options};
 
 /// Records `key` with the command modifier in the New Shortcut field.
 fn record(rig: &mut Rig, key: Key) {
@@ -16,6 +17,25 @@ fn record(rig: &mut Rig, key: Key) {
 /// The bindings of Bring to Front, compared as bindings rather than as their text.
 fn keys(rig: &Rig) -> Vec<Binding> {
     rig.shared.borrow().km.bindings(&CommandRef::from("object.front")).to_vec()
+}
+
+#[trial]
+fn remove_identifies_the_retained_shortcut_that_blocks_saving() {
+    let context = "Text".repeat(16);
+    let trigger = Trigger::parse("Cmd+Ctrl+Alt+Shift+IntlBackslash Cmd+Ctrl+Alt+Shift+IntlBackslash").unwrap();
+    let retained = Binding::in_scope(trigger, Scope::new(&context).unwrap());
+    let command =
+        CommandDef::new("text.save", "Save Text", Scope::app()).with_default(retained.clone()).with_default(Binding::parse("Cmd+S").unwrap());
+    let keymap = Keymap::new(vec![command], Scopes::new().with_context(&context), Platform::Mac);
+    let mut options = options();
+    options.layout = Layout::CommandLists;
+    let mut rig = Rig::new(keymap, options, None);
+
+    rig.click("Save Text");
+    rig.click("⌘S");
+    rig.click("Remove");
+    assert_eq!(rig.bindings("text.save"), [retained.to_string(), "Cmd+S".into()]);
+    assert!([Role::STATUS, Role::ALERT].into_iter().any(|role| !rig.names_with(role, "for Save Text cannot be saved").is_empty()));
 }
 
 /// Production applies each change at once and has no Cancel: an Escape that rolled back would silently lose them.

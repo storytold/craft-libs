@@ -22,26 +22,29 @@ pub(super) const CASES: &[Case] = &[
     Case::new("language", ANY, a_language_change_keeps_the_ids),
 ];
 
-/// Whether the drive changed a value, reported an edit or reported a click.
+/// Whether the drive changed a value, reported an edit or activated the story: a click or a fired command.
 fn acted(fixture: &mut Fixture, before: &crate::testing::story::StorySnapshot) -> bool {
     let changed = !fixture.data().changed_since(before).is_empty();
     let outputs = fixture.take_outputs();
-    changed || outputs.iter().any(|output| output.clicked || !output.edits.is_empty())
+    changed || outputs.iter().any(|output| output.activated() || !output.edits.is_empty())
 }
 
 /// A disabled component changes no value, fires no command and takes no focus unless it explains itself: a node
 /// with a description stands for the tooltip of `disabled_text`, and then its tooltip shows on focus. A description
 /// also comes from an invalid state, so a disabled story that takes no focus is not read as lacking `disabled_text`.
-/// A story with `disabled_text` is reached by Tab and shows that reason. A story binds no command, so a fired command is read as the pass's click, which a bound command follows.
+/// A story with `disabled_text` is reached by Tab and shows that reason.
 fn disabled_changes_nothing(subject: &Subject) -> Result<(), String> {
     for story in &subject.stories {
         let plan = subject.base(story).plan;
+        // One fixture takes every drive: a disabled story that acts on one is an error at once, so a drive that
+        // passes leaves it as it was for the next.
+        let mut driven = for_input(Fixture::story_scoped(story, |scope| scope.enabled = Some(false)));
         for variant in variants(plan, subject.probe).into_iter().filter(|variant| !cancels(plan, *variant)) {
-            let mut fixture = for_input(Fixture::story_scoped(story, |scope| scope.enabled = Some(false)));
+            let fixture = &mut driven;
             let before = fixture.data().snapshot();
             fixture.take_outputs();
-            run(&mut fixture, plan, variant);
-            if acted(&mut fixture, &before) {
+            run(fixture, plan, variant);
+            if acted(fixture, &before) {
                 return Err(format!("{}: a disabled story acted on drive {variant}", story.name));
             }
         }
@@ -87,12 +90,15 @@ fn read_only_changes_nothing(subject: &Subject) -> Result<(), String> {
     }
     for story in &subject.stories {
         let plan = subject.base(story).plan;
+        // One fixture takes every drive: a read-only story that acts on one is an error at once, so a drive that
+        // passes leaves it as it was for the next.
+        let mut driven = for_input(Fixture::story_scoped(story, |scope| scope.read_only = Some(true)));
         for variant in variants(plan, subject.probe).into_iter().filter(|variant| !cancels(plan, *variant)) {
-            let mut fixture = for_input(Fixture::story_scoped(story, |scope| scope.read_only = Some(true)));
+            let fixture = &mut driven;
             let before = fixture.data().snapshot();
             fixture.take_outputs();
-            run(&mut fixture, plan, variant);
-            if acted(&mut fixture, &before) {
+            run(fixture, plan, variant);
+            if acted(fixture, &before) {
                 return Err(format!("{}: a read-only story acted on drive {variant}", story.name));
             }
         }
@@ -221,14 +227,14 @@ fn motion_modes_settle(subject: &Subject) -> Result<(), String> {
 
 /// A host whose catalogs offer `ja`, in English.
 fn hosts() -> Option<(Arc<craft_host::Host>, Arc<craft_host::Host>)> {
-    use craft_host::{AppInfo, Host};
+    use craft_host::{AppInfo, Host, InlineJobs};
     let (i18n, problems) = craft_i18n::I18n::from_owned([("ja".to_owned(), String::new(), String::new())], &["ja"]);
     if !problems.is_empty() {
         return None;
     }
     let i18n = Arc::new(i18n);
     let japanese = i18n.from_code("ja")?;
-    let english = Arc::new(Host::builder(AppInfo { id: "suite", name: "Suite", version: "0" }).i18n(i18n).build());
+    let english = Arc::new(Host::builder(AppInfo { id: "suite", name: "Suite", version: "0" }).i18n(i18n).jobs(Arc::new(InlineJobs)).build());
     Some((english.clone(), Arc::new(english.with_lang(japanese))))
 }
 

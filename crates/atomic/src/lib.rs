@@ -14,9 +14,9 @@
 //!   file retains its previous bytes, or it is replaced completely with the new contents. If an error occurs
 //!   during staging or rename, the target remains unmodified and the staging file is removed in user space.
 //!   An abnormal process termination (e.g. `SIGKILL`, crash, power loss) bypasses user-space cleanup and
-//!   leaves the temporary staging file on disk. Sweeping orphaned staging files is the responsibility of the
-//!   consuming application; the library does not perform background sweeping. The destination file itself is
-//!   never corrupted.
+//!   leaves the temporary staging file on disk. The library does not sweep in the background; the consuming
+//!   application calls [`sweep_temp_files`] for a folder, for example at startup, to remove orphaned staging
+//!   files. The destination file itself is never corrupted.
 //! - **Durability & Ordering Boundaries**:
 //!   Data persistence across power failures involves two sync points:
 //!   1. **Content Flush (`sync_file`)**: The staging file's payload is forced to non-volatile storage
@@ -33,6 +33,13 @@
 //! Use [`WriteOptions`] with [`NewFilePermissions::Private`] for settings or sensitive payloads.
 //! Existing destinations always stage privately and retain their original Unix mode. Restoring
 //! an already-matching mode needs no chmod, including on fixed-mode network filesystems.
+//!
+//! ### Attributes
+//! A replaced file is the same document: its stage gets the file's extended attributes (macOS),
+//! its hidden and system attributes (Windows, at creation) and its creation date (macOS,
+//! Windows) before it is flushed. An extended attribute that cannot be read or copied whole, or
+//! passes a bound, refuses the save and leaves the original as it was. Saving through a symbolic
+//! link keeps the link and replaces the file it names, so the attributes kept are that file's.
 //!
 //! ### Platform Characteristics
 //! - **Windows**: Antivirus scanners, search indexers, and backup utilities briefly hold files
@@ -59,6 +66,15 @@ pub trait AtomicFs {
     /// request mode `0600` for `Private` or `0666` for `PlatformDefault`; the OS applies its
     /// umask/default ACL. Other platforms keep their native creation behavior.
     fn create_new(&self, path: &Path, permissions: NewFilePermissions) -> io::Result<File>;
+    /// Create the stage like [`AtomicFs::create_new`], carrying over the attributes of the file it
+    /// replaces that can only be given at creation (Windows: hidden and system). `keep` is the
+    /// `metadata` of the regular file being replaced: a save through a symbolic link keeps the
+    /// link and replaces the file it names, so `keep` describes that file, never the link. `None`
+    /// for a new file. The default ignores `keep` and calls `create_new`.
+    fn create_new_keeping(&self, path: &Path, permissions: NewFilePermissions, keep: Option<&std::fs::Metadata>) -> io::Result<File> {
+        let _ = keep;
+        self.create_new(path, permissions)
+    }
     /// Flush a written file to durable storage.
     fn sync(&self, file: &File) -> io::Result<()>;
     /// Rename `from` over `to`, replacing it atomically.
@@ -97,6 +113,21 @@ impl AtomicFs for RealFs {
         #[cfg(not(unix))]
         let _ = permissions;
         options.open(path)
+    }
+
+    fn create_new_keeping(&self, path: &Path, permissions: NewFilePermissions, keep: Option<&std::fs::Metadata>) -> io::Result<File> {
+        // Given as the file is created, so a hidden file's stage is never visible: Windows has no
+        // safe call that sets them on an open file afterwards.
+        #[cfg(windows)]
+        if let Some(keep) = keep {
+            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true).attributes(keep.file_attributes() & KEPT_ATTRIBUTES);
+            return options.open(path);
+        }
+        #[cfg(not(windows))]
+        let _ = keep;
+        self.create_new(path, permissions)
     }
 
     fn sync(&self, file: &File) -> io::Result<()> {
@@ -315,11 +346,15 @@ fn replace_with_options(
         check_writable(&target).map_err(|e| read_only_error(e, path))?;
     }
 
-    let tmp = stage(fs, &dir, &name, path, existing.as_ref(), new_permissions, fill)?;
+    let tmp = stage(fs, &dir, &name, path, existing.as_ref().map(|m| (target.as_path(), m)), new_permissions, fill)?;
 
     if let Err(e) = retry_rename(retry, || fs.rename(&tmp, &target)) {
         let _ = fs.remove(&tmp);
         return Err(rename_error(e, path, existed));
+    }
+    #[cfg(windows)]
+    if let Some(replaced) = existing.as_ref().filter(|m| m.is_file()) {
+        restore_kept_attributes(&target, replaced);
     }
 
     // The new bytes are in place; a failed directory fsync can't be undone and must not report
@@ -369,31 +404,35 @@ fn adopt_group(fs: &dyn AtomicFs, file: &File, stage_gid: u32, replaced_gid: u32
 }
 
 /// Create a temporary file in `dir`, fill it with `fill`, give it the permissions and group of
-/// the file it replaces (`replaced`, Unix) and flush it. Permission restoration is skipped when
+/// the file it replaces (`replaced`: its resolved path and `metadata`, Unix), keep that file's
+/// other attributes ([`keep_attributes`]) and flush it. Permission restoration is skipped when
 /// the mode already matches after `fill`; the group bits are dropped when the file cannot be put
 /// in the replaced file's group, so they never open the file to a group that was not granted
-/// them. A leftover file with the same name is skipped. When any step fails, the temporary file
-/// is removed.
+/// them. A name something already has (a leftover file, a link, a folder) is skipped, never
+/// opened, so nothing planted there receives or redirects the write. When any step fails, the
+/// temporary file is removed.
 fn stage(
     fs: &dyn AtomicFs,
     dir: &Path,
     name: &str,
     path: &Path,
-    replaced: Option<&std::fs::Metadata>,
+    replaced: Option<(&Path, &std::fs::Metadata)>,
     new_permissions: NewFilePermissions,
     fill: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> io::Result<PathBuf> {
     let existed = replaced.is_some();
     // Windows files carry only a read-only flag, and a read-only file can't be replaced.
-    let perms = replaced.filter(|_| cfg!(unix)).map(|m| m.permissions());
+    let perms = replaced.filter(|_| cfg!(unix)).map(|(_, m)| m.permissions());
+    // A folder or other non-file at the target has no attributes a stage could carry.
+    let keep = replaced.map(|(_, m)| m).filter(|m| m.is_file());
     // New documents inherit the directory's policy directly: no probe or chmod is needed.
     // Existing destinations still stage privately, including when their final mode is shared.
     let creation = if existed { NewFilePermissions::Private } else { new_permissions };
     for _ in 0..8 {
         let tmp = dir.join(temp_name(name));
-        let mut file = match fs.create_new(&tmp, creation) {
+        let mut file = match fs.create_new_keeping(&tmp, creation, keep) {
             Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) if name_taken(&e, &tmp) => continue,
             Err(e) => return Err(write_error(e, path, dir, existed)),
         };
         let written = fill(&mut file)
@@ -413,7 +452,7 @@ fn stage(
                             }
                             // The group bits belong to the replaced file's group, which a new
                             // inode need not be in (setgid directory, another primary group).
-                            if let Some(replaced) = replaced {
+                            if let Some((_, replaced)) = replaced {
                                 let stage_gid = std::os::unix::fs::MetadataExt::gid(&file.metadata()?);
                                 let replaced_gid = std::os::unix::fs::MetadataExt::gid(replaced);
                                 let perms = adopt_group(fs, &file, stage_gid, replaced_gid, p)?;
@@ -424,6 +463,7 @@ fn stage(
                     })
                     .map_err(|e| permissions_error(e, path))
             })
+            .and_then(|()| keep_attributes(&file, replaced.filter(|(_, m)| m.is_file())).map_err(|e| attributes_error(e, path)))
             .and_then(|()| fs.sync(&file).map_err(|e| write_error(e, path, dir, existed)));
         #[allow(
             clippy::drop_non_drop,
@@ -436,6 +476,168 @@ fn stage(
         return written.map(|()| tmp);
     }
     Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{}: could not create a temporary file", dir.display())))
+}
+
+/// Whether creating the stage failed because something already has its name: a file, a link
+/// (even a dangling one) or a folder. Windows reports a folder there as access denied.
+fn name_taken(e: &io::Error, tmp: &Path) -> bool {
+    match e.kind() {
+        io::ErrorKind::AlreadyExists => true,
+        io::ErrorKind::PermissionDenied => cfg!(windows) && std::fs::symlink_metadata(tmp).is_ok(),
+        _ => false,
+    }
+}
+
+/// The Windows attributes a replaced file passes on to its stage: hidden and system, the two that
+/// say who should see the file. A read-only file is never replaced, the archive bit is the
+/// system's to set on a changed file, and the others describe how the volume stores it.
+#[cfg(windows)]
+const KEPT_ATTRIBUTES: u32 = 0x2 | 0x4;
+
+/// A server that hides dot-named files (Samba, NAS) marks the stage hidden and keeps the mark
+/// through the rename: the saved file then gets the replaced file's attributes back. Only when the
+/// kept bits differ, since restoring the whole attribute word on a local disk would clear the
+/// archive bit backup tools read. Best effort: the new bytes are already in place.
+#[cfg(windows)]
+fn restore_kept_attributes(target: &Path, replaced: &std::fs::Metadata) {
+    use std::os::windows::fs::MetadataExt;
+    let saved = std::fs::symlink_metadata(target).map(|m| m.file_attributes() & KEPT_ATTRIBUTES);
+    if saved.is_ok_and(|bits| bits != replaced.file_attributes() & KEPT_ATTRIBUTES) {
+        let _ = std::fs::set_permissions(target, replaced.permissions());
+    }
+}
+
+/// Give the stage what the replaced regular file (`replaced`: its resolved path and `metadata`)
+/// carries besides its bytes and mode, before the stage is flushed: on macOS its extended
+/// attributes (`copy_xattrs`; an attribute that cannot be kept refuses the save), on macOS and
+/// Windows its creation date (best effort: a volume that stores none keeps the stage's own). A
+/// saved document is the same document. A new file has nothing to keep.
+fn keep_attributes(stage: &File, replaced: Option<(&Path, &std::fs::Metadata)>) -> io::Result<()> {
+    let Some((target, meta)) = replaced else { return Ok(()) };
+    #[cfg(target_os = "macos")]
+    copy_xattrs(target, stage)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = target;
+    #[cfg(any(target_os = "macos", windows))]
+    if let Ok(created) = meta.created() {
+        #[cfg(target_os = "macos")]
+        use std::os::macos::fs::FileTimesExt;
+        #[cfg(windows)]
+        use std::os::windows::fs::FileTimesExt;
+        let _ = stage.set_times(std::fs::FileTimes::new().set_created(created));
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = (stage, meta);
+    Ok(())
+}
+
+/// The longest list of extended attribute names read from a replaced file.
+#[cfg(target_os = "macos")]
+const MAX_XATTR_NAMES_BYTES: usize = 64 * 1024;
+/// The most extended attributes copied from a replaced file.
+#[cfg(target_os = "macos")]
+const MAX_XATTRS: usize = 1024;
+/// The largest extended attribute value copied (a resource fork can be larger than ordinary ones).
+#[cfg(target_os = "macos")]
+const MAX_XATTR_VALUE_BYTES: usize = 16 * 1024 * 1024;
+/// The most extended attribute bytes copied from one file in all.
+#[cfg(target_os = "macos")]
+const MAX_XATTR_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+
+/// Copy the extended attributes of the regular file at `target` (Finder tags, the "Open with"
+/// binding, quarantine, resource forks) to the stage. The attributes are as untrusted as the
+/// bytes, so the reads are bounded; one that cannot be read or written whole, or passes a bound,
+/// refuses the save rather than dropping the user's metadata unnoticed. Only a volume without
+/// extended attributes (`ENOTSUP`) is skipped. So is a file whose data the user may not read when
+/// its attribute names can't be listed either, as with mode 0200: its attributes are dropped, as
+/// before attributes were kept, since the user can't read them (or its bytes) at all. One whose
+/// data is denied but whose names can be listed (an ACL that denies reading) refuses the save.
+/// `com.apple.provenance` belongs to macOS, which gives the new file its own. Compression
+/// bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
+#[cfg(target_os = "macos")]
+fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
+    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
+    use rustix::io::Errno;
+
+    // Never read through a link: the target is already resolved, and a link swapped in since
+    // names another file. NONBLOCK keeps a FIFO put at the name from hanging the open.
+    let source = match open(target, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK, Mode::empty()) {
+        Ok(fd) => File::from(fd),
+        Err(Errno::NOENT | Errno::LOOP) => return Ok(()),
+        Err(Errno::ACCESS) => return unreadable_has_no_attributes(target),
+        Err(e) => return Err(e.into()),
+    };
+    if !source.metadata()?.is_file() {
+        return Ok(());
+    }
+    let names_too_long = || io::Error::other("the extended attribute names exceed 64 KiB");
+    let mut names = vec![0u8; MAX_XATTR_NAMES_BYTES];
+    let len = match flistxattr(&source, names.as_mut_slice()) {
+        Ok(len) => len,
+        Err(Errno::NOTSUP) => return Ok(()),
+        Err(Errno::RANGE) => return Err(names_too_long()),
+        Err(e) => return Err(e.into()),
+    };
+    let names = names.get(..len).ok_or_else(names_too_long)?;
+    let mut total = 0usize;
+    for (index, name) in names.split(|b| *b == 0).filter(|name| !name.is_empty()).enumerate() {
+        if index >= MAX_XATTRS {
+            return Err(io::Error::other("more than 1024 extended attributes"));
+        }
+        if name == b"com.apple.provenance" {
+            continue;
+        }
+        let name = std::ffi::CString::new(name).map_err(|_| io::Error::other("an extended attribute name is not valid"))?;
+        // An empty read buffer reads zero bytes in rustix, not the size: query it explicitly.
+        let size = fgetxattr_query(&source, &name)?;
+        if size > MAX_XATTR_VALUE_BYTES || size > MAX_XATTR_TOTAL_BYTES.saturating_sub(total) {
+            return Err(io::Error::other("the extended attributes exceed 16 MiB per value or 64 MiB in total"));
+        }
+        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?), || Ok(fgetxattr_query(&source, &name)?))?;
+        fsetxattr(stage, &name, &value, XattrFlags::empty())?;
+        total = total.saturating_add(value.len());
+    }
+    Ok(())
+}
+
+/// For a target whose data can't be opened for reading: `Ok` when the user can list no extended
+/// attribute names on it (none, only `com.apple.provenance`, none supported, or listing is denied too,
+/// as for mode 0200, whose attributes are then dropped); otherwise refuse the save, as the attributes
+/// can't be copied without opening the file. The names are read without following a link, by path.
+#[cfg(target_os = "macos")]
+fn unreadable_has_no_attributes(target: &Path) -> io::Result<()> {
+    use rustix::fs::llistxattr;
+    use rustix::io::Errno;
+    let mut names = vec![0u8; MAX_XATTR_NAMES_BYTES];
+    match llistxattr(target, names.as_mut_slice()) {
+        Ok(0) | Err(Errno::NOTSUP | Errno::ACCESS | Errno::NOENT) => Ok(()),
+        Ok(len) if names.get(..len).is_some_and(|names| names.split(|b| *b == 0).all(|name| name.is_empty() || name == b"com.apple.provenance")) => {
+            Ok(())
+        }
+        Ok(_) | Err(Errno::RANGE) => {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file can't be read, so its extended attributes can't be copied"))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Read one attribute value of `size` bytes (already within the bounds) with `read`, then ask
+/// its size again with `query_size`. A read that does not fill `size`, or a size that changed,
+/// is refused: a growing resource fork returns the prefix that fits instead of an error.
+#[cfg(target_os = "macos")]
+fn read_xattr_value(
+    size: usize,
+    read: impl FnOnce(&mut [u8]) -> io::Result<usize>,
+    query_size: impl FnOnce() -> io::Result<usize>,
+) -> io::Result<Vec<u8>> {
+    let mut value = vec![0u8; size.max(1)];
+    let len = read(value.as_mut_slice())?;
+    let after = query_size()?;
+    if len != size || after != size {
+        return Err(io::Error::other("an extended attribute changed size while saving"));
+    }
+    value.truncate(len);
+    Ok(value)
 }
 
 /// Exclusively creates and writes `path` with normal OS permissions, without replacing existing files.
@@ -597,16 +799,74 @@ fn resolve_links(path: &Path) -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, format!("cannot save {}: too many levels of symbolic links", path.display())))
 }
 
-/// Generates a unique, hidden temporary file name beside `file`.
+/// The most bytes of the target's name a temporary name keeps: with the leading `.`, the pid, the
+/// counter and `.craft_tmp` the name stays within the 255-byte (Linux, macOS) and 255-unit
+/// (Windows) limits however long the target's name is.
+const TEMP_STEM_BYTES: usize = 128;
+
+/// Generates a unique, hidden temporary file name beside `file`: `.{file}.{pid}-{n}.craft_tmp`,
+/// with `file` cut to its first 128 bytes between characters.
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let stem: String = file.chars().take(64).collect();
+    let end = file.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|&end| end <= TEMP_STEM_BYTES).last().unwrap_or(0);
+    let stem = file.get(..end).unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]
     let pid = std::process::id();
     #[cfg(target_arch = "wasm32")]
     let pid = 0;
     format!(".{stem}.{pid}-{n}.craft_tmp")
+}
+
+/// Removes staging files that interrupted writes left in `dir`, and returns how many it removed.
+///
+/// A file is removed when its name has the form [`temp_name`] gives, it is a regular file (a
+/// symbolic link is not followed), and it was last modified at least `min_age` ago. The process
+/// id in the name is not used to decide, since the system reuses process ids. A save updates its
+/// staging file's modification time only while it writes bytes, not while it flushes or renames,
+/// and removing the staging file makes that save fail. Pass a `min_age` longer than the longest
+/// time any save into `dir`, by any process including the calling one, may go without writing,
+/// counting the final flush and rename. On Windows, a write may not update the modification time
+/// until the staging file's handle closes, so pass a `min_age` longer than the longest whole save,
+/// from the staging file's creation through the rename. Entries that cannot be read or removed are
+/// left in place. Subfolders are not searched.
+/// On `wasm32` this returns an `Unsupported` error.
+pub fn sweep_temp_files(dir: &Path, min_age: std::time::Duration) -> io::Result<usize> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (dir, min_age);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "staging files cannot be swept on this platform"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let now = std::time::SystemTime::now();
+        let entries = std::fs::read_dir(dir).map_err(|e| io::Error::new(e.kind(), format!("cannot read {}: {e}", dir.display())))?;
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            if !entry.file_name().to_str().is_some_and(is_temp_name) {
+                continue;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+            let old = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= min_age);
+            if meta.is_file() && old && std::fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+}
+
+/// Whether `name` has the form [`temp_name`] gives (`.{stem}.{pid}-{n}.craft_tmp`), with a stem
+/// of at most [`TEMP_STEM_BYTES`] bytes.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_temp_name(name: &str) -> bool {
+    // Decimal digits with no leading zero, as `format!` writes an integer; a lone `0` is allowed.
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    let Some((stem, tail)) = name.strip_prefix('.').and_then(|rest| rest.strip_suffix(".craft_tmp")).and_then(|rest| rest.rsplit_once('.')) else {
+        return false;
+    };
+    let Some((pid, n)) = tail.split_once('-') else { return false };
+    stem.len() <= TEMP_STEM_BYTES && digits(pid) && digits(n) && pid.parse::<u32>().is_ok() && n.parse::<u64>().is_ok()
 }
 
 /// The end of an error message: whether an original file was left as it was.
@@ -630,6 +890,11 @@ fn write_error(e: io::Error, path: &Path, dir: &Path, existed: bool) -> io::Erro
 
 fn permissions_error(e: io::Error, path: &Path) -> io::Error {
     let msg = format!("cannot save {}: the new file cannot be given the original's permissions ({e}){}", path.display(), unchanged(true));
+    io::Error::new(e.kind(), msg)
+}
+
+fn attributes_error(e: io::Error, path: &Path) -> io::Error {
+    let msg = format!("cannot save {}: the original's extended attributes cannot be kept ({e}){}", path.display(), unchanged(true));
     io::Error::new(e.kind(), msg)
 }
 

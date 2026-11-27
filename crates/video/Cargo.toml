@@ -1,7 +1,7 @@
 [package]
 autotests = false
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Sierra VMD."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Sierra VMD, Bink."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,16 @@ all-features = true
 
 [lints]
 workspace = true
+
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/jpeg/tests/data/testorig-huffman-progressive.jpg",
+    "crates/jpeg/tests/data/testorig.jpg",
+    "crates/jpeg/tests/data/testorig12.jpg",
+    "crates/jpeg/tests/data/testorig12.ppm",
+]
 
 [features]
 # FLV codec 3 / SWF Screen Video key frames.
@@ -39,12 +49,17 @@ mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
 # FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
 ffv1 = ["dep:craft-media"]
+# Uncompressed packed pictures (UYVY, YUYV, YVYU, v210, r210, R10k): unpacking and packing.
+rawvideo = []
 # Hap (Vidvox): decoder and encoder, with Snappy and chunked second stages.
 hap = []
 # Motion JPEG: a frame-level decoder and encoder over `craft-jpeg`.
 mjpeg = ["dep:craft-jpeg"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
+# Bink video (Bink 1): decoder (`bink-decode`).
+bink = ["bink-decode"]
+bink-decode = ["dep:craft-media"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
 h264 = ["h264-decode", "h264-encode"]
 h264-decode = ["craft-media/bitstream"]
@@ -61,6 +76,10 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = ["dep:craft-media"]
 av1-encode = ["craft-media/isobmff"]
+# Theora video (Xiph.Org specification): decoder and encoder; `theora-decode` or `theora-encode` for one of them.
+theora = ["theora-decode", "theora-encode"]
+theora-decode = ["craft-media/bitstream"]
+theora-encode = ["craft-media/bitstream"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
@@ -82,8 +101,13 @@ rav1e = { version = "0.8", default-features = false, optional = true }
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
 # The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test; the MP4, MPEG-TS and AVI
-# demuxers, for the track decoder's tests; the VMD demuxer, for the VMD decoder's.
-craft-media = { workspace = true, features = ["avi", "isobmff", "mpegts", "vmd"] }
+# demuxers, for the track decoder's tests; the Ogg page writer, for tests; the VMD and Bink
+# demuxers, for those decoders'.
+craft-media = { workspace = true, features = ["avi", "bink", "isobmff", "mpegts", "ogg", "vmd"] }
+
+[[example]]
+name = "bink_binkdec"
+required-features = ["bink-decode"]
 
 [[example]]
 name = "vp8_fuzz"

@@ -561,6 +561,7 @@ impl<'a> PaneFrame<'a> {
         let mut props = ContainerProps::new()
             .mount(Mount::Pane(pane))
             .surface(SurfaceKind::Panel)
+            .edge_rule(true)
             .pad(Pad::Regular)
             .sizing(Sizing::Fill)
             .focus(FocusPolicy::PANE)
@@ -717,25 +718,27 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> PaneArea<'a, P> {
 
         let shown_root = root.show(ui, |ui, cx| {
             let Some(sizes) = cx.style::<DockRoot<'_, Vec<PaneRequest<P>>>>().map(|style| *style.sizes()) else { return };
-            let (docks, floats) = cx.shell().as_ref().map_or((true, true), |shell| (shell.dock_visible(), shell.floating_visible()));
-            let bounds = cx.shell().map_or(cx.rect, |shell| shell.float_bounds());
+            let shell = cx.shell();
+            let floats = shell.as_ref().is_none_or(|shell| shell.floating_visible());
+            let bounds = shell.as_ref().map_or(cx.rect, |shell| shell.float_bounds());
             let float = FloatPlace { bounds, inset: sizes.cascade_inset };
             pass.float.set(Some(float));
             let mut order = [PaneEdge::Bottom, PaneEdge::Top, PaneEdge::Start, PaneEdge::End];
             if rtl {
                 order.swap(2, 3);
             }
-            if docks {
-                for edge in order {
-                    let on_edge: Vec<&Shown<P>> = shown.iter().filter(|s| s.docked_at() == Some(edge)).collect();
-                    let slot = on_edge.iter().rposition(|s| s.spec.closable);
-                    for (at, pane) in on_edge.iter().enumerate() {
-                        if policy == SidePolicy::OneSlot && pane.spec.closable && slot != Some(at) {
-                            continue;
-                        }
-                        if show_docked(ui, &pass, pane, edge) {
-                            *pass.focused.borrow_mut() = Some(pane.pane.clone());
-                        }
+            for edge in order {
+                if !shell.as_ref().is_none_or(|shell| shell.dock_visible(edge)) {
+                    continue;
+                }
+                let on_edge: Vec<&Shown<P>> = shown.iter().filter(|s| s.docked_at() == Some(edge)).collect();
+                let slot = on_edge.iter().rposition(|s| s.spec.closable);
+                for (at, pane) in on_edge.iter().enumerate() {
+                    if policy == SidePolicy::OneSlot && pane.spec.closable && slot != Some(at) {
+                        continue;
+                    }
+                    if show_docked(ui, &pass, pane, edge) {
+                        *pass.focused.borrow_mut() = Some(pane.pane.clone());
                     }
                 }
             }
