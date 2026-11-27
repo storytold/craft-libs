@@ -167,8 +167,11 @@ fn od(vi: u16, ty: u16, body: &[u8]) -> Vec<u8> {
     cat(&[&vi.to_le_bytes(), &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body])
 }
 
+/// An FBSE holding `blip`: 36 bytes of description (its size at 20), then the BLIP.
 fn fbse(blip: &[u8]) -> Vec<u8> {
-    od(0x0062, 0xF007, &cat(&[&[0u8; 36], blip]))
+    let mut d = [0u8; 36];
+    d[20..24].copy_from_slice(&(blip.len() as u32).to_le_bytes());
+    od(0x0062, 0xF007, &cat(&[&d, blip]))
 }
 
 fn shape(pib: u32, anchor: [u16; 8]) -> Vec<u8> {

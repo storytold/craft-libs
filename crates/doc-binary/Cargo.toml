@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 craft-cfb = { workspace = true }
 craft-codepage = { workspace = true }
+craft-officeart = { workspace = true }
 craft-wordmodel = { workspace = true }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
