@@ -20,7 +20,6 @@ rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-craft-pbr = { path = ".", features = ["parallel"] }
 # The differential tests run verbatim copies of the apps' previous code, which uses glam and rayon.
 glam = "0.30"
 # Parses and validates the WGSL text of `SHADE_WGSL`.

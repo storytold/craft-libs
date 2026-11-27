@@ -5,8 +5,7 @@
 use std::f32::consts::PI;
 
 use craft_pbr::{
-    EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, Visibility, default_environment, ggx_distribution, ggx_distribution_between, hammersley,
-    try_environment_brdf,
+    EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, Visibility, default_environment, ggx_distribution, hammersley, try_environment_brdf,
 };
 
 const VISIBILITIES: [Visibility; 3] = [Visibility::SmithSchlick, Visibility::SmithSeparable, Visibility::SmithHeightCorrelated];
@@ -338,15 +337,6 @@ fn the_default_visibility_is_effectcrafts_smith_schlick() {
     assert!(at(Visibility::SmithHeightCorrelated) > at(Visibility::SmithSeparable));
 }
 
-/// A unit vector along `d`, computed in the same steps and order as the crate normalizes
-/// directions: divided by its largest component, then multiplied by the reciprocal length.
-fn crate_unit(d: [f32; 3]) -> [f32; 3] {
-    let big = d[0].abs().max(d[1].abs()).max(d[2].abs());
-    let s = [d[0] / big, d[1] / big, d[2] / big];
-    let r = 1.0 / ((s[0] * s[0]) + (s[1] * s[1]) + (s[2] * s[2])).sqrt();
-    [s[0] * r, s[1] * r, s[2] * r]
-}
-
 /// The light a material reflects from a uniform white sky onto a surface seen at `theta`: the
 /// specular lobe by GGX importance sampling of the half vector, and the diffuse lobe by cosine
 /// sampling of the light.
@@ -354,34 +344,36 @@ fn albedo(m: &Material, theta: f32, steps: u32) -> f64 {
     let n = [0.0, 0.0, 1.0];
     let v = [theta.sin(), 0.0, theta.cos()];
     let spec_only = m.try_with_weights(m.specular(), 0.0).unwrap();
-    let a = m.roughness().max(MIN_DIRECT_ROUGHNESS).powi(2);
+    let a = f64::from(m.roughness().max(MIN_DIRECT_ROUGHNESS).powi(2));
+    let view = v.map(f64::from);
+    let view_length = view.into_iter().map(|c| c * c).sum::<f64>().sqrt();
+    let view = view.map(|c| c / view_length);
     let (mut spec, mut diff) = (0.0f64, 0.0f64);
     for i in 0..steps {
-        let xi = (i as f32 + 0.5) / steps as f32;
+        let xi = (f64::from(i) + 0.5) / f64::from(steps);
         for j in 0..steps {
-            let phi = 2.0 * PI * (j as f32 + 0.5) / steps as f32;
+            let phi = 2.0 * std::f64::consts::PI * (f64::from(j) + 0.5) / f64::from(steps);
             // Specular: a half vector drawn from D (n·h), a light reflected about it.
             let ct = ((1.0 - xi) / (1.0 + (a * a - 1.0) * xi)).sqrt();
             let st = (1.0 - ct * ct).max(0.0).sqrt();
             let hv = [st * phi.cos(), st * phi.sin(), ct];
-            let vh = dot(v, hv);
+            let vh = view.into_iter().zip(hv).map(|(v, h)| v * h).sum::<f64>();
             if vh > 0.0 {
-                let l = [2.0 * vh * hv[0] - v[0], 2.0 * vh * hv[1] - v[1], 2.0 * vh * hv[2] - v[2]];
+                let l = [2.0 * vh * hv[0] - view[0], 2.0 * vh * hv[1] - view[1], 2.0 * vh * hv[2] - view[2]];
                 if l[2] > 0.0 {
-                    // The density at the half vector `try_direct` finds again from `v` and `l`,
-                    // rounded the same way and with `D` taken from the same vectors.
-                    let (uv, ul) = (crate_unit(v), crate_unit(l));
-                    let h = crate_unit([uv[0] + ul[0], uv[1] + ul[1], uv[2] + ul[2]]);
-                    let d = ggx_distribution_between(n, h, m.roughness().max(MIN_DIRECT_ROUGHNESS)).unwrap();
-                    let pdf = d * h[2] / (4.0 * dot(uv, h));
-                    spec += f64::from(spec_only.try_direct(n, v, l).unwrap()[0] / PI / pdf);
+                    // The sampled half vector has density D(h) * h.z, and reflection divides it by 4(v.h).
+                    let a2 = a * a;
+                    let denominator = hv[0] * hv[0] + hv[1] * hv[1] + a2 * hv[2] * hv[2];
+                    let d = a2 / (std::f64::consts::PI * denominator.powi(2));
+                    let pdf = d * hv[2] / (4.0 * vh);
+                    spec += f64::from(spec_only.try_direct(n, v, l.map(|c| c as f32)).unwrap()[0]) / std::f64::consts::PI / pdf;
                 }
             }
             // Diffuse: a light drawn from n·l / π.
             let (cl, sl) = ((1.0 - xi).sqrt(), xi.sqrt());
-            let l = [sl * phi.cos(), sl * phi.sin(), cl];
+            let l = [sl * phi.cos(), sl * phi.sin(), cl].map(|c| c as f32);
             let d = m.try_direct(n, v, l).unwrap()[0] - spec_only.try_direct(n, v, l).unwrap()[0];
-            diff += f64::from(d / cl);
+            diff += f64::from(d) / cl;
         }
     }
     (spec + diff) / f64::from(steps * steps)

@@ -1,0 +1,29 @@
+name: PBR feature tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, next]
+    paths: ['crates/pbr/**', 'crates/texture/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/pbr.yml']
+  pull_request:
+    paths: ['crates/pbr/**', 'crates/texture/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/pbr.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  features:
+    name: PBR ${{ matrix.mode }} tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { mode: serial, arguments: '' }
+          - { mode: parallel, arguments: '--features parallel' }
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["ubuntu-latest"]'
+      craft-fonts-ref: ''
+      require-craft-fonts: false
+      timeout-minutes: 30
+      command: cargo test -p craft-pbr --locked ${{ matrix.arguments }}
