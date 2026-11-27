@@ -1,12 +1,13 @@
 //! `BezierOverlay`: the pure path operations, and the overlay's pointer, keyboard and tools through the public API.
 
+use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
     PathEdit, PathSelection, PathTool, SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
+use craft_ui::canvas::{Canvas, Guide, Momentary, NavigationOptions, Snap, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::cancel_press_of;
@@ -176,6 +177,7 @@ struct State {
     paths: Vec<EditPath>,
     selection: PathSelection,
     guides: Vec<Guide>,
+    snap: Option<Snap>,
     tool: BezierTool,
     handles: HandlesShown,
     anchors: AnchorsShown,
@@ -199,6 +201,8 @@ struct State {
     tool_clicks: usize,
     /// The anchor tool the canvas runs under the overlay, if any.
     canvas_tool: Option<PathTool>,
+    /// The app-owned momentary navigation set, enabled by tests that exercise Space-to-Hand routing.
+    momentary: Option<Momentary>,
     /// Passes in which that tool ran a gesture.
     tool_gestures: usize,
 }
@@ -246,6 +250,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         paths,
         selection: PathSelection::default(),
         guides: Vec::new(),
+        snap: None,
         tool: BezierTool::Direct,
         handles: HandlesShown::Selected,
         anchors: AnchorsShown::All,
@@ -264,6 +269,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         lone_selects: 0,
         tool_clicks: 0,
         canvas_tool: None,
+        momentary: None,
         tool_gestures: 0,
     }));
     let shown = Rc::clone(&state);
@@ -285,6 +291,10 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         let canvas_id = ui.scope_id().with("document canvas");
         let canvas = Canvas::new("Document").id(canvas_id).view(view).precise_cursors(st.precise);
         let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+        let canvas = match &st.snap {
+            Some(snap) => canvas.snap(snap.clone()),
+            None => canvas,
+        };
         let mut reply = None;
         let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
@@ -298,18 +308,25 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
                 .segment_mark(st.segment_mark)
                 .show_at(ui, body.rect);
             if let (Some(tool), Some(pass)) = (st.canvas_tool, tool_pass(&body.env)) {
-                reply = Some(ToolHost::new().run(ui, &pass, &mut AnchorTool::new(tool)));
+                let mut host = ToolHost::new();
+                if let Some(momentary) = st.momentary.as_mut() {
+                    host = host.momentary(momentary);
+                }
+                reply = Some(host.run(ui, &pass, &mut AnchorTool::new(tool)));
             }
             output
         });
         if canvas.output.click_at().is_some() {
             st.tool_clicks += 1;
         }
-        if let Some(reply) = reply {
+        let tool_view = if let Some(reply) = reply {
             st.tool_gestures += usize::from(reply.gesture.is_some());
-        }
+            reply.view
+        } else {
+            None
+        };
         if st.pans {
-            st.view = canvas.output.view.or(st.view);
+            st.view = tool_view.or(canvas.output.view).or(st.view);
         }
         let Some(output) = canvas.inner else { return };
         st.id = output.edit.response.id;
@@ -1415,4 +1432,283 @@ fn a_cancelled_press_reports_nothing_on_release() {
     assert!(!st.seen.contains(&Seen::Commit) && !st.seen.contains(&Seen::Set), "{:?}", st.seen);
     assert_eq!(st.changes.len(), changes, "{:?}", st.changes);
     assert_eq!(st.paths, before);
+}
+
+// Add Anchor owns one drag while Space temporarily translates the new anchor and its handles. Letting Space go
+// resumes pulling the handles from that translated anchor; the canvas never takes this owned drag to pan.
+#[trial]
+fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
+    let space_key = |pressed| egui::Event::Key {
+        key: egui::Key::Space,
+        physical_key: Some(egui::Key::Space),
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let close = |a: Vec2, b: Vec2| (a - b).hypot() < 1e-6;
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+    });
+    let at = h.screen(p(110.0, 60.0));
+    let pulled_at = at + vec2(0.0, 60.0);
+    h.press_at(at);
+    h.move_to(at + vec2(0.0, 30.0));
+    h.move_to(pulled_at);
+    let (pulled, view) = {
+        let st = h.state.borrow();
+        assert_eq!(st.paths[0].subpaths[0].knots.len(), 5);
+        assert_eq!(st.selection, sel(1, &[(0, 1)]));
+        let knot = st.paths[0].subpaths[0].knots[1];
+        assert!(knot.anchor.distance(p(110.0, 60.0)) < 1e-3);
+        assert!(close(knot.out_ctrl - knot.anchor, Vec2::new(0.0, 60.0)) && knot.smooth);
+        (knot, st.view.expect("the canvas showed"))
+    };
+
+    h.fixture.frame(vec![space_key(true)]);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.paths[0].subpaths[0].knots[1], pulled, "Space down alone must not jump the anchor or handles");
+    }
+    let moved_at = pulled_at + vec2(30.0, 20.0);
+    h.move_to(pulled_at + vec2(15.0, 10.0));
+    h.move_to(moved_at);
+    let moved = {
+        let st = h.state.borrow();
+        let knot = st.paths[0].subpaths[0].knots[1];
+        let by = Vec2::new(30.0, 20.0);
+        assert!(close(knot.anchor - pulled.anchor, by), "the held key moves the new anchor with the pointer: {knot:?}");
+        assert!(
+            close(knot.out_ctrl - pulled.out_ctrl, by) && close(knot.in_ctrl - pulled.in_ctrl, by),
+            "both handles travel with the anchor: {knot:?}"
+        );
+        assert!(knot.smooth);
+        assert_eq!(st.view.expect("the canvas showed").center, view.center, "an overlay-owned drag must not turn into a pan");
+        assert_eq!(st.paths[0].subpaths[0].knots.len(), 5, "Space adds no second knot");
+        assert_eq!(st.selection, sel(1, &[(0, 1)]));
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+        assert!(!st.seen.contains(&Seen::Commit) && !st.seen.contains(&Seen::Cancel));
+        knot
+    };
+
+    h.fixture.frame(vec![space_key(false)]);
+    assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], moved, "Space up alone preserves the current geometry");
+    let end = moved_at + vec2(20.0, 10.0);
+    h.move_to(moved_at + vec2(10.0, 5.0));
+    h.move_to(end);
+    {
+        let st = h.state.borrow();
+        let knot = st.paths[0].subpaths[0].knots[1];
+        assert!(knot.anchor.distance(moved.anchor) < 1e-6, "released Space leaves the translated anchor in place");
+        assert!(knot.out_ctrl.distance(view.to_doc(end)) < 1e-6, "the handle follows the pointer again");
+        assert!(close(knot.in_ctrl - knot.anchor, -(knot.out_ctrl - knot.anchor)) && knot.smooth);
+        assert!(!close(knot.out_ctrl - knot.anchor, moved.out_ctrl - moved.anchor), "pulling resumes rather than freezing the handles");
+        assert_eq!(st.view.expect("the canvas showed").center, view.center);
+    }
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert_eq!(st.paths[0].subpaths[0].knots.len(), 5);
+    assert_eq!(st.selection, sel(1, &[(0, 1)]));
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+    assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)));
+    assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
+    assert!(st.inserts.is_empty(), "this drag is not an Insert-key report");
+    drop(st);
+
+    space_before_the_first_movement_translates_from_the_press(space_key);
+    space_release_preserves_raw_geometry_until_constraints_change(space_key);
+    space_release_applies_only_an_alt_modifier_still_held(space_key);
+}
+
+fn space_before_the_first_movement_translates_from_the_press(space_key: fn(bool) -> egui::Event) {
+    // Space after the press but before the first movement translates from the press, not from a first pulled handle.
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+    });
+    let at = h.screen(p(110.0, 60.0));
+    let to = at + vec2(30.0, 20.0);
+    h.press_at(at);
+    h.fixture.frame(vec![space_key(true)]);
+    h.move_to(to);
+    let translated = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(translated.anchor.distance(p(140.0, 80.0)) < 1e-3, "the first Space move includes all travel from the press: {translated:?}");
+    assert!(near(translated.in_ctrl, translated.anchor) && near(translated.out_ctrl, translated.anchor));
+    h.fixture.frame(vec![space_key(false)]).frame(Vec::new());
+    assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], translated);
+    let end = to + vec2(20.0, 10.0);
+    h.move_to(end);
+    let resumed = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(resumed.anchor, translated.anchor) && resumed.out_ctrl.distance(h.state.borrow().view.unwrap().to_doc(end)) < 1e-6);
+    h.release_at(end);
+    assert_eq!(h.state.borrow().seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+    assert_eq!(h.state.borrow().seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+}
+
+fn space_release_preserves_raw_geometry_until_constraints_change(space_key: fn(bool) -> egui::Event) {
+    // A real canvas Snap would pull x=160 to the guide at x=165. Space keeps raw translation; release alone must
+    // not apply that snap, including later stationary passes. Moving or changing Shift/Alt still reads constraints.
+    let mut targets = SnapTargets::new();
+    targets.add(SnapTarget::new(craft_behavior::Axis::Y, 165.0, SnapKind::Guide));
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+        st.snap = Some(Snap::new(std::sync::Arc::new(targets), SnapOptions::default()));
+    });
+    let at = h.screen(p(110.0, 60.0));
+    let pulled_at = at + vec2(20.0, 60.0);
+    h.press_at(at);
+    h.move_to(at + vec2(10.0, 30.0));
+    h.move_to(pulled_at);
+    let pulled = h.state.borrow().paths[0].subpaths[0].knots[1];
+    h.fixture.frame(vec![space_key(true)]);
+    let moved_at = pulled_at + vec2(30.0, 20.0);
+    h.move_to(moved_at);
+    let moved = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(moved.anchor, pulled.anchor + Vec2::new(30.0, 20.0)));
+    assert!(moved.out_ctrl.distance(p(160.0, 140.0)) < 1e-3 && near(moved.in_ctrl, pulled.in_ctrl + Vec2::new(30.0, 20.0)));
+    h.fixture.frame(vec![space_key(false)]).frame(Vec::new()).frame(Vec::new());
+    h.move_to(moved_at);
+    assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], moved, "no delayed stationary snap after Space release");
+    // Modifier-only frames travel through the real input/press route: no synthetic PathEdit calls.
+    h.fixture.hold(egui::Modifiers::SHIFT).frame(Vec::new());
+    let locked = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(
+        near(locked.anchor, moved.anchor) && locked.out_ctrl.distance(p(140.0, 140.0)) < 1e-3,
+        "stationary Shift still locks the handle: {locked:?}"
+    );
+    h.fixture.hold(egui::Modifiers::NONE).frame(Vec::new());
+    let snapped = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(snapped.out_ctrl.distance(p(165.0, 140.0)) < 1e-3, "releasing Shift reevaluates the actual enabled guide snap: {snapped:?}");
+    h.fixture.hold(egui::Modifiers::ALT).frame(Vec::new());
+    let alone = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(alone.in_ctrl, snapped.in_ctrl) && !alone.smooth, "stationary Alt still breaks the handle pair: {alone:?}");
+    let end = moved_at + vec2(20.0, 10.0);
+    h.move_to(end);
+    let resumed = h.state.borrow().paths[0].subpaths[0].knots[1];
+    assert!(near(resumed.anchor, moved.anchor) && resumed.out_ctrl.distance(p(180.0, 150.0)) < 1e-3 && near(resumed.in_ctrl, alone.in_ctrl));
+    h.fixture.hold(egui::Modifiers::NONE);
+    h.release_at(end);
+    let st = h.state.borrow();
+    assert_eq!(st.paths[0].subpaths[0].knots.len(), 5);
+    assert_eq!(st.selection, sel(1, &[(0, 1)]));
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+    assert_eq!(st.seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+    assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
+}
+
+fn space_release_applies_only_an_alt_modifier_still_held(space_key: fn(bool) -> egui::Event) {
+    // Alt held at Space-up breaks the pair, but an Alt tap released entirely during Space must not latch.
+    for keep_alt in [true, false] {
+        let mut h = harness_with(vec![path_a(), path_b()], true);
+        h.update(|st| {
+            st.tool = BezierTool::AddAnchor;
+            st.canvas_tool = Some(PathTool::AddAnchor);
+            st.momentary = Some(Momentary::new(NavigationOptions::default()));
+        });
+        let at = h.screen(p(110.0, 60.0));
+        let pulled_at = at + vec2(0.0, 60.0);
+        h.press_at(at);
+        h.move_to(at + vec2(0.0, 30.0));
+        h.move_to(pulled_at);
+        h.fixture.frame(vec![space_key(true)]);
+        let moved_at = pulled_at + vec2(30.0, 20.0);
+        h.move_to(moved_at);
+        let moved = h.state.borrow().paths[0].subpaths[0].knots[1];
+        assert!(moved.smooth, "the translated pair starts smooth");
+        h.fixture.hold(egui::Modifiers::ALT).frame(Vec::new());
+        assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], moved, "Space keeps translation priority over Alt");
+        if !keep_alt {
+            h.fixture.hold(egui::Modifiers::NONE).frame(Vec::new());
+        }
+        let modifiers = if keep_alt { egui::Modifiers::ALT } else { egui::Modifiers::NONE };
+        let space_up = egui::Event::Key { key: egui::Key::Space, physical_key: Some(egui::Key::Space), pressed: false, repeat: false, modifiers };
+        h.fixture.frame(vec![space_up]).frame(Vec::new());
+        let released = h.state.borrow().paths[0].subpaths[0].knots[1];
+        assert_eq!((released.anchor, released.in_ctrl, released.out_ctrl), (moved.anchor, moved.in_ctrl, moved.out_ctrl));
+        assert_eq!(released.smooth, !keep_alt, "only Alt still held at Space-up breaks the pair");
+        h.release_at(moved_at);
+        let st = h.state.borrow();
+        assert_eq!(st.paths[0].subpaths[0].knots[1], released, "mouse-up without travel commits the same geometry and smooth state");
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+        assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
+    }
+}
+
+// Without an overlay-owned press, the same held key still gives the canvas its ordinary hand drag.
+#[trial]
+fn space_still_pans_when_add_anchor_has_no_drag() {
+    let space_key = |pressed| egui::Event::Key {
+        key: egui::Key::Space,
+        physical_key: Some(egui::Key::Space),
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+    });
+    let (before, paths, selection) = {
+        let st = h.state.borrow();
+        (st.view.expect("the canvas showed"), st.paths.clone(), st.selection.clone())
+    };
+    // This empty corner is clear of both paths. Drag toward the document interior, away from the origin clamp.
+    let at = before.rect.right_bottom() - vec2(24.0, 24.0);
+    h.move_to(at);
+    h.fixture.frame(vec![space_key(true)]);
+    h.drag(at, vec2(-60.0, -40.0));
+    h.fixture.frame(vec![space_key(false)]).settle();
+    let st = h.state.borrow();
+    let after = st.view.expect("the canvas showed");
+    assert!(
+        after.center.x > before.center.x && after.center.y > before.center.y && (after.center - before.center).hypot() > 1.0,
+        "ordinary Space still pans: {:?} -> {:?}",
+        before.center,
+        after.center
+    );
+    assert_eq!(st.paths, paths, "panning does not edit the paths");
+    assert_eq!(st.selection, selection);
+    assert!(st.changes.is_empty() && st.inserts.is_empty() && st.deletes.is_empty());
+    assert!(!st.seen.contains(&Seen::Begin) && !st.seen.contains(&Seen::Commit));
+}
+
+// The translated public edit mirrors around the translated anchor and refuses nonfinite resulting geometry
+// without partially inserting a knot. The original zero-translation constructor remains covered above.
+#[trial]
+fn a_translated_pull_mirrors_around_its_anchor_and_refuses_nonfinite_geometry() {
+    let straight = || ops_path(EditSubpath::new(vec![Knot::corner(p(0.0, 0.0)), Knot::corner(p(100.0, 0.0))], false));
+    let mut path = straight();
+    let by = Vec2::new(12.0, 7.0);
+    let out = p(80.0, 40.0);
+    assert!(PathEdit::pull_anchor_moved(7, kr(0), 0.5, by, out, None).apply(&mut path));
+    let knot = path.subpaths[0].knots[1];
+    assert!(near(knot.anchor, p(50.0, 0.0) + by) && near(knot.out_ctrl, out) && knot.smooth);
+    assert!((knot.in_ctrl - knot.anchor + (knot.out_ctrl - knot.anchor)).hypot() < 1e-6, "the mirror is about the moved anchor: {knot:?}");
+
+    let huge = f64::MAX * 0.75;
+    let far_x = f64::MAX * 0.25;
+    let far = ops_path(EditSubpath::new(vec![Knot::corner(p(far_x, 0.0)), Knot::corner(p(far_x, 100.0))], false));
+    let at = far.subpaths[0].segment(0).unwrap().eval(0.5);
+    assert!(at.x.is_finite() && at.y.is_finite(), "the input curve is finite before translation");
+    for (why, mut path, by, out) in [
+        ("NaN offset", straight(), Vec2::new(f64::NAN, 0.0), p(50.0, 30.0)),
+        ("infinite offset", straight(), Vec2::new(0.0, f64::INFINITY), p(50.0, 30.0)),
+        ("overflowing anchor", far, Vec2::new(f64::MAX, 0.0), p(0.0, 0.0)),
+        ("overflowing mirrored handle", straight(), Vec2::new(huge, 0.0), p(-huge, 0.0)),
+    ] {
+        let before = path.clone();
+        assert!(!PathEdit::pull_anchor_moved(7, kr(0), 0.5, by, out, None).apply(&mut path), "{why}");
+        assert_eq!(path, before, "{why}: a refused edit changes nothing");
+    }
 }
