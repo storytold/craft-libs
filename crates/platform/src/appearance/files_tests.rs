@@ -68,3 +68,26 @@ fn settings_files_answer_without_a_portal() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// A FIFO with no writer in a settings file's place says nothing, and its open does not wait for a writer: these files
+// are read on the appearance watcher's one worker, whose other sources a waiting open would hold up. The other files
+// still answer.
+#[test]
+fn a_fifo_in_a_settings_files_place_is_not_waited_on() {
+    let dir = temp_config("fifo");
+    let fifo = dir.join("gtk-3.0/settings.ini");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().expect("mkfifo").success(), "a FIFO made");
+    write(&dir, "gtk-4.0/settings.ini", "[Settings]\ngtk-enable-animations=false\n");
+    let (send, read) = std::sync::mpsc::channel();
+    let config = dir.clone();
+    std::thread::spawn(move || {
+        let _ = send.send(reduced_motion_from_files(&config));
+    });
+    let answer = read.recv_timeout(std::time::Duration::from_secs(5));
+    if answer.is_err() {
+        // The read waits in its open: a writer's open completes it, so the thread ends.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(answer.ok(), Some(Some(true)), "the read did not wait for the FIFO, and GTK 4's file answered");
+}

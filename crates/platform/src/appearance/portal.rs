@@ -2,9 +2,14 @@
 //! watching for changes.
 
 use super::files::{kde_factor_reduces, reduced_motion_from_files};
-use super::{Contrast, Shared, Theme};
+use super::{Contrast, LayoutReading, LayoutSource, RawLayout, Shared, Theme};
+use craft_host::caption_layout::MAX_LAYOUT_BYTES;
 use futures_lite::{StreamExt, future::zip};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{Arc, PoisonError},
+    time::Duration,
+};
 use zbus::zvariant::{OwnedValue, Value};
 const DEST: &str = "org.freedesktop.portal.Desktop";
 const PATH: &str = "/org/freedesktop/portal/desktop";
@@ -14,6 +19,10 @@ const GNOME: &str = "org.gnome.desktop.interface";
 const KEY: &str = "color-scheme";
 const WM: &str = "org.gnome.desktop.wm.preferences";
 const LAYOUT_KEY: &str = "button-layout";
+/// The standard window-button placement, `(asas)`, in `STANDARD`.
+const PLACEMENT_KEY: &str = "button-placement";
+/// The most names one end of the standard placement may hold; more is malformed.
+const MAX_PLACEMENT_NAMES: usize = 32;
 const ICONS_KEY: &str = "icon-theme";
 const CONTRAST_KEY: &str = "contrast";
 const MOTION_KEY: &str = "reduced-motion";
@@ -92,6 +101,97 @@ fn decode_layout(value: &Value<'_>) -> Option<String> {
 }
 fn layout_reply(value: &Value<'_>, legacy: bool) -> Option<String> {
     decode_layout(unwrap_legacy(value, legacy)?)
+}
+// The standard `button-placement`: two arrays of names, `(asas)` exactly. Any other type, arrays of another element
+// type included when they are empty, or more or longer names than a layout holds, is malformed; two empty arrays of
+// names are an answer, no button.
+fn decode_placement(value: &Value<'_>) -> Option<RawLayout> {
+    if value.value_signature() != "(asas)" {
+        return None;
+    }
+    let Value::Structure(pair) = value else { return None };
+    let [leading, trailing] = pair.fields() else { return None };
+    let names = |value: &Value<'_>| -> Option<Vec<String>> {
+        let Value::Array(array) = value else { return None };
+        if array.len() > MAX_PLACEMENT_NAMES {
+            return None;
+        }
+        array.iter().map(|name| if let Value::Str(name) = name { Some(name.as_str().to_owned()) } else { None }).collect()
+    };
+    let (leading, trailing) = (names(leading)?, names(trailing)?);
+    (leading.iter().chain(&trailing).all(|name| name.len() <= MAX_LAYOUT_BYTES)).then_some(RawLayout::Placement { leading, trailing })
+}
+// A desktop schema's `button-layout` string as a layout, at most `MAX_LAYOUT_BYTES` long.
+fn decode_names(value: &Value<'_>) -> Option<RawLayout> {
+    let Value::Str(text) = value else { return None };
+    (text.len() <= MAX_LAYOUT_BYTES).then(|| RawLayout::Names(text.as_str().trim().to_owned()))
+}
+/// What one portal key said: a value, that the portal has no usable value for it (not found, or the wrong type), or
+/// nothing this time (no reply in time, the bus failed).
+#[derive(Debug, PartialEq)]
+enum Answer<T> {
+    Value(T),
+    Missing,
+    Failed,
+}
+/// Reads `namespace` `key` with `ReadOne`, then the legacy `Read` (which wraps the value once more), telling a key the
+/// portal has no value for from a read that failed.
+async fn read_key<T>(connection: &zbus::Connection, namespace: &str, key: &str, decode: impl Fn(&Value<'_>) -> Option<T>) -> Answer<T> {
+    let mut answer = Answer::Failed;
+    for (method, legacy) in [("ReadOne", false), ("Read", true)] {
+        match bounded(connection.call_method(Some(DEST), PATH, Some(IFACE), method, &(namespace, key))).await {
+            Some(Ok(message)) => {
+                let value = message.body().deserialize::<OwnedValue>();
+                match value.ok().as_deref().and_then(|value| unwrap_legacy(value, legacy)).and_then(&decode) {
+                    Some(value) => return Answer::Value(value),
+                    None => answer = Answer::Missing,
+                }
+            }
+            Some(Err(zbus::Error::MethodError(name, _, _))) if name.as_str() == "org.freedesktop.portal.Error.NotFound" => return Answer::Missing,
+            // An older portal without `ReadOne`, a timeout or a failed bus: the legacy method may still answer.
+            _ => {}
+        }
+    }
+    answer
+}
+/// The window-button layout keys the portal is asked for on the desktop found for the layout (`Shared::find_desktop`):
+/// the standard placement, the window manager's own schema where it has one (GNOME's, Cinnamon's or MATE's), and GNOME's
+/// where the desktop's own session keeps it in step with its window manager (Plasma, Xfce, Budgie on labwc). Never
+/// another desktop's key, which holds that desktop's default; none before the desktop is found.
+fn caption_keys(shared: &Shared) -> Vec<(&'static str, &'static str, LayoutSource)> {
+    let Some(desktop) = shared.layout_desktop() else { return Vec::new() };
+    let mut keys = vec![(STANDARD, PLACEMENT_KEY, LayoutSource::StandardPortal)];
+    if let Some(schema) = desktop.gsettings_schema() {
+        keys.push((schema, LAYOUT_KEY, LayoutSource::DesktopPortal));
+    }
+    if let Some(schema) = desktop.compatibility_schema() {
+        keys.push((schema, LAYOUT_KEY, LayoutSource::Compatibility));
+    }
+    keys
+}
+/// `namespace` `key` as a layout reading.
+fn caption_reading(namespace: &str, key: &str, value: &Value<'_>, source: LayoutSource) -> Option<LayoutReading> {
+    let raw = if key == PLACEMENT_KEY { decode_placement(value)? } else { decode_names(value)? };
+    Some(LayoutReading::new(source, raw, format!("settings portal, {namespace} {key}")))
+}
+/// Waits until the desktop is found for the layout, which is once the layout is asked for, then reads its layout keys
+/// and publishes each answer: a value replaces the key's last one, a key the portal has no value for gives way to the
+/// next source, and a failed read keeps the last one. Whether any key answered.
+async fn read_captions(shared: &Shared, connection: &zbus::Connection) -> bool {
+    shared.until_desktop_found().await;
+    let mut answered = false;
+    for (namespace, key, source) in caption_keys(shared) {
+        match read_key(connection, namespace, key, |value| caption_reading(namespace, key, value, source)).await {
+            Answer::Value(reading) => {
+                answered = true;
+                shared.publish_caption(source, Some(reading));
+            }
+            Answer::Missing => shared.publish_caption(source, None),
+            Answer::Failed => {}
+        }
+    }
+    shared.captions_asked.store(true, std::sync::atomic::Ordering::Release);
+    answered
 }
 // `None` means malformed. A blank name is no answer.
 fn decode_icons(value: &Value<'_>) -> Option<String> {
@@ -222,7 +322,10 @@ impl Fallbacks {
         }
     }
     async fn layout(&mut self, shared: &Shared) {
-        if std::mem::replace(&mut self.layout_used, true) {
+        // GNOME's string for `Watcher::button_layout`; the desktop's own layout sources are `caption.rs`'s.
+        // A sandbox's own `gsettings` answers GNOME's default, not the user's layout: it stands in only while the portal
+        // has given none, so a lost connection keeps the portal's.
+        if shared.layout.lock().unwrap_or_else(PoisonError::into_inner).is_some() || std::mem::replace(&mut self.layout_used, true) {
             return;
         }
         if let Some(text) = self.get(WM, LAYOUT_KEY).await
@@ -250,6 +353,7 @@ pub(super) async fn watch(shared: Arc<Shared>) {
         let _ = session(&shared, &mut fallbacks, &mut connected).await;
         // No session bus, no portal and an empty fallback all end here without a publish.
         shared.settle();
+        shared.captions_asked.store(true, std::sync::atomic::Ordering::Release);
         if connected {
             retry = Duration::from_secs(5);
         }
@@ -259,7 +363,7 @@ pub(super) async fn watch(shared: Arc<Shared>) {
     }
 }
 // Keep Nix/profile PATH entries, but never execute a helper from a relative search folder.
-fn gsettings_exe(path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+pub(super) fn gsettings_exe(path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
     let dirs = path.map(std::env::split_paths).into_iter().flatten().filter(|p| p.is_absolute());
     dirs.chain(["/usr/bin", "/bin", "/usr/local/bin"].map(std::path::PathBuf::from)).map(|p| p.join("gsettings")).find(|p| p.is_file())
 }
@@ -310,6 +414,12 @@ impl Answers {
     }
     /// Apply one `SettingChanged`; malformed values and other settings change nothing.
     fn apply(&mut self, shared: &Shared, namespace: &str, key: &str, value: &Value<'_>) {
+        // A layout key of this desktop's; a malformed value changes nothing.
+        if let Some((_, _, source)) = caption_keys(shared).into_iter().find(|(n, k, _)| *n == namespace && *k == key)
+            && let Some(reading) = caption_reading(namespace, key, value, source)
+        {
+            shared.publish_caption(source, Some(reading));
+        }
         match (namespace, key) {
             (WM, LAYOUT_KEY) => {
                 if let Some(layout) = decode_layout(value) {
@@ -408,6 +518,7 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
     let mut settings = [
         subscribe(&connection, rule(KEY), 64).await?,
         subscribe(&connection, rule(LAYOUT_KEY), 8).await?,
+        subscribe(&connection, rule(PLACEMENT_KEY), 8).await?,
         subscribe(&connection, rule(ICONS_KEY), 8).await?,
         subscribe(&connection, rule(CONTRAST_KEY), 8).await?,
         subscribe(&connection, rule(MOTION_KEY), 8).await?,
@@ -428,7 +539,36 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
     .await;
     let mut answers = Answers { standard, gnome, motion, gnome_motion, kde_motion };
     publish_first_reads(shared, fallbacks, contrast, &answers, text_scale);
-    match combined(standard, gnome) {
+    let themed = read_the_rest(shared, fallbacks, connected, &connection, combined(standard, gnome), text_scale.is_none()).await;
+    // A portal that knows neither colour key is followed for the window-button layout keys it has, when the layout is
+    // asked for by then.
+    if !themed {
+        if !(shared.captions_wanted() && read_captions(shared, &connection).await) {
+            return None;
+        }
+        *connected = true;
+    }
+    // Otherwise its layout keys are read once the layout is asked for and the desktop found, while the rest is followed.
+    let captions = async {
+        if themed {
+            read_captions(shared, &connection).await;
+        }
+        std::future::pending::<Option<()>>().await
+    };
+    futures_lite::future::or(follow(shared, &connection, &mut settings, &mut owners, &mut answers), captions).await
+}
+/// After the first concurrent reads: publishes the theme (else runs its fallbacks and stops), then GNOME's layout
+/// string, the icon theme and, when the portal had none, the text scale's fallback. Whether the portal knew a colour
+/// key. The window-button layout keys are read apart (`read_captions`).
+async fn read_the_rest(
+    shared: &Shared,
+    fallbacks: &mut Fallbacks,
+    connected: &mut bool,
+    connection: &zbus::Connection,
+    theme: Option<Option<Theme>>,
+    no_text_scale: bool,
+) -> bool {
+    match theme {
         Some(answer) => {
             *connected = true;
             shared.publish(answer);
@@ -438,23 +578,23 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
             fallbacks.layout(shared).await;
             fallbacks.icons(shared).await;
             fallbacks.text_scale(shared).await;
-            return None;
+            return false;
         }
     }
     // Read after the theme is published so `wait_first` never waits for the layout.
-    match read_with(&connection, WM, LAYOUT_KEY, layout_reply).await {
+    match read_with(connection, WM, LAYOUT_KEY, layout_reply).await {
         Some(layout) => shared.publish_layout(layout),
         None => fallbacks.layout(shared).await,
     }
-    match read_with(&connection, GNOME, ICONS_KEY, icons_reply).await {
+    match read_with(connection, GNOME, ICONS_KEY, icons_reply).await {
         Some(icons) => shared.publish_icons(icons),
         None => fallbacks.icons(shared).await,
     }
     // A portal without GNOME's keys answered nothing for the text scale either.
-    if text_scale.is_none() {
+    if no_text_scale {
         fallbacks.text_scale(shared).await;
     }
-    follow(shared, &connection, &mut settings, &mut owners, &mut answers).await
+    true
 }
 /// Follows the settings after the first read until the portal's owner goes away or a stream ends.
 async fn follow(
@@ -494,6 +634,7 @@ mod tests {
     use super::{ANIMATIONS_KEY, Answers, GNOME, KDE, KDE_MOTION_KEY, MOTION_KEY, STANDARD, decode, decode_motion};
     use crate::appearance::is_gnome_session;
     use crate::appearance::{Theme, Watcher};
+    use std::sync::PoisonError;
     use std::time::Duration;
     use zbus::zvariant::Value;
     // The portal's, GNOME's and KDE's keys each decode to reduced or not; malformed values say
@@ -669,5 +810,299 @@ mod tests {
         assert!(dropper.join().is_ok(), "watcher drop panicked");
         assert!(bounded, "watcher drop waited for a blocked synchronous poll");
         Ok(())
+    }
+
+    // A sandbox's own `gsettings` answers GNOME's default layout (`appmenu:close`), not the user's. Its one-shot answer
+    // stands in while the portal has given none; once the portal has answered, the fallback a lost connection runs keeps
+    // the portal's layout.
+    #[test]
+    fn the_gsettings_layout_stands_in_only_until_the_portal_answers() -> Result<(), Box<dyn std::error::Error>> {
+        use super::Fallbacks;
+        use crate::appearance::Shared;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("craft-platform-gsettings-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let gsettings = dir.join("gsettings");
+        std::fs::write(&gsettings, "#!/bin/sh\ncase \"$3\" in\n  button-layout) echo \"'appmenu:close'\" ;;\nesac\n")?;
+        std::fs::set_permissions(&gsettings, std::fs::Permissions::from_mode(0o755))?;
+        let layout_after = |portal: Option<&str>| {
+            let shared = Shared::new(true, Box::new(|| {}));
+            if let Some(layout) = portal {
+                shared.publish_layout(layout.to_owned());
+            }
+            let mut fallbacks = Fallbacks::from_env();
+            fallbacks.path = Some(dir.clone().into_os_string());
+            futures_lite::future::block_on(fallbacks.layout(&shared));
+            shared.layout.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        };
+        let fallback = layout_after(None);
+        let kept = layout_after(Some("appmenu:minimize,maximize,close"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(fallback.as_deref(), Some("appmenu:close"), "with no answer from the portal, gsettings answers");
+        assert_eq!(kept.as_deref(), Some("appmenu:minimize,maximize,close"), "the portal's layout stays");
+        Ok(())
+    }
+
+    /// Fallbacks that never run: a test's portal is the only source.
+    fn no_fallbacks() -> super::Fallbacks {
+        super::Fallbacks {
+            theme_used: true,
+            layout_used: true,
+            icons_used: true,
+            motion_used: true,
+            text_scale_used: true,
+            path: None,
+            config_home: None,
+        }
+    }
+
+    fn placement(leading: &[&str], trailing: &[&str]) -> crate::appearance::RawLayout {
+        let list = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+        crate::appearance::RawLayout::Placement { leading: list(leading), trailing: list(trailing) }
+    }
+
+    fn standard_value(leading: &[&str], trailing: &[&str]) -> zbus::zvariant::OwnedValue {
+        super::super::fake_bus::owned((leading.to_vec(), trailing.to_vec()))
+    }
+
+    /// `desktop`'s watcher state, with a source that runs `session` (each a fake portal served for the watcher's
+    /// connection) one after the other, sending each one's number on `ended` when it ends.
+    fn sessions(
+        desktop: craft_host::caption_layout::LayoutDesktop,
+        sessions: Vec<(super::super::fake_bus::Keys, async_channel::Receiver<super::super::fake_bus::Emit>)>,
+        ended: async_channel::Sender<usize>,
+    ) -> Option<Watcher> {
+        let shared = crate::appearance::Shared::new(false, Box::new(|| {}));
+        shared.find_desktop(desktop);
+        Watcher::spawn_shared(shared, move |shared| async move {
+            for (number, (keys, emits)) in sessions.into_iter().enumerate() {
+                let Some((client, server)) = super::super::fake_bus::pair().await else { return };
+                let mut fallbacks = no_fallbacks();
+                let mut connected = false;
+                futures_lite::future::or(
+                    async {
+                        super::super::fake_bus::serve(server, keys, emits).await;
+                    },
+                    async {
+                        let _ = super::watch_connection(&shared, &mut fallbacks, &mut connected, client).await;
+                    },
+                )
+                .await;
+                let _ = ended.send(number).await;
+            }
+        })
+    }
+
+    // A portal can give the window-button layout without either colour key: the standard placement and the desktop's
+    // own key are read whatever the theme reads gave, and the standard one decides.
+    #[test]
+    fn the_layout_keys_are_read_without_either_colour_key() -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::fake_bus::{Answer, Keys, eventually, owned};
+        use crate::appearance::{LayoutSource, RawLayout};
+        use craft_host::caption_layout::LayoutDesktop;
+        let keys = Keys::default();
+        keys.set(STANDARD, super::PLACEMENT_KEY, Answer::Value(standard_value(&["close"], &["minimize", "maximize"])));
+        keys.set(super::WM, super::LAYOUT_KEY, Answer::Value(owned("appmenu:minimize,close")));
+        let (_emit, emits) = async_channel::unbounded();
+        let (ended, _) = async_channel::unbounded();
+        let watcher = sessions(LayoutDesktop::Gnome, vec![(keys, emits)], ended).ok_or("worker creation failed")?;
+        assert!(eventually(|| watcher.caption_layout().is_some()), "the layout was read");
+        let reading = watcher.caption_layout().ok_or("no layout")?;
+        assert_eq!((reading.source, &reading.raw), (LayoutSource::StandardPortal, &placement(&["close"], &["minimize", "maximize"])));
+        let desktop =
+            |watcher: &Watcher| watcher.shared.captions.lock().unwrap_or_else(PoisonError::into_inner)[LayoutSource::DesktopPortal.rank()].clone();
+        assert!(eventually(|| desktop(&watcher).is_some()), "GNOME's own key was read too");
+        assert_eq!(desktop(&watcher).map(|reading| reading.raw), Some(RawLayout::Names("appmenu:minimize,close".into())));
+        assert_eq!(watcher.current(), None, "no colour key answered");
+        Ok(())
+    }
+
+    // The standard placement is `(asas)` by the specification. Arrays of another type are no answer even when empty,
+    // where they would read as no button, so the desktop's own key decides; two empty `as` arrays still ask for none.
+    #[test]
+    fn a_placement_of_another_type_is_no_answer_even_when_empty() -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::fake_bus::{Answer, Keys, eventually, owned};
+        use crate::appearance::{LayoutSource, RawLayout};
+        use craft_host::caption_layout::LayoutDesktop;
+        let read = |value: &Value<'_>| super::caption_reading(STANDARD, super::PLACEMENT_KEY, value, LayoutSource::StandardPortal).map(|r| r.raw);
+        assert_eq!(read(&Value::from((Vec::<String>::new(), Vec::<String>::new()))), Some(placement(&[], &[])), "(asas): no button");
+        for wrong in [
+            Value::from((Vec::<u32>::new(), Vec::<u32>::new())),
+            Value::from((Vec::<String>::new(), Vec::<u32>::new())),
+            Value::from((Vec::<String>::new(),)),
+        ] {
+            assert_eq!(read(&wrong), None, "{}", wrong.value_signature());
+        }
+        let keys = Keys::default();
+        keys.set(STANDARD, super::PLACEMENT_KEY, Answer::Value(owned((Vec::<u32>::new(), Vec::<u32>::new()))));
+        keys.set(super::WM, super::LAYOUT_KEY, Answer::Value(owned("close:minimize,maximize")));
+        let (_emit, emits) = async_channel::unbounded();
+        let (ended, _) = async_channel::unbounded();
+        let watcher = sessions(LayoutDesktop::Gnome, vec![(keys, emits)], ended).ok_or("worker creation failed")?;
+        let source = || watcher.caption_layout().map(|reading| reading.source);
+        assert!(eventually(|| source() == Some(LayoutSource::DesktopPortal)), "GNOME's key decides, not {:?}", watcher.caption_layout());
+        assert_eq!(watcher.caption_layout().map(|reading| reading.raw), Some(RawLayout::Names("close:minimize,maximize".into())));
+        Ok(())
+    }
+
+    // A change on the portal is followed while the app runs; a value of the wrong type changes nothing. The desktop's
+    // own key is another desktop's on Cinnamon, so GNOME's is not taken for it there.
+    #[test]
+    fn a_layout_change_on_the_portal_is_followed_and_a_malformed_one_ignored() -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::fake_bus::{Answer, Emit, Keys, eventually, owned};
+        use crate::appearance::{LayoutSource, RawLayout};
+        use craft_host::caption_layout::LayoutDesktop;
+        const CINNAMON: &str = "org.cinnamon.desktop.wm.preferences";
+        let keys = Keys::default();
+        keys.set(STANDARD, super::PLACEMENT_KEY, Answer::Value(standard_value(&[], &["minimize", "maximize", "close"])));
+        let (emit, emits) = async_channel::unbounded();
+        let (ended, _) = async_channel::unbounded();
+        let watcher = sessions(LayoutDesktop::Cinnamon, vec![(keys, emits)], ended).ok_or("worker creation failed")?;
+        let slot = |watcher: &Watcher, source: LayoutSource| {
+            watcher.shared.captions.lock().unwrap_or_else(PoisonError::into_inner)[source.rank()].clone().map(|r| r.raw)
+        };
+        assert!(eventually(|| watcher.caption_layout().is_some()), "the first read");
+
+        emit.send_blocking(Emit::SettingChanged(STANDARD, super::PLACEMENT_KEY, standard_value(&[], &["close"])))?;
+        assert!(eventually(|| slot(&watcher, LayoutSource::StandardPortal) == Some(placement(&[], &["close"]))), "the change is followed");
+
+        emit.send_blocking(Emit::SettingChanged(STANDARD, super::PLACEMENT_KEY, owned("close:")))?;
+        emit.send_blocking(Emit::SettingChanged(super::WM, super::LAYOUT_KEY, owned("close:")))?;
+        emit.send_blocking(Emit::SettingChanged(CINNAMON, super::LAYOUT_KEY, owned("close,minimize:maximize")))?;
+        assert!(eventually(|| slot(&watcher, LayoutSource::DesktopPortal).is_some()), "Cinnamon's own key is followed");
+        assert_eq!(slot(&watcher, LayoutSource::DesktopPortal), Some(RawLayout::Names("close,minimize:maximize".into())), "not GNOME's");
+        assert_eq!(slot(&watcher, LayoutSource::StandardPortal), Some(placement(&[], &["close"])), "the malformed value changed nothing");
+        Ok(())
+    }
+
+    // GNOME's key counts only where the desktop's own session keeps it in step with its window manager: in Plasma (its
+    // GTK bridge writes it from KWin's setting) it stands in after KWin's own file; for KWin and Openbox under LXQt it
+    // holds GNOME's default, which would show Close only, and is not read at all.
+    #[test]
+    fn gnomes_key_counts_only_where_the_desktop_keeps_it_in_step() -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::fake_bus::{Answer, Keys, eventually, owned};
+        use crate::appearance::{LayoutSource, RawLayout};
+        use craft_host::caption_layout::LayoutDesktop;
+        let slots = |watcher: &Watcher| watcher.shared.captions.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let gnome_key = || {
+            let keys = Keys::default();
+            keys.set(super::WM, super::LAYOUT_KEY, Answer::Value(owned("maximize:close")));
+            keys
+        };
+        let (_kde_emit, kde_emits) = async_channel::unbounded();
+        let (kde_ended, kde_done) = async_channel::unbounded();
+        let kde = sessions(LayoutDesktop::Plasma, vec![(gnome_key(), kde_emits)], kde_ended).ok_or("worker creation failed")?;
+        assert!(eventually(|| kde.caption_layout().is_some()), "KDE's bridge key is read");
+        let read = slots(&kde);
+        assert_eq!(read[LayoutSource::Compatibility.rank()].as_ref().map(|r| &r.raw), Some(&RawLayout::Names("maximize:close".into())));
+        assert!(read[LayoutSource::DesktopPortal.rank()].is_none(), "not as KWin's own setting");
+        drop(kde_done);
+
+        for window_manager in [LayoutDesktop::Kwin, LayoutDesktop::Openbox] {
+            let (_lxqt_emit, lxqt_emits) = async_channel::unbounded();
+            let (lxqt_ended, lxqt_done) = async_channel::unbounded();
+            let lxqt = sessions(window_manager, vec![(gnome_key(), lxqt_emits)], lxqt_ended).ok_or("worker creation failed")?;
+            assert!(eventually(|| lxqt.shared.captions_asked.load(std::sync::atomic::Ordering::Acquire)), "the layout keys were asked for");
+            assert!(slots(&lxqt).iter().all(Option::is_none), "GNOME's default is not taken for {window_manager:?}'s layout");
+            drop(lxqt_done);
+        }
+        Ok(())
+    }
+
+    // The session's names say GNOME but Openbox runs, as when a user replaces GNOME's window manager. The desktop is
+    // found once for every source, so the portal is not asked for GNOME's key, which holds GNOME's default there:
+    // Openbox's own file decides, though the portal exports GNOME's key.
+    #[test]
+    fn the_window_manager_found_decides_for_the_portals_keys_too() -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::caption::{Env, follow as follow_desktop};
+        use super::super::fake_bus::{Answer, Keys, eventually, owned, pair, serve};
+        use crate::appearance::{LayoutSource, RawLayout, Shared};
+        use craft_host::caption_layout::{DesktopHints, LayoutDesktop};
+        let home = crate::temp::TempDir::new("craft-caption-home")?;
+        std::fs::create_dir_all(home.path().join("openbox"))?;
+        std::fs::write(home.path().join("openbox/rc.xml"), "<openbox_config><theme><titleLayout>CLIM</titleLayout></theme></openbox_config>")?;
+        let env = Env { sandboxed: false, config_home: Some(home.path().to_owned()), config_dirs: Vec::new(), path: None, x11: false };
+        let names = |key: &str| (key == "XDG_CURRENT_DESKTOP").then(|| "GNOME".to_owned());
+        let desktop = LayoutDesktop::detect(&names, DesktopHints { x11_wm: Some("Openbox"), lxqt_wm: None });
+        let keys = Keys::default();
+        keys.set(super::WM, super::LAYOUT_KEY, Answer::Value(owned("close:")));
+        let (_emit, emits) = async_channel::unbounded();
+        let watcher = Watcher::spawn_shared(Shared::new(false, Box::new(|| {})), move |shared| async move {
+            let Some((client, server)) = pair().await else { return };
+            let (mut fallbacks, mut connected) = (no_fallbacks(), false);
+            let portal = futures_lite::future::or(
+                async {
+                    serve(server, keys, emits).await;
+                },
+                async {
+                    let _ = super::watch_connection(&shared, &mut fallbacks, &mut connected, client).await;
+                },
+            );
+            futures_lite::future::zip(follow_desktop(&shared, &env, desktop, None), portal).await;
+        })
+        .ok_or("worker creation failed")?;
+        let asked = || watcher.shared.captions_asked.load(std::sync::atomic::Ordering::Acquire);
+        assert!(eventually(|| asked() && watcher.caption_layout().is_some()), "the portal was asked and a source answered");
+        let reading = watcher.caption_layout().ok_or("no layout")?;
+        assert_eq!((reading.source, reading.raw), (LayoutSource::WmConfig, RawLayout::Openbox("CLIM".into())), "{}", reading.origin);
+        Ok(())
+    }
+
+    // Through a lost connection the last layout stays; a new portal whose read fails keeps it too, while one that
+    // definitively has no such key lets the next source answer.
+    #[test]
+    fn a_new_portal_without_the_key_gives_way_and_a_failed_read_keeps_it() -> Result<(), Box<dyn std::error::Error>> {
+        use super::super::fake_bus::{Answer, Emit, Keys, eventually};
+        use craft_host::caption_layout::LayoutDesktop;
+        let first = Keys::default();
+        first.set(STANDARD, super::PLACEMENT_KEY, Answer::Value(standard_value(&["close"], &[])));
+        let failing = Keys::default();
+        failing.set(STANDARD, super::PLACEMENT_KEY, Answer::Error("org.freedesktop.DBus.Error.Failed"));
+        let (emit, emits) = async_channel::unbounded();
+        let (_, quiet) = async_channel::unbounded();
+        let (_, quieter) = async_channel::unbounded();
+        let (ended, sessions_ended) = async_channel::unbounded();
+        let watcher = sessions(LayoutDesktop::Unknown, vec![(first, emits), (failing, quiet), (Keys::default(), quieter)], ended)
+            .ok_or("worker creation failed")?;
+        let wait = |number: usize| sessions_ended.recv_blocking().ok() == Some(number);
+        assert!(eventually(|| watcher.caption_layout().is_some()), "the first portal answered");
+        emit.send_blocking(Emit::OwnerChanged(super::DEST, ":1.1", ":1.2"))?;
+        assert!(wait(0), "the first session ended with its owner");
+        assert_eq!(watcher.caption_layout().map(|r| r.raw), Some(placement(&["close"], &[])), "kept through the disconnect");
+        assert!(wait(1), "the failing portal's session ended");
+        assert_eq!(watcher.caption_layout().map(|r| r.raw), Some(placement(&["close"], &[])), "a failed read keeps the layout");
+        assert!(wait(2), "the last portal's session ended");
+        assert_eq!(watcher.caption_layout(), None, "a portal without the key gives way");
+        Ok(())
+    }
+
+    // The sources rank: the standard placement replaces a file's layout whenever it answers, a later change of the file
+    // shows nothing (and wakes nothing) while it stands, and the file's layout is back once it is gone.
+    #[test]
+    fn a_better_source_replaces_a_worse_one_whenever_it_answers() {
+        use crate::appearance::{LayoutReading, LayoutSource, RawLayout, Shared};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let wakes = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&wakes);
+        let shared = Shared::new(
+            true,
+            Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let gtk = |text: &str| Some(LayoutReading::new(LayoutSource::GtkConfig, RawLayout::Names(text.into()), "settings.ini"));
+        let standard = Some(LayoutReading::new(LayoutSource::StandardPortal, placement(&["close"], &[]), "portal"));
+        let best = |shared: &Shared| shared.captions.lock().unwrap_or_else(PoisonError::into_inner).iter().flatten().next().map(|r| r.source);
+        shared.publish_caption(LayoutSource::GtkConfig, gtk("close:"));
+        assert_eq!(best(&shared), Some(LayoutSource::GtkConfig));
+        shared.publish_caption(LayoutSource::StandardPortal, standard);
+        assert_eq!(best(&shared), Some(LayoutSource::StandardPortal), "the slower, better source wins");
+        let woken = wakes.load(Ordering::SeqCst);
+        shared.publish_caption(LayoutSource::GtkConfig, gtk("minimize:"));
+        assert_eq!(best(&shared), Some(LayoutSource::StandardPortal), "a later, worse answer doesn't replace it");
+        assert_eq!(wakes.load(Ordering::SeqCst), woken, "and wakes nothing");
+        shared.publish_caption(LayoutSource::StandardPortal, None);
+        assert_eq!(best(&shared), Some(LayoutSource::GtkConfig), "once it is gone the file's layout is back");
+        assert!(wakes.load(Ordering::SeqCst) > woken);
     }
 }

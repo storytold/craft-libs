@@ -8,7 +8,8 @@
 //! - [`LayoutSource`] and [`LayoutReading`]: where a value came from. The sources rank in a fixed order, so a reading
 //!   from a better source replaces one from a worse source whenever it arrives, and never the other way round.
 //!
-//! craft-window turns a reading into the buttons at each end of the bar (`Layout::from_reading`).
+//! craft-platform's appearance watcher reads the sources and keeps the best reading current; craft-window turns it
+//! into the buttons at each end of the bar.
 //!
 //! | Desktop | Its own setting |
 //! |---|---|
