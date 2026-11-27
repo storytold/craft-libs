@@ -1,8 +1,10 @@
 # Where each layout comes from
 
 The reader relies on the record layouts below, and the writer (`src/write.rs`) lays out version 15
-files by the same rows, with R64 to R73 for what only the writer needs. Code cites a row by its id
-(`R1` ...), and `tests/it/provenance.rs` fails when a cited id has no row here.
+files by the same rows, with R64 to R73 for what only the writer needs. The `.cmx` writer
+(`src/cmx_write.rs`) writes in them, with R74 for what only it needs ("Written fields" lists each
+field it sets). Code cites a row by its id (`R1` ...), and `tests/it/provenance.rs` fails when a
+cited id has no row here.
 
 Sources:
 
@@ -57,7 +59,10 @@ Sources:
 
 Status: `public-spec` (K, KF, KR, Z, F, PR or G), `sample` (S), `public-notes` (a layout CN marks
 confirmed that no CX file shows), `unconfirmed` (a point no source states and no sample file shows;
-listed so it can be checked against a file, with what the reader does when it is wrong).
+listed so it can be checked against a file, with what the reader does when it is wrong). The
+"Written fields" table also uses `own` (a value the reader does not read, set as the synthetic test
+files of `src/synth_cmx.rs` set it) and `the writer's choice` (a value the reader does not read and
+the synthetic test files do not set, chosen by the writer).
 
 Public specifications cover only parts of versions 1 to 4: the rows that cite K, F or PR, such as
 the version 3 fill (R34) and page settings (R38). The other rows of those versions rest on the
@@ -126,7 +131,7 @@ file is committed.
 | R55 | A table (`rclr`, `rpen`, `rott`, `rdot`, `rotl`) is a u16 entry count, then one field list per entry; an instruction's body is field lists too. A field is a u8 tag, a u16 length counting its 3 header bytes, and the data; 0xff ends the list. Objects name table entries from 1 | CN "Tables"; S: every one of these tables in the nine CX files with 32-bit coordinates reads its count of entries with no bytes left | sample |
 | R56 | A color entry: a property list in field 10 (a u32 length, then parts laid out as R11's, the color in part 1 as R14), or in older files the model and palette bytes in field 1 and the values in field 2. Models of the older fields: 2 cyan, magenta, yellow and black in percent; 3 the same in 0 to 255; 4 cyan, magenta and yellow in 0 to 255; 5 red, green and blue in 0 to 255; 9 gray in 0 to 255, 255 white. Other models read as black with a warning | CN "Tables" (`rclr`); S: every color of the nine CX files is model 2 in the older fields | sample (model 2), public-notes (field 10), unconfirmed (models 3 and 5 of the older fields, read as the program of CN reads them, and models 4 and 9, read as R14's; a wrong reading gives a wrong color) |
 | R57 | `rpen` field 1: the width as a u32 in coordinate units (then an aspect, an angle and a matrix, not read). `rott` field 1: a flags byte (1 no outline, 2 solid, 4 dashed, 8 behind the fill, 16 scaled with the object), then the caps in the low 4 bits and the join in the high 4 bits, numbered as R12. `rdot` field 1: a u16 count, then the dash and gap lengths in outline widths (u16 each). A pattern whose lengths are all 0 draws a solid line, as R48's | CN "Tables"; S: line types 0x02 and 0x22 with caps and joins 0x00, 0x01 and 0x11 in the CX files | public-notes (the flags 4, 8 and 16 and the cap and join numbering; bit 0x20, set in `balloon.cmx`, is not read) |
-| R58 | `rotl` field 1: six u16, the 1-based entries of the outline's line type, screen, color, arrowhead pair, pen and dash pattern | CN "Tables"; S: every `rotl` entry of the CX files names entries that exist | sample |
+| R58 | `rotl` field 1: six u16, the 1-based entries of the outline's line type, screen, color, arrowhead pair, pen and dash pattern | CN "Tables"; S: every `rotl` entry of the CX files names entries that exist; in `balloon.cmx`, `PC.CMX` and `squares.cmx`, solid outlines name `rdot` entry 1, whose field 1 is a count of 0 | sample |
 | R59 | `rota`: a u16 count, then pairs of u16 (start and end arrowheads, 0 for none), not field lists | CN "Tables"; S: `rota` is `01 00 00 00 00 00` in every CX file | sample (pairs of 0), public-notes (other values) |
 | R60 | A `page` chunk is a stream of instructions: a u16 size counting the whole instruction and an i16 code, or 0xFFFF, a u32 size and the code (the long form); then field lists. Codes: 9 and 10 begin and end a page, 11 and 12 a layer, 13 and 14 a group, 67 a curve; 20 and 21 a text object, 65 its drawn characters, 66 an ellipse, 68 a rectangle, 69 an image, 88 and 89 add and remove a clipping path, 111 a jump whose field 1 is the u32 file offset to go on from (the bytes jumped over hold images). Objects are drawn in file order, the first at the back | CN "page: instructions"; S: codes 9 to 14 and 67 in the CX files; in `squares.cmx` the large square comes first and the two smaller ones inside it after | sample (9 to 14, 67, the order), public-notes (the long form and the other codes) |
 | R61 | Field 4 of instruction 9: the page's width and height, u32 each in coordinate units. Without it, field 1 gives the drawing's bounds: a u16 page number, a u32, then the left, top, right and bottom edges as i32 in coordinate units; the page takes the bounds' size and is centered on them (VectorCraft's own choice). Without either, the page has no size, and the importer gives it 612 × 792 pt as it does a `.cdr` page without one (VectorCraft's own size) | CN "page: instructions"; S: none of the CX files has field 4; in all nine with 32-bit coordinates, the four edges in field 1 match the extent of the file's curves | public-notes (field 4), sample (field 1) |
@@ -142,3 +147,39 @@ file is committed.
 | R71 | An `outl` chunk from version 13 holds records up to the one of id 1, whose length the specification's samples give as the bytes left in the chunk less 8. In the version 15 samples the id 1 record holds 130 bytes, 8 bytes follow it, and its body holds an f64 1 at bytes 16 and 48, 45 degrees at byte 84 and 60 at byte 88; the writer writes that layout and those values. A record of id 2 holds a color property list that ends at its empty property, without the fields R66 names after a fill's list | KF L1158-L1244 (the records, type 2 a color property list, and the id 1 length in its samples); S: the 18 `outl` chunks of the LT `testset/15` files without text (each 237 bytes, the id 1 record 130 bytes long with those values and 8 bytes of 0 after it, the id 2 record 43 bytes long) | public-spec (the record types and the length), sample (the values; the reader does not use them) |
 | R72 | In the version 15 samples an `mcfg` chunk starts with the tag 1300 and the length of the rest of the chunk, then 4 bytes of 0 (the 12 bytes R10 names), and each `fild` chunk sits in a `LIST filc` of its own inside `LIST filt` | S: the 15 LT `testset/15` files without text (every `mcfg` starts with 1300 and its size less 8; each of their 31 `fild` chunks is the only chunk of a `LIST filc`) | sample (the reader skips the 12 bytes and finds `fild` chunks at any depth) |
 | R73 | The specification reads the id in a container's argument 8005 (R46) as the stored u32 plus 1, halved, and the `spnd` id as stored. Sample files hold the same stored u32 in both places, even ids included, which the halved reading would not match. The writer numbers containers 1, 2, 3 and so on, and writes the same number in the clipped group's `spnd` | KF L799-L807 (`powerclip_id`), L2305-L2312 (`spnd`); S: the container and `spnd` of LT `powerclipsquare_blackfill_whiterectangleinside.cdr` of `testset/12` (156091928) and `powerclipsquare_blackfill_whiterectangleinside_cdr15.cdr` (1), the eight UC files `corel_powerclip_*` of versions 7 to 13 (47834832) and TDF 114901 (515235504) | sample (the halved reading: not followed) |
+| R74 | `rscr`: a u16 count, then one field list per screen entry, which a `rotl` entry names (R58). The reader does not read it; the `.cmx` writer writes one entry whose field 1 holds the 13 bytes `00 00 3c 00 00 00 00 00 40 a5 ae 02 00` | S: each of the nine CX files with 32-bit coordinates has an `rscr` of one entry with a 13-byte field 1, these bytes in seven of them (`bars.cmx` and `thatch.cmx` differ in bytes 2 and 8 to 11) | sample |
+
+## Written fields
+
+`src/cmx_write.rs` writes `.cmx` files in the layouts of the rows above, nothing else. The table
+lists every field it sets. `own` marks a value the reader does not read, which the writer sets as
+the synthetic test files of `src/synth_cmx.rs` set it. The header's offsets at bytes 84 to 95, the
+index chunks (`LIST indx`), the instruction counts and file offsets that the CX files also keep in
+their page, layer and group records, and the bounds they keep in layer and group records are not
+written: no public source describes
+them, and the reader finds every chunk by its id and walks the instructions in order.
+
+| Field written | Rows | Status |
+|---|---|---|
+| The RIFF form `CMX1`, chunk ids and sizes, a pad byte after an odd body | R53 | sample |
+| Chunk order: `cont`, the `page` chunks, then `rclr`, `rpen`, `rott`, `rdot`, `rotl`, `rota` and `rscr` | R53 | own (the reader finds each chunk by its id) |
+| `cont`: `4` at byte 52, the unit 1e-7 m as an f64 at bytes 64 to 72 | R54 | sample |
+| `cont`: `2` at bytes 48 and 54, zeros elsewhere, 180 bytes | R54 | own |
+| Table counts and field lists | R55 | sample |
+| `rclr` field 10: a property list with part 1, the color record (model, palette 5, 4 zero bytes, 4 values), and for a spot color part 3, its name; models 2 (CMYK in percent), 5 (blue, green, red), 9 (gray), 20 (registration) and 21 (blue, green, red at the tint, and the tint in percent) | R11, R14, R56 | public-notes (field 10), public-spec (the models) |
+| `rpen` field 1: the width | R57 | public-notes |
+| `rpen` field 1 after the width: an aspect of 100, an angle of 0, a matrix type of 1 | R57 | own |
+| `rott` field 1: the flags 2, 4, 8 and 16, the caps and the join | R57 | public-notes |
+| `rdot` field 1: a count and the lengths in whole outline widths | R57 | public-notes |
+| `rdot` field 1 of a solid outline's pattern: a count of 0 | R57, R58 | sample |
+| `rotl` field 1: six entries, the screen and the arrowhead pair always 1, a solid outline's dash pattern the entry with a count of 0 | R58 | sample |
+| `rota`: one pair of 0 | R59 | sample |
+| `rscr`: one screen entry, its field 1 as the sample files write it | R74 | sample |
+| Instructions in the short form, and the long form past 65,534 bytes | R60 | sample (short form), public-notes (long form) |
+| Begin page, field 1: the page number (from 1), a u32 of 0, the left, top, right and bottom edges of the page's curves (of the page around its center when it has none; all 0 for a page without a size) | R61 | sample (page number 1, the edges), own (the later numbers, the edges of a page with no curves or no size) |
+| Begin page, field 4: the page's width and height | R61 | public-notes |
+| Begin layer, field 1: the page number and the layer number (u16 each, from 1), then 8 zero bytes, then the name as a u16 byte count and 8-bit characters | R62 | sample (the numbers: `balloon.cmx` and `PC.CMX` number their four layers `01 00 01 00` to `01 00 04 00`; the name), own (the 8 bytes) |
+| Begin layer, field 4: the name as a u32 count of UTF-16 code units and the units | R62 | public-notes |
+| Begin group with field 1 of 26 zero bytes; end layer, group and page with no fields | R60 | own (the bodies are not read) |
+| Curve, field 1: rendering attributes with a uniform fill (type 1, the color entry, screen entry 1) and an outline entry | R63, R74 | sample (the uniform fills of `bars.cmx`, `balloon.cmx` and `PC.CMX` name screen 1) |
+| Curve, field 2: the point count, the points as i32 and a type byte each, bit 2 set on every move, line and curve end node and clear on control points, bit 3 on the first and last nodes of a closed subpath that fits in one curve; a closed subpath cut into open pieces gets a line back to its start added when its last point is elsewhere; at most 7,281 points | R16, R62 | sample (the layout), own (bit 2 on the nodes the synthetic files set it on), the writer's choice (bit 2 on a closing node, which the synthetic files leave clear) |

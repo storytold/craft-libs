@@ -4,6 +4,7 @@ pub(crate) mod dialog_open;
 pub(crate) mod dialog_tab;
 pub(crate) mod keys;
 pub(crate) mod press;
+pub(crate) mod rings;
 pub(crate) mod roving;
 pub(crate) mod scopes;
 
