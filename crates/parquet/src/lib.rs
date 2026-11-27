@@ -282,7 +282,8 @@ fn value(field: Field) -> Result<Value> {
         Field::TimestampMillis(v) => Value::TimestampMillis(v),
         Field::TimestampMicros(v) => Value::TimestampMicros(v),
         // Keep exact decimal text rather than silently rounding arbitrary precision values.
-        // `read_buffer` has already bounded the value's length with `decimal_length`.
+        // `read_buffer` has already bounded the value's significant bytes with `decimal_length`.
+        Field::Decimal(decimal @ Decimal::Bytes { .. }) => Value::Decimal(text(Field::Decimal(trimmed_decimal(&decimal)).to_string())?),
         Field::Decimal(_) => Value::Decimal(text(field.to_string())?),
         _ => return Err(invalid("Binary and nested Parquet values are not supported")),
     })
@@ -312,6 +313,12 @@ fn significant_bytes(mut bytes: &[u8]) -> &[u8] {
         }
     }
     bytes
+}
+
+/// Copies a byte-backed decimal with only its significant bytes, so the record reader's conversion
+/// copies at most the bytes that `decimal_length` allowed rather than the redundant sign padding too.
+fn trimmed_decimal(decimal: &Decimal) -> Decimal {
+    Decimal::from_bytes(ByteArray::from(significant_bytes(decimal.data()).to_vec()), decimal.precision(), decimal.scale())
 }
 
 /// The fewest two's complement bytes that hold every unscaled value of `precision` digits: the
