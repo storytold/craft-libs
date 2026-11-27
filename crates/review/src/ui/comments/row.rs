@@ -436,8 +436,9 @@ impl CommentRow<'_> {
         }
         if self.lead && self.editable {
             // While a message of the card is in its editor (a new comment not yet saved among them) the card offers no
-            // reply: the reply box, its Post and the Reply button that focuses it come back once the edit ends.
-            let replying = self.editing.is_none();
+            // reply: the reply box, its Post and the Reply button that focuses it come back once the edit ends. An edit
+            // of a message the thread no longer has (a reply deleted while edited) shows no editor, so it hides nothing.
+            let replying = !self.editing.is_some_and(|(index, _)| index < thread.messages.len());
             if replying {
                 let field = sink.field(Slot::ReplyField, strip(Pos2::new(name_at, y), under.room), &words.reply, self.reply, REPLY_LINES);
                 y += field + gap;

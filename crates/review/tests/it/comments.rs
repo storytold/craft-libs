@@ -448,6 +448,47 @@ fn a_card_offers_no_reply_while_its_message_is_edited() {
     assert!(fixture.by_label("Add a reply").is_some(), "a cancelled edit offers the reply again");
 }
 
+/// A reply deleted from its "..." menu while it is in the editor takes the editor with it: once the host drops the
+/// reply, the card offers the reply box again, with no reselection.
+#[trial]
+fn deleting_the_edited_reply_brings_the_reply_box_back() {
+    let mut item = thread(1, 1, "Note 1.");
+    item.messages.push(message("Bo", "Reply"));
+    let threads = Rc::new(RefCell::new(vec![item]));
+    let mut initial = CommentsPanelState::default();
+    initial.selected = Selection::single(ThreadId(1));
+    let state = Rc::new(RefCell::new(initial));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let (shown_threads, shown_state, shown_edits) = (threads.clone(), state.clone(), edits.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let threads = shown_threads.borrow();
+        let mut state = shown_state.borrow_mut();
+        let out = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+        shown_edits.borrow_mut().extend(out.edits);
+    });
+    fixture.in_room(Room::Panel).settle();
+    state.borrow_mut().edit(ThreadId(1), 1, "Reply");
+    fixture.settle();
+    assert!(fixture.by_label("Add a reply").is_none(), "no reply while the reply is edited");
+
+    // The reply's menu is the card's last "...".
+    let menus = fixture.by_role(Role::BUTTON);
+    let reply_menu = menus.into_iter().rfind(|target| fixture.tree().name_of(target.node) == Some("More")).expect("the reply's menu");
+    fixture.click(&reply_menu).settle();
+    let delete = fixture.by_label("Delete").expect("the reply's Delete");
+    fixture.click(&delete).settle();
+    assert!(
+        edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Delete { thread: ThreadId(1), index: 1, .. })),
+        "Delete reports the reply: {:?}",
+        edits.borrow()
+    );
+    // The host drops the reply; the selection does not change.
+    threads.borrow_mut()[0].messages.truncate(1);
+    fixture.settle();
+    assert_eq!(state.borrow().selected.lead, Some(ThreadId(1)), "the card stays the lead");
+    assert!(fixture.by_label("Add a reply").is_some(), "the card offers a reply once the edited reply is gone");
+}
+
 /// A value the rig and its trial share.
 type Shared<T> = Rc<RefCell<T>>;
 
