@@ -2143,6 +2143,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .limits(scene.spec(&anchor).limits)
                 .sized(Sizing::Fill)
                 .column(shape)
+                .resizable(specs.iter().all(|spec| spec.allow_float_resize))
                 .actions(actions)
                 .grip(scene.config.floating_grip)
                 .rounded_body(scene.config.floating_rounded_body)

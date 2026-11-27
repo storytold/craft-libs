@@ -29,3 +29,12 @@ report of what an importer leaves out to stay within a limit (`Dropped`, `begin_
 
 WordCraft's `crates/formats/src/model` (at `07f97737`), moved as it is onto craft-wordmodel.
 Image decoding for re-encoding (`decode_bounded`) stays with the RTF writer that needs it.
+
+## Grouped drawing hyperlinks
+
+Pictures, shapes and groups can retain their own target in `Img::link` or the corresponding
+`Inline::Shape`/`Inline::Group` field. Each `Member::link` and `craft_wordmodel::para::GroupChild::link`
+keeps that member's separate target through the document/flow conversions. Add `link: None` to
+older Rust struct/variant literals that do not carry a target. Older JSON group children without
+`link` deserialize as unlinked, and unlinked children omit that key when serialized. This does
+not promise compatibility for every binary serde format or hyperlink activation in every exporter.

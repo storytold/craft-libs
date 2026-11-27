@@ -643,7 +643,7 @@ fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
     }
 }
 
-#[test]
+#[trial]
 fn optional_report_limit_bounds_distinct_fcpxml_diagnostics() {
     let unknown = (0..10).map(|i| format!("<video name=\"missing{i}\" duration=\"1s\"/> ")).collect::<String>();
     let doc = format!(
@@ -659,7 +659,7 @@ fn optional_report_limit_bounds_distinct_fcpxml_diagnostics() {
     assert_eq!(ordinary.entries.len(), 10);
 }
 
-#[test]
+#[trial]
 fn optional_report_limit_bounds_fcpxml_export_diagnostics_without_changing_output() {
     let (p, s) = project();
     let mut ordinary = Report::default();
@@ -670,4 +670,510 @@ fn optional_report_limit_bounds_fcpxml_export_diagnostics_without_changing_outpu
     let total = |r: &Report| r.entries.iter().map(|e| e.count).sum::<u32>();
     assert_eq!(total(&limited), total(&ordinary));
     assert!(limited.entries.iter().all(|e| e.message == "further diagnostics omitted"), "{limited}");
+}
+
+// Original metadata-only resources: A first cuts off M64, then B rebuilds M63/M64 at a
+// shallower depth. C repeats that same cache hit, without another reason to rebuild it.
+fn deferred_audio_document(m62: &str, leaf_extra: &str, audio_only_chain: bool) -> String {
+    deferred_audio_document_at(62, m62, leaf_extra, audio_only_chain)
+}
+
+fn deferred_audio_document_at(custom_index: usize, custom_spine: &str, leaf_extra: &str, audio_only_chain: bool) -> String {
+    let selection = if audio_only_chain { r#" srcEnable="audio""# } else { "" };
+    let mut resources = String::new();
+    for i in 0..64 {
+        let spine = if i == custom_index && !custom_spine.is_empty() {
+            custom_spine.to_string()
+        } else {
+            format!(r#"<ref-clip ref="m{}" name="Next" duration="20s"{selection}/>"#, i + 1)
+        };
+        resources.push_str(&format!(r#"<media id="m{i}" name="M{i}"><sequence format="f"><spine>{spine}</spine></sequence></media>"#));
+    }
+    format!(
+        r#"<fcpxml version="1.10"><resources>
+          <format id="f" frameDuration="1/24s" width="1920" height="1080"/>
+          <asset id="av" name="Original AV" start="0s" duration="60s" hasVideo="1" hasAudio="1" format="f" audioChannels="2">
+            <media-rep kind="original-media" src="file:///original-deferred-audio.mov"/>
+          </asset>
+          {resources}
+          <media id="m64" name="M64"><sequence format="f"><spine>
+            <asset-clip ref="av" name="Real audio" duration="20s"/>{leaf_extra}
+          </spine></sequence></media>
+        </resources><library><event>
+          <project name="A"><sequence format="f"><spine><ref-clip ref="m0" name="Earlier parent" duration="20s"{selection}/></spine></sequence></project>
+          <project name="B"><sequence format="f"><spine><ref-clip ref="m63" duration="20s"/></spine></sequence></project>
+          <project name="C"><sequence format="f"><spine><ref-clip ref="m63" duration="20s"/></spine></sequence></project>
+        </event></library></fcpxml>"#
+    )
+}
+
+fn deferred_audio_sequence<'a>(p: &'a Project, name: &str) -> (ItemId, &'a Sequence) {
+    let item = p.items.values().find(|i| i.name == name).unwrap();
+    (item.id, p.sequence(item.id).unwrap())
+}
+
+fn deferred_audio_pair(seq: &Sequence, name: &str) {
+    let video = seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == name).unwrap();
+    let audio = seq.audio_tracks.iter().flat_map(|t| &t.items).filter(|i| i.name == name).collect::<Vec<_>>();
+    assert_eq!(audio.len(), 1, "deferred parent audio was not restored exactly once: {name}");
+    let audio = audio[0];
+    assert!(video.link.is_some());
+    assert_eq!(audio.link, video.link);
+    assert_eq!((audio.item, audio.start, audio.duration, audio.source_in), (video.item, video.start, video.duration, video.source_in));
+    assert_eq!((audio.speed, audio.reverse, audio.frame_hold, audio.enabled), (video.speed, video.reverse, video.frame_hold, video.enabled));
+}
+
+#[trial]
+fn deferred_audio_returns_after_shallower_rebuild() {
+    let xml = deferred_audio_document("", "", false);
+    let (imp, report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    let p = &imp.project;
+    assert_eq!(imp.sequences.len(), 3);
+    let (_, a) = deferred_audio_sequence(p, "A");
+    let (_, b) = deferred_audio_sequence(p, "B");
+    let (_, c) = deferred_audio_sequence(p, "C");
+    assert_eq!(a.video_tracks[0].items.len(), 1, "the earlier picture must already exist");
+    assert_eq!(p.item(a.video_tracks[0].items[0].item).unwrap().name, "M0");
+    assert!(report.mentions("nested too deeply"), "{report}");
+    let (m63_id, m63) = deferred_audio_sequence(p, "M63");
+    let (m64_id, m64) = deferred_audio_sequence(p, "M64");
+    assert_eq!(m63.audio_tracks[0].items.len(), 1, "the permitted shallower rebuild must really reach audio");
+    assert_eq!(m63.audio_tracks[0].items[0].item, m64_id);
+    assert_eq!(media_key(p, m64.audio_tracks[0].items[0].item), "/original-deferred-audio.mov");
+    assert_eq!(b.audio_tracks[0].items[0].item, m63_id);
+    assert_eq!(c.audio_tracks[0].items[0].item, m63_id);
+    // The baseline fails here, after proving that parsing, depth truncation and child recovery worked.
+    deferred_audio_pair(a, "Earlier parent");
+    for i in 0..64 {
+        let (_, seq) = deferred_audio_sequence(p, &format!("M{i}"));
+        deferred_audio_pair(seq, "Next");
+    }
+    assert_eq!(b.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>(), 1);
+    assert_eq!(c.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>(), 1);
+}
+
+#[trial]
+fn deferred_audio_keeps_selection_adjustments_and_overlap_lanes() {
+    use craft_timeline::interchange::{Catalog, EffectDef, EffectInstance, EffectKind, ParamDef};
+
+    struct AudioCatalog;
+    impl Catalog for AudioCatalog {
+        fn effect(&self, id: &str) -> Option<EffectDef> {
+            if id == "original_audio_filter" {
+                Some(EffectDef {
+                    id: id.into(),
+                    name: "Original audio filter".into(),
+                    kind: EffectKind::Audio,
+                    category: "Original test".into(),
+                    intrinsic: false,
+                    params: vec![ParamDef { id: "mix".into(), label: "Mix".into(), default: ParamValue::Float(0.0) }],
+                })
+            } else {
+                TestCatalog.effect(id)
+            }
+        }
+        fn effect_by_name(&self, name: &str) -> Option<EffectDef> {
+            if name == "Original audio filter" { self.effect("original_audio_filter") } else { TestCatalog.effect_by_name(name) }
+        }
+        fn intrinsic(&self, kind: TrackKind) -> Vec<EffectInstance> {
+            TestCatalog.intrinsic(kind)
+        }
+    }
+    let refs = r#"
+      <asset-clip ref="av" name="Existing sound" offset="0s" duration="4s" srcEnable="audio"/>
+      <ref-clip ref="m63" name="Adjusted" offset="0s" start="3s" duration="4s" enabled="0" label="Rose">
+        <adjust-volume amount="-6dB"><param name="amount"><keyframeAnimation>
+          <keyframe time="3s" value="-6dB"/><keyframe time="5s" value="-3dB"/>
+        </keyframeAnimation></param></adjust-volume>
+        <filter-audio name="Original audio filter" enabled="0"><param key="mix" value="0.25"/></filter-audio>
+        <marker start="4s" duration="1/24s" value="Cue" note="original"/>
+        <ref-clip ref="m63" name="Positive lane" lane="2" offset="3s" duration="2s"/>
+        <ref-clip ref="m63" name="Negative lane" lane="-3" offset="3s" duration="2s" srcEnable="audio"/>
+      </ref-clip>
+      <ref-clip ref="m63" name="Audio only" offset="4s" duration="2s" srcEnable="audio"/>
+      <ref-clip ref="m63" name="Video only" offset="6s" duration="2s" srcEnable="video"/>
+      <ref-clip ref="m63" name="Explicit all" offset="8s" duration="2s" srcEnable="all"/>
+    "#;
+    // Leave room for the connected children under the unchanged XML-depth cap. The direct
+    // M61 → M63 edge still reaches M64's storyline at depth128, deferring audio until B rebuilds it.
+    let xml = deferred_audio_document_at(61, refs, "", false);
+    let mut report = Report::default();
+    let opts = craft_timeline::ImportOptions { catalog: &AudioCatalog, ..iopts(None) };
+    let imp = craft_timeline::fcpxml::import(&xml, &opts, &mut report).unwrap();
+    assert!(report.mentions("nested too deeply"), "{report}");
+    let (_, seq) = deferred_audio_sequence(&imp.project, "M61");
+    let videos = seq.video_tracks.iter().flat_map(|t| &t.items).collect::<Vec<_>>();
+    let audios = seq.audio_tracks.iter().flat_map(|t| &t.items).collect::<Vec<_>>();
+    assert!(videos.iter().all(|i| !matches!(i.name.as_str(), "Audio only" | "Negative lane" | "Existing sound")));
+    assert!(audios.iter().all(|i| i.name != "Video only"));
+    assert!(videos.iter().find(|i| i.name == "Video only").unwrap().link.is_none());
+    for name in ["Adjusted", "Positive lane", "Explicit all"] {
+        deferred_audio_pair(seq, name);
+    }
+    let adjusted = seq.audio_tracks[1].items.iter().find(|i| i.name == "Adjusted").unwrap();
+    assert_eq!(seq.audio_tracks[0].items[0].name, "Existing sound");
+    assert_eq!(adjusted.source_in, Tick(3 * TICKS_PER_SECOND));
+    assert!(!adjusted.enabled);
+    assert_eq!(adjusted.label, Label::Rose);
+    assert_eq!(adjusted.effect("volume").unwrap().param("level").unwrap().value, ParamValue::Float(-6.0));
+    let keys = &adjusted.effect("volume").unwrap().param("level").unwrap().keyframes;
+    assert_eq!(keys.len(), 2);
+    assert_eq!((keys[1].time, keys[1].value.clone()), (Tick(5 * TICKS_PER_SECOND), ParamValue::Float(-3.0)));
+    let effect = adjusted.effect("original_audio_filter").unwrap();
+    assert!(!effect.enabled);
+    assert_eq!(effect.param("mix").unwrap().value, ParamValue::Float(0.25));
+    assert_eq!(adjusted.markers.len(), 1);
+    assert_eq!((adjusted.markers[0].name.as_str(), adjusted.markers[0].comment.as_str()), ("Cue", "original"));
+    assert_eq!(adjusted.markers[0].start, Tick(4 * TICKS_PER_SECOND));
+    assert!(seq.audio_tracks[2].items.iter().any(|i| i.name == "Positive lane"));
+    assert!(seq.audio_tracks[3].items.iter().any(|i| i.name == "Negative lane"), "overlapping lane -3 must move past occupied A3");
+    let audio_only = audios.iter().filter(|i| i.name == "Audio only").collect::<Vec<_>>();
+    assert_eq!(audio_only.len(), 1);
+    assert!(audio_only[0].link.is_none(), "audio-only restoration must not manufacture a picture anchor");
+}
+
+#[trial]
+fn deferred_audio_keeps_retime_reverse_hold_and_export_links() {
+    for (end, expected_speed, reverse, hold, source) in [(11, 2.0, false, false, 3), (1, 0.5, true, false, 1), (3, 1.0, false, true, 3)] {
+        let refs = format!(
+            r#"<ref-clip ref="m63" name="Timed" start="3s" duration="4s"><timeMap>
+              <timept time="3s" value="3s"/><timept time="7s" value="{end}s"/>
+            </timeMap></ref-clip>"#
+        );
+        let xml = deferred_audio_document(&refs, "", false);
+        let (imp, _) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+        let (id, seq) = deferred_audio_sequence(&imp.project, "M62");
+        deferred_audio_pair(seq, "Timed");
+        let audio = &seq.audio_tracks[0].items[0];
+        assert_eq!((audio.start, audio.duration, audio.source_in), (Tick::ZERO, Tick(4 * TICKS_PER_SECOND), Tick(source * TICKS_PER_SECOND)));
+        assert_eq!((audio.speed, audio.reverse), (expected_speed, reverse));
+        assert_eq!(audio.frame_hold, hold.then_some(Tick(source * TICKS_PER_SECOND)));
+        // Export the shallow rebuilt parent, not an artificially unbounded 65-level traversal.
+        let (reopened, _, report) = roundtrip(&imp.project, id, Format::Fcpxml, &xopts());
+        let seq = reopened.project.sequence(only_seq(&reopened)).unwrap();
+        assert!(!report.mentions("nested too deeply"), "{report}");
+        deferred_audio_pair(seq, "Timed");
+        let again = &seq.audio_tracks[0].items[0];
+        assert_eq!(
+            (again.duration, again.source_in, again.speed, again.reverse, again.frame_hold),
+            (audio.duration, audio.source_in, audio.speed, audio.reverse, audio.frame_hold)
+        );
+    }
+}
+
+#[trial]
+fn deferred_audio_export_keeps_unmerged_nested_sound_on_its_own_lane() {
+    let refs = r#"
+      <asset-clip ref="av" name="Existing sound" offset="0s" duration="4s" srcEnable="audio"/>
+      <ref-clip ref="m63" name="Restored" offset="0s" duration="4s"/>
+      <asset-clip ref="av" name="Neighbour" offset="6s" duration="1s" srcEnable="video"/>
+    "#;
+    let xml = deferred_audio_document_at(61, refs, "", false);
+    let (imported, _) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    let (id, seq) = deferred_audio_sequence(&imported.project, "M61");
+    deferred_audio_pair(seq, "Restored");
+    assert_eq!(seq.audio_tracks[1].items[0].name, "Restored", "the collision must leave picture and sound on different lanes");
+    let expected = deferred_audio_lanes(seq);
+    let original =
+        [seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Restored").unwrap().clone(), seq.audio_tracks[1].items[0].clone()];
+    let (reopened, text, report) = roundtrip(&imported.project, id, Format::Fcpxml, &xopts());
+    assert!(!report.mentions("track import limit"), "{report}");
+    // Separate source selections carry the two lanes; FCPXML ref-clip has no cross-reference
+    // for the model's internal LinkId (Apple's FCPXML 1.10 DTD, ref-clip/clip_attrs).
+    let xml = craft_xml::parse(text.as_bytes()).unwrap();
+    let spine = xml.child("library").unwrap().child("event").unwrap().child("project").unwrap().child("sequence").unwrap().child("spine").unwrap();
+    let refs = spine.find_all("ref-clip").filter(|e| e.attr("name") == Some("Restored")).collect::<Vec<_>>();
+    assert_eq!(refs.len(), 2, "exactly one picture ref and one sound ref must be exported");
+    let picture = refs.iter().find(|e| e.attr("lane").is_none()).unwrap();
+    let sound = refs.iter().find(|e| e.attr("lane") == Some("-2")).unwrap();
+    assert_eq!(picture.attr("srcEnable"), Some("video"), "an unmerged nested picture must not reintroduce its sound");
+    assert_eq!(sound.attr("srcEnable"), Some("audio"));
+    assert!(picture.attr("ref").is_some());
+    assert_eq!(picture.attr("ref"), sound.attr("ref"), "both selections must still reference the same nested resource");
+    let again = reopened.project.sequence(only_seq(&reopened)).unwrap();
+    assert_eq!(deferred_audio_lanes(again), expected, "the unmerged picture must not create a second audio reference");
+    let picture = again.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Restored").unwrap();
+    let sound = again.audio_tracks[1].items.iter().find(|i| i.name == "Restored").unwrap();
+    assert_eq!(picture.item, sound.item);
+    // Reimporting separate video-only and audio-only refs does not invent a shared LinkId.
+    // Preserve all other clip state, normalizing only IDs local to the newly imported project.
+    for (before, after) in original.iter().zip([picture, sound]) {
+        assert!(after.link.is_none());
+        assert_eq!(reopened.project.item(after.item).unwrap().name, imported.project.item(before.item).unwrap().name);
+        let mut expected = before.clone();
+        expected.id = after.id;
+        expected.item = after.item;
+        expected.link = None;
+        // Auto motion points use NaN; compare effects as in the OTIO round-trip control.
+        assert_eq!(format!("{:?}", after.effects), format!("{:?}", expected.effects));
+        expected.effects.clear();
+        let mut actual = after.clone();
+        actual.effects.clear();
+        assert_eq!(actual, expected, "split source selections must retain their timing and state");
+    }
+    let neighbour = again.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Neighbour").unwrap();
+    assert_eq!((neighbour.start, neighbour.duration), (Tick(6 * TICKS_PER_SECOND), Tick(TICKS_PER_SECOND)));
+}
+
+#[trial]
+fn deferred_audio_diagnostics_require_final_placed_sound() {
+    let refs = r#"
+      <ref-clip ref="m63" name="Pending" duration="4s"><filter-audio name="Missing deferred filter"/></ref-clip>
+      <title name="Actual omission" offset="5s" duration="1s"/>
+    "#;
+    let xml = deferred_audio_document_at(61, refs, "", false);
+    let leaf = r#"<asset-clip ref="av" name="Real audio" duration="20s"/>"#;
+    let silent = xml.replacen(leaf, r#"<asset-clip ref="av" name="Real audio" duration="20s" srcEnable="video"/>"#, 1);
+    for (text, recovered) in [(&xml, true), (&silent, false)] {
+        let (_, report) = import(text.as_bytes(), Format::Fcpxml, None).unwrap();
+        let count = report.entries.iter().filter(|e| e.message.contains("Missing deferred filter")).map(|e| e.count).sum::<u32>();
+        assert_eq!(count, u32::from(recovered), "only placed audio may report its filter, once: {report}");
+    }
+    let mut limited = Report::default();
+    let opts = iopts(None);
+    craft_timeline::fcpxml::import_with_report_limit(&silent, &opts, &mut limited, Some(2)).unwrap();
+    assert!(limited.mentions("<title>"), "a nonexistent audio omission must not consume the actual omission's report slot: {limited}");
+    assert!(!limited.mentions("Missing deferred filter"), "{limited}");
+
+    let filters = r#"<filter-audio name="A"/><filter-audio name="B"/><filter-audio name="X"/>"#;
+    let global_xml = xml.replace(r#"<filter-audio name="Missing deferred filter"/>"#, filters);
+    let mut global = Report::default();
+    let existing = "effect \"X\" is not supported and was skipped";
+    global.warn(existing);
+    craft_timeline::fcpxml::import_with_report_limit(&global_xml, &opts, &mut global, Some(2)).unwrap();
+    assert_eq!(
+        global.entries.iter().find(|e| e.message == existing).unwrap().count,
+        2,
+        "deferred A/B must not hide another occurrence of already reported X: {global}"
+    );
+    assert!(global.entries.len() <= 3, "the global quota plus its overflow message still bounds retention: {global}");
+}
+
+#[trial]
+fn deferred_audio_replay_updates_ordinary_video_partners() {
+    for (offset, placed) in [(0, false), (6, true)] {
+        let refs = format!(
+            r#"<gap duration="10s">
+              <ref-clip ref="m63" name="Earlier sound" lane="-256" offset="0s" duration="5s" srcEnable="audio"/>
+              <asset-clip ref="av" name="Ordinary pair" lane="255" offset="{offset}s" duration="3s"/>
+            </gap>"#
+        );
+        let xml = deferred_audio_document_at(61, &refs, "", false);
+        let (imported, _) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+        let (_, seq) = deferred_audio_sequence(&imported.project, "M61");
+        let video = seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Ordinary pair").unwrap();
+        let audio = seq.audio_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == "Ordinary pair");
+        assert_eq!(audio.is_some(), placed, "the earlier deferred sound has first choice of the final lane");
+        assert_eq!(video.link.is_some(), placed, "a displaced ordinary sound must not leave a dangling video link");
+        if let Some(audio) = audio {
+            assert_eq!(audio.link, video.link);
+        }
+    }
+    // The last AV clip initially loses its audio to a collision, then fits after replay
+    // moves O1. Its existing picture must regain the same pair identity.
+    let refs = r#"<gap duration="13s">
+      <ref-clip ref="m63" name="D" lane="-255" offset="0s" duration="5s" srcEnable="audio"/>
+      <asset-clip ref="av" name="O0" lane="-255" offset="0s" duration="10s" srcEnable="audio"/>
+      <asset-clip ref="av" name="O1" lane="-255" offset="9s" duration="3s" srcEnable="audio"/>
+      <asset-clip ref="av" name="O2 pair" lane="255" offset="11s" duration="2s"/>
+    </gap>"#;
+    let xml = deferred_audio_document_at(61, refs, "", false);
+    let (imported, report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    let (_, seq) = deferred_audio_sequence(&imported.project, "M61");
+    assert!(!report.mentions("track import limit"), "{report}");
+    deferred_audio_pair(seq, "O2 pair");
+
+    // No successful replay is available to clear this pair: either there is no pending
+    // child, or the pending child becomes video-only when rebuilt.
+    for silent_child in [false, true] {
+        let pending =
+            if silent_child { r#"<ref-clip ref="m63" name="Silent child" lane="-1" offset="6s" duration="1s" srcEnable="audio"/>"# } else { "" };
+        let refs = format!(
+            r#"<gap duration="10s">
+              <asset-clip ref="av" name="Occupier" lane="-256" offset="0s" duration="5s" srcEnable="audio"/>
+              <asset-clip ref="av" name="Failed pair" lane="255" offset="0s" duration="3s"/>
+              {pending}
+            </gap>"#
+        );
+        let xml = deferred_audio_document_at(61, &refs, "", false).replace(
+            r#"<asset-clip ref="av" name="Real audio" duration="20s"/>"#,
+            r#"<asset-clip ref="av" name="Real audio" duration="20s" srcEnable="video"/>"#,
+        );
+        let (imported, report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+        let (_, seq) = deferred_audio_sequence(&imported.project, "M61");
+        assert!(seq.audio_tracks.iter().flat_map(|t| &t.items).all(|a| a.name != "Failed pair"));
+        let video = seq.video_tracks.iter().flat_map(|t| &t.items).find(|v| v.name == "Failed pair").unwrap();
+        assert!(video.link.is_none(), "an initially unplaced sound has no partner even without a ready replay");
+        let cap_count = report.entries.iter().filter(|e| e.message.contains("Audio lane exceeds")).map(|e| e.count).sum::<u32>();
+        assert_eq!(cap_count, 1, "only the final ordinary placement failed: {report}");
+    }
+}
+
+#[trial]
+fn deferred_audio_only_cached_back_edges_stay_acyclic_and_bounded() {
+    let back = r#"<ref-clip ref="m0" name="Back edge" offset="20s" duration="1s" srcEnable="audio"/>"#;
+    let xml = deferred_audio_document("", back, true);
+    let (imp, report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(report.mentions("nested too deeply"), "{report}");
+    assert!(imp.project.items.len() <= 69, "reconciliation must reuse the existing resource identities");
+    let (_, a) = deferred_audio_sequence(&imp.project, "A");
+    assert!(a.video_tracks.iter().all(|t| t.items.is_empty()));
+    assert_eq!(a.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>(), 1);
+    let mut active = std::collections::HashSet::new();
+    let mut done = std::collections::HashSet::new();
+    fn visit(p: &Project, id: ItemId, active: &mut std::collections::HashSet<ItemId>, done: &mut std::collections::HashSet<ItemId>) {
+        if done.contains(&id) {
+            return;
+        }
+        assert!(active.insert(id), "deferred audio introduced a cycle at {id:?}");
+        if let Some(seq) = p.sequence(id) {
+            assert!(seq.video_tracks.len() <= 256 && seq.audio_tracks.len() <= 256);
+            for item in seq.all_tracks().flat_map(|t| &t.items) {
+                visit(p, item.item, active, done);
+            }
+        }
+        active.remove(&id);
+        done.insert(id);
+    }
+    for id in imp.project.items.keys() {
+        visit(&imp.project, *id, &mut active, &mut done);
+    }
+}
+
+fn deferred_audio_lanes(seq: &Sequence) -> Vec<(String, Tick, Tick, usize)> {
+    let mut items = seq
+        .audio_tracks
+        .iter()
+        .enumerate()
+        .flat_map(|(track, t)| t.items.iter().map(move |i| (i.name.clone(), i.start, i.duration, track)))
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    items
+}
+fn assert_outside_audio_control(seq: &Sequence, report: &Report, expected: &[(String, Tick, Tick, usize)]) {
+    assert_eq!(deferred_audio_lanes(seq).as_slice(), expected, "permanently outside preferences must not move valid neighbours");
+    assert!(seq.audio_tracks.len() <= 256 && seq.video_tracks.len() <= 256);
+    assert!(seq.all_tracks().flat_map(|t| &t.items).all(|i| !i.name.starts_with("Outside ")));
+    assert!(seq.markers.iter().all(|m| !m.name.starts_with("Outside ")));
+    assert!(seq.all_tracks().flat_map(|t| &t.items).flat_map(|i| &i.markers).all(|m| !m.name.starts_with("Outside ")));
+    deferred_audio_pair(seq, "Adjusted");
+    deferred_audio_pair(seq, "Positive lane");
+    assert!(seq.audio_tracks[3].items[0].link.is_none(), "the ordinary audio neighbour must remain unpaired");
+    let cap_failures = report
+        .entries
+        .iter()
+        .filter(|e| e.message == "FCPXML Audio lane exceeds the 256-track import limit; clip was skipped")
+        .map(|e| e.count)
+        .sum::<u32>();
+    assert_eq!(cap_failures, 2, "each outside reference contributes exactly one final diagnostic: {report}");
+}
+
+#[trial]
+fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
+    fn prewarm(xml: &str) -> String {
+        let start = xml.find("<project name=\"B\">").unwrap();
+        let end = start + xml[start..].find("</project>").unwrap() + "</project>".len();
+        let project_b = &xml[start..end];
+        let without_b = format!("{}{}", &xml[..start], &xml[end..]);
+        without_b.replacen("<project name=\"A\">", &format!("{project_b}<project name=\"A\">"), 1)
+    }
+    let refs = r#"<ref-clip ref="m63" name="Adjusted" start="3s" duration="4s">
+      <ref-clip ref="m63" name="Positive lane" lane="2" offset="3s" duration="2s"/>
+      <asset-clip ref="av" name="Negative lane" lane="-3" offset="3s" duration="2s" srcEnable="audio"/>
+    </ref-clip>"#;
+    let xml = deferred_audio_document_at(61, refs, "", false);
+
+    // With the same B project merely visited first, the earlier Positive lane gets A3.
+    let (warm, warm_report) = import(prewarm(&xml).as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(!warm_report.mentions("nested too deeply"), "{warm_report}");
+    let (_, warm_seq) = deferred_audio_sequence(&warm.project, "M61");
+    deferred_audio_pair(warm_seq, "Adjusted");
+    deferred_audio_pair(warm_seq, "Positive lane");
+    assert_eq!(warm_seq.audio_tracks[2].items[0].name, "Positive lane");
+    assert_eq!(warm_seq.audio_tracks[3].items[0].name, "Negative lane");
+    let expected = deferred_audio_lanes(warm_seq);
+    assert_eq!(expected.len(), 3);
+
+    // The audio asset remains available, but an intentionally video-only leaf can never
+    // recover nested audio. Such deferred references must not reserve or displace A3.
+    let leaf = r#"<asset-clip ref="av" name="Real audio" duration="20s"/>"#;
+    assert_eq!(xml.matches(leaf).count(), 1);
+    let silent_xml = xml.replacen(leaf, r#"<asset-clip ref="av" name="Real audio" duration="20s" srcEnable="video"/>"#, 1);
+    let (silent, silent_report) = import(silent_xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(silent_report.mentions("nested too deeply"), "{silent_report}");
+    let (_, silent_seq) = deferred_audio_sequence(&silent.project, "M61");
+    let (_, silent_child) = deferred_audio_sequence(&silent.project, "M63");
+    assert!(silent_child.audio_tracks.iter().all(|t| t.items.is_empty()));
+    assert!(silent_seq.video_tracks[2].items.iter().any(|i| i.name == "Positive lane"));
+    assert_eq!(deferred_audio_lanes(silent_seq), vec![("Negative lane".into(), Tick::ZERO, Tick(2 * TICKS_PER_SECOND), 2)]);
+    let ordinary = &silent_seq.audio_tracks[2].items[0];
+    assert!(ordinary.link.is_none());
+    assert_eq!(media_key(&silent.project, ordinary.item), "/original-deferred-audio.mov");
+
+    let (cold, cold_report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(cold_report.mentions("nested too deeply"), "{cold_report}");
+    let (_, cold_seq) = deferred_audio_sequence(&cold.project, "M61");
+    let (_, child) = deferred_audio_sequence(&cold.project, "M63");
+    assert_eq!(child.audio_tracks[0].items.len(), 1, "the later B visit must really recover child audio");
+    deferred_audio_pair(cold_seq, "Adjusted");
+    deferred_audio_pair(cold_seq, "Positive lane");
+    assert_eq!(deferred_audio_lanes(cold_seq).len(), 3, "no missing or duplicate restoration may explain the lane difference");
+
+    // Four entries suffice to reach the existing track cap. O2 is rejected during the
+    // premature ordinary-only placement, but fits when all recoverable entries replay in order.
+    let capped_refs = r#"<gap offset="0s" start="0s" duration="13s">
+      <ref-clip ref="m63" name="D" lane="-255" offset="0s" duration="5s" srcEnable="audio"/>
+      <asset-clip ref="av" name="O0" lane="-255" offset="0s" duration="10s" srcEnable="audio"/>
+      <asset-clip ref="av" name="O1" lane="-255" offset="9s" duration="3s" srcEnable="audio"/>
+      <asset-clip ref="av" name="O2" lane="-256" offset="11s" duration="2s" srcEnable="audio"/>
+    </gap>"#;
+    let capped_xml = deferred_audio_document_at(61, capped_refs, "", false);
+    let (warm_cap, warm_cap_report) = import(prewarm(&capped_xml).as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(!warm_cap_report.mentions("track import limit"), "{warm_cap_report}");
+    let (_, warm_cap_seq) = deferred_audio_sequence(&warm_cap.project, "M61");
+    let cap_expected = deferred_audio_lanes(warm_cap_seq);
+    assert_eq!(
+        cap_expected,
+        vec![
+            ("D".into(), Tick::ZERO, Tick(5 * TICKS_PER_SECOND), 254),
+            ("O0".into(), Tick::ZERO, Tick(10 * TICKS_PER_SECOND), 255),
+            ("O1".into(), Tick(9 * TICKS_PER_SECOND), Tick(3 * TICKS_PER_SECOND), 254),
+            ("O2".into(), Tick(11 * TICKS_PER_SECOND), Tick(2 * TICKS_PER_SECOND), 255),
+        ]
+    );
+    let (cold_cap, cold_cap_report) = import(capped_xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(cold_cap_report.mentions("nested too deeply"), "{cold_cap_report}");
+    let (_, cold_cap_seq) = deferred_audio_sequence(&cold_cap.project, "M61");
+    assert!(cold_cap_seq.audio_tracks.len() <= 256);
+    let mut failures = Vec::new();
+    if deferred_audio_lanes(cold_seq) != expected {
+        failures.push(format!("ordinary collision: cold {:?}, prewarmed {expected:?}", deferred_audio_lanes(cold_seq)));
+    }
+    if deferred_audio_lanes(cold_cap_seq) != cap_expected {
+        failures.push(format!("track-cap collision: cold {:?}, prewarmed {cap_expected:?}", deferred_audio_lanes(cold_cap_seq)));
+    }
+    if cold_cap_report.mentions("track import limit") {
+        failures.push("a recoverable encounter-order placement reported a false track-cap skip".into());
+    }
+    assert!(failures.is_empty(), "deferred audio changed encounter-order lanes: {failures:?}");
+
+    // Unlike the in-range O2 collision above, preferred index256 can never fit. Both an
+    // ordinary asset and a deferred reference must leave only their final cap diagnostics.
+    let outside = r#"
+      <asset-clip ref="av" name="Outside ordinary" lane="-257" offset="3s" duration="2s" srcEnable="audio">
+        <adjust-volume amount="-9dB"/><marker start="1s" value="Outside ordinary marker"/>
+      </asset-clip>
+      <ref-clip ref="m63" name="Outside deferred" lane="-257" offset="3s" duration="2s" srcEnable="audio">
+        <adjust-volume amount="-12dB"/><marker start="1s" value="Outside deferred marker"/>
+      </ref-clip>
+    </ref-clip>"#;
+    assert_eq!(refs.matches("</ref-clip>").count(), 1);
+    let outside_refs = refs.replacen("</ref-clip>", outside, 1);
+    let outside_xml = deferred_audio_document_at(61, &outside_refs, "", false);
+    let prewarmed_outside = prewarm(&outside_xml);
+    for text in [&outside_xml, &prewarmed_outside] {
+        let (imported, report) = import(text.as_bytes(), Format::Fcpxml, None).unwrap();
+        let (_, seq) = deferred_audio_sequence(&imported.project, "M61");
+        assert_outside_audio_control(seq, &report, &expected);
+    }
 }

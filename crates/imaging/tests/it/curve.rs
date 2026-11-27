@@ -6,18 +6,20 @@ use craft_imaging::ui::ChannelColor;
 use craft_imaging::ui::curve::{Curve, CurveChannel, CurveEditor};
 use craft_theme::{Contrast, Mode};
 use craft_ui::contract::Bind;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Fixture, Room, style, trial};
 use egui::{Pos2, Vec2, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-struct Rig {
-    fixture: Fixture,
+pub(crate) struct Rig {
+    pub(crate) fixture: Fixture,
     curve: Rc<RefCell<Curve>>,
-    selected: Rc<Cell<Option<usize>>>,
+    pub(crate) selected: Rc<Cell<Option<usize>>>,
     /// The kind of each edit event, in order.
     kinds: Rc<RefCell<Vec<&'static str>>>,
+    /// The key presses left in egui's input after the editor, which the app reads, in order.
+    pub(crate) app_keys: Rc<RefCell<Vec<egui::Key>>>,
     origin: Pos2,
     scale: Vec2,
 }
@@ -34,24 +36,42 @@ fn kind(event: &EditEvent<Curve>) -> &'static str {
 }
 
 fn rig(points: &[[f32; 2]]) -> Rig {
+    rig_with(points, false)
+}
+
+/// [`rig`] with `tab_steps` and `end_delete_deselects` when `point_keys`.
+pub(crate) fn rig_with(points: &[[f32; 2]], point_keys: bool) -> Rig {
     let curve = Curve::smooth(points.to_vec());
     let shared = Rc::new(RefCell::new(curve.clone()));
     let selected = Rc::new(Cell::new(None));
     let kinds = Rc::new(RefCell::new(Vec::new()));
-    let (c, s, k) = (shared.clone(), selected.clone(), kinds.clone());
+    let app_keys = Rc::new(RefCell::new(Vec::new()));
+    let (c, s, k, a) = (shared.clone(), selected.clone(), kinds.clone(), app_keys.clone());
     let channels = [CurveChannel::new("RGB", ChannelColor::Neutral), CurveChannel::new("Red", ChannelColor::Red)];
     let mut fixture = Fixture::new(move |ui| {
         let mut value = c.borrow().clone();
-        let out = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get()).show(ui);
+        let mut editor = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get());
+        if point_keys {
+            editor = editor.tab_steps().end_delete_deselects();
+        }
+        let out = editor.show(ui);
         for event in &out.edit.events {
             k.borrow_mut().push(kind(event));
         }
         s.set(out.selected);
         *c.borrow_mut() = value;
+        let pressed = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| if let egui::Event::Key { key, pressed: true, .. } = event { Some(*key) } else { None })
+                .collect::<Vec<_>>()
+        });
+        a.borrow_mut().extend(pressed);
     });
     fixture.room(room());
     fixture.settle();
-    let mut rig = Rig { fixture, curve: shared, selected, kinds, origin: Pos2::ZERO, scale: Vec2::ZERO };
+    let mut rig = Rig { fixture, curve: shared, selected, kinds, app_keys, origin: Pos2::ZERO, scale: Vec2::ZERO };
     rig.calibrate(&curve);
     rig
 }
@@ -72,7 +92,7 @@ impl Rig {
         pos2(self.origin.x + q[0] * self.scale.x, self.origin.y + q[1] * self.scale.y)
     }
 
-    fn points(&self) -> Vec<[f32; 2]> {
+    pub(crate) fn points(&self) -> Vec<[f32; 2]> {
         self.curve.borrow().points().map(<[_]>::to_vec).unwrap_or_default()
     }
 
@@ -80,7 +100,7 @@ impl Rig {
         self.kinds.borrow().clone()
     }
 
-    fn press_at(&mut self, q: [f32; 2]) {
+    pub(crate) fn press_at(&mut self, q: [f32; 2]) {
         let pos = self.at(q);
         self.fixture.frame(vec![moved(pos)]);
         self.fixture.frame(vec![press(pos)]);
@@ -102,8 +122,16 @@ impl Rig {
         self.fixture.frame(vec![moved(self.at(q))]);
     }
 
-    fn release_at(&mut self, q: [f32; 2]) {
+    pub(crate) fn release_at(&mut self, q: [f32; 2]) {
         self.fixture.frame(vec![release(self.at(q))]);
+        self.fixture.idle(1);
+    }
+
+    fn right_click_at(&mut self, q: [f32; 2]) {
+        let pos = self.at(q);
+        self.fixture.frame(vec![moved(pos)]);
+        self.fixture.frame(vec![secondary(pos, true)]);
+        self.fixture.frame(vec![secondary(pos, false)]);
         self.fixture.idle(1);
     }
 }
@@ -171,6 +199,20 @@ fn a_press_near_a_point_grabs_it_and_a_press_far_from_it_adds_one() {
     rig.press_near([100.0, 100.0], vec2(30.0, 0.0));
     rig.release_near([100.0, 100.0], vec2(30.0, 0.0));
     assert_eq!(rig.points().len(), 4, "a press 30 px away adds a point");
+}
+
+/// A right-click on the empty graph drops the selection and adds no point; a right-click on an inner point removes it.
+#[trial]
+fn a_right_click_on_the_empty_graph_deselects_and_on_a_point_removes_it() {
+    let mut rig = rig(&THREE);
+    rig.press_at([100.0, 100.0]);
+    rig.release_at([100.0, 100.0]);
+    assert_eq!(rig.selected.get(), Some(1));
+    rig.right_click_at([180.0, 20.0]);
+    assert_eq!(rig.selected.get(), None, "a right-click on the empty graph deselects");
+    assert_eq!(rig.points(), THREE.to_vec(), "and adds no point");
+    rig.right_click_at([100.0, 100.0]);
+    assert_eq!(rig.points(), vec![[0.0, 0.0], [255.0, 255.0]], "a right-click on a point removes it");
 }
 
 /// Where two points are closer than the grab radius, a press nearer the second grabs the second.

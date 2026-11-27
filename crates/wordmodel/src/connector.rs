@@ -560,8 +560,8 @@ mod tests {
         let (sin, cos) = rot.to_radians().sin_cos();
         let expected = (30.0 + dx * cos - dy * sin, 40.0 + dx * sin + dy * cos);
         let kids = vec![
-            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
-            GroupChild { x: 10.0, y: 30.0, obj },
+            GroupChild { link: None, x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { link: None, x: 10.0, y: 30.0, obj },
         ];
         let mut group = group(kids);
         assert!(reroute_group(&mut group));
@@ -601,8 +601,8 @@ mod tests {
         let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
         float.rot = 90.0;
         let kids = vec![
-            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
-            GroupChild { x: 10.0, y: 30.0, obj },
+            GroupChild { link: None, x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { link: None, x: 10.0, y: 30.0, obj },
         ];
         let mut group = group(kids);
         assert!(reroute_group(&mut group));
@@ -623,8 +623,8 @@ mod tests {
         let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
         float.rot = 90.0;
         let mut group = group(vec![
-            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
-            GroupChild { x: 10.0, y: 30.0, obj },
+            GroupChild { link: None, x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { link: None, x: 10.0, y: 30.0, obj },
         ]);
         let InlineObject::Group { w, h, .. } = &mut group else { panic!() };
         (*w, *h) = (400.0, 150.0);
@@ -648,8 +648,8 @@ mod tests {
             let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
             float.flip_h = free_start;
             let mut group = group(vec![
-                GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
-                GroupChild { x: 3000.0, y: 10.0, obj },
+                GroupChild { link: None, x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+                GroupChild { link: None, x: 3000.0, y: 10.0, obj },
             ]);
             let InlineObject::Group { w, .. } = &mut group else { panic!() };
             *w = 400.0;
@@ -693,8 +693,13 @@ mod tests {
             let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
             float.rot = 90.0;
             let mut group = group(vec![
-                GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
-                GroupChild { x: 10.0, y: 30.0, obj },
+                GroupChild {
+                    link: None,
+                    x: 100.0,
+                    y: 200.0,
+                    obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }),
+                },
+                GroupChild { link: None, x: 10.0, y: 30.0, obj },
             ]);
             let InlineObject::Group { w, h, ch_w, ch_h, .. } = &mut group else { panic!() };
             (*w, *h, *ch_w, *ch_h) = (dims[0], dims[1], dims[2], dims[3]);
@@ -717,9 +722,9 @@ mod tests {
         let b = ShapeExtra { id: 9, ..Default::default() };
         let link = ShapeExtra { start: Some(ConnEnd { id: 7, site: 3 }), end: Some(ConnEnd { id: 9, site: 2 }), ..Default::default() };
         let mut kids = vec![
-            GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 20.0, 10.0, a) },
-            GroupChild { x: 100.0, y: 50.0, obj: shape(ShapeKind::Ellipse, 20.0, 10.0, b) },
-            GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::ElbowConnector, 1.0, 1.0, link) },
+            GroupChild { link: None, x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 20.0, 10.0, a) },
+            GroupChild { link: None, x: 100.0, y: 50.0, obj: shape(ShapeKind::Ellipse, 20.0, 10.0, b) },
+            GroupChild { link: None, x: 0.0, y: 0.0, obj: shape(ShapeKind::ElbowConnector, 1.0, 1.0, link) },
         ];
         // Fully resolved endpoints must still come from their sites, regardless of the
         // connector's old rotation and flips.

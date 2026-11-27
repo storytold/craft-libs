@@ -1456,7 +1456,8 @@ fn groups_must_be_slots_of_one_part_each_in_one_group() {
 #[test]
 fn the_estimate_covers_what_the_read_does() {
     // A flat colour in ZIP16 (decodes to far more than it reads), lines of a ramp, and tiles.
-    let (w, h) = (256usize, 160usize);
+    // 136 rows retain ZIP16's eight-row final block while reducing the 160-row upstream fixture.
+    let (w, h) = (256usize, 136usize);
     let list = vec![AnyChannel::new("R", FlatSamples::F32(vec![0.25; w * h])), AnyChannel::new("G", FlatSamples::F32(vec![0.5; w * h]))];
     let encoding = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let flat = file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h));

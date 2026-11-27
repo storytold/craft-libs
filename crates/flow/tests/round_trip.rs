@@ -121,3 +121,173 @@ fn drop_cap_not_repeated_after_page_break() {
     assert_eq!(paras[1].extra.as_ref().and_then(|x| x.drop_cap_distance), None);
     assert_eq!(paras[1].extra.as_ref().and_then(|x| x.shading), Some(craft_wordmodel::Rgb(255, 0, 0)));
 }
+
+#[test]
+fn vml_hyperlinks_survive_flow_for_roots_and_nested_members() {
+    use craft_flow::{BoxLook, FlowOpts, Member, from_doc_with};
+    use craft_wordmodel::{Block, CharProps, para::ShapeKind};
+
+    let image = |target: Option<&str>| {
+        let mut img = make_img(PNG.to_vec(), Some(12.0), Some(8.0), "original tiny picture").unwrap();
+        img.link = target.map(str::to_string);
+        img.crop = [0.125, 0.25, 0.0, 0.0];
+        Inline::Image(img)
+    };
+    let nested = Inline::Group {
+        w: 10.0,
+        h: 10.0,
+        float: None,
+        link: None,
+        members: vec![Member { x: 2.0, y: 1.0, inline: image(None), link: Some("#nested-place".into()) }],
+    };
+    let group = Inline::Group {
+        w: 40.0,
+        h: 30.0,
+        float: None,
+        link: Some("https://example.com/group".into()),
+        members: vec![
+            Member { x: 1.0, y: 2.0, inline: image(None), link: Some("https://example.com/child".into()) },
+            Member { x: 8.0, y: 3.0, inline: nested, link: Some("https://example.com/nested-group".into()) },
+            Member { x: 4.0, y: 5.0, inline: image(None), link: None },
+        ],
+    };
+    let shape = Inline::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 9.0,
+        h: 6.0,
+        float: None,
+        blocks: Vec::new(),
+        look: BoxLook::default(),
+        path: None,
+        link: Some("https://example.com/shape".into()),
+    };
+    let mut paragraph = para(Kind::Normal, vec![group, image(Some("https://example.com/picture")), shape, image(None)]);
+    paragraph.mark = Some(Box::new(CharProps { link: Some("https://example.com/not-the-object".into()), ..Default::default() }));
+    let flow = Flow { blocks: vec![FBlock::Para(paragraph)], ..Default::default() };
+    let doc = to_doc(&flow);
+    let Block::Para(p) = &*doc.body[0] else { panic!("drawing paragraph") };
+    assert_eq!(
+        p.runs.iter().map(|r| r.props.link.as_deref()).collect::<Vec<_>>(),
+        [Some("https://example.com/group"), Some("https://example.com/picture"), Some("https://example.com/shape"), None],
+        "each root's target comes from that object, not the paragraph mark"
+    );
+    let craft_wordmodel::para::InlineObject::Group { children, .. } = &p.objects[0] else { panic!("group") };
+    assert_eq!(children[0].link.as_deref(), Some("https://example.com/child"));
+    assert_eq!(children[1].link.as_deref(), Some("https://example.com/nested-group"));
+    assert!(children[2].link.is_none());
+    let back = from_doc_with(&doc, FlowOpts { boxes: true, paras: true, ..Default::default() });
+    let got = paras(&back.blocks);
+    let [Inline::Group { link, members, .. }, Inline::Image(picture), Inline::Shape { link: shape_link, .. }, Inline::Image(unlinked)] =
+        got[0].inlines.as_slice()
+    else {
+        panic!("all four drawings survive")
+    };
+    assert_eq!(link.as_deref(), Some("https://example.com/group"));
+    assert_eq!(picture.link.as_deref(), Some("https://example.com/picture"));
+    assert_eq!(shape_link.as_deref(), Some("https://example.com/shape"));
+    assert!(unlinked.link.is_none());
+    assert_eq!(picture.data.as_slice(), PNG);
+    assert_eq!((picture.w, picture.h, picture.crop), (12.0, 8.0, [0.125, 0.25, 0.0, 0.0]));
+    assert_eq!((members[0].x, members[0].y), (1.0, 2.0));
+    assert_eq!(members[0].link.as_deref(), Some("https://example.com/child"));
+    assert_eq!(members[1].link.as_deref(), Some("https://example.com/nested-group"));
+    assert!(members[2].link.is_none());
+    let Inline::Group { link: own, members: inner, .. } = &members[1].inline else { panic!("nested group") };
+    assert!(own.is_none(), "the nested group's target is carried by its Member, not duplicated on descendants");
+    assert_eq!(inner[0].link.as_deref(), Some("#nested-place"));
+
+    fn check_depth_boundary(image: impl Fn(Option<&str>) -> Inline) {
+        // DOCX retains an outer group at depth 0 and eight nested subgroups. Flow must
+        // keep that complete tree rather than lose its last drawable member.
+        fn linked_chain(leaf: Inline, deepest: usize) -> Inline {
+            let mut inline = leaf;
+            for level in (0..=deepest).rev() {
+                let target = if level == deepest { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+                inline = Inline::Group {
+                    w: 12.0,
+                    h: 8.0,
+                    float: None,
+                    link: (level == 0).then(|| "https://example.com/deep-root".into()),
+                    members: vec![Member { x: 0.0, y: 0.0, inline, link: Some(target) }],
+                };
+            }
+            inline
+        }
+        let boundary = Flow { blocks: vec![FBlock::Para(para(Kind::Normal, vec![linked_chain(image(None), 8)]))], ..Default::default() };
+        let boundary_doc = to_doc(&boundary);
+        let boundary_para = boundary_doc.body[0].as_para().unwrap();
+        assert_eq!(boundary_para.objects.len(), 1, "root plus eight subgroups remains drawable");
+        assert_eq!(boundary_para.props_of_char(0).link.as_deref(), Some("https://example.com/deep-root"));
+        let mut object = &boundary_para.objects[0];
+        for level in 0..=8 {
+            let craft_wordmodel::para::InlineObject::Group { children, .. } = object else { panic!("group at level {level}") };
+            assert_eq!(children.len(), 1);
+            let target = if level == 8 { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+            assert_eq!(children[0].link.as_deref(), Some(target.as_str()), "document target at level {level}");
+            object = &children[0].obj;
+        }
+        let craft_wordmodel::para::InlineObject::Image { media, .. } = object else { panic!("last picture") };
+        assert_eq!(boundary_doc.media.get(media).unwrap().as_slice(), PNG);
+        let boundary_back = from_doc_with(&boundary_doc, FlowOpts { boxes: true, paras: true, ..Default::default() });
+        let boundary_paras = paras(&boundary_back.blocks);
+        assert_eq!(boundary_paras[0].inlines.len(), 1);
+        let mut inline = &boundary_paras[0].inlines[0];
+        for level in 0..=8 {
+            let Inline::Group { members, link, .. } = inline else { panic!("flow group at level {level}") };
+            assert_eq!(link.as_deref(), (level == 0).then_some("https://example.com/deep-root"));
+            assert_eq!(members.len(), 1);
+            let target = if level == 8 { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+            assert_eq!(members[0].link.as_deref(), Some(target.as_str()), "flow target at level {level}");
+            inline = &members[0].inline;
+        }
+        let Inline::Image(last) = inline else { panic!("last flow picture") };
+        assert_eq!(last.data.as_slice(), PNG);
+
+        // One further subgroup still exceeds the existing limit. Its root's separate
+        // drawable sibling survives, so dropping the over-deep branch cannot pass vacuously.
+        let mut beyond = linked_chain(image(None), 9);
+        let Inline::Group { members, .. } = &mut beyond else { panic!() };
+        members.push(Member { x: 0.0, y: 0.0, inline: image(None), link: Some("https://example.com/sibling".into()) });
+        let beyond_flow = Flow { blocks: vec![FBlock::Para(para(Kind::Normal, vec![beyond]))], ..Default::default() };
+        let beyond_doc = to_doc(&beyond_flow);
+        let beyond_para = beyond_doc.body[0].as_para().unwrap();
+        assert_eq!(beyond_para.objects.len(), 1);
+        let craft_wordmodel::para::InlineObject::Group { children, .. } = &beyond_para.objects[0] else { panic!() };
+        assert_eq!(children.len(), 1, "the ninth subgroup is still excluded");
+        assert_eq!(children[0].link.as_deref(), Some("https://example.com/sibling"));
+        assert!(matches!(&children[0].obj, craft_wordmodel::para::InlineObject::Image { .. }));
+    }
+    check_depth_boundary(image);
+
+    fn check_oversized_drawing_links(image: impl Fn(Option<&str>) -> Inline) {
+        // Construct valid drawable inputs first; to_doc's own budget must not hide
+        // the from_doc boundary being checked by this regression.
+        let group =
+            Inline::Group { w: 12.0, h: 8.0, float: None, link: None, members: vec![Member { x: 0.0, y: 0.0, inline: image(None), link: None }] };
+        let input = Flow {
+            blocks: vec![FBlock::Para(para(Kind::Normal, vec![group, image(None), image(Some("https://example.com/kept"))]))],
+            ..Default::default()
+        };
+        let mut doc = to_doc(&input);
+        let mut paragraph = doc.body[0].as_para().unwrap().clone();
+        let offsets = paragraph.object_offsets();
+        let oversized = "x".repeat(craft_flow::MAX_LINK + 1);
+        paragraph.format(offsets[0], offsets[0] + craft_wordmodel::para::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
+        paragraph.format(offsets[1], offsets[1] + craft_wordmodel::para::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
+        let craft_wordmodel::para::InlineObject::Group { children, .. } = &mut paragraph.objects[0] else { panic!() };
+        children[0].link = Some(oversized);
+        doc.body = vec![Block::Para(paragraph).into()];
+        let back = from_doc_with(&doc, FlowOpts { boxes: true, paras: true, ..Default::default() });
+        let got = paras(&back.blocks);
+        let [Inline::Group { link, members, .. }, Inline::Image(unlinked), Inline::Image(kept)] = got[0].inlines.as_slice() else {
+            panic!("all drawings remain")
+        };
+        assert!(link.is_none(), "oversized group target is dropped");
+        assert_eq!(members.len(), 1);
+        assert!(members[0].link.is_none(), "oversized member target is dropped");
+        assert!(unlinked.link.is_none(), "oversized root image target is dropped");
+        assert_eq!(kept.link.as_deref(), Some("https://example.com/kept"));
+        assert_eq!(kept.data.as_slice(), PNG);
+    }
+    check_oversized_drawing_links(image);
+}

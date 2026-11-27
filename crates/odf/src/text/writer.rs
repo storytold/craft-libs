@@ -546,7 +546,7 @@ impl Writer {
                     self.image(img, Place::Text(img.float.as_deref()), out);
                     prev_space = false;
                 }
-                Inline::Group { w, h, float, members } => {
+                Inline::Group { w, h, float, members, .. } => {
                     self.group((*w, *h), float.as_deref(), members, out);
                     prev_space = false;
                 }
@@ -571,7 +571,7 @@ impl Writer {
                     self.comment(*id, comment, out);
                     prev_space = false;
                 }
-                Inline::Shape { kind, w, h, float, blocks, look, path } => {
+                Inline::Shape { kind, w, h, float, blocks, look, path, .. } => {
                     self.drawing_shape(*kind, (*w, *h), Place::Text(float.as_deref()), (look, path.as_deref()), blocks, out);
                     prev_space = false;
                 }
