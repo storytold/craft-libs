@@ -79,21 +79,49 @@ fn painted_label(shapes: &[egui::Shape], label: &str) -> egui::TextFormat {
         .unwrap_or_else(|| panic!("the row {label:?} paints its label as text"))
 }
 
-/// A row the host marks italic draws its label in italics; marked italic and redo at once it is still dimmed, so one
-/// row carries both looks. Rows without the flag stay upright.
+/// A row the host marks italic draws its label in italics, and italics change no ink: a redone row stays dimmed
+/// whether or not it is italic, an italic row that is not redone reads in the ink of the plain row next to it, and a
+/// row without the flag stands upright.
 #[trial]
-fn a_row_marked_italic_draws_its_label_in_italics_and_a_redo_row_stays_dimmed() {
-    let rows = vec![HistoryRow::state(1, "Open"), HistoryRow::state(2, "Brush").redo(true), HistoryRow::state(3, "Fill").redo(true).italic(true)];
+fn an_italic_label_slants_itself_and_leaves_the_ink_to_redo() {
+    let rows = vec![
+        HistoryRow::state(1, "Open"),
+        HistoryRow::state(2, "Brush").redo(true),
+        HistoryRow::state(3, "Fill").redo(true).italic(true),
+        HistoryRow::state(4, "Text").italic(true),
+        HistoryRow::state(5, "Crop"),
+    ];
     let mut fixture = Fixture::new(move |ui| {
         let _ = HistoryPanel::new(&rows, Some(HistoryKey::State(1))).show(ui);
     });
     fixture.settle();
     let shapes = fixture.frame_shapes();
-    let plain = painted_label(&shapes, "Open");
+    let current = painted_label(&shapes, "Open");
     let redo = painted_label(&shapes, "Brush");
     let both = painted_label(&shapes, "Fill");
-    assert!(!plain.italics && !redo.italics, "a row without the flag draws its label upright: {plain:?} {redo:?}");
-    assert!(both.italics, "the flagged row draws its label in italics");
-    assert_eq!(both.color, redo.color, "the italic row is inked as the redone row is");
-    assert_ne!(both.color, plain.color, "a redone row is dimmer than a plain one");
+    let italic_only = painted_label(&shapes, "Text");
+    let plain = painted_label(&shapes, "Crop");
+    assert!(!current.italics && !redo.italics && !plain.italics, "a row without the flag draws its label upright: {current:?} {redo:?} {plain:?}");
+    assert!(both.italics && italic_only.italics, "both flagged rows draw their labels in italics: {both:?} {italic_only:?}");
+    assert_ne!(redo.color, plain.color, "a redone row reads dimmer than a plain one: {redo:?} {plain:?}");
+    assert_eq!(both.color, redo.color, "the italic redone row keeps the dimmed ink: {both:?} {redo:?}");
+    assert_eq!(italic_only.color, plain.color, "italics alone change no ink: {italic_only:?} {plain:?}");
+}
+
+/// The panel's source row, marked redo and italic at once, draws its label slanted and dimmed and keeps its source
+/// cell and the accessible name the label gives the row.
+#[trial]
+fn a_source_row_marked_italic_keeps_its_cell_and_its_dimmed_ink() {
+    let rows = vec![HistoryRow::state(1, "Open"), HistoryRow::state(2, "Brush").redo(true), HistoryRow::state(3, "Fill").redo(true).italic(true)];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = HistoryPanel::new(&rows, Some(HistoryKey::State(1))).source(Some(HistoryKey::State(3))).show(ui);
+    });
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let both = painted_label(&shapes, "Fill");
+    let redo = painted_label(&shapes, "Brush");
+    assert!(both.italics, "the source row draws its label in italics: {both:?}");
+    assert_eq!(both.color, redo.color, "and stays dimmed as a redone row is: {both:?} {redo:?}");
+    assert!(fixture.by_label("Set Fill as History Brush Source").is_some(), "its source cell is still there");
+    assert!(fixture.by_label("Fill").is_some(), "and the row is still named by its label");
 }
