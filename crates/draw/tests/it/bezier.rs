@@ -1518,6 +1518,12 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
     assert!(st.inserts.is_empty(), "this drag is not an Insert-key report");
     drop(st);
 
+    space_before_the_first_movement_translates_from_the_press(space_key);
+    space_release_preserves_raw_geometry_until_constraints_change(space_key);
+    space_release_applies_only_an_alt_modifier_still_held(space_key);
+}
+
+fn space_before_the_first_movement_translates_from_the_press(space_key: fn(bool) -> egui::Event) {
     // Space after the press but before the first movement translates from the press, not from a first pulled handle.
     let mut h = harness_with(vec![path_a(), path_b()], true);
     h.update(|st| {
@@ -1542,7 +1548,9 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
     h.release_at(end);
     assert_eq!(h.state.borrow().seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
     assert_eq!(h.state.borrow().seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+}
 
+fn space_release_preserves_raw_geometry_until_constraints_change(space_key: fn(bool) -> egui::Event) {
     // A real canvas Snap would pull x=160 to the guide at x=165. Space keeps raw translation; release alone must
     // not apply that snap, including later stationary passes. Moving or changing Shift/Alt still reads constraints.
     let mut targets = SnapTargets::new();
@@ -1594,6 +1602,45 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
     assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
     assert_eq!(st.seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
     assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
+}
+
+fn space_release_applies_only_an_alt_modifier_still_held(space_key: fn(bool) -> egui::Event) {
+    // Alt held at Space-up breaks the pair, but an Alt tap released entirely during Space must not latch.
+    for keep_alt in [true, false] {
+        let mut h = harness_with(vec![path_a(), path_b()], true);
+        h.update(|st| {
+            st.tool = BezierTool::AddAnchor;
+            st.canvas_tool = Some(PathTool::AddAnchor);
+            st.momentary = Some(Momentary::new(NavigationOptions::default()));
+        });
+        let at = h.screen(p(110.0, 60.0));
+        let pulled_at = at + vec2(0.0, 60.0);
+        h.press_at(at);
+        h.move_to(at + vec2(0.0, 30.0));
+        h.move_to(pulled_at);
+        h.fixture.frame(vec![space_key(true)]);
+        let moved_at = pulled_at + vec2(30.0, 20.0);
+        h.move_to(moved_at);
+        let moved = h.state.borrow().paths[0].subpaths[0].knots[1];
+        assert!(moved.smooth, "the translated pair starts smooth");
+        h.fixture.hold(egui::Modifiers::ALT).frame(Vec::new());
+        assert_eq!(h.state.borrow().paths[0].subpaths[0].knots[1], moved, "Space keeps translation priority over Alt");
+        if !keep_alt {
+            h.fixture.hold(egui::Modifiers::NONE).frame(Vec::new());
+        }
+        let modifiers = if keep_alt { egui::Modifiers::ALT } else { egui::Modifiers::NONE };
+        let space_up = egui::Event::Key { key: egui::Key::Space, physical_key: Some(egui::Key::Space), pressed: false, repeat: false, modifiers };
+        h.fixture.frame(vec![space_up]).frame(Vec::new());
+        let released = h.state.borrow().paths[0].subpaths[0].knots[1];
+        assert_eq!((released.anchor, released.in_ctrl, released.out_ctrl), (moved.anchor, moved.in_ctrl, moved.out_ctrl));
+        assert_eq!(released.smooth, !keep_alt, "only Alt still held at Space-up breaks the pair");
+        h.release_at(moved_at);
+        let st = h.state.borrow();
+        assert_eq!(st.paths[0].subpaths[0].knots[1], released, "mouse-up without travel commits the same geometry and smooth state");
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1);
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Commit).count(), 1);
+        assert!(!st.seen.contains(&Seen::Cancel) && !st.seen.contains(&Seen::Set));
+    }
 }
 
 // Without an overlay-owned press, the same held key still gives the canvas its ordinary hand drag.

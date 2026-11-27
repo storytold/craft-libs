@@ -784,16 +784,17 @@ impl<'a> BezierOverlay<'a> {
                 *translated_mods = Some(mods);
                 return Some(PathEdit::PullAnchor { path: *path, segment: *segment, t: *t, by: *by, out: *out, in_ctrl: *in_ctrl });
             }
+            // Space keeps translation priority; on release, Alt can break the pair without moving its geometry.
+            if mods.alt && in_ctrl.is_none() {
+                let anchor = *from + *by;
+                *in_ctrl = Some(anchor - (*out - anchor));
+            }
             // Space moves by raw travel, including off the snap targets. Releasing it is not a pointer move:
             // keep that geometry on every stationary pass, but still read modifier-only constraint changes.
             if *last == pos && *translated_mods == Some(mods) {
                 return Some(PathEdit::PullAnchor { path: *path, segment: *segment, t: *t, by: *by, out: *out, in_ctrl: *in_ctrl });
             }
             *translated_mods = None;
-            if mods.alt && in_ctrl.is_none() {
-                let anchor = *from + *by;
-                *in_ctrl = Some(anchor - (*out - anchor));
-            }
             *last = pos;
         }
         let edit = Self::edit(view, snap, tool, target, start.origin, pos, mods);
