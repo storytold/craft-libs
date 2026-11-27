@@ -465,22 +465,25 @@ fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) ->
     out
 }
 
-/// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its extent
-/// placed at `at` meets the view, or when one of its stops holds focus or is the target of a focus request. Its
-/// extent is the one a run showed it at, else `estimate`. The first run of a pass decides; every later run of the
-/// pass gets the same answer, so a measuring run and the real run lay out the same children.
+/// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its shown
+/// extent placed at `at` meets the view, or when one of its stops holds focus or is the target of a focus request. Its
+/// shown extent is the one its last real run showed it at, else the one a measuring run found, else `estimate`. The
+/// first run of a pass decides; every later run of the pass gets the same answer, so a measuring run and the real run
+/// lay out the same children. The answer does not depend on which kind of run decides: a child whose real extent is
+/// more than its content's (a card its grid row stretches) meets the view by its shown extent in both.
 pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
     write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
-        // A child the other kind of run showed last takes that run's extent.
+        // A skipped child takes this kind of run's extent in flow; one the other kind of run showed last takes that one.
         let size = entry.sizes[kind].or(entry.sizes[1 - kind]).map_or(estimate, |measured| measured.size);
         let skip = match entry.decided {
             Some((decided_in, skip)) if decided_in == pass_nr => skip,
             _ => {
+                let shown = entry.sizes[1].or(entry.sizes[0]).map_or(estimate, |measured| measured.size);
                 let focus = entry.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
-                let skip = !focus && !at(size).intersects(view.rect);
+                let skip = !focus && !at(shown).intersects(view.rect);
                 entry.decided = Some((pass_nr, skip));
                 skip
             }
