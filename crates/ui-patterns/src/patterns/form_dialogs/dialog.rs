@@ -596,6 +596,15 @@ impl<'a> ParamDialog<'a> {
         let units = params.iter().filter(|param| param.is_remembered()).filter_map(Param::unit_key);
         let keys: Vec<&str> = params.iter().filter(|param| kept(param)).map(|param| param.key.as_str()).chain(units).collect();
         let mut values = fields.clone();
+        // A color with opacity stored as four integers (`[1, 0, 0, 1]`, opaque red) reads back as a grid.
+        for param in params {
+            if let ParamKind::Color { alpha: Some(_), .. } = param.kind
+                && let Some(FieldValue::Grid(_)) = values.get(&param.key)
+                && let Some(rgba) = values.rgba(&param.key)
+            {
+                values.set(param.key.as_str(), FieldValue::Rgba(rgba));
+            }
+        }
         values.retain_fitting(&keys, |key, value| params.iter().any(|param| param.accepts(key, value)));
         values
     }
@@ -1867,7 +1876,8 @@ fn read_value(kind: &ParamKind, value: Value) -> Option<FieldValue> {
         ParamKind::Int { .. } | ParamKind::Channel { .. } => FieldValue::Int(value.as_i64()?),
         ParamKind::Bool { .. } => FieldValue::Bool(value.as_bool()?),
         ParamKind::Choice { .. } | ParamKind::Radio { .. } | ParamKind::Text { .. } => FieldValue::Text(value.as_str()?.to_owned()),
-        ParamKind::Color { .. } => FieldValue::Color(serde_json::from_value(value).ok()?),
+        ParamKind::Color { alpha: None, .. } => FieldValue::Color(serde_json::from_value(value).ok()?),
+        ParamKind::Color { alpha: Some(_), .. } => FieldValue::Rgba(serde_json::from_value(value).ok()?),
         ParamKind::Point { .. } => FieldValue::Point(serde_json::from_value(value).ok()?),
         ParamKind::Grid { .. } => FieldValue::Grid(serde_json::from_value(value).ok()?),
         ParamKind::Blend { .. } | ParamKind::Pattern { .. } => FieldValue::Text(value.as_str()?.to_owned()),

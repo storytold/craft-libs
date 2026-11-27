@@ -18,7 +18,7 @@ use crate::patterns::form_dialogs::SectionList;
 use crate::runtime::env::{Env, Label, Units};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::requests::ColorRequest;
-use crate::sections::Section;
+use crate::sections::{GroupBox, Section};
 use crate::style::{SurfaceKind, TypeRole};
 use crate::text::TextField;
 use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed};
@@ -38,6 +38,10 @@ pub enum PreferencesLayout {
     /// line and a short choice as a segmented control ([`RowSpec::pills`](super::RowSpec::pills)); the search field
     /// shows its match count beside it, and the column brings the picked page into view once: PdfCraft's preferences.
     Cards,
+    /// [`Paged`](Self::Paged) as a desktop preferences dialog draws it: the page list in a frame as tall as the page,
+    /// no heading over the page, and each titled group a framed group box with its title on the frame; the window puts
+    /// OK, Cancel, Prev and Next in a column at the end edge: PhotoCraft's preferences.
+    Classic,
 }
 
 /// A preferences page that applies each value at once, with search and Reset Section. [`PreferencesWindow`] shows its
@@ -74,6 +78,8 @@ pub struct PreferencesPageOutput {
     /// The id of the page shown, `None` when the search lists no page. With [`PreferencesLayout::Cards`], the picked
     /// page while the search lists it, else the first card.
     pub page: Option<String>,
+    /// The ids of the pages the search lists, in order: the pages Prev and Next step through.
+    pub pages: Vec<String>,
 }
 
 impl Outcome for PreferencesPageOutput {
@@ -99,6 +105,7 @@ struct PageRun {
     work: PreferencesState,
     out: BodyOut,
     page: Option<String>,
+    listed: Vec<String>,
 }
 
 impl<'a> PreferencesPage<'a> {
@@ -127,20 +134,23 @@ impl<'a> PreferencesPage<'a> {
             }
             let matcher = Matcher::new(&env.folder(), work.search.trim());
             let mut out = BodyOut::default();
+            let listed: Vec<String>;
             let page = match layout {
-                PreferencesLayout::Paged => {
+                PreferencesLayout::Paged | PreferencesLayout::Classic => {
                     let snap = snapshot(&*host, &matcher, &work.selected);
-                    show_body(ui, &mut *host, &snap, &mut work, &words, &units, &mut out);
+                    show_body(ui, &mut *host, &snap, &mut work, &Look { words: &words, units: &units, layout }, &mut out);
+                    listed = snap.list.iter().map(|entry| entry.id.clone()).collect();
                     snap.shown.map(|page| page.id)
                 }
                 PreferencesLayout::Cards => {
                     let snap = cards_snapshot(&*host, &matcher);
                     show_cards(ui, &mut *host, &snap, &mut work, &words, &units, &mut out);
+                    listed = snap.shown.iter().map(|page| page.id.clone()).collect();
                     let shown = snap.shown.iter().find(|page| page.id == work.selected).or(snap.shown.first());
                     shown.map(|page| page.id.clone())
                 }
             };
-            PageRun { before, work, out, page }
+            PageRun { before, work, out, page, listed }
         });
         let pick_color = shown
             .settle(|cx, run| {
@@ -161,8 +171,8 @@ impl<'a> PreferencesPage<'a> {
                 run.out.rows.pick_color.take()
             })
             .flatten();
-        let page = shown.inner.and_then(|run| run.page);
-        PreferencesPageOutput { response: shown.output, pick_color, page }
+        let (page, pages) = shown.inner.map_or((None, Vec::new()), |run| (run.page, run.listed));
+        PreferencesPageOutput { response: shown.output, pick_color, page, pages }
     }
 }
 
@@ -255,6 +265,14 @@ fn shown_page(matcher: &Matcher, listed: &Listed, page: &PageSpec<'_>) -> ShownP
     }
 }
 
+/// What a paged body draws with: the words, the units and the layout.
+#[derive(Clone, Copy)]
+struct Look<'a> {
+    words: &'a PreferencesWords,
+    units: &'a Units,
+    layout: PreferencesLayout,
+}
+
 /// The page list's rows: one per listed page, keyed by the page id.
 struct Pages<'a>(&'a [PageEntry]);
 
@@ -281,10 +299,10 @@ fn show_body<H: PreferencesModel + ?Sized>(
     host: &mut H,
     snap: &Snapshot,
     state: &mut PreferencesState,
-    words: &PreferencesWords,
-    units: &Units,
+    look: &Look<'_>,
     out: &mut BodyOut,
 ) {
+    let words = look.words;
     let list_id = ui.scope_id().with("pages");
     TextField::search(words.search_label.clone(), Bind::bound(&mut state.search))
         .placeholder(words.search_placeholder.clone())
@@ -295,14 +313,18 @@ fn show_body<H: PreferencesModel + ?Sized>(
         return;
     };
     let source = Pages(&snap.list);
-    let picked = SectionList::new(words.pages_label.clone(), &source, page.id.clone()).id(list_id).body_label(page.title.clone()).show(
+    let mut sections = SectionList::new(words.pages_label.clone(), &source, page.id.clone()).id(list_id).body_label(page.title.clone());
+    if look.layout == PreferencesLayout::Classic {
+        sections = sections.framed();
+    }
+    let picked = sections.show(
         ui,
         |key| {
             let entry = snap.list.iter().find(|entry| entry.id == *key);
             let row = ListRow::new(entry.map_or_else(Label::default, |entry| entry.title.clone()));
             if entry.is_some_and(|entry| entry.dimmed) { row.ink(RowInk::Dimmed) } else { row }
         },
-        |ui| show_page(ui, host, page, snap.searching, words, units, out),
+        |ui| show_page(ui, host, page, snap.searching, look, out),
     );
     if let Some(key) = picked {
         state.selected = key;
@@ -310,16 +332,12 @@ fn show_body<H: PreferencesModel + ?Sized>(
 }
 
 /// The page's title, groups, footnote and Reset Section.
-fn show_page<H: PreferencesModel + ?Sized>(
-    ui: &mut Ui,
-    host: &mut H,
-    page: &ShownPage,
-    searching: bool,
-    words: &PreferencesWords,
-    units: &Units,
-    out: &mut BodyOut,
-) {
-    Text::new(page.title.clone()).role(TypeRole::Title).show(ui);
+fn show_page<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, page: &ShownPage, searching: bool, look: &Look<'_>, out: &mut BodyOut) {
+    let Look { words, units, layout } = *look;
+    let classic = layout == PreferencesLayout::Classic;
+    if !classic {
+        Text::new(page.title.clone()).role(TypeRole::Title).show(ui);
+    }
     if page.custom {
         Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_page(ui, &page.id));
     } else if page.groups.is_empty() && !searching {
@@ -336,6 +354,9 @@ fn show_page<H: PreferencesModel + ?Sized>(
                     });
                 };
                 match &group.title {
+                    Some(title) if classic => {
+                        GroupBox::new(title.clone(), None).id_salt(at).show(ui, |ui, _| rows(ui));
+                    }
                     Some(title) => {
                         Section::fixed(title.clone()).id_salt(at).show(ui, |ui, _| rows(ui));
                     }
