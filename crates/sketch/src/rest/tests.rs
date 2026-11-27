@@ -177,11 +177,48 @@ fn the_layer_cap_holds() {
 
 #[test]
 fn a_path_past_the_point_cap_is_cut() {
-    let pts: Vec<(f64, f64)> = (0..100_005).map(|i| (f64::from(i % 2), f64::from(i) / 100_005.0)).collect();
-    let z = sketch_zip("50.2", 103, document(&["P"]), &[page("P", "P", vec![shape_path("L", 0.0, 0.0, 10.0, 10.0, &pts, false)])], &[]);
+    fn path_zip(point_count: u32) -> Vec<u8> {
+        let pts: Vec<(f64, f64)> = (0..point_count).map(|i| (f64::from(i % 2), f64::from(i) / f64::from(point_count))).collect();
+        sketch_zip("50.2", 103, document(&["P"]), &[page("P", "P", vec![shape_path("L", 0.0, 0.0, 10.0, 10.0, &pts, false)])], &[])
+    }
+
+    let note = "paths with more than 4 points were cut";
+    let z = path_zip(9);
+    let out = tree::to_rest_with_point_cap(&Archive::open(&z).unwrap(), "f", Options::default().max_nodes, None, 60_000_000, 4);
+    assert!(out.warnings.iter().any(|w| w == note), "{:?}", out.warnings);
+    assert_eq!(out.networks[0].as_ref().map(|n| n.vertices.len()), Some(4));
+
+    let z = path_zip(4);
+    let out = tree::to_rest_with_point_cap(&Archive::open(&z).unwrap(), "f", Options::default().max_nodes, None, 60_000_000, 4);
+    assert!(!out.warnings.iter().any(|w| w == note), "{:?}", out.warnings);
+    assert_eq!(out.networks[0].as_ref().map(|n| n.vertices.len()), Some(4));
+
+    // The ordinary entry point must not inherit the small test budget.
+    let z = path_zip(5);
+    let out = map(&z);
+    assert_eq!(out.networks[0].as_ref().map(|n| n.vertices.len()), Some(5));
+    assert!(!out.warnings.iter().any(|w| w.starts_with("paths with more than ")), "{:?}", out.warnings);
+
+    // Exercise the actual default boundary without making 100,000 vertices or formatted point strings.
+    let mut path = shape_path("L", 0.0, 0.0, 10.0, 10.0, &[], false);
+    path["points"] = Value::Array(vec![Value::Null; 100_001]);
+    let z = sketch_zip("50.2", 103, document(&["P"]), &[page("P", "P", vec![path])], &[]);
     let out = map(&z);
     assert!(out.warnings.iter().any(|w| w == "paths with more than 100000 points were cut"), "{:?}", out.warnings);
-    assert_eq!(out.networks[0].as_ref().map(|n| n.vertices.len()), Some(100_000));
+    assert!(out.warnings.iter().any(|w| w == "path points that couldn't be read were skipped"), "{:?}", out.warnings);
+    assert!(out.networks.is_empty());
+
+    // Pin truncation at the ordinary entry point's production boundary with only three readable points.
+    let mut points = vec![Value::Null; 100_001];
+    points[0] = json!({"point": "{0, 0}"});
+    points[99_999] = json!({"point": "{0.5, 0.5}"});
+    points[100_000] = json!({"point": "{1, 1}"});
+    let mut path = shape_path("L", 0.0, 0.0, 10.0, 10.0, &[], false);
+    path["points"] = Value::Array(points);
+    let z = sketch_zip("50.2", 103, document(&["P"]), &[page("P", "P", vec![path])], &[]);
+    let out = map(&z);
+    assert_eq!(out.networks[0].as_ref().map(|n| n.vertices.len()), Some(2));
+    assert!(out.warnings.iter().any(|w| w == "paths with more than 100000 points were cut"), "{:?}", out.warnings);
 }
 
 #[test]

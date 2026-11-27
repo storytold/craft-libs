@@ -3,6 +3,8 @@
 
 pub(crate) mod primary_down;
 
+pub(crate) mod mark_labels;
+
 pub(crate) mod dials;
 
 pub(crate) mod thumb_row;

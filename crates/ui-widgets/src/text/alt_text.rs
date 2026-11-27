@@ -10,7 +10,7 @@ use crate::contract::{
 };
 use crate::primitives::{TextOptions, TextRun};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Flags, StyleCx, SurfaceLook};
+use crate::style::{ComponentStyle, Flags, FocusLook, StyleCx, SurfaceLook};
 use craft_behavior::{Codec, Metrics, Mixed, NotAValue, PartKey, Proposal, Sense};
 use egui::{Rect, Vec2, pos2, vec2};
 use std::borrow::Cow;
@@ -104,6 +104,8 @@ pub struct AltTextFieldStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// An alt text editor: a multi-line description box and a Mark as decorative check. While the check is on, the box
@@ -149,7 +151,7 @@ impl Component for AltTextField<'_> {
 
     fn style(cx: &StyleCx<'_>, _: AltTextFieldStyleKey) -> AltTextFieldStyle {
         let field = FieldStyle::at(cx);
-        AltTextFieldStyle { surface: field.surface, metrics: field.metrics.gap(cx.control().gap) }
+        AltTextFieldStyle { surface: field.surface, metrics: field.metrics.gap(cx.control().gap), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

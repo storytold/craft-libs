@@ -296,6 +296,55 @@ fn a_press_on_an_app_drag_widget_in_the_body_is_no_surface_press() {
     assert!(surface.get(), "a press on the empty body is the group's surface press");
 }
 
+// As a group narrows, at both densities, the drag band narrows to its least before the shown tab goes below the width a
+// shrunk tab keeps (its first letters), alone and beside a tab that goes to the overflow menu. The shown tab stays
+// inside the group, and the band never covers it, down to a 40 pt column.
+#[trial]
+fn a_narrow_groups_drag_band_narrows_before_the_shown_tab() {
+    use craft_theme::Size;
+    let tab = |width: f32, density: Size, names: &'static [&'static str]| {
+        let panels: Vec<PanelTitle> = names.iter().enumerate().map(|(at, name)| PanelTitle::new(PanelKey::new(at as u64 + 1), *name)).collect();
+        let group_rect = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(width, 200.0));
+        let grip = Rc::new(Cell::new(None::<Rect>));
+        let seen = Rc::clone(&grip);
+        let mut fixture = Fixture::new(move |ui| {
+            let out = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).show_at(ui, group_rect, |_, _| ());
+            seen.set(out.output.grip.map(|(rect, _)| rect));
+        });
+        fixture.density(density).settle();
+        (fixture.by_label("Tools").map(|node| node.rect), grip.get())
+    };
+    for density in [Size::Compact, Size::Comfortable] {
+        // The least a tab shows: the narrowest "Tools" gets beside a shown tab as the group narrows by 1 pt steps, before
+        // it overflows; so within 1 pt of the strip's least.
+        let least = (0..260)
+            .filter_map(|step| tab(300.0 - step as f32, density, &["Tools Options", "Tools"]).0)
+            .map(|rect| rect.width())
+            .fold(f32::INFINITY, f32::min);
+        assert!(least.is_finite(), "the other tab shows shrunk in some group ({density:?})");
+        for names in [&["Tools"][..], &["Tools", "Swatches"][..]] {
+            let (Some(natural), Some(whole)) = tab(300.0, density, names) else { panic!("a wide group shows the tab and the band ({density:?})") };
+            let least = least.min(natural.width());
+            // The band at its narrowest, in the narrowest group.
+            let (_, Some(narrowest)) = tab(40.0, density, names) else { panic!("a 40 pt group shows the band ({density:?}, {names:?})") };
+            assert!(narrowest.width() < whole.width() - 0.5, "the band narrows in a 40 pt group ({density:?}, {names:?})");
+            for width in (0..13).map(|step| 40.0 + 8.0 * step as f32) {
+                let (shown, grip) = tab(width, density, names);
+                let Some(shown) = shown else { panic!("the shown tab shows in a {width} pt group ({density:?}, {names:?})") };
+                let Some(grip) = grip else { panic!("the band shows in a {width} pt group ({density:?}, {names:?})") };
+                let group = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(width, 200.0));
+                assert!(group.contains_rect(shown), "the shown tab {shown:?} lies inside the {width} pt group ({density:?}, {names:?})");
+                assert!(!grip.intersects(shown.shrink(0.5)), "the band {grip:?} does not cover the shown tab {shown:?} in {width} pt ({density:?})");
+                assert!(
+                    shown.width() >= least - 1.0 || grip.width() <= narrowest.width() + 0.5,
+                    "the band {grip:?} narrows to {} pt before the shown tab {shown:?} goes below {least} pt in {width} pt ({density:?}, {names:?})",
+                    narrowest.width()
+                );
+            }
+        }
+    }
+}
+
 // Closable panel tabs stay panel tabs: in a group too narrow for their whole names every tab keeps its place in the
 // strip, the shown one its whole name, and each shows a close button. A middle click closes an inactive tab without
 // showing it first.

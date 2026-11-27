@@ -220,6 +220,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             columns,
             toggles: self.header.toggle_columns().map(|(key, _)| key).collect(),
             toggle_keys: Vec::new(),
+            closed_toggles: Vec::new(),
             aligns: self.header.aligns(),
             pressed: None,
             menu_open: false,

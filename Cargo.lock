@@ -1790,6 +1790,7 @@ dependencies = [
  "craft-drawingml",
  "craft-dwg",
  "craft-dxf",
+ "craft-ease",
  "craft-ecproj-format",
  "craft-elf",
  "craft-eps",
@@ -1830,6 +1831,7 @@ dependencies = [
  "craft-html",
  "craft-http-url",
  "craft-i18n",
+ "craft-i18n-build",
  "craft-ical",
  "craft-idml",
  "craft-image-codecs",
@@ -1873,6 +1875,7 @@ dependencies = [
  "craft-ora",
  "craft-pages",
  "craft-palette",
+ "craft-pbr",
  "craft-pcap",
  "craft-pcraft-bundle",
  "craft-pcraft-format",
@@ -1906,6 +1909,7 @@ dependencies = [
  "craft-scraft-format",
  "craft-settings",
  "craft-sf2",
+ "craft-shared-vec",
  "craft-sheet",
  "craft-shx",
  "craft-silhouette-studio",
@@ -2044,6 +2048,7 @@ name = "craft-appkit"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
 ]
@@ -2277,12 +2282,14 @@ dependencies = [
  "craft-atomic",
  "craft-control-protocol",
  "craft-flags",
+ "craft-platform",
  "dirs",
  "getrandom 0.3.4",
  "log",
  "proptest",
  "serde",
  "serde_json",
+ "socket2",
  "tempfile",
 ]
 
@@ -2415,6 +2422,7 @@ name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-browse",
@@ -2650,6 +2658,7 @@ dependencies = [
  "exr",
  "flate2",
  "half",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -3463,6 +3472,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-flow",
+ "craft-html",
+ "craft-markdown",
  "craft-math",
  "craft-metafile",
  "craft-wordmodel",
@@ -4088,6 +4099,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-shared-vec"
+version = "0.1.0"
+dependencies = [
+ "craft-shared-vec",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-sheet"
 version = "0.1.0"
 
@@ -4206,6 +4227,7 @@ dependencies = [
 name = "craft-suite-account"
 version = "0.1.0"
 dependencies = [
+ "craft-platform",
  "dirs",
  "keyring",
  "keyring-core",
