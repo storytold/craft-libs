@@ -12,6 +12,11 @@
 //! document non-conformant (§17.13.7.1, §17.13.7.2); a comment range marker without its other end
 //! is the comment's single anchor point (§17.13.4.3, §17.13.4.4), so the span it marked is lost.
 //!
+//! A permission range can also be limited to some of a table's columns (`w:colFirst`, `w:colLast`,
+//! §17.13.7.2): its start goes in the first row it covers, its end at the end of the last, and the
+//! attributes name the first and last column it covers in each of those rows. Without them, a range
+//! in a table "shall apply to the entire table", so a range that loses them covers more cells.
+//!
 //! Synthetic fixtures written for these tests from the schema.
 
 use std::collections::BTreeMap;
@@ -351,4 +356,95 @@ fn range_markers_between_table_rows_and_cells_change_no_rows_cells_or_controls()
         let read = |marked| layout(&craft_docx::read(&package(&body(case, marked))).unwrap().body);
         assert_eq!(read(true), read(false), "{}", case.0);
     }
+}
+
+/// The editor the column cases' permission range names.
+const COLUMNS: &str = "columns";
+
+/// Where a column case's permission range starts. It always ends in `w:tr` after the second
+/// row's last cell, as in the spec's example (§17.13.7.2).
+#[derive(Clone, Copy)]
+enum StartAt {
+    /// In the first row, before its first cell.
+    Row,
+    /// In the first row's first cell, before its paragraph (the spec's example).
+    Cell,
+}
+
+/// A three-by-three table of the words `a0` … `c2` between two paragraphs, with a permission range
+/// over its first two rows that starts as `at` says and has the column attributes `cols`.
+fn column_body(at: StartAt, cols: &str) -> String {
+    let start = format!(r#"<w:permStart w:id="5" w:ed="{COLUMNS}"{cols}/>"#);
+    let cells = |r: char, from: usize| (from..3).map(|c| cell(&format!("{r}{c}"))).collect::<String>();
+    let first = match at {
+        StartAt::Row => format!("{start}{}", cells('a', 0)),
+        StartAt::Cell => format!(r#"<w:tc><w:tcPr/>{start}<w:p><w:r><w:t xml:space="preserve">a0 </w:t></w:r></w:p></w:tc>{}"#, cells('a', 1)),
+    };
+    let grid = r#"<w:gridCol w:w="1600"/>"#.repeat(3);
+    format!(
+        r#"<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid>{grid}</w:tblGrid>{}{}{}</w:tbl><w:p><w:r><w:t xml:space="preserve">after </w:t></w:r></w:p>"#,
+        row(&first),
+        row(&format!(r#"{}<w:permEnd w:id="5"/>"#, cells('b', 0))),
+        row(&cells('c', 0)),
+    )
+}
+
+/// A column case: its name, where its range starts, the column attributes its start has in the
+/// file, and the columns it should keep (`None`: none).
+type ColumnCase = (&'static str, StartAt, &'static str, Option<[u32; 2]>);
+
+const COLUMN_CASES: [ColumnCase; 6] = [
+    ("one column, the start in the row", StartAt::Row, r#" w:colFirst="1" w:colLast="1""#, Some([1, 1])),
+    ("two columns, the start in the first cell", StartAt::Cell, r#" w:colFirst="0" w:colLast="1""#, Some([0, 1])),
+    ("no columns", StartAt::Row, "", None),
+    // The spec says to ignore such a pair; it is saved as the file has it.
+    ("the first column after the last", StartAt::Row, r#" w:colFirst="2" w:colLast="1""#, Some([2, 1])),
+    // Non-conformant without its pair: it still limits the range to that column.
+    ("colFirst alone", StartAt::Cell, r#" w:colFirst="2""#, Some([2, 2])),
+    ("values that are not column numbers", StartAt::Row, r#" w:colFirst="two" w:colLast="-1""#, None),
+];
+
+/// The tags named `name` in `xml`, without their angle brackets.
+fn tags<'a>(xml: &'a str, name: &'a str) -> impl Iterator<Item = &'a str> {
+    xml.split('<')
+        .skip(1)
+        .map(|piece| piece.split('>').next().unwrap_or(""))
+        .filter(move |tag| tag.split(|c: char| c.is_whitespace() || c == '/').next() == Some(name))
+}
+
+/// A permission range limited to some of a table's columns keeps them, and its rows, as read and
+/// through two saves; a range without them gains none, and stays a range over whole rows.
+#[test]
+fn a_permission_range_keeps_its_table_columns_and_gains_none_through_two_saves() {
+    let mut problems = Vec::new();
+    for (name, at, attrs, want) in &COLUMN_CASES {
+        let body = column_body(*at, attrs);
+        let words = covered(&file_tokens(&body), PERM, COLUMNS);
+        assert!(!words.is_empty(), "{name}: the fixture marks no text");
+        let saved_cols = want.map_or([String::new(), String::new()], |c| c.map(|v| v.to_string()));
+        let mut d = craft_docx::read(&package(&body)).unwrap();
+        for (round, save) in [("as read", Some("first save")), ("after one save", Some("second save")), ("after two saves", None)] {
+            let cols: Vec<Option<[u32; 2]>> = d.perm_ranges().iter().map(|r| r.cols).collect();
+            if cols != [*want] {
+                problems.push(format!("{name}, {round}: ranges with the columns {cols:?}, want [{want:?}]"));
+            }
+            let mut tokens = Vec::new();
+            read_tokens(&d, &d.body, &mut BTreeMap::new(), &mut tokens);
+            let got = covered(&tokens, PERM, COLUMNS);
+            if got != words {
+                problems.push(format!("{name}, {round}: the range covers {got:?}, the file {words:?}"));
+            }
+            let Some(save) = save else { break };
+            let saved = craft_docx::write(&d).unwrap();
+            let xml = document_xml(&saved);
+            let starts: Vec<[String; 2]> = tags(&xml, "w:permStart").map(|t| [attr(t, "w:colFirst"), attr(t, "w:colLast")]).collect();
+            if starts != [saved_cols.clone()] {
+                problems.push(format!("{name}, {save}: saved starts with the columns {starts:?}, want [{saved_cols:?}]"));
+            }
+            let (bad, _) = unpaired(&xml);
+            problems.extend(bad.into_iter().map(|b| format!("{name}, {save}: {b}")));
+            d = craft_docx::read(&saved).unwrap();
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
 }

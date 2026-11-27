@@ -191,7 +191,7 @@ impl Reader<'_> {
                 if group.is_empty() && editor.is_empty() {
                     return None;
                 }
-                Some(InlineObject::PermStart { id, group, editor })
+                Some(InlineObject::PermStart { id, group, editor, cols: perm_cols(e) })
             }
             "w:permEnd" => self.perms.get(&id).map(|id| InlineObject::PermEnd { id: *id }),
             "w:commentRangeEnd" => {
@@ -535,4 +535,18 @@ fn grid_from_cells(table: &Table) -> Vec<f32> {
         }
     }
     grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(MIN_GRID_COL, crate::units::MAX_LEN_PT)).collect()
+}
+
+/// A permission range's table columns (`w:colFirst`, `w:colLast`, ECMA-376-1:2016 §17.13.7.2),
+/// zero-based, as the file gives them, so a save writes the same ones back: a pair in the wrong
+/// order or past the table's last column stays as it is, for the code that enforces the range.
+/// One of the two alone limits the range to that one column; a value that isn't a column number
+/// is ignored.
+fn perm_cols(e: &El) -> Option<[u32; 2]> {
+    let col = |a: &str| e.attr(a).and_then(|v| v.trim().parse::<u32>().ok());
+    match (col("w:colFirst"), col("w:colLast")) {
+        (Some(first), Some(last)) => Some([first, last]),
+        (Some(a), None) | (None, Some(a)) => Some([a, a]),
+        (None, None) => None,
+    }
 }

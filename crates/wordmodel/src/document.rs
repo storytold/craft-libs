@@ -897,9 +897,11 @@ impl Document {
     }
 
     /// Ranges that stay editable while the document is protected (Restrict Editing exceptions),
-    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group and
-    /// editor, its start (just after the marker) and its end (at the matching
-    /// [`InlineObject::PermEnd`], or the end of the story when it has none).
+    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group,
+    /// editor and columns, its start (just after the marker) and its end (at the matching
+    /// [`InlineObject::PermEnd`], or the end of the story when it has none). A range with
+    /// columns covers only those columns of its rows, so a caller that enforces ranges has to
+    /// check them.
     pub fn perm_ranges(&self) -> Vec<PermRange> {
         let mut out: Vec<PermRange> = Vec::new();
         let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
@@ -910,10 +912,17 @@ impl Document {
                 let Some(p) = self.para(story, &path) else { continue };
                 for (off, o) in p.objects_with_offsets() {
                     match o {
-                        InlineObject::PermStart { id, group, editor } => {
+                        InlineObject::PermStart { id, group, editor, cols } => {
                             let start = Pos { story, path: path.clone(), off: off + para::OBJ.len_utf8() };
                             open.entry(*id).or_default().push(out.len());
-                            out.push(PermRange { id: *id, group: group.clone(), editor: editor.clone(), start: start.clone(), end: start });
+                            out.push(PermRange {
+                                id: *id,
+                                group: group.clone(),
+                                editor: editor.clone(),
+                                cols: *cols,
+                                start: start.clone(),
+                                end: start,
+                            });
                         }
                         InlineObject::PermEnd { id } => {
                             if let Some(i) = open.get_mut(id).and_then(Vec::pop)
