@@ -94,7 +94,8 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
     // The BMP copy first: a bitmap whose pixels don't fit still keeps its BMP bytes as a
     // placeholder, if the copy fits.
     let bmp = to_bmp_within(dib, limit, work)?;
-    if !work.charge(cost, "bitmap") {
+    // A bitmap too large a side to be decoded is kept as a BMP without charging its pixels.
+    if w > u64::from(MAX_DIB_SIDE) || h > u64::from(MAX_DIB_SIDE) || !work.charge(cost, "bitmap") {
         return Some(Dib::Bmp(bmp));
     }
     let mut reader = image::ImageReader::new(std::io::Cursor::new(&bmp));

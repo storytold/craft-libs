@@ -203,9 +203,13 @@ pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> 
 /// A WMF BLIP as a `.wmf` file: its records, with the placeable header the BLIP leaves out put
 /// back so the picture keeps its size, within `limit` bytes and `work`. Putting the header in
 /// front copies the records again, so that copy is charged whole. When it doesn't fit, or the
-/// bounds can't make a placeable header, the records are kept as they are: a WMF without one.
+/// bounds can't make a placeable header, the records are kept as they are: a WMF without one. A
+/// BLIP whose WMF has its placeable header already is kept as it is, not given a second one.
 pub fn with_placeable_header(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
     let records = blip.bytes(limit, work)?;
+    if crate::wmf::is_placeable(&records) {
+        return Some(records);
+    }
     let Some(header) = blip.header.filter(|h| crate::wmf::gets_header(h)) else { return Some(records) };
     let whole = records.len().checked_add(crate::wmf::PLACEABLE_HEADER)?;
     if whole > limit || !work.charge(whole, "metafile") {
@@ -234,10 +238,11 @@ pub fn fbse_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<(Rec<'a>, Opti
     Some((rec, Some((fo_delay, rec.span()))))
 }
 
-/// The `OfficeArtFBSE` bodies of a BLIP store container's body, in order (`pib` 1 is the first),
-/// at most [`MAX_ENTRIES`].
-pub fn store_entries(bstore: &[u8]) -> impl Iterator<Item = &[u8]> {
-    crate::record::Records::new(bstore).filter(|r| r.kind == rt::FBSE).map(|r| r.data).take(MAX_ENTRIES)
+/// One slot per child of a BLIP store container's body, in order (`pib` 1 is the first), at most
+/// [`MAX_ENTRIES`]: an `OfficeArtFBSE`'s body, or `None` for a child that isn't one, so the `pib`s
+/// after it don't shift (as [`Store::new`] keeps them).
+pub fn store_entries(bstore: &[u8]) -> impl Iterator<Item = Option<&[u8]>> {
+    crate::record::Records::new(bstore).take(MAX_ENTRIES).map(|r| (r.kind == rt::FBSE).then_some(r.data))
 }
 
 /// The BLIP record of a `.ppt` store entry: embedded when bytes follow the FBSE's name, and in the
