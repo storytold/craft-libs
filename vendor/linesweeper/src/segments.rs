@@ -131,6 +131,66 @@ fn pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
     xs.windows(2).map(|pair| (&pair[0], &pair[1]))
 }
 
+// Craft patch (batch paths): counts calls to `enter_order` in tests.
+#[cfg(test)]
+thread_local! {
+    static ENTER_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// Craft patch (batch paths): the order of `Segments::enter`, by entrance
+// height and then by horizontal position at that height.
+fn enter_order(
+    segs: &SegVec<Segment>,
+    (y1, seg1): &(f64, SegIdx),
+    (y2, seg2): &(f64, SegIdx),
+) -> std::cmp::Ordering {
+    #[cfg(test)]
+    ENTER_COMPARISONS.with(|c| c.set(c.get() + 1));
+    CheapOrderedFloat::from(*y1)
+        .cmp(&CheapOrderedFloat::from(*y2))
+        .then_with(|| {
+            CheapOrderedFloat::from(segs[*seg1].at_y(*y1))
+                .cmp(&CheapOrderedFloat::from(segs[*seg2].at_y(*y1)))
+        })
+}
+
+// Craft patch (batch paths): sorts `v[old_len..]` and merges it into
+// `v[..old_len]`, which must already be sorted by `cmp`. The result is the
+// order a stable sort of all of `v` gives: on a tie, an entry from before
+// `old_len` comes first. Only the part of the sorted prefix that the new
+// entries reach is moved, so entries added below every existing one cost a
+// sort of the new entries and a binary search.
+fn merge_sorted_tail<T: Copy>(
+    v: &mut Vec<T>,
+    old_len: usize,
+    mut cmp: impl FnMut(&T, &T) -> std::cmp::Ordering,
+) {
+    let mut tail = v.split_off(old_len);
+    tail.sort_by(&mut cmp);
+    let Some(first) = tail.first() else {
+        return;
+    };
+    let pos = v.partition_point(|e| cmp(e, first) != std::cmp::Ordering::Greater);
+    if pos == v.len() {
+        v.append(&mut tail);
+        return;
+    }
+    let suffix = v.split_off(pos);
+    v.reserve(suffix.len() + tail.len());
+    let (mut i, mut j) = (0, 0);
+    while i < suffix.len() && j < tail.len() {
+        if cmp(&tail[j], &suffix[i]) == std::cmp::Ordering::Less {
+            v.push(tail[j]);
+            j += 1;
+        } else {
+            v.push(suffix[i]);
+            i += 1;
+        }
+    }
+    v.extend_from_slice(&suffix[i..]);
+    v.extend_from_slice(&tail[j..]);
+}
+
 struct SubpathIter<'a, I: Iterator> {
     inner: &'a mut Peekable<I>,
     started: bool,
@@ -298,6 +358,10 @@ impl Segments {
     /// Add a Bézier path to this arena.
     ///
     /// The path can contain multiple subpaths, and each of them must be closed.
+    ///
+    /// Each call merges the path's entrances and exits into the sorted ones
+    /// already in the arena, which moves every existing entry that sorts after
+    /// them. To add many paths, call [`Segments::add_bez_paths`] once instead.
     pub fn add_bez_path(&mut self, p: &BezPath) -> Result<(), NonClosedPath> {
         let old_len = self.segs.len();
         self.add_path_without_updating_enter_exit(p, true)?;
@@ -308,11 +372,81 @@ impl Segments {
     /// Add a Bézier path to this arena.
     ///
     /// The path can contain multiple subpaths, and each of them may or may not be closed.
+    ///
+    /// Each call merges the path's entrances and exits into the sorted ones
+    /// already in the arena, which moves every existing entry that sorts after
+    /// them. To add many paths, call [`Segments::add_non_closed_bez_paths`]
+    /// once instead.
     pub fn add_non_closed_bez_path(&mut self, p: &BezPath) -> Result<(), NonClosedPath> {
         let old_len = self.segs.len();
         self.add_path_without_updating_enter_exit(p, false)?;
         self.update_enter_exit(old_len);
         Ok(())
+    }
+
+    // Craft patch (batch paths): add every path, then sort the entrances and exits once.
+    /// Add a collection of Bézier paths to this arena.
+    ///
+    /// Every subpath must be closed. When every path is closed, this gives the
+    /// same arena as calling [`Segments::add_bez_path`] on each path in turn,
+    /// and it sorts the entrances and exits once instead of once per path.
+    ///
+    /// If a subpath is not closed, this returns the error for the first such
+    /// subpath. The paths before the one holding it stay in the arena, and no
+    /// segment of that path or of any later path is added.
+    pub fn add_bez_paths<'a>(
+        &mut self,
+        ps: impl IntoIterator<Item = &'a BezPath>,
+    ) -> Result<(), NonClosedPath> {
+        self.add_paths_updating_enter_exit_once(ps, true)
+    }
+
+    // Craft patch (batch paths).
+    /// Add a collection of Bézier paths to this arena.
+    ///
+    /// Each subpath may or may not be closed. This gives the same arena as
+    /// calling [`Segments::add_non_closed_bez_path`] on each path in turn, and
+    /// it sorts the entrances and exits once instead of once per path.
+    pub fn add_non_closed_bez_paths<'a>(
+        &mut self,
+        ps: impl IntoIterator<Item = &'a BezPath>,
+    ) -> Result<(), NonClosedPath> {
+        self.add_paths_updating_enter_exit_once(ps, false)
+    }
+
+    // Craft patch (batch paths).
+    fn add_paths_updating_enter_exit_once<'a>(
+        &mut self,
+        ps: impl IntoIterator<Item = &'a BezPath>,
+        must_be_closed: bool,
+    ) -> Result<(), NonClosedPath> {
+        let old_len = self.segs.len();
+        let mut result = Ok(());
+        for p in ps {
+            let path_start = self.segs.len();
+            result = self.add_path_without_updating_enter_exit(p, must_be_closed);
+            if result.is_err() {
+                // The failing path's segments are removed, so none is left
+                // linked to an index past the end of the arena.
+                self.truncate_unentered(path_start);
+                break;
+            }
+        }
+        self.update_enter_exit(old_len);
+        result
+    }
+
+    // Craft patch (batch paths): drops every segment at index `len` or above.
+    // `enter` and `exit` are left alone, so this is only for segments that
+    // `update_enter_exit` has not seen yet.
+    fn truncate_unentered(&mut self, len: usize) {
+        self.segs.inner.truncate(len);
+        self.horizontal_decomps.inner.truncate(len);
+        self.contour_prev.inner.truncate(len);
+        self.contour_next.inner.truncate(len);
+        self.orientation.inner.truncate(len);
+        self.split_from_predecessor.inner.truncate(len);
+        self.input_segs.inner.truncate(len);
     }
 
     pub(crate) fn add_path_without_updating_enter_exit(
@@ -415,6 +549,9 @@ impl Segments {
     }
 
     pub(crate) fn update_enter_exit(&mut self, old_len: usize) {
+        // Craft patch (batch paths).
+        let enter_old_len = self.enter.len();
+        let exit_old_len = self.exit.len();
         for idx in old_len..self.len() {
             let seg_idx = SegIdx(idx);
             let seg = &self.segs[seg_idx];
@@ -428,15 +565,15 @@ impl Segments {
         // We sort the enter segments by y position, and then by horizontal
         // start position so that they're fairly likely to get inserted in the
         // sweep-line in order (which makes the indexing fix-ups faster).
-        self.enter.sort_by(|(y1, seg1), (y2, seg2)| {
-            CheapOrderedFloat::from(*y1)
-                .cmp(&CheapOrderedFloat::from(*y2))
-                .then_with(|| {
-                    CheapOrderedFloat::from(self.segs[*seg1].at_y(*y1))
-                        .cmp(&CheapOrderedFloat::from(self.segs[*seg2].at_y(*y1)))
-                })
+        //
+        // Craft patch (batch paths): the entries before `old_len` are already
+        // sorted, so only the new entries are sorted and then merged in. This
+        // gives the same order as a stable sort of the whole vector.
+        let segs = &self.segs;
+        merge_sorted_tail(&mut self.enter, enter_old_len, |a, b| {
+            enter_order(segs, a, b)
         });
-        self.exit.sort_by(|(y1, _), (y2, _)| {
+        merge_sorted_tail(&mut self.exit, exit_old_len, |(y1, _), (y2, _)| {
             CheapOrderedFloat::from(*y1).cmp(&CheapOrderedFloat::from(*y2))
         });
     }
@@ -478,5 +615,196 @@ impl std::ops::Index<SegIdx> for Segments {
 
     fn index(&self, index: SegIdx) -> &Self::Output {
         &self.segs[index]
+    }
+}
+
+// Craft patch (batch paths).
+#[cfg(test)]
+mod tests {
+    use kurbo::BezPath;
+
+    use super::{SegIdx, Segments};
+    use crate::num::CheapOrderedFloat;
+
+    // Paths on a small integer grid, so that many segments share entrance
+    // heights and entrance positions, with lines, quadratics and cubics.
+    fn grid_paths(count: usize, closed: bool) -> Vec<BezPath> {
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 33) % 12) as f64
+        };
+        (0..count)
+            .map(|i| {
+                let mut p = BezPath::new();
+                p.move_to((next(), next()));
+                match i % 3 {
+                    0 => {
+                        p.line_to((next(), next()));
+                        p.line_to((next(), next()));
+                    }
+                    1 => {
+                        p.quad_to((next(), next()), (next(), next()));
+                        p.line_to((next(), next()));
+                    }
+                    _ => {
+                        p.curve_to((next(), next()), (next(), next()), (next(), next()));
+                    }
+                }
+                if closed {
+                    p.close_path();
+                }
+                p
+            })
+            .collect()
+    }
+
+    fn assert_same_arena(a: &Segments, b: &Segments) {
+        assert_eq!(a.segs, b.segs);
+        assert_eq!(a.orientation, b.orientation);
+        assert_eq!(a.contour_prev, b.contour_prev);
+        assert_eq!(a.contour_next, b.contour_next);
+        assert_eq!(a.enter, b.enter);
+        assert_eq!(a.exit, b.exit);
+    }
+
+    #[test]
+    fn add_bez_paths_matches_repeated_add_bez_path() {
+        let paths = grid_paths(300, true);
+        let mut one_by_one = Segments::default();
+        for p in &paths {
+            one_by_one.add_bez_path(p).unwrap();
+        }
+        let mut batch = Segments::default();
+        batch.add_bez_paths(&paths).unwrap();
+        batch.check_invariants();
+        assert!(batch.len() > 600);
+        assert_same_arena(&one_by_one, &batch);
+
+        // A second batch adds to the arena that is already there.
+        let more = grid_paths(50, true);
+        for p in &more {
+            one_by_one.add_bez_path(p).unwrap();
+        }
+        batch.add_bez_paths(&more).unwrap();
+        assert_same_arena(&one_by_one, &batch);
+    }
+
+    #[test]
+    fn add_non_closed_bez_paths_matches_repeated_add_non_closed_bez_path() {
+        let paths = grid_paths(300, false);
+        let mut one_by_one = Segments::default();
+        for p in &paths {
+            one_by_one.add_non_closed_bez_path(p).unwrap();
+        }
+        let mut batch = Segments::default();
+        batch.add_non_closed_bez_paths(&paths).unwrap();
+        batch.check_invariants();
+        assert_same_arena(&one_by_one, &batch);
+    }
+
+    #[test]
+    fn add_bez_paths_stops_at_an_open_path() {
+        let mut paths = grid_paths(4, true);
+        let mut open = BezPath::new();
+        open.move_to((0.0, 0.0));
+        open.line_to((1.0, 5.0));
+        paths.insert(2, open);
+
+        let mut segments = Segments::default();
+        let err = segments.add_bez_paths(&paths).unwrap_err();
+        assert_eq!(err.start_point, kurbo::Point::new(0.0, 0.0));
+        assert_eq!(err.end_point, kurbo::Point::new(1.0, 5.0));
+
+        // The two paths before the open one stay, and nothing of the open
+        // path or the paths after it is added.
+        segments.check_invariants();
+        let mut expected = Segments::default();
+        expected.add_bez_paths(&paths[..2]).unwrap();
+        assert_same_arena(&expected, &segments);
+        assert_eq!(segments.input_segs, expected.input_segs);
+        assert_eq!(
+            segments.split_from_predecessor,
+            expected.split_from_predecessor
+        );
+    }
+
+    type Events = Vec<(f64, SegIdx)>;
+
+    // The entrance and exit order that sorting every entry in index order
+    // gives, as `update_enter_exit` did before it merged new entries in.
+    fn sorted_from_scratch(s: &Segments) -> (Events, Events) {
+        let mut enter = Vec::new();
+        let mut exit = Vec::new();
+        for idx in s.indices() {
+            let seg = &s[idx];
+            enter.push((seg.start().y, idx));
+            if !seg.is_horizontal() {
+                exit.push((seg.end().y, idx));
+            }
+        }
+        enter.sort_by(|a, b| super::enter_order(&s.segs, a, b));
+        exit.sort_by(|(y1, _), (y2, _)| {
+            CheapOrderedFloat::from(*y1).cmp(&CheapOrderedFloat::from(*y2))
+        });
+        (enter, exit)
+    }
+
+    #[test]
+    fn merged_entrances_and_exits_match_a_full_sort() {
+        // Paths added one at a time land above, below and among the ones
+        // already there, with many equal heights and positions.
+        let mut one_by_one = Segments::default();
+        for p in &grid_paths(400, true) {
+            one_by_one.add_bez_path(p).unwrap();
+            let (enter, exit) = sorted_from_scratch(&one_by_one);
+            assert_eq!(one_by_one.enter, enter);
+            assert_eq!(one_by_one.exit, exit);
+        }
+
+        let mut batches = Segments::default();
+        let paths = grid_paths(400, false);
+        for chunk in paths.chunks(37) {
+            batches.add_non_closed_bez_paths(chunk).unwrap();
+            let (enter, exit) = sorted_from_scratch(&batches);
+            assert_eq!(batches.enter, enter);
+            assert_eq!(batches.exit, exit);
+        }
+    }
+
+    #[test]
+    fn paths_added_in_height_order_are_not_sorted_again() {
+        // 2,000 triangles in rows of 400, added one at a time from the top
+        // row down and left to right.
+        let triangles: Vec<BezPath> = (0..2000)
+            .map(|i| {
+                let x = (i % 400) as f64 * 3.0;
+                let y = (i / 400) as f64 * 3.0;
+                let mut p = BezPath::new();
+                p.move_to((x, y));
+                p.line_to((x + 2.0, y));
+                p.line_to((x + 1.0, y + 2.0));
+                p.close_path();
+                p
+            })
+            .collect();
+        let mut segments = Segments::default();
+        super::ENTER_COMPARISONS.with(|c| c.set(0));
+        for p in &triangles {
+            segments.add_bez_path(p).unwrap();
+        }
+        let comparisons = super::ENTER_COMPARISONS.with(|c| c.get());
+        assert_eq!(segments.len(), 6000);
+        // Sorting all the entrances on every call compares each existing
+        // entrance at least once per call, about 6,000,000 comparisons here.
+        assert!(
+            comparisons < 64 * 6000,
+            "{comparisons} entrance comparisons"
+        );
+        let (enter, exit) = sorted_from_scratch(&segments);
+        assert_eq!(segments.enter, enter);
+        assert_eq!(segments.exit, exit);
     }
 }

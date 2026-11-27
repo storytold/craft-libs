@@ -347,7 +347,7 @@ fn a_doc_opens_in_word_97_2003_compatibility_mode() {
     let doc = read(&f).expect("opens");
     // Word 97-2003 files are mode 11 in Word 2013+; mode 15 would change justification and
     // line breaking.
-    assert_eq!(doc.settings.compat_mode, 11);
+    assert_eq!(doc.settings.compat_mode, Some(11));
 }
 
 #[test]

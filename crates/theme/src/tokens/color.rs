@@ -212,8 +212,11 @@ pub struct StateColors {
 /// Canvas overlays: selection paths, handles, guides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OverlayColors {
-    /// Marks drawn over `halo` (the rotate cursor); handle outlines follow it.
+    /// Marks drawn over `halo`; handle outlines follow it.
     pub stroke: Rgba,
+    /// A painted pointer's marks over `halo`, a tool's icon included (the circle and crosshair keep their own ink);
+    /// follows `stroke` unless pinned.
+    pub cursor: Rgba,
     /// Bare lines on the canvas: a transform box, path outlines, a pen draft, warp boundaries.
     /// The accent itself, with no halo and no contrast pair, as guides are.
     pub line: Rgba,
@@ -363,6 +366,7 @@ impl ColorTokens {
             },
             overlay: OverlayColors {
                 stroke: c,
+                cursor: c,
                 line: c,
                 halo: c,
                 handle_fill: c,
@@ -583,6 +587,8 @@ color_tokens! {
     StateStripe = "state.stripe" => state.stripe;
     /// `overlay.stroke`
     OverlayStroke = "overlay.stroke" => overlay.stroke;
+    /// `overlay.cursor`
+    OverlayCursor = "overlay.cursor" => overlay.cursor;
     /// `overlay.line`
     OverlayLine = "overlay.line" => overlay.line;
     /// `overlay.halo`

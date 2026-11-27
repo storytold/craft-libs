@@ -254,7 +254,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         lenient("numbering", r.read_numbering(&p));
     }
     // Without a stated mode (or settings at all) Word lays a document out as Word 2007 did.
-    r.doc.settings.compat_mode = craft_wordmodel::LEGACY_COMPAT_MODE;
+    // Retain `compat_mode` as `None` when omitted from the source file to preserve XML fidelity on save (#3308).
+    r.doc.settings.compat_mode = None;
     if let Some(p) = part(rt::SETTINGS) {
         lenient("settings", r.read_settings(&p));
     }
