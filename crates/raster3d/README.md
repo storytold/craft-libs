@@ -87,8 +87,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   opaque-mode or masked caster with an opacity below 0.5.
 - **Resolve and encoding.** `try_resolve(&target, k)` averages each `k × k` block of premultiplied
   pixels with equal weights, and takes the mean depth of the block's covered pixels, infinity where
-  none is covered; a pixel whose `f32` sums overflow, and every pixel when a block holds more than
-  2^24 subsamples, is averaged in `f64`. `try_encode(&mut image)` divides each color by alpha, applies the sRGB transfer
+  none is covered. Factors 1 and 2 use `f32` sums unless those sums overflow; higher factors use
+  `f64` sums. `try_encode(&mut image)` divides each color by alpha, applies the sRGB transfer
   function of CSS Color 4 (<https://www.w3.org/TR/css-color-4/#color-conversion-code>), a linear
   segment up to a magnitude of 0.0031308 and a 1/2.4 power above it, with a negative color keeping
   its sign, multiplies by alpha again and leaves alpha linear. `srgb_to_linear` decodes a negative
@@ -179,8 +179,8 @@ texture coordinates times the texture's width or height reach 2^23 in magnitude,
 squared lengths, squared distances from fragments to point and spot lights, or casters'
 light-space coordinates times a map's focal length overflow `f32`, where shadow-casting spot
 lights' outer cones are over 1.40 radians wide, where a point light's shadow taps reach past a cube
-face's edge, where resolve blocks hold more than 2^24
-subsamples, where shadows-only materials do not receive shadows, where fragments under discarded
+face's edge, where resolve factors are greater than 2,
+where shadows-only materials do not receive shadows, where fragments under discarded
 opaque pixels leave the depth range, where blended casters have no base texture, where
 opaque-mode and masked casters have an opacity below 0.5, where casters reach within 1 unit of
 light-space depth of a spot or point light, where an encoded color is negative, where an
@@ -249,7 +249,7 @@ Changes from those files:
 - A spot light whose outer cone's half angle plus 0.05 radians is over 1.45 radians gets six maps,
   as a point light does. EffectCraft gave it one map 1.45 radians wide, so receivers in the rest
   of the cone were not shadowed.
-- A resolve block of more than 2^24 subsamples is averaged in `f64`. EffectCraft's `f32` count of
+- Resolve blocks with factors above 2 are averaged in `f64`. EffectCraft's `f32` count of
   covered subsamples stopped at 2^24, which raised the mean depth.
 - A clipped corner whose `1/w` overflows `f32` (a clip transform scaled near `f32`'s smallest
   values) is projected in `f64` instead of dropping its triangle, and a drawn pixel whose camera

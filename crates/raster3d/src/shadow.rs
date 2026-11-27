@@ -104,7 +104,14 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> CasterPoly<LightCorn
             if (da >= 0.0) != (db >= 0.0) {
                 let (from_b, k) = f32_crossing(da, db);
                 let (p, q) = if from_b { (b, a) } else { (a, b) };
-                let lerp = |x: f32, y: f32| x + (y - x) * k;
+                let lerp = |x: f32, y: f32| {
+                    let fast = x + (y - x) * k;
+                    if fast.is_finite() || !x.is_finite() || !y.is_finite() {
+                        fast
+                    } else {
+                        (f64::from(x) + (f64::from(y) - f64::from(x)) * f64::from(k)) as f32
+                    }
+                };
                 // The crossing lies on the near plane; its depth is set to it, since the lerp of
                 // far-apart depths can round to 0 or below.
                 out.push(([lerp(p.0[0], q.0[0]), lerp(p.0[1], q.0[1]), NEAR], [lerp(p.1[0], q.1[0]), lerp(p.1[1], q.1[1])]));
@@ -597,4 +604,29 @@ fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
     s.shadows = maps;
     s.shadow_texels = all;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NEAR, light_poly};
+    use crate::{Scene, ShadowMap, Vertex};
+
+    #[test]
+    fn near_plane_clipping_preserves_finite_opposite_uvs() {
+        let scene = Scene {
+            vertices: vec![
+                Vertex { pos: [0.0, 0.0, 0.0], uv: [3e38, 0.0], ..Vertex::default() },
+                Vertex { pos: [0.0, 1.0, 2.0 * NEAR], uv: [-3e38, 0.0], ..Vertex::default() },
+                Vertex { pos: [1.0, 0.0, 2.0 * NEAR], uv: [0.0, 0.0], ..Vertex::default() },
+            ],
+            ..Scene::default()
+        };
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let map = ShadowMap { view, focal: 1.0, ortho: false, size: 8, offset: 0, bias: 0.0, radius: 0.0 };
+        let polygon = light_poly(&scene, &map, [0, 1, 2]);
+        let crossings: Vec<_> = polygon.iter().filter(|corner| corner.0[2] == NEAR).collect();
+        assert_eq!(crossings.len(), 2);
+        assert!(crossings.iter().all(|corner| corner.1.iter().all(|value| value.is_finite())));
+        assert!(crossings.iter().any(|corner| corner.1[0] == 0.0), "the midpoint of opposite finite texture coordinates is zero");
+    }
 }

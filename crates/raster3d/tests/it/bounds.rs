@@ -30,6 +30,16 @@ fn almost_opaque_surfaces_still_blend_with_art_behind_them() {
     }
 }
 
+#[test]
+fn large_constant_resolve_keeps_fractional_color_and_depth() {
+    let k = 4096;
+    let samples = k as usize * k as usize;
+    let t = target(k, k, vec![[0.75; 4]; samples], vec![0.75; samples]);
+    let (image, depth) = try_resolve(&t, k).unwrap();
+    assert_eq!(image.data, vec![[0.75; 4]]);
+    assert_eq!(depth, vec![0.75]);
+}
+
 fn one_quad() -> Scene {
     quad_scene(8, 8, &[([1.0, 1.0, 7.0, 7.0], 100.0, WHITE)])
 }
