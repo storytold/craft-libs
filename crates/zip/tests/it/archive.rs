@@ -1,7 +1,10 @@
 //! Reading archives within limits, duplicate names, and the writer.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use craft_zip::{Archive, Compression, Error, Limits, Writer, check_entry_count, zip64_entry_count_sample};
+use craft_zip::{
+    Archive, Compression, Error, Limits, SeekableArchive, SeekableLimits, Writer, check_entry_count, has_traversal_component, sanitize_path,
+    zip64_entry_count_sample,
+};
 
 const ROOMY: Limits = Limits { max_entries: 1000, max_total_bytes: 1 << 20 };
 
@@ -204,4 +207,199 @@ fn owned_archive_applies_directory_guards() {
     bytes[central + 46] = b'a';
     assert!(Archive::open_owned(bytes, ROOMY).unwrap().has_duplicate_names());
     assert!(Archive::open_owned(b"invalid".to_vec(), ROOMY).is_err());
+}
+
+#[test]
+fn path_traversal_detection_flags_hostile_vectors() {
+    // Parent directory traversal
+    assert!(has_traversal_component("../../etc/passwd"));
+    assert!(has_traversal_component(r"..\..\windows\system32"));
+    assert!(has_traversal_component("foo/../bar"));
+    assert!(has_traversal_component(r"foo\..\bar"));
+    assert!(has_traversal_component(".."));
+
+    // Absolute and drive-letter prefixes
+    assert!(has_traversal_component("C:/test.txt"));
+    assert!(has_traversal_component(r"C:\test.txt"));
+    assert!(has_traversal_component("c:/test.txt"));
+    assert!(has_traversal_component(r"c:\windows\system32"));
+    assert!(has_traversal_component("/etc/passwd"));
+    assert!(has_traversal_component(r"\windows\system32"));
+
+    // Null bytes
+    assert!(has_traversal_component("foo\0bar"));
+
+    // Sanitization flags or cleans them safely
+    assert_eq!(sanitize_path("../../etc/passwd"), None);
+    assert_eq!(sanitize_path(r"..\..\windows\system32"), None);
+    assert_eq!(sanitize_path("C:/test.txt"), None);
+    assert_eq!(sanitize_path("/etc/passwd"), Some("etc/passwd"));
+    assert_eq!(sanitize_path(r"\windows\system32"), Some(r"windows\system32"));
+    assert_eq!(sanitize_path("foo\0bar"), None);
+
+    // Safe relative paths are allowed
+    assert!(!has_traversal_component("safe/path.txt"));
+    assert!(!has_traversal_component("mimetype"));
+    assert_eq!(sanitize_path("safe/path.txt"), Some("safe/path.txt"));
+    assert_eq!(sanitize_path("mimetype"), Some("mimetype"));
+}
+
+#[test]
+fn synthetic_hostile_zip_headers_are_safely_flagged_and_rejected() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("../../etc/passwd", opts).unwrap();
+    zip.write_all(b"root:x:0:0").unwrap();
+    zip.start_file(r"..\..\windows\system32", opts).unwrap();
+    zip.write_all(b"system32").unwrap();
+    zip.start_file("C:/test.txt", opts).unwrap();
+    zip.write_all(b"drive").unwrap();
+    zip.start_file("safe/file.txt", opts).unwrap();
+    zip.write_all(b"safe").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+
+    // Archive level checks
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+    assert!(archive.has_traversal_component());
+
+    // Enumeration and names() iterator omit traversal components
+    let names = (0..archive.len()).filter_map(|i| archive.entry_name(i).unwrap()).collect::<Vec<_>>();
+    assert_eq!(names, vec!["safe/file.txt"]);
+    assert_eq!(archive.names().collect::<Vec<_>>(), vec!["safe/file.txt"]);
+
+    let seekable =
+        SeekableArchive::open(std::io::Cursor::new(&bytes), SeekableLimits { max_entries: 100, max_metadata_bytes: 16_384, max_total_bytes: 1000 })
+            .unwrap();
+    assert_eq!(seekable.names().collect::<Vec<_>>(), vec!["safe/file.txt"]);
+    assert_eq!(archive.entry_name(3).unwrap().as_deref(), Some("safe/file.txt"));
+    assert_eq!(archive.entry_name(0).unwrap(), None);
+    assert_eq!(archive.entry_name(1).unwrap(), None);
+    assert_eq!(archive.entry_name(2).unwrap(), None);
+
+    // Raw entry name is still available for inspection
+    assert_eq!(archive.raw_entry_name(0).unwrap().as_deref(), Some("../../etc/passwd"));
+    assert_eq!(archive.raw_entry_name(1).unwrap().as_deref(), Some(r"..\..\windows\system32"));
+    assert_eq!(archive.raw_entry_name(2).unwrap().as_deref(), Some("C:/test.txt"));
+
+    // Virtual lookups reject traversal components
+    assert!(!archive.contains("../../etc/passwd"));
+    assert!(!archive.contains(r"..\..\windows\system32"));
+    assert!(!archive.contains("C:/test.txt"));
+    assert!(archive.contains("safe/file.txt"));
+    assert_eq!(archive.declared_size("../../etc/passwd"), None);
+    assert_eq!(archive.compressed_size(r"..\..\windows\system32"), None);
+    assert_eq!(archive.is_stored("C:/test.txt"), None);
+    assert_eq!(archive.declared_size("safe/file.txt"), Some(4));
+
+    // Extractions reject traversal components
+    assert_eq!(archive.read("../../etc/passwd", 100).unwrap(), None);
+    assert_eq!(archive.read(r"..\..\windows\system32", 100).unwrap(), None);
+    assert_eq!(archive.read("C:/test.txt", 100).unwrap(), None);
+    assert_eq!(archive.read_head("../../etc/passwd", 10).unwrap(), None);
+    assert_eq!(archive.read_index(0, 100).unwrap(), None);
+    assert_eq!(archive.read_index(1, 100).unwrap(), None);
+    assert_eq!(archive.read_index(2, 100).unwrap(), None);
+    assert_eq!(archive.read("safe/file.txt", 100).unwrap().as_deref(), Some(&b"safe"[..]));
+    assert_eq!(archive.read_index(3, 100).unwrap().as_deref(), Some(&b"safe"[..]));
+}
+
+#[test]
+fn writer_rejects_path_traversal_components() {
+    let mut writer = Writer::new();
+    assert!(matches!(writer.add("../../etc/passwd", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
+    assert!(matches!(writer.add(r"..\..\windows\system32", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
+    assert!(matches!(writer.add("C:/test.txt", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
+    assert!(matches!(writer.add_directory("../../etc/"), Err(Error::Write(msg)) if msg.contains("path traversal")));
+}
+
+#[test]
+fn raw_bytes_with_traversal_and_invalid_utf8_are_flagged() {
+    let mut bytes = archive(&[("xxxx", b"1", Compression::Stored)]);
+    let local = find(&bytes, b"PK\x03\x04", 0);
+    bytes[local + 30..local + 34].copy_from_slice(b"../\xff");
+    let central = find(&bytes, b"PK\x01\x02", 0);
+    bytes[central + 46..central + 50].copy_from_slice(b"../\xff");
+
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+    assert!(archive.has_traversal_component());
+    assert_eq!(archive.names().collect::<Vec<_>>(), Vec::<std::borrow::Cow<'_, str>>::new());
+    assert_eq!((0..archive.len()).filter_map(|i| archive.entry_name(i).unwrap()).collect::<Vec<_>>(), Vec::<String>::new());
+    assert_eq!(archive.entry_name(0).unwrap(), None);
+    assert_eq!(archive.entry_sizes(0).unwrap(), None);
+    assert_eq!(archive.read_index(0, 10).unwrap(), None);
+
+    let mut seekable =
+        SeekableArchive::open(std::io::Cursor::new(bytes), SeekableLimits { max_entries: 100, max_metadata_bytes: 16_384, max_total_bytes: 1000 })
+            .unwrap();
+    assert!(seekable.has_traversal_component());
+    assert_eq!(seekable.names().collect::<Vec<_>>(), Vec::<std::borrow::Cow<'_, str>>::new());
+    assert_eq!((0..seekable.len()).filter_map(|i| seekable.entry_name(i).unwrap()).collect::<Vec<_>>(), Vec::<String>::new());
+    assert_eq!(seekable.entry_name(0).unwrap(), None);
+    assert_eq!(seekable.entry_sizes(0).unwrap(), None);
+    assert_eq!(seekable.read_index(0, 10).unwrap(), None);
+}
+
+#[test]
+fn virtual_names_strip_a_leading_separator_and_still_refuse_traversal() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("/docProps/core.xml", &b"core"[..]), ("../evil.xml", b"evil"), ("C:/drive.xml", b"drive"), ("/", b"")] {
+        zip.start_file(name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+
+    // The named API stays closed to a leading separator; the virtual one reads it without it.
+    assert_eq!(archive.entry_name(0).unwrap(), None);
+    assert_eq!(archive.read("/docProps/core.xml", 100).unwrap(), None);
+    assert_eq!(archive.virtual_entry_name(0).unwrap().as_deref(), Some("docProps/core.xml"));
+    assert_eq!(archive.virtual_entry_size(0).unwrap(), Some(4));
+    assert_eq!(archive.read_virtual_index(0, 100).unwrap().as_deref(), Some(&b"core"[..]));
+
+    // Traversal, drive prefixes and an empty name stay unreadable either way.
+    for index in 1..archive.len() {
+        assert_eq!(archive.virtual_entry_name(index).unwrap(), None, "entry {index}");
+        assert_eq!(archive.virtual_entry_size(index).unwrap(), None, "entry {index}");
+        assert_eq!(archive.read_virtual_index(index, 100).unwrap(), None, "entry {index}");
+    }
+}
+
+#[test]
+fn virtual_names_come_from_the_central_directory_and_must_be_utf8() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("good.xml", &b"good"[..]), ("Xcp437.xml", b"cp437"), ("bad.xml", b"bad")] {
+        zip.start_file(name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let mut bytes = zip.finish().unwrap().into_inner();
+    // A byte that is not UTF-8: `zip` would decode it as CP437 `é`.
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(10).position(|w| w == b"Xcp437.xml") {
+        bytes[at + found] = 0x82;
+        at += found + 10;
+    }
+    // Break the local header of `bad.xml`; its central-directory record stays intact.
+    let local = find(&bytes, b"bad.xml", 0) - 30;
+    assert_eq!(&bytes[local..local + 4], b"PK\x03\x04");
+    bytes[local] = b'X';
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+
+    assert_eq!(archive.virtual_entry_name(0).unwrap().as_deref(), Some("good.xml"));
+    assert_eq!(archive.virtual_entry_name(1).unwrap(), None);
+    assert_eq!(archive.virtual_entry_size(1).unwrap(), None);
+    assert_eq!(archive.read_virtual_index(1, 100).unwrap(), None);
+
+    // The damaged entry is still named and sized; only reading it fails.
+    assert_eq!(archive.virtual_entry_name(2).unwrap().as_deref(), Some("bad.xml"));
+    assert_eq!(archive.virtual_entry_size(2).unwrap(), Some(3));
+    assert!(archive.read_virtual_index(2, 100).is_err());
+    assert_eq!(archive.read_virtual_index(0, 100).unwrap().as_deref(), Some(&b"good"[..]));
 }

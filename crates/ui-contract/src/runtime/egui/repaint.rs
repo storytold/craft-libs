@@ -2,13 +2,15 @@
 
 use egui::Context;
 
-/// Asks for one more pass after this one.
+/// Asks for one more pass after this one. The repaint cause names the caller.
+#[track_caller]
 pub(crate) fn request(ctx: &Context) {
     crate::runtime::replay::note_unsettled(ctx);
     ctx.request_repaint();
 }
 
-/// Asks for a pass of `viewport` at once.
+/// Asks for a pass of `viewport` at once. The repaint cause names the caller.
+#[track_caller]
 pub(crate) fn request_of(ctx: &Context, viewport: egui::ViewportId) {
     crate::runtime::replay::note_unsettled(ctx);
     ctx.request_repaint_of(viewport);

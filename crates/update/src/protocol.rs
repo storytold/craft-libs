@@ -76,7 +76,7 @@ pub const INSTALL_CANCELLED: &str = "install cancelled";
 /// Where release information came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Source {
-    /// ArtCraft's release feed (storyteller-web), which polls GitHub for everyone.
+    /// ArtCraft's signed release catalog (`getartcraft.com/launcher-catalog.toml`).
     Feed,
     /// The GitHub REST API.
     GitHubApi,
