@@ -246,3 +246,125 @@ fn the_edit_toolbar_button_takes_the_apps_icon() {
     fixture.idle(12);
     assert!(fixture.by_label("Customize").is_some(), "the button keeps its name with another icon");
 }
+
+struct SearchableDrawer {
+    fixture: Fixture,
+    open: std::rc::Rc<std::cell::Cell<bool>>,
+    reveal: std::rc::Rc<std::cell::Cell<Option<u8>>>,
+}
+
+/// A searchable drawer opened from its real rail button. Reveal is a request of one pass, not held state.
+fn searchable_drawer(no_matches: Option<&'static str>) -> SearchableDrawer {
+    use craft_ui::rails::{DrawerGroup, DrawerKind, LastUsed, ToolRail, ToolbarDrawer};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let open = Rc::new(Cell::new(false));
+    let reveal = Rc::new(Cell::new(None));
+    let (shown, pending) = (open.clone(), reveal.clone());
+    let slots = Tracked::new(vec![slot(0, &[UNDO])]);
+    let last = Tracked::new(LastUsed::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let groups = [DrawerGroup::new("Edit", vec![tool(UNDO), tool(REDO), tool(CUT)])];
+        let rail = ToolRail::new("Tools", &slots, &UNDO, &last).edit_toolbar("Customize").show_rail(ui, |_, _| {});
+        let opener = rail.edit_toolbar.expect("the rail's Edit Toolbar button");
+        if craft_ui::contract::clicked(&opener) {
+            shown.set(true);
+        }
+        if shown.get() {
+            let target = pending.take();
+            let mut drawer = ToolbarDrawer::new(rail.response.rect, &groups, &slots, None).opened_by(&opener).kind(DrawerKind::Searchable);
+            if let Some(label) = no_matches {
+                drawer = drawer.no_matches(label);
+            }
+            if let Some(target) = target.as_ref() {
+                drawer = drawer.reveal(target);
+            }
+            let out = drawer.show(ui);
+            assert!(out.select.is_none() && out.edits.is_empty(), "searching or revealing chooses and edits nothing");
+            if out.closed {
+                shown.set(false);
+            }
+        }
+    });
+    fixture.settle();
+    let opener = fixture.by_label("Customize").expect("the rail's Edit Toolbar button");
+    fixture.click(&opener).settle();
+    SearchableDrawer { fixture, open, reveal }
+}
+
+#[trial]
+fn searchable_drawer_keeps_native_escape_clear_then_close_and_opener_focus() {
+    use craft_ui::contract::Role;
+    use egui::{Key, Modifiers};
+
+    let SearchableDrawer { mut fixture, open, .. } = searchable_drawer(None);
+    let search = fixture.by_role(Role::TEXT_INPUT).first().cloned().expect("the drawer's own editable search");
+    fixture.click(&search).type_text("undo").settle();
+    assert_eq!(fixture.tree().value_of(search.node), Some("undo"), "real typing reached Search");
+    assert!(fixture.by_label("Cut").is_none(), "the nonempty query filters the drawer");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(open.get(), "native first Escape clears instead of closing");
+    assert_eq!(fixture.tree().value_of(search.node), Some(""));
+    assert!(fixture.by_label("Cut").is_some(), "clearing restores other rows");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(!open.get(), "Escape on the empty search closes the drawer");
+    let focused = craft_ui::testing::access::focused_key(fixture.tree());
+    assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "closing returns focus to the opener");
+}
+
+#[trial]
+fn revealing_a_filtered_tool_clears_search_once_and_keeps_later_typing() {
+    use craft_ui::contract::Role;
+    use egui::{Key, Modifiers};
+
+    let SearchableDrawer { mut fixture, open, reveal } = searchable_drawer(None);
+    let search = fixture.by_role(Role::TEXT_INPUT).first().cloned().expect("the drawer's own search");
+    fixture.click(&search).type_text("undo").settle();
+    assert!(fixture.by_label("Cut").is_none(), "the old query really hides the requested tool");
+    reveal.set(Some(CUT));
+    fixture.settle();
+    assert!(open.get(), "revealing leaves the drawer open");
+    assert_eq!(fixture.tree().value_of(search.node), Some(""), "a valid reveal clears the stale query");
+    let drawer = fixture.by_role(Role::DIALOG).first().expect("the drawer stays open").rect;
+    assert!(drawer.contains_rect(fixture.by_label("Cut").expect("the requested tool is shown").rect));
+    let search = fixture.by_role(Role::TEXT_INPUT).first().cloned().expect("search remains usable");
+    fixture.click(&search).key(Key::A, Modifiers::COMMAND).type_text("redo").settle();
+    fixture.idle(6);
+    assert_eq!(fixture.tree().value_of(search.node), Some("redo"), "later frames do not replay the clear request");
+    assert!(fixture.by_label("Cut").is_none(), "later typing filters again");
+    reveal.set(Some(u8::MAX));
+    fixture.settle();
+    assert_eq!(fixture.tree().value_of(search.node), Some("redo"), "a missing tool does not erase the user's filter");
+}
+
+#[trial]
+fn a_callers_empty_search_label_shows_only_while_no_tools_match() {
+    use craft_behavior::PartKey;
+    use craft_ui::contract::Role;
+
+    const EMPTY: &str = "No tools found here";
+    for label in [None, Some(EMPTY)] {
+        let SearchableDrawer { mut fixture, open, .. } = searchable_drawer(label);
+        assert!(fixture.by_label(EMPTY).is_none(), "an empty query lists tools without no-match feedback");
+        let search = fixture.by_role(Role::TEXT_INPUT).first().cloned().expect("the drawer's own search");
+        fixture.click(&search).type_text("undo").settle();
+        assert!(fixture.by_label("Undo").is_some(), "a nonempty matching query keeps its real row");
+        assert!(fixture.by_label(EMPTY).is_none(), "the authoritative matching count suppresses empty feedback");
+        fixture.key(egui::Key::A, egui::Modifiers::COMMAND).type_text("qzx-no-such-tool").settle();
+        assert_eq!(fixture.tree().value_of(search.node), Some("qzx-no-such-tool"));
+        assert!(fixture.by_label("Cut").is_none() && fixture.by_label("Redo").is_none(), "the real search has no matching tool rows");
+        assert_eq!(fixture.by_label(EMPTY).is_some(), label.is_some(), "only an opted-in caller adds the feedback");
+        if let Some(feedback) = fixture.by_label(EMPTY) {
+            let drawer = fixture.by_role(Role::DIALOG).first().expect("the open drawer").rect;
+            assert!(drawer.contains_rect(feedback.rect), "the feedback is part of the drawer");
+        }
+        let clear = craft_ui::testing::pointer::part_rect_of_node(fixture.ctx(), search.node.into(), PartKey::new("clear"))
+            .expect("the search's real clear part");
+        fixture.click_at(clear.center()).settle();
+        assert_eq!(fixture.tree().value_of(search.node), Some(""));
+        assert!(fixture.by_label("Cut").is_some(), "clear restores the tool rows");
+        assert!(fixture.by_label(EMPTY).is_none(), "the feedback leaves with the rejected query");
+        assert!(open.get(), "searching and clearing leave the drawer open");
+    }
+}

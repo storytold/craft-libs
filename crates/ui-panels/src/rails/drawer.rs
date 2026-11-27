@@ -26,6 +26,7 @@ use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Value};
 use egui::{Rect, Response, Ui};
 use std::borrow::Cow;
+use std::cell::Cell;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -180,8 +181,8 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     /// The tool whose row wears the target mark.
     #[prop]
     mark: Option<&'a T>,
-    /// A request of the pass: scrolls the tool's row into the list's view. Send it in the pass that needs it, not every
-    /// pass.
+    /// A request of the pass: scrolls the tool's row into the list's view and clears a searchable drawer's query so
+    /// the tool is not filtered out. Send it in the pass that needs it, not every pass.
     #[prop]
     reveal: Option<&'a T>,
     /// With rows, an icon button after the title opens a menu of them.
@@ -192,6 +193,10 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     /// Whether the drawer searches: a searchable drawer shows a search field under its title and filters its tool rows.
     #[prop]
     kind: DrawerKind,
+    /// Optional feedback when a nonempty search matches no tools. The caller supplies its translated label; by
+    /// default an empty search result adds no message.
+    #[prop(into)]
+    no_matches: Option<Label>,
     /// PdfCraft's drawer: a tool the toolbar holds only inside a group (behind another tool of its slot) stays
     /// draggable and undimmed, so it can also get a slot of its own. By default any tool on the toolbar is dimmed and
     /// does not drag.
@@ -226,6 +231,7 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
             dropped,
             opener: None,
             kind: DrawerKind::Plain,
+            no_matches: None,
             grouped_tools_drag: false,
         }
     }
@@ -339,7 +345,9 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
 
     /// [`show`](ToolbarDrawer::show) with `below` drawn in the footer above Restore Defaults.
     pub fn show_with(self, ui: &mut Ui, mut below: impl FnMut(&mut Ui)) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, mark, reveal, menu, dropped, opener, kind, grouped_tools_drag } = self;
+        let ToolbarDrawer {
+            rail, groups, toolbar, opens, mark, reveal, menu, dropped, opener, kind, no_matches, grouped_tools_drag,
+        } = self;
         let searchable = kind == DrawerKind::Searchable;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
@@ -361,6 +369,10 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                 .find_map(|(group, held)| held.tools.iter().position(|tool| tool.id == *id).map(|tool| DrawerKey::Tool { group, tool }))
         };
 
+        let reveal_key = reveal.and_then(key_of);
+        // Consume the request once, even if the stack measures its header again in this pass. A later edit keeps
+        // its query; a mark alone, or a request for a tool the drawer does not hold, does not clear it.
+        let mut clear_search = searchable && reveal_key.is_some();
         let mut popover = Popover::new(words.drawer_title.clone(), Bind::bound(&mut open));
         if let Some(opener) = &opener {
             popover = popover.opened_by(opener);
@@ -399,7 +411,11 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                         });
                         if searchable {
                             let state = stack.memory::<DrawerSearch>();
-                            TextField::search(words.drawer_search.clone(), Bind::bound(&mut state.query)).drives(list_id).show(ui);
+                            if std::mem::take(&mut clear_search) {
+                                state.query.clear();
+                            }
+                            let field = TextField::search(words.drawer_search.clone(), Bind::bound(&mut state.query));
+                            field.drives(list_id).show(ui);
                         }
                         Text::new(words.drawer_hint.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
                     })
@@ -409,6 +425,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                     })
                     .show(ui, |ui, stack| {
                         let query = stack.memory::<DrawerSearch>().query.clone();
+                        let count = Cell::new(0);
                         let mut list = List::<DrawerKey>::new(words.drawer_tools.clone())
                             .id(list_id)
                             .select(SelectMode::None)
@@ -422,15 +439,16 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 DrawerKey::Group(_) => None,
                             })
                             .sizing(Sizing::Content);
-                        if let Some(key) = reveal.and_then(key_of) {
+                        if let Some(key) = reveal_key {
                             list = list.reveal(key);
                         }
                         if searchable {
                             // A heading has no text of its own: the list keeps it while a tool under it matches.
-                            list = list.filter(&query, |key: &DrawerKey| match *key {
+                            let texts = |key: &DrawerKey| match *key {
                                 DrawerKey::Tool { group, tool } => match_texts(&resolved[group][tool], &groups[group].tools[tool]),
                                 DrawerKey::Group(_) => Vec::new(),
-                            });
+                            };
+                            list = if no_matches.is_some() { list.filter_counted(&query, texts, &count) } else { list.filter(&query, texts) };
                         }
                         let out = list.show_items(ui, &rows, &mut |key, _| match *key {
                             DrawerKey::Group(group) => ListRow::new(groups[group].label.clone()).section_heading(),
@@ -454,6 +472,11 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 }
                             }
                         });
+                        if searchable && !query.trim().is_empty() && count.get() == 0
+                            && let Some(label) = &no_matches
+                        {
+                            Text::new(label.clone()).shade(Shade::Muted).show(ui);
+                        }
                         if let Some(key) = mark.and_then(key_of)
                             && let Some(row) = out.shown.iter().find(|row| row.key == key)
                         {
