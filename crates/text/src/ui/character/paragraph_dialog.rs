@@ -657,7 +657,7 @@ impl ParagraphDialog {
     /// window too many.
     #[must_use]
     pub fn tabs_page(mut self, tabs: TabStopsDialog) -> Self {
-        self.tabs = Some(tabs);
+        self.tabs = Some(tabs.bare(self.bare));
         self
     }
 
@@ -906,6 +906,7 @@ impl ParagraphDialog {
     #[must_use]
     pub fn bare(mut self, on: bool) -> Self {
         self.bare = on;
+        self.tabs = self.tabs.take().map(|tabs| tabs.bare(on));
         self
     }
 
@@ -921,7 +922,7 @@ impl ParagraphDialog {
     ) -> Option<usize> {
         let mut picked = None;
         // The body applies this pass's edits before the keys are read: the state before it says whether a key ended a
-        // tab stop's position edit, the state after whether one began.
+        // field's edit on the Tabs page, the state after whether one began.
         let editing = self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
         // The pages take a fixed width, as the dialog's do, so a window that follows its content keeps one width and
         // follows only the height of the page shown (the preview fills what it is given).
@@ -938,7 +939,9 @@ impl ParagraphDialog {
                 let enabled = valid.get() && !waiting;
                 for (at, label) in labels.iter().cloned().enumerate() {
                     let button = Button::new(label).sizing(Sizing::FillWidth).enabled(at == CANCEL || enabled);
-                    let button = if at == OK { button.variant(Variant::PRIMARY) } else { button };
+                    // While a field on the Tabs page is edited, Enter is the field's and Set is the default button.
+                    let default = at == OK && !self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
+                    let button = if default { button.variant(Variant::PRIMARY) } else { button };
                     if button.show(ui).clicks == 1 {
                         picked = Some(at);
                     }
@@ -948,7 +951,7 @@ impl ParagraphDialog {
         let editing = editing || self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
-            // An Enter or Escape that begins or ends a tab stop's position edit is the edit's, not the dialog's.
+            // An Enter or Escape that begins or ends a field's edit on the Tabs page is the edit's, not the dialog's.
             _ if editing => None,
             (_, true) => Some(CANCEL),
             (true, _) if valid.get() && !waiting => Some(OK),

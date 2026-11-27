@@ -185,3 +185,16 @@ fn a_bare_dialog_shows_a_refusal_until_a_value_changes() {
     press(&mut fixture, "Set");
     assert!(fixture.by_label("Not allowed").is_none(), "an edit ends the refusal");
 }
+
+/// In the bare dialog, the Enter that ends typing in the default interval's field takes the value and only that: the
+/// dialog stays open, and the next Enter is OK again.
+#[trial]
+fn enter_in_the_default_interval_takes_the_value_and_the_next_enter_answers() {
+    let (mut fixture, _, result) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
+    press(&mut fixture, "Default tab stops:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("50").key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(result.borrow().is_none(), "the Enter that ends the edit does not answer");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    let answer = result.borrow().clone().expect("the next Enter is OK");
+    assert!((answer.default_interval - 36.0).abs() > 1.0, "the typed interval was taken: {}", answer.default_interval);
+}

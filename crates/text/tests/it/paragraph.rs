@@ -159,3 +159,25 @@ fn a_bare_dialog_shows_a_refusal_until_a_stop_changes() {
     fixture.click(&set).idle(4);
     assert!(fixture.by_label("Not allowed").is_none(), "a stop set on the page ends the refusal");
 }
+
+/// The Paragraph panel's Tabs page over a paragraph without stops: the Enter that ends typing in Default tab stops takes
+/// the value and leaves the dialog open (the reported bug: it answered OK).
+#[trial]
+fn enter_in_default_tab_stops_on_the_tabs_page_leaves_the_dialog_open() {
+    let format = ParagraphFormat { breaks: Some(LineBreakOptions::default()), asian: Some(AsianTypography::default()), ..ParagraphFormat::default() };
+    let dialog = ParagraphDialog::new(format).word(true).held_ok().bare(true).tabs_page(TabStopsDialog::new(Vec::new(), 36.0));
+    let dialog = Rc::new(RefCell::new(dialog));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    let page = fixture.by_label("Tabs").expect("the Tabs page's tab is shown");
+    fixture.click(&page).idle(4);
+    let field = fixture.by_label("Default tab stops:").expect("the default interval's field");
+    fixture.click(&field).idle(4);
+    fixture.key(egui::Key::A, egui::Modifiers::COMMAND).type_text("50").key(egui::Key::Enter, egui::Modifiers::NONE).idle(4);
+    assert!(dialog.borrow_mut().take_ok().is_none(), "the Enter that ends the edit files no answer");
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).idle(4);
+    assert!(dialog.borrow_mut().take_ok().is_some(), "the next Enter is OK");
+}

@@ -115,6 +115,8 @@ pub struct TabStopsDialog {
     unit: DocUnit,
     /// The row and position an in-place position edit began from, for Escape.
     draft: Option<(usize, f32)>,
+    /// Whether the default interval's field is being edited: from its focus until Enter, Escape or leaving it.
+    default_edit: bool,
     /// The selected row's Position field takes the focus the next time it shows: Set moves into the new stop.
     to_edit: bool,
     /// Whether OK files its result for the app to judge instead of closing.
@@ -139,6 +141,7 @@ impl TabStopsDialog {
             edited: None,
             unit: DocUnit::default(),
             draft: None,
+            default_edit: false,
             to_edit: false,
             hold: false,
             bare: false,
@@ -304,9 +307,10 @@ impl TabStopsDialog {
         self.body(ui, &words, &units);
     }
 
-    /// Whether a stop's position is being edited in place, where Enter and Escape end the edit.
+    /// Whether a number field (a stop's position, the default interval) is being edited, where Enter and Escape end
+    /// the edit.
     pub(crate) fn editing(&self) -> bool {
-        self.edited.is_some() || self.draft.is_some()
+        self.edited.is_some() || self.draft.is_some() || self.default_edit
     }
 
     /// The bare content: the body and a refused answer's reason above Cancel and OK at its end; the button picked, if
@@ -334,7 +338,10 @@ impl TabStopsDialog {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 // Right to left: OK at the end, Cancel before it.
                 let [ok, cancel] = labels;
-                if Button::new(ok).variant(Variant::PRIMARY).enabled(!waiting).show(ui).clicks == 1 {
+                // While a field is edited, Enter is the field's and Set is the default button.
+                let ok = Button::new(ok).enabled(!waiting);
+                let ok = if self.editing() { ok } else { ok.variant(Variant::PRIMARY) };
+                if ok.show(ui).clicks == 1 {
                     picked = Some(OK);
                 }
                 if Button::new(cancel).show(ui).clicks == 1 {
@@ -345,7 +352,7 @@ impl TabStopsDialog {
         let editing = editing || self.editing();
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
-            // An Enter or Escape that begins or ends a position edit is the edit's.
+            // An Enter or Escape that begins or ends a field's edit (a position, the default interval) is the edit's.
             _ if editing => None,
             (_, true) => Some(CANCEL),
             (true, _) if !waiting => Some(OK),
@@ -490,6 +497,11 @@ impl TabStopsDialog {
             .show(ui, |ui, _| length_field(unit, words.default_stops.clone(), points, range.clone()).show(ui))
             .inner;
         for event in edit.into_iter().flat_map(|out| out.edit.events) {
+            match event {
+                EditEvent::Begin { .. } => self.default_edit = true,
+                EditEvent::Commit { .. } | EditEvent::Cancel { .. } => self.default_edit = false,
+                _ => {}
+            }
             if !matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. }) {
                 continue;
             }
@@ -599,7 +611,10 @@ impl TabStopsDialog {
 
     fn buttons(&mut self, ui: &mut Ui, words: &TabStopsWords) {
         Row::new().show(ui, |ui, _| {
-            if clicked(&Button::new(words.set.clone()).enabled(self.stops.len() < MAX_STOPS).show(ui)) {
+            // Drawn bare (a window of its own, or a bare dialog's page), Set is the default button while a field is edited.
+            let set = Button::new(words.set.clone()).enabled(self.stops.len() < MAX_STOPS);
+            let set = if self.bare && self.editing() { set.variant(Variant::PRIMARY) } else { set };
+            if clicked(&set.show(ui)) {
                 self.new_stop();
             }
             if clicked(&Button::new(words.clear.clone()).enabled(self.selected.is_some()).show(ui)) {
