@@ -270,7 +270,7 @@ pub(crate) mod tests {
     const NOW: i64 = 1_795_728_600; // 2026-11-26T21:30:00Z
     const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    fn sample_toml() -> String {
+    pub(crate) fn sample_toml() -> String {
         format!(
             r#"generated_at = "2026-11-26T21:00:00Z"
 
@@ -317,7 +317,7 @@ prerelease = true
         )
     }
 
-    fn sign(toml: &str) -> (SigningKey, String) {
+    pub(crate) fn sign(toml: &str) -> (SigningKey, String) {
         let key = SigningKey::from_bytes(&[7; 32]);
         let sig = STANDARD.encode(key.sign(toml.as_bytes()).to_bytes());
         (key, sig)
@@ -358,7 +358,7 @@ prerelease = true
         assert!(catalog.latest_for(photo, false, NOW + MAX_AGE + 3600).is_none());
     }
 
-    fn signed(toml: &str) -> SignedCatalog {
+    pub(crate) fn signed(toml: &str) -> SignedCatalog {
         let (key, sig) = sign(toml);
         SignedCatalog::verify_with_key(toml.as_bytes(), sig.as_bytes(), &key.verifying_key()).unwrap()
     }
@@ -412,5 +412,47 @@ sha256 = "{HASH}"
         assert_eq!(catalog.latest_for(photo, false, NOW).unwrap().tag, "v0.23.1");
         let older_pre = sample_toml().replace("v0.24.0-rc.1", "v0.22.0-rc.1").replace("0.24.0-rc.1", "0.22.0-rc.1");
         assert_eq!(signed(&older_pre).latest_for(photo, true, NOW).unwrap().tag, "v0.23.1");
+    }
+
+    /// The sample catalog, generated "now" so it is fresh for code that reads the real clock.
+    pub(crate) fn fresh_signed_catalog() -> SignedCatalog {
+        let generated = chrono::DateTime::from_timestamp(crate::now(), 0).expect("a valid time").to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        signed(&sample_toml().replace("2026-11-26T21:00:00Z", &generated))
+    }
+
+    #[trial]
+    fn a_bad_signature_or_document_is_refused_with_a_reason() {
+        let toml = sample_toml();
+        let (key, sig) = sign(&toml);
+        let verifying = key.verifying_key();
+        let refused = |bytes: &[u8], signature: &[u8]| SignedCatalog::verify_with_key(bytes, signature, &verifying).unwrap_err();
+        assert!(refused(toml.as_bytes(), &[0xff, 0xfe]).contains("UTF-8"));
+        assert!(refused(toml.as_bytes(), b"not base64!").contains("base64"));
+        assert!(refused(toml.as_bytes(), STANDARD.encode([1u8; 8]).as_bytes()).contains("length"));
+        assert!(refused(&[b'a'; MAX_CATALOG_BYTES + 1], sig.as_bytes()).contains("byte limit"));
+        assert!(refused(toml.as_bytes(), &[b'a'; MAX_SIGNATURE_BYTES + 1]).contains("byte limit"));
+        // Signed but not TOML: the signature holds, the document is refused.
+        let garbage = "this is = = not toml";
+        let (garbage_key, garbage_sig) = sign(garbage);
+        let reason = SignedCatalog::verify_with_key(garbage.as_bytes(), garbage_sig.as_bytes(), &garbage_key.verifying_key()).unwrap_err();
+        assert!(reason.contains("invalid catalog TOML"), "{reason}");
+        // The pinned production key does not accept a signature made with a test key.
+        assert!(SignedCatalog::verify(toml.as_bytes(), sig.as_bytes()).is_err());
+    }
+
+    #[trial]
+    fn a_catalog_without_a_generation_time_is_never_fresh() {
+        let toml = sample_toml().replace("generated_at = \"2026-11-26T21:00:00Z\"", "");
+        let catalog = signed(&toml);
+        let photo = App::by_id("photocraft").unwrap();
+        assert!(catalog.latest_for(photo, false, NOW).is_none());
+        assert!(catalog.latest_for_repo("storytold/photocraft", false, NOW).is_none());
+        assert!(catalog.nightly_for(photo, NOW).is_none());
+    }
+
+    #[trial]
+    fn an_entry_for_another_repository_is_not_used_for_the_app() {
+        let toml = sample_toml().replace("repo = \"storytold/photocraft\"", "repo = \"someone/else\"");
+        assert!(signed(&toml).latest_for(App::by_id("photocraft").unwrap(), false, NOW).is_none());
     }
 }

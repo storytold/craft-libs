@@ -302,4 +302,70 @@ pub(crate) mod tests {
         assert_eq!(retry_at(Some(i64::MAX), 1_000), 1_000 + 60 * 60);
         assert_eq!(retry_at(Some(99_999_999_999), 1_000), 1_000 + 60 * 60);
     }
+
+    /// A fallback that answers "no release" and records nothing, so a test sees which source answered.
+    struct Fallback;
+
+    impl ReleaseSource for Fallback {
+        fn latest(&self, _repo: &str, _prereleases: bool) -> Answer {
+            Answer { latest: LatestRelease::None, source: Source::GitHubApi }
+        }
+
+        fn cached(&self, _repo: &str, _prereleases: bool) -> Option<LatestRelease> {
+            Some(LatestRelease::RateLimited)
+        }
+
+        fn newest_tag(&self, _repo: &str) -> Option<String> {
+            Some("v9.9.9".into())
+        }
+
+        fn rate_limited_until(&self) -> Option<i64> {
+            Some(42)
+        }
+
+        fn save(&self) {}
+    }
+
+    fn catalog_source() -> CatalogSource<Fallback> {
+        let source = CatalogSource::new(Http::new("craft-update-test/0.0").expect("an HTTP client"), Fallback);
+        *source.cached.lock().expect("lock") = Some(crate::catalog::tests::fresh_signed_catalog());
+        source
+    }
+
+    #[trial]
+    fn the_catalog_answers_for_a_repo_it_lists_and_marks_the_answer_as_the_feed() {
+        let answer = catalog_source().latest("storytold/photocraft", false);
+        assert_eq!(answer.source, Source::Feed);
+        assert!(matches!(&answer.latest, LatestRelease::Found(release) if release.tag == "v0.23.1"), "{:?}", answer.latest);
+    }
+
+    #[trial]
+    fn a_repo_the_catalog_omits_falls_back_to_the_other_source() {
+        let answer = catalog_source().latest("storytold/unlisted", false);
+        assert_eq!(answer.source, Source::GitHubApi);
+        assert_eq!(answer.latest, LatestRelease::None);
+    }
+
+    #[trial]
+    fn the_saved_answer_comes_from_the_catalog_or_else_the_fallback() {
+        let source = catalog_source();
+        assert!(matches!(source.cached("storytold/photocraft", true), Some(LatestRelease::Found(release)) if release.tag == "v0.24.0-rc.1"));
+        assert_eq!(source.cached("storytold/unlisted", false), Some(LatestRelease::RateLimited));
+    }
+
+    #[trial]
+    fn tags_quota_and_saving_are_the_fallbacks_business() {
+        let source = catalog_source();
+        assert_eq!(source.newest_tag("storytold/photocraft").as_deref(), Some("v9.9.9"));
+        assert_eq!(source.rate_limited_until(), Some(42));
+        source.save();
+    }
+
+    #[trial]
+    fn a_stale_cached_catalog_is_not_used() {
+        let source = CatalogSource::new(Http::new("craft-update-test/0.0").expect("an HTTP client"), Fallback);
+        let stale = crate::catalog::tests::sample_toml().replace("2026-11-26T21:00:00Z", "2020-01-01T00:00:00Z");
+        *source.cached.lock().expect("lock") = Some(crate::catalog::tests::signed(&stale));
+        assert_eq!(source.cached("storytold/photocraft", false), Some(LatestRelease::RateLimited));
+    }
 }
