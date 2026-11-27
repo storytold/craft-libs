@@ -30,8 +30,9 @@ pub fn to_png(tiff: &[u8], limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
 }
 
 /// The work decoding a JPEG-compressed TIFF (Compression 7) does past its own pixels: each strip
-/// or tile is a JPEG of its own (after the shared `JPEGTables`), copied out of the file and
-/// decoded to a frame of the size its start-of-frame marker declares. 0 for a TIFF that isn't
+/// or tile is a JPEG of its own, copied out of the file after a copy of the shared `JPEGTables`
+/// and decoded to a frame of the size its start-of-frame marker declares (in the strip, the
+/// tables, or across their join). 0 for a TIFF that isn't
 /// JPEG-compressed; `None` when its layout can't be read or the work passes `most`, where the
 /// count stops.
 fn jpeg_work(file: &[u8], most: usize) -> Option<usize> {
@@ -49,18 +50,32 @@ fn jpeg_work(file: &[u8], most: usize) -> Option<usize> {
         Some(offsets) => (offsets, d.find_tag_unsigned_vec::<u64>(Tag::StripByteCounts).ok()??),
         None => (d.find_tag_unsigned_vec::<u64>(Tag::TileOffsets).ok()??, d.find_tag_unsigned_vec::<u64>(Tag::TileByteCounts).ok()??),
     };
-    let tables_frame = frame_bytes(&tables);
+    // The decoder copies the tables, less their end-of-image marker, in front of each strip, less
+    // its start-of-image marker: a frame header may straddle the join.
+    let head = &tables[..tables.len().saturating_sub(2)];
+    let head_frame = frame_bytes(head);
     let mut total = 0usize;
     for (&at, &len) in offsets.iter().zip(&counts) {
         let start = usize::try_from(at).ok()?.min(file.len());
         let end = start.saturating_add(usize::try_from(len).unwrap_or(usize::MAX)).min(file.len());
         let chunk = &file[start..end];
-        total = total.saturating_add(chunk.len()).saturating_add(frame_bytes(chunk).max(tables_frame));
+        let frame = frame_bytes(chunk).max(head_frame).max(if tables.is_empty() { 0 } else { join_frame(head, chunk) });
+        total = total.saturating_add(tables.len()).saturating_add(chunk.len()).saturating_add(frame);
         if total > most {
             return None;
         }
     }
     Some(total)
+}
+
+/// The frame a start-of-frame header straddling the join of `head` (the tables, as the decoder
+/// copies them) and a strip declares: the header is ten bytes, so the last nine of `head` and the
+/// first nine of the strip after its start-of-image marker hold any that crosses it.
+fn join_frame(head: &[u8], chunk: &[u8]) -> usize {
+    let tail = chunk.get(2..).unwrap_or_default();
+    let mut edge = head[head.len().saturating_sub(9)..].to_vec();
+    edge.extend_from_slice(&tail[..tail.len().min(9)]);
+    frame_bytes(&edge)
 }
 
 /// The bytes of the largest frame a JPEG's start-of-frame markers declare (width × height ×
@@ -132,27 +147,58 @@ mod tests {
     /// A 1 × 1 RGB TIFF compressed with JPEG, its one strip a JPEG whose frame is declared
     /// `side` × `side` (only its start and frame header).
     fn jpeg_tiff(side: u16) -> Vec<u8> {
+        let mut jpeg = vec![0xFF, 0xD8];
+        jpeg.extend_from_slice(&sof(side));
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        jpeg_tiff_of(&[], &[jpeg])
+    }
+
+    /// A start-of-frame header (baseline, 8 bits, three components) declaring `side` × `side`.
+    fn sof(side: u16) -> Vec<u8> {
         let [hi, lo] = side.to_be_bytes();
-        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8, hi, lo, hi, lo, 3];
-        jpeg.extend_from_slice(&[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 0xFF, 0xD9]);
-        let (data_at, bits_at) = (8u32, 8 + jpeg.len() as u32);
-        let ifd_at = bits_at + 6;
+        vec![0xFF, 0xC0, 0, 17, 8, hi, lo, hi, lo, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0]
+    }
+
+    /// A JPEG-compressed RGB TIFF one pixel wide and a row a strip, with `tables` as its
+    /// `JPEGTables` (none when empty) and `strips` as its strips.
+    fn jpeg_tiff_of(tables: &[u8], strips: &[Vec<u8>]) -> Vec<u8> {
+        let n = strips.len() as u32;
         let mut out = b"II*\0".to_vec();
-        out.extend_from_slice(&ifd_at.to_le_bytes());
-        out.extend_from_slice(&jpeg);
+        out.extend_from_slice(&[0; 4]);
+        let mut offsets = vec![];
+        for s in strips {
+            offsets.push(out.len() as u32);
+            out.extend_from_slice(s);
+        }
+        let tables_at = out.len() as u32;
+        out.extend_from_slice(tables);
+        let bits_at = out.len() as u32;
         out.extend_from_slice(&[8, 0, 8, 0, 8, 0]);
-        let tags: [(u16, u16, u32, u32); 10] = [
+        // One strip's offset and count fit in their entries; more go in arrays.
+        let array = |out: &mut Vec<u8>, v: &[u32]| {
+            let at = out.len() as u32;
+            v.iter().for_each(|x| out.extend_from_slice(&x.to_le_bytes()));
+            if v.len() == 1 { v[0] } else { at }
+        };
+        let counts: Vec<u32> = strips.iter().map(|s| s.len() as u32).collect();
+        let (offsets_v, counts_v) = (array(&mut out, &offsets), array(&mut out, &counts));
+        let ifd_at = out.len() as u32;
+        out[4..8].copy_from_slice(&ifd_at.to_le_bytes());
+        let mut tags: Vec<(u16, u16, u32, u32)> = vec![
             (256, 3, 1, 1),
-            (257, 3, 1, 1),
+            (257, 3, 1, n),
             (258, 3, 3, bits_at),
             (259, 3, 1, 7),
             (262, 3, 1, 2),
-            (273, 4, 1, data_at),
+            (273, 4, n, offsets_v),
             (277, 3, 1, 3),
             (278, 3, 1, 1),
-            (279, 4, 1, jpeg.len() as u32),
+            (279, 4, n, counts_v),
             (284, 3, 1, 1),
         ];
+        if !tables.is_empty() {
+            tags.push((347, 7, tables.len() as u32, tables_at));
+        }
         out.extend_from_slice(&(tags.len() as u16).to_le_bytes());
         for (tag, kind, count, v) in tags {
             out.extend_from_slice(&tag.to_le_bytes());
@@ -176,6 +222,32 @@ mod tests {
         let mut work = Decode::new(frame / 2);
         assert!(to_png(&file, 1 << 20, &mut work).is_none());
         assert!(work.left > frame / 4, "refused before decoding, not charged its frame");
+    }
+
+    /// A frame header split between the tables and the strip, which the decoder joins back
+    /// together, is charged as one whole header.
+    #[test]
+    fn a_frame_header_split_across_the_tables_is_charged() {
+        let header = sof(2048);
+        // The tables end right after the precision byte (then their end marker); the strip
+        // starts with its start marker, then the rest of the header.
+        let tables = [&[0xFF, 0xD8][..], &header[..5], &[0xFF, 0xD9]].concat();
+        let strip = [&[0xFF, 0xD8][..], &header[5..], &[0xFF, 0xD9]].concat();
+        let file = jpeg_tiff_of(&tables, &[strip]);
+        let mut work = Decode::new(64 << 20);
+        let _ = to_png(&file, 1 << 20, &mut work);
+        assert!((64 << 20) - work.left >= 2048 * 2048 * 3, "{} charged", (64 << 20) - work.left);
+    }
+
+    /// The decoder copies the shared tables for every strip, so each strip is charged them.
+    #[test]
+    fn the_shared_tables_are_charged_for_every_strip() {
+        let tables = [&[0xFF, 0xD8][..], &[0; 1000], &[0xFF, 0xD9]].concat();
+        let strips = vec![vec![0xFF, 0xD8, 0xFF, 0xD9]; 64];
+        let file = jpeg_tiff_of(&tables, &strips);
+        let mut work = Decode::new(1 << 20);
+        let _ = to_png(&file, 1 << 20, &mut work);
+        assert!((1 << 20) - work.left >= 64 * tables.len(), "{} charged", (1 << 20) - work.left);
     }
 
     /// A floating-point TIFF's pixels take 12 bytes each, and its 16-bit copy (PNG has no floats)
