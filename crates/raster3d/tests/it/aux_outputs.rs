@@ -473,17 +473,18 @@ fn a_view_that_cannot_turn_normals_is_rejected() {
 }
 
 #[test]
-#[cfg(target_pointer_width = "64")]
 fn the_byte_check_counts_the_auxiliary_planes() {
-    // 2^30 × 150,000,000 pixels: on a 64-bit target the target's 40 bytes per pixel fit
-    // `isize::MAX` bytes, and 60 do not. The check runs before anything is allocated.
+    // The base target's 40 bytes per pixel fit `isize::MAX`, and 60 do not.
     let l = limits(|l| l.max_pixels = u64::MAX);
-    let (w, h) = (1 << 30, 150_000_000);
+    #[cfg(target_pointer_width = "64")]
+    let (w, h, resolve_h) = (1 << 30, 150_000_000, 100_000_000);
+    #[cfg(target_pointer_width = "32")]
+    let (w, h, resolve_h) = (1 << 20, 40, 24);
     assert!(l.check(w, h).is_ok());
     let s = Scene { width: w, height: h, ..Scene::default() };
     assert_eq!(try_render_with_aux(&s, &l), Err(RenderError::TooLarge(w, h)));
     assert_eq!(try_render_cpu_with_aux(&s, &l), Err(RenderError::TooLarge(w, h)));
-    // With 100,000,000 rows the raster fits, and its resolve at 1 × 1 adds 40 bytes per pixel more.
-    let s = Scene { width: w, height: 100_000_000, ..Scene::default() };
-    assert_eq!(try_render_cpu_with_aux(&s, &l), Err(RenderError::TooLarge(w, 100_000_000)));
+    // The smaller raster fits, and its resolve at 1 × 1 adds 40 bytes per pixel more.
+    let s = Scene { width: w, height: resolve_h, ..Scene::default() };
+    assert_eq!(try_render_cpu_with_aux(&s, &l), Err(RenderError::TooLarge(w, resolve_h)));
 }

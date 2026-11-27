@@ -371,30 +371,18 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     let (full_w, full_h) = if std::ptr::eq(pixels, raw) {
         (w, h)
     } else {
-        (raw.u64(t::IMAGE_WIDTH).unwrap_or(0) as usize, raw.u64(t::IMAGE_LENGTH).unwrap_or(0) as usize)
+        (
+            raw.u64(t::IMAGE_WIDTH).and_then(|v| usize::try_from(v).ok()).unwrap_or(0),
+            raw.u64(t::IMAGE_LENGTH).and_then(|v| usize::try_from(v).ok()).unwrap_or(0),
+        )
     };
     if full_w == 0 || full_h == 0 {
         return Err(RawError::Corrupt("raw image IFD without a size".into()));
     }
-    let active_area = match raw.u64s(t::ACTIVE_AREA).as_deref() {
-        Some([top, left, bottom, right]) if bottom > top && right > left && (*bottom as usize) <= full_h && (*right as usize) <= full_w => {
-            Rect::new(*left as usize, *top as usize, (*right - *left) as usize, (*bottom - *top) as usize)
-        }
-        _ => Rect::new(0, 0, full_w, full_h),
-    };
-    let (crop, default_crop_adjusted) = default_crop(raw, active_area, full_w, full_h);
-    let (active_area, crop) = if (full_w, full_h) == (w, h) {
-        (active_area, crop)
-    } else {
-        let (sx, sy) = (w as f64 / full_w as f64, h as f64 / full_h as f64);
-        let scale = |r: Rect| {
-            let (x, y) = ((r.x as f64 * sx).round() as usize, (r.y as f64 * sy).round() as usize);
-            let (x1, y1) = (((r.x + r.width) as f64 * sx).round() as usize, ((r.y + r.height) as f64 * sy).round() as usize);
-            Rect::new(x, y, x1.saturating_sub(x).max(1), y1.saturating_sub(y).max(1))
-        };
-        let area = scale(active_area).clipped(w, h);
-        (area, scale(crop).clipped(area.width, area.height))
-    };
+    if w > u32::MAX as usize || h > u32::MAX as usize || full_w > u32::MAX as usize || full_h > u32::MAX as usize {
+        return Err(RawError::Limit("DNG dimensions exceed u32::MAX"));
+    }
+    let (active_area, crop, default_crop_adjusted) = active_area_and_crop(raw, w, h, full_w, full_h);
 
     let mut assumed_cfa = false;
     let cfa = if info.photometric == photometric::CFA {
@@ -554,6 +542,49 @@ fn extend_understated_strip(bytes: &[u8], info: &mut ImageInfo, raw: &Ifd) {
     let fits = offset.checked_add(needed).is_some_and(|end| end <= bytes.len() as u64);
     if *count == counted && fits {
         info.byte_counts = vec![needed];
+    }
+}
+
+fn active_area_and_crop(raw: &Ifd, w: usize, h: usize, full_w: usize, full_h: usize) -> (Rect, Rect, bool) {
+    let active_area = match raw.u64s(t::ACTIVE_AREA).as_deref() {
+        Some(&[top, left, bottom, right]) => {
+            let coords = [top, left, bottom, right].map(|v| usize::try_from(v).ok());
+            match coords {
+                [Some(top), Some(left), Some(bottom), Some(right)]
+                    if bottom > top && right > left && top <= full_h && left <= full_w && bottom <= full_h && right <= full_w =>
+                {
+                    Rect::new(left, top, right - left, bottom - top)
+                }
+                _ => Rect::new(0, 0, full_w, full_h),
+            }
+        }
+        _ => Rect::new(0, 0, full_w, full_h),
+    };
+    let active_area = if active_area.width == 0 || active_area.height == 0 { Rect::new(0, 0, full_w, full_h) } else { active_area };
+    let (crop, mut default_crop_adjusted) = default_crop(raw, active_area, full_w, full_h);
+    if (full_w, full_h) == (w, h) {
+        (active_area, crop, default_crop_adjusted)
+    } else {
+        let (sx, sy) = (w as f64 / full_w as f64, h as f64 / full_h as f64);
+        let scale = |r: Rect| {
+            let (x, y) = ((r.x as f64 * sx).round() as usize, (r.y as f64 * sy).round() as usize);
+            let (x1, y1) = (((r.x + r.width) as f64 * sx).round() as usize, ((r.y + r.height) as f64 * sy).round() as usize);
+            Rect::new(x, y, x1.saturating_sub(x).max(1), y1.saturating_sub(y).max(1))
+        };
+        let mut area = scale(active_area).clipped(w, h);
+        let area_fell_back = area.width == 0 || area.height == 0;
+        if area_fell_back {
+            area = Rect::new(0, 0, w, h);
+        }
+        let scaled_crop = scale(crop);
+        let mut c = if area_fell_back { Rect::new(0, 0, area.width, area.height) } else { scaled_crop.clipped(area.width, area.height) };
+        if c.width == 0 || c.height == 0 {
+            c = Rect::new(0, 0, area.width, area.height);
+        }
+        if (raw.contains(t::DEFAULT_CROP_ORIGIN) || raw.contains(t::DEFAULT_CROP_SIZE)) && (area_fell_back || c != scaled_crop) {
+            default_crop_adjusted = true;
+        }
+        (area, c, default_crop_adjusted)
     }
 }
 
@@ -719,6 +750,28 @@ mod tests {
         // A hostile factor is an error, not a scrambled image.
         let mut hostile = RawData::U16(image);
         assert!(deinterleave(&mut hostile, 8, 6, 1, 1 << 20, 1).is_err());
+    }
+
+    #[test]
+    fn scaled_active_area_fallback_resets_crop_to_full_replacement_area() {
+        use craft_tiff::Entry;
+        let raw = Ifd { entries: vec![Entry { tag: t::ACTIVE_AREA, offset: 0, value: Value::Long(vec![63, 63, 64, 64]) }], ..Default::default() };
+        let (area, crop, adjusted) = active_area_and_crop(&raw, 8, 8, 64, 64);
+        assert_eq!(area, Rect::new(0, 0, 8, 8));
+        assert_eq!(crop, Rect::new(0, 0, 8, 8));
+        assert!(!adjusted);
+
+        let mut entries = vec![
+            Entry { tag: t::ACTIVE_AREA, offset: 0, value: Value::Long(vec![63, 63, 64, 64]) },
+            Entry { tag: t::DEFAULT_CROP_ORIGIN, offset: 0, value: Value::Rational(vec![(0, 1), (0, 1)]) },
+            Entry { tag: t::DEFAULT_CROP_SIZE, offset: 0, value: Value::Rational(vec![(1, 1), (1, 1)]) },
+        ];
+        entries.sort_by_key(|e| e.tag);
+        let explicit_crop_raw = Ifd { entries, ..Default::default() };
+        let (area, crop, adjusted) = active_area_and_crop(&explicit_crop_raw, 8, 8, 64, 64);
+        assert_eq!(area, Rect::new(0, 0, 8, 8));
+        assert_eq!(crop, Rect::new(0, 0, 8, 8));
+        assert!(adjusted);
     }
 }
 

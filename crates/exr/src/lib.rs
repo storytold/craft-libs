@@ -9,6 +9,7 @@
 //!   and alpha.
 //! - [`cryptomatte`]: Cryptomatte (specification 1.2) IDs, metadata keys, manifests and rank
 //!   channel names.
+//! - [`layer_stack`]: optional layer hierarchy and compositing metadata for editable EXR exchange.
 //!
 //! Those take names and attribute text and depend on no decoder. With the `decode` feature:
 //!
@@ -18,6 +19,7 @@
 //! - `seek`: any channels, display rows and reduced resolution of a file's flat parts, read from
 //!   a seekable source and delivered band by band (or collected into planes).
 //! - `stream`: one flat scan-line part read block by block, for pictures larger than memory.
+//! - `write`: write flat scan-line parts from a row callback to a seekable destination.
 //! - `cryptomatte_samples`: a file's Cryptomatte layers and their per-pixel (ID, coverage) ranks.
 
 /// Bounded RLE expansion and inverse byte prediction for EXR blocks.
@@ -53,9 +55,14 @@ pub mod deep;
 mod deep_tests;
 #[cfg(feature = "decode")]
 mod dwa_guard;
+pub mod layer_stack;
 #[cfg(feature = "decode")]
 pub mod seek;
 #[cfg(all(test, feature = "decode"))]
 mod seek_tests;
 #[cfg(feature = "decode")]
 pub mod stream;
+#[cfg(feature = "decode")]
+pub mod write;
+#[cfg(all(test, feature = "decode"))]
+mod write_tests;
