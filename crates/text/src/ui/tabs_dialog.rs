@@ -100,7 +100,7 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 ///   until the edit ends, then [`TabStopsDialog::normalize`] restores position order and merges stops moved onto one
 ///   another (the edited row wins).
 /// - The Tab stop position box shows the selected stop's position (the first stop is selected when the dialog
-///   opens), as in Word. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
+///   opens), as in Word; with none selected, the next free step, where Set puts a stop. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
 ///   empty), at the next free multiple of the default interval after the last stop; the new stop is left aligned, no
 ///   leader, selected. Clear moves the selected stop to "to be cleared"; Clear All clears every stop.
 /// - Positions are clamped to ±[`MAX_POSITION`]; at most [`MAX_STOPS`] stops are read from a paragraph.
@@ -175,6 +175,17 @@ impl TabStopsDialog {
         if self.stops.len() >= MAX_STOPS {
             return;
         }
+        let Some(position) = self.next_step() else { return };
+        self.stops.push(TabStop { position, align: TabAlign::Left, leader: TabLeader::None });
+        self.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+        self.select(self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION));
+        self.edited = None;
+        self.to_edit = self.selected.is_some();
+    }
+
+    /// Where Set puts a stop when no position is typed: the next free multiple of the default interval after the last
+    /// stop, past cleared positions; `None` past [`MAX_POSITION`]. An empty Tab stop position box shows it.
+    fn next_step(&self) -> Option<f32> {
         let step = if self.default_interval.is_finite() && self.default_interval > 0.0 { self.default_interval } else { FALLBACK_INTERVAL };
         let taken = |at: f32| {
             self.stops.iter().any(|stop| (stop.position - at).abs() < SAME_POSITION)
@@ -185,14 +196,7 @@ impl TabStopsDialog {
         while taken(position) && position <= MAX_POSITION {
             position += step;
         }
-        if !position.is_finite() || position > MAX_POSITION {
-            return;
-        }
-        self.stops.push(TabStop { position, align: TabAlign::Left, leader: TabLeader::None });
-        self.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
-        self.select(self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION));
-        self.edited = None;
-        self.to_edit = self.selected.is_some();
+        (position.is_finite() && position <= MAX_POSITION).then_some(position)
     }
 
     /// Set with a position typed in the Tab stop position box: a stop there (Left, no leader), or the stop already
@@ -561,8 +565,9 @@ impl TabStopsDialog {
 
     /// The Tab stop position box: Enter there is Set, a stop at the typed position.
     fn position_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut Vec<FieldPass>) {
-        // An empty box shows 0; it stays empty (Set steps, Enter sets nothing) until a value is typed.
-        let points = Mixed::Same(Some(self.typed_position.map_or(0.0, f64::from)));
+        // An empty box shows where Set would put a stop (the next free step), and follows it until a value is typed.
+        let next = self.next_step();
+        let points = Mixed::Same(self.typed_position.or(next).map(f64::from));
         let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
         let unit = self.unit;
         let Some(out) =
@@ -573,17 +578,18 @@ impl TabStopsDialog {
         fields.push(FieldPass::of(ui.ctx(), NumberField::Position, out.response.id, &out.edit));
         for event in &out.edit.events {
             let typed = matches!(event, EditEvent::Update { .. });
-            // Leaving an empty box commits the 0 it shows, which is no position typed.
+            // Leaving an empty box commits the step it shows, which is no position typed.
             let kept = matches!(event, EditEvent::Commit { .. } | EditEvent::Set { .. })
-                && (self.typed_position.is_some() || event.value() != Some(&Some(0.0)));
+                && (self.typed_position.is_some() || event.value() != Some(&next.map(f64::from)));
             if (typed || kept)
                 && let Some(Some(points)) = event.value()
             {
                 self.typed_position = Some(*points as f32);
             }
         }
+        // Enter in the box is Set at the position it shows: the one typed, or the next free step.
         if out.edit.submitted
-            && let Some(position) = self.typed_position
+            && let Some(position) = self.typed_position.or(next)
         {
             self.set_at(position);
         }
