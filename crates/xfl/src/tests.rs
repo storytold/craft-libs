@@ -29,6 +29,32 @@ fn reads_stored_and_deflated_entries() {
 }
 
 #[test]
+fn xfl_package_root_prefers_root_then_selects_one_top_level_folder() {
+    let root = zip(&[("DOMDocument.xml", b"<DOMDocument/>", true), ("Walk/DOMDocument.xml", b"<DOMDocument/>", true)]);
+    let archive = Archive::open(&root).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Document);
+
+    let folder = zip(&[("Walk/DOMDocument.xml", b"<DOMDocument/>", true), ("Walk/LIBRARY/Clip.xml", b"<DOMSymbolItem/>", true)]);
+    let archive = Archive::open(&folder).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Folder("Walk"));
+}
+
+#[test]
+fn xfl_package_root_reports_sorted_candidates_and_ignores_metadata_and_nested_paths() {
+    let multiple = zip(&[
+        ("Zebra/DOMDocument.xml", b"<DOMDocument/>", true),
+        ("Apple/DOMDocument.xml", b"<DOMDocument/>", true),
+        ("__MACOSX/DOMDocument.xml", b"not a project", true),
+    ]);
+    let archive = Archive::open(&multiple).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Multiple(vec!["Apple", "Zebra"]));
+
+    let nested = zip(&[("One/Two/DOMDocument.xml", b"<DOMDocument/>", true), ("__MACOSX/One/DOMDocument.xml", b"metadata", true)]);
+    let archive = Archive::open(&nested).unwrap();
+    assert_eq!(archive.xfl_package_root(), XflPackageRoot::Missing);
+}
+
+#[test]
 fn the_checksum_matches_the_published_check_value() {
     assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     assert_eq!(crc32(b""), 0);
@@ -80,6 +106,23 @@ fn damaged_archives_are_errors() {
     // Point the directory past the end.
     z[n - 6] = 0xff;
     assert!(Archive::open(&z).is_err());
+}
+
+#[test]
+fn reads_a_directory_with_an_overstated_size() {
+    let mut z = zip(&[("DOMDocument.xml", b"<DOMDocument/>", true), ("LIBRARY/ball.xml", b"<DOMSymbolItem/>", false)]);
+    let end = z.len() - 22;
+    let size = u32_at(&z, end + 12).unwrap();
+    z[end + 12..end + 16].copy_from_slice(&(size + 13).to_le_bytes());
+
+    let archive = Archive::open(&z).unwrap();
+    assert_eq!(archive.counts().0, 2);
+    assert_eq!(archive.read("DOMDocument.xml").unwrap().unwrap(), b"<DOMDocument/>");
+    assert_eq!(archive.read("LIBRARY/ball.xml").unwrap().unwrap(), b"<DOMSymbolItem/>");
+
+    // Keep the overstated end record but remove the last byte of the final entry's name.
+    z.remove(end - 1);
+    assert_eq!(Archive::open(&z).err(), Some(ZipError::Damaged("the central directory is outside the archive")));
 }
 
 #[test]
@@ -163,8 +206,8 @@ fn lying_sizes_and_checksums_are_damaged() {
 
 #[test]
 fn compression_bombs_are_refused() {
-    // A real 64 MB of zeros deflates past the ratio cap: refused before inflating.
-    let zeros = vec![0u8; 64 << 20];
+    // A real 16 MiB of zeros deflates past the ratio cap: refused before inflating.
+    let zeros = vec![0u8; 16 << 20];
     let z = zip(&[("bomb.xml", &zeros, true)]);
     assert!(z.len() < 100_000, "{}", z.len());
     assert_eq!(Archive::open(&z).err(), Some(ZipError::Bomb("bomb.xml".into())));
@@ -276,6 +319,32 @@ fn nonempty_comment_eocd_candidate_does_not_mask_valid_archive() {
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(&0u16.to_le_bytes());
 
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
+fn overstated_comment_eocd_does_not_mask_valid_archive() {
+    let mut bytes = zip(&[("a.xml", b"x", false)]);
+    let end = bytes.len() - 22;
+    let size = u32_at(&bytes, end + 12).unwrap();
+    let start = u32_at(&bytes, end + 16).unwrap() as usize;
+    let fake_start = bytes.len();
+
+    // Copy the directory and end record into the real comment, then corrupt the copies.
+    bytes.extend_from_within(start..);
+    let comment_len = u16::try_from(bytes.len() - fake_start).unwrap();
+    bytes[end + 20..end + 22].copy_from_slice(&comment_len.to_le_bytes());
+    bytes[fake_start + 42..fake_start + 46].copy_from_slice(&1u32.to_le_bytes());
+    let fake_end = bytes.len() - 22;
+    bytes[fake_end + 12..fake_end + 16].copy_from_slice(&(size + 1).to_le_bytes());
+    bytes[fake_end + 16..fake_end + 20].copy_from_slice(&u32::try_from(fake_start).unwrap().to_le_bytes());
+
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+
+    // If both candidates need recovery, the record before the comment still wins.
+    bytes[end + 12..end + 16].copy_from_slice(&(size + 1).to_le_bytes());
     let archive = Archive::open(&bytes).unwrap();
     assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
 }

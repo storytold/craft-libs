@@ -318,8 +318,160 @@ fn refuses_cubemaps_arrays_and_volumes() {
     unsupported(&dx10(4, 4, 71, 3, 0, 6), "array");
     unsupported(&dx10(4, 4, 71, 4, 0, 1), "2D");
     unsupported(&dx10(4, 4, 98, 3, 0, 1), "98"); // BC7_UNORM
-    unsupported(&compressed(4, 4, b"ATI2"), "ATI2");
+    unsupported(&compressed(4, 4, b"ATI3"), "ATI3");
     unsupported(&compressed(4, 4, b"DXT2"), "premultiplied");
+}
+
+/// A BC4 block of 200 everywhere (eight-value mode, a0 = 200 > a1 = 50, every index 0).
+const BC4_200: [u8; 8] = [0xc8, 0x32, 0, 0, 0, 0, 0, 0];
+/// A value block of 250 everywhere (six-value mode, a0 = 10 <= a1 = 250, every index 1).
+const VALUES_250: [u8; 8] = [0x0a, 0xfa, 0x49, 0x92, 0x24, 0x49, 0x92, 0x24];
+
+/// A DX10 file of one 1x1 level of `dxgi` with DDS_ALPHA_MODE `alpha_mode` (miscFlags2) and zeroed pixel data.
+fn dx10_alpha_mode(dxgi: u32, alpha_mode: u32) -> Vec<u8> {
+    let mut b = dx10(1, 1, dxgi, 3, 0, 1);
+    let n = b.len();
+    b[n - 4..].copy_from_slice(&alpha_mode.to_le_bytes());
+    b.extend([0u8; 16]);
+    b
+}
+
+#[test]
+fn refuses_premultiplied_alpha_dx10_textures() {
+    // RGBA, BGRA (typeless, UNORM, sRGB) and BC2/BC3: alpha mode 2 is premultiplied, like DXT2/DXT4.
+    for dxgi in [27, 28, 29, 87, 90, 91, 73, 74, 75, 76, 77, 78] {
+        match decode_as(Format::Dds, &dx10_alpha_mode(dxgi, 2)) {
+            Err(CodecError::Unsupported { reason, .. }) => assert!(reason.contains("premultiplied"), "{dxgi}: {reason}"),
+            other => panic!("DXGI {dxgi}: {:?}", other.map(|_| ())),
+        }
+    }
+    // Straight, unknown, opaque and custom alpha modes, and formats without alpha, still decode.
+    for dxgi in [28, 87, 74, 77] {
+        for mode in [0, 1, 3, 4] {
+            assert!(decode_as(Format::Dds, &dx10_alpha_mode(dxgi, mode)).is_ok(), "{dxgi} mode {mode}");
+        }
+    }
+    for dxgi in [88, 71, 80, 83] {
+        assert!(decode_as(Format::Dds, &dx10_alpha_mode(dxgi, 2)).is_ok(), "{dxgi}");
+    }
+}
+
+#[test]
+fn decodes_bc4_as_gray_from_every_name() {
+    // 5×3: two blocks across, one down; the second block's texels outside the image are dropped.
+    let blocks = [BC4_200, BC4_200].concat();
+    let mut files = vec![];
+    for fourcc in [b"ATI1", b"BC4U"] {
+        let mut b = compressed(5, 3, fourcc);
+        b.extend(&blocks);
+        files.push((String::from_utf8_lossy(fourcc).into_owned(), b));
+    }
+    for dxgi in [79, 80] {
+        let mut b = dx10(5, 3, dxgi, 3, 0, 1); // BC4_TYPELESS, BC4_UNORM
+        b.extend(&blocks);
+        files.push((format!("DXGI {dxgi}"), b));
+    }
+    for (name, b) in files {
+        let im = decode(&b).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!((im.dimensions(), im.layout()), ((5, 3), ChannelLayout::Gray), "{name}");
+        assert_eq!(im.data(), &[200; 15], "{name}");
+    }
+}
+
+#[test]
+fn decodes_bc5_as_red_and_green_with_blue_zero() {
+    let block = [BC4_200, VALUES_250].concat();
+    let mut files = vec![];
+    // ATI2 is BC5 as Microsoft reads it: red in the first block, not swapped as FFmpeg does.
+    for fourcc in [b"ATI2", b"BC5U"] {
+        let mut b = compressed(3, 2, fourcc);
+        b.extend(&block);
+        files.push((String::from_utf8_lossy(fourcc).into_owned(), b));
+    }
+    // BC5_TYPELESS (what Pillow writes) and BC5_UNORM.
+    for dxgi in [82, 83] {
+        let mut b = dx10(3, 2, dxgi, 3, 0, 1);
+        b.extend(&block);
+        files.push((format!("DXGI {dxgi}"), b));
+    }
+    for (name, b) in files {
+        let im = decode(&b).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!((im.dimensions(), im.layout()), ((3, 2), ChannelLayout::Rgb), "{name}");
+        assert!(im.data().chunks(3).all(|p| p == [200, 250, 0]), "{name}: {:?}", &im.data()[..3]);
+    }
+}
+
+#[test]
+fn sixteen_bit_textures_open_at_16_bits() {
+    let samples = |n: usize| -> Vec<u16> { (0..n).map(|i| (i as u32 * 7919 % 65536) as u16).collect() };
+    let le = |s: &[u16]| -> Vec<u8> { s.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let (gray, rg, rgba) = (samples(6), samples(12), samples(24));
+    let mut files = vec![];
+    for (dxgi, stored) in [(56, &gray), (53, &gray), (35, &rg), (33, &rg), (11, &rgba), (9, &rgba)] {
+        let mut b = dx10(3, 2, dxgi, 3, 0, 1);
+        b.extend(le(stored));
+        files.push((format!("DXGI {dxgi}"), b));
+    }
+    // D3DFMT_A16B16G16R16, the legacy FourCC 36.
+    let mut b = compressed(3, 2, &36u32.to_le_bytes());
+    b.extend(le(&rgba));
+    files.push(("FourCC 36".into(), b));
+    // A 16-bit luminance mask (L16).
+    let mut b = header(3, 2, DDPF_LUMINANCE, &[0; 4], 16, [0xffff, 0, 0, 0]);
+    b.extend(le(&gray));
+    files.push(("L16".into(), b));
+    let rgb: Vec<u16> = rg.chunks(2).flat_map(|p| [p[0], p[1], 0]).collect();
+    for (name, b) in files {
+        let im = decode(&b).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(im.sample_type(), SampleType::U16, "{name}");
+        let (layout, want) = match name.as_str() {
+            "DXGI 56" | "DXGI 53" | "L16" => (ChannelLayout::Gray, &gray),
+            // R16G16 is red and green, not gray and alpha: blue is 0, as for BC5.
+            "DXGI 35" | "DXGI 33" => (ChannelLayout::Rgb, &rgb),
+            _ => (ChannelLayout::Rgba, &rgba),
+        };
+        assert_eq!((im.dimensions(), im.layout()), ((3, 2), layout), "{name}");
+        assert_eq!(&im.to_u16_samples().unwrap(), want, "{name}");
+    }
+    // The limit counts two bytes a sample.
+    let mut b = dx10(3, 2, 11, 3, 0, 1);
+    b.extend(le(&rgba));
+    let limits = |max_alloc| DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..DecodeOptions::default() };
+    assert!(matches!(decode_as_with(Format::Dds, &b, &limits(47)), Err(CodecError::LimitExceeded(_))));
+    assert!(decode_as_with(Format::Dds, &b, &limits(48)).is_ok());
+    // A2R10G10B10 masks: 10-bit fields open at 16 bits, rescaled from their own width.
+    let mut b = header(1, 1, DDPF_RGB | DDPF_ALPHAPIXELS, &[0; 4], 32, [0x3ff0_0000, 0xf_fc00, 0x3ff, 0xc000_0000]);
+    b.extend((1023u32 << 20 | 512 << 10 | 1 | 3 << 30).to_le_bytes());
+    let im = decode(&b).unwrap();
+    assert_eq!((im.sample_type(), im.layout()), (SampleType::U16, ChannelLayout::Rgba));
+    assert_eq!(im.to_u16_samples().unwrap(), [65535, 32800, 64, 65535]);
+    // Fields of 8 bits or fewer still open at 8 bits.
+    let mut b = header(1, 1, DDPF_LUMINANCE | DDPF_ALPHAPIXELS, &[0; 4], 16, [0xff, 0, 0, 0xff00]);
+    b.extend([7, 9]);
+    assert_eq!(decode(&b).unwrap().sample_type(), SampleType::U8);
+}
+
+#[test]
+fn refuses_signed_bc4_and_bc5() {
+    for mut b in [compressed(4, 4, b"BC4S"), compressed(4, 4, b"BC5S"), dx10(4, 4, 81, 3, 0, 1), dx10(4, 4, 84, 3, 0, 1)] {
+        b.extend([0; 16]);
+        match decode_as(Format::Dds, &b) {
+            Err(CodecError::Unsupported { reason, .. }) => assert!(reason.contains("SNORM"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn truncated_bc4_and_bc5_data_is_refused() {
+    let mut b = dx10(5, 5, 83, 3, 0, 1); // four 16-byte blocks
+    b.extend([0x5a; 64]);
+    assert!(decode(&b).is_ok());
+    assert!(matches!(decode_as(Format::Dds, &b[..b.len() - 1]), Err(CodecError::Malformed { .. })));
+    let mut b = compressed(5, 5, b"ATI1"); // four 8-byte blocks
+    b.extend([0x5a; 32]);
+    assert!(decode(&b).is_ok());
+    assert!(matches!(decode_as(Format::Dds, &b[..b.len() - 1]), Err(CodecError::Malformed { .. })));
 }
 
 /// Face declarations matter even when the general cube flag is absent; padding does not.

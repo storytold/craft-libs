@@ -1,0 +1,17 @@
+[package]
+name = "craft-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Source-level platform regression guards, test deadlines, hostile-input helpers and a reentrant test lock for the Craft application suite"
+publish = false
+
+[dependencies]
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
+[lints]
+workspace = true

@@ -106,6 +106,10 @@ pub(super) struct Body<'a> {
     depth: usize,
     /// The markup being read (`content.xml`), for keeping paragraphs' own (empty: none kept).
     pub(super) raw: &'a [u8],
+    /// The markup being read, body's or a header's, and where the start tag being read ends in it:
+    /// for looking into a picture before reading it (empty: not known).
+    pub(super) markup: &'a [u8],
+    pub(super) tag_end: usize,
     /// The paragraph whose markup is being kept (see [`KeptOpen`]).
     kept_open: Option<KeptOpen>,
     /// The body table whose markup is being kept (its `done`: the container's length before it).
@@ -215,6 +219,16 @@ pub(super) struct Body<'a> {
     next_comment: u32,
 }
 
+/// `p`, read as a list's paragraph, as one the list doesn't number (a list item's second paragraph,
+/// a list header's): a paragraph of its own at the level's text indent.
+fn unnumbered(p: &mut Para) {
+    let Some(li) = p.list.take() else { return };
+    let indent = li.label.and_then(|l| l.indent).map_or((f32::from(li.level) + 1.0) * 36.0, |i| f32::from(i) / 20.0);
+    p.spacing.left = p.spacing.left.or(Some(indent));
+    p.spacing.first = p.spacing.first.or(Some(0.0));
+    p.item = Some(li.level.min(8));
+}
+
 impl<'a> Body<'a> {
     pub(super) fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
         let page = pages.first.clone().unwrap_or_default();
@@ -257,6 +271,8 @@ impl<'a> Body<'a> {
             skip: 0,
             depth: 0,
             raw: &[],
+            markup: &[],
+            tag_end: 0,
             kept_open: None,
             kept_table: None,
             kept_index: None,
@@ -411,6 +427,14 @@ impl<'a> Body<'a> {
                     {
                         p.index = Some(Box::new((std::sync::Arc::from(xml), n)));
                     }
+                    // The list kept whole or not, an unnumbered paragraph's markup is only for it.
+                    for b in blocks.iter_mut().skip(k.done) {
+                        if let FBlock::Para(p) = b
+                            && p.list.is_none()
+                        {
+                            p.kept = None;
+                        }
+                    }
                 }
                 None
             }
@@ -455,6 +479,7 @@ impl<'a> Body<'a> {
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
     /// that doesn't change it writes it as it was (see `craft_wordmodel::kept`).
     pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
+        self.tag_end = at.1;
         self.hide_read();
         self.hidden_section(&ev);
         // A body index, kept whole: its settings and templates, which WordCraft writes its own.
@@ -1050,21 +1075,15 @@ impl Body<'_> {
             }
         }
         self.paras_done += 1;
-        let cont = std::mem::take(&mut self.para_cont);
-        let level = p.list.map(|l| l.level);
-        let c = self.container();
-        if cont
-            && let Some(FBlock::Para(prev)) = c.last_mut()
-            && prev.list.is_some()
-            && prev.list.map(|l| l.level) == level
-        {
-            prev.push_text("\n", &Fmt::default());
-            prev.inlines.extend(p.inlines);
-            // Two elements made one paragraph: neither's markup is it.
-            prev.kept = None;
-            return;
+        if std::mem::take(&mut self.para_cont) {
+            unnumbered(&mut p);
+            // Its markup means nothing outside its list: only a list kept whole may keep it, and
+            // that is seen when the list ends.
+            if self.kept_list.is_none() {
+                p.kept = None;
+            }
         }
-        c.push(FBlock::Para(p));
+        self.container().push(FBlock::Para(p));
     }
 
     fn push_text(&mut self, t: &str) {
@@ -1261,6 +1280,7 @@ impl Body<'_> {
                     self.group = Some(OpenGroup {
                         anchor: get(a, "text:anchor-type").map(String::from),
                         page: get(a, "text:anchor-page-number").map(String::from),
+                        z: crate::text::frames::z_of(a),
                         style: get(a, "draw:style-name").map(String::from),
                         members: Vec::new(),
                     });
@@ -1467,10 +1487,33 @@ impl Body<'_> {
         }
     }
 
+    /// Whether the `draw:image` just started holds any text, read from its markup as the rest of
+    /// the file is read (`xml::holds_words`); `true` when the markup isn't known, so nothing in
+    /// it is skipped unread.
+    fn picture_holds_words(&self) -> bool {
+        let Some(before) = self.markup.get(..self.tag_end) else { return true };
+        if before.is_empty() {
+            return true;
+        }
+        if before.ends_with(b"/>") {
+            return false;
+        }
+        super::xml::holds_words(self.markup, self.tag_end)
+    }
+
     /// Part of a frame: its picture, embedded object, description or contour.
     fn frame_part(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "image" => {
+                // What a picture holds (§10.4.4 lets it hold text; LibreOffice writes an empty
+                // paragraph in one it draws as a shape, as it does every picture in a group) isn't
+                // the text's: read as a paragraph, it ended the one around the frame. An empty one
+                // isn't read. Words in one still are, as a paragraph of their own (which still ends
+                // the one around it): skipped, they'd be lost on the paragraph's first edit or a
+                // save to another format.
+                if q == "draw:image" && !self.picture_holds_words() {
+                    self.skip = 1;
+                }
                 // A chart's replacement picture (what readers that can't draw it show): kept with
                 // the chart as read, written back with it while it is unchanged.
                 if let Some(href) = get(a, "xlink:href")
@@ -1721,6 +1764,7 @@ impl Body<'_> {
                 }
             }
             "list-item" | "list-header" => {
+                let header = local(q) == "list-header";
                 // An item restarting the numbering begins a list of its own from there.
                 if let Some(v) = get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()) {
                     self.list_id = self.new_list_id();
@@ -1730,8 +1774,9 @@ impl Body<'_> {
                 if let Some(l) = self.lists.last_mut() {
                     l.1 = true;
                 }
+                // A list header's paragraphs have no number (§5.3.3), as an item's after its first.
                 if let Some(u) = self.item_used.last_mut() {
-                    *u = false;
+                    *u = header;
                 }
             }
             _ => return false,

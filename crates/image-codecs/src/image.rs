@@ -8,6 +8,7 @@ use std::fmt;
 
 use crate::error::CodecError;
 use crate::format::Format;
+use crate::options::Limits;
 use half::f16;
 
 /// Channel layout of an [`Image`]. Alpha, when present, is always the last
@@ -708,17 +709,100 @@ impl Image {
 
     /// Interleaved RGBA, 8 bits per sample.
     pub fn to_rgba8(&self) -> Vec<u8> {
-        self.convert(ChannelLayout::Rgba, SampleType::U8).data
+        convert_data(&self.data, self.layout, self.sample, ChannelLayout::Rgba, SampleType::U8)
     }
 
     /// Interleaved RGBA, 16 bits per sample.
     pub fn to_rgba16(&self) -> Vec<u16> {
-        self.convert(ChannelLayout::Rgba, SampleType::U16).to_u16_samples().unwrap_or_default()
+        u16_samples(&convert_data(&self.data, self.layout, self.sample, ChannelLayout::Rgba, SampleType::U16))
     }
 
-    /// Interleaved RGBA as f32 (integer inputs normalized to `[0,1]`).
-    pub fn to_rgba_f32(&self) -> Vec<f32> {
-        convert_layout(&self.to_normalized(), self.layout, ChannelLayout::Rgba)
+    /// [`Image::to_rgba8`], with the output checked against `limits` (dimensions, pixel count and
+    /// `max_alloc`) before any pixel is converted. A size over the limits, or a reservation the
+    /// allocator refuses, returns [`CodecError::LimitExceeded`]. An image with no pixels gives an
+    /// empty vector.
+    pub fn try_to_rgba8(&self, limits: &Limits) -> Result<Vec<u8>, CodecError> {
+        self.rgba_within(SampleType::U8, limits)
+    }
+
+    /// [`Image::to_rgba16`], with the output checked against `limits` as in
+    /// [`Image::try_to_rgba8`]. The samples are converted into bytes first and then copied into the
+    /// `u16` vector, so the peak is twice the size that `limits` checks.
+    pub fn try_to_rgba16(&self, limits: &Limits) -> Result<Vec<u16>, CodecError> {
+        let bytes = self.rgba_within(SampleType::U16, limits)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(bytes.len() / 2)
+            .map_err(|e| CodecError::LimitExceeded(format!("cannot reserve {} u16 samples for RGBA: {e}", bytes.len() / 2)))?;
+        out.extend(bytes.as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes([c[0], c[1]])));
+        Ok(out)
+    }
+
+    /// [`Image::to_rgba8`], consuming the image. An RGBA8 image gives back its own pixel buffer
+    /// without a copy. Any other image is converted as [`Image::try_to_rgba8`] converts it, with
+    /// the same `limits` check, and its buffer is dropped once the conversion returns.
+    pub fn into_rgba8(self, limits: &Limits) -> Result<Vec<u8>, CodecError> {
+        if self.layout == ChannelLayout::Rgba && self.sample == SampleType::U8 {
+            return Ok(self.data);
+        }
+        self.try_to_rgba8(limits)
+    }
+
+    /// RGBA samples in `sample` (U8 or U16), the bytes [`convert_data`] gives, with the output
+    /// checked against `limits` and reserved with `try_reserve_exact`. Integer sources are
+    /// converted by [`convert_int_direct_into`]. Other sources are converted one pixel at a time,
+    /// so the f32 copies of the whole image that [`convert_data`] makes for them are not allocated.
+    fn rgba_within(&self, sample: SampleType, limits: &Limits) -> Result<Vec<u8>, CodecError> {
+        if self.width == 0 || self.height == 0 {
+            return Ok(Vec::new());
+        }
+        limits.check(self.width, self.height, ChannelLayout::Rgba, sample)?;
+        let len = byte_len(self.width, self.height, ChannelLayout::Rgba, sample)
+            .ok_or_else(|| CodecError::LimitExceeded("RGBA size overflows usize".into()))?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(len).map_err(|e| CodecError::LimitExceeded(format!("cannot reserve {len} bytes for RGBA: {e}")))?;
+        if int_direct_applies(self.layout, self.sample, ChannelLayout::Rgba, sample) {
+            convert_int_direct_into(&self.data, self.layout, self.sample, ChannelLayout::Rgba, sample, &mut out);
+            return Ok(out);
+        }
+        let fc = self.layout.channels();
+        let mut px = [0.0f32; 5];
+        let mut rgba = Vec::with_capacity(ChannelLayout::Rgba.channels());
+        for p in 0..self.pixel_count() {
+            for (c, v) in px[..fc].iter_mut().enumerate() {
+                *v = read_normalized(&self.data, self.sample, p * fc + c);
+            }
+            rgba.clear();
+            convert_pixel(&px[..fc], self.layout, ChannelLayout::Rgba, &mut rgba);
+            quantize_into(&rgba, sample, &mut out);
+        }
+        Ok(out)
+    }
+
+    /// Interleaved RGBA as f32 (integer inputs normalized to `[0,1]`), with the same values as
+    /// [`Image::convert`] to RGBA F32. The output buffer is checked against `limits` (dimensions,
+    /// pixel count and `max_alloc`) and reserved before any pixel is converted, and the pixels are
+    /// written straight into it. A size over the limits, or a reservation the allocator refuses,
+    /// returns [`CodecError::LimitExceeded`]. An image with no pixels gives an empty vector.
+    pub fn to_rgba_f32(&self, limits: &Limits) -> Result<Vec<f32>, CodecError> {
+        if self.width == 0 || self.height == 0 {
+            return Ok(Vec::new());
+        }
+        limits.check(self.width, self.height, ChannelLayout::Rgba, SampleType::F32)?;
+        let len = self
+            .pixel_count()
+            .checked_mul(ChannelLayout::Rgba.channels())
+            .ok_or_else(|| CodecError::LimitExceeded("RGBA f32 size overflows usize".into()))?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(len).map_err(|e| CodecError::LimitExceeded(format!("cannot reserve {len} f32 samples for RGBA: {e}")))?;
+        let fc = self.layout.channels();
+        let mut px = [0.0f32; 5];
+        for p in 0..self.pixel_count() {
+            for (c, v) in px[..fc].iter_mut().enumerate() {
+                *v = read_normalized(&self.data, self.sample, p * fc + c);
+            }
+            convert_pixel(&px[..fc], self.layout, ChannelLayout::Rgba, &mut out);
+        }
+        Ok(out)
     }
 }
 
@@ -781,34 +865,41 @@ pub fn convert_samples(
 /// RGB. Bit-identical to the generic f32 route (see the equivalence tests) but without
 /// the two intermediate f32 buffers. Returns `None` for everything else.
 fn convert_int_direct(data: &[u8], from: ChannelLayout, from_sample: SampleType, layout: ChannelLayout, sample: SampleType) -> Option<Vec<u8>> {
+    if !int_direct_applies(from, from_sample, layout, sample) {
+        return None;
+    }
+    let n = data.len() / (from.channels() * from_sample.bytes());
+    let mut out = Vec::with_capacity(n.checked_mul(layout.channels())?.checked_mul(sample.bytes())?);
+    convert_int_direct_into(data, from, from_sample, layout, sample, &mut out);
+    Some(out)
+}
+
+/// `true` when [`convert_int_direct`] handles the conversion from `from` to `layout`.
+fn int_direct_applies(from: ChannelLayout, from_sample: SampleType, layout: ChannelLayout, sample: SampleType) -> bool {
     let int = |s: SampleType| matches!(s, SampleType::U8 | SampleType::U16);
-    if !int(from_sample) || !int(sample) {
-        return None;
-    }
-    let gray_to_rgb = from.is_gray() && layout.is_rgb();
-    if !gray_to_rgb && !layout.same_model(from) {
-        return None;
-    }
+    int(from_sample) && int(sample) && ((from.is_gray() && layout.is_rgb()) || layout.same_model(from))
+}
+
+/// [`convert_int_direct`], appending to `out`. The caller checks [`int_direct_applies`] first.
+fn convert_int_direct_into(data: &[u8], from: ChannelLayout, from_sample: SampleType, layout: ChannelLayout, sample: SampleType, out: &mut Vec<u8>) {
     let one: &[u8] = match sample {
         SampleType::U8 => &[u8::MAX],
         _ => &u16::MAX.to_ne_bytes(),
     };
-    let (fc, tc) = (from.channels(), layout.channels());
-    let (sb, db) = (from_sample.bytes(), sample.bytes());
+    let fc = from.channels();
+    let sb = from_sample.bytes();
     let (src_color, dst_color) = (from.color_channels(), layout.color_channels());
-    let n = data.len() / (fc * sb);
-    let mut out = Vec::with_capacity(n.checked_mul(tc)?.checked_mul(db)?);
     macro_rules! run {
         ($conv:expr) => {{
             let conv = $conv;
             for px in data.chunks_exact(fc * sb) {
                 for j in 0..dst_color {
                     let c = if src_color == 1 { 0 } else { j };
-                    conv(&px[c * sb..(c + 1) * sb], &mut out);
+                    conv(&px[c * sb..(c + 1) * sb], &mut *out);
                 }
                 if layout.has_alpha() {
                     if from.has_alpha() {
-                        conv(&px[src_color * sb..(src_color + 1) * sb], &mut out);
+                        conv(&px[src_color * sb..(src_color + 1) * sb], &mut *out);
                     } else {
                         out.extend_from_slice(one);
                     }
@@ -822,7 +913,6 @@ fn convert_int_direct(data: &[u8], from: ChannelLayout, from_sample: SampleType,
         (SampleType::U8, SampleType::U16) => run!(|s: &[u8], o: &mut Vec<u8>| o.extend_from_slice(&(u16::from(s[0]) * 257).to_ne_bytes())),
         _ => run!(|s: &[u8], o: &mut Vec<u8>| o.push(((u32::from(u16::from_ne_bytes([s[0], s[1]])) + 128) / 257) as u8)),
     }
-    Some(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -854,12 +944,24 @@ fn clamp01(v: f32) -> f32 {
 }
 
 pub(crate) fn quantize(values: &[f32], sample: SampleType) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * sample.bytes());
+    quantize_into(values, sample, &mut out);
+    out
+}
+
+/// [`quantize`], appending to `out`.
+fn quantize_into(values: &[f32], sample: SampleType, out: &mut Vec<u8>) {
     match sample {
-        SampleType::U8 => values.iter().map(|&v| (clamp01(v) * 255.0).round() as u8).collect(),
-        SampleType::U16 => values.iter().flat_map(|&v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
-        SampleType::F16 => values.iter().flat_map(|&v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
-        SampleType::F32 => values.iter().flat_map(|&v| v.to_ne_bytes()).collect(),
+        SampleType::U8 => out.extend(values.iter().map(|&v| (clamp01(v) * 255.0).round() as u8)),
+        SampleType::U16 => out.extend(values.iter().flat_map(|&v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes())),
+        SampleType::F16 => out.extend(values.iter().flat_map(|&v| f16::from_f32(v).to_bits().to_ne_bytes())),
+        SampleType::F32 => out.extend(values.iter().flat_map(|&v| v.to_ne_bytes())),
     }
+}
+
+/// Native-endian byte pairs as `u16` samples.
+fn u16_samples(data: &[u8]) -> Vec<u16> {
+    data.as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes([c[0], c[1]])).collect()
 }
 
 /// Rec. 709 luma weights applied to encoded values.
@@ -890,31 +992,37 @@ pub(crate) fn convert_layout(src: &[f32], from: ChannelLayout, to: ChannelLayout
     let n = src.len() / fc;
     let mut out = Vec::with_capacity(n * tc);
     for px in src.chunks_exact(fc) {
-        let alpha = if from.has_alpha() { px[fc - 1] } else { 1.0 };
-        let color = &px[..from.color_channels()];
-        if from.same_model(to) {
-            out.extend_from_slice(color);
-        } else {
-            let rgb = match from {
-                ChannelLayout::Gray | ChannelLayout::GrayA => [color[0]; 3],
-                ChannelLayout::Rgb | ChannelLayout::Rgba => [color[0], color[1], color[2]],
-                ChannelLayout::Cmyk | ChannelLayout::CmykA => cmyk_to_rgb(color[0], color[1], color[2], color[3]),
-                ChannelLayout::Lab | ChannelLayout::LabA => crate::lab::lab_to_srgb([color[0], color[1], color[2]]),
-            };
-            match to {
-                ChannelLayout::Gray | ChannelLayout::GrayA => {
-                    out.push(rgb[0] * LUMA[0] + rgb[1] * LUMA[1] + rgb[2] * LUMA[2]);
-                }
-                ChannelLayout::Rgb | ChannelLayout::Rgba => out.extend_from_slice(&rgb),
-                ChannelLayout::Cmyk | ChannelLayout::CmykA => out.extend_from_slice(&rgb_to_cmyk(rgb[0], rgb[1], rgb[2])),
-                ChannelLayout::Lab | ChannelLayout::LabA => out.extend_from_slice(&crate::lab::srgb_to_lab(rgb)),
-            }
-        }
-        if to.has_alpha() {
-            out.push(alpha);
-        }
+        convert_pixel(px, from, to, &mut out);
     }
     out
+}
+
+/// One pixel of [`convert_layout`]: the normalized samples `px` (`from` layout) appended to `out`
+/// in the `to` layout.
+fn convert_pixel(px: &[f32], from: ChannelLayout, to: ChannelLayout, out: &mut Vec<f32>) {
+    let alpha = if from.has_alpha() { px[from.channels() - 1] } else { 1.0 };
+    let color = &px[..from.color_channels()];
+    if from.same_model(to) {
+        out.extend_from_slice(color);
+    } else {
+        let rgb = match from {
+            ChannelLayout::Gray | ChannelLayout::GrayA => [color[0]; 3],
+            ChannelLayout::Rgb | ChannelLayout::Rgba => [color[0], color[1], color[2]],
+            ChannelLayout::Cmyk | ChannelLayout::CmykA => cmyk_to_rgb(color[0], color[1], color[2], color[3]),
+            ChannelLayout::Lab | ChannelLayout::LabA => crate::lab::lab_to_srgb([color[0], color[1], color[2]]),
+        };
+        match to {
+            ChannelLayout::Gray | ChannelLayout::GrayA => {
+                out.push(rgb[0] * LUMA[0] + rgb[1] * LUMA[1] + rgb[2] * LUMA[2]);
+            }
+            ChannelLayout::Rgb | ChannelLayout::Rgba => out.extend_from_slice(&rgb),
+            ChannelLayout::Cmyk | ChannelLayout::CmykA => out.extend_from_slice(&rgb_to_cmyk(rgb[0], rgb[1], rgb[2])),
+            ChannelLayout::Lab | ChannelLayout::LabA => out.extend_from_slice(&crate::lab::srgb_to_lab(rgb)),
+        }
+    }
+    if to.has_alpha() {
+        out.push(alpha);
+    }
 }
 
 #[cfg(test)]
@@ -1043,9 +1151,124 @@ mod tests {
     }
 
     #[test]
+    fn rgba_f32_limit_rejects_before_allocation() {
+        // 3x2 pixels: the RGBA f32 output is 3 * 2 * 4 * 4 = 96 bytes. Most sources here are
+        // smaller than that, so the source fitting the budget does not let the output through.
+        for sample in SampleType::ALL {
+            for layout in ChannelLayout::ALL {
+                let img = Image::new(3, 2, layout, sample).unwrap();
+                let tight = Limits::new(3, 2, 6, 95);
+                assert!(matches!(img.to_rgba_f32(&tight), Err(CodecError::LimitExceeded(_))), "{layout:?} {sample:?}: max_alloc");
+                let exact = Limits::new(3, 2, 6, 96);
+                assert_eq!(img.to_rgba_f32(&exact).map(|v| v.len()).ok(), Some(24), "{layout:?} {sample:?}");
+                for limits in [Limits::new(2, 2, 6, 96), Limits::new(3, 1, 6, 96), Limits::new(3, 2, 5, 96)] {
+                    assert!(matches!(img.to_rgba_f32(&limits), Err(CodecError::LimitExceeded(_))), "{layout:?} {sample:?}: {limits:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rgba_f32_matches_existing_conversions() {
+        // Edge, mid and (for float samples) out-of-range values, so the CMYK, Lab and alpha
+        // formulas and the f16 and f32 reads are all compared bit for bit.
+        let base = [0.0, 1.0, 0.5, 0.25, 0.75, 1.0 / 255.0, 0.3, 0.9, 1.5, -0.25];
+        for sample in SampleType::ALL {
+            for layout in ChannelLayout::ALL {
+                let n = 7 * 3 * layout.channels();
+                let vals: Vec<f32> = (0..n).map(|i| base[(i * 7 + i / 3) % base.len()]).collect();
+                let img = Image::from_normalized(7, 3, layout, sample, &vals).unwrap();
+                let got = img.to_rgba_f32(&Limits::default()).unwrap();
+                let want = convert_layout(&img.to_normalized(), layout, ChannelLayout::Rgba);
+                let via_convert = img.convert(ChannelLayout::Rgba, SampleType::F32).to_f32_samples().unwrap();
+                let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&got), bits(&want), "{layout:?} {sample:?}");
+                assert_eq!(bits(&got), bits(&via_convert), "{layout:?} {sample:?}: convert");
+            }
+        }
+    }
+
+    #[test]
+    fn rgba_f32_of_an_empty_image_is_empty() {
+        for (w, h) in [(0, 0), (0, 3), (4, 0)] {
+            let img = Image::new(w, h, ChannelLayout::Rgb, SampleType::U8).unwrap();
+            assert_eq!(img.to_rgba_f32(&Limits::new(1, 1, 1, 0)).ok(), Some(Vec::new()), "{w}x{h}");
+        }
+    }
+
+    #[test]
     fn rgba8_of_gray() {
         let img = Image::from_u8(1, 1, ChannelLayout::GrayA, vec![10, 20]).unwrap();
         assert_eq!(img.to_rgba8(), vec![10, 10, 10, 20]);
+    }
+
+    #[test]
+    fn rgba8_and_rgba16_limits_reject_before_allocation() {
+        // 3x2 pixels: the RGBA8 output is 3 * 2 * 4 = 24 bytes and the RGBA16 output 48. A gray
+        // U8 source is 6 bytes, so the source fitting the budget does not let the output through.
+        for sample in SampleType::ALL {
+            for layout in ChannelLayout::ALL {
+                let img = Image::new(3, 2, layout, sample).unwrap();
+                let over =
+                    |bytes| [Limits::new(3, 2, 6, bytes - 1), Limits::new(2, 2, 6, bytes), Limits::new(3, 1, 6, bytes), Limits::new(3, 2, 5, bytes)];
+                for limits in over(24) {
+                    assert!(matches!(img.try_to_rgba8(&limits), Err(CodecError::LimitExceeded(_))), "{layout:?} {sample:?}: {limits:?}");
+                }
+                for limits in over(48) {
+                    assert!(matches!(img.try_to_rgba16(&limits), Err(CodecError::LimitExceeded(_))), "{layout:?} {sample:?}: {limits:?}");
+                }
+                if layout != ChannelLayout::Rgba || sample != SampleType::U8 {
+                    for limits in over(24) {
+                        assert!(matches!(img.clone().into_rgba8(&limits), Err(CodecError::LimitExceeded(_))), "{layout:?} {sample:?}: {limits:?}");
+                    }
+                }
+                assert_eq!(img.try_to_rgba8(&Limits::new(3, 2, 6, 24)).map(|v| v.len()).ok(), Some(24), "{layout:?} {sample:?}");
+                assert_eq!(img.try_to_rgba16(&Limits::new(3, 2, 6, 48)).map(|v| v.len()).ok(), Some(24), "{layout:?} {sample:?}");
+                assert_eq!(img.clone().into_rgba8(&Limits::new(3, 2, 6, 24)).map(|v| v.len()).ok(), Some(24), "{layout:?} {sample:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn checked_rgba8_and_rgba16_match_the_unchecked_conversions() {
+        // The same edge, mid and out-of-range values as the f32 comparison, so the integer fast
+        // path and the per-pixel path are both compared with Image::convert bit for bit.
+        let base = [0.0, 1.0, 0.5, 0.25, 0.75, 1.0 / 255.0, 0.3, 0.9, 1.5, -0.25];
+        for sample in SampleType::ALL {
+            for layout in ChannelLayout::ALL {
+                let n = 7 * 3 * layout.channels();
+                let vals: Vec<f32> = (0..n).map(|i| base[(i * 7 + i / 3) % base.len()]).collect();
+                let img = Image::from_normalized(7, 3, layout, sample, &vals).unwrap();
+                let want8 = img.convert(ChannelLayout::Rgba, SampleType::U8);
+                let want16 = img.convert(ChannelLayout::Rgba, SampleType::U16).to_u16_samples().unwrap();
+                assert_eq!(img.to_rgba8(), want8.data(), "{layout:?} {sample:?}");
+                assert_eq!(img.try_to_rgba8(&Limits::default()).unwrap(), want8.data(), "{layout:?} {sample:?}: checked");
+                assert_eq!(img.clone().into_rgba8(&Limits::default()).unwrap(), want8.data(), "{layout:?} {sample:?}: into");
+                assert_eq!(img.to_rgba16(), want16, "{layout:?} {sample:?}");
+                assert_eq!(img.try_to_rgba16(&Limits::default()).unwrap(), want16, "{layout:?} {sample:?}: checked");
+            }
+        }
+    }
+
+    #[test]
+    fn into_rgba8_of_an_rgba8_image_keeps_its_buffer() {
+        let img = Image::from_u8(2, 1, ChannelLayout::Rgba, vec![1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        let ptr = img.data().as_ptr();
+        // The image already holds its output, so a budget of 0 bytes does not apply to it.
+        let out = img.into_rgba8(&Limits::new(1, 1, 1, 0)).unwrap();
+        assert_eq!(out.as_ptr(), ptr);
+        assert_eq!(out, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn checked_rgba8_and_rgba16_of_an_empty_image_are_empty() {
+        for (w, h) in [(0, 0), (0, 3), (4, 0)] {
+            let img = Image::new(w, h, ChannelLayout::Gray, SampleType::U16).unwrap();
+            let none = Limits::new(1, 1, 1, 0);
+            assert_eq!(img.try_to_rgba8(&none).ok(), Some(Vec::new()), "{w}x{h}");
+            assert_eq!(img.try_to_rgba16(&none).ok(), Some(Vec::new()), "{w}x{h}");
+            assert_eq!(img.into_rgba8(&none).ok(), Some(Vec::new()), "{w}x{h}");
+        }
     }
 
     #[test]

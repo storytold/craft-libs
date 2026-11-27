@@ -1,0 +1,28 @@
+[package]
+name = "craft-develop"
+description = "The raw develop pipeline, CPU path: sensor data from craft-raw (or a decoded linear image) and craft-develop-model settings in, the rendered picture out."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-color = { workspace = true }
+craft-color-transform = { workspace = true }
+craft-develop-model = { workspace = true }
+craft-geom = { workspace = true }
+craft-raw = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[dev-dependencies]
+craft-render-parity = { workspace = true }
+craft-testkit = { workspace = true }
+proptest = { workspace = true }

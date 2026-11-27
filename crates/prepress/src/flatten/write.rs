@@ -40,8 +40,10 @@ use crate::ink::{Ink, InkColor, InkId, InkSet, Overprint, Process, to_pdf_color}
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
+/// Why writing a flattened page failed.
 pub enum WriteError {
     #[error(transparent)]
+    #[allow(missing_docs)]
     Pdf(#[from] pdf_write::WriteError),
     /// An ink isn't in the set or a spot's Lab alternate can't be converted.
     #[error("color {0:?} can't be written")]
@@ -49,14 +51,28 @@ pub enum WriteError {
     /// A DeviceN space would have more colorants than the output's PDF version takes
     /// ([`max_colorants`]).
     #[error("a DeviceN space of {colorants} colorants; this output takes at most {max}")]
-    Colorants { colorants: usize, max: usize },
+    Colorants {
+        /// Colorants the space would have.
+        colorants: usize,
+        /// Most colorants the output takes.
+        max: usize,
+    },
     /// A complex region paints more spot inks than [`plates`](crate::plates::plates) separates;
     /// `unseparated` are the ones past the limit.
     #[error("a complex region paints {inks} spot inks; at most {max} are separated, not {}", some_names(.unseparated))]
-    SpotInks { inks: usize, max: usize, unseparated: Vec<String> },
+    SpotInks {
+        /// Spot inks the region paints.
+        inks: usize,
+        /// Most spot inks that are separated.
+        max: usize,
+        /// Names of the spot inks past the limit.
+        unseparated: Vec<String>,
+    },
     #[error("the page box is empty or not finite")]
+    #[allow(missing_docs)]
     Page,
     #[error("image: {0}")]
+    #[allow(missing_docs)]
     Image(&'static str),
     /// Display-list features the writer doesn't write yet.
     #[error("not written yet: {0}")]
@@ -135,6 +151,7 @@ pub struct FontMap {
 type Shared = (FontBytes, Option<Font>);
 
 impl FontMap {
+    /// Create an empty map.
     pub fn new() -> Self {
         Self::default()
     }
@@ -144,6 +161,7 @@ impl FontMap {
         self.fonts.values().map(Vec::len).sum()
     }
 
+    /// Whether no font program has been seen.
     pub fn is_empty(&self) -> bool {
         self.fonts.is_empty()
     }
@@ -255,10 +273,7 @@ impl<'a> Painter<'a, '_> {
 
     fn fill(&mut self, s: &mut Surface<'_>, f: &FillItem, opacity: f32) -> Result<(), WriteError> {
         let Some(path) = to_path(&f.path) else { return Ok(()) };
-        let rule = match f.rule {
-            FillRule::NonZero => KFillRule::NonZero,
-            FillRule::EvenOdd => KFillRule::EvenOdd,
-        };
+        let rule = k_fill_rule(f.rule);
         let (paint, overprint) = self.paint(&f.paint, f.overprint, Affine::IDENTITY)?;
         with_overprint(s, overprint, |s| {
             s.set_fill(Some(Fill { paint, opacity: normalized(opacity), rule }));
@@ -424,7 +439,7 @@ impl<'a> Painter<'a, '_> {
             None => None,
         };
         if let Some(clip) = clip {
-            s.push_clip_path(&clip, &KFillRule::NonZero);
+            s.push_clip_path(&clip, &k_fill_rule(g.clip_rule));
             pushed += 1;
         }
         let tag = match &g.actual_text {
@@ -692,6 +707,13 @@ fn blend_mode(b: BlendMode) -> kblend::BlendMode {
 fn to_transform(a: Affine) -> Transform {
     let [a, b, c, d, e, f] = a.as_coeffs().map(|v| v as f32);
     Transform::from_row(a, b, c, d, e, f)
+}
+
+fn k_fill_rule(rule: FillRule) -> KFillRule {
+    match rule {
+        FillRule::NonZero => KFillRule::NonZero,
+        FillRule::EvenOdd => KFillRule::EvenOdd,
+    }
 }
 
 /// `None` for an empty path, which paints nothing.

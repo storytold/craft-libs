@@ -80,6 +80,10 @@ pub struct Settings {
     pub default_tab: f32,
     pub even_odd_headers: bool,
     pub mirror_margins: bool,
+    /// The gutter (`w:gutter` of a section's page margins) is added to the top margin instead of
+    /// the left one (`w:gutterAtTop`; Page Setup › Gutter position › Top). A document-wide
+    /// setting: Word keeps it in `settings.xml`, not per section.
+    pub gutter_at_top: bool,
     pub auto_hyphenation: bool,
     /// Hyphenation zone (`w:hyphenationZone`), points: a line is hyphenated only when breaking
     /// it at a word boundary would leave more than this empty at its end.
@@ -166,6 +170,13 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Hide spelling errors in this document only (`w:hideSpellingErrors`): no squiggles under
+    /// misspelled words. Spelling & Grammar (F7) still finds them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_spelling_errors: bool,
+    /// Hide grammar errors in this document only (`w:hideGrammaticalErrors`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_grammar_errors: bool,
     /// The document was opened from ODF: the standard's rules that differ from Word's apply as
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,7 +230,7 @@ pub const DEFAULT_GRID: f32 = 9.0;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PagePicture {
-    /// Key into [`Document::media`].
+    /// Key into `Document::media`.
     pub media: String,
     /// `v:fill/@type` (`tile`, `frame`, `tile`...); tiled when `tile`, stretched to the page otherwise.
     pub fill_type: String,
@@ -296,6 +307,7 @@ impl Default for Settings {
             default_tab: 36.0,
             even_odd_headers: false,
             mirror_margins: false,
+            gutter_at_top: false,
             auto_hyphenation: false,
             hyphenation_zone: DEFAULT_HYPHENATION_ZONE,
             hyphenate_caps: true,
@@ -328,6 +340,8 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            hide_spelling_errors: false,
+            hide_grammar_errors: false,
             odf: None,
         }
     }

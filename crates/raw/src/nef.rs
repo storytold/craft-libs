@@ -12,10 +12,10 @@
 //! is exactly three bytes per pixel, Nikon small raw ([`small_raw`]); the D1X's genuinely Huffman-coded strip stays
 //! refused.
 
-use crate::nefc;
-use crate::shared::white_from_data;
+use crate::shared::white_from_data_sourced;
 use crate::tiffraw::{Packing, check_image, read_image};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use crate::{coolpix, nefc};
 use craft_tiff::image::ImageInfo;
 use craft_tiff::tags::{self as t, photometric};
 use craft_tiff::{ByteOrder, Ifd, Tiff, makernote};
@@ -237,6 +237,19 @@ pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, bits: u32) -> usize {
     aw & !1
 }
 
+/// The measured two-field Coolpix files use the binary maker-note version 0.2.0.0, compression 1 and a single
+/// tight 12-bit strip. Together with the model list in [`coolpix::field_order`] this scopes the rearrangement;
+/// it is a measured discriminator, not a TIFF declaration of field storage.
+fn legacy_field_layout(info: &ImageInfo, mn: Option<&makernote::MakerNote>, file_len: usize) -> bool {
+    let legacy = mn.and_then(|m| m.ifd.bytes(0x0001)) == Some(&[0, 2, 0, 0]);
+    let expected = (info.width as u64).checked_mul(info.height as u64).and_then(|n| n.checked_mul(3)).map(|n| n / 2);
+    legacy
+        && info.compression == 1
+        && info.samples_per_pixel == 1
+        && info.bits() == 12
+        && matches!(info.chunks(file_len as u64).as_slice(), [c] if Some(c.len) == expected)
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("TIFF without IFDs".into()))?;
@@ -255,46 +268,88 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Mode::Full => h,
         Mode::Header => h.min(MASK_ROWS),
     };
-    let data = if info.compression == t::compression::NIKON {
+    let mut data = if info.compression == t::compression::NIKON {
         compressed(bytes, &info, mn.as_ref(), rows, limits)?
     } else {
         uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows, limits)?
     };
+    // Header probes inspect stored rows. Judge masked columns before rearranging the full
+    // image too, so the probe and full decoder use exactly the same prefix.
+    let stored_active_w = match &data {
+        RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
+        _ => w,
+    };
+    let model = ifd0.string(t::MODEL).unwrap_or_default();
+    // Some CCD Coolpix bodies write two interlaced fields one after the other: the measured bodies, in their
+    // measured legacy layout, are interleaved in their model's field order (see `coolpix`).
+    if let (Mode::Full, RawData::U16(d)) = (mode, &mut data)
+        && let Some(first_even) = coolpix::field_order(&model)
+        && legacy_field_layout(&info, mn.as_ref(), bytes.len())
+        && let Some(img) = coolpix::deinterlace(d, w, h, first_even)
+    {
+        *d = img;
+    }
+    // the E5700's four-colour (CYGM) filter becomes linear RGB (fixed measured gains, approximate colour)
+    let cygm = matches!(
+        (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)),
+        (Some([2, 2]), Some(p)) if p == coolpix::CYGM_PATTERN
+    ) && info.compression != t::compression::NIKON
+        && info.samples_per_pixel == 1;
+    // Checked in every mode, so a CYGM NEF that `probe_info` accepts also decodes
+    if cygm && (w < 4 || h < 4 || !w.is_multiple_of(2) || !h.is_multiple_of(2)) {
+        return Err(RawError::Corrupt("Coolpix: bad CYGM mosaic".into()));
+    }
+    if cygm && let (Mode::Full, RawData::U16(d)) = (mode, &data) {
+        let rgb = coolpix::cygm_to_rgb(d, w, h, coolpix::CYGM_PATTERN).ok_or_else(|| RawError::Corrupt("Coolpix: bad CYGM mosaic".into()))?;
+        data = RawData::U16(rgb);
+    }
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float NEF".into())) };
 
     // Maker note 0x003d is in 14-bit units whatever the sample depth: 12-bit files from the D750, D780, D850,
     // D7500 and Z 50 store 600 / 1008 / 400 / 400 / 1008 while their darkest samples are 150 / ~252 / 99 / 99 / ~250
     // (our measurements on CC0 raw.pixls.us samples; the same bodies' 14-bit files match the tag as is).
     let black_scale = if bits == 12 { 0.25 } else { 1.0 };
-    let black = match mn.as_ref().and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
-        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => BlackLevel {
-            repeat_rows: 2,
-            repeat_cols: 2,
-            values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
-            ..Default::default()
+    let (black, black_source) = match mn.as_ref().and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
+        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => (
+            BlackLevel {
+                repeat_rows: 2,
+                repeat_cols: 2,
+                values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
+                ..Default::default()
+            },
+            crate::LevelSource::Metadata,
+        ),
+        _ => match nrw_black(mn.as_ref(), bits) {
+            Some(value) => (BlackLevel::uniform(value), crate::LevelSource::Metadata),
+            None => {
+                let (value, source) = be16_black(&info, bytes.len() as u64, mn.as_ref(), samples);
+                (BlackLevel::uniform(value), source)
+            }
         },
-        _ => BlackLevel::uniform(nrw_black(mn.as_ref(), bits).unwrap_or_else(|| be16_black(&info, bytes.len() as u64, mn.as_ref(), samples))),
     };
     let wb = mn
         .as_ref()
         .and_then(|m| m.ifd.f64s(WB_RB_LEVELS))
         .filter(|v| v.len() >= 2 && v[0] > 0.1 && v[1] > 0.1 && v[0] < 10.0 && v[1] < 10.0)
         .map(|v| [v[0] as f32, 1.0, v[1] as f32]);
-    let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
+    // the converted CYGM data is already balanced
+    let wb = if cygm { Some([1.0; 3]) } else { wb };
+    let (cfa, assumed_cfa) = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
-            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+            (Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }, false)
         }
-        _ => Cfa::bayer_static("RGGB"),
+        _ => (Cfa::bayer_static("RGGB"), true),
     };
-    let model = ifd0.string(t::MODEL).unwrap_or_default();
     let body = measured_body(&model, w, h, bits);
-    let active_w = trailing_masked_columns(samples, w, bits);
+    let active_w = stored_active_w;
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
-    let white = match (body.and_then(|b| b.white), mode) {
-        (Some(white), _) => white,
-        (None, Mode::Full) => white_from_data(samples, bits),
-        (None, Mode::Header) => ((1u32 << bits.clamp(1, 16)) - 1) as f32,
+    let (white, white_source) = match (body.and_then(|b| b.white), mode) {
+        // fixed, so the header probe and the full decode agree
+        _ if cygm => (coolpix::CYGM_WHITE, crate::LevelSource::Fallback),
+        (Some(white), _) => (white, crate::LevelSource::Fallback),
+        (None, Mode::Full) => white_from_data_sourced(samples, bits),
+        (None, Mode::Header) => (((1u32 << bits.clamp(1, 16)) - 1) as f32, crate::LevelSource::Fallback),
     };
     let crop = match body {
         Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
@@ -305,12 +360,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         format: RawFormat::Nef,
         width: w,
         height: h,
-        cpp: 1,
+        cpp: if cygm { 3 } else { 1 },
         data: match mode {
             Mode::Full => data,
             Mode::Header => RawData::U16(Vec::new()),
         },
-        cfa: Some(cfa),
+        cfa: if cygm { None } else { Some(cfa) },
         bits,
         black,
         white: vec![white],
@@ -320,6 +375,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect,
         // Nikon's in-file distortion correction, about the optical centre (which follows the sensor shift)
         opcodes: OpcodeLists {
@@ -329,7 +385,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
-        level_sources: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -378,8 +435,8 @@ fn uncompressed(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PackedLayout {
     /// LSB-first bit stream of `bits` per sample (12: 3 bytes per 2 samples, 14: 7 bytes per 4), rows byte aligned.
-    /// 12-bit rows are `3w/2` bytes (older bodies) or padded to 16 bytes (Z 6, D6); 14-bit rows are `7w/4` bytes
-    /// padded to 16 bytes.
+    /// Rows use `ceil(bits * width / 8)` bytes, optionally padded to 16 bytes. Without an explicit packed maker
+    /// mode, recognition requires complete sample groups and 14-bit rows padded to 16 bytes.
     Lsb { stride: usize },
     /// D100: 16-byte chunks of fifteen data bytes holding ten MSB-first 12-bit samples, plus one zero pad byte. The
     /// rows carry more samples than the IFD width (3040 against 3034); the extra columns are not image.
@@ -399,7 +456,11 @@ fn packed_layout(w: usize, h: usize, bits: u32, strip: u64, stated: bool) -> Opt
     }
     let stride = strip / h;
     let tight = w.checked_mul(bits as usize)?.div_ceil(8);
-    let tight = if bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4) { tight } else { return None };
+    // Unmarked data must still match a measured complete-group layout: do not guess a packing for compressed
+    // data. An explicit packed maker mode permits a final partial group, byte-aligned independently on each row.
+    if !(stated || bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4)) {
+        return None;
+    }
     let padded = tight.checked_next_multiple_of(16)?;
     let lsb_ok = match bits {
         12 => stride == tight || stride == padded,
@@ -436,14 +497,14 @@ fn be16_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayout
 /// 223), and the other 12-bit Coolpix NRWs state 200 in their NRW block; so 200, never above the darkest sample.
 const BE16_BLACK: f32 = 200.0;
 
-fn be16_black(info: &ImageInfo, file_len: u64, mn: Option<&makernote::MakerNote>, samples: &[u16]) -> f32 {
+fn be16_black(info: &ImageInfo, file_len: u64, mn: Option<&makernote::MakerNote>, samples: &[u16]) -> (f32, crate::LevelSource) {
     let has_table = mn.is_some_and(|m| m.ifd.bytes(LINEARIZATION_TABLE).is_some());
     let single = matches!(info.chunks(file_len).as_slice(), [c] if be16_layout(info.width as usize, info.height as usize, info.bits() as u32, c.len).is_some());
     if info.compression != t::compression::NIKON || has_table || info.samples_per_pixel != 1 || !single {
-        return 0.0;
+        return (0.0, crate::LevelSource::Fallback);
     }
     let darkest = samples.iter().copied().min().unwrap_or(0);
-    BE16_BLACK.min(f32::from(darkest))
+    (BE16_BLACK.min(f32::from(darkest)), crate::LevelSource::Inferred)
 }
 
 /// Unpack a [`PackedLayout`] strip into `w * h` samples. Short input leaves the missing samples zero.
@@ -524,7 +585,7 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
 }
 
 /// A "compressed" strip of packed samples: the strip size must match a measured layout exactly. `stated` is set
-/// when the maker note names the packed mode, which also allows 14-bit rows without padding.
+/// when the maker note names the packed mode, which also allows partial groups and 14-bit rows without padding.
 fn packed(bytes: &[u8], info: &ImageInfo, rows: usize, stated: bool, limits: &Limits) -> Result<RawData> {
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;
@@ -657,12 +718,14 @@ fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: craft_tiff::ima
         // the stored colour is already white balanced (see above)
         wb_multipliers: Some([1.0; 3]),
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -723,6 +786,21 @@ mod tests {
         }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(order, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn level_provenance_distinguishes_missing_black_from_recorded_black() {
+        let strip: Vec<u8> = [1000u16; 16].into_iter().flat_map(u16::to_be_bytes).collect();
+        let fallback = nef(1, 12, vec![strip.clone()], 4, 4, 4);
+        let mut note = IfdBuilder::new();
+        note.set(BLACK_LEVEL, Value::Short(vec![400; 4]));
+        let recorded = nef_with_note(1, 12, vec![strip], 4, 4, 4, Some(note));
+        for mode in [Mode::Header, Mode::Full] {
+            let missing = decode(&fallback, mode, &Limits::default()).unwrap();
+            assert_eq!((missing.black.mean(), missing.level_sources.black), (0.0, crate::LevelSource::Fallback));
+            let stated = decode(&recorded, mode, &Limits::default()).unwrap();
+            assert_eq!((stated.black.mean(), stated.level_sources.black), (100.0, crate::LevelSource::Metadata));
+        }
     }
 
     /// A small uncompressed NEF with a real NikonNEFInfo TIFF block, without binary fixtures.
@@ -909,10 +987,12 @@ mod tests {
     /// D70 and D70s get best-guess frames (the D40 shares the D50 / D70 / D70s data size but not their frame).
     #[test]
     fn measured_older_dx_bodies_image_area() {
-        let decode_as = |model: &str, (w, h): (usize, usize)| {
-            let nef = nef_model_in(ByteOrder::Big, model, 1, 12, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32, None);
-            crate::decode(&nef).unwrap()
+        let nef_as = |model: &str, (w, h): (usize, usize)| {
+            nef_model_in(ByteOrder::Big, model, 1, 12, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32, None)
         };
+        // The headers decide the frame (`probe_info` equals the decoded image's info); one body decodes in full.
+        let crop_of = |model: &str, size: (usize, usize)| crate::probe_info(&nef_as(model, size)).unwrap().crop;
+        assert_eq!(crate::decode(&nef_as("NIKON D200", (3904, 2616))).unwrap().crop, Rect::new(16, 12, 3872, 2592));
         for (model, size, crop) in [
             ("NIKON D200", (3904, 2616), Rect::new(16, 12, 3872, 2592)),
             ("NIKON D80", (3904, 2616), Rect::new(14, 9, 3872, 2592)),
@@ -925,10 +1005,10 @@ mod tests {
             ("NIKON D70", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
             ("NIKON D70s", (3040, 2014), Rect::new(15, 7, 3008, 2000)),
         ] {
-            assert_eq!(decode_as(model, size).crop, crop, "{model}");
+            assert_eq!(crop_of(model, size), crop, "{model}");
         }
         // the V1's area on the V2's data size: no entry, the whole data
-        assert_eq!(decode_as("NIKON 1 V1", (4620, 3084)).crop, Rect::new(0, 0, 4620, 3084));
+        assert_eq!(crop_of("NIKON 1 V1", (4620, 3084)), Rect::new(0, 0, 4620, 3084));
     }
 
     /// Every measured entry is a crop inside its data, once per model, data size and depth, with a white level (if
@@ -950,21 +1030,25 @@ mod tests {
     /// image areas (full frame and 1.3x crop), so renders came out larger and Lightroom crops landed off.
     #[test]
     fn measured_d7100_image_area() {
-        let decode_as = |model: &str, (w, h): (usize, usize)| {
+        let nef_as = |model: &str, (w, h): (usize, usize)| {
             let mut nef = nef(1, 14, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
             // the fixture's model is "NIKON TEST" plus its NUL: 11 bytes to overwrite
             let at = nef.windows(11).position(|b| b == b"NIKON TEST\0").unwrap();
             let name = format!("{model:\0<11}");
             nef[at..at + 11].copy_from_slice(name.as_bytes());
-            crate::decode(&nef).unwrap()
+            nef
         };
+        // The headers decide the frame (`probe_info` equals the decoded image's info); the white level needs the
+        // samples, so the full-frame area decodes in full.
+        let d7100 = crate::decode(&nef_as("NIKON D7100", (6036, 4020))).unwrap();
+        assert_eq!(d7100.crop, Rect::new(18, 10, 6000, 4000));
+        assert_ne!(d7100.white, vec![15520.0]);
         for (size, crop) in [((6036, 4020), Rect::new(18, 10, 6000, 4000)), ((4812, 3212), Rect::new(6, 6, 4800, 3200))] {
-            let d7100 = decode_as("NIKON D7100", size);
+            let d7100 = crate::probe_info(&nef_as("NIKON D7100", size)).unwrap();
             assert_eq!(d7100.crop, crop);
             assert_eq!((d7100.crop.width, d7100.crop.height), (crop.width, crop.height));
-            assert_ne!(d7100.white, vec![15520.0]);
-            assert_eq!(d7100.info().developed_size(), (crop.width, crop.height));
-            assert_eq!(decode_as("NIKON D7200", size).crop, Rect::new(0, 0, size.0, size.1));
+            assert_eq!(d7100.developed_size(), (crop.width, crop.height));
+            assert_eq!(crate::probe_info(&nef_as("NIKON D7200", size)).unwrap().crop, Rect::new(0, 0, size.0, size.1));
         }
     }
 
@@ -1103,6 +1187,153 @@ mod tests {
         let mut both = nrw_note(200);
         both.set(BLACK_LEVEL, Value::Short(vec![400, 404, 408, 412]));
         assert_eq!(decode(Some(both)).black.values, vec![100.0, 101.0, 102.0, 103.0]);
+    }
+
+    /// A Coolpix-style file: model `model`, `pattern` as the colour-filter tag, one strip of 12-bit MSB-first samples.
+    fn coolpix_file(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16]) -> Vec<u8> {
+        coolpix_file_version(model, pattern, w, h, strip_px, &[0, 2, 0, 0])
+    }
+
+    fn coolpix_file_version(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16], version: &[u8]) -> Vec<u8> {
+        let mut packed = Vec::new();
+        for pair in strip_px.chunks(2) {
+            let v = (pair[0] as u32) << 12 | pair.get(1).copied().unwrap_or(0) as u32;
+            packed.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+        }
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w as u32]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h as u32]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![packed] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("NIKON".into()));
+        ifd0.set(t::MODEL, Value::Ascii(model.into()));
+        ifd0.set(t::ORIENTATION, Value::Short(vec![1]));
+        let mut note = IfdBuilder::new();
+        note.set(0x0001, Value::Undefined(version.to_vec()));
+        let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
+        maker.extend(TiffWriter::new(ByteOrder::Little, false).write(&[note]).unwrap());
+        let mut exif = IfdBuilder::new();
+        exif.set(t::MAKER_NOTE, Value::Undefined(maker));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        ifd0.add_sub_ifd(raw);
+        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
+    /// The strip of a sensor image `img` with its even lines in the first (`first_even`) or the second field.
+    fn two_fields(img: &[u16], w: usize, h: usize, first_even: bool) -> Vec<u16> {
+        let lines = |start: usize| (start..h).step_by(2).flat_map(|y| img[y * w..(y + 1) * w].to_vec()).collect::<Vec<u16>>();
+        let (even, odd) = (lines(0), lines(1));
+        if first_even { [even, odd].concat() } else { [odd, even].concat() }
+    }
+
+    /// A smooth scene with a little per-colour texture, sized like nothing in particular.
+    fn smooth_scene(w: usize, h: usize) -> Vec<u16> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64 / w as f64, (i / w) as f64 / h as f64);
+                (1800.0
+                    + 600.0 * (y * 6.0 * std::f64::consts::PI).sin()
+                    + 300.0 * (x * 4.0 * std::f64::consts::PI).cos() * (y * 4.0 * std::f64::consts::PI).sin()
+                    + 1800.0 * y
+                    + (i % 2) as f64 * 40.0) as u16
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stacked_fields_are_interleaved_for_every_body_that_writes_them() {
+        let (w, h) = (96usize, 80usize);
+        let img = smooth_scene(w, h);
+        // E8400, E8800 and E5400 store the even lines first
+        for model in ["E8400", "E8800", "E5400"] {
+            let bytes = coolpix_file(model, [2, 1, 1, 0], w, h, &two_fields(&img, w, h, true));
+            let r = crate::decode(&bytes).unwrap();
+            assert_eq!((r.width, r.height, r.cpp), (w, h, 1), "{model}");
+            assert_eq!(r.data, RawData::U16(img.clone()), "{model}");
+            assert_eq!(r.cfa.as_ref().unwrap().name(), "BGGR", "{model}");
+        }
+    }
+
+    #[test]
+    fn other_models_and_layouts_keep_their_stored_rows() {
+        let (w, h) = (96usize, 80usize);
+        let stored = two_fields(&smooth_scene(w, h), w, h, true);
+        // an unmeasured model in the legacy layout
+        for model in ["E5000", "E99999", "D1X"] {
+            assert_eq!(crate::decode(&coolpix_file(model, [2, 1, 1, 0], w, h, &stored)).unwrap().data, RawData::U16(stored.clone()), "{model}");
+        }
+        // a measured model outside its legacy maker-note dialect
+        for version in [b"0211".as_slice(), b"unknown".as_slice()] {
+            let bytes = coolpix_file_version("E8800", [2, 1, 1, 0], w, h, &stored, version);
+            assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(stored.clone()));
+        }
+        // an odd height cannot hold two fields
+        let odd: Vec<u16> = (0..w * 79).map(|i| (i * 131 % 4096) as u16).collect();
+        assert_eq!(crate::decode(&coolpix_file("E8400", [2, 1, 1, 0], w, 79, &odd)).unwrap().data, RawData::U16(odd));
+    }
+
+    #[test]
+    fn field_storage_does_not_depend_on_orientation() {
+        let (w, h) = (96usize, 80usize);
+        let img = smooth_scene(w, h);
+        let bytes = coolpix_file("E8400", [2, 1, 1, 0], w, h, &two_fields(&img, w, h, true));
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let orientation = tiff.ifds.first().unwrap().get(t::ORIENTATION).unwrap().offset as usize;
+        for code in [3u16, 6, 8] {
+            let mut rotated = bytes.clone();
+            rotated.get_mut(orientation..orientation + 2).unwrap().copy_from_slice(&code.to_le_bytes());
+            let r = crate::decode(&rotated).unwrap();
+            assert_eq!(r.orientation, Orientation::from_exif(code), "the rotated file reports orientation {code}");
+            assert_eq!(r.data, RawData::U16(img.clone()), "orientation {code}");
+        }
+    }
+
+    #[test]
+    fn stacked_field_header_and_full_decode_agree() {
+        let (w, h) = (160usize, 256usize);
+        let mut img = smooth_scene(w, h);
+        for row in img.chunks_mut(w) {
+            row.iter_mut().skip(w - 8).for_each(|v| *v = 0);
+        }
+        for (model, pattern, first_even) in [("E8400", [2, 1, 1, 0], true), ("E5700", coolpix::CYGM_PATTERN, false)] {
+            let bytes = coolpix_file(model, pattern, w, h, &two_fields(&img, w, h, first_even));
+            let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
+            let full = decode(&bytes, Mode::Full, &Limits::default()).unwrap();
+            assert_eq!(header.info(), full.info(), "{model}");
+            assert_eq!(header.black, full.black, "{model}");
+            assert!(matches!(header.data, RawData::U16(ref d) if d.is_empty()));
+            if pattern == coolpix::CYGM_PATTERN {
+                assert_eq!((header.white.clone(), full.white.clone()), (vec![coolpix::CYGM_WHITE], vec![coolpix::CYGM_WHITE]), "{model}");
+            }
+        }
+    }
+
+    #[test]
+    fn coolpix_e5700_keeps_geometry_during_cygm_conversion() {
+        let (w, h) = (128usize, 96usize);
+        let img = smooth_scene(w, h);
+        // the E5700 stores the odd lines first
+        let r = crate::decode(&coolpix_file("E5700", [5, 3, 1, 4], w, h, &two_fields(&img, w, h, false))).unwrap();
+        assert_eq!((r.width, r.height, r.cpp), (w, h, 3));
+        assert!(r.cfa.is_none());
+        let expected = coolpix::cygm_to_rgb(&img, w, h, coolpix::CYGM_PATTERN).unwrap();
+        assert!(r.data == RawData::U16(expected), "full decode retains the intended sensor geometry");
+    }
+
+    #[test]
+    fn coolpix_short_input_is_an_error_not_a_panic() {
+        let (w, h) = (128usize, 96usize);
+        let mut file = coolpix_file("E5700", [5, 3, 1, 4], w, h, &vec![100u16; w * h]);
+        file.truncate(file.len() / 2);
+        let _ = crate::decode(&file);
+        file.truncate(200);
+        assert!(crate::decode(&file).is_err());
     }
 
     #[test]
@@ -1524,6 +1755,97 @@ mod tests {
             let short = truncated_tail_strip(bytes.clone(), keep);
             for mode in [Mode::Header, Mode::Full] {
                 assert!(matches!(decode(&short, mode, &Limits::default()), Err(RawError::Corrupt(_))));
+            }
+        }
+    }
+
+    mod partial_row_tests {
+        use super::*;
+
+        // Independent wire oracle: place each sample bit directly, leaving nonzero tail bits and padding.
+        fn image(data: &[u16], w: usize, bits: u32, padded: bool) -> Vec<u8> {
+            let tight = (w * bits as usize).div_ceil(8);
+            let stride = if padded { tight.next_multiple_of(16) } else { tight };
+            let mut bytes = vec![0xA5; stride * (data.len() / w)];
+            for (i, &sample) in data.iter().enumerate() {
+                for bit in 0..bits as usize {
+                    let at = (i % w) * bits as usize + bit;
+                    let byte = &mut bytes[(i / w) * stride + at / 8];
+                    *byte = (*byte & !(1 << (at % 8))) | (((sample >> bit) as u8 & 1) << (at % 8));
+                }
+            }
+            bytes
+        }
+
+        fn note(order: ByteOrder, modern: bool, mode: u16) -> IfdBuilder {
+            let mut n = IfdBuilder::new();
+            if modern {
+                let mut record = b"01000400\0\0".to_vec();
+                record.extend(if order == ByteOrder::Big { mode.to_be_bytes() } else { mode.to_le_bytes() });
+                n.set(NEF_COMPRESSION_RECORD, Value::Undefined(record));
+            } else {
+                n.set(NEF_COMPRESSION, Value::Short(vec![mode]));
+            }
+            n
+        }
+
+        #[test]
+        fn declared_packed_partial_rows_preserve_every_sample() {
+            let h = 5;
+            for (bits, mode) in [(12u32, 6), (14, 10)] {
+                for w in [1, 3, 5, 22, 23] {
+                    let data = samples(w * h, bits);
+                    for padded in [false, true] {
+                        let wire = image(&data, w, bits, padded);
+                        if w == 22 && bits == 14 {
+                            assert_eq!(wire.len() / h, if padded { 48 } else { 39 });
+                        }
+                        for order in [ByteOrder::Big, ByteOrder::Little] {
+                            for modern in [false, true] {
+                                let file = nef_in(
+                                    order,
+                                    34713,
+                                    bits as u16,
+                                    vec![wire.clone()],
+                                    w as u32,
+                                    h as u32,
+                                    h as u32,
+                                    Some(note(order, modern, mode)),
+                                );
+                                let raw = crate::decode(&file).unwrap();
+                                assert_eq!((raw.width, raw.height, raw.cpp), (w, h, 1));
+                                assert!(!raw.notices.assumed_cfa, "valid CFA tag is retained");
+                                let RawData::U16(got) = raw.data else { panic!("integer samples") };
+                                assert_eq!(got, data, "{bits}-bit width {w}, padded {padded}, {order:?}, modern {modern}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn partial_rows_keep_mode_depth_and_strip_guards() {
+            let (w, h) = (22, 5);
+            let data = samples(w * h, 14);
+            for padded in [false, true] {
+                let wire = image(&data, w, 14, padded);
+                let file = |bytes, mode: Option<u16>| {
+                    nef_with_note(34713, 14, vec![bytes], w as u32, h as u32, h as u32, mode.map(|m| note(ByteOrder::Big, false, m)))
+                };
+                for mode in [None, Some(0), Some(6), Some(13), Some(14)] {
+                    assert!(matches!(crate::decode(&file(wire.clone(), mode)), Err(RawError::Unsupported(_))), "mode {mode:?}");
+                }
+                let good = file(wire.clone(), Some(10));
+                assert!(crate::decode(&good).is_ok());
+                let short = truncated_tail_strip(good, wire.len() - 1);
+                assert!(matches!(crate::decode(&short), Err(RawError::Corrupt(_))));
+                for len in [wire.len() - 1, wire.len() + 1] {
+                    assert!(matches!(crate::decode(&file(vec![0; len], Some(10))), Err(RawError::Unsupported(_))));
+                }
+            }
+            for (w, h, bits) in [(0, 5, 14), (22, 0, 14), (22, 5, 13), (usize::MAX, 5, 14)] {
+                assert!(packed_layout(w, h, bits, u64::MAX, true).is_none());
             }
         }
     }

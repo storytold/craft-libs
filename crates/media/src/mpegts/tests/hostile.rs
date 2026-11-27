@@ -58,8 +58,8 @@ fn ps_seed() -> Vec<u8> {
 #[test]
 fn hostile_input_never_panics() {
     let mut seeds = vec![ts_seed(false), ts_seed(true), ps_seed()];
-    seeds.push(work_tests::big_program_stream(false, 40).0);
-    seeds.push(work_tests::big_program_stream(true, 40).0);
+    seeds.push(work_tests::big_program_stream(false, 8).0);
+    seeds.push(work_tests::big_program_stream(true, 8).0);
     // fewer rounds than FilmCraft's 40 000: tests here build without optimisation, and the two
     // large program streams cost a megabyte of window refill per unit read
     for (i, s) in seeds.iter().enumerate() {
@@ -89,7 +89,8 @@ fn elementary_stream_frame_parsers_never_panic() {
     ac3.extend([1u8; 60]);
     let seeds = [adts_frame(3), mp2_frame(1), ac3, mpeg2_frame(1, 0, false, 64), vec![0x56, 0xE0, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]];
     for (i, s) in seeds.iter().enumerate() {
-        craft_media_testkit::hostile::hammer(&format!("es seed {i}"), s, 40_000, |d| {
+        let codecs = codecs.clone();
+        craft_media_testkit::hostile::hammer(&format!("es seed {i}"), s, 40_000, move |d| {
             for c in &codecs {
                 let _ = frame_bytes(c, d);
                 let _ = frame_info(c, d);

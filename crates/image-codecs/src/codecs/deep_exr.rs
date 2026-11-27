@@ -304,19 +304,14 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
     let bytes_per_sample: usize = exr_types.iter().map(|t| sample_bytes(*t)).sum();
     let multipart = meta.requirements.has_multiple_layers;
 
-    // The offset tables follow the headers: `chunk_count` u64 per header, in header order.
-    // Our part's table starts after the tables of all earlier parts.
-    let mut table_pos = header_end(bytes)?;
-    for h_ in meta.headers.iter().take(header_index) {
-        table_pos = table_pos.saturating_add((h_.chunk_count.min(1 << 24) as u64).saturating_mul(8));
-    }
+    // A chunk offset before the end of the last offset table points into table data.
+    let (table_pos, tables_end) = offset_tables(meta, bytes, header_index)?;
     let mut cur = Cursor::new(bytes);
     seek_to(&mut cur, table_pos)?;
     let mut offsets = Vec::with_capacity(header.chunk_count.min(1 << 20));
     for _ in 0..header.chunk_count {
         offsets.push(u64(&mut cur)?);
     }
-    let tables_end = cur.position();
 
     // Block geometry.
     let (tiles_x, tile_w, tile_h, slots) = match &header.blocks {
@@ -563,6 +558,26 @@ fn header_end(bytes: &[u8]) -> Result<u64, CodecError> {
     let mut cur = Cursor::new(bytes);
     MetaData::read_from_buffered(&mut cur, false).map_err(err)?;
     Ok(cur.position())
+}
+
+/// Where part `header_index`'s offset table starts and where the last part's table ends. The
+/// tables follow the headers, `chunk_count` u64 per header in header order, and the chunks
+/// follow the last table. Sizes that overflow, or tables that run past the end of the file,
+/// are errors.
+fn offset_tables(meta: &MetaData, bytes: &[u8], header_index: usize) -> Result<(u64, u64), CodecError> {
+    let mut table_pos = header_end(bytes)?;
+    let mut tables_end = table_pos;
+    for (i, h) in meta.headers.iter().enumerate() {
+        let len = u64::try_from(h.chunk_count).ok().and_then(|n| n.checked_mul(8));
+        tables_end = len.and_then(|len| tables_end.checked_add(len)).ok_or_else(|| err("the offset tables are too large"))?;
+        if i < header_index {
+            table_pos = tables_end;
+        }
+    }
+    if tables_end > bytes.len() as u64 {
+        return Err(err(format!("the offset tables end at byte {tables_end}, past the end of the file")));
+    }
+    Ok((table_pos, tables_end))
 }
 
 /// Composite the deep samples into a flat image: per pixel, samples sorted by Z (stable; the

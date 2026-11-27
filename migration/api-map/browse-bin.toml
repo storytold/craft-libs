@@ -1,0 +1,171 @@
+# API map of the "Browse: media bin" family: old path to new path and setter renames.
+
+family = "Browse: media bin"
+new_module = "craft_browse::ui::bin"
+
+[[type]]
+name = "MediaBin"
+old = "craft_browse::ui::bin::MediaBin"
+new = "craft_browse::ui::bin::MediaBin"
+status = "same"
+note = "A pattern: `new(label, Bind<BinState<K>>, &M)` in place of `new(id_salt, &mut state, &M)`; pass `Bind::bound(&mut state)` so the bin writes the view, zoom, search, shown bin and open bins itself. `show(ui)` returns `BinOutput`."
+
+[[type]]
+name = "BinState"
+old = "craft_browse::ui::bin::BinState"
+new = "craft_browse::ui::bin::BinState"
+status = "same"
+note = "`expanded` is an `OpenSet<K>`; `apply` stays for events the host produces. Its settings are in `BinSettings`."
+
+[[type]]
+name = "BinSettings"
+old = "craft_browse::ui::bin::BinSettings"
+new = "craft_browse::ui::bin::BinSettings"
+status = "same"
+note = "`icon_size` (points) is `zoom` (a multiple of the medium thumbnail side); `columns: TableLayout<String>` is `sort`, `icon_sort` and `widths`, which last for the session because a `ColumnKey` has no text form."
+
+[[type]]
+name = "BinEvent"
+old = "craft_browse::ui::bin::BinEvent"
+new = "craft_browse::ui::bin::BinEvent"
+status = "same"
+note = "`Table(TableEvent)` is `Column(ColumnEvent)` and `IconSort(Option<ColumnSort>)`; `Footer { button }` and `FooterDrop { button, rows }` are `Footer { action }` and `FooterDrop { action, keys }` with the action's index; `Reorder` carries `EditEvent<ReorderMove<K>>`; `Open` carries `OpenChange { key, open, all }`; `Drag` carries `ListDrag { keys, .. }`; `ContextMenu` has no `row: None` background request."
+
+[[type]]
+name = "BinOutput"
+old = "craft_browse::ui::bin::BinOutput"
+new = "craft_browse::ui::bin::BinOutput"
+status = "same"
+note = "`#[non_exhaustive]`; an `Outcome`."
+
+[[type]]
+name = "BinItem"
+old = "craft_browse::ui::bin::BinItem"
+new = "craft_browse::ui::bin::BinItem"
+status = "same"
+note = "`icon` is an `IconId`, `label_color` a `Srgba`, `badges` are the tile grid's `TileBadge`, `status` its `TileStatus`; no `aspect`."
+
+[[type]]
+name = "BinEntry"
+old = "craft_browse::ui::bin::BinEntry"
+new = "craft_browse::ui::bin::BinEntry"
+status = "same"
+
+[[type]]
+name = "BinModel"
+old = "craft_browse::ui::bin::BinModel"
+new = "craft_browse::ui::bin::BinModel"
+status = "same"
+note = "`cell(&self, key, column: &ColumnKey)` in place of a column name."
+
+[[type]]
+name = "BinView"
+old = "craft_browse::ui::bin::BinView"
+new = "craft_browse::ui::bin::BinView"
+status = "same"
+
+[[type]]
+name = "OpenHow"
+old = "craft_browse::ui::bin::OpenHow"
+new = "craft_browse::ui::bin::OpenHow"
+status = "same"
+
+[[type]]
+name = "name_matches"
+old = "craft_browse::ui::bin::name_matches"
+new = "craft_browse::ui::bin::name_matches"
+status = "same"
+
+[[type]]
+name = "BinLabels"
+old = "craft_browse::ui::bin::BinLabels"
+new = ""
+status = "removed"
+note = "Renamed `BinWords`."
+
+[[type]]
+name = "BinWords"
+old = ""
+new = "craft_browse::ui::bin::BinWords"
+status = "replaced"
+note = "Replaces `BinLabels`. A `craft_ui::words!` set with ids `mediaBin.<name>`; the legacy `browse.bin.*` ids go. The item count is a `count` row (`items`), `selected_of` a template, `clear` is the search field's own."
+
+[[type]]
+name = "BinStyle"
+old = "craft_browse::ui::bin::BinStyle"
+new = ""
+status = "removed"
+note = "The look is the children's: `Table`, `ListRow`, `TileGrid`, `Tile`, `FooterBar`."
+
+[[type]]
+name = "ITEMS"
+old = "craft_browse::ui::bin::ITEMS"
+new = ""
+status = "removed"
+note = "The `items` count row of `BinWords`."
+
+[[setter]]
+type = "MediaBin"
+old = "new(id_salt, &mut BinState<K>, &M)"
+new = "new(label, Bind<BinState<K>>, &M)"
+
+[[setter]]
+type = "MediaBin"
+old = "selection(&mut Selection<K>)"
+new = "selection(Bind<Selection<K>>)"
+
+[[setter]]
+type = "MediaBin"
+old = "columns(&[TableColumn<String>])"
+new = "columns(Vec<ColumnSpec>)"
+note = "Column keys are `ColumnKey`s; the first column is the name column, key `name`. `ColumnSpec::tooltip` is not at the base, so a column header shows no tip."
+
+[[setter]]
+type = "MediaBin"
+old = "footer_actions(&[FooterAction])"
+new = "footer_actions(impl IntoIterator<Item = FooterAction>)"
+note = "A `FooterAction` has no id: events name the action by its index; an action that takes drops is built with `accepts_drops::<ListDrag<K>>`."
+
+[[setter]]
+type = "MediaBin"
+old = "zoom_range(f32, f32)"
+new = "zoom_range(f64, f64)"
+note = "Multiples of the medium thumbnail side."
+
+[[setter]]
+type = "MediaBin"
+old = "labels(BinLabels)"
+new = ""
+note = "The words come from the scope's `BinWords`."
+
+[[setter]]
+type = "MediaBin"
+old = "header(impl FnOnce(&mut Ui))"
+new = "header(impl FnOnce(&mut Ui))"
+
+[[setter]]
+type = "MediaBin"
+old = "freeform(&[FreeformCard<K>])"
+new = "freeform(&[FreeformCard<K>])"
+note = "`FreeformCard` is `craft_browse::ui::freebin::FreeformCard`."
+
+[[setter]]
+type = "MediaBin"
+old = "snap(Option<f32>)"
+new = "snap(Option<f32>)"
+
+[[setter]]
+type = "MediaBin"
+old = "start_rename(K)"
+new = "start_rename(K)"
+
+[[setter]]
+type = "MediaBin"
+old = "thumbnails(&Thumbnails<K>, &dyn ThumbSource<K>)"
+new = "thumbnails(&Thumbnails<K>, &dyn ThumbSource<K>)"
+note = "The types are `craft_ui::primitives::textures`'."
+
+[[setter]]
+type = "MediaBin"
+old = "hover_scrub(bool)"
+new = "hover_scrub(bool)"

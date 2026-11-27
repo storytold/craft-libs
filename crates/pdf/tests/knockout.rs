@@ -1,4 +1,4 @@
-//! Knockout transparency groups through the raster path. Adapted from PdfCraft #2974 by mtlcl410
+//! Knockout transparency groups through the raster path. Adapted from storytold/pdfcraft#2974 by mtlcl410
 //! (`raster::tests::knockout_groups_replace_what_their_elements_cover` in pdfcraft-render at
 //! bae69819594a6385a027fec1f67e6b3c36c259b4, MIT OR Apache-2.0).
 #![cfg(feature = "raster")]

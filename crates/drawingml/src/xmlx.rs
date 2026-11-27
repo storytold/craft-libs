@@ -156,7 +156,20 @@ fn used_prefixes(el: &El) -> HashSet<&str> {
     used
 }
 
-/// Serialize `el`, declaring every prefix it uses that the source root declared.
+/// Does `el` or a descendant have an unprefixed name that no `xmlns` inside `el` binds? Such a
+/// name is in the default namespace of the part it was read from. Attributes never are.
+fn uses_outer_default(el: &El) -> bool {
+    fn rec(e: &El, depth: usize) -> bool {
+        if depth > MAX_DEPTH || e.attrs.iter().any(|(k, _)| k == "xmlns") {
+            return false;
+        }
+        !e.name.contains(':') || e.elements().any(|c| rec(c, depth + 1))
+    }
+    rec(el, 0)
+}
+
+/// Serialize `el`, declaring every prefix it uses that the source root declared, and the
+/// root's default namespace when an unprefixed name in `el` depends on it.
 pub fn keep_xml(el: &El, ns: &[(String, String)]) -> String {
     keep_with(el, &[ns], None)
 }
@@ -166,11 +179,15 @@ pub fn keep_xml(el: &El, ns: &[(String, String)]) -> String {
 /// [`MAX_COPIED_NS_BYTES`]).
 pub fn keep_with(el: &El, decls: &[&[(String, String)]], budget: Option<&Cell<usize>>) -> String {
     let used = used_prefixes(el);
+    let default = uses_outer_default(el);
     let mut have: HashSet<&str> = el.attrs.iter().map(|(a, _)| a.as_str()).collect();
     let mut extra = Vec::new();
     for (k, v) in decls.iter().flat_map(|d| d.iter()) {
-        let p = k.strip_prefix("xmlns:").unwrap_or("");
-        if !p.is_empty() && used.contains(p) && v.len() <= MAX_NS_VALUE && !have.contains(k.as_str()) {
+        let wanted = match k.strip_prefix("xmlns:") {
+            Some(p) => !p.is_empty() && used.contains(p),
+            None => k == "xmlns" && default,
+        };
+        if wanted && v.len() <= MAX_NS_VALUE && !have.contains(k.as_str()) {
             let cost = k.len() + v.len();
             if let Some(b) = budget {
                 if b.get() < cost {
@@ -249,56 +266,7 @@ fn rec_mc(el: &mut El, depth: usize, keep: &dyn Fn(&El) -> bool) {
         let mut out = Vec::with_capacity(el.children.len());
         for c in std::mem::take(&mut el.children) {
             match c {
-                Node::El(ac_el) if ac_el.is(ac) => {
-                    if keep(&ac_el) {
-                        out.push(Node::El(ac_el));
-                        continue;
-                    }
-                    let choice = ac_el.children(Local("Choice")).find(|ch| {
-                        let requires = ch.attr_local("Requires").unwrap_or("");
-                        let req_ok = requires.split_whitespace().all(|r| SUPPORTED_MC.contains(&r));
-                        let modelled = !ch.elements().any(|e| e.is(Local("contentPart"))) && (!requires.contains("cx1") || chartex_readable(ch));
-                        req_ok && modelled
-                    });
-                    if let Some(b) = choice.or_else(|| ac_el.child(Local("Fallback"))) {
-                        // The branch's namespace declarations (the first usable one of each name,
-                        // in order), indexed by prefix once: each child then looks up the prefixes
-                        // it uses instead of scanning every declaration.
-                        let mut decls: Vec<(&String, &String)> = Vec::new();
-                        // An oversized declaration still shadows an outer one of its name: its
-                        // content is left unbound rather than bound to the outer namespace.
-                        let mut by_prefix: HashMap<&str, Option<usize>> = HashMap::new();
-                        for (k, v) in b.attrs.iter().chain(ac_el.attrs.iter()) {
-                            let prefix = if k == "xmlns" { Some("") } else { k.strip_prefix("xmlns:") };
-                            if let Some(p) = prefix
-                                && !by_prefix.contains_key(p)
-                            {
-                                by_prefix.insert(p, (v.len() <= MAX_NS_VALUE).then_some(decls.len()));
-                                if v.len() <= MAX_NS_VALUE {
-                                    decls.push((k, v));
-                                }
-                            }
-                        }
-                        for n in &b.children {
-                            if let Node::El(e) = n {
-                                // Carry the declarations from the branch that its content uses
-                                // (all of them per child made children x declarations copies).
-                                let used = used_prefixes(e);
-                                let have: HashSet<&str> = e.attrs.iter().map(|(a, _)| a.as_str()).collect();
-                                let mut wanted: Vec<usize> = std::iter::once("")
-                                    .chain(used.iter().copied())
-                                    .filter_map(|p| by_prefix.get(p).copied().flatten())
-                                    .filter(|&i| decls.get(i).is_some_and(|(k, _)| !have.contains(k.as_str())))
-                                    .collect();
-                                wanted.sort_unstable();
-                                wanted.dedup();
-                                let mut e = e.clone();
-                                e.attrs.extend(wanted.into_iter().filter_map(|i| decls.get(i)).map(|(k, v)| ((*k).clone(), (*v).clone())));
-                                out.push(Node::El(e));
-                            }
-                        }
-                    }
-                }
+                Node::El(ac_el) if ac_el.is(ac) => append_mc(ac_el, &mut out, depth, keep),
                 other => out.push(other),
             }
         }
@@ -306,6 +274,63 @@ fn rec_mc(el: &mut El, depth: usize, keep: &dyn Fn(&El) -> bool) {
     }
     for c in el.elements_mut() {
         rec_mc(c, depth + 1, keep);
+    }
+}
+
+fn append_mc(mut ac_el: El, out: &mut Vec<Node>, depth: usize, keep: &dyn Fn(&El) -> bool) {
+    if depth > MAX_DEPTH || keep(&ac_el) {
+        out.push(Node::El(ac_el));
+        return;
+    }
+    let choice = ac_el.children.iter().position(|node| {
+        let Node::El(ch) = node else { return false };
+        if !ch.is(Local("Choice")) {
+            return false;
+        }
+        let requires = ch.attr_local("Requires").unwrap_or("");
+        let req_ok = requires.split_whitespace().all(|r| SUPPORTED_MC.contains(&r));
+        let modelled = !ch.elements().any(|e| e.is(Local("contentPart"))) && (!requires.contains("cx1") || chartex_readable(ch));
+        req_ok && modelled
+    });
+    let index = choice.or_else(|| ac_el.children.iter().position(|node| matches!(node, Node::El(e) if e.is(Local("Fallback")))));
+    let Some(Node::El(branch)) = index.and_then(|i| ac_el.children.get_mut(i)) else { return };
+
+    // Index branch declarations by prefix once. An oversized declaration still shadows an
+    // outer one of its name, even though its value will not be copied.
+    let mut decls: Vec<(&String, &String)> = Vec::new();
+    let mut by_prefix: HashMap<&str, Option<usize>> = HashMap::new();
+    for (k, v) in branch.attrs.iter().chain(ac_el.attrs.iter()) {
+        let prefix = if k == "xmlns" { Some("") } else { k.strip_prefix("xmlns:") };
+        if let Some(p) = prefix
+            && !by_prefix.contains_key(p)
+        {
+            by_prefix.insert(p, (v.len() <= MAX_NS_VALUE).then_some(decls.len()));
+            if v.len() <= MAX_NS_VALUE {
+                decls.push((k, v));
+            }
+        }
+    }
+
+    for node in std::mem::take(&mut branch.children) {
+        let Node::El(mut e) = node else { continue };
+        // Carry only declarations the child uses, in their original order.
+        let used = used_prefixes(&e);
+        let have: HashSet<&str> = e.attrs.iter().map(|(a, _)| a.as_str()).collect();
+        let mut wanted: Vec<usize> = std::iter::once("")
+            .chain(used.iter().copied())
+            .filter_map(|p| by_prefix.get(p).copied().flatten())
+            .filter(|&i| decls.get(i).is_some_and(|(k, _)| !have.contains(k.as_str())))
+            .collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        e.attrs.extend(wanted.into_iter().filter_map(|i| decls.get(i)).map(|(k, v)| ((*k).clone(), (*v).clone())));
+
+        if e.is(Local("AlternateContent")) {
+            // The final child walk visits contents, so resolve a promoted wrapper here.
+            append_mc(e, out, depth + 1, keep);
+        } else {
+            out.push(Node::El(e));
+        }
     }
 }
 
@@ -322,6 +347,33 @@ mod tests {
         assert_eq!(keep_xml(root.child(Local("z")).unwrap(), &ns), r#"<p:z xmlns:p="P"/>"#);
         assert_eq!(rel_refs(x), ["rId1"]);
         assert!(!has_rel_refs(root.child(Local("z")).unwrap()));
+    }
+
+    /// A part written with a default namespace (`<theme xmlns="…/main">`): an unprefixed
+    /// fragment, or one with an unprefixed descendant, carries that namespace; a prefixed one
+    /// and one that declares its own default are written as before.
+    #[test]
+    fn a_kept_fragment_carries_the_default_namespace_its_names_depend_on() {
+        let root = parse(
+            br#"<theme xmlns="D" xmlns:r="R"><custClrLst><custClr name="x"><srgbClr val="FF0000"/></custClr></custClrLst><r:y/><r:z><w/></r:z><own xmlns="O"><v/></own><r:u><t xmlns=""/></r:u></theme>"#,
+        )
+        .unwrap();
+        let ns = ns_decls(&root);
+        let kid = |n: &str| root.child(Local(n)).unwrap();
+        assert_eq!(keep_xml(kid("custClrLst"), &ns), r#"<custClrLst xmlns="D"><custClr name="x"><srgbClr val="FF0000"/></custClr></custClrLst>"#);
+        assert_eq!(keep_xml(kid("y"), &ns), r#"<r:y xmlns:r="R"/>"#, "prefixed: as before");
+        assert_eq!(keep_xml(kid("z"), &ns), r#"<r:z xmlns="D" xmlns:r="R"><w/></r:z>"#, "an unprefixed descendant");
+        assert_eq!(keep_xml(kid("own"), &ns), r#"<own xmlns="O"><v/></own>"#, "its own default wins");
+        assert_eq!(keep_xml(kid("u"), &ns), r#"<r:u xmlns:r="R"><t xmlns=""/></r:u>"#, "an undeclared default stays");
+        // A part with no default namespace: unprefixed names stay in no namespace.
+        let plain = parse(br#"<p:sld xmlns:p="P"><x/></p:sld>"#).unwrap();
+        assert_eq!(keep_xml(plain.child(Local("x")).unwrap(), &ns_decls(&plain)), "<x/>");
+        // The default declaration spends the budget like the others.
+        let budget = Cell::new(3);
+        assert_eq!(
+            keep_with(kid("custClrLst"), &[&ns], Some(&budget)),
+            r#"<custClrLst><custClr name="x"><srgbClr val="FF0000"/></custClr></custClrLst>"#
+        );
     }
 
     #[test]
@@ -373,6 +425,23 @@ mod tests {
 
     /// The branch's own declaration of a prefix wins over the `AlternateContent`'s; an oversized
     /// one still shadows it (its content stays unbound); a child's own declaration is left alone.
+    #[test]
+    fn direct_nested_mc_branches_keep_namespace_precedence() {
+        let mut root = parse(
+            br#"<root xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+                <mc:AlternateContent><mc:Fallback xmlns:q="urn:outer-q" xmlns:z="urn:outer-z">
+                    <mc:AlternateContent><mc:Fallback xmlns:q="urn:inner-q">
+                        <q:item z:field="1"/>
+                    </mc:Fallback></mc:AlternateContent>
+                </mc:Fallback></mc:AlternateContent>
+            </root>"#,
+        )
+        .unwrap();
+        resolve_mc(&mut root);
+        let item = root.child(Local("item")).unwrap();
+        assert_eq!(item.to_xml(), r#"<q:item z:field="1" xmlns:q="urn:inner-q" xmlns:z="urn:outer-z"/>"#);
+    }
+
     #[test]
     fn mc_branch_declarations_keep_their_precedence() {
         let long = "u".repeat(MAX_NS_VALUE + 1);

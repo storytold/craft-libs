@@ -138,6 +138,94 @@ fn a_damaged_later_frame_keeps_the_frames_before_it() {
     assert_eq!(f[0].image.warnings, [DecodeWarning::Truncated { format: Format::WebP }]);
 }
 
+/// `still`'s chunk `id`, with its header and padding.
+fn chunk_in(still: &[u8], id: &[u8; 4]) -> Vec<u8> {
+    let at = still.windows(4).position(|w| w == id).unwrap();
+    let len = u32::from_le_bytes(still[at + 4..at + 8].try_into().unwrap()) as usize;
+    still[at..at + 8 + len + len % 2].to_vec()
+}
+
+/// `a` with one more frame: a translucent 6x4 lossy picture under an `ANMF` header giving the
+/// frame's size as `header`. The frame holds our encoder's `ALPH` chunk, then its `VP8 ` chunk
+/// (header included) as `picture` changes it.
+fn with_alpha_frame(mut a: Vec<u8>, header: [u32; 2], picture: Patch) -> Vec<u8> {
+    let opts = EncodeOptions { webp_lossless: false, ..EncodeOptions::default() };
+    let still = encode(&solid([0, 0, 255, 128], 6, 4), Format::WebP, &opts).unwrap();
+    let mut anmf = Vec::new();
+    anmf.extend_from_slice(&[0; 6]); // at the canvas origin
+    anmf.extend_from_slice(&u24(header[0] - 1));
+    anmf.extend_from_slice(&u24(header[1] - 1));
+    anmf.extend_from_slice(&u24(50));
+    anmf.push(0x02);
+    anmf.extend(chunk_in(&still, b"ALPH"));
+    anmf.extend(picture(chunk_in(&still, b"VP8 ")));
+    a.extend(chunk(b"ANMF", &anmf));
+    let riff = (a.len() - 8) as u32;
+    a[4..8].copy_from_slice(&riff.to_le_bytes());
+    a
+}
+
+/// A change to a frame's picture chunk.
+type Patch = fn(Vec<u8>) -> Vec<u8>;
+
+fn as_is(c: Vec<u8>) -> Vec<u8> {
+    c
+}
+
+fn renamed(mut c: Vec<u8>) -> Vec<u8> {
+    c[..4].copy_from_slice(b"VP9 ");
+    c
+}
+
+fn not_a_key_frame(mut c: Vec<u8>) -> Vec<u8> {
+    c[8] |= 1; // the frame tag's key-frame bit (set = interframe)
+    c
+}
+
+/// One stray byte after the picture chunk: the `ANMF` chunk around it becomes odd-sized.
+fn odd_sized_frame(mut c: Vec<u8>) -> Vec<u8> {
+    c.push(0);
+    c
+}
+
+#[test]
+fn a_frame_with_alpha_comes_back() {
+    let a = with_alpha_frame(animated(6, 4, &[part(RED, 6, 4, 50)]), [6, 4], as_is);
+    let f = frames(&a);
+    assert_eq!(f.len(), 2);
+    assert_eq!(f[1].image.warnings, []);
+    let [_, _, b, alpha] = pixel(&f[1], 3, 2);
+    assert!(b > 200 && alpha.abs_diff(128) <= 2, "{:?}", pixel(&f[1], 3, 2));
+}
+
+/// A frame with alpha whose picture isn't a VP8 key frame of its `ANMF` header's size panicked
+/// inside `image-webp` 0.2.4 (out-of-bounds indexing), found by the `decode_webp` fuzz target:
+/// larger than the header, under another FourCC (decoded as VP8 all the same), or a non-key frame
+/// (decoded as 0x0). An odd-sized `ANMF` chunk, after which `image-webp` would read the next frame
+/// one byte early, is refused too. Each is refused like a damaged frame: an error when it is the
+/// first, the frames before it otherwise.
+#[test]
+fn a_frame_with_alpha_that_is_not_its_headers_size_is_refused() {
+    let cases: [(&str, [u32; 2], Patch); 4] = [
+        ("larger", [6, 1], as_is),
+        ("renamed and larger", [6, 1], renamed),
+        ("not a key frame", [6, 4], not_a_key_frame),
+        ("odd-sized", [6, 4], odd_sized_frame),
+    ];
+    for (what, header, picture) in cases {
+        let later = with_alpha_frame(animated(6, 4, &[part(GREEN, 6, 4, 50)]), header, picture);
+        let f = frames(&later);
+        assert_eq!(f.len(), 1, "{what}");
+        assert_eq!(pixel(&f[0], 0, 0), GREEN, "{what}");
+        assert_eq!(f[0].image.warnings, [DecodeWarning::Truncated { format: Format::WebP }], "{what}");
+        assert_eq!(decode(&later).unwrap().width(), 6, "{what}: a still decode reads the first frame only");
+
+        let first = with_alpha_frame(with_alpha_frame(animated(6, 4, &[]), header, picture), [6, 4], as_is);
+        assert!(matches!(decode_webp_frames(&first, &DecodeOptions::default()), Err(CodecError::Malformed { .. })), "{what}");
+        assert!(matches!(decode(&first), Err(CodecError::Malformed { .. })), "{what}");
+    }
+}
+
 #[test]
 fn every_prefix_of_an_animated_webp_returns() {
     let a = animated(5, 4, &[part(RED, 5, 4, 50), part(GREEN, 5, 4, 50), part(BLUE, 5, 4, 50)]);

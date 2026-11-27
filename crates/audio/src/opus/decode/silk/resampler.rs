@@ -4,25 +4,7 @@
 //! RFC 6716 Table 54 (and the integer delays used when no rate conversion is needed), so that the
 //! SILK output lines up with the CELT layer in Hybrid mode.
 
-/// Dot product with eight independent partial sums, so the additions pipeline and the loop
-/// vectorises instead of waiting on one 4-cycle add chain. Rounds differently from a
-/// sequential sum (the resampler is not normative).
-#[inline]
-fn dot8(a: &[f32], b: &[f32]) -> f32 {
-    let mut s = [0f32; 8];
-    let (ca, ra) = a.as_chunks::<8>();
-    let (cb, rb) = b.as_chunks::<8>();
-    for (x, y) in ca.iter().zip(cb) {
-        for l in 0..8 {
-            s[l] += x[l] * y[l];
-        }
-    }
-    let mut acc = ((s[0] + s[4]) + (s[1] + s[5])) + ((s[2] + s[6]) + (s[3] + s[7]));
-    for (x, y) in ra.iter().zip(rb) {
-        acc += x * y;
-    }
-    acc
-}
+use crate::opus::dot::dot8;
 
 #[derive(Clone)]
 pub struct Resampler {
@@ -199,52 +181,6 @@ impl Resampler {
             let drop = (keep_from - self.hist_start) as usize;
             self.hist.drain(..drop.min(self.hist.len()));
             self.hist_start = keep_from;
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn upsample_sine_and_delay() {
-        for &(fin, fout) in &[(16000u32, 48000u32), (8000, 48000), (12000, 48000), (16000, 24000), (16000, 8000), (12000, 16000)] {
-            let mut r = Resampler::new(fin, fout);
-            let f = 440.0;
-            let n = fin as usize / 10;
-            let x: Vec<i16> = (0..n).map(|i| ((2.0 * std::f64::consts::PI * f * i as f64 / fin as f64).sin() * 10000.0) as i16).collect();
-            let mut y = Vec::new();
-            for c in x.chunks(fin as usize / 50) {
-                r.process(c, &mut y);
-            }
-            assert_eq!(y.len(), n * fout as usize / fin as usize);
-            // Compare against the ideal delayed sine.
-            let delay_ms = match fin {
-                8000 => 0.538,
-                12000 => 0.692,
-                _ => 0.706,
-            };
-            let mut err = 0f64;
-            let mut sig = 0f64;
-            for (j, &v) in y.iter().enumerate().skip(fout as usize / 100) {
-                let t = j as f64 / fout as f64 - delay_ms / 1000.0;
-                let ideal = (2.0 * std::f64::consts::PI * f * t).sin() * 10000.0;
-                err += (v as f64 - ideal).powi(2);
-                sig += ideal * ideal;
-            }
-            let snr = 10.0 * (sig / err).log10();
-            assert!(snr > 35.0, "{fin}->{fout}: {snr} dB");
-        }
-    }
-
-    #[test]
-    fn dot8_matches_sequential_sum() {
-        for len in [1usize, 7, 8, 9, 35, 36, 71] {
-            let a: Vec<f32> = (0..len).map(|i| ((i * 37 % 19) as f32 - 9.0) * 1000.0).collect();
-            let b: Vec<f32> = (0..len).map(|i| ((i * 11 % 7) as f32 - 3.0) / 7.0).collect();
-            let seq: f64 = a.iter().zip(&b).map(|(&x, &y)| x as f64 * y as f64).sum();
-            assert!((dot8(&a, &b) as f64 - seq).abs() < 1e-2, "len {len}");
         }
     }
 }

@@ -9,12 +9,14 @@
 //! [`parse`] gives the list as written ([`Edl`]: events of lines with their timecode fields); what
 //! an event means on a timeline (which media a reel is, how a dissolve overlaps) is the caller's
 //! mapping. A list carries no frame rate: [`guess_rate`] guesses one, and [`Timecode::frames`]
-//! counts at the rate the caller settles on. [`write`] lays out events the caller built.
+//! counts at the rate the caller settles on. [`fn@write`] lays out events the caller built.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::BTreeSet;
 
+use crate::rates::FrameRate;
 use crate::report::Report;
-use crate::time::{FrameRate, fields_to_frames, format_timecode_frames};
+use crate::time::{fields_to_frames, format_timecode_frames};
 
 /// Heuristic: does this text look like an EDL?
 pub fn looks_like_edl(text: &str) -> bool {
@@ -156,6 +158,10 @@ pub struct Edl {
 
 /// Read a list. Never fails: lines that cannot be read are named in `report` and skipped.
 pub fn parse(text: &str, report: &mut Report) -> Edl {
+    parse_with_report_limit(text, report, None)
+}
+/// Parse an EDL with an optional limit on distinct warning messages.
+pub fn parse_with_report_limit(text: &str, report: &mut Report, report_limit: Option<usize>) -> Edl {
     let mut p = Edl { title: None, events: Vec::new(), any_df: false, max_ff: 0 };
     let mut df = false;
     let mut skip_metadata = false;
@@ -224,7 +230,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
                 if (1..=99).contains(&n) {
                     extra.push(Channel::A(n));
                 } else {
-                    report.warn(format!("EDL AUD channel {n} is outside 1..99; ignored"));
+                    report.warn_limited(report_limit, format!("EDL AUD channel {n} is outside 1..99; ignored"));
                 }
             }
             if let Some(line) = p.events.last_mut().and_then(|e| e.lines.last_mut()) {
@@ -233,7 +239,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
             continue;
         }
         if upper.starts_with("SPLIT:") {
-            report.warn("EDL split (L-cut/J-cut) lines are not supported; the split was ignored");
+            report.warn_limited(report_limit, "EDL split (L-cut/J-cut) lines are not supported; the split was ignored");
             continue;
         }
         if let Some(line) = parse_event_line(l) {
@@ -256,7 +262,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
             // Comments and auxiliary lines after a rejected event do not belong to the previous one.
             skip_metadata = true;
         }
-        report.warn(format!("unrecognised EDL line ignored: {}", l.chars().take(60).collect::<String>()));
+        report.warn_limited(report_limit, format!("unrecognised EDL line ignored: {}", l.chars().take(60).collect::<String>()));
     }
     p
 }
@@ -413,10 +419,11 @@ pub fn write(header: &OutHeader, events: &[OutEvent]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn channels() {
         assert_eq!(parse_channels("B"), Some(vec![Channel::V, Channel::A(1)]));
         assert_eq!(parse_channels("AA/V"), Some(vec![Channel::A(1), Channel::A(2), Channel::V]));
@@ -425,7 +432,7 @@ mod tests {
         assert_eq!(parse_channels("A+4"), None);
     }
 
-    #[test]
+    #[trial]
     fn timecode_rejects_fields_too_large_for_i64() {
         for tc in ["9223372036854775808:00:00:00", "00:9223372036854775808:00:00", "00:00:9223372036854775808:00", "00:00:00:9223372036854775808"] {
             assert!(parse_tc(tc).is_none(), "accepted {tc}");
@@ -433,7 +440,7 @@ mod tests {
         assert_eq!(parse_tc("01:02:03:04"), Some(Timecode { h: 1, m: 2, s: 3, f: 4, df: false }));
     }
 
-    #[test]
+    #[trial]
     fn rejected_event_metadata_does_not_change_previous_event() {
         let text = "TITLE: Rejected event\n\
 001 A V C 00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n\
@@ -462,7 +469,7 @@ AUD 2\n\
         }
     }
 
-    #[test]
+    #[trial]
     fn event_lines() {
         let l = parse_event_line("002  REEL_B   V     D    030 02:00:10:00 02:00:15:00 01:00:05:00 01:00:10:00").unwrap();
         assert_eq!(l.trans, Transition::Dissolve);
@@ -475,7 +482,7 @@ AUD 2\n\
         assert!(parse_tc("01;00;00;02").unwrap().df);
     }
 
-    #[test]
+    #[trial]
     fn aud_line_out_of_range_channel_is_ignored() {
         for n in ["0", "100", "3000000"] {
             let text = format!("TITLE: t\n001  AX       V     C        00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\nAUD {n}\n");
@@ -490,7 +497,7 @@ AUD 2\n\
         assert!(report.is_empty(), "{report}");
     }
 
-    #[test]
+    #[trial]
     fn hostile_m2_speeds_are_read_as_written() {
         // the caller decides what a speed means; the parser must only not fail on them
         for v in ["nan", "inf", "-inf", "0.00001", "1e300"] {
@@ -503,7 +510,7 @@ AUD 2\n\
         }
     }
 
-    #[test]
+    #[trial]
     fn frame_counts_and_rate_guess() {
         let ndf = parse_tc("01:00:00:00").unwrap();
         assert_eq!(ndf.frames(FrameRate::FPS_24, false), 86_400);
@@ -521,7 +528,7 @@ AUD 2\n\
         assert_eq!(rate(&format!("FCM: NON-DROP FRAME\n{}", ev("10"))), FrameRate::FPS_24);
     }
 
-    #[test]
+    #[trial]
     fn locators_take_a_colour_word_only_from_the_known_set() {
         let text = "001 AX V C 00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n* LOC: 01:00:00:10 red    Slate\n* LOC: 01:00:00:20 Take two\n";
         let edl = parse(text, &mut Report::default());
@@ -529,7 +536,7 @@ AUD 2\n\
         assert_eq!(locs, [(10, "red", "Slate"), (20, "", "Take two")]);
     }
 
-    #[test]
+    #[trial]
     fn written_lists_have_the_column_layout_and_read_back() {
         let header = OutHeader { title: "Cut 1".into(), rate: FrameRate::FPS_29_97, drop_frame: true, reel_len: 8 };
         let events = [
@@ -584,5 +591,23 @@ M2   A001           -012.0                00;00;00;00\n\
         assert_eq!(channel_code(&BTreeSet::from([Channel::V, Channel::A(1), Channel::A(2)])), Some("AA/V"));
         assert_eq!(channel_code(&BTreeSet::from([Channel::A(1), Channel::A(3)])), None);
         assert_eq!(channel_name(Channel::A(7)), "A7");
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod report_limit_tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn caps_distinct_unrecognized_lines_without_changing_default() {
+        let text = (0..10).map(|i| format!("unrecognized-{i}\n")).collect::<String>();
+        let mut limited = Report::default();
+        let _ = parse_with_report_limit(&text, &mut limited, Some(2));
+        assert_eq!(limited.entries.len(), 3);
+        assert!(limited.mentions("further diagnostics omitted"));
+        let mut ordinary = Report::default();
+        let _ = parse(&text, &mut ordinary);
+        assert_eq!(ordinary.entries.len(), 10);
     }
 }
