@@ -163,7 +163,9 @@ let worst = over.regions().first().copied();
 
 `Plates::composite_to(enabled, &output)` returns the enabled inks in an output profile, for a
 print or a proof. `Output::new(press, output, intent, bpc)` takes the press's CMYK profile
-(`CmsConversion::profile`) and a gray, RGB or CMYK output profile:
+(`CmsConversion::profile`) and a gray, RGB or CMYK output profile. `press_profile(pdf, page,
+&opts)` returns the press a page's plates separate through (its output intent's profile, else
+the fallback's; `None` for the device formulas), so the composite converts from the same one:
 
 - the process plates convert from the press straight to the output (CMYK to PCS to output),
   not through sRGB, at `intent`, with black point compensation when `bpc`. Relative

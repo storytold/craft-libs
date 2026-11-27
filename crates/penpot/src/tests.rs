@@ -438,3 +438,23 @@ fn an_archive_declaring_too_many_members_is_refused_before_it_is_indexed() {
     let bomb = craft_zip::zip64_entry_count_sample(MAX_ENTRIES as u64 + 1);
     assert_eq!(Archive::open(&bomb).err(), Some(Error::Corrupt("too many ZIP members".into())));
 }
+
+#[test]
+fn incremental_writer_keeps_members_and_rejects_ambiguous_paths() {
+    let all = members();
+    let mut writer = Writer::new();
+    for (name, bytes) in &all {
+        writer.add(name, bytes).unwrap();
+    }
+    let output = writer.finish().unwrap();
+    assert_eq!(output, write_archive(all.iter().map(|(n, b)| (n.as_str(), b.as_slice()))).unwrap());
+    let mut archive = Archive::open(&output).unwrap();
+    assert_eq!(archive.names().first().map(String::as_str), Some("manifest.json"));
+    assert_eq!(archive.page_shapes(FILE, PAGE).unwrap().len(), 2);
+    for bad in ["../x", "/abs", "a/./b", "a\\b", "", "a\u{1}b"] {
+        assert!(Writer::new().add(bad, b"x").is_err());
+    }
+    let mut duplicate = Writer::new();
+    duplicate.add("a", b"first").unwrap();
+    assert!(duplicate.add("a", b"second").is_err());
+}

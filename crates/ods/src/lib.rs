@@ -19,7 +19,7 @@
 //!
 //! ```
 //! # fn main() -> Result<(), craft_ods::Error> {
-//! # let bytes = craft_ods::testing::spreadsheet(r#"<table:table table:name="Prices"><table:table-row><table:table-cell office:value-type="string"><text:p>Tea</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="2.5" table:number-columns-repeated="2"/></table:table-row></table:table>"#);
+//! # let bytes = craft_ods::testing::spreadsheet(r#"<table:table table:name="Prices"><table:table-row><table:table-cell office:value-type="string"><text:p>Tea</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="2.5" table:number-columns-repeated="2"/></table:table-row></table:table>"#)?;
 //! let book = craft_ods::read(&bytes, &craft_ods::Options::default())?;
 //! let sheet = &book.sheets[0];
 //! assert_eq!(sheet.name, "Prices");
@@ -30,6 +30,7 @@
 
 mod content;
 mod model;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 
@@ -73,6 +74,11 @@ pub struct Options {
     pub max_merges: u64,
     /// Bytes of cell text, repeats expanded, over all sheets.
     pub max_text: u64,
+    /// When the text would pass `max_text`, keep the cells read before that point and stop
+    /// keeping cells, with [`Workbook::text_truncated`] set, instead of refusing the document.
+    /// Rows and cells after the cell that passes it are not read. `max_cell_text` still applies
+    /// to every cell read, that cell included; `max_cells` and `max_merges` count the cells kept.
+    pub truncate_text: bool,
     /// Bytes of one cell's text, and of one attribute value.
     pub max_cell_text: usize,
     /// Keep the cells of this sheet only (by position); the others are listed by name, empty.
@@ -86,6 +92,7 @@ impl Default for Options {
             max_cells: 1_000_000,
             max_merges: 100_000,
             max_text: 64 << 20,
+            truncate_text: false,
             max_cell_text: 1 << 20,
             only_sheet: None,
         }

@@ -362,10 +362,63 @@ fn a_frame_keeps_its_place_in_the_stacking_order() {
     let saved = crate::text::tests::export_model(&d).unwrap();
     assert!(crate::text::tests::entry(&saved, "content.xml").contains(r#"draw:z-index="3""#));
     assert_eq!(float(&import(&saved).unwrap()).z, 4);
-    // Unknown (inserted in WordCraft): at the bottom, in document order.
+    // Unknown (inserted in WordCraft), with nothing else stored: 0.
     let d = open(r#"style:wrap="run-through""#, r#"text:anchor-type="paragraph""#);
     assert_eq!(float(&d).z, 0);
     assert!(crate::text::tests::entry(&crate::text::tests::export_model(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
+}
+
+/// An object without a stored order (made in WordCraft) stacks above every object that has one
+/// (`Float::z`), so it is written above them, not at the bottom.
+#[test]
+fn an_object_made_here_is_written_above_the_stored_orders() {
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
+    let frame = |z: &str| {
+        format!(
+            r#"<draw:frame draw:style-name="fr1" svg:width="2in" svg:height="1in" text:anchor-type="paragraph"{z}><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#
+        )
+    };
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="run-through"/></style:style></office:automatic-styles><office:body><office:text><text:p>{}{}Text beside.</text:p></office:text></office:body></office:document-content>"#,
+        frame(r#" draw:z-index="3""#),
+        frame("")
+    );
+    let d = import(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png)])).unwrap();
+    let zs: Vec<u32> = d.body[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Image { float, .. } = o { Some(float.z) } else { None })
+        .collect();
+    assert_eq!(zs, [4, 0], "one stored, one made here");
+    let content = crate::text::tests::entry(&crate::text::tests::export_model(&d).unwrap(), "content.xml");
+    let z: Vec<&str> = content.split(r#"draw:z-index=""#).skip(1).filter_map(|s| s.split('"').next()).collect();
+    assert_eq!(z, ["3", "4"], "{content}");
+}
+
+/// A group's members are written with their own stacking orders, so a member without one (made
+/// in WordCraft) goes above a member's stored order too, not just above the floating objects'.
+#[test]
+fn an_object_made_here_is_written_above_the_group_members_stored_orders() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:g text:anchor-type="paragraph"><draw:rect svg:width="1in" svg:height="1in" svg:x="0in" svg:y="0in"/><draw:ellipse svg:width="1in" svg:height="1in" svg:x="1in" svg:y="0in"/></draw:g>Text beside.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+    // The group stored at the bottom, its first member stored above it, its second made here.
+    d.objects_mut(&|o| matches!(o, InlineObject::Group { .. }), &mut |o| {
+        let InlineObject::Group { float, children, .. } = o else { return };
+        float.z = 1;
+        let wrap = float.wrap;
+        for (c, z) in children.iter_mut().zip([4, 0]) {
+            if let Some(f) = c.obj.float_mut() {
+                (f.wrap, f.z) = (wrap, z);
+            }
+        }
+    });
+    let content = crate::text::tests::entry(&crate::text::tests::export_model(&d).unwrap(), "content.xml");
+    let z: Vec<&str> = content.split(r#"draw:z-index=""#).skip(1).filter_map(|s| s.split('"').next()).collect();
+    assert_eq!(z, ["0", "3", "4"], "the group's, the stored member's, the member made here above it: {content}");
 }
 
 #[test]
@@ -455,4 +508,142 @@ fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
     let only = frame(&["Pictures/a.svm"]);
     let d = import(&zip_of(&[("content.xml", only.as_bytes()), ("Pictures/a.svm", &svm)])).unwrap();
     assert_eq!(pictures(&d), 0);
+}
+
+/// Export must leave room for import's one-more encoding, including group members.
+#[test]
+fn extreme_stacking_orders_remain_distinct_after_repeated_roundtrips() {
+    for (grouped, location) in [(false, 0), (true, 0), (false, 1), (true, 1), (false, 2), (true, 2), (false, 3)] {
+        let shapes = r#"<draw:rect svg:width="1in" svg:height="1in"/>"#.repeat(5);
+        let objects = if grouped {
+            format!(r#"<draw:g text:anchor-type="paragraph">{shapes}</draw:g>"#)
+        } else {
+            shapes.replace("<draw:rect ", r#"<draw:rect text:anchor-type="paragraph" "#)
+        };
+        let objects = if location == 3 { objects.replacen(r#"text:anchor-type="paragraph""#, r#"text:anchor-type="as-char""#, 1) } else { objects };
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>{objects}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+        let zs = [1, u32::MAX - 1, u32::MAX, u32::MAX, 0];
+        if grouped {
+            d.objects_mut(&|o| matches!(o, InlineObject::Group { .. }), &mut |o| {
+                let InlineObject::Group { float, children, .. } = o else { return };
+                float.z = 1;
+                for (child, z) in children.iter_mut().zip(zs) {
+                    child.obj.float_mut().unwrap().z = z;
+                }
+            });
+        } else {
+            let mut orders = zs.into_iter();
+            d.objects_mut(&|o| o.frame().is_some(), &mut |o| {
+                let f = o.float_mut().unwrap();
+                f.z = orders.next().unwrap();
+                if location == 3 && f.wrap == Wrap::Inline {
+                    f.y = 6.0;
+                }
+            });
+        }
+        let mut expected =
+            vec!["0".to_string(), (u32::MAX - 3).to_string(), (u32::MAX - 2).to_string(), (u32::MAX - 2).to_string(), (u32::MAX - 1).to_string()];
+        if grouped {
+            expected.insert(0, "0".into());
+        }
+        if location == 1 || location == 2 {
+            let blocks = std::mem::replace(&mut d.body, vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::new())]);
+            let kind = if location == 1 { craft_wordmodel::PartKind::Header } else { craft_wordmodel::PartKind::Footer };
+            d.parts.insert(1, craft_wordmodel::Part { kind, blocks, body: Default::default() });
+            if location == 1 {
+                d.last_section.headers.default = Some(1);
+            } else {
+                d.last_section.footers.default = Some(1);
+            }
+        }
+        for pass in 0..3 {
+            let bytes = crate::text::tests::export_model(&d).unwrap();
+            let content = crate::text::tests::entry(&bytes, if location == 1 || location == 2 { "styles.xml" } else { "content.xml" });
+            let actual: Vec<&str> = content.split(r#"draw:z-index=""#).skip(1).filter_map(|s| s.split('"').next()).collect();
+            assert_eq!(actual, expected, "grouped={grouped}, location={location}, pass={pass}: {content}");
+            if location == 3 {
+                assert!(content.contains(r#"text:anchor-type="as-char""#), "inline must remain inline");
+                assert!(content.contains(r#"svg:y="-78pt""#), "baseline raise must survive: {content}");
+            }
+            d = import(&bytes).unwrap();
+        }
+    }
+}
+
+#[test]
+fn extreme_raw_orders_are_normalized_once_across_body_and_headers() {
+    let shape = |z: &str| format!(r#"<draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="{z}"/>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>{}{}</text:p></office:text></office:body></office:document-content>"#,
+        shape("0"),
+        shape("4294967294")
+    );
+    let styles = format!(
+        r#"<office:document-styles {NS_T} {NS_D}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>{}{}</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#,
+        shape("429496729&#53;"),
+        shape("4294967295")
+    );
+    let mut d = import(&zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes())])).unwrap();
+    for _ in 0..3 {
+        let body: Vec<u32> =
+            d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        let header = &d.parts[&d.last_section.headers.default.unwrap()];
+        let head: Vec<u32> =
+            header.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        assert_eq!(body, [1, u32::MAX - 1]);
+        assert_eq!(head, [u32::MAX, u32::MAX]);
+        d = import(&export(&d).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn kept_stacking_markup_remaps_without_losing_unknown_attributes() {
+    for raw in ["4294967294", "4294967295"] {
+        let kept = format!(
+            r#"<text:p strange="retain &amp; &#x61;"><draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index = '{raw}' strange="untouched"/></text:p>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{kept}</office:text></office:body></office:document-content>"#
+        );
+        let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+        let extra = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in"/></text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut added = import(&zip_of(&[("content.xml", extra.as_bytes())])).unwrap();
+        added.objects_mut(&|o| o.frame().is_some(), &mut |o| o.float_mut().unwrap().z = 0);
+        d.body.extend(added.body);
+        for pass in 0..3 {
+            let bytes = export(&d).unwrap();
+            let xml = crate::text::tests::entry(&bytes, "content.xml");
+            let expected = kept.replace(raw, "4294967293");
+            assert!(xml.contains(&expected), "kept XML lost or order not remapped, {raw}, pass {pass}: {xml}");
+            d = import(&bytes).unwrap();
+            let orders: Vec<u32> =
+                d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+            assert_eq!(orders, [u32::MAX - 1, u32::MAX], "{raw}, pass {pass}");
+        }
+    }
+}
+
+#[test]
+fn retained_unknown_orders_participate_in_the_export_gap() {
+    let kept = r#"<text:p strange="preserve"><alien draw:z-index='4294967293' keep="yes"/><draw:rect text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="4294967294"/></text:p>"#;
+    let content =
+        format!(r#"<office:document-content {NS_T} {NS_D}><office:body><office:text>{kept}</office:text></office:body></office:document-content>"#);
+    let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+    let mut extra = d.body[0].as_para().unwrap().clone();
+    extra.objects[0].float_mut().unwrap().z = 0;
+    d.body.push(craft_wordmodel::para_block(extra));
+    for pass in 0..3 {
+        let bytes = export(&d).unwrap();
+        let xml = crate::text::tests::entry(&bytes, "content.xml");
+        assert!(xml.contains("<alien draw:z-index='4294967292' keep=\"yes\"/>"), "pass {pass}: {xml}");
+        d = import(&bytes).unwrap();
+        let orders: Vec<u32> =
+            d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter_map(|o| o.frame().map(|(_, _, f)| f.z)).collect();
+        assert_eq!(orders, [u32::MAX - 1, u32::MAX]);
+    }
 }

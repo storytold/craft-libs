@@ -26,6 +26,7 @@ mod media;
 pub mod odf_object;
 mod to_doc;
 mod types;
+pub use types::continues_list;
 
 pub use color::parse_color;
 pub use from_doc::{
@@ -78,6 +79,32 @@ mod tests {
             .iter()
             .any(|b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Field { result, .. } if result == "SECRETVALUE"))));
         assert!(kept);
+    }
+
+    /// The default look's header row is an option of the table style: a table with no style (or a
+    /// style the document doesn't have) has an ordinary first row, so RTF doesn't bold it or
+    /// repeat it on each page, and HTML doesn't make it `th`. Repeat as header row still does.
+    #[test]
+    fn look_header_row_needs_a_table_style() {
+        use craft_wordmodel::{Block, Document, table::Table};
+        let first_row_header = |style: Option<&str>, repeat: bool| {
+            let mut t = Table::new(2, 2, 200.0);
+            t.props.style = style.map(str::to_string);
+            assert!(t.props.look.header_row, "the default look has a header row");
+            if let Some(r) = t.rows.first_mut() {
+                r.props.header = repeat;
+            }
+            let mut doc = Document::new();
+            doc.body = vec![std::sync::Arc::new(Block::Table(t))];
+            let flow = from_doc(&doc);
+            let Some(FBlock::Table(ft)) = flow.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table in {:?}", flow.blocks) };
+            assert!(ft.rows.get(1).is_some_and(|r| r.iter().all(|c| !c.header)), "the second row is never a header");
+            ft.rows.first().is_some_and(|r| r.iter().all(|c| c.header))
+        };
+        assert!(first_row_header(Some("TableGrid"), false), "a table style applies the look's header row");
+        assert!(!first_row_header(None, false), "no style, no header row");
+        assert!(!first_row_header(Some("NoSuchStyle"), false), "a missing style applies nothing");
+        assert!(first_row_header(None, true), "Repeat as header row");
     }
 
     #[test]
@@ -183,5 +210,150 @@ mod tests {
         p.push_text("b ", &b);
         p.trim();
         assert_eq!(p.inlines, vec![Inline::Text("a ".into(), i), Inline::Text("b".into(), b)]);
+    }
+
+    /// Paragraphs of `text` in order, each with its props set by `set`.
+    fn doc_of(paras: &[(&str, &dyn Fn(&mut craft_wordmodel::ParaProps))]) -> craft_wordmodel::Document {
+        let mut doc = craft_wordmodel::Document::new();
+        doc.body = paras
+            .iter()
+            .map(|(t, set)| {
+                let mut p = craft_wordmodel::Paragraph::with_text(t, Default::default());
+                set(&mut p.props);
+                std::sync::Arc::new(craft_wordmodel::Block::Para(p))
+            })
+            .collect();
+        doc
+    }
+
+    /// The text and `item` of each flow paragraph, a table cell's included.
+    fn items(blocks: &[FBlock]) -> Vec<(String, Option<u8>)> {
+        let mut out = Vec::new();
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => out.push((p.text(), p.item)),
+                FBlock::Table(t) => {
+                    for c in t.rows.iter().flatten() {
+                        out.extend(items(&c.blocks));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn character_indents_set_the_list_continuation_baseline() {
+        let mut doc = craft_wordmodel::Document::new();
+        let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+        let numbered = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(0.0);
+            p.indent_left_chars = Some(6.0);
+        };
+        let outdented = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(0.0);
+        };
+        doc.body = doc_of(&[("One", &numbered), ("Out", &outdented)]).body;
+        let got = items(&from_doc(&doc).blocks);
+        assert_eq!(got.iter().find(|r| r.0 == "Out").map(|r| r.1), Some(None));
+    }
+
+    #[test]
+    fn a_zero_indent_header_keeps_its_explicit_list_membership() {
+        let header = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(0.0);
+        };
+        let doc = doc_of(&[("Header", &header)]);
+        assert_eq!(items(&from_doc(&doc).blocks), [("Header".into(), Some(0))]);
+    }
+
+    /// A list item's further paragraph cut by a page break is that paragraph on both pages: the
+    /// text after the break stays in the item too.
+    #[test]
+    fn a_further_paragraph_stays_in_its_item_past_a_page_break() {
+        let cont = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(36.0);
+        };
+        let doc = doc_of(&[("Before\u{c}After", &cont)]);
+        let got = items(&from_doc(&doc).blocks);
+        assert_eq!(got, [("Before".to_string(), Some(0)), ("After".to_string(), Some(0))], "{got:?}");
+    }
+
+    /// Body text ends the lists before it: a list starting with a header (no number) at its text
+    /// is a list's paragraph however far an earlier list's text was indented.
+    #[test]
+    fn a_list_header_after_body_text_is_in_its_list() {
+        let mut doc = craft_wordmodel::Document::new();
+        let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+        let numbered = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(72.0);
+        };
+        let header = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(36.0);
+        };
+        let numbered_36 = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(36.0);
+        };
+        let body = doc_of(&[("One", &numbered), ("Body", &|_| {}), ("Header", &header), ("Two", &numbered_36)]).body;
+        doc.body = body;
+        let got = items(&from_doc(&doc).blocks);
+        assert_eq!(got.iter().find(|r| r.0 == "Header").map(|r| r.1), Some(Some(0)), "{got:?}");
+    }
+
+    /// A further paragraph moved out of its item (to the margin) is body text: a list starting with
+    /// a header after it, less indented than the list before, keeps the header in its list.
+    #[test]
+    fn a_list_header_after_an_outdented_further_paragraph_is_in_its_list() {
+        let mut doc = craft_wordmodel::Document::new();
+        let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+        let numbered = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(72.0);
+        };
+        let outdented = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(0.0);
+        };
+        let header = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(36.0);
+        };
+        let numbered_36 = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(36.0);
+        };
+        let body = doc_of(&[("One", &numbered), ("Out", &outdented), ("Header", &header), ("Two", &numbered_36)]).body;
+        doc.body = body;
+        let got = items(&from_doc(&doc).blocks);
+        assert_eq!(got.iter().find(|r| r.0 == "Out").map(|r| r.1), Some(None), "{got:?}");
+        assert_eq!(got.iter().find(|r| r.0 == "Header").map(|r| r.1), Some(Some(0)), "{got:?}");
+    }
+
+    /// A list item's further paragraph in a table cell a table style formats stays one.
+    #[test]
+    fn a_further_paragraph_in_a_styled_cell_stays_in_its_item() {
+        let cont = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(36.0);
+        };
+        let mut doc = craft_wordmodel::Document::new();
+        // Table Grid: paragraph formatting of its own (no space after, single spacing).
+        let mut t = craft_wordmodel::table::Table::new(1, 1, 200.0);
+        if let Some(c) = t.rows.first_mut().and_then(|r| r.cells.first_mut()) {
+            c.blocks = doc_of(&[("Cont", &cont)]).body;
+        }
+        doc.body = vec![
+            std::sync::Arc::new(craft_wordmodel::Block::Table(t)),
+            std::sync::Arc::new(craft_wordmodel::Block::Para(craft_wordmodel::Paragraph::new())),
+        ];
+        let got = items(&from_doc_with(&doc, FlowOpts { paras: true, ..Default::default() }).blocks);
+        assert_eq!(got.iter().find(|r| r.0 == "Cont").map(|r| r.1), Some(Some(0)), "{got:?}");
     }
 }

@@ -26,6 +26,45 @@ impl Align {
     }
 }
 
+/// The kashida (tatweel) length a justified paragraph uses (`ST_Jc` in ECMA-376 §17.18.44).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Kashida {
+    /// No kashidas: justified lines widen their word spaces (`both`, `justify`).
+    #[default]
+    None,
+    /// `lowKashida`.
+    Short,
+    /// `mediumKashida`.
+    Medium,
+    /// `highKashida`.
+    Long,
+}
+
+impl Kashida {
+    /// The length named by a `w:jc` value, if that value is a kashida or ordinary justify form.
+    /// Other alignments return `None` so they leave an inherited length.
+    pub fn from_jc(value: &str) -> Option<Kashida> {
+        match value {
+            "both" | "justify" => Some(Kashida::None),
+            "lowKashida" => Some(Kashida::Short),
+            "mediumKashida" => Some(Kashida::Medium),
+            "highKashida" => Some(Kashida::Long),
+            _ => None,
+        }
+    }
+
+    /// The `w:jc` value for a justified paragraph of this length.
+    pub fn jc(self) -> &'static str {
+        match self {
+            Kashida::None => "both",
+            Kashida::Short => "lowKashida",
+            Kashida::Medium => "mediumKashida",
+            Kashida::Long => "highKashida",
+        }
+    }
+}
+
 /// Paragraph-level text flow (`w:pPr/w:textDirection`, ECMA-376 §17.3.1.41).
 ///
 /// Kept separate from [`super::TextDirection`], whose three values model the table-cell direction
@@ -276,11 +315,26 @@ pub struct Border {
 }
 
 impl Border {
+    /// The thinnest line a border is drawn at, an eighth of a point: Word draws `w:sz="0"`, and
+    /// a DOCX border without `w:sz`, at it (storytold/wordcraft#5065).
+    pub const THINNEST: f32 = 0.125;
     pub fn single(width: f32) -> Border {
         Border { style: BorderStyle::Single, width, color: None, space: 0.0 }
     }
+    /// The border takes room: it has a line and a width to give it.
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
+    }
+    /// The border is drawn: any line but `nil`/`none`, one of width 0 included, which Word draws
+    /// at [`Border::THINNEST`] without giving it any room (storytold/wordcraft#5065).
+    pub fn is_drawn(&self) -> bool {
+        self.style != BorderStyle::None && self.width.is_finite() && self.width >= 0.0
+    }
+    /// The border at the width it is drawn at: itself, unless it is a drawn line of width 0,
+    /// which becomes one of [`Border::THINNEST`]. That is how a format with no width-0 border
+    /// (ODF, RTF, HTML) keeps one, since it has no way to say "drawn, but taking no room".
+    pub fn as_drawn(&self) -> Border {
+        if self.is_drawn() && self.width <= 0.0 { Border { width: Border::THINNEST, ..*self } } else { *self }
     }
 }
 
@@ -307,6 +361,22 @@ impl Borders {
     }
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
+    }
+    /// Any side is drawn ([`Border::is_drawn`]), a line of width 0 included.
+    pub fn any_drawn(&self) -> bool {
+        [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_drawn)
+    }
+    /// Every side at the width it is drawn at ([`Border::as_drawn`]).
+    pub fn as_drawn(&self) -> Borders {
+        let side = |s: Option<Border>| s.map(|b| b.as_drawn());
+        Borders {
+            top: side(self.top),
+            left: side(self.left),
+            bottom: side(self.bottom),
+            right: side(self.right),
+            between: side(self.between),
+            inside_v: side(self.inside_v),
+        }
     }
     /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
     /// its room in LibreOffice's layout).
@@ -383,6 +453,10 @@ pub struct ParaProps {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
+    /// Kashida length for a justified paragraph. `None` inherits; `Some(Kashida::None)` is
+    /// ordinary justification (`both` / `justify`) and cancels an inherited length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kashida: Option<Kashida>,
     /// Left indent, points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indent_left: Option<f32>,
@@ -506,6 +580,11 @@ pub struct ParaProps {
     /// file (not laid out yet); Word sizes a line by it, so dropping it changes Word's pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_alignment: Option<TextAlignment>,
+    /// A list item's paragraph after its first (or a list header's), with no number of its own,
+    /// at this list level (0..=8): formats with list items (ODT, HTML, Markdown) keep it in the
+    /// item. Set only directly, never by a style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_item: Option<u8>,
 }
 
 impl ParaProps {
@@ -516,7 +595,7 @@ impl ParaProps {
     }
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
+        overlay_fields!(self, patch; style, align, kashida, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
             space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
     }
 

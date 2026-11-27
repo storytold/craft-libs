@@ -1,4 +1,4 @@
-//! Complex regions rasterized as ink images (plan tasks C3 and C4), and [`flatten_page`], which
+//! Complex regions rasterized as ink images, and [`flatten_page`], which
 //! flattens one page of a PDF.
 //!
 //! A region's image is its items written alone as a small PDF ([`page_pdf`]) and separated with
@@ -92,6 +92,7 @@ impl<'a> Rasterizer<'a> {
         Self { list, settings, printing, cms, dpi, report: RasterReport::default() }
     }
 
+    /// What the rasterizer has produced so far.
     pub fn report(&self) -> &RasterReport {
         &self.report
     }
@@ -163,6 +164,7 @@ impl<'a> Rasterizer<'a> {
             isolated: g.isolated,
             knockout: g.knockout,
             clip: g.clip.clone(),
+            clip_rule: g.clip_rule,
             mask,
             actual_text: g.actual_text.clone(),
             children,
@@ -231,6 +233,7 @@ impl<'a> Rasterizer<'a> {
             isolated: false,
             knockout: false,
             clip: None,
+            clip_rule: FillRule::NonZero,
             mask: None,
             actual_text: None,
             children: vec![Item::Image(image)],
@@ -369,7 +372,9 @@ impl Grid {
 /// How [`flatten_page`] reads and flattens.
 #[derive(Clone, Debug, Default)]
 pub struct FlattenPageOptions {
+    /// How the page is read.
     pub read: ReadOptions,
+    /// How the page is flattened.
     pub flatten: FlattenOptions,
 }
 
@@ -377,21 +382,29 @@ pub struct FlattenPageOptions {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FlattenPageReport {
+    /// What reading the page did.
     pub read: ReadReport,
+    /// What flattening the page did.
     pub flatten: FlattenReport,
+    /// What rasterizing the complex regions did.
     pub raster: RasterReport,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
+/// Why [`flatten_page`] failed.
 pub enum FlattenPageError {
     #[error(transparent)]
+    #[allow(missing_docs)]
     Open(#[from] OpenError),
     #[error(transparent)]
+    #[allow(missing_docs)]
     Read(#[from] ReadError),
     #[error(transparent)]
+    #[allow(missing_docs)]
     Flatten(#[from] FlattenError),
     #[error(transparent)]
+    #[allow(missing_docs)]
     Write(#[from] WriteError),
 }
 

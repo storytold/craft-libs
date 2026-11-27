@@ -1,8 +1,10 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod bmp_resolution;
 mod camera_raw;
 mod common;
 mod dds;
+mod dds_oracle;
 mod dds_write;
 mod decode_warnings;
 mod deep_exr;
@@ -14,6 +16,8 @@ mod exr_stream;
 mod fidelity;
 mod gif_frames;
 mod heif;
+mod jpeg_inks;
+mod jpegls_oracle;
 mod limits;
 mod malformed;
 mod metadata;
@@ -21,6 +25,8 @@ mod orientation;
 mod pcx;
 mod png_jpeg;
 mod pnm_headers;
+#[cfg(target_os = "linux")]
+mod pnm_peak_memory;
 mod resolution;
 mod roundtrip;
 mod source_settings;
@@ -37,3 +43,7 @@ mod tiff_ycbcr;
 mod webp_frames;
 mod webp_lossy;
 mod xpm;
+
+mod jxl_decode;
+mod jxl_export;
+mod legacy_tiff_raw;

@@ -2,7 +2,7 @@
 //!
 //! This layer recognizes the document, stage, scene, layer and keyframe fields defined by XFL.
 //! It does not construct a consumer's animation model. More detailed payloads remain available
-//! through [`Document::root`] for the application adapter.
+//! through [`crate::document::Document::root`] for the application adapter.
 use crate::shape::XflElement;
 use craft_xml::{Doctype, El, Error as XmlError, Limits, Local, Options, Pat, UnknownEntity};
 use std::borrow::Cow;
@@ -138,9 +138,51 @@ pub struct Frame<'a, E: XflElement = El> {
     element: &'a E,
 }
 
+/// An `Include` entry in the document's `<symbols>` library list.
+#[derive(Debug)]
+pub struct SymbolInclude<'a, E: XflElement = El> {
+    element: &'a E,
+}
+
+/// A folder entry in the document's `<folders>` library list.
+#[derive(Debug)]
+pub struct LibraryFolder<'a, E: XflElement = El> {
+    element: &'a E,
+}
+
+/// Native metadata stored on a library `DOMSymbolItem`.
+#[derive(Debug)]
+pub struct SymbolItem<'a, E: XflElement = El> {
+    element: &'a E,
+}
+
 impl<E: XflElement> Copy for Frame<'_, E> {}
 
 impl<E: XflElement> Clone for Frame<'_, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<E: XflElement> Copy for SymbolInclude<'_, E> {}
+
+impl<E: XflElement> Clone for SymbolInclude<'_, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<E: XflElement> Copy for LibraryFolder<'_, E> {}
+
+impl<E: XflElement> Clone for LibraryFolder<'_, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<E: XflElement> Copy for SymbolItem<'_, E> {}
+
+impl<E: XflElement> Clone for SymbolItem<'_, E> {
     fn clone(&self) -> Self {
         *self
     }
@@ -411,6 +453,112 @@ impl<'a, E: XflElement> Frame<'a, E> {
     }
 }
 
+impl<'a, E: XflElement> SymbolInclude<'a, E> {
+    /// Creates a borrowed view over a native `Include` element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
+    /// The package-relative library XML path from `href`, kept in native string form.
+    pub fn href(self) -> Option<&'a str> {
+        attr_last(self.element, "href")
+    }
+
+    /// The source element for application-specific path resolution.
+    pub fn element(self) -> &'a E {
+        self.element
+    }
+}
+
+impl<'a, E: XflElement> LibraryFolder<'a, E> {
+    /// Creates a borrowed view over a native `DOMFolderItem` element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
+    /// The folder path from `name`, kept in native string form.
+    pub fn name(self) -> Option<&'a str> {
+        attr_last(self.element, "name")
+    }
+
+    /// The source element for application-specific path validation.
+    pub fn element(self) -> &'a E {
+        self.element
+    }
+}
+
+impl<'a, E: XflElement> SymbolItem<'a, E> {
+    /// Creates a borrowed view over a native `DOMSymbolItem` element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
+    pub fn name(self) -> Option<&'a str> {
+        attr_last(self.element, "name")
+    }
+
+    pub fn symbol_type(self) -> Option<&'a str> {
+        attr_last(self.element, "symbolType")
+    }
+
+    pub fn linkage_export_for_action_script(self) -> Option<&'a str> {
+        attr_last(self.element, "linkageExportForAS")
+    }
+
+    pub fn linkage_class_name(self) -> Option<&'a str> {
+        attr_last(self.element, "linkageClassName")
+    }
+
+    pub fn linkage_identifier(self) -> Option<&'a str> {
+        attr_last(self.element, "linkageIdentifier")
+    }
+
+    pub fn linkage_base_class(self) -> Option<&'a str> {
+        attr_last(self.element, "linkageBaseClass")
+    }
+
+    /// Whether the symbol declares any native 9-slice scale-grid attribute, even if malformed.
+    pub fn has_scale_grid(self) -> bool {
+        ["scaleGridLeft", "scaleGridRight", "scaleGridTop", "scaleGridBottom"].iter().any(|name| attr_last(self.element, name).is_some())
+    }
+
+    pub fn scale_grid_left(self) -> Option<f32> {
+        number_f32(self.element, "scaleGridLeft")
+    }
+
+    pub fn scale_grid_right(self) -> Option<f32> {
+        number_f32(self.element, "scaleGridRight")
+    }
+
+    pub fn scale_grid_top(self) -> Option<f32> {
+        number_f32(self.element, "scaleGridTop")
+    }
+
+    pub fn scale_grid_bottom(self) -> Option<f32> {
+        number_f32(self.element, "scaleGridBottom")
+    }
+
+    /// The symbol's optional timeline wrapper, for the consumer to map into its own model.
+    pub fn timeline(self) -> Option<&'a E> {
+        self.element.child("timeline")
+    }
+
+    /// The source element for application-specific symbol validation and mapping.
+    pub fn element(self) -> &'a E {
+        self.element
+    }
+}
+
+/// Symbol library entries in source order, skipping non-`Include` extension nodes.
+pub fn symbol_includes<'a, E: XflElement>(root: &'a E) -> impl Iterator<Item = SymbolInclude<'a, E>> + 'a {
+    root.child("symbols").into_iter().flat_map(XflElement::elements).filter(|element| element.local_name() == "Include").map(SymbolInclude::new)
+}
+
+/// Library folders in source order, skipping non-`DOMFolderItem` extension nodes.
+pub fn library_folders<'a, E: XflElement>(root: &'a E) -> impl Iterator<Item = LibraryFolder<'a, E>> + 'a {
+    root.child("folders").into_iter().flat_map(XflElement::elements).filter(|element| element.local_name() == "DOMFolderItem").map(LibraryFolder::new)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,5 +797,48 @@ mod tests {
         let settings = root.publish_settings();
         assert_eq!(settings.action_script_version.as_deref(), Some("3"));
         assert_eq!(settings.document_class.as_deref(), Some("RootClass"));
+    }
+
+    #[test]
+    fn reads_symbol_library_entries_and_native_symbol_metadata() {
+        let document = Document::parse(
+            br#"<DOMDocument><symbols><Extension/><Include href="LIBRARY/Shape.xml"/><Include href="LIBRARY/Button.xml"/></symbols><folders><Extension/><DOMFolderItem name="Characters/Hero"/></folders></DOMDocument>"#,
+        )
+        .unwrap();
+        let includes: Vec<_> = symbol_includes(document.root()).map(SymbolInclude::href).collect();
+        assert_eq!(includes, [Some("LIBRARY/Shape.xml"), Some("LIBRARY/Button.xml")]);
+        let include = symbol_includes(document.root()).next().unwrap();
+        assert_eq!(include.element().local_name(), "Include");
+        let folders: Vec<_> = library_folders(document.root()).map(LibraryFolder::name).collect();
+        assert_eq!(folders, [Some("Characters/Hero")]);
+        let folder = library_folders(document.root()).next().unwrap();
+        assert_eq!(folder.element().local_name(), "DOMFolderItem");
+
+        let symbol = Document::parse(
+            br#"<x:DOMSymbolItem xmlns:x="urn:adobe:xfl" name="Characters/Hero" name="Characters/Final" symbolType="graphic" linkageExportForAS="true" linkageClassName="example.Hero" linkageIdentifier="legacy.Hero" linkageBaseClass="flash.display.MovieClip" scaleGridLeft="10" scaleGridRight="90" scaleGridTop="5" scaleGridBottom="75"><x:timeline><x:DOMTimeline/></x:timeline></x:DOMSymbolItem>"#,
+        )
+        .unwrap();
+        let item = SymbolItem::new(symbol.root());
+        assert_eq!(item.element().local_name(), "DOMSymbolItem");
+        assert_eq!(item.name(), Some("Characters/Final"), "the last duplicate attribute wins");
+        assert_eq!(item.symbol_type(), Some("graphic"));
+        assert_eq!(item.linkage_export_for_action_script(), Some("true"));
+        assert_eq!(item.linkage_class_name(), Some("example.Hero"));
+        assert_eq!(item.linkage_identifier(), Some("legacy.Hero"));
+        assert_eq!(item.linkage_base_class(), Some("flash.display.MovieClip"));
+        assert_eq!(
+            (item.scale_grid_left(), item.scale_grid_right(), item.scale_grid_top(), item.scale_grid_bottom()),
+            (Some(10.0), Some(90.0), Some(5.0), Some(75.0))
+        );
+        assert!(item.has_scale_grid());
+        assert!(item.timeline().is_some());
+
+        let malformed = Document::parse(br#"<DOMSymbolItem scaleGridLeft="not-a-number"/>"#).unwrap();
+        let malformed = SymbolItem::new(malformed.root());
+        assert!(malformed.has_scale_grid(), "attribute presence remains observable when its value is malformed");
+        assert_eq!(malformed.scale_grid_left(), None);
+
+        let absent = Document::parse(b"<DOMSymbolItem/>").unwrap();
+        assert!(!SymbolItem::new(absent.root()).has_scale_grid());
     }
 }

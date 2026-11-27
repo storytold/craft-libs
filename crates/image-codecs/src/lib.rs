@@ -15,8 +15,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod allocation;
+pub mod apng;
+pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
+#[cfg(feature = "cms")]
+mod display;
 mod error;
 pub mod exif_color;
 pub mod exr_stream;
@@ -24,30 +28,43 @@ mod fidelity;
 mod format;
 mod image;
 mod inspection;
+pub mod jp2_probe;
+pub mod jpeg_inks;
+pub mod jpeg_probe;
+pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
+pub mod png_probe;
+pub mod raw_metadata;
 pub mod resolution;
+pub mod resolution_probe;
 pub mod source_settings;
+pub mod tiff_probe;
 pub mod web;
-pub use crate::allocation::probe_allocation_size;
+pub mod webp_probe;
+pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
+pub use crate::codecs::jpeg::validate_jpeg_rgba8;
 pub use crate::codecs::png::{
     PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed,
-    encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
+    encode_pq as encode_png_pq, encode_rgba8 as encode_png_rgba8, palette as png_palette, stereo as png_stereo,
 };
 pub use crate::codecs::tiff::{
-    PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
+    PhotoshopTags as TiffPhotoshopTags, TiffBands, encode_plain_rgba16 as encode_tiff_plain_rgba16, photoshop_tags as tiff_photoshop_tags,
+    writes_little_endian as tiff_writes_little_endian,
 };
 pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
-pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
+pub use crate::format::{
+    ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension, ftyp_brands,
+};
 pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, ExtraSample, Image,
     MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
@@ -59,10 +76,15 @@ pub use crate::options::{
 };
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
+pub use crate::resolution_probe::file_resolution;
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+#[cfg(feature = "sgi")]
+use crate::codecs::sgi;
+#[cfg(feature = "sunraster")]
+use crate::codecs::sunraster;
+use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -73,6 +95,22 @@ pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
 pub fn decode_with(bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     decode_as_with(format, bytes, opts)
+}
+
+/// Read `reader` to its end, at most `max_bytes`, for [`decode_with`]. [`Limits`] bound the
+/// decoded image; this bounds the encoded input, for example an opened file.
+///
+/// The read stops one byte past `max_bytes`, so a file that grows after its size was checked, or
+/// a stream with no end, is not read further. Longer input fails with
+/// [`std::io::ErrorKind::FileTooLarge`].
+pub fn read_bounded(reader: impl std::io::Read, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(std::io::ErrorKind::FileTooLarge, format!("the image input is longer than {max_bytes} bytes")));
+    }
+    Ok(bytes)
 }
 
 /// Decode as a specific format with default [`Limits`].
@@ -101,13 +139,50 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::SunRaster => {
+            #[cfg(feature = "sunraster")]
+            {
+                sunraster::decode(bytes, l)
+            }
+            #[cfg(not(feature = "sunraster"))]
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
+        Format::Sgi => {
+            #[cfg(feature = "sgi")]
+            {
+                sgi::decode(bytes, l)
+            }
+            #[cfg(not(feature = "sgi"))]
+            {
+                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
+            }
+        }
+        Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
-        Format::Jxl => Err(CodecError::unsupported(format, "JPEG XL reading is not yet available; export is supported")),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
+        Format::Jxl => jxl::decode(bytes, l),
+        #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+        Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
+        #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
+        Format::Avif => via_image::decode(format, bytes, l),
+        Format::Bmp => via_image::decode(format, bytes, l).map(|mut img| {
+            img.meta.dpi = bmp::resolution(bytes);
+            img
+        }),
+        Format::Gif | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
     }?;
     finish_format(format, bytes, img, opts)
+}
+
+/// Decode AVIF pixels and report their original AV1 bit depth (8, 10 or 12).
+/// The returned image may use a wider sample type, particularly for linear HDR.
+#[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+pub fn decode_avif_with_depth(bytes: &[u8], opts: &DecodeOptions) -> Result<(Image, u8), CodecError> {
+    let (image, depth) = codecs::avif_decode::decode_with_depth(bytes, &opts.limits, opts.keep_orientation)?;
+    Ok((finish_format(Format::Avif, bytes, image, opts)?, depth))
 }
 
 /// What [`decode_as_with`] does with a PNG decoded in steps by [`PngDecodeRows`] (`img` is its
@@ -162,10 +237,11 @@ fn finish_format(format: Format, bytes: &[u8], mut img: Image, opts: &DecodeOpti
     }
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
-    // on the way. HEIF keeps it in its container, and its decoder has already applied it.
+    // on the way. HEIF and AVIF keep it in their container, and their decoders have already
+    // applied it.
     let o = match format {
         Format::Tiff => tiff::orientation(bytes, None),
-        Format::Heif => 1,
+        Format::Heif | Format::Avif => 1,
         Format::Dpx => dpx::orientation(bytes),
         Format::Cineon => dpx::cineon_orientation(bytes),
         _ => img.meta.exif.as_deref().map_or(1, exif_orientation),
@@ -194,10 +270,12 @@ pub fn decode_png_rows<E: From<CodecError>>(
 }
 
 /// The upright pixel size [`decode`] would return, read from the file's header without decoding
-/// pixels, for WebP, OpenEXR (flat) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
-/// header reads and size checks as the decoder (default [`Limits`]) and swaps the size for an
-/// EXIF orientation of 5–8, so wherever [`decode`] succeeds the two agree. Other formats (and
-/// deep EXR or AVIF) return [`CodecError::Unsupported`]: decode those to learn their size.
+/// pixels, for PNG, JPEG, TIFF (the page [`decode`] opens), WebP, OpenEXR (flat), AVIF (with
+/// `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same header reads and size
+/// checks as the decoder (default [`Limits`]) and swaps the size for an orientation of 5–8 (EXIF,
+/// the TIFF page's own tag, or AVIF's container `clap` and `irot`), so wherever [`decode`]
+/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]:
+/// decode those to learn their size.
 pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     if !caps(format).read {
@@ -205,13 +283,29 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     }
     let l = &Limits::default();
     let (w, h, exif) = match format {
+        Format::Png => png::probe(bytes, l)?,
+        Format::Jpeg => jpeg::probe(bytes, l)?,
+        Format::Tiff => {
+            let (w, h, o) = tiff::probe(bytes, l)?;
+            return Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) });
+        }
         Format::WebP => webp::probe(bytes, l)?,
         Format::OpenExr => exr::probe(bytes, l).map(|(w, h)| (w, h, None))?,
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::probe(format, bytes, l)?,
+        #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+        Format::Avif => codecs::avif_decode::probe(bytes, l).map(|(w, h)| (w, h, None))?,
+        #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
+        Format::Avif => via_image::probe(format, bytes, l)?,
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::probe(format, bytes, l)?,
         _ => return Err(CodecError::unsupported(format, "no header-only size probe")),
     };
     let o = exif.as_deref().map_or(1, exif_orientation);
     Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) })
+}
+
+/// Classify classic TIFF camera RAWs using LightCraft's historical bounded heuristic.
+/// This compatibility policy differs from the decoder's own RAW rejection policy.
+pub fn legacy_tiff_raw_hint(bytes: &[u8]) -> bool {
+    tiff::legacy_camera_raw(bytes)
 }
 
 /// A JPEG's frame as its header declares it, read without decoding pixels: the stored size, the
@@ -235,6 +329,15 @@ pub struct JpegInfo {
 /// [`JpegInfo`] of `bytes`; `None` without a readable frame of 1, 3 or 4 components.
 pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
+}
+
+/// Bytes of DCT coefficients to budget for a JPEG before decoding it: never less than
+/// [`JpegInfo::held_coefficients`] nor than the whole-picture estimate of every progressive
+/// frame header (SOF2, SOF6, SOF10, SOF14 at any precision, sampling clamped to 1..=4), and the
+/// costliest frame at the first size read when the header can't be followed. 0 without a
+/// readable frame. See the function body's rules for the precise charges.
+pub fn jpeg_worst_case_coefficients(bytes: &[u8]) -> u64 {
+    jpeg::worst_case_coefficients(bytes)
 }
 
 /// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.
@@ -261,8 +364,24 @@ pub fn bmp_palette(bytes: &[u8]) -> Result<Option<Vec<[u8; 3]>>, CodecError> {
 
 /// Encodes `indices` (row-major, one byte per pixel) as an 8-bit palette BMP with the colour
 /// table `palette` (1 to 256 entries). Used for Indexed Color documents; BMP has no transparency.
+/// The header's resolution is left unset; [`encode_bmp_indexed_with_dpi`] writes one.
 pub fn encode_bmp_indexed(width: u32, height: u32, indices: &[u8], palette: &[[u8; 3]]) -> Result<Vec<u8>, CodecError> {
     via_image::encode_bmp_indexed(width, height, indices, palette)
+}
+
+/// [`encode_bmp_indexed`] with the resolution `dpi` (pixels per inch, horizontal then vertical)
+/// in the header's pixels per metre, as [`encode`] writes [`Metadata::dpi`] for a BMP. `None`, or
+/// a resolution with no positive whole number of pixels per metre, leaves the fields unset.
+pub fn encode_bmp_indexed_with_dpi(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 3]],
+    dpi: Option<(f32, f32)>,
+) -> Result<Vec<u8>, CodecError> {
+    let mut bytes = via_image::encode_bmp_indexed(width, height, indices, palette)?;
+    bmp::set_resolution(&mut bytes, dpi);
+    Ok(bytes)
 }
 
 /// Lists the pages (image directories) of a TIFF or BigTIFF file without decoding pixels: the
@@ -457,12 +576,37 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::SunRaster => {
+            #[cfg(feature = "sunraster")]
+            {
+                sunraster::encode(image, plan)
+            }
+            #[cfg(not(feature = "sunraster"))]
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
+        Format::Sgi => {
+            #[cfg(feature = "sgi")]
+            {
+                sgi::encode(image, plan)
+            }
+            #[cfg(not(feature = "sgi"))]
+            {
+                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
+            }
+        }
+        Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
         Format::Jxl => jxl::encode(image, plan),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => {
-            via_image::encode(format, image, plan, opts)
-        }
+        // The `image` crate leaves a BMP's resolution fields 0; Photoshop fills them in. They are
+        // part of the header, not metadata, so they are written whatever `embed_metadata` says.
+        Format::Bmp => via_image::encode(format, image, plan, opts).map(|mut bytes| {
+            bmp::set_resolution(&mut bytes, image.meta.dpi);
+            bytes
+        }),
+        Format::Gif | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
 }
