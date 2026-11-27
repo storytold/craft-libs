@@ -1902,6 +1902,7 @@ dependencies = [
  "craft-scraft-format",
  "craft-settings",
  "craft-sf2",
+ "craft-shared-vec",
  "craft-sheet",
  "craft-shx",
  "craft-silhouette-studio",
@@ -4038,6 +4039,16 @@ version = "0.1.0"
 dependencies = [
  "craft-sf2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-shared-vec"
+version = "0.1.0"
+dependencies = [
+ "craft-shared-vec",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

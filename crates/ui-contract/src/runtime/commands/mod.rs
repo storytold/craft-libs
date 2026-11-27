@@ -766,14 +766,33 @@ pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     board::holder(ctx, chord)
 }
 
-/// A command shown at `rect` in `layer`, as a pass registered it.
+/// The commands shown at `rect` in `layer`, as a pass registered them: one bound component's command, or every command
+/// a container holds. A container's commands share one fact, so a menu title that holds its menu's hundred commands
+/// registers once per pass and a replay of the menu bar makes one registration per title, not one per command
+/// (photocraft#15493).
 #[derive(Clone, Debug, PartialEq)]
 struct ShownFact {
-    command: CommandRef,
+    commands: ShownCommands,
     layer: LayerKey,
     rect: egui::Rect,
     label: Label,
-    holder: bool,
+}
+
+/// What a [`ShownFact`] shows: a bound component's command, or the commands a container holds.
+#[derive(Clone, Debug, PartialEq)]
+enum ShownCommands {
+    Bound(CommandRef),
+    Held(Arc<[CommandRef]>),
+}
+
+impl ShownFact {
+    /// Whether the fact shows `command`.
+    fn shows(&self, command: &CommandRef) -> bool {
+        match &self.commands {
+            ShownCommands::Bound(bound) => bound == command,
+            ShownCommands::Held(held) => held.contains(command),
+        }
+    }
 }
 
 /// A replay moves the rect; the rest stays.
@@ -787,16 +806,16 @@ impl Shift for ShownFact {
     }
 }
 
-/// Registers `command` as shown for the next pass of the running viewport.
-fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef, holder: bool) {
-    Facts::register(ctx, ShownFact { command: command.clone(), layer, rect, label, holder });
+/// Registers `commands` as shown for the next pass of the running viewport.
+fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, commands: ShownCommands) {
+    Facts::register(ctx, ShownFact { commands, layer, rect, label });
 }
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
 pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[CommandRef], label: Label) {
-    for command in commands {
-        register_shown(ctx, layer, rect, label.clone(), command, true);
+    if !commands.is_empty() {
+        register_shown(ctx, layer, rect, label, ShownCommands::Held(commands.into()));
     }
 }
 
@@ -804,7 +823,15 @@ pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[Comma
 /// viewport: the report step calls it for a component wholly inside its clip.
 // PLAN: the caller is the report step (menus-w3); until it lands nothing in this crate calls it.
 pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef) {
-    register_shown(ctx, layer, rect, label, command, false);
+    register_shown(ctx, layer, rect, label, ShownCommands::Bound(command.clone()));
+}
+
+/// How many shown-command registrations the running viewport's last pass made: one per bound component and one per
+/// container, whatever it holds.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn shown_registrations(ctx: &Context) -> usize {
+    Facts::<ShownFact>::of_last_pass(ctx).len()
 }
 
 /// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
@@ -814,9 +841,9 @@ pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
     let scrim = overlay::top_modal_in(ctx, viewport).and_then(|top| top.cover);
     Facts::<ShownFact>::of_last_pass(ctx)
         .into_iter()
-        .filter(|fact| fact.command == *command)
+        .filter(|fact| fact.shows(command))
         .find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect)))
-        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: fact.holder })
+        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: matches!(fact.commands, ShownCommands::Held(_)) })
 }
 
 /// Where a command was shown, from [`shown`].
