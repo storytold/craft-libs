@@ -738,8 +738,10 @@ pub(crate) fn audit(
     same: Option<crate::runtime::audit::SameOutput>,
     shift: &RecordShift,
 ) {
-    // A pass that turned to discard during the audit run paints nothing: its run is no shown run to compare with.
-    if ctx.will_discard() {
+    // A pass that turned to discard during the audit run paints nothing: its run is no shown run to compare with. A
+    // discard layout memory asked for (a layout entry the run placed by was gone or moved) reaches egui only in the end
+    // hook.
+    if ctx.will_discard() || crate::runtime::layout_memory::discard_pending(ctx) {
         return;
     }
     let Some(kept) = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone())) else { return };
