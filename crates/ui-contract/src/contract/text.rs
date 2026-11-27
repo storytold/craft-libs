@@ -682,12 +682,6 @@ pub(crate) fn run<C: Component>(
 }
 
 impl<C: Component> Cx<'_, C> {
-    /// The response of a declared selection part after `paint` shows it, or `None` when the part has no widget.
-    pub fn selection_response(&self, part: impl Into<PartRef>) -> Option<egui::Response> {
-        let part = part.into();
-        self.core.selections.contains(&part).then(|| self.core.ctx.read_response(selection_id(self.core.id, part))).flatten()
-    }
-
     /// Changes the text part's draft in the next pass: `Some(text)` puts `text` in as a change of the typing run (one
     /// that begins the run when none is under way), the caret at its end; `None` ends the run with the text from
     /// before it, without the run's Escape reaching the host. A combo box's keys in its open list put the active

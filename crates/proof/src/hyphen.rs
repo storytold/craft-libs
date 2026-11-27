@@ -15,6 +15,10 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
+//! **Gujarati and Hindi**: breaks between aksharas, never inside a conjunct or between a
+//! consonant and its vowel sign ([`crate::indic`], rules from the script's Unicode encoding); no
+//! pattern file.
+//!
 //! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
 //! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
 //!
@@ -116,7 +120,7 @@ pub enum Source {
     Patterns,
     /// A heuristic for a language without a dictionary or patterns.
     Heuristic,
-    /// A language's syllable rules (Bulgarian, [`crate::bg`]).
+    /// A language's syllable rules (Bulgarian [`crate::bg`], Turkish, Gujarati and Hindi [`crate::indic`]).
     Rules,
     /// No break points: the word is too short or no source applies.
     None,
@@ -155,6 +159,13 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     // (`WordCraft`, `email`) are hyphenated as English, as in any other language.
     if lang == ProofLang::Bg && core.iter().all(|&c| crate::bg::is_letter(c)) {
         return (crate::bg::points(core), Source::Rules);
+    }
+    // Gujarati and Hindi words break between aksharas ([`crate::indic`]); other words in their runs
+    // (`WordCraft`) are hyphenated as English.
+    if let Some(script) = crate::indic::Script::of(lang)
+        && core.iter().all(|&c| script.is_letter(c))
+    {
+        return (crate::indic::points(script, core), Source::Rules);
     }
     // A suffix written after an apostrophe (`Ankara'dan`, `Türkiye'nin`) is hyphenated part by
     // part; no break goes next to the apostrophe ([`word_breaks_in`] drops those).
@@ -224,9 +235,9 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
     (nfc, starts)
 }
 
-/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian and Turkish: a word in
-/// their script (the guard their rules use) whose letters the patterns know, so a word with a
-/// letter the pack never mentions (`ё`) goes on to the built-in rules. Polish, Portuguese, Italian
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish and Gujarati: a
+/// word in their script (the guard their rules use) whose letters the patterns know, so a word with a
+/// letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
 /// and German: every word, as their embedded patterns do. Any other language: a word whose letters
 /// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
@@ -235,6 +246,7 @@ fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
         ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
+        ProofLang::Gu => core.iter().all(|&c| crate::gu::is_gujarati_char(c)) && pack_knows(pats, core),
         _ => pats.values(core).is_some(),
     }
 }

@@ -494,7 +494,7 @@ pub struct TransformBox<'a> {
     round_handles: bool,
     /// The side of the corner and side handles in points, for a host with a handle size preference; `None` uses the
     /// theme's (`size.handle.md`). A handle's reach grows with a larger side and stays at least the theme's.
-    #[prop]
+    #[prop(quantity = "points, from the host's handle size preference")]
     handle_side: Option<f32>,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
