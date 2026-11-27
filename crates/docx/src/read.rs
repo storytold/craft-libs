@@ -95,6 +95,10 @@ pub(crate) struct Reader<'p> {
     pub perms: HashMap<String, u32>,
     /// The next permission range id to give out (chunks' ranges take theirs from it too).
     pub next_perm: u32,
+    /// The ids of the permission starts read in a table's structure (each start has its own).
+    pub table_perms: HashSet<u32>,
+    /// Permission ranges to drop, start and end, when the read ends (see `finish_perms`).
+    pub perms_dropped: HashSet<u32>,
     /// Chart and diagram parts by path, parsed once.
     graphic_parts: HashMap<String, Option<Arc<El>>>,
     /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
@@ -190,6 +194,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         bookmarks: HashMap::new(),
         perms: HashMap::new(),
         next_perm: 0,
+        table_perms: HashSet::new(),
+        perms_dropped: HashSet::new(),
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
         glued: HashSet::new(),
@@ -368,6 +374,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
     r.finish_moves();
+    r.finish_perms();
     let links = std::mem::take(&mut r.txbx_links);
     link_text_boxes(&mut r.doc, links);
     if r.shape_ids {

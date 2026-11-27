@@ -1,5 +1,6 @@
 //! Stories: blocks, paragraphs, runs, fields, drawings, tables.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_wordmodel::connector::{ConnEnd, ShapeExtra};
@@ -117,6 +118,17 @@ pub struct StoryCtx {
     pub in_hf: bool,
     /// Reading a table cell's paragraphs (not a text box inside one).
     in_cell: bool,
+    /// The story's permission starts not yet ended, by the file's `w:id`, latest last (see
+    /// [`Reader::perm_start`]).
+    perms_open: HashMap<String, Vec<OpenPerm>>,
+}
+
+/// A permission start not yet ended while a story is read.
+struct OpenPerm {
+    /// Its id in the model; `None`: it was dropped, and so is its end.
+    id: Option<u32>,
+    /// Read in a table's structure (`w:tbl`, `w:tr` or a wrapper there).
+    structural: bool,
 }
 
 /// Paragraph content under construction.

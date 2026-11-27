@@ -19,11 +19,14 @@
 //!
 //! Synthetic fixtures written for these tests from the schema.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
+use std::sync::Arc;
 
 use craft_wordmodel::para::OBJ;
-use craft_wordmodel::{Block, Blocks, Document, InlineObject};
+use craft_wordmodel::props::CharProps;
+use craft_wordmodel::walk::each_para;
+use craft_wordmodel::{Block, Blocks, Document, InlineObject, Paragraph, Path, PermRange, StoryRef, para_block};
 
 use crate::fixtures::zip;
 
@@ -79,6 +82,9 @@ fn alternate(content: &str, fallback: &str) -> String {
 /// permission markers before `w:tblPr`).
 type Case = (&'static str, bool, fn(&str) -> String);
 
+/// The case whose markers come before a cell that starts with a table (its words `n1`, `n2`).
+const NESTED: &str = "before a cell that starts with a table";
+
 const CASES: [Case; 21] = [
     ("in the table before its properties", false, |m| {
         format!(r#"<w:tbl>{m}<w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid>{}{}</w:tbl>"#, row_a(), row_b())
@@ -115,7 +121,7 @@ const CASES: [Case; 21] = [
     }),
     // A damaged cell (§17.4.65): nothing in it to hold the markers.
     ("before a cell with no paragraph", true, |m| table(&(row_a() + &row(&format!("{}{m}<w:tc><w:tcPr/></w:tc>", cell("b1")))))),
-    ("before a cell that starts with a table", true, |m| {
+    (NESTED, true, |m| {
         let inner = format!(r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1200"/></w:tblGrid>{}{}</w:tbl>"#, row(&cell("n1")), row(&cell("n2")));
         table(&(row_a() + &row(&format!("{m}<w:tc><w:tcPr/>{inner}<w:p/></w:tc>{}", cell("b2")))))
     }),
@@ -300,8 +306,17 @@ fn ranges_marked_between_table_rows_and_cells_cover_the_same_text_and_save_as_pa
         let body = body(case, true);
         let file = file_tokens(&body);
         let kinds: &[&str] = if *perms { &[COMMENT, PERM] } else { &[COMMENT] };
-        let ranges: Vec<(&str, &str, Vec<String>)> = kinds.iter().flat_map(|k| [ENDS, STARTS].map(|n| (*k, n, covered(&file, k, n)))).collect();
+        let mut ranges: Vec<(&str, &str, Vec<String>)> = kinds.iter().flat_map(|k| [ENDS, STARTS].map(|n| (*k, n, covered(&file, k, n)))).collect();
         assert!(ranges.iter().all(|(_, _, words)| !words.is_empty()), "{name}: the fixture marks no text");
+        // A permission range's start stays in its own table: before a cell that starts with a
+        // table, it waits for the cell's own paragraph after that table.
+        if *name == NESTED {
+            for (kind, range, words) in &mut ranges {
+                if *kind == PERM && *range == STARTS {
+                    words.retain(|w| !w.starts_with('n'));
+                }
+            }
+        }
         let mut d = craft_docx::read(&package(&body)).unwrap();
         for (round, save) in [("as read", Some("first save")), ("after one save", Some("second save")), ("after two saves", None)] {
             let mut tokens = Vec::new();
@@ -309,7 +324,7 @@ fn ranges_marked_between_table_rows_and_cells_cover_the_same_text_and_save_as_pa
             for (kind, range, words) in &ranges {
                 let got = covered(&tokens, kind, range);
                 if &got != words {
-                    problems.push(format!("{name}, {round}: the {kind} range {range:?} covers {got:?}, the file {words:?}"));
+                    problems.push(format!("{name}, {round}: the {kind} range {range:?} covers {got:?}, want {words:?}"));
                 }
             }
             let Some(save) = save else { break };
@@ -393,7 +408,7 @@ fn column_body(at: StartAt, cols: &str) -> String {
 /// file, and the columns it should keep (`None`: none).
 type ColumnCase = (&'static str, StartAt, &'static str, Option<[u32; 2]>);
 
-const COLUMN_CASES: [ColumnCase; 6] = [
+const COLUMN_CASES: [ColumnCase; 7] = [
     ("one column, the start in the row", StartAt::Row, r#" w:colFirst="1" w:colLast="1""#, Some([1, 1])),
     ("two columns, the start in the first cell", StartAt::Cell, r#" w:colFirst="0" w:colLast="1""#, Some([0, 1])),
     ("no columns", StartAt::Row, "", None),
@@ -401,7 +416,9 @@ const COLUMN_CASES: [ColumnCase; 6] = [
     ("the first column after the last", StartAt::Row, r#" w:colFirst="2" w:colLast="1""#, Some([2, 1])),
     // Non-conformant without its pair: it still limits the range to that column.
     ("colFirst alone", StartAt::Cell, r#" w:colFirst="2""#, Some([2, 2])),
-    ("values that are not column numbers", StartAt::Row, r#" w:colFirst="two" w:colLast="-1""#, None),
+    // `ST_DecimalNumber` is an `xsd:integer`: a sign, leading zeros and spaces around it are allowed.
+    ("an integer's other spellings", StartAt::Row, r#" w:colFirst=" +1 " w:colLast="01""#, Some([1, 1])),
+    ("the largest column number the model holds", StartAt::Row, r#" w:colFirst="4294967295" w:colLast="4294967295""#, Some([u32::MAX, u32::MAX])),
 ];
 
 /// The tags named `name` in `xml`, without their angle brackets.
@@ -412,8 +429,55 @@ fn tags<'a>(xml: &'a str, name: &'a str) -> impl Iterator<Item = &'a str> {
         .filter(move |tag| tag.split(|c: char| c.is_whitespace() || c == '/').next() == Some(name))
 }
 
-/// A permission range limited to some of a table's columns keeps them, and its rows, as read and
-/// through two saves; a range without them gains none, and stays a range over whole rows.
+/// The cells a range limited to columns covers, worked out from the model on its own reading of
+/// §17.13.7.2: the table its start is in, the rows from its start's to its end's, and in each the
+/// cells wholly inside its columns, as (row, first grid column). `None` when it has no columns or
+/// its end isn't in that table.
+fn range_cells(d: &Document, r: &PermRange) -> Option<(Path, BTreeSet<(usize, usize)>)> {
+    let [first, last] = r.cols?;
+    let (table_path, start_row, _) = r.start.path.cell()?;
+    let n = table_path.0.len();
+    if r.end.story != r.start.story || r.end.path.0.len() < n + 3 || !r.end.path.0.starts_with(&table_path.0) {
+        return None;
+    }
+    let end_row = *r.end.path.0.get(n)? as usize;
+    let t = d.table(r.start.story, &table_path)?;
+    let mut cells = BTreeSet::new();
+    for row in start_row..=end_row {
+        for (c, cell) in t.rows.get(row)?.cells.iter().enumerate() {
+            let g = t.grid_col(row, c);
+            if first as usize <= g && g + cell.span().max(1) <= last as usize + 1 {
+                cells.insert((row, g));
+            }
+        }
+    }
+    Some((table_path, cells))
+}
+
+/// Every cell in rows `rows` and grid columns `cols`, as [`range_cells`] gives them.
+fn grid(rows: std::ops::RangeInclusive<usize>, cols: std::ops::RangeInclusive<usize>) -> BTreeSet<(usize, usize)> {
+    rows.flat_map(|r| cols.clone().map(move |c| (r, c))).collect()
+}
+
+/// The permission markers anywhere in the body, in document order: (start or end, id).
+fn body_perm_markers(d: &Document) -> Vec<(bool, u32)> {
+    let mut out = Vec::new();
+    for b in &d.body {
+        each_para(b, 0, &mut |p| {
+            for o in &p.objects {
+                match o {
+                    InlineObject::PermStart { id, .. } => out.push((true, *id)),
+                    InlineObject::PermEnd { id } => out.push((false, *id)),
+                    _ => {}
+                }
+            }
+        });
+    }
+    out
+}
+
+/// A permission range limited to some of a table's columns keeps them, and the cells they cover,
+/// as read and through two saves; a range without them gains none.
 #[test]
 fn a_permission_range_keeps_its_table_columns_and_gains_none_through_two_saves() {
     let mut problems = Vec::new();
@@ -422,17 +486,23 @@ fn a_permission_range_keeps_its_table_columns_and_gains_none_through_two_saves()
         let words = covered(&file_tokens(&body), PERM, COLUMNS);
         assert!(!words.is_empty(), "{name}: the fixture marks no text");
         let saved_cols = want.map_or([String::new(), String::new()], |c| c.map(|v| v.to_string()));
+        // Columns that name some of the table's: the first two rows' cells in them.
+        let cells = want.filter(|[a, b]| a <= b && *b < 3).map(|[a, b]| (Path::top(1), grid(0..=1, a as usize..=b as usize)));
         let mut d = craft_docx::read(&package(&body)).unwrap();
         for (round, save) in [("as read", Some("first save")), ("after one save", Some("second save")), ("after two saves", None)] {
-            let cols: Vec<Option<[u32; 2]>> = d.perm_ranges().iter().map(|r| r.cols).collect();
+            let ranges = d.perm_ranges();
+            let cols: Vec<Option<[u32; 2]>> = ranges.iter().map(|r| r.cols).collect();
             if cols != [*want] {
                 problems.push(format!("{name}, {round}: ranges with the columns {cols:?}, want [{want:?}]"));
+            }
+            if cells.is_some() && ranges.first().and_then(|r| range_cells(&d, r)) != cells {
+                problems.push(format!("{name}, {round}: covers the cells {:?}, want {cells:?}", ranges.first().and_then(|r| range_cells(&d, r))));
             }
             let mut tokens = Vec::new();
             read_tokens(&d, &d.body, &mut BTreeMap::new(), &mut tokens);
             let got = covered(&tokens, PERM, COLUMNS);
             if got != words {
-                problems.push(format!("{name}, {round}: the range covers {got:?}, the file {words:?}"));
+                problems.push(format!("{name}, {round}: the range's markers bound {got:?}, the file's {words:?}"));
             }
             let Some(save) = save else { break };
             let saved = craft_docx::write(&d).unwrap();
@@ -444,6 +514,257 @@ fn a_permission_range_keeps_its_table_columns_and_gains_none_through_two_saves()
             let (bad, _) = unpaired(&xml);
             problems.extend(bad.into_iter().map(|b| format!("{name}, {save}: {b}")));
             d = craft_docx::read(&saved).unwrap();
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// A permission range whose column attributes are there but aren't column numbers the model can
+/// hold is dropped, start and end, and nothing of it is saved: read as a range without columns it
+/// would apply to the entire table (§17.13.7.2). One good value isn't copied to the other.
+#[test]
+fn a_permission_range_whose_columns_are_not_column_numbers_is_dropped() {
+    let mut problems = Vec::new();
+    for (name, attrs) in [
+        ("not a number", r#" w:colFirst="two" w:colLast="1""#),
+        ("negative", r#" w:colFirst="1" w:colLast="-1""#),
+        ("past what the model holds", r#" w:colFirst="0" w:colLast="4294967296""#),
+    ] {
+        for at in [StartAt::Row, StartAt::Cell] {
+            let d = craft_docx::read(&package(&column_body(at, attrs))).unwrap();
+            let left = (d.perm_ranges().len(), body_perm_markers(&d).len());
+            let xml = document_xml(&craft_docx::write(&d).unwrap());
+            let saved = (tags(&xml, "w:permStart").count(), tags(&xml, "w:permEnd").count());
+            if left != (0, 0) || saved != (0, 0) {
+                problems.push(format!("{name}: (ranges, markers) {left:?} as read, (starts, ends) {saved:?} saved; want none"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// A table of `cols` grid columns whose rows are `rows` (row `r`'s cells read `r0`, `r1`…), between
+/// a paragraph before it and one after it; `marks(i)` gives the markers row `i` has before its
+/// cells and after them.
+fn grid_body(cols: usize, rows: &str, marks: impl Fn(usize) -> (String, String)) -> String {
+    let mut table = String::new();
+    for (i, r) in rows.chars().enumerate() {
+        let (before, after) = marks(i);
+        let cells: String = (0..cols).map(|c| cell(&format!("{r}{c}"))).collect();
+        table += &row(&format!("{before}{cells}{after}"));
+    }
+    let widths = r#"<w:gridCol w:w="400"/>"#.repeat(cols);
+    format!(
+        r#"<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid>{widths}</w:tblGrid>{table}</w:tbl><w:p><w:r><w:t xml:space="preserve">after </w:t></w:r></w:p>"#
+    )
+}
+
+/// A range limited to columns `cols`, started before row `from`'s cells and ended after row
+/// `to`'s, for [`grid_body`].
+fn column_marks(cols: &str, from: usize, to: usize) -> impl Fn(usize) -> (String, String) {
+    let start = format!(r#"<w:permStart w:id="5" w:ed="{COLUMNS}"{cols}/>"#);
+    move |i| (if i == from { start.clone() } else { String::new() }, if i == to { r#"<w:permEnd w:id="5"/>"#.to_string() } else { String::new() })
+}
+
+/// A table wider than the 63 columns the reader keeps (65 in the file): a range limited to columns
+/// past the last one kept is cut to the columns kept, and dropped, start and end, when none of its
+/// columns are kept. It never names a column the table no longer has, which would make it apply to
+/// the entire table (§17.13.7.2). Columns the reader keeps are left as they are.
+#[test]
+fn a_column_range_past_the_columns_the_reader_keeps_is_cut_to_them_or_dropped() {
+    let mut problems = Vec::new();
+    for (name, attrs, first, last) in [
+        ("columns kept", r#" w:colFirst="2" w:colLast="3""#, 2, 3),
+        ("columns kept and not", r#" w:colFirst="60" w:colLast="64""#, 60, 64),
+        ("no column kept", r#" w:colFirst="64" w:colLast="64""#, 64, 64),
+    ] {
+        let mut d = craft_docx::read(&package(&grid_body(65, "ab", column_marks(attrs, 0, 1)))).unwrap();
+        let kept = d.table(StoryRef::Body, &Path::top(1)).map_or(0, |t| t.cols());
+        assert!(kept < 65, "the reader keeps every column; this test needs it not to");
+        let want = (first < kept).then(|| [first as u32, last.min(kept - 1) as u32]);
+        for round in ["as read", "after one save", "after two saves"] {
+            let ranges = d.perm_ranges();
+            let cols: Vec<Option<[u32; 2]>> = ranges.iter().map(|r| r.cols).collect();
+            let markers = body_perm_markers(&d).len();
+            match want {
+                Some([a, b]) => {
+                    let cells = (Path::top(1), grid(0..=1, a as usize..=b as usize));
+                    if cols != [Some([a, b])] || ranges.first().and_then(|r| range_cells(&d, r)) != Some(cells) {
+                        problems.push(format!("{name}, {round}: ranges with the columns {cols:?}, want [[{a}, {b}]] over rows 0–1"));
+                    }
+                }
+                None if !ranges.is_empty() || markers != 0 => {
+                    problems.push(format!("{name}, {round}: ranges with the columns {cols:?} and {markers} markers left, want none"));
+                }
+                None => {}
+            }
+            if round != "after two saves" {
+                d = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// A permission start read in a table's structure counts only with an end of its own: with none,
+/// or with another start of its `w:id` open (which end closes which is unclear), it is dropped
+/// with any end it has, as before such markers were read, and nothing of it is saved. A start in a
+/// paragraph keeps the end it had before.
+#[test]
+fn a_start_in_a_tables_structure_without_an_end_of_its_own_is_dropped() {
+    let plain = column_body(StartAt::Row, "");
+    let end = r#"<w:permEnd w:id="5"/>"#;
+    let paragraph_start = r#"<w:permStart w:id="5" w:ed="paragraph"/>"#;
+    let before = r#"<w:p><w:r><w:t xml:space="preserve">before "#;
+    let b0 = r#"<w:p><w:r><w:t xml:space="preserve">b0 "#;
+    let cases: [(&str, String, &[(&str, &[&str])]); 4] = [
+        ("no end", plain.replace(end, ""), &[]),
+        ("a second start with its id", plain.replace(end, &format!(r#"<w:permStart w:id="5" w:ed="again"/>{end}"#)), &[]),
+        (
+            "a paragraph's start with its id before it",
+            plain.replacen(before, &format!("<w:p>{paragraph_start}{}", &before[5..]), 1),
+            &[("paragraph", &["before", "a0", "a1", "a2", "b0", "b1", "b2"])],
+        ),
+        (
+            "a paragraph's start with its id after it",
+            plain.replacen(b0, &format!("<w:p>{paragraph_start}{}", &b0[5..]), 1),
+            &[("paragraph", &["b0", "b1", "b2"])],
+        ),
+    ];
+    let mut problems = Vec::new();
+    for (name, body, want) in cases {
+        let mut d = craft_docx::read(&package(&body)).unwrap();
+        for round in ["as read", "after one save", "after two saves"] {
+            let editors: Vec<String> = d.perm_ranges().iter().map(|r| r.editor.clone()).collect();
+            let mut tokens = Vec::new();
+            read_tokens(&d, &d.body, &mut BTreeMap::new(), &mut tokens);
+            let got: Vec<(String, Vec<String>)> = editors.iter().map(|e| (e.clone(), covered(&tokens, PERM, e))).collect();
+            let expect: Vec<(String, Vec<String>)> = want.iter().map(|(e, w)| (e.to_string(), w.iter().map(|w| w.to_string()).collect())).collect();
+            let markers = body_perm_markers(&d).len();
+            if got != expect || markers != 2 * want.len() {
+                problems.push(format!("{name}, {round}: ranges {got:?} and {markers} markers, want {expect:?}"));
+            }
+            if round != "after two saves" {
+                let saved = craft_docx::write(&d).unwrap();
+                let xml = document_xml(&saved);
+                let (starts, ends) = (tags(&xml, "w:permStart").count(), tags(&xml, "w:permEnd").count());
+                if (starts, ends) != (want.len(), want.len()) {
+                    problems.push(format!("{name}, saved {round}: {starts} starts and {ends} ends, want {} of each", want.len()));
+                }
+                d = craft_docx::read(&saved).unwrap();
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// Deleting the row a column range ends in, or moving it before the row it starts in, leaves its
+/// start without an end after it, and so does deleting the paragraph a range ends in: nothing is
+/// editable through it, then or after saving. An unmatched start doesn't run on to the end of its
+/// story.
+#[test]
+fn a_range_whose_end_is_deleted_or_moved_before_its_start_makes_nothing_editable() {
+    let table = grid_body(3, "abcde", column_marks(r#" w:colFirst="1" w:colLast="1""#, 0, 3));
+    let paragraphs = r#"<w:p><w:permStart w:id="1" w:edGrp="everyone"/><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:t>two</w:t></w:r><w:permEnd w:id="1"/></w:p><w:p><w:r><w:t>three</w:t></w:r></w:p>"#;
+    let cases: [(&str, &str, fn(&mut Document)); 3] = [
+        ("the last row of a column range deleted", &table, |d| d.table_mut(StoryRef::Body, &Path::top(1)).unwrap().delete_row(3)),
+        ("the last row of a column range moved first", &table, |d| {
+            let t = d.table_mut(StoryRef::Body, &Path::top(1)).unwrap();
+            let last = t.rows.remove(3);
+            t.rows.insert(0, last);
+        }),
+        ("the paragraph a range ends in deleted", paragraphs, |d| {
+            d.body.remove(1);
+        }),
+    ];
+    let mut problems = Vec::new();
+    for (name, body, edit) in cases {
+        let mut d = craft_docx::read(&package(body)).unwrap();
+        assert_eq!(d.perm_ranges().len(), 1, "{name}: the fixture has one range");
+        edit(&mut d);
+        for round in ["edited", "after one save", "after two saves"] {
+            let ranges = d.perm_ranges();
+            if !ranges.is_empty() {
+                problems.push(format!("{name}, {round}: {} editable ranges, want none: {ranges:?}", ranges.len()));
+            }
+            if round != "after two saves" {
+                d = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// A column range whose first cell starts with a nested table keeps its start in its own table:
+/// the start goes to the cell's own paragraph after the nested table, not into the nested table,
+/// and no paragraph is added for it beyond the one a save gives a cell that ends with a table. So
+/// its columns still name the outer table's, as read and through two saves.
+#[test]
+fn a_column_ranges_start_stays_in_its_own_table_when_its_first_cell_starts_with_a_nested_one() {
+    let inner = format!(r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1200"/></w:tblGrid>{}</w:tbl>"#, row(&cell("nested")));
+    let a0 = r#"<w:p><w:r><w:t xml:space="preserve">a0 "#;
+    let mut problems = Vec::new();
+    let a0_para = r#"<w:p><w:r><w:t xml:space="preserve">a0 </w:t></w:r></w:p>"#;
+    for (name, at, nested_only) in [
+        ("the start in the row", StartAt::Row, false),
+        ("the start in the cell", StartAt::Cell, false),
+        // A damaged cell (§17.4.65): the nested table is all it holds.
+        ("the start in the row, the cell holding only the nested table", StartAt::Row, true),
+    ] {
+        let body = column_body(at, r#" w:colFirst="1" w:colLast="1""#).replacen(a0, &format!("{inner}{a0}"), 1);
+        let body = if nested_only { body.replacen(a0_para, "", 1) } else { body };
+        let unmarked =
+            body.replace(r#"<w:permStart w:id="5" w:ed="columns" w:colFirst="1" w:colLast="1"/>"#, "").replace(r#"<w:permEnd w:id="5"/>"#, "");
+        let first_cell_blocks = |d: &Document| d.table(StoryRef::Body, &Path::top(1)).map_or(0, |t| t.rows[0].cells[0].blocks.len());
+        // As saved: a cell that ends with a table is given a paragraph after it.
+        let saved = craft_docx::write(&craft_docx::read(&package(&unmarked)).unwrap()).unwrap();
+        let blocks = first_cell_blocks(&craft_docx::read(&saved).unwrap());
+        let mut d = craft_docx::read(&package(&body)).unwrap();
+        for round in ["as read", "after one save", "after two saves"] {
+            let ranges = d.perm_ranges();
+            let tables: Vec<_> = ranges.iter().map(|r| (r.start.path.cell().map(|c| c.0), r.end.path.cell().map(|c| c.0))).collect();
+            let cells = ranges.first().and_then(|r| range_cells(&d, r));
+            if tables != [(Some(Path::top(1)), Some(Path::top(1)))] || cells != Some((Path::top(1), grid(0..=1, 1..=1))) {
+                problems.push(format!(
+                    "{name}, {round}: start and end in the tables {tables:?}, covering {cells:?}; want the outer table, its column 1 in rows 0–1"
+                ));
+            }
+            if first_cell_blocks(&d) != blocks {
+                problems.push(format!("{name}, {round}: the first cell holds {} blocks, {blocks} without the range", first_cell_blocks(&d)));
+            }
+            if round != "after two saves" {
+                d = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
+}
+
+/// Splitting a table inside a column range closes the range at the end of the first table and
+/// opens it again, with an id of its own, at the start of the second: each table holds its own
+/// pair, over the same column of its own rows, as split and through two saves. Neither range
+/// crosses from one table to the other.
+#[test]
+fn splitting_a_table_inside_a_column_range_gives_each_table_a_range_of_its_own() {
+    let body = grid_body(3, "abcde", column_marks(r#" w:colFirst="1" w:colLast="1""#, 0, 3));
+    let mut d = craft_docx::read(&package(&body)).unwrap();
+    let mut next = d.next_perm_id();
+    let tail = d.table_mut(StoryRef::Body, &Path::top(1)).unwrap().split_off(2, &mut next);
+    d.body.insert(2, para_block(Paragraph::with_text("between", CharProps::default())));
+    d.body.insert(3, Arc::new(Block::Table(tail)));
+    let mut problems = Vec::new();
+    for round in ["split", "after one save", "after two saves"] {
+        let ranges = d.perm_ranges();
+        let ids: BTreeSet<u32> = ranges.iter().map(|r| r.id).collect();
+        let cells: Vec<_> = ranges.iter().map(|r| range_cells(&d, r)).collect();
+        let want = [Some((Path::top(1), grid(0..=1, 1..=1))), Some((Path::top(3), grid(0..=1, 1..=1)))];
+        if ranges.len() != 2 || ids.len() != 2 || cells != want || ranges.iter().any(|r| r.cols != Some([1, 1])) {
+            problems.push(format!(
+                "{round}: ranges {ranges:?} covering {cells:?}; want two, with ids of their own, each over column 1 of its own table's two rows"
+            ));
+        }
+        if round != "after two saves" {
+            d = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
         }
     }
     assert!(problems.is_empty(), "{} problems:\n{}", problems.len(), problems.join("\n"));
