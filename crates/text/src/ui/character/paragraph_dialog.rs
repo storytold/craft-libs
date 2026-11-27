@@ -929,7 +929,7 @@ impl ParagraphDialog {
         let mut picked = None;
         // The body applies this pass's edits before the keys are read: the state before it says whether a key ended a
         // field's edit on the Tabs page, the state after whether one began.
-        let editing = self.tabs_on_screen().is_some_and(|tabs| tabs.editing_at_frame_start(ui.ctx()));
+        let held = self.tabs_on_screen().is_some_and(|tabs| tabs.field_holds_keys(ui.ctx()));
         // The pages take a fixed width, as the dialog's do, so a window that follows its content keeps one width and
         // follows only the height of the page shown (the preview fills what it is given).
         ui.horizontal_top(|ui| {
@@ -945,8 +945,8 @@ impl ParagraphDialog {
                 let enabled = valid.get() && !waiting;
                 for (at, label) in labels.iter().cloned().enumerate() {
                     let button = Button::new(label).sizing(Sizing::FillWidth).enabled(at == CANCEL || enabled);
-                    // While a field on the Tabs page is edited, Enter is the field's and Set is the default button.
-                    let default = at == OK && !self.tabs_on_screen().is_some_and(|tabs| tabs.editing());
+                    // While a field on the Tabs page holds Enter, OK is not the default button.
+                    let default = at == OK && self.tabs_on_screen().is_none_or(|tabs| tabs.ok_is_default());
                     let button = if default { button.variant(Variant::PRIMARY) } else { button };
                     if button.show(ui).clicks == 1 {
                         picked = Some(at);
@@ -954,11 +954,10 @@ impl ParagraphDialog {
                 }
             });
         });
-        let editing = editing || self.tabs_on_screen().is_some_and(|tabs| tabs.editing());
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
-            // An Enter or Escape that begins or ends a field's edit on the Tabs page is the edit's, not the dialog's.
-            _ if editing => None,
+            // An Enter or Escape a field on the Tabs page holds is the field's, not the dialog's.
+            _ if held => None,
             (_, true) => Some(CANCEL),
             (true, _) if valid.get() && !waiting => Some(OK),
             _ => None,

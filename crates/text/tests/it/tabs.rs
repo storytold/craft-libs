@@ -228,3 +228,28 @@ fn enter_in_the_tab_stop_position_box_sets_a_stop_there_and_the_next_enter_answe
     press(&mut fixture, "Set");
     assert_eq!(dialog.borrow_mut().result().stops, [stop(90.0, TabAlign::Left, TabLeader::None)], "Set put the stop at the typed position");
 }
+
+/// Which button is the default in the bare dialog: OK when it opens (focus on its first field is not the user's), Set
+/// from a click or Tab into the Tab stop position box until Enter there, and neither while another number field holds
+/// Enter.
+#[trial]
+fn the_default_button_follows_the_field_that_holds_enter() {
+    let (mut fixture, dialog, _) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
+    let default = |dialog: &Rc<RefCell<TabStopsDialog>>| {
+        let dialog = dialog.borrow();
+        (dialog.ok_is_default(), dialog.set_is_default())
+    };
+    assert_eq!(default(&dialog), (true, false), "OK is the default when the dialog opens");
+    press(&mut fixture, "Tab stop position:");
+    assert_eq!(default(&dialog), (false, true), "a click into the box makes Set the default");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("100 pt").key(Key::Enter, Modifiers::NONE).idle(4);
+    assert_eq!(default(&dialog), (true, false), "after Enter in the box, OK is the default again");
+    press(&mut fixture, "Default tab stops:");
+    assert_eq!(default(&dialog), (false, false), "a click into Default tab stops: Enter takes the interval");
+    fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+    assert_eq!(default(&dialog), (false, true), "Tab into the box makes Set the default");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("200 pt").key(Key::Escape, Modifiers::NONE).idle(4);
+    assert_eq!(default(&dialog), (true, false), "Escape abandoning a typed position gives the keys back");
+    press(&mut fixture, "Position");
+    assert_eq!(default(&dialog), (false, false), "a click into a stop's position: Enter takes the position");
+}

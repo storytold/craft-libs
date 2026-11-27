@@ -24,7 +24,7 @@ use craft_ui::list::ListRow;
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, Units};
-use craft_ui::runtime::focus::{self, FocusTarget};
+use craft_ui::runtime::focus::{self, FocusOrigin, FocusTarget};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::table::Table;
@@ -102,7 +102,9 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 /// - Set adds a stop at the next free multiple of the default interval after the last stop, left aligned, no leader,
 ///   selected; Clear moves the selected stop to "to be cleared"; Clear All clears every stop.
 /// - Positions are clamped to ±[`MAX_POSITION`]; at most [`MAX_STOPS`] stops are read from a paragraph.
-/// - Keys: Enter is OK unless a field owns it, Escape is Cancel.
+/// - Keys: a number field (Default tab stops, Tab stop position, a row's position) holds Enter and Escape from when the
+///   user moves focus into it, clicks it or types in it until it takes one of them ([`FieldKeys`]). Enter in the Tab stop
+///   position box is Set; in another field it takes the value. Otherwise Enter is OK and Escape is Cancel.
 #[derive(craft_ui::contract::Pattern)]
 pub struct TabStopsDialog {
     stops: Vec<TabStop>,
@@ -115,14 +117,8 @@ pub struct TabStopsDialog {
     unit: DocUnit,
     /// The row and position an in-place position edit began from, for Escape.
     draft: Option<(usize, f32)>,
-    /// Whether a number field (the default interval, a stop's position) holds Enter and Escape: from the pass key focus
-    /// moved into it (a click, Tab, Set) or a value was typed, until Enter, Escape or focus leaving it.
-    field_keys: bool,
-    /// Whether a number field had key focus at the end of the last pass, to tell the pass focus arrives.
-    field_focus: bool,
-    /// The frame and whether a field held the keys at its start: a pass egui runs again in that frame sees the same keys
-    /// after the first run already ended the edit.
-    frame_start: Option<(u64, bool)>,
+    /// Which number field holds Enter and Escape.
+    keys: FieldKeys,
     /// The selected row's Position field takes the focus the next time it shows: Set moves into the new stop.
     to_edit: bool,
     /// The Tab stop position box's value, points: Set or Enter there puts a stop at it, as in Word.
@@ -149,9 +145,7 @@ impl TabStopsDialog {
             edited: None,
             unit: DocUnit::default(),
             draft: None,
-            field_keys: false,
-            field_focus: false,
-            frame_start: None,
+            keys: FieldKeys::default(),
             to_edit: false,
             typed_position: None,
             hold: false,
@@ -338,35 +332,22 @@ impl TabStopsDialog {
         self.body(ui, &words, &units);
     }
 
-    /// Whether a number field (a stop's position, the default interval) is being edited, where Enter and Escape end
-    /// the edit.
-    pub(crate) fn editing(&self) -> bool {
-        self.field_keys || self.edited.is_some() || self.draft.is_some()
+    /// Whether a number field held Enter and Escape when this frame began: the keys this frame brought are that
+    /// field's, not OK's or Cancel's. Asked before the body runs; the answer stays the same for the whole frame, so a
+    /// pass egui runs again does not read the Enter a field took in the first as OK.
+    pub(crate) fn field_holds_keys(&mut self, ctx: &egui::Context) -> bool {
+        self.keys.at_frame_start(ctx.cumulative_frame_nr()).is_some()
     }
 
-    /// Whether a number field held the keys at the start of this frame, for an Enter or Escape this frame brought: the
-    /// body's edits of the frame's first pass already ended the edit, and a pass egui runs again sees the same keys.
-    pub(crate) fn editing_at_frame_start(&mut self, ctx: &egui::Context) -> bool {
-        let frame = ctx.cumulative_frame_nr();
-        match self.frame_start {
-            Some((at, held)) if at == frame => held,
-            _ => {
-                let held = self.editing();
-                self.frame_start = Some((frame, held));
-                held
-            }
-        }
+    /// Whether OK is the default button: no number field holds Enter.
+    pub(crate) fn ok_is_default(&self) -> bool {
+        self.keys.active.is_none()
     }
 
-    /// Follows the number fields' key focus and edits over one pass (see `field_keys`).
-    fn note_fields(&mut self, pass: FieldPass) {
-        if (pass.focused && !self.field_focus) || pass.typed {
-            self.field_keys = true;
-        }
-        if pass.ended || !pass.focused {
-            self.field_keys = false;
-        }
-        self.field_focus = pass.focused;
+    /// Whether Set is the default button: drawn bare (a window of its own, or a bare dialog's page), while the Tab stop
+    /// position box holds Enter, which is Set there.
+    pub(crate) fn set_is_default(&self) -> bool {
+        self.bare && self.keys.active == Some(NumberField::Position)
     }
 
     /// The bare content: the body and a refused answer's reason above Cancel and OK at its end; the button picked, if
@@ -381,9 +362,8 @@ impl TabStopsDialog {
         refusal: Option<Label>,
     ) -> Option<usize> {
         let mut picked = None;
-        // The body applies this pass's edits before the keys are read: the state before it says whether a key ended an
-        // edit, the state after whether one began.
-        let editing = self.editing_at_frame_start(ui.ctx());
+        // Whose this frame's keys are is decided when it begins: the body may end the field's hold in this pass.
+        let held = self.field_holds_keys(ui.ctx());
         ui.vertical(|ui| {
             ui.set_width(BARE_WIDTH);
             self.body(ui, words, units);
@@ -394,9 +374,8 @@ impl TabStopsDialog {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 // Right to left: OK at the end, Cancel before it.
                 let [ok, cancel] = labels;
-                // While a field is edited, Enter is the field's and Set is the default button.
                 let ok = Button::new(ok).enabled(!waiting);
-                let ok = if self.editing() { ok } else { ok.variant(Variant::PRIMARY) };
+                let ok = if self.ok_is_default() { ok.variant(Variant::PRIMARY) } else { ok };
                 if ok.show(ui).clicks == 1 {
                     picked = Some(OK);
                 }
@@ -405,11 +384,9 @@ impl TabStopsDialog {
                 }
             });
         });
-        let editing = editing || self.editing();
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
-            // An Enter or Escape that begins or ends a field's edit (a position, the default interval) is the edit's.
-            _ if editing => None,
+            _ if held => None,
             (_, true) => Some(CANCEL),
             (true, _) if !waiting => Some(OK),
             _ => None,
@@ -531,11 +508,11 @@ enum CellEdit {
 
 impl TabStopsDialog {
     fn body(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units) {
-        let mut fields = FieldPass::default();
+        let mut fields = Vec::new();
         self.default_row(ui, words, &mut fields);
         self.position_row(ui, words, &mut fields);
         self.table(ui, words, units, &mut fields);
-        self.note_fields(fields);
+        self.keys.follow(ui.ctx(), &fields);
         self.buttons(ui, words);
         if !self.cleared.is_empty() {
             let positions: Vec<String> = self.cleared.iter().map(|gone| self.text(units, *gone)).collect();
@@ -548,7 +525,7 @@ impl TabStopsDialog {
         units.show(self.unit.kind, shown(units, self.unit, f64::from(points)))
     }
 
-    fn default_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut FieldPass) {
+    fn default_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut Vec<FieldPass>) {
         let unit = self.unit;
         let points = Mixed::Same(Some(f64::from(self.default_interval)));
         let range = f64::from(SAME_POSITION)..=f64::from(MAX_POSITION);
@@ -556,7 +533,7 @@ impl TabStopsDialog {
             .show(ui, |ui, _| length_field(unit, words.default_stops.clone(), points, range.clone()).show(ui))
             .inner;
         if let Some(out) = &edit {
-            fields.note(ui.ctx(), &out.edit);
+            fields.push(FieldPass::of(ui.ctx(), NumberField::Default, out.response.id, &out.edit));
         }
         for event in edit.into_iter().flat_map(|out| out.edit.events) {
             if !matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. }) {
@@ -569,7 +546,7 @@ impl TabStopsDialog {
     }
 
     /// The Tab stop position box: Enter there is Set, a stop at the typed position.
-    fn position_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut FieldPass) {
+    fn position_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut Vec<FieldPass>) {
         let points = Mixed::Same(self.typed_position.map(f64::from));
         let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
         let unit = self.unit;
@@ -578,7 +555,7 @@ impl TabStopsDialog {
         else {
             return;
         };
-        fields.note(ui.ctx(), &out.edit);
+        fields.push(FieldPass::of(ui.ctx(), NumberField::Position, out.response.id, &out.edit));
         for event in &out.edit.events {
             if matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. })
                 && let Some(Some(points)) = event.value()
@@ -595,7 +572,7 @@ impl TabStopsDialog {
 
     /// The stops table: each row edits its stop in place (a position field, an alignment and a leader `Select`); a
     /// selection change moves the selected stop.
-    fn table(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units, fields: &mut FieldPass) {
+    fn table(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units, fields: &mut Vec<FieldPass>) {
         let columns = vec![
             ColumnSpec::new(POSITION, words.position_column.clone(), ColumnWidth::Content),
             ColumnSpec::new(ALIGNMENT, words.alignment.clone(), ColumnWidth::fill(1.0)),
@@ -614,7 +591,7 @@ impl TabStopsDialog {
         let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
         let edits: RefCell<Vec<(usize, CellEdit)>> = RefCell::new(Vec::new());
         let position_ids: RefCell<Vec<(usize, egui::Id)>> = RefCell::new(Vec::new());
-        let noted = RefCell::new(FieldPass::default());
+        let noted = RefCell::new(Vec::new());
         let ctx = ui.ctx().clone();
         let out = Table::<usize>::new(words.title.clone(), columns.clone())
             .empty(words.no_stops.clone())
@@ -634,7 +611,7 @@ impl TabStopsDialog {
                     .cells(icx.cells())
                     .cell_field(POSITION, position, move |out| {
                         position_ids.borrow_mut().push((at, out.response.id));
-                        noted.borrow_mut().note(ctx, &out.edit);
+                        noted.borrow_mut().push(FieldPass::of(ctx, NumberField::Row, out.response.id, &out.edit));
                         edits.borrow_mut().extend(out.edit.events.into_iter().map(|event| (at, CellEdit::Position(event))));
                     })
                     .cell_field(ALIGNMENT, align, move |out| {
@@ -644,7 +621,7 @@ impl TabStopsDialog {
                         edits.borrow_mut().extend(out.value().copied().map(|leader| (at, CellEdit::Leader(leader))));
                     })
             });
-        fields.join(noted.into_inner());
+        fields.extend(noted.into_inner());
         if self.to_edit
             && let Some((_, id)) = position_ids.borrow().iter().find(|(at, _)| Some(*at) == self.selected)
         {
@@ -698,9 +675,8 @@ impl TabStopsDialog {
 
     fn buttons(&mut self, ui: &mut Ui, words: &TabStopsWords) {
         Row::new().show(ui, |ui, _| {
-            // Drawn bare (a window of its own, or a bare dialog's page), Set is the default button while a field is edited.
             let set = Button::new(words.set.clone()).enabled(self.stops.len() < MAX_STOPS);
-            let set = if self.bare && self.editing() { set.variant(Variant::PRIMARY) } else { set };
+            let set = if self.set_is_default() { set.variant(Variant::PRIMARY) } else { set };
             if clicked(&set.show(ui)) {
                 match self.typed_position {
                     Some(position) => self.set_at(position),
@@ -717,29 +693,85 @@ impl TabStopsDialog {
     }
 }
 
-/// What a pass's number fields reported: one has key focus, one took an Enter or Escape that ended its edit, a value
-/// was typed.
-#[derive(Default)]
+/// The page's number fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumberField {
+    /// Default tab stops: Enter takes the interval.
+    Default,
+    /// Tab stop position: Enter is Set.
+    Position,
+    /// A stop row's position: Enter takes the position.
+    Row,
+}
+
+/// What one number field reported in a pass.
 struct FieldPass {
-    focused: bool,
+    field: NumberField,
+    /// The component, which focus is on when it is on the field's text.
+    id: egui::Id,
+    /// It took an Enter or an Escape, which ended its edit.
     ended: bool,
+    /// A value was typed in it.
     typed: bool,
+    /// The pointer was pressed on it.
+    pressed: bool,
 }
 
 impl FieldPass {
-    fn note<T>(&mut self, ctx: &egui::Context, edit: &craft_ui::contract::EditResponse<T>) {
-        // The response is the field's whole box; key focus is on the text part inside it (its frame may stand half a
-        // point past the box, so its centre is what is inside).
-        let focused = ctx.memory(|m| m.focused()).and_then(|id| ctx.read_response(id));
-        self.focused |= focused.is_some_and(|inner| edit.response.rect.contains(inner.rect.center()));
-        self.ended |= edit.submitted || edit.escaped;
-        self.typed |= edit.events.iter().any(|event| matches!(event, EditEvent::Update { .. }));
+    fn of<T>(ctx: &egui::Context, field: NumberField, id: egui::Id, edit: &craft_ui::contract::EditResponse<T>) -> Self {
+        let typed = edit.events.iter().any(|event| matches!(event, EditEvent::Update { .. }));
+        let rect = edit.response.rect;
+        let pressed = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|at| rect.contains(at)));
+        FieldPass { field, id, ended: edit.submitted || edit.escaped, typed, pressed }
+    }
+}
+
+/// Which number field holds Enter and Escape: the focused one, from when the user moves focus into it (a click, Tab,
+/// Set moving into a new row), clicks it or types a value in it, until it takes Enter or Escape. After that the keys
+/// are OK's and Cancel's again, though focus stays in the field. Focus the dialog puts on its first field when it
+/// opens is not the user's ([`FocusOrigin::Open`]): Enter there is OK, as in Word.
+#[derive(Default)]
+struct FieldKeys {
+    /// The component focus was on at the end of the last pass, when it was a number field.
+    focused: Option<egui::Id>,
+    /// The field holding the keys.
+    active: Option<NumberField>,
+    /// The frame and the field that held the keys when it began.
+    frame: Option<(u64, Option<NumberField>)>,
+}
+
+impl FieldKeys {
+    /// The field that held the keys when frame `frame` began.
+    fn at_frame_start(&mut self, frame: u64) -> Option<NumberField> {
+        match self.frame {
+            Some((at, field)) if at == frame => field,
+            _ => {
+                self.frame = Some((frame, self.active));
+                self.active
+            }
+        }
     }
 
-    fn join(&mut self, other: FieldPass) {
-        self.focused |= other.focused;
-        self.ended |= other.ended;
-        self.typed |= other.typed;
+    /// Follows focus and edits over a pass's `fields`.
+    fn follow(&mut self, ctx: &egui::Context, fields: &[FieldPass]) {
+        let focused = fields.iter().find(|pass| focus::has(ctx, pass.id));
+        match focused {
+            Some(pass) if Some(pass.id) != self.focused => {
+                let by_user = matches!(focus::arrival(ctx, pass.id), Some(FocusOrigin::Press | FocusOrigin::Request));
+                self.active = by_user.then_some(pass.field);
+            }
+            Some(_) => {}
+            None => self.active = None,
+        }
+        self.focused = focused.map(|pass| pass.id);
+        // A click into the field that already has focus (the one the dialog opened on) or typing there.
+        if let Some(pass) = focused.filter(|pass| pass.typed || pass.pressed) {
+            self.active = Some(pass.field);
+        }
+        // Enter or Escape in the focused field (a field Tab leaves ends its edit too, but the keys go with focus).
+        if focused.is_some_and(|pass| pass.ended) {
+            self.active = None;
+        }
     }
 }
 

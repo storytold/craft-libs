@@ -776,7 +776,8 @@ pub(crate) fn is_focused(ctx: &Context, id: Id) -> bool {
 
 /// What moved focus onto a stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FocusOrigin {
+#[non_exhaustive]
+pub enum FocusOrigin {
     /// A pointer press on the stop.
     Press,
     /// The keyboard (Tab, arrows, Page keys) or a focus request.
@@ -829,6 +830,14 @@ pub(crate) fn facts(ctx: &Context, id: Id) -> Facts {
 pub(crate) fn origin(ctx: &Context, rec: &StopRec) -> Option<FocusOrigin> {
     let key = rec.stop.key();
     with(ctx, |state| state.arrived.filter(|(_, arrived, _)| *arrived == key).map(|(.., origin)| origin))
+}
+
+/// What moved focus onto the component `id` or one of its parts, for as long as focus stays there; `None` when focus
+/// is elsewhere or the focus service did not move it there. A dialog field tells the user's arrival (a press, Tab) from
+/// the focus the dialog put on it when it opened.
+pub fn arrival(ctx: &Context, id: Id) -> Option<FocusOrigin> {
+    let rec = focused_rec(ctx).filter(|rec| rec.stop.id == id)?;
+    origin(ctx, &rec)
 }
 
 /// `is_focused` and focus arrived by keyboard, so the ring shows.
