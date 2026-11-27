@@ -218,8 +218,10 @@ target, call `reset()`, decode from there, and drop the output before the target
 The codec modules are also usable on their own. `aac::Decoder`, `opus::Decoder` and
 `vorbis::decoder::Decoder` return the codec's channel order; `aac::wav_order(channel_config)`,
 `opus::wav_order(channels)` and `vorbis::wav_order(channels)` map it to WAV order, and
-`vorbis::layout(channels)` gives the speakers of the result. `ac3::Decoder` and `mpa::Decoder`
-output WAV order.
+`vorbis::layout(channels)` gives the speakers of the result. `opus::wav_order` applies only to
+mapping family 1. Family 0 is mono or stereo, which is already in WAV order. For other families,
+`TrackDecoder` assigns no conventional speaker mapping and leaves channels in stream order.
+`ac3::Decoder` and `mpa::Decoder` output WAV order.
 
 ### Encode a file
 
