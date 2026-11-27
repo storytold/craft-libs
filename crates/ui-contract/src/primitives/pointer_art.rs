@@ -53,6 +53,7 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
             tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
         }
         PaintedCursor::Crosshair => crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
+        PaintedCursor::DiagonalCrosshair => diagonal_crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
         PaintedCursor::Hand => hand(&pen, closed),
         PaintedCursor::Zoom { out, .. } => zoom(&pen, *out),
         PaintedCursor::Tool { icon, hotspot, badge, .. } => {
@@ -269,6 +270,12 @@ pub(crate) fn circle(pen: &Pen, radius: f32, width: f32, color: Color32) {
 /// A crosshair with arms of `arm` points.
 pub(crate) fn crosshair(pen: &Pen, arm: f32, width: f32, color: Color32) {
     pen.lines(width, color, &[Line::Segment(v([-arm, 0.0]), v([arm, 0.0])), Line::Segment(v([0.0, -arm]), v([0.0, arm]))]);
+}
+
+/// A crosshair turned 45°, with arms of `arm` points along the diagonals.
+fn diagonal_crosshair(pen: &Pen, arm: f32, width: f32, color: Color32) {
+    let d = arm * std::f32::consts::FRAC_1_SQRT_2;
+    pen.lines(width, color, &[Line::Segment(v([-d, -d]), v([d, d])), Line::Segment(v([-d, d]), v([d, -d]))]);
 }
 
 /// A brush tip's marks on the pointer: the centre mark when `centre`, a crosshair of `PaintedCursor::CENTRE_ARM` arms
