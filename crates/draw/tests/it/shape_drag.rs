@@ -8,7 +8,7 @@ use craft_draw::ui::shape_drag::{
     BoxConstraint, BoxConstraints, CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
 };
 use craft_ui::contract::Role;
-use craft_ui::dialog::{DialogHost, DialogId, DialogResult};
+use craft_ui::dialog::{DialogHost, DialogId, DialogResult, HostedAlert, StackDialog as _};
 use craft_ui::testing::{Fixture, ToolFixture, trial};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use serde_json::{Value, json};
@@ -371,5 +371,66 @@ fn create_shape_alerts_once_for_a_size_typed_past_its_range() {
         type_width(&mut fixture, "500");
         assert_eq!(width_now(&host), Some(500.0));
         assert!(take(&host).is_none(), "{kind:?}: a width in range raises no alert");
+    }
+}
+
+/// Create Polygon's Sides (3 to 100) and Star Ratio (1 to 100 %) typed past their ranges keep the nearest end and raise the
+/// range alert once, as the sizes do; numbers in range raise none. A star clamps the same fields without an alert
+/// (storytold/photocraft#13311).
+#[trial]
+fn create_polygon_alerts_once_for_sides_or_a_star_ratio_typed_past_its_range() {
+    for kind in [ShapeKind::Polygon, ShapeKind::Star] {
+        let alerts = kind == ShapeKind::Polygon;
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(egui::Vec2::new(1200.0, 900.0));
+        let options = CreateShapeOptions::initial(kind, Point::new(10.0, 20.0)).recalled();
+        host.borrow_mut().open(CreateShapeDialog::new(options).alert_title("PhotoCraft"));
+        fixture.settle();
+        let type_into = |fixture: &mut Fixture, name: &str, text: &str| {
+            let field = fixture
+                .by_role(Role::SPIN_BUTTON)
+                .into_iter()
+                .find(|field| fixture.tree().name_of(field.node) == Some(name))
+                .unwrap_or_else(|| panic!("the {name} field"));
+            fixture.click(&field).settle();
+            fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
+            fixture.key(Key::Tab, Modifiers::NONE).settle();
+        };
+        let sides_and_ratio = |host: &Rc<RefCell<DialogHost>>| {
+            let host = host.borrow();
+            let options = host.get::<CreateShapeDialog>().expect("Create Shape is open").options();
+            (options.sides, options.star_ratio)
+        };
+        // The alert's message, as the app's alert shows it.
+        let take = |host: &Rc<RefCell<DialogHost>>| {
+            let alert = host.borrow_mut().get_mut::<CreateShapeDialog>().and_then(CreateShapeDialog::take_range_alert)?;
+            HostedAlert::new(alert).json_fields()?.get("message")?.as_str().map(str::to_owned)
+        };
+
+        for (name, typed, kept) in
+            [("Sides", "101", (100, 1.0)), ("Sides", "2", (3, 1.0)), ("Star Ratio", "0", (3, 0.01)), ("Star Ratio", "101", (3, 1.0))]
+        {
+            let what = format!("{kind:?} {name} {typed}");
+            type_into(&mut fixture, name, typed);
+            let (sides, ratio) = sides_and_ratio(&host);
+            assert_eq!(sides, kept.0, "{what}: Sides keeps the nearest end");
+            assert!((ratio - kept.1).abs() < 1e-9, "{what}: Star Ratio keeps the nearest end, got {ratio}");
+            let message = take(&host);
+            if alerts {
+                assert!(message.as_deref().is_some_and(|m| m.contains("Closest value inserted")), "{what}: the range alert, got {message:?}");
+                assert!(take(&host).is_none(), "{what}: the alert is taken once");
+            } else {
+                assert!(message.is_none(), "{what}: a star raises no alert, got {message:?}");
+            }
+        }
+
+        type_into(&mut fixture, "Sides", "7");
+        type_into(&mut fixture, "Star Ratio", "50");
+        let (sides, ratio) = sides_and_ratio(&host);
+        assert_eq!(sides, 7, "{kind:?}");
+        assert!((ratio - 0.5).abs() < 1e-9, "{kind:?}: got {ratio}");
+        assert!(take(&host).is_none(), "{kind:?}: numbers in range raise no alert");
     }
 }

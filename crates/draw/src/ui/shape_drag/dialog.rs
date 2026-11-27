@@ -152,7 +152,8 @@ struct Memory {
 ///   default). Polygon and Star: Sides (3–100) and Star Ratio (1–100 %, default 100); the Polygon drag
 ///   keeps ratio 1. Then "From Center".
 /// - A width or height typed past [`CreateShapeOptions::SIZE`] keeps the nearest end and raises the range alert,
-///   which the app opens from [`take_range_alert`](Self::take_range_alert) (#13358). A size set out of range
+///   which the app opens from [`take_range_alert`](Self::take_range_alert) (#13358). Create Polygon's Sides and Star
+///   Ratio do the same past their ranges (storytold/photocraft#13311); a star's don't. A size set out of range
 ///   through automation shows [`CreateShapeWords::bad_size`] under the fields and disables OK; so does a click
 ///   farther than 300,000 px from the origin ([`CreateShapeWords::bad_position`]).
 /// - OK answers [`CreatedShape`] at the click (centred on it with From Center, unrounded) and
@@ -168,7 +169,7 @@ pub struct CreateShapeDialog {
     open: bool,
     /// The title of the range alert; the dialog's own title when `None`.
     alert_title: Option<Label>,
-    /// The last range alert a size field raised, with the env it showed in (which words it), until the app takes it.
+    /// The last range alert a field raised, with the env it showed in (which words it), until the app takes it.
     range_alert: Option<(RangeAlert, Env)>,
 }
 
@@ -293,15 +294,15 @@ impl CreateShapeDialog {
         CreateShapeDialog { id: dialog_id("shape.create"), options, units: [ruler; 2], open: true, alert_title: None, range_alert: None }
     }
 
-    /// The title of the range alert a size field raises (the app's name); the dialog's title by default.
+    /// The title of the range alert a field raises (the app's name); the dialog's title by default.
     #[must_use]
     pub fn alert_title(mut self, title: impl Into<Label>) -> Self {
         self.alert_title = Some(title.into());
         self
     }
 
-    /// The range alert of a width or height typed past [`CreateShapeOptions::SIZE`], worded once; `None` until a
-    /// size field raises one, and after it was taken.
+    /// The range alert of a width or height typed past [`CreateShapeOptions::SIZE`], or of Create Polygon's Sides or
+    /// Star Ratio typed past theirs, worded once; `None` until a field raises one, and after it was taken.
     pub fn take_range_alert(&mut self) -> Option<Alert<'static>> {
         let (alert, env) = self.range_alert.take()?;
         let title = self.alert_title.clone().unwrap_or_else(|| title_of(self.options.kind, &env.words::<CreateShapeWords>()));
@@ -442,13 +443,21 @@ fn body(
             });
         }
         if matches!(kind, ShapeKind::Polygon | ShapeKind::Star) {
+            // Create Polygon's Sides and Star Ratio raise the range alert for a number typed past their ranges, as the
+            // sizes do (storytold/photocraft#13311). The Star's own dialog measures other fields (storytold/photocraft#16871),
+            // so a star keeps clamping without one.
+            let alerts = kind == ShapeKind::Polygon;
             Field::new(Label::from(words.sides.as_str().to_owned())).show(ui, |ui, _| {
                 let field = NumberField::new(words.sides.as_str().to_owned(), Bind::given(Some(f64::from(values.sides))))
                     .range(f64::from(*SIDES.start())..=f64::from(*SIDES.end()))
                     .step(1.0)
                     .commit_decimals(0);
-                if let Some(value) = field.show(ui).value().copied().flatten() {
+                let out = field.show(ui);
+                if let Some(value) = out.value().copied().flatten() {
                     values.sides = value.round().clamp(f64::from(*SIDES.start()), f64::from(*SIDES.end())) as u32;
+                }
+                if alerts && let Some(alert) = out.out_of_range {
+                    *typed = Some(alert);
                 }
             });
             Field::new(Label::from(words.star_ratio.as_str().to_owned())).show(ui, |ui, _| {
@@ -457,10 +466,14 @@ fn body(
                     .range(1.0..=100.0)
                     .unit(numbers.symbol(UnitKind::Percent))
                     .commit_decimals(1);
-                if let Some(value) = field.show(ui).value().copied().flatten()
+                let out = field.show(ui);
+                if let Some(value) = out.value().copied().flatten()
                     && (value - percent).abs() > f64::EPSILON
                 {
                     values.star_ratio = (value / 100.0).clamp(0.01, 1.0);
+                }
+                if alerts && let Some(alert) = out.out_of_range {
+                    *typed = Some(alert);
                 }
             });
         }
