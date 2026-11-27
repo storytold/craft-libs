@@ -36,6 +36,7 @@ craft_ui::words! {
         hyphens: unit "units.hyphens" = "{n} hyphens";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
+        per_inch: unit "units.perInch" = "{n}/in";
         pixels_name: "units.pixelsName" = "Pixels";
         percent_name: "units.percentName" = "Percent";
         degrees_name: "units.degreesName" = "Degrees";
@@ -58,6 +59,7 @@ craft_ui::words! {
         ha_name: "units.haName" = "Ha";
         letters_name: "units.lettersName" = "Letters";
         hyphens_name: "units.hyphensName" = "Hyphens";
+        per_inch_name: "units.perInchName" = "Per Inch";
     }
 }
 
@@ -90,6 +92,26 @@ impl PointSize {
 impl EnvValue for PointSize {
     fn root() -> Self {
         PointSize::default()
+    }
+}
+
+/// How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
+/// follows it, so every zoom display (a zoom field, the status bar's, a print preview's row) reads alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum ZoomPrecision {
+    /// Up to two decimals, for the ladder's rungs such as 66.67 %.
+    #[default]
+    Fractional,
+    /// A whole percent ("94 %"), as a word processor shows its zoom. The zoom itself keeps its fraction, and a typed
+    /// fraction still applies; only the shown number is whole.
+    Whole,
+}
+
+impl EnvValue for ZoomPrecision {
+    fn root() -> Self {
+        ZoomPrecision::default()
     }
 }
 
@@ -148,6 +170,9 @@ pub enum UnitKind {
     Letters,
     /// `{n} hyphens`: a hyphenation setting counted in hyphens.
     Hyphens,
+    /// `{n}/in`: how many of something fall in an inch of length, such as the points a distortion adds along a path.
+    /// It is a count, not a length: [`per_inch`](Self::per_inch) answers `None` for it.
+    PerInch,
 }
 
 impl UnitKind {
@@ -161,7 +186,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 22] = [
+    const ALL: [UnitKind; 23] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -184,6 +209,7 @@ impl UnitKind {
         UnitKind::Ha,
         UnitKind::Letters,
         UnitKind::Hyphens,
+        UnitKind::PerInch,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
@@ -200,7 +226,8 @@ impl UnitKind {
             | UnitKind::PixelsPerInch
             | UnitKind::PixelsPerCentimetre
             | UnitKind::LinesPerInch
-            | UnitKind::LinesPerCentimetre => 0..=2,
+            | UnitKind::LinesPerCentimetre
+            | UnitKind::PerInch => 0..=2,
             UnitKind::Inches | UnitKind::Columns => 0..=3,
         }
     }
@@ -370,23 +397,35 @@ pub struct Units {
     readers: Arc<[OnceLock<Reader>; UnitKind::ALL.len() + 1]>,
     /// The scope's point size: what `reader` and `points_per_inch` use for Points and Picas.
     point_size: PointSize,
+    /// The decimals a zoom shows (`zoom_codec`).
+    zoom: ZoomPrecision,
 }
 
 /// What every number it reads and writes depends on: the format, the unit words and the scope's words (each by its
 /// generation) and the point size.
 impl crate::contract::MemoProps for Units {
     fn key(&self, key: &mut crate::contract::MemoKey) {
-        let Units { format, words, scope_words, readers: _, point_size } = self;
-        crate::contract::MemoProps::key(&(format, words, scope_words, point_size), key);
+        let Units { format, words, scope_words, readers: _, point_size, zoom } = self;
+        crate::contract::MemoProps::key(&(format, words, scope_words, point_size, zoom), key);
     }
 }
 
 impl Units {
     /// The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
     /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
-    /// typed text by the same rules.
+    /// typed text by the same rules. Under [`ZoomPrecision::Whole`] it writes whole percents.
     pub fn zoom_codec(&self) -> NumberCodec {
-        NumberCodec::new(self.reader(Some(UnitKind::Percent)), ZOOM_DECIMALS).zoom_typing()
+        NumberCodec::new(self.reader(Some(UnitKind::Percent)), self.zoom_decimals()).zoom_typing()
+    }
+}
+
+impl Units {
+    /// The most decimals a zoom shows: the env's [`ZoomPrecision`], shared by `zoom_codec` and `zoom_percent`.
+    fn zoom_decimals(&self) -> usize {
+        match self.zoom {
+            ZoomPrecision::Fractional => ZOOM_DECIMALS,
+            ZoomPrecision::Whole => 0,
+        }
     }
 }
 
@@ -396,7 +435,14 @@ const ZOOM_DECIMALS: usize = 2;
 impl Units {
     #[doc(hidden)]
     pub fn new(format: Arc<Format>, words: Arc<UnitWords>, scope_words: Arc<Words>, point_size: PointSize) -> Units {
-        Units { format, words, scope_words, readers: Arc::default(), point_size }
+        Units { format, words, scope_words, readers: Arc::default(), point_size, zoom: ZoomPrecision::default() }
+    }
+
+    /// The same units with `zoom` as the decimals a zoom shows: the env's [`ZoomPrecision`].
+    #[must_use]
+    pub(crate) fn with_zoom_precision(mut self, zoom: ZoomPrecision) -> Self {
+        self.zoom = zoom;
+        self
     }
 
     /// How many points make an inch in the scope: the app's point-size preference.
@@ -429,6 +475,7 @@ impl Units {
             UnitKind::Ha => words.ha.as_str(),
             UnitKind::Letters => words.letters.as_str(),
             UnitKind::Hyphens => words.hyphens.as_str(),
+            UnitKind::PerInch => words.per_inch.as_str(),
         }
     }
 
@@ -458,6 +505,7 @@ impl Units {
             UnitKind::Ha => &words.ha_name,
             UnitKind::Letters => &words.letters_name,
             UnitKind::Hyphens => &words.hyphens_name,
+            UnitKind::PerInch => &words.per_inch_name,
         };
         name.clone()
     }
@@ -509,9 +557,9 @@ impl Units {
     }
 
     /// A zoom of `n` percent: `100%`, `12.5%`, `66.67%`. The fewest digits that show it to two decimals, so the
-    /// ladder's thirds read as Photoshop shows them.
+    /// ladder's thirds read as Photoshop shows them. Under [`ZoomPrecision::Whole`] a whole percent.
     pub fn zoom_percent(&self, n: f64) -> String {
-        self.text(UnitKind::Percent, n, 0..=2)
+        self.text(UnitKind::Percent, n, 0..=self.zoom_decimals())
     }
 
     /// `n` degrees: `12°`.

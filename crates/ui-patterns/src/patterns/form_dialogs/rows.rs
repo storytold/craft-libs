@@ -69,7 +69,8 @@ pub struct ParamRowsOutput {
     /// A binding that writes through has them already; a given one applies them.
     pub values: Option<DialogFields>,
     /// The colour parameter whose button was pressed this pass: the host opens its colour picker for the request and
-    /// writes the answer into the request's key as a [`FieldValue::Color`].
+    /// writes the answer into the request's key as a [`FieldValue::Color`], or with `set_color_field`, which keeps a
+    /// row's opacity in a [`FieldValue::Rgba`].
     pub pick_color: Option<ColorRequest>,
     /// The Browse button pressed this pass: the host picks a path and writes it into the request's key as a
     /// [`FieldValue::Text`].
@@ -850,8 +851,9 @@ impl<'p> Pass<'p> {
         let value = self.work.number(line.key).unwrap_or(*range.start());
         let option = line.param.option();
         let places = option.range_places();
+        let step = option.range_step();
         if option.popup_slider {
-            self.popup_range(ui, line, range, value, places);
+            self.popup_range(ui, line, range, value, places, step);
             return;
         }
         let layout = self.sliders;
@@ -862,8 +864,8 @@ impl<'p> Pass<'p> {
             if short {
                 slider = slider.short(true).field_sizing(Sizing::Content);
             }
-            if let Some(places) = places {
-                slider = slider.step(10f64.powi(-(places as i32)));
+            if let Some(step) = step {
+                slider = slider.step(step);
             }
             if !option.marks().is_empty() {
                 slider = slider.marks_labelled(option.marks().iter().cloned());
@@ -900,10 +902,10 @@ impl<'p> Pass<'p> {
         }
     }
 
-    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>) {
+    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>, set_step: Option<f64>) {
         // Match the ordinary range row's number field precision when the caller sets no step.
         let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
-        let step = places.map_or(default_step, |places| 10f64.powi(-(places as i32)));
+        let step = set_step.unwrap_or(default_step);
         let unit = line.param.unit.map(|kind| (kind, self.units.symbol(kind)));
         let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
@@ -911,11 +913,11 @@ impl<'p> Pass<'p> {
                 let mut field = NumberField::new(line.name.clone(), line.bind(Some(value), default))
                     .range(range.clone())
                     .popup_slider(range.clone())
-                    .snap_popup_slider(places.is_some())
+                    .snap_popup_slider(set_step.is_some())
                     .commit_decimals(decimals_for_step(step))
                     .scrub_by_label();
-                if places.is_some() || default_step != 1.0 {
-                    field = field.step(step).snap_typed(places.is_some());
+                if set_step.is_some() || default_step != 1.0 {
+                    field = field.step(step).snap_typed(set_step.is_some());
                 }
                 if let Some((kind, _)) = &unit {
                     field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);
@@ -1304,7 +1306,14 @@ impl<'p> Pass<'p> {
     /// A colour row: a swatch that asks the host's picker (mixed while the row has no colour), and the eyedropper
     /// toggle when the row has one.
     fn color(&mut self, ui: &mut Ui, line: &Line<'_>) {
-        let color = self.work.color(line.key);
+        let alpha = match line.param.kind {
+            ParamKind::Color { alpha, .. } => alpha,
+            _ => None,
+        };
+        let color = match alpha {
+            Some(_) => self.work.rgba(line.key),
+            None => self.work.color(line.key).map(|[r, g, b]| [r, g, b, 1.0]),
+        };
         let option = line.param.option();
         if option.eyedropper() && self.memo.declared.insert(line.key.to_owned(), option.armed()) != Some(option.armed()) {
             if option.armed() {
@@ -1315,15 +1324,31 @@ impl<'p> Pass<'p> {
         }
         let armed = self.memo.armed.as_deref() == Some(line.key);
         let previewed = self.previews.iter().find(|(key, _)| key == line.key).map(|(_, color)| *color);
+        // A previewed color shows at the row's opacity: the picker sets the color, and the opacity field sets the alpha.
+        let opacity = color.map_or(alpha.unwrap_or(1.0), |[_, _, _, a]| a);
         let shown = match previewed {
+            Some(color) if alpha.is_some() => Mixed::Same(Srgba { a: opacity, ..color }),
             Some(color) => Mixed::Same(color),
-            None => color.map_or(Mixed::Mixed, |rgb| Mixed::Same(Srgba::from_rgb_array(rgb))),
+            None => color.map_or(Mixed::Mixed, |rgba| Mixed::Same(Srgba::from_array(rgba))),
         };
         line.show(ui, |ui| {
             beside(ui, |ui| {
                 let swatch = Swatch::new(line.name.clone(), shown).picker(line.key).id_salt("choose").show(ui);
                 if let Some(request) = swatch.pick_color {
                     self.color = Some(request);
+                }
+                if alpha.is_some() {
+                    let name = Label::from(self.words.opacity.fill(&[("name", line.name.as_str())]));
+                    let percent = color.map(|[_, _, _, a]| (f64::from(a) * 100.0).round());
+                    let field = number_field(self.units, name, percent, WHOLE, Some(UnitKind::Percent), false)
+                        .range(PERCENT)
+                        .enabled(color.is_some())
+                        .id_salt("opacity");
+                    let shown = field.show(ui);
+                    self.alert(shown.out_of_range);
+                    if let (Some([r, g, b, _]), Some(percent)) = (color, shown.edit.value().cloned().flatten()) {
+                        self.work.set(line.key, FieldValue::Rgba([r, g, b, (percent / 100.0) as f32]));
+                    }
                 }
                 if option.eyedropper() {
                     let toggle = ToggleButton::new(self.words.eyedropper.clone(), Bind::given(armed))
