@@ -13,7 +13,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   A vertex whose triangles have different tangent frames (mirrored UVs) is split into one copy
   per frame. Faces with coincident corners stay in the mesh and reuse shared vertex frames when
   available. MikkTSpace omits those faces. A mesh with more than 2,048 noncollapsed triangles around one vertex, or with non-finite
-  positions or UVs, or with positions or UVs above 1e6 or below 1e-6 in magnitude, gets per-vertex tangents from UV gradients instead of MikkTSpace. Tangents
+  positions or UVs, or with positions or UVs above 1e6 or below 1e-6 in magnitude, gets per-corner tangents from f64 UV gradients instead of MikkTSpace.
+  An edge-connected region containing a face whose f32 UV gradients overflow or underflow uses that fallback.
+  Both paths use the stored UVs. Each triangle with usable UV gradients has one handedness sign. Tangents
   are always finite; a non-finite normal counts as +Y.
 - **UV unwrapping.** `unwrap::auto_unwrap` makes a non-overlapping layout per material, splitting
   vertices where charts meet.

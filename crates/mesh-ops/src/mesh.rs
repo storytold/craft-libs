@@ -234,7 +234,7 @@ impl Mesh {
         self.normals = normals.into_iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
     }
 
-    /// MikkTSpace tangents (falls back to per-vertex tangents if generation fails). A mesh with
+    /// MikkTSpace tangents with per-corner f64 UV-gradient fallback. A mesh with
     /// an index out of range, a non-finite position or UV, a position or UV with a magnitude
     /// outside 1e-6 to 1e6 (zero is fine), only degenerate triangles, more than
     /// [`MAX_MIKKTSPACE_VALENCE`] noncollapsed triangles around one vertex or noncollapsed corners
@@ -247,6 +247,8 @@ impl Mesh {
     /// fit in `u32` is not made, and those corners keep the first frame.
     /// Faces with coincident corners stay in the mesh but are omitted from MikkTSpace. Their
     /// corners reuse a generated frame for the same vertex when one is available.
+    /// Edge-connected regions containing a face whose f32 UV gradients overflow or underflow use the fallback.
+    /// Both paths use the stored UVs. Each triangle with usable UV gradients has one handedness sign.
     pub fn compute_tangents(&mut self) {
         let n = self.positions.len();
         if self.normals.len() != n {
@@ -270,13 +272,38 @@ impl Mesh {
             corners: &mut corners,
             faces: if usable { Mikk::noncollapsed_faces(&self.positions, &self.indices) } else { None },
         };
-        if !(usable && g.face_count() != 0 && g.affordable() && mikktspace::generate_tangents(&mut g)) {
-            let per_vertex = simple_tangents(&self.positions, &normals, &self.uvs, &self.indices);
-            for (corner, v) in corners.iter_mut().zip(&self.indices) {
-                *corner = per_vertex.get(*v as usize).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0));
+        let affordable = usable && g.face_count() != 0 && g.affordable();
+        let mut fallback_faces: Vec<usize> = if affordable {
+            (0..g.face_count())
+                .map(|face| g.original_face(face))
+                .filter(|&face| !mikk_uvs_safe(&self.positions, &self.uvs, &self.indices[face * 3..face * 3 + 3]))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !fallback_faces.is_empty() {
+            let welded = tangent_vertex_ids(&self.positions, &normals, &self.uvs, self.indices.iter().copied());
+            let eligible = g.faces.clone().unwrap_or_else(|| (0..self.indices.len() / 3).collect());
+            fallback_faces = connected_fallback_faces(&welded, &eligible, &fallback_faces);
+            let mut faces = g.faces.take().unwrap_or_else(|| (0..self.indices.len() / 3).collect());
+            faces.retain(|face| fallback_faces.binary_search(face).is_err());
+            g.faces = Some(faces);
+        }
+        if !(affordable && g.face_count() != 0 && mikktspace::generate_tangents(&mut g)) {
+            fill_simple_tangents(&self.positions, &normals, &self.uvs, &self.indices, g.corners);
+            if self.indices.iter().all(|&index| (index as usize) < n) {
+                g.fill_collapsed_corners();
             }
-        } else if g.faces.is_some() {
-            g.fill_collapsed_corners();
+        } else {
+            let fallback_indices: Vec<u32> = fallback_faces.iter().flat_map(|&face| self.indices[face * 3..face * 3 + 3].iter().copied()).collect();
+            let fallback = simple_tangents(&self.positions, &normals, &self.uvs, &fallback_indices);
+            for (slot, face) in fallback_faces.into_iter().enumerate() {
+                let start = face * 3;
+                g.corners[start..start + 3].copy_from_slice(&fallback[slot * 3..slot * 3 + 3]);
+            }
+            if g.faces.is_some() {
+                g.fill_collapsed_corners();
+            }
         }
 
         // Orthonormalize a tangent against the normal of vertex `v`; repair degenerate results.
@@ -516,49 +543,201 @@ impl Mesh {
     }
 }
 
-/// Per-vertex tangents from the UV gradients of the triangles around each vertex: the fallback
-/// when MikkTSpace does not run or fails. `w` is -1 where the summed direction up the image
-/// (toward smaller v) lies against `cross(normal, tangent)`, and +1 otherwise, as MikkTSpace
-/// sets it. Edges, UV differences and sums are taken in `f64`, and a triangle is skipped when
-/// its UV edges are nearly parallel relative to their lengths, so tiny UV differences still
-/// set the direction.
-fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32]) -> Vec<Vec4> {
-    let mut sums = vec![(DVec3::ZERO, DVec3::ZERO); positions.len()];
-    for &[a, b, c] in indices.as_chunks::<3>().0 {
-        let (a, b, c) = (a as usize, b as usize, c as usize);
-        let (Some(pa), Some(pb), Some(pc)) = (positions.get(a), positions.get(b), positions.get(c)) else { continue };
-        let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
-        let (e1, e2) = (pb.as_dvec3() - pa.as_dvec3(), pc.as_dvec3() - pa.as_dvec3());
-        let (d1, d2) = (ub.as_dvec2() - ua.as_dvec2(), uc.as_dvec2() - ua.as_dvec2());
-        let determinant = d1.x * d2.y - d2.x * d1.y;
-        if !determinant.is_finite() || determinant.abs() <= 1e-12 * d1.length() * d2.length() {
-            continue;
-        }
+fn tangent_vertex_ids(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: impl IntoIterator<Item = u32>) -> Vec<u32> {
+    let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+    let mut vertices = std::collections::HashMap::new();
+    indices
+        .into_iter()
+        .map(|index| {
+            let index = index as usize;
+            let (Some(p), Some(n), Some(uv)) = (positions.get(index), normals.get(index), uvs.get(index)) else { return u32::MAX };
+            let attributes = [p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y].map(bits);
+            let next = vertices.len() as u32;
+            *vertices.entry(attributes).or_insert(next)
+        })
+        .collect()
+}
 
-        let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
-        // The direction in which v shrinks, which is up the image.
-        let up = (e1 * d2.x - e2 * d1.x) / determinant;
-        if !tangent.is_finite() || !up.is_finite() {
-            continue;
+fn connected_fallback_faces(indices: &[u32], eligible: &[usize], seeds: &[usize]) -> Vec<usize> {
+    let vertex_count = indices.iter().copied().max().map_or(0, |index| index as usize + 1);
+    let mut offsets = vec![0usize; vertex_count + 1];
+    for &face in eligible {
+        for &vertex in &indices[face * 3..face * 3 + 3] {
+            offsets[vertex as usize + 1] += 1;
         }
-        for v in [a, b, c] {
-            if let Some((t, u)) = sums.get_mut(v) {
-                *t += tangent;
-                *u += up;
+    }
+    for vertex in 1..offsets.len() {
+        offsets[vertex] += offsets[vertex - 1];
+    }
+    let mut incidents = vec![0usize; eligible.len() * 3];
+    let mut cursor = offsets.clone();
+    for &face in eligible {
+        for &vertex in &indices[face * 3..face * 3 + 3] {
+            incidents[cursor[vertex as usize]] = face;
+            cursor[vertex as usize] += 1;
+        }
+    }
+    drop(cursor);
+    let mut selected = vec![false; indices.len() / 3];
+    let mut faces = seeds.to_vec();
+    for &face in seeds {
+        selected[face] = true;
+    }
+    let mut next = 0;
+    let mut visited_edges = std::collections::HashSet::new();
+    while let Some(&face) = faces.get(next) {
+        next += 1;
+        let vertices = &indices[face * 3..face * 3 + 3];
+        for edge in 0..3 {
+            let (a, b) = (vertices[edge] as usize, vertices[(edge + 1) % 3] as usize);
+            if !visited_edges.insert((a.min(b), a.max(b))) {
+                continue;
+            }
+            let vertex = if offsets[a + 1] - offsets[a] <= offsets[b + 1] - offsets[b] { a } else { b };
+            for &other in &incidents[offsets[vertex]..offsets[vertex + 1]] {
+                #[cfg(test)]
+                FALLBACK_ADJACENCY_VISITS.with(|visits| visits.set(visits.get() + 1));
+                if !selected[other] {
+                    let triangle = &indices[other * 3..other * 3 + 3];
+                    if triangle.contains(&(a as u32)) && triangle.contains(&(b as u32)) {
+                        selected[other] = true;
+                        faces.push(other);
+                    }
+                }
             }
         }
     }
+    faces.sort_unstable();
+    faces
+}
 
-    sums.into_iter()
-        .enumerate()
-        .map(|(v, (t, up))| {
-            let t = t.try_normalize().map(|t| t.as_vec3()).filter(|t| t.is_finite()).unwrap_or(Vec3::X);
-            let up = up.try_normalize().map(|up| up.as_vec3()).unwrap_or(Vec3::ZERO);
-            let n = normals.get(v).copied().unwrap_or(Vec3::Y);
-            let w = if n.cross(t).dot(up) < 0.0 { -1.0 } else { 1.0 };
-            t.extend(w)
-        })
-        .collect()
+/// Per-corner tangents from f64 triangle UV gradients.
+fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32]) -> Vec<Vec4> {
+    let mut corners = vec![Vec4::ZERO; indices.len()];
+    fill_simple_tangents(positions, normals, uvs, indices, &mut corners);
+    corners
+}
+
+fn fallback_gradients(positions: &[Vec3], uvs: &[Vec2], indices: &[u32]) -> Option<(DVec3, DVec3, DVec3, f64)> {
+    let &[a, b, c] = indices else { return None };
+    let (a, b, c) = (a as usize, b as usize, c as usize);
+    let (pa, pb, pc) = (positions.get(a)?, positions.get(b)?, positions.get(c)?);
+    if pa == pb || pa == pc || pb == pc {
+        return None;
+    }
+    let (ua, ub, uc) = (uvs.get(a)?, uvs.get(b)?, uvs.get(c)?);
+    let (e1, e2) = (pb.as_dvec3() - pa.as_dvec3(), pc.as_dvec3() - pa.as_dvec3());
+    let (d1, d2) = (ub.as_dvec2() - ua.as_dvec2(), uc.as_dvec2() - ua.as_dvec2());
+    let determinant = d1.perp_dot(d2);
+    if !determinant.is_finite() || determinant == 0.0 {
+        return None;
+    }
+    let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
+    let bitangent = (e2 * d1.x - e1 * d2.x) / determinant;
+    (tangent.is_finite() && bitangent.is_finite()).then_some((tangent, bitangent, e1.cross(e2), determinant))
+}
+
+fn fill_simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32], corners: &mut [Vec4]) {
+    corners.fill(Vec4::ZERO);
+    let mut valid_faces = Vec::new();
+    for (face, vertices) in indices.as_chunks::<3>().0.iter().enumerate() {
+        #[cfg(test)]
+        FALLBACK_FACE_VISITS.with(|visits| visits.set(visits.get() + 1));
+        let Some((tangent, _, _, determinant)) = fallback_gradients(positions, uvs, vertices) else { continue };
+        valid_faces.push(face);
+        for corner in 0..3 {
+            let t = tangent.try_normalize().map(|t| t.as_vec3()).unwrap_or(Vec3::X);
+            let w = if determinant.is_sign_negative() { -1.0 } else { 1.0 };
+            corners[face * 3 + corner] = t.extend(w);
+        }
+    }
+    fn root(parents: &mut [usize], mut at: usize) -> usize {
+        while parents[at] != at {
+            parents[at] = parents[parents[at]];
+            at = parents[at];
+        }
+        at
+    }
+    let mut parents: Vec<usize> = (0..valid_faces.len() * 3).collect();
+    #[cfg(test)]
+    FALLBACK_CONNECTIVITY_CORNERS.with(|corners| corners.set(parents.len()));
+    let welded = tangent_vertex_ids(positions, normals, uvs, valid_faces.iter().flat_map(|&face| indices[face * 3..face * 3 + 3].iter().copied()));
+    let mut edges = std::collections::HashMap::new();
+    for (slot, &face) in valid_faces.iter().enumerate() {
+        for edge in 0..3 {
+            let (mut a, mut b) = (slot * 3 + edge, slot * 3 + (edge + 1) % 3);
+            let reversed = usize::from(welded[a] > welded[b]);
+            if welded[a] > welded[b] {
+                std::mem::swap(&mut a, &mut b);
+            }
+            let key = (welded[a], welded[b], corners[face * 3 + a % 3].w < 0.0, corners[face * 3 + b % 3].w < 0.0);
+            let previous: &mut [Option<(usize, usize)>; 2] = edges.entry(key).or_insert([None, None]);
+            if let Some((previous_a, previous_b)) = previous[1 - reversed] {
+                for (current, previous) in [(a, previous_a), (b, previous_b)] {
+                    let (a, b) = (root(&mut parents, current), root(&mut parents, previous));
+                    parents[a.max(b)] = a.min(b);
+                }
+            }
+            previous[reversed].get_or_insert((a, b));
+        }
+    }
+    drop(edges);
+    drop(welded);
+    let mut sums = std::collections::HashMap::<usize, DVec3>::new();
+    for (slot, &face) in valid_faces.iter().enumerate() {
+        if let Some((tangent, ..)) = fallback_gradients(positions, uvs, &indices[face * 3..face * 3 + 3]) {
+            let direction = tangent.try_normalize().unwrap_or(DVec3::X);
+            let triangle = &indices[face * 3..face * 3 + 3];
+            for corner in 0..3 {
+                let origin = positions[triangle[corner] as usize].as_dvec3();
+                let a = (positions[triangle[(corner + 1) % 3] as usize].as_dvec3() - origin).try_normalize().unwrap_or(DVec3::ZERO);
+                let b = (positions[triangle[(corner + 2) % 3] as usize].as_dvec3() - origin).try_normalize().unwrap_or(DVec3::ZERO);
+                let weight = a.cross(b).length().atan2(a.dot(b));
+                *sums.entry(root(&mut parents, slot * 3 + corner)).or_default() += direction * weight;
+            }
+        }
+    }
+    for (slot, &face) in valid_faces.iter().enumerate() {
+        let Some((gradient, bitangent, ..)) = fallback_gradients(positions, uvs, &indices[face * 3..face * 3 + 3]) else { continue };
+        for local in 0..3 {
+            let index = face * 3 + local;
+            let corner = &mut corners[index];
+            if let Some(tangent) = sums.get(&root(&mut parents, slot * 3 + local)).and_then(|sum| sum.try_normalize()) {
+                let normal = normals.get(indices[index] as usize).copied().unwrap_or(Vec3::Y).as_dvec3();
+                if tangent.dot(gradient) > 0.0 && (normal.cross(tangent) * f64::from(corner.w)).dot(bitangent) > 0.0 {
+                    *corner = tangent.as_vec3().extend(corner.w);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static FALLBACK_FACE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FALLBACK_ADJACENCY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FALLBACK_CONNECTIVITY_CORNERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn mikk_uvs_safe(positions: &[Vec3], uvs: &[Vec2], indices: &[u32]) -> bool {
+    let [a, b, c] = indices else { return false };
+    let (a, b, c) = (*a as usize, *b as usize, *c as usize);
+    let (d1, d2) = (uvs[b] - uvs[a], uvs[c] - uvs[a]);
+    let wide1 = uvs[b].as_dvec2() - uvs[a].as_dvec2();
+    let wide2 = uvs[c].as_dvec2() - uvs[a].as_dvec2();
+    if wide1.perp_dot(wide2) == 0.0 {
+        return true;
+    }
+    let determinant = d1.perp_dot(d2);
+    if determinant.abs() <= f32::MIN_POSITIVE || !determinant.is_finite() || !determinant.recip().is_finite() {
+        return false;
+    }
+    let (e1, e2) = (positions[b] - positions[a], positions[c] - positions[a]);
+    let tangent = e1 * d2.y - e2 * d1.y;
+    let bitangent = e2 * d1.x - e1 * d2.x;
+    [tangent, bitangent, tangent / determinant, bitangent / determinant]
+        .into_iter()
+        .all(|v| v.length_squared().is_finite() && v.length_squared() > 0.0)
 }
 
 /// Whether the values are finite and their largest magnitude is zero or lies between the
@@ -617,20 +796,29 @@ impl Mikk<'_> {
     }
 
     fn fill_collapsed_corners(&mut self) {
+        let generated_faces: Vec<usize> = self
+            .corners
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, corners)| corners.iter().all(|corner| *corner != Vec4::ZERO))
+            .map(|(face, _)| face)
+            .collect();
         let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
         let attributes = |index: usize| {
             let (p, n, uv) = (self.positions[index], self.normals[index], self.uvs[index]);
             [p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y].map(bits)
         };
         let mut first = vec![None; self.positions.len()];
-        for &face in self.faces.as_deref().unwrap_or(&[]) {
+        for &face in &generated_faces {
             for vertex in 0..3 {
                 let corner = face * 3 + vertex;
                 let index = self.indices[corner] as usize;
                 first[index].get_or_insert(self.corners[corner]);
             }
         }
-        let generated_count = self.face_count() * 3;
+        let generated_count = generated_faces.len() * 3;
         let index_generated = generated_count <= self.indices.len() - generated_count;
         let mut welded: std::collections::HashMap<[u32; 8], Option<Vec4>> = if index_generated {
             std::collections::HashMap::new()
@@ -643,7 +831,7 @@ impl Mikk<'_> {
                 .collect()
         };
         if index_generated || !welded.is_empty() {
-            for &face in self.faces.as_deref().unwrap_or(&[]) {
+            for &face in &generated_faces {
                 for vertex in 0..3 {
                     let corner = face * 3 + vertex;
                     let key = attributes(self.indices[corner] as usize);
@@ -717,11 +905,8 @@ impl mikktspace::Geometry for Mikk<'_> {
         self.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y).to_array()
     }
     fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
-        // MikkTSpace expects OpenGL texture coordinates (v up); our UVs are glTF (v down). With
-        // v negated, the bitangent `cross(N, T) * w` points up the image, as glTF requires.
-        // Negating keeps differences in v that `1 - v` would round away.
         let uv = self.uvs.get(self.vi(face, vert)).copied().unwrap_or_default();
-        [uv.x, -uv.y]
+        [uv.x, uv.y]
     }
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
         // One tangent per corner: corners of a vertex can get different frames.
@@ -734,6 +919,333 @@ impl mikktspace::Geometry for Mikk<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fallback_smoothing_is_invariant_to_gradient_magnitude() {
+        let mut reference = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::Y, Vec3::X, Vec3::new(-1.0, -10.0, 0.0)],
+            normals: vec![-Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::Y, Vec2::X, -Vec2::X],
+            indices: vec![0, 1, 2, 1, 0, 3],
+            ..Mesh::default()
+        };
+        let mut tiny = reference.clone();
+        tiny.uvs[3] = -Vec2::X * 1e-20;
+        reference.compute_tangents();
+        tiny.compute_tangents();
+        for corner in 0..6 {
+            let (expected, actual) = (reference.tangents[reference.indices[corner] as usize], tiny.tangents[tiny.indices[corner] as usize]);
+            assert!(expected.truncate().dot(actual.truncate()) > 0.999, "{corner}: {expected:?} {actual:?}");
+        }
+    }
+
+    #[test]
+    fn fallback_keeps_mikktspace_face_signs_with_opposed_vertex_normals() {
+        let mut reference = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            normals: vec![Vec3::Z, -Vec3::Z, Vec3::Z],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        let mut tiny = reference.clone();
+        for uv in &mut tiny.uvs {
+            *uv *= 1e-30;
+        }
+        reference.compute_tangents();
+        tiny.compute_tangents();
+        assert!(reference.tangents.iter().all(|tangent| tangent.w == reference.tangents[0].w));
+        for corner in 0..3 {
+            assert_eq!(tiny.tangents[tiny.indices[corner] as usize].w, reference.tangents[reference.indices[corner] as usize].w);
+        }
+    }
+
+    #[test]
+    fn fallback_visits_a_nonmanifold_welded_edge_once() {
+        let count = 1000u32;
+        let mut mesh = Mesh { positions: vec![Vec3::ZERO, Vec3::X], normals: vec![Vec3::Z; 2], uvs: vec![Vec2::ZERO, Vec2::X], ..Mesh::default() };
+        for face in 0..count {
+            mesh.positions.push(Vec3::Y * (1.0 + face as f32 / count as f32));
+            mesh.normals.push(Vec3::Z);
+            mesh.uvs.push(Vec2::Y * if face == 0 { 1e-30 } else { 1.0 });
+            mesh.indices.extend([0, 1, face + 2]);
+        }
+        FALLBACK_ADJACENCY_VISITS.with(|visits| visits.set(0));
+        mesh.compute_tangents();
+        let visits = FALLBACK_ADJACENCY_VISITS.with(|visits| visits.get());
+        assert!(visits <= count as usize * 12, "nonmanifold traversal visited {visits} corners");
+    }
+
+    #[test]
+    fn ill_conditioned_uvs_keep_their_orientation_sign() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(-1.0, 1.0, 0.0)],
+            normals: vec![Vec3::Z; 3],
+            uvs: vec![Vec2::ZERO, Vec2::ONE, Vec2::X * 1e-20],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        let determinant = (mesh.uvs[1].as_dvec2() - mesh.uvs[0].as_dvec2()).perp_dot(mesh.uvs[2].as_dvec2() - mesh.uvs[0].as_dvec2());
+        assert!(determinant < 0.0);
+        mesh.compute_tangents();
+        assert!(mesh.tangents.iter().all(|tangent| tangent.w < 0.0));
+    }
+
+    #[test]
+    fn collapsed_faces_do_not_allocate_fallback_connectivity() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::X * 2_000_000.0, Vec3::X * 2_000_001.0, Vec3::new(2_000_000.0, 1.0, 0.0)],
+            normals: vec![Vec3::Z; 3],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        for _ in 0..1000 {
+            mesh.indices.extend([0, 0, 1]);
+        }
+        FALLBACK_CONNECTIVITY_CORNERS.with(|corners| corners.set(0));
+        mesh.compute_tangents();
+        let corners = FALLBACK_CONNECTIVITY_CORNERS.with(|corners| corners.get());
+        assert_eq!(corners, 3, "fallback allocated connectivity for {corners} corners");
+    }
+
+    #[test]
+    fn regional_fallback_keeps_a_valid_nearly_parallel_uv_gradient() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::Y, Vec3::new(-1.0, 1.0, 0.0), -Vec3::X],
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::new(1.0, 1e-13), Vec2::Y * 1e-30],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert!(mesh.tangents[mesh.indices[1] as usize].truncate().dot(Vec3::Y) > 0.99);
+    }
+
+    #[test]
+    fn fallback_smoothing_does_not_reverse_an_adjacent_bitangent() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(-1.0, -1.0, 0.0)],
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::ONE, Vec2::Y, Vec2::X * 1e-20],
+            indices: vec![0, 1, 2, 0, 1, 3],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        for corner in 0..3 {
+            let tangent = mesh.tangents[mesh.indices[corner] as usize];
+            assert!((Vec3::Z.cross(tangent.truncate()) * tangent.w).dot(Vec3::Y) > 0.0);
+        }
+    }
+
+    #[test]
+    fn fallback_adjacency_ignores_incomplete_triangles() {
+        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X * 10.0, Vec3::X * 11.0, Vec3::new(10.0, 1.0, 0.0)];
+        let uvs = vec![Vec2::ZERO, Vec2::Y * 1e-30, Vec2::X * 1e-30, Vec2::ZERO, Vec2::X, Vec2::Y];
+        let indices = vec![0, 1, 2, 3, 4, 5, 0, 1];
+        let mut mesh =
+            Mesh { positions: positions.clone(), normals: vec![Vec3::Z; 6], uvs: uvs.clone(), indices: indices.clone(), ..Mesh::default() };
+        mesh.compute_tangents();
+        let result = Mesh::from_parts(positions, Some(vec![Vec3::Z; 6]), uvs, indices, "m");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fallback_traversal_excludes_collapsed_face_fans() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X * 10.0, Vec3::X * 11.0, Vec3::new(10.0, 1.0, 0.0)],
+            normals: vec![Vec3::Z; 6],
+            uvs: vec![Vec2::ZERO, Vec2::Y * 1e-30, Vec2::X * 1e-30, Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Mesh::default()
+        };
+        for _ in 0..1000 {
+            mesh.indices.extend([0, 1, 1]);
+        }
+        FALLBACK_ADJACENCY_VISITS.with(|visits| visits.set(0));
+        mesh.compute_tangents();
+        let visits = FALLBACK_ADJACENCY_VISITS.with(|visits| visits.get());
+        assert!(visits <= mesh.indices.len() * 8, "fallback adjacency visited {visits} corners");
+    }
+
+    #[test]
+    fn fallback_boundaries_share_frames_across_equivalent_edge_vertices() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::Y],
+            normals: vec![Vec3::Z; 6],
+            uvs: vec![Vec2::ZERO, Vec2::Y, Vec2::splat(1e-19), Vec2::ZERO, Vec2::splat(1e-19), Vec2::X * 1e-19],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_eq!(mesh.tangents[mesh.indices[0] as usize], mesh.tangents[mesh.indices[3] as usize]);
+        assert_eq!(mesh.tangents[mesh.indices[2] as usize], mesh.tangents[mesh.indices[4] as usize]);
+    }
+
+    #[test]
+    fn a_numerical_fallback_boundary_preserves_continuous_edge_frames() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::Y],
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::Y, Vec2::splat(1e-19), Vec2::X * 1e-19],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_eq!(mesh.indices[0], mesh.indices[3]);
+        assert_eq!(mesh.indices[2], mesh.indices[4]);
+    }
+
+    #[test]
+    fn an_isolated_uv_outlier_only_runs_fallback_for_its_island() {
+        let mut mesh = Mesh::default();
+        for face in 0..1001 {
+            let x = face as f32 * 2.0;
+            mesh.positions.extend([Vec3::X * x, Vec3::X * (x + 1.0), Vec3::new(x, 1.0, 0.0)]);
+            mesh.normals.extend([Vec3::Z; 3]);
+            let scale = if face == 1000 { 1e-30 } else { 1.0 };
+            mesh.uvs.extend([Vec2::ZERO, Vec2::X * scale, Vec2::Y * scale]);
+            mesh.indices.extend([face * 3, face * 3 + 1, face * 3 + 2]);
+        }
+        FALLBACK_FACE_VISITS.with(|visits| visits.set(0));
+        mesh.compute_tangents();
+        let visits = FALLBACK_FACE_VISITS.with(|visits| visits.get());
+        assert_eq!(visits, 1, "fallback visited {visits} faces for one isolated UV outlier");
+    }
+
+    #[test]
+    fn subnormal_uv_determinants_use_the_wide_fallback() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X * 2.0, Vec3::X * 3.0, Vec3::new(2.0, 1.0, 0.0)],
+            normals: vec![Vec3::Z; 6],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ZERO, Vec2::Y * 1e-19, Vec2::X * 1e-19],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert!(mesh.tangents[mesh.indices[3] as usize].truncate().dot(Vec3::Y) > 0.99);
+    }
+
+    #[test]
+    fn fallback_faces_touching_only_at_a_vertex_keep_their_directions() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, -Vec3::X * 1e-40, -Vec3::Y * 1e-40],
+            normals: vec![Vec3::Z; 5],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::X * 1e-30, Vec2::Y * 1e-30],
+            indices: vec![0, 1, 2, 0, 3, 4],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert!(mesh.tangents[mesh.indices[0] as usize].truncate().dot(Vec3::X) > 0.99);
+        assert!(mesh.tangents[mesh.indices[3] as usize].truncate().dot(-Vec3::X) > 0.99);
+    }
+
+    #[test]
+    fn collapsed_fallback_faces_with_distinct_uvs_reuse_complete_frames() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::ZERO],
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::Y * 1e-30, Vec2::X * 1e-30, Vec2::Y * 1e-30],
+            indices: vec![0, 1, 2, 0, 3, 2],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_eq!(mesh.indices[0], mesh.indices[3]);
+        assert_eq!(mesh.tangents[mesh.indices[3] as usize], mesh.tangents[mesh.indices[0] as usize]);
+    }
+
+    #[test]
+    fn tiny_mikk_numerators_keep_their_uv_direction() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::Y, Vec3::X * 1e-6],
+            normals: vec![Vec3::Z; 3],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y * 1e-25],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert!(mesh.tangents.iter().all(|t| t.truncate().dot(Vec3::Y) > 0.99));
+    }
+
+    #[test]
+    fn fallback_smooths_continuous_same_handed_edges() {
+        let mut mesh = quad();
+        for p in &mut mesh.positions {
+            p.x += 2_000_000.0;
+        }
+        mesh.uvs = vec![Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::new(0.0, 2.0)];
+        let count = mesh.positions.len();
+        mesh.compute_tangents();
+        assert_eq!(mesh.positions.len(), count);
+        assert_eq!(mesh.indices[0], mesh.indices[3]);
+        assert_eq!(mesh.indices[2], mesh.indices[4]);
+    }
+
+    #[test]
+    fn collapsed_corners_reuse_tiny_uv_fallback_frames() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::ZERO],
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::ZERO, Vec2::Y * 1e-30, Vec2::X * 1e-30, Vec2::ZERO],
+            indices: vec![0, 1, 2, 0, 3, 2],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_eq!(mesh.indices[0], mesh.indices[3]);
+        assert!(mesh.tangents[mesh.indices[4] as usize].truncate().dot(Vec3::Y) > 0.99);
+    }
+
+    #[test]
+    fn tangent_frames_follow_stored_uv_gradients() {
+        for offset in [0.0, 2_000_000.0] {
+            for scale in [1.0, 1e-30] {
+                for orientation in [-1.0, 1.0] {
+                    let mut mesh = Mesh {
+                        positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y].into_iter().map(|p| p + Vec3::X * offset).collect(),
+                        normals: vec![Vec3::Z; 3],
+                        uvs: vec![Vec2::ZERO, Vec2::X * scale, Vec2::Y * (scale * orientation)],
+                        indices: vec![0, 1, 2],
+                        ..Mesh::default()
+                    };
+                    mesh.compute_tangents();
+                    for tangent in mesh.tangents {
+                        assert!(tangent.truncate().dot(Vec3::X) > 0.99, "{offset} {scale} {orientation}: {tangent:?}");
+                        let bitangent = Vec3::Z.cross(tangent.truncate()) * tangent.w;
+                        assert!(bitangent.dot(Vec3::Y * orientation) > 0.99, "{offset} {scale} {orientation}: {tangent:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn translated_mirrored_faces_keep_separate_corner_frames() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)].into_iter().map(|p| p + Vec3::X * 2_000_000.0).collect(),
+            normals: vec![Vec3::Z; 4],
+            uvs: vec![Vec2::new(0.0, 1.0), Vec2::ONE, Vec2::ZERO, Vec2::new(1.0, 2.0)],
+            indices: vec![0, 1, 2, 1, 3, 2],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_ne!(mesh.indices[1], mesh.indices[3]);
+        assert_ne!(mesh.indices[2], mesh.indices[5]);
+        assert!(mesh.tangents[mesh.indices[1] as usize].w * mesh.tangents[mesh.indices[3] as usize].w < 0.0);
+    }
+
+    #[test]
+    fn tiny_uv_islands_do_not_receive_the_ordinary_islands_frame() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X * 2.0, Vec3::X * 3.0, Vec3::new(2.0, 1.0, 0.0)],
+            normals: vec![Vec3::Z; 6],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ZERO, Vec2::Y * 1e-30, Vec2::X * 1e-30],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert!(mesh.tangents[0].truncate().dot(Vec3::X) > 0.99);
+        assert!(mesh.tangents[3].truncate().dot(Vec3::Y) > 0.99);
+    }
+
     #[test]
     fn unmatched_collapsed_corners_keep_the_mikktspace_default_frame() {
         let mut mesh = Mesh {
@@ -925,7 +1437,7 @@ mod tests {
             )
             .unwrap();
             for t in &m.tangents {
-                assert!((t.truncate() - Vec3::X).length() < 1e-4 && t.w == 1.0, "edge {edge}: {t:?}");
+                assert!((t.truncate() - Vec3::X).length() < 1e-4 && t.w == -1.0, "edge {edge}: {t:?}");
             }
         }
     }
@@ -942,7 +1454,8 @@ mod tests {
             m.compute_tangents();
             let fallback = simple_tangents(&m.positions, &m.normals, &m.uvs, &m.indices);
             assert_eq!(m.tangents.len(), 4);
-            for (mikk, simple) in m.tangents.iter().zip(&fallback) {
+            for (&index, simple) in m.indices.iter().zip(&fallback) {
+                let mikk = m.tangents[index as usize];
                 assert!((mikk.truncate() - simple.truncate()).length() < 1e-4, "flip {flip}: {mikk:?} {simple:?}");
                 assert_eq!(mikk.w, simple.w, "flip {flip}");
             }
