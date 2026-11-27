@@ -67,6 +67,8 @@ pub struct RootEnv {
     pub today: Option<CalendarDate>,
     /// This frame's wheel speed.
     pub wheel: WheelSpeed,
+    /// Sends the wheel to a focused field only while the pointer is over that field.
+    pub pointer_scoped_field_wheel: bool,
     /// The code pages that decode Alt+numpad codes.
     pub alt_codes: AltCodePages,
     /// On Windows and Linux, a Ctrl+wheel in fractions of a notch (a point-unit one on Linux) is a touchpad pinch
@@ -102,6 +104,7 @@ impl Default for RootEnv {
             values: AppValues::default(),
             today: None,
             wheel: WheelSpeed::default(),
+            pointer_scoped_field_wheel: false,
             alt_codes: AltCodePages::default(),
             ctrl_wheel_pinch: true,
         }
@@ -280,6 +283,12 @@ impl RootEnv {
     /// Sets this frame's wheel speed.
     pub fn wheel_speed(mut self, speed: WheelSpeed) -> Self {
         self.wheel = speed;
+        self
+    }
+
+    /// Sends the wheel to a focused field only while the pointer is over it when enabled.
+    pub fn pointer_scoped_field_wheel(mut self, enabled: bool) -> Self {
+        self.pointer_scoped_field_wheel = enabled;
         self
     }
 

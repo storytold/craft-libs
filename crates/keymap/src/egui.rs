@@ -64,6 +64,20 @@ impl Mods {
             Mods { cmd: mods.ctrl || mods.command, ctrl: false, alt: mods.alt, shift: mods.shift }
         }
     }
+
+    /// The modifiers an egui key event carries for these keys on `platform`, for typing a chord
+    /// into egui in tests and remote control. On macOS cmd sets `mac_cmd` and `command`; elsewhere
+    /// cmd and ctrl both set `ctrl` and `command`, as egui-winit reports the Ctrl key.
+    /// [`Mods::from_egui`] reads the result back as these modifiers, with ctrl folded into cmd off
+    /// macOS.
+    pub fn to_egui(self, platform: Platform) -> Modifiers {
+        if platform.is_mac() {
+            Modifiers { alt: self.alt, ctrl: self.ctrl, shift: self.shift, mac_cmd: self.cmd, command: self.cmd }
+        } else {
+            let ctrl = self.cmd || self.ctrl;
+            Modifiers { alt: self.alt, ctrl, shift: self.shift, mac_cmd: false, command: ctrl }
+        }
+    }
 }
 
 impl Chord {

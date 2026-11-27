@@ -56,6 +56,7 @@ pub(crate) struct Preedit {
 /// What the adapter keeps per text part between passes.
 #[derive(Clone, Default)]
 pub(crate) struct TextState {
+    pub edit_target: Option<egui::IdSalt>,
     pub draft: Option<String>,
     /// The value when the run began (a `K::Value`).
     pub start: Option<Arc<dyn Any + Send + Sync>>,

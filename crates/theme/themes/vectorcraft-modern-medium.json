@@ -36,6 +36,7 @@
     "line.divider": "#bcc3ce",
     "line.grip": "#7d8594",
     "line.outline": "#8a93a2",
+    "overlay.cursor": "#ffffff",
     "seeds": {
       "accent": "#d9472f",
       "neutral": "#d3d8e0"
@@ -64,6 +65,7 @@
     "line.divider": "#323946",
     "line.grip": "#626b7a",
     "line.outline": "#5a6476",
+    "overlay.cursor": "#ffffff",
     "state.hover": "#353c49",
     "state.pressed": "#633f3e",
     "state.selected": "#573b3d",

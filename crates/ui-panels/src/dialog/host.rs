@@ -6,6 +6,7 @@
 
 use std::any::{Any, TypeId};
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 
 use egui::{Context, Ui};
 use serde_json::Value;
@@ -409,19 +410,37 @@ impl<D: StackDialog> AnyStackDialog for D {
 #[derive(Default)]
 pub struct DialogHost {
     stack: DialogStack,
-    open: Vec<Box<dyn AnyStackDialog>>,
+    open: Vec<OpenedDialog>,
     queued: Vec<(StartupStage, Box<dyn AnyStackDialog>)>,
     results: Vec<StoredResult>,
     /// Dialogs another of their type replaced, waiting for the pass's `run` to run their
     /// [`StackDialog::cancelled`] (`open` has no `Context`).
-    replaced: Vec<Box<dyn AnyStackDialog>>,
+    replaced: Vec<OpenedDialog>,
     /// The number the last open got ([`open_serial`](DialogHost::open_serial)).
     opens: u64,
-    /// The number of each dialog's last open, by id; read only while the dialog is open.
-    serials: Vec<(DialogId, u64)>,
     /// Dialogs [`close_by_id`](DialogHost::close_by_id) asked to close, closed by the next `run`
     /// (which has the `Context` a close needs).
     closing: Vec<DialogId>,
+}
+
+/// Owns an opening's identity from the time it joins the stack until its result is stored.
+struct OpenedDialog {
+    dialog: Box<dyn AnyStackDialog>,
+    serial: u64,
+}
+
+impl Deref for OpenedDialog {
+    type Target = dyn AnyStackDialog;
+
+    fn deref(&self) -> &Self::Target {
+        self.dialog.as_ref()
+    }
+}
+
+impl DerefMut for OpenedDialog {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dialog.as_mut()
+    }
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -442,6 +461,7 @@ pub struct OpenDialog {
 struct StoredResult {
     type_id: TypeId,
     id: DialogId,
+    serial: u64,
     instance: Option<DialogId>,
     key: Option<String>,
     result: Box<dyn Any + Send>,
@@ -543,7 +563,7 @@ impl DialogHost {
             self.remove_tree(id);
             let dialog = self.open.remove(at);
             crate::runtime::overlay::end_stack_dialog(&ctx, id);
-            self.store_result(dialog.as_ref(), result);
+            self.store_result(&dialog, result);
             self.cancel_orphans(Some(&ctx));
         }
         if self.open_next_queued() {
@@ -581,6 +601,14 @@ impl DialogHost {
     /// instances.
     pub fn take_by_id<D: StackDialog>(&mut self, id: DialogId) -> Option<DialogResult<D::Result>> {
         let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>() && stored.id == id)?;
+        self.take_at::<D>(at).map(|(result, _)| result)
+    }
+
+    /// Takes the result of the opening identified by this host's [`open_serial`](Self::open_serial).
+    /// A replacement cancel uses the serial of the dialog being replaced. As with [`take`](Self::take), a later
+    /// opening or result for the same type and instance can displace an untaken result.
+    pub fn take_by_open_serial<D: StackDialog>(&mut self, serial: u64) -> Option<DialogResult<D::Result>> {
+        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>() && stored.serial == serial)?;
         self.take_at::<D>(at).map(|(result, _)| result)
     }
 
@@ -634,7 +662,7 @@ impl DialogHost {
         self.remove_tree(id);
         let dialog = self.open.remove(at);
         crate::runtime::overlay::end_stack_dialog(ctx, id);
-        self.store_result(dialog.as_ref(), result);
+        self.store_result(&dialog, result);
         self.cancel_orphans(Some(ctx));
         true
     }
@@ -680,7 +708,7 @@ impl DialogHost {
         let mut dialog = self.open.remove(at);
         crate::runtime::overlay::end_stack_dialog(ctx, id);
         dialog.release(ctx);
-        self.store_result(dialog.as_ref(), dialog.cancelled());
+        self.store_result(&dialog, dialog.cancelled());
         self.cancel_orphans(Some(ctx));
         true
     }
@@ -763,10 +791,9 @@ impl DialogHost {
         self.open.iter_mut().find(|dialog| dialog.id() == id).map(|dialog| dialog.as_any_mut())
     }
 
-    /// The open `D` when it is the dialog `id` names (the host holds one `D` at a time; the id
-    /// tells which command it is).
+    /// The first open `D` with `id`. Other dialog types with the same ID are ignored.
     pub fn get_by_id<D: StackDialog>(&self, id: DialogId) -> Option<&D> {
-        self.get_dyn(id)?.downcast_ref()
+        self.open[self.position_by_id_of::<D>(id)?].as_any().downcast_ref()
     }
 
     /// The open `D`, for the app to feed (a preview image) or a script to read.
@@ -781,7 +808,18 @@ impl DialogHost {
 
     /// [`get_mut`](DialogHost::get_mut) for the open `D` that `id` names.
     pub fn get_mut_by_id<D: StackDialog>(&mut self, id: DialogId) -> Option<&mut D> {
-        self.get_dyn_mut(id)?.downcast_mut()
+        let at = self.position_by_id_of::<D>(id)?;
+        self.open[at].as_any_mut().downcast_mut()
+    }
+
+    /// The live `D` of this opening, while it is still open on this host.
+    pub fn get_by_open_serial<D: StackDialog>(&self, serial: u64) -> Option<&D> {
+        self.open.iter().find(|dialog| dialog.serial == serial)?.as_any().downcast_ref()
+    }
+
+    /// [`get_by_open_serial`](Self::get_by_open_serial), mutably.
+    pub fn get_mut_by_open_serial<D: StackDialog>(&mut self, serial: u64) -> Option<&mut D> {
+        self.open.iter_mut().find(|dialog| dialog.serial == serial)?.as_any_mut().downcast_mut()
     }
 
     /// The most recently opened `D`.
@@ -793,18 +831,27 @@ impl DialogHost {
         self.open.iter().position(|dialog| dialog.id() == id)
     }
 
-    fn store_result(&mut self, dialog: &dyn AnyStackDialog, result: Box<dyn Any + Send>) {
-        let (type_id, instance) = (dialog.result_type(), dialog.instance());
-        self.results.retain(|stored| stored.type_id != type_id || stored.instance != instance);
-        self.results.push(StoredResult { type_id, id: dialog.id(), instance, key: dialog.key(), result });
+    fn position_by_id_of<D: StackDialog>(&self, id: DialogId) -> Option<usize> {
+        self.open.iter().position(|dialog| dialog.id() == id && dialog.result_type() == TypeId::of::<D>())
     }
 
-    /// Which open of the dialog `id` this is: a number distinct for every open on this host, the same while the
-    /// dialog stays open. A dialog's id is the same at every open of its key; this tells one open from the next (a
-    /// preview cached for a cancelled open is not the reopened dialog's). `None` when `id` is not open.
+    fn store_result(&mut self, dialog: &OpenedDialog, result: Box<dyn Any + Send>) {
+        let (type_id, instance) = (dialog.result_type(), dialog.instance());
+        self.results.retain(|stored| stored.type_id != type_id || stored.instance != instance);
+        self.results.push(StoredResult { type_id, id: dialog.id(), serial: dialog.serial, instance, key: dialog.key(), result });
+    }
+
+    /// The newest live opening of `id`: a number distinct for every open on this host, the same while the dialog
+    /// stays open. A dialog's id is the same at every open of its key, so the serial distinguishes one opening from
+    /// the next. `None` when `id` is not open.
     pub fn open_serial(&self, id: DialogId) -> Option<u64> {
-        self.position_by_id(id)?;
-        self.serials.iter().find(|(open, _)| *open == id).map(|(_, serial)| *serial)
+        self.open.iter().rfind(|dialog| dialog.id() == id).map(|dialog| dialog.serial)
+    }
+
+    /// Like [`open_serial`](Self::open_serial), restricted to the dialog type `D`.
+    /// Use [`get_by_open_serial`](Self::get_by_open_serial) to access this exact opening after capturing its serial.
+    pub fn open_serial_by_id<D: StackDialog>(&self, id: DialogId) -> Option<u64> {
+        self.open.iter().rfind(|dialog| dialog.id() == id && dialog.result_type() == TypeId::of::<D>()).map(|dialog| dialog.serial)
     }
 
     fn open_with_parent(&mut self, dialog: Box<dyn AnyStackDialog>, parent: Option<DialogId>) -> DialogId {
@@ -813,17 +860,14 @@ impl DialogHost {
         if let Some(at) = self.open.iter().position(|open| open.result_type() == type_id && open.instance() == instance) {
             self.remove_tree(self.open[at].id());
             let old = self.open.remove(at);
-            self.store_result(old.as_ref(), old.cancelled());
+            self.store_result(&old, old.cancelled());
             self.replaced.push(old);
             self.cancel_orphans(None);
         }
         let id = dialog.id();
         self.opens += 1;
-        let open = &self.open;
-        self.serials.retain(|(serial_of, _)| *serial_of != id && open.iter().any(|dialog| dialog.id() == *serial_of));
-        self.serials.push((id, self.opens));
         self.stack.push(id, parent);
-        self.open.push(dialog);
+        self.open.push(OpenedDialog { dialog, serial: self.opens });
         id
     }
 
@@ -833,7 +877,7 @@ impl DialogHost {
         let (kept, orphans): (Vec<_>, Vec<_>) = std::mem::take(&mut self.open).into_iter().partition(|dialog| self.stack.contains(dialog.id()));
         self.open = kept;
         for mut dialog in orphans {
-            self.store_result(dialog.as_ref(), dialog.cancelled());
+            self.store_result(&dialog, dialog.cancelled());
             match ctx {
                 Some(ctx) => {
                     crate::runtime::overlay::end_stack_dialog(ctx, dialog.id());

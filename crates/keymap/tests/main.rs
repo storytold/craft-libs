@@ -2,6 +2,8 @@
 
 mod chord;
 mod editor;
+#[cfg(feature = "egui")]
+mod egui;
 mod import;
 mod keymap;
 mod layout;
