@@ -2,6 +2,35 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
+## v1.1.0
+
+- **Release Notes:** [GitHub Release v1.1.0](https://github.com/ussoewwin/craft-libs/releases/tag/v1.1.0)
+
+### 2026-11-27 - The Second Merge (`next`), Space on the Release, and the Listing's Exit
+
+- **Merged `storytold/craft-libs` into the fork's `next`:** `next` at `a46af76c7`, 13 upstream
+  commits over `ea14416aa`, merged as `b3e81eb46` with no conflict, the fork's own crates, their
+  trials and its Space rule kept.
+- **Space activates on the release, and never waits.** `PressRoute::Space` holds the stop
+  (`space_held::hold`) and the pass that carries the release activates the held record once, as a
+  mouse release clicks; the input hook no longer defers a press for its release, which had returned
+  the same pair at the head of the queue on every pass and stalled that viewport's input. Enter stays
+  immediate, and the canvas keeps its Space.
+- **A failed CUPS listing is a failure, not a system without printers.** The Unix runner returns the
+  `lpstat` exit status and its stderr (`output_within_full`); a failed exit is `None` unless it is the
+  supported driverless-only answer (`No destinations added`), and a successful empty listing stays an
+  empty list, so the dialog reports `DiscoveryFailed` instead of clearing the remembered destination.
+- **Upstream's own design-lint red is exempt where its precedent exempts it.** `4062c6aa1` asserts a
+  literal `4.0` in `crates/ui-panels/src/dialog/trials.rs`, the shape the two trial rooms already
+  exempt: a `test/literal-size` rule in `design-lint.toml` and one exception entry in
+  `design/exceptions/craft-ui-panels/dialog.toml`, after which the lint reports 28 passed.
+- **The round is written down.** `md/2026-11-27-round-2-merge.md` holds the merge, the three-way
+  audit and each finding with its measurement, and section 7 of
+  `md/fork-technical-specification.md` states the round's rules and numbers.
+- **Suites**: the workspace runs **18,729 tests, 18,728 passed, 63 skipped, 1 failed** - upstream's own
+  `craft-xlsx` stack test, measured and named in section 4; format and clippy exit 0.
+- See [Release Notes v1.1.0](https://github.com/ussoewwin/craft-libs/releases/tag/v1.1.0) for details.
+
 ## v1.0.9
 
 - **Release Notes:** [GitHub Release v1.0.9](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.9)

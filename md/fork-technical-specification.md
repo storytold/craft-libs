@@ -359,3 +359,21 @@ Not changed, with the measurement that decided it:
 - The macOS and Linux legs were not run (this is a Windows machine).
 - The one failing test above is upstream's; it is reported, not fixed, because the fork holds no
   change to that crate and a change there would be the fork's own, not upstream's.
+
+## 7. The second round of 2026-11-27
+
+`next` took 13 upstream commits over `ea14416aa`, to `a46af76c7`, as `b3e81eb46`; no file conflicted,
+and 0 of 9 upstream files and 0 of 52 fork files were dropped against the merge base.
+
+- **Space activates on the release.** `PressRoute::Space` holds the stop (`space_held::hold`) and the
+  pass carrying the release activates it once; the input hook no longer defers a press for its release,
+  which had returned the same pair on every pass and stalled the viewport. Enter stays immediate.
+- **A failed CUPS listing is a failure.** `output_within_full` returns the exit status and stderr, and
+  the listing is `None` on a failed exit unless it is the driverless-only answer; a successful empty
+  listing stays an empty list.
+- **Upstream's own design-lint red is exempt, as its precedent exempts it.** `4062c6aa1`'s literal
+  `4.0` in `crates/ui-panels/src/dialog/trials.rs` gets `test/literal-size` in `design-lint.toml` and
+  one exception entry in `design/exceptions/craft-ui-panels/dialog.toml`; the lint reports 28 passed.
+- **The measurements.** 18,729 tests run, 18,728 passed, 63 skipped, 1 failed (upstream's `craft-xlsx`
+  stack test, section 4); format and clippy exit 0.
+
