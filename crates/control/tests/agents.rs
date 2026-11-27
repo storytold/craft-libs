@@ -6,7 +6,7 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use craft_control::agents::{
@@ -65,19 +65,53 @@ fn with_the_flag_only_the_launchers_switch_lets_agents_in() {
     assert!(!AgentSwitch::fixed(false, true).allows(false));
 }
 
-/// The switch follows the launcher's list within a poll, wakes the app once per change rather than
-/// once per poll, and its thread ends once the last clone is dropped.
+/// The watch thread's poll clock, driven by the test: [`Self::poll`] lets one poll run and returns
+/// once the thread has finished it and waits for the next.
+struct Ticks {
+    tick: mpsc::SyncSender<()>,
+    waiting: mpsc::Receiver<()>,
+}
+
+impl Ticks {
+    /// The clock and the `tick` to give [`AgentSwitch::watch_with`].
+    fn new() -> (Self, impl FnMut() -> bool + Send + 'static) {
+        let (tick, ticks) = mpsc::sync_channel(0);
+        let (waits, waiting) = mpsc::channel();
+        let wait = move || {
+            let _ = waits.send(());
+            ticks.recv().is_ok()
+        };
+        (Self { tick, waiting }, wait)
+    }
+
+    /// Blocks until the watch thread waits for its next poll; `false` once the thread has ended.
+    fn waiting(&self) -> bool {
+        // A hang guard only: the thread answers at once, so the limit is never reached by a run
+        // that works.
+        match self.waiting.recv_timeout(Duration::from_secs(60)) {
+            Ok(()) => true,
+            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("the watch thread hung"),
+        }
+    }
+
+    /// Runs one poll; `false` when the thread ended in it instead of waiting for the next one.
+    fn poll(&self) -> bool {
+        self.tick.send(()).unwrap();
+        self.waiting()
+    }
+}
+
+/// The switch follows the launcher's list at the next poll, wakes the app once per change rather
+/// than once per poll, and its thread ends at the first poll after the last clone is dropped.
 #[test]
 fn the_switch_wakes_once_per_change() {
     let launcher = Arc::new(AtomicBool::new(false));
     let probes = Arc::new(AtomicUsize::new(0));
     let wakes = Arc::new(AtomicUsize::new(0));
-    // Held by the watch thread through its probe: gone once the thread has ended.
-    let alive = Arc::new(());
     let probe = {
-        let (launcher, probes, alive) = (launcher.clone(), probes.clone(), alive.clone());
+        let (launcher, probes) = (launcher.clone(), probes.clone());
         move || {
-            let _ = &alive;
             probes.fetch_add(1, Ordering::Relaxed);
             launcher.load(Ordering::Relaxed)
         }
@@ -88,26 +122,35 @@ fn the_switch_wakes_once_per_change() {
             wakes.fetch_add(1, Ordering::Relaxed);
         }
     };
-    let switch = AgentSwitch::watch_with(true, probe, Duration::from_millis(5), wake);
+    let (ticks, tick) = Ticks::new();
+    let switch = AgentSwitch::watch_with(true, probe, tick, wake);
     let clone = switch.clone();
+    assert!(ticks.waiting());
     assert!(!switch.launcher());
+    assert_eq!(probes.load(Ordering::Relaxed), 1, "asked once at the start");
 
     launcher.store(true, Ordering::Relaxed);
-    assert!(wait_for(|| clone.launcher()), "the switch follows the launcher");
+    assert!(ticks.poll());
+    assert!(clone.launcher(), "the switch follows the launcher");
     assert!(switch.allows(false));
-    let polled = probes.load(Ordering::Relaxed);
-    assert!(wait_for(|| probes.load(Ordering::Relaxed) > polled + 10));
+    // Many polls with nothing changed.
+    for _ in 0..10 {
+        assert!(ticks.poll());
+    }
+    assert_eq!(probes.load(Ordering::Relaxed), 12, "one probe per poll");
+    assert_eq!(wakes.load(Ordering::Relaxed), 1, "one wake per change, not per poll");
     launcher.store(false, Ordering::Relaxed);
-    assert!(wait_for(|| !switch.launcher()));
-    assert!(wait_for(|| wakes.load(Ordering::Relaxed) == 2));
+    assert!(ticks.poll());
+    assert!(!switch.launcher());
     assert_eq!(wakes.load(Ordering::Relaxed), 2, "one wake per change, not per poll");
 
     drop(switch);
+    assert!(ticks.poll(), "a clone keeps the watch");
     drop(clone);
-    assert!(wait_for(|| Arc::strong_count(&alive) == 1), "the watch ended with the last switch");
-    let after_end = probes.load(Ordering::Relaxed);
-    std::thread::sleep(Duration::from_millis(20));
-    assert_eq!(probes.load(Ordering::Relaxed), after_end, "nothing probes after the watch ended");
+    // The thread probes once more, sees the switch gone and ends, so nothing probes after it.
+    assert!(!ticks.poll(), "the watch ended with the last switch");
+    assert_eq!(probes.load(Ordering::Relaxed), 15, "one probe per poll, the last one before the watch ended");
+    assert_eq!(wakes.load(Ordering::Relaxed), 2);
 }
 
 // ---- The connection file ------------------------------------------------------------------------
