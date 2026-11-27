@@ -199,9 +199,24 @@ fn arrowheads_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(BoxConstraintsPopover<'static>, covers = [Default], drive = Drive::Never)]
 fn box_constraints_popover_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    gear(ui, data, ShapeKind::Rectangle)
+}
+
+#[story(BoxConstraintsPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn box_constraints_popover_triangle(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    gear(ui, data, ShapeKind::Triangle)
+}
+
+#[story(BoxConstraintsPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn box_constraints_popover_polygon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    gear(ui, data, ShapeKind::Polygon)
+}
+
+/// The open gear of the `kind` tool over the story's constraints.
+fn gear(ui: &mut Ui, data: &mut StoryData, kind: ShapeKind) -> StoryOutput {
     let value = *data.value("box", BoxConstraints::default());
     let mut open = *data.value("open", true);
-    let out = BoxConstraintsPopover::new(Bind::given(value), Bind::bound(&mut open), DOCUMENT_PIXELS_PER_INCH).show(ui);
+    let out = BoxConstraintsPopover::new(Bind::given(value), Bind::bound(&mut open), DOCUMENT_PIXELS_PER_INCH).kind(kind).show(ui);
     *data.value("open", true) = open;
     if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
         *data.value("box", BoxConstraints::default()) = *next;

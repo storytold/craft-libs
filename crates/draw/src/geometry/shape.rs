@@ -6,7 +6,7 @@
 //! Document units throughout; y grows downwards. Corner radii run top-left, top-right,
 //! bottom-right, bottom-left (PhotoCraft's engine order).
 
-use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use std::ops::RangeInclusive;
 
 use kurbo::{BezPath, Ellipse, Point, Rect, RoundedRect, RoundedRectRadii, Shape, Vec2};
@@ -177,16 +177,28 @@ pub struct BoxRule {
     pub fixed: Option<(f64, f64)>,
     /// A width to height ratio: the largest box of this ratio inside the dragged one, from the press.
     pub ratio: Option<(f64, f64)>,
+    /// The box keeps the drag's fractions instead of landing on whole pixels (Photoshop's Align Edges off).
+    pub keep_fractions: bool,
 }
 
-/// The box a drag from `start` to `end` draws under `rule`, in whole pixels, or `None` when a side is under
-/// [`MIN_SIDE`].
+impl BoxRule {
+    /// Whether the box [`box_drag`] makes under this rule is the drag squared: `square` with neither a usable `fixed`
+    /// size, which ignores it, nor a usable `ratio`, which turns the squared drag into a box of its ratio. The Triangle
+    /// tool draws its equilateral triangle only in such a box ([`equilateral_in`]).
+    pub fn is_square(&self) -> bool {
+        self.square && self.fixed.and_then(positive).is_none() && self.ratio.and_then(positive).is_none()
+    }
+}
+
+/// The box a drag from `start` to `end` draws under `rule`, in whole pixels unless `keep_fractions`, or `None`
+/// when a side is under [`MIN_SIDE`].
 ///
 /// - `fixed` (both sides finite and above 0): that size at the release; `square` and `ratio` do not apply.
 /// - `square`: both sides take the drag's shorter extent, each keeping its direction.
 /// - `ratio` (both parts finite and above 0): the largest box of that ratio inside the (squared) drag.
 /// - `from_centre`: `start` is the centre; the box is twice the extent.
-/// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`.
+/// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`; with `keep_fractions`
+///   they stay as dragged, and a side under [`MIN_SIDE`] still draws nothing.
 pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
     // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `drag_box` (⇧: `m = w.abs().min(h.abs())` with the
     // signs kept, #13222; ⌥: origin `start - (w, h)`, size doubled; the Rectangle gear's Fixed Size and
@@ -207,7 +219,8 @@ pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
         }
         if rule.from_centre { (start.x - w, start.y - h, w * 2.0, h * 2.0) } else { (start.x, start.y, w, h) }
     };
-    let (x, y, w, h) = (x0.min(x0 + w).round(), y0.min(y0 + h).round(), w.abs().round(), h.abs().round());
+    let (x, y, w, h) = (x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs());
+    let (x, y, w, h) = if rule.keep_fractions { (x, y, w, h) } else { (x.round(), y.round(), w.round(), h.round()) };
     (w >= MIN_SIDE && h >= MIN_SIDE).then(|| Rect::new(x, y, x + w, y + h))
 }
 
@@ -259,6 +272,29 @@ impl RadialFrame {
             return None;
         }
         let rotation = if upright { 0.0 } else { (v.atan2() + FRAC_PI_2).rem_euclid(TAU) };
+        Some(RadialFrame { center, radius, rotation })
+    }
+
+    /// The frame of a Freeform drag from `start` to `end` (the Polygon gear's Freeform, storytold/photocraft#13306):
+    /// centred on the middle of the drag, or on `start` with `from_centre`, its first point at `end`, so the polygon
+    /// turns with the drag. `snap` (⇧) turns it so that the first point lies at a multiple of 45° from the centre, at
+    /// the same distance. A `radius` above 0 sets the distance to the points: the drag then only places the centre and
+    /// turns the polygon. `None` when that distance is under [`MIN_SIDE`] or the release is on the centre.
+    pub fn freeform(start: Point, end: Point, from_centre: bool, snap: bool, radius: Option<f64>) -> Option<RadialFrame> {
+        // pc: #13306 G8 (centre 499.5,349.5 from the press 399.5,299.5 and the release 599.5,399.5, the first vertex at
+        // the release), H3 (⌥: the centre at the press), and the Freeform + ⇧ run (the first vertex straight right).
+        let center = if from_centre { start } else { start.midpoint(end) };
+        let v = end - center;
+        let reach = v.hypot();
+        if reach.is_nan() || reach <= 0.0 {
+            return None;
+        }
+        let radius = radius.filter(|r| r.is_finite() && *r > 0.0).unwrap_or(reach);
+        if radius < MIN_SIDE {
+            return None;
+        }
+        let turn = (v.atan2() + FRAC_PI_2).rem_euclid(TAU);
+        let rotation = if snap { ((turn / FRAC_PI_4).round() * FRAC_PI_4).rem_euclid(TAU) } else { turn };
         Some(RadialFrame { center, radius, rotation })
     }
 

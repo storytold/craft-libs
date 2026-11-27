@@ -1,10 +1,10 @@
-//! [`BoxConstraintsPopover`]: the Rectangle tool's gear.
+//! [`BoxConstraintsPopover`]: the Rectangle, Triangle and Polygon tools' gear.
 
 use std::sync::Arc;
 
 use super::ShapeWords;
 use super::panel::{NumberCell, glyph_side};
-use crate::ui::shape_drag::{BoxConstraint, BoxConstraints};
+use crate::ui::shape_drag::{BoxConstraint, BoxConstraints, ShapeKind};
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
@@ -16,9 +16,13 @@ use craft_ui::runtime::env::{Env, Label, Units};
 use craft_ui::text::RangeAlert;
 use egui::{Response, Ui};
 
-/// The Rectangle tool's gear: a button that opens the box constraints of a drag. The popover holds the radios
+/// A Shape tool's gear: a button that opens the box constraints of a drag. The popover holds the radios
 /// Unconstrained, Square, Fixed Size and Proportional, each size's W and H beside its radio and enabled only while it
-/// is chosen, and the From Center check box. Fixed Size takes whole pixels (0 to 300,000), Proportional up to three
+/// is chosen, and the From Center check box. The tool's [`kind`](Self::kind) words it: the Rectangle's (the default)
+/// as above, the Triangle's with Equilateral in Square's place and its Proportional fields empty while they are
+/// greyed (storytold/photocraft#13361), the Polygon's with Symmetric in Square's place and a Freeform radio after
+/// Proportional, its Radius beside it (whole pixels, 0 to 300,000, empty to start) and enabled only while Freeform is
+/// chosen (storytold/photocraft#13306). Fixed Size takes whole pixels (0 to 300,000), Proportional up to three
 /// decimals (0 to 99,999); an emptied field is `None`, which draws as Unconstrained, and a value typed past its range
 /// is clamped and reported once in [`BoxConstraintsOutput::out_of_range`]. Escape closes it and keeps the values. Its
 /// `open` flag is read and written through the binding, so give it `Bind::bound`.
@@ -28,6 +32,7 @@ pub struct BoxConstraintsPopover<'a> {
     value: Bind<'a, BoxConstraints>,
     open: Bind<'a, bool>,
     pixels_per_inch: f64,
+    kind: ShapeKind,
 }
 
 /// What [`BoxConstraintsPopover::show`] reports.
@@ -49,12 +54,18 @@ impl<'a> BoxConstraintsPopover<'a> {
     /// The gear of `value`, open while `open` is set, in a document of `pixels_per_inch`, which sizes a Fixed Size typed
     /// in inches or points.
     pub fn new(value: Bind<'a, BoxConstraints>, open: Bind<'a, bool>, pixels_per_inch: f64) -> Self {
-        BoxConstraintsPopover { value, open, pixels_per_inch }
+        BoxConstraintsPopover { value, open, pixels_per_inch, kind: ShapeKind::Rectangle }
+    }
+
+    /// The tool the gear is for, which words it; the Rectangle by default.
+    pub fn kind(mut self, kind: ShapeKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     /// Shows the gear button and, while open, the popover.
     pub fn show(self, ui: &mut Ui) -> BoxConstraintsOutput {
-        let BoxConstraintsPopover { mut value, mut open, pixels_per_inch } = self;
+        let BoxConstraintsPopover { mut value, mut open, pixels_per_inch, kind } = self;
         let env = Env::of(ui);
         let (words, units) = (env.words::<ShapeWords>(), env.units());
         let current = match value.reborrow().get() {
@@ -74,7 +85,7 @@ impl<'a> BoxConstraintsPopover<'a> {
             let event = EditEvent::set(Mixed::Same(was), !was, Arc::from(words.shape_options.as_str()), None);
             let _ = open.reborrow().apply(&event);
         }
-        let mut body = Body { words: &words, units: &units, pixels_per_inch, value: current, edits: Vec::new(), out_of_range: None };
+        let mut body = Body { words: &words, units: &units, pixels_per_inch, kind, value: current, edits: Vec::new(), out_of_range: None };
         let _ = Popover::new(words.shape_options.clone(), open.reborrowed()).opened_by(&gear).show(ui, |ui, _| {
             FieldGroup::new(words.shape_options.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| body.show(ui));
         });
@@ -87,6 +98,7 @@ struct Body<'p> {
     words: &'p ShapeWords,
     units: &'p Units,
     pixels_per_inch: f64,
+    kind: ShapeKind,
     value: BoxConstraints,
     edits: Vec<EditEvent<BoxConstraints>>,
     out_of_range: Option<RangeAlert>,
@@ -99,19 +111,30 @@ impl Body<'_> {
         self.out_of_range = None;
         let (words, units, ppi, value) = (self.words, self.units, self.pixels_per_inch, self.value);
         let chosen = value.constraint;
+        // The Triangle's Proportional fields are empty while greyed out and show the ratio once it is chosen.
+        let ratio_shown = self.kind != ShapeKind::Triangle || chosen == BoxConstraint::Proportional;
+        let shown_ratio = |part: Option<f64>| part.filter(|_| ratio_shown);
+        let square = match self.kind {
+            ShapeKind::Triangle => &words.equilateral,
+            ShapeKind::Polygon => &words.symmetric,
+            _ => &words.square,
+        };
+        let freeform = (self.kind == ShapeKind::Polygon)
+            .then(|| NumberCell::whole_pixels(units, ppi, "freeform-radius", &words.freeform_radius, value.radius, BoxConstraints::RADIUS));
+        let (mut radius_edit, mut radius_alert) = (EditEvents::new(), None);
         let fixed = [
             NumberCell::whole_pixels(units, ppi, "fixed-width", &words.fixed_width, value.fixed.0, BoxConstraints::FIXED),
             NumberCell::whole_pixels(units, ppi, "fixed-height", &words.fixed_height, value.fixed.1, BoxConstraints::FIXED),
         ];
         let ratio = [
-            NumberCell::plain(units, None, RATIO_DECIMALS, "ratio-width", &words.ratio_width, value.ratio.0, BoxConstraints::RATIO),
-            NumberCell::plain(units, None, RATIO_DECIMALS, "ratio-height", &words.ratio_height, value.ratio.1, BoxConstraints::RATIO),
+            NumberCell::plain(units, None, RATIO_DECIMALS, "ratio-width", &words.ratio_width, shown_ratio(value.ratio.0), BoxConstraints::RATIO),
+            NumberCell::plain(units, None, RATIO_DECIMALS, "ratio-height", &words.ratio_height, shown_ratio(value.ratio.1), BoxConstraints::RATIO),
         ];
         let (mut fixed_edits, mut ratio_edits) = (Pair::default(), Pair::default());
         let group = RadioGroup::new(words.shape_options.clone(), Bind::given(chosen)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 Radio::new(BoxConstraint::Unconstrained).label(words.unconstrained.clone()).show(ui);
-                Radio::new(BoxConstraint::Square).label(words.square.clone()).show(ui);
+                Radio::new(BoxConstraint::Square).label(square.clone()).show(ui);
                 Row::new().show(ui, |ui, _| {
                     Radio::new(BoxConstraint::FixedSize).label(words.fixed_size.clone()).show(ui);
                     fixed_edits = pair(ui, words, &fixed, chosen == BoxConstraint::FixedSize);
@@ -120,6 +143,18 @@ impl Body<'_> {
                     Radio::new(BoxConstraint::Proportional).label(words.proportional.clone()).show(ui);
                     ratio_edits = pair(ui, words, &ratio, chosen == BoxConstraint::Proportional);
                 });
+                if let Some(cell) = &freeform {
+                    Row::new().show(ui, |ui, _| {
+                        Radio::new(BoxConstraint::Freeform).label(words.freeform.clone()).show(ui);
+                        let on = chosen == BoxConstraint::Freeform;
+                        let shown = Field::new(cell.caption.clone())
+                            .id_salt(cell.key)
+                            .side(glyph_side(&words.radius))
+                            .enabled(on)
+                            .show(ui, |ui, _| cell.show_optional(ui));
+                        (radius_edit, radius_alert) = shown.inner.unwrap_or_default();
+                    });
+                }
             });
         });
         self.edits.extend(group.output.events.map(|constraint| BoxConstraints { constraint, ..value }));
@@ -129,9 +164,10 @@ impl Body<'_> {
         let [width, height] = ratio_edits.edits;
         self.edits.extend(width.map(|width| BoxConstraints { ratio: (width, value.ratio.1), ..value }));
         self.edits.extend(height.map(|height| BoxConstraints { ratio: (value.ratio.0, height), ..value }));
+        self.edits.extend(radius_edit.map(|radius| BoxConstraints { radius, ..value }));
         let centre = Checkbox::new(Bind::given(value.from_center)).label(words.from_center.clone()).show(ui).events;
         self.edits.extend(centre.map(|from_center| BoxConstraints { from_center, ..value }));
-        self.out_of_range = fixed_edits.alerts.into_iter().chain(ratio_edits.alerts).flatten().last();
+        self.out_of_range = fixed_edits.alerts.into_iter().chain(ratio_edits.alerts).chain([radius_alert]).flatten().last();
     }
 }
 

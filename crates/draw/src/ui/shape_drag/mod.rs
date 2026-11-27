@@ -18,7 +18,7 @@ use craft_keymap::Mods;
 use kurbo::Point;
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::shape::ShapeGeometry;
+use crate::geometry::shape::{BoxRule, ShapeGeometry};
 use crate::ui::shape::VectorMode;
 
 pub use dialog::{CreateShapeDialog, CreateShapeOptions, CreatedShape};
@@ -61,7 +61,8 @@ pub enum ShapeFrame {
     Radial,
 }
 
-/// What the Rectangle tool's gear keeps a box drag to ([`BoxConstraints::constraint`]).
+/// What a Shape tool's gear (the Rectangle's, the Triangle's and the Polygon's) keeps a drag to
+/// ([`BoxConstraints::constraint`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -69,16 +70,22 @@ pub enum BoxConstraint {
     /// The dragged box.
     #[default]
     Unconstrained,
-    /// A square; ⇧ draws the dragged box instead.
+    /// A square: the Rectangle's Square, the Triangle's Equilateral (its triangle in the square's circle), the
+    /// Polygon's Symmetric (the regular polygon in the square's circle); ⇧ draws the dragged box instead.
     Square,
     /// The gear's width and height, with the top left at the release.
     FixedSize,
     /// The largest box of the gear's width to height ratio inside the drag, from the press.
     Proportional,
+    /// The Polygon's Freeform: the regular polygon centred on the middle of the drag (on the press with From Center),
+    /// its first corner at the release ([`RadialFrame::freeform`](crate::geometry::shape::RadialFrame::freeform)), its
+    /// circumradius the gear's [`radius`](BoxConstraints::radius) when set. The other kinds draw it as Unconstrained.
+    Freeform,
 }
 
-/// The Rectangle tool's gear: a constraint, its sizes, and From Center. A Fixed Size or Proportional pair with an
-/// empty field (`None`) or a 0 draws as Unconstrained.
+/// A Shape tool's gear (the Rectangle's, the Triangle's or the Polygon's, each its own value): a constraint, its sizes,
+/// Freeform's radius, and From Center. A Fixed Size or Proportional pair with an empty field (`None`) or a 0 draws as
+/// Unconstrained.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -89,6 +96,9 @@ pub struct BoxConstraints {
     pub fixed: (Option<f64>, Option<f64>),
     /// Proportional's width and height, in [`RATIO`](Self::RATIO); 1 : 1 to start.
     pub ratio: (Option<f64>, Option<f64>),
+    /// Freeform's Radius in pixels, in [`RADIUS`](Self::RADIUS): the polygon's circumradius. Empty (or 0) lets the drag
+    /// set it; empty to start.
+    pub radius: Option<f64>,
     /// The press is the box's centre; ⌥ draws from the corner instead.
     pub from_center: bool,
 }
@@ -98,12 +108,35 @@ impl BoxConstraints {
     pub const FIXED: RangeInclusive<f64> = 0.0..=300_000.0;
     /// The range of a Proportional field.
     pub const RATIO: RangeInclusive<f64> = 0.0..=99_999.0;
+    /// The range of Freeform's Radius field, in whole pixels.
+    pub const RADIUS: RangeInclusive<f64> = 0.0..=300_000.0;
+
+    /// The rule of a box drag under these constraints with ⇧ (`shift`) and ⌥ (`alt`) held as they are now: ⇧ turns
+    /// Square on, or off when it is chosen, and ⌥ does the same to From Center; Fixed Size and Proportional take their
+    /// pair when both fields hold a value. The box lands on whole pixels; the drag sets
+    /// [`keep_fractions`](BoxRule::keep_fractions) from its own options.
+    pub fn rule(&self, shift: bool, alt: bool) -> BoxRule {
+        let pair = |(w, h): (Option<f64>, Option<f64>)| w.zip(h);
+        BoxRule {
+            square: shift != (self.constraint == BoxConstraint::Square),
+            from_centre: alt != self.from_center,
+            fixed: (self.constraint == BoxConstraint::FixedSize).then(|| pair(self.fixed)).flatten(),
+            ratio: (self.constraint == BoxConstraint::Proportional).then(|| pair(self.ratio)).flatten(),
+            keep_fractions: false,
+        }
+    }
 }
 
 impl Default for BoxConstraints {
-    /// Unconstrained, Fixed Size empty, Proportional 1 : 1, From Center off.
+    /// Unconstrained, Fixed Size empty, Proportional 1 : 1, Freeform's Radius empty, From Center off.
     fn default() -> Self {
-        BoxConstraints { constraint: BoxConstraint::Unconstrained, fixed: (None, None), ratio: (Some(1.0), Some(1.0)), from_center: false }
+        BoxConstraints {
+            constraint: BoxConstraint::Unconstrained,
+            fixed: (None, None),
+            ratio: (Some(1.0), Some(1.0)),
+            radius: None,
+            from_center: false,
+        }
     }
 }
 
@@ -128,6 +161,9 @@ pub struct ShapeDragOptions {
     /// What the drag makes: a Rectangle in Shape mode ends a click within 1 screen point, every other drag within
     /// the press slop.
     pub mode: VectorMode,
+    /// A box drag lands on whole pixels (Photoshop's Align Edges, on by default); off, the box keeps the drag's
+    /// fractions. Lines and the radial frame are not boxes and ignore it.
+    pub whole_pixels: bool,
 }
 
 impl ShapeDragOptions {
@@ -164,7 +200,8 @@ impl ShapeDragOptions {
         self
     }
 
-    /// The gear's constraints for a box drag (Photoshop shows the gear for the Rectangle only).
+    /// The gear's constraints for a drag (the Rectangle's, the Triangle's or the Polygon's gear; the app passes the
+    /// selected tool's).
     #[must_use]
     pub fn constraints(mut self, constraints: BoxConstraints) -> Self {
         self.constraints = constraints;
@@ -177,11 +214,18 @@ impl ShapeDragOptions {
         self.mode = mode;
         self
     }
+
+    /// Whether a box drag lands on whole pixels (the options bar's Align Edges).
+    #[must_use]
+    pub fn whole_pixels(mut self, whole: bool) -> Self {
+        self.whole_pixels = whole;
+        self
+    }
 }
 
 impl Default for ShapeDragOptions {
-    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained, Shape mode (PhotoCraft's
-    /// defaults).
+    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained, Shape mode, whole pixels
+    /// (PhotoCraft's defaults).
     fn default() -> Self {
         ShapeDragOptions {
             kind: ShapeKind::Rectangle,
@@ -191,6 +235,7 @@ impl Default for ShapeDragOptions {
             line_weight: 3.0,
             constraints: BoxConstraints::default(),
             mode: VectorMode::Shape,
+            whole_pixels: true,
         }
     }
 }
