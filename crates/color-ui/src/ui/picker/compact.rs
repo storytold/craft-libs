@@ -30,6 +30,8 @@ pub(super) struct Body<'a> {
     pub dynamic_tracks: bool,
     pub eyedropper: bool,
     pub eyedropper_busy: bool,
+    /// The hex field also takes `0x` digits, `rgb(r, g, b)` and three channel values.
+    pub hex_notations: bool,
 }
 
 impl<'a> Body<'a> {
@@ -132,8 +134,9 @@ impl<'a> Body<'a> {
     /// the production Colors dialog. In the Full layout Enter commits the digits and confirms the dialog, as in the
     /// reference image editor's Color Picker.
     pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
-        let field =
-            TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
+        let field = TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba())))
+            .empty(pass.shown.color.to_rgba())
+            .notations(self.hex_notations);
         let field = if self.layout == ColorPickerLayout::Compact { field.submits() } else { field };
         let edit = match sizing {
             Some(sizing) => field.sizing(sizing),

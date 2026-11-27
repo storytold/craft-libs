@@ -298,6 +298,10 @@ pub struct ColorPicker<'a> {
     /// Disables the screen-pick button while the host samples.
     #[prop]
     eyedropper_busy: bool,
+    /// Whether the hex field also takes a colour written as `0x` digits, `rgb(r, g, b)` or three channel values
+    /// (`HexCodec::notations`); off by default.
+    #[prop]
+    hex_notations: bool,
     /// The Full layout's compare block: the colour being edited over this one, the colour the host started from; a
     /// click on it sets it again, with the model values it carries. Without it the block shows the colour at the
     /// picker's first show.
@@ -329,6 +333,7 @@ impl<'a> ColorPicker<'a> {
             dynamic_tracks: true,
             eyedropper: false,
             eyedropper_busy: false,
+            hex_notations: false,
             compare: None,
             warnings: Vec::new(),
             constrain: None,
@@ -387,6 +392,7 @@ impl<'a> ColorPicker<'a> {
             dynamic_tracks,
             eyedropper,
             eyedropper_busy,
+            hex_notations,
             compare,
             warnings,
             constrain,
@@ -405,6 +411,7 @@ impl<'a> ColorPicker<'a> {
             dynamic_tracks,
             eyedropper,
             eyedropper_busy,
+            hex_notations,
         };
         let mut run = Run {
             name: Arc::from(label.as_str()),
