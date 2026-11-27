@@ -240,3 +240,18 @@ fn the_largest_column_limit_still_reads() {
     let table = super::read(&bytes, &TableLimits { max_columns: u32::MAX, ..LIMITS }).unwrap();
     assert_eq!(table.rows.len(), 1);
 }
+
+#[test]
+fn duplicate_field_names_are_rejected() {
+    let schema = Arc::new(parse_message_type("message test { REQUIRED INT64 x; REQUIRED INT64 x; }").unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    for v in [10i64, 20] {
+        let mut col = group.next_column().unwrap().unwrap();
+        col.typed::<Int64Type>().write_batch(&[v], None, None).unwrap();
+        col.close().unwrap();
+    }
+    group.close().unwrap();
+    let bytes = writer.into_inner().unwrap();
+    assert!(read(&bytes).unwrap_err().to_string().contains("unique"));
+}

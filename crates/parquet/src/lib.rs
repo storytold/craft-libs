@@ -170,9 +170,15 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
     if fields.iter().any(|f| !f.is_primitive() || !f.get_basic_info().has_repetition() || f.get_basic_info().repetition() == Repetition::REPEATED) {
         return Err(invalid("Nested, list and repeated Parquet fields are not supported; flatten the table first"));
     }
+    let mut names = HashSet::new();
     for field in fields {
         if field.name().len() > MAX_TEXT_BYTES {
             return Err(invalid("A Parquet field name exceeds the 1 MiB text budget"));
+        }
+        // The record reader looks columns up by name, so a repeated name would read the last
+        // column of that name in every position.
+        if !names.insert(field.name()) {
+            return Err(invalid("Parquet field names must be unique"));
         }
         if let Some(logical) = field.get_basic_info().logical_type_ref() {
             match logical {
