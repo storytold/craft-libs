@@ -1233,6 +1233,9 @@ mod tests {
         let c = read(xml.as_bytes());
         let deleted: Vec<u32> = c.legend_entries.iter().filter(|e| e.deleted).map(|e| e.idx).collect();
         assert_eq!(deleted, vec![1], "Beta's entry is left out, Alpha's isn't");
+        // A bare `c:delete` deletes too: CT_Boolean's `val` defaults to true.
+        let bare = read(xml.replace(r#"<c:delete val="1"/>"#, "<c:delete/>").as_bytes());
+        assert_eq!(bare.legend_entries, c.legend_entries, "a bare c:delete reads as val=\"1\"");
         // `c:delete val="0"` keeps the entry, as no `c:legendEntry` would.
         let kept = read(xml.replace(r#"<c:delete val="1"/>"#, r#"<c:delete val="0"/>"#).as_bytes());
         assert!(kept.legend_entries.iter().all(|e| !e.deleted), "{:?}", kept.legend_entries);

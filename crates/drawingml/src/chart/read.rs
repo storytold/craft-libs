@@ -619,8 +619,9 @@ fn legend_entries(legend: Option<&El>) -> Vec<crate::chart::LegendEntry> {
         .take(MAX_LEGEND_ENTRIES)
         .filter_map(|e| {
             let idx = e.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.parse().ok())?;
-            // `c:delete` and `c:txPr` are a choice: a deleted entry has no text to set.
-            if e.child(Local("delete")).and_then(|d| d.attr_local("val").and_then(value::to_bool)) == Some(true) {
+            // `c:delete` and `c:txPr` are a choice: a deleted entry has no text to set. A bare
+            // `c:delete` deletes (CT_Boolean's `val` defaults to true).
+            if e.child(Local("delete")).is_some_and(|d| d.attr_local("val").and_then(value::to_bool).unwrap_or(true)) {
                 return Some(crate::chart::LegendEntry { idx, deleted: true, ..Default::default() });
             }
             // The paragraph's own run properties first, then the list style's defaults
