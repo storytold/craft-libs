@@ -1471,17 +1471,17 @@ mod tests {
         assert_eq!(back.series.iter().find(|s| s.name == "Primary").unwrap().kind, Some(ChartType::Line));
         assert_eq!(back.series.iter().find(|s| s.name == "Secondary").unwrap().kind, Some(ChartType::Column));
 
-        // The former reader used the group's marker switch rather than the retained per-series
-        // none symbols: its unchanged chart-wide baseline genuinely differs from today's reader.
+        // The former reader flattens this group to Line when any marker is explicitly none.
+        // The current reader retains the omitted marker as LineMarkers, producing Combo.
         let xml = metadata_chart(
             r#"<c:lineChart><c:grouping val="standard"/>
 <c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Edited</c:v></c:tx><c:marker><c:symbol val="none"/></c:marker><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>
-<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Inherited</c:v></c:tx><c:marker><c:symbol val="none"/></c:marker><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:marker val="1"/></c:lineChart>"#,
+<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Inherited</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:marker val="1"/></c:lineChart>"#,
         );
         let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
-        assert_eq!(chart_from(&root).unwrap().kind, ChartType::Line);
+        assert_eq!(chart_from(&root).unwrap().kind, ChartType::Combo);
         let mut legacy = legacy_chart_from(&root).unwrap();
-        assert_eq!((legacy.kind, legacy.raw_metadata_version), (ChartType::LineMarkers, 0));
+        assert_eq!((legacy.kind, legacy.raw_metadata_version), (ChartType::Line, 0));
         legacy.raw = Some(xml);
         legacy.series[0].kind = Some(ChartType::Area);
         let (written, kept) = crate::chart::write::chart_xml(&legacy);
@@ -1492,7 +1492,7 @@ mod tests {
             Some(ChartType::Area),
             "legacy provenance must not turn an unchanged chart-wide type into an override"
         );
-        assert_eq!(back.series.iter().find(|s| s.name == "Inherited").unwrap().kind, Some(ChartType::LineMarkers));
+        assert_eq!(back.series.iter().find(|s| s.name == "Inherited").unwrap().kind, Some(ChartType::Line));
     }
 
     #[test]
