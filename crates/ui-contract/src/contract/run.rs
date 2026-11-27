@@ -417,7 +417,6 @@ fn blank_core<'a>(
         toggles: Vec::new(),
         reset_part: None,
         root_sense: Sense::empty(),
-        roving_arrival: None,
         roving_lead: None,
         collection_events: None,
         visible_rows: 0..0,
@@ -1213,13 +1212,7 @@ fn update_steps(p: &mut Pass<'_, '_, '_>, env: &Env, h: &HostStep) {
             Some(lead) => group.lead((lead, None)),
             None => group,
         };
-        focus::register_group(
-            ctx,
-            match core.roving_arrival {
-                Some(arrival) => group.selected((arrival, None)),
-                None => group,
-            },
-        );
+        focus::register_group(ctx, group);
     }
 }
 

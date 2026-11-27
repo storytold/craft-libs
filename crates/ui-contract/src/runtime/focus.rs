@@ -617,6 +617,16 @@ pub(crate) fn register_group(ctx: &Context, group: Group) {
     });
 }
 
+/// Names the member Tab arrives at in the roving group `group` registered in the running pass, once its members have
+/// registered. A group not registered in this pass is left as it is.
+pub(crate) fn name_group_arrival(ctx: &Context, group: Id, member: StopKey) {
+    with(ctx, |state| {
+        if let Some(group) = state.groups.get_mut(&group) {
+            group.selected = Some(member);
+        }
+    });
+}
+
 /// Registers the row groups `ids` of the collection `owner` for the running pass.
 pub(crate) fn register_row_groups(ctx: &Context, owner: Id, rtl: bool, mut ids: Vec<Id>) {
     ids.sort_unstable_by_key(|id| id.value());

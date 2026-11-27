@@ -531,8 +531,8 @@ fn members(props: &mut Members, ui: &mut Ui) {
     });
 }
 
-/// A radio group that first shows in a view's run names Tab's arrival (its selected member) only once its members have
-/// registered, after that run: the view runs once more, so its replays hold the arrival a run gives.
+/// A radio group that first shows in a view's run names Tab's arrival (its selected member) from the members that run
+/// registers: the run's record holds the arrival, so the view replays from the next frame, with no extra pass or run.
 #[trial]
 fn a_radio_group_new_in_a_run_replays_with_its_arrival() {
     let radios = Rc::new(Cell::new(false));
@@ -543,7 +543,12 @@ fn a_radio_group_new_in_a_run_replays_with_its_arrival() {
     fixture.room(Vec2::new(400.0, 200.0)).settle();
     audit_replays(fixture.ctx(), true);
     radios.set(true);
-    fixture.frame(vec![]).idle(4);
+    fixture.frame(vec![]);
+    assert_eq!(fixture.passes(), 1, "the frame the group appears in runs one pass");
+    fixture.frame(vec![]);
     let ran = last_frame_memo_runs(fixture.ctx());
-    assert!(!ran.iter().any(|(_, _, run)| *run == MemoRun::Ran), "the view settles: {ran:?}");
+    assert!(!ran.iter().any(|(_, _, run)| *run == MemoRun::Ran), "the view replays in the next frame: {ran:?}");
+    fixture.idle(3);
+    let ran = last_frame_memo_runs(fixture.ctx());
+    assert!(!ran.iter().any(|(_, _, run)| *run == MemoRun::Ran), "the view stays settled: {ran:?}");
 }

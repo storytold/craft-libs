@@ -66,15 +66,13 @@ pub struct RadioGroup<'a, T: Value + 'static> {
     #[container]
     props: ContainerProps,
     value: Bind<'a, T>,
-    /// `update` named Tab's arrival from the members registered last pass.
-    arrived: bool,
 }
 
 impl<'a, T: Value + 'static> RadioGroup<'a, T> {
     /// A group named `label` over `value`.
     pub fn new(label: impl Into<crate::runtime::env::Label>, value: Bind<'a, T>) -> Self {
         let props = ContainerProps::new().arena(true).roving(Roving::new(NavShape::Flat));
-        RadioGroup { common: Common::new(), props, value, arrived: false }.label(label)
+        RadioGroup { common: Common::new(), props, value }.label(label)
     }
 
     /// How the arrows move through the members: `Flat` by default; a group that wraps its members in rows takes
@@ -104,7 +102,7 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
     }
 
     /// The pick (20.3 item 1): the member activated this pass, found in last pass's registrations, goes to the
-    /// binding. Tab arrives at the selected member.
+    /// binding.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let memory = cx.memory::<GroupMemory<T>>().clone();
         let handle = GroupHandle::<RadioKind<T>>::new(Arc::clone(&memory.live));
@@ -113,12 +111,7 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
             cx.propose(picked);
             cx.commit();
         }
-        let selected = cx.value().cloned();
-        if let Some(id) = selected.as_ref().and_then(|value| handle.member_id(value)) {
-            cx.roving_arrival(id);
-            self.arrived = true;
-        }
-        handle.select(selected);
+        handle.select(cx.value().cloned());
     }
 
     fn content_env(&self, cx: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
@@ -132,15 +125,13 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
         values.set(GroupInvalid(matches!(cx.validity(), Validity::Refuse(_) | Validity::Error(_))));
     }
 
-    /// The selected member registers in the body, after `update` read last pass's members: a run where it first
-    /// shows names no arrival, so it asks for another pass, which does. A memoized view around the group then runs once
-    /// more and keeps a run with the arrival.
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<T> {
-        let ctx = &cx.core.ctx;
-        if !self.arrived && !crate::runtime::measure::active(ctx) {
+    /// Tab arrives at the selected member, named from the members this run's body registered, so the run that first
+    /// shows the group already holds its arrival.
+    fn finish(self, mut cx: Cx<'_, Self>) -> EditResponse<T> {
+        if !crate::runtime::measure::active(&cx.core.ctx) {
             let handle = GroupHandle::<RadioKind<T>>::new(Arc::clone(&cx.recall::<GroupMemory<T>>().live));
-            if cx.value().is_some_and(|value| handle.member_id(value).is_some()) {
-                crate::runtime::frame::request_repaint(ctx);
+            if let Some(id) = cx.value().and_then(|value| handle.member_id(value)) {
+                cx.roving_arrival(id);
             }
         }
         cx.edit_response()
