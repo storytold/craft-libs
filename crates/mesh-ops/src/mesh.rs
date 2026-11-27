@@ -76,11 +76,6 @@ fn try_name(name: &str) -> Result<String> {
     Ok(s)
 }
 
-/// The unit vector along `v`, scaled first so a long vector cannot overflow; zero when `v` is zero.
-fn unit(v: Vec3) -> Vec3 {
-    v.try_normalize().or_else(|| (v / v.abs().max_element()).try_normalize()).unwrap_or(Vec3::ZERO)
-}
-
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
@@ -462,24 +457,25 @@ impl Mesh {
         let has = |len: usize| len == n;
         let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
         let mut mids: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
-        // Half-sums: (a + b) * 0.5 overflows for coordinates near f32::MAX.
+        // The f64 average preserves finite extremes and subnormal components.
         let mid = |m: &mut Mesh, mids: &mut std::collections::HashMap<(u32, u32), u32>, a: u32, b: u32| -> u32 {
             *mids.entry((a.min(b), a.max(b))).or_insert_with(|| {
                 let (i, j) = (a as usize, b as usize);
-                let half = |x: Vec3, y: Vec3| x * 0.5 + y * 0.5;
+                let half = |x: Vec3, y: Vec3| ((x.as_dvec3() + y.as_dvec3()) * 0.5).as_vec3();
+                let direction = |x: Vec3, y: Vec3| (x.as_dvec3() + y.as_dvec3()).try_normalize().map(|v| v.as_vec3()).unwrap_or(Vec3::ZERO);
                 m.positions.push(half(self.positions[i], self.positions[j]));
                 if has_n {
-                    m.normals.push(unit(half(self.normals[i], self.normals[j])));
+                    m.normals.push(direction(self.normals[i], self.normals[j]));
                 }
                 if has_t {
                     let (ti, tj) = (self.tangents[i], self.tangents[j]);
-                    m.tangents.push(unit(half(ti.truncate(), tj.truncate())).extend(ti.w));
+                    m.tangents.push(direction(ti.truncate(), tj.truncate()).extend(ti.w));
                 }
                 if has_uv {
-                    m.uvs.push(self.uvs[i] * 0.5 + self.uvs[j] * 0.5);
+                    m.uvs.push(((self.uvs[i].as_dvec2() + self.uvs[j].as_dvec2()) * 0.5).as_vec2());
                 }
                 if has_c {
-                    m.colors.push(self.colors[i] * 0.5 + self.colors[j] * 0.5);
+                    m.colors.push(((self.colors[i].as_dvec4() + self.colors[j].as_dvec4()) * 0.5).as_vec4());
                 }
                 // At most n + 3 x triangles vertices, checked to fit above.
                 (m.positions.len() - 1) as u32
@@ -689,6 +685,41 @@ mod tests {
         assert_eq!(m.uvs.len(), 9);
         assert_eq!((m.submeshes[0].start, m.submeshes[0].count), (0, 24));
         m.validate().unwrap();
+    }
+
+    #[test]
+    fn subdivision_preserves_equal_subnormal_components() {
+        let tiny = f32::from_bits(1);
+        let mut mesh = quad();
+        for position in &mut mesh.positions {
+            position.z = tiny;
+        }
+        mesh.normals.fill(Vec3::new(tiny, 0.0, 1.0));
+        mesh.tangents.fill(Vec4::new(1.0, tiny, 0.0, 1.0));
+        mesh.uvs.fill(Vec2::splat(tiny));
+        mesh.colors = vec![Vec4::splat(tiny); mesh.positions.len()];
+        let divided = mesh.try_subdivided().unwrap();
+        for index in mesh.positions.len()..divided.positions.len() {
+            assert_eq!(divided.positions[index].z, tiny);
+            assert_eq!(divided.normals[index].x, tiny);
+            assert_eq!(divided.tangents[index].y, tiny);
+            assert_eq!(divided.uvs[index], Vec2::splat(tiny));
+            assert_eq!(divided.colors[index], Vec4::splat(tiny));
+        }
+    }
+
+    #[test]
+    fn subdivision_normalizes_wide_directions_before_narrowing() {
+        let tiny = f32::from_bits(1);
+        let mut mesh = quad();
+        mesh.normals[0] = Vec3::new(tiny, 0.0, 1.0);
+        mesh.normals[1] = Vec3::new(0.0, 0.0, -1.0);
+        mesh.tangents[0] = mesh.normals[0].extend(1.0);
+        mesh.tangents[1] = mesh.normals[1].extend(1.0);
+        let divided = mesh.try_subdivided().unwrap();
+        let midpoint = divided.indices[1] as usize;
+        assert_eq!(divided.normals[midpoint], Vec3::X);
+        assert_eq!(divided.tangents[midpoint], Vec3::X.extend(1.0));
     }
 
     #[test]
