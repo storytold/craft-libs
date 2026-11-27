@@ -29,7 +29,7 @@ use crate::menu::Menu;
 use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use craft_behavior::fit::{FitItem, fit_items};
 use craft_behavior::{
     Flow, HitLevel, HitPriority, IconId, Insets, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection,
@@ -122,12 +122,14 @@ fn strip_lead(kind: TabKind, tokens: &crate::style::UiTokens) -> f32 {
     if kind == TabKind::Ribbon { tokens.space.pad.regular } else { 0.0 }
 }
 
-/// The look of a strip: it has none of its own; its row is as high as its tabs.
+/// The look of a strip: the focus ring of its end items; its row is as high as its tabs.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TabStripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The text line a wheel notch given in lines counts.
     line: f32,
     /// The colour of the one underline a ribbon strip slides under its shown tab.
@@ -827,6 +829,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         let (lead, side) = (strip_lead(key.kind, tokens), if ribbon { super::tab::ribbon_pad(tokens) - tokens.stroke.thick / 2.0 } else { 0.0 });
         TabStripStyle {
             metrics: Metrics::new().padding(Insets::new(lead, 0.0, 0.0, 0.0)),
+            focus: cx.focus_look(),
             line: tokens.typography.body.line_height,
             underline: cx.color(tokens.color.accent.solid),
             underline_inset: tokens.stroke.thick / 2.0,
