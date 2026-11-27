@@ -454,14 +454,16 @@ impl SearchIndex {
         let mut term: Vec<char> = Vec::new();
         let mut near: Vec<(usize, usize)> = Vec::new();
         for (t, (text, postings)) in self.terms.iter().enumerate() {
-            if text.chars().count().abs_diff(word.len()) > bound || text.chars().any(spaceless) {
+            // A word of no label or path is skipped before its edits are counted.
+            if text.chars().count().abs_diff(word.len()) > bound
+                || text.chars().any(spaceless)
+                || !postings.iter().any(|p| matches!(p.field, LABEL | PATH))
+            {
                 continue;
             }
             term.clear();
             term.extend(text.chars());
-            if let Some(edits) = edits_within(&word, &term, bound)
-                && postings.iter().any(|p| matches!(p.field, LABEL | PATH))
-            {
+            if let Some(edits) = edits_within(&word, &term, bound) {
                 near.push((edits, t));
             }
         }
@@ -488,14 +490,22 @@ impl SearchIndex {
         }
     }
 
+    /// Is the word at place `t` in `terms` a word of entry `i` in one of `fields`? A word's postings are sorted by entry
+    /// ([`SearchIndex::build`]), so a binary search finds entry `i`'s first one.
+    fn holds(&self, t: usize, i: usize, fields: &[u8]) -> bool {
+        let postings = self.postings_of(t);
+        let from = postings.partition_point(|p| p.entry < i);
+        postings.get(from..).unwrap_or_default().iter().take_while(|p| p.entry == i).any(|p| fields.contains(&p.field))
+    }
+
     /// The first word of `near` that is a word of entry `i` in one of `fields`.
     fn nearest_of(&self, near: &[usize], i: usize, fields: &[u8]) -> Option<&str> {
-        near.iter().find(|&&t| self.postings_of(t).iter().any(|p| p.entry == i && fields.contains(&p.field))).map(|&t| self.term(t))
+        near.iter().find(|&&t| self.holds(t, i, fields)).map(|&t| self.term(t))
     }
 
     /// The words of `near` that are words of entry `i` in one of `fields`, in the order of `near`.
     fn words_of(&self, near: &[usize], i: usize, fields: &[u8]) -> Vec<&str> {
-        near.iter().filter(|&&t| self.postings_of(t).iter().any(|p| p.entry == i && fields.contains(&p.field))).map(|&t| self.term(t)).collect()
+        near.iter().filter(|&&t| self.holds(t, i, fields)).map(|&t| self.term(t)).collect()
     }
 
     /// Is `query` (no spaces) the initials of one of entry `i`'s labels?

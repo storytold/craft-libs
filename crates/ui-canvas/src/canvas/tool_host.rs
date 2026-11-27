@@ -399,9 +399,32 @@ struct HostState {
     /// The tip the tool's last hover asked for: the tool answers again only when the pointer moves, so it stands
     /// while the pointer rests, until a press, a gesture or the pointer leaving drops it.
     tip: Option<Tooltip>,
+    /// The box the running gesture's last press or drag asked for (its hud, its readout): a pass with neither, where
+    /// the pointer rested or something else repainted, shows it again, so the box does not blink out between moves.
+    gesture_box: Option<GestureBox>,
     /// A press ran since the last hover: the next resting pass hovers at the pointer even when it did not move, so the
     /// tool answers again for where the pointer rests and the tip the press dropped comes back.
     rehover: bool,
+}
+
+/// The rows a gesture's press or drag asked to show beside the pointer.
+#[derive(Clone, Debug, Default)]
+struct GestureBox {
+    hud: Option<Vec<(Label, String)>>,
+    readout: Option<Vec<(Label, String)>>,
+}
+
+/// The gesture's box stands between its moves: a pass whose press or drag `answered` keeps what it asked for, one with
+/// neither shows the last box again. The box ends with the gesture.
+fn keep_gesture_box(state: &mut HostState, requests: &mut ToolRequests, answered: bool) {
+    if state.gesture.is_none() {
+        state.gesture_box = None;
+    } else if answered || requests.hud.is_some() || requests.readout.is_some() {
+        state.gesture_box = Some(GestureBox { hud: requests.hud.clone(), readout: requests.readout.clone() });
+    } else if let Some(shown) = state.gesture_box.clone() {
+        requests.hud = shown.hud;
+        requests.readout = shown.readout;
+    }
 }
 
 fn state_id(canvas: Id) -> Id {
@@ -608,6 +631,7 @@ impl<'m> ToolHost<'m> {
             pending_drag: None,
             ended_session: false,
             hovered: false,
+            answered: false,
         };
         run.call(None, |tool, cx| tool.each_pass(cx));
         run.hover_scrolls = run.pick_as(None).autoscrolls_on_hover();
@@ -622,7 +646,8 @@ impl<'m> ToolHost<'m> {
             run.keys(&ctx, pass.id, env.direction.is_rtl());
             run.menu_key();
         }
-        let Run { mut response, requests, momentary: momentary_tool, hovered, .. } = run;
+        let Run { mut response, mut requests, momentary: momentary_tool, hovered, answered, .. } = run;
+        keep_gesture_box(&mut state, &mut requests, answered);
         let before = space.map(|space| space.target());
         if let Some(past) = response.past_edge {
             let step = frame_step(input.time - state.time.unwrap_or(input.time));
@@ -1028,6 +1053,8 @@ struct Run<'a, 't> {
     pending_drag: Option<DragRequest>,
     /// The gesture whose release or cancel is being delivered started a drag session.
     ended_session: bool,
+    /// The tool had a press or a drag call this pass: what it asked to show beside the pointer replaces the gesture's box.
+    answered: bool,
 }
 
 impl<'a, 't: 'a> Run<'a, 't> {
@@ -1197,6 +1224,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         let id = next_gesture_id(self.ctx);
         self.ending = Some(id);
         self.pending_drag = None;
+        self.answered = true;
         let mut action = self.call_as(who, Some(pointer), |tool, cx| tool.press(&pointer, cx));
         if action == ToolAction::Ignored
             && who.is_none()
@@ -1235,6 +1263,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         let Some(active) = self.state.gesture.as_mut() else { return };
         active.last = pointer;
         active.dragged = true;
+        self.answered = true;
         self.call(Some(pointer), |tool, cx| tool.drag(&pointer, cx));
         self.report(GesturePhase::Update);
         let who = self.state.gesture.and_then(|active| active.stand_in);

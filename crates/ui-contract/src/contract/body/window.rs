@@ -215,7 +215,7 @@ fn resized_edge(before: Rect, after: Rect) -> Option<ResizeEdge> {
 /// `rect` moved, at its size, the least distance that puts it inside `bounds`: the one keep rule for a layer's
 /// bounds, whether the user moves the layer or the host places it. On an axis where it is longer than the bounds, its
 /// low edge sits on theirs.
-pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
+pub fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
     let keep = |low: f32, high: f32, bounds_low: f32, bounds_high: f32| low.min(bounds_high - (high - low)).max(bounds_low) - low;
     rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
 }
@@ -808,7 +808,9 @@ impl BodyHooks<'_> {
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.movable && stands.band,
             _ => props.header.is_some_and(|header| header.band == crate::contract::DragBand::Move) && stands.band,
         };
-        let band = move_band(props, regions, rect);
+        // A layer's band reaches its frame's edges; an OS window's stays in its header, clear of the edges the
+        // platform hit-tests for resizing.
+        let band = move_band(props, regions, rect, os.is_none() && !moves_window);
         if props.header.is_some() && movable && band.is_positive() {
             // The band lies under the line's own parts and children, like the reorder band, so they keep their presses.
             // On a window the OS frames (macOS `Inset`) it keeps the arrow, as an OS title bar does: the OS's resize
@@ -847,7 +849,7 @@ impl BodyHooks<'_> {
         let handle = grip_band(pcx.tokens);
         let corner = 2.0 * handle;
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
-        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
+        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.text_direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         let grip_name = props.resize_name.as_ref().map(|name| pcx.env.resolve(name).as_str().to_owned());
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
@@ -911,10 +913,16 @@ impl BodyHooks<'_> {
 
 /// The move band of a container whose header drags: an inline header's band spans the header's whole line (header,
 /// body and end region), beneath the line's children, so every free point of the line drags; a header on a line of
-/// its own is the band.
-fn move_band(props: &ContainerProps, regions: &Regions, rect: Rect) -> Rect {
+/// its own is the band. With `to_edges` (a layer: a dialog, a floating group) a header on a line of its own drags
+/// from the frame's top and side edges down to where the body starts, so the padding around the title moves the
+/// layer as a title bar does, not only the title's line (photocraft#17112).
+fn move_band(props: &ContainerProps, regions: &Regions, rect: Rect, to_edges: bool) -> Rect {
     if !props.header.is_some_and(|header| header.inline) {
-        return regions.header;
+        if !to_edges {
+            return regions.header;
+        }
+        let bottom = regions.header.max.y.max(regions.body.min.y.min(rect.max.y));
+        return Rect::from_min_max(rect.min, Pos2::new(rect.max.x, bottom)).intersect(rect);
     }
     let line = regions.header.union(regions.body);
     let line = if props.end.is_some() { line.union(regions.end) } else { line };
