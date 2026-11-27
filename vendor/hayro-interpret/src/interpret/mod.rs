@@ -651,6 +651,11 @@ fn interpret_window<'a>(
                 )
                 .to_path(0.1);
                 context.path_mut().extend(rect);
+                // Craft patch (re current point, craft-libs #3821): ISO 32000-2 §8.5.2.1 leaves
+                // the current point at the rectangle's (x, y), where an `l` after it starts.
+                let p = Point::new(r.0.as_f64(), r.1.as_f64());
+                *(context.last_point_mut()) = p;
+                *(context.sub_path_start_mut()) = p;
             }
             TypedInstruction::MoveTo(m) => {
                 let p = Point::new(m.0.as_f64(), m.1.as_f64());
