@@ -144,3 +144,91 @@ fn rows_hold_cells_a_little_apart_and_the_rows_further_apart() {
     assert!(rows.0 > touching.0 && rows.0 < spaced.0, "across a row: {touching:?} < {rows:?} < {spaced:?}");
     assert!(rows.1 > rows.0, "the rows lie further apart than the cells in a row: {rows:?}");
 }
+
+/// The widths of the outlines painted inside `cell`.
+fn outline_widths(shapes: &[egui::Shape], cell: Rect, out: &mut Vec<f32>) {
+    let inside = cell.expand(0.5);
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => outline_widths(inner, cell, out),
+            egui::Shape::Rect(r) if inside.contains_rect(r.rect) && r.stroke.width > 0.0 && r.stroke.color.a() > 0 => out.push(r.stroke.width),
+            egui::Shape::Path(path) if !path.points.is_empty() && path.points.iter().all(|p| inside.contains(*p)) && path.stroke.width > 0.0 => {
+                out.push(path.stroke.width);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The widest outline painted round the second cell of a table of three, on a display of two pixels per point.
+fn outline_width(hairline: bool) -> f32 {
+    let entries = vec![
+        (Label::from("Grey"), Srgba::rgb(0.5, 0.5, 0.5)),
+        (Label::from("Black"), Srgba::rgb(0.0, 0.0, 0.0)),
+        (Label::from("White"), Srgba::rgb(1.0, 1.0, 1.0)),
+    ];
+    let shown = entries.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = SwatchTable::new("Colors", &shown).per_row(3).spacing(SwatchSpacing::Spaced).hairline(hairline).show_all(ui);
+    });
+    fixture.room(vec2(200.0, 100.0));
+    fixture.pixels_per_point(2.0).settle();
+    let shapes = fixture.frame_shapes();
+    let cell = fixture.by_label("Black").expect("a cell").rect;
+    let mut widths = Vec::new();
+    outline_widths(&shapes, cell, &mut widths);
+    widths.into_iter().fold(None, |widest: Option<f32>, w| Some(widest.map_or(w, |m| m.max(w)))).expect("the cell has an outline")
+}
+
+/// A hairline table outlines its cells with a thinner line than a plain one.
+#[trial]
+fn hairline_cells_draw_a_thinner_outline() {
+    let (plain, hairline) = (outline_width(false), outline_width(true));
+    assert!(hairline < plain, "a hairline outline ({hairline}) is thinner than a thin one ({plain})");
+}
+
+/// The colours of the outlines painted inside `cell`.
+fn outline_colors(shapes: &[egui::Shape], cell: Rect, out: &mut Vec<egui::Color32>) {
+    let inside = cell.expand(0.5);
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => outline_colors(inner, cell, out),
+            egui::Shape::Rect(r) if inside.contains_rect(r.rect) && r.stroke.width > 0.0 && r.stroke.color.a() > 0 => out.push(r.stroke.color),
+            egui::Shape::Path(path) if !path.points.is_empty() && path.points.iter().all(|p| inside.contains(*p)) && path.stroke.width > 0.0 => {
+                if let egui::epaint::ColorMode::Solid(color) = path.stroke.color {
+                    out.push(color);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The summed channels of the outline round the black cell of a table of three: higher is lighter.
+fn outline_lightness(hairline: bool) -> u32 {
+    let entries = vec![
+        (Label::from("Grey"), Srgba::rgb(0.5, 0.5, 0.5)),
+        (Label::from("Black"), Srgba::rgb(0.0, 0.0, 0.0)),
+        (Label::from("White"), Srgba::rgb(1.0, 1.0, 1.0)),
+    ];
+    let shown = entries.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = SwatchTable::new("Colors", &shown).per_row(3).spacing(SwatchSpacing::Spaced).hairline(hairline).show_all(ui);
+    });
+    fixture.room(vec2(200.0, 100.0));
+    fixture.pixels_per_point(2.0).settle();
+    let shapes = fixture.frame_shapes();
+    let cell = fixture.by_label("Black").expect("a cell").rect;
+    let mut colors = Vec::new();
+    outline_colors(&shapes, cell, &mut colors);
+    let color = colors.first().copied().expect("the cell has an outline");
+    u32::from(color.r()) + u32::from(color.g()) + u32::from(color.b())
+}
+
+/// On the light theme a hairline cell's outline is the lighter border colour, not the control edge, so a grid of
+/// colours reads as colours rather than grey frames.
+#[trial]
+fn hairline_cells_take_the_lighter_border_colour() {
+    let (plain, hairline) = (outline_lightness(false), outline_lightness(true));
+    assert!(hairline > plain, "a hairline outline ({hairline}) is lighter than a plain one ({plain})");
+}

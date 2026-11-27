@@ -436,6 +436,9 @@ pub struct SwatchTable<'a> {
     /// How the cells sit: touching, in rows or spaced apart.
     #[prop]
     spacing: SwatchSpacing,
+    /// Whether the cells' outlines are hairlines (`Swatch::hairline`).
+    #[prop]
+    hairline: bool,
     /// The marks of each cell, by index, given to the cell's `Swatch::marks`.
     #[prop(func = "Fn(&usize) -> CellMarks")]
     marks: Option<RowMarks<'a, usize>>,
@@ -476,6 +479,7 @@ impl<'a> SwatchTable<'a> {
             tips: false,
             wells: false,
             spacing: SwatchSpacing::Touching,
+            hairline: false,
             marks: None,
             max_rows: None,
             arrangement: SwatchArrangement::default(),
@@ -540,7 +544,7 @@ impl<'a> SwatchTable<'a> {
 
     /// Shows the table.
     pub fn show_all(mut self, ui: &mut Ui) -> SwatchTableOutput {
-        let (swatches, tips, wells) = (self.swatches, self.tips, self.wells);
+        let (swatches, tips, wells, hairline) = (self.swatches, self.tips, self.wells, self.hairline);
         let shape = if self.arrangement == SwatchArrangement::Honeycomb { SwatchShape::Hexagon } else { SwatchShape::Square };
         let marks = self.marks.take();
         // A clone, not a take: `ideal_width` reads the trailing cell while the table shows.
@@ -558,6 +562,7 @@ impl<'a> SwatchTable<'a> {
             };
             let cell = cell.cell().shape(shape);
             let cell = if wells { cell.well() } else { cell };
+            let cell = if hairline { cell.hairline() } else { cell };
             let cell = match &marks {
                 Some(marks) => cell.marks(marks.of(key)),
                 None => cell,
