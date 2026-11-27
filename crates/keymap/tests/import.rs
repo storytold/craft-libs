@@ -203,6 +203,88 @@ fn a_failed_change_keeps_its_shortcut_when_a_later_change_frees_room() {
     assert_eq!(r.imported, 1);
 }
 
+#[test]
+fn an_import_removes_conflicts_using_each_commands_final_binding_list() {
+    let a = "A".repeat(64);
+    let b = "B".repeat(64);
+    let scopes = || Scopes::new().with_context(&a).with_context(&b);
+    let scope_a = Scope::new(&a).unwrap();
+    let scope_b = Scope::new(&b).unwrap();
+    let trigger = craft_keymap::Trigger::parse("Cmd+Ctrl+Alt+Shift+IntlBackslash Cmd+Ctrl+Alt+Shift+IntlBackslash").unwrap();
+    let other = craft_keymap::Trigger::parse("Cmd+K").unwrap();
+    let old = CommandRef::new("old.command");
+    let first = CommandRef::new("new.first");
+    let second = CommandRef::new("new.second");
+    let catalog = || {
+        vec![
+            CommandDef::new(old.clone(), "Old", Scope::app())
+                .with_default(Binding::in_scope(trigger, scope_a.clone()))
+                .with_default(Binding::in_scope(other, scope_b.clone())),
+            CommandDef::new(first.clone(), "First", scope_a.clone()),
+            CommandDef::new(second.clone(), "Second", scope_b.clone()),
+        ]
+    };
+    let mut km = Keymap::new(catalog(), scopes(), Platform::Mac);
+    assert_eq!(km.bindings(&old).len(), 2);
+    assert!(km.bindings(&old).iter().any(|binding| binding.text(&Scope::app()).len() > craft_keymap::MAX_BINDING_TEXT));
+    // A reader can supply an already parsed sequence through the public import API.
+    let key = |trigger: craft_keymap::Trigger| ForeignKey { context: None, text: trigger.to_string(), trigger: Ok(trigger), notes: Vec::new() };
+    let set = ForeignSet::new(vec![
+        ForeignEntry::new(None, ["Second"]).with_id("new.second").with_key(key(other)),
+        ForeignEntry::new(None, ["First"]).with_id("new.first").with_key(key(trigger)),
+    ]);
+    let report = plan(&set, &km, &ImportOptions::default()).apply(&mut km);
+    assert!(report.failed.is_empty(), "the final cleared list is savable: {report:?}");
+    assert_eq!(report.imported, 2);
+    assert_eq!(report.conflicts_cleared.len(), 2);
+    assert!(km.bindings(&old).is_empty());
+    assert_eq!(km.bindings(&first), [Binding::new(trigger)]);
+    assert_eq!(km.bindings(&second), [Binding::new(other)]);
+    let reopened = Keymap::new(catalog(), scopes(), Platform::Mac).with_overrides(km.overrides().clone());
+    for command in [&old, &first, &second] {
+        assert_eq!(reopened.bindings(command), km.bindings(command), "the imported bindings persist in the same contexts");
+    }
+}
+
+#[test]
+fn an_unsavable_final_conflict_list_keeps_all_claimants_and_applies_other_entries() {
+    let context = "A".repeat(64);
+    let scope = Scope::new(&context).unwrap();
+    let long = craft_keymap::Trigger::parse("Cmd+Ctrl+Alt+Shift+IntlBackslash Cmd+Ctrl+Alt+Shift+IntlBackslash").unwrap();
+    let old = CommandRef::new("old.command");
+    let catalog = vec![
+        CommandDef::new(old.clone(), "Old", Scope::app())
+            .with_default(Binding::in_scope(long, scope.clone()))
+            .with_default(b("Cmd+K"))
+            .with_default(b("Cmd+L")),
+        command("new.first", "First", &[], &["Cmd+1"]),
+        command("new.second", "Second", &[], &["Cmd+2"]),
+        command("new.other", "Other", &[], &[]),
+        command("old.other", "Old Other", &[], &["Cmd+J"]),
+    ];
+    let mut overrides = Overrides::new();
+    for n in 0..MAX_COMMANDS - 3 {
+        overrides.insert(format!("junk.{n}"), vec!["Cmd+9".into()]);
+    }
+    let mut km = Keymap::new(catalog, Scopes::new().with_context(&context), Platform::Mac).with_overrides(overrides);
+    let before = km.bindings(&old);
+    let set = ForeignSet::new(vec![
+        ForeignEntry::new(None, ["First"]).with_id("new.first").with_key(ForeignKey::read(None, "Cmd+K", Flavor::Mac)),
+        ForeignEntry::new(None, ["Second"]).with_id("new.second").with_key(ForeignKey::read(None, "Cmd+L", Flavor::Mac)),
+        ForeignEntry::new(None, ["Other"]).with_id("new.other").with_key(ForeignKey::read(None, "Cmd+J", Flavor::Mac)),
+    ]);
+    let report = plan(&set, &km, &ImportOptions::default()).apply(&mut km);
+    assert_eq!(report.failed.iter().map(|failed| failed.command.id.as_str()).collect::<Vec<_>>(), ["new.first", "new.second"]);
+    assert_eq!(report.imported, 1);
+    assert_eq!(report.conflicts_cleared.len(), 1);
+    assert_eq!(report.conflicts_cleared[0].command.id, "old.other");
+    assert_eq!(km.bindings(&old), before);
+    has(&km, "new.first", &["Cmd+1"]);
+    has(&km, "new.second", &["Cmd+2"]);
+    has(&km, "new.other", &["Cmd+J"]);
+    has(&km, "old.other", &[]);
+}
+
 /// A Mac keymap of `catalog` with no reserved chords, for sets read with [`kys::read`].
 fn mac_keymap(catalog: Vec<CommandDef>) -> Keymap {
     Keymap::new(catalog, Scopes::new(), Platform::Mac)
