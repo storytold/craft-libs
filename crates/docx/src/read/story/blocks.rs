@@ -287,7 +287,8 @@ impl Reader<'_> {
             pb.run_boundaries,
             pb.run_formatting_revisions,
             pb.run_editing_revisions,
-        );
+        )
+        .map(Box::new);
         para
     }
 

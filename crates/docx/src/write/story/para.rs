@@ -373,7 +373,7 @@ struct SourcePieces<'a> {
 
 impl<'a> SourcePieces<'a> {
     fn new(p: &'a Paragraph) -> Self {
-        let s = p.source_runs.as_ref();
+        let s = p.source_runs.as_deref();
         SourcePieces {
             boundaries: s.map_or(&[][..], |s| s.offsets_for(&p.text)),
             revisions: s.map_or(&[][..], |s| s.formatting_revisions_for(&p.text)),

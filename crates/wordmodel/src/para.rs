@@ -35,7 +35,7 @@ pub struct Paragraph {
     pub runs: Vec<Run>,
     /// Original DOCX run boundaries; not part of semantic equality or layout.
     #[serde(default, rename = "sourceRuns", skip_serializing_if = "Option::is_none")]
-    pub source_runs: Option<SourceRuns>,
+    pub source_runs: Option<Box<SourceRuns>>,
     #[serde(default, skip_serializing_if = "ParaProps::is_empty")]
     pub props: ParaProps,
     /// Formatting of the paragraph mark (used when typing into an empty paragraph).
