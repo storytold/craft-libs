@@ -541,6 +541,8 @@ impl<'a> ColorPanel<'a> {
 
     /// The colour the rows edit, with its model values; `None` disables the rows (mixed, None, a pattern). The edited
     /// well's colour by default.
+    /// Explicit components take precedence over remembered values for their model, including when the host uses a
+    /// different working-space transform to render the colour.
     pub fn edited(mut self, color: Option<PickedColor>) -> Self {
         self.edited = Some(color);
         self
@@ -1052,12 +1054,11 @@ impl Body<'_> {
     /// The model's values for the edited colour, unrounded: an edit of one channel leaves the others as they are.
     fn values(&self, model: &dyn ColorModel) -> ModelValues {
         let color = self.color();
-        // The host's own values of the colour (typed CMYK, a working space's numbers) stand when they give the colour.
-        let given = self.picked().and_then(|picked| picked.model);
-        let kept = self.kept.values[self.target.index()]
-            .iter()
-            .chain(given.as_ref())
-            .find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
+        // Current host values are authoritative: its working-space transform may differ from the panel's.
+        if let Some(values) = self.picked().and_then(|picked| picked.model).filter(|values| values.model == model.id()) {
+            return finite_values(values);
+        }
+        let kept = self.kept.values[self.target.index()].iter().find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
         finite_values(kept.copied().unwrap_or_else(|| self.read(model, color)))
     }
 
