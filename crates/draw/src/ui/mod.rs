@@ -101,7 +101,8 @@ pub use pen::{
 };
 pub use picture_fill::{PictureFill, PictureFillEditor, PictureFillOutput, PictureMode};
 pub use shape::{
-    Arrowheads, ArrowheadsOutput, ArrowheadsPopover, LINE_WEIGHT_RANGE, RADIUS_RANGE, StrokeCells, StrokeCellsOutput, VectorMode, VectorModeSelect,
+    Arrowheads, ArrowheadsOutput, ArrowheadsPopover, LINE_WEIGHT_RANGE, RADIUS_RANGE, STAR_POINTS_RANGE, StrokeCells, StrokeCellsOutput, VectorMode,
+    VectorModeSelect,
 };
 pub use shape::{BoxConstraintsOutput, BoxConstraintsPopover};
 pub use shape::{

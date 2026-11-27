@@ -285,3 +285,55 @@ fn a_fixed_size_typed_past_its_range_keeps_the_end_and_reports_it_once_and_an_em
     assert_eq!(host.borrow().value.fixed, (None, Some(50.0)), "an emptied field is empty");
     assert_eq!(host.borrow().alerts.len(), 1, "an emptied field reports nothing");
 }
+
+struct SidesHost {
+    settings: ShapeToolSettings,
+    alerts: Vec<RangeAlert>,
+}
+
+/// The options bar of `kind` with its Sides field bound to the host's settings.
+fn sides_bar(kind: ShapeKind) -> (Fixture, Rc<RefCell<SidesHost>>) {
+    let host = Rc::new(RefCell::new(SidesHost { settings: ShapeToolSettings::default(), alerts: Vec::new() }));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let SidesHost { settings, alerts } = &mut *held;
+        let look = ShapeAppearance::new(Paint::None, Paint::None, 0.0);
+        let out = Bar::new("Shape options", BarKind::Options).show(ui, |ui, _| ShapeBar::new(kind, settings, &look, 72.0).show(ui)).inner;
+        let Some(out) = out else { return };
+        if let Some(ShapeChange::Sides(n)) = out.events.iter().rev().find_map(|event| event.value()) {
+            settings.sides = *n;
+        }
+        alerts.extend(out.out_of_range);
+    });
+    fixture.settle();
+    (fixture, host)
+}
+
+/// photocraft#16867: the Star tool's points take whole numbers 3 to 20; a value typed past either end keeps the end
+/// and reports it once, with the 3 to 20 range. The Polygon's Sides keep 3 to 100.
+#[trial]
+fn star_points_take_3_to_20_and_polygon_sides_keep_3_to_100() {
+    for (typed, kept) in [("25", 20), ("2", 3), ("21", 20)] {
+        let (mut fixture, host) = sides_bar(ShapeKind::Star);
+        type_into(&mut fixture, "Sides", typed);
+        let host = host.borrow();
+        assert_eq!(host.settings.sides, kept, "star: {typed} keeps {kept}");
+        assert_eq!(host.alerts.len(), 1, "star: {typed} is reported once");
+        assert_eq!(host.alerts[0].range, 3.0..=20.0, "star: the alert names 3 to 20");
+        assert!(host.alerts[0].whole, "star: a whole-number alert");
+    }
+    for (typed, kept) in [("8", 8), ("20", 20), ("3", 3)] {
+        let (mut fixture, host) = sides_bar(ShapeKind::Star);
+        type_into(&mut fixture, "Sides", typed);
+        assert_eq!(host.borrow().settings.sides, kept, "star: {typed} is in range");
+        assert!(host.borrow().alerts.is_empty(), "star: {typed} reports nothing");
+    }
+    let (mut fixture, host) = sides_bar(ShapeKind::Polygon);
+    type_into(&mut fixture, "Sides", "25");
+    assert_eq!(host.borrow().settings.sides, 25, "polygon: 25 sides are in range");
+    assert!(host.borrow().alerts.is_empty(), "polygon: 25 reports nothing");
+    type_into(&mut fixture, "Sides", "101");
+    assert_eq!(host.borrow().settings.sides, 100, "polygon: 101 keeps 100");
+    assert_eq!(host.borrow().alerts.last().map(|a| a.range.clone()), Some(3.0..=100.0), "polygon: the alert names 3 to 100");
+}
