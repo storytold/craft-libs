@@ -3,8 +3,8 @@
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
-    AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
-    PathEdit, PathSelection, PathTool, SegmentMark,
+    AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandleStyle, HandlesShown, Knot,
+    KnotRef, PathEdit, PathOptionsSettings, PathSelection, PathTool, SegmentMark,
 };
 use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
@@ -180,6 +180,8 @@ struct State {
     handles: HandlesShown,
     anchors: AnchorsShown,
     segment_mark: SegmentMark,
+    /// The Path Options the overlay draws with.
+    options: PathOptionsSettings,
     rotation: f64,
     flip: bool,
     /// The canvas shows a document and keeps the view it reports, so page keys move it.
@@ -250,6 +252,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         handles: HandlesShown::Selected,
         anchors: AnchorsShown::All,
         segment_mark: SegmentMark::HandlesOnly,
+        options: PathOptionsSettings::default(),
         rotation: 0.0,
         flip: false,
         pans,
@@ -296,6 +299,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
                 .handles(st.handles)
                 .anchors(st.anchors)
                 .segment_mark(st.segment_mark)
+                .path_options(&st.options)
                 .show_at(ui, body.rect);
             if let (Some(tool), Some(pass)) = (st.canvas_tool, tool_pass(&body.env)) {
                 reply = Some(ToolHost::new().run(ui, &pass, &mut AnchorTool::new(tool)));
@@ -445,6 +449,21 @@ fn anchors_of_other_paths_draw_selected_and_stay_out_of_the_edit() {
     let listed = painted(sel(1, &[]).also(2, vec![kr(0)]));
     assert_eq!(listed, painted(sel(2, &[(0, 0)])), "a listed anchor fills as a selected one");
     assert_ne!(listed, painted(sel(1, &[])), "and differs from an unselected one");
+}
+
+// The Path Options' handle style shows: a solid handle end fills in the path's colour and a hollow one as an
+// unselected anchor, so the two look different.
+#[trial]
+fn solid_and_hollow_handle_ends_look_different() {
+    let painted_as = |style: HandleStyle| {
+        let mut h = two_paths();
+        h.update(|st| {
+            st.options.handles = style;
+            st.selection = sel(1, &[(0, 2)]);
+        });
+        format!("{:?}", h.fixture.frame_shapes())
+    };
+    assert_ne!(painted_as(HandleStyle::Solid), painted_as(HandleStyle::Hollow));
 }
 
 // One anchor selected over all paths shows its handles; one in each path is two, so none.

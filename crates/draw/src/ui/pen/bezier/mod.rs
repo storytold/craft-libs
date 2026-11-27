@@ -36,7 +36,7 @@ use kurbo::ParamCurve as _;
 use hit_test::{Shown, nearest_on_screen, other_handles, shown_handles};
 pub(crate) use mark::paint_mark;
 pub use mark::{AnchorsShown, HitMark, SegmentMark};
-use mark::{Fill, paint_handle, segment_path, stroke};
+use mark::{Fill, paint_dot, paint_handle, segment_path, stroke};
 pub use model::{AnchorDelete, EditPath, EditSubpath, HandleSide, Knot, KnotRef, PathEdit, PathSelection};
 pub use style::BezierStyle;
 pub use words::BezierWords;
@@ -1354,11 +1354,13 @@ impl Component for BezierOverlay<'_> {
         if let Some(side) = options.and_then(|options| options.anchor_size) {
             anchor_look.side = side;
         }
+        // A handle end is a dot as wide as the anchor square, a large one as wide as the anchor under the pointer.
         let mut control_look = style.control.clone();
-        if handle_style == HandleStyle::Large {
-            control_look.side = style.close.side;
-        }
-        let handle_fill = if handle_style == HandleStyle::Hollow { &style.anchor.fill } else { &style.control.fill };
+        control_look.side = if handle_style == HandleStyle::Large { style.close.side } else { anchor_look.side };
+        // A hollow end is filled as an unselected anchor and outlined; a solid or large one is a dot in the path's
+        // colour with no outline.
+        let hollow = handle_style == HandleStyle::Hollow;
+        let handle_fill = &style.anchor.fill;
         let circles = self.anchors == AnchorsShown::Curvature;
         // A direction handle: its line from the anchor and its end dot.
         let draw_end = |path: &EditPath, knot: KnotRef, end: Pos2, fill: Fill| {
@@ -1366,7 +1368,11 @@ impl Component for BezierOverlay<'_> {
                 let shape = PaintShape::Path(vec![view.to_screen(knot.anchor), end]);
                 stroke(&draw, &shape, StrokeWidth::Thin, path.color, style.line);
             }
-            paint_handle(&draw, &control_look, true, end, fill, path.color);
+            if hollow {
+                paint_handle(&draw, &control_look, true, end, fill, path.color);
+            } else {
+                paint_dot(&draw, &control_look, end, fill, path.color);
+            }
         };
         // The path's thickness is a document width; without one the lines take the theme's widths. A path with a
         // thickness and no colour of its own keeps that width in the theme's line colour.
@@ -1408,11 +1414,15 @@ impl Component for BezierOverlay<'_> {
             let path = &paths[item.path];
             match item.kind {
                 Kind::Handle(_) => {
-                    let fill = Fill::Style(if cx.part_if_declared(item.part()).is_some() {
-                        cx.resolve_part(item.part(), handle_fill)
+                    let fill = if !hollow {
+                        Fill::Path(style.line)
                     } else {
-                        cx.resolve(handle_fill)
-                    });
+                        Fill::Style(if cx.part_if_declared(item.part()).is_some() {
+                            cx.resolve_part(item.part(), handle_fill)
+                        } else {
+                            cx.resolve(handle_fill)
+                        })
+                    };
                     draw_end(path, item.knot, item.at, fill);
                 }
                 Kind::Anchor if item.shown => {
@@ -1434,7 +1444,8 @@ impl Component for BezierOverlay<'_> {
         if !circles {
             for (at, path) in paths.iter().enumerate() {
                 for shown in other_handles(paths, at, self.selection, self.handles, &view) {
-                    draw_end(path, shown.knot, shown.at, Fill::Style(cx.resolve(handle_fill)));
+                    let fill = if hollow { Fill::Style(cx.resolve(handle_fill)) } else { Fill::Path(style.line) };
+                    draw_end(path, shown.knot, shown.at, fill);
                 }
             }
         }

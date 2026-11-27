@@ -16,7 +16,7 @@ pub struct BezierStyle {
     pub(crate) halo: StyleColor,
     /// An anchor: a hollow square.
     pub(crate) anchor: HandleLook,
-    /// The end of a direction handle.
+    /// The end of a direction handle: its size and outline. Its fill follows the Path Options' handle style.
     pub(crate) control: HandleLook,
     /// The anchor or handle end under the pointer, which a click would take.
     pub(crate) close: HandleLook,
@@ -35,8 +35,7 @@ impl BezierStyle {
         let overlay = &tokens.color.overlay;
         let mut anchor = cx.handle();
         anchor.side = tokens.size.handle.sm;
-        let mut control = anchor.clone();
-        control.fill = cx.handle().fill;
+        let control = anchor.clone();
         let close = cx.handle();
         BezierStyle {
             metrics: Metrics::new(),

@@ -88,6 +88,18 @@ pub(super) fn paint_handle(draw: &Draw<'_>, look: &HandleLook, circle: bool, at:
     }
 }
 
+/// A solid handle end centred on `at`: a dot of the look's side filled with `fill`, with no outline.
+pub(super) fn paint_dot(draw: &Draw<'_>, look: &HandleLook, at: Pos2, fill: Fill, color: Option<Srgba>) {
+    let shape = PaintShape::Circle(at, look.side / 2.0);
+    match fill {
+        Fill::Style(fill) => draw.fill(&shape, fill),
+        Fill::Path(fallback) => match color {
+            Some(color) => draw.data_fill(&shape, DataColor::new(color.into())),
+            None => draw.fill(&shape, fallback),
+        },
+    }
+}
+
 /// How a handle is filled.
 #[derive(Clone, Copy)]
 pub(super) enum Fill {
