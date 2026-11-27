@@ -12,7 +12,7 @@
 use super::length::{DocUnit, length_field, shown};
 use super::ruler::{MAX_POSITION, SAME_POSITION, TabAlign, TabLeader, TabStop};
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, ItemSource, Mixed, Selection, SelectionChange};
-use craft_theme::variant::Variant;
+use craft_theme::variant::{Tone, Variant};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnSpec, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked,
@@ -21,6 +21,7 @@ use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, 
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::list::ListRow;
+use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, Units};
 use craft_ui::runtime::focus::{self, FocusTarget};
@@ -303,17 +304,32 @@ impl TabStopsDialog {
         self.body(ui, &words, &units);
     }
 
-    /// Whether a stop's position is being edited in place, where Enter ends the edit.
+    /// Whether a stop's position is being edited in place, where Enter and Escape end the edit.
     pub(crate) fn editing(&self) -> bool {
-        self.edited.is_some()
+        self.edited.is_some() || self.draft.is_some()
     }
 
-    /// The bare content: the body above Cancel and OK at its end; the button picked, if any.
-    fn show_bare(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units, labels: [Label; 2], waiting: bool) -> Option<usize> {
+    /// The bare content: the body and a refused answer's reason above Cancel and OK at its end; the button picked, if
+    /// any.
+    fn show_bare(
+        &mut self,
+        ui: &mut Ui,
+        words: &TabStopsWords,
+        units: &Units,
+        labels: [Label; 2],
+        waiting: bool,
+        refusal: Option<Label>,
+    ) -> Option<usize> {
         let mut picked = None;
+        // The body applies this pass's edits before the keys are read: the state before it says whether a key ended an
+        // edit, the state after whether one began.
+        let editing = self.editing();
         ui.vertical(|ui| {
             ui.set_width(BARE_WIDTH);
             self.body(ui, words, units);
+            if let Some(reason) = refusal {
+                Notice::new(Tone::Bad, reason).layout(NoticeLayout::Inline).show(ui);
+            }
             ui.add_space(BARE_GAP);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 // Right to left: OK at the end, Cancel before it.
@@ -326,10 +342,13 @@ impl TabStopsDialog {
                 }
             });
         });
+        let editing = editing || self.editing();
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
+            // An Enter or Escape that begins or ends a position edit is the edit's.
+            _ if editing => None,
             (_, true) => Some(CANCEL),
-            (true, _) if !waiting && self.edited.is_none() => Some(OK),
+            (true, _) if !waiting => Some(OK),
             _ => None,
         })
     }
@@ -356,7 +375,7 @@ impl TabStopsDialog {
     }
 
     /// Whether the stops, the cleared positions and the interval are those of `result`.
-    fn matches(&self, result: &TabStopsResult) -> bool {
+    pub(crate) fn matches(&self, result: &TabStopsResult) -> bool {
         self.stops == result.stops && self.cleared_positions() == result.cleared && self.default_interval == result.default_interval
     }
 }
@@ -384,7 +403,8 @@ impl StackDialog for TabStopsDialog {
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
         ];
         if self.bare {
-            let picked = self.show_bare(ui, &words, &units, [common.ok.clone(), common.cancel.clone()], waiting);
+            let notice = refused.as_ref().filter(|(_, result)| self.matches(result)).map(|(reason, _)| reason.clone());
+            let picked = self.show_bare(ui, &words, &units, [common.ok.clone(), common.cancel.clone()], waiting, notice);
             // A refused result stands until the stops change, as in the dialog.
             if refused.as_ref().is_some_and(|(_, result)| !self.matches(result)) {
                 self.held.clear_refusal();

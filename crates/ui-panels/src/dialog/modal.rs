@@ -169,8 +169,10 @@ impl<'a> Dialog<'a> {
 
     /// Shows only the dialog's content in the flow of its parent: the body, its refusal notice and the buttons, without
     /// the surface, the title row or the close action. For a dialog in a window of its own, which has those
-    /// (`DialogHost::run_windowed`). Escape still cancels and Enter still answers, through a dialog focus scope. Call it
-    /// last: [`overlay`](Dialog::overlay) and [`viewport`](Dialog::viewport) mount the dialog again.
+    /// (`DialogHost::run_windowed`). Escape still cancels and Enter still answers, through a dialog focus scope. Enter
+    /// answers through an enabled `Accept` button only: without one, [`close_on_enter`](Dialog::close_on_enter) has no
+    /// overlay to close and Enter does nothing; the window's close action stays. Call it last:
+    /// [`overlay`](Dialog::overlay) and [`viewport`](Dialog::viewport) mount the dialog again.
     #[must_use]
     pub fn bare(mut self) -> Self {
         self.bare = true;
@@ -244,7 +246,7 @@ impl<'a> Dialog<'a> {
     /// Whether Enter, pressed with the focus inside and left untaken by the focused part, is the OK of the dialog.
     /// With an enabled `Accept` button in the footer, Enter activates that button, so a click and Enter take the same
     /// way (`close_guard` included) and `DialogOutput::picked` says so. Without one, Enter closes the dialog with
-    /// `CloseReason::Enter`.
+    /// `CloseReason::Enter`, except in a [`bare`](Dialog::bare) dialog, which has no overlay to close.
     #[must_use]
     pub fn close_on_enter(mut self, on: bool) -> Self {
         self.enter = on;

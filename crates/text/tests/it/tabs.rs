@@ -144,3 +144,44 @@ fn a_bare_tabs_dialog_has_no_close_box_of_its_own_and_ok_answers() {
     press(&mut fixture, "OK");
     assert!(result.borrow().is_some(), "OK answered");
 }
+
+/// In the bare dialog the Enter or Escape that ends a stop's position edit ends only the edit: the dialog stays open, an
+/// Enter keeps the typed position and an Escape the one the edit began from.
+#[trial]
+fn a_key_that_ends_a_position_edit_in_the_bare_dialog_does_not_settle_it() {
+    let stops = vec![stop(72.0, TabAlign::Left, TabLeader::None)];
+    let (mut fixture, _, result) = shown(TabStopsDialog::new(stops.clone(), 36.0).bare(true));
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("108").key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(result.borrow().is_none(), "the Enter that ends the edit does not answer");
+    press(&mut fixture, "OK");
+    let answer = result.borrow().clone().expect("OK answered");
+    assert_eq!(answer.stops, vec![stop(108.0, TabAlign::Left, TabLeader::None)], "the edit kept the typed position");
+
+    let cancelled = Rc::new(RefCell::new(false));
+    let dialog = Rc::new(RefCell::new(TabStopsDialog::new(stops, 36.0).bare(true)));
+    let (shown, seen) = (dialog.clone(), cancelled.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        if let Some(DialogResult::Cancel) = shown.borrow_mut().show(ui, &DialogStack::default()) {
+            *seen.borrow_mut() = true;
+        }
+    });
+    fixture.idle(30);
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("108").key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(!*cancelled.borrow(), "the Escape that ends the edit does not cancel the dialog");
+    assert_eq!(dialog.borrow_mut().result().stops, vec![stop(72.0, TabAlign::Left, TabLeader::None)], "Escape restored the position");
+}
+
+/// A bare dialog's refused answer shows its reason, as the framed dialog does, until a value changes.
+#[trial]
+fn a_bare_dialog_shows_a_refusal_until_a_value_changes() {
+    let (mut fixture, dialog, _) = shown(TabStopsDialog::new(Vec::new(), 36.0).held_ok().bare(true));
+    press(&mut fixture, "OK");
+    assert!(dialog.borrow_mut().take_ok().is_some(), "OK filed its result");
+    dialog.borrow_mut().answer_ok(Err("Not allowed".into()));
+    fixture.idle(4);
+    assert!(fixture.by_label("Not allowed").is_some(), "the refusal is shown");
+    press(&mut fixture, "Set");
+    assert!(fixture.by_label("Not allowed").is_none(), "an edit ends the refusal");
+}

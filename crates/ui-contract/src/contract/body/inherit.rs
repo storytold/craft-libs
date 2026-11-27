@@ -115,6 +115,12 @@ impl BodyHooks<'_> {
         scoped.flow_body = None;
         scoped.column_row =
             self.in_column && matches!(props.layout, crate::layout::BodyLayout::Row { wrap: false, align: crate::layout::RowAlign::Start });
+        // Children side by side share the layer's width, so none of them spans it: a collection in a row or a grid takes
+        // its own content width, not the layer's floor. Only a floor that is set is cleared, so the bodies of rows
+        // outside a layer share their scope and memo key with their parent's.
+        if !matches!(props.layout, crate::layout::BodyLayout::Stack) && scoped.values.get::<crate::contract::overlay::LayerFloor>().0 != 0.0 {
+            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor(0.0));
+        }
         // A bracketed row's rows report to it up to the first labelled container, whose body is its own control.
         if props.bracket.is_some() {
             scoped.bracket = Some(layout);

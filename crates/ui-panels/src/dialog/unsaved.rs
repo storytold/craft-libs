@@ -54,6 +54,9 @@ impl Outcome for UnsavedChangesOutput {
 /// guard has more documents, an "Apply to All" check box. Windows and Linux ask Yes, No and Cancel. Reverting asks
 /// Revert and Cancel; Revert answers `CloseAnswer::DontSave`.
 ///
+/// The node has the alert-dialog role (`Role::ALERT_DIALOG`), described by the consequence message and any save
+/// failure reason.
+///
 /// The result is `Ok(UnsavedAnswer)` for every answer, Cancel included (the guard needs it), and
 /// `DialogResult::Cancel` only when the host closed the dialog from outside.
 #[derive(crate::contract::Pattern)]
@@ -164,7 +167,7 @@ impl UnsavedChangesDialog {
         let replies = self.replies(&words, common.cancel.clone(), env.view().shell().os);
         let answers: Vec<CloseAnswer> = replies.iter().map(|(answer, _)| *answer).collect();
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
-        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
+        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).alert().answers(buttons(&env, replies));
         if let Some(reason) = &self.reason {
             prompt = prompt.tone(Tone::Bad, reason.clone());
         }

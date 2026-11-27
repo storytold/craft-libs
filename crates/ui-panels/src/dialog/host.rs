@@ -617,7 +617,9 @@ impl DialogHost {
                 ctx.data_mut(|m| m.insert_temp(viewport.0, want));
                 ctx.request_repaint();
             }
-            if let Some(child) = child {
+            // As in `run`: a dialog that finished or whose window closed would close its child with it, so its request
+            // is dropped.
+            if let Some(child) = child.filter(|_| result.is_none() && !close) {
                 self.open_with_parent(child, Some(id));
             }
             match result {

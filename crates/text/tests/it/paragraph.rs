@@ -120,3 +120,42 @@ fn a_tabs_page_replaces_the_button_and_ok_answers_its_stops() {
     assert!(!tabs.stops.is_empty(), "the stop set on the page is in the answer");
     assert!(!answer.open_tabs, "no second dialog is asked for");
 }
+
+/// A Tabs page on a dialog without Word's pages has no strip to reach it, so the Tabs… button stays.
+#[trial]
+fn a_tabs_page_without_the_word_pages_keeps_the_tabs_button() {
+    let dialog = ParagraphDialog::new(ParagraphFormat::default()).held_ok().bare(true).tabs_page(TabStopsDialog::new(Vec::new(), 36.0));
+    let dialog = Rc::new(RefCell::new(dialog));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    let tabs = fixture.by_label("Tabs…").expect("the Tabs… button stays");
+    fixture.click(&tabs).idle(4);
+    assert!(dialog.borrow_mut().take_ok().expect("Tabs… filed its answer").open_tabs, "Tabs… asks for the Tabs dialog");
+}
+
+/// A bare dialog's refused answer shows its reason until a field changes; a stop set on the Tabs page is a change.
+#[trial]
+fn a_bare_dialog_shows_a_refusal_until_a_stop_changes() {
+    let format = ParagraphFormat { breaks: Some(LineBreakOptions::default()), asian: Some(AsianTypography::default()), ..ParagraphFormat::default() };
+    let dialog = ParagraphDialog::new(format).word(true).held_ok().bare(true).tabs_page(TabStopsDialog::new(Vec::new(), 36.0));
+    let dialog = Rc::new(RefCell::new(dialog));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    let ok = fixture.by_label("OK").expect("OK is shown");
+    fixture.click(&ok).idle(4);
+    assert!(dialog.borrow_mut().take_ok().is_some(), "OK filed its answer");
+    dialog.borrow_mut().answer_ok(Err("Not allowed".into()));
+    fixture.idle(4);
+    assert!(fixture.by_label("Not allowed").is_some(), "the refusal is shown");
+    let page = fixture.by_label("Tabs").expect("the Tabs page's tab is shown");
+    fixture.click(&page).idle(4);
+    let set = fixture.by_label("Set").expect("the Tabs page shows the stops' buttons");
+    fixture.click(&set).idle(4);
+    assert!(fixture.by_label("Not allowed").is_none(), "a stop set on the page ends the refusal");
+}
