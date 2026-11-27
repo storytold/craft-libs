@@ -210,3 +210,10 @@ fn an_empty_row_group_reads() {
     let table = read(&bytes).unwrap();
     assert_eq!(table.rows, vec![vec![Value::Text("a".into()), Value::Float(1.5)]; 2]);
 }
+
+#[test]
+fn the_largest_column_limit_still_reads() {
+    let bytes = write_rows(&[vec![Cell::Text("a"), Cell::Number(1.0), Cell::Bool(true)]]).unwrap();
+    let table = super::read(&bytes, &TableLimits { max_columns: u32::MAX, ..LIMITS }).unwrap();
+    assert_eq!(table.rows.len(), 1);
+}

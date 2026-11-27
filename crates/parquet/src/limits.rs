@@ -71,7 +71,7 @@ impl<'a> Compact<'a> {
             let kind = header & 15;
             if matches!(context, Context::Footer) && id == 2 && kind == 9 {
                 let (n, element) = self.collection()?;
-                if element != 12 || n == 0 || n > self.limits.max_columns as usize + 1 {
+                if element != 12 || n == 0 || n > (self.limits.max_columns as usize).saturating_add(1) {
                     return Err(invalid("Invalid or oversized Parquet schema"));
                 }
                 for i in 0..n {
