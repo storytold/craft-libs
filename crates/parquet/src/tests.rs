@@ -212,6 +212,29 @@ fn an_empty_row_group_reads() {
 }
 
 #[test]
+fn a_row_callback_error_stops_the_read() {
+    let bytes = write("test", &NAMES, 64, |row, col| Ok(if col == 1 { Cell::Number(f64::from(row)) } else { Cell::<&str>::Empty })).unwrap();
+    for owned in [false, true] {
+        let mut calls = 0;
+        let on_row = |_: &[Value]| {
+            calls += 1;
+            if calls == 2 { Err(invalid("caller cancelled")) } else { Ok(()) }
+        };
+        let error =
+            if owned { super::read_owned_rows(bytes.clone(), &LIMITS, on_row) } else { super::read_rows(&bytes, &LIMITS, on_row) }.unwrap_err();
+        assert_eq!(error.to_string(), "caller cancelled");
+        assert_eq!(calls, 2);
+    }
+    let mut calls = 0;
+    let summary = super::read_rows(&bytes, &LIMITS, |_| {
+        calls += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!((summary.rows, calls), (64, 64));
+}
+
+#[test]
 fn the_largest_column_limit_still_reads() {
     let bytes = write_rows(&[vec![Cell::Text("a"), Cell::Number(1.0), Cell::Bool(true)]]).unwrap();
     let table = super::read(&bytes, &TableLimits { max_columns: u32::MAX, ..LIMITS }).unwrap();

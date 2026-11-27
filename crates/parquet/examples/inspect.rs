@@ -10,7 +10,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_bytes = bytes.len();
     let limits = craft_parquet::TableLimits { max_rows: 1_048_575, max_columns: 16_384, max_cells: 5_000_000 };
     let mut values = 0u64;
-    let on_row = |row: &[craft_parquet::Value]| values += row.iter().filter(|v| **v != craft_parquet::Value::Null).count() as u64;
+    let on_row = |row: &[craft_parquet::Value]| {
+        values += row.iter().filter(|v| **v != craft_parquet::Value::Null).count() as u64;
+        Ok(())
+    };
     let summary = if owned { craft_parquet::read_owned_rows(bytes, &limits, on_row)? } else { craft_parquet::read_rows(&bytes, &limits, on_row)? };
     println!(
         "input_bytes={} rows={} columns={} values={} seconds={:.3}",

@@ -12,7 +12,7 @@ binary64 precision into text, or a column into a header row is the caller's work
 | Function | What it does |
 |---|---|
 | `is_parquet(bytes)` | `PAR1` or `PARE` at the start, whatever the file's extension |
-| `read_rows(bytes, limits, on_row)` | one callback per row of `Value`s, after every metadata check has passed; returns the field names and the row count; copies the input |
+| `read_rows(bytes, limits, on_row)` | one callback per row of `Value`s, after every metadata check has passed; an error the callback returns stops the read and comes back to the caller; returns the field names and the row count; copies the input |
 | `read_owned_rows(bytes, limits, on_row)` | the same, handing the owned `Vec<u8>` to the decoder without a second full-file copy |
 | `read(bytes, limits)`, `read_owned(bytes, limits)` | the same, collected into a `Table` (a second copy of the data) |
 

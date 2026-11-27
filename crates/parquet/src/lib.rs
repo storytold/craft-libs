@@ -96,22 +96,19 @@ pub struct Table {
 }
 
 /// Reads a borrowed buffer, calling `on_row` once per row after every check on the file's
-/// metadata has passed. Call [`read_owned_rows`] when the input is already owned to avoid a copy.
-pub fn read_rows(bytes: &[u8], limits: &TableLimits, mut on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
+/// metadata has passed. An error from `on_row` stops the read at once and comes back unchanged,
+/// so a caller can cancel or refuse a row. Call [`read_owned_rows`] when the input is already
+/// owned to avoid a copy.
+pub fn read_rows(bytes: &[u8], limits: &TableLimits, on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
     let footer_start = limits::footer(bytes, limits)?;
-    read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, |row| {
-        on_row(row);
-        Ok(())
-    })
+    read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, on_row)
 }
 
 /// Reads an owned buffer, transferring its allocation to the decoder without copying its payload.
-pub fn read_owned_rows(bytes: Vec<u8>, limits: &TableLimits, mut on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
+/// `on_row` works as in [`read_rows`].
+pub fn read_owned_rows(bytes: Vec<u8>, limits: &TableLimits, on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
     let footer_start = limits::footer(&bytes, limits)?;
-    read_buffer(Bytes::from(bytes), footer_start, limits, |row| {
-        on_row(row);
-        Ok(())
-    })
+    read_buffer(Bytes::from(bytes), footer_start, limits, on_row)
 }
 
 /// Reads a borrowed buffer into a [`Table`]. The table holds a second copy of the data; callers
