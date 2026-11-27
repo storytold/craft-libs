@@ -35,7 +35,7 @@ pub(super) enum ListAction {
     Check(EffectId, bool),
     /// An absent effect is added when checked and removed again if its sweep is cancelled.
     CheckAbsent(EffectKind, bool),
-    /// A click on an absent effect's row, or `+`: [`LayerStyleDraft::add_instance`].
+    /// A click on an absent effect's row, or `+`: [`LayerStyleDraft::try_add_instance`].
     Add(EffectKind),
     /// `−`: [`LayerStyleDraft::remove_instance`].
     Remove(EffectId),

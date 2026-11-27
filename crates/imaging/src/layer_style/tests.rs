@@ -156,12 +156,12 @@ fn adding_stops_at_the_specs_limit() {
     let max = spec.max_instances.expect("Drop Shadow has a limit");
     let mut draft = shadows(1);
     for _ in 0..=max {
-        draft.add_instance(&spec);
+        draft.try_add_instance(&spec);
     }
     assert_eq!(drop_shadows(&draft), max);
     assert!(!draft.can_add(&spec));
     let page = draft.page;
-    assert_eq!(draft.add_instance(&spec), None);
+    assert_eq!(draft.try_add_instance(&spec), None);
     assert_eq!(draft.page, page, "a refused add keeps the page");
     draft.open_on(EffectKind::DropShadow);
     assert_eq!(drop_shadows(&draft), max);
@@ -175,8 +175,8 @@ fn removing_one_at_the_limit_lets_one_more_in() {
     let mut draft = shadows(max as u32);
     draft.remove_instance(EffectId(1));
     assert!(draft.can_add(&spec));
-    assert!(draft.add_instance(&spec).is_some());
-    assert_eq!(draft.add_instance(&spec), None);
+    assert!(draft.try_add_instance(&spec).is_some());
+    assert_eq!(draft.try_add_instance(&spec), None);
     assert_eq!(drop_shadows(&draft), max);
 }
 
@@ -186,7 +186,7 @@ fn a_style_over_the_limit_keeps_every_instance() {
     let spec = EffectSpec::photoshop(EffectKind::DropShadow);
     let max = spec.max_instances.expect("Drop Shadow has a limit");
     let mut draft = shadows(max as u32 + 2);
-    assert_eq!(draft.add_instance(&spec), None);
+    assert_eq!(draft.try_add_instance(&spec), None);
     draft.open_on(EffectKind::DropShadow);
     assert_eq!(drop_shadows(&draft), max + 2);
 }
@@ -199,11 +199,11 @@ fn kinds_without_a_limit_keep_adding() {
     for kind in [EffectKind::Stroke, EffectKind::InnerShadow, EffectKind::ColorOverlay, EffectKind::GradientOverlay] {
         let spec = EffectSpec::photoshop(kind);
         for _ in 0..12 {
-            assert!(draft.add_instance(&spec).is_some(), "{kind:?} is not limited");
+            assert!(draft.try_add_instance(&spec).is_some(), "{kind:?} is not limited");
         }
         assert_eq!(draft.style.instances(kind).count(), 12);
     }
     let unlimited = EffectSpec { max_instances: None, ..EffectSpec::photoshop(EffectKind::DropShadow) };
-    assert!(draft.add_instance(&unlimited).is_some());
+    assert!(draft.try_add_instance(&unlimited).is_some());
     assert_eq!(drop_shadows(&draft), 11);
 }
