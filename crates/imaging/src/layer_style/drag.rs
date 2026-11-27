@@ -20,8 +20,10 @@ impl ShadowDrag {
 
     /// The `(angle, distance)` after the pointer moved `total` document pixels since the press:
     /// the start offset plus `total`; the distance is its length rounded to a whole pixel and
-    /// clamped to 0..=30000; the angle `atan2(oy, −ox)` in whole degrees, or the start angle while
-    /// the new offset is shorter than 0.5 px. `None` when the result is not finite.
+    /// clamped to 0..=30000; the angle `atan2(oy, −ox)` with its fraction cut off, as the
+    /// reference application does (photocraft#14894: 133.6° gives 133°), or the start angle while
+    /// the new offset is shorter than 0.5 px. An angle below 0°, which the reference was not
+    /// measured at, still rounds to the nearest degree. `None` when the result is not finite.
     pub fn moved(self, total: [f64; 2]) -> Option<(f64, f64)> {
         // pc: crates/ui-egui/src/dialogs/layer_style.rs:517-527 `drag_shadow`.
         let a = self.start_angle.to_radians();
@@ -30,9 +32,14 @@ impl ShadowDrag {
         if !d.is_finite() {
             return None;
         }
-        let angle = if d >= 0.5 { oy.atan2(-ox).to_degrees().round() } else { self.start_angle };
+        let angle = if d >= 0.5 { whole_degrees(oy.atan2(-ox).to_degrees()) } else { self.start_angle };
         Some((angle, d.round().clamp(0.0, 30000.0)))
     }
+}
+
+/// A dragged shadow's angle in whole degrees: the fraction cut off from 0° up, rounded below 0°.
+fn whole_degrees(degrees: f64) -> f64 {
+    if degrees >= 0.0 { degrees.trunc() } else { degrees.round() }
 }
 
 /// The largest offset a Gradient Overlay drag writes, in layer sizes, either way.
