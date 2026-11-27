@@ -137,12 +137,11 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
     if let Some(t) = ch.child(Local("title")) {
         c.title = Some(rich_text(t).unwrap_or_else(|| "Chart Title".into()));
     }
-    if ch.child(Local("autoTitleDeleted")).and_then(|a| a.attr_local("val").and_then(value::to_bool)) == Some(true) {
+    if on(ch.child(Local("autoTitleDeleted"))) {
         c.title = None;
     }
     c.legend = ch.child(Local("legend")).map(|l| l.child(Local("legendPos")).and_then(|c| c.attr_local("val")).unwrap_or("r").to_string());
-    c.legend_overlay =
-        ch.child(Local("legend")).and_then(|l| l.child(Local("overlay"))).and_then(|o| o.attr_local("val").and_then(value::to_bool)).unwrap_or(false);
+    c.legend_overlay = on(ch.child(Local("legend")).and_then(|l| l.child(Local("overlay"))));
     c.legend_entries = legend_entries(ch.child(Local("legend")));
     c.chart_fill = simple_fill(root.child(Local("spPr")));
     c.plot_fill = simple_fill(pa.child(Local("spPr")));
@@ -351,7 +350,7 @@ fn read_error_bars(s: &El, kind: ChartType, budget: &mut usize) -> Option<ErrorB
             .unwrap_or(d.value),
         plus: e.child(Local("plus")).map(|p| numbers(p, budget)).unwrap_or_default(),
         minus: e.child(Local("minus")).map(|p| numbers(p, budget)).unwrap_or_default(),
-        end_cap: e.child(Local("noEndCap")).and_then(|v| v.attr_local("val").and_then(value::to_bool)) != Some(true),
+        end_cap: !on(e.child(Local("noEndCap"))),
     })
 }
 
@@ -363,7 +362,7 @@ fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categorie
         name: s.child(Local("tx")).map(|t| strings(t, budget)).and_then(|v| v.into_iter().next()).unwrap_or_default(),
         fill: simple_fill(s.child(Local("spPr"))),
         line: simple_line(s.child(Local("spPr"))),
-        smooth: s.child(Local("smooth")).and_then(|v| v.attr_local("val").and_then(value::to_bool)).unwrap_or(false),
+        smooth: on(s.child(Local("smooth"))),
         marker: s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")).filter(|m| *m != "none").map(String::from),
         kind: Some(kind),
         secondary_axis: secondary,
@@ -456,10 +455,7 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
         n => source_format(a).or_else(|| n.and_then(|n| n.attr_local("formatCode")).map(str::to_string)),
     };
     // `c:tickLblPos val="none"` hides the labels just as `c:delete` does.
-    let deleted = |a: &El| {
-        a.child(Local("delete")).and_then(|d| d.attr_local("val").and_then(value::to_bool)) == Some(true)
-            || a.child(Local("tickLblPos")).and_then(|c| c.attr_local("val")) == Some("none")
-    };
+    let deleted = |a: &El| on(a.child(Local("delete"))) || a.child(Local("tickLblPos")).and_then(|c| c.attr_local("val")) == Some("none");
     // A gridline whose `c:spPr/a:ln` has `a:noFill` is not drawn, though the element is there.
     let grid = |a: &El, k: &str| {
         a.child(Local(k))
@@ -551,6 +547,12 @@ fn read_text_styles(c: &mut Chart, root: &El, ch: &El, val_ax: Option<&El>, cat_
         .and_then(|t| text_size(t.child(Local("tx")).and_then(|x| x.child(Local("rich")))).or_else(|| text_size(t.child(Local("txPr")))));
 }
 
+/// A `CT_Boolean` element: on when it is there, with `val` true or no `val` (the schema's
+/// default is true); off when it is missing or its `val` is false.
+fn on(e: Option<&El>) -> bool {
+    e.is_some_and(|e| e.attr_local("val").and_then(value::to_bool).unwrap_or(true))
+}
+
 fn trend_num(e: &El, k: &str) -> Option<f64> {
     e.child(Local(k)).and_then(|c| c.attr_local("val")).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && v.abs() <= 1.0e12)
 }
@@ -581,8 +583,8 @@ fn trendline(e: &El) -> Option<Trendline> {
         forward: trend_num(e, "forward"),
         backward: trend_num(e, "backward"),
         intercept: trend_num(e, "intercept"),
-        disp_eq: e.child(Local("dispEq")).and_then(|d| d.attr_local("val").and_then(value::to_bool)).unwrap_or(false),
-        disp_r_sqr: e.child(Local("dispRSqr")).and_then(|d| d.attr_local("val").and_then(value::to_bool)).unwrap_or(false),
+        disp_eq: on(e.child(Local("dispEq"))),
+        disp_r_sqr: on(e.child(Local("dispRSqr"))),
     })
 }
 
@@ -907,6 +909,29 @@ mod tests {
         assert!(t[0].disp_eq && t[0].disp_r_sqr);
         assert_eq!((t[1].kind, t[1].order), (TrendlineType::Poly, Some(6)));
         assert_eq!((t[2].kind, t[2].period), (TrendlineType::MovingAvg, Some(3)));
+    }
+
+    /// A `CT_Boolean` element with no `val` is on, as `val="1"` is: the schema's default is
+    /// true (#3828).
+    #[test]
+    fn a_bare_boolean_element_reads_as_true() {
+        // Every flag element below gets the same `val` (or none).
+        let xml = |v: &str| {
+            format!(
+                r#"<c:chartSpace xmlns:c="{NS_C}" xmlns:a="{NS_A}"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Mine</a:t></a:r></a:p></c:rich></c:tx></c:title><c:autoTitleDeleted{v}/><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:trendline><c:trendlineType val="linear"/><c:dispRSqr{v}/><c:dispEq{v}/></c:trendline><c:errBars><c:errBarType val="plus"/><c:errValType val="percentage"/><c:noEndCap{v}/><c:val val="20"/></c:errBars><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val><c:smooth{v}/></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:delete{v}/><c:crossAx val="1"/></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/><c:overlay{v}/></c:legend></c:chart></c:chartSpace>"#
+            )
+        };
+        // The part's own XML, kept for an unedited save, differs; nothing read from it may.
+        let read = |v: &str| Chart { raw: None, ..read_chart_xml(xml(v).as_bytes()).unwrap() };
+        let flags = |c: &Chart| {
+            let s = &c.series[0];
+            let e = s.error_bars.as_ref().unwrap();
+            let t = &s.trendlines[0];
+            [c.title.is_none(), c.legend_overlay, s.smooth, !e.end_cap, t.disp_eq, t.disp_r_sqr, c.y_hidden]
+        };
+        assert_eq!(flags(&read(r#" val="1""#)), [true; 7], "val=\"1\" turns each on");
+        assert_eq!(flags(&read(r#" val="0""#)), [false; 7], "val=\"0\" turns each off");
+        assert_eq!(read(""), read(r#" val="1""#), "a bare element reads as val=\"1\"");
     }
 
     const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
