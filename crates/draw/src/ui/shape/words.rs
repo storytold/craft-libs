@@ -62,12 +62,14 @@ craft_ui::words! {
         set_as_default: "shape.setAsDefault" = "Set as default";
         /// The tooltip of that check box.
         set_as_default_tip: "shape.setAsDefaultTip" = "Use these settings for new arrows";
-        /// The Rectangle gear's button: its accessible name and tooltip.
+        /// The shape gear's button: its accessible name and tooltip.
         shape_options: "shape.shapeOptions" = "Set additional shape and path options";
         /// The gear's radio that draws the dragged box.
         unconstrained: "shape.unconstrained" = "Unconstrained";
         /// The gear's radio that draws a square.
         square: "shape.square" = "Square";
+        /// The Triangle gear's radio in Square's place: the equilateral triangle in the square's circle.
+        equilateral: "shape.equilateral" = "Equilateral";
         /// The gear's radio that draws a box of a fixed width and height.
         fixed_size: "shape.fixedSize" = "Fixed Size";
         /// The gear's radio that draws a box of a fixed width to height ratio.

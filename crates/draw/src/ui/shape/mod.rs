@@ -271,7 +271,7 @@ impl ShapeChange {
 }
 
 /// The Shape tools' persisted options-bar values (Fill on, radius, sides, star ratio, weight,
-/// stroke width, the Rectangle's gear); the paints are the app's foreground and background.
+/// stroke width, the Rectangle's and the Triangle's gears); the paints are the app's foreground and background.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -292,11 +292,13 @@ pub struct ShapeToolSettings {
     pub arrowheads: Arrowheads,
     /// The Rectangle's gear ([`BoxConstraintsPopover`]).
     pub rect_box: BoxConstraints,
+    /// The Triangle's gear, its own value.
+    pub triangle_box: BoxConstraints,
 }
 
 impl Default for ShapeToolSettings {
     /// Fill on, square corners, 5 sides, a star ratio of 0.5 (production's Star), weight 3, no stroke, no
-    /// arrowheads, an unconstrained Rectangle.
+    /// arrowheads, an unconstrained Rectangle and Triangle.
     fn default() -> Self {
         ShapeToolSettings {
             fill_on: true,
@@ -307,17 +309,20 @@ impl Default for ShapeToolSettings {
             stroke_width: 0.0,
             arrowheads: Arrowheads::default(),
             rect_box: BoxConstraints::default(),
+            triangle_box: BoxConstraints::default(),
         }
     }
 }
 
 impl ShapeToolSettings {
-    /// The drag options of `kind` with these values; the gear's constraints apply to the Rectangle only.
+    /// The drag options of `kind` with these values; the Rectangle and the Triangle take their own gear's constraints,
+    /// the other kinds none.
     pub fn drag_options(&self, kind: ShapeKind) -> ShapeDragOptions {
         let options =
             ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight);
         match kind {
             ShapeKind::Rectangle => options.constraints(self.rect_box),
+            ShapeKind::Triangle => options.constraints(self.triangle_box),
             _ => options,
         }
     }

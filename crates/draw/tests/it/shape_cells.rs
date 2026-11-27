@@ -234,14 +234,19 @@ struct GearHost {
     alerts: Vec<RangeAlert>,
 }
 
-/// A fixture with the gear open over `value`.
+/// A fixture with the Rectangle's gear open over `value`.
 fn gear(value: BoxConstraints) -> (Fixture, Rc<RefCell<GearHost>>) {
+    gear_of(ShapeKind::Rectangle, value)
+}
+
+/// A fixture with the gear of the `kind` tool open over `value`.
+fn gear_of(kind: ShapeKind, value: BoxConstraints) -> (Fixture, Rc<RefCell<GearHost>>) {
     let host = Rc::new(RefCell::new(GearHost { value, open: false, alerts: Vec::new() }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let mut held = shown.borrow_mut();
         let GearHost { value, open, alerts } = &mut *held;
-        let out = BoxConstraintsPopover::new(Bind::given(*value), Bind::bound(open), 72.0).show(ui);
+        let out = BoxConstraintsPopover::new(Bind::given(*value), Bind::bound(open), 72.0).kind(kind).show(ui);
         if let Some(next) = out.edits.iter().rev().find_map(|event| event.value()) {
             *value = *next;
         }
@@ -272,6 +277,53 @@ fn the_gear_enables_only_the_chosen_sizes_and_escape_keeps_the_pick() {
     fixture.key(Key::Escape, Modifiers::NONE).settle();
     assert!(!host.borrow().open, "Escape closes the gear");
     assert_eq!(host.borrow().value.constraint, BoxConstraint::FixedSize, "Escape keeps the pick");
+}
+
+/// The number the field named `label` shows; `None` while it is empty.
+fn field_value(fixture: &Fixture, label: &str) -> Option<f64> {
+    let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+    fixture.tree().numeric_of(field.node).and_then(|n| n.value)
+}
+
+/// storytold/photocraft#13361: the Triangle's gear says Equilateral in Square's place, and its Proportional fields are
+/// empty while greyed out and 1 : 1 once Proportional is chosen. The Rectangle's keeps Square and shows 1 : 1 greyed.
+#[trial]
+fn the_triangle_gear_says_equilateral_and_shows_its_ratio_once_proportional_is_chosen() {
+    let (mut fixture, host) = gear_of(ShapeKind::Triangle, BoxConstraints::default());
+    assert!(fixture.by_label("Square").is_none(), "the Triangle's gear has no Square");
+    for field in ["Fixed Size W", "Fixed Size H", "Proportional W", "Proportional H"] {
+        assert!(disabled(&fixture, field), "Unconstrained: {field} is off");
+        assert_eq!(field_value(&fixture, field), None, "{field} is empty while greyed out");
+    }
+    let proportional = fixture.by_label("Proportional").expect("the Proportional radio");
+    fixture.click(&proportional).settle();
+    assert_eq!(host.borrow().value.constraint, BoxConstraint::Proportional);
+    for field in ["Proportional W", "Proportional H"] {
+        assert!(!disabled(&fixture, field), "Proportional: {field} is on");
+        assert_eq!(field_value(&fixture, field), Some(1.0), "{field} shows 1 once chosen");
+    }
+    let fixed = fixture.by_label("Fixed Size").expect("the Fixed Size radio");
+    fixture.click(&fixed).settle();
+    assert_eq!(field_value(&fixture, "Proportional W"), None, "greyed again, empty again");
+    assert_eq!(host.borrow().value.ratio, (Some(1.0), Some(1.0)), "the ratio itself is kept");
+    let equilateral = fixture.by_label("Equilateral").expect("the Equilateral radio");
+    fixture.click(&equilateral).settle();
+    assert_eq!(host.borrow().value.constraint, BoxConstraint::Square, "Equilateral is the Square constraint");
+
+    let (fixture, _) = gear(BoxConstraints::default());
+    assert!(fixture.by_label("Square").is_some() && fixture.by_label("Equilateral").is_none(), "the Rectangle's says Square");
+    assert_eq!(field_value(&fixture, "Proportional W"), Some(1.0), "the Rectangle's ratio shows greyed out");
+}
+
+/// Each of the Rectangle and the Triangle draws with its own gear from the stored settings; the other kinds with none.
+#[trial]
+fn the_stored_settings_give_the_rectangle_and_the_triangle_their_own_gear() {
+    let mut settings = ShapeToolSettings::default();
+    settings.rect_box.constraint = BoxConstraint::Square;
+    settings.triangle_box.from_center = true;
+    assert_eq!(settings.drag_options(ShapeKind::Rectangle).constraints, settings.rect_box);
+    assert_eq!(settings.drag_options(ShapeKind::Triangle).constraints, settings.triangle_box);
+    assert_eq!(settings.drag_options(ShapeKind::Ellipse).constraints, BoxConstraints::default());
 }
 
 #[trial]
