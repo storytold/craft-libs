@@ -338,6 +338,7 @@ pub enum SliderScale {
     /// Only the track is curved: text, steps, wheel notches and accessibility remain in model units. Inputs and
     /// outputs are clamped to their ranges; a non-finite output falls back to the corresponding linear projection.
     /// The caller owns monotonicity and the inverse relationship; the widget does not sample or fit the curve.
+    #[non_exhaustive]
     Custom {
         /// The track fraction for a model value.
         position: fn(f64, f64, f64) -> f64,

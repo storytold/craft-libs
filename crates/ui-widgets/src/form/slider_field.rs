@@ -100,7 +100,7 @@ pub struct SliderField<'a> {
     pointer_modifiers: craft_behavior::DragModifiers,
     /// Optional zero-origin model grid for this field's real slider pointer values, not its numeric/label editor.
     /// None preserves original pointer snapping. Keys, wheel and accessibility keep their independent policies.
-    #[prop]
+    #[prop(quantity = "step")]
     pointer_model_step: Option<f64>,
     /// What the number counts: the field shows its unit and reads its spellings.
     #[prop]

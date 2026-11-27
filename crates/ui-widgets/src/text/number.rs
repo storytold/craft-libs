@@ -171,6 +171,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     #[prop(func = "Fn(f64, i32, f64) -> f64")]
     stepper: Option<NumberStepper<'a>>,
     /// A composite may route AX increment/decrement in separate model units; editing/typing/wheel still use step.
+    #[prop(quantity = "step", vis = "pub(crate)")]
     scalar_access_step: Option<f64>,
     /// Pointer-only fine/coarse bindings for the field, label and popup-slider scrubs.
     #[prop]
@@ -331,12 +332,6 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             value_width: 0.0,
         }
         .label(label)
-    }
-
-    /// An AX-only step for the owning scalar composite; not a new public number-field key or wheel policy.
-    pub(crate) fn scalar_access_step(mut self, step: Option<f64>) -> Self {
-        self.scalar_access_step = step.filter(|step| step.is_finite() && *step > 0.0);
-        self
     }
 
     /// The caller hangs a context menu of its own on the field (`Menu::context` over its response, a unit menu): a
@@ -980,7 +975,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             Some(value) => Numeric::new(value, rule.bounds()),
             None => Numeric::empty(rule.bounds()),
         };
-        access.numeric(numeric.step(self.scalar_access_step.unwrap_or(rule.step)));
+        access.numeric(numeric.step(self.scalar_access_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step)));
         if let Some(unit) = self.painted_unit(cx) {
             access.unit(cx.env.resolve(&unit).as_str());
         }

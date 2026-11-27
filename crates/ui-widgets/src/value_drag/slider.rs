@@ -124,7 +124,7 @@ pub struct Slider<'a> {
     pointer_modifiers: craft_behavior::DragModifiers,
     /// Optional zero-origin model grid for thumb/track pointer values only. None keeps original track snapping.
     /// A non-positive or non-finite quantum is ignored. Keys, wheel, accessibility and editors are independent.
-    #[prop]
+    #[prop(quantity = "step")]
     pointer_model_step: Option<f64>,
     /// The value as the caller words it ("50 %"), in place of the slider's own value text: the number in the step's
     /// decimals, in one decimal without a step, or at the local step's precision with a custom stepper. Assistive
