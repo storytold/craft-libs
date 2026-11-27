@@ -194,6 +194,10 @@ pub struct WarpGrid<'a> {
     /// rule-of-thirds lines real first.
     #[prop(flag)]
     preset: bool,
+    /// The frame is crossed corner to corner, as a placed object's transform box is: the two diagonals between the
+    /// mesh's corners, as the reference application keeps them in Warp mode.
+    #[prop(flag)]
+    crossed: bool,
     /// The split tool, when one is armed.
     #[prop]
     split: Option<WarpSplit>,
@@ -231,6 +235,7 @@ impl<'a> WarpGrid<'a> {
             bounds,
             lines_only: false,
             preset: false,
+            crossed: false,
             split: None,
             surface: None,
             reach_scale: None,
@@ -543,6 +548,16 @@ impl Component for WarpGrid<'_> {
         }
         for path in mesh.boundaries() {
             stroke(&path, StrokeWidth::Thin, style.line);
+        }
+        if self.crossed {
+            let (w, h) = (mesh.width().max(1), mesh.height().max(1));
+            let corner = |i: usize, j: usize| mesh.points.get(j * w + i).map(|point| view.to_screen(*point));
+            let diagonals = [(corner(0, 0), corner(w - 1, h - 1)), (corner(w - 1, 0), corner(0, h - 1))];
+            for (from, to) in diagonals.into_iter().filter_map(|(from, to)| Some((from?, to?))) {
+                let diagonal = PaintShape::Path(vec![from, to]);
+                draw.stroke(&diagonal, StrokeWidth::Thick, style.halo);
+                draw.stroke(&diagonal, StrokeWidth::Medium, style.line);
+            }
         }
         if self.lines_only {
             return;

@@ -675,3 +675,46 @@ fn a_reach_map_makes_a_points_reach_a_circle_in_the_contents() {
         }
     }
 }
+
+/// A crossed grid draws the two diagonals between the mesh's corners, as a placed object's transform box draws its own;
+/// a plain grid draws none.
+#[trial]
+fn a_crossed_grid_draws_the_diagonals_between_its_corners() {
+    fn segments_of(shapes: &[egui::Shape], out: &mut Vec<(Pos2, Pos2)>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Vec(inner) => segments_of(inner, out),
+                egui::Shape::LineSegment { points, .. } => out.push((points[0], points[1])),
+                egui::Shape::Path(path) if path.points.len() == 2 => out.push((path.points[0], path.points[1])),
+                _ => {}
+            }
+        }
+    }
+    let diagonals = |crossed: bool| {
+        let view = Rc::new(Cell::new(None));
+        let shown = Rc::clone(&view);
+        let mut fixture = Fixture::new(move |ui| {
+            let room = ui.available_rect_before_wrap();
+            let centre = Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0);
+            let shown_view = CanvasView::new(room, centre, 1.0);
+            shown.set(Some(shown_view));
+            let _ = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+                let mut mesh = WarpMesh::identity(RECT, 1, 1);
+                let grid = WarpGrid::new("Warp", Bind::bound(&mut mesh), RECT);
+                let grid = if crossed { grid.crossed() } else { grid };
+                grid.show_at(ui, body.rect)
+            });
+        });
+        fixture.settle();
+        let view: CanvasView = view.get().expect("drawn");
+        let mut segments = Vec::new();
+        segments_of(&fixture.frame_shapes(), &mut segments);
+        let corner = |x: f64, y: f64| view.to_screen(Point::new(x, y));
+        let has = |a: Pos2, b: Pos2| {
+            segments.iter().any(|(p, q)| (p.distance(a) < 0.01 && q.distance(b) < 0.01) || (p.distance(b) < 0.01 && q.distance(a) < 0.01))
+        };
+        has(corner(RECT.x0, RECT.y0), corner(RECT.x1, RECT.y1)) && has(corner(RECT.x1, RECT.y0), corner(RECT.x0, RECT.y1))
+    };
+    assert!(diagonals(true), "a crossed grid draws both diagonals");
+    assert!(!diagonals(false), "a plain grid draws none");
+}
