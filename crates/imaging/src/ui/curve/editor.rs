@@ -118,6 +118,15 @@ pub struct CurveEditor<'a> {
     /// Whether the tone bars show under the plot and beside it.
     #[prop]
     bars: bool,
+    /// A ten-by-ten grid instead of the default quarter grid.
+    #[prop]
+    fine_grid: bool,
+    /// Whether the unchanged curve's diagonal reference shows.
+    #[prop]
+    baseline: bool,
+    /// Guides through a point while it is dragged; never shown in pencil mode.
+    #[prop]
+    intersections: bool,
     /// Whether the Input and Output fields show.
     #[prop]
     fields: bool,
@@ -159,6 +168,9 @@ impl<'a> CurveEditor<'a> {
             max_points: 16,
             sampler: None,
             bars: true,
+            fine_grid: false,
+            baseline: true,
+            intersections: false,
             fields: true,
             percent: false,
             hint: None,
@@ -188,6 +200,9 @@ impl<'a> CurveEditor<'a> {
             max_points,
             mut sampler,
             bars,
+            fine_grid,
+            baseline,
+            intersections,
             fields,
             percent,
             hint,
@@ -220,6 +235,9 @@ impl<'a> CurveEditor<'a> {
                 .levels(levels)
                 .max_points(max_points)
                 .bars(bars)
+                .fine_grid(fine_grid)
+                .baseline(baseline)
+                .intersections(intersections)
                 .overlays(overlays);
             if let Some(data) = histogram {
                 graph = graph.histogram(data);

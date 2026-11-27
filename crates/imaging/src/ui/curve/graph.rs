@@ -181,20 +181,28 @@ impl PlotLook {
 
     /// The frame, the backdrop, the quarter grid and the diagonal of the plot `plot` (the value area is inset by the pad).
     pub(super) fn backdrop(&self, painter: &ContentPainterCx<'_>, plot: Rect, histogram: Option<&HistogramData>) {
+        self.backdrop_options(painter, plot, histogram, false, true);
+    }
+
+    /// The editable graph can choose its grid and baseline without changing previews' defaults.
+    fn backdrop_options(&self, painter: &ContentPainterCx<'_>, plot: Rect, histogram: Option<&HistogramData>, fine_grid: bool, baseline: bool) {
         paint_frame(painter, plot, &self.frame, true);
         let area = plot.shrink(self.pad);
         if let Some(data) = histogram {
             paint_bins(painter, area, data, HistogramLook::Backdrop, &self.inks);
         }
         painter.with_draw(|draw| {
-            for i in 1..4 {
-                let f = i as f32 / 4.0;
+            let divisions = if fine_grid { 10 } else { 4 };
+            for i in 1..divisions {
+                let f = i as f32 / divisions as f32;
                 let x = area.left() + f * area.width();
                 let y = area.top() + f * area.height();
                 draw.rule(RuleKind::Divider, pos2(x, area.top()), pos2(x, area.bottom()));
                 draw.rule(RuleKind::Divider, pos2(area.left(), y), pos2(area.right(), y));
             }
-            line(draw, [area.left_bottom(), area.right_top()], self.baseline);
+            if baseline {
+                line(draw, [area.left_bottom(), area.right_top()], self.baseline);
+            }
         });
     }
 }
@@ -349,6 +357,15 @@ pub struct CurveGraph<'a> {
     /// Whether the tone bars show under the plot and beside it.
     #[prop]
     bars: bool,
+    /// A ten-by-ten grid instead of the default quarter grid.
+    #[prop]
+    fine_grid: bool,
+    /// The unchanged curve's diagonal reference.
+    #[prop]
+    baseline: bool,
+    /// Horizontal and vertical guides through the point of an active drag, outside pencil mode.
+    #[prop]
+    intersections: bool,
     /// Pencil mode: a drag draws one output per input level.
     #[prop(flag)]
     pencil: bool,
@@ -383,6 +400,9 @@ impl<'a> CurveGraph<'a> {
             max_points: 16,
             sampler: None,
             bars: true,
+            fine_grid: false,
+            baseline: true,
+            intersections: false,
             pencil: false,
             corners: false,
             percent: false,
@@ -710,7 +730,7 @@ impl Component for CurveGraph<'_> {
         let color = self.color();
         {
             let painter = ui.content_painter(cx);
-            style.look.backdrop(&painter, frame.plot, self.histogram);
+            style.look.backdrop_options(&painter, frame.plot, self.histogram, self.fine_grid, self.baseline);
             let draw = ui.draw();
             for i in self.other_channels() {
                 paint_line(
@@ -723,6 +743,17 @@ impl Component for CurveGraph<'_> {
             if let Some(curve) = curve {
                 paint_line(&draw, &outputs(curve, self.sampler.as_ref(), self.levels), frame.map, style.look.curve(color));
                 if let (true, Some(points)) = (self.points_mode(Some(curve)), curve.points()) {
+                    // A selection alone is not a drag. Release, cancellation and a point removed off
+                    // the plot clear the held index, so no guide is left behind.
+                    if self.intersections
+                        && let Some(drag) = cx.recall::<Held>().drag.filter(|drag| drag.begun)
+                        && let Some(point) = drag.index.and_then(|i| points.get(i))
+                    {
+                        let at = frame.map.screen(*point);
+                        let area = frame.map.area;
+                        line(&draw, [pos2(at.x, area.top()), pos2(at.x, area.bottom())], style.look.baseline);
+                        line(&draw, [pos2(area.left(), at.y), pos2(area.right(), at.y)], style.look.baseline);
+                    }
                     for (i, p) in points.iter().enumerate() {
                         let smooth = self.corners && !curve.is_corner(i);
                         point(&draw, style, frame.map.screen(*p), smooth, self.selection == Some(i));

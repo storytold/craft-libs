@@ -38,6 +38,17 @@ craft_ui::words! {
         unavailable_mode: "adjust.unavailableMode" = "Unavailable in this color mode";
 
         // Curves.
+        show: "adjust.show" = "Show";
+        grid_quarters: "adjust.gridQuarters" = "4x4 grid";
+        grid_tenths: "adjust.gridTenths" = "10x10 grid";
+        channel_overlays: "adjust.channelOverlays" = "Channel Overlays";
+        baseline: "adjust.baseline" = "Baseline";
+        intersection_line: "adjust.intersectionLine" = "Intersection Line";
+        /// Translators can choose a letter present in the corresponding translated label.
+        overlays_mnemonic: "adjust.overlaysMnemonic" = "v";
+        histogram_mnemonic: "adjust.histogramMnemonic" = "H";
+        baseline_mnemonic: "adjust.baselineMnemonic" = "B";
+        intersection_mnemonic: "adjust.intersectionMnemonic" = "n";
         edit_points: "adjust.editPoints" = "Edit points to modify the curve";
         draw_curve: "adjust.drawCurve" = "Draw to modify the curve";
         smooth: "adjust.smooth" = "Smooth";
