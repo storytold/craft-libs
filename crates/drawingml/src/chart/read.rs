@@ -130,15 +130,21 @@ pub fn chart_from(root: &El) -> Option<Chart> {
 
 /// [`chart_from`] decoding at most `budget` data slots in all.
 fn chart_within(root: &El, budget: usize) -> Option<Chart> {
-    read_chart(root, budget, false)
+    read_chart(root, budget, 2)
 }
 
 /// Exact former metadata projection for unchanged legacy native saves, using the same caps.
 pub(super) fn legacy_chart_from(root: &El) -> Option<Chart> {
-    read_chart(root, MAX_CHART_POINTS, true)
+    read_chart(root, MAX_CHART_POINTS, 0)
 }
 
-fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
+/// The published first typed projection, before stacked visibility and secondary-only axes.
+pub(super) fn metadata_v1_chart_from(root: &El) -> Option<Chart> {
+    read_chart(root, MAX_CHART_POINTS, 1)
+}
+
+fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
+    let legacy = version == 0;
     let ch = root.child(Local("chart"))?;
     let pa = ch.child(Local("plotArea"))?;
     let mut c = Chart {
@@ -147,7 +153,7 @@ fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
         title: None,
         legend: None,
         gridlines: false,
-        raw_metadata_version: if legacy { 0 } else { 1 },
+        raw_metadata_version: version,
         ..Default::default()
     };
     c.style = root.child(Local("style")).and_then(|c| c.attr_local("val")).and_then(|v| v.parse().ok()).unwrap_or(2);
@@ -177,7 +183,7 @@ fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
             ))
         })
         .collect();
-    let primary_val = primary_value_axis(pa, &val_map, legacy);
+    let primary_val = primary_value_axis(pa, &val_map, version);
     for g in pa.elements() {
         let name = g.local();
         if !name.ends_with("Chart") {
@@ -200,6 +206,13 @@ fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
         for s in g.children(Local("ser")).take(1000) {
             let needs_categories = c.categories.is_empty();
             let mut ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            if version >= 2 && kind == ChartType::StackedLine {
+                ser.marker_visible = Some(match ser.marker.as_deref() {
+                    Some("none") => false,
+                    Some(_) => true,
+                    None => g.child(Local("marker")).and_then(|m| m.attr_local("val")).and_then(value::to_bool).unwrap_or(false),
+                });
+            }
             if legacy {
                 ser.kind = Some(kind);
                 if ser.marker.as_deref() == Some("none") {
@@ -268,7 +281,8 @@ fn group_value_axis(val_map: &std::collections::HashMap<&str, bool>, g: &El) -> 
 
 /// The primary value axis is the one on the left (bottom for bar charts); the secondary one
 /// sits on the right or top, or crosses the category axis at its maximum.
-fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, legacy: bool) -> Option<String> {
+fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, version: u16) -> Option<String> {
+    let legacy = version == 0;
     let secondary_placed = |a: &El| {
         a.child(Local("crosses")).and_then(|c| c.attr_local("val")) == Some("max")
             || matches!(a.child(Local("axPos")).and_then(|c| c.attr_local("val")), Some("r" | "t"))
@@ -282,7 +296,29 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
         })
         .filter_map(|g| group_value_axis(val_map, g))
         .collect();
-    used.iter().find(|id| val_axes_by_id.get(id.as_str()).is_some_and(|a| !secondary_placed(a))).or(used.first()).cloned()
+    if let Some(id) = used.iter().find(|id| val_axes_by_id.get(id.as_str()).is_some_and(|a| !secondary_placed(a))) {
+        return Some(id.clone());
+    }
+    if version >= 2 {
+        // A secondary-only plot still owns the right/top pair. The writer keeps the unused
+        // primary pair; require reciprocal IDs so a stray or incomplete axis cannot win.
+        if let Some(id) = pa.children(Local("valAx")).find_map(|a| {
+            let id = a.child(Local("axId"))?.attr_local("val")?;
+            let cross = a.child(Local("crossAx"))?.attr_local("val")?;
+            if secondary_placed(a) || !matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("l" | "b")) {
+                return None;
+            }
+            pa.elements().any(|other| {
+                matches!(other.local(), "catAx" | "dateAx" | "valAx")
+                    && (!other.is(Local("valAx")) || val_map.get(cross) == Some(&false))
+                    && other.child(Local("axId")).and_then(|i| i.attr_local("val")) == Some(cross)
+                    && other.child(Local("crossAx")).and_then(|i| i.attr_local("val")) == Some(id)
+            }).then(|| id.to_string())
+        }) {
+            return Some(id);
+        }
+    }
+    used.first().cloned()
 }
 
 /// The chart type of a plot group (`name` is its element name), or `None` for an unknown group.

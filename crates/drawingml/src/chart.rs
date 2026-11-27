@@ -233,6 +233,10 @@ pub struct Series {
     pub smooth: bool,
     /// The marker symbol, including explicit `"none"`; `None` means no symbol was specified.
     pub marker: Option<String>,
+    /// Effective marker visibility of an imported stacked line series, independent of its
+    /// symbol and stacking kind. An explicit symbol still takes precedence on rebuild.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_visible: Option<bool>,
     /// The series' plot type, including its line-marker override. DrawingML reads retain this
     /// even when all plot groups have the same type. On rebuild, supported series types
     /// take precedence unless a non-Combo `Chart::kind` differs from its raw chart's
@@ -474,7 +478,8 @@ pub struct Chart {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
     /// Metadata interpretation of retained classic chart XML: 0 is the former reader, 1 is
-    /// the current reader. Missing native-save fields are legacy. Preserve this when editing.
+    /// the first typed-metadata reader, and 2 also retains stacked marker visibility and
+    /// secondary-only axis ownership. Missing fields are version 0. Preserve when editing.
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub raw_metadata_version: u16,
     /// The chart was too large to model: `raw` and `kept` are written back unchanged on save.

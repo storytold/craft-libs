@@ -304,7 +304,15 @@ fn point_fills(w: &mut Writer, s: &Series, g: Group) {
 /// Data points (categories and values counted per series) one chart group writes to its caches.
 const MAX_EXPORT_POINTS: usize = 4_000_000;
 
-fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: Group) {
+fn line_markers(s: &Series, kind: ChartType, override_markers: Option<bool>) -> bool {
+    override_markers.unwrap_or_else(|| match s.marker.as_deref() {
+        Some("none") => false,
+        Some(m) if !m.is_empty() => true,
+        _ => s.marker_visible.unwrap_or(kind == ChartType::LineMarkers),
+    })
+}
+
+fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: Group, markers: (Option<bool>, bool)) {
     w.open("c:ser", &[]);
     w.tag("c:idx").attr("val", i).empty();
     w.tag("c:order").attr("val", i).empty();
@@ -343,11 +351,20 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         w.tag("c:invertIfNegative").attr("val", 0).empty();
     }
     if matches!(g, Group::Line | Group::Scatter | Group::Radar) {
-        let sym = match (&s.marker, kind) {
-            (Some(m), _) if !m.is_empty() => Some(m.as_str()),
-            (_, ChartType::LineMarkers) => None,
-            (_, ChartType::Scatter) => None,
-            _ => Some("none"),
+        let sym = if g == Group::Line {
+            match (s.marker.as_deref().filter(|m| !m.is_empty()), markers.0) {
+                (_, Some(false)) => Some("none"),
+                (Some("none"), Some(true)) => None,
+                (Some(m), _) => Some(m),
+                (None, _) if !line_markers(s, kind, markers.0) && markers.1 => Some("none"),
+                _ => None,
+            }
+        } else {
+            match (&s.marker, kind) {
+                (Some(m), _) if !m.is_empty() => Some(m.as_str()),
+                (_, ChartType::LineMarkers | ChartType::Scatter) => None,
+                _ => Some("none"),
+            }
         };
         if let Some(sym) = sym.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric())) {
             w.open("c:marker", &[]);
@@ -606,7 +623,7 @@ fn series_points(c: &Chart, s: &Series, g: Group) -> usize {
     }
 }
 
-fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)], secondary: bool) {
+fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)], secondary: bool, override_markers: Option<bool>) {
     let g = group_of(kind);
     let grouping = if kind.percent() {
         "percentStacked"
@@ -644,8 +661,17 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
     if g != Group::Stock {
         w.tag("c:varyColors").attr("val", vary).empty();
     }
+    // Explicit symbols override this default. Do not split stacked groups by visibility:
+    // that would change which series are stacked together.
+    let markers = override_markers.unwrap_or_else(|| {
+        if list.is_empty() {
+            kind == ChartType::LineMarkers
+        } else {
+            list.iter().any(|(_, s)| s.marker.as_deref().is_none_or(str::is_empty) && line_markers(s, kind, None))
+        }
+    });
     for (i, s) in list {
-        series(w, c, s, *i, kind, g);
+        series(w, c, s, *i, kind, g, (override_markers, markers));
     }
     if c.data_labels {
         data_labels(w, c, true);
@@ -658,7 +684,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
                 w.tag("c:overlap").attr("val", ov).empty();
             }
         }
-        Group::Line => w.tag("c:marker").attr("val", 1).empty(),
+        Group::Line => w.tag("c:marker").attr("val", u8::from(markers)).empty(),
         Group::Stock => {
             w.open("c:hiLowLines", &[]);
             w.open("c:spPr", &[]);
@@ -693,7 +719,7 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
 }
 
 /// Retain the old per-kind cache budget before axis ownership partitions that list.
-fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)]) -> bool {
+fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series)], override_markers: Option<bool>) -> [Option<ChartType>; 2] {
     let g = group_of(kind);
     let mut left = MAX_EXPORT_POINTS;
     let mut end = list.len();
@@ -708,18 +734,18 @@ fn plot_kind(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Series
     }
     let retained = &list[..end];
     if matches!(g, Group::Pie | Group::Doughnut) {
-        plot_group(w, c, kind, retained, false);
-        return false;
+        plot_group(w, c, kind, retained, false, override_markers);
+        return [None, None];
     }
-    let mut has_secondary = false;
+    let mut emitted = [None, None];
     for secondary in [false, true] {
         let part = retained.iter().filter(|(_, s)| s.secondary_axis == secondary).copied().collect::<Vec<_>>();
         if !part.is_empty() || (!secondary && retained.is_empty()) {
-            plot_group(w, c, kind, &part, secondary);
-            has_secondary |= secondary;
+            plot_group(w, c, kind, &part, secondary, override_markers);
+            emitted[usize::from(secondary)] = Some(kind);
         }
     }
-    has_secondary
+    emitted
 }
 
 /// The `chartEx` part of an Office 2016 chart (waterfall, funnel…): the kept part when the chart
@@ -780,7 +806,11 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         // Native saves without provenance used the former metadata projection. Comparing
         // that exact projection only on the legacy path preserves raw XML without treating
         // current-reader metadata edits as unchanged legacy state.
-        let back = if c.raw_metadata_version == 0 { super::read::legacy_chart_from(&root) } else { super::read::chart_from(&root) };
+        let back = match c.raw_metadata_version {
+            0 => super::read::legacy_chart_from(&root),
+            1 => super::read::metadata_v1_chart_from(&root),
+            _ => super::read::chart_from(&root),
+        };
         if let Some(back) = back {
             raw_kind = Some(back.kind);
             let mut me = c.clone();
@@ -840,10 +870,30 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     if kinds.is_empty() && !combo {
         kinds.push(main);
     }
-    let mut has_secondary = false;
+    let override_markers = match override_kind {
+        Some(ChartType::Line) => Some(false),
+        Some(ChartType::LineMarkers) => Some(true),
+        _ => None,
+    };
+    let mut axis_kinds: [Option<ChartType>; 2] = [None, None];
     for kind in &kinds {
         let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
-        has_secondary |= plot_kind(&mut w, c, *kind, &list);
+        let emitted = plot_kind(&mut w, c, *kind, &list, override_markers);
+        for (axis, kind) in axis_kinds.iter_mut().zip(emitted) {
+            if let Some(kind) = kind {
+                // A Line encountered first must not override a horizontal Bar on that pair.
+                // Shared pairs keep the existing limitation for incompatible orientations;
+                // use horizontal Bar placement and percentage defaults when plots need them.
+                let horizontal = kind.horizontal() || axis.is_some_and(ChartType::horizontal);
+                let percent = kind.percent() || axis.is_some_and(ChartType::percent);
+                *axis = Some(match (horizontal, percent) {
+                    (true, true) => ChartType::PercentBar,
+                    (true, false) => ChartType::Bar,
+                    (false, true) => ChartType::PercentColumn,
+                    _ => axis.unwrap_or(kind),
+                });
+            }
+        }
     }
     if !combo
         && !matches!(
@@ -870,12 +920,12 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     {
         log::warn!("pptx: {} chart written as a column chart", first.label());
     }
-    let axis_kind = if combo { ChartType::Combo } else { first };
     let axis_group = if combo { Group::Bar } else { group_of(first) };
     if !matches!(axis_group, Group::Pie | Group::Doughnut) {
-        axes(&mut w, c, axis_group, axis_kind, false);
-        if has_secondary {
-            axes(&mut w, c, axis_group, axis_kind, true);
+        let primary_kind = if combo { axis_kinds[0].or(axis_kinds[1]).unwrap_or(first) } else { first };
+        axes(&mut w, c, axis_group, primary_kind, false);
+        if let Some(secondary_kind) = axis_kinds[1] {
+            axes(&mut w, c, axis_group, if combo { secondary_kind } else { first }, true);
         }
     }
     if let Some(dt) = &c.data_table {
