@@ -6,7 +6,7 @@
 pub(crate) mod stories;
 mod ticks;
 
-pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
+pub use ticks::{CENTIMETRE_LABEL_STEP_MIN, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
 
 use super::words::CanvasWords;
 use super::{CanvasRulers, CanvasSpace, GuideDrag, RulerText, Snap, context_menu, readout};

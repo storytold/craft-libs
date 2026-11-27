@@ -170,7 +170,8 @@ impl<'a> Slider<'a> {
     }
 
     /// [`Slider::marks`] at the values, each with a caption centred under its mark and kept inside the slider. The
-    /// slider is taller by one caption line. The captions are drawing only: assistive technology gets the value.
+    /// slider is taller by one caption line, and at least as wide as the captions need to sit apart with a gap between
+    /// them. The captions are drawing only: assistive technology gets the value.
     pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
         self.marks.set_labelled(marks);
         self
@@ -230,7 +231,8 @@ impl Component for Slider<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.marks.lay_out(&cx.style.mark_text, cx.style.space, |label| cx.env.resolve(label), |run| cx.layout(run).size());
-        let along = if cx.proposal == Proposal::Min { 0.0 } else { cx.style.length };
+        let labels = self.marks.least_width(&self.track_scale());
+        let along = if cx.proposal == Proposal::Min { labels } else { cx.style.length.max(labels) };
         Vec2::new(along, cx.icon() + self.marks.below(&cx.style.track))
     }
 

@@ -19,6 +19,8 @@
 use std::cmp::Reverse;
 use std::collections::VecDeque;
 use std::hash::Hash;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
@@ -94,14 +96,17 @@ pub enum QueueOrder {
 
 impl QueueOptions {
     /// Lanes for this machine: the number of cores less one, at least 2 and at most 8 (4 when
-    /// the core count is unknown); 0 on wasm32.
+    /// the core count is unknown); 0 on wasm32. The core count is read once per process.
     // lightcraft: crates/preview/src/pool.rs:104 `default_threads` (cores − 1 clamped to 2..=8;
     // ours is 0 on wasm32 instead of 1, because wasm runs jobs only through `run_inline`).
     pub fn default_lanes() -> usize {
         #[cfg(target_arch = "wasm32")]
         return 0;
         #[cfg(not(target_arch = "wasm32"))]
-        thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(2, 8))
+        {
+            static LANES: OnceLock<usize> = OnceLock::new();
+            *LANES.get_or_init(|| thread::available_parallelism().map_or(4, |n| n.get().saturating_sub(1).clamp(2, 8)))
+        }
     }
 }
 

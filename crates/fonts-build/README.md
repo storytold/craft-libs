@@ -95,13 +95,17 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 - `embedded_elsewhere(&["Noto Sans Math", …])` names families another table of the app embeds,
   so `check_text` and the catalog check count their characters as covered.
 - `dir(path)` and `required(bool)` override the two environment variables.
+- `tab_face()` also embeds Noto Sans Condensed SemiBold from `fonts/latin-manifest.txt`, with the
+  role `tab`. `scripts` and `filter` do not apply to it. A checkout without that manifest or its
+  row embeds the other faces and prints a warning, even with `CRAFT_FONTS_REQUIRED=1`.
 
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
 index, bytes, role }` literals; any struct with those fields and that name in scope works too.
 `role` is the manifest line's ninth field: `Some("ui")`, `Some("mono")`, `Some("signature")` or
-`None`; craft-ui's font stack leads the Monospace family with the `mono` face and the signature
-family (`FontRef::signature()`) with the `signature` face. `EmbeddedFace` itself has `name()`,
+`None`, or `Some("tab")` on the face `tab_face()` adds; craft-ui's font stack leads the Monospace
+family with the `mono` face, the signature family (`FontRef::signature()`) with the `signature`
+face and the tab-title family with the `tab` face. `EmbeddedFace` itself has `name()`,
 `has_script(tag)`, `is_cjk()` and `weight()`.
 
 ## Document fonts
