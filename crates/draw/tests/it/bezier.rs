@@ -465,6 +465,54 @@ fn one_anchor_shows_handles_only_while_one_anchor_is_selected_over_all_paths() {
     assert!(!matches!(none, Some(BezierHit::Handle { .. })), "{none:?}");
 }
 
+// Under `OneAnchor` the handles of an anchor listed in `others` draw while it is the only selected anchor over all
+// paths, as `Selected` draws them; with an anchor of a third path listed too, neither path's handles draw.
+#[trial]
+fn one_anchor_draws_other_paths_handles_only_while_one_anchor_is_selected_over_all_paths() {
+    let painted_with = |selection: PathSelection, handles: HandlesShown| {
+        let mut other = path_b();
+        other.subpaths[0].knots[0] = Knot::smooth(p(60.0, 200.0), p(90.0, 170.0));
+        let third =
+            EditPath::new(3, vec![EditSubpath::new(vec![Knot::smooth(p(300.0, 220.0), p(330.0, 190.0)), Knot::corner(p(360.0, 260.0))], false)]);
+        let mut h = harness(vec![path_a(), other, third]);
+        h.update(|st| (st.selection, st.handles) = (selection, handles));
+        format!("{:?}", h.fixture.frame_shapes())
+    };
+    let one = || sel(1, &[]).also(2, vec![kr(0)]);
+    assert_eq!(painted_with(one(), HandlesShown::OneAnchor), painted_with(one(), HandlesShown::Selected));
+    let two = || sel(1, &[]).also(2, vec![kr(0)]).also(3, vec![kr(0)]);
+    assert_ne!(painted_with(two(), HandlesShown::OneAnchor), painted_with(two(), HandlesShown::Selected));
+    assert_eq!(
+        painted_with(two(), HandlesShown::OneAnchor),
+        painted_with(sel(1, &[]).also(2, vec![kr(0)]).also(3, vec![kr(0)]), HandlesShown::OneAnchor),
+        "painting is the same from frame to frame"
+    );
+}
+
+// A frame reads the selection's anchor lists a number of times that grows with the selection, not with its square:
+// doubling the selected anchors of the edited path and the number of other paths listed at most doubles the entries
+// read (a search of the lists for each anchor laid out or drawn quadruples them).
+#[trial]
+fn a_frame_reads_the_selections_anchor_lists_in_proportion_to_the_selection() {
+    let reads_for = |n: usize| {
+        let knot = |i: usize| Knot::smooth(p(20.0 + (i % 40) as f64 * 12.0, 20.0 + (i / 40) as f64 * 12.0), p(26.0 + (i % 40) as f64 * 12.0, 20.0));
+        let edited = EditPath::new(1, vec![EditSubpath::new((0..n).map(knot).collect(), false)]);
+        let others: Vec<EditPath> =
+            (0..n).map(|i| EditPath::new(2 + i as u64, vec![EditSubpath::new((0..4).map(|k| knot(i * 4 + k)).collect(), true)])).collect();
+        let mut selection = PathSelection::new(Some(1), (0..n).map(kr).collect(), None);
+        for other in &others {
+            selection = selection.also(other.key, (0..4).map(kr).collect());
+        }
+        let mut h = harness(std::iter::once(edited).chain(others).collect());
+        craft_draw::ui::pen::bezier::reads::take();
+        h.update(|st| st.selection = selection);
+        craft_draw::ui::pen::bezier::reads::take()
+    };
+    let (small, large) = (reads_for(60), reads_for(120));
+    assert!(small > 0, "the frame reads the selection");
+    assert!(large < small * 3, "{small} entries read for 60 selected paths, {large} for 120");
+}
+
 // Hovering a segment under Add reports the segment with its parameter, which the preview anchor stands at.
 
 // `AnchorsShown::Hidden` draws outlines only: no anchor, no handle, no part, no AccessKit object.

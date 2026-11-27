@@ -60,7 +60,7 @@ pub use state_layer::{StateLayer, StateLayerKind};
 pub(crate) use surface::{Frames as SurfaceFrames, SurfaceSlot, fit_to_frame};
 pub use surface::{Surface, frame_surfaces};
 pub use surround::paint_surround;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use svg_set::Layer;
 pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
