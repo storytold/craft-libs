@@ -19,11 +19,14 @@ use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
 use crate::xml::{El, Node};
 use craft_wordmodel::wordart::TextWarp;
+pub(crate) use perms::MAX_COLUMN_CHECKS;
+use perms::{ColumnRange, PermPairs, TableFrame};
 
 mod blocks;
 mod drawing;
 mod fields;
 mod locked_canvas;
+mod perms;
 mod runs;
 mod vml;
 
@@ -107,7 +110,6 @@ fn sink(sc: &mut StoryCtx) -> Option<&mut FieldState> {
 
 /// Per-story parsing state (fields may span paragraphs; block-level markers wait for the next
 /// paragraph).
-#[derive(Default)]
 pub struct StoryCtx {
     fields: Vec<FieldState>,
     ignored_begins: usize,
@@ -118,17 +120,33 @@ pub struct StoryCtx {
     pub in_hf: bool,
     /// Reading a table cell's paragraphs (not a text box inside one).
     in_cell: bool,
-    /// The story's permission starts not yet ended, by the file's `w:id`, latest last (see
-    /// [`Reader::perm_start`]).
-    perms_open: HashMap<String, Vec<OpenPerm>>,
+    /// How the file pairs the story's permission markers.
+    pairs: PermPairs,
+    /// The tables being read, outermost first.
+    open_tables: Vec<TableFrame>,
+    /// Tables read so far in the story: the next one's number.
+    tables_read: u32,
+    /// The ranges limited to columns read, by the model id of their start.
+    columns: HashMap<u32, ColumnRange>,
 }
 
-/// A permission start not yet ended while a story is read.
-struct OpenPerm {
-    /// Its id in the model; `None`: it was dropped, and so is its end.
-    id: Option<u32>,
-    /// Read in a table's structure (`w:tbl`, `w:tr` or a wrapper there).
-    structural: bool,
+impl StoryCtx {
+    /// The state for reading the story whose blocks are `root`'s: a `w:body`, `w:hdr`, `w:ftr`,
+    /// note, comment, text box's `w:txbxContent` or glossary entry's `w:docPartBody`.
+    pub fn new(root: &El) -> StoryCtx {
+        StoryCtx {
+            fields: Vec::new(),
+            ignored_begins: 0,
+            pending: Vec::new(),
+            story_depth: 0,
+            in_hf: false,
+            in_cell: false,
+            pairs: PermPairs::of(root),
+            open_tables: Vec::new(),
+            tables_read: 0,
+            columns: HashMap::new(),
+        }
+    }
 }
 
 /// Paragraph content under construction.

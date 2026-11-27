@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 
-use craft_wordmodel::walk::{each_para, each_para_mut};
-
+use super::perms::{Grids, RowGrid, column_marker_waits};
 use super::{
-    Arc, Block, Blocks, Cell, CharProps, El, InlineObject, MAX_COLS, MAX_ROWS, MAX_TABLE_DEPTH, Node, NumChange, OpenPerm, PB, Paragraph, Phase,
-    PropChange, Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, last_para_mut, para_block,
-    placeholder_of, sectpr, tcpr, trpr,
+    Arc, Block, Blocks, Cell, CharProps, El, InlineObject, MAX_COLS, MAX_ROWS, MAX_TABLE_DEPTH, Node, NumChange, PB, Paragraph, Phase, PropChange,
+    Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, TableFrame, children_of_choice, clean_text, collect, last_para_mut, para_block,
+    placeholder_of, sectpr, tcpr, trpr, u32_of,
 };
 
 impl Reader<'_> {
@@ -124,9 +123,14 @@ impl Reader<'_> {
 
     /// Markers left over at the end of a story go to its last paragraph (after a final table:
     /// the last paragraph of its last cell, so a bookmark around the table keeps its end).
+    /// A range limited to columns keeps its markers out of a final table (whose columns they
+    /// don't name): they get the empty paragraph a save gives a list that ends with a table.
     pub fn flush_pending(&mut self, sc: &mut StoryCtx, out: &mut Blocks) {
         if sc.pending.is_empty() {
             return;
+        }
+        if out.last().is_some_and(|b| matches!(**b, Block::Table(_))) && column_marker_waits(sc) {
+            out.push(para_block(Paragraph::new()));
         }
         if let Some(p) = last_para_mut(out, 0) {
             for o in sc.pending.drain(..) {
@@ -179,7 +183,7 @@ impl Reader<'_> {
                 .map(|name| InlineObject::BookmarkEnd { name }),
             "w:commentRangeStart" => self.comment_id(&id).map(|id| InlineObject::CommentStart { id }),
             "w:permStart" => self.perm_start(sc, e, id, structural),
-            "w:permEnd" => self.perm_end(sc, &id, structural),
+            "w:permEnd" => self.perm_end(sc, e, &id, structural),
             "w:commentRangeEnd" => {
                 let cid = self.comment_id(&id)?;
                 self.comments_ended.insert(cid);
@@ -187,112 +191,6 @@ impl Reader<'_> {
             }
             _ => None,
         }
-    }
-
-    /// A `w:permStart`. Each start gets an id of its own, and the story's open starts are kept by
-    /// the file's `w:id`, so that an end closes the latest of them, as
-    /// [`craft_wordmodel::Document::perm_ranges`] pairs them. Dropped, so that nothing of it can
-    /// widen what is editable:
-    /// - a start whose columns are there but aren't column numbers ([`perm_cols`]), and its end;
-    /// - one in a table's structure while another start with its `w:id` is open: which end closes
-    ///   which is unclear. An open start there is dropped too, when the read ends, as is one there
-    ///   that no end closes ([`Self::finish_perms`]). Such starts were dropped before markers there
-    ///   were read; a start in a paragraph keeps the end it had then.
-    fn perm_start(&mut self, sc: &mut StoryCtx, e: &El, id: String, structural: bool) -> Option<InlineObject> {
-        let open = sc.perms_open.entry(id.clone()).or_default();
-        // A start in a table's structure is only ever pushed onto an empty list, so it is first.
-        if let Some(OpenPerm { id: Some(first), structural: true }) = open.first() {
-            self.perms_dropped.insert(*first);
-        }
-        if structural && !open.is_empty() {
-            return None;
-        }
-        let Ok(cols) = perm_cols(e) else {
-            open.push(OpenPerm { id: None, structural });
-            return None;
-        };
-        // Bounded: a hostile file can't grow the map without end.
-        if self.perms.len() >= 100_000 || (structural && self.table_perms.len() >= 100_000) {
-            return None;
-        }
-        let n = self.next_perm;
-        self.next_perm = n.saturating_add(1);
-        self.perms.insert(id, n);
-        let text = |a: &str| e.attr(a).filter(|v| v.len() <= 256).unwrap_or("").to_string();
-        let (group, editor) = (text("w:edGrp"), text("w:ed"));
-        if group.is_empty() && editor.is_empty() {
-            return None;
-        }
-        if structural {
-            self.table_perms.insert(n);
-        }
-        open.push(OpenPerm { id: Some(n), structural });
-        Some(InlineObject::PermStart { id: n, group, editor, cols })
-    }
-
-    /// A `w:permEnd`: it closes the latest open start of its `w:id` in this story. With none open,
-    /// one in a paragraph or between blocks keeps the id it had before (it opens nothing); one in
-    /// a table's structure, never read before, is dropped.
-    fn perm_end(&mut self, sc: &mut StoryCtx, id: &str, structural: bool) -> Option<InlineObject> {
-        match sc.perms_open.get_mut(id).and_then(Vec::pop) {
-            Some(OpenPerm { id, .. }) => id.map(|id| InlineObject::PermEnd { id }),
-            None if structural => None,
-            None => self.perms.get(id).map(|id| InlineObject::PermEnd { id: *id }),
-        }
-    }
-
-    /// When the read ends, drop, start and end, the permission ranges [`Self::perm_start`] and
-    /// [`Self::read_table`] marked, and the starts read in a table's structure that no end after
-    /// them in their story closes.
-    pub(crate) fn finish_perms(&mut self) {
-        if self.table_perms.is_empty() && self.perms_dropped.is_empty() {
-            return;
-        }
-        let mut closed = HashSet::new();
-        let table_perms = &self.table_perms;
-        let mut visit = |blocks: &Blocks| {
-            let mut started = HashSet::new();
-            for b in blocks {
-                each_para(b, 0, &mut |p| {
-                    for o in &p.objects {
-                        match o {
-                            InlineObject::PermStart { id, .. } if table_perms.contains(id) => {
-                                started.insert(*id);
-                            }
-                            InlineObject::PermEnd { id } if started.contains(id) => {
-                                closed.insert(*id);
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-            }
-        };
-        visit(&self.doc.body);
-        self.doc.parts.values().for_each(|part| visit(&part.blocks));
-        self.doc.glossary.iter().for_each(|entry| visit(&entry.blocks));
-        let mut gone = std::mem::take(&mut self.perms_dropped);
-        gone.extend(self.table_perms.iter().filter(|id| !closed.contains(*id)));
-        if gone.is_empty() {
-            return;
-        }
-        let drop_in = |blocks: &mut Blocks| {
-            for b in blocks.iter_mut() {
-                each_para_mut(Arc::make_mut(b), 0, &mut |p| {
-                    let at: Vec<usize> = p
-                        .objects_with_offsets()
-                        .filter(|(_, o)| matches!(o, InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } if gone.contains(id)))
-                        .map(|(off, _)| off)
-                        .collect();
-                    for off in at.into_iter().rev() {
-                        let _ = p.delete(off, off + craft_wordmodel::para::OBJ.len_utf8());
-                    }
-                });
-            }
-        };
-        drop_in(&mut self.doc.body);
-        self.doc.parts.values_mut().for_each(|part| drop_in(&mut part.blocks));
-        self.doc.glossary.iter_mut().for_each(|entry| drop_in(&mut entry.blocks));
     }
 
     pub(super) fn comment_id(&self, file_id: &str) -> Option<u32> {
@@ -436,56 +334,32 @@ impl Reader<'_> {
 
     /// Markers pending at the end of a cell's content end it, in its last paragraph (see
     /// [`Self::flush_pending`]). A cell with no paragraph there to take them (none at all, or a
-    /// table last whose last cell has none) gets an empty one at its end, as saving gives it; so
-    /// does one that ends with a table when a permission start waits, which stays in its own
-    /// table (see [`Self::read_table`]).
+    /// table last whose last cell has none) gets an empty one at its end, as saving gives it.
     fn end_cell(&mut self, sc: &mut StoryCtx, blocks: &mut Blocks) {
-        let table_last = blocks.last().is_some_and(|b| matches!(**b, Block::Table(_)));
-        let start = sc.pending.iter().any(|o| matches!(o, InlineObject::PermStart { .. }));
-        if !sc.pending.is_empty() && (last_para_mut(blocks, 0).is_none() || (table_last && start)) {
+        if !sc.pending.is_empty() && last_para_mut(blocks, 0).is_none() {
             blocks.push(para_block(Paragraph::new()));
         }
         self.flush_pending(sc, blocks);
     }
 
-    /// A table. A permission start waiting for a paragraph in a cell stays in that cell's table,
-    /// whose columns it names: a table nested in the cell doesn't take it, and it waits, with any
-    /// end of its own waiting after it, for the cell's own next paragraph.
+    /// A table. A start of a range limited to columns, waiting for a paragraph, stays out of it:
+    /// its columns name the table it was read in (or none, read before a table at a story's own
+    /// level). It waits, with any end of its own waiting after it, for the next paragraph at its
+    /// own level. Other markers keep their place in the text: the table's first paragraph takes
+    /// them.
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
-        let held = if sc.in_cell { take_perm_starts(&mut sc.pending) } else { Vec::new() };
+        let held = take_column_starts(&mut sc.pending);
+        for o in &held {
+            if let InlineObject::PermStart { id, .. } = o {
+                self.relocated_perms.insert(*id);
+            }
+        }
         let table = self.read_table_body(sc, t, rels, depth);
         if !held.is_empty() {
             let after = std::mem::replace(&mut sc.pending, held);
             sc.pending.extend(after);
         }
         table
-    }
-
-    /// A table the reader cut down to `kept` columns, fewer than the file gives it: a permission
-    /// range of its own (started in one of its cells' paragraphs; a nested table's ranges are that
-    /// table's) that names a column past them is cut to them, or dropped, start and end, when it
-    /// names none of them. Otherwise it would name columns the table no longer has, and the
-    /// standard would apply it to the entire table (§17.13.7.2).
-    fn fit_perm_cols(&mut self, table: &mut Table, kept: usize) {
-        let last = u32::try_from(kept.saturating_sub(1)).unwrap_or(u32::MAX);
-        for b in table.rows.iter_mut().flat_map(|r| r.cells.iter_mut()).flat_map(|c| c.blocks.iter_mut()) {
-            if !matches!(**b, Block::Para(_)) {
-                continue;
-            }
-            let Block::Para(p) = Arc::make_mut(b) else { continue };
-            for o in &mut p.objects {
-                if let InlineObject::PermStart { id, cols: Some([first, end]), .. } = o
-                    && (*first).max(*end) > last
-                {
-                    if (*first).min(*end) > last {
-                        self.perms_dropped.insert(*id);
-                    } else {
-                        *first = (*first).min(last);
-                        *end = (*end).min(last);
-                    }
-                }
-            }
-        }
     }
 
     fn read_table_body(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
@@ -523,87 +397,23 @@ impl Reader<'_> {
                 .map(|c| crate::units::tw(c, "w:w").unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT))
                 .collect();
         }
+        let number = sc.tables_read;
+        sc.tables_read = number.saturating_add(1);
+        sc.open_tables.push(TableFrame::new(number));
         // The columns the file gives the table, before the reader's limit: its grid's, or its
         // widest row's.
-        let mut file_cols = t.child("w:tblGrid").map_or(0, |g| g.children("w:gridCol").count());
-        let mut rows = Vec::new();
-        collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
-        // Comment and permission range markers between the rows and between a row's cells, in
-        // document order: those before a cell go to its first paragraph, as a paragraph takes the
-        // markers before it; those after a row's last cell, or after the last row, end that cell.
-        let mut lead = Vec::new();
-        let mut row_count = 0;
-        for (tr, row_controls) in rows {
-            if tr.name != "w:tr" {
-                lead.extend(self.marker(sc, tr, true));
-                continue;
-            }
-            if row_count >= MAX_ROWS {
-                continue;
-            }
-            row_count += 1;
-            let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
-            row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
-            if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
-                let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
-                row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
-            }
-            let mut tcs = Vec::new();
-            collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
-            let tr_pr = tr.child("w:trPr");
-            let mut row_cols = file_count(tr_pr, "w:gridBefore", 0).saturating_add(file_count(tr_pr, "w:gridAfter", 0));
-            let mut cell_count = 0;
-            for (tc, cell_controls) in tcs {
-                if tc.name != "w:tc" {
-                    lead.extend(self.marker(sc, tc, true));
-                    continue;
-                }
-                row_cols = row_cols.saturating_add(file_count(tc.child("w:tcPr"), "w:gridSpan", 1).max(1));
-                file_cols = file_cols.max(row_cols);
-                if cell_count >= MAX_COLS {
-                    continue;
-                }
-                cell_count += 1;
-                let (mut props, hcont) = tc
-                    .child("w:tcPr")
-                    .map(|p| tcpr(&self.pc, p))
-                    .unwrap_or_else(|| (craft_wordmodel::props::CellProps { span: 1, ..Default::default() }, false));
-                if let Some(ch) = tc.child("w:tcPr").and_then(|p| p.child("w:tcPrChange")) {
-                    let old = ch.child("w:tcPr").map(|o| tcpr(&self.pc, o).0).unwrap_or_default();
-                    props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
-                }
-                // Markers before a skipped cell wait for the next one, or end the row.
-                if hcont && let Some(prev) = row.cells.last_mut() {
-                    prev.props.span = (prev.props.span + props.span.max(1)).min(63);
-                    continue;
-                }
-                let mut blocks = Blocks::new();
-                let outer = std::mem::replace(&mut sc.in_cell, true);
-                sc.pending.append(&mut lead);
-                self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
-                self.end_cell(sc, &mut blocks);
-                sc.in_cell = outer;
-                row.cells.push(Cell { props, blocks, controls: cell_controls });
-            }
-            // A row with no cells isn't kept: its markers wait for the next cell.
-            let Some(last) = row.cells.last_mut() else { continue };
-            sc.pending.append(&mut lead);
-            self.end_cell(sc, &mut last.blocks);
-            table.rows.push(row);
+        let mut grids = Grids { rows: Vec::new(), file_cols: t.child("w:tblGrid").map_or(0, |g| g.children("w:gridCol").count() as u64) };
+        let kept = self.read_rows(sc, t, rels, depth, &mut table, &mut grids);
+        sc.open_tables.pop();
+        if !kept {
+            self.check_columns(sc, number, None, &grids);
+            return None;
         }
-        // Markers after the last row end the table's last cell; with no row kept, they go on to
-        // what follows the table.
-        sc.pending.append(&mut lead);
-        let last = table.rows.last_mut().and_then(|r| r.cells.last_mut())?;
-        self.end_cell(sc, &mut last.blocks);
         if table.grid.is_empty() {
             // A file with an empty `w:tblGrid` keeps the inch per column it always had.
             table.grid = if t.child("w:tblGrid").is_none() { grid_from_cells(&table) } else { vec![72.0; table.cols().clamp(1, MAX_COLS)] };
         }
-        let kept = table.cols();
-        if file_cols > kept {
-            self.fit_perm_cols(&mut table, kept);
-        }
+        self.check_columns(sc, number, Some(&mut table), &grids);
         // The cells' paragraphs, with the run formatting the table style gives each cell (a
         // table inside has marked its own).
         let chrs = self.doc.styles.table_cells_chr(&table);
@@ -619,6 +429,151 @@ impl Reader<'_> {
             }
         }
         Some(table)
+    }
+
+    /// A table's rows, and the comment and permission range markers between them and between a
+    /// row's cells, in document order: those before a cell go to its first paragraph, as a
+    /// paragraph takes the markers before it; those after a row's last cell, or after the last
+    /// row, end that cell; a permission range's end between rows ends the row before
+    /// ([`Self::send_back`]). The grids of rows read once a column range has started go to
+    /// `grids`. Whether a row was kept: with none, the markers go on to what follows the table.
+    fn read_rows(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize, table: &mut Table, grids: &mut Grids) -> bool {
+        let mut rows = Vec::new();
+        collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
+        let mut lead = Vec::new();
+        let (mut row_count, mut file_row) = (0, 0);
+        for (tr, row_controls) in rows {
+            if tr.name != "w:tr" {
+                set_at(sc, 2 * file_row);
+                lead.extend(self.marker(sc, tr, true));
+                continue;
+            }
+            self.send_back(sc, &mut lead, table);
+            set_at(sc, 2 * file_row + 1);
+            let file = file_row;
+            file_row += 1;
+            if row_count >= MAX_ROWS {
+                continue;
+            }
+            row_count += 1;
+            let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
+            row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
+            if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
+                let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
+                row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            }
+            let mut grid = RowGrid { file, kept: table.rows.len(), cells: Vec::new(), kept_cells: Vec::new() };
+            self.read_cells(sc, tr, rels, depth, &mut lead, (&mut row, &mut grid, &mut grids.file_cols));
+            // A row with no cells isn't kept: its markers wait for the next cell.
+            let Some(last) = row.cells.last_mut() else { continue };
+            sc.pending.append(&mut lead);
+            self.end_cell(sc, &mut last.blocks);
+            table.rows.push(row);
+            if sc.open_tables.last().is_some_and(|f| f.columns) {
+                grids.rows.push(grid);
+            }
+        }
+        set_at(sc, 2 * file_row);
+        // Markers after the last row end the table's last cell; with no row kept, they go on to
+        // what follows the table.
+        sc.pending.append(&mut lead);
+        let Some(last) = table.rows.last_mut().and_then(|r| r.cells.last_mut()) else { return false };
+        self.end_cell(sc, &mut last.blocks);
+        true
+    }
+
+    /// A row's cells, the markers among them going to `lead`; with its grid as the file gives it
+    /// (`grid`), and the widest the file's rows are so far (`file_cols`).
+    fn read_cells(
+        &mut self,
+        sc: &mut StoryCtx,
+        tr: &El,
+        rels: &Rels,
+        depth: usize,
+        lead: &mut Vec<InlineObject>,
+        into: (&mut Row, &mut RowGrid, &mut u64),
+    ) {
+        let (row, grid, file_cols) = into;
+        let mut tcs = Vec::new();
+        collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
+        let tr_pr = tr.child("w:trPr");
+        let before = file_count(tr_pr, "w:gridBefore", 0);
+        // Where the next cell starts, and how wide the row is, as the file grids it.
+        let mut at = before;
+        let mut row_cols = before.saturating_add(file_count(tr_pr, "w:gridAfter", 0));
+        for (tc, cell_controls) in tcs {
+            if tc.name != "w:tc" {
+                lead.extend(self.marker(sc, tc, true));
+                continue;
+            }
+            let span = file_count(tc.child("w:tcPr"), "w:gridSpan", 1).max(1);
+            let first = at;
+            at = at.saturating_add(span);
+            row_cols = row_cols.saturating_add(span);
+            *file_cols = (*file_cols).max(row_cols);
+            let ord = grid.cells.len();
+            if ord >= MAX_COLS {
+                continue;
+            }
+            grid.cells.push((first, span));
+            let (mut props, hcont) = tc
+                .child("w:tcPr")
+                .map(|p| tcpr(&self.pc, p))
+                .unwrap_or_else(|| (craft_wordmodel::props::CellProps { span: 1, ..Default::default() }, false));
+            if let Some(ch) = tc.child("w:tcPr").and_then(|p| p.child("w:tcPrChange")) {
+                let old = ch.child("w:tcPr").map(|o| tcpr(&self.pc, o).0).unwrap_or_default();
+                props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            }
+            // Markers before a skipped cell wait for the next one, or end the row. In the file, too,
+            // the cell is part of the cell before it.
+            if hcont && let Some(prev) = row.cells.last_mut() {
+                prev.props.span = (prev.props.span + props.span.max(1)).min(63);
+                if let Some(merged) = grid.kept_cells.last().and_then(|c| grid.cells.get_mut(*c)) {
+                    merged.1 = merged.1.saturating_add(span);
+                }
+                continue;
+            }
+            let mut blocks = Blocks::new();
+            let outer = std::mem::replace(&mut sc.in_cell, true);
+            sc.pending.append(lead);
+            self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
+            self.end_cell(sc, &mut blocks);
+            sc.in_cell = outer;
+            row.cells.push(Cell { props, blocks, controls: cell_controls });
+            grid.kept_cells.push(ord);
+        }
+    }
+
+    /// The permission ranges' ends waiting in `lead` between rows, or in a row with no cells, end
+    /// the row before, at the end of its last cell: that row is the last the range covers in the
+    /// file, and the next row's first cell would give a range limited to columns a row more. An
+    /// end whose own start waits with it waits on with it (the range covers no row). The text
+    /// each range covers is the same either way.
+    fn send_back(&mut self, sc: &mut StoryCtx, lead: &mut Vec<InlineObject>, table: &mut Table) {
+        if !lead.iter().any(|o| matches!(o, InlineObject::PermEnd { .. })) {
+            return;
+        }
+        let Some(last) = table.rows.last_mut().and_then(|r| r.cells.last_mut()) else { return };
+        let mut starts = HashSet::new();
+        let (back, wait): (Vec<_>, Vec<_>) = std::mem::take(lead).into_iter().partition(|o| match o {
+            InlineObject::PermStart { id, .. } => {
+                starts.insert(*id);
+                false
+            }
+            InlineObject::PermEnd { id } => !starts.contains(id),
+            _ => false,
+        });
+        *lead = wait;
+        let pending = std::mem::replace(&mut sc.pending, back);
+        self.end_cell(sc, &mut last.blocks);
+        sc.pending = pending;
+    }
+}
+
+/// Where the reader is among the rows of the table it reads (see [`TableFrame::at`]).
+fn set_at(sc: &mut StoryCtx, at: usize) {
+    if let Some(frame) = sc.open_tables.last_mut() {
+        frame.at = at;
     }
 }
 
@@ -684,40 +639,22 @@ fn grid_from_cells(table: &Table) -> Vec<f32> {
     grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(MIN_GRID_COL, crate::units::MAX_LEN_PT)).collect()
 }
 
-/// A permission range's table columns (`w:colFirst`, `w:colLast`, ECMA-376-1:2016 §17.13.7.2),
-/// zero-based, as the file gives them, so a save writes the same ones back: a pair in the wrong
-/// order or past the table's last column stays as it is, for the code that enforces the range.
-/// One of the two alone limits the range to that one column. `Err` when either is there but isn't
-/// a column number the model holds: `ST_DecimalNumber` is an `xsd:integer`, and a negative one, or
-/// one past `u32::MAX`, names no column. The range is then dropped, rather than read as one without
-/// columns (which, in a table, applies to the entire table), and the other value isn't used alone.
-fn perm_cols(e: &El) -> Result<Option<[u32; 2]>, ()> {
-    let col = |a: &str| match e.attr(a) {
-        None => Ok(None),
-        Some(v) => v.trim_matches([' ', '\t', '\r', '\n']).parse::<i64>().ok().and_then(|n| u32::try_from(n).ok()).map(Some).ok_or(()),
-    };
-    Ok(match (col("w:colFirst")?, col("w:colLast")?) {
-        (Some(first), Some(last)) => Some([first, last]),
-        (Some(one), None) | (None, Some(one)) => Some([one, one]),
-        (None, None) => None,
-    })
-}
-
 /// A count in an element's `w:val` (`w:gridSpan`, `w:gridBefore`, `w:gridAfter`) as the file gives
-/// it, before the reader's limits: `default` when it's not there or not a count.
-fn file_count(parent: Option<&El>, name: &str, default: usize) -> usize {
-    parent.and_then(|p| p.child(name)).and_then(|e| e.attr("w:val")).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(default)
+/// it, before the reader's limits (the last such element counts, as the reader takes it):
+/// `default` when it's not there or not a count.
+fn file_count(parent: Option<&El>, name: &str, default: u64) -> u64 {
+    parent.and_then(|p| p.children(name).last()).and_then(|e| e.attr("w:val")).and_then(u32_of).map_or(default, u64::from)
 }
 
-/// The permission starts waiting in `pending`, and any end waiting after its own start, taken out
-/// in order (see [`Reader::read_table`]).
-fn take_perm_starts(pending: &mut Vec<InlineObject>) -> Vec<InlineObject> {
-    if !pending.iter().any(|o| matches!(o, InlineObject::PermStart { .. })) {
+/// The starts of ranges limited to columns waiting in `pending`, and any end waiting after its own
+/// start, taken out in order (see [`Reader::read_table`]).
+fn take_column_starts(pending: &mut Vec<InlineObject>) -> Vec<InlineObject> {
+    if !pending.iter().any(|o| matches!(o, InlineObject::PermStart { cols: Some(_), .. })) {
         return Vec::new();
     }
     let mut ids = HashSet::new();
     let (held, rest) = std::mem::take(pending).into_iter().partition(|o| match o {
-        InlineObject::PermStart { id, .. } => {
+        InlineObject::PermStart { id, cols: Some(_), .. } => {
             ids.insert(*id);
             true
         }

@@ -263,8 +263,9 @@ impl Table {
     /// columns, at the start of the new table's first row, under the id `next_perm_id` gives
     /// (which then moves on): ECMA-376-1:2016 §17.13.7.2 limits a range to columns only within one
     /// table, so each table gets a pair of its own. Pass the [`crate::Document::next_perm_id`] of
-    /// the document the table is in. With no id left (`u32::MAX`), the new table's part of the
-    /// range is dropped instead: a range never runs from one table into the other.
+    /// the document the table is in. `u32::MAX` means no id is left, and is never given out: the
+    /// new table's part of the range is then dropped instead. A range never runs from one table
+    /// into the other.
     pub fn split_off(&mut self, at: usize, next_perm_id: &mut u32) -> Table {
         let at = at.min(self.rows.len());
         let mut open = Vec::new();

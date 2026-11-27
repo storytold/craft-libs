@@ -953,20 +953,32 @@ impl Document {
         out.into_iter().zip(closed).filter_map(|(r, c)| c.then_some(r)).collect()
     }
 
-    /// An id no permission marker in the document uses yet, matched or not, for a new range
-    /// (as [`crate::table::Table::split_off`] needs).
+    /// The id for a new permission range (as [`crate::table::Table::split_off`] takes it): one past
+    /// the highest id any permission marker in the document has, matched or not, in its body, its
+    /// parts (headers, footers, notes, comments, text boxes), its glossary entries and its note
+    /// separators, so that no marker has it or any id after it.
+    ///
+    /// With a marker at `u32::MAX` no id is left after it, and this returns `u32::MAX`, which is
+    /// then in use. [`crate::table::Table::split_off`] takes `u32::MAX` to mean that no id is left,
+    /// and never gives it to a range.
     pub fn next_perm_id(&self) -> u32 {
-        let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
+        let separators = [&self.footnote_separators, &self.endnote_separators]
+            .into_iter()
+            .flat_map(|s| [&s.separator, &s.continuation_separator, &s.continuation_notice])
+            .flatten();
+        let lists = std::iter::once(&self.body)
+            .chain(self.parts.values().map(|p| &p.blocks))
+            .chain(self.glossary.iter().map(|entry| &entry.blocks))
+            .chain(separators);
         let mut next = 0u32;
-        for story in stories {
-            for path in self.para_paths(story) {
-                let Some(p) = self.para(story, &path) else { continue };
+        for b in lists.flatten() {
+            crate::walk::each_para(b, 0, &mut |p| {
                 for o in &p.objects {
                     if let InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } = o {
                         next = next.max(id.saturating_add(1));
                     }
                 }
-            }
+            });
         }
         next
     }

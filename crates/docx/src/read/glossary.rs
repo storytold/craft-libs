@@ -73,7 +73,7 @@ impl Reader<'_> {
         let comments = std::mem::take(&mut self.comment_map);
         let ended = std::mem::take(&mut self.comments_ended);
         let bookmarks = std::mem::take(&mut self.bookmarks);
-        let perms = std::mem::take(&mut self.perms);
+        let perms = std::mem::take(&mut self.perm_ids);
         let moves = std::mem::take(&mut self.moves);
         let mut out = Vec::new();
         for part in root.child("w:docParts").into_iter().flat_map(|d| d.children("w:docPart")) {
@@ -86,7 +86,7 @@ impl Reader<'_> {
             let name = val(pr.and_then(|p| p.child("w:name")));
             let Some(body) = part.child("w:docPartBody").filter(|_| !name.is_empty()) else { continue };
             let category = pr.and_then(|p| p.child("w:category"));
-            let mut sc = StoryCtx::default();
+            let mut sc = StoryCtx::new(body);
             let mut blocks = Blocks::new();
             self.read_blocks(&mut sc, body, rels, &mut blocks, 0);
             self.flush_pending(&mut sc, &mut blocks);
@@ -110,7 +110,7 @@ impl Reader<'_> {
         self.comment_map = comments;
         self.comments_ended = ended;
         self.bookmarks = bookmarks;
-        self.perms = perms;
+        self.perm_ids = perms;
         self.moves = moves;
         out
     }

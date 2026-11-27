@@ -36,6 +36,7 @@ mod nested_block_controls;
 mod note_comments;
 mod partial_table_margins;
 mod passthrough;
+mod permission_ranges_generated;
 mod picture_links;
 mod positional_tabs;
 mod privacy;

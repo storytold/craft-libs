@@ -165,7 +165,7 @@ impl Reader<'_> {
             _ => return Some(id),
         };
         let rels = self.pkg.rels(path);
-        let mut sc = StoryCtx::default();
+        let mut sc = StoryCtx::new(&root);
         sc.in_hf = true;
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
