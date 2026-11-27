@@ -47,7 +47,7 @@ impl Reader<'_> {
                         })
                         .and_then(|c| c.attr("w:val"));
                     if let Some(m) = mode.and_then(u32_of) {
-                        s.compat_mode = m.clamp(11, 99);
+                        s.compat_mode = Some(m.clamp(11, 99));
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
                     s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);

@@ -1280,17 +1280,17 @@ fn compatibility_mode_is_read_and_defaults_to_word_2007() {
     let compat = |v: &str| {
         format!(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{v}"/></w:compat>"#)
     };
-    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, 15);
-    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, 14);
+    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, Some(15));
+    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, Some(14));
     // Unnamed, out of range or junk values.
-    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(None).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, 11);
-    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, 99);
-    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, None);
+    assert_eq!(with_settings(None).settings.compat_mode, None);
+    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, Some(11));
+    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, Some(99));
+    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, None);
     // Another vendor's setting of the same name is ignored.
     let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
-    assert_eq!(with_settings(Some(other)).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some(other)).settings.compat_mode, None);
 }
 
 #[test]
@@ -1458,7 +1458,9 @@ fn anchor_stacking_order_is_read_and_kept() {
 
 #[test]
 fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
-    assert_eq!(read_body("<w:p/>").settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    let d = read_body("<w:p/>");
+    assert_eq!(d.settings.compat_mode, None);
+    assert_eq!(d.settings.effective_compat_mode(), craft_wordmodel::LEGACY_COMPAT_MODE);
 }
 
 #[test]
