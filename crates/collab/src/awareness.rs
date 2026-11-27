@@ -113,11 +113,17 @@ impl Awareness {
         Awareness { client_id, ..Default::default() }
     }
 
-    /// Sets our state; returns the update to send.
-    pub fn set_local(&mut self, state: Option<Json>) -> Vec<u8> {
+    /// Sets our state; returns the update to send. A state too large for an update is refused
+    /// and nothing changes: every peer would drop the update, and we would fade from their view.
+    pub fn set_local(&mut self, state: Option<Json>) -> Result<Vec<u8>, CollabError> {
+        // Measured under the largest clock, so no later renewal outgrows the limit either.
+        let largest = encode(&[(self.client_id, u64::MAX, state.as_ref())]).len();
+        if largest > crate::MAX_AWARENESS {
+            return Err(CollabError::TooLarge(largest));
+        }
         self.clock += 1;
         self.local = state;
-        self.local_update()
+        Ok(self.local_update())
     }
 
     /// Our state again under a new clock: what to send every [`RENEW_MS`]. Peers refresh a
@@ -187,17 +193,17 @@ mod tests {
     fn encode_decode_and_apply() {
         let mut a = Awareness::new(1);
         let mut b = Awareness::new(2);
-        let up = a.set_local(Some(json!({"user": {"id": "u1", "name": "Ann", "color": "#3B7DD8"}})));
+        let up = a.set_local(Some(json!({"user": {"id": "u1", "name": "Ann", "color": "#3B7DD8"}}))).expect("fits");
         assert!(b.apply(&up, 0).expect("apply"));
         assert_eq!(b.present().count(), 1);
         // A replay of the same clock changes nothing; an older one is ignored.
         assert!(!b.apply(&up, 10).expect("apply"));
-        let up2 = a.set_local(Some(json!({"user": {"name": "Ann B"}})));
+        let up2 = a.set_local(Some(json!({"user": {"name": "Ann B"}}))).expect("fits");
         assert!(b.apply(&up2, 20).expect("apply"));
         assert!(!b.apply(&up, 30).expect("apply"));
         assert_eq!(b.peers[&1].state.as_ref().map(|s| s["user"]["name"].clone()), Some(json!("Ann B")));
         // Leaving.
-        let bye = a.set_local(None);
+        let bye = a.set_local(None).expect("fits");
         assert!(b.apply(&bye, 40).expect("apply"));
         b.prune(40);
         assert_eq!(b.present().count(), 0);
@@ -209,7 +215,7 @@ mod tests {
     fn timeouts_and_garbage() {
         let mut a = Awareness::new(1);
         let mut b = Awareness::new(2);
-        b.apply(&a.set_local(Some(json!({"x": 1}))), 0).expect("apply");
+        b.apply(&a.set_local(Some(json!({"x": 1}))).expect("fits"), 0).expect("apply");
         assert!(!b.prune(TIMEOUT_MS - 1));
         assert!(b.prune(TIMEOUT_MS));
         assert!(decode(&[5]).is_err());
@@ -236,7 +242,7 @@ mod tests {
     #[test]
     fn a_renewal_has_a_new_clock() {
         let mut a = Awareness::new(1);
-        let first = decode(&a.set_local(Some(json!({"x": 1})))).expect("decode");
+        let first = decode(&a.set_local(Some(json!({"x": 1}))).expect("fits")).expect("decode");
         let again = decode(&a.local_update()).expect("decode");
         let renewed = decode(&a.renew()).expect("decode");
         assert_eq!(again, first, "a snapshot for a newcomer changes nothing");
@@ -248,8 +254,8 @@ mod tests {
     fn a_late_update_does_not_bring_back_a_peer_that_went() {
         let mut a = Awareness::new(1);
         let mut b = Awareness::new(2);
-        let here = a.set_local(Some(json!({"x": 1})));
-        let bye = a.set_local(None);
+        let here = a.set_local(Some(json!({"x": 1}))).expect("fits");
+        let bye = a.set_local(None).expect("fits");
         b.apply(&here, 0).expect("apply");
         b.apply(&bye, 10).expect("apply");
         b.prune(20);
@@ -259,7 +265,7 @@ mod tests {
         // The same after a timeout; a newer clock brings the peer back.
         let mut c = Awareness::new(3);
         let mut d = Awareness::new(4);
-        let here = c.set_local(Some(json!({"x": 1})));
+        let here = c.set_local(Some(json!({"x": 1}))).expect("fits");
         d.apply(&here, 0).expect("apply");
         assert!(d.prune(TIMEOUT_MS));
         assert!(!d.apply(&here, TIMEOUT_MS + 1).expect("apply"));
@@ -276,7 +282,7 @@ mod tests {
     fn a_replay_does_not_keep_a_silent_peer_present() {
         let mut a = Awareness::new(1);
         let mut b = Awareness::new(2);
-        let here = a.set_local(Some(json!({"x": 1})));
+        let here = a.set_local(Some(json!({"x": 1}))).expect("fits");
         b.apply(&here, 0).expect("apply");
         b.apply(&here, TIMEOUT_MS - 1).expect("apply");
         assert!(b.prune(TIMEOUT_MS), "the replay didn't count as news of the peer");
@@ -286,6 +292,19 @@ mod tests {
         c.apply(&a.renew(), TIMEOUT_MS - 1).expect("apply");
         assert!(!c.prune(TIMEOUT_MS));
         assert_eq!(c.present().count(), 1);
+    }
+
+    #[test]
+    fn a_state_too_large_to_send_is_refused_and_changes_nothing() {
+        let mut a = Awareness::new(1);
+        let kept = a.set_local(Some(json!({"x": 1}))).expect("fits");
+        let big = json!({"note": "n".repeat(crate::MAX_AWARENESS)});
+        assert!(matches!(a.set_local(Some(big)), Err(CollabError::TooLarge(_))));
+        assert_eq!(a.local_update(), kept, "the state and its clock are the ones from before");
+        // What is accepted can be read by a peer, now and after renewals.
+        let most = json!({"note": "n".repeat(crate::MAX_AWARENESS - 64)});
+        assert!(decode(&a.set_local(Some(most)).expect("fits")).is_ok());
+        assert!(decode(&a.renew()).is_ok());
     }
 
     #[test]
