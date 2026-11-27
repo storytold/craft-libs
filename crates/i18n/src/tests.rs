@@ -7,7 +7,7 @@ use unicode_bidi::{BidiClass, bidi_class};
 impl I18n {
     /// The embedded locales parsed so far, by code.
     fn parsed(&self) -> Vec<&str> {
-        let mut codes: Vec<&str> = self.locales.iter().skip(2).filter(|l| l.parsed.get().is_some()).map(|l| l.code.as_str()).collect();
+        let mut codes: Vec<&str> = self.locales.iter().skip(RESERVED).filter(|l| l.parsed.get().is_some()).map(|l| l.code.as_str()).collect();
         codes.sort_unstable();
         codes
     }

@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
-# Regenerates the number, plural and date data in this directory from Unicode CLDR, for every CLDR
-# locale: 10 KB of numbers (CLDR's modern-coverage locales alone would be 7 KB) and 340 KB of
-# dates. Lookups fall back at run time, so a locale whose data matches its parent's is left out.
+# Regenerates the number, plural (cardinal and ordinal) and date data in this directory from Unicode
+# CLDR, for every CLDR locale: 11 KB of numbers and plural rules and 427 KB of dates. Lookups fall
+# back at run time, so a locale whose data matches its parent's is left out.
 #
-# Needs `cargo install icu4x-datagen --version 2.3.0` (the ICU4X minor version in Cargo.toml)
-# and python3. Downloads CLDR's JSON release once into $CACHE.
+# Needs `cargo install icu4x-datagen --version 2.4.0 --locked` (the ICU4X minor version in Cargo.toml,
+# which the script checks) and python3. Downloads CLDR's JSON release once into $CACHE. The releases
+# the data came from are written to source.txt: the ICU4X minor version and CLDR release a build of
+# this crate holds, and the one other tables built from the same CLDR (language names, quotation
+# marks) take, so they cannot disagree with the data here.
 set -euo pipefail
 
-CLDR=48.2.1
+# ICU4X 2.4's own tested CLDR release (`SourceDataProvider::TESTED_CLDR_TAG`).
+ICU4X=2.4.0
+CLDR=49.0.0
 HERE=$(cd "$(dirname "$0")" && pwd)
 CACHE=${CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/craft-i18n-data}
 mkdir -p "$CACHE"
 
+[ "$(icu4x-datagen --version | awk '{print $2}')" = "$ICU4X" ] || {
+    echo "icu4x-datagen $ICU4X is needed (cargo install icu4x-datagen --version $ICU4X --locked)" >&2
+    exit 1
+}
+
 TMPDIR=$CACHE icu4x-datagen --format blob --overwrite \
     --cldr-tag "$CLDR" \
-    --markers DecimalSymbolsV1 DecimalDigitsV1 PluralsCardinalV1 \
+    --markers DecimalSymbolsV1 DecimalDigitsV1 PluralsCardinalV1 PluralsOrdinalV1 \
     --locales full --deduplication maximal \
     --out "$HERE/numbers.postcard"
 
@@ -34,3 +44,5 @@ TMPDIR=$CACHE icu4x-datagen --format blob --overwrite \
 
 python3 -I "$HERE/locales.py" "$ZIP" "$CLDR" > "$HERE/locales.rs.tmp"
 mv "$HERE/locales.rs.tmp" "$HERE/locales.rs"
+
+printf 'icu4x-datagen %s\ncldr %s\n' "$ICU4X" "$CLDR" > "$HERE/source.txt"

@@ -33,7 +33,6 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{Datelike, Local, NaiveDate, Offset, TimeZone as _};
 use icu_calendar::week::WeekInformation;
 use icu_calendar::{AnyCalendarKind, Date, Gregorian};
 use icu_datetime::fieldsets::{T, YM, YMD, YMDE, YMDET, YMDT};
@@ -45,15 +44,24 @@ use icu_locale_core::Locale;
 use icu_locale_core::extensions::unicode::{key, value};
 use icu_provider::buf::AsDeserializingBufferProvider;
 use icu_time::Time;
+use jiff::Timestamp;
+use jiff::civil::Date as CivilDate;
+use jiff::tz::TimeZone as ZoneRules;
 use writeable::{Part, PartsWrite, TryWriteable, Writeable};
 
 use crate::{Digits, HourCycle, I18n, Region, data};
 
 /// Days in a 400-year Gregorian cycle, after which the calendar (and the weekday) repeats.
 const CYCLE_DAYS: i64 = 146_097;
-const CYCLE_SECS: i64 = CYCLE_DAYS * 86_400;
-/// `NaiveDate::num_days_from_ce` of 1970-01-01.
-const EPOCH_FROM_CE: i32 = 719_163;
+const DAY_SECS: i64 = 86_400;
+#[cfg(feature = "local-time")]
+const CYCLE_SECS: i64 = CYCLE_DAYS * DAY_SECS;
+
+/// The civil date of a day inside the 400-year cycle that starts at year 0, which is inside jiff's years
+/// (-9999 to 9999). `None` for a month or day out of range for that year.
+fn civil_in_cycle(year_in_cycle: i64, month: u8, day: u8) -> Option<CivilDate> {
+    CivilDate::new(i16::try_from(year_in_cycle).ok()?, i8::try_from(month).ok()?, i8::try_from(day).ok()?).ok()
+}
 
 /// A day of the Gregorian calendar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -70,7 +78,7 @@ impl CalendarDate {
     /// `None` when `month` or `day` is out of range for that year (`2026-02-29`).
     pub fn new(year: i64, month: u8, day: u8) -> Option<CalendarDate> {
         // Whole 400-year cycles leave month lengths, leap days and weekdays as they were.
-        NaiveDate::from_ymd_opt(year.rem_euclid(400) as i32, month.into(), day.into())?;
+        civil_in_cycle(year.rem_euclid(400), month, day)?;
         Some(CalendarDate { year, month, day })
     }
 
@@ -78,17 +86,25 @@ impl CalendarDate {
     // pdfcraft: crates/ui-egui/src/workflows/combine_ui/parts.rs:279 civil_from_days
     pub fn from_days(days: i64) -> CalendarDate {
         let cycles = days.div_euclid(CYCLE_DAYS);
-        let in_cycle = days.rem_euclid(CYCLE_DAYS) as i32;
-        let date = NaiveDate::from_num_days_from_ce_opt(in_cycle + EPOCH_FROM_CE).unwrap_or_default();
-        CalendarDate { year: i64::from(date.year()).saturating_add(cycles.saturating_mul(400)), month: date.month() as u8, day: date.day() as u8 }
+        // Days after 1970-01-01 inside one cycle: a date between 1970 and 2369.
+        let in_cycle = days.rem_euclid(CYCLE_DAYS);
+        let date =
+            Timestamp::from_second(in_cycle * DAY_SECS).map_or(CivilDate::constant(1970, 1, 1), |at| at.to_zoned_datetime(ZoneRules::UTC).date());
+        CalendarDate {
+            year: i64::from(date.year()).saturating_add(cycles.saturating_mul(400)),
+            month: u8::try_from(date.month()).unwrap_or(1),
+            day: u8::try_from(date.day()).unwrap_or(1),
+        }
     }
 
     /// Days since 1970-01-01; the inverse of [`from_days`](Self::from_days).
     pub fn days(self) -> i64 {
         let cycles = self.year.div_euclid(400);
-        let year = self.year.rem_euclid(400) as i32;
-        let date = NaiveDate::from_ymd_opt(year, self.month.into(), self.day.into()).unwrap_or_default();
-        i64::from(date.num_days_from_ce() - EPOCH_FROM_CE).saturating_add(cycles.saturating_mul(CYCLE_DAYS))
+        // A date the fields do not name (an invalid one built by hand) counts as 1970-01-01 of its cycle.
+        let in_cycle = civil_in_cycle(self.year.rem_euclid(400), self.month, self.day)
+            .and_then(|date| date.to_zoned_datetime(ZoneRules::UTC).ok())
+            .map_or(0_i64, |at| at.timestamp().as_second().div_euclid(DAY_SECS));
+        in_cycle.saturating_add(cycles.saturating_mul(CYCLE_DAYS))
     }
 
     /// The day of the week.
@@ -145,7 +161,8 @@ impl Weekday {
 /// Which clock a moment is read on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TimeZone {
-    /// The system's offset at that moment (daylight saving included).
+    /// The system's offset at that moment (daylight saving included); UTC when the crate is built
+    /// without its `local-time` feature.
     #[default]
     Local,
     /// Coordinated Universal Time.
@@ -167,7 +184,8 @@ pub struct DateTime {
 
 impl DateTime {
     /// The moment `unix` seconds after 1970-01-01T00:00Z, on `zone`'s clock. The local offset
-    /// is the system's (chrono's `Local`; the browser's `Date` on wasm).
+    /// is the system's (jiff's system zone; the browser's `Date` on wasm), or UTC without the
+    /// `local-time` feature.
     // effectcraft: crates/ui-egui/src/panels/home.rs:74 utc_parts
     pub fn from_unix(unix: i64, zone: TimeZone) -> DateTime {
         let offset = match zone {
@@ -721,11 +739,33 @@ fn from_icu_weekday(day: icu_calendar::types::Weekday) -> Weekday {
     }
 }
 
-/// The system's offset from UTC in seconds at `unix`. A moment beyond chrono's range takes the
-/// offset of the same moment in the 400-year cycle that fits.
+/// The system's offset from UTC in seconds at `unix`. A moment beyond jiff's range (the years
+/// -9999 to 9999) takes the offset of the same moment in the 400-year cycle that fits. Zero (UTC)
+/// without the `local-time` feature, or when the system's zone cannot be read.
+#[cfg(feature = "local-time")]
 fn local_offset(unix: i64) -> i64 {
-    let at = Local.timestamp_opt(unix, 0).single().or_else(|| Local.timestamp_opt(unix.rem_euclid(CYCLE_SECS), 0).single());
-    at.map_or(0, |t| i64::from(t.offset().fix().local_minus_utc()))
+    system_offset(unix).or_else(|| system_offset(unix.rem_euclid(CYCLE_SECS))).unwrap_or(0)
+}
+
+#[cfg(not(feature = "local-time"))]
+fn local_offset(_unix: i64) -> i64 {
+    0
+}
+
+/// The system zone's offset at `unix` seconds; `None` for a moment jiff does not hold.
+#[cfg(all(feature = "local-time", not(target_arch = "wasm32")))]
+fn system_offset(unix: i64) -> Option<i64> {
+    let at = Timestamp::from_second(unix).ok()?;
+    Some(i64::from(ZoneRules::system().to_offset(at).seconds()))
+}
+
+/// The browser's offset at `unix` seconds: `Date`'s `getTimezoneOffset` is minutes behind UTC.
+/// `None` for a moment a `Date` does not hold (it answers NaN).
+#[cfg(all(feature = "local-time", target_arch = "wasm32"))]
+fn system_offset(unix: i64) -> Option<i64> {
+    use js_sys::wasm_bindgen::JsValue;
+    let behind = js_sys::Date::new(&JsValue::from_f64(unix as f64 * 1000.0)).get_timezone_offset();
+    behind.is_finite().then(|| -(behind * 60.0).round() as i64)
 }
 
 impl I18n {

@@ -75,7 +75,9 @@ impl Template {
             } else if matches!(pieces.last(), Some(Piece::Hole(_))) {
                 return None;
             }
-            pieces.push(Piece::Hole(after.get(..b)?.to_string()));
+            // A typed placeholder (`{item :noun}`) is its name.
+            let inside = after.get(..b)?;
+            pieces.push(Piece::Hole(inside.split_whitespace().next().unwrap_or(inside).to_string()));
             rest = after.get(b + 1..)?;
         }
         text.push_str(rest);
@@ -182,5 +184,99 @@ fn match_pieces<'p, 'a>(pieces: &'p [Piece], s: &'a str, counted: bool, out: &mu
             }
             false
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Typed messages: a template of the code and typed values
+
+use std::borrow::Cow;
+use std::cell::Cell;
+
+use crate::limits::MAX_OUTPUT_CHARS;
+use crate::select::{self, Arg, Env};
+use crate::{Lang, Locale, Row, assemble, split};
+
+/// A message's pieces joined (isolating values as [`crate::fmt`] does) and cut to [`MAX_OUTPUT_CHARS`] characters, balanced: a cut
+/// never leaves an isolate, embedding or override open for what follows the message to be reordered by, nor does a translation
+/// that opens one of its own.
+fn finish(pieces: Vec<(Cow<'_, str>, bool)>) -> String {
+    crate::bidi::cap_balanced(&assemble(pieces, true, 64), MAX_OUTPUT_CHARS)
+}
+
+impl crate::I18n {
+    /// A message with typed values, in `lang`: `source` is the English template, `{name}` or `{name :type}` placeholders, and
+    /// `args` the values by name. The row is the (`context`, `source`) of the catalogs along `lang`'s chain, else the plain
+    /// row of `source` (an empty `context` is the plain row alone); its translation is plain text with `{name}` placeholders,
+    /// or a selector message ([`select`]) that chooses words by a number, an ordinal or a noun's gender. Values are written as
+    /// [`I18n::format`](crate::I18n::format) writes numbers and as [`I18n::dates`](crate::I18n::dates) writes dates, and
+    /// isolated as [`crate::fmt`] does. A message the language cannot show (a value of another type than the function takes,
+    /// a noun the language has no row for) shows in English, and so does a message with no row. The output is at most
+    /// [`MAX_OUTPUT_CHARS`] characters, and a person's text ([`Arg::Name`]) at most [`MAX_ARG_CHARS`](crate::limits::MAX_ARG_CHARS).
+    /// In `@msg` rows, `{{` and `}}` are a literal `{` and `}`.
+    pub fn tm(&self, lang: Lang, context: &str, source: &str, args: &[(&str, Arg<'_>)]) -> String {
+        let escapes = context == "@msg";
+        if let Some(pseudo) = lang.pseudo() {
+            return pseudo.show(&self.render_english(source, args, escapes));
+        }
+        let both = [(context, source), ("", source)];
+        let keys = if context.is_empty() { both.get(1..).unwrap_or(&both) } else { &both[..] };
+        if let Some((locale, row)) = self.find_row(lang, keys) {
+            let shown = match row {
+                Row::Text(text) => self.render_text(locale, text, args, escapes),
+                Row::Message(message) => self.render_message(locale, message, args, false),
+            };
+            if let Some(shown) = shown {
+                return shown;
+            }
+        }
+        self.render_english(source, args, escapes)
+    }
+
+    /// The pieces' environment for `locale`'s rules and nouns, or for English (`None`).
+    fn with_env<T>(&self, locale: Option<&Locale>, plain: bool, run: impl FnOnce(&Env<'_>) -> T) -> T {
+        let format = self.format();
+        #[cfg(feature = "dates")]
+        let dates = self.dates();
+        let env = Env {
+            cardinal: locale.and_then(|l| l.plural.as_ref()).map(|(rules, _)| rules),
+            ordinal: locale.and_then(|l| l.ordinal.as_ref()).map(|(rules, _)| rules),
+            nouns: locale.map(|l| &l.parsed().nouns),
+            format: &format,
+            plain,
+            #[cfg(feature = "dates")]
+            dates: &dates,
+        };
+        run(&env)
+    }
+
+    /// A selector message of `locale` shown for `args`; `None` when it cannot be shown.
+    pub(crate) fn render_message(&self, locale: &Locale, message: &select::Message, args: &[(&str, Arg<'_>)], plain: bool) -> Option<String> {
+        self.with_env(Some(locale), plain, |env| message.evaluate(env, args).map(finish))
+    }
+
+    /// Plain translated text with `{name}` placeholders, filled from `args`; `None` when a value cannot be shown.
+    fn render_text(&self, locale: &Locale, template: &str, args: &[(&str, Arg<'_>)], escapes: bool) -> Option<String> {
+        self.with_env(Some(locale), false, |env| {
+            let failed = Cell::new(false);
+            let pieces = split(template, escapes, true, &|name| {
+                let (_, arg) = args.iter().find(|(n, _)| *n == name)?;
+                let shown = select::shown(arg, env);
+                failed.set(failed.get() || shown.is_none());
+                shown.map(Cow::Owned)
+            });
+            (!failed.get()).then(|| finish(pieces))
+        })
+    }
+
+    /// The English `template` filled from `args`, a noun as its English name.
+    fn render_english(&self, template: &str, args: &[(&str, Arg<'_>)], escapes: bool) -> String {
+        self.with_env(None, false, |env| {
+            let pieces = split(template, escapes, true, &|name| {
+                let (_, arg) = args.iter().find(|(n, _)| *n == name)?;
+                select::shown(arg, env).map(Cow::Owned)
+            });
+            finish(pieces)
+        })
     }
 }

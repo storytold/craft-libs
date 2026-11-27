@@ -8,6 +8,10 @@
 //! [`Region`] does ([`I18n::format`]): grouped (`1.234`, `12,34,567`) and in the region's digits
 //! (`١٬٢٣٤`). Text that goes into documents or file names should use [`I18n::trn_plain`], which
 //! writes `0`–`9` without grouping.
+//!
+//! Ordinals ([`I18n::tord`]), messages with typed values ([`I18n::tm`], [`Arg`]) and the selector messages, nouns and
+//! forms that choose a translation's words by a number, an ordinal or a gender ([`select`], [`noun`]) read the same catalogs
+//! under the caps of [`limits`].
 #![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -15,6 +19,7 @@ mod age;
 mod catalog;
 #[cfg(feature = "collate")]
 mod collate;
+#[cfg(feature = "dates")]
 mod date;
 mod fold;
 mod format;
@@ -27,16 +32,23 @@ mod size;
 mod words;
 
 mod bidi;
+pub mod limits;
 mod negotiation;
+pub mod noun;
+mod ordinal;
+mod pseudo;
+pub mod select;
 
 use bidi::{FSI, has_bidi_control, has_rtl, is_one_isolate, unwrap_isolate, wrap};
 #[cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))]
 use negotiation::posix_env_tags;
-use negotiation::{bare, candidates, is_region, marked, plural_rules};
+use negotiation::{bare, candidates, is_region, ordinal_rules, plural_rules};
+use pseudo::Pseudo;
 
 pub use bidi::{file_name, isolate, ltr, path, strip_isolates};
 pub use message::MessageMatch;
 use message::{KEPT_VALUE, MAX_MESSAGE_LEN, MESSAGE_DEPTH, Template, insert_template, sort_templates};
+pub use select::Arg;
 
 /// The CLDR number, plural and date data for every CLDR locale, from `data/generate.sh`.
 mod data {
@@ -61,6 +73,7 @@ mod data {
 
     /// The date, time, name and week data (with the digits they use), read once; `None` if the
     /// blob doesn't load.
+    #[cfg(feature = "dates")]
     pub(crate) fn dates_provider() -> Option<&'static LocaleFallbackProvider<BlobDataProvider>> {
         static PROVIDER: OnceLock<Option<LocaleFallbackProvider<BlobDataProvider>>> = OnceLock::new();
         PROVIDER
@@ -82,6 +95,7 @@ use icu_plurals::{PluralCategory, PluralOperands, PluralRules};
 pub use age::{AGE_SHOWN_AS_DATE, AgeStyle, relative_age};
 #[cfg(feature = "collate")]
 pub use collate::Collator;
+#[cfg(feature = "dates")]
 pub use date::{
     CalendarDate, CalendarKind, DateFormat, DateLength, DateStyle, DateTime, LocalDate, NameLength, TimePrecision, TimeZone, Weekday, utc_stamp,
 };
@@ -106,7 +120,22 @@ impl Lang {
     pub const EN: Lang = Lang(0);
     /// A test-only locale that marks every looked-up string.
     pub const PSEUDO: Lang = Lang(1);
+    /// A test-only locale that marks every looked-up string, accents its letters and makes it 40% longer, so a layout that only
+    /// just fits English is found.
+    pub const PSEUDO_LONG: Lang = Lang(2);
+
+    /// The pseudo locale a language is, if it is one.
+    fn pseudo(self) -> Option<Pseudo> {
+        match self {
+            Lang::PSEUDO => Some(Pseudo::Marked),
+            Lang::PSEUDO_LONG => Some(Pseudo::Long),
+            _ => None,
+        }
+    }
 }
+
+/// The languages before the embedded locales: English and the two pseudo locales.
+const RESERVED: usize = 3;
 
 /// One locale's translations: context → source text → translation, app rows over shared ones.
 struct Locale {
@@ -116,6 +145,8 @@ struct Locale {
     app: Cow<'static, str>,
     /// Plural forms `@plural` rows must list, for [`catalog::parse`].
     forms: usize,
+    /// Ordinal forms `@ordinal` rows must list.
+    ordinal_forms: usize,
     parsed: OnceLock<Parsed>,
     /// [`I18n::name`], read from the text on first use.
     name: OnceLock<Option<String>>,
@@ -127,11 +158,17 @@ struct Locale {
     offered: bool,
     /// Plural rules and the categories `@plural` forms list, in order.
     plural: Option<(PluralRules, Vec<PluralCategory>)>,
+    /// Ordinal rules and the categories `@ordinal` forms list, in order.
+    ordinal: Option<(PluralRules, Vec<PluralCategory>)>,
 }
 
 /// A locale's rows, app over shared, and what was wrong with the catalogs it came from.
 struct Parsed {
     rows: HashMap<String, HashMap<String, String>>,
+    /// The rows whose translation is a selector message, parsed: context → source text → message. A key is in `rows` or here.
+    messages: HashMap<String, HashMap<String, select::Message>>,
+    /// The `@noun` rows: English noun → its words in this locale.
+    nouns: noun::Nouns,
     /// The `@msg` rows without placeholders: the English message, its `{{` and `}}` read as `{`
     /// and `}`, → its translation as written.
     exact: HashMap<String, String>,
@@ -148,6 +185,26 @@ struct Found<'a> {
     english: &'a str,
     forms: &'a [String],
     captures: Vec<(&'a str, &'a str)>,
+}
+
+/// A row found along a locale chain: plain text, or a selector message.
+enum Row<'a> {
+    Text(&'a str),
+    Message(&'a select::Message),
+}
+
+/// A count as the wording functions take it.
+struct Tally<'a> {
+    /// What a selector message binds to `n`.
+    arg: Arg<'a>,
+    /// The plural operands of the number as shown; `None` for the `other` category.
+    operands: Option<PluralOperands>,
+    /// Whether the English singular reads it.
+    english_one: bool,
+    /// The number as shown.
+    shown: &'a str,
+    /// Written for a document or a file name: `0`–`9`, no grouping.
+    plain: bool,
 }
 
 /// The index of `category` among a locale's plural `categories`. A category whole numbers up to
@@ -167,12 +224,22 @@ impl Locale {
         self.parsed.get_or_init(|| {
             let mut problems = Vec::new();
             let mut rows: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut messages: HashMap<String, HashMap<String, select::Message>> = HashMap::new();
+            let mut nouns = noun::Nouns::new();
             let mut exact = HashMap::new();
             let mut templates = Vec::new();
+            // The locale's genders and forms come from both its catalogs, whichever row comes first.
+            let grammar = catalog::grammar([&*self.shared, &*self.app]);
+            let rules = select::LocaleRules::from_rules(self.plural.as_ref(), self.ordinal.as_ref());
+            let shape = catalog::Shape {
+                cardinal: self.forms,
+                ordinal: self.ordinal_forms,
+                locale: select::Locale { rules: rules.as_ref(), grammar: &grammar },
+            };
             for (name, text) in [("common", &self.shared), ("app", &self.app)] {
-                let (entries, errors) = catalog::parse(text, self.forms);
-                problems.extend(errors.into_iter().map(|e| format!("{}/{name}: {e}", self.code)));
-                for e in entries {
+                let read = catalog::parse(text, &shape);
+                problems.extend(read.problems.into_iter().map(|e| format!("{}/{name}: {e}", self.code)));
+                for e in read.entries {
                     match e.context.as_str() {
                         "@msg" => {
                             if let Some(template) = Template::parse(&e.source, vec![e.translation.clone()], false) {
@@ -194,14 +261,30 @@ impl Locale {
                         }
                         _ => {}
                     }
+                    // A row of the app replaces the shared row of the same key, whichever kind each is.
+                    if let Some(by_source) = messages.get_mut(&e.context) {
+                        by_source.remove(&e.source);
+                    }
                     rows.entry(e.context).or_default().insert(e.source, e.translation);
+                }
+                for (e, message) in read.messages {
+                    if let Some(by_source) = rows.get_mut(&e.context) {
+                        by_source.remove(&e.source);
+                    }
+                    messages.entry(e.context).or_default().insert(e.source, message);
+                }
+                for (english, noun) in read.nouns {
+                    if !noun::insert(&mut nouns, english, noun) {
+                        problems.push(format!("{}/{name}: more than {} nouns; the rest are skipped", self.code, limits::MAX_NOUNS));
+                        break;
+                    }
                 }
             }
             sort_templates(&mut templates);
             for p in &problems {
                 log::warn!("translation catalog: {p}; row skipped");
             }
-            Parsed { rows, exact, templates, problems }
+            Parsed { rows, messages, nouns, exact, templates, problems }
         })
     }
 
@@ -214,8 +297,7 @@ impl Locale {
                     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
                     text.split('\n')
                         .filter(|line| line.starts_with("@id\tlanguage.name\t"))
-                        .find_map(|line| catalog::parse_row(line.strip_suffix('\r').unwrap_or(line), self.forms).ok())
-                        .map(|row| row.translation)
+                        .find_map(|line| catalog::id_translation(line.strip_suffix('\r').unwrap_or(line)))
                 })
             })
             .as_deref()
@@ -226,16 +308,17 @@ impl Locale {
 /// its first lookup, which is also when its bad rows are logged.
 pub struct I18n {
     locales: Vec<Locale>,
-    /// Marked strings for the pseudo locale by source text, leaked so lookups can hand out `&str`.
-    /// Debug builds only; the keys are what [`I18n::looked_up`] reports.
+    /// Marked strings for the pseudo locales by source text, leaked so lookups can hand out `&str`: `pseudo`'s, then
+    /// `pseudo-long`'s. Debug builds only; the keys are what [`I18n::looked_up`] reports.
     // ponytail: grows by one leak per distinct source text, fine for a test run; an arena if the
     // pseudo locale ever ships.
-    pseudo: Mutex<BTreeMap<String, &'static str>>,
+    pseudo: [Mutex<BTreeMap<String, &'static str>>; 2],
     /// [`I18n::system_lang`], read once.
     system: OnceLock<Lang>,
     /// [`I18n::format`]; the system region's until [`I18n::set_format`].
     format: RwLock<Option<Arc<Format>>>,
-    /// [`I18n::dates`]; the system region's until [`I18n::set_dates`].
+    /// `I18n::dates`; the system region's until `I18n::set_dates`.
+    #[cfg(feature = "dates")]
     dates: RwLock<Option<Arc<DateFormat>>>,
 }
 
@@ -257,8 +340,12 @@ impl I18n {
 
     fn build(catalogs: impl Iterator<Item = (Cow<'static, str>, Cow<'static, str>, Cow<'static, str>)>, offered: &[&str]) -> (I18n, Vec<String>) {
         let mut problems = Vec::new();
-        let mut locales = vec![bare("en"), bare("pseudo")];
+        let mut locales = vec![bare("en"), bare("pseudo"), bare("pseudo-long")];
         for (code, shared, app) in catalogs {
+            if locales.len() - RESERVED >= limits::MAX_LOCALES {
+                problems.push(format!("more than {} locales; the rest are ignored", limits::MAX_LOCALES));
+                break;
+            }
             let code = code.to_ascii_lowercase();
             if locales.iter().any(|l| l.code == code) {
                 problems.push(format!("{code}: reserved or embedded twice; skipped"));
@@ -268,11 +355,25 @@ impl I18n {
             if plural.is_none() {
                 problems.push(format!("{code}: no plural rules; plurals show in English"));
             }
+            let ordinal = ordinal_rules(&code);
             let forms = plural.as_ref().map_or(1, |(_, c)| c.len());
+            let ordinal_forms = ordinal.as_ref().map_or(1, |(_, c)| c.len());
             let offered = offered.iter().any(|o| o.eq_ignore_ascii_case(&code));
-            locales.push(Locale { code, shared, app, forms, parsed: OnceLock::new(), name: OnceLock::new(), chain: Vec::new(), plural, offered });
+            locales.push(Locale {
+                code,
+                shared,
+                app,
+                forms,
+                ordinal_forms,
+                parsed: OnceLock::new(),
+                name: OnceLock::new(),
+                chain: Vec::new(),
+                plural,
+                ordinal,
+                offered,
+            });
         }
-        for i in 2..locales.len() {
+        for i in RESERVED..locales.len() {
             let mut chain = vec![i];
             // Only a region falls back (`pt-br` → `pt`, `zh-hant-hk` → `zh-hant`); a script
             // doesn't, since `sr-latn` → `sr` would show Cyrillic.
@@ -281,16 +382,24 @@ impl I18n {
                 Some((parent, region)) if is_region(region) => parent,
                 _ => "",
             };
-            if let Some(b) = locales.iter().skip(2).position(|l| l.code == base)
-                && b + 2 != i
+            if let Some(b) = locales.iter().skip(RESERVED).position(|l| l.code == base)
+                && b + RESERVED != i
             {
-                chain.push(b + 2);
+                chain.push(b + RESERVED);
             }
             if let Some(l) = locales.get_mut(i) {
                 l.chain = chain;
             }
         }
-        (I18n { locales, pseudo: Mutex::default(), system: OnceLock::new(), format: RwLock::default(), dates: RwLock::default() }, problems)
+        let i18n = I18n {
+            locales,
+            pseudo: [Mutex::default(), Mutex::default()],
+            system: OnceLock::new(),
+            format: RwLock::default(),
+            #[cfg(feature = "dates")]
+            dates: RwLock::default(),
+        };
+        (i18n, problems)
     }
 
     /// Parse every locale and list every problem, `<locale>/<common|app>: line N: …`, for a test or
@@ -305,7 +414,7 @@ impl I18n {
         let i = self.locales.iter().position(|l| l.code.eq_ignore_ascii_case(code))?;
         let usable = match Lang(i) {
             Lang::EN => true,
-            Lang::PSEUDO => cfg!(debug_assertions),
+            Lang::PSEUDO | Lang::PSEUDO_LONG => cfg!(debug_assertions),
             _ => self.locales.get(i).is_some_and(|l| l.offered),
         };
         usable.then_some(Lang(i))
@@ -318,8 +427,8 @@ impl I18n {
 
     /// `source` in `lang`, or `source` itself.
     pub fn t<'a>(&'a self, lang: Lang, source: &'a str) -> &'a str {
-        if lang == Lang::PSEUDO {
-            return self.mark(source);
+        if let Some(pseudo) = lang.pseudo() {
+            return self.mark(pseudo, source);
         }
         self.find(lang, &[("", source)]).unwrap_or(source)
     }
@@ -327,8 +436,8 @@ impl I18n {
     /// `source` with a disambiguating `context` (`menu`, `@msg`); in each locale of the chain the
     /// context row, then the plain one, so `pt-br`'s plain row beats `pt`'s context row.
     pub fn tc<'a>(&'a self, lang: Lang, context: &str, source: &'a str) -> &'a str {
-        if lang == Lang::PSEUDO {
-            return self.mark(source);
+        if let Some(pseudo) = lang.pseudo() {
+            return self.mark(pseudo, source);
         }
         self.find(lang, &[(context, source), ("", source)]).unwrap_or(source)
     }
@@ -337,8 +446,8 @@ impl I18n {
     /// row or the English: for strings that must not borrow another meaning's wording (a key cap's
     /// name under context `key`), or to ask whether a translation exists.
     pub fn get<'a>(&'a self, lang: Lang, context: &str, source: &'a str) -> Option<&'a str> {
-        if lang == Lang::PSEUDO {
-            return Some(self.mark(source));
+        if let Some(pseudo) = lang.pseudo() {
+            return Some(self.mark(pseudo, source));
         }
         self.find(lang, &[(context, source)])
     }
@@ -346,8 +455,8 @@ impl I18n {
     /// A command's label by its `id` (`@id` rows); in each locale of the chain the `@id` row, then
     /// the plain row of the English `label`.
     pub fn tid<'a>(&'a self, lang: Lang, id: &str, label: &'a str) -> &'a str {
-        if lang == Lang::PSEUDO {
-            return self.mark(label);
+        if let Some(pseudo) = lang.pseudo() {
+            return self.mark(pseudo, label);
         }
         self.find(lang, &[("@id", id), ("", label)]).unwrap_or(label)
     }
@@ -368,8 +477,8 @@ impl I18n {
     /// is not between quotes at its own place in the message, at every depth, before the default
     /// rule. `Some(text)` replaces the value's translation.
     pub fn message_with(&self, lang: Lang, s: &str, values: &dyn Fn(&MessageMatch<'_>, &str, &str) -> Option<String>) -> String {
-        if lang == Lang::PSEUDO {
-            return self.mark(s).to_string();
+        if let Some(pseudo) = lang.pseudo() {
+            return self.mark(pseudo, s).to_string();
         }
         self.message_at(lang, s, false, MESSAGE_DEPTH, values)
     }
@@ -468,50 +577,66 @@ impl I18n {
     /// A count's wording in `lang`, `{n}` filled in as [`I18n::format`] writes numbers: grouped and
     /// in the region's digits, as a left-to-right isolate ([`ltr`]) when the wording has a
     /// right-to-left letter. `one` and `other` are the English forms; they are also the key of the
-    /// `@plural` row, and the fallback.
+    /// `@plural` row, and the fallback. The row's translation may be a selector message
+    /// ([`select`]) that chooses its words by the number, with `$n` the count.
     pub fn trn(&self, lang: Lang, n: u64, one: &str, other: &str) -> String {
         let format = self.format();
-        self.plural(lang, Some(PluralOperands::from(n)), n == 1, &format.integer(n), one, other)
+        let shown = format.integer(n);
+        self.plural(
+            lang,
+            &Tally { arg: Arg::Count(n), operands: Some(PluralOperands::from(n)), english_one: n == 1, shown: &shown, plain: false },
+            one,
+            other,
+        )
     }
 
     /// [`I18n::trn`] with `{n}` in `0`–`9` without grouping (`Copy 1234`) and no isolate marks
     /// ([`strip_isolates`]), for text that goes into documents, file names or anything read back
     /// later.
     pub fn trn_plain(&self, lang: Lang, n: u64, one: &str, other: &str) -> String {
-        strip_isolates(&self.plural(lang, Some(PluralOperands::from(n)), n == 1, &n.to_string(), one, other))
+        let shown = n.to_string();
+        let count = Tally { arg: Arg::Count(n), operands: Some(PluralOperands::from(n)), english_one: n == 1, shown: &shown, plain: true };
+        strip_isolates(&self.plural(lang, &count, one, other))
     }
 
     /// [`I18n::trn`] for a count with `decimals` digits after the decimal separator (`1.5 files`).
     /// The plural form follows the digits shown, so `1.0` takes English `other`; infinities and NaN
     /// (`∞`, `NaN`) take `other` too.
     pub fn trn_decimal(&self, lang: Lang, n: f64, decimals: usize, one: &str, other: &str) -> String {
+        // An `f64` holds no more digits than this; a count of more is no count of anything.
+        let decimals = decimals.min(select::MAX_DECIMALS);
         let format = self.format();
+        let arg = Arg::Number { value: n, decimals };
         let Some(d) = format::to_decimal(n, decimals) else {
-            return self.plural(lang, None, false, &format.number(n, decimals), one, other);
+            let shown = format.number(n, decimals);
+            return self.plural(lang, &Tally { arg, operands: None, english_one: false, shown: &shown, plain: false }, one, other);
         };
         let english_one = d.to_string() == "1";
-        self.plural(lang, Some(PluralOperands::from(&d)), english_one, &format.write(&d), one, other)
+        let shown = format.write(&d);
+        self.plural(lang, &Tally { arg, operands: Some(PluralOperands::from(&d)), english_one, shown: &shown, plain: false }, one, other)
     }
 
-    /// `operands` `None` is the `other` category.
-    fn plural(&self, lang: Lang, operands: Option<PluralOperands>, english_one: bool, n: &str, one: &str, other: &str) -> String {
+    /// The wording of a count: the row of `@plural` for `one|other` along `lang`'s chain, else the English form.
+    fn plural(&self, lang: Lang, count: &Tally<'_>, one: &str, other: &str) -> String {
         let key = format!("{one}|{other}");
-        let chain = self.locale(lang).map_or(&[][..], |l| l.chain.as_slice());
-        let text = chain
-            .iter()
-            .find_map(|&i| {
-                let locale = self.locales.get(i)?;
-                let forms = locale.parsed().rows.get("@plural")?.get(&key)?;
-                let (rules, categories) = locale.plural.as_ref()?;
-                let category = operands.map_or(PluralCategory::Other, |o| rules.category_for(o));
-                forms.split('|').nth(plural_index(categories, category))
-            })
-            .unwrap_or(if english_one { one } else { other });
-        let text = fmt(text, &[("n", &ltr(n))]);
-        if lang == Lang::PSEUDO {
-            return marked(&text);
+        let english = if count.english_one { one } else { other };
+        let filled = |text: &str| fmt(text, &[("n", &ltr(count.shown))]);
+        if let Some(pseudo) = lang.pseudo() {
+            return pseudo.show(&filled(english));
         }
-        text
+        let chain = self.locale(lang).map_or(&[][..], |l| l.chain.as_slice());
+        let text = chain.iter().find_map(|&i| {
+            let locale = self.locales.get(i)?;
+            let parsed = locale.parsed();
+            if let Some(message) = parsed.messages.get("@plural").and_then(|m| m.get(&key)) {
+                return self.render_message(locale, message, &[("n", count.arg)], count.plain);
+            }
+            let forms = parsed.rows.get("@plural")?.get(&key)?;
+            let (rules, categories) = locale.plural.as_ref()?;
+            let category = count.operands.map_or(PluralCategory::Other, |o| rules.category_for(o));
+            forms.split('|').nth(plural_index(categories, category)).map(&filled)
+        });
+        text.unwrap_or_else(|| filled(english))
     }
 
     /// How counts, file sizes and measures write numbers: [`Region::system`]'s format with the
@@ -528,6 +653,7 @@ impl I18n {
     /// so the two cannot differ.
     pub fn set_region(&self, region: &Region, digits: Digits) {
         self.set_format(Format::new(region, digits));
+        #[cfg(feature = "dates")]
         self.set_dates(DateFormat::new(region).with_digits(digits));
     }
 
@@ -544,7 +670,7 @@ impl I18n {
     /// The languages to offer: English first, then the offered locales by code. Never the
     /// pseudo locale.
     pub fn languages(&self) -> Vec<Lang> {
-        let mut embedded: Vec<usize> = (2..self.locales.len()).filter(|&i| self.locales.get(i).is_some_and(|l| l.offered)).collect();
+        let mut embedded: Vec<usize> = (RESERVED..self.locales.len()).filter(|&i| self.locales.get(i).is_some_and(|l| l.offered)).collect();
         embedded.sort_by_key(|&i| self.locales.get(i).map(|l| l.code.as_str()));
         std::iter::once(Lang::EN).chain(embedded.into_iter().map(Lang)).collect()
     }
@@ -572,12 +698,13 @@ impl I18n {
         if matches!(candidates.first().map(String::as_str), Some("c" | "posix")) {
             return Some(Lang::EN);
         }
-        candidates.iter().filter(|c| *c != "pseudo").find_map(|c| self.from_code(c))
+        candidates.iter().filter(|c| *c != "pseudo" && *c != "pseudo-long").find_map(|c| self.from_code(c))
     }
 
-    /// The first of `tags` (most preferred first) that [`I18n::match_tag`] knows; English if none.
+    /// The first of `tags` (most preferred first, at most [`limits::MAX_PREFERRED`] of them) that [`I18n::match_tag`] knows;
+    /// English if none.
     pub fn match_tags<'t>(&self, tags: impl IntoIterator<Item = &'t str>) -> Lang {
-        tags.into_iter().find_map(|t| self.match_tag(t)).unwrap_or(Lang::EN)
+        tags.into_iter().take(limits::MAX_PREFERRED).find_map(|t| self.match_tag(t)).unwrap_or(Lang::EN)
     }
 
     /// The language the system asks for (`LANG` and friends, the macOS and Windows preferred
@@ -593,20 +720,40 @@ impl I18n {
         })
     }
 
-    /// Every source text looked up in the pseudo locale so far, for an audit to check against a
-    /// complete catalog. Plurals aren't recorded.
+    /// Every source text looked up in the pseudo locales so far, for an audit to check against a
+    /// complete catalog. Counts, ordinals and typed messages aren't recorded.
     pub fn looked_up(&self) -> BTreeSet<String> {
-        self.pseudo.lock().unwrap_or_else(PoisonError::into_inner).keys().cloned().collect()
+        self.pseudo.iter().flat_map(|cache| cache.lock().unwrap_or_else(PoisonError::into_inner).keys().cloned().collect::<Vec<_>>()).collect()
     }
 
-    /// `source` marked for the pseudo locale, made once per string.
-    fn mark(&self, source: &str) -> &'static str {
-        let mut cache = self.pseudo.lock().unwrap_or_else(PoisonError::into_inner);
-        cache.entry(source.to_owned()).or_insert_with(|| Box::leak(marked(source).into_boxed_str()))
+    /// `source` marked for a pseudo locale, made once per string.
+    fn mark(&self, pseudo: Pseudo, source: &str) -> &'static str {
+        let [marked, long] = &self.pseudo;
+        let cache = match pseudo {
+            Pseudo::Marked => marked,
+            Pseudo::Long => long,
+        };
+        let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+        cache.entry(source.to_owned()).or_insert_with(|| Box::leak(pseudo.show(source).into_boxed_str()))
     }
 
     fn locale(&self, lang: Lang) -> Option<&Locale> {
         self.locales.get(lang.0)
+    }
+
+    /// [`I18n::find`], except that a row may be a selector message too, and the locale that holds it is returned.
+    fn find_row<'a>(&'a self, lang: Lang, keys: &[(&str, &str)]) -> Option<(&'a Locale, Row<'a>)> {
+        let chain = self.locale(lang).map(|l| l.chain.as_slice())?;
+        chain.iter().find_map(|&i| {
+            let locale = self.locales.get(i)?;
+            let parsed = locale.parsed();
+            keys.iter().find_map(|(context, source)| {
+                if let Some(message) = parsed.messages.get(*context).and_then(|m| m.get(*source)) {
+                    return Some((locale, Row::Message(message)));
+                }
+                parsed.rows.get(*context)?.get(*source).map(|text| (locale, Row::Text(text.as_str())))
+            })
+        })
     }
 
     /// Along `lang`'s chain, locale by locale, the first of `keys` (context, source text) found.
@@ -642,47 +789,60 @@ pub fn fmt_plain(template: &str, args: &[(&str, &str)]) -> String {
 /// The one filler behind [`fmt`], [`fmt_plain`] and message translation. With `escapes`, `{{` and
 /// `}}` are a literal `{` and `}`, as in a message template; without, braces are only placeholders.
 fn fill(template: &str, args: &[(&str, &str)], isolated: bool, escapes: bool) -> String {
-    let mut pieces: Vec<(&str, bool)> = Vec::new();
+    let pieces = split(template, escapes, false, &|name| args.iter().find(|(k, _)| *k == name).map(|(_, value)| Cow::Borrowed(*value)));
+    assemble(pieces, isolated, template.len())
+}
+
+/// `template` as pieces: (text, whether it is an inserted value). A placeholder whose `value` is `None` stays as written. With
+/// `typed`, a placeholder is its name up to the first white space (`{n :number}` is `n`).
+fn split<'a>(template: &'a str, escapes: bool, typed: bool, value: &dyn Fn(&str) -> Option<Cow<'a, str>>) -> Vec<(Cow<'a, str>, bool)> {
+    let mut pieces: Vec<(Cow<'a, str>, bool)> = Vec::new();
     let mut rest = template;
     while let Some(open) = rest.find(|c: char| c == '{' || (escapes && c == '}')) {
         let (before, tail) = rest.split_at_checked(open).unwrap_or((rest, ""));
-        pieces.push((before, false));
+        pieces.push((Cow::Borrowed(before), false));
         let after_open = tail.get(1..).unwrap_or("");
         if tail.starts_with('}') {
-            pieces.push(("}", false));
+            pieces.push((Cow::Borrowed("}"), false));
             rest = after_open.strip_prefix('}').unwrap_or(after_open);
             continue;
         }
         if escapes && let Some(escaped) = after_open.strip_prefix('{') {
-            pieces.push(("{", false));
+            pieces.push((Cow::Borrowed("{"), false));
             rest = escaped;
             continue;
         }
-        let Some((name, after_close)) = after_open.split_once('}') else {
-            pieces.push(("{", false));
+        let Some((inside, after_close)) = after_open.split_once('}') else {
+            pieces.push((Cow::Borrowed("{"), false));
             rest = after_open;
             break;
         };
-        match args.iter().find(|(k, _)| *k == name) {
-            Some((_, value)) => pieces.push((value, true)),
-            None => pieces.extend([("{", false), (name, false), ("}", false)]),
+        let name = if typed { inside.split_whitespace().next().unwrap_or(inside) } else { inside };
+        match value(name) {
+            Some(v) => pieces.push((v, true)),
+            None => pieces.extend([(Cow::Borrowed("{"), false), (Cow::Borrowed(inside), false), (Cow::Borrowed("}"), false)]),
         }
         rest = after_close;
     }
-    pieces.push((rest, false));
+    pieces.push((Cow::Borrowed(rest), false));
+    pieces
+}
+
+/// The pieces of [`split`] joined, with each value isolated when `isolated` and the sentence or a value needs it (see [`fmt`]).
+fn assemble(pieces: Vec<(Cow<'_, str>, bool)>, isolated: bool, capacity: usize) -> String {
     let isolated = isolated && pieces.iter().any(|(text, value)| has_rtl(text) || (*value && has_bidi_control(text)));
-    let mut out = String::with_capacity(template.len());
+    let mut out = String::with_capacity(capacity);
     for (text, value) in pieces {
         match (value, isolated) {
-            (false, _) => out.push_str(text),
-            (true, false) => out.push_str(unwrap_isolate(text)),
+            (false, _) => out.push_str(&text),
+            (true, false) => out.push_str(unwrap_isolate(&text)),
             (true, true) if text.is_empty() => {}
             // Rebuilt rather than copied, so what it opens inside is closed too.
-            (true, true) if is_one_isolate(text) => {
+            (true, true) if is_one_isolate(&text) => {
                 let initiator = text.chars().next().unwrap_or(FSI);
-                out.push_str(&wrap(initiator, unwrap_isolate(text)));
+                out.push_str(&wrap(initiator, unwrap_isolate(&text)));
             }
-            (true, true) => out.push_str(&isolate(text)),
+            (true, true) => out.push_str(&isolate(&text)),
         }
     }
     out
