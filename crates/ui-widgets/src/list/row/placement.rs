@@ -61,7 +61,7 @@ impl Sizes {
         let tight = cx.env::<ThumbRows>() == ThumbRows::Tight;
         let own_indent = if tight { small.icon + tokens.space.gap.tight } else { control.icon };
         // A host's own step (`TreeIndent`) wins over the size set's; 0, or no value, keeps the size set's.
-        let set_indent = cx.env::<TreeIndent>().0;
+        let set_indent = cx.env::<TreeIndent>().step();
         Sizes {
             row,
             icon: control.icon,

@@ -2255,13 +2255,13 @@ fn tree_indent_step(indent: Option<craft_ui::list::TreeIndent>) -> f32 {
 }
 
 /// A list whose scope sets `TreeIndent` indents a level by that many points, whatever the size set's own step; with no
-/// value (or `TreeIndent(0.0)`) a level keeps the size set's step, so no other list changes.
+/// value (or `TreeIndent::new(0.0)`) a level keeps the size set's step, so no other list changes.
 #[trial]
 fn a_scope_tree_indent_sets_how_far_a_level_steps_in() {
     use craft_ui::list::TreeIndent;
     let own = tree_indent_step(None);
-    let unset = tree_indent_step(Some(TreeIndent(0.0)));
-    let set = tree_indent_step(Some(TreeIndent(10.0)));
+    let unset = tree_indent_step(Some(TreeIndent::new(0.0)));
+    let set = tree_indent_step(Some(TreeIndent::new(10.0)));
     assert!((unset - own).abs() < 0.01, "a zero value keeps the size set's step ({} with none, {} with zero)", own, unset);
     assert!((set - 10.0).abs() < 0.01, "a level steps in by the value the scope sets: {set}");
     assert!(own > set, "the size set's own step ({own}) is wider than the 10 pt the scope sets");
@@ -2274,7 +2274,7 @@ fn a_tree_indent_that_is_not_a_finite_length_keeps_the_size_sets_step() {
     use craft_ui::list::TreeIndent;
     let own = tree_indent_step(None);
     for bad in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -4.0] {
-        let step = tree_indent_step(Some(TreeIndent(bad)));
+        let step = tree_indent_step(Some(TreeIndent::new(bad)));
         assert_eq!(step, own, "TreeIndent({bad}) is no step, so a level keeps the size set's {own}");
     }
 }

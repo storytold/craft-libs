@@ -110,7 +110,19 @@ pub enum ThumbRows {
 /// disclosure all follow it, and so does the `AccessKit` tree's level: only the step changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
 #[env(style)]
-pub struct TreeIndent(pub f32);
+pub struct TreeIndent(f32);
+
+impl TreeIndent {
+    /// A host's step, in points; `0` (or no value) keeps the size set's own step.
+    pub const fn new(step: f32) -> Self {
+        TreeIndent(step)
+    }
+
+    /// The step in points, as given.
+    pub const fn step(self) -> f32 {
+        self.0
+    }
+}
 
 impl std::hash::Hash for TreeIndent {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
