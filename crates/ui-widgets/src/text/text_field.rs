@@ -11,7 +11,7 @@ use crate::contract::{
 };
 use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
-use crate::style::Span;
+use crate::style::{FieldLook, Span};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
@@ -67,6 +67,11 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// (a find bar's): Escape still clears it.
     #[prop]
     clear_button: bool,
+    /// The field's look: [`FieldLook::Quiet`] is a bar's own field, with its fill and quiet edge at rest
+    /// ([`StyleCx::quiet_field`](crate::style::StyleCx::quiet_field)) and the muted placeholder.
+    #[prop]
+    #[style_key]
+    look: FieldLook,
     /// The adornments before the text, in reading order.
     leading: Vec<Adornment>,
     /// The field reserves and paints a chevron at the end, for the host's popup.
@@ -130,6 +135,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             empty: None,
             search: false,
             clear_button: true,
+            look: FieldLook::Normal,
             leading: Vec::new(),
             arrow: false,
             drives: None,
@@ -365,6 +371,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             style = style.held_at(FieldStyle::chars_width(cx, chars));
         }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
+        if key.look == FieldLook::Quiet {
+            style.surface = cx.quiet_field();
+        }
         style
     }
 
@@ -447,7 +456,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
                 Some(Mixed::Same(at)) => Some(at),
                 _ => None,
             });
-            let options = TextOptions { mixed: value.is_none(), limit, caret, ..self.options.clone() };
+            let options = TextOptions { mixed: value.is_none(), limit, caret, look: self.look, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }

@@ -788,6 +788,41 @@ fn document_tabs_keep_whole_touching_titles_and_an_asterisk_by_default() {
     assert_eq!(stars, 1, "the modified tab shows its asterisk");
 }
 
+/// A semibold document tab's title draws in the font stack's tab-title family when the app embeds the tab-title face,
+/// so its width follows that face; a tab in the default look keeps its label's face. The stand-in face is Abel, a
+/// condensed face, which the stack scales to the semibold face's x-height.
+#[trial]
+fn a_semibold_document_tab_title_draws_in_the_tab_title_face() {
+    use craft_ui::fonts::{EmbeddedFace, I18nScripts, SystemFonts, UiFonts};
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const TAB: EmbeddedFace = EmbeddedFace {
+        family: "Abel",
+        style: "Regular",
+        scripts: &["Latn"],
+        bytes: include_bytes!("../../../font-subset/tests/data/abel/Abel-Regular.ttf"),
+        index: 0,
+        // craft-fonts-build's `TAB_ROLE`.
+        role: Some("tab"),
+    };
+    let title = "Poster draft one";
+    let width = |look: DocumentTabLook, faces: &'static [EmbeddedFace]| {
+        let mut fixture = Fixture::new(move |ui| {
+            let tabs = [DocumentTab::new(0, title)];
+            let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        });
+        fixture.root_value(look);
+        fixture.room(egui::vec2(600.0, 100.0)).settle();
+        UiFonts::new(&I18nScripts).craft_faces(faces).languages(&["en"]).ui_language("en").system_fonts(SystemFonts::Off).install(fixture.ctx());
+        fixture.settle();
+        fixture.texts().iter().find(|run| run.text == title).map_or(f32::NAN, |run| run.rect.width())
+    };
+    let (plain, condensed) = (width(DocumentTabLook::Semibold, &[]), width(DocumentTabLook::Semibold, &[TAB]));
+    assert!(plain.is_finite() && condensed.is_finite(), "the title is painted: {plain} {condensed}");
+    assert!(condensed < plain - 2.0, "the semibold tab's title draws in the condensed tab-title face: {plain} vs {condensed}");
+    let (whole, whole_with) = (width(DocumentTabLook::Whole, &[]), width(DocumentTabLook::Whole, &[TAB]));
+    assert!((whole - whole_with).abs() < 0.01, "a default tab's title keeps its face: {whole} vs {whole_with}");
+}
+
 /// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
 /// name is painted once.
 #[trial]
