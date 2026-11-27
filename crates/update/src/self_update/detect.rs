@@ -511,8 +511,9 @@ pub(super) fn detect(app: &App, exe: &Path) -> Option<Install> {
 /// What `exe`'s MSI update does (update in place, or move a per-user copy to everyone), or why it
 /// stops. Asked while the app still runs (so it can show the error) and again by the helper.
 #[cfg(windows)]
-pub(super) fn msi_step(app: &App, exe: &Path) -> Result<crate::msi_migrate::Step, String> {
-    crate::msi_migrate::windows::step(app, exe)
+#[cfg(windows)]
+pub(super) fn msi_step_reason(app: &App, exe: &Path) -> Result<crate::msi_migrate::Step, crate::Reason> {
+    crate::msi_migrate::windows::step_reason(app, exe)
 }
 
 /// Whether the helper starts the app after the update step: never while the old app is still

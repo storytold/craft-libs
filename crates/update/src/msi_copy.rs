@@ -21,6 +21,8 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use crate::Reason;
+
 use std::path::{Path, PathBuf};
 
 use crate::msi_context::MsiScope;
@@ -60,22 +62,33 @@ pub(crate) fn update_arguments(
 
 /// The confirmed context and product code of `copy`, by the rules of [`update_arguments`]. `None`
 /// for the launcher's own package, which keeps its package default and is never moved.
+#[cfg(test)]
 pub(crate) fn resolve(
     copy: MsiCopy,
     product_codes: &[String],
     probe: impl FnOnce(&str) -> Result<MsiScope, crate::msi_context::ProbeError>,
     record_scopes: impl FnOnce(&str) -> Vec<MsiScope>,
 ) -> Result<Option<(MsiScope, String)>, String> {
+    resolve_reason(copy, product_codes, probe, record_scopes).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+pub(crate) fn resolve_reason(
+    copy: MsiCopy,
+    product_codes: &[String],
+    probe: impl FnOnce(&str) -> Result<MsiScope, crate::msi_context::ProbeError>,
+    record_scopes: impl FnOnce(&str) -> Vec<MsiScope>,
+) -> Result<Option<(MsiScope, String)>, Reason> {
     let hive = match copy {
         MsiCopy::Legacy => return Ok(None),
-        MsiCopy::Conflicting => return Err(CONFLICTING.into()),
+        MsiCopy::Conflicting => return Err(Reason::new(CONFLICTING, &[])),
         MsiCopy::Registered { hive } => hive,
     };
-    let [code] = product_codes else { return Err(NOT_ONE_PRODUCT.into()) };
+    let [code] = product_codes else { return Err(Reason::new(NOT_ONE_PRODUCT, &[])) };
     let fallback = |code: &str| crate::msi_context::single_scope(record_scopes(code));
-    let scope = crate::msi_context::update_scope(true, Some(code), probe, fallback)?.ok_or(NOT_ONE_PRODUCT)?;
+    let scope = crate::msi_context::update_scope_reason(true, Some(code), probe, fallback)?.ok_or_else(|| Reason::new(NOT_ONE_PRODUCT, &[]))?;
     if scope != hive {
-        return Err(ANOTHER_COPY.into());
+        return Err(Reason::new(ANOTHER_COPY, &[]));
     }
     Ok(Some((scope, code.clone())))
 }
@@ -128,6 +141,7 @@ pub(crate) mod windows {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 
     use super::{MsiCopy, MsiScope, app_path_value, match_registration};
+    use crate::Reason;
     use crate::app::App;
 
     /// `path` with links and `..` resolved in ordinary drive syntax, or as given when it cannot be
@@ -169,15 +183,15 @@ pub(crate) mod windows {
     }
 
     /// The confirmed context and product code of `exe`'s copy, asking Windows Installer; `None`
-    /// for the launcher's own package. See [`super::resolve`].
-    pub(crate) fn resolve(app: &App, exe: &Path) -> Result<Option<(MsiScope, String)>, String> {
-        let copy = find(app, exe).ok_or_else(|| format!("{} isn't registered with the Windows Installer", app.name))?;
+    /// for the launcher's own package. See [`super::resolve_reason`].
+    pub(crate) fn resolve_reason(app: &App, exe: &Path) -> Result<Option<(MsiScope, String)>, Reason> {
+        let copy = find(app, exe).ok_or_else(|| Reason::new("{arg0} isn't registered with the Windows Installer", &[("arg0", app.name)]))?;
         let codes: Vec<String> = crate::detect::windows::msi_installs(app)
             .into_iter()
             .map(|m| m.product_code)
             .filter(|code| crate::msi_context::valid_product_code(code))
             .collect();
-        super::resolve(copy, &codes, crate::msi_context::probe, record_scopes)
+        super::resolve_reason(copy, &codes, crate::msi_context::probe, record_scopes)
     }
 
     /// The context of every uninstall record of `code`: the machine's (both registry views) are

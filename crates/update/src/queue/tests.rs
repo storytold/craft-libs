@@ -46,8 +46,8 @@ impl Calls {
 fn behind_a_running_install(
     queue: &Queue,
     jobs: &[(Vec<OsString>, &str)],
-    exec: &(dyn Fn(&[OsString], &[OsString]) -> Outcome + Sync),
-) -> Vec<Option<Outcome>> {
+    exec: &(dyn Fn(&[OsString], &[OsString]) -> TypedOutcome + Sync),
+) -> Vec<Option<TypedOutcome>> {
     let (started, has_started) = mpsc::channel();
     let (release, released) = mpsc::channel::<()>();
     let (turned, turns) = mpsc::channel();
@@ -69,7 +69,7 @@ fn behind_a_running_install(
                             turned.send(()).unwrap();
                         }
                     };
-                    queue.batched(command.clone(), os(target), &|| false, &mut turn, exec)
+                    queue.batched_reason(command.clone(), os(target), &|| false, &mut turn, exec)
                 })
             })
             .collect();
@@ -164,6 +164,34 @@ fn an_installer_that_dies_frees_the_queue_and_fails_its_jobs() {
     });
     // The job that made the call unwound; the other was told.
     assert!(results.contains(&None), "{results:?}");
-    assert!(results.contains(&Some(Err("the system installer was interrupted".to_string()))), "{results:?}");
+    assert!(
+        results.iter().any(|result| matches!(result, Some(Err(why)) if why.to_string() == "the system installer was interrupted")),
+        "{results:?}"
+    );
     assert_eq!(queue.batched(install(), os("c.deb"), &|| false, &mut |_| {}, &|_, _| Ok(())), Ok(()));
+}
+
+#[trial]
+fn every_job_in_a_failed_batch_keeps_the_reason_for_later_translation() {
+    let queue = Queue::new();
+    let jobs = [(install(), "a.deb"), (install(), "b.deb")];
+    let calls = AtomicUsize::new(0);
+    let raw = "拒否 {reason}";
+    let failure = Reason::data(raw).context("couldn't install: {reason}", &[]);
+    let results = behind_a_running_install(&queue, &jobs, &|_, targets| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(targets.len(), jobs.len());
+        Err(failure.clone())
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    fn translated(text: &str, args: &[(&str, &str)]) -> String {
+        assert_eq!(text, "couldn't install: {reason}");
+        crate::translate::fill("installation refused: {reason}", args)
+    }
+    for result in results {
+        let why = result.expect("job returned").expect_err("shared call failed");
+        assert_eq!(why, failure);
+        assert!(why.translated(translated).contains(raw));
+        assert_ne!(why.translated(translated), why.to_string());
+    }
 }

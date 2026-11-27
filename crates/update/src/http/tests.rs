@@ -185,13 +185,29 @@ fn a_rate_limited_release_check_is_typed_not_english_text() {
     let app = crate::suite::PHOTOCRAFT;
     let (url, _) = serve(Vec::new(), vec![Reply::RateLimited]);
     assert_eq!(crate::check_releases_at(&url, &app, &http, "0.1.0"), Err(crate::CheckError::RateLimited));
-    // A normal answer is not mistaken for the limit, and a failure keeps its reason as data.
+    // A normal answer is not mistaken for the limit. Authored context remains translatable,
+    // while the connection's diagnostic stays data.
     let (url, _) = serve(b"[]".to_vec(), vec![Reply::Full]);
     assert_eq!(crate::check_releases_at(&url, &app, &http, "0.1.0"), Ok(None));
     // A port that was free a moment ago: the connection is refused.
     let closed = format!("http://{}/", TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap());
     let why = crate::check_releases_at(&closed, &app, &http, "0.1.0").unwrap_err();
-    assert!(matches!(&why, crate::CheckError::Failed(text) if why.to_string() == *text));
+    let crate::CheckError::Message(reason) = &why else { panic!("authored failure was flattened: {why:?}") };
+    fn translated(text: &str, args: &[(&str, &str)]) -> String {
+        if text == "couldn't reach GitHub ({reason})" {
+            crate::translate::fill("GitHub unreachable: {reason}", args)
+        } else {
+            panic!("external diagnostic was used as a translation key: {text}");
+        }
+    }
+    let english = reason.to_string();
+    let localized = reason.translated(translated);
+    assert!(english.starts_with("couldn't reach GitHub ("));
+    assert_ne!(english, localized);
+    assert_eq!(
+        english.strip_prefix("couldn't reach GitHub (").unwrap().strip_suffix(')').unwrap(),
+        localized.strip_prefix("GitHub unreachable: ").unwrap()
+    );
 }
 
 #[trial]
@@ -200,5 +216,13 @@ fn a_repository_github_does_not_find_is_an_error_not_up_to_date() {
     let app = crate::suite::PHOTOCRAFT;
     let (url, _) = serve(Vec::new(), vec![Reply::NotFound]);
     let why = crate::check_releases_at(&url, &app, &http, "0.1.0").unwrap_err();
-    assert!(matches!(&why, crate::CheckError::Failed(text) if text.contains(app.repo)), "the reason names the repository: {why}");
+    let crate::CheckError::Message(reason) = &why else { panic!("authored failure was flattened: {why:?}") };
+    assert!(reason.to_string().contains(app.repo), "the reason names the repository: {why}");
+    assert_eq!(reason.to_string(), format!("GitHub has no repository {}, or it is private", app.repo));
+    fn translated(text: &str, args: &[(&str, &str)]) -> String {
+        assert_eq!(text, "GitHub has no repository {repo}, or it is private");
+        assert_eq!(args, &[("repo", crate::suite::PHOTOCRAFT.repo)]);
+        crate::translate::fill("GitHub findet das Repository {repo} nicht, oder es ist privat", args)
+    }
+    assert_eq!(reason.translated(translated), format!("GitHub findet das Repository {} nicht, oder es ist privat", app.repo));
 }

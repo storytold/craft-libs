@@ -20,9 +20,9 @@ use craft_ui::runtime::frame::request_repaint_after;
 
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
-use crate::self_update::{Outcome, Restart};
+use crate::self_update::{ReasonOutcome, Restart};
 use crate::stack_dialogs::{UpdateChoice, UpdatePromptDialog};
-use crate::translate::{Note, Translate, english};
+use crate::translate::{Note, Reason, Translate, english};
 use crate::{App, CheckError, Http, Paths, Platform, Stop, check_for_update, self_update};
 
 /// Asks for the newest release (blocking; it runs on its own thread), in place of the built-in
@@ -70,6 +70,8 @@ pub enum Status {
     UpToDate,
     /// A requested check failed, for this English reason (data, not translated).
     Failed(String),
+    /// A crate-authored check failure, translated when it is shown.
+    CheckFailed(Reason),
     /// A requested check hit GitHub's request limit; the app words it ([`crate::stack_dialogs::UpdateWords`]).
     RateLimited,
     /// A requested check found an update downloading and installing; the startup prompt shows
@@ -84,7 +86,7 @@ pub enum Status {
     /// This start follows an update that installed this version.
     Updated(String),
     /// The last update could not be installed, for this reason.
-    InstallFailed(String),
+    InstallFailed(Reason),
 }
 
 /// What [`Status::Ready`] says: on Windows the update installs after the app exits; elsewhere it
@@ -132,8 +134,9 @@ const POLL_SECONDS: f64 = 0.1;
 /// The line under the prompt's text: the installer's own words, or one of the updater's, translated each pass.
 #[derive(Debug)]
 enum Message {
-    Installer(String),
+    Installer(Reason),
     Note(Note),
+    Reason(Reason),
 }
 
 /// The update prompt the updater holds for the app's dialog host.
@@ -165,7 +168,7 @@ impl Offer {
 
     fn text(&self, translate: Translate) -> Option<String> {
         self.message.as_ref().map(|message| match message {
-            Message::Installer(text) => text.clone(),
+            Message::Installer(reason) | Message::Reason(reason) => reason.translated(translate),
             Message::Note(note) => note.translated(translate),
         })
     }
@@ -180,11 +183,10 @@ impl Offer {
     }
 }
 
-/// Why an installation failed: the installer's own words, shown as they are, or the updater's,
-/// shown in the interface language.
+/// Why an installation failed: authored context stays translatable and external details stay data.
 #[derive(Debug)]
 enum Failure {
-    Installer(String),
+    Installer(Reason),
     Updater(Note),
 }
 
@@ -199,33 +201,33 @@ impl Failure {
         Self::Updater(Note::new("The update stopped unexpectedly.", &[]))
     }
 
-    /// The reason in English, for the log and for the record the next start reads.
-    fn reason(&self) -> String {
+    /// The owned reason, rendered in English only at the log or compatibility boundary.
+    fn reason(&self) -> Reason {
         match self {
             Self::Installer(e) => e.clone(),
-            Self::Updater(note) => note.translated(english),
+            Self::Updater(note) => note.clone().into(),
         }
     }
 }
 
 /// Logs a failed update and records it under `paths`, so that the next start reports it
 /// ([`Status::InstallFailed`]). Used at the exit, where no prompt can show the reason.
-fn record(app: &App, paths: Option<&Paths>, reason: &str) {
+fn record(app: &App, paths: Option<&Paths>, reason: &Reason) {
     log::warn!("{} self-update failed: {reason}", app.name);
     if let Some(paths) = paths {
-        self_update::record_failure(paths, reason);
+        self_update::record_failure_reason(paths, reason);
     }
 }
 
 impl From<String> for Failure {
     fn from(e: String) -> Self {
-        Self::Installer(e)
+        Self::Installer(e.into())
     }
 }
 
 impl From<&str> for Failure {
     fn from(e: &str) -> Self {
-        Self::Installer(e.to_owned())
+        Self::Installer(e.into())
     }
 }
 
@@ -278,7 +280,7 @@ pub struct Updater {
     paths: Option<Paths>,
     /// Why the last update could not be installed, until a prompt that offers the update again
     /// shows it.
-    failed_reason: Option<String>,
+    failed_reason: Option<Reason>,
     /// Set when the app exits: the `Updater` is dropped or [`Updater::start_pending_update`] is
     /// called. An install worker sends its outcome while holding it, and starts a finished
     /// installation's helper itself once it is set.
@@ -341,7 +343,7 @@ impl Updater {
     fn open_offer(&mut self, release: Release, installs_itself: bool) {
         let mut offer = Offer::new(release, installs_itself);
         if let Some(reason) = self.failed_reason.take() {
-            offer.message = Some(Message::Note(failed_note(&reason)));
+            offer.message = Some(Message::Reason(failed_note(&reason)));
         }
         self.prompt = Some(offer);
     }
@@ -402,9 +404,9 @@ impl Updater {
             return;
         }
         let Some(paths) = self.outcome_paths() else { return };
-        match self_update::take_outcome(&paths, &self.version) {
-            Some(Outcome::Installed(version)) => self.status = Status::Updated(version.to_string()),
-            Some(Outcome::Failed(reason)) => {
+        match self_update::take_outcome_reason(&paths, &self.version) {
+            Some(ReasonOutcome::Installed(version)) => self.status = Status::Updated(version.to_string()),
+            Some(ReasonOutcome::Failed(reason)) => {
                 log::warn!("{} self-update failed: {reason}", self.app.name);
                 self.failed_reason = Some(reason.clone());
                 self.status = Status::InstallFailed(reason);
@@ -610,13 +612,13 @@ impl Updater {
                     (release, installs_itself)
                 }))
             };
-            let answer =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(ask)).unwrap_or_else(|_| Err("the update check failed unexpectedly".into()));
+            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(ask))
+                .unwrap_or_else(|_| Err(Reason::new("the update check failed unexpectedly", &[]).into()));
             let _ = tx.send(answer);
         });
         match spawned {
             Ok(_) => self.check = Some(rx),
-            Err(e) => self.finish_check(Err(format!("couldn't start the update check ({e})").into())),
+            Err(e) => self.finish_check(Err(Reason::new("couldn't start the update check ({error})", &[("error", &e.to_string())]).into())),
         }
     }
 
@@ -629,16 +631,16 @@ impl Updater {
             return Status::Installing;
         }
         if self.restart.is_none()
-            && let Some(reason) = self.outcome_paths().and_then(|paths| self_update::take_failure(&paths))
+            && let Some(reason) = self.outcome_paths().and_then(|paths| self_update::take_failure_reason(&paths))
         {
             log::warn!("{} self-update failed: {reason}", self.app.name);
-            let reason = reason.trim().to_owned();
+            let reason = reason.trimmed();
             self.installed = false;
             self.close_wanted = false;
             match &mut self.prompt {
                 Some(offer) => {
                     offer.ready = false;
-                    offer.message = Some(Message::Note(failed_note(&reason)));
+                    offer.message = Some(Message::Reason(failed_note(&reason)));
                 }
                 // The next prompt that offers the update says why.
                 None => self.failed_reason = Some(reason.clone()),
@@ -686,7 +688,7 @@ impl Updater {
                     // A prompt the app opened before (`offer`) says why the last update failed.
                     Some(offer) => {
                         if let Some(reason) = self.failed_reason.take() {
-                            offer.message = Some(Message::Note(failed_note(&reason)));
+                            offer.message = Some(Message::Reason(failed_note(&reason)));
                         }
                     }
                 }
@@ -703,6 +705,7 @@ impl Updater {
                     self.status = match e {
                         CheckError::RateLimited => Status::RateLimited,
                         CheckError::Failed(why) => Status::Failed(why),
+                        CheckError::Message(reason) => Status::CheckFailed(reason),
                     };
                 }
             }
@@ -721,7 +724,7 @@ impl Updater {
                 Err(TryRecvError::Empty) => request_repaint_after(ctx, POLL_SECONDS),
                 Err(TryRecvError::Disconnected) => {
                     self.check = None;
-                    self.finish_check(Err("the update check stopped unexpectedly".into()));
+                    self.finish_check(Err(Reason::new("the update check stopped unexpectedly", &[]).into()));
                 }
             }
         }
@@ -949,7 +952,7 @@ impl Updater {
             }
         }
         if let Some((restart, _)) = self.restart.take()
-            && let Err(e) = restart.start()
+            && let Err(e) = restart.start_reason()
         {
             record(self.app, self.outcome_paths().as_ref(), &e);
         }
@@ -976,7 +979,7 @@ impl Updater {
         let note = if self.installed { self.installed_note() } else { save_first_note() };
         if let Some(offer) = &mut self.prompt {
             offer.message = Some(match error {
-                Some(error) => Message::Installer(error),
+                Some(error) => Message::Installer(error.into()),
                 None => Message::Note(note),
             });
         }
@@ -1093,7 +1096,7 @@ fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, exiting: &Mutex<boo
     drop(gone);
     match unsent {
         Some(Ok(restart)) => {
-            if let Err(e) = restart.start() {
+            if let Err(e) = restart.start_reason() {
                 record(app, paths, &e);
             }
         }
@@ -1108,8 +1111,8 @@ fn save_first_note() -> Note {
 }
 
 /// "The update could not be installed: …", for a prompt that offers a failed update again.
-fn failed_note(reason: &str) -> Note {
-    Note::new("The update could not be installed: {reason}", &[("reason", reason)])
+fn failed_note(reason: &Reason) -> Reason {
+    reason.clone().context("The update could not be installed: {reason}", &[])
 }
 
 /// The id of the update prompt on the host.
@@ -1174,16 +1177,17 @@ impl Updater {
     }
 }
 
-fn install(app: &'static App, installed: &self_update::Install, mut release: Release, version: &str) -> Result<Restart, String> {
-    let http = Http::new(&format!("{}/Update", app.name)).map_err(|e| format!("could not initialize HTTP: {e}"))?;
+fn install(app: &'static App, installed: &self_update::Install, mut release: Release, version: &str) -> Result<Restart, Reason> {
+    let http = Http::new(&format!("{}/Update", app.name)).map_err(|e| Reason::data(e).context("could not initialize HTTP: {reason}", &[]))?;
     if release.assets.is_empty()
-        && let Some(full) = check_for_update(app, &http, version).map_err(|e| format!("could not fetch release assets: {e}"))?
+        && let Some(full) =
+            check_for_update(app, &http, version).map_err(|e| Reason::from(e).context("could not fetch release assets: {reason}", &[]))?
     {
         release = full;
     }
-    let paths = Paths::for_app(app).map_err(|e| format!("could not find paths: {e}"))?;
-    let platform = Platform::current().ok_or("unsupported platform for self update")?;
-    self_update::prepare_update(app, installed, &release, platform, &http, &paths, &Stop::default(), &mut |_| {}, &|| Ok(()), Some(version))
+    let paths = Paths::for_app_reason(app).map_err(|e| e.context("could not find paths: {reason}", &[]))?;
+    let platform = Platform::current().ok_or_else(|| Reason::new("unsupported platform for self update", &[]))?;
+    self_update::prepare_update_reason(app, installed, &release, platform, &http, &paths, &Stop::default(), &mut |_| {}, &|| Ok(()), Some(version))
 }
 
 /// Download in the prompt: the release page, when it is a safe web link (an app may build its

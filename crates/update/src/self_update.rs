@@ -22,7 +22,6 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::PackageKind;
 use crate::app::App;
 use crate::platform::{Platform, pick_asset};
 use crate::protocol::JobPhase;
@@ -30,6 +29,7 @@ use crate::release::Release;
 use crate::version::{self, Version};
 #[cfg(target_os = "macos")]
 use crate::{InstallSource, Installed};
+use crate::{PackageKind, Reason};
 
 use crate::http::{Http, Stop};
 use crate::install::{self, Job};
@@ -79,7 +79,7 @@ impl Install {
 }
 
 mod detect;
-mod helper;
+pub(crate) mod helper;
 #[cfg(unix)]
 mod relaunch;
 mod replace;
@@ -103,9 +103,11 @@ use replace::unmark_unless_scheduled;
 use replace::{after_install, keep_download, mark_installed};
 
 pub use detect::{DEV_VAR, PRETEND_VAR, current, current_version, is_self_updating, just_updated_to, release_installs};
-#[cfg(feature = "ui")]
+#[cfg(test)]
 pub(crate) use helper::record_failure;
-pub use helper::{FINISH_FLAG, Outcome, finish, take_failure, take_outcome};
+#[cfg(feature = "ui")]
+pub(crate) use helper::record_failure_reason;
+pub use helper::{FINISH_FLAG, Outcome, ReasonOutcome, finish, finish_reason, take_failure, take_failure_reason, take_outcome, take_outcome_reason};
 
 /// Downloads `release` for `platform`, puts it in place and starts the helper that relaunches
 /// it once this process has exited. On success the caller must quit promptly. `last` is called
@@ -123,7 +125,24 @@ pub fn update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<(), String> {
-    prepare_update(app, install, release, platform, http, paths, stop, phase, last, running_version)?.start()
+    update_reason(app, install, release, platform, http, paths, stop, phase, last, running_version).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+#[allow(clippy::too_many_arguments)]
+pub fn update_reason(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+) -> Result<(), Reason> {
+    prepare_update_reason(app, install, release, platform, http, paths, stop, phase, last, running_version)?.start_reason()
 }
 
 /// What remains of an update after [`prepare_update`]: starting the helper, which waits for this
@@ -131,7 +150,7 @@ pub fn update(
 /// on macOS and Linux the update is already in place and the helper starts the new version.
 #[must_use = "the update only installs or restarts once the restart is started"]
 pub struct Restart {
-    helper: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+    helper: Option<Box<dyn FnOnce() -> Result<(), Reason> + Send>>,
 }
 
 impl Restart {
@@ -142,8 +161,13 @@ impl Restart {
     }
 
     /// `start` runs when the app closes.
-    #[cfg_attr(not(any(windows, unix, test)), allow(dead_code))]
+    #[cfg(any(test, feature = "screen-testing"))]
     pub(crate) fn later(start: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
+        Self::later_reason(move || start().map_err(Reason::data))
+    }
+
+    /// Keeps an authored failure structured until the restart is attempted.
+    pub(crate) fn later_reason(start: impl FnOnce() -> Result<(), Reason> + Send + 'static) -> Self {
         Self { helper: Some(Box::new(start)) }
     }
 
@@ -152,6 +176,11 @@ impl Restart {
     /// that; on macOS and Linux the Flatpak helper starts nothing then, and the other helpers
     /// start the new version anyway.
     pub fn start(self) -> Result<(), String> {
+        self.start_reason().map_err(|reason| reason.to_string())
+    }
+
+    /// Starts the helper, retaining a structured failure for translation.
+    pub fn start_reason(self) -> Result<(), Reason> {
         self.helper.map_or(Ok(()), |start| start())
     }
 }
@@ -185,7 +214,24 @@ pub fn prepare_update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<Restart, String> {
-    prepare_update_with_options(app, install, release, platform, http, paths, stop, phase, last, running_version, UpdateOptions::default())
+    prepare_update_reason(app, install, release, platform, http, paths, stop, phase, last, running_version).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update_reason(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+) -> Result<Restart, Reason> {
+    prepare_update_with_options_reason(app, install, release, platform, http, paths, stop, phase, last, running_version, UpdateOptions::default())
 }
 
 /// Like [`prepare_update`], with an explicit choice of Windows Installer progress UI.
@@ -203,6 +249,25 @@ pub fn prepare_update_with_options(
     running_version: Option<&str>,
     options: UpdateOptions,
 ) -> Result<Restart, String> {
+    prepare_update_with_options_reason(app, install, release, platform, http, paths, stop, phase, last, running_version, options)
+        .map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update_with_options_reason(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+    options: UpdateOptions,
+) -> Result<Restart, Reason> {
     // The option only changes Windows MSI helpers.
     #[cfg(not(windows))]
     let _ = options;
@@ -212,13 +277,20 @@ pub fn prepare_update_with_options(
     {
         // Compare the effective version: an explicit pretend version also exercises installation.
         // Without that opt-in, a build from source requires a strictly higher release.
-        return Err(format!("{} {} is not newer than currently running version {}", app.name, release.version_label(), cur_v));
+        return Err(Reason::new(
+            "{arg0} {arg1} is not newer than currently running version {arg2}",
+            &[("arg0", app.name), ("arg1", &release.version_label()), ("arg2", &(cur_v).to_string())],
+        ));
     }
-    let (asset, _) = pick_asset(release, &[app.id], platform, &[install.kind()])
-        .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))?;
+    let (asset, _) = pick_asset(release, &[app.id], platform, &[install.kind()]).ok_or_else(|| {
+        Reason::new(
+            "{arg0} {arg1} has no {arg2} for {arg3}",
+            &[("arg0", app.name), ("arg1", &release.version_label()), ("arg2", install.kind().label()), ("arg3", &platform.label())],
+        )
+    })?;
     let asset = asset.clone();
     crate::install::bind_artifact_version(app, release, &asset)?;
-    crate::install::check_download_link(app, release, &asset)?;
+    crate::install::check_download_link_reason(app, release, &asset)?;
     // Nothing is downloaded for a copy that can't install it.
     #[cfg(windows)]
     windows_precheck(app, install, paths)?;
@@ -229,7 +301,7 @@ pub fn prepare_update_with_options(
     #[cfg(windows)]
     windows_check_download(app, install, &file)?;
     // The restart ends this process: nothing else may be under way.
-    last()?;
+    last().map_err(Reason::data)?;
     phase(JobPhase::Installing);
     // Written before the swap starts. On Windows the helper does the swap, so the record is
     // written when it starts (see `windows_helper`): it clears the record when it fails, which a
@@ -237,7 +309,7 @@ pub fn prepare_update_with_options(
     #[cfg(not(windows))]
     mark_installed(paths, release);
     let pid = std::process::id();
-    let scheduled = (|| -> Result<Restart, String> {
+    let scheduled = (|| -> Result<Restart, Reason> {
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
@@ -251,8 +323,16 @@ pub fn prepare_update_with_options(
                     installation: None,
                 };
                 let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
-                let placed =
-                    install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
+                let placed = install::macos::install_dmg_reason(
+                    app,
+                    &file,
+                    Some(&existing),
+                    None,
+                    false,
+                    paths,
+                    &install::macos::Expect::self_update(release),
+                    wait,
+                );
                 after_install(paths, &file, recorded, &placed);
                 let placed = placed?;
                 Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
@@ -266,7 +346,7 @@ pub fn prepare_update_with_options(
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
-                let result = install::linux::install_package(*kind, &file, None, stop, phase);
+                let result = install::linux::install_package_reason(*kind, &file, None, stop, phase);
                 after_install(paths, &file, recorded, &result);
                 result?;
                 Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
@@ -278,9 +358,11 @@ pub fn prepare_update_with_options(
                     Some(FlatpakLevel::User) => false,
                     // Re-read rather than trusting a stale guess: `--user` on a system copy
                     // would install a second one beside it.
-                    None => return Err(format!("this copy of {} can't update itself; download the new version instead", app.name)),
+                    None => {
+                        return Err(Reason::new("this copy of {arg0} can't update itself; download the new version instead", &[("arg0", app.name)]));
+                    }
                 };
-                let result = install::linux::update_flatpak_bundle(&file, &app.bundle_id(), system, stop, phase);
+                let result = install::linux::update_flatpak_bundle_reason(&file, &app.bundle_id(), system, stop, phase);
                 after_install(paths, &file, recorded, &result);
                 result?;
                 relaunch_flatpak_after_exit(app)
@@ -289,12 +371,12 @@ pub fn prepare_update_with_options(
             Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file, options.quiet_msi)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
-                exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
+                exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", app.name)]))?;
                 windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(windows)]
             Install::Standalone(exe) => {
-                exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
+                exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", app.name)]))?;
                 windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(unix)]
@@ -307,7 +389,7 @@ pub fn prepare_update_with_options(
             #[allow(unreachable_patterns)]
             _ => {
                 let _ = (pid, &file);
-                Err(format!("this copy of {} can't update itself; download the new version instead", app.name))
+                Err(Reason::new("this copy of {arg0} can't update itself; download the new version instead", &[("arg0", app.name)]))
             }
         }
     })();

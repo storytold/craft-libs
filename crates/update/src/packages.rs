@@ -207,7 +207,7 @@ pub(crate) mod remote_url_tests {
 
 /// A missing ref permits bundle fallback; an unknown or different version must not replace it.
 #[cfg(all(target_os = "linux", feature = "oci_migration"))]
-pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, listing: &str) -> Result<bool, String> {
+pub(crate) fn oci_ref_available_reason(reference: &str, expected: &version::Version, listing: &str) -> Result<bool, crate::Reason> {
     for line in listing.lines() {
         let mut fields = line.split('\t');
         if fields.next().map(str::trim) != Some(reference) {
@@ -215,7 +215,7 @@ pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, li
         }
         let candidate = fields.next().and_then(|value| version::parse(value.trim()));
         if candidate.as_ref() != Some(expected) {
-            return Err("The ArtCraft OCI repository does not yet provide the selected version".into());
+            return Err(crate::Reason::new("The ArtCraft OCI repository does not yet provide the selected version", &[]));
         }
         return Ok(true);
     }
@@ -225,17 +225,17 @@ pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, li
 #[cfg(test)]
 #[cfg(all(target_os = "linux", feature = "oci_migration"))]
 pub(crate) mod migration_tests {
-    use super::{oci_ref_available, version};
+    use super::{oci_ref_available_reason, version};
     use craft_ui::testing::trial;
 
     #[trial]
     fn migration_requires_the_exact_ref_and_selected_version() {
         let reference = "app/ai.storyteller.photocraft/x86_64/stable";
         let expected = version::parse("1.2.3").unwrap();
-        assert_eq!(oci_ref_available(reference, &expected, &format!("{reference}\t1.2.3")), Ok(true));
-        assert_eq!(oci_ref_available(reference, &expected, "app/ai.storyteller.photocraft/aarch64/stable\t1.2.3"), Ok(false));
+        assert_eq!(oci_ref_available_reason(reference, &expected, &format!("{reference}\t1.2.3")), Ok(true));
+        assert_eq!(oci_ref_available_reason(reference, &expected, "app/ai.storyteller.photocraft/aarch64/stable\t1.2.3"), Ok(false));
         for value in ["", "1.2.2", "1.2.4", "unknown"] {
-            assert!(oci_ref_available(reference, &expected, &format!("{reference}\t{value}")).is_err());
+            assert!(oci_ref_available_reason(reference, &expected, &format!("{reference}\t{value}")).is_err());
         }
     }
 }

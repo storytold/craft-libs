@@ -1,34 +1,39 @@
 //! FreeBSD installs: the release `/usr/local` tree.
 
+use crate::Reason;
 use std::ffi::OsStr;
 
-use super::{App, Path, PathBuf, Paths, pkexec, process, run_as_root, tree};
+use super::{App, Path, PathBuf, Paths, pkexec, process, run_as_root_reason, tree};
 
 /// Copies the release's tree into `/usr/local` (asking for permission through polkit), or
 /// into `~/.local` when polkit isn't installed. Returns the binary, every file installed,
 /// and whether removing them needs root.
 pub fn install_tree(app: &App, file: &Path, paths: &Paths) -> Result<(PathBuf, Vec<PathBuf>, bool), String> {
+    install_tree_reason(app, file, paths).map_err(|reason| reason.to_string())
+}
+
+pub fn install_tree_reason(app: &App, file: &Path, paths: &Paths) -> Result<(PathBuf, Vec<PathBuf>, bool), Reason> {
     let staging = paths.cache.join(format!("{}.new", app.id));
     let result = install_from(app, file, &staging);
     let _ = std::fs::remove_dir_all(&staging);
     result
 }
 
-fn install_from(app: &App, file: &Path, staging: &Path) -> Result<(PathBuf, Vec<PathBuf>, bool), String> {
-    let tree = tree::unpack(app, file, staging)?;
-    let rel = tree::files(&tree)?;
+fn install_from(app: &App, file: &Path, staging: &Path) -> Result<(PathBuf, Vec<PathBuf>, bool), Reason> {
+    let tree = tree::unpack_reason(app, file, staging)?;
+    let rel = tree::files_reason(&tree)?;
     let mut source = tree.into_os_string();
     source.push("/.");
     if pkexec().is_some() {
         let prefix = PathBuf::from("/usr/local");
-        run_as_root(&[OsStr::new("/bin/cp"), OsStr::new("-R"), &source, prefix.as_os_str()])?;
+        run_as_root_reason(&[OsStr::new("/bin/cp"), OsStr::new("-R"), &source, prefix.as_os_str()])?;
         return Ok((prefix.join("bin").join(app.id), rel.iter().map(|r| prefix.join(r)).collect(), true));
     }
-    let prefix = crate::folders::home_dir().ok_or("no home folder")?.join(".local");
-    std::fs::create_dir_all(&prefix).map_err(|e| e.to_string())?;
-    let status = process::command("/bin/cp").arg("-R").arg(&source).arg(&prefix).status().map_err(|e| e.to_string())?;
+    let prefix = crate::folders::home_dir().ok_or_else(|| Reason::new("no home folder", &[]))?.join(".local");
+    std::fs::create_dir_all(&prefix).map_err(|e| Reason::data(e.to_string()))?;
+    let status = process::command("/bin/cp").arg("-R").arg(&source).arg(&prefix).status().map_err(|e| Reason::data(e.to_string()))?;
     if !status.success() {
-        return Err("couldn't copy the app into ~/.local".into());
+        return Err(Reason::new("couldn't copy the app into ~/.local", &[]));
     }
     // ~/.local/bin is often not on PATH for the desktop: point the menu entry at the binary.
     let bin = prefix.join("bin").join(app.id);
@@ -85,7 +90,7 @@ pub fn remove_files(files: &[PathBuf], needs_root: bool) -> Result<(), String> {
     if needs_root {
         let mut args: Vec<&OsStr> = vec![OsStr::new("/bin/rm"), OsStr::new("-f"), OsStr::new("--")];
         args.extend(safe_files.iter().map(|f| f.as_os_str()));
-        return run_as_root(&args);
+        return run_as_root_reason(&args).map_err(|reason| reason.to_string());
     }
     for f in safe_files {
         let _ = std::fs::remove_file(f);

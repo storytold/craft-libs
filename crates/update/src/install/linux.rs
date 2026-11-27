@@ -4,13 +4,14 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
+use crate::Reason;
 use crate::distro;
 use crate::protocol::CANCELLED;
 use crate::version::{self, Version};
 
 use super::{
-    App, INSTALLER, InstallSource, Installed, JobPhase, PackageKind, Path, PathBuf, Paths, Record, SHARED_CALL, SYSTEM_BIN_DIRS, Stop, cancelled,
-    find_in, kill_on_cancel, pkexec, process, run_as_root, swap_into_place, tree, turn,
+    App, INSTALLER, InstallSource, Installed, JobPhase, PackageKind, Path, PathBuf, Paths, Record, SYSTEM_BIN_DIRS, Stop, cancelled, find_in,
+    kill_on_cancel, pkexec, process, run_as_root_reason, swap_into_place, tree, turn,
 };
 
 /// apt waits this long for another package tool (a software centre, automatic updates) to
@@ -23,32 +24,45 @@ fn system_tool(name: &str) -> Option<PathBuf> {
 }
 
 /// Where commands that need root go: the installer's queue, then `pkexec`.
-pub struct Root<'a> {
+pub struct Root<'a, E = String> {
     /// The queue root commands wait their turn in.
     pub queue: &'a crate::queue::Queue,
     /// Runs a command line as root.
-    pub run: &'a (dyn Fn(&[&OsStr]) -> Result<(), String> + Sync),
+    pub run: &'a (dyn Fn(&[&OsStr]) -> Result<(), E> + Sync),
     /// A `flatpak` command, set up as the installer runs it.
     pub flatpak: &'a (dyn Fn() -> std::process::Command + Sync),
 }
 
-const SYSTEM: Root<'static> = Root { queue: &INSTALLER, run: &run_as_root, flatpak: &process::flatpak_command_c };
+const SYSTEM: Root<'static, Reason> = Root { queue: &INSTALLER, run: &run_as_root_reason, flatpak: &process::flatpak_command_c };
 
 /// Runs `command target` as root. Jobs waiting for the same command go into one call
 /// (`apt-get install a.deb b.deb`), so the password is asked for once.
-fn as_root(root: &Root<'_>, command: &[&str], target: &OsStr, stop: &Stop, phase: &mut dyn FnMut(JobPhase), working: JobPhase) -> Result<(), String> {
+fn as_root<E: Into<Reason>>(
+    root: &Root<'_, E>,
+    command: &[&str],
+    target: &OsStr,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    working: JobPhase,
+) -> Result<(), Reason> {
     let command = command.iter().map(OsString::from).collect();
-    root.queue.batched(command, target.to_os_string(), &cancelled(stop), &mut turn(phase, working), &|command, targets| {
+    root.queue.batched_reason(command, target.to_os_string(), &cancelled(stop), &mut turn(phase, working), &|command, targets| {
         let args: Vec<&OsStr> = command.iter().chain(targets).map(OsString::as_os_str).collect();
-        shared_outcome((root.run)(&args), targets.len())
+        shared_outcome_reason((root.run)(&args).map_err(Into::into), targets.len())
     })
 }
 
 /// What one call's result means for each of the `count` apps it handled: a failure can't be
 /// pinned on one of them, and trying each again by itself would ask for the password each time.
 pub fn shared_outcome(result: Result<(), String>, count: usize) -> Result<(), String> {
+    shared_outcome_reason(result.map_err(Reason::data), count).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn shared_outcome_reason(result: Result<(), Reason>, count: usize) -> Result<(), Reason> {
     match result {
-        Err(e) if count > 1 && e != CANCELLED => Err(format!("{e} while handling {count} {SHARED_CALL}")),
+        Err(e) if count > 1 && e.to_string() != CANCELLED => {
+            Err(e.context("{reason} while handling {count} apps together. Try them one at a time.", &[("count", &count.to_string())]))
+        }
         other => other,
     }
 }
@@ -157,13 +171,13 @@ pub(crate) fn system_bundle_prefix(in_sandbox: bool) -> &'static [&'static str] 
     if in_sandbox { &["flatpak-spawn", "--host", "pkexec", "/usr/bin/flatpak"] } else { &["pkexec", "/usr/bin/flatpak"] }
 }
 
-fn system_bundle_command(file: &Path) -> Result<std::process::Command, String> {
+fn system_bundle_command(file: &Path) -> Result<std::process::Command, Reason> {
     if !process::in_sandbox() && pkexec().is_none() {
-        return Err("installing system-wide needs polkit (pkexec), which isn't installed".into());
+        return Err(Reason::new("installing system-wide needs polkit (pkexec), which isn't installed", &[]));
     }
     let prefix = system_bundle_prefix(process::in_sandbox());
     let Some((program, rest)) = prefix.split_first() else {
-        return Err("couldn't start Flatpak".into());
+        return Err(Reason::new("couldn't start Flatpak", &[]));
     };
     let mut cmd = process::command(*program);
     cmd.args(rest);
@@ -172,7 +186,7 @@ fn system_bundle_command(file: &Path) -> Result<std::process::Command, String> {
     Ok(cmd)
 }
 
-pub(crate) fn flatpak_bundle_error(output: &std::process::Output) -> Result<(), String> {
+pub(crate) fn flatpak_bundle_error_reason(output: &std::process::Output) -> Result<(), Reason> {
     if output.status.success() {
         return Ok(());
     }
@@ -186,21 +200,22 @@ pub(crate) fn flatpak_bundle_error(output: &std::process::Output) -> Result<(), 
     let err = stderr.trim();
     let err = if err.is_empty() { String::from_utf8_lossy(&output.stdout).trim().to_string() } else { err.to_string() };
     if err.is_empty() {
-        Err("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)".into())
+        Err(Reason::new("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)", &[]))
     } else {
         let clean_err = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(&err);
-        Err(format!("Flatpak couldn't install the bundle: {clean_err}"))
+        Err(Reason::new("Flatpak couldn't install the bundle: {clean_err}", &[("clean_err", clean_err)]))
     }
 }
 
 /// Puts a self-update's `.flatpak` bundle in place. `system` replaces the system-wide copy
 /// through `pkexec`. Per-user stays a normal `flatpak install --user`, which needs no password.
-pub(crate) fn update_flatpak_bundle(file: &Path, id: &str, system: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
-    update_flatpak_bundle_via(&SYSTEM, file, id, system, stop, phase)
+pub(crate) fn update_flatpak_bundle_reason(file: &Path, id: &str, system: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), Reason> {
+    update_flatpak_bundle_via_reason(&SYSTEM, file, id, system, stop, phase)
 }
 
 /// An app never uninstalls itself here: its download goes after this, so a failed install would
 /// leave nothing. "Already installed" means an earlier update landed and never restarted.
+#[cfg(test)]
 pub(crate) fn update_flatpak_bundle_via(
     root: &Root<'_>,
     file: &Path,
@@ -209,8 +224,19 @@ pub(crate) fn update_flatpak_bundle_via(
     stop: &Stop,
     phase: &mut dyn FnMut(JobPhase),
 ) -> Result<(), String> {
+    update_flatpak_bundle_via_reason(root, file, id, system, stop, phase).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn update_flatpak_bundle_via_reason<E: Into<Reason>>(
+    root: &Root<'_, E>,
+    file: &Path,
+    id: &str,
+    system: bool,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+) -> Result<(), Reason> {
     match install_flatpak_bundle_via(root, file, None, system, stop, phase) {
-        Err(e) if already_installed(&e, id) => {
+        Err(e) if already_installed(&e.to_string(), id) => {
             log::info!("{id} is already installed: only the restart is left");
             Ok(())
         }
@@ -220,14 +246,14 @@ pub(crate) fn update_flatpak_bundle_via(
 
 /// Installs a downloaded `.flatpak` bundle. `bundle` is the app id it holds, for a per-user install
 /// that may uninstall that app first.
-fn install_flatpak_bundle_via(
-    root: &Root<'_>,
+fn install_flatpak_bundle_via<E: Into<Reason>>(
+    root: &Root<'_, E>,
     file: &Path,
     bundle: Option<&str>,
     system: bool,
     stop: &Stop,
     phase: &mut dyn FnMut(JobPhase),
-) -> Result<(), String> {
+) -> Result<(), Reason> {
     let install_one = || {
         log::info!("executing flatpak install --reinstall --bundle for {}", file.display());
         let mut cmd = if system {
@@ -239,25 +265,26 @@ fn install_flatpak_bundle_via(
             cmd.arg(file);
             cmd
         };
-        let output = cmd.output().map_err(|e| format!("couldn't start Flatpak ({e})"))?;
+        let output = cmd.output().map_err(|e| Reason::new("couldn't start Flatpak ({e})", &[("e", &(e).to_string())]))?;
         if output.status.success() {
             log::info!("flatpak install succeeded for {}", file.display());
         }
-        flatpak_bundle_error(&output)
+        flatpak_bundle_error_reason(&output)
     };
     // Inside the queue: an uninstall racing another bundle install can drop its remote.
     let install = || {
         let result = install_one();
         match bundle {
-            Some(id) if result.as_ref().is_err_and(|e| already_installed(e, id)) && reinstall_by_hand(root) => {
+            Some(id) if result.as_ref().is_err_and(|e| already_installed(&e.to_string(), id)) && reinstall_by_hand(root) => {
                 log::info!("{id} is already installed and this Flatpak can't reinstall a bundle: uninstalling it first");
                 // No `--delete-data`: the app's files stay for the next install.
                 if !(root.flatpak)().args(["uninstall", "--user", "-y", "--noninteractive", id]).status().is_ok_and(|s| s.success()) {
                     log::warn!("couldn't uninstall {id} to install its bundle again");
                     return result;
                 }
-                install_one()
-                    .map_err(|e| format!("{e} (It was uninstalled first. Its data is kept, and Install tries again with the same download.)"))
+                install_one().map_err(|e| {
+                    e.context("{reason} (It was uninstalled first. Its data is kept, and Install tries again with the same download.)", &[])
+                })
             }
             _ => result,
         }
@@ -268,6 +295,16 @@ fn install_flatpak_bundle_via(
 /// Opt-in OCI migration; only an absent ref permits bundle fallback.
 #[cfg(feature = "oci_migration")]
 pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super::version::Version, stop: &Stop) -> Result<bool, String> {
+    migrate_bundle_to_oci_reason(app, installed, expected, stop).map_err(|reason| reason.to_string())
+}
+
+#[cfg(feature = "oci_migration")]
+pub(crate) fn migrate_bundle_to_oci_reason(
+    app: &App,
+    installed: &Installed,
+    expected: &super::version::Version,
+    stop: &Stop,
+) -> Result<bool, Reason> {
     if installed.source != InstallSource::Flatpak || installed.externally_managed || !app.repo.starts_with("storytold/") {
         return Ok(false);
     }
@@ -275,16 +312,16 @@ pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super:
     if !installed.origin.as_deref().is_some_and(|origin| origin.ends_with("-origin")) {
         return Ok(false);
     }
-    let id = installed.package.as_deref().ok_or("Flatpak installation has no package ID")?;
+    let id = installed.package.as_deref().ok_or_else(|| Reason::new("Flatpak installation has no package ID", &[]))?;
     let scope = match installed.installation.as_deref() {
         Some("user") => "--user".to_string(),
         Some("system") => "--system".to_string(),
         Some(name) => format!("--installation={name}"),
-        None => return Err("Flatpak installation scope is unknown".into()),
+        None => return Err(Reason::new("Flatpak installation scope is unknown", &[])),
     };
     // `cancellable` is false for steps that must not stop part-way: killing flatpak-spawn
     // doesn't wait for the host transaction, and `--reinstall` removes the old ref first.
-    let flatpak = |args: &[&str], cancellable: bool| -> Result<String, String> {
+    let flatpak = |args: &[&str], cancellable: bool| -> Result<String, Reason> {
         let mut cmd = if process::in_sandbox() {
             let mut cmd = process::command("flatpak-spawn");
             cmd.args(["--host", "--watch-bus", "flatpak"]);
@@ -297,9 +334,9 @@ pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super:
             stop.check()?; // paused or cancelled: start no further command
         }
         let end = kill_on_cancel(stop);
-        let output = process::cancellable_output(cmd, || if cancellable { end() } else { Ok(()) })?;
+        let output = process::cancellable_output_reason(cmd, || if cancellable { end() } else { Ok(()) })?;
         if !output.status.success() {
-            return Err(format!("Flatpak OCI migration failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+            return Err(Reason::new("Flatpak OCI migration failed: {arg0}", &[("arg0", String::from_utf8_lossy(&output.stderr).trim())]));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     };
@@ -318,13 +355,13 @@ pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super:
         Some(remote) => remote,
         None => {
             if remotes.lines().any(|line| line.split('\t').next() == Some("artcraft-oci")) {
-                return Err("The artcraft-oci remote points to a different repository".into());
+                return Err(Reason::new("The artcraft-oci remote points to a different repository", &[]));
             }
             // Another app's migration may add the remote first; the URL is checked below.
             run(&["remote-add", "--if-not-exists", "artcraft-oci", "https://getartcraft.com/artcraft-oci.flatpakrepo"])?;
             let remotes = run(&["remotes", "--show-disabled", "--columns=name,url"])?;
             if !crate::packages::is_artcraft_remote("artcraft-oci", &remotes) {
-                return Err("The ArtCraft OCI descriptor configured an unexpected repository".into());
+                return Err(Reason::new("The ArtCraft OCI descriptor configured an unexpected repository", &[]));
             }
             "artcraft-oci".to_string()
         }
@@ -333,26 +370,39 @@ pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super:
     // on demand; without a refresh a new remote lists refs with empty versions.
     run(&["update", "--appstream", &remote])?;
     let refs = run(&["remote-ls", "--app", "--columns=ref,version", &remote])?;
-    if !crate::packages::oci_ref_available(reference, expected, &refs)? {
+    if !crate::packages::oci_ref_available_reason(reference, expected, &refs)? {
         return Ok(false);
     }
     stop.check()?;
     if let Err(e) = flatpak(&["install", "--reinstall", "-y", "--noninteractive", &remote, reference], false) {
         // The bundle origin has no repository to restore from, so point at the bundle itself.
         if flatpak(&["info", id], false).is_err() {
-            return Err(format!("{e}. {} is no longer installed; reinstall it from the .flatpak bundle at {}", app.name, app.releases_url()));
+            return Err(e.context(
+                "{reason}. {app} is no longer installed; reinstall it from the .flatpak bundle at {url}",
+                &[("app", app.name), ("url", &app.releases_url())],
+            ));
         }
         return Err(e);
     }
     let origin = run(&["info", "--show-origin", id])?;
     if origin.trim() != remote {
-        return Err("Flatpak did not switch the installed app to the ArtCraft OCI remote".into());
+        return Err(Reason::new("Flatpak did not switch the installed app to the ArtCraft OCI remote", &[]));
     }
     Ok(true)
 }
 
 /// Updates an installed Flatpak from its remote repository (such as FlatPark).
 pub fn update_flatpak_app(app: &App, id: &str, installation: Option<&str>, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+    update_flatpak_app_reason(app, id, installation, stop, phase).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn update_flatpak_app_reason(
+    app: &App,
+    id: &str,
+    installation: Option<&str>,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+) -> Result<(), Reason> {
     phase(JobPhase::Installing);
     stop.check()?;
     let scope_arg = match installation {
@@ -370,17 +420,17 @@ pub fn update_flatpak_app(app: &App, id: &str, installation: Option<&str>, stop:
         process::command("flatpak")
     };
     cmd.args(["update", &scope_arg, "-y", "--noninteractive", id]);
-    let output = process::cancellable_output(cmd, kill_on_cancel(stop))?;
+    let output = process::cancellable_output_reason(cmd, kill_on_cancel(stop))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let err = stderr.trim();
     if err.is_empty() {
-        Err(format!("Flatpak couldn't update {}", app.name))
+        Err(Reason::new("Flatpak couldn't update {arg0}", &[("arg0", app.name)]))
     } else {
         let clean = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(err);
-        Err(format!("Flatpak couldn't update {}: {clean}", app.name))
+        Err(Reason::new("Flatpak couldn't update {arg0}: {clean}", &[("arg0", app.name), ("clean", clean)]))
     }
 }
 
@@ -392,7 +442,7 @@ pub(crate) fn already_installed(err: &str, id: &str) -> bool {
 
 /// Whether the user's copy has to be uninstalled before its bundle installs again: Flatpak
 /// before 1.16.2 ignores `--reinstall` for a bundle.
-fn reinstall_by_hand(root: &Root<'_>) -> bool {
+fn reinstall_by_hand<E>(root: &Root<'_, E>) -> bool {
     let mut cmd = (root.flatpak)();
     cmd.arg("--version");
     process::run_command(cmd, "flatpak", Duration::from_secs(10)).is_ok_and(|v| ignores_bundle_reinstall(&v))
@@ -407,13 +457,23 @@ pub(crate) fn ignores_bundle_reinstall(flatpak_version: &str) -> bool {
 /// Installs (or upgrades) a downloaded package with the system's own tools. `bundle` is the app
 /// id a Flatpak bundle holds.
 pub fn install_package(kind: PackageKind, file: &Path, bundle: Option<&str>, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+    install_package_reason(kind, file, bundle, stop, phase).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn install_package_reason(
+    kind: PackageKind,
+    file: &Path,
+    bundle: Option<&str>,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+) -> Result<(), Reason> {
     if kind == PackageKind::Deb && system_tool("apt-get").is_none() {
-        return Err("this system has no apt-get to install a Debian package with".into());
+        return Err(Reason::new("this system has no apt-get to install a Debian package with", &[]));
     }
     if kind == PackageKind::ArchPkg && system_tool("pacman").is_none() {
-        return Err("this system has no pacman to install an Arch package with".into());
+        return Err(Reason::new("this system has no pacman to install an Arch package with", &[]));
     }
-    install_package_via(&SYSTEM, kind, file, bundle, stop, phase)
+    install_package_via_reason(&SYSTEM, kind, file, bundle, stop, phase)
 }
 
 /// [`install_package`] through `root` in place of the installer's queue and `pkexec`.
@@ -425,18 +485,33 @@ pub fn install_package_via(
     stop: &Stop,
     phase: &mut dyn FnMut(JobPhase),
 ) -> Result<(), String> {
+    install_package_via_reason(root, kind, file, bundle, stop, phase).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn install_package_via_reason<E: Into<Reason>>(
+    root: &Root<'_, E>,
+    kind: PackageKind,
+    file: &Path,
+    bundle: Option<&str>,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+) -> Result<(), Reason> {
     let f = file.as_os_str();
     if let Some(command) = install_command(kind) {
         return as_root(root, command, f, stop, phase, JobPhase::Installing);
     }
     match kind {
         PackageKind::Flatpak => install_flatpak_bundle_via(root, file, bundle, false, stop, phase),
-        other => Err(format!("{} isn't a system package", other.label())),
+        other => Err(Reason::new("{arg0} isn't a system package", &[("arg0", other.label())])),
     }
 }
 
 /// Removes the app's system package with the tools of the package manager that installed it.
 pub fn remove_package(app: &App, installed: &Installed, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+    remove_package_reason(app, installed, stop, phase).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn remove_package_reason(app: &App, installed: &Installed, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), Reason> {
     let mut remove = |command: &[&str], package: &str| as_root(&SYSTEM, command, OsStr::new(package), stop, phase, JobPhase::Removing);
     match installed.source {
         InstallSource::Deb if system_tool("apt-get").is_some() => remove(&["apt-get", "-o", APT_WAITS, "remove", "-y"], app.id),
@@ -461,11 +536,11 @@ pub fn remove_package(app: &App, installed: &Installed, stop: &Stop, phase: &mut
                 if system.is_ok_and(|s| s.success()) {
                     return Ok(());
                 }
-                return Err(format!("couldn't uninstall {id}"));
+                return Err(Reason::new("couldn't uninstall {id}", &[("id", &id)]));
             }
             remove(&["flatpak", "uninstall", "--system", "-y", "--noninteractive"], &id)
         }
-        other => Err(format!("{} isn't a system package", other.label())),
+        other => Err(Reason::new("{arg0} isn't a system package", &[("arg0", other.label())])),
     }
 }
 
@@ -480,27 +555,38 @@ pub fn install_appimage(
     previous: Option<&Record>,
     replace: bool,
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    install_appimage_reason(file, name, destination, previous, replace).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn install_appimage_reason(
+    file: &Path,
+    name: &str,
+    destination: Option<&Path>,
+    previous: Option<&Record>,
+    replace: bool,
+) -> Result<(PathBuf, Vec<PathBuf>), Reason> {
     let dir = match destination {
         Some(dir) => dir.to_path_buf(),
         None => {
-            let dir = crate::detect::linux::appimage_dir().ok_or("no home folder")?;
-            std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create {} ({e})", dir.display()))?;
+            let dir = crate::detect::linux::appimage_dir().ok_or_else(|| Reason::new("no home folder", &[]))?;
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| Reason::new("couldn't create {arg0} ({e})", &[("arg0", &(dir.display()).to_string()), ("e", &(e).to_string())]))?;
             dir
         }
     };
     let dest = dir.join(name);
     let ours = previous.is_some_and(|r| r.kind == PackageKind::AppImage && r.path == dest);
     if std::fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir() || !(replace || ours && m.is_file())) {
-        return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
+        return Err(Reason::new("{arg0} already exists and wasn't installed by ArtCraft Launcher", &[("arg0", &(dest.display()).to_string())]));
     }
     clear_staging(&dir, std::time::SystemTime::now());
     let staging = super::staging_dir(&dir)?;
     let partial = staging.path().join(name);
-    std::fs::copy(file, &partial).map_err(|e| format!("couldn't copy the AppImage ({e})"))?;
+    std::fs::copy(file, &partial).map_err(|e| Reason::new("couldn't copy the AppImage ({e})", &[("e", &(e).to_string())]))?;
     // The AppImage is the program the user just installed and must be executable; 0o755 is
     // not group/world-writable.
-    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?; // NOSONAR
-    std::fs::rename(&partial, &dest).map_err(|e| format!("couldn't put the AppImage in place ({e})"))?;
+    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o755)).map_err(|e| Reason::data(e.to_string()))?; // NOSONAR
+    std::fs::rename(&partial, &dest).map_err(|e| Reason::new("couldn't put the AppImage in place ({e})", &[("e", &(e).to_string())]))?;
     let mut removed = Vec::new();
     if let Some(old) = previous.filter(|r| r.kind == PackageKind::AppImage && r.path != dest)
         && std::fs::remove_file(&old.path).is_ok()
@@ -563,22 +649,27 @@ fn left_by_install(folder: &Path, now: std::time::SystemTime) -> bool {
 /// sandbox instead of on the host. `bin` and `share` are swapped in one at a time, so an
 /// update leaves the app's own `home/` beside them untouched.
 pub fn install_tree(app: &App, file: &Path, paths: &Paths) -> Result<PathBuf, String> {
+    install_tree_reason(app, file, paths).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn install_tree_reason(app: &App, file: &Path, paths: &Paths) -> Result<PathBuf, Reason> {
     let staged = paths.cache.join(format!("{}.new", app.id));
     let result = unpack_tree(app, file, &staged, paths);
     let _ = std::fs::remove_dir_all(&staged);
     result
 }
 
-fn unpack_tree(app: &App, file: &Path, staged: &Path, paths: &Paths) -> Result<PathBuf, String> {
-    let tree = tree::unpack(app, file, staged)?;
+fn unpack_tree(app: &App, file: &Path, staged: &Path, paths: &Paths) -> Result<PathBuf, Reason> {
+    let tree = tree::unpack_reason(app, file, staged)?;
     // Verify tree root is strictly within staged and is not a symlink (CWE-59).
-    let rel_tree = tree.strip_prefix(staged).map_err(|_| "staging layout escapes staging".to_string())?;
+    let rel_tree = tree.strip_prefix(staged).map_err(|_| Reason::new("staging layout escapes staging", &[]))?;
     let mut check_root = staged.to_path_buf();
     for part in rel_tree.components() {
         check_root.push(part);
-        let meta = std::fs::symlink_metadata(&check_root).map_err(|e| format!("couldn't check {} ({e})", check_root.display()))?;
+        let meta = std::fs::symlink_metadata(&check_root)
+            .map_err(|e| Reason::new("couldn't check {arg0} ({e})", &[("arg0", &(check_root.display()).to_string()), ("e", &(e).to_string())]))?;
         if meta.file_type().is_symlink() {
-            return Err("unpacked tree root is a symlink".into());
+            return Err(Reason::new("unpacked tree root is a symlink", &[]));
         }
     }
     // Validate the staged binary and set its mode *before* either swap: a rejected update
@@ -586,7 +677,8 @@ fn unpack_tree(app: &App, file: &Path, staged: &Path, paths: &Paths) -> Result<P
     let staged_bin = tree.join("bin").join(app.id);
     make_runnable_within(&tree, &staged_bin)?;
     let root = paths.apps().join(app.id);
-    std::fs::create_dir_all(&root).map_err(|e| format!("couldn't create {} ({e})", root.display()))?;
+    std::fs::create_dir_all(&root)
+        .map_err(|e| Reason::new("couldn't create {arg0} ({e})", &[("arg0", &(root.display()).to_string()), ("e", &(e).to_string())]))?;
     for dir in ["bin", "share"] {
         if tree.join(dir).is_dir() {
             swap_into_place(&tree.join(dir), &root.join(dir))?;
@@ -603,45 +695,53 @@ fn unpack_tree(app: &App, file: &Path, staged: &Path, paths: &Paths) -> Result<P
 /// mode of an existing file *outside* the tree (CWE-59). We reject any symlinked component
 /// before changing permissions, so the chmod can only ever reach a regular file that lives at
 /// the verified path inside the launcher's own apps folder.
-fn make_runnable_within(root: &Path, bin: &Path) -> Result<(), String> {
-    let root_meta = std::fs::symlink_metadata(root).map_err(|e| format!("couldn't check {} ({e})", root.display()))?;
+fn make_runnable_within(root: &Path, bin: &Path) -> Result<(), Reason> {
+    let root_meta = std::fs::symlink_metadata(root)
+        .map_err(|e| Reason::new("couldn't check {arg0} ({e})", &[("arg0", &(root.display()).to_string()), ("e", &(e).to_string())]))?;
     if root_meta.file_type().is_symlink() {
-        return Err("the install tree root is a symlink".into());
+        return Err(Reason::new("the install tree root is a symlink", &[]));
     }
     // No component between `root` and `bin` may be a symlink.
-    let rel = bin.strip_prefix(root).map_err(|_| "the app binary isn't inside the install tree".to_string())?;
+    let rel = bin.strip_prefix(root).map_err(|_| Reason::new("the app binary isn't inside the install tree", &[]))?;
     let mut here = root.to_path_buf();
     for part in rel.components() {
         here.push(part);
-        let meta = std::fs::symlink_metadata(&here).map_err(|e| format!("couldn't check {} ({e})", here.display()))?;
+        let meta = std::fs::symlink_metadata(&here)
+            .map_err(|e| Reason::new("couldn't check {arg0} ({e})", &[("arg0", &(here.display()).to_string()), ("e", &(e).to_string())]))?;
         if meta.file_type().is_symlink() {
-            return Err("the download's app binary escapes the install tree through a symlink".into());
+            return Err(Reason::new("the download's app binary escapes the install tree through a symlink", &[]));
         }
     }
     // The final component is a verified non-symlink regular file inside the launcher's own
     // apps folder, so changing its mode cannot reach anything outside the tree.
-    if !here.metadata().map_err(|e| e.to_string())?.file_type().is_file() {
-        return Err("the download's app binary isn't a regular file".into());
+    if !here.metadata().map_err(|e| Reason::data(e.to_string()))?.file_type().is_file() {
+        return Err(Reason::new("the download's app binary isn't a regular file", &[]));
     }
     // Verified non-symlink regular file inside the launcher's apps folder; the app binary must
     // be executable and 0o755 is not group/world-writable.
-    std::fs::set_permissions(bin, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("couldn't make {} runnable ({e})", bin.display())) // NOSONAR
+    std::fs::set_permissions(bin, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| Reason::new("couldn't make {arg0} runnable ({e})", &[("arg0", &(bin.display()).to_string()), ("e", &(e).to_string())])) // NOSONAR
 }
 
 /// Removes a tree the launcher unpacked in [`install_tree`], keeping the app's `home/`: the
 /// settings and projects in it are the user's, not the installer's. Only the two folders the
 /// launcher put there are removed, and only inside the launcher's own apps folder.
 pub fn remove_tree(app: &App, paths: &Paths) -> Result<(), String> {
+    remove_tree_reason(app, paths).map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn remove_tree_reason(app: &App, paths: &Paths) -> Result<(), Reason> {
     let root = paths.apps().join(app.id);
     let mut removed = false;
     for dir in ["bin", "share"] {
         let path = root.join(dir);
         if path.starts_with(paths.apps()) && path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|e| format!("couldn't remove {} ({e})", path.display()))?;
+            std::fs::remove_dir_all(&path)
+                .map_err(|e| Reason::new("couldn't remove {arg0} ({e})", &[("arg0", &(path.display()).to_string()), ("e", &(e).to_string())]))?;
             removed = true;
         }
     }
-    if removed { Ok(()) } else { Err(format!("{} isn't installed in this folder", app.name)) }
+    if removed { Ok(()) } else { Err(Reason::new("{arg0} isn't installed in this folder", &[("arg0", app.name)])) }
 }
 
 /// Where menu entries and icons go: `$XDG_DATA_HOME`, else `~/.local/share`. Inside the

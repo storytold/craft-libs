@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use crate::process::HelperFailure;
+use crate::Reason;
+use crate::process::{HelperFailure, HelperFailureReason};
 use crate::protocol::CANCELLED;
 use crate::queue::Queue;
 use crate::version::Version;
@@ -10,7 +11,7 @@ use crate::version::Version;
 use super::{App, InstallSource, Installed, JobPhase, Path, PathBuf, Paths, Release, Stop, cancelled, not_running, process, swap_into_place, turn};
 
 /// `/Applications` when we can write there, else `~/Applications`.
-fn applications_dir(existing: Option<&Installed>, destination: Option<&Path>) -> Result<PathBuf, String> {
+fn applications_dir(existing: Option<&Installed>, destination: Option<&Path>) -> Result<PathBuf, Reason> {
     if let Some(parent) = existing.filter(|i| i.source == InstallSource::MacApp).and_then(|i| Path::new(&i.location).parent().map(Path::to_path_buf))
     {
         return Ok(parent);
@@ -24,8 +25,9 @@ fn applications_dir(existing: Option<&Installed>, destination: Option<&Path>) ->
         let _ = std::fs::remove_file(&probe);
         return Ok(system);
     }
-    let user = crate::folders::home_dir().ok_or("no home folder")?.join("Applications");
-    std::fs::create_dir_all(&user).map_err(|e| format!("couldn't create {} ({e})", user.display()))?;
+    let user = crate::folders::home_dir().ok_or_else(|| Reason::new("no home folder", &[]))?.join("Applications");
+    std::fs::create_dir_all(&user)
+        .map_err(|e| Reason::new("couldn't create {arg0} ({e})", &[("arg0", &(user.display()).to_string()), ("e", &(e).to_string())]))?;
     Ok(user)
 }
 
@@ -131,15 +133,31 @@ pub fn install_dmg(
     expect: &Expect<'_>,
     wait: CheckTurn<'_>,
 ) -> Result<PathBuf, String> {
+    install_dmg_reason(app, dmg, existing, destination, replace, paths, expect, wait).map_err(|reason| reason.to_string())
+}
+
+/// [`install_dmg`] with a structured failure for translation.
+#[allow(clippy::too_many_arguments)]
+pub fn install_dmg_reason(
+    app: &App,
+    dmg: &Path,
+    existing: Option<&Installed>,
+    destination: Option<&Path>,
+    replace: bool,
+    paths: &Paths,
+    expect: &Expect<'_>,
+    wait: CheckTurn<'_>,
+) -> Result<PathBuf, Reason> {
     // A new, empty mount point for every install. A fixed one can still hold an image from an
     // attach that was interrupted or timed out, and hdiutil won't mount another over it.
     let attempt = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
     let mount = paths.cache.join(format!("mount-{}-{}-{attempt}", app.id, std::process::id()));
     let _in_use = InUse::new(&mount);
-    std::fs::create_dir_all(&mount).map_err(|e| format!("couldn't create a folder to open the disk image in ({e})"))?;
+    std::fs::create_dir_all(&mount)
+        .map_err(|e| Reason::new("couldn't create a folder to open the disk image in ({e})", &[("e", &(e).to_string())]))?;
     let (Some(dmg_s), Some(mount_s)) = (dmg.to_str(), mount.to_str()) else {
         let _ = std::fs::remove_dir(&mount);
-        return Err("unusual characters in the cache folder's path".into());
+        return Err(Reason::new("unusual characters in the cache folder's path", &[]));
     };
     // diskimages-helper refuses an attach while it is busy with another image ("Resource
     // temporarily unavailable"): attach one image at a time (several apps may be updating at
@@ -149,9 +167,9 @@ pub fn install_dmg(
     let attached = {
         let _one_at_a_time = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // An image an earlier install left attached makes hdiutil refuse the same file.
-        clear_mounts(app, &paths.cache, process_ended(), detach);
+        clear_mounts(app, &paths.cache, process_ended(), |mount| detach(mount).map_err(|reason| reason.to_string()));
         let attach = || {
-            process::run(
+            process::run_reason(
                 HDIUTIL,
                 &["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint", mount_s, dmg_s],
                 Duration::from_secs(300),
@@ -171,25 +189,31 @@ pub fn install_dmg(
         attached
     };
     if let Err(reason) = attached {
-        let mut reason = format!("{IMAGE_NOT_OPENED}: {reason}");
+        let mut reason = reason.context("couldn't open the disk image: {reason}", &[]);
         if let Err(why) = detach_unmounted(dmg) {
             log::warn!("couldn't detach the disk image {} ({why})", dmg.display());
-            reason = format!("{reason}; the disk image may still be attached ({why})");
+            reason = reason.joined(why.context("the disk image may still be attached ({reason})", &[]));
         }
         // An attach that timed out can still finish mounting the image.
-        return close_image(Err(reason), &mount, detach);
+        return close_image_reason(Err(reason), &mount, detach);
     }
     let result = copy_app(app, &mount, existing, destination, replace, expect, wait);
-    close_image(result, &mount, detach)
+    close_image_reason(result, &mount, detach)
 }
 
 /// Detaches the image at `mount` through `detach` and removes the mount point. An image that
 /// stays attached is logged, and the error of a failed install says so after its reason. A
 /// later install detaches it.
-pub(crate) fn close_image(result: Result<PathBuf, String>, mount: &Path, detach: impl Fn(&Path) -> Result<(), String>) -> Result<PathBuf, String> {
+pub(crate) fn close_image_reason(
+    result: Result<PathBuf, Reason>,
+    mount: &Path,
+    detach: impl Fn(&Path) -> Result<(), Reason>,
+) -> Result<PathBuf, Reason> {
     if let Err(why) = detach(mount) {
         log::warn!("couldn't detach the disk image at {} ({why})", mount.display());
-        return result.map_err(|reason| format!("{reason}; the disk image is still attached at {} ({why})", mount.display()));
+        return result.map_err(|reason| {
+            reason.joined(why.context("the disk image is still attached at {path} ({reason})", &[("path", &mount.display().to_string())]))
+        });
     }
     if let Err(e) = std::fs::remove_dir(mount) {
         log::warn!("couldn't remove the empty folder {} ({e})", mount.display());
@@ -205,39 +229,40 @@ fn copy_app(
     replace: bool,
     expect: &Expect<'_>,
     wait: CheckTurn<'_>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, Reason> {
     let bundle = format!("{}.app", app.name);
     let src = mount.join(&bundle);
-    crate::detect::macos::read_bundle(app, &src).ok_or("the disk image doesn't contain the app")?;
+    crate::detect::macos::read_bundle(app, &src).ok_or_else(|| Reason::new("the disk image doesn't contain the app", &[]))?;
     let dir = applications_dir(existing, destination)?;
     let dest = existing.filter(|i| i.source == InstallSource::MacApp).map_or_else(|| dir.join(&bundle), |i| PathBuf::from(&i.location));
     if !replace
         && std::fs::symlink_metadata(&dest).is_ok()
         && (std::fs::symlink_metadata(&dest).is_ok_and(|m| m.file_type().is_symlink()) || crate::detect::macos::read_bundle(app, &dest).is_none())
     {
-        return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
+        return Err(Reason::new("{arg0} already exists and wasn't installed by ArtCraft Launcher", &[("arg0", &(dest.display()).to_string())]));
     }
     clear_staging(app, &dir, process_ended(), std::time::SystemTime::now());
     let staging = staging_dir(&dir)?;
     let result = place(app, &src, staging.path(), &dest, expect, wait);
-    remove_staging(result, staging)
+    remove_staging_reason(result, staging)
 }
 
 /// Copies the app at `src` into `staging`, checks the copy and replaces `dest` with it.
-fn place(app: &App, src: &Path, staging: &Path, dest: &Path, expect: &Expect<'_>, wait: CheckTurn<'_>) -> Result<PathBuf, String> {
+fn place(app: &App, src: &Path, staging: &Path, dest: &Path, expect: &Expect<'_>, wait: CheckTurn<'_>) -> Result<PathBuf, Reason> {
     let staged = staging.join(format!("{}.app", app.name));
-    let (Some(src_s), Some(staged_s)) = (src.to_str(), staged.to_str()) else { return Err("unusual characters in a path".into()) };
+    let (Some(src_s), Some(staged_s)) = (src.to_str(), staged.to_str()) else { return Err(Reason::new("unusual characters in a path", &[])) };
     // ditto keeps the code signature and symlinks intact. The disk image's volume adds Finder
     // metadata (com.apple.FinderInfo) to the files; leave it and the extended attributes
     // behind, or `codesign --verify --strict` rejects the bundle as carrying "detritus". A
     // bundle's signature lives in its files, not in extended attributes.
-    process::run(DITTO, &["--norsrc", "--noextattr", "--noacl", src_s, staged_s], Duration::from_secs(600))
-        .map_err(|reason| format!("couldn't copy the app: {reason}"))?;
-    place_checked(app, &staged, dest, expect, process::run_detailed, process::running, wait)
+    process::run_reason(DITTO, &["--norsrc", "--noextattr", "--noacl", src_s, staged_s], Duration::from_secs(600))
+        .map_err(|reason| reason.context("couldn't copy the app: {reason}", &[]))?;
+    place_checked_reason(app, &staged, dest, expect, process::run_detailed_reason, process::running_reason, wait)
 }
 
 /// Checks the copy at `staged` and replaces `dest` with it. `codesign` runs through `run`, and
 /// `running` says whether `dest` is running. Tests pass stand-ins.
+#[cfg(test)]
 pub(crate) fn place_checked(
     app: &App,
     staged: &Path,
@@ -247,8 +272,29 @@ pub(crate) fn place_checked(
     running: impl FnOnce(&Path) -> Result<bool, String>,
     wait: CheckTurn<'_>,
 ) -> Result<PathBuf, String> {
-    let found = crate::detect::macos::read_bundle(app, staged).ok_or("the copied app is incomplete")?;
-    check(staged, &found, expect, run, wait)?;
+    place_checked_reason(
+        app,
+        staged,
+        dest,
+        expect,
+        |program, args, timeout| run(program, args, timeout).map_err(Into::into),
+        |path| running(path).map_err(Reason::data),
+        wait,
+    )
+    .map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn place_checked_reason(
+    app: &App,
+    staged: &Path,
+    dest: &Path,
+    expect: &Expect<'_>,
+    run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailureReason>,
+    running: impl FnOnce(&Path) -> Result<bool, Reason>,
+    wait: CheckTurn<'_>,
+) -> Result<PathBuf, Reason> {
+    let found = crate::detect::macos::read_bundle(app, staged).ok_or_else(|| Reason::new("the copied app is incomplete", &[]))?;
+    check_reason(staged, &found, expect, run, wait)?;
     // The check can wait behind other apps' checks, and the user may have opened the app.
     if expect.quit_first {
         not_running(app, running(dest))?;
@@ -260,15 +306,21 @@ pub(crate) fn place_checked(
 /// Removes `staging` with whatever is still in it: the new copy when the install failed. A
 /// folder that can't be removed is logged, and the error of a failed install says so after
 /// its reason.
-pub(crate) fn remove_staging(result: Result<PathBuf, String>, staging: tempfile::TempDir) -> Result<PathBuf, String> {
+pub(crate) fn remove_staging_reason(result: Result<PathBuf, Reason>, staging: tempfile::TempDir) -> Result<PathBuf, Reason> {
     let path = staging.path().to_path_buf();
     let Err(e) = staging.close() else { return result };
     log::warn!("couldn't remove the staging folder {} ({e})", path.display());
-    result.map_err(|reason| format!("{reason}; couldn't remove the partial copy at {} ({e})", path.display()))
+    result.map_err(|reason| {
+        reason.context(
+            "{reason}; couldn't remove the partial copy at {path} ({error})",
+            &[("path", &path.display().to_string()), ("error", &e.to_string())],
+        )
+    })
 }
 
 /// Checks a copied bundle against what its release promises, before it replaces anything.
 /// `codesign` runs through `run`.
+#[cfg(test)]
 pub(crate) fn check(
     bundle: &Path,
     found: &Installed,
@@ -276,19 +328,32 @@ pub(crate) fn check(
     run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
     wait: CheckTurn<'_>,
 ) -> Result<(), String> {
+    check_reason(bundle, found, expect, |program, args, timeout| run(program, args, timeout).map_err(Into::into), wait)
+        .map_err(|reason| reason.to_string())
+}
+
+pub(crate) fn check_reason(
+    bundle: &Path,
+    found: &Installed,
+    expect: &Expect<'_>,
+    run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailureReason>,
+    wait: CheckTurn<'_>,
+) -> Result<(), Reason> {
     if let Some(team) = expect.team {
-        match signature(bundle, team, run, wait) {
+        match signature_reason(bundle, team, run, wait) {
             Signature::Valid => {}
             Signature::Canceled => return Err(CANCELLED.into()),
-            Signature::Wrong => return Err("the app isn't signed by its developer, so it wasn't installed".into()),
-            Signature::Failed(reason) => return Err(format!("the app failed its signature check ({reason}), so it wasn't installed")),
-            Signature::Unchecked(reason) => return Err(format!("the app's signature couldn't be checked ({reason}), so it wasn't installed")),
+            Signature::Wrong => return Err(Reason::new("the app isn't signed by its developer, so it wasn't installed", &[])),
+            Signature::Failed(reason) => return Err(reason.context("the app failed its signature check ({reason}), so it wasn't installed", &[])),
+            Signature::Unchecked(reason) => {
+                return Err(reason.context("the app's signature couldn't be checked ({reason}), so it wasn't installed", &[]));
+            }
         }
     }
     if let Some(want) = expect.version
         && !found.version.as_ref().is_some_and(|v| same_release(v, want))
     {
-        return Err(format!("the app inside isn't version {want}, so it wasn't installed"));
+        return Err(Reason::new("the app inside isn't version {want}, so it wasn't installed", &[("want", &(want).to_string())]));
     }
     Ok(())
 }
@@ -310,9 +375,9 @@ pub(crate) enum Signature {
     Wrong,
     /// `codesign` failed the verification, with its reason: no signature at all, a damaged
     /// signature, or a bundle it couldn't read.
-    Failed(String),
+    Failed(Reason),
     /// `codesign` gave no answer, with the reason why.
-    Unchecked(String),
+    Unchecked(Reason),
     /// The user canceled the job while it waited for its turn. `codesign` did not run.
     Canceled,
 }
@@ -324,7 +389,16 @@ pub(crate) fn signature(
     run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
     wait: CheckTurn<'_>,
 ) -> Signature {
-    let Some(path) = bundle.to_str() else { return Signature::Unchecked("unusual characters in the app's path".into()) };
+    signature_reason(bundle, team, |program, args, timeout| run(program, args, timeout).map_err(Into::into), wait)
+}
+
+pub(crate) fn signature_reason(
+    bundle: &Path,
+    team: &str,
+    run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailureReason>,
+    wait: CheckTurn<'_>,
+) -> Signature {
+    let Some(path) = bundle.to_str() else { return Signature::Unchecked(Reason::new("unusual characters in the app's path", &[])) };
     if team.is_empty() || !team.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Signature::Wrong;
     }
@@ -333,8 +407,8 @@ pub(crate) fn signature(
         Ok(_) => Signature::Valid,
         // codesign(1): 3 is a signature that fails the requirement, and 1 any other failed
         // verification.
-        Err(HelperFailure::Exited { code: 3, .. }) => Signature::Wrong,
-        Err(HelperFailure::Exited { code: 1, reason }) => Signature::Failed(reason),
+        Err(HelperFailureReason::Exited { code: 3, .. }) => Signature::Wrong,
+        Err(HelperFailureReason::Exited { code: 1, reason }) => Signature::Failed(reason),
         Err(failure) => Signature::Unchecked(failure.into_reason()),
     };
     SIGNATURE_CHECKS.alone(&cancelled(wait.stop), &mut turn(wait.phase, JobPhase::Installing), verify).unwrap_or(Signature::Canceled)
@@ -347,89 +421,19 @@ fn same_release(found: &Version, release: &Version) -> bool {
 }
 
 /// Detaches the image mounted at `mount`, if one is. `Ok` when none is mounted there.
-fn detach(mount: &Path) -> Result<(), String> {
+fn detach(mount: &Path) -> Result<(), Reason> {
     if !is_mounted(mount) {
         return Ok(());
     }
-    let m = mount.to_str().ok_or("unusual characters in the mount point's path")?;
-    detach_with(m, process::run)
+    let m = mount.to_str().ok_or_else(|| Reason::new("unusual characters in the mount point's path", &[]))?;
+    detach_with(m, process::run_reason)
 }
 
 /// Keeps the helper's stderr: `-quiet` would hide the busy reply that cleanup retries.
-fn detach_with(mount: &str, run: impl Fn(&str, &[&str], Duration) -> Result<String, String>) -> Result<(), String> {
+fn detach_with<E>(mount: &str, run: impl Fn(&str, &[&str], Duration) -> Result<String, E>) -> Result<(), E> {
     run(HDIUTIL, &["detach", mount], Duration::from_secs(60))
         .or_else(|_| run(HDIUTIL, &["detach", mount, "-force"], Duration::from_secs(60)))
         .map(drop)
-}
-
-#[cfg(test)]
-#[craft_ui::testing::trial]
-fn detach_stderr_reaches_the_busy_retry_policy() {
-    // Model hdiutil's documented -quiet behavior, then use the real process reader and
-    // retry classifier instead of injecting an already classified error string.
-    let script = r#"
-state=$1
-scenario=$2
-shift 2
-count=0
-if [ -f "$state" ]; then read -r count < "$state"; fi
-count=$((count + 1))
-printf '%s\n' "$count" > "$state"
-quiet=false
-for arg do
-if [ "$arg" = -quiet ]; then quiet=true; fi
-done
-case "$scenario:$count" in
-success:*|busy:3) exit 0 ;;
-busy:*) reason='hdiutil: detach failed - Resource busy' ;;
-permanent:*) reason='hdiutil: detach failed - Permission denied' ;;
-*) exit 64 ;;
-esac
-if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
-exit 16
-"#;
-    for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
-        let directory = tempfile::tempdir();
-        assert!(directory.is_ok(), "temporary directory creation failed: {directory:?}");
-        let Ok(dir) = directory else { return };
-        let state = dir.path().join("attempts");
-        let calls = std::cell::RefCell::new(Vec::new());
-        let waits = std::cell::RefCell::new(Vec::new());
-        let mount = "/Volumes/PhotoCraft test";
-        let result = super::retry_busy_detach_with_elapsed(
-            || {
-                detach_with(mount, |program, args, timeout| {
-                    assert_eq!(program, "/usr/bin/hdiutil");
-                    assert_eq!(timeout, std::time::Duration::from_secs(60));
-                    calls.borrow_mut().push(args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
-                    let mut cmd = process::command("/bin/sh");
-                    cmd.args(["-c", script, "hdiutil-fixture"]).arg(&state).arg(scenario).args(args);
-                    process::run_command(cmd, program, timeout)
-                })
-            },
-            |delay| waits.borrow_mut().push(delay),
-            || std::time::Duration::ZERO,
-        );
-        if scenario == "permanent" {
-            assert_eq!(result, Err("hdiutil: detach failed - Permission denied".into()));
-        } else {
-            assert_eq!(result, Ok(()), "{scenario}");
-        }
-        let calls = calls.into_inner();
-        assert_eq!(calls.len(), expected_calls, "{scenario}");
-        assert_eq!(calls[0], ["detach", mount]);
-        if expected_calls > 1 {
-            assert_eq!(calls[1], ["detach", mount, "-force"]);
-        }
-        if scenario == "busy" {
-            assert_eq!(calls[2], ["detach", mount], "the preserved busy error must reach another ordinary attempt");
-        }
-        let waits = waits.into_inner();
-        assert_eq!(waits.len(), expected_waits, "{scenario}");
-        if scenario == "busy" {
-            assert_eq!(waits, [std::time::Duration::from_millis(500)]);
-        }
-    }
 }
 
 /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
@@ -437,21 +441,21 @@ exit 16
 /// be using it. So is every attachment while a program started with `dmg` in its arguments
 /// (another process's `hdiutil attach`) is running, or while the check for one gets no answer;
 /// in that case the error gives the check's reason.
-fn detach_unmounted(dmg: &Path) -> Result<(), String> {
-    detach_unmounted_with(dmg, process::running, process::run)
+fn detach_unmounted(dmg: &Path) -> Result<(), Reason> {
+    detach_unmounted_with_reason(dmg, process::running_reason, process::run_reason)
 }
 
 /// [`detach_unmounted`], with `running` checking for a program started with `dmg` in its
 /// arguments and `run` running `hdiutil`.
-pub(crate) fn detach_unmounted_with(
+pub(crate) fn detach_unmounted_with_reason(
     dmg: &Path,
-    running: impl FnOnce(&Path) -> Result<bool, String>,
-    run: impl Fn(&str, &[&str], Duration) -> Result<String, String>,
-) -> Result<(), String> {
+    running: impl FnOnce(&Path) -> Result<bool, Reason>,
+    run: impl Fn(&str, &[&str], Duration) -> Result<String, Reason>,
+) -> Result<(), Reason> {
     match running(dmg) {
         Ok(false) => {}
         Ok(true) => return Ok(()),
-        Err(why) => return Err(format!("couldn't check for a running attach of the image ({why})")),
+        Err(why) => return Err(why.context("couldn't check for a running attach of the image ({reason})", &[])),
     }
     let info = run(HDIUTIL, &["info", "-plist"], Duration::from_secs(30))?;
     let image = [Some(dmg.to_path_buf()), std::fs::canonicalize(dmg).ok()];
@@ -640,8 +644,10 @@ fn left_by_old_install(app: &App, folder: &Path, now: std::time::SystemTime) -> 
 }
 
 /// A new staging folder for this process in `dir`, holding [`STAGING_MARKER`]. See [`STAGING`].
-fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
-    let failed = |e: std::io::Error| format!("couldn't create a staging folder in {} ({e})", dir.display());
+fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, Reason> {
+    let failed = |e: std::io::Error| {
+        Reason::new("couldn't create a staging folder in {arg0} ({e})", &[("arg0", &(dir.display()).to_string()), ("e", &(e).to_string())])
+    };
     let staging = tempfile::Builder::new().prefix(&format!("{STAGING}{}-", std::process::id())).rand_bytes(6).tempdir_in(dir).map_err(failed)?;
     std::fs::write(staging.path().join(STAGING_MARKER), b"").map_err(failed)?;
     Ok(staging)
@@ -656,4 +662,78 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
         dest = trash.join(format!("{} {}", name.to_string_lossy(), crate::now()));
     }
     std::fs::rename(path, &dest).map_err(|e| format!("couldn't move {} to Trash ({e}). Remove it in Finder instead.", path.display()))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    #[craft_ui::testing::trial]
+    fn detach_stderr_reaches_the_busy_retry_policy() {
+        // Model hdiutil's documented -quiet behavior, then use the real process reader and
+        // retry classifier instead of injecting an already classified error string.
+        let script = r#"
+state=$1
+scenario=$2
+shift 2
+count=0
+if [ -f "$state" ]; then read -r count < "$state"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$state"
+quiet=false
+for arg do
+if [ "$arg" = -quiet ]; then quiet=true; fi
+done
+case "$scenario:$count" in
+success:*|busy:3) exit 0 ;;
+busy:*) reason='hdiutil: detach failed - Resource busy' ;;
+permanent:*) reason='hdiutil: detach failed - Permission denied' ;;
+*) exit 64 ;;
+esac
+if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
+exit 16
+"#;
+        for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
+            let directory = tempfile::tempdir();
+            assert!(directory.is_ok(), "temporary directory creation failed: {directory:?}");
+            let Ok(dir) = directory else { return };
+            let state = dir.path().join("attempts");
+            let calls = std::cell::RefCell::new(Vec::new());
+            let waits = std::cell::RefCell::new(Vec::new());
+            let mount = "/Volumes/PhotoCraft test";
+            let result = super::super::retry_busy_detach_with_elapsed(
+                || {
+                    detach_with(mount, |program, args, timeout| {
+                        assert_eq!(program, "/usr/bin/hdiutil");
+                        assert_eq!(timeout, std::time::Duration::from_secs(60));
+                        calls.borrow_mut().push(args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
+                        let mut cmd = process::command("/bin/sh");
+                        cmd.args(["-c", script, "hdiutil-fixture"]).arg(&state).arg(scenario).args(args);
+                        process::run_command(cmd, program, timeout)
+                    })
+                },
+                |delay| waits.borrow_mut().push(delay),
+                || std::time::Duration::ZERO,
+            );
+            if scenario == "permanent" {
+                assert_eq!(result, Err("hdiutil: detach failed - Permission denied".into()));
+            } else {
+                assert_eq!(result, Ok(()), "{scenario}");
+            }
+            let calls = calls.into_inner();
+            assert_eq!(calls.len(), expected_calls, "{scenario}");
+            assert_eq!(calls[0], ["detach", mount]);
+            if expected_calls > 1 {
+                assert_eq!(calls[1], ["detach", mount, "-force"]);
+            }
+            if scenario == "busy" {
+                assert_eq!(calls[2], ["detach", mount], "the preserved busy error must reach another ordinary attempt");
+            }
+            let waits = waits.into_inner();
+            assert_eq!(waits.len(), expected_waits, "{scenario}");
+            if scenario == "busy" {
+                assert_eq!(waits, [std::time::Duration::from_millis(500)]);
+            }
+        }
+    }
 }

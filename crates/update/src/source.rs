@@ -13,6 +13,7 @@ use crate::protocol::{LatestRelease, Source};
 use crate::release::{self, Release};
 use serde::{Deserialize, Serialize};
 
+use crate::Reason;
 use crate::http::{Fetched, Http};
 
 /// One answer from a source.
@@ -88,7 +89,7 @@ impl GitHubSource {
         until.is_some_and(|u| u > crate::now())
     }
 
-    fn ask_api(&self, repo: &str, prereleases: bool) -> Result<Option<Answer>, String> {
+    fn ask_api(&self, repo: &str, prereleases: bool) -> Result<Option<Answer>, Reason> {
         let url = if prereleases {
             format!("https://api.github.com/repos/{repo}/releases?per_page=30")
         } else {
@@ -97,12 +98,12 @@ impl GitHubSource {
         let saved = self.entry(repo, prereleases);
         let found =
             |release: Option<Release>| Answer { latest: release.map_or(LatestRelease::None, LatestRelease::Found), source: Source::GitHubApi };
-        match self.http.get_api(&url, saved.as_ref().and_then(|e| e.etag.as_deref()))? {
+        match self.http.get_api_reason(&url, saved.as_ref().and_then(|e| e.etag.as_deref()))? {
             Fetched::Body { text, etag } => {
                 let release = if prereleases {
-                    release::parse_github_release_list(&text, repo, true)?
+                    release::parse_github_release_list_reason(&text, repo, true)?
                 } else {
-                    Some(release::parse_github_release(&text, repo)?)
+                    Some(release::parse_github_release_reason(&text, repo)?)
                 };
                 self.store(repo, Entry { etag, release: release.clone(), prereleases, fetched_at: crate::now() });
                 Ok(Some(found(release)))
@@ -112,7 +113,7 @@ impl GitHubSource {
                     self.store(repo, Entry { fetched_at: crate::now(), ..e.clone() });
                     Ok(Some(found(e.release)))
                 }
-                None => Err("GitHub said nothing changed, but there's no saved answer".into()),
+                None => Err(Reason::new("GitHub said nothing changed, but there's no saved answer", &[])),
             },
             Fetched::NotFound => {
                 self.store(repo, Entry { etag: None, release: None, prereleases, fetched_at: crate::now() });
@@ -126,8 +127,8 @@ impl GitHubSource {
     }
 
     /// The quota-free route through github.com (stable releases only).
-    fn ask_pages(&self, repo: &str) -> Result<Answer, String> {
-        let location = self.http.redirect_target(&format!("https://github.com/{repo}/releases/latest"))?;
+    fn ask_pages(&self, repo: &str) -> Result<Answer, Reason> {
+        let location = self.http.redirect_target_reason(&format!("https://github.com/{repo}/releases/latest"))?;
         let Some(tag) = location.as_deref().and_then(|l| release::tag_from_redirect(l, repo)) else {
             // No published release: github.com sends us to the release list instead.
             return Ok(Answer { latest: LatestRelease::None, source: Source::GitHubPages });
@@ -138,8 +139,9 @@ impl GitHubSource {
             return Ok(Answer { latest: LatestRelease::Found(r.clone()), source: Source::GitHubPages });
         }
         // The same link `release_from_sums` stores and the check before the download accepts.
-        let sums_url = release::expected_download_url(repo, &tag, "SHA256SUMS.txt").ok_or("the latest release's tag isn't one we'd fetch")?;
-        let sums = self.http.get_text(&sums_url)?.map(|t| release::parse_sha256sums(&t)).unwrap_or_default();
+        let sums_url = release::expected_download_url(repo, &tag, "SHA256SUMS.txt")
+            .ok_or_else(|| Reason::new("the latest release's tag isn't one we'd fetch", &[]))?;
+        let sums = self.http.get_text_reason(&sums_url)?.map(|t| release::parse_sha256sums(&t)).unwrap_or_default();
         let r = release::release_from_sums(repo, &tag, &sums);
         self.store(repo, Entry { etag: None, release: Some(r.clone()), prereleases: false, fetched_at: crate::now() });
         Ok(Answer { latest: LatestRelease::Found(r), source: Source::GitHubPages })
@@ -173,7 +175,7 @@ impl ReleaseSource for GitHubSource {
         }
         match self.cached(repo, prereleases) {
             Some(latest) => Answer { latest, source: Source::Cache },
-            None => Answer { latest: api_error.map_or(LatestRelease::RateLimited, LatestRelease::Failed), source: Source::Cache },
+            None => Answer { latest: api_error.map_or(LatestRelease::RateLimited, LatestRelease::Message), source: Source::Cache },
         }
     }
 

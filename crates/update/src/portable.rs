@@ -5,15 +5,20 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::manifest::Record;
 use crate::paths::Paths;
-use crate::{App, PackageKind};
+use crate::{App, PackageKind, Reason};
 
 const MAX_FILES: usize = 10_000;
 const MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Custom destinations may have OS-managed links in their host ancestors.
 pub fn validate_directory(path: &Path) -> Result<(), String> {
+    validate_directory_reason(path).map_err(|reason| reason.to_string())
+}
+
+/// Structured internal transaction failure.
+pub(crate) fn validate_directory_reason(path: &Path) -> Result<(), Reason> {
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
-        return Err("Choose an absolute installation folder without parent-directory components.".into());
+        return Err(Reason::new("Choose an absolute installation folder without parent-directory components.", &[]));
     }
     // Resolve the closest existing ancestor: /home and /var can be OS-managed
     // symlinks, and a custom destination need not exist yet.
@@ -21,56 +26,56 @@ pub fn validate_directory(path: &Path) -> Result<(), String> {
         match std::fs::canonicalize(ancestor) {
             Ok(resolved) => {
                 if !resolved.is_dir() {
-                    return Err("The installation folder contains a non-directory component.".into());
+                    return Err(Reason::new("The installation folder contains a non-directory component.", &[]));
                 }
                 return Ok(());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // A dangling link is not a missing directory we can safely create.
                 if std::fs::symlink_metadata(ancestor).is_ok() {
-                    return Err("The installation folder contains a dangling link.".into());
+                    return Err(Reason::new("The installation folder contains a dangling link.", &[]));
                 }
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(Reason::data(error.to_string())),
         }
     }
-    Err("The installation folder has no existing ancestor.".into())
+    Err(Reason::new("The installation folder has no existing ancestor.", &[]))
 }
 
 /// Links are allowed above the ownership boundary, never inside it (including root).
-fn validate_owned_directory(root: &Path, path: &Path) -> Result<(), String> {
-    validate_directory(path)?;
+fn validate_owned_directory(root: &Path, path: &Path) -> Result<(), Reason> {
+    validate_directory_reason(path)?;
     if !path.starts_with(root) {
-        return Err("An installation path points outside its folder.".into());
+        return Err(Reason::new("An installation path points outside its folder.", &[]));
     }
     for ancestor in path.ancestors().take_while(|ancestor| ancestor.starts_with(root)) {
         match std::fs::symlink_metadata(ancestor) {
             Ok(meta) if linked(&meta) || !meta.is_dir() => {
-                return Err("The installation folder contains a link or a non-directory component.".into());
+                return Err(Reason::new("The installation folder contains a link or a non-directory component.", &[]));
             }
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.to_string()),
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(Reason::data(error.to_string())),
             _ => {}
         }
     }
     Ok(())
 }
 
-fn resolve_missing(path: &Path) -> Result<PathBuf, String> {
+fn resolve_missing(path: &Path) -> Result<PathBuf, Reason> {
     for ancestor in path.ancestors() {
         match std::fs::canonicalize(ancestor) {
             Ok(resolved) => {
-                let suffix = path.strip_prefix(ancestor).map_err(|e| e.to_string())?;
+                let suffix = path.strip_prefix(ancestor).map_err(|e| Reason::data(e.to_string()))?;
                 return Ok(resolved.join(suffix));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if std::fs::symlink_metadata(ancestor).is_ok() {
-                    return Err("The installation folder contains a dangling link.".into());
+                    return Err(Reason::new("The installation folder contains a dangling link.", &[]));
                 }
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(Reason::data(error.to_string())),
         }
     }
-    Err("The installation folder has no existing ancestor.".into())
+    Err(Reason::new("The installation folder has no existing ancestor.", &[]))
 }
 
 /// Whether two paths name the same Windows folder or file: case, trailing separators and the
@@ -119,72 +124,73 @@ impl Drop for Staging {
     }
 }
 
-fn extract(file: &Path, destination: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
-    let file = std::fs::File::open(file).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("couldn't read the portable ZIP ({e})"))?;
+fn extract(file: &Path, destination: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Reason> {
+    let file = std::fs::File::open(file).map_err(|e| Reason::data(e.to_string()))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| Reason::new("couldn't read the portable ZIP ({e})", &[("e", &(e).to_string())]))?;
     if archive.len() > MAX_FILES {
-        return Err("The portable ZIP contains too many files.".into());
+        return Err(Reason::new("The portable ZIP contains too many files.", &[]));
     }
     let mut files = Vec::new();
     let mut entries = Vec::new();
     let mut total = 0u64;
     let mut seen = std::collections::BTreeSet::new();
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
-        let relative = entry.enclosed_name().ok_or("The portable ZIP contains an unsafe path.")?;
+        let mut entry = archive.by_index(index).map_err(|e| Reason::data(e.to_string()))?;
+        let relative = entry.enclosed_name().ok_or_else(|| Reason::new("The portable ZIP contains an unsafe path.", &[]))?;
         if relative.components().any(|c| !matches!(c, Component::Normal(_)))
             || entry.name().map_or(true, |name| name.contains(['\\', ':']))
             || entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            return Err("The portable ZIP contains an unsafe path or link.".into());
+            return Err(Reason::new("The portable ZIP contains an unsafe path or link.", &[]));
         }
         // Windows treats case variants as the same file; reject duplicate and colliding names.
         if !seen.insert(relative.to_string_lossy().to_lowercase()) {
-            return Err("The portable ZIP contains duplicate paths.".into());
+            return Err(Reason::new("The portable ZIP contains duplicate paths.", &[]));
         }
         let target = destination.join(&relative);
         entries.push(relative.clone());
         if entry.is_dir() {
-            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&target).map_err(|e| Reason::data(e.to_string()))?;
             continue;
         }
-        total = total.checked_add(entry.size()).filter(|size| *size <= MAX_BYTES).ok_or("The portable ZIP is too large.")?;
+        total =
+            total.checked_add(entry.size()).filter(|size| *size <= MAX_BYTES).ok_or_else(|| Reason::new("The portable ZIP is too large.", &[]))?;
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(parent).map_err(|e| Reason::data(e.to_string()))?;
         }
-        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| e.to_string())?;
+        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| Reason::data(e.to_string()))?;
         use std::io::Read;
         let declared = entry.size();
-        let copied = std::io::copy(&mut (&mut entry).take(declared.saturating_add(1)), &mut output).map_err(|e| e.to_string())?;
+        let copied = std::io::copy(&mut (&mut entry).take(declared.saturating_add(1)), &mut output).map_err(|e| Reason::data(e.to_string()))?;
         if copied != declared {
-            return Err("The portable ZIP has an unexpected unpacked size.".into());
+            return Err(Reason::new("The portable ZIP has an unexpected unpacked size.", &[]));
         }
         files.push(relative);
     }
     Ok((files, entries))
 }
 
-fn recorded_files<'a>(app: &App, record: &'a Record) -> Result<(&'a Path, Vec<PathBuf>), String> {
-    let root = record.path.parent().ok_or("The portable installation has no parent folder.")?;
+fn recorded_files<'a>(app: &App, record: &'a Record) -> Result<(&'a Path, Vec<PathBuf>), Reason> {
+    let root = record.path.parent().ok_or_else(|| Reason::new("The portable installation has no parent folder.", &[]))?;
     if record.kind != PackageKind::PortableZip || root.file_name().is_none_or(|n| n != app.id) {
-        return Err("The launcher has no valid ownership record for this portable folder.".into());
+        return Err(Reason::new("The launcher has no valid ownership record for this portable folder.", &[]));
     }
     let resolved = resolve_missing(root)?;
     if !same_windows_path(root, &resolved) {
-        return Err("The recorded portable folder resolves through a changed alias. Reinstall it to choose a safe location.".into());
+        return Err(Reason::new("The recorded portable folder resolves through a changed alias. Reinstall it to choose a safe location.", &[]));
     }
     validate_owned_directory(root, root)?;
     let mut files = Vec::new();
     for file in &record.files {
-        let relative = file.strip_prefix(root).map_err(|_| "An installation record points outside its folder.")?;
+        let relative = file.strip_prefix(root).map_err(|_| Reason::new("An installation record points outside its folder.", &[]))?;
         if relative.as_os_str().is_empty() || relative.components().any(|c| !matches!(c, Component::Normal(_))) {
-            return Err("The installation record contains an unsafe path.".into());
+            return Err(Reason::new("The installation record contains an unsafe path.", &[]));
         }
-        validate_owned_directory(root, file.parent().ok_or("A recorded file has no parent folder.")?)?;
+        validate_owned_directory(root, file.parent().ok_or_else(|| Reason::new("A recorded file has no parent folder.", &[]))?)?;
         if let Ok(meta) = std::fs::symlink_metadata(file)
             && (linked(&meta) || !meta.is_file())
         {
-            return Err("A recorded file was replaced by a link or directory.".into());
+            return Err(Reason::new("A recorded file was replaced by a link or directory.", &[]));
         }
         files.push(relative.to_path_buf());
     }
@@ -204,6 +210,22 @@ pub fn install(
     replace: bool,
     commit: &mut dyn FnMut(&Record) -> Result<(), String>,
 ) -> Result<Record, String> {
+    install_reason(app, file, version, previous, paths, directory, replace, &mut |record| commit(record).map_err(Reason::data))
+        .map_err(|reason| reason.to_string())
+}
+
+/// Structured internal transaction failure.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn install_reason(
+    app: &App,
+    file: &Path,
+    version: &str,
+    previous: Option<&Record>,
+    paths: &Paths,
+    directory: Option<&Path>,
+    replace: bool,
+    commit: &mut dyn FnMut(&Record) -> Result<(), Reason>,
+) -> Result<Record, Reason> {
     let (destination, mut old_files) = match previous {
         Some(record) => {
             let (root, files) = recorded_files(app, record)?;
@@ -211,20 +233,20 @@ pub fn install(
         }
         None => {
             let parent = directory.map(Path::to_path_buf).unwrap_or_else(|| paths.apps());
-            validate_directory(&parent)?;
+            validate_directory_reason(&parent)?;
             let parent = resolve_missing(&parent)?;
             (parent.join(app.id), Vec::new())
         }
     };
     validate_owned_directory(&destination, &destination)?;
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| Reason::data(e.to_string()))?.as_nanos();
     let staging = paths.cache.join("staging").join(format!("{}-{}-{stamp}", app.id, std::process::id()));
     validate_owned_directory(&paths.cache, &staging)?;
-    std::fs::create_dir_all(staging.parent().ok_or("no staging folder")?).map_err(|e| e.to_string())?;
-    std::fs::create_dir(&staging).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(staging.parent().ok_or_else(|| Reason::new("no staging folder", &[]))?).map_err(|e| Reason::data(e.to_string()))?;
+    std::fs::create_dir(&staging).map_err(|e| Reason::data(e.to_string()))?;
     let staging = Staging(staging);
     let unpacked = staging.0.join("unpacked");
-    std::fs::create_dir(&unpacked).map_err(|e| e.to_string())?;
+    std::fs::create_dir(&unpacked).map_err(|e| Reason::data(e.to_string()))?;
     let (files, entries) = extract(file, &unpacked)?;
     // Accept both a flat layout (files at the ZIP root) and a single wrapper-folder layout,
     // but never arbitrary nesting.
@@ -232,23 +254,23 @@ pub fn install(
     let executable = files
         .iter()
         .find(|relative| is_root_executable(relative, app))
-        .ok_or("The portable ZIP does not contain the expected executable at its root.")?
+        .ok_or_else(|| Reason::new("The portable ZIP does not contain the expected executable at its root.", &[]))?
         .clone();
     // Validate the entire transaction before moving any existing program file.
     for relative in &files {
         let target = destination.join(relative);
-        validate_owned_directory(&destination, target.parent().ok_or("no destination folder")?)?;
+        validate_owned_directory(&destination, target.parent().ok_or_else(|| Reason::new("no destination folder", &[]))?)?;
         if let Ok(meta) = std::fs::symlink_metadata(&target) {
             let recorded = old_files.iter().any(|old| same_windows_path(old, relative));
             if linked(&meta) || !meta.is_file() || !(recorded || replace) {
-                return Err("The installation would overwrite an unrecorded file.".into());
+                return Err(Reason::new("The installation would overwrite an unrecorded file.", &[]));
             }
             if !recorded {
                 old_files.push(relative.clone());
             }
         }
     }
-    std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&destination).map_err(|e| Reason::data(e.to_string()))?;
     let backup = staging.0.join("backup");
     let record = Record {
         version: version.to_string(),
@@ -267,22 +289,23 @@ pub fn install(
                 continue;
             }
             let saved = backup.join(relative);
-            std::fs::create_dir_all(saved.parent().ok_or("no backup folder")?).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(saved.parent().ok_or_else(|| Reason::new("no backup folder", &[]))?).map_err(|e| Reason::data(e.to_string()))?;
             // Copy the rollback copy: cache and custom installation can be on different drives.
-            std::fs::copy(&old, &saved).map_err(|e| e.to_string())?;
-            std::fs::remove_file(&old).map_err(|e| e.to_string())?;
+            std::fs::copy(&old, &saved).map_err(|e| Reason::data(e.to_string()))?;
+            std::fs::remove_file(&old).map_err(|e| Reason::data(e.to_string()))?;
             moved.push(relative.clone());
         }
         for relative in &files {
             let target = destination.join(relative);
-            std::fs::create_dir_all(target.parent().ok_or("no destination folder")?).map_err(|e| e.to_string())?;
-            let mut input = std::fs::File::open(unpacked.join(relative)).map_err(|e| e.to_string())?;
-            let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(target.parent().ok_or_else(|| Reason::new("no destination folder", &[]))?)
+                .map_err(|e| Reason::data(e.to_string()))?;
+            let mut input = std::fs::File::open(unpacked.join(relative)).map_err(|e| Reason::data(e.to_string()))?;
+            let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|e| Reason::data(e.to_string()))?;
             copied.push(relative.clone());
-            std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+            std::io::copy(&mut input, &mut output).map_err(|e| Reason::data(e.to_string()))?;
         }
         commit(&record)?;
-        Ok::<(), String>(())
+        Ok::<(), Reason>(())
     })();
     if let Err(error) = transaction {
         for relative in copied {
@@ -292,7 +315,10 @@ pub fn install(
             if let Err(restore) = std::fs::copy(backup.join(&relative), destination.join(&relative)) {
                 // Preserve backups for manual recovery if the disk won't accept a rollback.
                 let backup_path = staging.keep();
-                return Err(format!("{error}; could not restore the previous version ({restore}). Recovery files: {}", backup_path.display()));
+                return Err(error.context(
+                    "{reason}; could not restore the previous version ({restore}). Recovery files: {path}",
+                    &[("restore", &restore.to_string()), ("path", &backup_path.display().to_string())],
+                ));
             }
         }
         return Err(error);
@@ -310,32 +336,44 @@ fn is_root_executable(relative: &Path, app: &App) -> bool {
 /// packaging script's `Compress-Archive -Path $Portable` puts everything under a versioned
 /// directory) into the flat layout a root launcher exe requires, passing already-flat layouts
 /// through. ZIPs mixing unrelated top-level folders are rejected.
-fn flatten_zip_layout(app: &App, unpacked: &Path, files: Vec<PathBuf>, entries: &[PathBuf]) -> Result<(PathBuf, Vec<PathBuf>), String> {
+fn flatten_zip_layout(app: &App, unpacked: &Path, files: Vec<PathBuf>, entries: &[PathBuf]) -> Result<(PathBuf, Vec<PathBuf>), Reason> {
     if files.iter().any(|relative| is_root_executable(relative, app)) {
         return Ok((unpacked.to_path_buf(), files));
     }
-    let prefix = files.first().and_then(|path| path.components().next()).ok_or("The portable ZIP contains no files.")?.as_os_str().to_os_string();
+    let prefix = files
+        .first()
+        .and_then(|path| path.components().next())
+        .ok_or_else(|| Reason::new("The portable ZIP contains no files.", &[]))?
+        .as_os_str()
+        .to_os_string();
     let prefix = PathBuf::from(prefix);
     // Include explicit ZIP directory entries as well as extracted files.
     // The wrapper directory itself is allowed; unrelated roots are not.
     if !entries.iter().all(|path| path.starts_with(&prefix))
         || !files.iter().all(|path| path.strip_prefix(&prefix).is_ok_and(|relative| relative.components().next().is_some()))
     {
-        return Err("The portable ZIP has an unsupported directory layout.".into());
+        return Err(Reason::new("The portable ZIP has an unsupported directory layout.", &[]));
     }
     let unpacked = unpacked.join(&prefix);
-    let files: Vec<PathBuf> =
-        files.into_iter().map(|path| path.strip_prefix(&prefix).map(Path::to_path_buf).map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+    let files: Vec<PathBuf> = files
+        .into_iter()
+        .map(|path| path.strip_prefix(&prefix).map(Path::to_path_buf).map_err(|e| Reason::data(e.to_string())))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((unpacked, files))
 }
 
 /// Removes only recorded program files. Personal settings and documents remain.
 pub fn remove(app: &App, record: &Record) -> Result<(), String> {
+    remove_reason(app, record).map_err(|reason| reason.to_string())
+}
+
+/// Structured internal transaction failure.
+pub(crate) fn remove_reason(app: &App, record: &Record) -> Result<(), Reason> {
     let (root, files) = recorded_files(app, record)?;
     for relative in &files {
         let file = root.join(relative);
         if file.exists() {
-            std::fs::remove_file(&file).map_err(|e| e.to_string())?;
+            std::fs::remove_file(&file).map_err(|e| Reason::data(e.to_string()))?;
         }
     }
     for relative in &files {
@@ -364,10 +402,24 @@ pub fn unpack_over(
     executable: &std::ffi::OsStr,
     check: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
+    unpack_over_reason(zip, staging, folder, executable, &|path| check(path).map_err(Reason::data)).map_err(|reason| reason.to_string())
+}
+
+/// Structured internal transaction failure.
+pub(crate) fn unpack_over_reason(
+    zip: &Path,
+    staging: &Path,
+    folder: &Path,
+    executable: &std::ffi::OsStr,
+    check: &dyn Fn(&Path) -> Result<(), Reason>,
+) -> Result<(), Reason> {
     let backup = staging.join("backup");
     // A failed update whose files couldn't be moved to a recovery folder: never clear them.
     if backup.exists() {
-        return Err(format!("the previous files of a failed update are in {}; move them out of the way first", backup.display()));
+        return Err(Reason::new(
+            "the previous files of a failed update are in {arg0}; move them out of the way first",
+            &[("arg0", &(backup.display()).to_string())],
+        ));
     }
     let _ = std::fs::remove_dir_all(staging);
     let mut keep = false;
@@ -383,26 +435,26 @@ fn replace_with(
     staging: &Path,
     folder: &Path,
     executable: &std::ffi::OsStr,
-    check: &dyn Fn(&Path) -> Result<(), String>,
+    check: &dyn Fn(&Path) -> Result<(), Reason>,
     keep: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), Reason> {
     let unpacked = staging.join("unpacked");
     let backup = staging.join("backup");
-    std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&unpacked).map_err(|e| Reason::data(e.to_string()))?;
     let (files, _) = extract(zip, &unpacked)?;
     let top = single_top_folder(&files);
     let files = files
         .into_iter()
         .map(|relative| {
             let inside = match &top {
-                Some(top) => relative.strip_prefix(top).map_err(|e| e.to_string())?.to_path_buf(),
+                Some(top) => relative.strip_prefix(top).map_err(|e| Reason::data(e.to_string()))?.to_path_buf(),
                 None => relative.clone(),
             };
             Ok((relative, inside))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, Reason>>()?;
     if !files.iter().any(|(_, inside)| inside == Path::new(executable)) {
-        return Err(format!("the update doesn't contain {}", executable.to_string_lossy()));
+        return Err(Reason::new("the update doesn't contain {arg0}", &[("arg0", executable.to_string_lossy().as_ref())]));
     }
     for (relative, _) in &files {
         check(&unpacked.join(relative))?;
@@ -413,23 +465,25 @@ fn replace_with(
         for (relative, inside) in &files {
             let target = folder.join(inside);
             if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(parent).map_err(|e| Reason::data(e.to_string()))?;
             }
             if target.is_file() {
                 let previous = backup.join(inside);
-                std::fs::create_dir_all(previous.parent().ok_or("no backup folder")?).map_err(|e| e.to_string())?;
-                std::fs::copy(&target, &previous).map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(previous.parent().ok_or_else(|| Reason::new("no backup folder", &[]))?)
+                    .map_err(|e| Reason::data(e.to_string()))?;
+                std::fs::copy(&target, &previous).map_err(|e| Reason::data(e.to_string()))?;
                 saved.push(inside.to_path_buf());
             } else {
                 created.push(target.clone());
             }
-            std::fs::copy(unpacked.join(relative), &target).map_err(|e| format!("couldn't replace {} ({e})", target.display()))?;
+            std::fs::copy(unpacked.join(relative), &target)
+                .map_err(|e| Reason::new("couldn't replace {arg0} ({e})", &[("arg0", &(target.display()).to_string()), ("e", &(e).to_string())]))?;
         }
         // Keep the previous files until the installed copies have passed the same checks.
         for (_, inside) in &files {
             check(&folder.join(inside))?;
         }
-        Ok::<(), String>(())
+        Ok::<(), Reason>(())
     })();
     if let Err(error) = copied {
         for target in &created {
@@ -447,10 +501,9 @@ fn replace_with(
                     *keep = true;
                     backup.clone()
                 };
-                return Err(format!(
-                    "{error}; couldn't put back {} ({restore}). The previous files are in {}",
-                    folder.join(inside).display(),
-                    kept.display()
+                return Err(error.context(
+                    "{reason}; couldn't put back {path} ({restore}). The previous files are in {kept}",
+                    &[("path", &folder.join(inside).display().to_string()), ("restore", &restore.to_string()), ("kept", &kept.display().to_string())],
                 ));
             }
         }

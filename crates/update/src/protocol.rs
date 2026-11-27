@@ -26,6 +26,7 @@ impl InstallLocations {
 
 /// The answer to "what's the latest release of this app?".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LatestRelease {
     #[allow(missing_docs)]
     Found(Release),
@@ -35,6 +36,8 @@ pub enum LatestRelease {
     RateLimited,
     /// Couldn't find out (offline, unreadable answer); the reason is data.
     Failed(String),
+    /// A crate-authored failure whose wording is translated at presentation.
+    Message(crate::Reason),
 }
 
 /// What a running job is doing.
