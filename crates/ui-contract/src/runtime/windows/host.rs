@@ -259,14 +259,17 @@ impl WindowHost {
     /// [`desktop`](Self::desktop) and the root shell's chrome follow at once. A change of caption buttons alone sends
     /// no command, and the decision in force changes nothing. A change to or from the inset frame cannot reach an open
     /// window: it keeps the current decision and returns false. Call it when the app's decision changes (the user's
-    /// title bar setting); between calls the caption layout follows the desktop.
+    /// title bar setting); between calls the caption layout follows the desktop. A new frame shows the decision's own
+    /// caption layout for the rest of the pass that gives it, and the desktop's from the next pass.
     pub fn set_root_frame(&self, decision: Decision) -> bool {
-        let (installed, desktop) = shared(&self.ctx, |shared| (shared.root_frame.clone(), shared.desktop.clone()));
-        let current = installed.unwrap_or_else(|| frame_in(&self.ctx, ViewportId::ROOT));
-        let Some(commands) = craft_window::policy::reframe(&current, &decision.frame) else { return false };
-        if current == decision.frame && desktop.as_ref() == Some(&decision.desktop) {
+        // The decision in force is the app's last one, whatever caption layout the desktop gave its frame since. An app
+        // may give it again every frame, so it is compared in place.
+        if shared(&self.ctx, |shared| shared.decided.as_ref() == Some(&decision)) {
             return true;
         }
+        let installed = shared(&self.ctx, |shared| shared.root_frame.clone());
+        let current = installed.unwrap_or_else(|| frame_in(&self.ctx, ViewportId::ROOT));
+        let Some(commands) = craft_window::policy::reframe(&current, &decision.frame) else { return false };
         // The watch may read the desktop's settings, so it is built outside the lock.
         let layouts = LayoutWatch::new(&decision);
         shared(&self.ctx, |shared| keep_root_frame(shared, decision, layouts));
@@ -471,7 +474,7 @@ impl WindowHost {
     /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app
     /// installed no decision (an embedded shell, a trial). The caption buttons take the desktop's icon theme from it.
     pub fn desktop(&self) -> Option<Desktop> {
-        shared(&self.ctx, |shared| shared.desktop.clone())
+        shared(&self.ctx, |shared| shared.decided.as_ref().map(|decision| decision.desktop.clone()))
     }
 
     /// Where the exclusive parts of `viewport`'s window lay in its last complete pass: the caption buttons, the edge

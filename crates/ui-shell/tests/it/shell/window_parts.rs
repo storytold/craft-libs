@@ -158,7 +158,7 @@ fn with_the_hit_sink_the_window_region_answers_the_platforms_hit_test() {
     use craft_host::target::{Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
     use craft_ui::contract::ShowContainer as _;
     use craft_ui::runtime::InstallSpec;
-    use craft_ui::shell::{CaptionFamily, Captions, Frame, ShellRegion, Title, TitleBar};
+    use craft_ui::shell::{CaptionFamily, Captions, Frame, LayoutSides, ShellRegion, Title, TitleBar};
     use craft_ui::testing::pointer::{moved, press, release};
     use craft_ui::testing::windows::NoWindows;
     use craft_window::policy::{Decision, Desktop, DesktopKind};
@@ -171,9 +171,10 @@ fn with_the_hit_sink_the_window_region_answers_the_platforms_hit_test() {
         .caps(Caps::native(Os::Windows))
         .window(WindowInfo::new(WindowKind::Main).chrome(WindowChrome::Integrated));
     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
     let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let windows =
+        Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)).frame(Decision { frame, overridden: None, caption_layout_fixed: false, desktop }));
     let host = WindowHost::of(&windows.ctx);
     let _sink = host.install_hit_sink(ViewportId::ROOT);
     let (window, bar) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));

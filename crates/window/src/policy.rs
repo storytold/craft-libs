@@ -23,12 +23,14 @@
 //! let viewport = craft_window::policy::apply(egui::ViewportBuilder::default(), &d.frame);
 //! ```
 //!
-//! [`LayoutWatch`] keeps the caption layout current while the app runs: GNOME's value from the
-//! settings portal, KWin's and GTK's files re-read when the window regains focus.
+//! [`LayoutWatch`] keeps the caption layout current while the app runs, from the desktop's own
+//! setting as `craft_platform::appearance` observes it (`craft_host::caption_layout` lists the
+//! desktops and their settings).
 
 pub use crate::desktop::{Backend, Desktop, DesktopKind};
 pub use crate::layout::LayoutWatch;
 use crate::{Layout, Prefix, layout};
+pub use craft_host::caption_layout::{LayoutReading, LayoutSource, RawLayout};
 pub use craft_host::target::{Os, Runtime, WindowKind};
 
 /// Whether KDE, COSMIC, Xfce, Cinnamon, MATE and X11 window managers, which draw their own frame,
@@ -72,6 +74,24 @@ impl CaptionFamily {
     }
 }
 
+/// What a caption layout's left and right ends are, which the system decides and the buttons' look does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutSides {
+    /// The window's own left and right, whichever way the UI reads: Linux's and the BSDs' desktops set their layouts so,
+    /// and the settings portal's leading and trailing ends become sides once, when they are read
+    /// ([`Layout::from_reading`]).
+    Physical,
+    /// The ends of a left-to-right UI, which change places in a right-to-left one, as Windows' own caption buttons do.
+    Reading,
+}
+
+impl LayoutSides {
+    /// The sides of `os`'s caption layouts: Windows' follow the reading direction, every other system's are physical.
+    pub fn of(os: Os) -> Self {
+        if os == Os::Windows { LayoutSides::Reading } else { LayoutSides::Physical }
+    }
+}
+
 /// Caption buttons the app draws: their look and which end of the bar they sit at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Captions {
@@ -79,6 +99,8 @@ pub struct Captions {
     pub family: CaptionFamily,
     /// Which buttons go on which end.
     pub layout: Layout,
+    /// What `layout`'s ends are: a right-to-left UI mirrors a [`LayoutSides::Reading`] layout, whatever its look.
+    pub sides: LayoutSides,
 }
 
 impl Captions {
@@ -136,6 +158,10 @@ pub struct Decision {
     /// `Some(true)` when `<PREFIX>_TITLEBAR` forced the app's bar, `Some(false)` when it forced the
     /// system's, `None` when the platform and setting decided.
     pub overridden: Option<bool>,
+    /// `true` when the decision chose the caption layout itself: `<PREFIX>_CAPTION_LAYOUT` (or `CRAFT_CAPTION_LAYOUT`)
+    /// set it, or the window is a tool window, which shows no caption buttons. A [`LayoutWatch`] keeps a chosen layout
+    /// whatever the desktop's says, while a main window's follows the desktop, also from a layout with no button.
+    pub caption_layout_fixed: bool,
     /// The desktop the decision was made for, so an app can hide the "Use system title bar" row
     /// where it changes nothing (tiling compositors, web) without probing again.
     pub desktop: Desktop,
@@ -170,7 +196,7 @@ fn decide_with(inputs: &Inputs<'_>, layout: &dyn Fn(DesktopKind) -> Layout) -> D
     let Inputs { os, runtime, backend, desktop, kind, pref, env, caption_style, caption_layout } = *inputs;
     let overridden = crate::parse_override(env);
     if kind == WindowKind::Tool {
-        return Decision { frame: tool_frame(os, runtime), overridden, desktop: desktop.clone() };
+        return Decision { frame: tool_frame(os, runtime), overridden, caption_layout_fixed: true, desktop: desktop.clone() };
     }
     let integrated = match (overridden, pref) {
         (Some(app), _) => app,
@@ -183,15 +209,17 @@ fn decide_with(inputs: &Inputs<'_>, layout: &dyn Fn(DesktopKind) -> Layout) -> D
     };
     // The overrides pick the look and order of the app's own caption buttons; an unknown family and a layout with no
     // usable button leave what the platform decided.
+    let mut caption_layout_fixed = false;
     if let Frame::Integrated(captions) = &mut frame {
         if let Some(family) = caption_style.and_then(CaptionFamily::parse) {
             captions.family = family;
         }
         if let Some(parsed) = caption_layout.map(Layout::parse).filter(Layout::is_usable) {
             captions.layout = parsed;
+            caption_layout_fixed = true;
         }
     }
-    Decision { frame, overridden, desktop: desktop.clone() }
+    Decision { frame, overridden, caption_layout_fixed, desktop: desktop.clone() }
 }
 
 /// The frame of a tool window on `os`: its own title row replaces the OS title bar, whatever frame the main window
@@ -202,8 +230,16 @@ pub fn tool_frame(os: Os, runtime: Runtime) -> Frame {
     match (runtime, os) {
         (Runtime::Web, _) => Frame::Native,
         (_, Os::Mac) => Frame::Inset(MacInset::default()),
-        (_, Os::Windows) => Frame::Integrated(Captions { family: CaptionFamily::Windows, layout: Layout { left: Vec::new(), right: Vec::new() } }),
-        _ => Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout { left: Vec::new(), right: Vec::new() } }),
+        (_, Os::Windows) => Frame::Integrated(Captions {
+            family: CaptionFamily::Windows,
+            layout: Layout { left: Vec::new(), right: Vec::new() },
+            sides: LayoutSides::Reading,
+        }),
+        _ => Frame::Integrated(Captions {
+            family: CaptionFamily::Generic,
+            layout: Layout { left: Vec::new(), right: Vec::new() },
+            sides: LayoutSides::Physical,
+        }),
     }
 }
 
@@ -220,7 +256,7 @@ fn integrated_frame(
 ) -> Frame {
     let captions = |family: CaptionFamily| {
         let kind = if family == CaptionFamily::Windows { DesktopKind::Other } else { desktop.kind };
-        Frame::Integrated(Captions { family, layout: layout(kind) })
+        Frame::Integrated(Captions { family, layout: layout(kind), sides: LayoutSides::of(os) })
     };
     match os {
         Os::Mac => Frame::Inset(MacInset::default()),
@@ -276,11 +312,12 @@ pub fn decide_for_kind(prefix: Prefix, backend: Backend, kind: WindowKind, pref:
     decide_with(&inputs, &|kind| desktop_layout(os, kind))
 }
 
-/// The desktop's window-button layout, where it names one.
+/// The desktop's window-button layout as it reads at startup ([`layout::read_layout`]), where it names one.
 pub(crate) fn desktop_layout(os: Os, kind: DesktopKind) -> Layout {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
     if os == Os::Linux {
-        return layout::read_layout(kind, &|k: &str| std::env::var(k).ok());
+        let var = |k: &str| std::env::var(k).ok();
+        return layout::read_layout(kind, layout::layout_desktop(&var), &var);
     }
     let _ = os;
     layout::default_layout(kind)
@@ -319,7 +356,9 @@ impl From<&crate::Frame> for Frame {
     fn from(old: &crate::Frame) -> Self {
         match old {
             crate::Frame::Desktop => Frame::Native,
-            crate::Frame::App(layout) => Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: layout.clone() }),
+            crate::Frame::App(layout) => {
+                Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: layout.clone(), sides: LayoutSides::Physical })
+            }
         }
     }
 }
@@ -329,9 +368,13 @@ mod tests {
     use super::*;
 
     fn decided(pref: TitleBarPref, style: Option<&str>, layout: Option<&str>) -> Frame {
+        decided_on(Os::Windows, pref, style, layout)
+    }
+
+    fn decided_on(os: Os, pref: TitleBarPref, style: Option<&str>, layout: Option<&str>) -> Frame {
         let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
         let inputs = Inputs {
-            os: Os::Windows,
+            os,
             runtime: Runtime::Native,
             backend: Backend::Wayland,
             desktop: &desktop,
@@ -368,6 +411,16 @@ mod tests {
         assert_ne!(laid.layout, base.layout);
 
         assert_eq!(decided(TitleBarPref::System, Some("breeze"), Some("close:")), Frame::Native, "a native frame has no captions to change");
+    }
+
+    // The look a variable picks leaves the layout's sides to the system: on Linux the Windows look keeps the desktop's
+    // physical sides, and on Windows any look keeps the sides that follow the reading direction.
+    #[test]
+    fn the_caption_look_leaves_the_layouts_sides_to_the_system() {
+        let linux = captions(decided_on(Os::Linux, TitleBarPref::Integrated, Some("windows"), None));
+        assert_eq!((linux.family, linux.sides), (CaptionFamily::Windows, LayoutSides::Physical));
+        let windows = captions(decided_on(Os::Windows, TitleBarPref::Integrated, Some("adwaita"), None));
+        assert_eq!((windows.family, windows.sides), (CaptionFamily::Adwaita, LayoutSides::Reading));
     }
 
     #[cfg(feature = "ui")]

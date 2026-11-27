@@ -5,7 +5,7 @@ use craft_host::target::ShellInfo;
 use craft_ui::contract::Role;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::WindowKey;
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, LayoutSides, Title, TitleBar};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::NoWindows;
 use craft_ui::testing::{Fixture, trial};
@@ -20,9 +20,14 @@ use std::sync::Arc;
 /// click on the band, and the caption it reports. With `embedded` the bar is the title bar of an embedded shell.
 fn sent(embedded: bool) -> (Vec<ViewportCommand>, Option<Caption>) {
     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
     let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision {
+        frame,
+        overridden: None,
+        caption_layout_fixed: false,
+        desktop,
+    }));
     let (bar, clicked) = (Cell::new(Rect::NOTHING), Cell::new(None));
     let show_bar = |ui: &mut Ui| {
         let shown = TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {});
@@ -142,7 +147,7 @@ fn a_document_tab_strip_in_the_bar_takes_the_free_width() {
     use craft_ui::testing::Fixture;
     let mut fixture = Fixture::new(|ui| {
         let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
         let tabs = [DocumentTab::new(0_usize, "One.pdf"), DocumentTab::new(1, "Two.pdf"), DocumentTab::new(2, "Three.pdf")];
         let _ = TitleBar::new().frame(frame).show_titled(
             ui,
@@ -180,7 +185,7 @@ fn a_trailing_control_of_overflowing_tabs_stays_clear_of_the_bars_controls() {
     use craft_ui::testing::Fixture;
     let mut fixture = Fixture::new(|ui| {
         let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
         let tabs: Vec<_> = (0..9).map(|i| DocumentTab::new(i, format!("Statement {i} for the office records, scanned.pdf")).closable(true)).collect();
         let _ = TitleBar::new().frame(frame).show_titled(
             ui,
@@ -276,7 +281,12 @@ fn lights_right_bar(follows: bool, lights_right: bool) -> impl Fn(&str) -> Rect 
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
     let frame = Frame::Inset(MacInset::default().with_lights_right(lights_right));
     let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision {
+        frame,
+        overridden: None,
+        caption_layout_fixed: false,
+        desktop,
+    }));
     let tabs = [DocumentTab::new(0_usize, "first.pdf"), DocumentTab::new(1, "last.pdf")];
     let frame = || {
         windows.frame(vec![], vec![], |ui| {
@@ -364,7 +374,7 @@ fn whole_bar(ui: &mut Ui) {
     use craft_ui::menu::MenuItem;
     use craft_ui::menu::bar::{MenuBar, MenuTitle};
     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
     let _ = TitleBar::new().frame(frame).show_titled(
         ui,
         Title::new("Untitled-1.psd"),
@@ -388,9 +398,14 @@ fn whole_bar(ui: &mut Ui) {
 /// The cursor over the File title and over the band of the whole bar in a window, with the band's cursor `look`.
 fn cursors_over_the_bar(look: craft_ui::contract::MoveBandCursor) -> (Option<craft_behavior::Cursor>, Option<craft_behavior::Cursor>) {
     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
     let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision {
+        frame,
+        overridden: None,
+        caption_layout_fixed: false,
+        desktop,
+    }));
     let mut root = craft_ui::runtime::env::RootEnv::default();
     root.values.set(look);
     windows.root_env(root);
@@ -457,7 +472,7 @@ fn fitted(width: f32, direction: craft_i18n::Direction, fitted: bool) -> impl Fn
     use craft_ui::layout_components::Row;
     let mut fixture = Fixture::new(move |ui| {
         let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
         let leading = |ui: &mut Ui, _: &mut BodyCx<'_>| {
             Button::new(MENUS).show(ui);
         };
@@ -521,4 +536,49 @@ fn a_fitted_bar_drops_its_trailing_members_by_rank_before_the_leading_content_na
         assert!((rtl_leading.right() - (width - leading.left())).abs() <= 0.5, "the leading content {rtl_leading:?} mirrors {leading:?} at {width}");
     }
     assert!(dropped_alone, "rank 1 never left alone");
+}
+
+/// The Windows look on Linux (`CRAFT_CAPTION_STYLE=windows`) changes how the caption buttons look, not which end they
+/// sit at. In a right-to-left UI the settings portal's standard placement puts Close at the leading end, the right one,
+/// and minimize then maximize at the trailing end read from the right, as the desktop's own look does: the placement
+/// is turned into sides once, and the Windows look's own mirroring is for Windows' layout.
+#[trial]
+fn a_windows_look_on_linux_keeps_the_sides_the_desktop_placed_right_to_left() {
+    use craft_host::caption_layout::{LayoutReading, LayoutSource, RawLayout};
+    use craft_host::target::{Backend, Os, WindowKind};
+    use craft_ui::runtime::env::{Direction, RootEnv};
+    use craft_ui::testing::windows::{FakeSystem, report_os_caption_layout};
+    use craft_window::policy::{Runtime, TitleBarPref};
+    let desktop = Desktop { kind: DesktopKind::Gnome, ssd: Some(false), gtk_theme: None, icon_theme: None };
+    let mut decision =
+        craft_window::policy::decide(Os::Linux, Runtime::Native, Backend::Wayland, &desktop, WindowKind::Main, TitleBarPref::Integrated, None);
+    // What the variable does to the decision.
+    if let Frame::Integrated(captions) = &mut decision.frame {
+        captions.family = CaptionFamily::Windows;
+    }
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).frame(decision));
+    windows.root_env(RootEnv::default().direction(Direction::Rtl));
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect();
+    let placement = RawLayout::Placement { leading: names(&["close"]), trailing: names(&["minimize", "maximize"]) };
+    report_os_caption_layout(&windows.ctx, Some(LayoutReading::new(LayoutSource::StandardPortal, placement, "portal")));
+    let bar = Cell::new(Rect::NOTHING);
+    let mut out = None;
+    for _ in 0..3 {
+        out = Some(windows.frame(vec![], vec![], |ui| {
+            bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
+        }));
+    }
+    let out = out.expect("the frames ran");
+    let tree = &out.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    let button = |name: &str| {
+        tree.with_role(Role::BUTTON)
+            .into_iter()
+            .find(|key| tree.name_of(*key) == Some(name))
+            .and_then(|key| tree.bounds_of(key))
+            .unwrap_or_else(|| panic!("the bar shows its {name} button"))
+    };
+    let (minimize, maximize, close) = (button("Minimize"), button("Maximize"), button("Close"));
+    let middle = bar.get().center().x;
+    assert!(close.left() > middle, "Close {close:?} sits at the leading end, the right, of {:?}", bar.get());
+    assert!(maximize.right() <= minimize.left() + 0.5 && minimize.right() < middle, "Maximize {maximize:?}, then Minimize {minimize:?}, at the left");
 }

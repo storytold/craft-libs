@@ -6,14 +6,16 @@ use crate::contract::{Show as _, ShowContainer as _};
 use crate::display::Text;
 use crate::layout_components::Row;
 use crate::shell::Title;
-use crate::shell::{Caption, CaptionFamily, Captions, Frame, MacInset};
+use crate::shell::{Caption, CaptionFamily, Captions, Frame, LayoutSides, MacInset};
 use crate::style::SurfaceKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_window::Layout;
 use egui::Ui;
 
 fn captions(family: CaptionFamily, left: &[Caption], right: &[Caption]) -> Frame {
-    Frame::Integrated(Captions { family, layout: Layout { left: left.to_vec(), right: right.to_vec() } })
+    // Each family's bar as on its own system: the Windows look on Windows.
+    let sides = if family == CaptionFamily::Windows { LayoutSides::Reading } else { LayoutSides::Physical };
+    Frame::Integrated(Captions { family, layout: Layout { left: left.to_vec(), right: right.to_vec() }, sides })
 }
 
 fn menu(ui: &mut Ui, _: &mut crate::contract::BodyCx<'_>) {

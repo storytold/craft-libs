@@ -22,6 +22,18 @@ pub fn set_os(ctx: &egui::Context, os: craft_host::target::Os) {
     crate::runtime::windows::set_os(ctx, os);
 }
 
+/// Reports `layout` as GNOME's `button-layout` on `ctx` through the host's reader (`None`: no answer), as the
+/// settings portal would.
+pub fn report_os_button_layout(ctx: &egui::Context, layout: Option<&str>) {
+    crate::runtime::env::system::report_button_layout(ctx, layout);
+}
+
+/// Reports `reading` as the desktop's window-button layout on `ctx` through the host's reader (`None`: no answer), as
+/// the desktop's sources would (`craft_platform::appearance::Watcher::caption_layout`).
+pub fn report_os_caption_layout(ctx: &egui::Context, reading: Option<craft_platform::appearance::LayoutReading>) {
+    crate::runtime::env::system::report_caption_layout(ctx, reading);
+}
+
 /// The window actions the platform applies out of reach of egui's commands (`SetOpacity`) since the last call.
 pub fn applied_actions(ctx: &egui::Context) -> Vec<(egui::ViewportId, crate::runtime::windows::WindowAction)> {
     crate::runtime::windows::take_sent(ctx)

@@ -102,3 +102,28 @@ fn a_layout_naming_no_button_is_none_and_kwins_unset_keys_keep_its_defaults() {
     assert_eq!(read(RawLayout::Xfwm("CC|MC".into())), sides(&[CLOSE], &[MAX]));
     assert_eq!(read(RawLayout::Labwc(" close : iconify , close ".into())), sides(&[CLOSE], &[MIN]));
 }
+
+// A FIFO in the place of a file the startup read takes (KWin's `kwinrc`, GTK's `settings.ini`) is no file and is not
+// waited on: a plain open would wait for a writer, and the frame deciding the window with it.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+#[test]
+fn a_fifo_in_a_desktop_files_place_is_not_waited_on() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = std::env::temp_dir().join(format!("craft-window-fifo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let fifo = dir.join("kwinrc");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status()?.success(), "a FIFO made");
+    let home = dir.to_string_lossy().into_owned();
+    let (send, read) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let var = |key: &str| (key == "XDG_CONFIG_HOME").then(|| home.clone());
+        let _ = send.send(super::read_config(&var, "kwinrc"));
+    });
+    let answer = read.recv_timeout(std::time::Duration::from_secs(5));
+    if answer.is_err() {
+        // The read waits in its open: a writer's open completes it, so the thread ends.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(answer.ok(), Some(None), "the FIFO is no file, and the read did not wait");
+    Ok(())
+}

@@ -7,7 +7,7 @@ use craft_ui::dialog::Dialog;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::sections::{DialogRole, FooterButton};
-use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, LayoutSides, Title, TitleBar};
 use craft_ui::testing::layout::Block;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
@@ -26,9 +26,10 @@ fn a_modals_strip_stands_for_the_hit_sink() {
     let shell = ShellInfo::default();
     let shell = shell.clone().caps(shell.caps.union(Caps::OS_RESIZES_UNDECORATED));
     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
     let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let windows =
+        Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)).frame(Decision { frame, overridden: None, caption_layout_fixed: false, desktop }));
     let host = WindowHost::of(&windows.ctx);
     let _sink = host.install_hit_sink(ViewportId::ROOT);
     let (bar, dialog) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));

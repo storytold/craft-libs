@@ -111,6 +111,8 @@ the files at once.
 
 `Watcher::button_layout()` stays for older callers: GNOME's `org.gnome.desktop.wm.preferences` `button-layout`
 string as the portal (or `gsettings` once when the portal has no answer) reports it.
+`craft_window::policy::LayoutWatch` turns a reading into the caption layout, so craft-window needs no D-Bus or X11
+dependency.
 
 ### Contrast and reduced motion
 

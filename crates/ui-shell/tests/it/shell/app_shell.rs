@@ -18,7 +18,7 @@ use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
 use craft_ui::runtime::env::{PageBandRoom, RevealEdge, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, LayoutSides, MacInset, Slot, SlotSize, Title, TitleBar, slots};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::NoWindows;
@@ -682,7 +682,12 @@ struct PageRuns {
 /// A window whose frame is `frame`, as the running platform would decide it.
 fn framed(frame: Frame) -> Windows {
     let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
-    Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }))
+    Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision {
+        frame,
+        overridden: None,
+        caption_layout_fixed: false,
+        desktop,
+    }))
 }
 
 /// One frame with `events` of a window shell with a title bar, a rail and a body, and a page shown over them; with
@@ -777,7 +782,7 @@ fn a_page_hides_the_slots_and_its_band_keeps_the_window_ends_and_moves_the_windo
     assert_eq!((band.start, band.end), (inset.leading, 0.0), "under an Inset frame the start room is the lights' inset");
 
     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-    let windows = framed(Frame::Integrated(Captions { family: CaptionFamily::Windows, layout }));
+    let windows = framed(Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading }));
     for _ in 0..3 {
         page_frame(&windows, &mut runs, false, vec![]);
     }

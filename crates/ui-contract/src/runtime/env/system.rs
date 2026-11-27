@@ -2,7 +2,7 @@
 //! resolve from.
 
 use crate::runtime::egui::memory::Service;
-use craft_platform::appearance::{SystemReader, Theme};
+use craft_platform::appearance::{LayoutReading, SystemReader, Theme};
 use craft_theme::SystemAppearance;
 use egui::{Context, Event};
 
@@ -41,6 +41,17 @@ pub fn system_text_scale(ctx: &Context) -> Option<f32> {
     Service::<Source>::run(ctx, |source| source.0.text_scale())
 }
 
+/// GNOME's `button-layout` as the installed [`SystemReader`] heard it; `None` while it heard none.
+pub(crate) fn button_layout(ctx: &Context) -> Option<String> {
+    Service::<Source>::run(ctx, |source| source.0.button_layout())
+}
+
+/// The desktop's window-button layout as the installed [`SystemReader`] heard it from the best of the desktop's
+/// sources; `None` while it heard none.
+pub(crate) fn caption_layout(ctx: &Context) -> Option<LayoutReading> {
+    Service::<Source>::run(ctx, |source| source.0.caption_layout())
+}
+
 /// Tells the reader whether the app is active, so a desktop source that reports the appearance only for an active app
 /// reads again when the root window gains focus.
 pub(crate) fn set_active(ctx: &Context, active: bool) {
@@ -76,6 +87,18 @@ pub(crate) fn report_theme(ctx: &Context, dark: bool) {
 #[cfg(feature = "testing")]
 pub(crate) fn report_text_scale(ctx: &Context, scale: Option<f32>) {
     Service::<Source>::run(ctx, |source| source.0.report_text_scale(scale));
+}
+
+/// Reports `layout` as GNOME's `button-layout` (`None`: no answer), as the settings portal would.
+#[cfg(feature = "testing")]
+pub(crate) fn report_button_layout(ctx: &Context, layout: Option<&str>) {
+    Service::<Source>::run(ctx, |source| source.0.report_button_layout(layout));
+}
+
+/// Reports `reading` as the desktop's window-button layout (`None`: no answer), as the desktop's sources would.
+#[cfg(feature = "testing")]
+pub(crate) fn report_caption_layout(ctx: &Context, reading: Option<LayoutReading>) {
+    Service::<Source>::run(ctx, |source| source.0.report_caption_layout(reading));
 }
 
 /// Reports `contrast` as the OS's, as a desktop source would.

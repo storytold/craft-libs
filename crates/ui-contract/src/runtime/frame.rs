@@ -848,6 +848,10 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     let env = Env::from_root(&ctx, &input.root, input.host, scale::pixels_per_point(&ctx));
     style::set_theme_direction(&ctx, ui, env.direction.is_rtl());
     Env::set_root(&ctx, viewport, env.clone());
+    if root_pass.is_some() {
+        // Before anything draws: the root frame's caption layout, for the direction this pass reads in.
+        windows::begin_root(&ctx, env.direction.is_rtl());
+    }
     drop(Env::install_for(ui, env));
     // H7: focus moves and the press classification, then the pass's intents, then the wheel split.
     focus::begin(&ctx, input.root.tab_all_controls || windows::os_of(&ctx) != Os::Mac, input.root.dialog_tab);

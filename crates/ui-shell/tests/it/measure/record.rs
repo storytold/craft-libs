@@ -147,7 +147,7 @@ fn a_grid_narrows_in_the_frame_its_widest_cell_shrinks() {
 fn a_settled_leaf_that_read_an_input_besides_its_room_runs_one_pass() {
     use craft_ui::contract::Trigger;
     use craft_ui::menu::{Menu, MenuItem};
-    use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+    use craft_ui::shell::{Caption, CaptionFamily, Captions, Frame, LayoutSides, Title, TitleBar};
     let menu = |ui: &mut Ui| {
         let opener = Button::new("File").show(ui);
         let mut open = true;
@@ -158,7 +158,7 @@ fn a_settled_leaf_that_read_an_input_besides_its_room_runs_one_pass() {
     };
     let bar = |ui: &mut Ui| {
         let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading });
         let _ = TitleBar::new().frame(frame).show_titled(
             ui,
             Title::new("Landscape.psd"),

@@ -12,7 +12,7 @@ use craft_ui::contract::{Role, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Picture;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::WindowKey;
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, LayoutSides, Title, TitleBar};
 use craft_ui::testing::{Fixture, trial};
 use egui::vec2;
 
@@ -52,15 +52,17 @@ fn window(width: f32, pixels_per_point: f32) -> Fixture {
                 move |ui, _, _: &mut ()| {
                     let bar = Rc::clone(&bar);
                     let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-                    TitleBar::new().frame(Frame::Integrated(Captions { family: CaptionFamily::Windows, layout })).show_titled(
-                        ui,
-                        Title::new(DOCUMENT),
-                        move |ui, _| {
-                            Picture::new("", 7, &brand).show(ui);
-                            MenuBarUi::new(&bar).target(Target::Windows).mnemonics(&PREFERRED).help_search(true).show(ui);
-                        },
-                        |_, _| {},
-                    );
+                    TitleBar::new()
+                        .frame(Frame::Integrated(Captions { family: CaptionFamily::Windows, layout, sides: LayoutSides::Reading }))
+                        .show_titled(
+                            ui,
+                            Title::new(DOCUMENT),
+                            move |ui, _| {
+                                Picture::new("", 7, &brand).show(ui);
+                                MenuBarUi::new(&bar).target(Target::Windows).mnemonics(&PREFERRED).help_search(true).show(ui);
+                            },
+                            |_, _| {},
+                        );
                 },
             )
             .body(|ui, _, _| {
