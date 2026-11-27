@@ -482,13 +482,14 @@ impl<'a> Ctx<'a> {
     /// The date, footer and slide number placeholders `hf` turns on, for those the slide doesn't
     /// hold itself. They take their place and look from the layout and master.
     fn footers(&mut self, shapes: &mut Vec<Shape>, hf: &doc::HeadersFooters) {
-        let field = |text: &str, field: String| TextBody {
-            paragraphs: vec![Paragraph {
+        let field = |text: &str, field: String| {
+            std::iter::once(Paragraph {
                 runs: vec![Run { text: text.into(), props: Default::default(), kind: RunKind::Field { field } }],
                 ..Default::default()
-            }],
-            ..Default::default()
+            })
         };
+        // A paragraph per line, as `TextBody::from_text` splits it.
+        let lines = |text: &str| text.replace("\r\n", "\n").replace('\r', "\n");
         let wanted = [
             (PhType::Date, hf.date, "Date Placeholder"),
             (PhType::Footer, hf.footer && !hf.footer_text.is_empty(), "Footer Placeholder"),
@@ -498,15 +499,15 @@ impl<'a> Ctx<'a> {
             if !on || shapes.iter().any(|s| s.ph_type() == Some(kind)) {
                 continue;
             }
+            // A footer repeats on every slide, and its text splits into a paragraph per line, so
+            // it is made only as far as the text budget allows.
             let text = match kind {
-                PhType::SlideNum => field("‹#›", "slidenum".into()),
-                PhType::Date if hf.user_date => TextBody::from_text(&hf.date_text),
+                PhType::SlideNum => self.within_budget(field("‹#›", "slidenum".into())),
+                PhType::Date if hf.user_date => self.within_budget(lines(&hf.date_text).split('\n').map(Paragraph::new)),
                 // formatId 0–12 are the thirteen date formats, in DrawingML's order.
-                PhType::Date => field("", format!("datetime{}", hf.format.min(12) + 1)),
-                _ => TextBody::from_text(&hf.footer_text),
+                PhType::Date => self.within_budget(field("", format!("datetime{}", hf.format.min(12) + 1))),
+                _ => self.within_budget(lines(&hf.footer_text).split('\n').map(Paragraph::new)),
             };
-            // A footer repeats on every slide, and its text splits into a paragraph per line.
-            let text = self.within_budget(text);
             if text.paragraphs.is_empty() {
                 continue;
             }
@@ -521,22 +522,22 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// `body`, made here rather than read from a text block, cut to the paragraphs and runs the
-    /// presentation's text budget still allows.
-    fn within_budget(&self, mut body: TextBody) -> TextBody {
-        let mut kept = 0;
-        for para in &mut body.paragraphs {
+    /// A text body of `paras`, made here rather than read from a text block, taken one at a time
+    /// while the presentation's text budget allows: the rest are never made.
+    fn within_budget(&self, paras: impl Iterator<Item = Paragraph>) -> TextBody {
+        let mut paragraphs = vec![];
+        for mut para in paras {
             if !text::take_text_item(&self.text_items) {
                 break;
             }
-            kept += 1;
             if let Some(runs) = (0..para.runs.len()).find(|_| !text::take_text_item(&self.text_items)) {
                 para.runs.truncate(runs);
+                paragraphs.push(para);
                 break;
             }
+            paragraphs.push(para);
         }
-        body.paragraphs.truncate(kept);
-        body
+        TextBody { paragraphs, ..Default::default() }
     }
 
     /// The text of a notes page's notes placeholder.
