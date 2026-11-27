@@ -237,14 +237,16 @@ impl Mesh {
     /// MikkTSpace tangents (falls back to per-vertex tangents if generation fails). A mesh with
     /// an index out of range, a non-finite position or UV, a position or UV with a magnitude
     /// outside 1e-6 to 1e6 (zero is fine), only degenerate triangles, more than
-    /// [`MAX_MIKKTSPACE_VALENCE`] triangles around one vertex or corners whose welding would take
-    /// more than [`MAX_MIKKTSPACE_WELD_WORK`] comparisons does not go to MikkTSpace. Missing
+    /// [`MAX_MIKKTSPACE_VALENCE`] noncollapsed triangles around one vertex or noncollapsed corners
+    /// whose welding would take more than [`MAX_MIKKTSPACE_WELD_WORK`] comparisons does not go to MikkTSpace. Missing
     /// normals are computed and missing UVs are zero. A non-finite normal counts as +Y.
     ///
     /// MikkTSpace gives each triangle corner its own tangent frame. A vertex whose corners get
     /// different frames (UVs mirrored across it) is split: every further frame gets a copy of
     /// the vertex, and the corners with that frame use the copy. A copy whose index would not
     /// fit in `u32` is not made, and those corners keep the first frame.
+    /// Faces with coincident corners stay in the mesh but are omitted from MikkTSpace. Their
+    /// corners reuse a generated frame for the same vertex when one is available.
     pub fn compute_tangents(&mut self) {
         let n = self.positions.len();
         if self.normals.len() != n {
@@ -256,18 +258,25 @@ impl Mesh {
         let normals: Vec<Vec3> = self.normals.iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
         let mut corners = vec![Vec4::ZERO; self.indices.len()];
 
-        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then. Its
-        // callbacks read a missing vertex as the origin, which the degenerate check cannot see,
-        // so an index past the last vertex skips it too.
+        // MikkTSpace receives noncollapsed faces with valid indices and bounded attributes.
         let usable = in_safe_range(self.positions.iter().flat_map(|p| p.to_array()))
             && in_safe_range(self.uvs.iter().flat_map(|uv| uv.to_array()))
             && self.indices.iter().all(|&i| (i as usize) < n);
-        let mut g = Mikk { positions: &self.positions, normals: &normals, uvs: &self.uvs, indices: &self.indices, corners: &mut corners };
-        if !(usable && !g.all_triangles_degenerate() && g.affordable() && mikktspace::generate_tangents(&mut g)) {
+        let mut g = Mikk {
+            positions: &self.positions,
+            normals: &normals,
+            uvs: &self.uvs,
+            indices: &self.indices,
+            corners: &mut corners,
+            faces: if usable { Mikk::noncollapsed_faces(&self.positions, &self.indices) } else { None },
+        };
+        if !(usable && g.face_count() != 0 && g.affordable() && mikktspace::generate_tangents(&mut g)) {
             let per_vertex = simple_tangents(&self.positions, &normals, &self.uvs, &self.indices);
             for (corner, v) in corners.iter_mut().zip(&self.indices) {
                 *corner = per_vertex.get(*v as usize).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0));
             }
+        } else if g.faces.is_some() {
+            g.fill_collapsed_corners();
         }
 
         // Orthonormalize a tangent against the normal of vertex `v`; repair degenerate results.
@@ -572,22 +581,93 @@ struct Mikk<'a> {
     uvs: &'a [Vec2],
     indices: &'a [u32],
     corners: &'a mut [Vec4],
+    faces: Option<Vec<usize>>,
 }
 
 impl Mikk<'_> {
-    fn vi(&self, face: usize, vert: usize) -> usize {
-        self.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+    fn face_count(&self) -> usize {
+        self.faces.as_ref().map_or(self.indices.len() / 3, Vec::len)
     }
 
-    /// True when the mesh has triangles and every one of them has two corners at the same
-    /// position as MikkTSpace gets it.
-    fn all_triangles_degenerate(&self) -> bool {
-        use mikktspace::Geometry;
-        self.num_faces() > 0
-            && (0..self.num_faces()).all(|f| {
-                let p = |v| self.position(f, v);
-                p(0) == p(1) || p(0) == p(2) || p(1) == p(2)
-            })
+    fn original_face(&self, face: usize) -> usize {
+        self.faces.as_ref().map_or(face, |faces| faces.get(face).copied().unwrap_or(0))
+    }
+
+    fn vi(&self, face: usize, vert: usize) -> usize {
+        let original = self.original_face(face);
+        self.indices.get(original * 3 + vert).copied().unwrap_or(0) as usize
+    }
+
+    fn noncollapsed_faces(positions: &[Vec3], indices: &[u32]) -> Option<Vec<usize>> {
+        let mut remap: Option<Vec<usize>> = None;
+        for (face, vertices) in indices.as_chunks::<3>().0.iter().enumerate() {
+            let kept = match vertices.map(|vertex| positions.get(vertex as usize)) {
+                [Some(a), Some(b), Some(c)] => a != b && a != c && b != c,
+                _ => false,
+            };
+            if kept {
+                if let Some(faces) = &mut remap {
+                    faces.push(face);
+                }
+            } else if remap.is_none() {
+                remap = Some((0..face).collect());
+            }
+        }
+        remap
+    }
+
+    fn fill_collapsed_corners(&mut self) {
+        let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+        let attributes = |index: usize| {
+            let (p, n, uv) = (self.positions[index], self.normals[index], self.uvs[index]);
+            [p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y].map(bits)
+        };
+        let mut first = vec![None; self.positions.len()];
+        for &face in self.faces.as_deref().unwrap_or(&[]) {
+            for vertex in 0..3 {
+                let corner = face * 3 + vertex;
+                let index = self.indices[corner] as usize;
+                first[index].get_or_insert(self.corners[corner]);
+            }
+        }
+        let generated_count = self.face_count() * 3;
+        let index_generated = generated_count <= self.indices.len() - generated_count;
+        let mut welded: std::collections::HashMap<[u32; 8], Option<Vec4>> = if index_generated {
+            std::collections::HashMap::new()
+        } else {
+            self.indices
+                .iter()
+                .zip(self.corners.iter())
+                .filter(|&(index, tangent)| *tangent == Vec4::ZERO && first[*index as usize].is_none())
+                .map(|(&index, _)| (attributes(index as usize), None))
+                .collect()
+        };
+        if index_generated || !welded.is_empty() {
+            for &face in self.faces.as_deref().unwrap_or(&[]) {
+                for vertex in 0..3 {
+                    let corner = face * 3 + vertex;
+                    let key = attributes(self.indices[corner] as usize);
+                    if index_generated {
+                        welded.entry(key).or_insert(Some(self.corners[corner]));
+                    } else if let Some(frame) = welded.get_mut(&key) {
+                        frame.get_or_insert(self.corners[corner]);
+                    }
+                }
+            }
+        }
+        for (&index, tangent) in self.indices.iter().zip(self.corners.iter_mut()) {
+            if *tangent == Vec4::ZERO
+                && let Some(Some(frame)) = first.get(index as usize)
+            {
+                *tangent = *frame;
+            } else if *tangent == Vec4::ZERO
+                && let Some(Some(frame)) = welded.get(&attributes(index as usize))
+            {
+                *tangent = *frame;
+            } else if *tangent == Vec4::ZERO {
+                *tangent = Vec4::new(1.0, 0.0, 0.0, -1.0);
+            }
+        }
     }
 
     /// Whether MikkTSpace's work on this input stays bounded: at most
@@ -625,7 +705,7 @@ impl Mikk<'_> {
 
 impl mikktspace::Geometry for Mikk<'_> {
     fn num_faces(&self) -> usize {
-        self.indices.len() / 3
+        self.face_count()
     }
     fn num_vertices_of_face(&self, _face: usize) -> usize {
         3
@@ -645,7 +725,8 @@ impl mikktspace::Geometry for Mikk<'_> {
     }
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
         // One tangent per corner: corners of a vertex can get different frames.
-        if let Some(t) = self.corners.get_mut(face * 3 + vert) {
+        let original = self.original_face(face);
+        if let Some(t) = self.corners.get_mut(original * 3 + vert) {
             *t = Vec4::from_array(tangent);
         }
     }
@@ -653,6 +734,101 @@ impl mikktspace::Geometry for Mikk<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unmatched_collapsed_corners_keep_the_mikktspace_default_frame() {
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z, Vec3::Z, Vec3::Z + Vec3::X],
+            normals: vec![Vec3::Z; 6],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2, 3, 4, 5],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        for corner in 3..6 {
+            assert_eq!(mesh.tangents[mesh.indices[corner] as usize], Vec4::new(1.0, 0.0, 0.0, -1.0));
+        }
+    }
+
+    #[test]
+    fn collapsed_corners_reuse_frames_from_matching_vertex_attributes() {
+        for extra_valid_face in [false, true] {
+            let mut mesh = Mesh {
+                positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::ZERO],
+                normals: vec![Vec3::Z; 4],
+                uvs: vec![Vec2::ZERO, Vec2::Y, Vec2::X, Vec2::ZERO],
+                indices: vec![0, 1, 2, 3, 3, 1],
+                ..Mesh::default()
+            };
+            if extra_valid_face {
+                mesh.indices.extend_from_slice(&[0, 1, 2]);
+            }
+            mesh.compute_tangents();
+            assert_eq!(mesh.tangents[mesh.indices[0] as usize], mesh.tangents[mesh.indices[3] as usize]);
+        }
+    }
+
+    #[test]
+    fn collapsed_faces_do_not_force_valid_corner_frames_into_fallback() {
+        let angle = 0.1f32;
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(angle.cos(), angle.sin(), 0.0), Vec3::new(-angle.sin(), angle.cos(), 0.0)],
+            normals: vec![Vec3::Z; 5],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2, 0, 3, 4],
+            ..Mesh::default()
+        };
+        for _ in 0..=MAX_MIKKTSPACE_VALENCE {
+            let duplicate = mesh.positions.len() as u32;
+            mesh.positions.push(Vec3::ZERO);
+            mesh.normals.push(Vec3::Z);
+            mesh.uvs.push(Vec2::ZERO);
+            mesh.indices.extend_from_slice(&[0, duplicate, 1]);
+        }
+        mesh.compute_tangents();
+        assert_ne!(mesh.indices[0], mesh.indices[3]);
+        assert_eq!(mesh.tangents[mesh.indices[0] as usize].w, mesh.tangents[mesh.indices[3] as usize].w);
+    }
+
+    #[test]
+    fn collapsed_corners_reuse_shared_generated_frames() {
+        let angle = 0.1f32;
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(angle.cos(), angle.sin(), 0.0), Vec3::new(-angle.sin(), angle.cos(), 0.0)],
+            normals: vec![Vec3::Z; 5],
+            uvs: vec![Vec2::ZERO, Vec2::Y, Vec2::X, Vec2::Y, Vec2::X],
+            indices: vec![0, 0, 1, 0, 1, 2, 0, 3, 4],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        assert_eq!(mesh.positions.len(), 6);
+        assert_eq!(mesh.indices[0], mesh.indices[3]);
+        assert_eq!(mesh.indices[1], mesh.indices[3]);
+        assert_eq!(mesh.indices[2], mesh.indices[4]);
+        assert_ne!(mesh.indices[3], mesh.indices[6]);
+        assert!(mesh.tangents.iter().all(|tangent| tangent.is_finite()));
+    }
+
+    #[test]
+    fn same_handed_corner_frames_keep_distinct_directions() {
+        let angle = 0.1f32;
+        let x = Vec3::new(angle.cos(), angle.sin(), 0.0);
+        let y = Vec3::new(-angle.sin(), angle.cos(), 0.0);
+        let mut mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, x, y],
+            normals: vec![Vec3::Z; 5],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2, 0, 3, 4],
+            ..Mesh::default()
+        };
+        mesh.compute_tangents();
+        let first = mesh.indices[0] as usize;
+        let second = mesh.indices[3] as usize;
+        assert_ne!(first, second);
+        assert_eq!(mesh.tangents[first].w, mesh.tangents[second].w);
+        assert!(mesh.tangents[first].truncate().dot(mesh.tangents[second].truncate()) > 0.99);
+        assert!((mesh.tangents[first].truncate() - mesh.tangents[second].truncate()).length() > 0.05);
+    }
+
     use super::*;
 
     fn quad() -> Mesh {
@@ -795,7 +971,14 @@ mod tests {
             let indices: Vec<u32> = (0..k as u32).flat_map(|i| [0, i + 1, i + 2]).collect();
             let (normals, uvs) = (vec![Vec3::Z; positions.len()], vec![Vec2::ZERO; positions.len()]);
             let mut corners = vec![Vec4::ZERO; indices.len()];
-            let g = Mikk { positions: &positions, normals: &normals, uvs: &uvs, indices: &indices, corners: &mut corners };
+            let g = Mikk {
+                positions: &positions,
+                normals: &normals,
+                uvs: &uvs,
+                indices: &indices,
+                corners: &mut corners,
+                faces: Mikk::noncollapsed_faces(&positions, &indices),
+            };
             assert_eq!(g.affordable(), affordable, "{k} triangles");
         }
     }
