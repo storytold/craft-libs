@@ -10,6 +10,8 @@
 //! that the driver validates before anything is sent. `winprint` and `winsafe` wrap the Win32
 //! and WinRT calls, so there is no `unsafe` here.
 
+pub(crate) mod drawn;
+
 use std::io::Write as _;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
