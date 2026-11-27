@@ -22,6 +22,8 @@ pub use link::safe_url;
 mod read;
 #[cfg(feature = "read")]
 pub use read::*;
+#[cfg(feature = "emf")]
+pub mod emf;
 #[cfg(feature = "paths")]
 pub mod paths;
 #[cfg(feature = "raster")]

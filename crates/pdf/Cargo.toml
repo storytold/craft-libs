@@ -25,6 +25,8 @@ default = []
 read = ["dep:hayro-syntax", "dep:thiserror"]
 interpret = ["read", "dep:hayro-interpret"]
 paths = ["interpret", "dep:kurbo"]
+# One page as an EMF of vector calls, for printing through GDI.
+emf = ["interpret", "dep:kurbo", "dep:craft-metafile"]
 raster = ["interpret", "dep:hayro", "dep:bytemuck"]
 write = ["dep:krilla", "dep:thiserror"]
 write-svg = ["write", "dep:craft-svg", "dep:krilla-svg", "dep:usvg", "craft-svg/tree-text"]
@@ -66,6 +68,7 @@ zeroize = { version = "1", optional = true }
 # PDF date strings in the object layer (`cos`).
 chrono = { workspace = true, optional = true }
 kurbo = { workspace = true, optional = true }
+craft-metafile = { workspace = true, optional = true, features = ["write"] }
 
 # On the web, a rewrite's fresh file identifier (`cos`) takes its entropy from the browser
 # (`crypto.getRandomValues`); native builds compile neither.

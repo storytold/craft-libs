@@ -3628,6 +3628,7 @@ dependencies = [
  "aes 0.9.4",
  "bytemuck",
  "chrono",
+ "craft-metafile",
  "craft-stream-codecs",
  "craft-svg",
  "craft-testkit",
