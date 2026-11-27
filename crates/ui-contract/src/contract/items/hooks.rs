@@ -14,7 +14,7 @@ use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
 use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, PartsCx, Props, Show as _, Sizing};
-use crate::primitives::{AutoScrollMark, HiddenContent, ScrollBar, SurfaceSlot};
+use crate::primitives::{AutoScrollMark, FocusKind, FocusRing, HiddenContent, PaintShape, ScrollBar, SurfaceSlot};
 use crate::runtime::access::{self, Role};
 use crate::runtime::egui::{alloc, areas, child, response};
 use crate::runtime::env::WheelScope;
@@ -22,7 +22,7 @@ use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts, ThemeScope};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::auto_scroll_mark_look;
-use crate::style::{ComponentStyle as _, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
+use crate::style::{ComponentStyle as _, FocusLook, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{
     Axis, Buttons, CancelReason, EditEvent, Intent, ItemLayout, MiddleButton, MiddleScroll, Mixed, MoveMods, NavMove, PointerButton, PressPhase,
     Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
@@ -333,7 +333,19 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.requested_reveal(comp, &layout);
         self.type_ahead(comp, cx, &layout, lead_at);
         self.rest_lead(cx, &layout, seen);
-        request::record_lead(&cx.core.ctx, cx.core.id, self.lead.key.as_ref().and_then(|key| self.index_of(key)));
+        let lead_now = self.lead.key.as_ref().and_then(|key| self.index_of(key));
+        request::record_lead(&cx.core.ctx, cx.core.id, lead_now);
+        // A collection whose lead item shows the focus ring takes the ring around that item while it is shown, and
+        // around itself while it has no lead or its lead is not shown, so its focus always shows.
+        if comp.rings_lead() {
+            cx.core.focus_shape = Some(match lead_now.filter(|&at| layout.shown(at)) {
+                Some(at) => {
+                    let row = self.screen(&layout, rect, at, offset, rtl);
+                    focus::FocusShape::Polygon(vec![row.left_top(), row.right_top(), row.right_bottom(), row.left_bottom()])
+                }
+                None => focus::FocusShape::Rect,
+            });
+        }
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
         }
@@ -402,7 +414,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
         focus::registration::record_tree(&ctx, id, tree);
-        let focused = focus::is_focused(&ctx, id);
+        let collection_focus = focus::facts(&ctx, id);
+        let focused = collection_focus.focused;
+        let row_focus = comp.shows_row_focus() && collection_focus.visible && collection_focus.part.is_none();
         let lead = self.lead.key.clone();
         focus::registration::record_lead(&ctx, id, lead.as_ref().is_some_and(|key| self.index_of(key).is_some()));
         let mut lead_child = None;
@@ -412,7 +426,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let (parent, clip) = (ui.layer_id(), rect.intersect(ui.clip_rect()));
         let forward = areas::Forward { root: id, sense: response::to_egui(cx.core.root_sense), rect: cx.core.rect.intersect(ui.clip_rect()) };
         let placed = known.placed.clone();
-        let tolerance = craft_behavior::layout_memory::measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
+        let pixels = crate::runtime::egui::scale::pixels_per_point(&ctx);
+        let tolerance = craft_behavior::layout_memory::measure_tolerance(pixels);
+        let mut lead_bounds = None;
         // What this pass measured of the rows it builds, before any of them is built: (width and height, widths).
         let fresh: Vec<(Option<Vec2>, Option<Vec2>)> = rows::measured_this_pass(&ctx, id, |fresh| {
             order
@@ -429,8 +445,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // collection's: a heading named by the row's text (a row with no text makes an unnamed heading, which the access
         // lint reports).
         for &at in order.iter().filter(|&&at| self.source.section_stop(at) && layout.shown(at)) {
-            if cx.part_if_declared(section_part(&self.source.key(at))).is_none() {
-                let row = self.screen(&layout, rect, at, offset, rtl);
+            let key = self.source.key(at);
+            let row = self.screen(&layout, rect, at, offset, rtl);
+            if row_focus && lead.as_ref() == Some(&key) {
+                lead_bounds = Some((row, row, None));
+            }
+            if cx.part_if_declared(section_part(&key)).is_none() {
                 self.report_section_node(&ctx, id, at, row, cx.core.resolved.enabled);
             }
         }
@@ -626,6 +646,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     Some(tip) => item.show_at_with_tip(&mut row_ui, leaf, tip),
                     None => item.show_at(&mut row_ui, leaf),
                 };
+                if row_focus && state.lead {
+                    let clip = row_ui.clip_rect();
+                    let bounds = out.lead_focus_bounds().unwrap_or(leaf).intersect(clip);
+                    lead_bounds = Some((leaf.intersect(clip), bounds, out.lead_fill()));
+                }
                 if let Some(body) = detail {
                     // The body's stops follow the leaf's: it shows inside the item's scope, under the leaf.
                     let below = Rect::from_min_size(Pos2::new(row.min.x, leaf.max.y), Vec2::new(row.width(), f32::INFINITY));
@@ -743,6 +768,66 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state));
             }
             middle_mark(ui, env, cx.core.memory.session::<MiddleScroll>(sub(id, "middle")), rect);
+        }
+        if row_focus && !self.visible.is_empty() {
+            // The collection owns the keyboard stop. Paint the lead or rows' viewport above the scroll fades.
+            let viewport = self.clear_of_bar(rect, scroll_bar_look(&env.tokens).thickness, rtl).intersect(clip);
+            let style = StyleCx::of_env(&ctx, env);
+            let mut look = style.focus_look();
+            let visible_bounds = |row: Rect| {
+                if row.is_positive() {
+                    Rect::from_two_pos(self.on_screen(row.min), self.on_screen(row.max)).intersect(viewport)
+                } else {
+                    Rect::NOTHING
+                }
+            };
+            let minimum_side = look.stroke.width.max(pixels.recip());
+            let fits_stroke = |bounds: Rect| bounds.width() >= minimum_side && bounds.height() >= minimum_side;
+            let (bounds, fill) = lead_bounds
+                .map(|(row, bounds, fill)| {
+                    let inset = visible_bounds(bounds);
+                    (if fits_stroke(inset) { inset } else { visible_bounds(row) }, fill)
+                })
+                .filter(|(row, _)| fits_stroke(*row))
+                .unwrap_or_else(|| {
+                    let mut bounds = viewport;
+                    if let Some(at) = lead.as_ref().and_then(|key| self.index_of(key)).filter(|&at| layout.shown(at)) {
+                        // Mark the edge the lead scrolled past, separately from the ring shown before a lead exists.
+                        let row = self.screen(&layout, rect, at, offset, rtl);
+                        let row = Rect::from_two_pos(self.on_screen(row.min), self.on_screen(row.max));
+                        let band = 2.0 * (look.stroke.width + env.tokens.stroke.thin);
+                        if row.intersect(viewport).height() >= minimum_side {
+                            if row.center().x < viewport.center().x {
+                                bounds.max.x = (bounds.min.x + band).min(bounds.max.x);
+                            } else {
+                                bounds.min.x = (bounds.max.x - band).max(bounds.min.x);
+                            }
+                        } else if row.center().y < viewport.center().y {
+                            bounds.max.y = (bounds.min.y + band).min(bounds.max.y);
+                        } else {
+                            bounds.min.y = (bounds.max.y - band).max(bounds.min.y);
+                        }
+                    }
+                    (bounds, None)
+                });
+            if bounds.is_positive() {
+                let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill.into();
+                let fill = fill.map_or(background, |fill| craft_theme::over(fill, background));
+                let minimum = craft_theme::non_text_contrast_min(style.contrast());
+                let stroke = env.tokens.color.line.focus;
+                let composite = craft_theme::over(stroke, fill);
+                let stroke = if craft_theme::contrast_ratio(composite, fill) >= minimum {
+                    composite
+                } else {
+                    craft_theme::ensure_contrast(stroke.with_alpha(u8::MAX), fill, minimum)
+                };
+                look.stroke.color = style.color(stroke).egui();
+                let outline = PaintShape::Rect(bounds, egui::CornerRadius::ZERO);
+                // Filled cells and scroll fades can change the backdrop under the ring. Keep a strip of the resolved fill inside it.
+                let backing = FocusLook::new(egui::Stroke::new(look.stroke.width + env.tokens.stroke.thin, style.color(fill).egui()), look.offset);
+                ui.painter().extend(FocusRing::shapes(&backing, FocusKind::Ring, &outline, pixels));
+                ui.painter().extend(FocusRing::shapes(&look, FocusKind::Ring, &outline, pixels));
+            }
         }
         self.layout = Some(layout);
     }

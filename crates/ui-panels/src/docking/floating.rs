@@ -25,7 +25,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
+use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
 use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
@@ -45,12 +45,15 @@ pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
 /// title bar has beside its double arrow; the menu opens from the band.
 const ACTIONS: [HeaderAction; 1] = [HeaderAction::Close];
 
-/// The style of a floating group: the surface and padding come from the container.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// The style of a floating group: the surface and padding come from the container, and the ring from the theme.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct FloatingGroupStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the chevron while it has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// The column a dock's floating window holds. The window's title row is the column's bar: it shows the column's
@@ -525,8 +528,8 @@ impl Component for FloatingGroup<'_> {
     type Style = FloatingGroupStyle;
     type Output = FloatingGroupOutput;
 
-    fn style(_: &StyleCx<'_>, _: FloatingGroupStyleKey) -> FloatingGroupStyle {
-        FloatingGroupStyle::default()
+    fn style(cx: &StyleCx<'_>, _: FloatingGroupStyleKey) -> FloatingGroupStyle {
+        FloatingGroupStyle { metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

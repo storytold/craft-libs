@@ -232,7 +232,7 @@
     {
       "path": "src/interactive/annotation.rs",
       "upstream_sha256": "45b01acfef124a5ab9b6799ab4c83734f929b3573fdb28c218b108e220afad39",
-      "sha256": "50f2a4bdc99d82bda275533e3a269eca6e7ae3ecb68b781203160122c744e55e"
+      "sha256": "ae77906266537fe8b87e11c195a1eaaae149452a76b567428f221e9deea44075"
     },
     {
       "path": "src/interactive/destination.rs",

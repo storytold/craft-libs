@@ -149,6 +149,7 @@ things that do not belong in `config.toml`.
 | Older `schema_version` | `Settings::migrate` once per step, then saved; `report.migrated_from`. |
 | Newer `schema_version` | Values shown, store read-only, so an older build never overwrites a newer file. |
 | Migration step fails | Store read-only, file untouched. |
+| Larger than `store::MAX_CONFIG_BYTES` (16 MiB) | Not read into memory; defaults; store read-only, file untouched; `report.read_only` is `Unreadable` with `ErrorKind::FileTooLarge`. |
 
 ## What happens when saving
 
@@ -189,7 +190,11 @@ which can stay the same on FAT, HFS+ or network shares) with what it last read o
 | Changed, parses | Adopts it so its comments and unknown keys survive, backs it up, then writes this store's values over its known keys. |
 | Changed, does not parse | Moves it to `config.broken-<ts>.toml` (the edit is kept; `take_moved_aside()` returns the path to show), leaves the previous backup alone, then writes. |
 | Blank | Leaves the previous backup alone, then writes. |
-| From a newer build, or its migration fails | Writes nothing; the store becomes read-only and the save returns `SettingsError::ReadOnly`, the same as at startup. |
+| From a newer build, its migration fails, or larger than `store::MAX_CONFIG_BYTES` | Writes nothing; the store becomes read-only and the save returns `SettingsError::ReadOnly`, the same as at startup. |
+
+When the settings would render to more than `store::MAX_CONFIG_BYTES`, the save writes nothing
+and returns `SettingsError::Io` with `ErrorKind::FileTooLarge`. The file on disk stays as it was,
+and the store keeps the changes and tries again after the retry delay.
 
 ### Concurrency contract
 

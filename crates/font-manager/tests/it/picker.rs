@@ -9,8 +9,8 @@ use craft_behavior::{GESTURE_GAP, PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FamilySet, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize, FontScript,
-    HostFontGroup, HostFontRow, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FamilySet, FilterLayout, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize,
+    FontScript, HostFontGroup, HostFontRow, MissingAdvice, SIMILAR_COUNT, SampleText, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_theme::{Contrast, Mode};
@@ -1052,6 +1052,66 @@ fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
         fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
         "the banner of a face without the text's letters shows what its row shows, not the text"
     );
+}
+
+/// The sample texts the host offers in the chips rigs: the selection's text first, then a fixed word.
+const SAMPLE_TEXTS: [(&str, &str, &str); 2] = [("selection", "Selected Text", "Hello"), ("word", "Word", "Abc")];
+
+/// An open library list in the `Chips` layout over Inter, keeping `settings`, with the host's sample texts when
+/// `offered` and "Hello" as the preview text.
+fn sample_texts_rig(settings: Rc<RefCell<FontPickerSettings>>, offered: bool) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut family = "Inter".to_owned();
+    let mut filters = FontFilters::default();
+    let mut fx = Fixture::new(move |ui| {
+        let texts: Vec<SampleText<'_>> =
+            if offered { SAMPLE_TEXTS.iter().map(|(key, label, text)| SampleText::new(key, *label, text)).collect() } else { Vec::new() };
+        let mut settings = settings.borrow_mut();
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .filters(Bind::bound(&mut filters))
+            .filter_layout(FilterLayout::Chips)
+            .preview_text("Hello")
+            .sample_texts(&texts)
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// The host's sample texts make a Sample Text dropdown beside the preview size: the rows and the banner show the
+/// chosen text (the first while none is chosen), a choice from the dropdown is kept in the settings and every row
+/// follows it, and a stored choice the host no longer offers falls back to the first. Without sample texts there is
+/// no dropdown and the preview text shows.
+#[trial]
+fn the_sample_text_dropdown_picks_what_every_sample_shows() {
+    let settings = Rc::new(RefCell::new(FontPickerSettings::default()));
+    let mut fx = sample_texts_rig(Rc::clone(&settings), true);
+    assert!(fx.by_label("Inter: Hello").is_some(), "with no choice stored the rows show the first sample text");
+    let dropdown = fx.by_label("Sample Text").expect("the sample text dropdown");
+    fx.click(&dropdown);
+    fx.settle();
+    let word = fx.by_label("Word").expect("the dropdown lists the host's sample texts");
+    fx.click(&word);
+    fx.settle();
+    assert_eq!(settings.borrow().sample_text.as_deref(), Some("word"), "the choice is kept in the settings");
+    assert!(fx.by_label("Inter: Abc").is_some(), "the row follows the chosen sample text");
+    assert!(fx.by_label("Inter: Hello").is_none(), "no row keeps the earlier text");
+    assert!(fx.texts().iter().any(|painted| painted.text == "Abc"), "the banner shows the chosen text");
+
+    let stored = |key: &str| {
+        let mut settings = FontPickerSettings::default();
+        settings.sample_text = Some(key.to_owned());
+        Rc::new(RefCell::new(settings))
+    };
+    let fx = sample_texts_rig(stored("gone"), true);
+    assert!(fx.by_label("Inter: Hello").is_some(), "a choice the host no longer offers falls back to the first sample text");
+
+    let fx = sample_texts_rig(stored("word"), false);
+    assert!(fx.by_label("Sample Text").is_none(), "without the host's sample texts there is no dropdown");
+    assert!(fx.by_label("Inter: Hello").is_some(), "without sample texts the rows show the preview text");
 }
 
 /// The repository's Noto Sans CJK SC subset (CFF): its line (hhea 1160/-288) is taller than Inter's.

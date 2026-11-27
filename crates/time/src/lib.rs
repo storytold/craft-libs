@@ -36,9 +36,14 @@ impl Tick {
     pub const MAX: Tick = Tick(i64::MAX / 4);
     pub const MIN: Tick = Tick(i64::MIN / 4);
 
-    /// Seconds to ticks, clamped to [`Tick::MIN`]..=[`Tick::MAX`].
+    /// Seconds to ticks, rounded to the nearest tick and clamped to [`Tick::MIN`]..=[`Tick::MAX`].
+    /// Infinities clamp to the matching bound, and NaN gives [`Tick::ZERO`].
     pub fn from_seconds_f64(s: f64) -> Tick {
-        Tick((s * TICKS_PER_SECOND as f64).round() as i64)
+        let ticks = (s * TICKS_PER_SECOND as f64).round();
+        if ticks.is_nan() {
+            return Tick::ZERO;
+        }
+        Tick((ticks as i64).clamp(Tick::MIN.0, Tick::MAX.0))
     }
 
     pub fn seconds(self) -> f64 {
@@ -907,6 +912,18 @@ mod tests {
         assert_eq!(Tick::from_rational(1, 1, 1).0, TICKS_PER_SECOND);
         assert_eq!(Tick(TICKS_PER_SECOND).to_rational_floor(1, 1), 1);
         assert_eq!(Tick(TICKS_PER_SECOND).to_rational_round(1, 1), 1);
+    }
+
+    #[test]
+    fn seconds_outside_the_tick_range_clamp_to_its_bounds() {
+        let beyond = Tick::MAX.seconds() * 2.0;
+        assert_eq!(Tick::from_seconds_f64(beyond), Tick::MAX);
+        assert_eq!(Tick::from_seconds_f64(-beyond), Tick::MIN);
+        assert_eq!(Tick::from_seconds_f64(f64::INFINITY), Tick::MAX);
+        assert_eq!(Tick::from_seconds_f64(f64::NEG_INFINITY), Tick::MIN);
+        assert!(Tick::from_seconds_f64(Tick::MAX.seconds()) <= Tick::MAX);
+        assert!(Tick::from_seconds_f64(Tick::MIN.seconds()) >= Tick::MIN);
+        assert_eq!(Tick::from_seconds_f64(f64::NAN), Tick::ZERO);
     }
 
     #[test]

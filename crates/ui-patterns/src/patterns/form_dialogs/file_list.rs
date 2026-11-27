@@ -137,7 +137,9 @@ impl Outcome for FileListPickerOutput {
 /// Keys: the list is one Tab stop; arrows move the selection; Delete and Backspace remove the selected file; Cmd+] and
 /// Cmd+[ move it up and down (Ctrl off macOS; Shift to the ends). Dropped files are added by the dialog with [`FileList::add`].
 ///
-/// The list shows six rows and scrolls the rest.
+/// The list shows six rows and scrolls the rest. The picker takes the width it is given and the height its content
+/// needs: in a room shorter than its column of buttons, the buttons keep their height and the rows after the picker
+/// start under them.
 #[must_use = "show the picker with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct FileListPicker<'a> {
@@ -180,7 +182,7 @@ impl<'a> FileListPicker<'a> {
         let FileListPicker { label, list, request, folder_mode, open_files, folder_files, info } = self;
         let words = Env::of(ui).words::<FileListWords>();
         let pass = RefCell::new(Pass { held: Held::new(list), seen: None, browsing: None });
-        let mut stack = Stack::new().fill();
+        let mut stack = Stack::new().fill_width();
         if folder_mode {
             stack = stack.header(|ui, cx| {
                 let mut pass = pass.borrow_mut();
