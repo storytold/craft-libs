@@ -29,3 +29,24 @@ fn a_grouped_place_answers_its_flat_index() {
     // Rows run Top, Headings, Intro, Method, Bookmarks, fig1, fig2; fig2 is the fourth place.
     assert_eq!(*answer.borrow(), Some(HyperlinkAnswer::set(Hyperlink::new(LinkTarget::Place(3)), None)));
 }
+
+#[trial]
+fn address_field_selects_its_text_on_focus() {
+    let current = CurrentLink::One(Hyperlink::new(LinkTarget::Url("https://example.com".to_owned())));
+    let dialog = Rc::new(RefCell::new(HyperlinkDialog::new(current, Some("Example".to_owned()))));
+    let answer = Rc::new(RefCell::new(None));
+    let (shown, got) = (dialog.clone(), answer.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        if let Some(result) = shown.borrow_mut().show(ui).answer {
+            *got.borrow_mut() = Some(result);
+        }
+    });
+    fixture.idle(30);
+    let display = fixture.by_label("Text to display:").expect("Text to display");
+    fixture.click(&display).idle(4);
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(4);
+    fixture.type_text("https://rust-lang.org").idle(4);
+    let ok = fixture.by_label("OK").expect("OK");
+    fixture.click(&ok).idle(30);
+    assert_eq!(*answer.borrow(), Some(HyperlinkAnswer::set(Hyperlink::new(LinkTarget::Url("https://rust-lang.org".to_owned())), None)));
+}
