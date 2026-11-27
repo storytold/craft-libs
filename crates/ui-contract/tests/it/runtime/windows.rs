@@ -4,14 +4,17 @@
 //! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
 //! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
-//! placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted window's
-//! Control-click and window-input policy.
+//! placement of a minimized window, the placement in zoom-1 points through changes of zoom and starts and without a
+//! position, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
+//! policy.
 
+use craft_behavior::placement::Placement;
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
 use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
+use craft_ui::runtime::env::{RootEnv, Scale};
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
@@ -162,6 +165,123 @@ fn a_minimized_window_keeps_its_last_shown_placement() {
     windows.root_info(shown(Pos2::new(200.0, 100.0), Vec2::new(1000.0, 720.0)));
     frames(2);
     assert_eq!(saved(), Some(([1000.0, 720.0], [200.0, 100.0])), "shown again, the window records its placement");
+}
+
+/// The `main` entry of `store`.
+fn main_entry(store: &Mutex<Store>) -> Option<Placement> {
+    store.lock().unwrap().get(craft_window::restore::MAIN)
+}
+
+/// The store keeps sizes in points at zoom 1 and positions in physical pixels, while egui reports a window in points
+/// at the interface zoom, measured before each frame at the zoom then in force: in the frame of a change of zoom, at
+/// the zoom before. A 1200 × 900 window at (300, 150) on a 1× display stays recorded as that at every frame, through
+/// changes of the interface zoom within a start and across starts, each opening the window at its saved placement at
+/// zoom 1 (as eframe creates the root window before the app's zoom applies) and setting the zoom in its first frame.
+#[trial]
+fn the_window_placement_is_recorded_at_zoom_1_through_changes_of_zoom_and_starts() {
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    let expected = ([1200.0, 900.0], Some([300, 150]));
+    let recorded = || main_entry(&store).map(|placement| (placement.normal.size, placement.position_px));
+    for zooms in [[1.5, 1.5, 1.5, 1.0, 1.0, 2.0, 2.0], [1.25; 7], [2.0, 2.0, 0.75, 0.75, 0.75, 1.5, 1.5]] {
+        let window = main_entry(&store).map_or(Rect::from_min_size(Pos2::new(300.0, 150.0), Vec2::new(1200.0, 900.0)), |saved| {
+            Rect::from_min_size(Pos2::from(saved.position().expect("a saved corner")), Vec2::from(saved.normal.size))
+        });
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).placement(store.clone()));
+        let mut measured_at = 1.0;
+        for zoom in zooms {
+            windows.root_env(RootEnv::default().scale(Scale::new(zoom)));
+            let at = window / measured_at;
+            windows.root_info(ViewportInfo {
+                inner_rect: Some(at),
+                outer_rect: Some(at),
+                native_pixels_per_point: Some(1.0),
+                ..ViewportInfo::default()
+            });
+            windows.frame(vec![], vec![], |_| {});
+            measured_at = zoom;
+            if let Some(recorded) = recorded() {
+                assert_eq!(recorded, expected, "{zooms:?}, at zoom {zoom}");
+            }
+        }
+        assert_eq!(recorded(), Some(expected), "after the start at {zooms:?}");
+    }
+}
+
+/// The dock model keeps its native windows' placements in egui points (`WindowHost::placement`), while the store
+/// keeps an app window's at zoom 1: at zoom 1.5 a window reporting 800 × 600 points at (200, 100) is that to the host
+/// and 1200 × 900 at (300, 150) in the store.
+#[trial]
+fn the_hosts_placement_stays_in_egui_points_while_the_store_keeps_zoom_1() {
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).placement(store.clone()));
+    windows.root_env(RootEnv::default().scale(Scale::new(1.5)));
+    let at = Rect::from_min_size(Pos2::new(200.0, 100.0), Vec2::new(800.0, 600.0));
+    windows.root_info(ViewportInfo { inner_rect: Some(at), outer_rect: Some(at), native_pixels_per_point: Some(1.0), ..ViewportInfo::default() });
+    (0..3).for_each(|_| drop(windows.frame(vec![], vec![], |_| {})));
+    let hosted = WindowHost::of(&windows.ctx).placement(ViewportId::ROOT, None).expect("the host's placement");
+    assert_eq!((hosted.normal.size, hosted.normal.pos), ([800.0, 600.0], [200.0, 100.0]), "egui points to the dock model");
+    let stored = main_entry(&store).expect("the recorded placement");
+    assert_eq!((stored.normal.size, stored.position_px), ([1200.0, 900.0], Some([300, 150])), "zoom-1 points in the store");
+}
+
+/// The store keeps a window's placement in points at zoom 1, and a window with a saved key (a dialog, section or
+/// document window) opens once the interface zoom applies, in egui points at that zoom: at zoom 1.5 a window saved at
+/// 1200 × 900 at (300, 150) opens at 800 × 600 points at (200, 100), and reporting itself there, it is recorded as it
+/// was saved.
+#[trial]
+fn a_window_with_a_saved_key_comes_back_as_saved_at_any_interface_zoom() {
+    use craft_ui::contract::SaveKey;
+    use craft_ui::contract::overlay::OverlayFit;
+    const KEY: &str = "craft_ui_tests.document";
+    let mut saved = Placement::new([1200.0, 900.0], 1.0);
+    saved.position_px = Some([300, 150]);
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    store.lock().unwrap().set(KEY, &saved);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).placement(store.clone()));
+    windows.root_env(RootEnv::default().scale(Scale::new(1.5)));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            let overlay = Overlay::floating().resizable(true).fit(OverlayFit::Resizable);
+            let props = ContainerProps::new().mount(Mount::viewport_with(overlay, WindowSpec::document())).save(SaveKey::new(KEY));
+            Palette { common: Common::new(), props }.label("Document").id_salt("Document").show(ui, |_, _| {});
+        })
+    };
+    let first = frame();
+    let (_, builder) = builder_titled(&first, "Document");
+    let opened = Rect::from_min_size(builder.position.unwrap_or_default(), builder.inner_size.unwrap_or_default());
+    // The window reports itself where it opened, in egui points at the zoom in force.
+    windows.child_info(ViewportInfo {
+        inner_rect: Some(opened),
+        outer_rect: Some(opened),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    });
+    (0..3).for_each(|_| drop(frame()));
+    let kept = store.lock().unwrap().get(KEY).map(|placement| (placement.normal.size, placement.position_px));
+    let expected = Rect::from_min_size(Pos2::new(200.0, 100.0), Vec2::new(800.0, 600.0));
+    assert_eq!((opened, kept), (expected, Some((saved.normal.size, saved.position_px))), "opened in points at zoom 1.5, recorded as saved");
+}
+
+/// On native Wayland egui reports no window rect, as the platform tells no position: the window's size (its content
+/// rect, in points at zoom 1) and its state are still recorded, with no position, and a maximized window keeps the
+/// normal size. The first frame at the app's zoom records nothing: egui rescales its content rect from the one before,
+/// which in a first frame is a placeholder 10000 points square.
+#[trial]
+fn a_window_without_a_position_records_its_size_and_state() {
+    let store = Arc::new(Mutex::new(Store::in_memory()));
+    let shell = ShellInfo::default().os(Os::Linux).backend(Backend::Wayland);
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(FakeSystem::new())).placement(store.clone()));
+    windows.root_env(RootEnv::default().scale(Scale::new(1.5)));
+    let recorded = || main_entry(&store).map(|saved| (saved.normal.size, saved.position_px, saved.maximized));
+    // The kit's root window is 800 × 600 points, here at zoom 1.5.
+    for (maximized, expected) in [(false, ([1200.0, 900.0], None, false)), (true, ([1200.0, 900.0], None, true))] {
+        windows.root_info(ViewportInfo { native_pixels_per_point: Some(1.0), maximized: Some(maximized), ..ViewportInfo::default() });
+        for frame in 0..3 {
+            windows.frame(vec![], vec![], |_| {});
+            assert!(recorded().is_none_or(|(size, _, _)| size == expected.0), "frame {frame}: {:?}", recorded());
+        }
+        assert_eq!(recorded(), Some(expected), "maximized: {maximized}");
+    }
 }
 
 /// The user's "Use system title bar" setting changes the open main window at once: `set_root_frame` sends the window

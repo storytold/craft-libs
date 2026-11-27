@@ -20,27 +20,50 @@ pub(crate) fn save_placement(ctx: &Context, key: &str, placement: &Placement) {
     store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set(key, placement);
 }
 
-/// Keeps the window's placement in the store, as [`placement_of`] records it. A minimized window keeps the last
-/// placement it was shown at: Windows reports it as 0 × 0 far off screen, which would reopen at egui's size floor.
+/// The interface zoom of the running pass, when the frame's window facts were measured at it: egui-winit measures them
+/// before the frame, at the zoom then in force, and a zoom the frame sets applies from its first pass. `None` in the
+/// frame of a change of zoom.
+fn settled_zoom(ctx: &Context) -> Option<f32> {
+    let zoom = ctx.zoom_factor();
+    let measured = shared(ctx, |shared| shared.facts_zoom).unwrap_or(zoom);
+    (measured == zoom).then_some(zoom)
+}
+
+/// Keeps the window's placement in the store, as [`placement_of`] records it, in the store's points at zoom 1
+/// (`craft_behavior::placement`): egui's rects are points at the interface zoom. A frame whose window facts were
+/// measured at another zoom than its own (the frame of a change of zoom) records nothing; the next one does. A
+/// minimized window keeps the last placement it was shown at: Windows reports it as 0 × 0 far off screen, which would
+/// reopen at egui's size floor. Where the platform tells no window position (Wayland), egui reports no window rect:
+/// the size is then the pass's content rect, and the size and state are recorded while the position stays as it was.
 pub(super) fn record_placement(ctx: &Context, viewport: ViewportId, key: &str, facts: &viewports::Facts) {
     if facts.minimized {
         return;
     }
+    let Some(zoom) = settled_zoom(ctx) else { return };
+    let mut facts = *facts;
+    if facts.inner.is_none() {
+        let content = ctx.input(|input| input.content_rect());
+        facts.inner = Some(content).filter(|rect| rect.is_finite() && rect.width() > 0.0 && rect.height() > 0.0);
+        facts.outer = None;
+    }
     let Some(inner) = facts.inner else { return };
-    let geometry = Geometry { inner, outer: facts.outer, scale: facts.native_scale, maximized: facts.maximized, fullscreen: facts.fullscreen };
+    let geometry = Geometry { inner, outer: facts.outer, scale: facts.native_scale, zoom, maximized: facts.maximized, fullscreen: facts.fullscreen };
     let unchanged = PerViewport::<Record>::with(ctx, viewport, |record| record.placed.replace(geometry) == Some(geometry));
     if unchanged {
         return;
     }
-    if let Some(next) = placement_of(ctx, facts, saved_placement(ctx, key)) {
+    let at_zoom_1 = viewports::Facts { inner: Some(inner * zoom), outer: facts.outer.map(|outer| outer * zoom), ..facts };
+    if let Some(mut next) = placement_of(ctx, &at_zoom_1, saved_placement(ctx, key)) {
+        next.zoom = zoom;
         save_placement(ctx, key, &next);
     }
 }
 
 /// `previous` (or a new record) updated to where the window with `facts` is: its scale, its state, its size and
 /// outer position unless it is maximized or full screen (which keep the last normal ones), and the monitor showing
-/// most of it. App windows and native dock windows record their placement with this. `None` before the window has
-/// an inner rect and a scale.
+/// most of it, all in the points of `facts`. App windows record their placement with this at zoom 1
+/// ([`record_placement`]); the dock model keeps its native windows' placements in egui points
+/// (`WindowHost::placement`). `None` before the window has an inner rect and a scale.
 pub(super) fn placement_of(ctx: &Context, facts: &viewports::Facts, previous: Option<Placement>) -> Option<Placement> {
     let inner = facts.inner?;
     let scale = scale_of(ctx, facts)?;
