@@ -373,3 +373,75 @@ fn create_shape_alerts_once_for_a_size_typed_past_its_range() {
         assert!(take(&host).is_none(), "{kind:?}: a width in range raises no alert");
     }
 }
+
+/// The dialog of `kind` at (10, 20) whose Width takes 0.
+fn open_zero_width(host: &mut DialogHost, kind: ShapeKind) -> DialogId {
+    host.open(CreateShapeDialog::new(CreateShapeOptions::initial(kind, Point::new(10.0, 20.0)).zero_width()))
+}
+
+/// With `zero_width` (PhotoCraft's Create Rectangle) the Width takes 0 and OK then answers an empty shape, which the
+/// app creates nothing for (storytold/photocraft#13339). Height keeps its 1 px minimum, a Width between 0 and 1 px is
+/// refused as before, and without `zero_width` the Width keeps its minimum.
+#[trial]
+fn a_zero_width_dialog_takes_a_width_of_zero_and_answers_nothing_to_create() {
+    let ctx = egui::Context::default();
+    let mut host = DialogHost::new();
+    let id = open_zero_width(&mut host, ShapeKind::Rectangle);
+    assert_eq!(host.set_json_field(&ctx, id, "width", json!(0)), Ok(()));
+    let shape = confirm(&mut host, &ctx).expect("OK answers");
+    assert!(shape.empty, "Width 0 creates nothing");
+    assert_eq!(shape.geometry.bounds().width(), 0.0);
+
+    let id = open_zero_width(&mut host, ShapeKind::Rectangle);
+    assert_eq!(host.set_json_field(&ctx, id, "width", json!(1)), Ok(()));
+    let shape = confirm(&mut host, &ctx).expect("OK answers");
+    assert!(!shape.empty);
+    assert_eq!(shape.geometry.bounds(), Rect::new(10.0, 20.0, 11.0, 120.0));
+
+    for (zero, field, value) in [(true, "height", 0.0), (true, "width", 0.5), (true, "width", -1.0), (false, "width", 0.0)] {
+        let kind = ShapeKind::Rectangle;
+        let id = if zero { open_zero_width(&mut host, kind) } else { open_create(&mut host, kind) };
+        assert_eq!(host.set_json_field(&ctx, id, field, json!(value)), Ok(()));
+        assert!(!host.confirm::<CreateShapeDialog>(&ctx), "zero_width {zero}: {field} {value} is refused");
+        assert!(host.cancel::<CreateShapeDialog>(&ctx));
+        let _ = host.take::<CreateShapeDialog>();
+    }
+}
+
+/// Typed into a `zero_width` dialog's Width field, 0 stays 0 with no range alert and a size under a pixel becomes 1 px;
+/// without `zero_width` the Width keeps its 1 px minimum.
+#[trial]
+fn a_zero_width_field_takes_a_typed_zero() {
+    for (zero_width, zero) in [(true, 0.0), (false, 1.0)] {
+        let kind = ShapeKind::Rectangle;
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(egui::Vec2::new(1200.0, 900.0));
+        let options = CreateShapeOptions::initial(kind, Point::new(10.0, 20.0)).recalled();
+        host.borrow_mut().open(CreateShapeDialog::new(if zero_width { options.zero_width() } else { options }));
+        fixture.settle();
+        let width = fixture
+            .by_role(Role::SPIN_BUTTON)
+            .into_iter()
+            .find(|field| fixture.tree().name_of(field.node) == Some("Width"))
+            .expect("the Width field");
+        let type_width = |fixture: &mut Fixture, text: &str| {
+            fixture.click(&width).settle();
+            fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
+            fixture.key(Key::Tab, Modifiers::NONE).settle();
+        };
+        let width_now = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<CreateShapeDialog>().map(|dialog| dialog.options().size.0);
+        let take = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<CreateShapeDialog>().and_then(CreateShapeDialog::take_range_alert);
+
+        type_width(&mut fixture, "0");
+        assert_eq!(width_now(&host), Some(zero), "zero_width {zero_width}: a typed 0");
+        if zero_width {
+            assert!(take(&host).is_none(), "0 is in the range");
+            type_width(&mut fixture, "250");
+            assert_eq!(width_now(&host), Some(250.0));
+            type_width(&mut fixture, "0.4");
+            assert_eq!(width_now(&host), Some(1.0), "under a pixel keeps the 1 px minimum");
+        }
+    }
+}

@@ -65,6 +65,9 @@ pub struct CreateShapeOptions {
     pub from_center: bool,
     /// The remembered values are already in (a reopened dialog, a test).
     pub recalled: bool,
+    /// The Width also takes 0, and OK then answers an [`empty`](CreatedShape::empty) shape: Photoshop's Create
+    /// Rectangle (storytold/photocraft#13339). Off, every side takes [`SIZE`](Self::SIZE).
+    pub zero_width: bool,
 }
 
 impl Default for CreateShapeOptions {
@@ -92,6 +95,7 @@ impl CreateShapeOptions {
             star_ratio: 1.0,
             from_center: false,
             recalled: false,
+            zero_width: false,
         }
     }
 
@@ -117,6 +121,13 @@ impl CreateShapeOptions {
         self.recalled = true;
         self
     }
+
+    /// The Width also takes 0, which creates nothing ([`zero_width`](Self::zero_width)).
+    #[must_use]
+    pub fn zero_width(mut self) -> Self {
+        self.zero_width = true;
+        self
+    }
 }
 
 /// What Create Shape answers on OK.
@@ -130,6 +141,9 @@ pub struct CreatedShape {
     pub geometry: ShapeGeometry,
     /// Whether From Center was on.
     pub from_center: bool,
+    /// The Width was 0 ([`CreateShapeOptions::zero_width`]): OK closes the dialog and the app creates nothing. The
+    /// geometry is then a rectangle 0 wide.
+    pub empty: bool,
 }
 
 /// The remembered values of one kind. The ratio is the field's percentage.
@@ -192,14 +206,14 @@ fn shown_places(value: f64, unit: UnitKind) -> f64 {
 fn answer(o: &CreateShapeOptions, words: &CreateShapeWords, units: &Units) -> Result<CreatedShape, String> {
     // pc: crates/ui-egui/src/dialogs/shape_dialog.rs:102-138 `geometry` (from the fields: at the
     // rounded `__at`, centred with From Center, radii, sides, star ratio), :42 `valid`, :19 `MAX_PX`.
-    let side = |value: f64, caption: &str| {
-        if value.is_finite() && CreateShapeOptions::SIZE.contains(&value) {
+    let side = |value: f64, caption: &str, zero: bool| {
+        if value.is_finite() && (CreateShapeOptions::SIZE.contains(&value) || (zero && value == 0.0)) {
             return Ok(value);
         }
         let max = units.number(*CreateShapeOptions::SIZE.end(), 0..=0);
         Err(words.bad_size.fill(&[("field", caption), ("max", &max)]))
     };
-    let (w, h) = (side(o.size.0, words.width.as_str())?, side(o.size.1, words.height.as_str())?);
+    let (w, h) = (side(o.size.0, words.width.as_str(), o.zero_width)?, side(o.size.1, words.height.as_str(), false)?);
     let at = Point::new(o.at.x.round(), o.at.y.round());
     if !(at.x.abs() <= MAX_POSITION && at.y.abs() <= MAX_POSITION) {
         return Err(words.bad_position.as_str().to_owned());
@@ -221,7 +235,7 @@ fn answer(o: &CreateShapeOptions, words: &CreateShapeWords, units: &Units) -> Re
         }
         ShapeKind::Line | ShapeKind::Custom => return Err(String::new()),
     };
-    Ok(CreatedShape { kind: o.kind, geometry, from_center: o.from_center })
+    Ok(CreatedShape { kind: o.kind, geometry, from_center: o.from_center, empty: w == 0.0 })
 }
 
 /// The dialog's title for `kind`.
@@ -331,10 +345,13 @@ impl CreateShapeDialog {
 }
 
 /// One size field (`axis` 0 is Width, 1 Height) in its unit; sets `size` when the number changed. The range alert
-/// of a typed number past [`CreateShapeOptions::SIZE`].
+/// of a typed number past [`CreateShapeOptions::SIZE`]. With `zero` the field also takes 0, and a size between 0 and
+/// 1 px becomes 1 px as below the range.
+#[expect(clippy::too_many_arguments, reason = "the field's inputs")]
 fn size_field(
     ui: &mut Ui,
     axis: usize,
+    zero: bool,
     caption: &Label,
     unit: &mut UnitKind,
     size: &mut (f64, f64),
@@ -344,7 +361,7 @@ fn size_field(
     let extent = extent_of(document, axis);
     let shown = shown_size(document, axis, *unit, *size);
     let (low, high) = (
-        document.from_pixels(*CreateShapeOptions::SIZE.start(), *unit, extent),
+        document.from_pixels(if zero { 0.0 } else { *CreateShapeOptions::SIZE.start() }, *unit, extent),
         document.from_pixels(*CreateShapeOptions::SIZE.end(), *unit, extent),
     );
     let mut field = UnitSelect::new(caption.clone(), Bind::given(Some(shown)), Bind::given(*unit), entries).id_salt(("size", axis));
@@ -359,6 +376,10 @@ fn size_field(
         && shown_places(value, *unit) != shown_places(shown, *unit)
     {
         set_size(document, axis, *unit, size, value);
+        let side = if axis == 0 { &mut size.0 } else { &mut size.1 };
+        if zero && *side > 0.0 && *side < *CreateShapeOptions::SIZE.start() {
+            *side = *CreateShapeOptions::SIZE.start();
+        }
     }
     out.out_of_range
 }
@@ -416,7 +437,8 @@ fn body(
         let (width, height) = (Label::from(words.width.as_str().to_owned()), Label::from(words.height.as_str().to_owned()));
         for (axis, caption) in [(0, &width), (1, &height)] {
             Field::new(caption.clone()).show(ui, |ui, _| {
-                if let Some(alert) = size_field(ui, axis, caption, &mut units[axis], &mut values.size, &document, &entries) {
+                let zero = axis == 0 && values.zero_width;
+                if let Some(alert) = size_field(ui, axis, zero, caption, &mut units[axis], &mut values.size, &document, &entries) {
                     *typed = Some(alert);
                 }
             });
