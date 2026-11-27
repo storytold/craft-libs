@@ -1,5 +1,6 @@
 pub(crate) mod alt_code;
 pub(crate) mod chord_fallthrough;
+pub(crate) mod command_states;
 // `clipboard.rs` is platform-w3's trial (F-28); this file is shell-w1's, so its line is written here.
 pub(crate) mod clipboard;
 pub(crate) mod control_click;
@@ -25,3 +26,4 @@ pub(crate) mod windows;
 pub(crate) mod words;
 
 pub(crate) mod screenshot;
+pub(crate) mod shown;
