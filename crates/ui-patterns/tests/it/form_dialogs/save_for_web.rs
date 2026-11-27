@@ -6,7 +6,7 @@ use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
     Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, OptimizeAnswer, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog,
-    SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant,
+    SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant, WebView,
 };
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -491,6 +491,61 @@ fn a_remembered_format_not_offered_opens_as_one_that_is() {
     let wanted = wanted_formats(&host);
     assert!(!wanted.is_empty() && wanted.iter().all(|wanted| *wanted == WebFormat::Gif), "{wanted:?}");
     assert_eq!(saved_format(&host, &mut fixture), WebFormat::Gif);
+}
+
+/// The panes a dialog asked for, as (index, format), gathered across passes.
+type Asked = Rc<RefCell<Vec<(usize, WebFormat)>>>;
+
+/// A dialog shown directly, in `view`, offering whatever `formats` holds at each pass. The returned list gathers the
+/// panes asked for, as (index, format), since it was last emptied.
+fn shown_offering(options: SaveForWebOptions, view: WebView, formats: &Rc<RefCell<Vec<WebFormat>>>) -> (Fixture, Asked) {
+    let options = Rc::new(RefCell::new(options));
+    let view = Rc::new(RefCell::new(view));
+    let offered = Rc::clone(formats);
+    let asked: Asked = Rc::default();
+    let gathered = Rc::clone(&asked);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut options, mut view, offered) = (options.borrow_mut(), view.borrow_mut(), offered.borrow());
+        let output = SaveForWebDialog::new("poster.psd", IMAGE, WebPictures::new().original(texture()), Bind::bound(&mut *options))
+            .view(Bind::bound(&mut *view))
+            .formats(&offered)
+            .show(ui);
+        gathered.borrow_mut().extend(output.wanted_variants.iter().map(|wanted| (wanted.index, wanted.request.options.format)));
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(10);
+    (fixture, asked)
+}
+
+/// A host that stops offering the shown format while the dialog is open gets a new encode in the format it falls back
+/// to, not the old one's preview under the new format's settings.
+#[trial]
+fn a_format_no_longer_offered_asks_for_the_fallback() {
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Avif;
+    let formats = Rc::new(RefCell::new(vec![WebFormat::Avif, WebFormat::Jpeg]));
+    let (mut fixture, asked) = shown_offering(options, WebView::TwoUp, &formats);
+    assert_eq!(asked.take(), vec![(0, WebFormat::Avif)], "the open asks for the remembered format");
+    *formats.borrow_mut() = vec![WebFormat::Jpeg];
+    fixture.idle(4);
+    assert_eq!(asked.take(), vec![(0, WebFormat::Jpeg)], "the fallback is encoded");
+}
+
+/// 4-Up's extra panes are encoded again when a change of the offered formats changes them alone, and not when the
+/// change leaves them as they were.
+#[trial]
+fn four_up_asks_again_when_the_offered_formats_change_its_panes() {
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Png24;
+    let formats = Rc::new(RefCell::new(vec![WebFormat::Png24, WebFormat::Png8, WebFormat::Gif]));
+    let (mut fixture, asked) = shown_offering(options, WebView::FourUp, &formats);
+    let opened = asked.take();
+    assert!(opened.contains(&(1, WebFormat::Png8)) && opened.contains(&(2, WebFormat::Gif)), "{opened:?}");
+    formats.borrow_mut().push(WebFormat::Jpeg);
+    fixture.idle(4);
+    assert_eq!(asked.take(), Vec::new(), "a list that keeps the panes asks for nothing");
+    *formats.borrow_mut() = vec![WebFormat::Png24];
+    fixture.idle(4);
+    assert_eq!(asked.take(), vec![(0, WebFormat::Png24), (1, WebFormat::Png24), (2, WebFormat::Png24)]);
 }
 
 /// A preset in a format the host doesn't offer is not in the list, so choosing one never asks for that format; one it

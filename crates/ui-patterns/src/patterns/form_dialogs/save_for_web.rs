@@ -328,6 +328,8 @@ struct Live {
     clock: f64,
     revision: u64,
     reported: u64,
+    /// The Four-Up panes' settings at the last pass: a change of the offered formats can change them alone.
+    four_up: [SaveForWebOptions; 2],
     /// The selection of the Color Table's cells.
     table: Selection<usize>,
     /// The colour of the palette entry whose colour request is out.
@@ -352,6 +354,7 @@ impl Default for Live {
             clock: 0.0,
             revision: 1,
             reported: 0,
+            four_up: Default::default(),
             table: Selection::default(),
             editing: None,
             speed: OPENING_SPEED,
@@ -704,6 +707,7 @@ impl<'a> SaveForWebDialog<'a> {
             let mut live = cx.memory::<Live>().clone();
             let mut restored = false;
             let mut asked = options::Asked::default();
+            let started = live.started;
             if !live.started {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<Last>>(key).clone());
                 live = Live::open(size, saved.as_ref());
@@ -712,6 +716,7 @@ impl<'a> SaveForWebDialog<'a> {
                     restored = true;
                 }
             }
+            let listed = options.format;
             options.keep_to(formats);
             // A measuring run reads the view but never writes it, as `FormDialog` does for its own bind.
             let measuring = crate::runtime::measure::active(ui.ctx());
@@ -745,7 +750,12 @@ impl<'a> SaveForWebDialog<'a> {
                     _ => {}
                 }
             }
-            let before = (options.clone(), live.link.pixels(), live.view, live.frame);
+            let mut before = (options.clone(), live.link.pixels(), live.view, live.frame);
+            // A format the host stopped offering falls back to another while the dialog is open: that is a change the
+            // panes show, and a change of the palette's reduction. At the open the first pass asks for the panes anyway.
+            if started {
+                before.0.format = listed;
+            }
             options.apply_size(&mut live.link);
             // A frame the host set is a change from the one the last pass showed: the panes are encoded again.
             if let Some(bound) = frame_held.as_mut().and_then(|held| held.read(&mut **cx)) {
@@ -819,7 +829,10 @@ impl<'a> SaveForWebDialog<'a> {
             if options.reduction() != before.0.reduction() {
                 asked.table.push(ColorTableEvent { edit: ColorTableEdit::Restore, colors: Vec::new() });
             }
-            if (options.clone(), live.link.pixels(), live.view, live.frame) != before {
+            let four_up = four_up_variants(options, formats);
+            let four_up_changed = live.view == WebView::FourUp && four_up != live.four_up;
+            live.four_up = four_up;
+            if (options.clone(), live.link.pixels(), live.view, live.frame) != before || four_up_changed {
                 live.revision += 1;
             }
             if live.frame != frame_before
