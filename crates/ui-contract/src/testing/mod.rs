@@ -52,6 +52,8 @@ pub use crate::contract::{Exemption, PatternKind, PatternProbe, Probe, Registrat
 pub use crate::fonts::document::set_budget as document_face_budget;
 pub use crate::runtime::audit::{in_run as in_audit_run, set as audit_replays};
 #[cfg(feature = "testing")]
+pub use crate::runtime::env::env_walks;
+#[cfg(feature = "testing")]
 pub use crate::runtime::layout_memory::forget_kept as forget_measurements;
 #[cfg(feature = "testing")]
 pub use crate::runtime::layout_memory::kept_leaves as kept_measurement_leaves;

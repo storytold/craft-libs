@@ -90,6 +90,39 @@ fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
     assert_eq!(ten_unbound, forty_unbound, "unbound pass-state reads grow with the runs: {ten_unbound} for ten leaves, {forty_unbound} for forty");
 }
 
+/// The place env: a run takes the env its parent installed for its `Ui` from its caller, or walks the `Ui` stack for it
+/// once where app code shows it, and every step and layout helper of the run reads it from there. A pass of forty
+/// leaves in a panel walks no more often per run than one of ten: at most once.
+#[trial]
+fn a_run_walks_its_ui_stack_for_its_env_at_most_once() {
+    use craft_ui::testing::{env_walks, last_pass_runs};
+    use craft_ui_test_kit::contract::Panel;
+    let walks_and_runs = |leaves: usize| {
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut egui::Ui| {
+            Panel::new().id_salt("leaves").show(ui, |ui, _| {
+                for at in 0..leaves {
+                    let seen = std::cell::RefCell::new(Seen::default());
+                    Probe::new(&seen).label(format!("Leaf {at}")).show(ui);
+                }
+            });
+        };
+        for _ in 0..3 {
+            frames.frame(vec![], &mut show);
+        }
+        let walks = env_walks();
+        assert_eq!(frames.frame(vec![], &mut show), 1, "the settled frame is one pass");
+        let runs: u32 = last_pass_runs(&frames.ctx).iter().map(|(_, runs)| runs).sum();
+        (env_walks() - walks, u64::from(runs))
+    };
+    let ((ten, ten_runs), (forty, forty_runs)) = (walks_and_runs(10), walks_and_runs(40));
+    assert!(forty_runs > ten_runs, "the leaves run in the pass: {ten_runs} runs for ten leaves, {forty_runs} for forty");
+    assert!(
+        forty - ten <= forty_runs - ten_runs,
+        "env walks grow faster than the runs: {ten} walks in {ten_runs} runs for ten leaves, {forty} in {forty_runs} for forty"
+    );
+}
+
 /// The app command the settled view's probe is bound to; its modal rule is the default one, `Blocked`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
 #[command(prefix = "frameTrial")]

@@ -124,12 +124,17 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
         let MemoView { lazy, mut props, show } = self;
         let ctx = ui.ctx().clone();
         // In the counting sweep of a shrinking row the view reports what it takes in no room, as a leaf there does.
-        let counting = matches!(Env::of(ui).shrink, Some(Shrink::Count(_)));
-        let unbounded = counting.then(|| Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.unbounded.0 = true)));
         let env = Env::of(ui);
-        let id = lazy.id(ui);
+        let (env, unbounded) = if matches!(env.shrink, Some(Shrink::Count(_))) {
+            let env = env.derive_local(|scoped| scoped.unbounded.0 = true);
+            let installed = Env::install_for(ui, env.clone());
+            (env, Some(installed))
+        } else {
+            (env, None)
+        };
+        let id = lazy.id(ui, &env);
         let key = Self::key(&ctx, &env, &props, show);
-        let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
+        let shown = lazy.run_keyed((ui, env.clone()), std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
             // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps how
             // that body sizes from its content, whether its leaves fit their room and which axis it shares among the
             // children that fill it (`Scoped::start_view_room`), so the view takes what its content used there, as the
