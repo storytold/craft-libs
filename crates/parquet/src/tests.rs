@@ -497,3 +497,40 @@ fn padded_decimals_format_only_their_significant_bytes() {
         assert_eq!(table.rows[0][0], Value::Decimal(expected.into()), "{physical}");
     }
 }
+
+#[test]
+fn a_repeated_padded_decimal_cannot_pass_the_decimal_budget() {
+    // One 1 MiB padded dictionary entry read 100,000 times took 117.63 s from a 1 MB file before this budget.
+    let schema = Arc::new(parse_message_type("message test { REQUIRED BYTE_ARRAY d (DECIMAL(2,0)); }").unwrap());
+    // Statistics would store the entry again as the chunk's minimum and maximum.
+    let properties = Arc::new(
+        WriterProperties::builder().set_dictionary_enabled(true).set_statistics_enabled(parquet::file::properties::EnabledStatistics::None).build(),
+    );
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, properties).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    let entry = [vec![0u8; (64 << 10) - 1], vec![0x63]].concat();
+    let values = vec![ByteArray::from(entry); 64];
+    col.typed::<ByteArrayType>().write_batch(&values, None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    let bytes = writer.into_inner().unwrap();
+    // 64 rows of one 64 KiB entry hand the reader 4 MiB of decimal bytes from a much smaller file.
+    assert!(bytes.len() < 256 << 10, "{} bytes", bytes.len());
+    let footer_start = limits::footer(&bytes, &LIMITS).unwrap();
+    let rows = |budget| {
+        let mut calls = 0;
+        let result = read_buffer(Bytes::from(bytes.clone()), footer_start, &LIMITS, budget, |row| {
+            assert_eq!(row[0], Value::Decimal("99.".into()));
+            calls += 1;
+            Ok(())
+        });
+        (result, calls)
+    };
+    let (result, calls) = rows(1 << 20);
+    assert!(result.unwrap_err().to_string().contains("decimal data exceeds"));
+    assert_eq!(calls, 16);
+    let (result, calls) = rows(4 << 20);
+    assert_eq!((result.unwrap().rows, calls), (64, 64));
+    assert_eq!(read(&bytes).unwrap().rows.len(), 64);
+}

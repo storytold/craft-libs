@@ -104,17 +104,19 @@ pub struct Table {
 /// Reads a borrowed buffer, calling `on_row` once per row after every check on the file's
 /// metadata has passed. An error from `on_row` stops the read at once and comes back unchanged,
 /// so a caller can cancel or refuse a row. Call [`read_owned_rows`] when the input is already
-/// owned to avoid a copy.
+/// owned to avoid a copy. The stored bytes of byte-backed decimal values, sign padding included,
+/// share the 512 MiB decoded-data budget, so a dictionary entry repeated across many rows cannot
+/// make the read check and format more than that.
 pub fn read_rows(bytes: &[u8], limits: &TableLimits, on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
     let footer_start = limits::footer(bytes, limits)?;
-    read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, on_row)
+    read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, limits::MAX_DECODED, on_row)
 }
 
 /// Reads an owned buffer, transferring its allocation to the decoder without copying its payload.
 /// `on_row` works as in [`read_rows`].
 pub fn read_owned_rows(bytes: Vec<u8>, limits: &TableLimits, on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
     let footer_start = limits::footer(&bytes, limits)?;
-    read_buffer(Bytes::from(bytes), footer_start, limits, on_row)
+    read_buffer(Bytes::from(bytes), footer_start, limits, limits::MAX_DECODED, on_row)
 }
 
 /// Reads a borrowed buffer into a [`Table`]. The table holds a second copy of the data; callers
@@ -138,7 +140,7 @@ pub fn read_owned(bytes: Vec<u8>, limits: &TableLimits) -> Result<Table> {
 fn collect(bytes: Bytes, footer_start: usize, limits: &TableLimits, text_budget: usize) -> Result<Table> {
     let mut rows = Vec::new();
     let mut text_bytes = 0usize;
-    let summary = read_buffer(bytes, footer_start, limits, |row| {
+    let summary = read_buffer(bytes, footer_start, limits, limits::MAX_DECODED, |row| {
         for value in row {
             if let Value::Text(s) | Value::Decimal(s) = value {
                 text_bytes = text_bytes.saturating_add(s.len());
@@ -153,7 +155,15 @@ fn collect(bytes: Bytes, footer_start: usize, limits: &TableLimits, text_budget:
     Ok(Table { columns: summary.columns, rows })
 }
 
-fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
+/// Reads every row, stopping with an error once the stored bytes of byte-backed decimal values pass
+/// `decimal_budget`.
+fn read_buffer(
+    bytes: Bytes,
+    footer_start: usize,
+    limits: &TableLimits,
+    decimal_budget: usize,
+    mut on_row: impl FnMut(&[Value]) -> Result<()>,
+) -> Result<ReadSummary> {
     let reader = SerializedFileReader::new(bytes.clone())?;
     let metadata = reader.metadata();
     let info = metadata.file_metadata();
@@ -238,6 +248,9 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
     // Check every advertised page allocation before the decoder sees it.
     limits::pages(&bytes, metadata, footer_start, limits)?;
     let mut count = 0u64;
+    // The page budget counts a dictionary entry once, but every row that refers to it hands the
+    // length check and the formatter the whole entry again.
+    let mut decimal_bytes_read = 0usize;
     let mut values = Vec::with_capacity(cols);
     for row in reader.get_row_iter(None)? {
         if count >= rows {
@@ -247,6 +260,10 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
         values.clear();
         for (name, field) in row.into_columns() {
             if let Field::Decimal(decimal @ Decimal::Bytes { .. }) = &field {
+                decimal_bytes_read = decimal_bytes_read.saturating_add(decimal.data().len());
+                if decimal_bytes_read > decimal_budget {
+                    return Err(invalid("Parquet decimal data exceeds the 512 MiB decoded-data budget; select a smaller table first"));
+                }
                 decimal_length(&name, decimal)?;
             }
             values.push(value(field)?);
