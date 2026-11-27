@@ -227,8 +227,30 @@ impl VariantLook {
             // A disabled solid button keeps its shape: its solid colour dimmed towards the disabled fill, which alone
             // would match the panel and leave only the label.
             Emphasis::Solid => {
-                let dimmed = crate::derive::mix(solid, c.state.disabled_fill, DISABLED_SOLID_DIM);
-                VariantLook::new(States::new(solid, solid_hover, solid_pressed, dimmed), text(on_solid)).radius(button)
+                // Dimmed towards the disabled fill until it differs from the enabled fill by
+                // `DISABLED_SOLID_SEPARATION`, so a dark theme's disabled button is not taken for an enabled one. A theme
+                // whose disabled fill is itself close to the solid colour dims towards black, then white, instead.
+                let dim = |to: Rgba| {
+                    let mut at = DISABLED_SOLID_DIM;
+                    let mut fill = crate::derive::mix(solid, to, at);
+                    while at < DISABLED_SOLID_DIM_MAX && crate::contrast::contrast_ratio(fill, solid) < DISABLED_SOLID_SEPARATION {
+                        at += 0.05;
+                        fill = crate::derive::mix(solid, to, at);
+                    }
+                    fill
+                };
+                let apart = |fill: Rgba| crate::contrast::contrast_ratio(fill, solid) >= DISABLED_SOLID_SEPARATION;
+                let dimmed = [c.state.disabled_fill, Rgba::BLACK, Rgba::WHITE]
+                    .into_iter()
+                    .map(dim)
+                    .find(|fill| apart(*fill))
+                    .unwrap_or_else(|| dim(c.state.disabled_fill));
+                // Its label is the disabled ink moved off the dimmed fill until it reads (4.5:1): the disabled grey alone
+                // is pale on a pale blue block and says nothing.
+                let label =
+                    crate::contrast::ensure_contrast(c.text.disabled, dimmed, crate::contrast::text_contrast_min(crate::theme::Contrast::Standard));
+                let text = States::new(on_solid, on_solid, on_solid, label);
+                VariantLook::new(States::new(solid, solid_hover, solid_pressed, dimmed), text).radius(button)
             }
             Emphasis::Soft => VariantLook::new(States::new(soft_fill, soft_fill, soft_fill, c.state.disabled_fill), text(fg))
                 .edge(States::new(edge, edge, edge, c.line.divider))
@@ -255,6 +277,11 @@ impl VariantLook {
 
 /// How far a disabled solid fill moves from its solid colour to the disabled fill.
 const DISABLED_SOLID_DIM: f64 = 0.5;
+
+/// The least contrast ratio between a disabled solid fill and the enabled one, and how far the fill may be dimmed to
+/// get it.
+const DISABLED_SOLID_SEPARATION: f64 = 1.5;
+const DISABLED_SOLID_DIM_MAX: f64 = 0.95;
 
 /// A look for one component's style key, built in a `const`. It describes itself; nothing registers it.
 #[derive(Clone, Copy)]
