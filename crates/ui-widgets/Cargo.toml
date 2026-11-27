@@ -19,6 +19,7 @@ workspace = true
 [package.metadata.craft]
 reads = [
     "crates/ui-contract/tests/fonts/NotoSansArabic-test.ttf",
+    "crates/font-subset/tests/data/abel/Abel-Regular.ttf",
 ]
 
 [features]

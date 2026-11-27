@@ -20,6 +20,8 @@
 #![warn(missing_docs)]
 
 mod filter;
+#[cfg(any(target_os = "macos", test))]
+mod format_menu;
 mod native;
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 pub(crate) mod portal;
@@ -92,12 +94,18 @@ pub struct FileDialog {
     pub directory: Option<PathBuf>,
     /// The file name a Save dialog suggests.
     pub file_name: Option<String>,
+    /// The label of the file type menu a macOS Save panel with two or more file types shows; `None` shows
+    /// [`FORMAT_LABEL`]. Other platforms' dialogs label their menu themselves.
+    pub format_label: Option<String>,
 }
+
+/// The English label of the macOS Save panel's file type menu.
+pub const FORMAT_LABEL: &str = "Format:";
 
 impl FileDialog {
     /// A dialog of `kind` with nothing else set.
     pub fn new(kind: Kind) -> Self {
-        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None }
+        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None, format_label: None }
     }
 
     /// Choose one existing file.
@@ -141,6 +149,12 @@ impl FileDialog {
     /// Sets the file name a Save dialog suggests.
     pub fn file_name(mut self, file_name: impl Into<String>) -> Self {
         self.file_name = Some(file_name.into());
+        self
+    }
+
+    /// Sets the label of the macOS Save panel's file type menu, in the app's language.
+    pub fn format_label(mut self, label: impl Into<String>) -> Self {
+        self.format_label = Some(label.into());
         self
     }
 }
@@ -223,7 +237,7 @@ pub enum Answer {
     /// The chosen files or folder.
     Paths(Vec<PathBuf>),
     /// A Save panel's answer: the name as typed and the file type picked, when the panel reports it (the portal's
-    /// current filter; rfd reports `None`).
+    /// current filter, or the macOS panel's Format menu; rfd reports `None`).
     Saved {
         /// The name as typed.
         path: PathBuf,
