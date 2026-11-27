@@ -60,7 +60,7 @@ impl<'a> Body<'a> {
                     let mut row = ChannelRow::new(
                         channel_name(model, i, &visible),
                         Bind::given(pass.shows(f64::from(values.values[i]))),
-                        ChannelRule::of(channel),
+                        ChannelRule::in_model(model, channel),
                     )
                     .short(channel.label)
                     .unit(ChannelUnit::of(channel.unit));

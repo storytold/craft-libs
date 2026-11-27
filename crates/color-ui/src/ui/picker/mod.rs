@@ -462,7 +462,8 @@ impl<'a> Run<'_, 'a> {
             Some(held) => held.read(&mut *body).and_then(|held| held.same().copied()).unwrap_or(false),
             None => memo.web,
         };
-        let rules = Rules { web: held_web, constrain: self.constrain.clone() };
+        let exact_rgb = self.models.iter().copied().find(|model| model.id() == "rgb" && model.channel_precision() == craft_theme::ChannelPrecision::Float32);
+        let rules = Rules { web: held_web, constrain: self.constrain.clone(), exact_rgb };
 
         // The Full layout shows a mode its models offer.
         if self.full {
@@ -522,9 +523,9 @@ impl<'a> Run<'_, 'a> {
                 None => body.memory::<Memo>().web = on,
             }
             if on {
-                let snapped_rules = Rules { web: true, constrain: self.constrain.clone() };
+                let snapped_rules = Rules { web: true, constrain: self.constrain.clone(), exact_rgb };
                 let snapped = snapped_rules.apply(self.latest.color);
-                if !snapped.same_rgb8(self.latest.color) {
+                if !snapped_rules.same(snapped, self.latest.color) {
                     let next = self.latest.with_color(snapped, &snapped_rules);
                     self.set(body, next);
                 }

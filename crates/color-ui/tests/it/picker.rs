@@ -609,3 +609,118 @@ fn a_request_for_the_swatches_opens_the_picker_on_its_swatch_view() {
     assert!(shows_swatches(request().on_swatches()), "the swatch view shows the library's cells");
     assert!(!shows_swatches(request()), "without it the picker opens on the Color Models");
 }
+
+
+#[trial]
+fn exact_working_rgb_fields_and_automation_preserve_components_in_both_dialog_layouts() {
+    use craft_theme::FloatRgbModel;
+    for layout in [ColorPickerDialogLayout::Full, ColorPickerDialogLayout::Tabbed] {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let opening = Srgba::rgb(1e-8, 2.5, -0.25).with_alpha(0.37);
+        dialogs.borrow_mut().open(ColorPickerDialog::new("float", "Float", opening)
+            .layout(layout).tab(ColorPickerTab::Custom).working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
+        fixture.idle(6);
+        let ctx = fixture.ctx().clone();
+        let id = dialog_id(("color-picker", "float"));
+        assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "model", serde_json::json!("rgb")), Ok(()));
+        fixture.idle(4);
+        let red = fixture.by_label("Red").expect("the float red numeric field");
+        fixture.click(&red).key(Key::Tab, Modifiers::NONE).settle();
+        assert_eq!(dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).expect("current color").color, opening);
+        fixture.click(&red).key(Key::A, Modifiers::COMMAND).type_text("0.1234567").key(Key::Tab, Modifiers::NONE).settle();
+        let typed = Srgba::rgb(0.1234567, 2.5, -0.25).with_alpha(0.37);
+        assert_eq!(dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).expect("typed color").color, typed);
+        let reset = fixture.by_label("Restore current color").expect("the original color swatch");
+        fixture.click(&reset).settle();
+        assert_eq!(dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).expect("restored color").color, opening);
+        let rgb = [3.5_f32, 0.2345678, -0.5];
+        assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "color", serde_json::json!(rgb)), Ok(()));
+        fixture.settle();
+        assert_eq!(dialog_field(&dialogs, "color"), Some(serde_json::json!(rgb)));
+        assert!(dialogs.borrow_mut().set_json_field(&ctx, id, "color", serde_json::json!([1e100, 0, 0])).is_err());
+        assert!(dialogs.borrow_mut().set_json_field(&ctx, id, "color", serde_json::json!([1, 2])).is_err());
+        assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx));
+        let answer = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).expect("an OK answer");
+        assert_eq!(answer.picked.color, Srgba::rgb(rgb[0], rgb[1], rgb[2]).with_alpha(opening.a));
+
+        dialogs.borrow_mut().open(ColorPickerDialog::new("float", "Float", opening)
+            .layout(layout).working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
+        fixture.idle(6);
+        assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "color", serde_json::json!([4, 5, 6])), Ok(()));
+        let cancel = fixture.by_label("Cancel").expect("Cancel");
+        fixture.click(&cancel).settle();
+        assert!(dialogs.borrow_mut().take::<ColorPickerDialog>().expect("a Cancel answer").ok().is_none());
+    }
+}
+
+#[trial]
+fn bounded_float_dialog_arrays_and_legacy_hex_keep_their_distinct_contracts() {
+    use craft_theme::FloatRgbModel;
+    let ctx = egui::Context::default();
+    let opening = Srgba::rgb(0.1234567, 0.5, 0.75).with_alpha(0.37);
+    let mut exact = ColorPickerDialog::new("bounded", "Bounded", opening).working_rgb(FloatRgbModel::bounded()).web_colors_remembered(false);
+    assert_eq!(exact.set_json_field(&ctx, "color", serde_json::json!([2.5, 0.1234567, -0.25])), Ok(()));
+    assert_eq!(exact.current().expect("bounded color").color, Srgba::rgb(1.0, 0.1234567, 0.0).with_alpha(opening.a));
+    assert_eq!(exact.set_json_field(&ctx, "color", serde_json::json!("#336699")), Ok(()));
+    assert_eq!(exact.current().expect("hex color").color.a, opening.a);
+    let mut legacy = ColorPickerDialog::new("legacy", "Legacy", opening).web_colors_remembered(false);
+    assert_eq!(legacy.json_fields().and_then(|v| v.get("color").cloned()), Some(serde_json::json!(opening.to_hex())));
+    assert!(legacy.set_json_field(&ctx, "color", serde_json::json!([1, 0, 0])).is_err());
+    assert_eq!(legacy.set_json_field(&ctx, "color", serde_json::json!("#336699")), Ok(()));
+    assert_eq!(legacy.current().expect("legacy hex").color.to_hex(), "#336699");
+}
+
+
+#[trial]
+fn explicit_hex_and_web_edits_clamp_float_rgb_even_when_the_projection_is_unchanged() {
+    use craft_theme::FloatRgbModel;
+    for hex in [true, false] {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let opening = Srgba::rgb(2.0, 0.0, -0.25).with_alpha(0.37);
+        dialogs.borrow_mut().open(ColorPickerDialog::new("sdr", "SDR choice", opening)
+            .working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
+        fixture.idle(6);
+        assert_eq!(dialog_field(&dialogs, "color"), Some(serde_json::json!(opening.to_rgb_array())), "passive hex display preserves HDR");
+        if hex {
+            type_into(&mut fixture, "Hex color", "ff0000");
+        } else {
+            let web = fixture.by_label("Only Web Colors").expect("the Web control");
+            fixture.click(&web).settle();
+            let ctx = fixture.ctx().clone();
+            assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx));
+        }
+        let answer = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).expect("the SDR choice answers OK");
+        assert_eq!(answer.picked.color, Srgba::rgb(1.0, 0.0, 0.0).with_alpha(opening.a));
+        assert!(answer.picked.model.is_none());
+    }
+}
+
+
+#[trial]
+fn raw_float_channel_keeps_untouched_hdr_numbers_but_edits_an_sdr_track() {
+    use craft_color_ui::ui::{ChannelRow, ChannelRule};
+    use craft_theme::FloatRgbModel;
+    let value = Rc::new(RefCell::new(2.5_f64));
+    let shown = Rc::clone(&value);
+    let model = FloatRgbModel::raw();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let basis = model.from_srgb(Srgba::rgb(*held as f32, 0.0, 0.0));
+        let rule = ChannelRule::in_model(&model, &model.channels()[0]);
+        let _ = ChannelRow::new("Red", Bind::bound(&mut *held), rule).track(model.track(0, &basis)).show(ui);
+    });
+    fixture.room(vec2(1000.0, 400.0));
+    fixture.settle();
+    let fields = fixture.by_role(Role::SPIN_BUTTON);
+    fixture.click(fields.first().expect("the raw numeric field")).key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), 2.5, "the bounded track does not clamp an untouched HDR number");
+    let track = fixture.by_role(Role::SLIDER).first().expect("the bounded SDR track").rect;
+    fixture.click_at(track.center()).settle();
+    assert!((0.45..=0.55).contains(&*value.borrow()), "the midpoint selects an SDR component near 0.5, not the raw range's zero");
+}

@@ -63,6 +63,9 @@ pub struct SliderField<'a> {
     common: Common,
     value: Bind<'a, f64>,
     range: RangeInclusive<f64>,
+    /// An independent range for the numeric child; by default it shares the slider's range.
+    #[prop]
+    numeric_range: Option<RangeInclusive<f64>>,
     /// Whether the caption and the number field share a line over the slider, or the slider and then the number field
     /// share one line for a row labelled by an enclosing `Field`.
     #[prop]
@@ -76,6 +79,9 @@ pub struct SliderField<'a> {
     /// The decimal places retained and shown for typed values (at most 12), independently of the step; typing no longer snaps to it.
     #[prop]
     typed_decimals: Option<usize>,
+    /// Preserve finite f32 numbers in the numeric child instead of its decimal step grid.
+    #[prop]
+    round_trip_f32: bool,
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
@@ -155,10 +161,12 @@ impl<'a> SliderField<'a> {
             common: Common::new(),
             value,
             range,
+            numeric_range: None,
             layout: SliderFieldLayout::Stacked,
             scale: SliderScale::Linear,
             step: None,
             typed_decimals: None,
+            round_trip_f32: false,
             wheel_step: None,
             track_press: TrackPress::OnRelease,
             unit_kind: None,
@@ -195,9 +203,11 @@ impl<'a> SliderField<'a> {
         Look {
             track_press: self.track_press,
             range: self.range.clone(),
+            numeric_range: self.numeric_range.clone(),
             scale: self.scale,
             step: self.step,
             typed_decimals: self.typed_decimals,
+            round_trip_f32: self.round_trip_f32,
             wheel_step: self.wheel_step,
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
@@ -225,9 +235,11 @@ enum FieldMarks {
 struct Look {
     track_press: TrackPress,
     range: RangeInclusive<f64>,
+    numeric_range: Option<RangeInclusive<f64>>,
     scale: SliderScale,
     step: Option<f64>,
     typed_decimals: Option<usize>,
+    round_trip_f32: bool,
     wheel_step: Option<f64>,
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
@@ -280,7 +292,8 @@ impl Look {
             Some(face) => slider.track_face(face),
             None => slider,
         };
-        let slider = match self.set_step() {
+        // Exact-float fields retain their numeric step without imposing that grid on the SDR track.
+        let slider = match self.set_step().filter(|_| !self.round_trip_f32) {
             Some(step) => slider.step(step),
             None => slider,
         };
@@ -306,7 +319,8 @@ impl Look {
         let step = self.field_step();
         let typed_decimals = self.typed_decimals.map(|places| places.min(12));
         let field = NumberField::new(name.clone(), bind)
-            .range(self.range.clone())
+            .range(self.numeric_range.clone().unwrap_or_else(|| self.range.clone()))
+            .round_trip_f32(self.round_trip_f32)
             .step(step)
             .snap_typed(typed_decimals.is_none() && self.set_step().is_some())
             .commit_decimals(typed_decimals.unwrap_or_else(|| decimals_for_step(step)))

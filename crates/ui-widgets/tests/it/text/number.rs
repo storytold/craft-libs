@@ -836,3 +836,78 @@ fn changing_a_number_fields_edit_target_clears_the_old_draft_with_equal_values()
         assert_eq!((values[0].get(), values[1].get()), (Some(START), Some(13.0)));
     }
 }
+
+
+/// Opt-in float channels use the ordinary number field, including focus, stepping, scrubbing and accessibility.
+type ExactNumber = (craft_ui::testing::Fixture, std::rc::Rc<RefCell<Option<f64>>>, std::rc::Rc<Cell<Option<egui::Id>>>);
+
+fn exact_number(start: f32) -> ExactNumber {
+    let value = std::rc::Rc::new(RefCell::new(Some(f64::from(start))));
+    let owner = std::rc::Rc::new(Cell::new(None));
+    let shown = std::rc::Rc::clone(&value);
+    let field_owner = std::rc::Rc::clone(&owner);
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let field = NumberField::new("Exact", Bind::bound(&mut *held))
+            .round_trip_f32(true)
+            .step(1.0)
+            .snap_typed(true)
+            .commit_decimals(0)
+            .fixed_decimals(0)
+            .id_salt("exact");
+        field_owner.set(Some(field.show(ui).response.id));
+        let mut other = Some(0.0);
+        NumberField::new("Other", Bind::bound(&mut other)).show(ui);
+    });
+    fixture.settle();
+    (fixture, value, owner)
+}
+
+#[trial]
+fn exact_float_focus_and_typed_edits_do_not_snap_or_round_components() {
+    let tiny = 1e-8_f32;
+    let (mut fixture, value, _) = exact_number(tiny);
+    let target = fixture.by_label("Exact").expect("the exact field");
+    fixture.click(&target).key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), Some(f64::from(tiny)), "focus and blur retain every component bit");
+    fixture.click(&target).key(Key::A, Modifiers::COMMAND).type_text("-").settle();
+    assert_eq!(*value.borrow(), Some(f64::from(tiny)), "a partial draft retains the last finite component");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    for (text, expected) in [("0.1234567", 0.1234567_f32), ("2.5", 2.5), ("-0.25", -0.25)] {
+        fixture.click(&target).key(Key::A, Modifiers::COMMAND).type_text(text).key(Key::Tab, Modifiers::NONE).settle();
+        assert_eq!(*value.borrow(), Some(f64::from(expected)), "{text}");
+    }
+    fixture.click(&target).key(Key::A, Modifiers::COMMAND).type_text(&"9".repeat(100)).key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), Some(-0.25), "an overflowing draft never replaces a finite component");
+}
+
+#[trial]
+fn exact_float_steps_wheel_scrub_and_accessibility_keep_the_fractional_origin() {
+    use craft_ui::testing::focus::{AccessActionKind, set_value};
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    let origin = 0.1234567_f32;
+    let (mut fixture, value, owner) = exact_number(origin);
+    let target = fixture.by_label("Exact").expect("the exact field");
+    fixture.click(&target).key(Key::ArrowUp, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), Some(f64::from((f64::from(origin) + 1.0) as f32)));
+    fixture.access(AccessActionKind::Decrement, &target).settle();
+    let back = value.borrow().expect("a number") as f32;
+    assert!((back - origin).abs() < 1e-7, "stepping back retains the fraction within f32 arithmetic");
+    fixture.frame(vec![set_value(owner.get().expect("the field owner"), f64::from(origin))]).settle();
+    fixture.frame(vec![moved(target.rect.center()), wheel_lines(1.0)]).settle();
+    assert_eq!(*value.borrow(), Some(f64::from((f64::from(origin) + 1.0) as f32)), "a wheel notch adds a step instead of snapping to a grid");
+    for invalid in [f64::NAN, f64::INFINITY, f64::MAX] {
+        let before = *value.borrow();
+        fixture.frame(vec![set_value(owner.get().expect("the field owner"), invalid)]).settle();
+        assert_eq!(*value.borrow(), before, "a non-finite float set is refused");
+    }
+    let (mut zero, zero_value, _) = exact_number(0.0);
+    let (mut fractional, fractional_value, _) = exact_number(origin);
+    let a = zero.by_label("Exact").expect("the zero field").rect.center();
+    let b = fractional.by_label("Exact").expect("the fractional field").rect.center();
+    zero.drag_at(a, Vec2::new(3.0, 0.0)).settle();
+    fractional.drag_at(b, Vec2::new(3.0, 0.0)).settle();
+    let delta = fractional_value.borrow().expect("fractional number") - zero_value.borrow().expect("zero number");
+    assert!((delta - f64::from(origin)).abs() < 2e-6, "scrubbing is relative to the unrounded component");
+    assert_ne!(*zero_value.borrow(), Some(0.0), "the drag actually scrubs");
+}
