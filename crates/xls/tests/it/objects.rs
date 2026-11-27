@@ -187,7 +187,12 @@ fn pictures(blips: &[Vec<u8>], shapes: &[u8]) -> (Workbook, Report) {
 
 /// [`pictures`], with `sheet` records before the sheet's drawing.
 fn pictures_after(blips: &[Vec<u8>], shapes: &[u8], sheet: &[u8]) -> (Workbook, Report) {
-    let dgg = od(0x000F, 0xF000, &od(0x002F, 0xF001, &blips.iter().map(|b| fbse(b)).collect::<Vec<_>>().concat()));
+    pictures_in(&blips.iter().map(|b| fbse(b)).collect::<Vec<_>>().concat(), shapes, sheet)
+}
+
+/// [`pictures_after`], from the BStore's FBSE records as given.
+fn pictures_in(entries: &[u8], shapes: &[u8], sheet: &[u8]) -> (Workbook, Report) {
+    let dgg = od(0x000F, 0xF000, &od(0x002F, 0xF001, entries));
     let (first, second) = dgg.split_at(30);
     let dg = od(0x000F, 0xF002, &od(0x000F, 0xF003, shapes));
     // MsoDrawing records are at most 8224 bytes; longer drawings continue in more of them.
@@ -264,6 +269,19 @@ fn rows_hidden_by_default_have_no_height() {
     let p = &wb.sheets[0].pictures;
     assert_eq!(p.len(), 1, "{:?}", report.warnings);
     assert_eq!((p[0].anchor.row2, p[0].anchor.dy2), (1, 128));
+}
+
+/// The BLIP embedded after an FBSE's name is the picture even when the FBSE's size field is 0:
+/// a workbook has no delay stream for that to point at instead.
+#[test]
+fn a_picture_whose_store_entry_gives_no_size_is_read() {
+    let png = [0x89, b'P', b'N', b'G', 1, 2, 3];
+    let blip = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], &png]));
+    let no_size = od(0x0062, 0xF007, &cat(&[&[0u8; 36], &blip]));
+    let (wb, report) = pictures_in(&no_size, &shape(1, [1, 0, 1, 0, 3, 0, 3, 0]), &[]);
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    assert_eq!((p[0].data.as_slice(), p[0].mime), (&png[..], "image/png"));
 }
 
 #[test]
