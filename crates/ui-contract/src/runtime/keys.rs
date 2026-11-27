@@ -2,14 +2,13 @@
 //! every key event of the pass, the begin hook turns them into the `Intents` of the focused component,
 //! and claims, menu-bar keys and AccessKit action requests are routed from the same record.
 
-use crate::runtime::commands::FirePhase;
+use crate::runtime::commands::{ClipContent, FirePhase};
 use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
 use egui::{Context, Id, IdMap, Vec2, ViewportId};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 mod claims;
 mod input;
@@ -21,15 +20,18 @@ mod route;
 pub use claims::capture;
 #[doc(hidden)]
 pub use claims::claim;
-pub(crate) use claims::hold_escape;
 #[doc(hidden)]
 pub use claims::take_claimed;
-pub(crate) use claims::take_first_claimed;
+#[doc(hidden)]
+pub use claims::{claim_alt_tap, take_alt_tap};
+pub(crate) use claims::{fire_claimed, hold_escape, take_first_claimed};
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
-pub(crate) use input::{claims_press, input_hook, keys_state, queue_nav, take_menu_keys, take_nav};
+pub use input::held;
 #[doc(hidden)]
-pub use input::{down, keyed};
+pub use input::keyed;
+pub use input::textless_paste;
+pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, note_ime_presses, queue_nav, sent, stirred, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
@@ -39,14 +41,16 @@ pub(crate) use intents::lent_taken;
 pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
-pub use intents::with_window_intents;
 pub(crate) use intents::{
-    Lent, context_part, context_request, context_requests, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel,
-    take_every_escape, take_window_cancel,
+    Lent, context_part, context_request, context_requests, give_back, hand_on_cancel, lend, request_context, route_whole_reset, scope_escape,
+    take_cancel, take_every_escape, take_window_cancel,
 };
+pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
-pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
+pub(crate) use route::{
+    activated_member, begin, focus_in_modal_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts,
+};
+pub use route::{escape_mods, focus_holds};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,9 +66,6 @@ pub enum MenuKey {
 pub(crate) struct NavKeys {
     pub(crate) tabs: Vec<bool>,
     pub(crate) panes: Vec<bool>,
-    /// The input hook left a bare Tab in egui's input: nothing has the focus and the window registered no focus stop,
-    /// so the framework has nothing to move to and egui moves its own focus.
-    pub(crate) tab_to_egui: bool,
 }
 
 struct Press {
@@ -83,6 +84,18 @@ struct Press {
     canvas: bool,
     /// The press's place among the frame's events ([`Batch::place`]).
     place: usize,
+    /// The keys down when it went down, itself not among them: what a nudge reads as held with its arrow.
+    held: Vec<Key>,
+    /// An input method committed text right after it: the press typed that text, which a text stop takes.
+    ime: bool,
+}
+
+/// An arrow press as a nudge of content: its unit direction, its modifiers and the keys down when it went down.
+#[derive(Clone, Debug)]
+pub(crate) struct Nudge {
+    pub(crate) direction: Vec2,
+    pub(crate) mods: Mods,
+    pub(crate) held: Vec<Key>,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
@@ -98,6 +111,8 @@ pub(crate) struct Shortcut {
     /// The input time the event arrived at when an earlier frame held it back; `None` for the pass's own input, which
     /// arrived at the pass time.
     pub(crate) at: Option<f64>,
+    /// The event's place among the frame's events ([`Batch::place`]), which the editor inputs it comes between share.
+    pub(crate) place: usize,
 }
 
 /// What the intent routing did with one press.
@@ -107,6 +122,11 @@ enum Taken {
     No,
     /// The press became an intent, a focus move or an activation.
     Yes,
+    /// With nothing focused, the window's document canvas took the press (a nudge it declares, `KeyUse::nudge_mods`,
+    /// or a page move): it is the canvas's alone, as while the canvas has the focus, and no app shortcut runs with it.
+    Canvas,
+    /// A collection under the pointer took the key.
+    Hover,
 }
 
 /// The key events the owner leaves to the app this pass, with the facts the matching needs.
@@ -115,10 +135,18 @@ pub(crate) struct Shortcuts {
     pub(crate) keys: Vec<Shortcut>,
     /// A text field owns the keys: plain keys wait for it.
     pub(crate) typing: bool,
+    /// The text component that owns the keys leaves command chords and function keys to the app (`KeyUse::command_keys`).
+    pub(crate) command_keys: bool,
     /// A dialog owns the keys: commands that do not fire in dialogs wait.
     pub(crate) dialog: bool,
     /// The layout that reads the presses.
     pub(crate) layout: Layout,
+    /// Each change of Cmd, Ctrl or Alt in the pass, with the index into `keys` (the kept list) of the first entry after it.
+    pub(crate) mods: Vec<(usize, Mods)>,
+    /// The pass's input had `WindowFocused(false)`.
+    pub(crate) focus_lost: bool,
+    /// The content of a paste no focused component lists: the Paste command the keys fire carries it.
+    pub(crate) pasted: Option<ClipContent>,
 }
 
 /// What the input hook recorded for the next pass's begin hook.
@@ -128,20 +156,27 @@ struct Batch {
     /// How many key presses the strip left in egui's input.
     egui_presses: usize,
     shortcuts: Vec<Shortcut>,
-    /// The text of the paste the focused component takes.
-    paste: Option<String>,
+    /// The content of the paste the focused component takes.
+    paste: Option<ClipContent>,
+    /// The content of a paste no focused component lists, for the command its chord fires (`Fired::pasted`).
+    app_paste: Option<ClipContent>,
     /// Every text event of the pass, in order.
     texts: Vec<Typed>,
     /// How many text events the strip left in egui's input.
     egui_texts: usize,
-    clips: Vec<EditCommand>,
+    /// Each clipboard command of the pass, with its place among the frame's events.
+    clips: Vec<(EditCommand, usize)>,
     access: Vec<Action>,
-    escapes: usize,
+    escapes: Vec<EscapePress>,
     claimed: Vec<Chord>,
     nav: NavKeys,
     menu: Vec<MenuKey>,
-    /// Whether the last Enter event of the pass was a press (`true`) or a release, `None` when there was none.
-    enter_down: Option<bool>,
+    /// A lone Alt tap ended in this pass and a tool claimed it.
+    alt_tap: bool,
+    /// Each change of Cmd, Ctrl or Alt in the pass, with the index into `shortcuts` of the first entry after it.
+    mods: Vec<(usize, Mods)>,
+    /// The pass's input had `WindowFocused(false)`.
+    focus_lost: bool,
     /// The latest key press of the pass, which a following text event was typed by; its release or a clipboard event
     /// ends it.
     last_press: Option<LastPress>,
@@ -178,11 +213,21 @@ struct LastPress {
     claimed: bool,
 }
 
+/// An Escape press the strip took as a scope escape.
+struct EscapePress {
+    mods: Mods,
+    /// An auto-repeat of a key that is still held.
+    repeat: bool,
+}
+
 /// A bare Tab or Shift+Tab press.
 struct TabPress {
     input: KeyInput,
     /// An auto-repeat of a key that is still held.
     repeat: bool,
+    /// When and where among the frame's events it arrived, as a [`Shortcut`] has them.
+    at: Option<f64>,
+    place: usize,
 }
 
 #[derive(Clone)]
@@ -190,15 +235,23 @@ struct Item {
     intent: Intent,
     /// A physical left or right arrow: under right-to-left text it reads as the opposite logical move.
     horizontal: bool,
-    /// The place among the frame's events of the press or text it came from ([`Batch::place`]); `None` for an intent
-    /// of no one event.
-    place: Option<usize>,
+    /// The press or text it came from; `None` for an intent of no one event.
+    source: Option<Source>,
+}
+
+/// The press or text an intent came from.
+#[derive(Clone, Copy, Debug)]
+struct Source {
+    /// Its place among the frame's events ([`Batch::place`]).
+    place: usize,
+    /// Shift was held at the press; never for a text.
+    shift: bool,
 }
 
 #[derive(Clone, Default)]
 struct Routed {
     items: Vec<Item>,
-    nudge: Option<(Vec2, Mods)>,
+    nudge: Option<Nudge>,
     /// The chords a recorder stop's presses spell this pass.
     chords: Vec<Chord>,
     set_value: Option<(Option<PartRef>, f64)>,
@@ -213,11 +266,16 @@ struct Node {
     focusable: bool,
     /// The node's expanded state this pass, `None` when it has none.
     expanded: Option<bool>,
+    /// The part of the owner that opens the popup whose state the node reports, when that part has no node of its own:
+    /// Expand and Collapse on the node go to the part instead of activating the owner.
+    toggle: Option<PartRef>,
 }
 
 #[derive(Default)]
 struct AltTrack {
     down: bool,
+    /// The modifiers of the last `Modifiers` event, `None` before the first.
+    last: Option<Mods>,
     other_key: bool,
     /// The right Alt key is down: text typed with it (AltGr) teaches the layout nothing.
     right: bool,
@@ -229,6 +287,16 @@ pub(crate) struct Stage {
     routed: HashMap<Option<Id>, Routed>,
     claimed: Vec<(Id, Chord)>,
     claims: Vec<(Id, Chord)>,
+    /// The tool hosts that claim the next lone Alt tap, from the pass that registered them.
+    alt_claims: Vec<Id>,
+    /// The claimer of the lone Alt tap that ended in this pass.
+    alt_tapped: Option<Id>,
+    /// Collections that accept Delete under the pointer in the next pass.
+    hover_deletes: Vec<Id>,
+    /// The state-dependent claims the running pass holds: those registered in the pass before.
+    last_claims: Vec<(Id, Chord)>,
+    /// The claimed chords fired commands stand for (`fire_claimed`), for their owners in the next pass.
+    fired_claims: Vec<(Id, Chord)>,
     /// Chords a container holds for itself while focus is anywhere in the viewport (a window mode), from the
     /// pass that registered them.
     captures: Vec<(Id, Chord)>,
@@ -242,24 +310,39 @@ pub(crate) struct Stage {
     down: Vec<Key>,
     /// The input hook read a key press, typed text or a clipboard event in this pass, withheld ones included.
     keyed: bool,
+    /// A key went down or up (no repeat) in this pass, withheld ones included: the pointer's stir.
+    stirred: bool,
+    /// The input hook read a paste with no text (the clipboard held none) in this pass.
+    textless_paste: bool,
+    /// How many inputs of the viewport held an event sent to the focus (`count_sent`).
+    sent: u64,
+    /// The key presses of this input that an input method's commit follows (`note_ime_presses`).
+    ime_presses: Vec<egui::Event>,
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,
-    /// The paste text the focused component reads through its clipboard handle.
-    pasted: Option<(Id, Arc<str>)>,
+    /// The paste the focused component reads through its clipboard handle.
+    pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.
     queued_edits: Vec<EditCommand>,
+    /// A component read its intents in this pass, so the pass's UI is running: an edit fired from now on waits for the
+    /// next pass.
+    intents_read: bool,
     /// The components that asked for a context menu in this pass, with the rect it opens at.
     contexts: Vec<(Id, egui::Rect, Option<PartRef>)>,
     /// Components with an open edit run this pass: Escape cancels the run before it leaves a row's child.
     open_edits: Vec<Id>,
     last_open_edits: Vec<Id>,
-    /// Enter is held down: its last event was a press.
-    enter_down: bool,
     /// A modal layer was open at the previous pass.
     modal_open: bool,
-    /// The held Enter began before the open modal layer: its repeats reach nobody until a fresh press.
-    enter_stale: bool,
+    /// The keys that were down when a modal layer opened or closed: their repeats reach neither layer until a fresh
+    /// press or the release.
+    held_over: Vec<Key>,
+    /// The modifiers of the last Escape of the pass that became a `Cancel`.
+    escape_mods: Option<Mods>,
+    /// The Escapes that windows opened from this one handed on (`intents::hand_on_cancel`), by their modifiers: the next
+    /// pass's `Cancel`s.
+    handed_cancels: Vec<Mods>,
     /// How many lent keys session members have taken (`lend`), counted over the viewport's life.
     lent_taken: u64,
     /// The pane moves that menu, palette or automation fires of `NavCommand` asked for: `true` is forward.
@@ -274,4 +357,13 @@ fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Stage) -> R)
 
 fn current<R>(ctx: &Context, f: impl FnOnce(&mut Stage) -> R) -> R {
     with(ctx, crate::runtime::egui::pass::current_viewport(ctx), f)
+}
+
+pub(crate) fn register_hover_delete(ctx: &Context, id: Id) {
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| register_hover_delete(ctx, id));
+    current(ctx, |stage| {
+        if !stage.hover_deletes.contains(&id) {
+            stage.hover_deletes.push(id);
+        }
+    });
 }

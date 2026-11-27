@@ -16,10 +16,10 @@ use crate::runtime::env::Label;
 use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 
-pub use grid::{GridEvent, RatingKeys, TileGrid, TileGridOutput, TileGridStyle};
+pub use grid::{GridEvent, GridZoom, GroupHeads, RatingKeys, TileGrid, TileGridOutput, TileGridStyle};
 pub use layout::{Around, ArrangeSpacing, GridLayout, TailRow, TileArrangement, TileGroup, TileRow, Tiling, arrange, aspects_of};
 pub use slider::{ThumbnailSlider, ThumbnailSliderStyle, TileZoom, ZoomStep};
-pub use tile::{Tile, TileOutput, TilePartEvent, TileStyle};
+pub use tile::{StackLook, Tile, TileActionPlace, TileOutput, TilePartEvent, TileStyle};
 pub use words::TileWords;
 
 /// Where a tile's caption goes.
@@ -34,6 +34,43 @@ pub enum CaptionPlace {
     Start,
     /// No caption: the picture takes the whole tile.
     None,
+}
+
+/// How a framed card (`TileGrid::card`) sets its name and detail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CardText {
+    /// For cards of files (the start screen's recent documents): a strong name and the detail under it, both at the
+    /// reading start.
+    #[default]
+    File,
+    /// For cards of presets (New Document): a regular name and the detail under it, both centred.
+    Preset,
+    /// For cards of page presets (`Tile::page`: VectorCraft's New Document and start page): a strong name on up to two
+    /// lines and the detail right under it, all centred, on a flat card: no fill of its own at rest, the hover fill
+    /// under the pointer, and the hover fill with an accent edge while selected.
+    Page,
+}
+
+impl CardText {
+    /// The type role of the name.
+    pub(super) fn name_role(self) -> craft_theme::TypeRole {
+        match self {
+            CardText::File => craft_theme::TypeRole::BodyStrong,
+            CardText::Preset => craft_theme::TypeRole::Body,
+            CardText::Page => craft_theme::TypeRole::BodyStrong,
+        }
+    }
+
+    /// Whether the name and detail are centred in the card.
+    pub(super) fn centred(self) -> bool {
+        matches!(self, CardText::Preset | CardText::Page)
+    }
+
+    /// The lines the card keeps for the name.
+    pub(super) fn name_lines(self) -> u8 {
+        if self == CardText::Page { 2 } else { 1 }
+    }
 }
 
 /// A pick or reject flag.

@@ -2,15 +2,18 @@
 //! each mode.
 
 use super::{
-    SliceBar, SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceRules, SliceTool, SliceToolSettings, SliceToolWords,
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceBackground, SliceBar, SliceCellAlign, SliceCellVAlign, SliceCommand, SliceEvent, SliceItem,
+    SliceKind, SliceMode, SliceOptions, SliceOptionsDialog, SliceOrigin, SliceOverlay, SliceRules, SliceTool, SliceToolSettings, SliceToolWords,
 };
 use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::Rect;
 use craft_behavior::{CanvasView, EditEvent, PixelSize};
 use craft_ui::bars::{Bar, BarKind};
+use craft_ui::buttons::Button;
 use craft_ui::canvas::{Canvas, RasterSource as _};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
-use craft_ui::runtime::env::{Env, UnitKind};
+use craft_ui::dialog::{DialogStack, StackDialog};
+use craft_ui::runtime::env::{Env, LengthUnits, UnitKind};
 use craft_ui::testing::canvas_story::StoryDocument;
 use craft_ui::testing::{Drive, EditKind, StoryButton, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
@@ -103,6 +106,69 @@ fn slice_bar_select_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(SliceBar<'static>, covers = [], drive = Drive::Never)]
 fn slice_bar_locked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     bar(ui, data, SliceMode::Select, Constraint::Free, true)
+}
+
+/// A story button that opens the dialog `make` builds; the dialog is kept until it answers or is cancelled, so its
+/// fields keep what was typed while it shows.
+fn dialog_story<D: StackDialog + 'static>(ui: &mut Ui, data: &mut StoryData, opener: &'static str, make: impl FnOnce() -> D) -> StoryOutput {
+    let open = data.note::<Option<D>>("dialog", None);
+    if craft_ui::contract::clicked(&Button::new(opener).show(ui)) {
+        *open = Some(make());
+    }
+    if let Some(dialog) = open.as_mut() {
+        let mut stack = DialogStack::default();
+        stack.push(dialog.id(), None);
+        let closed = dialog.show(ui, &stack).is_some();
+        if closed {
+            *open = None;
+        }
+    }
+    StoryOutput::default()
+}
+
+/// Slice Options over `options` and the slice types `kinds`.
+fn options_story(ui: &mut Ui, data: &mut StoryData, options: SliceOptions, kinds: &[SliceKind]) -> StoryOutput {
+    dialog_story(ui, data, "Slice Options…", || SliceOptionsDialog::new(options).kinds(kinds))
+}
+
+#[story(SliceOptionsDialog, covers = [Default], drive = Drive::Never)]
+fn slice_options_image(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let options = SliceOptions { name: "hero".into(), url: "https://example.com".into(), alt: "A hero image".into(), ..SliceOptions::default() };
+    options_story(ui, data, options, &[SliceKind::Image, SliceKind::NoImage])
+}
+
+#[story(SliceOptionsDialog, covers = [], drive = Drive::Never)]
+fn slice_options_no_image(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let options = SliceOptions {
+        kind: SliceKind::NoImage,
+        cell_text: "Sale ends Friday".into(),
+        h_align: SliceCellAlign::Center,
+        v_align: SliceCellVAlign::Middle,
+        background: SliceBackground::Matte,
+        ..SliceOptions::default()
+    };
+    options_story(ui, data, options, &[SliceKind::Image, SliceKind::NoImage])
+}
+
+#[story(SliceOptionsDialog, covers = [], drive = Drive::Never)]
+fn slice_options_html_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let options = SliceOptions { kind: SliceKind::HtmlText, ..SliceOptions::default() };
+    options_story(ui, data, options, &[SliceKind::Image, SliceKind::NoImage, SliceKind::HtmlText])
+}
+
+#[story(DivideSlicesDialog, covers = [Default], drive = Drive::Never)]
+fn divide_slices(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    dialog_story(ui, data, "Divide…", || DivideSlicesDialog::new(DivideSlices::default()))
+}
+
+/// Sizes kept in points and shown in millimetres.
+#[story(DivideSlicesDialog, covers = [], drive = Drive::Never)]
+fn divide_slices_by_length(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    dialog_story(ui, data, "Divide…", || {
+        DivideSlicesDialog::new(DivideSlices::new(Some(DivideBy::Size(72.0)), Some(DivideBy::Count(3))))
+            .lengths(LengthUnits::new(UnitKind::Points, UnitKind::Millimetres, 72.0))
+            .start_sizes(72.0, 144.0)
+    })
 }
 
 /// The slices of the live story's document: a demo layout of user, auto and layer slices on the story document.

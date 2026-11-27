@@ -15,6 +15,30 @@ use egui::epaint::{CircleShape, RectShape};
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, TextureId, Vec2};
 use std::cell::RefCell;
 
+/// The "no colour" diagonal of a well stops this share of the well's height short of its edges.
+const NONE_DIAGONAL_INSET: f32 = 0.15;
+
+/// What a swatch well shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WellFill {
+    /// A colour.
+    Color(Srgba),
+    /// The mixed mark: the values differ.
+    Mixed,
+    /// The sunken "no colour" diagonal in `status.bad`.
+    None,
+    /// The sunken well with no mark: the base of a swatch icon.
+    Empty,
+}
+
+impl From<Option<Srgba>> for WellFill {
+    /// A colour, or the mixed mark for no colour of its own.
+    fn from(color: Option<Srgba>) -> WellFill {
+        color.map_or(WellFill::Mixed, WellFill::Color)
+    }
+}
+
 /// A shape `Draw::fill` and `Draw::stroke` paint.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -27,6 +51,29 @@ pub enum PaintShape {
     Polygon(Vec<Pos2>),
     /// An open path.
     Path(Vec<Pos2>),
+}
+
+impl PaintShape {
+    /// Where `Draw::stroke` puts the shape's stroke.
+    fn stroke_place(&self) -> StrokePlace {
+        match self {
+            PaintShape::Rect(..) => StrokePlace::Inside,
+            PaintShape::Circle(..) => StrokePlace::Outside,
+            PaintShape::Polygon(_) | PaintShape::Path(_) => StrokePlace::Centre,
+        }
+    }
+}
+
+/// Where a stroke lies against the edge of a closed shape (`Rect`, `Circle`, `Polygon`); an open `Path` always strokes
+/// on its centre line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrokePlace {
+    /// Wholly inside the edge, so the shape keeps its outer size.
+    Inside,
+    /// Centred on the edge.
+    Centre,
+    /// Wholly outside the edge, so the stroke covers nothing the shape covers.
+    Outside,
 }
 
 /// A line width from the theme, so content never picks a literal one.
@@ -240,6 +287,11 @@ impl<'a> Draw<'a> {
         self
     }
 
+    /// The egui painter and the tokens this `Draw` paints with: what [`Glyph::paint`](super::Glyph::paint) takes.
+    pub(crate) fn painter_and_tokens(&self) -> (&'a Painter, &'a UiTokens) {
+        (self.painter, self.env.tokens)
+    }
+
     fn text_env(&self) -> TextEnv<'a> {
         TextEnv {
             tokens: self.env.tokens,
@@ -247,6 +299,13 @@ impl<'a> Draw<'a> {
             ink: ink_color(self.env.tokens, self.env.ink),
             fonts: stack_facts(self.painter.ctx()),
         }
+    }
+
+    /// A colour role of the scope's theme, for content that paints a state with no style of its own: a selected row in
+    /// `draw.role(|c| c.state.selected)`, its text in `|c| c.text.on_selected`. It is the colour a style function
+    /// gets from `cx.color(cx.tokens.color.…)` for the same role.
+    pub fn role(&self, pick: impl FnOnce(&craft_theme::ColorTokens) -> craft_theme::Rgba) -> StyleColor {
+        StyleColor(crate::style::rgba_color(pick(&self.env.tokens.color)))
     }
 
     #[doc(hidden)]
@@ -330,8 +389,8 @@ impl<'a> Draw<'a> {
 
     /// Paints `run` in its document face with the start of its first baseline at `start`, and returns its layout, whose
     /// top lies at `start.y - layout.first_baseline` ([`FaceRun`] says how the face, its fallback and the size are
-    /// chosen). `load` gives the face's bytes and index the first time `run.key` is drawn, and again only after the
-    /// fonts were replaced; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
+    /// chosen). `load` gives the face's bytes and index, which the caller holds, the first time `run.key` is drawn while
+    /// the face is kept; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
     /// component's run paints at `Opacity::DISABLED`, as `doc` does.
     pub fn face_run(&self, start: Pos2, run: &FaceRun<'_>, load: impl FnOnce() -> Option<FaceBytes>) -> TextLayout {
         let ctx = self.painter.ctx();
@@ -392,7 +451,8 @@ impl<'a> Draw<'a> {
         let square = Rect::from_center_size(rect.center(), Vec2::splat(side));
         match icon.source {
             super::IconSource::Swatch(swatch) => {
-                self.swatch_well(square, CornerRadius::ZERO, swatch);
+                // The icon's `None` is its own empty swatch (a mixed or theme-decided colour), so it keeps the dash.
+                self.swatch_well(square, CornerRadius::ZERO, swatch.map_or(WellFill::Mixed, WellFill::Color));
                 self.paint(&PaintShape::Rect(square, CornerRadius::ZERO), None, Some(Stroke::new(self.width(StrokeWidth::Thin), color)));
                 return;
             }
@@ -400,7 +460,16 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
-            _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon, self.data != DataMode::Full),
+            super::IconSource::Glyph(glyph) => glyph.paint_draw(self, square, color, super::icon::glyph_mirrored(glyph, icon, self.env.direction)),
+            _ => super::icon::paint(
+                self.painter,
+                self.env.tokens,
+                self.env.direction,
+                rect,
+                icon,
+                self.data != DataMode::Full,
+                self.env.ink == Ink::OnDark,
+            ),
         }
         match icon.badge {
             Some(super::IconMark::Dot(badge)) => {
@@ -423,6 +492,12 @@ impl<'a> Draw<'a> {
         }
     }
 
+    /// Paints `icon` as `icon` does, in the data colour `color` in place of the icon's own colour or ink: an icon drawn in
+    /// document content. The colour paints as `data_fill` paints one (dimmed or inactive with the component).
+    pub fn data_icon(&self, rect: Rect, icon: &super::IconSpec<'_>, color: DataColor) {
+        self.icon(rect, &icon.clone().data_color(DataColor::new(self.data_color(color))));
+    }
+
     /// `letter` in caption text centred in an outlined box that fills the square of `rect`'s shorter side.
     fn initial(&self, rect: Rect, letter: char, color: StyleColor) {
         let side = rect.width().min(rect.height());
@@ -433,6 +508,11 @@ impl<'a> Draw<'a> {
         let run = TextRun::new(letter.to_string()).role(TypeRole::Caption).color(color);
         let layout = self.layout(&run, f32::INFINITY);
         self.galley(square.center() - layout.size() / 2.0, &layout);
+    }
+
+    /// Paints the auto-scroll mark of `look` at `anchor`.
+    pub fn auto_scroll_mark(&self, look: &crate::style::AutoScrollMarkLook, anchor: Pos2) {
+        self.painter.extend(super::AutoScrollMark::shapes(look, anchor));
     }
 
     /// Paints the reset mark of `look` centred on `center`: the dot while the value `differs`, else the ring.
@@ -487,10 +567,44 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::rule::Rule::shapes(look, from, to, self.painter.pixels_per_point()));
     }
 
+    /// Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a dotted line.
+    pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32) {
+        self.painter.extend(super::rule::Rule::dotted(look, from, to, gap, self.painter.pixels_per_point()));
+    }
+
+    /// Paints the line `look` from `from` to `to` as ticks `across` points long, `gap` points apart (`Rule::ticks`):
+    /// a grip's row of marks.
+    pub fn ticked_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32, across: f32) {
+        self.painter.extend(super::rule::Rule::ticks(look, from, to, gap, across, self.painter.pixels_per_point()));
+    }
+
+    /// Paints `count` upright ticks of `look` centred on `centre`, side by side on a level line, `gap` points apart and
+    /// `across` points tall (`Rule::ticks`): a grip's row of marks, `count` of them at every display scale.
+    pub fn grip_ticks(&self, look: &crate::style::RuleLook, centre: Pos2, count: u16, gap: f32, across: f32) {
+        let ppp = self.painter.pixels_per_point().max(f32::EPSILON);
+        let (side, gap_px) = (look.width.pixels(ppp), (gap * ppp).round().max(1.0));
+        // The run `Rule::ticks` fits exactly `count` marks into: their sides, the gaps between them and the one free
+        // pixel it keeps.
+        let length = f32::from(count) * side + f32::from(count.saturating_sub(1)) * gap_px + 1.0;
+        let half = egui::vec2(length / ppp / 2.0, 0.0);
+        self.ticked_rule_with(look, centre - half, centre + half, gap, across);
+    }
+
     /// Paints a surface of `kind` (tracks, plot wells).
     pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners) {
         let style = surface_style(self.env.tokens, kind);
-        self.painter.extend(Surface::shapes(&style, None, rect, corners, self.env.direction, self.painter.pixels_per_point()));
+        let mut shapes = Surface::shapes(&style, None, rect, corners, self.env.direction, self.painter.pixels_per_point());
+        super::fit_to_frame(self.painter.ctx(), self.painter.layer_id(), &mut shapes);
+        self.painter.extend(shapes);
+    }
+
+    /// Paints the edge alone of a surface of `kind` over `rect`, with no shadow or fill: a floating window draws its
+    /// edge again over its content, which covers it where it reaches the window's sides.
+    pub fn surface_edge(&self, rect: Rect, kind: SurfaceKind) {
+        let mut style = surface_style(self.env.tokens, kind);
+        style.shadow = None;
+        style.fill = egui::Color32::TRANSPARENT;
+        self.painter.extend(Surface::shapes(&style, None, rect, Corners::All, self.env.direction, self.painter.pixels_per_point()));
     }
 
     /// Paints a surface of an already resolved `style` (a kind's look with one field changed, as a knob's round radius).
@@ -510,9 +624,16 @@ impl<'a> Draw<'a> {
     }
 
     /// Strokes `shape` at a theme width or a width from the document, in a theme colour or a colour from data (a
-    /// chart series, a curve). A data colour paints as `data_fill` paints it.
+    /// chart series, a curve). A data colour paints as `data_fill` paints it. A rect strokes inside its edge, a circle
+    /// outside it and a polygon on it; [`stroke_placed`](Self::stroke_placed) picks the place.
     pub fn stroke(&self, shape: &PaintShape, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
-        self.paint(shape, None, Some(self.line(width.into(), color.into())));
+        self.stroke_placed(shape, shape.stroke_place(), width, color);
+    }
+
+    /// Strokes `shape` as [`stroke`](Self::stroke) does, with the stroke `place`d against the shape's edge: an outline
+    /// around a selected item that must not cover it strokes `Outside`.
+    pub fn stroke_placed(&self, shape: &PaintShape, place: StrokePlace, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
+        self.paint_placed(shape, None, Some(self.line(width.into(), color.into())), place);
     }
 
     /// Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar). A component that paints its
@@ -521,6 +642,21 @@ impl<'a> Draw<'a> {
     pub fn data_fill(&self, shape: &PaintShape, color: DataColor) {
         let fill = self.data_color(color);
         self.paint(shape, Some(fill), None);
+    }
+
+    /// Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour
+    /// from data as `data_fill` paints it. Feathered pieces would each fade out along the edges they share, so a
+    /// translucent fill would show a seam of what lies beneath along every shared edge; unfeathered triangles meet
+    /// with no gap and no overlap.
+    pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor) {
+        let fill = self.data_color(color);
+        let mut mesh = egui::Mesh::default();
+        for piece in pieces {
+            mesh.append(super::kit::fill_polygon(piece, fill, 0.0));
+        }
+        if !mesh.is_empty() {
+            self.painter.add(Shape::mesh(mesh));
+        }
     }
 
     /// Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture
@@ -537,6 +673,13 @@ impl<'a> Draw<'a> {
         data_quad(self.painter, self.env.tokens, self.data, texture, corners, uv);
     }
 
+    /// The texture for `key` from the `TextureCache` of the context this painter paints in, for [`texture`](Self::texture):
+    /// `image()` is built on the first request only (see `TextureCache::texture`). A painter with no `egui::Context`
+    /// of its own, such as a canvas tool's paint call, loads its pictures through here.
+    pub fn cached_texture<K: std::hash::Hash + 'static>(&self, key: K, image: impl FnOnce() -> egui::ColorImage) -> TextureId {
+        super::TextureCache::texture(self.painter.ctx(), key, image)
+    }
+
     /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
     /// so it paints as the data over it: at `Opacity::DISABLED` for a disabled component, and for an inactive part as
     /// the theme's disabled fill, as `data_fill` does.
@@ -545,37 +688,52 @@ impl<'a> Draw<'a> {
     }
 
     /// Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
-    /// translucent, or for `None` (no colour of its own, or a mixed one) the empty well, `surface.sunken` with a
-    /// `text.muted` dash. `Swatch` and swatch icons paint their wells with it and add their own edges.
-    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, color: Option<Srgba>) {
-        self.well_of(&PaintShape::Rect(well, radius), well, color, |draw| draw.checker(&super::Checker::new(), well, radius));
+    /// translucent; else the empty well in `surface.sunken`, with a `text.muted` dash for `Mixed`, a `status.bad`
+    /// diagonal from the bottom start to the top end for `None`, and nothing for `Empty`. An `Option<Srgba>` is a
+    /// colour or, for `None` (no colour of its own, or a mixed one), the dash. `Swatch`, swatch icons and the paint
+    /// chip paint their wells with it and add their own edges.
+    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: impl Into<WellFill>) {
+        self.well_of(&PaintShape::Rect(well, radius), well, fill.into(), |draw| draw.checker(&super::Checker::new(), well, radius));
     }
 
     /// [`Self::swatch_well`] over the convex polygon `corners` (a honeycomb cell): the same parts, the checkerboard and
-    /// the dash cut to the polygon.
-    pub fn swatch_polygon_well(&self, corners: &[Pos2], color: Option<Srgba>) {
+    /// the marks cut to the polygon.
+    pub fn swatch_polygon_well(&self, corners: &[Pos2], fill: impl Into<WellFill>) {
         let bounds = Rect::from_points(corners);
-        self.well_of(&PaintShape::Polygon(corners.to_vec()), bounds, color, |draw| {
+        self.well_of(&PaintShape::Polygon(corners.to_vec()), bounds, fill.into(), |draw| {
             data_polygon_checker(draw.painter, draw.env.tokens, draw.data, &super::Checker::new(), corners, bounds.min);
         });
     }
 
     /// The parts of a swatch well in `shape` within `bounds`: the colour over the checkerboard `checker` paints where it
-    /// is translucent, or the empty well with its dash.
-    fn well_of(&self, shape: &PaintShape, bounds: Rect, color: Option<Srgba>, checker: impl FnOnce(&Self)) {
-        match color {
-            None => {
-                let colors = &self.env.tokens.color;
-                self.paint(shape, Some(crate::style::rgba_color(colors.surface.sunken)), None);
-                let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
-                self.paint(&super::glyph::dash(bounds), None, Some(dash));
-            }
-            Some(color) => {
+    /// is translucent, or the empty well with its mark.
+    fn well_of(&self, shape: &PaintShape, bounds: Rect, fill: WellFill, checker: impl FnOnce(&Self)) {
+        let colors = &self.env.tokens.color;
+        let sunken = Some(crate::style::rgba_color(colors.surface.sunken));
+        match fill {
+            WellFill::Color(color) => {
                 if color.a < 1.0 {
                     checker(self);
                 }
                 self.data_fill(shape, DataColor::new(Color32::from(color)));
             }
+            WellFill::Mixed => {
+                self.paint(shape, sunken, None);
+                let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
+                self.paint(&super::glyph::dash(bounds), None, Some(dash));
+            }
+            WellFill::None => {
+                self.paint(shape, sunken, None);
+                let inner = bounds.shrink(bounds.height() * NONE_DIAGONAL_INSET);
+                let (from, to) = if self.env.direction == Direction::Rtl {
+                    (inner.right_bottom(), inner.left_top())
+                } else {
+                    (inner.left_bottom(), inner.right_top())
+                };
+                let mark = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.status.bad.solid));
+                self.paint(&PaintShape::Path(vec![from, to]), None, Some(mark));
+            }
+            WellFill::Empty => self.paint(shape, sunken, None),
         }
     }
 
@@ -626,12 +784,36 @@ impl<'a> Draw<'a> {
         paint(&Draw { painter: &painter, record: self.record, env: self.env, data: self.data, text_direction: self.text_direction });
     }
 
+    /// Paints `shape` with its stroke where [`stroke`](Self::stroke) puts it.
     fn paint(&self, shape: &PaintShape, fill: Option<Color32>, stroke: Option<Stroke>) {
+        self.paint_placed(shape, fill, stroke, shape.stroke_place());
+    }
+
+    fn paint_placed(&self, shape: &PaintShape, fill: Option<Color32>, stroke: Option<Stroke>, place: StrokePlace) {
         let fill_color = fill.unwrap_or(Color32::TRANSPARENT);
         let stroke = stroke.unwrap_or(Stroke::NONE);
+        let kind = match place {
+            StrokePlace::Inside => StrokeKind::Inside,
+            StrokePlace::Centre => StrokeKind::Middle,
+            StrokePlace::Outside => StrokeKind::Outside,
+        };
         let shape = match shape {
-            PaintShape::Rect(rect, radius) => Shape::Rect(RectShape::new(*rect, *radius, fill_color, stroke, StrokeKind::Inside)),
-            PaintShape::Circle(center, radius) => Shape::Circle(CircleShape { center: *center, radius: *radius, fill: fill_color, stroke }),
+            PaintShape::Rect(rect, radius) => Shape::Rect(RectShape::new(*rect, *radius, fill_color, stroke, kind)),
+            PaintShape::Circle(center, radius) => {
+                // egui strokes a circle outside its radius, so the fill and the stroke paint as two circles when the
+                // stroke moves in.
+                let offset = match place {
+                    StrokePlace::Inside => -stroke.width,
+                    StrokePlace::Centre => -stroke.width / 2.0,
+                    StrokePlace::Outside => 0.0,
+                };
+                if offset != 0.0 && fill.is_some() {
+                    self.painter.add(Shape::Circle(CircleShape { center: *center, radius: *radius, fill: fill_color, stroke: Stroke::NONE }));
+                }
+                let fill_color = if offset == 0.0 { fill_color } else { Color32::TRANSPARENT };
+                let radius = (*radius + offset).max(0.0);
+                Shape::Circle(CircleShape { center: *center, radius, fill: fill_color, stroke })
+            }
             PaintShape::Polygon(points) => {
                 if fill.is_some() {
                     let feather = self.painter.ctx().tessellation_options(|options| {
@@ -645,7 +827,9 @@ impl<'a> Draw<'a> {
                 if stroke.is_empty() {
                     return;
                 }
-                Shape::closed_line(points.clone(), stroke)
+                let mut line = egui::epaint::PathStroke::from(stroke);
+                line.kind = kind;
+                Shape::closed_line(points.clone(), line)
             }
             PaintShape::Path(points) => Shape::line(points.clone(), stroke),
         };

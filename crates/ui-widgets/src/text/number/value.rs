@@ -139,6 +139,8 @@ pub struct NumberOutput<V: NumberValue = Option<f64>> {
     pub out_of_range: Option<RangeAlert>,
     /// The committed text held more than the codec reads, in the pass it committed.
     pub cut: bool,
+    /// The field's link label was clicked in this pass (`Cx::link_activated`); false unless its side label is a link.
+    pub link: bool,
 }
 
 /// A typed value the field clamped to its range, in shown units.
@@ -178,6 +180,7 @@ impl<V: NumberValue> Outcome for NumberOutput<V> {
 
     #[cfg(feature = "testing")]
     fn story_facts(&self) -> crate::testing::StoryOutput {
-        self.edit.story_facts()
+        let facts = self.edit.story_facts();
+        crate::testing::StoryOutput { clicked: facts.clicked || self.link, ..facts }
     }
 }

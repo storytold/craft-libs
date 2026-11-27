@@ -18,7 +18,7 @@ workspace = true
 suite = ["testing", "craft-ui-panels/suite"]
 default = []
 # `shell::app`: the eframe entry point.
-app = ["dep:eframe", "craft-window/ui"]
+app = ["dep:eframe"]
 # `craft_ui::testing`.
 testing = ["craft-ui-panels/testing"]
 
@@ -32,7 +32,8 @@ craft-ui-macros = { workspace = true }
 egui = { workspace = true }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "x11", "default_fonts"], optional = true }
 craft-host = { workspace = true }
-craft-window = { workspace = true }
+# `ui`: `desktop::fits`, for `embed::before_ui`'s first fit.
+craft-window = { workspace = true, features = ["ui"] }
 craft-i18n = { workspace = true, features = ["collate"] }
 # The saved forms of `ScreenMode`, `RecentView` and `RecentSort`.
 serde = { workspace = true }
@@ -40,6 +41,10 @@ serde = { workspace = true }
 craft-svg = { workspace = true, features = ["draw"] }
 # `std::time::Instant` on native; the browser clock on wasm, where `Instant::now` panics.
 web-time = "1.1"
+
+# `embed::before_ui` takes the root window's handle (eframe's `Frame`).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+raw-window-handle = "0.6"
 
 # `AppSpec::new` installs `craft_window::system::SystemWindows`, which reads AppKit without craft-window's egui layer.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -53,6 +58,7 @@ craft-theme = { workspace = true }
 craft-ui-test-kit = { workspace = true, features = ["suite"] }
 craft-window = { workspace = true }
 egui = { workspace = true }
+serde_json = { workspace = true }
 
 [[test]]
 name = "it"

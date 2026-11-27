@@ -2,10 +2,10 @@
 
 use std::hash::Hash;
 
-use craft_behavior::{EditEvents, IconId};
-use craft_ui::contract::{Bind, EditResponse, Outcome, Props as _, ShowContainer as _};
+use craft_behavior::{EditEvents, IconId, Selection};
+use craft_ui::contract::{Bind, EditResponse, MemoProps, Outcome, Props as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFooterEvent, PresetFooterOptions, PresetReorder, PresetRow, PresetState};
+use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFooterEvent, PresetFooterOptions, PresetReorder, PresetSource, PresetState};
 use craft_ui::runtime::drag::DropZone;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::sections::FooterAction;
@@ -29,9 +29,9 @@ pub(super) const BRUSH_THUMBS: TileZoom =
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 #[pattern(probe(BrushesPanel<'static, u32>))]
-pub struct BrushesPanel<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
+pub struct BrushesPanel<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> {
     label: Label,
-    rows: &'a [PresetRow<K>],
+    source: &'a PresetSource<'a, K>,
     state: Bind<'a, PresetState<K>>,
     diameter: Bind<'a, f64>,
     max_size: f64,
@@ -67,16 +67,22 @@ impl<K> Outcome for BrushesPanelOutput<K> {
     }
 }
 
-impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> BrushesPanel<'a, K> {
-    /// A panel named `label` over the presets in `rows`, with its view in `state` and the brush
+impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> BrushesPanel<'a, K> {
+    /// A panel named `label` over the presets of `source`, with its view in `state` and the brush
     /// size in `diameter` up to `max_size`.
-    pub fn new(label: impl Into<Label>, rows: &'a [PresetRow<K>], state: Bind<'a, PresetState<K>>, diameter: Bind<'a, f64>, max_size: f64) -> Self {
-        BrushesPanel { label: label.into(), rows, state, diameter, max_size, selected: None, drop_zone: None, import: false }
+    pub fn new(
+        label: impl Into<Label>,
+        source: &'a PresetSource<'a, K>,
+        state: Bind<'a, PresetState<K>>,
+        diameter: Bind<'a, f64>,
+        max_size: f64,
+    ) -> Self {
+        BrushesPanel { label: label.into(), source, state, diameter, max_size, selected: None, drop_zone: None, import: false }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> BrushesPanelOutput<K> {
-        let BrushesPanel { label, rows, mut state, mut diameter, max_size, mut selected, mut drop_zone, import } = self;
+        let BrushesPanel { label, source, mut state, mut diameter, max_size, mut selected, mut drop_zone, import } = self;
         let words = Env::of(ui).words::<BrushPresetWords>();
         let shown = Stack::new().label(label.clone()).fill().show(ui, |ui, _| {
             let size = BrushSizeField::new(words.size.clone(), diameter.reborrowed(), max_size).show(ui);
@@ -84,14 +90,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> BrushesPanel<'a, K> {
             if import {
                 footer = footer.action(FooterAction::new(IconId::new("folder_open"), words.menu_import.clone()));
             }
-            let mut browser = PresetBrowser::new(label.clone(), state.reborrowed(), rows)
+            let mut browser = PresetBrowser::new(label.clone(), state.reborrowed(), source)
                 .toolbar(true)
-                .row_menu(true)
                 .reorder(PresetReorder::items_and_groups())
                 .thumb_range(BRUSH_THUMBS)
                 .footer(footer);
             if let Some(key) = selected.take() {
-                browser = browser.selected(key);
+                browser = browser.selection(Bind::given(Selection::single(key)));
             }
             if let Some(zone) = drop_zone.take() {
                 browser = browser.drop_zone(zone);

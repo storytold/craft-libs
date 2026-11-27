@@ -3,7 +3,6 @@
 use crate::contract::cx::CxCore;
 use crate::runtime::egui::repaint;
 use crate::runtime::pass_state;
-use crate::runtime::wheel;
 use craft_behavior::{MoveMods, NavMove};
 use egui::{Context, Id, Rect, Vec2};
 
@@ -13,6 +12,15 @@ use egui::{Context, Id, Rect, Vec2};
 pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     let scrolls = |mv: NavMove, _| matches!(mv, NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End);
     let mut moves = Vec::new();
+    if let Some(collection) = core.env.fallback_collection().filter(|id| *id != core.id) {
+        while let Some(mv) = core.intents.take_move() {
+            moves.push(mv);
+        }
+        if !moves.is_empty() {
+            pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.drain(..).map(|(mv, mods)| (collection, mv, mods, true))));
+            repaint::request(&core.ctx);
+        }
+    }
     while let Some(mv) = core.intents.take_move_where(scrolls) {
         moves.push(mv);
     }
@@ -20,8 +28,8 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     if moves.is_empty() && !reveal {
         return;
     }
-    let Some(owner) = core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&core.ctx, core.rect)) else { return };
-    pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods))));
+    let Some(owner) = core.env.scroll_owner() else { return };
+    pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods, false))));
     if reveal {
         pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));
     }
@@ -116,17 +124,43 @@ pub(crate) fn child_reveal(ctx: &Context, owner: Id, quiet: bool) -> Option<Id> 
 /// A page or end move a focused component left untaken, with its modifiers, addressed to the scroll owner around it
 /// (9.2 rule 5).
 #[derive(Default)]
-pub(crate) struct ScrollMoves(Vec<(Id, NavMove, MoveMods)>);
+/// Each move carries whether it came through a region's fallback collection (`ContainerProps::fallback_collection`).
+pub(crate) struct ScrollMoves(Vec<(Id, NavMove, MoveMods, bool)>);
 
 /// The scroll moves addressed to `owner`, in the order they arrived: taken, or left queued when `quiet`.
 pub(crate) fn scroll_moves(ctx: &Context, owner: Id, quiet: bool) -> Vec<(NavMove, MoveMods)> {
     pass_state::with::<ScrollMoves, _>(ctx, |moves| {
-        let mine = moves.0.iter().filter(|(id, ..)| *id == owner).map(|(_, mv, mods)| (*mv, *mods)).collect();
+        let mine = moves.0.iter().filter(|(id, ..)| *id == owner).map(|(_, mv, mods, _)| (*mv, *mods)).collect();
         if !quiet {
             moves.0.retain(|(id, ..)| *id != owner);
         }
         mine
     })
+}
+
+/// Moves with their modifiers, in the order they came.
+type Moves = Vec<(NavMove, MoveMods)>;
+
+/// [`scroll_moves`] apart: the page and end moves a component inside left for its scroll owner, and the moves a
+/// region's fallback collection takes as its own keys (every move, page and end included, L-319).
+pub(crate) fn scroll_and_fallback_moves(ctx: &Context, owner: Id, quiet: bool) -> (Moves, Moves) {
+    pass_state::with::<ScrollMoves, _>(ctx, |moves| {
+        let (mut scrolls, mut fallback) = (Vec::new(), Vec::new());
+        for &(id, mv, mods, through_fallback) in &moves.0 {
+            if id == owner {
+                if through_fallback { fallback.push((mv, mods)) } else { scrolls.push((mv, mods)) }
+            }
+        }
+        if !quiet {
+            moves.0.retain(|(id, ..)| *id != owner);
+        }
+        (scrolls, fallback)
+    })
+}
+
+/// Targets with queued moves, to wake settled regions containing them.
+pub(crate) fn move_targets(ctx: &Context) -> Vec<Id> {
+    pass_state::with::<ScrollMoves, _>(ctx, |moves| moves.0.iter().map(|(id, ..)| *id).collect())
 }
 
 /// The smallest move of `view` that shows `rect`, per axis in screen points (positive: toward larger coordinates), and

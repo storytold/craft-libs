@@ -207,3 +207,113 @@ fn end_skips_the_items_of_a_closed_group() {
     let rows = seen.rows.borrow();
     assert!(rows.iter().all(|(key, rect)| *key < 5 && rect.is_finite()), "only shown items are built: {rows:?}");
 }
+
+#[trial]
+fn unused_moves_reach_the_regions_collection_in_either_declaration_order() {
+    use craft_ui::contract::{Show as _, ShowContainer as _};
+    use craft_ui_test_kit::{
+        body::Slab,
+        contract::{Probe as Button, Seen as ButtonSeen},
+    };
+    for collection_first in [false, true] {
+        let (seen, layout) = (Seen::default(), Ragged { rows: vec![3, 2], hidden_from: 5 });
+        let source = Count(5);
+        let button_seen = RefCell::new(ButtonSeen::default());
+        let list_id = Id::unique("fallback collection");
+        let button_id = Id::unique("fallback button");
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+                Slab::new(ContainerProps::new().fallback_collection(list_id)).show(ui, |ui, _| {
+                    let list = |ui: &mut Ui| {
+                        seen.take(
+                            Probe::new(CollectionProps::new().select(SelectMode::Single), layout.clone(), &seen.digits).id(list_id).show_items(
+                                ui,
+                                &source,
+                                &mut |_, _| Row::new(),
+                            ),
+                        );
+                    };
+                    if collection_first {
+                        list(ui);
+                    }
+                    Button::new(&button_seen).id(button_id).show(ui);
+                    if !collection_first {
+                        list(ui);
+                    }
+                });
+            });
+        };
+        frames.idle(3, &mut show);
+        request(&frames.ctx, FocusTarget::Id(button_id));
+        frames.idle(2, &mut show);
+        press(&mut frames, Key::ArrowDown, &mut show);
+        frames.idle(2, &mut show);
+        assert_eq!(seen.lead_keys().len(), 1, "the move reaches the collection once across later passes");
+    }
+}
+
+#[derive(craft_ui::contract::Component)]
+struct MoveControl<'a> {
+    #[common]
+    common: Common,
+    taken: &'a Cell<usize>,
+}
+
+impl Component for MoveControl<'_> {
+    const ROLE: Role = Role::BUTTON;
+    type Style = PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &StyleCx<'_>, _: MoveControlStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+    fn keys(&self) -> craft_ui::runtime::focus::KeyUse {
+        craft_ui::runtime::focus::KeyUse::of(craft_behavior::Input::Pointer).with_moves()
+    }
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        TILE
+    }
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::CLICK | craft_behavior::Sense::FOCUS
+    }
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        while cx.intents().take_move().is_some() {
+            self.taken.set(self.taken.get() + 1);
+        }
+    }
+    fn finish(self, cx: Cx<'_, Self>) -> Self::Output {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn a_focused_control_keeps_the_moves_it_uses_before_the_fallback() {
+    use craft_ui::contract::{Show as _, ShowContainer as _};
+    use craft_ui_test_kit::body::Slab;
+    let (seen, layout) = (Seen::default(), Ragged { rows: vec![3, 2], hidden_from: 5 });
+    let source = Count(5);
+    let taken = Cell::new(0);
+    let list_id = Id::unique("fallback first refusal list");
+    let control_id = Id::unique("fallback first refusal control");
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Slab::new(ContainerProps::new().fallback_collection(list_id)).show(ui, |ui, _| {
+                MoveControl { common: Common::new(), taken: &taken }.id(control_id).show(ui);
+                seen.take(Probe::new(CollectionProps::new().select(SelectMode::Single), layout.clone(), &seen.digits).id(list_id).show_items(
+                    ui,
+                    &source,
+                    &mut |_, _| Row::new(),
+                ));
+            });
+        })
+    };
+    frames.idle(3, &mut show);
+    request(&frames.ctx, FocusTarget::Id(control_id));
+    frames.idle(2, &mut show);
+    press(&mut frames, Key::ArrowDown, &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(taken.get(), 1);
+    assert!(seen.lead_keys().is_empty(), "a move used by the control never reaches the fallback");
+}

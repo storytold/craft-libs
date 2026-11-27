@@ -6,7 +6,10 @@
 //! its in-window bar ([`from_items`]), gives each top-level menu its role ([`MenuRole`]), and
 //! tags the items the layouts put in fixed places ([`MenuBar::tag_item`], [`MenuBar::tag_submenu`]).
 //! Each item runs a [`craft_keymap::CommandRef`], its shortcut is a [`craft_keymap::Chord`], and
-//! its [`ItemKind`] makes it plain, a check item or a radio item. [`layout`]
+//! its [`ItemKind`] makes it plain, a check item or a radio item; [`Item::sample()`] gives its row a
+//! painted sample in the in-window bar. A [`Node::Heading`] is a caption over the rows after it,
+//! never a command: the native menu shows it as a disabled item, and [`tidy`] drops one with no
+//! item after it. [`layout`]
 //! arranges them the way the platform's apps do, and [`NativeMenu`] hands the result to a platform
 //! [`Backend`] and brings its events back. This part is pure and platform-free, so it is tested
 //! everywhere and builds for the web; only the backend touches AppKit, in `craft_window::native_menu`.
@@ -50,9 +53,9 @@
 //!   the others go without a shortcut. A system item gives way to the command the app's keymap
 //!   gives the key to, in a menu or not ([`LayoutOptions::keys`]), and to an item that shows it.
 //!
-//! **Alternates.** An [`Item`] or [`Row`] can carry an [`Alternate`]: while its modifiers are held
-//! as the row is clicked, the row runs the alternate's command, in the in-window bar and the native
-//! menu. Key equivalents are never swapped.
+//! **Alternates.** An [`Item`] or [`Row`] can carry an [`Alternate`] (craft-ui's, which panel menus
+//! share): while its modifiers are held as the row is clicked, the row runs the alternate's
+//! command, in the in-window bar and the native menu. Key equivalents are never swapped.
 //!
 //! **Customization.** [`Customization`] drops the rows the user hid and tints the ones they
 //! coloured, before [`from_items`].
@@ -87,6 +90,10 @@
 //! `mac::install_app_menu` (a minimal app menu, for apps without a [`MenuBar`]) both use it.
 //! [`NativeMenu::on_command`] sees each allowed click as it arrives, also while egui is idle.
 //!
+//! A native menu opening is [`Event::Opened`]; [`NativeMenu::take_opened`] reports it once, for an
+//! app that refreshes what a menu lists (a scripts folder) when it opens. It changes nothing the menus
+//! show, so it does not re-sync them.
+//!
 //! Per frame: [`NativeMenu::poll`], then [`NativeMenu::set_gate`], [`NativeMenu::take_clicks`] and run the commands, then
 //! [`NativeMenu::sync_with`], which lays the menus out again only when its key changed (the menu model's
 //! `Tracked` revision and the other inputs of the layout).
@@ -114,11 +121,12 @@ pub mod mac;
 pub mod ribbon;
 pub mod shortcuts;
 
-pub use bar::{EnglishHook, Labeled, MenuBarOutput, MenuBarUi};
+pub use bar::{MenuBarOutput, MenuBarUi};
 pub use craft_keymap::{Chord, CommandRef};
+pub use craft_ui::menu::Alternate;
 pub use customize::Customization;
 pub use documents::DOCUMENT_COMMAND_PREFIX;
-pub use driver::{Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu};
+pub use driver::{Attempt, Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu, REBUILD_RETRY, RebuildRetry};
 pub use help::{HelpCommand, HelpLabels, HelpLink, HelpMenu};
 pub use keymap::{ItemState, apply_keymap, apply_state};
 pub use keytips::{KeytipControl, Keytips, KeytipsOutput};
@@ -126,8 +134,7 @@ pub use language::{LANGUAGE_COMMAND, LanguageChoice, LanguageLabels, LanguageMen
 pub use layout::{Clash, Layout, LayoutOptions, Target, desktop_layout, layout, mac_layout, web_layout};
 pub use modal::{ModalRules, NAVIGATION_COMMANDS, PendingRule};
 pub use model::{
-    Alternate, Builtin, Document, Item, ItemKind, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Row, Standard, from_items, structure_key, tidy,
-    window_key,
+    Builtin, Document, Item, ItemKind, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Row, Standard, from_items, structure_key, tidy, window_key,
 };
 pub use ribbon::{
     Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput, GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonOutput,

@@ -469,9 +469,6 @@ const MINOR_SHARE: f32 = 0.45;
 /// How many times a thinned grid doubles its step before it gives up.
 const MAX_DOUBLINGS: u32 = 32;
 
-/// The radius of a dot, in screen points.
-const DOT_RADIUS: f32 = 0.6;
-
 /// What a grid does when its lines come closer than the minimum step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -693,7 +690,7 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
             match ink.stroke {
                 GridStroke::Solid => shapes.extend(Rule::shapes(&RuleLook { color, width: look.width }, a, b, pixels_per_point)),
                 GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width.points(pixels_per_point), color)),
-                GridStroke::Dots => shapes.extend(Shape::dotted_line(&[a, b], color, look.gap, DOT_RADIUS)),
+                GridStroke::Dots => shapes.extend(Rule::dotted(&RuleLook { color, width: look.width }, a, b, look.gap, pixels_per_point)),
             }
         }
     }
@@ -747,8 +744,12 @@ pub fn outline(tokens: &UiTokens, shape: &PaintShape) -> Vec<Shape> {
 /// The outline of [`outline`] with the line in `line`, a colour the user picked (a Navigator proxy colour), over the
 /// overlay halo. Every halo is drawn under every line, so the edges of one mark that meet or cross stay unbroken.
 pub fn outline_in(tokens: &UiTokens, shapes: &[PaintShape], line: Color32) -> Vec<Shape> {
-    let halo = Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo));
-    let line = Stroke::new(tokens.stroke.medium, line);
+    outline_with(Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo)), Stroke::new(tokens.stroke.medium, line), shapes)
+}
+
+/// The outline of `shapes` with the strokes given: the halo under the line. For a component that keeps shapes built in
+/// `update`, where only `style` has read the tokens.
+pub fn outline_with(halo: Stroke, line: Stroke, shapes: &[PaintShape]) -> Vec<Shape> {
     let halos = shapes.iter().flat_map(|shape| stroked(shape, halo));
     halos.chain(shapes.iter().flat_map(|shape| stroked(shape, line))).collect()
 }
@@ -935,6 +936,16 @@ pub fn ellipse(center: Pos2, axes: [Vec2; 2]) -> Vec<Pos2> {
         .collect()
 }
 
+/// A line `width` points wide along `points`, with round dots at every point, in the theme's text-selection fill
+/// (translucent, so the content under it shows): the swath a rubbing tool leaves.
+pub fn swath(tokens: &UiTokens, points: &[Pos2], width: f32) -> Vec<Shape> {
+    let color = rgba_color(tokens.color.state.text_selection);
+    let mut shapes = vec![Shape::line(points.to_vec(), Stroke::new(width, color))];
+    // A line has butt ends and no joins: a dot at each point keeps the swath's width at the ends and corners.
+    shapes.extend(points.iter().map(|&p| Shape::circle_filled(p, width / 2.0, color)));
+    shapes
+}
+
 fn stroked(shape: &PaintShape, stroke: Stroke) -> Vec<Shape> {
     match shape {
         PaintShape::Rect(rect, radius) => vec![Shape::rect_stroke(*rect, *radius, stroke, egui::StrokeKind::Middle)],
@@ -1048,6 +1059,11 @@ impl ContentPainterCx<'_> {
     /// The device pixels per point of the surface being painted.
     pub fn pixels_per_point(&self) -> f32 {
         self.ppp()
+    }
+
+    /// Paints a swath `width` points wide along `points` in the text-selection fill; see [`swath`].
+    pub fn swath(&self, points: &[Pos2], width: f32) {
+        self.painter.extend(swath(self.tokens, points, width));
     }
 
     /// Paints the insertion mark of a drop.

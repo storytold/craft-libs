@@ -423,7 +423,9 @@ impl StackDialog for HostedNewGuideDialog {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Guide>> {
         self.recall(ui.ctx());
-        let mut dialog = (self.build)(Bind::bound(&mut self.values)).answers(self.requests.take_answers()).opened(Bind::bound(&mut self.open));
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
+        let mut dialog = (self.build)(Bind::bound(&mut self.values)).answers(answers).opened(Bind::bound(&mut self.open));
         dialog.recalled = true;
         if self.error.is_some() {
             dialog.error = self.error.clone();

@@ -68,6 +68,8 @@ pub(super) fn write(handle: &mut arboard::Clipboard, state: &mut State, plan: &P
                 string("public.html", &html.text);
             }
         }
+        // arboard's file list is the whole copy.
+        Primary::Files => {}
     }
     state.change = Some(board.changeCount());
     Ok(index)

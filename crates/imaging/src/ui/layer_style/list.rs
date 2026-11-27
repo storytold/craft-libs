@@ -31,8 +31,10 @@ pub enum LayerStyleCommand {
 pub(super) enum ListAction {
     /// Show this page (a row click, Enter on the lead row).
     Select(LayerStylePage),
-    /// An instance's check box: [`LayerStyleDraft::toggle`].
-    Toggle(EffectId),
+    /// The value of an instance's check box.
+    Check(EffectId, bool),
+    /// An absent effect is added when checked and removed again if its sweep is cancelled.
+    CheckAbsent(EffectKind, bool),
     /// A click on an absent effect's row, or `+`: [`LayerStyleDraft::add_instance`].
     Add(EffectKind),
     /// `−`: [`LayerStyleDraft::remove_instance`].
@@ -96,6 +98,10 @@ impl ItemSource<EffectRow> for Rows<'_> {
     fn toggled(&self, at: usize, _: &ColumnKey) -> bool {
         matches!(&self.rows[at], EffectRow::Instance(id) if self.draft.style.effect(*id).is_some_and(|instance| instance.on))
     }
+
+    fn toggle_enabled(&self, at: usize, _: &ColumnKey) -> bool {
+        matches!(&self.rows[at], EffectRow::Instance(_) | EffectRow::Absent(_))
+    }
 }
 
 /// The name of instance `id` of `kind`: the effect's name, numbered when the style has several instances of the kind.
@@ -128,7 +134,7 @@ pub(super) fn effect_list(
     specs: &[EffectSpec],
     words: &LayerStyleWords,
     units: &Units,
-) -> Option<ListAction> {
+) -> Vec<ListAction> {
     let mut rows = vec![EffectRow::Styles, EffectRow::Blending, EffectRow::Gap];
     for spec in specs {
         let before = rows.len();
@@ -145,7 +151,7 @@ pub(super) fn effect_list(
     let shown = rows.iter().find(|row| row.page() == Some(draft.page)).cloned();
     let selection = shown.clone().map_or_else(Selection::default, Selection::single);
     let source = Rows { rows: &rows, draft };
-    let columns = vec![ColumnSpec::toggle(CHECK, Label::Empty, ToggleColumn::default()), ColumnSpec::new(NAME, Label::Empty, ColumnWidth::Content)];
+    let columns = vec![ColumnSpec::toggle(CHECK, Label::Empty, ToggleColumn::sweepable()), ColumnSpec::new(NAME, Label::Empty, ColumnWidth::Content)];
 
     let out = List::<EffectRow>::new(words.effects.clone())
         .select(SelectMode::Single)
@@ -194,48 +200,50 @@ pub(super) fn effect_list(
     }
     let lead = cx.keep::<Lead>().0.clone().filter(|row| rows.contains(row)).or(shown);
 
-    let mut action = None;
-    let mut first = |next: Option<ListAction>| {
-        if action.is_none() {
-            action = next;
-        }
-    };
+    let mut actions = Vec::new();
     for event in &out.events {
-        match event {
-            CollectionEvent::Toggle(edit) => {
-                // This column does not sweep: each toggle edit is one press.
-                if let Some(SweepStep::Flip(toggle) | SweepStep::Restore(toggle)) = cx.keep::<SweepApply>().feed(edit) {
-                    first(match &toggle.key {
-                        EffectRow::Instance(id) => Some(ListAction::Toggle(*id)),
-                        EffectRow::Absent(kind) => Some(ListAction::Add(*kind)),
-                        _ => None,
-                    });
-                }
-            }
-            CollectionEvent::Item(row, RowEvent::Trailing { part, .. }) => first(match (row, *part) {
+        let action = match event {
+            CollectionEvent::Toggle(edit) => match cx.keep::<SweepApply>().feed(edit) {
+                Some(SweepStep::Flip(toggle) | SweepStep::Restore(toggle)) => match toggle.key {
+                    EffectRow::Instance(id) => Some(ListAction::Check(id, toggle.on)),
+                    EffectRow::Absent(kind) => Some(ListAction::CheckAbsent(kind, toggle.on)),
+                    _ => None,
+                },
+                _ => None,
+            },
+            CollectionEvent::Item(row, RowEvent::Trailing { part, .. }) => match (row, *part) {
                 (EffectRow::Instance(_), ADD) => kind_of(row).map(ListAction::Add),
                 (EffectRow::Instance(id), REMOVE) => Some(ListAction::Remove(*id)),
                 _ => None,
-            }),
-            CollectionEvent::Activate(row) => first(match row {
+            },
+            CollectionEvent::Activate(row) => match row {
                 EffectRow::Absent(kind) => Some(ListAction::Add(*kind)),
                 other => other.page().map(ListAction::Select),
-            }),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
-                first(keys.last().and_then(EffectRow::page).filter(|page| *page != draft.page).map(ListAction::Select));
+            },
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                keys.last().and_then(EffectRow::page).filter(|page| *page != draft.page).map(ListAction::Select)
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(action) = action
+            && (actions.is_empty() || matches!(action, ListAction::Check(..) | ListAction::CheckAbsent(..)))
+        {
+            actions.push(action);
         }
     }
     while let Some((command, _)) = cx.take_command::<LayerStyleCommand>() {
+        if !actions.is_empty() {
+            continue;
+        }
         let kind = lead.as_ref().and_then(kind_of).filter(|kind| kind.allows_several());
-        first(match (command, &lead) {
+        let action = match (command, &lead) {
             (LayerStyleCommand::AddInstance, _) => kind.map(ListAction::Add),
             (LayerStyleCommand::RemoveInstance, Some(EffectRow::Instance(id))) => {
                 kind.filter(|kind| draft.style.instances(*kind).count() > 1).map(|_| ListAction::Remove(*id))
             }
             _ => None,
-        });
+        };
+        actions.extend(action);
     }
-    action
+    actions
 }

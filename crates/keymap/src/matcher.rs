@@ -2,9 +2,9 @@
 //! Alt variant. It reads no toolkit's events; craft-ui's key stage runs it.
 
 use crate::DOUBLE_PRESS;
-use crate::chord::{Chord, Key, Mods, Trigger};
+use crate::chord::{Chord, Key, Mods, PressKind, Trigger};
 use crate::command::CommandRef;
-use crate::keymap::{Keymap, Lookup};
+use crate::keymap::{DeleteKeys, Keymap, Lookup};
 use crate::layout::{KeyInput, Layout};
 use crate::scope::Active;
 
@@ -72,7 +72,7 @@ pub struct Matcher {
 }
 
 impl Matcher {
-    /// A matcher with Delete and Backspace standing for each other.
+    /// A matcher with no previous press.
     pub fn new() -> Matcher {
         Matcher::default()
     }
@@ -87,7 +87,7 @@ impl Matcher {
     /// scope or of its next chord candidate, as if the refused one were not bound.
     pub fn press_where(&mut self, layout: &Layout, keymap: &Keymap, press: &Press<'_>, accept: &dyn Fn(&CommandRef) -> bool) -> Option<Hit> {
         let Press { input, repeat, now, active, outer } = *press;
-        let chords = Chords::of(layout, input)?;
+        let chords = Chords::of(layout, keymap, input)?;
         let m = Match { keymap, active, outer, accept };
         if repeat {
             return chords.single(&m);
@@ -105,7 +105,13 @@ impl Matcher {
     /// The command a press of `input` runs on its own, as [`press`](Self::press) matches a press that completes no
     /// double press: for a key that is held down rather than pressed now (a key automation holds). Keeps no state.
     pub fn single(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
-        Chords::of(layout, input)?.single(&Match { keymap, active, outer, accept: &|_| true })
+        Chords::of(layout, keymap, input)?.single(&Match { keymap, active, outer, accept: &|_| true })
+    }
+
+    /// The command a hold of `input` runs: for a key that stays down past the hold time. Keeps no state.
+    // PLAN: `Keymap::hold_of` ranks without the outer panels, so `outer` has no effect yet.
+    pub fn hold(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, _outer: &[&str]) -> Option<Hit> {
+        Chords::of(layout, keymap, input)?.hold(keymap, active)
     }
 }
 
@@ -120,12 +126,13 @@ struct Match<'a> {
 }
 
 /// The chords one press can run, most specific first: the chord with the Shift the layout dropped kept (rule 3's
-/// exception), the layout's candidates, then Delete and Backspace standing for each other.
+/// exception), the layout's candidates, then, where the keymap takes them as one key ([`DeleteKeys::OneKey`]), Delete
+/// and Backspace standing for each other.
 struct Chords(Vec<Chord>, Chord);
 
 impl Chords {
     /// `None` when the press names no key.
-    fn of(layout: &Layout, input: &KeyInput) -> Option<Chords> {
+    fn of(layout: &Layout, keymap: &Keymap, input: &KeyInput) -> Option<Chords> {
         let mut chords = layout.candidates(input);
         let meant = chords.first().copied()?;
         // Rule 3's exception (`layout` docs): where the layout dropped the Shift the person held for a symbol that
@@ -136,15 +143,17 @@ impl Chords {
             chords.retain(|chord| *chord != kept);
             chords.insert(0, kept);
         }
-        let twins: Vec<Chord> = chords
-            .iter()
-            .filter_map(|c| match c.key {
-                Key::Delete => Some(Chord::new(c.mods, Key::Backspace)),
-                Key::Backspace => Some(Chord::new(c.mods, Key::Delete)),
-                _ => None,
-            })
-            .collect();
-        chords.extend(twins);
+        if keymap.delete_keys() == DeleteKeys::OneKey {
+            let twins: Vec<Chord> = chords
+                .iter()
+                .filter_map(|c| match c.key {
+                    Key::Delete => Some(Chord::new(c.mods, Key::Backspace)),
+                    Key::Backspace => Some(Chord::new(c.mods, Key::Delete)),
+                    _ => None,
+                })
+                .collect();
+            chords.extend(twins);
+        }
         Some(Chords(chords, meant))
     }
 
@@ -157,7 +166,20 @@ impl Chords {
     fn find(&self, m: &Match<'_>, double: bool) -> Option<Hit> {
         let first = self.first();
         self.0.iter().find_map(|&chord| {
-            Hit::from_lookup(m.keymap.lookup_where(&chord, double, m.active, m.outer, m.accept), Trigger { chord, double }, chord == first)
+            Hit::from_lookup(
+                m.keymap.lookup_where(&chord, double, m.active, m.outer, m.accept),
+                Trigger { chord, press: if double { PressKind::Double } else { PressKind::Single } },
+                chord == first,
+            )
+        })
+    }
+
+    /// The first chord a hold is bound to.
+    fn hold(&self, keymap: &Keymap, active: &Active<'_>) -> Option<Hit> {
+        let first = self.first();
+        self.0.iter().find_map(|&chord| {
+            let command = keymap.hold_of(&chord, active)?;
+            Some(Hit { command, cycle: Vec::new(), trigger: Trigger::hold(chord), exact: chord == first, alt_variant: false })
         })
     }
 
@@ -176,9 +198,13 @@ impl Chords {
             }
             let plain = Chord::new(Mods { alt: false, ..chord.mods }, chord.key);
             match keymap.lookup_where(&plain, false, &Active { typing: false, ..*active }, outer, accept) {
-                Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => {
-                    Some(Hit { command, cycle: Vec::new(), trigger: Trigger { chord, double: false }, exact: chord == first, alt_variant: true })
-                }
+                Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => Some(Hit {
+                    command,
+                    cycle: Vec::new(),
+                    trigger: Trigger { chord, press: PressKind::Single },
+                    exact: chord == first,
+                    alt_variant: true,
+                }),
                 _ => None,
             }
         })

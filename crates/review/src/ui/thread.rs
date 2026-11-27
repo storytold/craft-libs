@@ -6,14 +6,16 @@
 //! ```
 
 mod mention;
+pub(crate) mod note_popup;
 pub(crate) mod pins;
 pub(crate) mod popover;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub use mention::{insert_mention, mention_matches, mention_query};
+pub use note_popup::{NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage, NotePopupOutput, NoteReplyLook};
 pub use pins::{CommentPin, CommentPins, CommentPinsOutput, PinCluster, PinMove, cluster};
-pub use popover::{CommentComposer, CommentComposerOutput, REACTIONS, ThreadPopover, ThreadPopoverOutput};
+pub use popover::{CommentComposer, CommentComposerOutput, ComposerClose, ComposerDraft, REACTIONS, ThreadPopover, ThreadPopoverOutput};
 
 craft_ui::words! {
     /// The thread popover's and composer's words, English by default.
@@ -22,6 +24,7 @@ craft_ui::words! {
         reply: "thread.reply" = "Reply";
         add_comment: "thread.addComment" = "Add a comment";
         post: "thread.post" = "Post";
+        save: "thread.save" = "Save";
         edit: "thread.edit" = "Edit";
         delete: "thread.delete" = "Delete";
         delete_thread: "thread.deleteThread" = "Delete thread";
@@ -36,5 +39,6 @@ craft_ui::words! {
         pin: template "thread.pin" = "Comment by {author}";
         pin_text: template "thread.pinText" = "Comment by {author}: {words}";
         cluster: template "thread.cluster" = "{n} comments";
+        note_title: template "thread.noteTitle" = "{kind} – {author}";
     }
 }

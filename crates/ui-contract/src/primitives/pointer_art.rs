@@ -69,11 +69,11 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
         PaintedCursor::Locator => locator(&pen),
         PaintedCursor::Arrow { hollow, toward, .. } => arrow(&pen, *hollow, *toward),
         PaintedCursor::PathText { start, end, .. } => path_text(&pen, *start, *end),
-        PaintedCursor::PointerTool { pointer, icon, .. } => {
+        PaintedCursor::PointerTool { pointer, icon, badge, .. } => {
             // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
             let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
             let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
-            pointer_tool(&pen, *pointer, icon, side, edge, ink);
+            pointer_tool(&pen, *pointer, icon, *badge, side, edge, ink);
         }
         // `Hidden` has no marks.
         _ => {}
@@ -451,14 +451,27 @@ pub(crate) fn path_text(pen: &Pen, start: bool, end: bool) {
 
 /// `pointer` with the tool's `icon` of `side` points below and right of it: a crosshair with arms of `side` points in a
 /// line of `width` in `color`, as the plain crosshair pointer, beside the icon; or the solid arrow, as the plain arrow
-/// pointer, over the icon's top-left corner. An icon the catalog lacks leaves only the pointer.
-pub(crate) fn pointer_tool(pen: &Pen, pointer: PointerGlyph, icon: Option<SvgIcon>, side: f32, width: f32, color: Color32) {
+/// pointer, over the icon's top-left corner; `badge` at the icon's lower right. An icon the catalog lacks leaves only the
+/// pointer and the badge.
+pub(crate) fn pointer_tool(
+    pen: &Pen,
+    pointer: PointerGlyph,
+    icon: Option<SvgIcon>,
+    badge: Option<CursorBadge>,
+    side: f32,
+    width: f32,
+    color: Color32,
+) {
     let corner = match pointer {
         PointerGlyph::Arrow => ARROW_ICON,
         _ => CROSSHAIR_ICON,
     };
+    let rect = Rect::from_min_size(v(corner).to_pos2(), Vec2::splat(side));
     if let Some(icon) = icon {
-        icon_on_halo(pen, Rect::from_min_size(v(corner).to_pos2(), Vec2::splat(side)), icon);
+        icon_on_halo(pen, rect, icon);
+    }
+    if let Some(badge) = badge {
+        self::badge(pen, rect.right_bottom().to_vec2(), badge);
     }
     match pointer {
         PointerGlyph::Arrow => arrow(pen, false, None),

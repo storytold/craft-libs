@@ -5,6 +5,7 @@ pub(crate) mod gesture;
 pub(crate) mod hit_order;
 pub(crate) mod level;
 pub(crate) mod memo_key;
+pub(crate) mod memo_row;
 pub(crate) mod pages;
 pub(crate) mod pointer;
 pub(crate) mod style;

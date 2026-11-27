@@ -31,7 +31,6 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2, vec2};
 
 pub use craft_ui::buttons::{GroupLevel, RibbonLook};
 pub use gallery::{Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput};
-use group::BodyHeight;
 pub use group::RibbonGroup;
 pub use plan::{GroupWidths, plan};
 
@@ -189,7 +188,7 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
         if let Some(strip) = strip {
             for event in &strip.response.events {
                 match event {
-                    CollectionEvent::Selection(SelectionChange::Set(keys)) => chosen = keys.last().cloned().or(chosen),
+                    CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => chosen = keys.last().cloned().or(chosen),
                     CollectionEvent::Activate(_) if strip.response.activation_clicks == 2 => toggle = true,
                     _ => {}
                 }
@@ -316,31 +315,16 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
             let shown = Region::slide(lead)
                 .show(ui, |ui, _| {
-                    // The titles sit under the tallest content of the last pass; a change shows in the next frame.
-                    let slot = base.with("ribbon.body");
-                    let last = with_session(ui.ctx(), slot, |kept: &mut BodyHeight| kept.0);
-                    let row = Row::new().scroll(Scroll::horizontal()).fill_width().show(ui, |ui, _| {
+                    // The row's line is as high as its tallest group, at least the body's least height over a title line:
+                    // every group fills the line, so the titles at the groups' feet share one line.
+                    let row = Row::new().scroll(Scroll::horizontal()).fill_width().least_height(least + title_line).show(ui, |ui, _| {
                         // The groups start a regular pad in from the row's start edge, as the old ribbon's did.
                         craft_ui::layout::place_in_flow(ui, Vec2::new(start, 0.0));
-                        let mut row = RibbonRow {
-                            ui,
-                            base,
-                            groups: Vec::new(),
-                            body: last.max(least),
-                            title_line,
-                            tallest: 0.0,
-                            icons,
-                            launcher: launcher.clone(),
-                        };
+                        let mut row = RibbonRow { ui, base, groups: Vec::new(), title_line, icons, launcher: launcher.clone() };
                         body(&mut row, key);
-                        (row.groups, row.tallest)
+                        row.groups
                     });
-                    let (groups, tallest) = row.inner.unwrap_or_default();
-                    if tallest > 0.0 && (tallest - last).abs() >= 0.5 {
-                        with_session(ui.ctx(), slot, |kept: &mut BodyHeight| kept.0 = tallest);
-                        ui.ctx().request_repaint();
-                    }
-                    (row.output.id, row.output.rect, groups)
+                    (row.output.id, row.output.rect, row.inner.unwrap_or_default())
                 })
                 .inner;
             if let Some((owner, view, groups)) = shown {
@@ -426,12 +410,8 @@ pub struct RibbonRow<'a> {
     base: Id,
     /// The rect of each group this run of the row showed, in order: the units the edge chevrons step by.
     groups: Vec<Rect>,
-    /// The height under each open group's top at which its title row sits: the tallest content of the last pass.
-    body: f32,
     /// The height of every group's title line, the launcher's side: one line of the caption role.
     title_line: f32,
-    /// The tallest open group content of this run, every level the row measured included.
-    tallest: f32,
     /// The icon sides of the groups' buttons (`Ribbon::icons`).
     icons: RibbonLook,
     /// The icon of every group's dialog launcher (`Ribbon::launcher_icon`).
