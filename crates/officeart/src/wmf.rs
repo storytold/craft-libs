@@ -10,6 +10,14 @@ fn bounds16(header: &[u8]) -> Option<[i16; 4]> {
     Some([v(4)?, v(8)?, v(12)?, v(16)?])
 }
 
+/// The key a placeable header starts with.
+const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
+
+/// Whether a WMF starts with a placeable header already.
+pub fn is_placeable(wmf: &[u8]) -> bool {
+    wmf.get(..4).is_some_and(|k| k == PLACEABLE_KEY.to_le_bytes())
+}
+
 /// Whether [`with_placeable_header`] would add a header: the BLIP header is whole and its bounds
 /// fit 16 bits.
 pub fn gets_header(header: &[u8]) -> bool {
@@ -33,7 +41,7 @@ pub fn with_placeable_header(header: &[u8], records: Vec<u8>) -> Option<Vec<u8>>
     let units = f64::from(r.saturating_sub(l));
     let inch = if width_emu > 0.0 && units > 0.0 { (units * 914_400.0 / width_emu).round().clamp(1.0, 65_535.0) as u16 } else { 1440 };
     let mut out = Vec::with_capacity(PLACEABLE_HEADER + records.len());
-    out.extend_from_slice(&0x9AC6_CDD7u32.to_le_bytes());
+    out.extend_from_slice(&PLACEABLE_KEY.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     for v in bounds {
         out.extend_from_slice(&v.to_le_bytes());
