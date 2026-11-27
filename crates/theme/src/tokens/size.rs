@@ -508,9 +508,12 @@ pub struct StrokeTokens {
     pub dash: f32,
     /// Gap between dashes.
     pub dash_gap: f32,
-    /// The line of a stroke-set icon, as a share of the icon's side rather than in points, so a small glyph keeps the
-    /// weight of a large one.
+    /// The part of a stroke-set icon's line that grows with the icon, as a share of its side.
     pub icon: f32,
+    /// The part of a stroke-set icon's line that doesn't grow with the icon, in points. The line is `icon_base` plus
+    /// `icon` of the side: a large icon's line grows more slowly than the icon, so it stays near the weight of the text
+    /// beside it instead of outweighing it, and a small icon's line stays near the label's stems.
+    pub icon_base: f32,
 }
 
 /// Thumbnail sides, in logical pixels, for the three user settings.

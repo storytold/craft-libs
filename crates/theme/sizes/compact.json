@@ -160,7 +160,8 @@
       "dash_gap": 3.0,
       "focus": 2.0,
       "heavy": 3.0,
-      "icon": 0.0729,
+      "icon": 0.042,
+      "icon_base": 0.4,
       "medium": 1.5,
       "thick": 2.0,
       "thin": 1.0
