@@ -747,8 +747,16 @@ impl<'a> BezierOverlay<'a> {
                 } else {
                     self.report.select = Some(self.selecting(path, Vec::new(), Some(segment)));
                     Target::Bend {
-                        path, segment, t, from,
-                        constrain: self.constrain_path_dragging && self.tool == BezierTool::Direct && !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift,
+                        path,
+                        segment,
+                        t,
+                        from,
+                        constrain: self.constrain_path_dragging
+                            && self.tool == BezierTool::Direct
+                            && !mods.cmd
+                            && !mods.ctrl
+                            && !mods.alt
+                            && !mods.shift,
                     }
                 }
             }

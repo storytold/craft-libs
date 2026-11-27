@@ -212,7 +212,11 @@ impl PathEdit {
                         let u = 1.0 - t;
                         let da = (by.x * vb.y - by.y * vb.x) / (det * 3.0 * u * u * t);
                         let db = (va.x * by.y - va.y * by.x) / (det * 3.0 * u * t * t);
-                        ((la + da).max(0.0), (lb + db).max(0.0))
+                        let (na, nb) = (la + da, lb + db);
+                        if !da.is_finite() || !db.is_finite() || !na.is_finite() || !nb.is_finite() {
+                            return false;
+                        }
+                        (na.max(0.0), nb.max(0.0))
                     };
                     sp.knots[a].out_ctrl = ka.anchor + va * na;
                     sp.knots[b].in_ctrl = kb.anchor + vb * nb;
@@ -296,9 +300,11 @@ impl PathEdit {
             }
         }
         if matches!(self, PathEdit::MoveSubpath { .. } | PathEdit::BendSegment { constrain: true, .. })
-            && path.subpaths.iter().flat_map(|sub| &sub.knots).any(|knot| {
-                [knot.anchor, knot.in_ctrl, knot.out_ctrl].iter().any(|point| !point.x.is_finite() || !point.y.is_finite())
-            })
+            && path
+                .subpaths
+                .iter()
+                .flat_map(|sub| &sub.knots)
+                .any(|knot| [knot.anchor, knot.in_ctrl, knot.out_ctrl].iter().any(|point| !point.x.is_finite() || !point.y.is_finite()))
         {
             *path = before;
             return false;

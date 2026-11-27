@@ -1420,24 +1420,26 @@ fn a_cancelled_press_reports_nothing_on_release() {
     assert_eq!(st.paths, before);
 }
 
-
 // ---- opt-in Direct Selection subpath and constrained-segment gestures ----
 
 fn constraint_curve() -> EditPath {
     // The measured S curve, translated into the fixture's canvas.
-    ops_path(EditSubpath::new(vec![
-        Knot::new(p(50.0, 150.0), p(-50.0, 250.0), p(150.0, 50.0), true),
-        Knot::new(p(350.0, 150.0), p(250.0, 250.0), p(450.0, 50.0), true),
-    ], false))
+    ops_path(EditSubpath::new(
+        vec![Knot::new(p(50.0, 150.0), p(-50.0, 250.0), p(150.0, 50.0), true), Knot::new(p(350.0, 150.0), p(250.0, 250.0), p(450.0, 50.0), true)],
+        false,
+    ))
 }
 
 fn constraint_circle() -> EditPath {
-    ops_path(EditSubpath::new(vec![
-        Knot::new(p(130.0, 70.0), p(85.82, 70.0), p(174.18, 70.0), true),
-        Knot::new(p(210.0, 150.0), p(210.0, 105.82), p(210.0, 194.18), true),
-        Knot::new(p(130.0, 230.0), p(174.18, 230.0), p(85.82, 230.0), true),
-        Knot::new(p(50.0, 150.0), p(50.0, 194.18), p(50.0, 105.82), true),
-    ], true))
+    ops_path(EditSubpath::new(
+        vec![
+            Knot::new(p(130.0, 70.0), p(85.82, 70.0), p(174.18, 70.0), true),
+            Knot::new(p(210.0, 150.0), p(210.0, 105.82), p(210.0, 194.18), true),
+            Knot::new(p(130.0, 230.0), p(174.18, 230.0), p(85.82, 230.0), true),
+            Knot::new(p(50.0, 150.0), p(50.0, 194.18), p(50.0, 105.82), true),
+        ],
+        true,
+    ))
 }
 
 fn assert_facing_handles_only(before: &EditPath, after: &EditPath, segment: usize) {
@@ -1446,8 +1448,12 @@ fn assert_facing_handles_only(before: &EditPath, after: &EditPath, segment: usiz
     for (i, (old, new)) in sp.knots.iter().zip(&after.subpaths[0].knots).enumerate() {
         assert_eq!(old.anchor, new.anchor);
         assert_eq!(old.smooth, new.smooth);
-        if i != a { assert_eq!(old.out_ctrl, new.out_ctrl); }
-        if i != b { assert_eq!(old.in_ctrl, new.in_ctrl); }
+        if i != a {
+            assert_eq!(old.out_ctrl, new.out_ctrl);
+        }
+        if i != b {
+            assert_eq!(old.in_ctrl, new.in_ctrl);
+        }
     }
     assert_eq!(before.subpaths[0].closed, after.subpaths[0].closed);
 }
@@ -1472,8 +1478,10 @@ fn move_subpath_moves_every_handle_and_only_the_requested_subpath() {
         }
     }
     for edit in [
-        PathEdit::move_subpath(3, 0, by), PathEdit::move_subpath(2, 2, by),
-        PathEdit::move_subpath(2, 0, Vec2::ZERO), PathEdit::move_subpath(2, 0, Vec2::new(f64::INFINITY, 0.0)),
+        PathEdit::move_subpath(3, 0, by),
+        PathEdit::move_subpath(2, 2, by),
+        PathEdit::move_subpath(2, 0, Vec2::ZERO),
+        PathEdit::move_subpath(2, 0, Vec2::new(f64::INFINITY, 0.0)),
     ] {
         let mut after = before.clone();
         assert!(!edit.apply(&mut after));
@@ -1507,13 +1515,21 @@ fn constrained_bend_fallbacks_are_exactly_the_existing_operation() {
     one_retracted.subpaths[0].knots[0].out_ctrl = one_retracted.subpaths[0].knots[0].anchor;
     let mut other_retracted = constraint_curve();
     other_retracted.subpaths[0].knots[1].in_ctrl = other_retracted.subpaths[0].knots[1].anchor;
-    for (before, t) in [(line, 0.5), (one_retracted, 0.5), (other_retracted, 0.5),
-        (constraint_curve(), 0.01), (constraint_curve(), 0.99), (constraint_curve(), f64::NAN)] {
+    for (before, t) in [
+        (line, 0.5),
+        (one_retracted, 0.5),
+        (other_retracted, 0.5),
+        (constraint_curve(), 0.01),
+        (constraint_curve(), 0.99),
+        (constraint_curve(), f64::NAN),
+    ] {
         let mut free = before.clone();
         let mut constrained = before;
         let by = Vec2::new(20.0, -50.0);
-        assert_eq!(PathEdit::bend_segment(7, kr(0), t, by).apply(&mut free),
-            PathEdit::bend_segment_constrained(7, kr(0), t, by).apply(&mut constrained));
+        assert_eq!(
+            PathEdit::bend_segment(7, kr(0), t, by).apply(&mut free),
+            PathEdit::bend_segment_constrained(7, kr(0), t, by).apply(&mut constrained)
+        );
         assert_eq!(constrained, free, "t={t}");
     }
     assert!(matches!(PathEdit::bend_segment(7, kr(0), 0.5, Vec2::ZERO), PathEdit::BendSegment { constrain: false, .. }));
@@ -1534,6 +1550,11 @@ fn constrained_bend_invalid_or_zero_edits_leave_the_path_unchanged() {
         assert!(!edit.apply(&mut after), "{edit:?}");
         assert_eq!(after, before);
     }
+    // Nonparallel rays: negative overflow must not become two valid zero-length handles.
+    let before = constraint_circle();
+    let mut after = before.clone();
+    assert!(!PathEdit::bend_segment_constrained(7, kr(0), 0.5, Vec2::new(-f64::MAX, f64::MAX)).apply(&mut after));
+    assert_eq!(after, before);
 }
 
 fn assert_one_commit(st: &State) {
@@ -1608,8 +1629,7 @@ fn command_subpath_policy_preserves_modified_handle_and_empty_canvas_routes() {
         }
     }
     for point in [p(290.0, 100.0), p(380.0, 300.0)] {
-        assert_eq!(run(false, egui::Modifiers::COMMAND, point, sel(1, &[(0, 2)])),
-            run(true, egui::Modifiers::COMMAND, point, sel(1, &[(0, 2)])));
+        assert_eq!(run(false, egui::Modifiers::COMMAND, point, sel(1, &[(0, 2)])), run(true, egui::Modifiers::COMMAND, point, sel(1, &[(0, 2)])));
     }
     // Constructor defaults retain the existing command-only anchor move.
     let mut h = harness(vec![path_b()]);
@@ -1698,7 +1718,6 @@ fn constrained_overlay_latches_the_option_at_press_and_preserves_modifier_fallba
     assert!(free.subpaths[0].knots[0].out_ctrl.distance(preview[0].subpaths[0].knots[0].out_ctrl) < 1.0);
 }
 
-
 #[trial]
 fn opt_in_path_gestures_cancel_back_to_their_original_geometry() {
     for constrained in [false, true] {
@@ -1706,7 +1725,9 @@ fn opt_in_path_gestures_cancel_back_to_their_original_geometry() {
         let on = if constrained { before.subpaths[0].segment(0).unwrap().eval(0.5) } else { p(100.0, 200.0) };
         let mut h = harness(vec![before.clone()]);
         h.update(|st| st.constrain = constrained);
-        if !constrained { h.fixture.hold(egui::Modifiers::COMMAND); }
+        if !constrained {
+            h.fixture.hold(egui::Modifiers::COMMAND);
+        }
         let at = h.screen(on);
         h.press_at(at);
         h.move_to(at + vec2(20.0, -30.0));
@@ -1724,7 +1745,11 @@ fn opt_in_path_gestures_cancel_back_to_their_original_geometry() {
 fn constrained_option_does_not_change_other_tools_or_direct_handle_drags() {
     let run = |enabled, tool, point, selection: PathSelection| {
         let mut h = harness(vec![path_a().command_selects_subpath(true)]);
-        h.update(|st| { st.constrain = enabled; st.tool = tool; st.selection = selection; });
+        h.update(|st| {
+            st.constrain = enabled;
+            st.tool = tool;
+            st.selection = selection;
+        });
         let at = h.screen(point);
         h.drag(at, vec2(20.0, -30.0));
         let paths = h.state.borrow().paths.clone();
