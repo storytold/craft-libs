@@ -15,7 +15,7 @@ use craft_cms::convert::CmykConverter;
 use craft_keymap::Mods;
 use craft_theme::Srgba;
 use craft_ui::buttons::{Button, PopupMark};
-use craft_ui::choice::{ChoiceWords, RING_SHARE, Segmented, Swatch, SwatchStyle, paint_ring};
+use craft_ui::choice::{ChoiceWords, Segmented, Swatch, SwatchStyle, paint_ring, ring_band};
 use craft_ui::contract::{
     Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi,
     Overlays as _, Pages, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
@@ -372,7 +372,7 @@ pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl craft_ui::contra
     if style.ring {
         let ground =
             ui.with_style(cx.resolved.variant, |scope| SurfaceStyle { edge: SurfaceEdge::None, shadow: None, ..scope.surface(cx.env.surface()) });
-        ui.draw().surface_styled(well.shrink(well.width() * RING_SHARE), &ground);
+        ui.draw().surface_styled(well.shrink(ring_band(well)), &ground);
     } else {
         ui.draw().stroke(&shape, StrokeWidth::Thin, style.edge);
     }
@@ -783,7 +783,7 @@ impl Component for PaintChip<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let (well, mark) = self.layout(cx.rect, &cx.style, cx.flow.is_rtl());
+        let (well, mark) = self.layout(cx.rect, cx.style, cx.flow.is_rtl());
         if self.popup_mark == PopupMark::Menu {
             let mut arrow = DisclosureGlyph::dropdown_of(cx.env.get());
             arrow.color = Some(cx.style.arrow_color);

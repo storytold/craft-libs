@@ -5,9 +5,10 @@ use crate::buttons::IconButton;
 use crate::contract::SizeLimits;
 use crate::contract::{BodyCx, Props as _, Show as _, Tracked};
 use crate::display::Text;
-use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, IconicMode, PanelSpec, PanelSpecs};
+use crate::docking::{ColumnCards, DockConfig, DockGrid, DockPanels, GroupAt, IconicMode, PanelSpec, PanelSpecs};
 use crate::menu::PanelRow;
 use crate::patterns::presets::{PresetPanelMenu, PresetView};
+use crate::tabs::PanelTabLook;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_behavior::{Axis, IconId, Proposal};
@@ -168,4 +169,22 @@ fn rail_with_fixed_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut demo = Demo { canvas_view: false, host_rows: false };
     let config = DockConfig::default().iconic_mode(IconicMode::Rail);
     DockArea::new("Rail dock", workspace_at.bind(&mut *workspace), &*SPECS, &mut demo, config).rail_footer(LAYERS).show(ui).into()
+}
+
+/// VectorCraft 0.24's dock frame: only the stepped tool column is a card (`ColumnCards::Stepped`); the docks stand flush
+/// against the canvas, the column of icons framed as the panel column is (`DockConfig::flush_docks`); the panel tabs and
+/// the column bars in the block look (`PanelTabLook::Block`).
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
+fn a_tool_card_beside_flush_panels(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (workspace, workspace_at) = data.value_at("stepped cards workspace", {
+        let tools = Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1);
+        let side = Column::new(vec![Group::new(vec![PROPERTIES, LAYERS], 0), Group::new(vec![HISTORY], 0)]);
+        let icons = Column::new(vec![Group::new(vec![SWATCHES], 0), Group::new(vec![NAVIGATOR], 0)]).with_iconic(true);
+        let docked = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![CANVAS], 0), Node::dock(DockEdge::End, vec![side, icons]));
+        let root = Node::split(Axis::X, SplitSize::FixedFirst(60.0), Node::dock(DockEdge::Start, vec![tools]), docked);
+        Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))
+    });
+    let mut demo = Demo { canvas_view: false, host_rows: false };
+    let config = DockConfig::default().column_cards(ColumnCards::Stepped).flush_docks(true).tab_look(PanelTabLook::Block);
+    DockArea::new("Stepped cards dock", workspace_at.bind(&mut *workspace), &*SPECS, &mut demo, config).show(ui).into()
 }

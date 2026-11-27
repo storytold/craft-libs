@@ -107,6 +107,82 @@ impl PageSource for SmallPages {
     }
 }
 
+/// Whether the view shows a horizontal scroll bar at `zoom` in a window 900 wide.
+fn has_horizontal_bar(zoom: f64) -> bool {
+    let (fixture, _, _) = layout_rig(
+        3,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = zoom;
+        }),
+    );
+    horizontal_bar(&fixture).is_some()
+}
+
+#[trial]
+fn the_horizontal_bar_shows_only_when_the_pages_are_wider_than_the_view() {
+    assert!(!has_horizontal_bar(0.5), "pages that fit the width need no horizontal bar");
+    assert!(has_horizontal_bar(3.0), "pages wider than the view scroll sideways");
+}
+
+/// The horizontal scroll bar the fixture shows, if any.
+fn horizontal_bar(fixture: &Fixture) -> Option<egui::Rect> {
+    fixture.by_role(Role::SCROLL_BAR).iter().map(|bar| bar.rect).find(|rect| rect.width() > rect.height())
+}
+
+#[trial]
+fn a_horizontal_thumb_held_while_the_pages_come_to_fit_keeps_its_bar_until_the_release() {
+    let (mut fixture, state, _) = layout_rig(
+        3,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = 3.0;
+        }),
+    );
+    let bar = horizontal_bar(&fixture).expect("pages wider than the view have a horizontal bar");
+    // The view starts at the left edge, so the thumb is at the start of the track.
+    let from = pos2(bar.left() + 4.0, bar.center().y);
+    fixture.drag_hold_at(from, vec2(20.0, 0.0));
+    state.borrow_mut().zoom = 0.5;
+    fixture.idle(3);
+    assert!(horizontal_bar(&fixture).is_some(), "the held thumb keeps its bar, so its release reaches it");
+    fixture.release_at(from + vec2(20.0, 0.0)).idle(2);
+    assert!(horizontal_bar(&fixture).is_none(), "after the release, pages that fit have no horizontal bar");
+}
+
+#[trial]
+fn a_horizontal_thumb_released_while_the_bars_are_not_shown_leaves_no_bar_behind() {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 3.0;
+    })));
+    let full_screen = Rc::new(Cell::new(false));
+    let (kept, edge_to_edge) = (Rc::clone(&state), Rc::clone(&full_screen));
+    let pages = DemoPages::new(3);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).fill_screen(edge_to_edge.get()).show(ui, |_, _| ());
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let bar = horizontal_bar(&fixture).expect("pages wider than the view have a horizontal bar");
+    let from = pos2(bar.left() + 4.0, bar.center().y);
+    fixture.drag_hold_at(from, vec2(20.0, 0.0));
+    // Full screen mid-drag: the bars go, and the release can't reach them.
+    full_screen.set(true);
+    fixture.idle(2);
+    fixture.release_at(from + vec2(20.0, 0.0)).idle(2);
+    full_screen.set(false);
+    {
+        let mut state = state.borrow_mut();
+        state.fit = Fit::None;
+        state.zoom = 0.5;
+    }
+    fixture.idle(3);
+    assert!(horizontal_bar(&fixture).is_none(), "a press that ended unseen leaves no horizontal bar over pages that fit");
+}
+
 #[trial]
 fn go_to_a_narrow_page_brings_it_back_into_horizontal_view() {
     let Rig { mut fixture, state, out, .. } = rig_over(
@@ -512,7 +588,8 @@ fn a_page_gap_change_keeps_the_scroll_offset() {
 #[trial]
 fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     let budget = TextureStoreOptions::pages().budget.max_entries;
-    let count = 4 * budget;
+    // Past the budget by half again: the store has to evict for the bound to be tested.
+    let count = budget + budget / 2;
     let state = Rc::new(RefCell::new(state_with(|s| {
         s.continuous = true;
         s.fit = Fit::None;
@@ -539,6 +616,7 @@ fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     assert!(drawn > 0, "the view drew pages");
     // The pages of the last two passes, in view and one row either side, are never evicted.
     let bound = budget + 2 * (drawn + 2);
+    eprintln!("DIAG pictures_bounded: budget {budget}, count {count}, held {held}, drawn {drawn}");
     assert!(held > 0 && held <= bound, "{held} pictures held over {count} pages scrolled through, at most {bound} expected");
 }
 
@@ -1007,12 +1085,11 @@ fn shift_and_command_with_the_page_keys_and_arrows_go_to_the_ends() {
         );
         focus_canvas(&mut fixture);
         let keys = [(Key::PageDown, both, 4), (Key::PageUp, both, 0), (Key::ArrowDown, both, 4), (Key::ArrowUp, both, 0)];
-        let ends = [
-            (Key::End, Modifiers::SHIFT, 4),
-            (Key::Home, Modifiers::SHIFT, 0),
-            (Key::End, Modifiers::COMMAND, 4),
-            (Key::Home, Modifiers::COMMAND, 0),
-        ];
+        // Off macOS Ctrl+End and Ctrl+Home go to the ends too; macOS gives Cmd with Home and End no move.
+        let mut ends = vec![(Key::End, Modifiers::SHIFT, 4), (Key::Home, Modifiers::SHIFT, 0)];
+        if !cfg!(target_os = "macos") {
+            ends.extend([(Key::End, Modifiers::COMMAND, 4), (Key::Home, Modifiers::COMMAND, 0)]);
+        }
         for (key, mods, want) in keys.into_iter().chain(ends) {
             fixture.key(key, mods);
             fixture.idle(2);

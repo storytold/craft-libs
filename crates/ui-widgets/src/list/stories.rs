@@ -1,10 +1,10 @@
 //! Stories of the row types of the list family: `ListRow`.
 
-use super::{CellStatus, HueTarget, LabelUnderline, ListRow, RowInk, RowRun, ThumbSize, TrailingFace, TrailingPart};
+use super::{CellStatus, HueTarget, LabelUnderline, ListRow, RowInk, RowRun, ThumbRows, ThumbSize, TrailingFace, TrailingPart};
 use crate::contract::{SetPosition, Show as _, ShowContainer as _, show_item_in_flow};
 use crate::layout_components::Stack;
 use crate::primitives::{ContentPainterCx, IconSpec, Span, StrokeWidth};
-use crate::runtime::env::Env;
+use crate::runtime::env::{Env, with_env};
 use crate::style::{Corners, DataColor, SurfaceKind};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, show_as_only_item_across, story};
 use craft_behavior::{ColumnKey, IconId};
@@ -161,6 +161,26 @@ fn list_row_thumb_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             ListRow::new("Large").thumb_height(ThumbSize::Large).icon(icon()),
         ]
     })
+}
+
+/// Thumbnail rows of a list under `ThumbRows::Tight` (VectorCraft's Layers panel): the thumbnail with a tight gap, no
+/// taller than a control, and a nested row indented by a small icon and a tight gap.
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_tight_thumb_rows(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ThumbRows::Tight);
+        },
+        |ui| {
+            show_rows(ui, || {
+                vec![
+                    ListRow::new("Layer 1").depth(0).thumb(ThumbSize::Medium, thumb),
+                    ListRow::new("Ellipse").depth(1).thumb(ThumbSize::Medium, thumb),
+                ]
+            })
+        },
+    )
 }
 
 /// A colour from the document's data: a bookmark's or a tag's own colour.

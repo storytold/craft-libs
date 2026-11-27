@@ -24,13 +24,13 @@ use crate::primitives::ContentPainterCx;
 use crate::runtime::env::Label;
 use crate::runtime::focus::FocusMove;
 use crate::runtime::overlay::CloseReason;
-use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
+use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
 use craft_behavior::overlay::MinWidth;
 use craft_behavior::{
     CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, WheelPhase, wheel_step,
 };
-use craft_theme::{Stateful, States};
+use craft_theme::{Flags, Stateful, States};
 use egui::{Rect, Ui, Vec2};
 use std::borrow::Cow;
 
@@ -56,6 +56,24 @@ pub struct SelectStyle {
     /// The face's placeholder text.
     #[style(text)]
     muted: TextLook,
+    /// The least width of the box: `size.length.short` for a quiet select, none for a field.
+    least_width: f32,
+}
+
+/// How a select's closed box looks and how wide it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SelectLook {
+    /// A field as wide as its widest entry, so its width stays whichever entry is picked.
+    #[default]
+    Field,
+    /// A quiet box on the panel surface with no edge until it has focus, as wide as the entry it shows (text, chevron
+    /// and padding): at least `size.length.short`, at most a field length, where a longer text elides. It changes
+    /// width with the pick (a workspace switcher at the end of an app bar).
+    Quiet,
+    /// A field filled with `surface.control`, with no edge until it has focus, as wide as its widest entry:
+    /// VectorCraft 0.24's status bar selects.
+    Filled,
 }
 
 /// The icon of the button in the popup header that opens the header menu.
@@ -96,7 +114,8 @@ impl<'a> HeaderMenu<'a> {
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
-/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only).
+/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only); the picture is
+/// square unless [`picture_aspect`](Select::picture_aspect) sets its width.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(Select<'static, u8>))]
 pub struct Select<'a, T: Value + 'static> {
@@ -122,6 +141,10 @@ pub struct Select<'a, T: Value + 'static> {
     /// Shown, muted, while the value is none of the entries.
     #[prop(into)]
     placeholder: Option<Label>,
+    /// The closed face and accessible label for a bound value outside the entries. The picture,
+    /// if supplied, receives the bound value. This adds no option to the list.
+    #[prop(into)]
+    unlisted_label: Option<Label>,
     /// Adds the host's content to each entry's row.
     #[prop(func = "Fn(&T, ListRow<'a>) -> ListRow<'a>")]
     decorate: Option<RowDress<'a, T>>,
@@ -131,6 +154,9 @@ pub struct Select<'a, T: Value + 'static> {
     /// The face shows the picked entry's picture alone; its label stays the accessible value.
     #[prop(flag)]
     picture_only: bool,
+    /// The picture's width as a multiple of its height, in the rows and on the face; square without it.
+    #[prop]
+    picture_aspect: ThumbAspect,
     /// The row under the pointer is proposed as the value while the list is open, as the rows the keys reach are;
     /// closing the list without a pick restores the value.
     #[prop(flag)]
@@ -138,6 +164,10 @@ pub struct Select<'a, T: Value + 'static> {
     /// A button in the popup header opens a menu of these rows (a list's own options: sort, view).
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     header_menu: Option<HeaderMenu<'a>>,
+    /// How the closed box looks and how wide it is.
+    #[style_key]
+    #[prop]
+    look: SelectLook,
 }
 
 impl<'a, T: Value + 'static> Select<'a, T> {
@@ -153,11 +183,14 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             search_kept: None,
             list_width: None,
             placeholder: None,
+            unlisted_label: None,
             decorate: None,
             picture: None,
             picture_only: false,
+            picture_aspect: ThumbAspect::SQUARE,
             preview: false,
             header_menu: None,
+            look: SelectLook::Field,
         }
         .label(label)
     }
@@ -166,10 +199,31 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         value.and_then(|value| self.entries.iter().position(|entry| entry.value() == Some(value)))
     }
 
+    fn unlisted_face(&self) -> (Option<&Label>, bool) {
+        match self.unlisted_label.as_ref() {
+            Some(label) => (Some(label), false),
+            None => (self.placeholder.as_ref(), true),
+        }
+    }
+
+    /// The unresolved face text and whether it stands in for a pick.
+    fn shown<'s>(&'s self, value: Option<&T>, mixed: &'s Label) -> (Option<&'s Label>, bool) {
+        match self.position(value) {
+            Some(at) => (Some(self.entries[at].face_label()), false),
+            None if value.is_none() => (Some(mixed), true),
+            None => self.unlisted_face(),
+        }
+    }
+
+    /// Whether the faces fit their text: a quiet select, and the selects `fits` names.
+    fn fits(&self, sizing: Option<Sizing>, in_bar: bool) -> bool {
+        self.look == SelectLook::Quiet || fits(sizing, in_bar)
+    }
+
     /// The face of `text`, with the picture's room before it, or the picture alone, when the select has a picture.
     fn sized_face(&self, text: Label, picture: bool, fit: bool) -> SelectFace<'static> {
         let face = SelectFace::new(text).fit(fit);
-        if self.picture.is_some() && picture { face.thumb(ThumbAspect::SQUARE, |_, _| {}).name(!self.picture_only) } else { face }
+        if self.picture.is_some() && picture { face.thumb(self.picture_aspect, |_, _| {}).name(!self.picture_only) } else { face }
     }
 
     /// Sets the value to the entry at `at` unless it is the value already.
@@ -181,17 +235,17 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         }
     }
 
-    /// The closed field's keys: typed letters open the list on the first entry they begin, AccessKit sets the pick and
+    /// The closed field's keys: typed letters open the list on the first enabled match, AccessKit sets the pick and
     /// the arrow keys, Home and End step it through `stops`.
     fn closed_keys(&self, cx: &mut Cx<'_, Self>, list: PopupHandle, stops: &[usize]) {
         let held = self.position(cx.value());
         while let Some(text) = cx.intents().take_text() {
-            // Type-ahead passes over headings: their captions name no entry.
+            // Keep the entry indices for wrapping around the held value, with no label for headings or disabled items.
             let labels: Vec<Label> =
-                self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
+                self.entries.iter().map(|entry| if entry.is_enabled() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
             let folder = cx.env.folder();
             let found = TypeAhead::pick(&text, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |s| folder.key(s));
-            if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
+            if let Some(value) = found.and_then(|at| self.entries[at].value()) {
                 cx.propose(value.clone());
                 list.open(cx);
                 return;
@@ -225,6 +279,17 @@ fn fits(sizing: Option<Sizing>, in_bar: bool) -> bool {
     }
 }
 
+/// The closed box of a quiet or filled select: `fill` at the well radius, the hover fill under the pointer, and an edge
+/// only in the focus colour while it has focus.
+fn borderless(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> SurfaceLook {
+    let colors = &cx.tokens.color;
+    let (rest, hover) = (cx.color(fill), cx.color(colors.state.hover));
+    let fill = Stateful::new(rest).off(States::new(rest, hover, hover, rest));
+    // The edge takes the fill's colour in every state, so it shows only with focus.
+    let edge = fill.clone().when(Flags::FOCUSED, cx.color(colors.line.focus));
+    SurfaceLook::new(fill).radius(cx.surface(SurfaceKind::Well).radius).border(edge, cx.tokens.stroke.thin).border_replaces_edge()
+}
+
 /// The stop a move over the closed field reaches: `stops` are the positions of the stepped entries and `from` the
 /// position of the current value.
 fn step(stops: &[usize], from: Option<usize>, mv: NavMove) -> Option<usize> {
@@ -243,14 +308,20 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     type Style = SelectStyle;
     type Output = EditResponse<T>;
 
-    fn style(cx: &StyleCx<'_>, _: SelectStyleKey<T>) -> SelectStyle {
+    fn style(cx: &StyleCx<'_>, key: SelectStyleKey<T>) -> SelectStyle {
         let off = cx.color(cx.tokens.color.text.disabled);
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
+        let (surface, least_width) = match key.look {
+            SelectLook::Field => (cx.dropdown(), 0.0),
+            SelectLook::Quiet => (borderless(cx, cx.tokens.color.surface.panel), cx.tokens.size.length.short),
+            SelectLook::Filled => (borderless(cx, cx.tokens.color.surface.control), 0.0),
+        };
         SelectStyle {
-            surface: cx.dropdown(),
+            surface,
             metrics: Metrics::new(),
             text: TextLook::new(TypeRole::Body, Stateful::new(ink).off(States::new(ink, ink, ink, off))),
             muted: TextLook::new(TypeRole::Body, Stateful::new(muted).off(States::new(muted, muted, muted, off))),
+            least_width,
         }
     }
 
@@ -260,13 +331,21 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// The widest face of an entry (its closed label, or its picture), the placeholder and the mixed word, so the field
-    /// keeps its size whichever is shown.
+    /// keeps its size whichever is shown; a quiet select's face as it shows now. At least the least width.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let mixed = cx.words::<PickerWords>().mixed.clone();
-        let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
-        let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
-        let fit = fits(cx.resolved.sizing(), cx.env.get::<InBar>().0);
-        texts.map(|(text, picture)| cx.face(self.sized_face(cx.env.resolve(text), picture, fit))).fold(Vec2::ZERO, Vec2::max)
+        let fit = self.fits(cx.resolved.sizing(), cx.env.get::<InBar>().0);
+        let face = |(text, picture): (&Label, bool)| cx.face(self.sized_face(cx.env.resolve(text), picture, fit));
+        let size = if self.look == SelectLook::Quiet {
+            let (text, muted) = self.shown(cx.value(), &mixed);
+            face((text.unwrap_or(&Label::Empty), !muted))
+        } else {
+            let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
+            let (unlisted, muted) = self.unlisted_face();
+            let texts = entries.chain(unlisted.map(|text| (text, !muted))).chain(std::iter::once((&mixed, false)));
+            texts.map(face).fold(Vec2::ZERO, Vec2::max)
+        };
+        Vec2::new(size.x.max(cx.style.least_width), size.y)
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, T>> {
@@ -321,15 +400,15 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// The picked entry's place among the entries that can be picked, shown as its label, so AccessKit steps and sets it.
-    /// A value that names no entry reads as the placeholder the face shows for it.
+    /// A value that names no entry reads as its unlisted label or placeholder, as shown on the face.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let stops = step_stops(self.entries);
         let range = 0.0..=stops.len().saturating_sub(1) as f64;
         let held = self.position(cx.value());
-        let placeholder = self.placeholder.as_ref().filter(|_| held.is_none() && cx.value().is_some());
+        let unlisted = self.unlisted_face().0.filter(|_| held.is_none() && cx.value().is_some());
         let numeric = match held.and_then(|held| stops.iter().position(|&stop| stop == held)) {
             Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[stops[at]].label()).as_str()),
-            None => match placeholder {
+            None => match unlisted {
                 Some(text) => Numeric::empty(range).text(cx.env.resolve(text).as_str()),
                 None => Numeric::empty(range),
             },
@@ -347,7 +426,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let name = cx.label();
         let words = cx.words::<PickerWords>();
         let held = self.position(cx.value());
-        let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
+        let (searchable, dress, picture) =
+            (self.searchable, self.decorate.as_ref(), self.picture.as_ref().map(|picture| (picture, self.picture_aspect)));
         let kept =
             |at: usize| self.search_kept.as_ref().is_some_and(|kept| entries.get(at).and_then(Entry::value).is_some_and(|value| (kept.0)(value)));
         let (search_label, no_matches, wide) = (self.search_label.clone(), self.no_matches.clone(), self.list_width.is_some());
@@ -434,17 +514,16 @@ impl<T: Value + 'static> Component for Select<'_, T> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let held = self.position(cx.value());
-        let (text, muted) = match held {
-            Some(at) => (cx.env.resolve(self.entries[at].face_label()), false),
-            None if cx.value().is_none() => (cx.env.resolve(&cx.words::<PickerWords>().mixed.clone()), true),
-            None => (self.placeholder.as_ref().map_or(Label::Empty, |text| cx.env.resolve(text)), true),
-        };
-        let mut face = SelectFace::new(text).fit(fits(cx.resolved.sizing(), cx.env.get::<InBar>().0));
+        let mixed = cx.words::<PickerWords>().mixed.clone();
+        let (text, muted) = self.shown(cx.value(), &mixed);
+        let text = text.map_or(Label::Empty, |text| cx.env.resolve(text));
+        let mut face = SelectFace::new(text).fit(self.fits(cx.resolved.sizing(), cx.env.get::<InBar>().0));
         if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
             face = face.leading(icon.clone());
         }
-        if let (Some(picture), Some(value)) = (self.picture.as_ref(), held.and_then(|at| self.entries[at].value())) {
-            face = face.thumb(ThumbAspect::SQUARE, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
+        let pictured = held.and_then(|at| self.entries[at].value()).or(cx.value().filter(|_| !muted));
+        if let (Some(picture), Some(value)) = (self.picture.as_ref(), pictured) {
+            face = face.thumb(self.picture_aspect, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
         }
         ui.face(FACE, if muted { face.placeholder() } else { face });
     }

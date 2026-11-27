@@ -53,6 +53,12 @@ pub struct FieldStyle {
     button: f32,
 }
 
+/// The space above the first and below the last of the lines of a multi-line text in a field of `metrics`, its lines
+/// `line` high: that of a single line in its control, so a box of `n` lines shows them whole.
+pub(crate) fn lines_inset(metrics: &Metrics, line: f32) -> f32 {
+    ((metrics.min_size.y - line) / 2.0).max(0.0)
+}
+
 impl FieldStyle {
     /// The style a text-like field reads from the theme.
     pub fn at(cx: &StyleCx<'_>) -> FieldStyle {
@@ -124,7 +130,8 @@ fn text_part<V>() -> TextKey<V> {
 }
 
 /// The text field every collection's `rename_editor` and the canvas `Pasteboard`'s page-name rename show over a label:
-/// it selects the name on focus, so typing replaces it.
+/// it selects the name on focus, so typing replaces it. It caps nothing: the item's name is the app's, and a rename shows
+/// and edits all of it.
 pub fn rename_field<'a>(draft: Bind<'a, String>, name: &str) -> TextField<'a> {
-    TextField::new(name.to_owned(), draft).select_on_focus()
+    TextField::new(name.to_owned(), draft).select_on_focus().limit(None::<usize>)
 }

@@ -74,8 +74,9 @@ impl TaskBarPlace {
 ///   or the bar grows; a press with no drag changes nothing. A moved bar whose offset place would cover the `keep_clear` point shows at its unmoved place and keeps
 ///   its offset. Pinned, it stays where it shows.
 /// - Area: the bar shows inside `area` (the canvas rect): a move stays inside it, and a stored place outside it comes
-///   back inside, its left and top edges winning where the bar does not fit. Its members continue on a new line when
-///   the area is too narrow for them.
+///   back inside, its left and top edges winning where the bar does not fit. An anchor that leaves no room on either
+///   side (a crop frame larger than the view) has the bar over it, on its side's edge of the area, with all its
+///   members. Its members continue on a new line when the area is too narrow for them.
 /// - Menu: Hide bar reports `hide`; Reset bar position clears the place, so the bar follows its anchor again; Pin bar
 ///   position keeps it where it shows and, picked again, lets it follow its anchor from where it shows.
 /// - `place` is the caller's value (`Bind::bound`): the bar reads it before it shows and writes the pass's change
@@ -390,7 +391,7 @@ impl<'a> TaskBar<'a> {
             Some(Mixed::Same(held)) => held,
             _ => TaskBarPlace::default(),
         };
-        let rtl = env.direction.is_rtl();
+        let rtl = env.layer_direction().is_rtl();
         let overlay = match kind {
             TaskBarKind::Selection => selection_overlay(hung.as_ref(), area, dismiss),
             TaskBarKind::Task | TaskBarKind::Fixed => layer_overlay(&held, hung.as_ref(), area, movable),
@@ -464,7 +465,7 @@ impl Hung {
     /// Where a bar of `size` hangs inside `area` before any offset: the place the overlay host computes for the
     /// anchored layer, taken from the one placement rule.
     fn unmoved(&self, size: Vec2, area: Rect, rtl: bool) -> Rect {
-        let request = PlaceRequest::new(self.rect, size, area).side(self.side).align(self.align).rtl(rtl).flips_across(true);
+        let request = PlaceRequest::new(self.rect, size, area).side(self.side).align(self.align).rtl(rtl).flips_across(true).covers_anchor(true);
         craft_behavior::overlay::place(&request).rect
     }
 }
@@ -494,7 +495,7 @@ fn selection_overlay(hang: Option<&Hung>, area: Rect, dismiss: TaskBarDismiss) -
     };
     let overlay = Overlay::floating().modeless().body_scroll(false).dismiss(Dismiss::new().outside(outside));
     match hang {
-        Some(hang) => overlay.bounds(area).place(Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align)),
+        Some(hang) => overlay.bounds(area).place(Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).covering_anchor()),
         None => overlay,
     }
 }
@@ -509,7 +510,9 @@ fn layer_overlay(held: &TaskBarPlace, hang: Option<&Hung>, area: Rect, movable: 
     if let Some(at) = held.placed_in(area).filter(|_| movable) {
         return overlay.placed_at(at);
     }
-    let mut hung = Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).flipping_across();
+    // An anchor that fills the area (a crop frame larger than the view) leaves no room on either side: the bar keeps
+    // its members and slides over the anchor, inside the area, instead of showing an empty surface.
+    let mut hung = Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).flipping_across().covering_anchor();
     if movable {
         hung = hung.offset(held.offset_in().unwrap_or(Vec2::ZERO));
     }

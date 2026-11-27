@@ -14,12 +14,13 @@ use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::overlay::Dismiss;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, Cx, Edit as _, LeadSource, Overlay, OverlayUi, Overlays as _, Props as _, Remember as _, Show as _,
+    Bind, CollectionEvent, ColumnSpec, Cx, Edit as _, Entry, LeadSource, Overlay, OverlayUi, Overlays as _, Props as _, Remember as _, Show as _,
     ShowCollection as _, ShowContainer as _, ToggleColumn, WordSetCx as _, clicked,
 };
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, RowEvent, ThumbSize, ToggleCell, ToggleFace, ToggleState, TrailingFace, TreeLeaves};
+use craft_ui::pickers::Select;
 use craft_ui::primitives::{FacesCx, IconSpec};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
@@ -28,8 +29,8 @@ use super::banner::FontPreviewBanner;
 use super::rank::{FamilyInfos, Language, Listing, host_rows, list, shown_name};
 use super::{
     FamilyRow, FamilySet, FilterLayout, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords,
-    FontPreviewSize, FontScript, HostFontGroup, HostFontKind, HostFontRow, POPUP, SAMPLE_EM, SIMILAR, Sample, Typing, infos_of, read, ui_language,
-    write,
+    FontPreviewSize, FontScript, HostFontGroup, HostFontKind, HostFontRow, POPUP, SAMPLE_EM, SIMILAR, Sample, SampleText, Typing, chosen_sample,
+    infos_of, read, ui_language, write,
 };
 use crate::panel::faces::{self, Owner, Shown};
 use crate::panel::specimen::{FontSample, SampleFace};
@@ -374,16 +375,44 @@ fn set_chip(ui: &mut egui::Ui, set: &FamilySet<'_>, keys: &mut Vec<String>) {
     }
 }
 
+/// The Sample Text dropdown over the host's `texts`, showing `chosen`; a pick writes its key to `key`.
+fn sample_text_select(
+    ui: &mut egui::Ui,
+    texts: &[SampleText<'_>],
+    chosen: Option<&SampleText<'_>>,
+    key: &mut Option<String>,
+    words: &FontPickerWords,
+) {
+    let Some(chosen) = chosen else { return };
+    let entries: Vec<Entry<String>> = texts.iter().map(|text| Entry::new(text.key.to_owned(), text.label.clone())).collect();
+    let mut picked = chosen.key.to_owned();
+    Select::new(words.sample_text.clone(), Bind::bound(&mut picked), &entries).show(ui);
+    if picked != chosen.key {
+        *key = Some(picked);
+    }
+}
+
+/// What the preview area of the `Chips` filters offers and writes: the preview size, and the host's sample texts with
+/// the chosen one and the key a pick writes.
+struct PreviewChoices<'s, 'a> {
+    size: &'s mut Option<FontPreviewSize>,
+    texts: &'s [SampleText<'a>],
+    chosen: Option<&'s SampleText<'a>>,
+    key: &'s mut Option<String>,
+}
+
 /// The `Chips` filter area: the script row; Favorites, the host sets, Any Kind and the classes; Font Technology and
-/// Variable; the similar chip while Show Similar Fonts is on; and the Font Preview Size row while samples show.
+/// Variable; the similar chip while Show Similar Fonts is on; and, while samples show, the Font Preview Size row and the
+/// Sample Text dropdown when the host offers sample texts.
 fn filter_chips(
     ui: &mut egui::Ui,
     filters: &mut FontFilters,
-    preview: &mut Option<FontPreviewSize>,
+    choices: PreviewChoices<'_, '_>,
     sets: &[FamilySet<'_>],
     scripts: &[FontScript],
     words: &FontPickerWords,
 ) {
+    let PreviewChoices { size: preview, texts, chosen: sample, key } = choices;
     Stack::new().show(ui, |ui, _| {
         if !scripts.is_empty() {
             Row::new().wrap(true).show(ui, |ui, _| {
@@ -436,6 +465,7 @@ fn filter_chips(
             {
                 *size = *next;
             }
+            sample_text_select(ui, texts, sample, key, words);
         }
     });
 }
@@ -589,10 +619,15 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     (&query, narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar, narrowing.script, &narrowing.sets, on_white, chips)
         .hash(&mut stamp);
     let banner_family = lead.unwrap_or_else(|| family.clone());
+    let texts = picker.sample_texts;
+    let chosen = chosen_sample(texts, settings.as_ref());
+    let mut sample_key = settings.as_ref().and_then(|s| s.sample_text.clone());
+    // The chosen sample text, else the host's preview text.
+    let host_text = chosen.map(|text| text.text).or(picker.preview_text);
     // The library picker always shows the banner, with the sample word when the host gives no text.
-    let banner_text = picker.preview_text.or((!plain).then_some(words.sample.as_str()));
+    let banner_text = host_text.or((!plain).then_some(words.sample.as_str()));
     // Every row's sample is the banner's text: the host's text, else the sample word.
-    let sample_text = picker.preview_text.unwrap_or(words.sample.as_str());
+    let sample_text = host_text.unwrap_or(words.sample.as_str());
     let name = words.list.clone();
     let mut stars: Vec<(String, bool)> = Vec::new();
     let mut over_rows = false;
@@ -618,7 +653,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
             }
             if let Some(filters) = filters.as_mut() {
                 if chips {
-                    filter_chips(ui, filters, &mut preview_size, sets, scripts, &words);
+                    let choices = PreviewChoices { size: &mut preview_size, texts, chosen, key: &mut sample_key };
+                    filter_chips(ui, filters, choices, sets, scripts, &words);
                 } else {
                     filter_bar(ui, filters, &mut hide_classes, &family, &words);
                 }
@@ -698,7 +734,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                             }
                         });
                     over_rows = rows.response.contains_pointer();
-                    let pointer = ui.ctx().pointer_hover_pos();
+                    let pointer = craft_ui::runtime::pointer::hover_point_in(ui.ctx(), rows.response.rect);
                     under_pointer = pointer.and_then(|at| rows.shown.iter().find(|row| row.rect.contains(at)).map(|row| row.key.clone()));
                     events = rows.events;
                 });
@@ -774,8 +810,16 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         if let Some(size) = preview_size {
             changed.preview = size;
         }
+        let sample_changed = sample_key != changed.sample_text;
+        changed.sample_text = sample_key;
         if Some(&changed) != settings.as_ref() {
-            let label = if stars.is_empty() { "Font preview size" } else { "Favorite font" };
+            let label = if !stars.is_empty() {
+                "Favorite font"
+            } else if sample_changed {
+                "Font sample text"
+            } else {
+                "Font preview size"
+            };
             write(&mut picker.settings, cx, changed, label);
         }
     }

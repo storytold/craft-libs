@@ -100,6 +100,8 @@ enum Recorded {
     /// The width a row's shrink step gave a unit, as a measure, and whether it narrowed the unit or dropped it.
     Shrink(Measured, ShrinkGiven),
     Text(Option<Arc<str>>),
+    /// A width a run measured that a step outside the run sizes by (`emit_width`).
+    Width(f32),
 }
 
 /// One thing a measuring run handed forward, in the order it did.
@@ -244,9 +246,11 @@ pub(crate) struct Entries {
     replaying: Vec<(Arc<Transcript>, Id, usize)>,
     /// The drafts open, innermost last.
     drafts: Vec<Draft>,
+    /// This pass asked for the frame's discard pass; the end hook requests it.
     ask: bool,
     /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
     asks: u64,
+    /// The frame whose one discard pass the end hook requested.
     asked: Option<u64>,
 }
 
@@ -534,6 +538,28 @@ pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>> {
     })
 }
 
+/// Hands forward a width a run measured under `id` that a step outside the content that measured it sizes by, as
+/// [`emit_text`] hands forward a text (the room a container's header parts leave for items its host adds, for
+/// example): it serves the rest of this pass, and a later pass that takes the kept measurement of a body it ran in
+/// gets it with that measurement. A real run emits it too: a width that differs by more than the measuring tolerance
+/// from the one a kept transcript gave the pass shows that transcript changed.
+///
+/// A memoized view that replays emits it again.
+pub fn emit_width(ctx: &Context, id: Id, width: f32) {
+    emit(ctx, id, Recorded::Width(width));
+    super::replay::journal(ctx, || (id, width), |ctx, (id, width)| emit(ctx, *id, Recorded::Width(*width)));
+}
+
+/// The width a run of this pass handed forward under `id` ([`emit_width`]), or a kept transcript gave this pass.
+pub fn width(ctx: &Context, id: Id) -> Option<f32> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass) {
+        Some(Found { recorded: Recorded::Width(width), .. }) => Some(*width),
+        _ => None,
+    })
+}
+
 fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
@@ -574,6 +600,7 @@ fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Opti
     let differs = match (was, now) {
         (Recorded::Measured(was), Recorded::Measured(now)) => measures(was, now, false),
         (Recorded::Shrink(was, was_given), Recorded::Shrink(now, now_given)) => measures(was, now, was_given != now_given),
+        (Recorded::Width(was), Recorded::Width(now)) => (was - now).abs() > tolerance,
         (was, now) => was != now,
     };
     if *at != pass || !differs {
@@ -1175,6 +1202,13 @@ pub(crate) fn ask_discard(ctx: &Context) {
     with(ctx, &moment, Entries::ask_discard);
 }
 
+/// Whether this pass asked for the frame's discard pass and the end hook will request it from egui: no earlier pass of
+/// the frame got it, and egui can still run this one again.
+pub(crate) fn discard_pending(ctx: &Context) -> bool {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.ask && memory.asked != Some(moment.frame)) && sizing::discardable(ctx)
+}
+
 /// Keeps the entries and kept transcripts of `ids` through this frame, for a replayed run that kept them
 /// (`replay::note_layout_keep`): the replay does not reach them, and an entry no pass touched in a frame is dropped.
 pub(crate) fn keep(ctx: &Context, ids: &[Id]) {
@@ -1244,6 +1278,7 @@ pub(crate) mod guard {
         ("layout::column_group::Open", "column groups: frames the run opens and closes; reports go through contribute"),
         ("access::scope::Stack", "label and merge scopes: opened and closed by the run; control minimums go through contribute"),
         ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
+        ("layout::body::ViewFills", "view fills: opened and closed by the memoized view's own run"),
         ("layout::body::HeldWidths", "held children: opened by the column's own first sweep and closed after its last"),
         ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
         ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
@@ -1256,6 +1291,8 @@ pub(crate) mod guard {
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
         ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),
+        ("layout::body::FillLeasts", "fill leasts: opened and closed by the row's own first sweep; the sum goes through contribute"),
+        ("layout::body::RowShortfalls", "shortfalls: asked and taken by the container around the row in the same measuring sweep"),
         ("runtime::reads::Runs", "measuring runs of the read record: opened and closed by each run; reads go through contribute"),
         ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),
         // Read in measuring runs; written by real runs, the frame hooks or the host.

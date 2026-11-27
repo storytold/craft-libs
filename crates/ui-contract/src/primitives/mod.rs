@@ -10,6 +10,7 @@ mod focus_ring;
 #[doc(hidden)]
 pub mod glyph;
 mod handle;
+mod host;
 mod icon;
 mod ime_surface;
 mod kit;
@@ -40,6 +41,7 @@ pub use face::FacePaint;
 pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};
+pub use host::HostStyle;
 pub(crate) use icon::SvgIcon;
 pub use icon::{Glyph, IconMark, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names, paint_icon};
 pub use ime_surface::ImeSurface;
@@ -58,7 +60,7 @@ pub use state_layer::{StateLayer, StateLayerKind};
 pub(crate) use surface::{Frames as SurfaceFrames, SurfaceSlot, fit_to_frame};
 pub use surface::{Surface, frame_surfaces};
 pub use surround::paint_surround;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use svg_set::Layer;
 pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};

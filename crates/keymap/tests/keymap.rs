@@ -1,8 +1,8 @@
 //! Integration tests of craft-keymap: keymap.
 
 use craft_keymap::{
-    Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides,
-    Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
+    Active, Binding, Chord, CommandDef, CommandRef, DeleteKeys, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods,
+    Overrides, Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
 };
 use serde_json::json;
 
@@ -24,6 +24,61 @@ fn cmd(id: &str) -> CommandRef {
 
 fn app(id: &str, keys: &[&str]) -> CommandDef {
     keys.iter().fold(CommandDef::new(id, id, Scope::app()), |e, k| e.with_default(b(k)))
+}
+
+#[test]
+fn a_replacement_that_is_too_long_to_store_leaves_both_commands_intact() {
+    let context = "Text".repeat(16);
+    let scope = scope(&context);
+    let command = cmd("text.save");
+    let other = cmd("text.export");
+    let trigger = Trigger::parse("Cmd+Ctrl+Alt+Shift+IntlBackslash Cmd+Ctrl+Alt+Shift+IntlBackslash").unwrap();
+    let held = Binding::new(trigger);
+    let catalog = || vec![app("text.save", &["Cmd+S"]), CommandDef::new("text.export", "Export Text", scope.clone()).with_default(held.clone())];
+    let mut km = Keymap::new(catalog(), Scopes::new().with_context(&context), Platform::Mac);
+    let original = Binding::in_scope(Trigger::parse("Cmd+K").unwrap(), scope.clone());
+    km.set_bindings(&command, vec![original.clone()], Policy::Keep).unwrap();
+    let saved = km.overrides().clone();
+
+    let replacement = Binding::in_scope(trigger, scope.clone());
+    assert!(matches!(km.set_bindings(&command, vec![replacement], Policy::Steal), Err(craft_keymap::AssignError::Unstorable { .. })));
+    assert_eq!(km.bindings(&command), std::slice::from_ref(&original));
+    assert_eq!(km.bindings(&other), std::slice::from_ref(&held));
+    assert_eq!(km.overrides(), &saved);
+
+    let mut reopened = Keymap::new(catalog(), Scopes::new().with_context(&context), Platform::Mac);
+    reopened.set_overrides(km.overrides().clone());
+    assert_eq!(reopened.bindings(&command), [original]);
+}
+
+#[test]
+fn a_binding_that_would_reload_in_another_scope_is_refused() {
+    let command = cmd("text.save");
+    let mut km = Keymap::new(vec![app("text.save", &["Cmd+S"])], Scopes::new().with_context("Cmd+"), Platform::Mac);
+    let binding = Binding::in_scope(Trigger::parse("Cmd+:").unwrap(), scope("Cmd+"));
+    assert!(matches!(km.set_bindings(&command, vec![binding], Policy::Keep), Err(craft_keymap::AssignError::Unstorable { .. })));
+    assert_eq!(km.bindings(&command), [b("Cmd+S")]);
+    assert!(km.overrides().is_empty());
+}
+
+#[test]
+fn editing_one_shortcut_keeps_a_saved_spelling_that_can_be_read_back() {
+    let command = cmd("text.save");
+    let catalog = || vec![app("text.save", &["Cmd+S"])];
+    let scopes = || Scopes::new().with_context("Cmd+");
+    let mut km = Keymap::new(catalog(), scopes(), Platform::Mac);
+    let scoped = Binding::in_scope(Trigger::parse("Cmd+:").unwrap(), scope("Cmd+"));
+    let stored = "Cmd+: Cmd + :";
+    let mut overrides = Overrides::new();
+    assert!(overrides.insert(command.key(), vec![stored.into(), "Cmd+S".into()]));
+    km.set_overrides(overrides);
+    assert!(km.bindings(&command).contains(&scoped));
+
+    assert!(km.remove(&command, &b("Cmd+S")));
+    assert_eq!(km.overrides().get(&command.key()).unwrap(), [stored]);
+    let mut reopened = Keymap::new(catalog(), scopes(), Platform::Mac);
+    reopened.set_overrides(km.overrides().clone());
+    assert_eq!(reopened.bindings(&command), [scoped]);
 }
 
 fn in_scope(id: &str, home: &str, keys: &[&str]) -> CommandDef {
@@ -216,6 +271,28 @@ fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
 
     let km = Keymap::new(vec![app("layer.new.layer", &["F2"])], Scopes::new(), Platform::Mac);
     assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
+}
+
+/// Delete and Backspace: a press runs its own key's binding; with the keys one key (the default) a key with no
+/// binding of its own runs the other's, and with the keys apart it runs nothing.
+#[test]
+fn delete_and_backspace_run_their_own_bindings_and_stand_in_only_as_one_key() {
+    let hit = |km: &Keymap, key: Key| {
+        let input = KeyInput::new(Mods::NONE).with_physical(key);
+        let press = Press { input: &input, repeat: false, now: 0.0, active: &Active::NONE, outer: &[] };
+        Matcher::new().press(&Layout::new(), km, &press).map(|hit| hit.command)
+    };
+    let both = || vec![app("layer.remove", &["Delete"]), app("path.removePoint", &["Backspace"])];
+    for keys in [DeleteKeys::OneKey, DeleteKeys::Apart] {
+        let km = Keymap::new(both(), Scopes::new(), Platform::Linux).with_delete_keys(keys);
+        assert_eq!(hit(&km, Key::Delete), Some(cmd("layer.remove")), "{keys:?}: Delete runs its own binding");
+        assert_eq!(hit(&km, Key::Backspace), Some(cmd("path.removePoint")), "{keys:?}: Backspace runs its own binding");
+    }
+    let delete_only = || vec![app("layer.remove", &["Delete"])];
+    let km = Keymap::new(delete_only(), Scopes::new(), Platform::Mac);
+    assert_eq!(hit(&km, Key::Backspace), Some(cmd("layer.remove")), "one key: Backspace runs the Delete binding");
+    let km = Keymap::new(delete_only(), Scopes::new(), Platform::Mac).with_delete_keys(DeleteKeys::Apart);
+    assert_eq!(hit(&km, Key::Backspace), None, "apart: Backspace runs nothing");
 }
 
 /// A press passes over the binding of a command the caller refuses (one disabled where it lands): the chord's binding

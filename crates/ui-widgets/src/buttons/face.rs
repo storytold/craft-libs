@@ -1,11 +1,13 @@
 //! What a push or toggle button shows: a leading icon (or spinner), a label and a trailing icon, centred in the
 //! button unless it aligns them to an edge, and the look parts the buttons share.
 
-use super::{ControlPlace, GroupLevel, RibbonLook};
+use super::{ActiveLook, ControlPlace, GroupLevel, RibbonLook};
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::list::ThumbAspect;
-use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
-use crate::style::{FocusLook, GlyphRole, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
+use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun, Wrap};
+use crate::style::{
+    ComponentStyle as _, FocusLook, GlyphRole, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts,
+};
 use craft_behavior::{Flow, Insets, Metrics, Proposal};
 use craft_theme::{
     Stateful, States, Variant,
@@ -106,8 +108,8 @@ pub(crate) struct FaceSpec<'a> {
     pub align: HAlign,
     /// The command's chord, shown after the label of an inline face and dropped before the label elides.
     pub chord: Option<&'a str>,
-    /// A caption-role second line under the icon and label of an inline face, wrapped to the face's width.
-    pub detail: Option<&'a str>,
+    /// A caption under the icon and label of an inline face, with its wrapping policy.
+    pub detail: Option<(&'a str, Wrap)>,
 }
 
 impl FaceSpec<'_> {
@@ -154,8 +156,8 @@ impl FaceSpec<'_> {
         })
     }
 
-    fn detail_run(&self) -> Option<TextRun<'_>> {
-        self.detail.filter(|detail| !detail.is_empty()).map(|detail| TextRun::new(detail).role(TypeRole::Caption))
+    pub(super) fn detail_run(&self) -> Option<TextRun<'_>> {
+        self.detail.filter(|(detail, _)| !detail.is_empty()).map(|(detail, wrap)| TextRun::new(detail).role(TypeRole::Caption).wrap(wrap))
     }
 }
 
@@ -322,16 +324,16 @@ fn stacked_sizes<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, lines
         .collect()
 }
 
-/// The metrics of a button with a face: the control's, with the horizontal padding at least the corner radius plus
-/// the gap, so the label and icons of a capsule clear its round ends.
+/// The metrics of a button with a face: a button high (`StyleCx::button_height`), with the control's horizontal padding
+/// at least the corner radius plus the gap, so the label and icons of a capsule clear its round ends.
 pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
-    let control = cx.control();
-    let round = f32::from(parts.radius.nw).min(control.height / 2.0);
+    let (control, height) = (cx.control(), cx.button_height());
+    let round = f32::from(parts.radius.nw).min(height / 2.0);
     // The sides clear the corner round, so an edge never crosses the label. A ribbon's flat button has no edge at rest
     // (`ControlPlace::Ribbon`): its sides take the control's padding, as a ribbon's controls sit close.
     let side = if super::flat_in_ribbon(cx) { control.pad_x } else { control.pad_x.max(round + control.gap) };
-    // A ribbon look's row height (`RibbonLook::row`) stands in for the control's.
-    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, control.height))).gap(control.gap)
+    // A ribbon look's row height (`RibbonLook::row`) stands in for the button's.
+    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, height))).gap(control.gap)
 }
 
 /// The metrics of a stacked face: `metrics`, with the control's gap above and below the stack, so its height is the
@@ -396,15 +398,21 @@ pub(crate) struct IconFace {
 /// button of the old look (a capsule would round the on plate), showing the on look while on. The scope's glyph role
 /// sets the glyph's side and, in a rail, the quieter ink it rests in.
 pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
-    let (off, on) = (cx.variant_look(), on_parts(cx));
+    let on = match cx.env::<ActiveLook>() {
+        ActiveLook::Accent => on_parts(cx),
+        ActiveLook::Pressed => filled_parts(cx, cx.tokens.color.state.pressed),
+        ActiveLook::Control => filled_parts(cx, cx.tokens.color.surface.control),
+    };
+    let off = cx.variant_look();
     let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
     let (side, rest) = match cx.glyph_role() {
         GlyphRole::Tool => (icon.md, None),
         GlyphRole::ToolRail => (icon.lg, Some(text.muted)),
         GlyphRole::PanelRail => (cx.glyph(), Some(text.faint)),
+        GlyphRole::Compact => (icon.glyph_sm, None),
         _ => (cx.glyph(), None),
     };
-    let side = super::small_icon(cx, side);
+    let side = if cx.glyph_role() == GlyphRole::Compact { side } else { super::small_icon(cx, side) };
     let mut ink = off.text.clone();
     if let Some(rest) = rest {
         ink.off.rest = cx.color(rest);
@@ -424,6 +432,13 @@ pub(super) fn on_parts(cx: &StyleCx<'_>) -> VariantParts {
     let fill = cx.color(colors.accent.soft);
     let ink = cx.color(colors.accent.on_soft);
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), ..soft }
+}
+
+/// The on look under `ActiveLook::Pressed` and `ActiveLook::Control`: `fill` with no edge, the normal text colour.
+fn filled_parts(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> VariantParts {
+    let soft = on_parts(cx);
+    let (fill, ink) = (cx.color(fill), cx.color(cx.tokens.color.text.normal));
+    VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), edge: None, ..soft }
 }
 
 /// The focus ring of a button.
@@ -463,7 +478,21 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
     let (icon, gap) = (measured_icon(cx), cx.gap());
     let trail = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonLook>()).unwrap_or(icon);
     let fixed = spec.icons_width(icon, trail) + gap * spec.gaps() as f32;
-    let room = cx.room.unwrap_or(f32::INFINITY);
+    let detail = spec.detail_run();
+    let wraps = detail.as_ref().is_some_and(|run| run.wrap == Wrap::Wrap);
+    let room = cx.room.or_else(|| {
+        if !wraps {
+            return None;
+        }
+        let width = match cx.proposal {
+            Proposal::Width(width) => width,
+            Proposal::Size(size) => size.x,
+            _ => return None,
+        };
+        let pad = cx.style.metrics().padding;
+        width.is_finite().then(|| (width - pad.start - pad.end).max(0.0))
+    });
+    let room = room.unwrap_or(f32::INFINITY);
     let (text, chord) = if spec.label.is_empty() {
         (Vec2::ZERO, None)
     } else if cx.proposal == Proposal::Min {
@@ -480,7 +509,7 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         }
     };
     let row = Vec2::new(text.x + fixed + chord.map_or(0.0, |width| width + gap), text.y.max(icon));
-    let Some(detail) = spec.detail_run() else { return row };
+    let Some(detail) = detail else { return row };
     let detail = if cx.proposal == Proposal::Min { cx.least(&detail).size() } else { cx.layout_at(&detail, room).size() };
     Vec2::new(row.x.max(detail.x), row.y + gap + detail.y)
 }

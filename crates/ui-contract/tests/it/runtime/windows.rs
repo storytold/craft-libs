@@ -1,23 +1,27 @@
-//! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
-//! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
-//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
-//! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
-//! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
-//! pointer, the placement of a minimized window, the root frame decided again, a held close, and `act`.
+//! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS resize
+//! (H4), the raise of a modal's window and the keyboard it takes from a window it blocks, the mount of a full-window
+//! container (in a window of its own, or in a full-screen or Wayland-maximized main window), the size of a
+//! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
+//! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
+//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
+//! placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted window's
+//! Control-click and window-input policy.
 
-use craft_behavior::{Cursor, CursorIcon, PointerButton};
+use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
-use craft_ui::runtime::windows::{WindowHost, WindowSpec};
+use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
-use craft_ui::testing::pointer::{moved, press, wheel};
+use craft_ui::testing::input::key_press;
+use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
-use craft_ui_test_kit::windows::{Out, Windows};
+use craft_ui_test_kit::windows::{FilesOver, Out, Windows};
 use craft_window::policy::{Decision, Desktop, DesktopKind, Frame, MacInset, Runtime, TitleBarPref};
 use craft_window::restore::Store;
 use egui::{Event, Pos2, Rect, Response, UserAttentionType, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
@@ -325,6 +329,240 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
     }
 }
 
+/// Window facts with the focus as given, at a place the window system tells.
+fn focus(on: bool) -> ViewportInfo {
+    ViewportInfo { focused: Some(on), inner_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(300.0))), ..ViewportInfo::default() }
+}
+
+fn on_x11() -> Windows {
+    Windows::with(InstallSpec::new(ShellInfo::default().backend(Backend::X11), Arc::new(FakeSystem::new())))
+}
+
+/// How many focus requests `out` sent to `viewport`.
+fn focus_requests(out: &Out, viewport: ViewportId) -> usize {
+    out.commands.iter().filter(|(id, command)| *id == viewport && *command == ViewportCommand::Focus).count()
+}
+
+/// Frames that last longer than a modal's window waits before it takes the keyboard.
+const PAST_THE_WAIT: usize = 40;
+
+/// The app's own modal that opens while a window it blocks has the keyboard (a command typed in a floated panel opens
+/// the save prompt in the main window) gets the keys it needs: its window takes the OS focus from the blocked one,
+/// once, and the wait before it wakes an idle app. Nothing is sent when no blocked window has the focus by then (an OS
+/// dialog that opened with the modal took it, or the modal's window has it) or the modal closed meanwhile.
+#[trial]
+fn an_app_modal_takes_the_keyboard_from_a_window_it_blocks() {
+    // The frames after the modal opens in which the main window, which shows it, got a focus request, with the main
+    // window and a child window focused as given and `before` run before each frame.
+    let requests = |root: bool, float: bool, before: &dyn Fn(&Windows, usize)| -> Vec<usize> {
+        let windows = on_x11();
+        windows.root_info(focus(root));
+        windows.child_info(focus(float));
+        let frame = || {
+            windows.frame(vec![], vec![], |ui| {
+                Palette::new("float", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            })
+        };
+        for _ in 0..4 {
+            frame();
+        }
+        windows.app_modal(Some(ViewportId::ROOT));
+        (0..PAST_THE_WAIT)
+            .flat_map(|at| {
+                before(&windows, at);
+                vec![at; focus_requests(&frame(), ViewportId::ROOT)]
+            })
+            .collect()
+    };
+    let none: [usize; 0] = [];
+    let sent = requests(false, true, &|_, _| {});
+    let &[handed] = sent.as_slice() else { panic!("the main window takes the keyboard from the float once: {sent:?}") };
+    assert!(handed > 1, "not before an OS dialog that opens with the modal could take it: frame {handed}");
+    let closes = |windows: &Windows, at| {
+        if at == handed {
+            windows.app_modal(None);
+        }
+    };
+    assert_eq!(requests(false, true, &closes), none, "the modal closed meanwhile");
+    let os_dialog = |windows: &Windows, at| {
+        if at == 1 {
+            windows.child_info(focus(false));
+        }
+    };
+    assert_eq!(requests(false, true, &os_dialog), none, "an OS dialog took the focus");
+    assert_eq!(requests(false, false, &|_, _| {}), none, "no window of the app has the focus");
+    assert_eq!(requests(true, false, &|_, _| {}), none, "the modal's window has the focus");
+
+    let woken = Arc::new(Mutex::new(false));
+    let settled = |windows: &Windows, at| {
+        if at == 2 {
+            let woken = woken.clone();
+            windows.ctx.set_request_repaint_callback(move |info| *woken.lock().unwrap() |= !info.delay.is_zero());
+        }
+    };
+    requests(false, true, &settled);
+    assert!(*woken.lock().unwrap(), "an idle app wakes for the hand-over");
+}
+
+/// A framework modal in a window of its own takes the keyboard from the main window it blocks.
+#[trial]
+fn a_framework_modal_takes_the_keyboard_from_the_window_it_blocks() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(false));
+    let sent: usize = (0..PAST_THE_WAIT).map(|_| focus_requests(&modal_frame(&windows), child())).sum();
+    assert_eq!(sent, 1, "once");
+}
+
+/// A menu's layer hung from a place near its window's corner: opened in a palette it shows in a popup window.
+fn menu_layer() -> ContainerProps {
+    use craft_behavior::overlay::{Align, Side};
+    use craft_ui::contract::overlay::{Anchor, Place};
+    let anchor = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(10.0));
+    ContainerProps::new().mount(Mount::Layer(Overlay::menu().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start))))
+}
+
+/// The popup window `out` shows beside the main window and `palette`.
+fn popup_window(out: &Out, palette: ViewportId) -> Option<ViewportId> {
+    out.builders.iter().map(|(id, _)| *id).find(|id| ![ViewportId::ROOT, palette].contains(id))
+}
+
+/// A popup window opened from the window that shows the app's modal keeps the keyboard.
+#[trial]
+fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
+    let windows = on_x11();
+    windows.root_info(focus(false));
+    windows.child_info(focus(true));
+    let open = Cell::new(false);
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    Modal { common: Common::new(), props: menu_layer() }.id_salt("popup").show(ui, |_, _| {});
+                }
+            });
+        })
+    };
+    let palette = builder_titled(&frame(), "tool").0;
+    windows.app_modal(Some(palette));
+    open.set(true);
+    frame();
+    windows.child_info(focus(false));
+    let outs: Vec<Out> = (0..PAST_THE_WAIT).map(|_| frame()).collect();
+    let popup = outs.last().and_then(|out| popup_window(out, palette)).expect("the layer opened in the palette shows in a popup window");
+    assert_eq!(windows.facts(popup).focused, Some(true), "the popup window has the keyboard");
+    assert_eq!(outs.iter().map(|out| focus_requests(out, palette)).sum::<usize>(), 0, "the modal's window leaves it there");
+}
+
+/// A popup window opened in a palette's first frames stays open while the palette's window has the focus: the
+/// palette counts among the app's windows from the frame it opened in, before the main window's input lists it, so
+/// the app is not away.
+#[trial]
+fn a_popup_window_opened_with_its_palette_stays_open() {
+    let windows = on_x11();
+    windows.root_info(focus(false));
+    windows.child_info(focus(true));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                Modal { common: Common::new(), props: menu_layer() }.id_salt("popup").show(ui, |_, _| {});
+            });
+        })
+    };
+    let outs: Vec<Out> = (0..4).map(|_| frame()).collect();
+    let palette = builder_titled(&outs[0], "tool").0;
+    assert!(popup_window(&outs[3], palette).is_some(), "the layer opened with its palette still shows in its popup window");
+}
+
+/// A layer in a popup window keeps the scroll that a focus move below its view gave it while it is open, and starts at
+/// the top when it opens again.
+#[trial]
+fn a_layer_in_a_popup_window_keeps_its_scroll_until_it_closes() {
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    let (open, reveal, top) = (Cell::new(false), Cell::new(false), Cell::new(0.0));
+    let (tall, last) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    let props = menu_layer().scroll(Scroll::vertical());
+                    Modal { common: Common::new(), props }.id_salt("popup").show(ui, |ui, _| {
+                        if !craft_ui::testing::is_measuring(ui.ctx()) {
+                            top.set(ui.next_widget_position().y);
+                        }
+                        Probe::new(&tall).id_salt("tall").size(Vec2::new(100.0, 2000.0)).show(ui);
+                        Probe::new(&last).id_salt("last").show(ui);
+                        if let Some(id) = last.borrow().id.filter(|_| reveal.take()) {
+                            request(ui.ctx(), FocusTarget::Id(id));
+                        }
+                    });
+                }
+            });
+        })
+    };
+    let settled = || {
+        let mut out = frame();
+        for _ in 1..PAST_THE_WAIT {
+            out = frame();
+        }
+        out
+    };
+    let palette = builder_titled(&frame(), "tool").0;
+    open.set(true);
+    assert!(popup_window(&settled(), palette).is_some(), "the layer opened in the palette shows in a popup window");
+    let start = top.get();
+    reveal.set(true);
+    settled();
+    let scrolled = top.get();
+    assert!(scrolled < start - 1.0, "the layer stays scrolled: its content starts at {scrolled}, {start} unscrolled");
+    open.set(false);
+    assert_eq!(popup_window(&settled(), palette), None, "the layer closed");
+    open.set(true);
+    settled();
+    assert!((top.get() - start).abs() < 0.5, "opened again, it starts at the top: {} after {scrolled}, {start} unscrolled", top.get());
+}
+
+/// A popup that a press in another window of the app opened stays open, also when its opener runs a second pass of the
+/// frame it opens in, and a later press there closes it.
+#[trial]
+fn a_popup_window_stays_after_the_press_in_another_window_that_opened_it() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    let (open, again, closed) = (Cell::new(false), Cell::new(false), RefCell::new(Vec::new()));
+    let frame = |root: Vec<Event>| {
+        windows.frame(root, vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    Capture { common: Common::new(), props: menu_layer(), closed: &closed }.id_salt("popup").show(ui, |_, _| {});
+                    if again.take() {
+                        craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
+                    }
+                }
+            });
+        })
+    };
+    let at = Pos2::new(250.0, 250.0);
+    frame(vec![]);
+    let out = frame(vec![moved(at)]);
+    let palette = builder_titled(&out, "tool").0;
+    frame(vec![press(at), release(at)]);
+    open.set(true);
+    again.set(true);
+    let mut out = frame(vec![]);
+    for _ in 0..4 {
+        out = frame(vec![]);
+    }
+    assert!(!again.get() && popup_window(&out, palette).is_some(), "the popup opened, its opener's pass repeated");
+    assert_eq!(*closed.borrow(), [], "the press that opened it leaves it open");
+    frame(vec![press(at), release(at)]);
+    frame(vec![]);
+    assert_eq!(closed.borrow().first(), Some(&CloseReason::Outside), "a later press in the main window closes it");
+}
+
 /// A window that a modal in another window blocks takes no wheel, as it takes no press or key: what is under the
 /// pointer there does not scroll.
 #[trial]
@@ -359,7 +597,7 @@ fn a_window_an_app_modal_in_another_window_blocks_takes_no_wheel() {
 
 #[trial]
 fn wheel_over_a_modal_never_reaches_a_view_under_it_during_a_drag() {
-    use craft_behavior::{Sense, WheelTaker};
+    use craft_behavior::WheelTaker;
     use craft_ui::testing::wheel::{register, take};
     let windows = Windows::new();
     let view = egui::Id::unique("dragging view");
@@ -464,6 +702,107 @@ fn a_blocking_modal_is_raised_when_the_main_window_gains_focus() {
     assert!(!raised(&frame()), "the main window stays unfocused: the dialog's window is not raised");
     windows.root_info(focus(true));
     assert!(raised(&frame()), "the main window gained focus: the dialog's window is raised");
+}
+
+/// A modal window that opens over a modal in another window comes first in the app's modal stack: the screen picker's
+/// capture windows, one per monitor and all opened in one frame, take the click and the Escape that end the pick and
+/// block none of each other, while the window of the Color Picker under them stays blocked until they close.
+#[trial]
+fn modal_windows_opened_over_a_modal_in_another_window_take_input_and_block_it() {
+    let windows = Windows::new();
+    let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+    windows.child_info(ViewportInfo { inner_rect: Some(screen), focused: Some(true), ..ViewportInfo::default() });
+    let titles = ["monitor 1", "monitor 2"];
+    let seen = [RefCell::new(Seen::default()), RefCell::new(Seen::default())];
+    let closed = RefCell::new(Vec::new());
+    // The capture windows shown, in show order. The trial's renderer hands the child events to the first child pass of
+    // the frame, so the order picks the window a click goes to.
+    let frame = |shown: &[usize], root: Vec<Event>, child: Vec<Event>| {
+        windows.frame(root, child, |ui| {
+            let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+            Modal { common: Common::new(), props }.id_salt("color picker").show(ui, |_, _| {});
+            for &at in shown {
+                Capture::new(titles[at], screen, &closed).show(ui, |ui, _| {
+                    Probe::new(&seen[at]).size(Vec2::splat(120.0)).sense(Sense::CLICK).show(ui);
+                });
+            }
+        })
+    };
+    let (both, flipped) = ([0, 1], [1, 0]);
+    let blocked = Some(Cursor::System(CursorIcon::NotAllowed));
+    for _ in 0..3 {
+        frame(&[], vec![], vec![]);
+    }
+    let mut out = frame(&both, vec![], vec![]);
+    for _ in 0..3 {
+        out = frame(&both, vec![], vec![]);
+    }
+    let captures = titles.map(|title| builder_titled(&out, title).0);
+
+    let at = Pos2::new(50.0, 50.0);
+    for order in [both, flipped] {
+        frame(&order, vec![], vec![moved(at)]);
+        frame(&order, vec![], vec![press(at)]);
+        frame(&order, vec![], vec![release(at)]);
+        frame(&order, vec![], vec![]);
+    }
+    let clicks: Vec<u32> = seen.iter().map(|seen| seen.borrow().activations).collect();
+    assert_eq!(clicks, [1, 1], "a click reaches each capture window");
+
+    assert_eq!(craft_ui::runtime::cursor::current(&windows.ctx), blocked, "the Color Picker's window is blocked");
+    let mut sent = frame(&both, vec![moved(at), press(at)], vec![]).commands;
+    sent.extend(frame(&both, vec![release(at)], vec![]).commands);
+    assert!(
+        sent.iter().any(|(id, command)| captures.contains(id) && *command == ViewportCommand::Focus),
+        "a press in the Color Picker's window raises a capture window: {sent:?}"
+    );
+
+    frame(&both, vec![], vec![key_press(egui::Key::Escape, egui::Modifiers::NONE)]);
+    frame(&both, vec![], vec![]);
+    assert_eq!(*closed.borrow(), [CloseReason::Escape], "Escape closes the capture window, which ends the pick");
+    for _ in 0..3 {
+        frame(&[], vec![], vec![]);
+    }
+    assert_ne!(craft_ui::runtime::cursor::current(&windows.ctx), blocked, "the pick ended: the Color Picker's window takes input again");
+}
+
+/// A modal container in an OS window of its own over `over`, as the screen picker's capture windows mount, that adds
+/// how it closed to `closed`.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Capture<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl<'a> Capture<'a> {
+    fn new(title: &'static str, over: Rect, closed: &'a RefCell<Vec<CloseReason>>) -> Self {
+        let mount = Mount::viewport_with(Overlay::modal().placed(over), WindowSpec::dialog().level(WindowLevel::AlwaysOnTop).taskbar(false));
+        Capture { common: Common::new(), props: ContainerProps::new().mount(mount), closed }.label(title).id_salt(title)
+    }
+}
+
+impl Component for Capture<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: CaptureStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Capture<'_> {
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
 }
 
 /// A container mounted in an OS viewport that opens as `spec`, with a body the trial gives it.
@@ -762,6 +1101,45 @@ fn a_content_sized_window_takes_its_content_size_once_it_reported_its_place() {
         taken.x >= CONTENT.x && taken.y >= CONTENT.y && taken.x < GIVEN.x && taken.y < GIVEN.y,
         "the window takes its content's size, not the room the OS gave it: {taken:?}"
     );
+}
+
+/// photocraft#16595: a full-window container in a window of its own keeps the size the window has. Its body takes
+/// less than the window (side panels, header and footer are no part of it), and the window was sent that size each
+/// frame, so it shrank until it was a pixel wide.
+#[trial]
+fn a_full_window_viewport_keeps_its_window_size() {
+    const GIVEN: Vec2 = Vec2::new(1000.0, 700.0);
+    let windows = Windows::new();
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::full_window("Workspace").show(ui, |ui, _| {
+                ui.allocate_exact_size(Vec2::new(300.0, 200.0), egui::Sense::hover());
+            });
+        })
+    };
+    let (dialog, _) = builder_titled(&frame(), "Workspace");
+    let report = |size: Vec2| {
+        let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), size);
+        windows.child_info(ViewportInfo {
+            inner_rect: Some(rect),
+            outer_rect: Some(rect),
+            native_pixels_per_point: Some(1.0),
+            ..ViewportInfo::default()
+        });
+    };
+    let sizes_sent = || -> Vec<Vec2> {
+        (0..6)
+            .flat_map(|_| frame().commands)
+            .filter_map(|(id, command)| match command {
+                ViewportCommand::InnerSize(size) if id == dialog => Some(size),
+                _ => None,
+            })
+            .collect()
+    };
+    report(GIVEN);
+    assert_eq!(sizes_sent(), Vec::<Vec2>::new(), "the workspace's window keeps the size it has");
+    report(Vec2::new(1200.0, 820.0));
+    assert_eq!(sizes_sent(), Vec::<Vec2>::new(), "a size the user gives the window is kept too");
 }
 
 /// Placing a minimized window below its smallest inner size restores it and lowers that size to the placed one, so the
@@ -1157,6 +1535,40 @@ fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_clo
     assert_eq!(back, Some(true), "the palette returns once the modal closed");
 }
 
+/// A palette that opens while the palettes still yield to a modal or popup of the root window that has just closed
+/// opens hidden and appears in the frames after.
+#[trial]
+fn a_palette_opened_as_the_roots_modal_or_popup_closes_appears() {
+    let windows = Windows::new();
+    let frame = |modal: bool, palette: bool| {
+        windows.frame(vec![], vec![], |ui| {
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("modal").show(ui, |_, _| {});
+            }
+            if palette {
+                Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            }
+        })
+    };
+    for _ in 0..3 {
+        frame(true, false);
+    }
+    frame(false, false);
+    let out = frame(false, true);
+    let (tool, builder) = builder_titled(&out, "tool");
+    let mut shown = builder.visible != Some(false);
+    assert!(!shown, "it opens hidden while the palettes yield");
+    for out in [out].into_iter().chain((0..3).map(|_| frame(false, true))) {
+        for (id, command) in out.commands {
+            if let (true, ViewportCommand::Visible(visible)) = (id == tool, command) {
+                shown = visible;
+            }
+        }
+    }
+    assert!(shown, "it appears once the modal is gone");
+}
+
 /// A key automation holds is in `keys::held` while it is held and not after its release.
 #[trial]
 fn a_key_held_by_automation_reads_as_held() {
@@ -1206,4 +1618,109 @@ fn a_title_with_nul_reaches_the_window_without_it() {
     assert!(send("Report draft.docx").is_empty(), "a title that differs only by NULs is the one already sent");
     assert_eq!(send("Notes.docx"), ["Notes.docx"], "a changed title is sent");
     assert_eq!(send("\0Report\0\0 draft.docx\0"), ["Report draft.docx"], "a title changed back is sent again, every NUL dropped");
+}
+
+/// A double click on the move band of an app-drawn frame follows the desktop's setting (GNOME's
+/// `action-double-click-titlebar` gives an integrated frame minimize or nothing), as a macOS inset frame follows
+/// its own; a native frame leaves it to the OS.
+#[trial]
+fn a_double_click_on_an_app_drawn_frame_follows_the_setting() {
+    use craft_host::target::DoubleClick;
+    use craft_ui::runtime::windows::{WindowAction, double_click_action};
+    use craft_window::policy::{CaptionFamily, Captions};
+    let integrated = Frame::Integrated(Captions { family: CaptionFamily::Adwaita, layout: craft_window::Layout::default() });
+    let inset = Frame::Inset(MacInset::default());
+    for frame in [&integrated, &inset] {
+        assert_eq!(double_click_action(frame, DoubleClick::Zoom, false), Some(WindowAction::SetMaximized(true)), "{frame:?}");
+        assert_eq!(double_click_action(frame, DoubleClick::Zoom, true), Some(WindowAction::SetMaximized(false)), "{frame:?}");
+        assert_eq!(double_click_action(frame, DoubleClick::Minimize, false), Some(WindowAction::Minimize), "{frame:?}");
+        assert_eq!(double_click_action(frame, DoubleClick::Nothing, false), None, "{frame:?}");
+    }
+    assert_eq!(double_click_action(&Frame::Native, DoubleClick::Zoom, false), None, "the OS acts on its own frame");
+}
+
+/// What the hosted child window's passes saw: its last pass's pointer, events and OS files, and the clicks since the
+/// last reset.
+#[derive(Clone, Copy, Debug, Default)]
+struct ChildSeen {
+    pointer: bool,
+    events: usize,
+    files: usize,
+    primary: bool,
+    secondary: bool,
+}
+
+/// One frame of a root window that hosts the child window as an OS window with a 200-point click area at its origin:
+/// `root` events go to the root, `events` and `dropped` files to the child. Returns whether the root knows the pointer.
+fn hosted_frame(windows: &Windows, root: Vec<Event>, events: Vec<Event>, dropped: Vec<String>, seen: &Cell<ChildSeen>) -> bool {
+    let root_pointer = Cell::new(false);
+    windows.frame_with_files(root, events, FilesOver::Child, Vec::new(), dropped, |ui| {
+        root_pointer.set(ui.ctx().input(|input| input.pointer.latest_pos().is_some()));
+        ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |cui, _| {
+            let area = cui.allocate_rect(Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)), egui::Sense::click());
+            let (pointer, events, files) = cui.ctx().input(|input| {
+                (input.pointer.latest_pos().is_some(), input.events.len(), input.raw.hovered_files.len() + input.raw.dropped_files.len())
+            });
+            let was = seen.get();
+            seen.set(ChildSeen {
+                pointer,
+                events,
+                files,
+                primary: was.primary || area.clicked(),
+                secondary: was.secondary || area.secondary_clicked(),
+            });
+        });
+    });
+    root_pointer.get()
+}
+
+/// A panel floated into its own OS window gets a macOS Control+Click as a secondary click, as the main window does:
+/// the Control-click mapping runs on every hosted window's input, which eframe's `raw_input_hook` never sees.
+#[trial]
+fn a_control_click_in_a_hosted_window_is_a_secondary_click_on_macos() {
+    let shell = ShellInfo::default().os(Os::Mac).caps(Caps::native(Os::Mac));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(FakeSystem::new())));
+    let seen = Cell::new(ChildSeen::default());
+    let at = Pos2::new(50.0, 50.0);
+    let control = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::CTRL };
+    hosted_frame(&windows, vec![], vec![], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![moved(at)], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![control(true)], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![control(false)], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![], vec![], &seen);
+    assert!(seen.get().secondary && !seen.get().primary, "the Control+Click is a secondary click there: {:?}", seen.get());
+}
+
+/// `WindowInput::Dropped` (an agent-driven session): a hosted window's own events and OS files reach none of its
+/// passes, while the root's input stays the host's and injected input still reaches the hosted window. Under `Live`
+/// the same input reaches it.
+#[trial]
+fn dropped_window_input_leaves_a_hosted_window_only_injected_input() {
+    use craft_ui::runtime::frame::WindowInput;
+    let at = Pos2::new(50.0, 50.0);
+    for policy in [WindowInput::Live, WindowInput::Dropped] {
+        let windows = Windows::new();
+        windows.window_input(policy);
+        let seen = Cell::new(ChildSeen::default());
+        hosted_frame(&windows, vec![], vec![], vec![], &seen);
+        let root_pointer = hosted_frame(&windows, vec![moved(at)], vec![moved(at)], vec!["clip.mov".to_owned()], &seen);
+        assert!(root_pointer, "{policy:?}: the root's input is the host's");
+        let after_move = seen.get();
+        hosted_frame(&windows, vec![], vec![press(at)], vec![], &seen);
+        hosted_frame(&windows, vec![], vec![release(at)], vec![], &seen);
+        hosted_frame(&windows, vec![], vec![], vec![], &seen);
+        let live = policy == WindowInput::Live;
+        assert_eq!(after_move.pointer, live, "{policy:?}: the window's pointer move {after_move:?}");
+        assert_eq!(after_move.events > 0, live, "{policy:?}: the window's events {after_move:?}");
+        assert_eq!(after_move.files > 0, live, "{policy:?}: the files dropped on the window {after_move:?}");
+        assert_eq!(seen.get().primary, live, "{policy:?}: the window's own click {:?}", seen.get());
+
+        seen.set(ChildSeen::default());
+        let host = WindowHost::of(&windows.ctx);
+        host.inject_click(child(), Pos2::new(60.0, 60.0), PointerButton::Primary, 1, Mods::NONE, false);
+        for _ in 0..8 {
+            hosted_frame(&windows, vec![], vec![], vec![], &seen);
+        }
+        assert!(seen.get().primary, "{policy:?}: the injected click reaches the window: {:?}", seen.get());
+    }
 }

@@ -3,7 +3,7 @@
 
 use super::{
     AppCatalog, CommandChain, CommandGate, CommandInput, CommandScope, CommandSet, CommandState, EditCommands, FirePhase, FireSource, Fired,
-    ResolvedCommand, WindowShortcut, registry,
+    ResolvedCommand, WindowShortcut, registry, yields_default,
 };
 use crate::contract::Revision;
 use crate::runtime::egui::sizing::{Rerun, request_discard};
@@ -17,7 +17,7 @@ use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, PressKind,
-    Scopes, Trigger, TypingRule,
+    Problem, Scopes, Trigger, TypingRule,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -413,7 +413,7 @@ impl Shown {
     /// The entry `reader` keeps for `command`.
     fn find(&self, reader: &Reader, number: u32, command: &CommandRef) -> Option<u64> {
         let ids = self.by_reader.get(reader)?.get(&number)?;
-        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| entry.kept.resolved.command == *command))
+        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| *entry.kept.resolved.command == *command))
     }
 
     /// Keeps `kept` for `reader`, in place of what it kept for the same command.
@@ -806,6 +806,13 @@ impl Board {
         };
         let state = this.or(last);
         let flags = resolve_flags(this.map(CommandState::flags), last.map(CommandState::flags));
+        // The focused part answers for a declared edit's flags, but its title and icon stay the app's, so the edit's
+        // label does not change language with the focus (#3569). The hint stays the part's: the app's hint describes
+        // the app's own enable state, which the part's flags override.
+        let app_number = matches!(declaring, Some(Declaration::Focused { .. })).then(|| self.numbers.get(command.id.as_str()).copied()).flatten();
+        let shown = state.or_else(|| app_number.and_then(|number| self.app_state(number, command)));
+        // The resolution reads the app's held state, so a change to it invalidates the kept resolution.
+        let key = key.or(app_number.map(|number| (number, None)));
         let reached = declaring.is_some()
             || instance.is_some_and(|id| match reach {
                 Reach::Focus => {
@@ -828,9 +835,9 @@ impl Board {
         let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
         let chord_text = chord.and_then(|chord| self.keymap.as_ref()?.shown_text.get(&chord).cloned());
         let resolved = ResolvedCommand {
-            label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
+            label: shown.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             catalog_label: def.map(|def| Arc::from(def.label.as_str())),
-            icon: state.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
+            icon: shown.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
             chord,
             chord_text,
             enabled: flags.enabled && !refused,
@@ -841,7 +848,7 @@ impl Board {
             hint_alone: state.is_some_and(CommandState::is_hint_alone),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             edit: self.registry.edit_of(&command.id).is_some(),
-            command: command.clone(),
+            command: Arc::new(command.clone()),
             instance,
         };
         (resolved, key)
@@ -974,8 +981,9 @@ pub fn keymap_builds() -> u64 {
 /// definition, and the catalog's default bindings join the registry's after them (an app's alternate keys, such as
 /// F2/F3/F4 for Cut/Copy/Paste).
 ///
-/// A window shortcut's default chord that another command also binds is that command's: the window shortcut loses it, so the
-/// app's binding beats the framework's default. A window shortcut the overrides name keeps what they give it.
+/// A yielding library command's default chord (a window shortcut's, Quit's: `yields_default`) that another command also
+/// binds is that command's: the library command loses it, so the app's binding beats the framework's default. One the
+/// overrides name keeps what they give it.
 fn build_keymap(
     registry: &registry::Registry,
     app: Option<&AppCatalog>,
@@ -1022,9 +1030,9 @@ fn build_keymap(
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs
         .iter()
-        .filter(|def| WindowShortcut::of(&def.command).is_some() && !overridden(def))
+        .filter(|def| yields_default(&def.command) && !overridden(def))
         .flat_map(|def| keymap.conflicts_with(&def.command))
-        .filter(|conflict| WindowShortcut::of(&conflict.b.0).is_none())
+        .filter(|conflict| !yields_default(&conflict.b.0))
         .map(|conflict| (conflict.a.0, conflict.chord))
         .collect();
     if !yielded.is_empty() {
@@ -1033,6 +1041,13 @@ fn build_keymap(
                 .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
         }
         keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, typing, holds);
+    }
+    // An override whose key names no command binds nothing and leaves that command's defaults in place; a misspelt id in
+    // an app's own table otherwise fails without a trace.
+    for problem in keymap.problems() {
+        if let Problem::UnknownCommand { key } = problem {
+            log::warn!("shortcut override `{key}` names no command and binds nothing");
+        }
     }
     let window_shortcuts = registry
         .defs()
@@ -1801,7 +1816,10 @@ pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: Fi
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
-    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press, pass::now(ctx)) }.mods(mods));
+    queue(
+        ctx,
+        Fired { target: command.instance, ..Fired::new(CommandRef::clone(&command.command), source, FirePhase::Press, pass::now(ctx)) }.mods(mods),
+    );
     true
 }
 

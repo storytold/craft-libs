@@ -8,9 +8,9 @@ use craft_behavior::Sense;
 use craft_ui::buttons::Button;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{
-    CommandSet, Common, Component, Cx, GlyphLabel, LabelKind, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
+    CommandSet, Common, Component, Cx, GlyphLabel, LabelKind, LabelScheme, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
 };
-use craft_ui::form::Field;
+use craft_ui::form::{Field, FieldGroup};
 use craft_ui::runtime::commands::CommandState;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer::moved;
@@ -297,4 +297,74 @@ fn a_tooltip_shown_from_inside_a_body_keeps_its_rect_frame_to_frame() {
     }
     let first = frames[0].1;
     assert!(first.is_some() && frames.iter().all(|(passes, rect)| *passes == 1 && *rect == first), "one pass a frame and one rect: {frames:?}");
+}
+
+/// A tooltip longer than a mark's cell and far shorter than the layer's cap.
+const STROKE_TIP: &str = "Set shape stroke type";
+
+/// The width of the tooltip a rest on a mark labelled `STROKE_TIP` shows in a wide window, with `inspector` in an
+/// inspector's field, whose control fills the cell its label leaves; and the window's width.
+fn stroke_tip_width(inspector: bool) -> (f32, f32) {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut fixture = Fixture::new(move |ui| {
+        let field = |ui: &mut Ui| {
+            Field::new("Stroke").show(ui, |ui, _| seen.set(Mark { common: Common::new() }.label(STROKE_TIP).show(ui).rect));
+        };
+        if inspector {
+            FieldGroup::new("Shape").labels(LabelScheme::Inspector).show(ui, |ui, _| field(ui));
+        } else {
+            field(ui);
+        }
+    });
+    let room = Vec2::new(1600.0, 600.0);
+    fixture.room(room);
+    fixture.settle();
+    fixture.frame(vec![moved(at.get().center())]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    let tip = fixture.by_role(Role::TOOLTIP).first().map(|tip| tip.rect).expect("the tooltip shows");
+    (tip.width(), room.x)
+}
+
+/// A control beside an inspector label fills its cell, its tooltip does not: the tooltip layer takes its text's width,
+/// as it does outside an inspector, not the layer's cap of the window (photocraft#16593).
+#[trial]
+fn a_tooltip_of_a_control_in_an_inspector_cell_keeps_its_text_width() {
+    let (plain, _) = stroke_tip_width(false);
+    let (inspector, room) = stroke_tip_width(true);
+    assert!(inspector <= plain + 0.5, "the tooltip in an inspector cell is as wide as outside one: {inspector} vs {plain}");
+    assert!(inspector < room / 4.0, "the tooltip does not span the window: {inspector} of {room}");
+}
+
+/// A press on a control hides its tooltip until the pointer leaves the control, so what the press opens (a popover
+/// under a swatch) is not covered; a rest after the pointer came back shows it again.
+#[trial]
+fn a_press_on_a_control_hides_its_tooltip_until_the_pointer_leaves() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(20.0);
+        seen.set(Button::new("Stroke").tooltip(STROKE_TIP.to_owned()).show(ui).rect);
+    });
+    fixture.settle();
+    let shows = |fixture: &Fixture| fixture.texts().iter().any(|run| run.text == STROKE_TIP);
+    let center = at.get().center();
+    fixture.frame(vec![moved(center)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(shows(&fixture), "a rest on the button shows its tooltip");
+
+    fixture.click_at(center);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(!shows(&fixture), "after a press on the button its tooltip stays hidden while the pointer rests there");
+
+    fixture.frame(vec![moved(at.get().right_bottom() + Vec2::splat(200.0))]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    fixture.frame(vec![moved(center)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(shows(&fixture), "once the pointer left and came back, a rest shows the tooltip again");
 }

@@ -27,7 +27,7 @@ mod binding;
 mod command;
 
 pub use binding::{Binding, BindingError};
-pub use command::{CommandDef, CommandKind, ModalRule, TypingRule};
+pub use command::{CommandDef, CommandKind, DeleteKeys, ModalRule, TypingRule};
 
 mod editing;
 pub use editing::text_editing_chords;
@@ -102,6 +102,13 @@ pub enum AssignError {
     UnknownScope(Scope),
     /// The change needs a new [`Overrides`] entry and it already holds [`MAX_COMMANDS`].
     Full,
+    /// A binding cannot be written and read back in the overrides format.
+    Unstorable {
+        /// The command whose bindings cannot be saved.
+        command: CommandRef,
+        /// The shortcut that cannot be saved.
+        trigger: Trigger,
+    },
     /// A hold is a chord that types a character, alone or with Shift: never Space, Backtick, Cmd, Ctrl or Alt.
     NotHoldable(Trigger),
 }
@@ -115,6 +122,7 @@ impl fmt::Display for AssignError {
             AssignError::Taken(h) => write!(f, "in use by {} other command(s)", h.len()),
             AssignError::UnknownScope(s) => write!(f, "unknown scope {s}"),
             AssignError::Full => write!(f, "more than {MAX_COMMANDS} changed commands"),
+            AssignError::Unstorable { command, trigger } => write!(f, "{trigger} for {} cannot be saved in its current scope", command.key()),
             AssignError::NotHoldable(t) => write!(f, "{t} cannot be held"),
         }
     }
@@ -267,6 +275,7 @@ pub struct Keymap {
     scopes: Scopes,
     platform: Platform,
     typing: TypingRule,
+    delete_keys: DeleteKeys,
     reserved: Vec<Chord>,
     overrides: Overrides,
     /// Tools of different groups may share a chord ([`Keymap::with_shared_tool_keys`]).
@@ -294,6 +303,7 @@ impl Keymap {
             scopes,
             platform,
             typing: TypingRule::default(),
+            delete_keys: DeleteKeys::default(),
             reserved: Vec::new(),
             overrides: Overrides::new(),
             shared_tool_keys: false,
@@ -321,6 +331,12 @@ impl Keymap {
     /// Sets the [`TypingRule`] for presses while a text field is being typed in.
     pub fn with_typing_rule(mut self, rule: TypingRule) -> Keymap {
         self.typing = rule;
+        self
+    }
+
+    /// Sets how a press of Delete or Backspace finds its binding ([`DeleteKeys`]).
+    pub fn with_delete_keys(mut self, keys: DeleteKeys) -> Keymap {
+        self.delete_keys = keys;
         self
     }
 
@@ -365,6 +381,11 @@ impl Keymap {
     /// The rule for presses while a text field is being typed in.
     pub fn typing_rule(&self) -> TypingRule {
         self.typing
+    }
+
+    /// How a press of Delete or Backspace finds its binding.
+    pub fn delete_keys(&self) -> DeleteKeys {
+        self.delete_keys
     }
 
     /// Every command the user can bind, in catalog order.
@@ -592,11 +613,21 @@ impl Keymap {
     /// not have it, or when the change needs a new [`Overrides`] entry and the overrides are full
     /// ([`AssignError::Full`]); nothing changes then.
     pub fn remove(&mut self, command: &CommandRef, binding: &Binding) -> bool {
-        let Some(i) = self.find(command) else { return false };
+        self.try_remove(command, binding).unwrap_or(false)
+    }
+
+    /// Removes one binding and reports why an edit could not be saved. `Ok(false)` means the command did not have
+    /// that binding.
+    pub fn try_remove(&mut self, command: &CommandRef, binding: &Binding) -> Result<bool, AssignError> {
+        let i = self.find(command).ok_or(AssignError::UnknownCommand)?;
         let gone = self.bound(i, binding);
         let before = self.current[i].len();
         let list: Vec<Bound> = self.current[i].iter().filter(|b| !self.same(b, &gone)).cloned().collect();
-        list.len() != before && self.commit(vec![(i, list)]).is_ok()
+        if list.len() == before {
+            return Ok(false);
+        }
+        self.commit(vec![(i, list)])?;
+        Ok(true)
     }
 
     /// Leaves a command without shortcuts, in every scope. `false` for an unknown command, or when
@@ -913,38 +944,52 @@ impl Keymap {
         Ok(done)
     }
 
-    /// Stores several commands' bindings, or none of them when the overrides lack room for the
-    /// new entries.
+    /// Prepares all entries before replacing live or stored bindings, including commands whose bindings were taken.
     fn commit(&mut self, writes: Vec<(usize, Vec<Bound>)>) -> Result<(), AssignError> {
-        let needed = writes.iter().filter(|(i, list)| self.stored[*i].is_none() && !self.is_default(*i, list)).count();
+        let mut prepared = Vec::with_capacity(writes.len());
+        for (i, list) in writes {
+            let texts = self.store_texts(i, &list)?;
+            prepared.push((i, list, texts));
+        }
+        let needed = prepared.iter().filter(|(i, _, texts)| self.stored[*i].is_none() && texts.is_some()).count();
         if self.overrides.len() + needed > MAX_COMMANDS {
             return Err(AssignError::Full);
         }
-        for (i, list) in writes {
-            self.store(i, list);
+        for (i, list, texts) in prepared {
+            self.remove_entries(i);
+            if let Some(texts) = texts {
+                self.overrides.insert(self.keys[i].clone(), texts);
+                self.stored[i] = Some(self.keys[i].clone());
+            }
+            self.set_current(i, list);
         }
         Ok(())
     }
 
-    /// Writes a command's bindings to the overrides, dropping the entry when they equal the
+    /// Prepares a command's overrides, dropping the entry when its bindings equal the
     /// defaults. Texts of the old entry this build cannot use stay in it, after the bindings and up
-    /// to [`MAX_BINDINGS`], unless the command is left without bindings: an entry of only such
-    /// texts loads as the defaults. Callers check for room first ([`Keymap::commit`]); texts always
-    /// fit, since a scope name, `": "` and the longest double press stay under
-    /// [`MAX_BINDING_TEXT`].
-    fn store(&mut self, i: usize, list: Vec<Bound>) {
+    /// to [`MAX_BINDINGS`], unless the command is left without bindings. An entry of only such texts loads as the defaults.
+    fn store_texts(&self, i: usize, list: &[Bound]) -> Result<Option<Vec<String>>, AssignError> {
         let mut kept = if list.is_empty() { Vec::new() } else { self.unusable_texts(i) };
         kept.truncate(MAX_BINDINGS.saturating_sub(list.len()));
-        self.remove_entries(i);
-        if !kept.is_empty() || !self.is_default(i, &list) {
-            let home = &self.catalog[i].scope;
-            let mut texts: Vec<String> = list.iter().map(|b| self.public(i, b).text(home)).collect();
-            texts.extend(kept);
-            if self.overrides.insert(self.keys[i].clone(), texts) {
-                self.stored[i] = Some(self.keys[i].clone());
+        if kept.is_empty() && self.is_default(i, list) {
+            return Ok(None);
+        }
+        let saved = self.stored[i].as_deref().and_then(|key| self.overrides.get(key)).unwrap_or_default();
+        let mut texts = Vec::with_capacity(list.len() + kept.len());
+        for bound in list {
+            let binding = self.public(i, bound);
+            let text = binding.to_string();
+            if Binding::parse(&text).as_ref() == Ok(&binding) {
+                texts.push(text);
+            } else if let Some(existing) = saved.iter().find(|text| Binding::parse(text).as_ref() == Ok(&binding)) {
+                texts.push(existing.clone());
+            } else {
+                return Err(AssignError::Unstorable { command: self.catalog[i].command.clone(), trigger: binding.trigger });
             }
         }
-        self.set_current(i, list);
+        texts.extend(kept);
+        Ok(Some(texts))
     }
 
     /// Removes a command's overrides entries: the one it reads and hand-written variants of its

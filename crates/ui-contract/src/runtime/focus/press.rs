@@ -1,6 +1,7 @@
 //! Focus on press (spec 8.3): the press is classified at the begin hook from last pass's shapes, and the
 //! classified focus move applies at the end hook.
 
+use super::nav::declared_canvas;
 use super::{Act, State, StopKey};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::{pointer, sampler};
@@ -148,10 +149,10 @@ impl State {
         self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.press_only && rec.stop.root == widget).cloned()
     }
 
-    /// The press's focus move at the end hook; `focused` is egui's focus now. The press moves the framework's focus
-    /// only: when `focused` is an app's own widget (`on_app_widget`), egui's own surrender rule, by the app's
-    /// `surrender_focus_on`, decides whether a press elsewhere takes it; a press a component takes still moves focus
-    /// to the component.
+    /// The press's focus move at the end hook; `focused` is egui's focus now. A press a component takes moves focus to
+    /// the component, whatever has it. A press nothing takes ends the focus of a component only: it leaves the app's
+    /// document canvas focused (`declared_canvas`), and when `focused` is an app's own widget (`on_app_widget`),
+    /// egui's own surrender rule, by the app's `surrender_focus_on`, decides whether a press elsewhere takes it.
     pub(super) fn apply_press(&mut self, focused: Option<Id>, on_app_widget: bool) -> Vec<Act> {
         let Some(plan) = self.press.plan.take() else { return Vec::new() };
         match plan.kind {
@@ -166,7 +167,12 @@ impl State {
                 None if self.in_trapping_scope() => Vec::new(),
                 None => focused.map(Act::Surrender).into_iter().collect(),
             },
-            PressFocus::Unclaimed if focused == self.press.focus_at_begin && !on_app_widget && !self.in_trapping_scope() => {
+            PressFocus::Unclaimed
+                if focused == self.press.focus_at_begin
+                    && !on_app_widget
+                    && !focused.is_some_and(|id| declared_canvas(&self.stops, id))
+                    && !self.in_trapping_scope() =>
+            {
                 focused.map(Act::Surrender).into_iter().collect()
             }
             _ => Vec::new(),

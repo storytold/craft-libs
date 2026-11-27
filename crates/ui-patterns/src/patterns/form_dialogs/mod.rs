@@ -63,14 +63,14 @@ pub(crate) mod new_document;
 pub use new_document::{
     BACKGROUND_COLOR_KEY, BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, ColorProfiles, DetailsCx, DocumentCard, DocumentOptions,
     DocumentPreset, DocumentSettings, HostedNewDocument, NewDocumentDialog, NewDocumentOutput, NewDocumentPresetWords, NewDocumentResult,
-    NewDocumentWords, Orientation, PIXEL_ASPECTS, PresetCategory, RasterMemory, RasterSetup, SQUARE_PIXELS,
+    NewDocumentWords, Orientation, PIXEL_ASPECTS, PresetCardLook, PresetCategory, RasterMemory, RasterSetup, SQUARE_PIXELS,
 };
 
 pub(crate) mod about;
 
 pub use about::{
-    AboutAppTab, AboutDialog, AboutImage, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor,
-    ContributorSort, Credits, HostedAbout, ModelCredit, NameMode,
+    AboutAppTab, AboutDialog, AboutImage, AboutInfo, AboutLayout, AboutLicense, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare,
+    Contributor, ContributorSort, Credits, HostedAbout, ModelCredit, NameMode,
 };
 
 mod color_choice;

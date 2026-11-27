@@ -3,7 +3,7 @@
 
 use super::flyout::{FlyoutButton, SlotEdit};
 use super::words::RailWords;
-use crate::buttons::IconButton;
+use crate::buttons::{ActiveLook, IconButton};
 use crate::contract::{
     Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, NoValue, Outcome, Pad, Pointer as _, Props as _, Role, Scroll,
     Show as _, ShowContainer as _, Sizing, WordSetCx as _,
@@ -15,8 +15,8 @@ use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
 use crate::runtime::commands::resolver_in;
-use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind, TypeRole};
+use crate::runtime::env::{AppValues, EnvValue, Label};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind, TypeRole, UiTokens};
 use crate::tabs::TornOff;
 use craft_behavior::overlay::Side;
 use craft_behavior::{IconId, Metrics, NavShape, Proposal, Roving, Sense, Value};
@@ -37,6 +37,30 @@ pub use data::{LastUsed, RailTool, SlotId, ToolSlot, ToolTips, remembered, shown
 use drag::RailDrop;
 pub(crate) use drag::SlotDrop;
 pub use drag::{DropAt, ToolDrag, ToolDropped, drop_in_slot};
+
+/// How tightly a tool rail packs its buttons. A rail publishes its density to its content ([`ToolRail::density`]),
+/// and the dock sizes the rail's column from the same density ([`DockGrid::density`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum RailDensity {
+    /// Buttons `size.rail.button` square.
+    #[default]
+    Regular,
+    /// Buttons a control high (`size.control.md`) square: a denser step than the scope's density gives, for an app
+    /// whose compact toolbar packs its tools tighter than its other controls.
+    Dense,
+}
+
+impl RailDensity {
+    /// The side of a rail button at this density.
+    pub fn button(self, tokens: &UiTokens) -> f32 {
+        match self {
+            RailDensity::Regular => tokens.size.rail.button,
+            RailDensity::Dense => tokens.size.control.md,
+        }
+    }
+}
 
 /// What the footer closure of [`ToolRail::show_rail`] is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +130,8 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// and the slots fill the rows in reading order. The control padding surrounds the buttons; a slot that ends a group
 /// leaves `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The Edit Toolbar button
 /// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short under
-/// an overlay bar in the end padding that shows only under the pointer (`Scroll::overlay`), and its
+/// an overlay bar in the end padding that shows only under the pointer (`Scroll::overlay`), or at rest too with
+/// [`bar_at_rest`](ToolRail::bar_at_rest), and its
 /// buttons show the rail's glyphs. The rail is exactly as tall as its rows and footer at the width it gets
 /// ([`measure_rail`](ToolRail::measure_rail)). The buttons are one roving group: arrow keys move between them by the
 /// grid. While the toolbar is edited the buttons are dragged and the rail takes drops, and reports the drop in the
@@ -158,6 +183,12 @@ pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     /// The tips the tools' buttons and flyout rows show in place of the command tooltip, where a tool has one.
     #[prop]
     tips: Option<&'a dyn ToolTips<T>>,
+    /// How tightly the rail packs its buttons; its columns follow the rail grid at that density.
+    #[prop]
+    density: RailDensity,
+    /// How the button of the current tool shows it is on.
+    #[prop]
+    active_look: ActiveLook,
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
@@ -194,6 +225,8 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             mark: None,
             reveal: None,
             tips: None,
+            density: RailDensity::Regular,
+            active_look: ActiveLook::Accent,
             footer: None,
             columns: 1,
             shown: Rc::default(),
@@ -213,6 +246,14 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
         self
     }
 
+    /// The overlay bar of a rail too short for its rows also shows while the pointer is away from the rail
+    /// ([`Scroll::at_rest`]).
+    #[must_use]
+    pub fn bar_at_rest(mut self) -> Self {
+        self.props = std::mem::take(&mut self.props).scroll(Scroll::vertical().overlay().at_rest());
+        self
+    }
+
     /// The cells the rail lays out: its visible slots and the Edit Toolbar button.
     fn cells(&self) -> usize {
         visible_slots(self.slots, hidden_in(self.hidden)).len() + usize::from(self.edit_toolbar.is_some())
@@ -225,7 +266,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             Some(scope) => StyleCx::with_root_scoped(ui.ctx(), scope, DockSizes::style),
             None => DockSizes::of_scope(ui),
         };
-        DockGrid::rail(cells).resolved(&sizes)
+        DockGrid::rail(cells).density(self.density).resolved(&sizes)
     }
 
     /// Sets up the pass for a rail `width` wide: its columns, its roving grid and its footer. Returns what the body
@@ -515,6 +556,12 @@ impl<T: Value + MemoProps + PlainData + 'static> Component for ToolRail<'_, T> {
         if cx.resolved.label.is_empty() {
             access.name(Name::Text(cx.words::<RailWords>().tools.as_str().to_owned()));
         }
+    }
+
+    /// The rail's density and active look reach its buttons.
+    fn content_env(&self, _: &Cx<'_, Self>, values: &mut AppValues) {
+        values.set(self.density);
+        values.set(self.active_look);
     }
 
     /// While the toolbar is edited the rail takes the drops its buttons do not: a blank toolbar's, and those in the room

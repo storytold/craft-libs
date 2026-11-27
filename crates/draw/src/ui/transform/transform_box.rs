@@ -492,6 +492,10 @@ pub struct TransformBox<'a> {
     /// Whether the corner and side handles are circles (a rounded document editor's look) instead of squares.
     #[prop]
     round_handles: bool,
+    /// The side of the corner and side handles in points, for a host with a handle size preference; `None` uses the
+    /// theme's (`size.handle.md`). A handle's reach grows with a larger side and stays at least the theme's.
+    #[prop(quantity = "points, from the host's handle size preference")]
+    handle_side: Option<f32>,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
@@ -509,6 +513,10 @@ pub struct TransformBox<'a> {
     /// and an open drag's Escape still cancels the drag.
     #[prop]
     session_commit: bool,
+    /// The caller hangs a context menu of its own on the box (`Menu::context` over its response): every part takes the
+    /// right click, so it does not reach the tool under the box.
+    #[prop]
+    own_context_menu: bool,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,
     /// Whether this pass holds a drag that began, so a live line's box shows as it scales.
@@ -534,10 +542,12 @@ impl<'a> TransformBox<'a> {
             session_arrows: true,
             centre_mark: false,
             round_handles: false,
+            handle_side: None,
             line: None,
             reach: TransformReach::Box,
             color: None,
             session_commit: true,
+            own_context_menu: false,
             pivot_held: false,
             dragging: false,
             report: Report::default(),
@@ -573,6 +583,16 @@ impl<'a> TransformBox<'a> {
     /// The colour of a stroke that is `theme` unless the host gave the box its own.
     fn ink(&self, theme: StyleColor) -> StrokeColor {
         self.color.map_or(StrokeColor::from(theme), StrokeColor::from)
+    }
+
+    /// The side of a corner or side handle: the host's, else the theme's.
+    fn side_of_handles(&self, style: &TransformBoxStyle) -> f32 {
+        self.handle_side.unwrap_or(style.handle.side)
+    }
+
+    /// The hit radius of a corner or side handle: the theme's, or more for a host's larger handle.
+    fn reach_of_handles(&self, style: &TransformBoxStyle) -> f32 {
+        self.handle_side.map_or(style.handle_reach, |side| style.handle_reach.max(side * HANDLE_REACH_IN_HANDLES))
     }
 
     /// Whether the middle of the box is a move part: the reference point is hidden, so it does not take that place.
@@ -822,7 +842,7 @@ impl<'a> TransformBox<'a> {
         let suspend = suspend_key(snap.as_ref());
         for (reference, part) in self.pointer_parts() {
             let Some(result) = cx.part_if_declared(reference) else { continue };
-            let (press, hover) = (result.press, result.hover_pos.filter(|_| result.hovered));
+            let (press, hover) = (result.press, cx.hover_pos(reference));
             let mods = self.mods.unwrap_or(press.mods);
             let acting = drag_mods(mods, suspend);
             if let Some(pos) = hover
@@ -1027,7 +1047,8 @@ impl TransformBox<'_> {
     /// press; `enlarged` with the overflow plus.
     fn paint_handle(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, part: BoxPart, at: Pos2, enlarged: bool) {
         let look = &cx.style.handle;
-        let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
+        let side = self.side_of_handles(cx.style);
+        let side = if enlarged { side * OVERFLOW_IN_HANDLES } else { side };
         self.paint_handle_shape(draw, cx, self.handle_shape(at, side), self.rules.allows(part).then(|| BOX.at(part.index())));
         if enlarged {
             Handle::plus(draw, look, at, side);
@@ -1043,14 +1064,14 @@ impl TransformBox<'_> {
             paint_frame(draw, style, self.ink(style.line), corners);
             for k in 0..4 {
                 let middle = corners[k].lerp(corners[(k + 1) % 4], 0.5);
-                self.paint_handle_shape(draw, cx, self.handle_shape(middle, style.handle.side), None);
+                self.paint_handle_shape(draw, cx, self.handle_shape(middle, self.side_of_handles(style)), None);
             }
         }
         for (part, end) in line.end_parts() {
             self.paint_handle(draw, cx, part, view.to_screen(end), false);
         }
         for (end, at) in line.free_ends() {
-            self.paint_handle_shape(draw, cx, self.handle_shape(view.to_screen(at), style.handle.side), Some(LINE_END.at(end.index())));
+            self.paint_handle_shape(draw, cx, self.handle_shape(view.to_screen(at), self.side_of_handles(style)), Some(LINE_END.at(end.index())));
         }
         paint_widget(draw, view.to_screen(line.from.midpoint(line.to)), &style.widget, None);
     }
@@ -1098,11 +1119,11 @@ fn paint_frame(draw: &Draw<'_>, style: &TransformBoxStyle, line: StrokeColor, co
 /// The move reach outside the box whose corners are `quad` on the screen: every point within `points` of its border,
 /// as a strip along each side and a round sector outside each corner (PhotoCraft's type move reach measures the
 /// distance to the nearest side, pc-prod-e76 type_transform.rs:156-196).
-fn declare_ring(cx: &mut PartsCx<'_, TransformBox<'_>>, quad: &[Pos2; 4], points: f32) {
+fn declare_ring(cx: &mut PartsCx<'_, TransformBox<'_>>, quad: &[Pos2; 4], points: f32, context: Sense) {
     let outward = outward_normals(quad);
     let mut declare = |part: usize, shape: Vec<Pos2>| {
         cx.part(MOVE_RING.at(part as u64), HitShape::Polygon(shape))
-            .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+            .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside) | context)
             .priority(HitPriority::new(HitLevel::Body, RING_SUB))
             .pointer_only(MOVE_BY_KEY);
     };
@@ -1250,9 +1271,10 @@ impl Component for TransformBox<'_> {
         let style = cx.style;
         let screen = on_screen(&space.view, &state);
         let quad: [Pos2; 4] = screen.quad.map(pos);
+        let context = if self.own_context_menu { Sense::CONTEXT_CLICK } else { Sense::empty() };
         if self.move_only().is_some() {
             if let Some(points) = self.ring_reach() {
-                declare_ring(cx, &quad, points);
+                declare_ring(cx, &quad, points, context);
             }
             return;
         }
@@ -1272,20 +1294,20 @@ impl Component for TransformBox<'_> {
                 handle => {
                     let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
-                        HitShape::circle(at, style.handle_reach),
+                        HitShape::circle(at, self.reach_of_handles(style)),
                         Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS,
                         HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                         FocusShape::Circle,
                     )
                 }
             };
-            cx.part(BOX.at(part.index()), shape).sense(sense | slop_sense(part)).priority(priority).focus_shape(focus).focusable();
+            cx.part(BOX.at(part.index()), shape).sense(sense | slop_sense(part) | context).priority(priority).focus_shape(focus).focusable();
             any = true;
         }
         if let Some(line) = self.line {
             for (end, at) in line.free_ends() {
-                cx.part(LINE_END.at(end.index()), HitShape::circle(space.view.to_screen(at), style.handle_reach))
-                    .sense(Sense::DRAG | Sense::CLICK)
+                cx.part(LINE_END.at(end.index()), HitShape::circle(space.view.to_screen(at), self.reach_of_handles(style)))
+                    .sense(Sense::DRAG | Sense::CLICK | context)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(LINE_END_BY_KEY);
             }
@@ -1299,7 +1321,7 @@ impl Component for TransformBox<'_> {
             let band =
                 if self.rules.edge_band > 0.0 { edge_band(&quad, side, self.rules.edge_band) } else { side_band(&quad, side, style.side_band) };
             cx.part(EDGE.at(u64::from(k)), band)
-                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
+                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)) | context)
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
         }
@@ -1309,7 +1331,7 @@ impl Component for TransformBox<'_> {
             for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
                 let Some(reach) = corner_reach(&quad, side, corner, style.side_band) else { continue };
                 cx.part(CORNER_REACH.at(2 * u64::from(k) + end), reach)
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Corner(k)))
+                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Corner(k)) | context)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(CORNER_BY_KEY);
             }
@@ -1317,7 +1339,7 @@ impl Component for TransformBox<'_> {
         if self.declares_centre() {
             let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
             cx.part(CENTRE.at(0), HitShape::circle(centre.to_pos2(), style.hit))
-                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside) | context)
                 .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                 .pointer_only(MOVE_BY_KEY);
         }
@@ -1328,7 +1350,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Outside | RotateZone::Border { .. } if self.rules.allows(BoxPart::Outside) => {
                 for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside) | context)
                         .priority(HitPriority::new(HitLevel::Background, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1336,7 +1358,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Band if self.rules.allows(BoxPart::Outside) => {
                 for (corner, ring) in band_rings(&screen, style).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(ring))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside) | context)
                         .priority(HitPriority::new(HitLevel::Body, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1347,7 +1369,7 @@ impl Component for TransformBox<'_> {
                 if self.has_knob() {
                     let (knob, _) = knob_at(&quad, rect, style);
                     cx.part(KNOB.at(0), HitShape::circle(knob, style.handle_reach))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside) | context)
                         .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1355,7 +1377,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Handle if self.rules.allows(BoxPart::Outside) => {
                 let (_, knob) = rotate_handle(&quad, style.rotate_stem);
                 cx.part(ROTATE_HANDLE.at(0), HitShape::circle(knob, style.handle_reach))
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside) | context)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(ROTATE_BY_KEY);
             }

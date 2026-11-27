@@ -1,11 +1,11 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme};
+use super::props::{CaptionInk, FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk, LinkLabelUnderline};
 use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
 use crate::contract::{Cx, MeasureCx, PaintUi, PartsCx, Styled as _};
-use crate::primitives::{IconSpec, Span, TextRun, Wrap};
+use crate::primitives::{IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
 use crate::runtime::access::{Access, Name};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::words::CommonWords;
@@ -30,12 +30,15 @@ pub(super) struct LabelStyle {
     gap: f32,
     /// The detail: `text.muted`, `text.disabled` with a disabled control.
     detail: Stateful<StyleColor>,
-    /// The name: `TypeRole::Label` in `text.muted`; after a check box or a radio, `TypeRole::Body` in `text.normal`.
-    /// `text.disabled` with a disabled control.
+    /// The name: `TypeRole::Label` in the [`CaptionInk`]; after a check box or a radio, `TypeRole::Body` in
+    /// `text.normal`. `text.disabled` with a disabled control.
     #[style(text)]
     name: TextLook,
     /// The glyph and icon: their own ink (`None`), `text.disabled` with a disabled control.
     glyph: Stateful<Option<StyleColor>>,
+    /// The width (`stroke.thin`) of a one-line link's underline where the label draws it inside its rect
+    /// ([`LinkLabelUnderline::Inside`]); `None` where egui draws it with the text.
+    underline: Option<f32>,
 }
 
 /// What the label leaf reports.
@@ -173,11 +176,15 @@ impl Component for LabelLeaf {
             // A caption reads as secondary; a check box's or a radio's text after it is the control's own.
             name: {
                 let text = &cx.tokens.color.text;
-                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
-                if key.link {
+                let caption = if cx.env::<CaptionInk>() == CaptionInk::Normal { text.normal } else { text.muted };
+                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, caption) };
+                let neutral = cx.env::<LinkLabelInk>() == LinkLabelInk::Neutral;
+                if key.link && !neutral {
                     // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
                     TextLook { role, ..cx.link_look(true) }
                 } else {
+                    // A neutral link label reads in the body ink; its underline still marks it.
+                    let ink = if key.link { text.normal } else { ink };
                     let (ink, off) = (cx.color(ink), cx.color(text.disabled));
                     TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
                 }
@@ -186,6 +193,7 @@ impl Component for LabelLeaf {
                 let off = Some(cx.color(cx.tokens.color.text.disabled));
                 Stateful::new(None).off(States::new(None, None, None, off))
             },
+            underline: (cx.env::<LinkLabelUnderline>() == LinkLabelUnderline::Inside).then_some(cx.tokens.stroke.thin),
         }
     }
 
@@ -362,8 +370,12 @@ impl Component for LabelLeaf {
             let name_ink = cx.resolve(&cx.style.name.color);
             let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).role(cx.style.name.role).color(name_ink));
             let colon_width = colon.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
-            let named =
-                if self.link { TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()]) } else { TextRun::new(cx.core.resolved.label) };
+            let underline = cx.style.underline.filter(|_| self.link && !wrapped);
+            let named = if self.link && underline.is_none() {
+                TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()])
+            } else {
+                TextRun::new(cx.core.resolved.label)
+            };
             let run = named.role(cx.style.name.role).color(name_ink);
             let run = if wrapped { run.wrap(Wrap::Wrap) } else { run.elide() };
             let name = draw.layout(&run, (rest.rect().width() - colon_width).max(0.0)).size();
@@ -371,6 +383,11 @@ impl Component for LabelLeaf {
             let name_at =
                 if wrapped { Rect::from_min_size(egui::pos2(name_rect.min.x, middle - line / 2.0), name) } else { centred(name_rect, name.y) };
             draw.text(name_at, &run);
+            if let Some(width) = underline {
+                // egui's underline lies on the text box's bottom edge, which a rect shorter than the box would clip.
+                let y = name_at.bottom().min(cx.rect.bottom()) - width / 2.0;
+                draw.stroke(&PaintShape::Path(vec![egui::pos2(name_at.left(), y), egui::pos2(name_at.right(), y)]), StrokeWidth::Thin, name_ink);
+            }
             let after = match colon {
                 Some(run) => {
                     let (colon_rect, after) = after.take_start(colon_width);

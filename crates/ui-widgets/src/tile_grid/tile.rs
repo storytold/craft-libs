@@ -17,10 +17,13 @@ use crate::contract::{
 };
 use crate::display::{Badge, Picture};
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
-use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{Label, Units};
-use crate::style::{ComponentStyle, Corners, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, UiTokens};
+use crate::style::{
+    ComponentStyle, Corners, DataColor, Flags, FocusLook, IconLook, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceLook, SurfaceStyle,
+    TextLook, UiTokens,
+};
 use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::{Emphasis, Tone};
@@ -185,7 +188,7 @@ impl Sizes {
     fn of(cx: &StyleCx<'_>, card: bool, text: CardText, place: CaptionPlace, regular_card_padding: bool) -> Sizes {
         let (tokens, control) = (cx.tokens, cx.control());
         let line = tokens.typography.get(TypeRole::Caption).line_height;
-        let name_line = if card { tokens.typography.get(text.name_role()).line_height } else { line };
+        let name_line = if card { tokens.typography.get(text.name_role()).line_height * f32::from(text.name_lines()) } else { line };
         let inset = match (card, place) {
             (true, _) if regular_card_padding => tokens.space.pad.regular,
             (true, _) => tokens.space.pad.control,
@@ -241,6 +244,8 @@ pub struct TileStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The name.
     #[style(text)]
     name: TextLook,
@@ -300,6 +305,25 @@ pub struct TileStyle {
     pill_radius: CornerRadius,
     plate_radius: CornerRadius,
     sizes: Sizes,
+}
+
+/// The paper of a page picture (`Tile::page`): a document's blank page, which is data, not a theme surface.
+const PAPER: DataColor = DataColor::new(Color32::WHITE); // design: allow[raw-colour/const](a document's blank page is data, not a theme surface)
+
+/// A `width` by `height` page centred in `picture` on the knob's shadow, the theme's short hard shadow of a part lifted
+/// just off the surface under it. The page's longer side spans the largest square the picture holds with the shadow,
+/// so pages of every shape stand at one scale of size.
+fn paint_page(cx: &ContentPainterCx<'_>, picture: Rect, width: f64, height: f64) {
+    let shadow = cx.style_cx().surface(SurfaceKind::Knob).shadow;
+    let reach = shadow.map(|shadow| shadow.margin()).unwrap_or_default();
+    let room = Rect::from_min_max(picture.min + Vec2::new(reach.left, reach.top), picture.max - Vec2::new(reach.right, reach.bottom));
+    let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
+    let scale = (room.width().min(room.height()) / width.max(height)).max(0.0);
+    let page = Rect::from_center_size(room.center(), Vec2::new(width * scale, height * scale));
+    cx.with_draw(|draw| {
+        draw.surface_styled(page, &SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow });
+        draw.data_fill(&PaintShape::Rect(page, CornerRadius::ZERO), PAPER);
+    });
 }
 
 /// A text badge's variant: a solid fill in its tone.
@@ -366,6 +390,12 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop(flag)]
     flat_thumbnail: bool,
+    /// The paper colour of a page card (document data); replaces the sunken well and draws a crisp frame border.
+    #[prop(into)]
+    paper: Option<DataColor>,
+    /// The zoom of the icon in the picture area, a factor on the style's face size (default: 1, or 2 on a paper card).
+    #[prop(quantity = "zoom factor")]
+    icon_zoom: Option<f32>,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -460,6 +490,8 @@ impl<'a> Tile<'a> {
             card: false,
             card_text: CardText::File,
             flat_thumbnail: false,
+            paper: None,
+            icon_zoom: None,
             detail: None,
             summary_action: None,
             accessible_name: None,
@@ -526,6 +558,16 @@ impl<'a> Tile<'a> {
         self.first = None;
         self.picture = None;
         self
+    }
+
+    /// The picture is a page `width` by `height` (in any one unit: only the shape counts): blank paper lifted on the
+    /// knob's short shadow, as large as the picture holds with its shadow, drawn flat on the tile. A preset or template
+    /// that stands for a document size shows it this way (New Document's presets in `PresetCardLook::Page`, a start
+    /// page's page templates).
+    #[must_use]
+    // design: allow[props/point-size](only the page's shape counts: `width` and `height` are a proportion in any one unit)
+    pub fn page(self, width: f64, height: f64) -> Self {
+        self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
     }
 
     /// A hover action: an `IconButton::command` face shown while the pointer is over the tile, it has visible focus or
@@ -760,6 +802,16 @@ fn badge_rects(flow: Flow, widths: &[f32], height: f32, sizes: &Sizes, plate: Op
         .collect()
 }
 
+/// Returns `zoom` sanitized if it is finite and positive, or `1.0` if non-finite or `<= 0.0`.
+/// When `zoom` is `None`, falls back to `default`.
+fn clean_zoom(zoom: Option<f32>, default: f32) -> f32 {
+    match zoom {
+        Some(z) if z.is_finite() && z > 0.0 => z,
+        Some(_) => 1.0,
+        None => default,
+    }
+}
+
 impl Component for Tile<'_> {
     const ROLE: Role = Role::LIST_ITEM;
     const OVERLAYS: bool = false;
@@ -787,6 +839,10 @@ impl Component for Tile<'_> {
                 c(state.selected),
                 c(state.selected),
             ))
+        } else if key.card && key.card_text == CardText::Page {
+            // A page card lies flat on the surface under it.
+            let (rest, hover, pressed) = (c(clear), c(state.hover), c(state.pressed));
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(hover, hover, pressed, hover))
         } else if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
@@ -819,12 +875,13 @@ impl Component for Tile<'_> {
         };
         let radius = UiTokens::corner(tokens.shape.radius.control);
         let mut surface = SurfaceLook::new(fill).radius(radius);
-        if key.action_place == TileActionPlace::Band {
-            // A band tile has no ring round its picture: the selected tile is outlined as a whole.
+        let page_card = key.card && key.card_text == CardText::Page;
+        if key.action_place == TileActionPlace::Band || page_card {
+            // A band tile or a page card has no ring round its picture: the selected tile is outlined as a whole.
             let (line, accent) = (c(clear), c(colors.accent.solid));
             surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
         }
-        let surface = if key.card { surface.kind(SurfaceKind::Raised) } else { surface };
+        let surface = if key.card && !page_card { surface.kind(SurfaceKind::Raised) } else { surface };
         // A selected tile's name reads in the normal ink: the selection is the ring, not a fill under the name.
         let normal = c(text.normal);
         let ink = |base: StyleColor| Stateful::new(base).on(States::new(normal, normal, normal, normal));
@@ -842,6 +899,7 @@ impl Component for Tile<'_> {
                     sizes.inset,
                 ))
                 .gap(sizes.tight),
+            focus: cx.focus_look(),
             name: if key.card {
                 TextLook::new(key.card_text.name_role(), ink(c(text.normal)))
             } else {
@@ -890,9 +948,12 @@ impl Component for Tile<'_> {
         // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
         // side, with what the density adds around it. A narrower room shrinks the picture to fit.
         let side = match (&self.icon, cx.proposal) {
-            (Some(_), _) => cx.style.face.side,
-            (None, Proposal::Min) => sizes.thumbs[0],
-            (None, _) => sizes.thumbs[1],
+            (Some(_), _) if !self.card => {
+                let zoom = clean_zoom(self.icon_zoom, 1.0);
+                cx.style.face.side * zoom
+            }
+            (Some(_) | None, Proposal::Min) => sizes.thumbs[0],
+            (Some(_) | None, _) => sizes.thumbs[1],
         };
         let width = cx.room.map_or(side + column, |room| room.min(side + column));
         Vec2::new(width, ((width - column).max(0.0) / ratio) + caption)
@@ -1017,50 +1078,8 @@ impl Component for Tile<'_> {
         let Some(placed) = self.placed.take() else { return };
         let style = cx.style;
         let picture = placed.picture;
-        if let Some(action) = &self.summary_action {
-            let flow = Flow::new(picture, cx.flow.is_rtl());
-            let draw = ui.draw();
-            let icon_side = style.face.side.min(picture.width()).min(picture.height());
-            let ink = match self.hue {
-                Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(style.placeholder.egui()))),
-                None => cx.resolve(&style.face.color),
-            };
-            let centered = action.as_str().is_empty();
-            let icon = if centered {
-                Rect::from_center_size(egui::pos2(picture.center().x, picture.center().y - icon_side / 2.0), Vec2::splat(icon_side))
-            } else {
-                let cell = flow.span(0.0, icon_side);
-                Rect::from_min_size(cell.min, Vec2::splat(icon_side))
-            };
-            if let Some(face) = self.icon.take() {
-                draw.icon(icon, &face.color(ink));
-            }
-            let title = TextRun::new(cx.resolved.label).role(style.name.role).color(cx.resolve(&style.name.color)).elide();
-            let title_area = if centered {
-                Rect::from_min_max(egui::pos2(picture.left(), icon.bottom() + style.sizes.tight), picture.max)
-            } else {
-                flow.take_start(icon_side + style.sizes.tight).1.rect()
-            };
-            let title_layout = draw.layout(&title, title_area.width());
-            let title_x =
-                if centered { title_area.center().x - title_layout.size().x / 2.0 } else { Self::text_x(title_area, title_layout.size().x, cx) };
-            draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
-            if !centered {
-                if let Some(detail) = &self.detail {
-                    // The description wraps, onto the two lines the card reserves for it, as production's cards do.
-                    let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::Wrap);
-                    let mut layout = draw.layout(&run, picture.width());
-                    // More than the two reserved lines would run into the action: cut that description with an ellipsis.
-                    if layout.galley.rows.len() > 2 {
-                        layout = draw.layout(&run.elide(), picture.width());
-                    }
-                    draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
-                }
-                let run = TextRun::new(action.as_str()).role(style.detail.role).color(style.range).elide();
-                let layout = draw.layout(&run, picture.width());
-                draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
-            }
-            self.caption_rect = Some(title_area);
+        if let Some(action) = self.summary_action.clone() {
+            self.paint_summary_card(ui, cx, &placed, action.as_str());
             return;
         }
         let flat = CornerRadius::ZERO;
@@ -1085,7 +1104,9 @@ impl Component for Tile<'_> {
             }
             // A band tile's selection fill covers the whole tile, picture included: no well over it.
             if self.action_place != TileActionPlace::Band {
-                if style.sizes.card {
+                if let Some(paper) = self.paper {
+                    draw.data_fill(&PaintShape::Rect(picture, flat), paper);
+                } else if style.sizes.card {
                     ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
                 } else {
                     ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
@@ -1094,7 +1115,7 @@ impl Component for Tile<'_> {
         }
         // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
         // has no well and takes no frame.
-        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some());
+        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some() || self.paper.is_some());
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
         }
@@ -1114,8 +1135,17 @@ impl Component for Tile<'_> {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
             if let Some(face) = face {
-                let icon = Rect::from_center_size(picture.center(), Vec2::splat(style.face.side));
-                draw.icon(icon, &face.color(face_ink));
+                let paper = if !self.flat_thumbnail && self.action_place != TileActionPlace::Band { self.paper } else { None };
+                let zoom = clean_zoom(self.icon_zoom, if paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
+                let max_side = picture.width().min(picture.height()).max(0.0);
+                let side = (style.face.side * zoom).min(max_side);
+                let icon = Rect::from_center_size(picture.center(), Vec2::splat(side));
+                let color = match (face.color, paper) {
+                    (Some(color), _) => color,
+                    (None, Some(paper)) => ui.with_style(Variant::SECONDARY, |cx| cx.icon_ink_on(paper)),
+                    (None, None) => face_ink,
+                };
+                draw.icon(icon, &face.color(color));
             }
             if self.dimmed || self.rejected || self.hidden {
                 draw.fill(&PaintShape::Rect(picture, flat), style.dim);
@@ -1158,6 +1188,53 @@ impl Component for Tile<'_> {
 }
 
 impl Tile<'_> {
+    fn paint_summary_card(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed, action: &str) {
+        let style = cx.style;
+        let picture = placed.picture;
+        let flow = Flow::new(picture, cx.flow.is_rtl());
+        let draw = ui.draw();
+        let icon_side = style.face.side.min(picture.width()).min(picture.height());
+        let ink = match self.hue {
+            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(style.placeholder.egui()))),
+            None => cx.resolve(&style.face.color),
+        };
+        let centered = action.is_empty();
+        let icon = if centered {
+            Rect::from_center_size(egui::pos2(picture.center().x, picture.center().y - icon_side / 2.0), Vec2::splat(icon_side))
+        } else {
+            let cell = flow.span(0.0, icon_side);
+            Rect::from_min_size(cell.min, Vec2::splat(icon_side))
+        };
+        if let Some(face) = self.icon.take() {
+            draw.icon(icon, &face.color(ink));
+        }
+        let title = TextRun::new(cx.resolved.label).role(style.name.role).color(cx.resolve(&style.name.color)).elide();
+        let title_area = if centered {
+            Rect::from_min_max(egui::pos2(picture.left(), icon.bottom() + style.sizes.tight), picture.max)
+        } else {
+            flow.take_start(icon_side + style.sizes.tight).1.rect()
+        };
+        let title_layout = draw.layout(&title, title_area.width());
+        let title_x =
+            if centered { title_area.center().x - title_layout.size().x / 2.0 } else { Self::text_x(title_area, title_layout.size().x, cx) };
+        draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
+        if !centered {
+            if let Some(detail) = &self.detail {
+                // The description wraps, onto the two lines the card reserves for it, as production's cards do.
+                let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::Wrap);
+                let mut layout = draw.layout(&run, picture.width());
+                // More than the two reserved lines would run into the action: cut that description with an ellipsis.
+                if layout.galley.rows.len() > 2 {
+                    layout = draw.layout(&run.elide(), picture.width());
+                }
+                draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
+            }
+            let run = TextRun::new(action).role(style.detail.role).color(style.range).elide();
+            let layout = draw.layout(&run, picture.width());
+            draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
+        }
+        self.caption_rect = Some(title_area);
+    }
     fn full_name(&self, cx: &Cx<'_, Self>, words: &TileWords) -> String {
         let marks = || self.marks.iter().map(|mark| mark.tip.as_str().to_owned()).filter(|tip| !tip.is_empty());
         let joined = |name: &str, details: &[String]| {
@@ -1292,11 +1369,15 @@ impl Tile<'_> {
         let failed = matches!(self.status, TileStatus::Offline(_));
         let look = if failed { &style.name_failed } else { &style.name };
         let ink = cx.resolve(&look.color);
+        let mut name_bottom = placed.name.bottom();
         if !self.renaming {
-            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElideMiddle);
+            let lines = if style.sizes.card { style.sizes.text.name_lines() } else { 1 };
+            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink);
+            let run = if lines > 1 { run.wrap(Wrap::Clamp(lines)).align(HAlign::Center) } else { run.wrap(Wrap::ElideMiddle) };
             let layout = draw.layout(&run, placed.name.width());
             let at = Pos2::new(Self::text_x(placed.name, layout.size().x, cx), placed.name.top());
             draw.galley(at, &layout);
+            name_bottom = at.y + layout.size().y;
             if self.hidden && self.caption == CaptionPlace::Start {
                 let name = Rect::from_min_size(at, layout.size());
                 draw.stroke(&PaintShape::Path(vec![name.left_bottom(), name.right_top()]), StrokeWidth::Medium, ink);
@@ -1305,7 +1386,9 @@ impl Tile<'_> {
         if let (Some(detail), Some(rect)) = (&self.detail, placed.detail) {
             let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, rect.width());
-            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), rect.top()), &layout);
+            // Under a name of fewer lines than the card keeps, the detail follows the name.
+            let top = if style.sizes.card && style.sizes.text.name_lines() > 1 { name_bottom } else { rect.top() };
+            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), top), &layout);
         }
         for (mark, rect) in self.marks.iter().zip(&placed.marks) {
             draw.icon(*rect, &IconSpec::svg(mark.icon.clone()).color(cx.resolve(&style.mark.color)));

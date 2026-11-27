@@ -12,7 +12,8 @@ pub enum Initial {
     Keep,
     /// The scope's first stop.
     First,
-    /// The scope's first text or number field, else its default stop, else nothing: a dialog's default.
+    /// The scope's first text or number field, else its default stop, else the first stop of its body, else nothing:
+    /// a dialog's default. A footer's or a header's buttons are not taken by the last rule.
     FirstField,
     /// The stop registered as the default.
     Default,
@@ -295,7 +296,9 @@ pub struct KeyUse {
     pub keep: KeepKeys,
     /// The keys that activate.
     pub activate: ActivateKeys,
-    /// Chords kept from the shortcut dispatcher while focused.
+    /// Chords kept from the shortcut dispatcher, and from Alt+numpad code entry, while focused, and for the window's
+    /// document canvas also while nothing has the focus. An app's own egui widget (`focus::host_canvas`) reads their
+    /// presses from egui's input; a framework component reads them as claimed chords.
     pub claims: &'static [Chord],
     /// Edit commands delivered as `Intent::Edit`.
     pub edits: EditSet,

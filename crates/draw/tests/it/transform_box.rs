@@ -60,6 +60,8 @@ struct Config {
     f32_host: bool,
     centre_mark: bool,
     round_handles: bool,
+    /// The host's handle side, `None` for the theme's.
+    handle_side: Option<f32>,
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
@@ -119,6 +121,7 @@ fn defaults() -> Config {
         f32_host: false,
         centre_mark: false,
         round_handles: false,
+        handle_side: None,
         line: None,
         targets: Vec::new(),
         suspend: SnapSuspend::Control,
@@ -217,6 +220,9 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             }
             if let Some(line) = config.line {
                 control = control.line(line);
+            }
+            if let Some(side) = config.handle_side {
+                control = control.handle_side(side);
             }
             control = control.reach(config.reach).session_commit(config.session_commit);
             if config.hover_frame {
@@ -1070,20 +1076,28 @@ fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     assert_eq!(h.host.borrow().applied, 1, "the double click applies");
 }
 
-/// A secondary click on the session's box opens the mode menu (its rows are on the page); with the menu closed again, a
-/// secondary click away from the box opens none.
+/// A secondary click on the session's box opens the mode menu (its rows are on the page) and is the box's alone: the
+/// tool host under it asks for no menu of its own. With the menu closed again, a secondary click away from the box
+/// opens none.
 #[trial]
 fn a_secondary_click_on_the_box_opens_the_mode_menu() {
+    use craft_draw::ui::transform::TransformTool;
+    use craft_ui::canvas::{ToolHost, tool_pass};
     let session = TransformSession::<()>::new(RECT);
     let settings = TransformSettings::default();
     let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
-    let shown_view = Rc::clone(&view);
+    let host_asked = Rc::new(Cell::new(false));
+    let (shown_view, asked) = (Rc::clone(&view), Rc::clone(&host_asked));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
         *shown_view.borrow_mut() = at;
         Canvas::new("Document").view(at).show(ui, |ui, body| {
-            TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            let shown = TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            if let Some(pass) = tool_pass(&body.env) {
+                let mut tool = TransformTool::new(&session, shown.snapped.clone());
+                asked.set(asked.get() || ToolHost::new().run(ui, &pass, &mut tool).context.is_some());
+            }
         });
     });
     fixture.settle();
@@ -1098,8 +1112,10 @@ fn a_secondary_click_on_the_box_opens_the_mode_menu() {
     right_click(&mut fixture, screen(Point::new(1000.0, 1000.0)));
     assert!(fixture.by_label("Distort").is_none(), "a secondary click away from the box opens no mode menu");
 
+    host_asked.set(false);
     right_click(&mut fixture, screen(Point::new(200.0, 150.0)));
     assert!(fixture.by_label("Distort").is_some(), "a secondary click on the box opens the mode menu");
+    assert!(!host_asked.get(), "the tool host under the box asks for no menu");
 }
 
 /// A drag from inside snaps the moved box's edges, not the pointer: the right edge lands on the guide at 310 while the
@@ -1638,4 +1654,47 @@ fn round_handles_are_circles() {
     };
     // Each handle is a filled circle and its stroke.
     assert_eq!(circles(true), circles(false) + 16, "the four corners and four sides are circles");
+}
+
+/// A host's handle side draws the corner and side handles at that side: a larger side draws a larger square.
+#[trial]
+fn a_host_handle_side_sets_the_drawn_handle_square() {
+    let corner_side = |side: Option<f32>| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| config.handle_side = side);
+        let corner = h.screen(Point::new(RECT.x1, RECT.y1));
+        let sides: Vec<f32> = h
+            .fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(square) if (square.rect.center() - corner).length() < 0.5 => Some(square.rect.width()),
+                _ => None,
+            })
+            .collect();
+        sides.into_iter().fold(0.0, f32::max)
+    };
+    let (small, large) = (corner_side(Some(4.0)), corner_side(Some(12.0)));
+    assert!(small > 0.0, "the corner handle is drawn as a square");
+    assert!(large > small, "a larger side draws a larger square: {large} against {small}");
+}
+
+/// A large host handle takes a press anywhere on its square, also past the theme's reach, and the press drags it.
+#[trial]
+fn a_press_just_inside_a_large_handles_edge_grabs_it() {
+    // 7 points in from the bottom right corner on both axes: inside a 16 point square, about 9.9 from its centre.
+    let near_edge = Point::new(RECT.x1 - 7.0, RECT.y1 - 7.0);
+    let mut theme = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    hover(&mut theme, near_edge);
+    assert_ne!(theme.host.borrow().hovered, Some(BoxPart::Corner(2)), "past the theme's handle reach");
+
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.rules = free_rules();
+        config.handle_side = Some(16.0);
+    });
+    hover(&mut h, near_edge);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(2)), "on the large handle's square");
+    drag(&mut h, near_edge, Point::new(RECT.x1 + 13.0, RECT.y1 + 13.0));
+    let quad = h.state().quad;
+    assert!(quad[2].x > RECT.x1 + 1.0 && quad[2].y > RECT.y1 + 1.0, "the corner moved with the drag: {quad:?}");
+    assert_eq!(quad[0], Point::new(RECT.x0, RECT.y0), "the opposite corner stayed: {quad:?}");
 }

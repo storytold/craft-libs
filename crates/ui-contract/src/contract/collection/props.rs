@@ -37,6 +37,23 @@ pub enum DeleteTarget {
     FocusOrHover,
 }
 
+/// What a row drag shows while it runs. The text is the count word for the dragged items
+/// (`CollectionProps::drag_count`), else the number of items for several and the item's text for one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowPreview {
+    /// The text in a badge by the pointer.
+    #[default]
+    Badge,
+    /// The text inside the region a drop would take, where the target marks one ([`DragPreview::Named`]); nothing
+    /// by the pointer.
+    ///
+    /// [`DragPreview::Named`]: crate::runtime::drag::DragPreview::Named
+    Named,
+    /// No preview: the dragged row shows alone.
+    None,
+}
+
 /// How the user may reorder items.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -99,6 +116,8 @@ pub enum SpaceAction {
     /// Picks the lead row in a collection that selects, else activates it.
     #[default]
     Activate,
+    /// Activates the lead like Enter, including when it is already selected.
+    ActivateLead,
     /// Flips the lead row's first enabled toggle cell; with several rows selected, the cell of every selected row.
     ToggleCell,
     /// Reports `CollectionEvent::Preview` for the lead row (Bridge's preview); Ctrl+Space still toggles the lead's pick.
@@ -246,11 +265,11 @@ pub struct CollectionProps {
     /// Map a row drag to the payloads that other drop targets take (8.4), one per type. A map starts row drags by
     /// itself, with or without a reorder rule.
     pub drag_payloads: Vec<DragPayload>,
-    /// The count word the drag badge shows for the dragged items, one item included ("1 page", "3 pages"); `None`
-    /// shows the number of items for several and the item's text for one.
+    /// The count word a row drag's preview shows for the dragged items, one item included ("1 page", "3 pages");
+    /// `None` shows the number of items for several and the item's text for one.
     pub drag_count: Option<Counted>,
-    /// Whether a row drag shows its badge by the pointer. Off, the drag carries no preview.
-    pub drag_badge: bool,
+    /// What a row drag shows while it runs.
+    pub drag_preview: RowPreview,
     /// The collection takes the full height of its rows and owns no scroll, so it can sit inside a scrolling page:
     /// every row is built, the wheel and the keys that move past an end act on the page's scroll owner, and moving
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
@@ -369,7 +388,7 @@ impl CollectionProps {
             delete_target: DeleteTarget::Focus,
             drag_payloads: Vec::new(),
             drag_count: None,
-            drag_badge: true,
+            drag_preview: RowPreview::Badge,
             natural_height: false,
             min_rows: 0,
             max_rows: None,
@@ -424,14 +443,14 @@ impl CollectionProps {
         self
     }
 
-    /// Whether a row drag shows its badge by the pointer (on by default).
+    /// What a row drag shows while it runs (a badge by the pointer by default).
     #[must_use]
-    pub const fn drag_badge(mut self, on: bool) -> Self {
-        self.drag_badge = on;
+    pub const fn drag_preview(mut self, preview: RowPreview) -> Self {
+        self.drag_preview = preview;
         self
     }
 
-    /// The drag badge reads `count` for the number of dragged items.
+    /// A row drag's preview reads `count` for the number of dragged items.
     #[must_use]
     pub const fn drag_count(mut self, count: Counted) -> Self {
         self.drag_count = Some(count);

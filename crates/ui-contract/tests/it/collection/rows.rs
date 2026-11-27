@@ -3,7 +3,7 @@
 
 use super::kit::{Count, Dismissed, List, ROW_H, RowOut, Words};
 use craft_behavior::{
-    CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, GestureId, ItemSource, Mixed, PartKey, ScrollPos, Selection,
+    CancelReason, CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, GestureId, ItemSource, Mixed, PartKey, ScrollPos, Selection,
     SelectionModel as _, Sense, SheetLayout, SpanLayout, keyed,
 };
 use craft_keymap::Mods;
@@ -258,6 +258,9 @@ impl Collection for Probe<'_> {
             None => (enter.get(), Mods::NONE),
         };
         let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), events, None);
+        // The probe field is no focus stop, so it asks for the focus a real text field keeps: a field that holds the focus
+        // and then loses it ends the rename.
+        request(ui.ctx(), FocusTarget::Id(editor.response.id));
         editor.submitted = submitted;
         editor.submit_mods = mods;
         Some(editor)
@@ -740,4 +743,42 @@ fn a_rename_request_runs_the_settled_view_of_its_collection() {
     frames.idle(3, &mut show);
     let begun = log.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { .. })));
     assert!(begun, "the settled view ran and its collection opened the requested rename");
+}
+
+/// A rename whose item leaves the source (here, the source shrinks past it) ends once with a removed cancel and writes
+/// nothing: the draft is not committed, and the rename does not open again with the old draft.
+#[trial]
+fn a_rename_whose_item_leaves_the_source_ends_with_a_removed_cancel() {
+    let (log, enter, shrunk) = (Log::new(), Cell::new(false), Cell::new(false));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let words = if shrunk.get() { Words::flat(&["a"]) } else { Words::flat(&["a", "b", "c"]) };
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).id_salt("list").renaming("proposed", &enter);
+            log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
+        });
+    };
+    frames.idle(3, &mut show);
+    request_rename(&frames.ctx, log.id(), &1_usize);
+    frames.idle(3, &mut show);
+    let ends = |log: &Log| -> Vec<&'static str> {
+        log.events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Rename(EditEvent::Begin { .. }) => Some("begin"),
+                CollectionEvent::Rename(EditEvent::Commit { .. }) => Some("commit"),
+                CollectionEvent::Rename(EditEvent::Cancel { reason: CancelReason::Removed, .. }) => Some("removed"),
+                CollectionEvent::Rename(EditEvent::Cancel { .. }) => Some("cancel"),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(ends(log), ["begin"], "the rename is open");
+    shrunk.set(true);
+    frames.idle(3, &mut show);
+    assert_eq!(ends(log), ["begin", "removed"], "the rename ended once, with a removed cancel and no commit");
+    enter.set(true);
+    frames.idle(3, &mut show);
+    assert_eq!(ends(log), ["begin", "removed"], "nothing more is written after the item left");
 }

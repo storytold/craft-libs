@@ -2,7 +2,6 @@
 
 use crate::runtime::commands::{self, CommandInput, CommandSet as _, Fired};
 use crate::runtime::egui::input::{self as raw_input, Arrived, HeldInput, RawInput};
-use crate::runtime::egui::memory as store;
 use crate::runtime::egui::{clipboard, pass, scale, style};
 use crate::runtime::env::{AltCodePages, Env, RootEnv, WheelSpeed, WindowKey};
 use crate::runtime::pass_state;
@@ -14,7 +13,6 @@ use craft_keymap::Mods;
 use craft_theme::{AppSizes, Appearance, Contrast, HitSizes, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, builtins, resolve_sized};
 use egui::{Context, Id, Ui, ViewportId};
 use std::any::TypeId;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -32,12 +30,42 @@ pub struct FrameInput {
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
+    /// The window in which the app's own egui code shows a modal this frame (a dialog the app draws itself, not a
+    /// framework layer). It blocks the app's other windows as a framework app-modal layer open in it does: their
+    /// presses, keys, wheel and text go nowhere, a press there brings the modal's window forward, they refuse to close,
+    /// and the modal's window takes the keyboard if one of them has it when the modal opens. A panel floated into a
+    /// window of its own is one of them. `None` (the default) when the app shows no such modal; set every frame from
+    /// the app's own state.
+    pub app_modal: Option<ViewportId>,
+    /// Whether the window system's input reaches the OS windows the runtime hosts.
+    pub window_input: WindowInput,
+}
+
+/// Whether the window system's input reaches the OS windows the runtime hosts beside the root (a panel floated into
+/// its own window). eframe gives the host only the root's raw input (`App::raw_input_hook`), so the host applies its
+/// policy to the root there and gives it here for the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowInput {
+    /// The window system's input reaches every hosted window.
+    #[default]
+    Live,
+    /// An agent-driven session: a hosted window's events, hovered files and dropped files are dropped before any
+    /// stage reads them, so only the runtime's injected input reaches it. Its window facts (size, focus, close
+    /// requests) stay.
+    Dropped,
 }
 
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE }
+        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, app_modal: None, window_input: WindowInput::Live }
+    }
+
+    /// Sets whether the window system's input reaches the hosted windows.
+    pub fn window_input(mut self, window_input: WindowInput) -> Self {
+        self.window_input = window_input;
+        self
     }
 
     /// Sets the command input.
@@ -49,6 +77,12 @@ impl FrameInput {
     /// Sets the modifiers latched beyond the window's input.
     pub fn latched(mut self, mods: Mods) -> Self {
         self.latched = mods;
+        self
+    }
+
+    /// Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`](Self::app_modal)).
+    pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self {
+        self.app_modal = viewport;
         self
     }
 
@@ -140,6 +174,11 @@ pub struct FrameOutput {
 #[derive(Default)]
 pub(crate) struct FrameState {
     input: Option<FrameInput>,
+    /// The root pass number when `set_input` was last called, so test drivers know whether a frame's input is set.
+    input_pass: Option<u64>,
+    /// The window of `FrameInput::app_modal` and the root frame its modal first showed in: its place in the modal stack
+    /// (`overlay::modal_viewport`). It stays while the app names the same window frame after frame.
+    app_modal: Option<(ViewportId, u64)>,
     /// The pointer tolerances of the app's resolved tokens (`tokens.size.hit`) and the `sizes` they came from:
     /// the input hook writes the slop before any `Env` exists, and the press lifecycle reads the hit target.
     hit: Option<(Arc<AppSizes>, HitSizes)>,
@@ -152,6 +191,7 @@ pub(crate) struct FrameState {
     passes_open: u32,
     /// How many root-viewport passes the begin hook has run for: egui counts a pass when it ends.
     root_passes_hooked: u64,
+    /// What drops the records of closed viewports as a frame begins.
     prunes: HashMap<TypeId, fn(&Context, &[ViewportId])>,
     sweeps: HashMap<TypeId, fn(&Context)>,
     /// What a layer above the runtime reads at the begin hook, after the pointer snapshot and before any component runs.
@@ -181,8 +221,8 @@ struct PendingToggle {
 /// How many passes a shell has to take its toggle before the toggle is dropped.
 const TOGGLE_PASSES: u64 = 2;
 
-/// Records of one runtime service, one per viewport. A viewport egui stops reporting has its record dropped
-/// at once, by the frame loop's end hook.
+/// Records of one runtime service, one per viewport, kept from the viewport's first pass until it closes: the root's
+/// begin hook drops the records of the viewports egui no longer reports as a frame begins.
 #[doc(hidden)]
 pub struct PerViewport<T> {
     /// One or two entries: a linear search beats hashing.
@@ -233,18 +273,18 @@ impl<T: Default> PerViewport<T> {
     }
 }
 
-/// Where the records of a [`PerViewport`] type live: a context service unless the type is pass-local
-/// (`runtime::pass_state`), which overrides these.
+/// Where the records of a [`PerViewport`] type live: in the context's pass state, a field of it for the types the
+/// runtime names there (`runtime::pass_state`, which overrides these), else by type beside the fields.
 #[doc(hidden)]
 pub trait Stored: Default + Send + 'static {
     /// Runs `f` on the records of this type.
     fn records<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Self>) -> R) -> R {
-        store::with::<PerViewport<Self>, R>(ctx, f)
+        pass_state::with_records::<Self, R>(ctx, f)
     }
 
     /// Runs `f` on the stamped records of this type.
     fn stamped<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Stamped<Self>>) -> R) -> R {
-        store::with::<PerViewport<Stamped<Self>>, R>(ctx, f)
+        pass_state::with_records::<Stamped<Self>, R>(ctx, f)
     }
 }
 
@@ -336,11 +376,23 @@ impl<T: Stored> PerViewport<Stamped<T>> {
     }
 }
 
-/// Registers the end hook's prune of a service's per-viewport records, once per service type.
+/// Registers the prune of a service's per-viewport records to the open viewports ([`prune_closed`]), once per service
+/// type.
 pub(crate) fn register_prune(ctx: &Context, key: TypeId, prune: fn(&Context, &[ViewportId])) {
     pass_state::with::<FrameState, _>(ctx, |state| {
         state.prunes.entry(key).or_insert(prune);
     });
+}
+
+/// Drops the records of the viewports that have closed, at the start of a frame. A pass's list of viewports dates from
+/// the start of its frame, so only there does it name every viewport with a record that is still open: later in the
+/// frame it lacks the ones the frame opened.
+fn prune_closed(ctx: &Context) {
+    let live = pass::live_viewports(ctx);
+    let prunes: Vec<fn(&Context, &[ViewportId])> = pass_state::with::<FrameState, _>(ctx, |state| state.prunes.values().copied().collect());
+    for prune in prunes {
+        prune(ctx, &live);
+    }
 }
 
 /// Registers a sweep the end hook runs for the running viewport's pass, once per service type.
@@ -370,7 +422,12 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
         if !state.hit.as_ref().is_some_and(|(sizes, _)| Arc::ptr_eq(sizes, &input.root.sizes)) {
             state.hit = Some((input.root.sizes.clone(), resolved_hit(&input.root.sizes)));
         }
+        state.app_modal = match (input.app_modal, state.app_modal) {
+            (Some(viewport), Some((shown, since))) if shown == viewport => Some((viewport, since)),
+            (viewport, _) => viewport.map(|viewport| (viewport, pass::root_frame_nr(ctx))),
+        };
         state.input = Some(input);
+        state.input_pass = Some(root_passes);
         ran
     });
     commands::set_input(ctx, &commands);
@@ -378,6 +435,14 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
     windows::set_input(ctx);
     debug_assert!(hooks_ran, "the runtime plugin's hooks did not run for the previous pass: drive frames with `Context::run_ui` or `run_pass`");
     scale::set_interface_scale(ctx, scale.0);
+}
+
+/// Whether [`set_input`] has already run for the upcoming root pass.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn input_pending(ctx: &Context) -> bool {
+    let root_passes = pass::pass_nr(ctx, ViewportId::ROOT);
+    pass_state::with::<FrameState, _>(ctx, |state| state.input_pass == Some(root_passes))
 }
 
 /// The tokens the app's `sizes` give the default density: the built-in sets and the overrides apply in
@@ -411,9 +476,35 @@ fn frame_hit(ctx: &Context) -> HitSizes {
     pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
 }
 
-/// The wheel speed and Alt-code pages of the frame's root values; the defaults before the app sets any input.
-pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
-    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
+/// What the raw-input step reads of the frame's root values (`RootEnv`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RootInput {
+    pub(crate) wheel: WheelSpeed,
+    pub(crate) alt_codes: AltCodePages,
+    pub(crate) ctrl_wheel_pinch: bool,
+}
+
+impl RootInput {
+    fn of(root: &RootEnv) -> Self {
+        RootInput { wheel: root.wheel, alt_codes: root.alt_codes, ctrl_wheel_pinch: root.ctrl_wheel_pinch }
+    }
+}
+
+/// The raw-input values of the frame's root values; the defaults before the app sets any input.
+pub(crate) fn root_input(ctx: &Context) -> RootInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| RootInput::of(&input.root)))
+        .unwrap_or_else(|| RootInput::of(&RootEnv::default()))
+}
+
+/// The window in which the app's own egui code shows a modal this frame (`FrameInput::app_modal`), and the root frame
+/// that modal first showed in.
+pub(crate) fn app_modal(ctx: &Context) -> Option<(ViewportId, u64)> {
+    pass_state::with::<FrameState, _>(ctx, |state| state.app_modal)
+}
+
+/// The frame's window-input policy; `Live` before the app sets any input.
+pub(crate) fn window_input(ctx: &Context) -> WindowInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.window_input)).unwrap_or_default()
 }
 
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own
@@ -448,9 +539,12 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
-    // already acted in the key stage.
+    // already acted in the key stage. Quit, from any source, asks the root window to close through its close path.
     let focused = crate::runtime::egui::viewports::reported(ctx).into_iter().find(|(_, facts)| facts.focused).map(|(viewport, _)| viewport);
     for fired in &output.fired {
+        if fired.phase == commands::FirePhase::Press && commands::QuitCommand::from_ref(&fired.command).is_some() {
+            windows::act(ctx, ViewportId::ROOT, windows::WindowAction::Close);
+        }
         if fired.source == commands::FireSource::Key {
             continue;
         }
@@ -509,6 +603,14 @@ pub fn request_repaint_after(ctx: &Context, seconds: f64) {
 /// in the last one is ignored, so what that pass shows paints.
 pub fn discardable(ctx: &Context) -> bool {
     crate::runtime::egui::sizing::discardable(ctx)
+}
+
+/// Whether egui will run the running pass again, so nothing of it paints: egui's `Context::will_discard`, or a discard
+/// pass that layout memory asked for in this pass and requests from egui only at the pass's end. Host code that does
+/// work once per shown frame (a frame count, a settle count) skips it while this is true; `will_discard` alone is still
+/// false during the app's UI in a pass that a changed size runs again.
+pub fn will_rerun(ctx: &Context) -> bool {
+    ctx.will_discard() || crate::runtime::layout_memory::discard_pending(ctx)
 }
 
 /// Discards the running pass, so nothing of it paints, and runs it again, when [`discardable`]: for a host that learns
@@ -577,14 +679,6 @@ struct ViewportRecord {
 
 impl Stored for ViewportRecord {}
 
-/// What the begin hook read of the running pass; steps read it, none writes it.
-#[derive(Clone)]
-struct RunningPass {
-    /// The context the pass runs in. Another context on the same thread, and a pass a panic left open, read none of these.
-    ctx: Context,
-    facts: PassFacts,
-}
-
 /// What a pass fixes for every step: its viewport, numbers and time.
 #[derive(Clone, Copy)]
 #[doc(hidden)]
@@ -599,15 +693,11 @@ pub struct PassFacts {
     pub elapsed: f64,
 }
 
-thread_local! {
-    /// The passes between their begin and end hooks on this thread, innermost last: nested viewport passes stack.
-    static RUNNING: RefCell<Vec<RunningPass>> = const { RefCell::new(Vec::new()) };
-}
-
-/// The facts of the innermost running pass of `ctx` on this thread, `None` outside every pass of it.
+/// The facts of the innermost running pass of `ctx` on this thread, `None` outside every pass of it. The begin hook
+/// reads them; steps read them, none writes them.
 #[doc(hidden)]
 pub fn running(ctx: &Context) -> Option<PassFacts> {
-    RUNNING.with(|running| running.borrow().iter().rev().find(|pass| pass.ctx == *ctx).map(|pass| pass.facts))
+    pass_state::running(ctx)
 }
 
 /// The facts of the innermost running pass of `ctx`, or outside every pass of it, what the context says of its
@@ -664,6 +754,15 @@ pub(crate) fn held_for(ctx: &Context, viewport: ViewportId, frame: u64) -> Vec<e
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.delivered_in(frame))
 }
 
+/// The mode the current frame's root theme resolves to on `ctx`.
+fn effective_mode(ctx: &Context) -> Mode {
+    let root = pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.root.clone()));
+    match root {
+        Some(root) => root.effective_mode(ctx),
+        None => RootEnv::fallback(ctx).effective_mode(ctx),
+    }
+}
+
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
 /// records keyed by `input.viewport_id`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
@@ -675,6 +774,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     raw_input::prepare(ctx, input);
     // H0b: the OS colour scheme egui's integration reports reaches the system reader.
     crate::runtime::env::system::input_hook(ctx, &input.events);
+    // H0d: match egui's font coverage transfer function to the pass's resolved theme mode before egui runs
+    // `Fonts::begin_pass`, so dark-on-light and light-on-dark text use the right curve even when the app's mode
+    // differs from the OS's.
+    let mode = effective_mode(ctx);
+    style::set_text_color_transfer(ctx, mode);
     // From H0 to H3 the events go with the input time each arrived at (`Arrived`): held events keep theirs, and the key
     // stage gives each shortcut its own. egui's events are what these stages leave.
     let mut events = Arrived::take(input);
@@ -722,13 +826,11 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
         let elapsed = record.now.replace(now).map_or(0.0, |previous| (now - previous).max(0.0));
         (elapsed, std::mem::take(&mut record.press_cancelled))
     });
-    RUNNING.with(|running| {
-        let mut running = running.borrow_mut();
-        // A pass of this viewport that never ended (a panic unwound through it) is not still running.
-        running.retain(|pass| !(pass.ctx == ctx && pass.facts.viewport == viewport));
-        running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, frame_nr, now, elapsed } });
-    });
     pass_state::hold(&ctx);
+    pass_state::begin_running(&ctx, PassFacts { viewport, pass_nr, frame_nr, now, elapsed });
+    if root_pass.is_some() && pass::first_of_frame(&ctx) {
+        prune_closed(&ctx);
+    }
     if cancelled {
         raw_input::stop_dragging(&ctx);
     }
@@ -759,7 +861,7 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     } else if escapes.to_components > 0 {
         raw_input::stop_dragging(&ctx);
     }
-    wheel::begin(&ctx);
+    wheel::begin(&ctx, input.root.pointer_scoped_field_wheel);
     // H7: shortcuts the owner allows, through the gate.
     commands::begin(&ctx);
     access::begin_live_pass(&ctx);
@@ -778,6 +880,8 @@ pub(crate) fn end_pass(ui: &mut Ui) {
         paint_frame_layers(&ctx);
     }
     toast::end_pass(&ctx);
+    // Every taker of the pass has run, and the layers and the focus are the pass's still.
+    keys::hand_on_cancel(&ctx);
     overlay::end_pass(&ctx);
     focus::end(&ctx);
     let sweeps: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.sweeps.values().copied().collect());
@@ -790,21 +894,9 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     motion::end_pass(&ctx);
     windows::end(&ctx);
     ime::end_pass(&ctx);
-    let live = pass::live_viewports(&ctx);
-    let prunes: Vec<fn(&Context, &[ViewportId])> = pass_state::with::<FrameState, _>(&ctx, |state| {
-        state.passes_open = state.passes_open.saturating_sub(1);
-        state.prunes.values().copied().collect()
-    });
-    for prune in prunes {
-        prune(&ctx, &live);
-    }
+    pass_state::with::<FrameState, _>(&ctx, |state| state.passes_open = state.passes_open.saturating_sub(1));
     #[cfg(feature = "testing")]
     crate::runtime::egui::access::check_parents_acyclic(&ctx);
-    RUNNING.with(|running| {
-        let mut running = running.borrow_mut();
-        if let Some(at) = running.iter().rposition(|pass| pass.ctx == ctx) {
-            running.remove(at);
-        }
-    });
+    pass_state::end_running(&ctx);
     pass_state::release(&ctx);
 }

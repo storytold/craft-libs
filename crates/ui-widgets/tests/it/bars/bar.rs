@@ -2,9 +2,8 @@
 //! bar gives way from its end, a status bar's trailing group keeps its width, and a row of labelled controls in it
 //! lays out under right-to-left.
 
-use craft_behavior::CanvasView;
 use craft_behavior::IconId;
-use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::kurbo::Size;
 use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues, path_crumbs};
 use craft_ui::buttons::{Button, IconButton, Link};
@@ -382,14 +381,12 @@ fn readout_texts(width: f32) -> Vec<(String, bool)> {
     let mut fixture = Fixture::new(|ui| {
         let mut values = StatusValues::default();
         values.document_sizes = Some((26_100_000, 31_400_000));
-        let canvas = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
-        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667);
         Bar::new("Status", BarKind::Status)
             .trailing(|ui, _| {
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {
-                StatusReadout::new(Bind::given(view), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
+                StatusReadout::new(Bind::given(0.6667), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
                 StatusMessage::new("Exported 14 layers to the folder Documents/Exports/2026").show(ui);
             });
     });
@@ -410,11 +407,10 @@ fn a_narrow_bar_gives_way_from_its_end_so_the_message_elides_before_the_readout(
 fn status_zoom(zoom: f64, comma: bool) -> Fixture {
     let mut fixture = Fixture::new(move |ui| {
         let size = Size::new(2000.0, 1500.0);
-        let canvas = Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
         let scale = craft_ui::runtime::env::Env::of(ui).scale.0;
-        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), zoom / f64::from(scale));
+        let zoom = zoom / f64::from(scale);
         Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
-            StatusReadout::new(Bind::given(view), size, StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
+            StatusReadout::new(Bind::given(zoom), size, StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
         });
     });
     if comma {
@@ -452,7 +448,7 @@ fn the_status_zoom_shows_the_complete_dash_without_a_view() {
         let mut values = StatusValues::default();
         values.document_sizes = Some((1024, 4096));
         Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
-            StatusReadout::new(Bind::given(Mixed::<CanvasView>::Mixed), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
+            StatusReadout::new(Bind::given(Mixed::<f64>::Mixed), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
         });
     });
     fixture.scale(Scale::new(1.25)).room(Vec2::new(600.0, 80.0)).settle();
@@ -472,34 +468,34 @@ fn the_status_zoom_shows_the_complete_dash_without_a_view() {
 fn the_status_zoom_still_scrubs_and_applies_edited_text() {
     use egui::{Event, Key, Modifiers};
 
-    let view = Rc::new(Cell::new(CanvasView::new(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0)), Point::ZERO, 1.0)));
-    let shown = view.clone();
+    let held = Rc::new(Cell::new(1.0_f64));
+    let shown = held.clone();
     let committed = Rc::new(Cell::new(None));
     let seen = committed.clone();
     let mut fixture = Fixture::new(move |ui| {
-        let mut view = shown.get();
+        let mut value = shown.get();
         Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
             let output =
-                StatusReadout::new(Bind::bound(&mut view), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
-            if let Some(view) = output.view.committed() {
-                seen.set(Some(view.zoom));
+                StatusReadout::new(Bind::bound(&mut value), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
+            if let Some(zoom) = output.zoom_edits.committed() {
+                seen.set(Some(*zoom));
             }
         });
-        shown.set(view);
+        shown.set(value);
     });
     fixture.room(Vec2::new(600.0, 80.0)).settle();
     let zoom = fixture.by_label("Zoom").expect("the status zoom field");
     fixture.drag(&zoom, Vec2::new(12.0, 0.0)).settle();
-    let scrubbed = view.get().zoom;
+    let scrubbed = held.get();
     assert!(scrubbed > 1.0, "the status bar still scrubs the zoom to the right");
 
     fixture.click(&zoom).settle();
     fixture.key(Key::A, Modifiers::COMMAND);
     fixture.frame(vec![Event::Paste("079.69%".to_owned())]).settle();
-    let before_tab = view.get().zoom;
+    let before_tab = held.get();
     committed.set(None);
     fixture.key(Key::Tab, Modifiers::NONE).settle();
-    assert_eq!(view.get().zoom, before_tab, "Tab does not change the current zoom");
+    assert_eq!(held.get(), before_tab, "Tab does not change the current zoom");
     assert_eq!(committed.get(), None, "Tab does not commit the draft");
     let zoom = fixture.by_label("Zoom").expect("the status zoom field");
     assert_eq!(fixture.tree().value_of(zoom.node), Some("79.69%"), "Tab rewrites the draft with its suffix");
@@ -650,4 +646,59 @@ fn a_tool_bar_reports_set_positions_from_its_first_pass() {
     fixture.idle(1);
     let joined = places(&fixture);
     assert!(joined.len() == 4 && joined.iter().all(|(_, held)| *held == size + 1), "the set counts the new tool in the frame it joins: {joined:?}");
+}
+
+/// The painted rects of a status bar `width` wide that ends as production's did: the zoom and the message in the body,
+/// then the pointer's position (rank 2) and the timings (rank 1) in the trailing group. In that order, `None` for one
+/// not shown, and the bar's rect last.
+fn end_group(width: f32) -> ([Option<Rect>; 4], Rect) {
+    const TEXTS: [&str; 4] = ["93.5 %", "Saved recovery data for Untitled-1", "X: 120 pt  Y: 48 pt", "render 0.6 ms"];
+    let seen = Rc::new(Cell::new((None, Rect::NOTHING)));
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let bar = Bar::new("Status", BarKind::Status)
+            .trailing(|ui, _| {
+                Row::new().fit_rank(2).show(ui, |ui, _| {
+                    Text::new(TEXTS[2]).show(ui);
+                });
+                Row::new().fit_rank(1).show(ui, |ui, _| {
+                    Text::new(TEXTS[3]).show(ui);
+                });
+            })
+            .show(ui, |ui, _| {
+                Text::new(TEXTS[0]).show(ui);
+                StatusMessage::new(TEXTS[1]).show(ui).map(|message| message.rect)
+            });
+        shown.set((bar.inner.flatten(), bar.output.response.rect));
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    let rect_of = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let (message, bar) = seen.get();
+    ([rect_of(TEXTS[0]), message.filter(|rect| rect.width() > 0.0), rect_of(TEXTS[2]), rect_of(TEXTS[3])], bar)
+}
+
+/// A status bar's trailing group joins the body's fit: on a wide bar the timings end at the bar's end with the position
+/// before them; a narrowing bar drops the timings first, then the position, while the message keeps its whole width,
+/// and only then cuts the message.
+#[trial]
+fn a_narrow_status_bar_drops_its_ranked_trailing_members_before_it_cuts_its_message() {
+    let ([zoom, message, position, timings], bar) = end_group(1200.0);
+    let [zoom, message, position, timings] = [zoom, message, position, timings].map(|rect| rect.expect("a wide bar shows every member"));
+    assert!(bar.right() - timings.right() < bar.width() / 20.0, "the timings end at the bar's end: {timings:?} in {bar:?}");
+    assert!(position.right() <= timings.left() && message.right() <= position.left() && zoom.right() <= message.left(), "in reading order");
+    let whole = message.width();
+    let shown: Vec<(u32, [Option<Rect>; 4])> = (150..=1200).step_by(10).map(|width| (width, end_group(width as f32).0)).collect();
+    for (width, [zoom, message, position, timings]) in &shown {
+        assert!(zoom.is_some() && message.is_some(), "the body's members stay at {width}: {zoom:?} {message:?}");
+        assert!(!(timings.is_some() && position.is_none()), "the timings leave before the position at {width}");
+        if position.is_some() || timings.is_some() {
+            let message = message.expect("the message shows");
+            assert!(message.width() > whole - SLACK, "the message is cut to {} of {whole} at {width} while a ranked member stays", message.width());
+        }
+    }
+    assert!(shown.iter().any(|(_, [.., position, timings])| position.is_some() && timings.is_none()), "the timings leave alone first");
+    assert!(
+        shown.iter().any(|(_, [_, message, position, _])| position.is_none() && message.is_some_and(|rect| rect.width() < whole - SLACK)),
+        "a narrow bar drops the position, then cuts the message"
+    );
 }

@@ -32,7 +32,7 @@ fn sent(embedded: bool) -> (Vec<ViewportCommand>, Option<Caption>) {
     let frame = |events: Vec<Event>| {
         windows.frame(events, vec![], |ui| {
             if embedded {
-                let _ = AppShell::embedded(WindowKey::new("preview")).title_bar(|ui, _, _: &mut ()| show_bar(ui)).show(ui, &mut ());
+                let _ = AppShell::embedded(WindowKey::new("preview")).title_bar(|_| None, |ui, _, _: &mut ()| show_bar(ui)).show(ui, &mut ());
             } else {
                 show_bar(ui);
             }
@@ -282,22 +282,25 @@ fn lights_right_bar(follows: bool, lights_right: bool) -> impl Fn(&str) -> Rect 
         windows.frame(vec![], vec![], |ui| {
             let _ = AppShell::new(WindowKey::main())
                 .title_follows_lights(follows)
-                .title_bar(|ui, _, _: &mut ()| {
-                    let _ = TitleBar::new()
-                        .trailing(|ui, _| {
-                            Button::new("Discord").show(ui);
-                            Button::new("Preferences").show(ui);
-                        })
-                        .show(ui, |ui, _| {
-                            Button::new("Home").show(ui);
-                            let _ = DocumentTabs::new("Documents", &tabs)
-                                .selected(0)
-                                .trailing(|ui| {
-                                    Button::new("Open").show(ui);
-                                })
-                                .show(ui);
-                        });
-                })
+                .title_bar(
+                    |_| None,
+                    |ui, _, _: &mut ()| {
+                        let _ = TitleBar::new()
+                            .trailing(|ui, _| {
+                                Button::new("Discord").show(ui);
+                                Button::new("Preferences").show(ui);
+                            })
+                            .show(ui, |ui, _| {
+                                Button::new("Home").show(ui);
+                                let _ = DocumentTabs::new("Documents", &tabs)
+                                    .selected(0)
+                                    .trailing(|ui| {
+                                        Button::new("Open").show(ui);
+                                    })
+                                    .show(ui);
+                            });
+                    },
+                )
                 .body(|_, _, _| {})
                 .show(ui, &mut ());
         })
@@ -352,4 +355,170 @@ fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
     let rect = lights_right_bar(true, false);
     assert!(rect("Home").left() >= lights - 0.5, "Home {:?} after the lights at the left", rect("Home"));
     assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
+}
+
+/// A Windows title bar with a brand button, a menu bar of an image editor's menus and the document title.
+fn whole_bar(ui: &mut Ui) {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::menu::MenuItem;
+    use craft_ui::menu::bar::{MenuBar, MenuTitle};
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let _ = TitleBar::new().frame(frame).show_titled(
+        ui,
+        Title::new("Untitled-1.psd"),
+        |ui, _| {
+            Button::new("Brand").show(ui);
+            let names = ["&File", "&Edit", "&Image", "&Layer", "&Type", "&Select", "Fil&ter", "&3D", "&View", "&Plugins", "&Window", "&Help"];
+            let titles = names
+                .into_iter()
+                .map(|name| {
+                    MenuTitle::new(name, |ui| {
+                        MenuItem::new("Row").show(ui);
+                    })
+                })
+                .collect();
+            MenuBar::new("Main menu", titles).show(ui);
+        },
+        |_, _| {},
+    );
+}
+
+/// The cursor over the File title and over the band of the whole bar in a window, with the band's cursor `look`.
+fn cursors_over_the_bar(look: craft_ui::contract::MoveBandCursor) -> (Option<craft_behavior::Cursor>, Option<craft_behavior::Cursor>) {
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let mut root = craft_ui::runtime::env::RootEnv::default();
+    root.values.set(look);
+    windows.root_env(root);
+    let show = whole_bar;
+    windows.frame(vec![], vec![], show);
+    let settled = windows.frame(vec![], vec![], show);
+    let tree = &settled.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    let title = |name: &str| {
+        tree.with_role(Role::MENU_ITEM).into_iter().find(|key| tree.name_of(*key) == Some(name)).and_then(|key| tree.bounds_of(key)).expect("a title")
+    };
+    let (file, help) = (title("File"), title("Help"));
+    let over = |at: Pos2| {
+        windows.frame(vec![moved(at)], vec![], show);
+        windows.frame(vec![], vec![], show);
+        craft_ui::runtime::cursor::current(&windows.ctx)
+    };
+    (over(file.center()), over(Pos2::new(help.right() + 40.0, help.center().y)))
+}
+
+/// A title bar's move band shows the open hand by default, also through the menu titles on it, which sense clicks
+/// only; under `MoveBandCursor::Arrow` the band and the titles show the arrow, as an OS title bar does.
+#[trial]
+fn a_move_band_shows_the_arrow_when_the_app_asks() {
+    use craft_behavior::{Cursor, CursorIcon};
+    use craft_ui::contract::MoveBandCursor;
+    let grab = Some(Cursor::System(CursorIcon::Grab));
+    assert_eq!(cursors_over_the_bar(MoveBandCursor::Hand), (grab.clone(), grab), "the hand over the band and the titles on it");
+    assert_eq!(cursors_over_the_bar(MoveBandCursor::Arrow), (None, None), "the arrow over the band and the titles on it");
+}
+
+/// A whole title bar in the shell's versioned title slot, which replays it as a memoized view (1600 × 1000 px at
+/// 125 %), fills the slot as the bar shown directly does: the captions end at the slot's end edge and the document
+/// title is drawn whole after the last menu.
+#[trial]
+fn a_memoized_title_bar_fills_the_title_slot() {
+    use craft_host::target::Os;
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&slot);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main()).title_bar(|_| Some(0), |ui, _, _: &mut ()| whole_bar(ui)).body(|_, _, _| {}).show(ui, &mut ());
+        if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == "title").map(|(_, rect)| *rect) {
+            seen.set(rect);
+        }
+    });
+    fixture.os(Os::Windows);
+    fixture.ctx().set_pixels_per_point(1.25);
+    fixture.room(vec2(1280.0, 800.0)).settle();
+    let slot = slot.get();
+    let close = fixture.by_label("Close").expect("the Close caption").rect;
+    assert!((close.right() - slot.right()).abs() <= 1.0, "the Close caption {close:?} ends at the slot's end {slot:?}");
+    let help = fixture.by_label("Help").expect("Help is a title of the menu bar").rect;
+    let (title, elided) =
+        fixture.texts().iter().find(|run| run.text == "Untitled-1.psd").map(|run| (run.rect, run.elided)).expect("the document title is painted");
+    assert!(title.left() > help.right() && title.right() < close.left(), "the title {title:?} lies between Help {help:?} and the captions");
+    assert!(!elided, "the document title is whole");
+}
+
+/// What a bar with Windows captions `width` wide shows in `direction`, with its trailing content fitted after the
+/// leading content or, without `fitted`, in the end region, by label: the leading button, the trailing buttons ranked 1
+/// and 2 when they are there, the unranked trailing button and the Minimize caption.
+fn fitted(width: f32, direction: craft_i18n::Direction, fitted: bool) -> impl Fn(&str) -> Option<Rect> {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{BodyCx, Show as _, ShowContainer as _};
+    use craft_ui::layout_components::Row;
+    let mut fixture = Fixture::new(move |ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let leading = |ui: &mut Ui, _: &mut BodyCx<'_>| {
+            Button::new(MENUS).show(ui);
+        };
+        let trailing = |ui: &mut Ui, _: &mut BodyCx<'_>| {
+            let _ = Row::new().fit_rank(1).show(ui, |ui, _| {
+                Button::new("Community").show(ui);
+            });
+            let _ = Row::new().fit_rank(2).show(ui, |ui, _| {
+                Button::new("Learn").show(ui);
+            });
+            Button::new("Share").show(ui);
+        };
+        let _ = if fitted {
+            TitleBar::new().frame(frame).show_fitted(ui, leading, trailing)
+        } else {
+            TitleBar::new().frame(frame).trailing(trailing).show(ui, leading).output
+        };
+    });
+    fixture.direction(direction).room(vec2(width, 80.0)).settle();
+    move |label: &str| fixture.by_label(label).map(|node| node.rect)
+}
+
+/// The leading button of the fitted bar trial: menus wider than the trailing content.
+const MENUS: &str = "File Edit Object Type Select Effect View Window Help";
+
+/// A fitted bar's trailing content takes what the leading content leaves: as the bar narrows, its ranked members
+/// leave whole, lowest rank first, while the leading content keeps its width; a ranked member that stays keeps its
+/// whole width, even where the member before it took the room; and the rest of the trailing content stays at the end,
+/// clear of the captions and no further from them than a wide unfitted bar puts it. Right to left places it the same,
+/// mirrored.
+#[trial]
+fn a_fitted_bar_drops_its_trailing_members_by_rank_before_the_leading_content_narrows() {
+    use craft_i18n::Direction;
+    let wide = fitted(1400.0, Direction::Ltr, true);
+    let (whole, learn) = (wide(MENUS).expect("the leading button"), wide("Learn").expect("Learn on a wide bar"));
+    assert!(wide("Community").is_some(), "a wide bar shows every trailing member");
+    let unfitted = fitted(1400.0, Direction::Ltr, false);
+    let end_gap = unfitted("Minimize").expect("Minimize").left() - unfitted("Share").expect("Share").right();
+    let mut dropped_alone = false;
+    for width in (360..=900).step_by(30).map(|width| width as f32) {
+        let rect = fitted(width, Direction::Ltr, true);
+        let (leading, share, minimize) =
+            (rect(MENUS).expect("the leading button"), rect("Share").expect("Share"), rect("Minimize").expect("Minimize"));
+        let (low, high) = (rect("Community").is_some(), rect("Learn"));
+        assert!(!(low && high.is_none()), "rank 2 left before rank 1 at {width}");
+        dropped_alone |= !low && high.is_some();
+        if let Some(high) = high {
+            assert!(leading.width() >= whole.width() - 0.5, "the leading content narrowed to {leading:?} at {width} while a ranked member stayed");
+            assert!(high.width() >= learn.width() - 0.5, "Learn narrowed to {high:?} at {width} instead of leaving");
+        }
+        let gap = minimize.left() - share.right();
+        assert!((-0.5..=end_gap + 0.5).contains(&gap), "Share {share:?} stands {gap} before the captions at {width}, an unfitted bar {end_gap}");
+        let mirrored = fitted(width, Direction::Rtl, true);
+        assert_eq!(
+            [mirrored("Community").is_some(), mirrored("Learn").is_some()],
+            [low, high.is_some()],
+            "right to left keeps the same members at {width}"
+        );
+        let (rtl_leading, rtl_share) = (mirrored(MENUS).expect("the leading button"), mirrored("Share").expect("Share"));
+        assert!((rtl_share.left() - (width - share.right())).abs() <= 0.5, "Share {rtl_share:?} mirrors {share:?} at {width}");
+        assert!((rtl_leading.right() - (width - leading.left())).abs() <= 0.5, "the leading content {rtl_leading:?} mirrors {leading:?} at {width}");
+    }
+    assert!(dropped_alone, "rank 1 never left alone");
 }

@@ -96,7 +96,7 @@ impl<G: GroupKind> GroupHandle<G> {
         self.with(|state| state.members.iter().find(|(_, member, enabled)| *member == id && *enabled).map(|(value, ..)| value.clone()))
     }
 
-    /// The id of the enabled member registered with `value` last pass.
+    /// The id of the enabled member registered with `value`: last pass's members until the body runs, this run's after.
     ///
     /// For the group form's own code, not for members or body code.
     #[doc(hidden)]

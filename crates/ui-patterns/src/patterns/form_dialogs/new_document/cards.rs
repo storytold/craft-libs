@@ -4,12 +4,12 @@ use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPre
 use super::settings::{CardCx, CardSource, DocumentCard, DocumentSettings, RasterSetup};
 use super::{NewDocumentWords, Read, Session, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
-use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
+use crate::contract::{Bind, CollectionEvent, MemoProps, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::{PresetId, PresetLibrary};
 use crate::primitives::{ContentPainterCx, StrokeWidth};
-use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::env::{Env, EnvValue, Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{CardText, Tile, TileGrid};
@@ -176,17 +176,21 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
         let count = read.units.number(cards.len() as f64, 0..=0);
         let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
         Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
+        let look = Env::of(ui).get::<PresetCardLook>();
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
             .card()
-            .card_text(CardText::Preset)
+            .card_text(match look {
+                PresetCardLook::Outline => CardText::Preset,
+                PresetCardLook::Page => CardText::Page,
+            })
             .fill_row()
             .aspect(2.0)
             .select(SelectMode::Single)
             .detail_line()
             .rows_stamp(stamp)
             .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index]));
+            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index], look));
         route(shown.response.events, &cards, left);
     }
 }
@@ -354,13 +358,29 @@ fn recent_title(recent: &DocumentOptions, cx: &CardCx<'_, DocumentOptions>) -> L
     found.map_or_else(|| cx.words.custom.clone(), |preset| preset_title(preset, cx.setup, cx.words, cx.preset_words))
 }
 
-/// The tile of a card: the page outline at the card's aspect, the title and the size line.
-fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>) -> Tile<'static> {
+/// How New Document's preset cards show their page. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum PresetCardLook {
+    /// A small page outline in content ink on a raised card, the name and size line centred under it.
+    #[default]
+    Outline,
+    /// Blank paper on its shadow (`Tile::page`) on a flat card (`CardText::Page`): the name strong on up to two lines,
+    /// the size line under it. VectorCraft's preset cards, as production drew them.
+    Page,
+}
+
+/// The tile of a card: the page at the card's aspect in `look`, the title and the size line.
+fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook) -> Tile<'static> {
     let page = card.settings.page();
-    let tile = Tile::new(card.title.clone())
-        .detail(card.line.clone())
-        .flat_thumbnail()
-        .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page));
+    let tile = Tile::new(card.title.clone()).detail(card.line.clone());
+    let tile = match look {
+        PresetCardLook::Outline => {
+            tile.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page))
+        }
+        PresetCardLook::Page => tile.page(page.0, page.1),
+    };
     match &card.tooltip {
         Some(tooltip) => tile.tooltip(tooltip.clone()),
         None => tile,

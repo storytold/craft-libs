@@ -821,6 +821,19 @@ impl Outcome for LayerFilterOutput {
     }
 }
 
+/// How wide the Objects filter's search field stands in the filter bar. An app sets it once at its root
+/// (`RootEnv::values`); the default is `Natural`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::runtime::env::EnvValue, craft_ui::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ObjectsSearch {
+    /// The field's own width, with the Filter button right after it.
+    #[default]
+    Natural,
+    /// The field fills the row, with the Filter button at the end edge: VectorCraft's Layers panel.
+    Fill,
+}
+
 /// Whether the Objects filter's popover is open: the bar's memory, so it stays open across passes until a
 /// click outside or Escape closes it.
 #[derive(Clone, Default)]
@@ -859,7 +872,10 @@ impl<'a> LayerFilterBar<'a> {
         }
         let words = Env::of(ui).words::<LayerFilterWords>();
         let mut edit = None;
-        let row = Row::new().show(ui, |ui, cx| {
+        // A filling search field needs a row as wide as the bar to fill.
+        let fill = Env::of(ui).get::<ObjectsSearch>() == ObjectsSearch::Fill;
+        let row = if fill { Row::new().fill_width() } else { Row::new() };
+        let row = row.show(ui, |ui, cx| {
             let select_name = std::mem::replace(&mut cx.memory::<FindName>().select, focus_name);
             let Some(Mixed::Same(current)) = filter.reborrow().read(cx) else { return };
             let stored = current;
@@ -948,9 +964,12 @@ impl<'a> LayerFilterBar<'a> {
                 // The selected layers pick the artboards; Group lists every group.
                 FilterBy::Artboard | FilterBy::Group => {}
                 FilterBy::Objects => {
-                    let typed = TextField::search(words.search_layers.clone(), Bind::given(current.name.clone()))
-                        .placeholder(words.search_all.clone())
-                        .show(ui);
+                    let mut field =
+                        TextField::search(words.search_layers.clone(), Bind::given(current.name.clone())).placeholder(words.search_all.clone());
+                    if fill {
+                        field = field.sizing(Sizing::FillWidth);
+                    }
+                    let typed = field.show(ui);
                     if let Some(text) = typed.value() {
                         next.name.clone_from(text);
                     }

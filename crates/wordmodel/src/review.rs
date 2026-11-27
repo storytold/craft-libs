@@ -42,11 +42,15 @@ pub struct Revision {
     /// insertion or deletion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub move_name: Option<String>,
+    /// The change's UTC timestamp (`w16du:dateUtc`, MS-DOCX 2.12.2.1), where `date` is the local
+    /// time Word writes in `w:date`. `None` when the file doesn't give it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_utc: Option<String>,
 }
 
 impl Revision {
     pub fn new(kind: RevisionKind, author: impl Into<String>, date: impl Into<String>) -> Revision {
-        Revision { kind, author: author.into(), date: date.into(), move_name: None }
+        Revision { kind, author: author.into(), date: date.into(), move_name: None, date_utc: None }
     }
 }
 
