@@ -1,0 +1,9 @@
+config_version = 1
+
+[[exception]]
+name = "window-egui-dependency"
+kind = "dependency"
+rule = "graph/egui"
+path = "craft-window->egui"
+reason = "native window code calls egui until the cut-over"
+expires = "cutover-3"

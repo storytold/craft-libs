@@ -40,9 +40,10 @@
 //! The correction is produced whatever the in-camera flag says. Only bodies listed in [`FULL_FRAME_CROP`] or
 //! [`APSC_BODIES`] get it: the unit and the knot spacing are verified on the ILCE-7RM6 and, for distortion, on the
 //! ILCE-6700 (APS-C, 11 knots spanning its own crop, the same unit 15000: 0.73 px worst over 27 photos with three
-//! lenses as rendered, 1.38 px at the 10–18 mm's 10 mm end). Another body is added by repeating the measurement on its photos shot
-//! with distortion correction on and listing its full-frame default crop (or, for an APS-C body, its model). The method
-//! and the numbers: docs/sony-ilce7rm6-lens-corrections.md.
+//! lenses as rendered, 1.38 px at the 10–18 mm's 10 mm end) and the ZV-E10 (the same APS-C rule with unit 16384:
+//! 0.64 px worst over 4 photos with the E PZ 16–50 mm at 16–32 mm as rendered). Another body is added by repeating the
+//! measurement on its photos shot with distortion correction on and listing its full-frame default crop (or, for an
+//! APS-C body, its model). The method and the numbers: docs/sony-ilce7rm6-lens-corrections.md.
 
 use crate::opcodes::max_radius;
 use crate::shared::fit_radial_warp;
@@ -59,9 +60,15 @@ pub(crate) const CA_FLAG: u16 = 0x7034;
 
 /// The bodies whose tables are verified (Exif `Model`), with their full-frame default crop (width, height) in px.
 const FULL_FRAME_CROP: &[(&str, (f64, f64))] = &[("ILCE-7RM6", (9984.0, 6656.0))];
-/// The verified APS-C bodies (Exif `Model`): their knots span the file's own default crop, the last knot at its corner.
-/// Measured on the ILCE-6700 (docs/sony-ilce7rm6-lens-corrections.md → ILCE-6700).
-const APSC_BODIES: &[&str] = &["ILCE-6700"];
+/// The verified APS-C bodies (Exif `Model`) with their distortion unit: their knots span the file's own default crop,
+/// the last knot at its corner. Measured against the camera JPEG (docs/sony-ilce7rm6-lens-corrections.md → ILCE-6700,
+/// ZV-E10): the ILCE-6700 at the ILCE-7RM6's 15000; the ZV-E10 at 16384, where 15000 over-corrects by about 9 %.
+const APSC_BODIES: &[(&str, f64)] = &[("ILCE-6700", DISTORTION_UNIT), ("ZV-E10", 16384.0)];
+
+/// The distortion unit of an [`APSC_BODIES`] body.
+fn apsc_unit(model: &str) -> Option<f64> {
+    APSC_BODIES.iter().find(|(m, _)| *m == model.trim()).map(|&(_, unit)| unit)
+}
 
 /// A lens whose tables follow its body's convention with another knot spacing and unit, at the focal lengths up to
 /// `max_focal_mm`; measured like the body, against the camera JPEG.
@@ -153,7 +160,7 @@ fn knot_spacing(model: &str, knots: usize, crop: Rect) -> Option<f64> {
     }
     let gaps = knots.checked_sub(1).filter(|&n| n > 0)?;
     let half_diagonal = (crop.width as f64).hypot(crop.height as f64) / 2.0;
-    (APSC_BODIES.contains(&model) && crate::arw_lens::is_3_2(crop)).then(|| half_diagonal / gaps as f64)
+    (apsc_unit(model).is_some() && crate::arw_lens::is_3_2(crop)).then(|| half_diagonal / gaps as f64)
 }
 
 /// The knot table at radius `r` px: knot `i` at `i · spacing`, linear in between, the last segment extended beyond
@@ -261,8 +268,8 @@ pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, lens: Option<&str>, focal_mm:
     let Some(spacing) = knot_spacing(model, knots, crop) else { return Vec::new() };
     let op = if let Some(e) = lens_exception(model, lens, focal_mm) {
         gated_warp_opcode(&tables, e.knot_spacing, e.unit, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
-    } else if APSC_BODIES.contains(&model.trim()) {
-        gated_warp_opcode(&tables, spacing, DISTORTION_UNIT, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
+    } else if let Some(unit) = apsc_unit(model) {
+        gated_warp_opcode(&tables, spacing, unit, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
     } else {
         warp_opcode(&tables, spacing, active, crop, false)
     };
@@ -310,6 +317,8 @@ mod tests {
     const FF_HQ_R: [f64; 4] = [0.9715153129, 0.02236266369, 0.0007060224765, 0.005666341563];
     const FF_HQ_B: [f64; 4] = [0.97137946, 0.02277016389, 0.0003830082563, 0.005727820598];
     const APSC_G: [f64; 4] = [1.01627551, -0.0618606692, 0.02768349621, -0.005595798468];
+    /// The ZV-E10 16 mm example's G plane (unit 16384, knots over its crop's half diagonal / 10), from the same recipe.
+    const ZV_E10_G: [f64; 4] = [1.051925248, -0.1972416727, 0.09393523723, -0.0282770833];
     const APSC_R: [f64; 4] = [1.016503991, -0.06206460153, 0.0278447625, -0.005644118171];
     const APSC_B: [f64; 4] = [1.016155702, -0.06162477627, 0.02753315326, -0.005554915901];
 
@@ -627,6 +636,33 @@ mod tests {
         assert_eq!(warp_opcode(&t, s, A6700_ACTIVE, A6700_DECODED_CROP, false), None);
         let ops = lens_opcodes(&ifd, "ILCE-6700", None, None, A6700_ACTIVE, A6700_DECODED_CROP);
         assert!(matches!(ops.as_slice(), [Opcode::WarpRectilinear { planes, .. }] if planes.len() == 1), "{ops:?}");
+    }
+
+    /// A ZV-E10 file (E PZ 16-50 mm at 16 mm): 11 knots, zero-padded as this body stores them.
+    const ZV_E10_16MM_DISTORTION: [i16; 17] = [11, 72, -7, -129, -266, -446, -640, -877, -1114, -1380, -1639, -1905, 0, 0, 0, 0, 0];
+    /// The ZV-E10's decoded geometry: 6048 × 4024 storage, a 6000 × 4000 default crop at (12, 12).
+    const ZV_E10_ACTIVE: Rect = Rect { x: 0, y: 0, width: 6048, height: 4024 };
+    const ZV_E10_CROP: Rect = Rect { x: 12, y: 12, width: 6000, height: 4000 };
+
+    /// The ZV-E10 follows the ILCE-6700's APS-C rule (knots over its own crop's half diagonal / 10, the APS-C fit
+    /// gate) with its own unit, 16384; its zero padding is not read as knots, and its successor (ZV-E10M2) stays
+    /// unverified.
+    #[test]
+    fn zv_e10_uses_the_apsc_rule_with_its_own_unit() {
+        let s = knot_spacing("ZV-E10", 11, ZV_E10_CROP).unwrap();
+        assert!((s - 360.5551).abs() < 1e-3, "{s}");
+        let ifd = sony_lens_ifd(&ZV_E10_16MM_DISTORTION, &APSC_VIGNETTING, &APSC_CA, [17, 2, 1]);
+        let t = read_tables(&ifd);
+        assert_eq!(t.distortion.as_ref().map(Vec::len), Some(11));
+        let gated = gated_warp_opcode(&t, s, 16384.0, ZV_E10_ACTIVE, ZV_E10_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
+        let ops = lens_opcodes(&ifd, " ZV-E10 ", Some("E PZ 16-50mm F3.5-5.6 OSS"), Some(16.0), ZV_E10_ACTIVE, ZV_E10_CROP);
+        assert_warp(ops.first().cloned(), [3011.5 / 6047.0, 0.5], &[ZV_E10_G]);
+        assert_eq!(ops, gated.into_iter().collect::<Vec<_>>());
+        // the ILCE-6700's unit would warp it differently
+        let at_15000 = gated_warp_opcode(&t, s, DISTORTION_UNIT, ZV_E10_ACTIVE, ZV_E10_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
+        assert_ne!(ops.first(), at_15000.as_ref());
+        assert_eq!(apsc_unit("ILCE-6700"), Some(DISTORTION_UNIT));
+        assert!(lens_opcodes(&ifd, "ZV-E10M2", None, None, ZV_E10_ACTIVE, ZV_E10_CROP).is_empty());
     }
 
     const SIGMA_10_18: &str = "10-18mm F2.8 DC DN | Contemporary 023";

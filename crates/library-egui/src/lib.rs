@@ -28,6 +28,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use craft_library::Nouns;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Sizing};
+use craft_ui::pickers::Select;
 use egui::{Color32, CornerRadius, Rect, RichText, Role, Sense, Stroke, StrokeKind, TextureOptions, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
 
@@ -467,18 +469,15 @@ fn folder_controls(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &La
     if st.folder.as_ref().is_some_and(|f| !folders.contains(f)) {
         st.folder = None;
     }
-    let all = tr(host, words::ALL_FOLDERS);
-    let shown = st.folder.as_deref().map_or(all.as_str(), folder_name).to_string();
-    let mut chosen = st.folder.clone();
-    let combo = craft_ui::ComboBox::from_id_salt("library_folder").selected_text(shown).width(ui.available_width()).show_ui(ui, |ui| {
-        ui.selectable_value(&mut chosen, None, all.as_str());
-        for f in &folders {
-            ui.selectable_value(&mut chosen, Some(f.clone()), folder_name(f)).on_hover_text(f);
-        }
-    });
-    let name = tr(host, words::FOLDER);
-    combo.response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, &name));
-    st.folder = chosen;
+    // Entry 0 is every folder; entry i + 1 is folders[i], shown by its name, with its path as its description.
+    let entries: Vec<Entry<usize>> = std::iter::once(Entry::new(0, tr(host, words::ALL_FOLDERS)))
+        .chain(folders.iter().enumerate().map(|(i, f)| Entry::new(i + 1, folder_name(f).to_string()).description(f.clone())))
+        .collect();
+    let held = st.folder.as_ref().and_then(|f| folders.iter().position(|g| g == f)).map_or(0, |i| i + 1);
+    let picked = Select::new(tr(host, words::FOLDER), Bind::given(held), &entries).id_salt("library_folder").sizing(Sizing::FillWidth).show(ui);
+    if let Some(&at) = picked.value() {
+        st.folder = at.checked_sub(1).and_then(|i| folders.get(i)).cloned();
+    }
     let [add_label, add_tip, remove_label, remove_tip, refresh_label, refresh_tip, path_hint, add_path] = [
         words::ADD_FOLDER,
         labels.add_folder_tip,

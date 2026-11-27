@@ -36,7 +36,7 @@ assert_eq!((rows, sheet.map(|s| s.children.len())), (3, Ok(0)));
 | `unknown_entity` | `Drop` | `Drop`, `Literal` (keep `&name;` as text) or `Error`. |
 | `doctype` | `Ignore` | `Ignore`, `RejectInternalSubset` or `Reject`. Never processed, whichever is chosen. |
 | `cdata`, `pis`, `comments` | `false` | Keep these as their own nodes. CDATA content is otherwise joined to the text around it. |
-| `drop_blank_text` | `false` | Drop the text of an element with child elements when all of it is whitespace (indentation). |
+| `drop_blank_text` | `false` | If an element has child elements and all its character data is XML whitespace, the reader drops its ordinary text nodes. CDATA nodes retained by `cdata` remain. |
 | `split_depth` | `2` | For streaming: how far below the root an element may be and still be handed out. |
 
 ### Limits
@@ -46,7 +46,7 @@ assert_eq!((rows, sheet.map(|s| s.children.len())), (3, Ok(0)));
 | `max_input` | 256 MiB | `TooLarge` |
 | `max_depth` | 256 levels (the root is 1) | `TooDeep` |
 | `max_nodes` | 2,000,000 nodes kept in the tree: elements, text stretches, kept CDATA, instructions and comments | `TooManyNodes` |
-| `max_attrs` | 1024 on one start tag, namespace declarations and malformed ones included; with canonical names, also the declarations in scope at once | `TooManyAttrs` |
+| `max_attrs` | 1024 on one start tag, namespace declarations and malformed ones included; with canonical names or strict reads, also the declarations in scope at once | `TooManyAttrs` |
 | `max_attrs_total` | 4,000,000 attributes kept in the tree, over all its elements | `TooManyAttrsTotal` |
 
 A limit exceeded is an error, never a panic and never a truncated tree. `parse_streaming_partial`
@@ -73,9 +73,9 @@ A lenient read keeps what a damaged document had:
 - reading stops when the root element ends: nothing after it is looked at;
 - a malformed attribute is skipped; bytes that are not UTF-8 become U+FFFD.
 
-A strict read makes each of those an error, and also a second root element and text outside the
+A strict read rejects duplicate raw or expanded attribute names (while allowing undeclared prefixes in fragments). It makes each of those an error, and also a second root element and text outside the
 root, in the pull reader as in the tree. Markup the tokenizer cannot read (`<a b='1`, an unterminated comment) is an error either
-way. A repeated attribute is kept each time in both.
+way. A lenient read keeps repeated attributes.
 
 ### Text
 

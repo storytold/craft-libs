@@ -22,6 +22,7 @@ use craft_wordmodel::wordart::TextWarp;
 mod blocks;
 mod drawing;
 mod fields;
+mod locked_canvas;
 mod runs;
 mod vml;
 
@@ -47,6 +48,7 @@ const MAX_FORM: usize = 64 * 1024;
 #[derive(Clone, Default)]
 pub struct RunCtx {
     link: Option<String>,
+    link_tooltip: Option<std::sync::Arc<str>>,
     ins: Option<u32>,
     del: Option<u32>,
 }

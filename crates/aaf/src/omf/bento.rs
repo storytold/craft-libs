@@ -35,8 +35,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-pub(crate) const MAGIC: [u8; 8] = [0xA4, b'C', b'M', 0xA5, b'H', b'd', b'r', 0xD7];
-pub(crate) const LABEL_SIZE: usize = 24;
+/// The eight-byte magic number that opens a Bento container.
+pub const MAGIC: [u8; 8] = [0xA4, b'C', b'M', 0xA5, b'H', b'd', b'r', 0xD7];
+/// The size in bytes of one label in the container table.
+pub const LABEL_SIZE: usize = 24;
 
 // standard object ids
 const TOC_OBJECT: u32 = 1;
@@ -82,7 +84,7 @@ const MAX_VALUE_BYTES: usize = 16 << 20;
 const MAX_NAME_BYTES: usize = 4 << 20;
 
 /// Builds a Bento container.
-pub(crate) struct Writer {
+pub struct Writer {
     data: Vec<u8>,
     names: HashMap<(u32, String), u32>,
     next: u32,
@@ -90,7 +92,14 @@ pub(crate) struct Writer {
     entries: Vec<(u32, u32, u32, Vec<Seg>)>,
 }
 
+impl Default for Writer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Writer {
+    /// An empty writer that assigns user object ids from the first free id.
     pub fn new() -> Writer {
         Writer { data: Vec::new(), names: HashMap::new(), next: MIN_USER_ID, entries: Vec::new() }
     }
@@ -108,14 +117,17 @@ impl Writer {
         id
     }
 
+    /// The id of the global property named `name`, assigned on first use.
     pub fn property(&mut self, name: &str) -> u32 {
         self.named(GLOBAL_PROP_NAME, name)
     }
 
+    /// The id of the global type named `name`, assigned on first use.
     pub fn type_id(&mut self, name: &str) -> u32 {
         self.named(GLOBAL_TYPE_NAME, name)
     }
 
+    /// Allocates the next free user object id.
     pub fn new_object(&mut self) -> u32 {
         let id = self.next;
         self.next += 1;
@@ -150,6 +162,7 @@ impl Writer {
         self.entries.push((obj, OBJ_REFERENCES, TYPE_7BIT_ASCII, vec![seg]));
     }
 
+    /// Finishes the container and returns its bytes.
     pub fn finish(mut self) -> Vec<u8> {
         let seed = self.next;
         self.entries.push((TOC_OBJECT, TOC_SEED, TOC_TYPE, vec![Seg::Imm(seed.to_be_bytes().to_vec())]));
@@ -217,9 +230,9 @@ pub(crate) struct Prop {
 }
 
 /// A parsed Bento container.
-pub(crate) struct Container<'a> {
+pub struct Container<'a> {
     data: &'a [u8],
-    pub objects: BTreeMap<u32, Vec<Prop>>,
+    pub(crate) objects: BTreeMap<u32, Vec<Prop>>,
     names: HashMap<u32, String>,
     by_name: HashMap<String, u32>,
 }
@@ -229,11 +242,17 @@ fn be32(b: &[u8], at: usize) -> Option<u32> {
 }
 
 /// Whether `b` ends with a Bento label.
-pub(crate) fn sniff(b: &[u8]) -> bool {
+pub fn sniff(b: &[u8]) -> bool {
     b.len() >= LABEL_SIZE && b[b.len() - LABEL_SIZE..b.len() - LABEL_SIZE + 8] == MAGIC
 }
 
 impl<'a> Container<'a> {
+    /// Object identifiers in ascending order.
+    pub fn object_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.objects.keys().copied()
+    }
+
+    /// Opens `data` as a Bento container, or says why it is not one.
     pub fn open(data: &'a [u8]) -> Result<Container<'a>, String> {
         if !sniff(data) {
             return Err("no Bento label at the end of the file".into());
@@ -324,7 +343,7 @@ impl<'a> Container<'a> {
     }
 
     /// The bytes of a value.
-    pub fn value(&self, p: &Prop) -> Result<Vec<u8>, String> {
+    pub(crate) fn value(&self, p: &Prop) -> Result<Vec<u8>, String> {
         let total = p.segs.iter().try_fold(0usize, |total, s| {
             let len = match s {
                 Seg::Imm(b) => b.len(),
@@ -351,11 +370,13 @@ impl<'a> Container<'a> {
         Ok(out)
     }
 
+    /// The id registered for `name`, if any.
     pub fn id_of(&self, name: &str) -> Option<u32> {
         self.by_name.get(name).copied()
     }
 
     #[allow(dead_code)]
+    /// The name registered for `id`, if any.
     pub fn name_of(&self, id: u32) -> Option<&str> {
         self.names.get(&id).map(String::as_str)
     }

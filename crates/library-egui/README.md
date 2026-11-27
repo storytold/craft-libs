@@ -18,6 +18,8 @@ inserts it. Its context menu can insert it as a whole item, as shapes, or one na
   set. With `one_per_file` (pictures, icons), every file's one item goes in a single grid, named
   under its thumbnail, instead of each file having its own heading.
 - **`Palette`**: colours from the app's theme, or `Palette::from_visuals`.
+- **The craft-ui runtime**: the folder drop-down is craft-ui's `Select`, whose list opens only in
+  a window that hosts the runtime (`shell::embed`'s install and per-frame hooks, or `shell::app::run`).
 
 Two `Host` methods are optional, and do nothing by default:
 

@@ -1,6 +1,10 @@
 //! The pane against a made-up app whose Library holds pages, with a tab of its own.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use craft_ui::testing::Fixture;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
@@ -182,6 +186,27 @@ fn without_folders_the_pane_says_what_to_do_and_adds_one() {
     h.run_steps(2);
     assert_eq!(h.state().1.folders, vec!["/picked".to_string()]);
     assert_eq!(h.state().0.folder.as_deref(), Some("/picked"));
+}
+
+/// The folder drop-down is the framework's `Select`, whose list opens only under the runtime the apps run, so this
+/// shows the pane over the framework's fixture.
+#[test]
+fn the_folder_drop_down_picks_one_folder_and_all_again() {
+    let pane = Rc::new(RefCell::new((State::default(), Pages { folders: vec!["/lib".into(), "/more/decks".into()], ..Default::default() })));
+    let shown = pane.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let pal = Palette::from_visuals(ui.visuals());
+        let (st, host) = &mut *shown.borrow_mut();
+        show(ui, st, host, &LABELS, &pal);
+    });
+    fixture.idle(4);
+    for (row, want) in [("decks", Some("/more/decks")), ("lib", Some("/lib")), ("All folders", None)] {
+        let field = fixture.by_label("Library folder").expect("the drop-down is shown");
+        fixture.click(&field).idle(4);
+        let entry = fixture.by_label(row).unwrap_or_else(|| panic!("`{row}` is listed"));
+        fixture.click(&entry).idle(4);
+        assert_eq!(pane.borrow().0.folder.as_deref(), want, "picked {row}");
+    }
 }
 
 #[test]

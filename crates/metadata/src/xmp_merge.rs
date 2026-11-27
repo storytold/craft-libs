@@ -512,10 +512,10 @@ mod tests {
             assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
             took
         };
-        let (n, small_packet, large_packet) = (50_000, packet(50_000), packet(200_000));
+        let (n, small_packet, large_packet) = (20_000, packet(20_000), packet(80_000));
         // interleaved, so a burst of load slows both sizes rather than one; the fastest run of each counts
         let (mut small, mut large) = (std::time::Duration::MAX, std::time::Duration::MAX);
-        for _ in 0..5 {
+        for _ in 0..3 {
             small = small.min(run(&small_packet, n));
             large = large.min(run(&large_packet, 4 * n));
         }

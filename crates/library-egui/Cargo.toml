@@ -20,5 +20,7 @@ serde_json = { workspace = true }
 web-time = "1.1"
 
 [dev-dependencies]
+# The framework's fixture, which runs the runtime the folder drop-down (a `Select`) needs, as the apps do.
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true, features = ["default_fonts"] }
 egui_kittest = "0.37"

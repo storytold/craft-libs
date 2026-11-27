@@ -13,6 +13,9 @@
 //!   timestamp on every entry so equal input gives equal bytes.
 //! - [`preflight`] is a stricter check of the whole end-record and central-directory structure
 //!   on the raw bytes, for a caller that wants nothing ambiguous to reach a ZIP reader at all.
+//! - `lenient` (feature `lenient`) is the other way round: a reader of the raw bytes without
+//!   `zip`, for inspectors that list and describe damaged or unusual archives instead of refusing
+//!   them, with bounded, CRC-checked entry reads.
 //!
 //! Every limit is the caller's number. Entry-name rules (which names are safe, which spellings
 //! are one part) stay with the format that knows them.
@@ -22,14 +25,22 @@
 struct ReadmeExamples;
 
 mod archive;
+pub mod entry;
 mod guard;
+#[cfg(feature = "lenient")]
+pub mod lenient;
+mod metadata_reader;
 pub mod preflight;
+mod seekable;
 mod write;
 
 pub use archive::{Archive, Limits};
-pub use guard::check_entry_count;
+pub use entry::{has_traversal_component, has_traversal_component_bytes, sanitize_path};
 #[cfg(any(test, feature = "test-support"))]
 pub use guard::zip64_entry_count_sample;
+pub use guard::{check_entry_count, check_entry_count_seekable};
+pub use metadata_reader::{Indexing, MetadataReader};
+pub use seekable::{EntryReader, InspectError, SeekableArchive, SeekableLimits, inspect_seekable};
 pub use write::{Compression, Writer};
 
 /// The payload of a ZIP's first entry when it is a stored file named `mimetype` of at most 256
