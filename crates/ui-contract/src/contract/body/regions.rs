@@ -363,7 +363,8 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// The header's line inside its inset, less the slots of the container's own header parts at its two edges: the
-    /// rect the header's children get, and the slots.
+    /// rect the header's children get, and the slots. An end edge that narrows (`HeaderParts::end_narrows`) gives up
+    /// room, down to its least, until the children keep their room.
     pub(super) fn header_line(&self, header: Rect, inset: f32, parts: HeaderParts, rtl: bool) -> (Rect, HeaderSlots) {
         let mut flow = craft_behavior::Flow::new(header.shrink2(Vec2::new(inset, 0.0)), rtl);
         let mut slots = HeaderSlots::default();
@@ -372,8 +373,12 @@ impl<'b> BodyHooks<'b> {
             slots.start = Some(slot);
             flow = rest.take_start(self.region_gap).1;
         }
-        if parts.end > 0.0 {
-            let (slot, rest) = flow.take_end(parts.end);
+        let end = match parts.end_least {
+            Some(least) => parts.end.min((flow.rect().width() - self.region_gap - parts.keep).max(least)),
+            None => parts.end,
+        };
+        if end > 0.0 {
+            let (slot, rest) = flow.take_end(end);
             slots.end = Some(slot);
             flow = rest.take_end(self.region_gap).1;
         }

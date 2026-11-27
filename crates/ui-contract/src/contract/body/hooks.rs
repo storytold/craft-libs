@@ -329,6 +329,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// the room. What the regions took is recorded for the rest of the pass; a record this pass already holds serves
     /// instead when the room still allows it (`reusable`).
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
+        // A layer measures under its opener's env and runs in its own, which flows in the layer's direction
+        // (`Scoped::layer_direction`): its measuring run lays out in that direction too.
+        let layer_env = matches!(self.props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow)
+            .then(|| at.env.derive(|scoped| scoped.direction = scoped.layer_direction()));
+        let at = &Measuring { env: layer_env.as_ref().unwrap_or(at.env), command: at.command.clone(), ..*at };
         let scrolled_share = match self.measure_room(comp, at, cx) {
             Ok(scrolled_share) => scrolled_share,
             Err(extent) => return extent,
@@ -640,6 +645,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 self.end_unfit = Some(short);
             }
             self.after_body(ui, env, &mut plan);
+            if plan.real {
+                crate::runtime::focus::end_body(&plan.ctx, plan.id);
+            }
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
             }
@@ -647,6 +655,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             // A collapsed body keeps its last full size in layout memory, so opening it again places by that size
             // and asks for no discard pass.
             self.body_size = if props.collapse.is_some() { None } else { Some(Vec2::ZERO) };
+            if plan.real {
+                crate::runtime::focus::end_body(&plan.ctx, plan.id);
+            }
         }
         self.close_label(&mut plan);
         // B4 footer: under the control column of a label-scoped container, which starts where the label step put
@@ -1294,7 +1305,7 @@ impl BodyHooks<'_> {
             plan.footer_env = plan.region_env.derive_local(|scoped| scoped.content_column = true);
         }
         if plan.real {
-            crate::runtime::focus::begin_body(&plan.ctx);
+            crate::runtime::focus::begin_body(&plan.ctx, plan.id);
         }
         // A stack is a content column where its width comes from its content: a content-sized stack in flow, or a
         // held fill-width container. A stack given its width (a rect it is shown at, or a column's width it passes
@@ -1608,7 +1619,14 @@ impl BodyHooks<'_> {
         if lays_out {
             crate::runtime::lazy::begin(ctx, view, self.anchor.map(|anchor| anchor.child), self.glide.map(|glide| glide.child));
         }
-        let env = run.env.derive_local(|scoped| scoped.lazy = Some(view));
+        // The children fill what the view shows: the width the body was offered counts the bar's lane, so a child that
+        // fills the offered width would lie under the bar.
+        let env = run.env.derive_local(|scoped| {
+            scoped.lazy = Some(view);
+            if let Some(offered) = scoped.offered.as_mut() {
+                *offered = (*offered - inset.x).max(0.0);
+            }
+        });
         let installed = Env::install_for(&region_ui, env.clone());
         ScrollRegion { ui: region_ui, env, installed, seen, max, shown, bar, lays_out, laid_for: (inset, shows) }
     }

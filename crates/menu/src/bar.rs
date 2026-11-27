@@ -48,11 +48,11 @@ pub(crate) fn keymap_platform(target: Target, os: Platform) -> Platform {
 /// A replay at another place moves the titles' rect with the bar.
 impl craft_ui::runtime::Shift for MenuBarOutput {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
-        MenuBarOutput { titles: by.rect(self.titles), opened: self.opened }
+        MenuBarOutput { titles: by.rect(self.titles), natural: self.natural, opened: self.opened }
     }
 
     fn snapped(&self, to: &Self, within: f32) -> Self {
-        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within), opened: self.opened }
+        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within), natural: self.natural, opened: self.opened }
     }
 }
 
@@ -63,6 +63,9 @@ pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
     /// ([`craft_ui::menu::MenuBarOutput::titles`]).
     pub titles: Rect,
+    /// The width every title takes side by side with none in "…", whatever room the bar had
+    /// ([`craft_ui::menu::MenuBarOutput::natural`]). Zero when the bar shows nothing.
+    pub natural: f32,
     /// True in the one pass where a menu of the bar opened while none was open
     /// ([`craft_ui::menu::MenuBarOutput::opened`]).
     pub opened: bool,
@@ -167,7 +170,7 @@ impl<'a> MenuBarUi<'a> {
             icons: self.icons,
             compact: self.compact,
         };
-        MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING, opened: false })
+        MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING, natural: 0.0, opened: false })
     }
 }
 
@@ -214,8 +217,8 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
     if let Some(menu) = props.help {
         bar = bar.help(MenuHelp::new(menu, &entries));
     }
-    let out = bar.show(ui);
-    MenuBarOutput { titles: out.titles, opened: out.opened }
+    let shown = bar.show(ui);
+    MenuBarOutput { titles: shown.titles, natural: shown.natural, opened: shown.opened }
 }
 
 /// What the kept text of a bar is made of: the model, the platform that names its shortcuts, the preferred mnemonics,

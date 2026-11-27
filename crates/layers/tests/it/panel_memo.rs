@@ -66,6 +66,13 @@ impl Rig {
         (count(MemoRun::Ran), count(MemoRun::Replayed))
     }
 
+    /// The runs and replays in the last frame of the memoized views whose type name holds `name`.
+    fn view_runs(&self, name: &str) -> (u32, u32) {
+        let runs = last_frame_memo_runs(self.fixture.ctx());
+        let count = |wanted: MemoRun| runs.iter().filter(|(ty, _, run)| ty.contains(name) && *run == wanted).count() as u32;
+        (count(MemoRun::Ran), count(MemoRun::Replayed))
+    }
+
     /// One frame with no input, after the edit of the trial.
     fn frame(&mut self) -> &mut Self {
         self.fixture.frame(Vec::new());
@@ -163,4 +170,32 @@ fn a_pointer_move_beside_the_panel_replays_it_and_a_modifier_runs_it() {
     assert_eq!(runs(&fixture).0, 1, "Alt held runs the view");
     fixture.frame(Vec::new());
     assert_eq!(runs(&fixture), (0, 1), "and it replays while Alt stays held");
+}
+
+/// The pointer moving over the rows runs the panel but replays its blend, Opacity, Fill and lock rows: they show only the
+/// active layer's properties, and running them was about half of the panel's time in such a frame (photocraft#17131).
+#[trial]
+fn a_pointer_over_the_rows_replays_the_blend_rows() {
+    let mut rig = rig(FakeLayers::fifty());
+    for step in 0..3 {
+        rig.fixture.frame(vec![pointer::moved(egui::Pos2::new(100.0, 300.0 + step as f32))]);
+        assert_eq!(rig.host_runs().0, 1, "step {step}: the pointer runs the panel");
+        assert_eq!(rig.view_runs("BlendProps"), (0, 1), "step {step}: the blend rows replay");
+    }
+}
+
+/// A new blend mode on the active layer runs the blend rows, so they never show a stale value.
+#[trial]
+fn the_active_layers_blend_mode_runs_the_blend_rows() {
+    let mut rig = rig(FakeLayers::fifty());
+    {
+        let mut tree = rig.tree.borrow_mut();
+        let active = tree.selection.active.expect("the sample has an active layer");
+        let layer = tree.layers.iter_mut().find(|layer| layer.id == active).expect("the active layer is listed");
+        layer.info.blend_key = String::from("multiply");
+    }
+    rig.frame();
+    assert_eq!(rig.view_runs("BlendProps").0, 1, "the edit runs the blend rows");
+    rig.frame();
+    assert_eq!(rig.host_runs(), (0, 1), "and the panel replays after it");
 }
