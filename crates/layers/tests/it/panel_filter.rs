@@ -359,7 +359,6 @@ fn a_filling_objects_search_puts_the_filter_button_at_the_end() {
     assert!(fill > natural, "the Filter button ends at {fill} under Fill, {natural} under Natural");
 }
 
-
 const NO_MATCHES: &str = "No layers match the filter.";
 type MessageEvents = Shared<Vec<LayersEvent<u32>>>;
 type MessageMenus = Shared<Vec<Option<craft_layers::ui::tree::LayerRowKey<u32>>>>;
@@ -381,7 +380,9 @@ fn message_rig(message: Option<&'static str>, room: Vec2) -> (Rig, MessageEvents
             menus.borrow_mut().push(target.row.clone());
             vec![craft_ui::contract::Entry::new(String::from("empty-options"), "Empty-area options").into()]
         });
-        if let Some(message) = message { panel = panel.no_matches_message(message); }
+        if let Some(message) = message {
+            panel = panel.no_matches_message(message);
+        }
         sink.borrow_mut().extend(panel.show(ui).events);
     });
     fixture.room(room).settle();
@@ -392,7 +393,10 @@ fn message_rig(message: Option<&'static str>, room: Vec2) -> (Rig, MessageEvents
 /// order, including clearing the criterion and an actually empty source tree.
 #[trial]
 fn a_no_matches_message_is_optional_and_follows_the_filtered_rows() {
-    let mut absent = rig(|filter| { filter.by = FilterBy::Name; filter.name = String::from("no match"); });
+    let mut absent = rig(|filter| {
+        filter.by = FilterBy::Name;
+        filter.name = String::from("no match");
+    });
     assert!(absent.rows().is_empty());
     assert!(absent.fixture.by_label(NO_MATCHES).is_none(), "the default adds no wording");
     absent.fixture.idle(2);
@@ -430,7 +434,7 @@ fn the_no_matches_message_is_centred_in_the_short_body_above_the_footer() {
         let label = rig.fixture.by_label(NO_MATCHES).expect("the no-matches text");
         let footer = rig.fixture.by_label("Create a new layer").expect("the existing footer is still shown").rect;
         assert!(body.contains_rect(label.rect), "the label is inside the body: {body:?} / {:?}", label.rect);
-        let offset = (label.center()-body.center()).abs();
+        let offset = (label.center() - body.center()).abs();
         assert!(offset.x <= 1.0 && offset.y <= 1.0, "centred within pixel rounding: {body:?} / {:?}", label.rect);
         assert!(body.bottom() <= footer.top(), "the footer keeps its own room");
         let visible = rig.fixture.visible(&label).expect("the message is visible");
@@ -450,11 +454,11 @@ fn message_right_click(fixture: &mut Fixture, at: egui::Pos2) {
 /// still reaches the same list response and the host's ordinary empty-area menu.
 #[trial]
 fn the_no_matches_text_keeps_the_empty_area_menu_at_and_away_from_the_label() {
-    let (mut rig, seen, asked) = message_rig(Some(NO_MATCHES), Vec2::new(400.0,260.0));
+    let (mut rig, seen, asked) = message_rig(Some(NO_MATCHES), Vec2::new(400.0, 260.0));
     rig.filter_by(|filter| filter.name = String::from("no match"));
     let body = rig.fixture.by_label("Layers").unwrap().rect;
     let label = rig.fixture.by_label(NO_MATCHES).unwrap();
-    let away = egui::pos2(body.left()+body.width()*0.1, body.top()+body.height()*0.1);
+    let away = egui::pos2(body.left() + body.width() * 0.1, body.top() + body.height() * 0.1);
     assert!(body.contains(away) && !label.rect.contains(away));
     for at in [label.center(), away] {
         seen.borrow_mut().clear();
@@ -472,16 +476,23 @@ fn the_no_matches_text_keeps_the_empty_area_menu_at_and_away_from_the_label() {
 #[trial]
 fn the_no_matches_text_preserves_list_pointer_focus_and_tab_order() {
     let mut observations = Vec::new();
-    for message in [None,Some(NO_MATCHES)] {
-        let (mut rig, seen, _) = message_rig(message, Vec2::new(400.0,260.0));
+    for message in [None, Some(NO_MATCHES)] {
+        let (mut rig, seen, _) = message_rig(message, Vec2::new(400.0, 260.0));
         rig.filter_by(|filter| filter.name = String::from("no match"));
         let body = rig.fixture.by_label("Layers").unwrap().rect;
-        if let Some(label) = rig.fixture.by_label(NO_MATCHES) { assert!(label.rect.contains(body.center())); }
+        if let Some(label) = rig.fixture.by_label(NO_MATCHES) {
+            assert!(label.rect.contains(body.center()));
+        }
         seen.borrow_mut().clear();
         rig.fixture.click_at(body.center()).idle(2);
-        let selected: Vec<_> = seen.borrow().iter().filter_map(|event| match event {
-            LayersEvent::Select(select) => Some(select.change.clone()), _ => None,
-        }).collect();
+        let selected: Vec<_> = seen
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                LayersEvent::Select(select) => Some(select.change.clone()),
+                _ => None,
+            })
+            .collect();
         let focused = |fixture: &Fixture| fixture.focused().and_then(|id| fixture.tree().name(id).map(str::to_string));
         let before_tab = focused(&rig.fixture);
         assert_ne!(before_tab.as_deref(), Some(NO_MATCHES));
@@ -489,7 +500,7 @@ fn the_no_matches_text_preserves_list_pointer_focus_and_tab_order() {
         let after_tab = focused(&rig.fixture);
         assert!(after_tab.is_some(), "the existing keyboard path remains reachable");
         assert_ne!(after_tab.as_deref(), Some(NO_MATCHES));
-        observations.push((selected,before_tab,after_tab));
+        observations.push((selected, before_tab, after_tab));
     }
-    assert_eq!(observations[0],observations[1], "the optional text leaves list input and focus unchanged");
+    assert_eq!(observations[0], observations[1], "the optional text leaves list input and focus unchanged");
 }
