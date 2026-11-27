@@ -577,12 +577,45 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
 
 #[cfg(test)]
 mod tests {
-    use super::f32_crossing;
+    use super::{Band, Pass, STri, f32_crossing};
+    use crate::scene::{Material, Scene, Vertex};
 
     #[test]
     fn a_crossing_whose_distance_difference_overflows_is_taken_in_f64() {
         // −3e38 − 1e38 overflows f32; the plane lies three quarters of the way along the edge.
         assert_eq!(f32_crossing(-3e38, 1e38), (false, 0.75));
         assert_eq!(f32_crossing(1e38, -3e38), (false, 0.25));
+    }
+
+    #[test]
+    fn fallback_rejects_a_nearer_candidate_outside_the_depth_range() {
+        let depths = [0.9, 1.25, 0.5];
+        let vertices = depths
+            .into_iter()
+            .flat_map(|z| [[-1.0, -1.0, z], [3.0, -1.0, z], [-1.0, 3.0, z]].map(|pos| Vertex { pos, normal: [0.0, 0.0, 1.0], ..Vertex::default() }))
+            .collect();
+        let scene = Scene {
+            width: 1,
+            height: 1,
+            vertices,
+            indices: (0..9).collect(),
+            opaque_count: 9,
+            materials: vec![Material { unlit: true, ..Material::default() }],
+            ..Scene::default()
+        };
+        let triangles: [STri; 3] = std::array::from_fn(|tri| STri {
+            p: [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]],
+            z: [depths[tri]; 3],
+            inv_w: [1.0; 3],
+            w: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            tri: tri as u32,
+            front: true,
+            bbox: [0, 0, 1, 1],
+        });
+        let band = Band { s: &scene, y0: 0, rows: 1, w: 1 };
+        let pass = Pass { tris: &triangles, bins: &[0, 1, 2] };
+        let visible = vec![(0, depths[0], [1.0, 0.0, 0.0])];
+        let fallback = band.fallback(pass, &visible, &[true]).unwrap();
+        assert_eq!(fallback[0].unwrap().0, depths[2]);
     }
 }
