@@ -107,14 +107,6 @@ impl Component for SelectableText<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
-        let mut response = cx.response.clone();
-        if let Some(text) = cx.selection_response(TEXT) {
-            let clicked = cx.resolved.enabled && !cx.resolved.read_only && text.clicked_by(egui::PointerButton::Primary);
-            response.flags.set(egui::response::Flags::CLICKED, clicked);
-            if clicked {
-                response.interact_pointer_pos_or_nan = text.interact_pointer_pos_or_nan;
-            }
-        }
-        response
+        cx.response.clone()
     }
 }

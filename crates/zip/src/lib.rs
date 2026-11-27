@@ -25,6 +25,7 @@
 struct ReadmeExamples;
 
 mod archive;
+pub mod entry;
 mod guard;
 #[cfg(feature = "lenient")]
 pub mod lenient;
@@ -34,6 +35,7 @@ mod seekable;
 mod write;
 
 pub use archive::{Archive, Limits};
+pub use entry::{has_traversal_component, has_traversal_component_bytes, sanitize_path};
 #[cfg(any(test, feature = "test-support"))]
 pub use guard::zip64_entry_count_sample;
 pub use guard::{check_entry_count, check_entry_count_seekable};
