@@ -482,14 +482,14 @@ impl<'a> Ctx<'a> {
     /// The date, footer and slide number placeholders `hf` turns on, for those the slide doesn't
     /// hold itself. They take their place and look from the layout and master.
     fn footers(&mut self, shapes: &mut Vec<Shape>, hf: &doc::HeadersFooters) {
-        let field = |text: &str, field: String| {
-            std::iter::once(Paragraph {
-                runs: vec![Run { text: text.into(), props: Default::default(), kind: RunKind::Field { field } }],
-                ..Default::default()
-            })
+        let field = |(text, field): (&str, String)| Paragraph {
+            runs: vec![Run { text: text.into(), props: Default::default(), kind: RunKind::Field { field } }],
+            ..Default::default()
         };
-        // A paragraph per line, as `TextBody::from_text` splits it.
-        let lines = |text: &str| text.replace("\r\n", "\n").replace('\r', "\n");
+        /// A line per paragraph, split as `TextBody::from_text` splits it, without copying `text`.
+        fn lines(text: &str) -> impl Iterator<Item = &str> {
+            text.split("\r\n").flat_map(|line| line.split(['\r', '\n']))
+        }
         let wanted = [
             (PhType::Date, hf.date, "Date Placeholder"),
             (PhType::Footer, hf.footer && !hf.footer_text.is_empty(), "Footer Placeholder"),
@@ -502,11 +502,11 @@ impl<'a> Ctx<'a> {
             // A footer repeats on every slide, and its text splits into a paragraph per line, so
             // it is made only as far as the text budget allows.
             let text = match kind {
-                PhType::SlideNum => self.within_budget(field("‹#›", "slidenum".into())),
-                PhType::Date if hf.user_date => self.within_budget(lines(&hf.date_text).split('\n').map(Paragraph::new)),
+                PhType::SlideNum => self.within_budget(std::iter::once(("‹#›", "slidenum".into())), field),
+                PhType::Date if hf.user_date => self.within_budget(lines(&hf.date_text), Paragraph::new),
                 // formatId 0–12 are the thirteen date formats, in DrawingML's order.
-                PhType::Date => self.within_budget(field("", format!("datetime{}", hf.format.min(12) + 1))),
-                _ => self.within_budget(lines(&hf.footer_text).split('\n').map(Paragraph::new)),
+                PhType::Date => self.within_budget(std::iter::once(("", format!("datetime{}", hf.format.min(12) + 1))), field),
+                _ => self.within_budget(lines(&hf.footer_text), Paragraph::new),
             };
             if text.paragraphs.is_empty() {
                 continue;
@@ -522,17 +522,21 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// A text body of `paras`, made here rather than read from a text block, taken one at a time
-    /// while the presentation's text budget allows: the rest are never made.
-    fn within_budget(&self, paras: impl Iterator<Item = Paragraph>) -> TextBody {
+    /// A text body made here rather than read from a text block: a paragraph `make`s from each of
+    /// `items`, while the presentation's text budget allows. Each is made only once the budget has
+    /// taken it, so the rest are never made; one cut down to no runs at all is left out.
+    fn within_budget<T>(&self, items: impl Iterator<Item = T>, make: impl Fn(T) -> Paragraph) -> TextBody {
         let mut paragraphs = vec![];
-        for mut para in paras {
+        for item in items {
             if !text::take_text_item(&self.text_items) {
                 break;
             }
+            let mut para = make(item);
             if let Some(runs) = (0..para.runs.len()).find(|_| !text::take_text_item(&self.text_items)) {
-                para.runs.truncate(runs);
-                paragraphs.push(para);
+                if runs > 0 {
+                    para.runs.truncate(runs);
+                    paragraphs.push(para);
+                }
                 break;
             }
             paragraphs.push(para);

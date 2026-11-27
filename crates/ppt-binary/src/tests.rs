@@ -1183,6 +1183,25 @@ fn footer_text_counts_against_the_text_budget() {
     assert!(paragraphs.capacity() <= crate::text::MAX_TEXT_ITEMS, "room for {} paragraphs", paragraphs.capacity());
 }
 
+/// A slide number with room in the text budget for its paragraph but not its field is left out,
+/// not added as an empty placeholder.
+#[test]
+fn a_slide_number_the_budget_cannot_fit_is_left_out() {
+    // 32,767 one-letter lines and a last empty one: one item short of the budget.
+    let footer = "a\r".repeat(crate::text::MAX_TEXT_ITEMS / 2 - 1);
+    let flags: u16 = 0x20 | 0x08;
+    let hf = container(
+        rt::HEADERS_FOOTERS,
+        0,
+        &[atom(rt::HEADERS_FOOTERS_ATOM, 0, &[&0u16.to_le_bytes()[..], &flags.to_le_bytes()].concat()), atom(rt::CSTRING, 2, &utf16(&footer))],
+    );
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[]), hf]);
+    let p = open_streams(streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], &[]));
+    let shapes = &p.slides[0].shapes;
+    assert!(shapes.iter().any(|s| s.ph_type() == Some(PhType::Footer)), "the footer fits");
+    assert!(!shapes.iter().any(|s| s.ph_type() == Some(PhType::SlideNum)), "a slide number with no field");
+}
+
 /// A text box that points at an outline block keeps its own `TextRulerAtom`: the margin it sets
 /// (one inch at level 1) wins over the block's. It used to be dropped with the reference.
 #[test]
