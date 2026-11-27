@@ -518,6 +518,17 @@ pub const BUILTINS: [(&str, &str); 9] = [
 #[cfg(test)]
 mod tests {
     #[test]
+    fn accepted_small_box_dimensions_are_preserved() {
+        let cube = cube(1e-7).unwrap();
+        let (lo, hi) = cube.bounds();
+        assert_eq!(hi - lo, Vec3::splat(1e-7));
+        let half = Vec3::new(5e-8, 2e-7, 3e-7);
+        let mesh = rounded_box(half, 0.0).unwrap();
+        let (lo, hi) = mesh.bounds();
+        assert_eq!((lo, hi), (-half, half));
+    }
+
+    #[test]
     fn rounded_box_face_boundaries_share_exact_positions() {
         for (half, bevel) in [(1.038, 0.037), (1e21, 1e20)] {
             let mut builder = Builder::default();
