@@ -959,7 +959,11 @@ impl<T: Clone + Send + Sync + 'static> Facts<T> {
         let viewport = pass::current_viewport(ctx);
         let pass_nr = pass::pass_nr(ctx, viewport);
         let advance = |record: &mut FactRecord<T>, step: PassStep| match step {
-            PassStep::Next => record.last = std::mem::take(&mut record.this),
+            // The buffers swap, so a pass reuses the room the pass before it grew.
+            PassStep::Next => {
+                std::mem::swap(&mut record.last, &mut record.this);
+                record.this.clear();
+            }
             PassStep::Skipped => {
                 record.last.clear();
                 record.this.clear();
