@@ -377,7 +377,6 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
         let end = group.last().map_or(first, |last| (last + columns).min(cells));
         visible.get(first..end.min(visible.len()))?.iter().find_map(|(index, _)| slots[*index].caption.clone())
     };
-    let trace_grid_output = std::env::var("CRAFT_TRACE_GRID_OUTPUT").is_ok_and(|value| value == "1");
     let (mut edit_toolbar, mut shown_at) = (None, Vec::with_capacity(visible.len()));
     let sent = &mut props.sent;
     // The grid of buttons sits at the centre of the rail's width.
@@ -424,15 +423,9 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                             Some(tips) => button.show_with_tip(ui, |ui| tips.show(&shown.id, ui)),
                                             None => button.show(ui),
                                         };
-                                        if trace_grid_output {
-                                            eprintln!(
-                                                "CRAFT_TRACE_GRID_OUTPUT push measuring={} index={} rect={:?}",
-                                                crate::runtime::measure::active(ui.ctx()),
-                                                index,
-                                                out.response.rect
-                                            );
+                                        if !crate::runtime::measure::active(ui.ctx()) {
+                                            shown_at.push((*index, out.response.rect));
                                         }
-                                        shown_at.push((*index, out.response.rect));
                                         // The slot wears the mark; while its flyout is open the tool's row does.
                                         if marked.is_some() && !out.opened {
                                             TargetMark::new(out.response.rect).id_salt(("mark", slot.id)).show_mark(ui);
@@ -458,7 +451,9 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                         let icon = props.edit_icon.clone().unwrap_or_else(|| IconId::new("more"));
                                         let more = IconButton::new(icon).id_salt("edit-toolbar").label(label).show(ui);
                                         edit_toolbar = Some(more.response.id);
-                                        sent.send(RailEvent::EditToolbar(more.response));
+                                        if !crate::runtime::measure::active(ui.ctx()) {
+                                            sent.send(RailEvent::EditToolbar(more.response));
+                                        }
                                     }
                                 }
                             }
@@ -468,14 +463,6 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
             }
         });
     });
-    if trace_grid_output {
-        eprintln!(
-            "CRAFT_TRACE_GRID_OUTPUT return measuring={} edit_toolbar={:?} shown_at={:?}",
-            crate::runtime::measure::active(ui.ctx()),
-            edit_toolbar,
-            shown_at
-        );
-    }
     (edit_toolbar, shown_at)
 }
 
