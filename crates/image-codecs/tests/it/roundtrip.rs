@@ -316,7 +316,7 @@ fn webp_lossy_request_is_a_lossy_file() {
 }
 
 #[test]
-fn one_pixel_images_roundtrip() {
+fn feature_config_one_pixel_images_roundtrip() {
     for f in rw_formats() {
         // The JPEG XL encoder refuses images narrower than two pixels (jxl_export.rs pins the error).
         if f == Format::Jxl {
@@ -337,7 +337,7 @@ fn ico_rejects_oversize() {
 }
 
 #[test]
-fn empty_image_rejected() {
+fn feature_config_empty_image_rejected() {
     let img = Image::new(0, 5, ChannelLayout::Rgb, SampleType::U8).unwrap();
     for f in writable_formats() {
         assert!(encode(&img, f, &EncodeOptions::default()).is_err(), "{f:?}");

@@ -10,7 +10,7 @@ use craft_image_codecs::*;
 // ---------------------------------------------------------------------------
 
 #[test]
-fn every_enabled_format_is_symmetric_or_whitelisted() {
+fn feature_config_every_enabled_format_is_symmetric_or_whitelisted() {
     for f in Format::ALL {
         let c = caps(f);
         if !(c.read || c.write) {
@@ -34,7 +34,7 @@ fn exceptions_are_documented_and_unique() {
 }
 
 #[test]
-fn never_write_only_without_exception() {
+fn feature_config_never_write_only_without_exception() {
     // Stronger form: no format may be writable-but-unreadable unless listed.
     for f in writable_formats() {
         if !caps(f).read {
@@ -44,7 +44,7 @@ fn never_write_only_without_exception() {
 }
 
 #[test]
-fn default_build_formats_all_symmetric() {
+fn feature_config_default_build_formats_all_symmetric() {
     let expected = [
         Format::Png,
         Format::Jpeg,
@@ -74,7 +74,7 @@ fn default_build_formats_all_symmetric() {
 }
 
 #[test]
-fn avif_is_readable_only_with_the_decode_feature() {
+fn feature_config_avif_is_readable_only_with_the_decode_feature() {
     assert_eq!(caps(Format::Avif).read, cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))));
     assert_eq!(caps(Format::Avif).write, cfg!(feature = "avif"));
     let header = decode_as(Format::Avif, b"\0\0\0\x1cftypavif");
@@ -86,7 +86,7 @@ fn avif_is_readable_only_with_the_decode_feature() {
 }
 
 #[test]
-fn heif_is_detected_always_and_readable_only_with_the_feature() {
+fn feature_config_heif_is_detected_always_and_readable_only_with_the_feature() {
     let header = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic";
     assert_eq!(detect(header), Some(Format::Heif));
     assert_eq!(from_extension("IMG_0001.HEIC"), Some(Format::Heif));
@@ -149,7 +149,7 @@ fn caps_are_internally_consistent() {
 }
 
 #[test]
-fn caps_function_matches_method() {
+fn feature_config_caps_function_matches_method() {
     for f in Format::ALL {
         assert_eq!(caps(f), f.caps());
     }
@@ -160,7 +160,7 @@ fn caps_function_matches_method() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn detect_encoded_output_of_every_format() {
+fn feature_config_detect_encoded_output_of_every_format() {
     for f in writable_formats() {
         let img = test_image(ChannelLayout::Rgba, SampleType::U8);
         let bytes = encode(&img, f, &EncodeOptions::default()).unwrap();
@@ -258,7 +258,7 @@ fn detect_magic_iff() {
 }
 #[cfg(feature = "sgi")]
 #[test]
-fn detect_magic_sgi() {
+fn feature_config_detect_magic_sgi() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     let img = Image::from_u8(5, 3, ChannelLayout::Rgba, (0..60).collect()).unwrap();
     let bytes = encode(&img, Format::Sgi, &EncodeOptions::default()).unwrap();
@@ -522,7 +522,7 @@ fn a_detector_keeps_its_place_between_calls() {
 
 #[cfg(feature = "sunraster")]
 #[test]
-fn detect_magic_sun_raster() {
+fn feature_config_detect_magic_sun_raster() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
     let bytes = encode(&img, Format::SunRaster, &EncodeOptions::default()).unwrap();
@@ -626,7 +626,7 @@ fn extensions_unique_across_formats() {
 
 #[cfg(not(feature = "sgi"))]
 #[test]
-fn sgi_requires_explicit_feature() {
+fn feature_config_sgi_requires_explicit_feature() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     assert!(!caps(Format::Sgi).read && !caps(Format::Sgi).write);
     assert!(decode_as(Format::Sgi, &[]).is_err());
@@ -639,7 +639,7 @@ fn sgi_requires_explicit_feature() {
 
 #[cfg(not(feature = "sunraster"))]
 #[test]
-fn sun_raster_disabled_by_default() {
+fn feature_config_sun_raster_disabled_by_default() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
     let bytes = [0x59, 0xa6, 0x6a, 0x95, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 42, 0];
     assert_ne!(detect(&bytes), Some(Format::SunRaster));
