@@ -80,7 +80,13 @@ struct DropShown {
 }
 
 /// Shows an action's drop slot around its button.
-type DropShow = dyn Fn(&mut Ui, &FooterAction) -> DropShown + Send + Sync;
+type DropShow = dyn Fn(&mut Ui, &FooterAction, Id) -> DropShown + Send + Sync;
+
+/// One payload type accepted by an action, and the drop slot that can report it.
+struct ActionDrop {
+    matches: Box<dyn Fn(&Context) -> bool + Send + Sync>,
+    show: Box<DropShow>,
+}
 
 /// An icon action of a panel footer: an `IconButton` named by its label.
 #[derive(Clone)]
@@ -94,7 +100,7 @@ pub struct FooterAction {
     expanded: Option<bool>,
     takes_drops_disabled: bool,
     drop_hint: Option<Label>,
-    drops: Option<Arc<DropShow>>,
+    drops: Vec<Arc<ActionDrop>>,
 }
 
 impl fmt::Debug for FooterAction {
@@ -109,7 +115,7 @@ impl fmt::Debug for FooterAction {
             .field("expanded", &self.expanded)
             .field("takes_drops_disabled", &self.takes_drops_disabled)
             .field("drop_hint", &self.drop_hint)
-            .field("accepts_drops", &self.drops.is_some())
+            .field("accepts_drops", &!self.drops.is_empty())
             .finish()
     }
 }
@@ -127,7 +133,7 @@ impl FooterAction {
             expanded: None,
             takes_drops_disabled: false,
             drop_hint: None,
-            drops: None,
+            drops: Vec::new(),
         }
     }
 
@@ -185,18 +191,35 @@ impl FooterAction {
 
     /// Lets drags carrying a `P` that `accepts` takes drop on the action. The action shows the drop outline while
     /// such a drag is over it, and the drop comes back in [`FooterOutput::dropped`]. `accepts` may capture: a caller
-    /// checks that the drag comes from its own list.
+    /// checks that the drag comes from its own list. This replaces any predicates already set on the action.
     #[must_use]
     pub fn accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
+        self.drops.clear();
+        self.also_accepts_drops(accepts)
+    }
+
+    /// Adds a predicate for a dropped payload of type `P`. If a drag carries multiple payloads that the action
+    /// accepts, the first matching predicate determines which payload appears in [`FooterOutput::dropped`].
+    #[must_use]
+    pub fn also_accepts_drops<P: Clone + Send + Sync + 'static>(mut self, accepts: impl Fn(&P) -> bool + Send + Sync + 'static) -> Self {
         let accepts: Arc<dyn Fn(&P) -> bool + Send + Sync> = Arc::new(accepts);
-        self.drops = Some(Arc::new(move |ui, action| {
+        let matches = Arc::clone(&accepts);
+        let matches = Box::new(move |ctx: &Context| crate::runtime::drag::active::<P>(ctx).is_some_and(|payload| matches(&payload)));
+        let show = Box::new(move |ui: &mut Ui, action: &FooterAction, id: Id| {
             let accepts = Arc::clone(&accepts);
-            let slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled);
+            let slot = DropAction::new(move |payload: &P| accepts(payload)).enabled(action.enabled || action.takes_drops_disabled).id(id);
             let shown = slot.show(ui, |ui, _| action.icon_button(DropAction::<P>::accepting(ui)).show(ui).response);
             let response = shown.inner.unwrap_or_else(|| shown.output.response.clone());
             DropShown { response, dropped: shown.output.dropped.map(|payload| Arc::new(payload) as Dropped), over: shown.output.over }
-        }));
+        });
+        self.drops.push(Arc::new(ActionDrop { matches, show }));
         self
+    }
+
+    fn drop_slot(&self, ctx: &Context) -> Option<&ActionDrop> {
+        let first = self.drops.first()?;
+        let slot = if self.drops.len() > 1 { self.drops.iter().find(|drop| (drop.matches)(ctx)).unwrap_or(first) } else { first };
+        Some(slot)
     }
 
     /// The button, enabled when the action is or when `accepting` lifts it for an accepted drag over it.
@@ -810,9 +833,11 @@ impl FooterBar {
 fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item = usize>, shown: &mut Shown) {
     for at in order {
         let action = &actions[at];
-        let response = match &action.drops {
+        let response = match action.drop_slot(ui.ctx()) {
             Some(drops) => {
-                let slot = drops(ui, action);
+                // All payload types share this slot and its child button. A different type can be over it next pass.
+                let id = ui.scope_id().with(("footer-action-drop", at));
+                let slot = (drops.show)(ui, action, id);
                 if let Some(payload) = slot.dropped {
                     shown.dropped = Some(FooterDrop { index: at, payload });
                 }
