@@ -18,8 +18,8 @@ use crate::primitives::IconSpec;
 use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::{self, FocusTarget};
-use crate::runtime::overlay::CloseReason;
 use crate::runtime::memory::Remember as _;
+use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::os_of;
 use crate::sections::DropAction;
 use crate::style::TypeRole;
@@ -507,7 +507,10 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
             edits.push(ToolbarEdit::Reset);
         }
         let closed = leave || !open || shown.output.closed.is_some();
-        if searchable && shown.output.closed == Some(CloseReason::Escape) && let Some(opener) = &opener {
+        if searchable
+            && shown.output.closed == Some(CloseReason::Escape)
+            && let Some(opener) = &opener
+        {
             // The search's empty Escape closes the drawer; give its recorded rail button real
             // focus now, while its stop is registered, rather than leaving focus on removed text.
             focus::request(&ctx, FocusTarget::Id(opener.id));
