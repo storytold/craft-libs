@@ -235,17 +235,17 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         }
     }
 
-    /// The closed field's keys: typed letters open the list on the first entry they begin, AccessKit sets the pick and
+    /// The closed field's keys: typed letters open the list on the first enabled match, AccessKit sets the pick and
     /// the arrow keys, Home and End step it through `stops`.
     fn closed_keys(&self, cx: &mut Cx<'_, Self>, list: PopupHandle, stops: &[usize]) {
         let held = self.position(cx.value());
         while let Some(text) = cx.intents().take_text() {
-            // Type-ahead passes over headings: their captions name no entry.
+            // Keep the entry indices for wrapping around the held value, with no label for headings or disabled items.
             let labels: Vec<Label> =
-                self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
+                self.entries.iter().map(|entry| if entry.is_enabled() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
             let folder = cx.env.folder();
             let found = TypeAhead::pick(&text, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |s| folder.key(s));
-            if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
+            if let Some(value) = found.and_then(|at| self.entries[at].value()) {
                 cx.propose(value.clone());
                 list.open(cx);
                 return;
