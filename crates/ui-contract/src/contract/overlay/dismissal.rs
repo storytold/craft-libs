@@ -34,9 +34,12 @@ pub(super) fn dismissal(
     if dismiss.anchor_gone && layer.overlay.opener.as_ref().is_some_and(|first| !first.active(ctx, None).0.enabled) {
         return Some(CloseReason::AnchorGone);
     }
-    // The input hook removed the press and recorded it; presses inside the family and its anchors never get here.
+    // The input hook recorded the press (and removed a primary one) as the lone point it landed on; the record stands
+    // for the layers the pass already had, and presses inside the family and its anchors never get here.
     if dismiss.outside == Outside::Absorb {
-        if overlay::absorbed_press(ctx).is_some() {
+        // A layer that appears in this pass opened after the press was made, so the press is not outside it: `opening`
+        // is what tells it from the layers the record stands for.
+        if overlay::absorbed_press(ctx).is_some() && !overlay::opening(ctx, layer.id) {
             return Some(CloseReason::Outside);
         }
     } else if press_outside(ctx, layer, rect, anchor) {

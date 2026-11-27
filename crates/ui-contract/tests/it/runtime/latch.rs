@@ -24,6 +24,8 @@ struct Log {
     claimed: Vec<Chord>,
     /// `pointer::frame(..).mods` of every pass.
     pointer: Vec<Mods>,
+    /// `pointer::frame(..).pick_mods` of every pass: what a pick and a drop read.
+    pick: Vec<Mods>,
 }
 
 /// A focusable button that logs its activations' modifiers and the claimed chords it takes.
@@ -79,7 +81,10 @@ impl Rig {
     fn show(&self, ui: &mut Ui) {
         let response = LatchProbe { common: Common::new(), log: &self.log }.id_salt("latch").show(ui);
         self.shown.set(Some((response.id, response.rect)));
-        self.log.borrow_mut().pointer.push(craft_ui::runtime::pointer::frame(ui.ctx()).mods);
+        let frame = craft_ui::runtime::pointer::frame(ui.ctx());
+        let mut log = self.log.borrow_mut();
+        log.pointer.push(frame.mods);
+        log.pick.push(frame.pick_mods);
         if self.discard.take() {
             ui.ctx().request_discard("the trial reruns the pass");
         }
@@ -155,4 +160,63 @@ fn a_latch_change_adds_no_pass() {
     assert_eq!(latched, steady, "latching runs no extra pass");
     assert_eq!(held, steady);
     assert_eq!(released, steady, "releasing runs no extra pass");
+}
+
+#[trial]
+fn a_click_reads_the_modifiers_of_its_release() {
+    let rig = Rig::new();
+    let mut frames = Frames::new();
+    frames.idle(3, |ui| rig.show(ui));
+    let at = rig.at();
+    frames.frame(vec![moved(at)], |ui| rig.show(ui));
+    rig.clear();
+    // A quick Alt-click: the press and the release carry Alt, which is up again when the frame runs.
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::ALT };
+    frames.frame(vec![button(true), button(false)], |ui| rig.show(ui));
+    frames.idle(1, |ui| rig.show(ui));
+    let log = rig.log.borrow();
+    assert_eq!(log.activations, [Mods::ALT], "the activation carries the release's Alt, not the frame's held modifiers");
+    assert!(log.pointer.iter().all(|mods| !mods.alt), "nothing is held when the frames run: {:?}", log.pointer);
+}
+
+/// A press or release of `button` at `at`, carrying `modifiers`.
+fn pointer_button(at: Pos2, button: egui::PointerButton, pressed: bool, modifiers: Modifiers) -> egui::Event {
+    egui::Event::PointerButton { pos: at, button, pressed, modifiers }
+}
+
+#[trial]
+fn an_alt_click_keeps_its_alt_when_a_plain_secondary_release_follows() {
+    let rig = Rig::new();
+    let mut frames = Frames::new();
+    frames.idle(3, |ui| rig.show(ui));
+    let at = rig.at();
+    frames.frame(vec![moved(at)], |ui| rig.show(ui));
+    rig.clear();
+    // A quick Alt-click, then an unmodified secondary release in the same pass. The click completes, and it carries
+    // the Alt of the release that ended its own press, which is not the pass's last release.
+    let alt = |pressed| pointer_button(at, egui::PointerButton::Primary, pressed, Modifiers::ALT);
+    let secondary = pointer_button(at, egui::PointerButton::Secondary, false, Modifiers::NONE);
+    frames.frame(vec![alt(true), alt(false), secondary], |ui| rig.show(ui));
+    frames.idle(1, |ui| rig.show(ui));
+    let log = rig.log.borrow();
+    assert_eq!(log.activations, [Mods::ALT], "the activation carries the Alt of the release that ended the primary press");
+    assert!(log.pick.iter().all(|mods| !mods.alt), "a pick and a drop read the pass's last release, which was the secondary's: {:?}", log.pick);
+}
+
+#[trial]
+fn a_plain_click_takes_no_modifier_from_a_secondary_release() {
+    let rig = Rig::new();
+    let mut frames = Frames::new();
+    frames.idle(3, |ui| rig.show(ui));
+    let at = rig.at();
+    frames.frame(vec![moved(at)], |ui| rig.show(ui));
+    rig.clear();
+    // A plain quick click, then a Shift-carrying secondary release in the same pass: the click gains no Shift.
+    let plain = |pressed| pointer_button(at, egui::PointerButton::Primary, pressed, Modifiers::NONE);
+    let secondary = pointer_button(at, egui::PointerButton::Secondary, false, Modifiers::SHIFT);
+    frames.frame(vec![plain(true), plain(false), secondary], |ui| rig.show(ui));
+    frames.idle(1, |ui| rig.show(ui));
+    let log = rig.log.borrow();
+    assert_eq!(log.activations, [Mods::NONE], "the activation carries the plain release of its own press");
+    assert!(log.pick.contains(&Mods::SHIFT), "a pick and a drop read the pass's last release, which carried Shift: {:?}", log.pick);
 }

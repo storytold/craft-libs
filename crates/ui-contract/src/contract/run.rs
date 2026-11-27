@@ -794,7 +794,10 @@ fn declared_with(parts: &PartsStep, has: impl Fn(&super::cx::PartExtras) -> bool
 }
 
 /// The activation this pass: none for a component that takes none; a key or AccessKit activation of a member
-/// (`keyed`); else the click, or the release of a press that opened a popup and ended over this row.
+/// (`keyed`); else the click, or the release of a press that opened a popup and ended over this row. A pointer
+/// activation carries the modifiers of the release that ended the primary press (`PointerFrame::click_mods`), not the
+/// ones still held when the pass runs: an Alt-click whose Alt goes up in the same frame is an Alt-click, and another
+/// button's release later in that pass does not take its modifiers.
 fn activation_of(ctx: &Context, ui: &Ui, rect: Rect, resolved: &Resolved<'_>, keyed: bool, root_sense: Sense, clicked: bool) -> Option<Activation> {
     if !steps::takes_activation(resolved) {
         return None;
@@ -810,7 +813,7 @@ fn activation_of(ctx: &Context, ui: &Ui, rect: Rect, resolved: &Resolved<'_>, ke
         );
     (clicked || released).then(|| Activation {
         by_key: false,
-        mods: crate::runtime::pointer::with_frame(ctx, |frame, _| frame.map_or(craft_keymap::Mods::NONE, |frame| frame.mods)),
+        mods: crate::runtime::pointer::with_frame(ctx, |frame, _| frame.map_or(craft_keymap::Mods::NONE, |frame| frame.click_mods)),
     })
 }
 
@@ -1033,7 +1036,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     };
     if !inert && registers {
         let sensed = craft_behavior::WheelTaker::for_sense(id, rect, own).map(|taker| taker.notch(e.wheel_notch()));
-        steps::register_wheel(&ctx, id, rect, sensed, e.bound().0 && !facts.binds_view, facts.text(), env.wheel);
+        steps::register_wheel(&ctx, sensed, e.bound().0 && !facts.binds_view, facts.text(), env.wheel);
     }
     // 8 sense
     p.trace.mark(Step::Sense);

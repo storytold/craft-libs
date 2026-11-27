@@ -1,4 +1,4 @@
-//! A menu with several openers: a context menu over a popover.
+//! Menus and their openers: a context menu over a popover, and a second opener's menu beside an open one.
 
 use craft_behavior::IconId;
 use craft_ui::buttons::{Button, IconButton, PopupMark};
@@ -9,7 +9,7 @@ use craft_ui::runtime::commands::{self, CommandSet as _, EditCommands, FireSourc
 use craft_ui::runtime::env::Direction;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Rect, Shape, pos2};
+use egui::{Pos2, Rect, Shape, pos2};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -124,6 +124,45 @@ fn a_new_right_click_moves_an_open_context_menu_to_the_pointer() {
     right_click(&mut fixture, second);
     let after = menu_rect(&fixture).expect("the menu is open after the second right-click");
     assert!(after.min.x > before.min.x + 40.0, "the menu moved to the second point: {before:?} then {after:?}");
+}
+
+/// A right-click on a second opener while a menu is open closes that menu and opens the second one, as it does on the
+/// opener of a closed one: the press lay outside the menu it closed, not outside the menu it opened. A press is judged
+/// against the menus the pass before it showed: one that appears in the press's own pass comes after that record, and
+/// the press is not outside it.
+#[trial]
+fn a_right_click_on_a_second_opener_closes_the_open_menu_and_opens_its_own() {
+    const FIRST: Rect = Rect { min: Pos2::new(8.0, 8.0), max: Pos2::new(200.0, 32.0) };
+    const SECOND: Rect = Rect { min: Pos2::new(8.0, 240.0), max: Pos2::new(200.0, 264.0) };
+    let mut fixture = Fixture::new(|ui| {
+        let first = Button::new("First target").show_at(ui, FIRST);
+        Menu::context("First menu", &first).show(ui, |ui, _| {
+            MenuItem::new("First action").show(ui);
+        });
+        let second = Button::new("Second target").show_at(ui, SECOND);
+        Menu::context("Second menu", &second).show(ui, |ui, _| {
+            MenuItem::new("Second action").show(ui);
+        });
+    });
+    fixture.settle();
+    let (first, second) = (FIRST.center(), SECOND.center());
+    right_click(&mut fixture, first);
+    let open = menu_rect(&fixture).expect("the right-click on the first target opens its menu");
+    assert!(fixture.by_label("First action").is_some(), "the first menu is open");
+    assert!(fixture.by_label("Second action").is_none(), "and only the first menu");
+    assert!(!open.contains(second), "the second target stands clear of the open menu: {open:?} {second:?}");
+    // A user's right-click: the press closes the first menu, its release opens the second.
+    right_click(&mut fixture, second);
+    assert!(fixture.by_label("Second action").is_some(), "the right-click on the second target opens its menu");
+    assert!(fixture.by_label("First action").is_none(), "the first menu closed");
+    // A press in the pass a menu appears in: a double right-click on the first target, its second press in the frame of
+    // the release that opens the first menu. That press is the frame's one press, and it lands outside the zone the
+    // frame begins with, which the second menu still set in the pass it closed, so the pass records it. The first menu
+    // appears in that same pass, after the record was made, and the record is not for it.
+    fixture.frame(vec![pointer::moved(first)]).frame(vec![pointer::secondary(first, true)]);
+    fixture.frame(vec![pointer::secondary(first, false), pointer::secondary(first, true)]).settle();
+    assert!(fixture.by_label("First action").is_some(), "the press recorded in the pass the first menu appears in does not close it");
+    assert!(fixture.by_label("Second action").is_none(), "and the second menu closed");
 }
 
 /// A menu request retains its point until an image arrives from the clipboard in a later frame.

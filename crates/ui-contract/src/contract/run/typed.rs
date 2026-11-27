@@ -772,12 +772,18 @@ pub(crate) fn paint_face<C: Show>(
     if !source.reported {
         return (baseline, None);
     }
-    let name = cx.core.paint.borrow().elided.clone().unwrap_or_else(|| step1.label.as_str().to_owned());
     // The face's own `access` adds its facts; the composite's step 16 fills the part's sub-node from the record.
     let mut access = Access::default();
     #[cfg(feature = "testing")]
     crate::runtime::measure::count_access_build(&ctx);
     face.access(&mut access, &cx);
+    // A face that names itself (a `Kbd` by its chord spoken) names its part's sub-node so, as it would its own node;
+    // a face that declares no text is named by its label, the full text when elided.
+    let name = access
+        .name
+        .own_text()
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| cx.core.paint.borrow().elided.clone().unwrap_or_else(|| step1.label.as_str().to_owned()));
     let record = FaceRecord {
         part,
         name,

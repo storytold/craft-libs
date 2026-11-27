@@ -190,6 +190,20 @@ fn a_log_slider_spreads_equal_ratios_evenly() {
     assert!((bottom - min).abs() < 1e-2 * min, "a travel past the start lands on the minimum: {bottom}");
 }
 
+/// A mixed slider has no thumb to grab: a click where a single value's thumb would sit, the middle step, sets that step.
+#[trial]
+fn a_click_on_a_mixed_slider_sets_the_step_under_it() {
+    use craft_behavior::Mixed;
+    let value = Rc::new(RefCell::new(Mixed::<f64>::Mixed));
+    let shown = value.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Slider::new(Bind::bound_mixed(&mut *shown.borrow_mut()), 0.0..=10.0).step(1.0).label("Hyphenation Weight").show_at(ui, FIELD);
+    });
+    fixture.motion(MotionMode::Off).settle();
+    fixture.click_at(FIELD.center()).settle();
+    assert_eq!(*value.borrow(), Mixed::Same(5.0), "the click set the middle step");
+}
+
 /// A trimmed span's ends are drawn across the track, not stops: a drag that ends beside one lands where the drag
 /// puts it.
 #[trial]

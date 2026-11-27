@@ -238,7 +238,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             if cx.core.resolved.enabled
                 && let Some(taker) = WheelTaker::for_sense(cx.core.id, cx.core.rect, crate::contract::Component::sense(comp))
             {
-                wheel::register(&cx.core.ctx, taker.notch(self.notch).gated(cx.core.env.wheel() == WheelScope::Gated));
+                wheel::register(&cx.core.ctx, taker.notch(self.notch).gated(taker.gated || cx.core.env.wheel() == WheelScope::Gated));
             }
         } else if self.scrolls {
             // The taker covers the whole collection, header row and frame included: the wheel over the header scrolls
@@ -391,6 +391,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::runtime::egui::repaint::request(&ctx);
         }
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
+        if let Some(at) = self.reveal_around.take().filter(|&at| layout.shown(at)) {
+            cx.core.reveal = Some(self.screen(&layout, rect, at, offset, rtl).intersect(rect));
+        }
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
             note_scroll_regions(ui, rect, self.content, offset, rtl, self.header.view());

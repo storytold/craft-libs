@@ -80,7 +80,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
     /// moves the lead to the row and key focus to the collection; Click also picks an item and activates it when the
     /// collection activates on click, or activates a section it does not select. Expand and Collapse open and
-    /// close rows with children.
+    /// close rows with children. Scroll Into View brings the row into view as a lead move does, moving neither the
+    /// lead nor focus, and in a collection with its own scroll the scroll owner around the collection then shows the
+    /// row's visible piece.
     pub(super) fn node_by_access(
         &mut self,
         comp: &C,
@@ -130,6 +132,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                                 self.events.push(CollectionEvent::Activate(key));
                             }
                         }
+                    }
+                }
+                AccessAction::ScrollIntoView => {
+                    self.reveal_with(layout, at);
+                    if self.scrolls {
+                        self.reveal_around = Some(at);
                     }
                 }
                 AccessAction::Expand | AccessAction::Collapse => {

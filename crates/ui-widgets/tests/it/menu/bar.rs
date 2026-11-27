@@ -16,7 +16,8 @@ struct Rig {
 }
 
 fn entries() -> Vec<HelpEntry> {
-    // The help rows show their command's label, so each entry has its own command.
+    // A help row shows its entry's label and runs its command; the results keep one row per command, so each entry has
+    // its own.
     vec![
         HelpEntry::new(EditCommands::Paste, "Café").with_path(["Edit"]),
         HelpEntry::new(EditCommands::Copy, "Copy").with_english("Duplicate").with_path(["Edit"]),
@@ -60,11 +61,13 @@ fn help_search_ignores_accents_and_matches_the_english_label_and_the_path() {
     rig.fixture.settle();
     let search = rig.fixture.by_label("Search menus").expect("the search field");
     rig.fixture.click(&search);
-    for (typed, found, absent) in [("cafe", "Paste", "Copy"), ("duplic", "Copy", "Paste"), ("clipboard", "Cut", "Copy")] {
+    // A row is found by the label it shows. "Café" runs Paste, but no node is named "Paste": the row's shortcut part is
+    // named by its chord spoken, not by the command's label.
+    for (typed, found, absent) in [("cafe", "Café", "Copy"), ("duplic", "Copy", "Café"), ("clipboard", "Cut", "Copy")] {
         rig.fixture.key(Key::A, Modifiers::COMMAND);
         rig.fixture.type_text(typed);
         rig.fixture.settle();
-        assert!(rig.open(found), "{typed:?} finds the entry whose command row reads {found:?}");
+        assert!(rig.open(found), "{typed:?} finds the entry whose row reads {found:?}");
         assert!(!rig.open(absent), "{typed:?} leaves {absent:?} out");
     }
 }
