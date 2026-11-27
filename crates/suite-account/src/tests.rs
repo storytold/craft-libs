@@ -81,6 +81,20 @@ fn the_handle_is_stable_and_separates_accounts() {
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
 }
 
+#[test]
+fn a_service_base_is_https_or_loopback_http() {
+    assert!(accounts::allowed_service_base("https://craft.example.com"));
+    assert!(accounts::allowed_service_base("https://craft.example.com/collab"));
+    assert!(accounts::allowed_service_base("http://127.0.0.1:8080"));
+    assert!(accounts::allowed_service_base("http://localhost:9"));
+    assert!(accounts::allowed_service_base("http://[::1]:80/path"));
+    assert!(!accounts::allowed_service_base(""));
+    assert!(!accounts::allowed_service_base("http://collab.lan:8080"));
+    assert!(!accounts::allowed_service_base("http://127.0.0.1"));
+    assert!(!accounts::allowed_service_base("http://127.0.0.1:99999"));
+    assert!(!accounts::allowed_service_base("http://evil@127.0.0.1:8080"));
+}
+
 // ---- signing in and out ----------------------------------------------------
 
 #[test]
@@ -521,6 +535,159 @@ fn write_leaves_a_previously_good_file_untouched_when_the_new_one_is_too_large()
     assert_eq!(accounts::read(&path).unwrap(), good, "the earlier, readable file must still be exactly what was there before");
 }
 
+/// A portable install or `ARTCRAFT_SUITE_DIR` can put the list in a folder that lets every local
+/// user read the files created in it, as a new folder at a drive root does. The list written there
+/// has an access list of its user and SYSTEM only.
+#[cfg(windows)]
+#[test]
+fn the_list_in_a_folder_users_can_read_is_still_this_users_alone() {
+    use craft_platform::owner_only;
+    let dir = tempfile::tempdir().unwrap();
+    let granted = std::process::Command::new("icacls").arg(dir.path()).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+    assert!(granted.status.success(), "{}", String::from_utf8_lossy(&granted.stderr));
+    let path = dir.path().join(paths::FILE);
+    let list =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at("a", 0)], active: Some("a".to_owned()), tombstones: Vec::new() };
+
+    accounts::write(&path, &list).unwrap();
+
+    let me = owner_only::current_user_sid().unwrap();
+    let sddl = owner_only::sddl_of(&path).unwrap();
+    assert!(!sddl.contains(";BU)") && !sddl.contains(";S-1-5-32-545)"), "Users must not inherit read access: {sddl}");
+    assert_eq!(owner_only::foreign_access(&sddl, &me), None, "{sddl}");
+    assert_eq!(accounts::read(&path).unwrap(), list);
+    // A second write, through a copy prepared before the lock as a `Store` does, leaves no copy behind.
+    let _copy = accounts::prepare(&path);
+    accounts::write(&path, &list).unwrap();
+    assert_eq!(owner_only::foreign_access(&owner_only::sddl_of(&path).unwrap(), &me), None);
+    let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(names, [std::ffi::OsString::from(paths::FILE)], "no temporary file is left behind");
+}
+
+/// The list's access list is protected: a change to its folder's access list, which Windows hands
+/// down to the files in the folder that inherit from it, does not reach the list, whether the list
+/// was written directly or through a `Store`.
+#[cfg(windows)]
+#[test]
+fn a_change_to_the_folders_access_list_does_not_reach_the_list() {
+    use craft_platform::owner_only;
+    let me = owner_only::current_user_sid().unwrap();
+    for through_store in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(paths::FILE);
+        if through_store {
+            let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
+            store.sign_in(&new_account(), &Secret::new(TOKEN), NOW).unwrap();
+        } else {
+            let list = accounts::Accounts {
+                format: accounts::FORMAT,
+                accounts: vec![account_at("a", 0)],
+                active: Some("a".to_owned()),
+                tombstones: Vec::new(),
+            };
+            accounts::write(&path, &list).unwrap();
+        }
+
+        let granted = std::process::Command::new("icacls").arg(dir.path()).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(granted.status.success(), "{}", String::from_utf8_lossy(&granted.stdout));
+
+        let sddl = owner_only::sddl_of(&path).unwrap();
+        assert_eq!(owner_only::foreign_access(&sddl, &me), None, "through a Store: {through_store}; {sddl}");
+    }
+}
+
+/// A prepared copy that no write took is closed and removed when its change under the lock is
+/// done, as for a discard of an account that is not in the list.
+#[cfg(windows)]
+#[test]
+fn a_prepared_copy_no_write_took_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let copy = accounts::prepare(&path);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "the copy is made");
+    drop(copy);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "the copy is removed");
+
+    let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
+    store.sign_in(&new_account(), &Secret::new(TOKEN), NOW).unwrap();
+    let names = || std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    let before = names();
+    let _ = store.discard("no such account");
+    assert_eq!(names(), before, "a change that writes nothing leaves no copy behind");
+}
+
+/// A write uses the copy its own thread prepared and leaves another thread's copy for that
+/// thread, which would otherwise have to create one while it holds the accounts lock.
+#[cfg(windows)]
+#[test]
+fn a_write_takes_only_the_copy_its_thread_prepared() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let list =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at("a", 0)], active: Some("a".to_owned()), tombstones: Vec::new() };
+    let copies = || std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().path()).filter(|p| p != &path).collect::<Vec<_>>();
+    let prepared = std::sync::Barrier::new(2);
+    // The other thread keeps its copy until `done` is dropped, which a failed assertion does too.
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|scope| {
+        let (list_path, prepared) = (&path, &prepared);
+        scope.spawn(move || {
+            let _other = accounts::prepare(list_path);
+            prepared.wait();
+            let _ = wait.recv();
+        });
+        prepared.wait();
+        let other = copies();
+        assert_eq!(other.len(), 1, "{other:?}");
+        let _mine = accounts::prepare(&path);
+        accounts::write(&path, &list).unwrap();
+        assert_eq!(copies(), other, "the other thread's copy is still waiting");
+        drop(done);
+    });
+    assert_eq!(copies(), Vec::<std::path::PathBuf>::new());
+}
+
+/// A prepared copy is created with an access list of its user and SYSTEM only, and can't be
+/// removed, renamed or replaced, nor its folder renamed, between its check and the write. An empty
+/// copy that an ended process left a minute or more ago is removed by the next preparation; a
+/// newer one, which another process may be about to open, is kept.
+#[cfg(windows)]
+#[test]
+fn a_prepared_copy_is_private_and_cannot_be_swapped_before_the_write() {
+    use craft_platform::owner_only;
+    let me = owner_only::current_user_sid().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("suite");
+    std::fs::create_dir(&dir).unwrap();
+    let granted = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+    assert!(granted.status.success(), "{}", String::from_utf8_lossy(&granted.stdout));
+    let path = dir.join(paths::FILE);
+    let left = dir.join(format!(".{}.1.0.prepared.tmp", paths::FILE));
+    std::fs::File::create(&left).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(120)).unwrap();
+    let fresh = dir.join(format!(".{}.2.0.prepared.tmp", paths::FILE));
+    std::fs::write(&fresh, b"").unwrap();
+
+    let _copy = accounts::prepare(&path);
+
+    assert!(!left.exists(), "an old empty copy that no process holds is removed");
+    assert!(fresh.exists(), "a new empty copy, which another process may be about to open, is kept");
+    let copies: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| *p != fresh).collect();
+    assert_eq!(copies.len(), 1, "{copies:?}");
+    let copy = &copies[0];
+    let sddl = owner_only::sddl_of(copy).unwrap();
+    assert_eq!(owner_only::foreign_access(&sddl, &me), None, "{sddl}");
+    assert!(std::fs::remove_file(copy).is_err(), "the checked copy must stay in place");
+    assert!(std::fs::rename(copy, dir.join("moved")).is_err(), "the checked copy must not be renamed away");
+    assert!(std::fs::rename(&dir, root.path().join("moved")).is_err(), "its folder must not be renamed away");
+
+    let list =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at("a", 0)], active: Some("a".to_owned()), tombstones: Vec::new() };
+    accounts::write(&path, &list).unwrap();
+    assert!(!copy.exists(), "the write used the prepared copy");
+    assert_eq!(accounts::read(&path).unwrap(), list);
+    assert_eq!(owner_only::foreign_access(&owner_only::sddl_of(&path).unwrap(), &me), None);
+}
+
 #[test]
 fn a_sign_in_with_an_oversized_display_name_fails_without_bricking_the_list() {
     let dir = tempfile::tempdir().unwrap();
@@ -567,6 +734,63 @@ fn a_machine_with_no_keychain_signs_nobody_in() {
         other => panic!("expected a keychain failure, got {other:?}"),
     }
     assert!(!store.path().unwrap().exists(), "a refused sign-in should write no file");
+}
+
+/// A store whose accounts file holds `account` and whose keychain holds `TOKEN` under that id.
+fn store_holding(account: Account) -> (tempfile::TempDir, Store<Memory>) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let keychain = Memory::new();
+    keychain.put(&account.id, &Secret::new(TOKEN)).unwrap();
+    let list =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account.clone()], active: Some(account.id.clone()), tombstones: Vec::new() };
+    accounts::write(&path.join(paths::FILE), &list).unwrap();
+    (dir, Store::at(Some(path), keychain))
+}
+
+#[test]
+fn shared_does_not_hand_a_token_to_a_plain_http_host() {
+    let service = "http://collab.lan:8080";
+    let account = Account { id: accounts::handle(service, USER), service: service.to_owned(), user: USER.to_owned(), ..account_at("unused", 0) };
+    let (_dir, store) = store_holding(account);
+    match store.shared() {
+        Shared::Unreadable { why, .. } => {
+            assert!(why.contains("service address"), "{why}");
+        }
+        other => panic!("expected unreadable, got {other:?}"),
+    }
+}
+
+#[test]
+fn shared_does_not_hand_a_token_when_the_handle_no_longer_matches() {
+    // `id` was minted for SERVICE; the file now names another host.
+    let account = Account {
+        id: accounts::handle(SERVICE, USER),
+        service: "https://evil.example.com".to_owned(),
+        user: USER.to_owned(),
+        ..account_at("unused", 0)
+    };
+    let (_dir, store) = store_holding(account);
+    match store.shared() {
+        Shared::Unreadable { why, .. } => {
+            assert!(why.contains("handle"), "{why}");
+        }
+        other => panic!("expected unreadable, got {other:?}"),
+    }
+}
+
+#[test]
+fn shared_still_hands_a_token_for_loopback_http() {
+    let service = "http://127.0.0.1:8080";
+    let account = Account { id: accounts::handle(service, USER), service: service.to_owned(), user: USER.to_owned(), ..account_at("unused", 0) };
+    let (_dir, store) = store_holding(account);
+    match store.shared() {
+        Shared::Session { account: found, token } => {
+            assert_eq!(found.service, service);
+            assert_eq!(token, Secret::new(TOKEN));
+        }
+        other => panic!("expected a session, got {other:?}"),
+    }
 }
 
 #[test]

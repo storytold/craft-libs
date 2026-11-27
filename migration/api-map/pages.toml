@@ -223,21 +223,21 @@ name = "PageList"
 old = "craft_pages::ui::list::PageList"
 new = "craft_pages::ui::list::PageList"
 status = "same"
-note = "`new(id_salt, rows, &mut picked, active)` becomes `new(label, rows, &mut picked, active)`; a pattern over `Table` with an eye and a lock column and a `FooterBar` (New, Duplicate, Delete); `start_rename`, `id_in` and `labels` go."
+note = "`new(id_salt, rows, &mut picked, active)` becomes `new(label, rows, &mut picked, active)`; a pattern over `Table` with no eye or lock column (the lock is a row part) and a `FooterBar` (Rearrange, Delete, New, Move Down, Move Up); `start_rename`, `id_in` and `labels` go."
 
 [[type]]
 name = "PageListRow"
 old = "craft_pages::ui::list::PageListRow"
 new = "craft_pages::ui::list::PageListRow"
 status = "same"
-note = "New field `hidden`."
+note = "No `hidden` field."
 
 [[type]]
 name = "PageListEvent"
 old = "craft_pages::ui::list::PageListEvent"
 new = "craft_pages::ui::list::PageListEvent"
 status = "same"
-note = "`Lock` is `Toggle`, carrying a `craft_ui::contract::SweepStep<usize>` (the cell names its column, visibility or lock; the eye column gives `ShowOnly` on an Alt press); `Fit` goes (the row number is no longer a separate target); `Reorder` carries `EditEvent<ReorderMove<usize>>`."
+note = "`Lock { row, locked }` is a click on a row's lock and `Rearrange` the footer button; there is no `Toggle`; `Fit` stays (a double-click on the row number); `Reorder` carries `EditEvent<ReorderMove<usize>>`."
 
 [[type]]
 name = "PageListOutput"

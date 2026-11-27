@@ -268,13 +268,13 @@ note = "The unit is a kind whose spelling comes from `Units` in the user's langu
 type = "RowKind"
 old = "RowKind::Int { value, range, unit }"
 new = "RowKind::int(value, range).counting(kind)"
-note = "Struct-like variants are `#[non_exhaustive]`; the unit is a `UnitKind`."
+note = "Struct-like variants are `#[non_exhaustive]`; the unit is a `UnitKind`, or `.unit_text(text)` for a unit no `UnitKind` names."
 
 [[setter]]
 type = "RowKind"
 old = "RowKind::Float { value, range, decimals, unit }"
 new = "RowKind::float(value, range, decimals).counting(kind)"
-note = "Struct-like variants are `#[non_exhaustive]`; the unit is a `UnitKind`."
+note = "Struct-like variants are `#[non_exhaustive]`; the unit is a `UnitKind`, or `.unit_text(text)` for a unit no `UnitKind` names."
 
 [[setter]]
 type = "RowKind"

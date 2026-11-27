@@ -26,3 +26,16 @@ fn every_message_is_in_the_registry_once() {
     }
     assert!(all.len() >= 15);
 }
+
+// A clipboard failure is worded in the app's language: the catalog row of a message's id reaches its text, and
+// without a row the English stays.
+#[test]
+fn a_message_is_translated_by_its_id_and_reads_english_without_a_row() {
+    use craft_i18n::{WordRows, Words};
+    for text in texts() {
+        let translated = format!("{} (translated)", text.english);
+        let words = Words::english().overlay(&WordRows::new().row(text.word(), translated.clone()));
+        assert_eq!(words.get(text.word()), translated, "{}", text.id);
+        assert_eq!(Words::english().get(text.word()), text.english, "{}", text.id);
+    }
+}

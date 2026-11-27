@@ -116,8 +116,15 @@ mod tests {
     fn deflated_entries_are_read_and_path_traversal_is_skipped() {
         let mut writer = Writer::new();
         writer.add("animations/main.json", br#"{"w":1,"h":1}"#, Compression::Deflated).unwrap();
-        writer.add("../outside.json", b"{}", Compression::Deflated).unwrap();
-        let bytes = writer.finish().unwrap();
+        writer.add("xx/outside.json", b"{}", Compression::Deflated).unwrap();
+        let mut bytes = writer.finish().unwrap();
+        let target = b"xx/outside.json";
+        let replacement = b"../outside.json";
+        for i in 0..bytes.len().saturating_sub(target.len()) {
+            if &bytes[i..i + target.len()] == target {
+                bytes[i..i + target.len()].copy_from_slice(replacement);
+            }
+        }
         assert_eq!(read_entries(&bytes).unwrap(), [("animations/main.json".into(), br#"{"w":1,"h":1}"#.to_vec())]);
         assert!(read_entries_with_limits(&bytes, Limits { max_entries: 10, max_total_bytes: 4 }).is_err());
     }

@@ -1,5 +1,6 @@
 //! The label step: scrub across a pointer warp and the label beside or above a fill-width control.
 
+pub(crate) mod after_wrap;
 pub(crate) mod align;
 pub(crate) mod baseline;
 pub(crate) mod bracket;
@@ -8,10 +9,14 @@ pub mod group;
 pub(crate) mod hit;
 pub(crate) mod inside;
 pub mod kit;
+pub(crate) mod link;
 pub(crate) mod reach;
 pub(crate) mod reset;
+pub(crate) mod row_least;
 pub(crate) mod scheme;
+pub(crate) mod scrub_drags;
 pub(crate) mod short;
+pub(crate) mod stacked;
 pub(crate) mod tooltip;
 
 use self::kit::{Dial, Field, Seen, Wide};

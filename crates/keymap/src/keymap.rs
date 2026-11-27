@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::chord::{Chord, Key, Mods, ParseError, Platform, Trigger};
+use crate::chord::{Chord, Key, Mods, ParseError, Platform, PressKind, Trigger};
 use crate::command::{CommandRef, MAX_KEY};
 use crate::scope::{Active, Scope, ScopeKind, Scopes};
 
@@ -27,7 +27,7 @@ mod binding;
 mod command;
 
 pub use binding::{Binding, BindingError};
-pub use command::{CommandDef, CommandKind, ModalRule, TypingRule};
+pub use command::{CommandDef, CommandKind, DeleteKeys, ModalRule, TypingRule};
 
 mod editing;
 pub use editing::text_editing_chords;
@@ -102,6 +102,15 @@ pub enum AssignError {
     UnknownScope(Scope),
     /// The change needs a new [`Overrides`] entry and it already holds [`MAX_COMMANDS`].
     Full,
+    /// A binding cannot be written and read back in the overrides format.
+    Unstorable {
+        /// The command whose bindings cannot be saved.
+        command: CommandRef,
+        /// The shortcut that cannot be saved.
+        trigger: Trigger,
+    },
+    /// A hold is a chord that types a character, alone or with Shift: never Space, Backtick, Cmd, Ctrl or Alt.
+    NotHoldable(Trigger),
 }
 
 impl fmt::Display for AssignError {
@@ -113,6 +122,8 @@ impl fmt::Display for AssignError {
             AssignError::Taken(h) => write!(f, "in use by {} other command(s)", h.len()),
             AssignError::UnknownScope(s) => write!(f, "unknown scope {s}"),
             AssignError::Full => write!(f, "more than {MAX_COMMANDS} changed commands"),
+            AssignError::Unstorable { command, trigger } => write!(f, "{trigger} for {} cannot be saved in its current scope", command.key()),
+            AssignError::NotHoldable(t) => write!(f, "{t} cannot be held"),
         }
     }
 }
@@ -219,6 +230,13 @@ pub struct Conflict {
 /// A binding with its scope resolved.
 type Bound = (Trigger, Scope);
 
+/// Whether `trigger` can start a command: any press can; a hold needs a chord that types a character, alone or with
+/// Shift, since the others are taken by the system and by text fields.
+fn holdable(trigger: &Trigger) -> bool {
+    let Chord { mods, key } = trigger.chord;
+    !trigger.is_hold() || ((key.is_letter() || key.is_digit() || key.is_symbol()) && key != Key::Backtick && !(mods.cmd || mods.ctrl || mods.alt))
+}
+
 /// A command's bindings on one chord grouped by scope and tool group, for [`Keymap::conflicts`].
 struct Group<'a> {
     scope: &'a Scope,
@@ -257,10 +275,13 @@ pub struct Keymap {
     scopes: Scopes,
     platform: Platform,
     typing: TypingRule,
+    delete_keys: DeleteKeys,
     reserved: Vec<Chord>,
     overrides: Overrides,
     /// Tools of different groups may share a chord ([`Keymap::with_shared_tool_keys`]).
     pub(crate) shared_tool_keys: bool,
+    /// Whether hold bindings count ([`Keymap::set_holds`]).
+    holds: bool,
 }
 
 impl Keymap {
@@ -282,9 +303,11 @@ impl Keymap {
             scopes,
             platform,
             typing: TypingRule::default(),
+            delete_keys: DeleteKeys::default(),
             reserved: Vec::new(),
             overrides: Overrides::new(),
             shared_tool_keys: false,
+            holds: false,
         };
         for b in catalog {
             let key = b.command.key();
@@ -311,10 +334,19 @@ impl Keymap {
         self
     }
 
+    /// Sets how a press of Delete or Backspace finds its binding ([`DeleteKeys`]).
+    pub fn with_delete_keys(mut self, keys: DeleteKeys) -> Keymap {
+        self.delete_keys = keys;
+        self
+    }
+
     /// Chords that cannot be assigned or bound, e.g. [`reserved::system`](crate::reserved::system).
-    /// Without this call the keymap reserves no chord.
+    /// Without this call the keymap reserves no chord. A default binding on a reserved chord is dropped.
     pub fn with_reserved(mut self, chords: Vec<Chord>) -> Keymap {
         self.reserved = chords;
+        let mut defaults = std::mem::take(&mut self.defaults);
+        defaults.iter_mut().for_each(|list| list.retain(|(trigger, _)| !self.is_reserved(&trigger.chord)));
+        self.defaults = defaults;
         self.reload();
         self
     }
@@ -351,6 +383,11 @@ impl Keymap {
         self.typing
     }
 
+    /// How a press of Delete or Backspace finds its binding.
+    pub fn delete_keys(&self) -> DeleteKeys {
+        self.delete_keys
+    }
+
     /// Every command the user can bind, in catalog order.
     pub fn catalog(&self) -> &[CommandDef] {
         &self.catalog
@@ -363,12 +400,12 @@ impl Keymap {
 
     /// The effective bindings of a command; empty for an unknown one.
     pub fn bindings(&self, command: &CommandRef) -> Vec<Binding> {
-        self.find(command).map(|i| self.current[i].iter().map(|b| self.public(i, b)).collect()).unwrap_or_default()
+        self.find(command).map(|i| self.current[i].iter().filter(|b| self.counts(b)).map(|b| self.public(i, b)).collect()).unwrap_or_default()
     }
 
     /// The default bindings of a command; empty for an unknown one.
     pub fn default_bindings(&self, command: &CommandRef) -> Vec<Binding> {
-        self.find(command).map(|i| self.defaults[i].iter().map(|b| self.public(i, b)).collect()).unwrap_or_default()
+        self.find(command).map(|i| self.defaults[i].iter().filter(|b| self.counts(b)).map(|b| self.public(i, b)).collect()).unwrap_or_default()
     }
 
     /// Whether `chord` is reserved, as `platform` sees chords.
@@ -381,6 +418,39 @@ impl Keymap {
     /// home or default scope of the catalog.
     pub fn knows_scope(&self, scope: &Scope) -> bool {
         scope.is_app() || self.scopes.knows(scope) || self.catalog_scopes.contains(scope)
+    }
+
+    /// Whether hold bindings count: off (the default) leaves them out of bindings, lookups, conflicts and
+    /// summaries, though they stay in the overrides.
+    pub fn set_holds(&mut self, on: bool) {
+        if self.holds != on {
+            self.holds = on;
+            self.rebuild_index();
+        }
+    }
+
+    /// Whether hold bindings count ([`Keymap::set_holds`]).
+    pub fn holds(&self) -> bool {
+        self.holds
+    }
+
+    /// Whether `bound` counts: a hold only while holds are on.
+    fn counts(&self, bound: &Bound) -> bool {
+        self.holds || !bound.0.is_hold()
+    }
+
+    /// The hold bindings of command `i` that are left out while holds are off. An edit made without seeing them keeps them.
+    fn hidden(&self, i: usize) -> Vec<Bound> {
+        self.current[i].iter().filter(|b| !self.counts(b)).cloned().collect()
+    }
+
+    /// The command a hold of `chord` runs where it applies, ranked as the other lookups rank.
+    pub fn hold_of(&self, chord: &Chord, active: &Active<'_>) -> Option<CommandRef> {
+        match self.winners(Trigger { chord: chord.effective(self.platform), press: PressKind::Hold }, active, &[], &|_| true) {
+            Winners::None => None,
+            Winners::Run(i) => Some(self.catalog[i].command.clone()),
+            Winners::Cycle(cycle) => cycle.first().map(|&i| self.catalog[i].command.clone()),
+        }
     }
 
     /// The command `chord` (pressed twice when `double`) runs with `active` focus.
@@ -397,7 +467,12 @@ impl Keymap {
     /// (one disabled where the press lands) are passed over, so the chord's next binding, in an outer scope, runs.
     pub fn lookup_where(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str], accept: &dyn Fn(&CommandRef) -> bool) -> Lookup {
         let command = |i: usize| self.catalog[i].command.clone();
-        match self.winners(Trigger { chord: chord.effective(self.platform), double }, active, outer, accept) {
+        match self.winners(
+            Trigger { chord: chord.effective(self.platform), press: if double { PressKind::Double } else { PressKind::Single } },
+            active,
+            outer,
+            accept,
+        ) {
             Winners::None => Lookup::None,
             Winners::Run(i) => Lookup::Run(command(i)),
             Winners::Cycle(cycle) => Lookup::Cycle(cycle.into_iter().map(command).collect()),
@@ -459,7 +534,7 @@ impl Keymap {
     /// [`shown_chord`](Self::shown_chord) of the command at catalog position `i`, from the bindings.
     fn shown_of(&self, i: usize) -> Option<Chord> {
         let home = &self.catalog[i].scope;
-        let single = || self.current[i].iter().filter(|(trigger, _)| !trigger.double);
+        let single = || self.current[i].iter().filter(|(trigger, _)| trigger.press == PressKind::Single);
         let runs = |(trigger, scope): &&Bound| {
             let name = [scope.as_str()];
             let active = match self.scopes.kind(scope) {
@@ -467,7 +542,7 @@ impl Keymap {
                 ScopeKind::Panel => Active::panel(name[0]),
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
-            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), double: false }, &active, &[], &|_| true) {
+            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), press: PressKind::Single }, &active, &[], &|_| true) {
                 Winners::None => false,
                 Winners::Run(j) => j == i,
                 Winners::Cycle(cycle) => cycle.contains(&i),
@@ -491,14 +566,14 @@ impl Keymap {
             Lookup::Cycle(cycle) => return cycle.into_iter().next(),
             Lookup::None => {}
         }
-        let want = Trigger { chord: chord.effective(self.platform), double: false };
+        let want = Trigger { chord: chord.effective(self.platform), press: PressKind::Single };
         self.by_trigger.get(&want)?.iter().find(|&&(i, k)| self.at(i, k).is_some()).map(|&(i, _)| self.catalog[i].command.clone())
     }
 
     /// Every command a single press of `chord` is bound to, in any scope, in catalog order, each once: a caller that
     /// asks whether the press can run anything now reads each one's state.
     pub fn holders(&self, chord: &Chord) -> Vec<CommandRef> {
-        let want = Trigger { chord: chord.effective(self.platform), double: false };
+        let want = Trigger { chord: chord.effective(self.platform), press: PressKind::Single };
         let mut found: Vec<usize> = Vec::new();
         for &(i, k) in self.by_trigger.get(&want).into_iter().flatten() {
             if self.at(i, k).is_some() && !found.contains(&i) {
@@ -527,7 +602,9 @@ impl Keymap {
             return Err(AssignError::TooMany);
         }
         let home = self.catalog[i].scope.clone();
-        let list = self.normalize(bindings, &home);
+        let mut list = self.normalize(bindings, &home);
+        let kept: Vec<Bound> = self.hidden(i).into_iter().filter(|h| !list.iter().any(|b| self.same(b, h))).collect();
+        list.extend(kept);
         let new: Vec<Bound> = list.iter().filter(|b| !self.current[i].iter().any(|c| self.same(c, b))).cloned().collect();
         self.apply(i, list, &new, policy)
     }
@@ -536,18 +613,29 @@ impl Keymap {
     /// not have it, or when the change needs a new [`Overrides`] entry and the overrides are full
     /// ([`AssignError::Full`]); nothing changes then.
     pub fn remove(&mut self, command: &CommandRef, binding: &Binding) -> bool {
-        let Some(i) = self.find(command) else { return false };
+        self.try_remove(command, binding).unwrap_or(false)
+    }
+
+    /// Removes one binding and reports why an edit could not be saved. `Ok(false)` means the command did not have
+    /// that binding.
+    pub fn try_remove(&mut self, command: &CommandRef, binding: &Binding) -> Result<bool, AssignError> {
+        let i = self.find(command).ok_or(AssignError::UnknownCommand)?;
         let gone = self.bound(i, binding);
         let before = self.current[i].len();
         let list: Vec<Bound> = self.current[i].iter().filter(|b| !self.same(b, &gone)).cloned().collect();
-        list.len() != before && self.commit(vec![(i, list)]).is_ok()
+        if list.len() == before {
+            return Ok(false);
+        }
+        self.commit(vec![(i, list)])?;
+        Ok(true)
     }
 
     /// Leaves a command without shortcuts, in every scope. `false` for an unknown command, or when
     /// the overrides are full as for [`Keymap::remove`].
     pub fn clear(&mut self, command: &CommandRef) -> bool {
         let Some(i) = self.find(command) else { return false };
-        self.commit(vec![(i, Vec::new())]).is_ok()
+        let rest = self.hidden(i);
+        self.commit(vec![(i, rest)]).is_ok()
     }
 
     /// Gives a command its default bindings back.
@@ -591,7 +679,7 @@ impl Keymap {
     pub fn conflicts_with(&self, command: &CommandRef) -> Vec<Conflict> {
         let Some(i) = self.find(command) else { return Vec::new() };
         let mut out = Vec::new();
-        for a in &self.current[i] {
+        for a in self.current[i].iter().filter(|a| self.counts(a)) {
             let chord = a.0.effective(self.platform);
             let Some(holders) = self.by_trigger.get(&chord) else { continue };
             for &(j, k) in holders {
@@ -817,6 +905,9 @@ impl Keymap {
         if let Some((t, _)) = new.iter().find(|(t, _)| self.is_reserved(&t.chord)) {
             return Err(AssignError::Reserved(*t));
         }
+        if let Some((t, _)) = new.iter().find(|(t, _)| !holdable(t)) {
+            return Err(AssignError::NotHoldable(*t));
+        }
         let home = &self.catalog[i].scope;
         if let Some((_, s)) = new.iter().find(|(_, s)| !self.usable_scope(s, home)) {
             return Err(AssignError::UnknownScope(s.clone()));
@@ -853,38 +944,52 @@ impl Keymap {
         Ok(done)
     }
 
-    /// Stores several commands' bindings, or none of them when the overrides lack room for the
-    /// new entries.
+    /// Prepares all entries before replacing live or stored bindings, including commands whose bindings were taken.
     fn commit(&mut self, writes: Vec<(usize, Vec<Bound>)>) -> Result<(), AssignError> {
-        let needed = writes.iter().filter(|(i, list)| self.stored[*i].is_none() && !self.is_default(*i, list)).count();
+        let mut prepared = Vec::with_capacity(writes.len());
+        for (i, list) in writes {
+            let texts = self.store_texts(i, &list)?;
+            prepared.push((i, list, texts));
+        }
+        let needed = prepared.iter().filter(|(i, _, texts)| self.stored[*i].is_none() && texts.is_some()).count();
         if self.overrides.len() + needed > MAX_COMMANDS {
             return Err(AssignError::Full);
         }
-        for (i, list) in writes {
-            self.store(i, list);
+        for (i, list, texts) in prepared {
+            self.remove_entries(i);
+            if let Some(texts) = texts {
+                self.overrides.insert(self.keys[i].clone(), texts);
+                self.stored[i] = Some(self.keys[i].clone());
+            }
+            self.set_current(i, list);
         }
         Ok(())
     }
 
-    /// Writes a command's bindings to the overrides, dropping the entry when they equal the
+    /// Prepares a command's overrides, dropping the entry when its bindings equal the
     /// defaults. Texts of the old entry this build cannot use stay in it, after the bindings and up
-    /// to [`MAX_BINDINGS`], unless the command is left without bindings: an entry of only such
-    /// texts loads as the defaults. Callers check for room first ([`Keymap::commit`]); texts always
-    /// fit, since a scope name, `": "` and the longest double press stay under
-    /// [`MAX_BINDING_TEXT`].
-    fn store(&mut self, i: usize, list: Vec<Bound>) {
+    /// to [`MAX_BINDINGS`], unless the command is left without bindings. An entry of only such texts loads as the defaults.
+    fn store_texts(&self, i: usize, list: &[Bound]) -> Result<Option<Vec<String>>, AssignError> {
         let mut kept = if list.is_empty() { Vec::new() } else { self.unusable_texts(i) };
         kept.truncate(MAX_BINDINGS.saturating_sub(list.len()));
-        self.remove_entries(i);
-        if !kept.is_empty() || !self.is_default(i, &list) {
-            let home = &self.catalog[i].scope;
-            let mut texts: Vec<String> = list.iter().map(|b| self.public(i, b).text(home)).collect();
-            texts.extend(kept);
-            if self.overrides.insert(self.keys[i].clone(), texts) {
-                self.stored[i] = Some(self.keys[i].clone());
+        if kept.is_empty() && self.is_default(i, list) {
+            return Ok(None);
+        }
+        let saved = self.stored[i].as_deref().and_then(|key| self.overrides.get(key)).unwrap_or_default();
+        let mut texts = Vec::with_capacity(list.len() + kept.len());
+        for bound in list {
+            let binding = self.public(i, bound);
+            let text = binding.to_string();
+            if Binding::parse(&text).as_ref() == Ok(&binding) {
+                texts.push(text);
+            } else if let Some(existing) = saved.iter().find(|text| Binding::parse(text).as_ref() == Ok(&binding)) {
+                texts.push(existing.clone());
+            } else {
+                return Err(AssignError::Unstorable { command: self.catalog[i].command.clone(), trigger: binding.trigger });
             }
         }
-        self.set_current(i, list);
+        texts.extend(kept);
+        Ok(Some(texts))
     }
 
     /// Removes a command's overrides entries: the one it reads and hand-written variants of its
@@ -910,7 +1015,7 @@ impl Keymap {
 
     /// Whether a stored binding of a command with home scope `home` works here.
     fn usable(&self, binding: &Binding, home: &Scope) -> bool {
-        !self.is_reserved(&binding.trigger.chord) && self.usable_scope(binding.scope_or(home), home)
+        holdable(&binding.trigger) && !self.is_reserved(&binding.trigger.chord) && self.usable_scope(binding.scope_or(home), home)
     }
 
     /// The command's overrides texts as stored, when it has an entry.
@@ -938,7 +1043,8 @@ impl Keymap {
 
     fn index_command(&mut self, i: usize) {
         let Some(list) = self.current.get(i) else { return };
-        for (k, (t, _)) in list.iter().enumerate() {
+        let holds = self.holds;
+        for (k, (t, _)) in list.iter().enumerate().filter(|(_, (t, _))| holds || !t.is_hold()) {
             self.by_trigger.entry(t.effective(self.platform)).or_default().insert((i, k));
         }
     }

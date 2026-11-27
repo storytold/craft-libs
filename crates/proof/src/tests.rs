@@ -13,6 +13,7 @@ fn write_test_dictionaries(dir: &std::path::Path) {
         ("ru_RU", ru::test_dict::AFF, ru::test_dict::DIC),
         ("cs_CZ", cs::test_dict::AFF, cs::test_dict::DIC),
         ("id_ID", id::test_dict::AFF, id::test_dict::DIC),
+        ("gu_IN", gu::test_dict::AFF, gu::test_dict::DIC),
         ("es_ES", es::test_dict::AFF, es::test_dict::DIC),
         ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
         ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
@@ -627,8 +628,8 @@ fn mixed_language_paragraphs_check_each_run_in_its_language() {
 
 proptest::proptest! {
     #[test]
-    fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-        let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+    fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..16), 0..6)) {
+        let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Gu, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
         let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
         for i in check_text(&s, &spans) {
             proptest::prop_assert!(i.start <= i.end && i.end <= s.len());

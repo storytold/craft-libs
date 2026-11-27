@@ -38,12 +38,12 @@ pub struct AppSpec {
 
 impl AppSpec {
     /// A spec for `app_id` titled `title`, with the running build's shell on the backend winit opens by default (the one
-    /// `run` opens its windows on) and an in-memory placement store.
+    /// `run` opens its windows on) and the desktop's title-bar double click, and an in-memory placement store.
     pub fn new(app_id: impl Into<String>, title: impl Into<String>, defaults: Defaults) -> Self {
         AppSpec {
             title: title.into(),
             app_id: app_id.into(),
-            shell_info: ShellInfo::default().backend(Backend::from_env()),
+            shell_info: ShellInfo::default().backend(Backend::from_env()).double_click(craft_window::desktop::double_click()),
             defaults,
             placement: Arc::new(Mutex::new(Store::in_memory())),
             window_system: Arc::new(SystemWindows),
@@ -135,7 +135,10 @@ impl<A: ShellApp> eframe::App for Driver<A> {
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
         embed::before_ui(ui.ctx(), frame);
+        #[cfg(target_arch = "wasm32")]
+        let _ = frame;
         self.app.ui(ui);
     }
 }

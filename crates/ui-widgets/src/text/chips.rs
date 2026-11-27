@@ -14,7 +14,7 @@ use crate::display::Badge;
 use crate::menu::Menu;
 use crate::primitives::TextOptions;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx, SurfaceLook};
+use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
 use craft_behavior::{Caret, Codec, Flow, Granularity, IconId, Intent, Metrics, NavShape, NotAValue, PartKey, Proposal, Roving, Sense};
 use craft_theme::Variant;
 use egui::{Rect, Response, Vec2, pos2, vec2};
@@ -105,6 +105,8 @@ pub struct ChipFieldStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The least width of the draft, so a full line of chips still leaves room to type.
     draft_min: f32,
 }
@@ -334,7 +336,12 @@ impl Component for ChipField<'_> {
 
     fn style(cx: &StyleCx<'_>, _: ChipFieldStyleKey) -> ChipFieldStyle {
         let field = FieldStyle::at(cx);
-        ChipFieldStyle { surface: field.surface, metrics: field.metrics.gap(cx.control().gap), draft_min: cx.tokens.size.length.short }
+        ChipFieldStyle {
+            surface: field.surface,
+            metrics: field.metrics.gap(cx.control().gap),
+            focus: cx.focus_look(),
+            draft_min: cx.tokens.size.length.short,
+        }
     }
 
     fn sense(&self) -> Sense {

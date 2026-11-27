@@ -31,13 +31,14 @@ serde_json = { workspace = true, optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
 # The file-dialog probe asks the session bus whether the desktop portal offers a file chooser.
-# The free-standing Open and Folder panel (`beginWithCompletionHandler:`). rfd and winit already
-# use these.
+# The free-standing Open and Folder panel (`beginWithCompletionHandler:`), and the Save sheet with a
+# Format menu (`beginSheetModalForWindow:completionHandler:`). rfd and winit already use these.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
+craft-appkit = { workspace = true }
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSAccessibilityProtocols", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSPopUpButton", "NSResponder", "NSSavePanel", "NSText", "NSTextField", "NSView", "NSWindow", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString", "NSURL", "objc2-core-foundation"] }
 
 # The Linux and BSD Save panel asks the desktop portal itself, which reports the file type picked.
 # The versions craft-platform already builds (zbus with async-io and blocking-api), so adopting the

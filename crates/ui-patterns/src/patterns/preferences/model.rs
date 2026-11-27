@@ -3,10 +3,10 @@
 use std::ops::RangeInclusive;
 
 use craft_theme::{Rgba, Srgba};
-use egui::{Context, Response, Ui};
+use egui::{Response, Ui};
 
 use crate::contract::{Entry, NoValue, Outcome};
-use crate::runtime::env::UnitKind;
+use crate::runtime::env::{LengthUnits, UnitKind};
 use crate::runtime::requests::ColorRequest;
 
 /// A setting's value as it crosses the boundary between the window and the host.
@@ -51,9 +51,17 @@ impl<'a> PageSpec<'a> {
         Self { id, title, groups: vec![GroupSpec::new(None, rows)], footnote: None, keywords: "", custom: false }
     }
 
-    /// A page the host draws.
+    /// A page the host draws ([`PreferencesModel::custom_page`]). Its [`group`](PageSpec::group)s follow the host's
+    /// part, drawn and searched as a plain page's groups are.
     pub fn custom(id: &'a str, title: &'a str) -> Self {
         Self { id, title, groups: Vec::new(), footnote: None, keywords: "", custom: true }
+    }
+
+    /// Adds `group` under a custom page's own part, where the search sees its rows.
+    #[must_use]
+    pub fn group(mut self, group: GroupSpec<'a>) -> Self {
+        self.groups.push(group);
+        self
     }
 
     /// Sets the note shown under the last group.
@@ -114,6 +122,10 @@ pub struct RowSpec<'a> {
     /// The step of a [`RowKind::Float`] row (arrow keys, wheel, drag); without one the step comes from the range and
     /// decimals. Ignored by other kinds.
     pub step: Option<f64>,
+    /// A choice row: `Some(true)` draws its options as a segmented (pill) control, `Some(false)` as a drop-down; by
+    /// default a drop-down, and on a card ([`PreferencesLayout::Cards`](super::PreferencesLayout::Cards)) a short
+    /// choice of up to five options is segmented. Ignored by other kinds.
+    pub pills: Option<bool>,
     /// The control and the value it shows.
     pub kind: RowKind<'a>,
 }
@@ -121,7 +133,7 @@ pub struct RowSpec<'a> {
 impl<'a> RowSpec<'a> {
     /// A visible, enabled row with no keywords or help.
     pub fn new(key: &'a str, label: &'a str, kind: RowKind<'a>) -> Self {
-        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, kind }
+        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, pills: None, kind }
     }
 
     /// Sets extra search text for the row.
@@ -149,6 +161,13 @@ impl<'a> RowSpec<'a> {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Chooses how a [`RowKind::Choice`] row draws its options: `true` as segments, `false` as a drop-down.
+    #[must_use]
+    pub fn pills(mut self, pills: bool) -> Self {
+        self.pills = Some(pills);
         self
     }
 
@@ -189,6 +208,8 @@ pub enum RowKind<'a> {
         range: RangeInclusive<i64>,
         /// What the number counts, shown after the field in the user's language.
         unit: Option<UnitKind>,
+        /// A translated unit after the number, for quantities with no `UnitKind`; `counting` wins when both are set.
+        unit_text: Option<&'a str>,
     },
     /// A number field.
     #[non_exhaustive]
@@ -201,6 +222,18 @@ pub enum RowKind<'a> {
         decimals: u8,
         /// What the number counts, shown after the field in the user's language.
         unit: Option<UnitKind>,
+        /// A translated unit after the number, for quantities with no `UnitKind`; `counting` wins when both are set.
+        unit_text: Option<&'a str>,
+    },
+    /// A length: stored in `lengths.stored` and shown in `lengths.shown`; typed text accepts any length spelling.
+    #[non_exhaustive]
+    Length {
+        /// The current value in the stored unit.
+        value: f64,
+        /// The values the field accepts, in the stored unit.
+        range: RangeInclusive<f64>,
+        /// The stored and the shown unit.
+        lengths: LengthUnits,
     },
     /// A text field.
     Text(&'a str),
@@ -220,12 +253,27 @@ impl<'a> RowKind<'a> {
 
     /// An integer field limited to `range`.
     pub fn int(value: i64, range: RangeInclusive<i64>) -> Self {
-        RowKind::Int { value, range, unit: None }
+        RowKind::Int { value, range, unit: None, unit_text: None }
     }
 
     /// A number field limited to `range`, showing `decimals` decimal places.
     pub fn float(value: f64, range: RangeInclusive<f64>, decimals: u8) -> Self {
-        RowKind::Float { value, range, decimals, unit: None }
+        RowKind::Float { value, range, decimals, unit: None, unit_text: None }
+    }
+
+    /// A length field limited to `range` in the stored unit, shown in the shown unit of `lengths`.
+    pub fn length(value: f64, range: RangeInclusive<f64>, lengths: LengthUnits) -> Self {
+        RowKind::Length { value, range, lengths }
+    }
+
+    /// A translated unit shown after an integer or number field, for quantities with no `UnitKind`; other kinds
+    /// ignore it.
+    #[must_use]
+    pub fn unit_text(mut self, text: &'a str) -> Self {
+        if let RowKind::Int { unit_text, .. } | RowKind::Float { unit_text, .. } = &mut self {
+            *unit_text = Some(text);
+        }
+        self
     }
 
     /// What an integer or number field counts, shown after it, or what the ids of a choice count (the choice labels its
@@ -303,15 +351,16 @@ pub trait PreferencesModel {
         self.set(key, PrefValue::Color(color.into()));
     }
     /// Draws a [`RowKind::Custom`] row's control, which the window labels from the row's label (an empty label shows
-    /// an empty one), or a [`RowKind::CustomRows`] row's whole rows, labels included.
-    fn custom_row(&mut self, ui: &mut Ui, key: &str);
-    /// Draws a [`PageSpec::custom`] page.
-    fn custom_page(&mut self, ui: &mut Ui, page: &str);
+    /// an empty one), or a [`RowKind::CustomRows`] row's whole rows, labels included. Returns whether the row changed
+    /// the draft this pass, so an edit made there clears a failed apply's message as any row's edit does.
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool;
+    /// Draws a [`PageSpec::custom`] page, returning whether it changed the draft this pass.
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool;
     /// Resets the page's rows in the draft to their defaults.
     fn reset_page(&mut self, page: &str);
-    /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
-    /// every pass.
-    fn nested(&mut self, _ctx: &Context) {}
+    /// Draws the dialogs the host opened from this window (a colour picker) with the body's `Ui`, in the window's own
+    /// viewport. Called last in every pass.
+    fn nested(&mut self, _ui: &mut Ui) {}
     /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
     fn nested_open(&self) -> bool {
         false

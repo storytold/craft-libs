@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Runtime, style, fonts, primitives, the component contract, layout and the test kit of the craft UI library, on egui"
 
+[package.metadata.craft]
+reads = ["crates/font-subset/tests/data/orbitron/Orbitron[wght].ttf"]
+
 [lib]
 # Every test lives in the `it` integration binary.
 test = false
@@ -19,7 +22,7 @@ default = []
 # `craft_ui::testing`: the fixture and helpers used by application tests.
 # The suite runner, stories, registrations and snapshots are opt-in.
 testing = ["craft-platform/testing"]
-suite = ["testing", "dep:libtest-mimic", "snapshot"]
+suite = ["testing", "dep:libtest-mimic", "dep:craft-testkit", "snapshot"]
 # `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
 snapshot = ["dep:egui_kittest", "dep:image"]
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
@@ -46,6 +49,8 @@ craft-settings = { workspace = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 egui = { workspace = true }
 libtest-mimic = { version = "0.8", optional = true }
+# The gate's sweep fraction (`hostile::divisor`), which the suite's repeat sampling follows.
+craft-testkit = { workspace = true, optional = true }
 craft-host = { workspace = true }
 # `WindowSystem` and `restore::Store`, which viewport mounts place windows through.
 # `ui`: the window crate's egui side builds once, the same for the runtime, the shell's `app` and the apps.
@@ -90,6 +95,8 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `screen::available`: whether the browser has the EyeDropper, read at install for `Caps::SCREEN_CAPTURE`.
 craft-platform = { workspace = true, features = ["screen", "browser", "clipboard"] }
+# `egui/files.rs`: a pathless dropped file's bytes, which the page reads only asynchronously.
+wasm-bindgen-futures = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 craft-window = { workspace = true, features = ["ui", "appkit"] }

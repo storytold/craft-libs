@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-android-res = { path = "crates/android-res" }
 craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
@@ -31,15 +32,20 @@ craft-ssip = { path = "crates/ssip" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 craft-render-parity = { path = "crates/render-parity" }
+craft-shared-vec = { path = "crates/shared-vec" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
 craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
+craft-png = { path = "crates/png" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-win32 = { path = "crates/win32" }
+craft-appkit = { path = "crates/appkit" }
+craft-wayland = { path = "crates/wayland" }
+craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
@@ -97,6 +103,7 @@ craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
+craft-ease = { path = "crates/ease" }
 craft-eps = { path = "crates/eps" }
 craft-elf = { path = "crates/elf" }
 craft-file-formats = { path = "crates/file-formats" }
@@ -118,6 +125,7 @@ craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
+craft-font-os-windows = { path = "crates/font-os-windows" }
 craft-font-store = { path = "crates/font-store" }
 craft-gainmap = { path = "crates/gainmap" }
 craft-flow = { path = "crates/flow" }
@@ -139,6 +147,7 @@ craft-gpu-null = { path = "crates/gpu-null" }
 craft-gpu-providers = { path = "crates/gpu-providers" }
 craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
+craft-i18n-build = { path = "crates/i18n-build" }
 craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
 craft-indd = { path = "crates/indd" }
@@ -165,6 +174,7 @@ craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
+craft-material-graph = { path = "crates/material-graph" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-sf2 = { path = "crates/sf2" }
@@ -220,6 +230,7 @@ craft-testkit = { path = "crates/testkit" }
 craft-text = { path = "crates/text" }
 craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
+craft-pbr = { path = "crates/pbr" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
@@ -310,20 +321,20 @@ hayro-postscript = { path = "vendor/hayro-postscript" }
 linesweeper = { path = "vendor/linesweeper" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 # symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid

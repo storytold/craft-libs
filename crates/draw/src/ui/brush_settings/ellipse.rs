@@ -39,7 +39,7 @@ const ROUND_MIN: f64 = 0.01;
 pub struct TipAngle {
     /// The major axis's angle in whole degrees, counter-clockwise from the right, −180 to 180.
     pub degrees: f64,
-    /// The minor axis over the major, 0.01 to 1.
+    /// The minor axis over the major, from the widget's least roundness to 1.
     pub roundness: f64,
 }
 
@@ -66,6 +66,11 @@ pub enum TipEllipseGrab {
     Roundness,
 }
 
+/// The least roundness as a bound `clamp` accepts: a non-finite value falls back to the default.
+fn least_bound(least: f64) -> f64 {
+    if least.is_finite() { least.clamp(0.0, 1.0) } else { ROUND_MIN }
+}
+
 /// The two roundness dots, relative to the widget's centre in points (screen y down), for an
 /// ellipse of major radius `radius`: `±minor × radius × clamp(roundness, 0, 1)`, where the minor
 /// axis is the major turned 90° counter-clockwise, `(−sin a, −cos a)`.
@@ -83,8 +88,9 @@ pub fn ellipse_grab(at: Vec2, angle: TipAngle, radius: f32, reach: f32) -> TipEl
 
 /// The value after a drag to `at` (relative to the centre) holding `grab`. Angle: the direction
 /// of `at` in whole degrees, counter-clockwise, `atan2(−y, x)` rounded; unchanged within 1 pt of
-/// the centre. Roundness: `|at · minor| / radius` clamped to 0.01 to 1; the angle stays.
-pub fn ellipse_drag(grab: TipEllipseGrab, at: Vec2, angle: TipAngle, radius: f32) -> TipAngle {
+/// the centre. Roundness: `|at · minor| / radius` clamped to `least` (a non-finite `least` is 0.01) to 1; the angle
+/// stays.
+pub fn ellipse_drag(grab: TipEllipseGrab, at: Vec2, angle: TipAngle, radius: f32, least: f64) -> TipAngle {
     if !(at.x.is_finite() && at.y.is_finite()) {
         return angle;
     }
@@ -94,7 +100,7 @@ pub fn ellipse_drag(grab: TipEllipseGrab, at: Vec2, angle: TipAngle, radius: f32
         TipEllipseGrab::Roundness => {
             let (sin, cos) = (angle.degrees as f32).to_radians().sin_cos();
             let along = (at.x * -sin + at.y * -cos).abs();
-            TipAngle { roundness: f64::from(along / radius.max(f32::EPSILON)).clamp(ROUND_MIN, 1.0), ..angle }
+            TipAngle { roundness: f64::from(along / radius.max(f32::EPSILON)).clamp(least_bound(least), 1.0), ..angle }
         }
     }
 }
@@ -146,13 +152,16 @@ pub struct TipEllipse<'a> {
     #[common]
     common: Common,
     value: Bind<'a, TipAngle>,
+    /// The least roundness a dot drag, an Alt+arrow step and the drawn ellipse reach; 0 draws the flat tip as a line.
+    #[prop(quantity = "minor axis over major")]
+    least_roundness: f64,
 }
 
 impl<'a> TipEllipse<'a> {
     /// The widget named `label` over `value`.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, value: Bind<'a, TipAngle>) -> Self {
         use craft_ui::contract::Props as _;
-        TipEllipse { common: Common::new(), value }.label(label)
+        TipEllipse { common: Common::new(), value, least_roundness: ROUND_MIN }.label(label)
     }
 }
 
@@ -162,8 +171,8 @@ fn major_radius(rect: Rect, style: &TipEllipseStyle) -> f32 {
 }
 
 /// The angle after a key: Up and Right turn it counter-clockwise (the widget is not mirrored), Shift by a large
-/// turn; Alt changes the roundness instead.
-fn key(value: TipAngle, mv: NavMove, mods: MoveMods, rtl: bool) -> Option<TipAngle> {
+/// turn; Alt changes the roundness instead, down to `least`.
+fn key(value: TipAngle, mv: NavMove, mods: MoveMods, rtl: bool, least: f64) -> Option<TipAngle> {
     let raise = match mv {
         NavMove::Up => true,
         NavMove::Down => false,
@@ -173,7 +182,7 @@ fn key(value: TipAngle, mv: NavMove, mods: MoveMods, rtl: bool) -> Option<TipAng
     };
     let sign = if raise { 1.0 } else { -1.0 };
     if mods.fine {
-        let roundness = (value.roundness + sign * ROUND_STEP).clamp(ROUND_MIN, 1.0);
+        let roundness = (value.roundness + sign * ROUND_STEP).clamp(least_bound(least), 1.0);
         return Some(TipAngle { roundness: (roundness * 100.0).round() / 100.0, ..value });
     }
     let by = if mods.extend { COARSE_TURN } else { 1.0 };
@@ -261,7 +270,8 @@ impl Component for TipEllipse<'_> {
         ];
         for (grab, press) in presses {
             let current = cx.value().copied().unwrap_or_default();
-            let at = |pos: Pos2| ellipse_drag(grab, pos - center, current, radius);
+            let least = self.least_roundness;
+            let at = |pos: Pos2| ellipse_drag(grab, pos - center, current, radius, least);
             match press.phase {
                 PressPhase::DragStart { pos, .. } => {
                     cx.begin();
@@ -284,7 +294,7 @@ impl Component for TipEllipse<'_> {
         let mut now = cx.value().copied().unwrap_or_default();
         // While a drag runs, keys and screen-reader requests change nothing; they are still taken.
         while let Some((mv, mods)) = cx.intents().take_move() {
-            if let Some(next) = key(now, mv, mods, rtl).filter(|_| !running) {
+            if let Some(next) = key(now, mv, mods, rtl, self.least_roundness).filter(|_| !running) {
                 cx.set(next);
                 now = next;
             }
@@ -321,7 +331,7 @@ impl Component for TipEllipse<'_> {
         draw.stroke(&PaintShape::Path(vec![center - vec2(0.0, disc), center + vec2(0.0, disc)]), StrokeWidth::Thin, cross);
         let (sin, cos) = (value.degrees as f32).to_radians().sin_cos();
         let (major, minor) = (vec2(cos, -sin), vec2(-sin, -cos));
-        let round = (value.roundness as f32).clamp(ROUND_MIN as f32, 1.0);
+        let round = (value.roundness as f32).clamp(least_bound(self.least_roundness) as f32, 1.0);
         let ring: Vec<Pos2> = (0..SEGMENTS)
             .map(|i| {
                 let t = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;

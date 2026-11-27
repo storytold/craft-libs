@@ -42,11 +42,49 @@ pub(crate) fn hold_escape(ctx: &Context, owner: Id) {
 }
 
 /// A state-dependent claim of `owner`, held from the next frame's input hook on while `owner` is the focused
-/// component.
+/// component, or the window's document canvas while nothing has focus and no modal layer is open.
 #[doc(hidden)]
 pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
     crate::runtime::replay::journal(ctx, || (owner, chord), |ctx, &(owner, chord)| claim(ctx, owner, chord));
     current(ctx, |stage| stage.claims.push((owner, chord)));
+}
+
+/// The tool host claims the next pass's lone Alt tap for `owner` at the end of a pass, as it claims chords.
+#[doc(hidden)]
+pub fn claim_alt_tap(ctx: &Context, owner: Id) {
+    current(ctx, |stage| stage.alt_claims.push(owner));
+}
+
+/// Reads this pass's lone Alt tap for the claimer `owner`.
+#[doc(hidden)]
+pub fn take_alt_tap(ctx: &Context, owner: Id) -> bool {
+    if crate::runtime::measure::active(ctx) {
+        return false;
+    }
+    current(ctx, |stage| (stage.alt_tapped == Some(owner)).then(|| stage.alt_tapped = None).is_some())
+}
+
+/// Hands the first of `chords` (a fired command's keys, in binding order) that the focused component claims, as it is
+/// focused now, to the claim's owner in the next pass, as a press of the chord arrives: a command run from a menu or
+/// the palette whose key a component claims (a canvas tool's Delete) reaches the component as that key, so key and
+/// menu share one path. A menu pick returns focus in its pass before its command fires. With nothing focused the
+/// window's document canvas stands for the focused component, as it takes the window's nudges
+/// (`route::unfocused_canvas`). `false` when that component claims none of them.
+pub(crate) fn fire_claimed(ctx: &Context, chords: &[Chord]) -> bool {
+    let Some(rec) = crate::runtime::focus::focused_rec(ctx).or_else(|| super::route::unfocused_canvas(ctx)) else { return false };
+    let root = (rec.stop.root != rec.stop.id && !rec.stop.text).then_some(rec.stop.root);
+    let found = current(ctx, |stage| {
+        let held = |chord: &Chord| {
+            let owns = |owner: &Id| *owner == rec.stop.id || Some(*owner) == root;
+            let state = stage.last_claims.iter().chain(&stage.claims).find(|(owner, held)| held == chord && owns(owner));
+            state.map(|(owner, _)| *owner).or_else(|| rec.stop.keys.claims.contains(chord).then_some(rec.stop.id))
+        };
+        chords.iter().find_map(|chord| held(chord).map(|owner| (owner, *chord)))
+    });
+    let Some(claim) = found else { return false };
+    current(ctx, |stage| stage.fired_claims.push(claim));
+    crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
+    true
 }
 
 /// Holds `chord` for `owner` from the next input hook on, whichever component has focus: the key stage withholds

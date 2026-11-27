@@ -96,6 +96,8 @@ pub struct GuideStyle {
     focus: FocusLook,
     /// The width of a guide line.
     width: f32,
+    /// The width of the key guide's line.
+    key_width: f32,
     dash: f32,
     gap: f32,
 }
@@ -147,9 +149,12 @@ pub struct Guides<'a> {
     #[common]
     common: Common,
     guides: Bind<'a, Vec<Guide>>,
-    /// The selected guide.
-    #[prop(name = "selected_guide")]
-    selected: Option<GuideKey>,
+    /// The selected guides.
+    #[prop(name = "selected_guides")]
+    selected: &'a [GuideKey],
+    /// The key guide, stroked at `stroke.medium`.
+    #[prop]
+    key_guide: Option<GuideKey>,
     /// Whether the pointer and the keyboard take guides (the Move tool, or the selection tools). Off, the guides only
     /// draw.
     #[prop]
@@ -183,7 +188,8 @@ impl<'a> Guides<'a> {
         Guides {
             common: Common::new(),
             guides,
-            selected: None,
+            selected: &[],
+            key_guide: None,
             interactive: false,
             moves_with_command: false,
             bounds: None,
@@ -206,6 +212,11 @@ impl<'a> Guides<'a> {
         } else {
             position
         }
+    }
+
+    /// The first selected guide, the one the keys and the pointer act on.
+    fn lead_selected(&self) -> Option<GuideKey> {
+        self.selected.first().copied()
     }
 
     /// The positions a guide may be moved to with the keyboard.
@@ -346,7 +357,7 @@ impl<'a> Guides<'a> {
     /// canvas's tool and the app's shortcuts (Edit > Clear) while such a guide is selected.
     fn run_canvas_delete(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, guides: &[Guide]) {
         let Some(canvas) = space.canvas() else { return };
-        if !self.selected.is_some_and(|key| guides.iter().any(|guide| guide.key == key && !guide.locked)) {
+        if !self.lead_selected().is_some_and(|key| guides.iter().any(|guide| guide.key == key && !guide.locked)) {
             return;
         }
         let mut delete = false;
@@ -357,7 +368,7 @@ impl<'a> Guides<'a> {
         let mut next = guides.to_vec();
         if delete
             && self.report.select.is_none()
-            && let Some(select) = GuideCommands::Delete.apply(&mut next, self.selected)
+            && let Some(select) = GuideCommands::Delete.apply(&mut next, self.lead_selected())
         {
             cx.set(next);
             self.report.select = Some(select);
@@ -459,6 +470,7 @@ impl Component for Guides<'_> {
             selected: cx.color(tokens.color.accent.solid),
             focus,
             width: tokens.stroke.thin,
+            key_width: tokens.stroke.medium,
             dash: tokens.stroke.dash,
             gap: tokens.stroke.dash_gap,
         }
@@ -487,11 +499,11 @@ impl Component for Guides<'_> {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, rect) else { continue };
             let part = cx
                 .part(guide.key.part(GUIDE), HitShape::segment(a, b))
-                .sense(Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS)
+                .sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .cursor(resize_cursor(&space.view, motion_across(guide.along)))
                 .focusable();
-            if self.selected == Some(guide.key) {
+            if self.selected.contains(&guide.key) {
                 part.selected().flags(Flags::SELECTED);
             }
             any = true;
@@ -512,7 +524,7 @@ impl Component for Guides<'_> {
         if self.interactive {
             self.run_keys(cx, &space, &guides);
             self.run_canvas_delete(cx, &space, &guides);
-            if space.background().pressed.is_some() && self.selected.is_some() && self.report.select.is_none() {
+            if space.background().pressed.is_some() && !self.selected.is_empty() && self.report.select.is_none() {
                 self.report.select = Some(None);
             }
         }
@@ -525,15 +537,18 @@ impl Component for Guides<'_> {
         let focused = cx.focus_visible().then(|| cx.active_part()).flatten().filter(|part| part.key == GUIDE).and_then(|part| part.index);
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
-            let color = if self.selected == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
-            let look = RuleLook { color, width: RuleWidth::Points(style.width) };
+            let key = self.key_guide == Some(guide.key);
+            let color =
+                if key || self.selected.contains(&guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let width = if key { style.key_width } else { style.width };
+            let look = RuleLook { color, width: RuleWidth::Points(width) };
             match guide.line {
                 GuideLine::Solid => painter.painter.extend(Rule::shapes(&look, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),
                 GuideLine::Dots => painter.painter.extend(Rule::dotted(&look, a, b, style.gap, ppp)),
             }
             if focused == Some(guide.key.get()) && (b - a).length() > 0.0 {
-                painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, style.width), ppp));
+                painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, width), ppp));
             }
         }
     }

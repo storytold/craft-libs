@@ -8,7 +8,7 @@ use craft_i18n::Words;
 use craft_theme::variant::Tone;
 
 /// A label: a literal stays borrowed, a built string is shared. Cloning is cheap.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, crate::contract::PlainData)]
 #[non_exhaustive]
 pub enum Label {
     /// No text.
@@ -19,7 +19,7 @@ pub enum Label {
     /// A built string.
     Shared(Arc<str>),
     /// A word from a catalogue.
-    Word(Word),
+    Word(#[plain_data(assume = "a word is three static strings")] Word),
 }
 
 impl Label {

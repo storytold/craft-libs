@@ -5,12 +5,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::EditEvent;
-use craft_color_ui::ui::gradient::stops::{StopRules, sample};
+use craft_color_ui::ui::gradient::stops::{AltDrop, StopRules, sample};
 use craft_color_ui::ui::gradient::{ColorStop, GradientEditor, GradientStops, OpacityStop, StopDrop, StopRef, StopRows};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Color32, Event, Shape, TextureId, Vec2, vec2};
+use egui::{Color32, Event, Key, Modifiers, Rect, Shape, TextureId, Vec2, vec2};
 
 const RED: Srgba = Srgba::rgb(1.0, 0.0, 0.0);
 const BLUE: Srgba = Srgba::rgb(0.0, 0.0, 1.0);
@@ -45,7 +45,7 @@ fn the_default_sampler_bends_each_segment_to_its_midpoint_and_splits_alpha_by_la
 #[derive(Default)]
 struct Seen {
     events: Vec<&'static str>,
-    requested: Vec<usize>,
+    requested: Vec<(usize, Option<Rect>)>,
     dropped: Vec<StopDrop>,
     selected: Option<StopRef>,
 }
@@ -82,7 +82,7 @@ fn rig_below(start: GradientStops, rules: StopRules, fields: bool, above: f32) -
         let out = GradientEditor::new("Gradient", Bind::bound(&mut stops)).rules(rules.clone()).fields(fields).drop_target::<u32>().show(ui);
         let mut seen = report.borrow_mut();
         seen.events.extend(out.edit.events.iter().map(kind));
-        seen.requested.extend(out.color_requested.iter().map(|c| c.index));
+        seen.requested.extend(out.color_requested.iter().map(|c| (c.index, c.rect)));
         seen.dropped.extend(out.dropped.iter().map(|(place, _)| *place));
         seen.selected = out.selected;
     });
@@ -111,6 +111,23 @@ impl Rig {
     }
 }
 
+/// The host opens its picker where the request came from: under the stop's marker for Enter on it, at the Color well
+/// for a click on the well.
+#[trial]
+fn a_colour_request_carries_the_rect_of_what_asked() {
+    let mut rig = rig(three(), StopRules::default(), true);
+    let last = rig.marker("Color stop 3 of 3");
+    rig.fixture.click(&last).key(Key::Enter, Modifiers::NONE).idle(1);
+    let requested = std::mem::take(&mut rig.seen.borrow_mut().requested);
+    let Some(&(2, Some(rect))) = requested.last() else { panic!("Enter asks for the last stop's colour at a place: {requested:?}") };
+    assert!(rect.x_range().contains(last.center().x), "under the last stop's marker: {rect:?}, marker {:?}", last.rect);
+    let well = rig.marker("Color");
+    rig.fixture.click(&well).idle(1);
+    let requested = std::mem::take(&mut rig.seen.borrow_mut().requested);
+    let Some(&(2, Some(rect))) = requested.last() else { panic!("the well asks for the selected stop's colour at a place: {requested:?}") };
+    assert!(rect.intersects(well.rect), "at the well: {rect:?}, well {:?}", well.rect);
+}
+
 #[trial]
 fn a_drag_past_a_neighbour_is_one_gesture_and_the_selection_follows_the_stop() {
     let mut rig = rig(three(), StopRules::default(), false);
@@ -124,6 +141,38 @@ fn a_drag_past_a_neighbour_is_one_gesture_and_the_selection_follows_the_stop() {
     assert_eq!(events.first(), Some(&"begin"));
     assert_eq!(events.iter().filter(|e| **e == "begin").count(), 1, "one gesture");
     assert!(matches!(events.last(), Some(&"commit") | Some(&"set")), "{events:?}");
+}
+
+#[trial]
+fn an_alt_drag_released_on_another_stop_swaps_their_colours_and_keeps_their_places() {
+    // Alt-drags the first stop of `three()` (the first one half transparent) to `share` of the way to the last.
+    let alt_drag = |rules: StopRules, share: f32| {
+        let mut start = three();
+        start.color[0].color.a = 0.5;
+        let mut rig = rig(start, rules, false);
+        let (from, last) = (rig.marker("Color stop 1 of 3").center(), rig.marker("Color stop 3 of 3").center());
+        rig.fixture.hold(Modifiers::ALT);
+        rig.seen.borrow_mut().events.clear();
+        rig.fixture.drag_at(from, vec2((last.x - from.x) * share, 0.0));
+        rig.fixture.hold(Modifiers::NONE);
+        rig.fixture.idle(2);
+        rig
+    };
+    let swap = StopRules::new(StopRows::Combined).alt_drop(AltDrop::Swap);
+
+    let rig = alt_drag(swap.clone(), 1.0);
+    let stops = rig.stops.borrow().clone();
+    assert_eq!(rig.tags(), [3, 2, 1], "the tags went with the colours");
+    assert_eq!(stops.color[0].color, Srgba { a: 0.5, ..BLUE }, "the first stop took the blue and kept its alpha");
+    assert_eq!(stops.color[2].color, RED, "the last stop took the red and kept its alpha");
+    assert_eq!(stops.color.iter().map(|s| s.location).collect::<Vec<_>>(), [0.0, 0.5, 1.0], "the places stay");
+    assert_eq!(rig.seen.borrow().selected, Some(StopRef::Color(0)), "the selection stays on the dragged stop");
+    let events = rig.seen.borrow().events.clone();
+    assert_eq!(events.iter().filter(|e| **e == "begin").count(), 1, "one step: {events:?}");
+
+    // Between stops it copies, and so does the default rule onto a stop.
+    assert_eq!(alt_drag(swap, 0.25).tags(), [1, 1, 2, 3], "released between stops it copies");
+    assert_eq!(alt_drag(StopRules::new(StopRows::Combined), 1.0).tags(), [1, 2, 3, 1], "under Copy it copies onto the stop");
 }
 
 /// Three colour stops (tags 1..=3) and three opacity stops (tags 11..=13).

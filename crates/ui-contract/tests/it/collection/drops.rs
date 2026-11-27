@@ -136,6 +136,42 @@ fn rows_from_another_list_drop_into_a_gap_only_where_a_kind_takes_them() {
     assert_eq!(keys, vec![(DropAt::gap(Some(2), 2), Some(vec![0]))]);
 }
 
+/// A list's copy keys decide which held key makes its own row drag a copy, and the pointer over it shows the copy
+/// while they are held: the platform's keys copy with Ctrl off macOS and Option on it, Alt copies with Alt; the other
+/// key moves.
+#[trial]
+fn a_lists_copy_keys_pick_the_key_that_copies_its_rows() {
+    use craft_behavior::{CopyKeys, Cursor, CursorIcon};
+    use egui::Modifiers;
+    let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
+    let platform = if cfg!(target_os = "macos") { (Modifiers::ALT, ctrl) } else { (ctrl, Modifiers::ALT) };
+    for (keys, copies, moves) in [(CopyKeys::Platform, platform.0, platform.1), (CopyKeys::Alt, Modifiers::ALT, ctrl)] {
+        for (held, copy) in [(copies, true), (moves, false)] {
+            let words = Words::flat(&["a", "b", "c", "d"]);
+            let run = Run::default();
+            let mut frames = Frames::new();
+            let mut show = |ui: &mut Ui| show(ui, List::new(SelectMode::Multi).reorder_copying(keys), "list", Pos2::new(10.0, 10.0), &words, &run);
+            frames.idle(3, &mut show);
+            let gap = run.row(2).min + Vec2::new(10.0, 2.0);
+            frames.hold(held);
+            drag_to(&mut frames, run.row(0).center(), gap, &mut show);
+            let pointer = craft_ui::runtime::cursor::current(&frames.ctx);
+            assert_eq!(pointer == Some(Cursor::System(CursorIcon::Copy)), copy, "{keys:?} with {held:?}: the pointer {pointer:?}");
+            release_at(&mut frames, gap, &mut show);
+            let moved: Vec<bool> = run
+                .events
+                .borrow()
+                .iter()
+                .filter_map(|event| match event {
+                    CollectionEvent::Reorder(edit) => edit.value().map(|mv| mv.copy),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(moved, vec![copy], "{keys:?} with {held:?}");
+        }
+    }
+}
+
 /// Rows dropped in the empty room below the last row land after it, as at the last row's lower half.
 #[trial]
 fn a_drop_below_the_last_row_lands_at_the_end() {

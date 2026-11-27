@@ -32,10 +32,14 @@ pub(crate) struct Own<'a> {
     /// A display component describes itself with its tooltip.
     pub display: bool,
     pub flags: Flags,
+    /// `Common.selected`: the component's chosen state outside a collection; for a button, else its two-state value.
+    pub selected: Option<bool>,
     pub enabled: bool,
     pub read_only: bool,
     pub focusable: bool,
     pub clickable: bool,
+    /// A `Trigger::Context` opener on the component this pass: the node declares the context menu action.
+    pub context_menu: bool,
     pub keeps_name: bool,
     /// The axes the component's body scrolls on, vertical then horizontal: the node serves the scroll actions.
     pub scrolls: (bool, bool),
@@ -45,6 +49,9 @@ pub(crate) struct Own<'a> {
     /// Parts of the component open its popups: their sub-nodes report the expanded state and serve Expand and
     /// Collapse, so the component's own node does not.
     pub popups_by_part: bool,
+    /// The one part that opens the component's popup when that part has no node of its own (a corner mark): Expand
+    /// and Collapse on the component's node go to it instead of activating the component.
+    pub toggle: Option<PartRef>,
     /// The component's horizontal axis keeps its left-to-right order under a right-to-left interface.
     pub ltr_axis: bool,
 }
@@ -124,15 +131,20 @@ fn expanded_of(flags: Flags, explicit: Option<bool>) -> Option<bool> {
     explicit.or_else(|| flags.intersects(Flags::OPEN | Flags::EXPANDED).then_some(true))
 }
 
-/// The state flags of a node.
-fn write_states(spec: &mut NodeSpec, flags: Flags, enabled: bool, read_only: bool) {
+/// The state flags of a node, and `selected`, the `Common.selected` of a component's own node or a button's two-state
+/// value. A node that is neither checked nor selected by its role, and shows no checked value, reports `selected` as
+/// pressed: a tool's button is down while it is the tool, and a toggle button while it is on, and up otherwise.
+fn write_states(spec: &mut NodeSpec, flags: Flags, selected: Option<bool>, enabled: bool, read_only: bool) {
     spec.disabled = !enabled;
+    let pressed = selected.filter(|_| !is_checkable(spec.role) && !is_selectable(spec.role) && !flags.intersects(Flags::CHECKED | Flags::MIXED));
     if flags.contains(Flags::MIXED) {
         spec.toggled = Some(Toggle::Mixed);
     } else if flags.contains(Flags::CHECKED) || is_checkable(spec.role) {
         spec.toggled = Some(if flags.contains(Flags::CHECKED) { Toggle::On } else { Toggle::Off });
+    } else if let Some(on) = pressed {
+        spec.toggled = Some(if on { Toggle::On } else { Toggle::Off });
     }
-    if flags.contains(Flags::SELECTED) || is_selectable(spec.role) {
+    if pressed.is_none() && (flags.contains(Flags::SELECTED) || is_selectable(spec.role)) {
         spec.selected = Some(flags.contains(Flags::SELECTED));
     }
     spec.invalid = flags.contains(Flags::INVALID);
@@ -149,7 +161,14 @@ fn write_position(spec: &mut NodeSpec, position: Option<SetPosition>, level: Opt
 }
 
 /// The actions the interaction and the numeric facts declare.
-fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, numeric: Option<&Numeric>) {
+fn declare_actions(
+    spec: &mut NodeSpec,
+    focusable: bool,
+    clickable: bool,
+    context_menu: bool,
+    numeric: Option<&Numeric>,
+    variable_steps: Option<(bool, bool)>,
+) {
     // A read-only value offers no action that would change it.
     let numeric = numeric.filter(|_| !spec.read_only);
     if focusable {
@@ -158,17 +177,25 @@ fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, numeri
     if clickable {
         spec.actions.push(NodeAction::Click);
     }
-    if let Some(numeric) = numeric.filter(|numeric| numeric.step.is_some()) {
+    if context_menu {
+        spec.actions.push(NodeAction::ContextMenu);
+    }
+    if let Some(numeric) = numeric {
         // A step that cannot move the value is not offered: no Increment at the range's end, unless the value wraps.
         let stuck = |at_end: bool| at_end && !numeric.wraps;
-        if !stuck(numeric.value.is_some_and(|value| value >= *numeric.range.end())) {
+        let (increment, decrement) = variable_steps.unwrap_or_else(|| {
+            let has_step = numeric.step.is_some();
+            (
+                has_step && !stuck(numeric.value.is_some_and(|value| value >= *numeric.range.end())),
+                has_step && !stuck(numeric.value.is_some_and(|value| value <= *numeric.range.start())),
+            )
+        });
+        if increment {
             spec.actions.push(NodeAction::Increment);
         }
-        if !stuck(numeric.value.is_some_and(|value| value <= *numeric.range.start())) {
+        if decrement {
             spec.actions.push(NodeAction::Decrement);
         }
-    }
-    if numeric.is_some() {
         spec.actions.push(NodeAction::SetValue);
     }
 }
@@ -287,13 +314,13 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
         column_index: spec.grid.column_index.or(access.grid.column_index),
         column_count: spec.grid.column_count.or(access.grid.column_count),
     };
-    write_states(&mut spec, own.flags, own.enabled, own.read_only);
+    write_states(&mut spec, own.flags, own.selected, own.enabled, own.read_only);
     spec.ltr_axis = own.ltr_axis;
     spec.busy |= access.busy;
     if let Some(expanded) = expanded {
         spec.actions.push(if expanded { NodeAction::Collapse } else { NodeAction::Expand });
     }
-    declare_actions(&mut spec, own.focusable, own.clickable, numeric);
+    declare_actions(&mut spec, own.focusable, own.clickable, own.context_menu, numeric, access.variable_steps);
     declare_scroll_actions(&mut spec, (own.scrolls.0 || access.pans.0, own.scrolls.1 || access.pans.1));
     custom_actions(&mut spec, &access.custom_actions);
     write_node(ctx, own.id, &spec);
@@ -318,7 +345,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
         true,
     );
     keys::register_node(ctx, own.id, own.id, None, own.focusable);
-    keys::register_expanded(ctx, own.id, expanded);
+    keys::register_expanded(ctx, own.id, expanded, own.toggle);
     scope::register(
         ctx,
         scope::ScopeNode {
@@ -353,7 +380,6 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
                 rtl: run.rtl,
                 positions: &run.positions,
                 widths: &run.widths,
-                links: &node.run_links,
             },
         );
         keys::register_node(ctx, id, decl.owner, Some(node.part), false);
@@ -389,8 +415,8 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.grid = node.grid;
     spec.sort = node.sort;
     spec.sortable = node.sortable;
-    write_states(&mut spec, flags, decl.enabled, false);
-    declare_actions(&mut spec, decl.focusable, decl.clickable, numeric);
+    write_states(&mut spec, flags, None, decl.enabled, false);
+    declare_actions(&mut spec, decl.focusable, decl.clickable, false, numeric, None);
     if node.steps && numeric.is_none() {
         spec.actions.extend([NodeAction::Increment, NodeAction::Decrement]);
     }
@@ -413,7 +439,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
         false,
     );
     keys::register_node(ctx, id, decl.owner, Some(node.part), decl.focusable);
-    keys::register_expanded(ctx, id, expanded);
+    keys::register_expanded(ctx, id, expanded, None);
     if decl.active {
         adapter::set_focus(ctx, id);
     }
