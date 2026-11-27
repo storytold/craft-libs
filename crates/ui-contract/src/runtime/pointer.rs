@@ -1112,6 +1112,9 @@ pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
 }
 
+/// A shape a memoized view's run sensed ([`Sensed::hover`]): its kind, root, owner and part.
+type SensedShape = (u8, Id, Id, Option<PartRef>);
+
 /// What pointer sensing gives a memoized view's run in the running pass (`runtime::lazy`): of the components that own
 /// shapes the run registered (arena roots and members) and of its egui widgets, the ones under the pass's hover point
 /// and what they win there. A component's facts are its own: a member's view sees a move over a sibling member or its
@@ -1121,7 +1124,7 @@ pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(
 pub(crate) struct Sensed {
     /// The press winners and the shape that hovers beside them (`Under`), each as its kind, root, owner and part, of
     /// the run's components. None while a press is open: only the press's target hovers, and the press runs it.
-    hover: SmallVec<[(u8, Id, Id, Option<PartRef>); 3]>,
+    hover: SmallVec<[SensedShape; 3]>,
     /// The run's components with a shape under the point.
     over: SmallVec<[Id; 4]>,
     /// The own parts of the run's roots with a shape under the point (`Under::parts`).

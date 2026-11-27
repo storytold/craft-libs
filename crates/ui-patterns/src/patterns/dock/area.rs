@@ -579,8 +579,11 @@ struct GeometryKey<'k> {
 /// The docks' columns as they lay out before the room shrinks them, derived per [`GeometryKey`]: for each dock, by its
 /// window edge, each column's `(width, floor)` ([`Scene::natural`]) and its card's inset ([`DockSizes::card_place`]).
 struct DockGeometry {
-    docks: Vec<(DockEdge, Vec<(f32, Option<f32>)>, Vec<Option<CardInset>>)>,
+    docks: Vec<(DockEdge, Vec<ColumnExtent>, Vec<Option<CardInset>>)>,
 }
+
+/// A dock column's `(width, floor)` before the room shrinks it ([`Scene::natural`]).
+type ColumnExtent = (f32, Option<f32>);
 
 impl DockGeometry {
     fn of<P: Clone + Eq + Hash>(scene: &Scene<'_, P>) -> Self {
@@ -598,7 +601,7 @@ impl DockGeometry {
     }
 
     /// The `(width, floor)` and card place of each column of the dock at `edge`.
-    fn dock(&self, edge: DockEdge) -> (&[(f32, Option<f32>)], &[Option<CardInset>]) {
+    fn dock(&self, edge: DockEdge) -> (&[ColumnExtent], &[Option<CardInset>]) {
         self.docks.iter().find(|(at, _, _)| *at == edge).map_or((&[], &[]), |(_, natural, cards)| (natural.as_slice(), cards.as_slice()))
     }
 }
@@ -1423,7 +1426,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let spec = scene.spec(&members[at]);
             if minimized {
                 group = group.minimized();
-            } else if !document(&spec) && !spec.host_body {
+            } else if !document(spec) && !spec.host_body {
                 // The app's own egui body lays out in the whole body, as it did outside the dock.
                 group = group.pad(Pad::Regular);
             }
