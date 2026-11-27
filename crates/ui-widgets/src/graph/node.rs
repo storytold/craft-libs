@@ -302,10 +302,12 @@ impl<E: 'static> Component for Node<'_, E> {
 
     /// The ports: press parts at handle priority, above the node's body. A Dot's body is a circle part that passes
     /// its drag to the graph, so the graph's free move moves it; the hit resolve grows the circle to the pointer's
-    /// target size. A Dot's ports reach around its circle but not into it, so a press inside the circle is the
-    /// body's and one just outside it, in the grown grab area, is the port's.
+    /// target size. A Dot's ports reach around its circle and into it only as far as their drawn handle, so a press
+    /// on a port's handle, centred on the circle's edge, or just outside it is the port's, and one deeper inside the
+    /// circle is the body's.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let body = (rect.center(), rect.width() / 2.0);
+        let inner = (body.0, body.1 - cx.style.handle.side / 2.0);
         if self.dot {
             cx.part(BODY, HitShape::circle(body.0, body.1))
                 .sense(Sense::CLICK | Sense::PASSES_DRAG)
@@ -316,7 +318,7 @@ impl<E: 'static> Component for Node<'_, E> {
         let reach = cx.style.reach;
         for port in 0..self.kind.port_count() {
             let circle = HitShape::circle(port_center(self.kind, rect, port), reach);
-            let shape = if self.dot { HitShape::excluding(circle, vec![body]) } else { circle };
+            let shape = if self.dot { HitShape::excluding(circle, vec![inner]) } else { circle };
             cx.part(PORT.at(port as u64), shape)
                 .sense(Sense::PRESS)
                 .priority(HitPriority::new(HitLevel::Handle, 2))

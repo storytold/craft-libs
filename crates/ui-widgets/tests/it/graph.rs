@@ -310,8 +310,9 @@ fn a_refusing_port_under_another_node_is_not_reported() {
     assert_eq!(graph.refused(), [None], "the node over the refusing port takes the release");
 }
 
-/// A Dot's ports reach around its circle but not into it: a drag from inside the circle moves the Dot, one from just
-/// outside it wires from the port, at a small and a large zoom alike.
+/// A Dot's ports reach around its circle and into it only as far as their own handle: a drag from inside the circle
+/// moves the Dot, one from just outside it or from the port's centre, on the circle's edge, wires from the port, at a
+/// small and a large zoom alike.
 #[trial]
 fn a_dot_moves_from_its_body_and_wires_from_just_outside_at_any_zoom() {
     let dot = Kind { shape: NodeShape::Dot, ..Kind::new("Dot", ["Dot in", "Dot out"]) };
@@ -330,6 +331,11 @@ fn a_dot_moves_from_its_body_and_wires_from_just_outside_at_any_zoom() {
         rig.drag(outside, outside + Vec2::new(0.0, 60.0));
         assert!(matches!(rig.ended().as_slice(), [(from, None, Some(_))] if *from == port(0, 1)), "at {zoom}: {:?}", rig.ended());
         assert_eq!(rig.moves(), [0; 4], "at {zoom}: a drag from just outside the circle moves nothing");
+
+        let on_port = rig.at("Dot out");
+        rig.drag(on_port, on_port + Vec2::new(0.0, 60.0));
+        assert!(matches!(rig.ended().as_slice(), [(from, None, Some(_))] if *from == port(0, 1)), "at {zoom}: {:?}", rig.ended());
+        assert_eq!(rig.moves(), [0; 4], "at {zoom}: a drag from the port's centre moves nothing");
     }
 }
 
