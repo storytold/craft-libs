@@ -224,9 +224,10 @@ fn tabs_closed_together_reopen_together_and_a_tab_closed_alone_stays_closed() {
     assert_eq!(group_members(workspace.layout(), 2), [2, 3], "it reopens beside 2");
 }
 
-/// A panel that floats keeps its docked place until it docks or closes; floating again from the float keeps the first.
+/// A panel that floats keeps its docked place until it docks; floating again from the float keeps the first, and a
+/// float that closes keeps it while it is closed and after it reopens floating.
 #[test]
-fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
+fn a_floated_panel_keeps_where_it_was_docked_until_it_docks() {
     let mut workspace = Workspace::new(docked());
     let docked_at = workspace.layout().location(&2).unwrap();
     workspace.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
@@ -235,10 +236,15 @@ fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
     assert_eq!(workspace.floated(), [(2, docked_at)], "floating again from the float keeps the first record");
     workspace.apply(Action::move_beside(2, 11, DockPlacement::tab(None)), false, allow).unwrap();
     assert!(workspace.floated().is_empty(), "docking drops the record");
+    let docked_at = workspace.layout().location(&3).unwrap();
     workspace.apply(Action::float(3, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
-    assert_eq!(workspace.floated().len(), 1);
     workspace.apply(Action::close(3), false, allow).unwrap();
-    assert!(workspace.floated().is_empty(), "closing drops the record");
+    assert_eq!(workspace.floated(), [(3, docked_at.clone())], "closing keeps the record");
+    workspace.apply(Action::open(3, None), false, allow).unwrap();
+    assert!(floats(workspace.layout(), 3), "it reopens floating");
+    assert_eq!(workspace.floated(), [(3, docked_at.clone())], "reopening keeps the record");
+    workspace.apply(Action::restore(3, docked_at), false, allow).unwrap();
+    assert!(!floats(workspace.layout(), 3) && workspace.floated().is_empty(), "docking back drops the record");
 }
 
 /// A closed panel that floats by itself records the place it would reopen at, as opening it first records, and its old
@@ -311,6 +317,45 @@ fn a_floating_windows_edge_is_saved_set_by_collapsed_moves_and_floats_and_cleare
     moved.apply(Action::move_group(2, Target::float_with_edge(window(), Some(DockEdge::End)))).unwrap();
     let floated = moved.floating.iter().find(|window| window.contains(&2)).unwrap();
     assert_eq!(floated.edge, None, "an expanded column keeps to the edge nearer its rect");
+}
+
+/// A group docked into a collapsed column keeps the width it was shown at as its flyout width: a floating window's
+/// width, or an expanded column's. A width equal to the column's leaves the flyout following the column, and a group
+/// moved between collapsed columns keeps its own flyout width.
+#[test]
+fn a_group_docked_into_a_collapsed_column_keeps_its_width_as_the_flyout_width() {
+    let flyout = |layout: &Layout<u32>, panel: u32| layout.group(&layout.place(&panel).unwrap()).unwrap().flyout_width;
+
+    let mut layout = columns();
+    layout.apply(Action::move_floating(6, rect(100.0, 100.0, 420.0, 400.0))).unwrap();
+    layout.apply(Action::move_group(6, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert!(!floats(&layout, 6) && column_of(&layout, 6).iconic);
+    assert_eq!(flyout(&layout, 6), Some(420.0), "the floating window's width");
+
+    layout.apply(Action::resize_flyout_width(6, Some(380.0))).unwrap();
+    layout.apply(Action::move_group(6, Target::float(rect(100.0, 100.0, 380.0, 400.0)))).unwrap();
+    layout.apply(Action::set_iconic(6, false)).unwrap();
+    layout.apply(Action::move_floating(6, rect(100.0, 100.0, 300.0, 400.0))).unwrap();
+    layout.apply(Action::move_group(6, Target::at(4, DockPlacement::group(false, None)))).unwrap();
+    assert_eq!(flyout(&layout, 6), Some(300.0), "the width the window was resized to, not the flyout width it left with");
+
+    let mut layout = columns();
+    layout.apply(Action::resize_column(2, 260.0)).unwrap();
+    layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(flyout(&layout, 2), Some(260.0), "the expanded column's width");
+
+    let mut layout = columns();
+    layout.apply(Action::resize_column(3, 300.0)).unwrap();
+    layout.apply(Action::move_group(6, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(flyout(&layout, 6), None, "a width equal to the column's follows the column");
+
+    let mut layout = columns();
+    let start = Node::dock(DockEdge::Start, vec![Column::new(vec![g(&[7], 0)]).with_iconic(true)]);
+    let Some(root) = layout.root.take() else { panic!("no root") };
+    layout.root = Some(Node::split(Axis::X, SplitSize::FixedFirst(48.0), start, root));
+    layout.apply(Action::resize_flyout_width(3, Some(350.0))).unwrap();
+    layout.apply(Action::move_group(3, Target::at(7, DockPlacement::group(true, None)))).unwrap();
+    assert_eq!(flyout(&layout, 3), Some(350.0), "a group from another collapsed column keeps its own");
 }
 
 /// Collapse to icons is a state of every column: a floating window collapses and stays floating; groups leaving a

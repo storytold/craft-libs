@@ -125,6 +125,11 @@ pub struct Frame<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Packet {
     pub data: Vec<u8>,
+    /// Presentation timestamp: the `pts` given to [`Encoder::encode_at`], or from [`Encoder::encode`]
+    /// one more than the previous picture's (0 for the first picture).
+    pub pts: i64,
+    /// Decoding timestamp. Pictures are not reordered, so it is always `pts`.
+    pub dts: i64,
     /// IDR picture.
     pub keyframe: bool,
 }
@@ -212,6 +217,8 @@ pub struct Encoder {
     frames: u64,
     /// POC of the previous picture (relative to the last IDR).
     poc: u32,
+    /// `pts` of the previous picture.
+    last_pts: Option<i64>,
     reference: Option<[Vec<u16>; 3]>,
     recon: Option<[Vec<u16>; 3]>,
     rc: Option<RateCtl>,
@@ -272,7 +279,7 @@ impl Encoder {
         };
         let sets = [params::vps(&seq), params::sps(&seq), params::pps()];
         let rc = kbps.map(|k| RateCtl::new(k, &cfg));
-        Ok(Encoder { cfg, seq, sets, frames: 0, poc: 0, reference: None, recon: None, rc })
+        Ok(Encoder { cfg, seq, sets, frames: 0, poc: 0, last_pts: None, reference: None, recon: None, rc })
     }
 
     pub fn config(&self) -> &EncoderConfig {
@@ -335,8 +342,22 @@ impl Encoder {
         Ok(out)
     }
 
-    /// Encodes one picture.
+    /// Encodes one picture, stamped one more than the previous picture's `pts` (0 for the first).
     pub fn encode(&mut self, frame: &Frame) -> Result<Packet, Error> {
+        let pts = match self.last_pts {
+            None => 0,
+            Some(last) => last.checked_add(1).ok_or_else(|| Error::InvalidFrame(format!("no pts follows {last}")))?,
+        };
+        self.encode_at(frame, pts)
+    }
+
+    /// Encodes one picture with the presentation timestamp `pts`, in the caller's time base. Each `pts`
+    /// must be greater than the previous picture's; an [`Error::InvalidFrame`] for one that is not
+    /// leaves the encoder as it was.
+    pub fn encode_at(&mut self, frame: &Frame, pts: i64) -> Result<Packet, Error> {
+        if let Some(last) = self.last_pts.filter(|&last| pts <= last) {
+            return Err(Error::InvalidFrame(format!("pts {pts} is not after the previous picture's pts {last}")));
+        }
         let src = self.pad_input(frame)?;
         let keyint = self.cfg.keyint as u64;
         let idr = self.reference.is_none() || (keyint > 0 && self.frames.is_multiple_of(keyint));
@@ -394,6 +415,68 @@ impl Encoder {
         self.recon = Some([crop(&rec[0], w, ow, oh), crop(&rec[1], w / 2, ow / 2, oh / 2), crop(&rec[2], w / 2, ow / 2, oh / 2)]);
         self.reference = Some(rec);
         self.frames += 1;
-        Ok(Packet { data, keyframe: idr })
+        self.last_pts = Some(pts);
+        Ok(Packet { data, pts, dts: pts, keyframe: idr })
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    fn encoder(keyint: u32) -> Encoder {
+        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
+        cfg.keyint = keyint;
+        Encoder::new(cfg).unwrap()
+    }
+
+    fn picture(enc: &mut Encoder, pts: Option<i64>) -> Result<Packet, Error> {
+        let (y, c) = (vec![128u16; 16 * 16], vec![128u16; 8 * 8]);
+        let frame = Frame { y: &y, u: &c, v: &c, y_stride: 16, uv_stride: 8 };
+        match pts {
+            Some(pts) => enc.encode_at(&frame, pts),
+            None => enc.encode(&frame),
+        }
+    }
+
+    #[test]
+    fn encode_numbers_pictures_from_zero() {
+        let mut enc = encoder(60);
+        let stamps: Vec<_> = (0..3).map(|_| picture(&mut enc, None).map(|p| (p.pts, p.dts)).unwrap()).collect();
+        assert_eq!(stamps, [(0, 0), (1, 1), (2, 2)]);
+    }
+
+    #[test]
+    fn encode_at_keeps_the_callers_timestamps() {
+        let mut enc = encoder(60);
+        let stamps: Vec<_> = [-3000, 0, 3003, 6006].map(|pts| picture(&mut enc, Some(pts)).map(|p| (p.pts, p.dts)).unwrap()).to_vec();
+        assert_eq!(stamps, [(-3000, -3000), (0, 0), (3003, 3003), (6006, 6006)]);
+    }
+
+    #[test]
+    fn encode_continues_after_the_last_given_timestamp() {
+        let mut enc = encoder(60);
+        assert_eq!(picture(&mut enc, Some(900)).unwrap().pts, 900);
+        assert_eq!(picture(&mut enc, None).unwrap().pts, 901);
+    }
+
+    #[test]
+    fn a_timestamp_that_does_not_increase_is_rejected_without_a_picture() {
+        let mut enc = encoder(2);
+        assert!(picture(&mut enc, Some(10)).unwrap().keyframe);
+        for pts in [10, 9, i64::MIN] {
+            assert!(matches!(picture(&mut enc, Some(pts)), Err(Error::InvalidFrame(_))), "pts {pts} accepted");
+        }
+        // The rejected calls coded nothing: the next picture is still the P picture before the next IDR.
+        let next = picture(&mut enc, Some(11)).unwrap();
+        assert_eq!((next.pts, next.keyframe), (11, false));
+        assert!(picture(&mut enc, Some(12)).unwrap().keyframe);
+    }
+
+    #[test]
+    fn encode_after_the_largest_timestamp_is_rejected() {
+        let mut enc = encoder(60);
+        assert_eq!(picture(&mut enc, Some(i64::MAX)).unwrap().pts, i64::MAX);
+        assert!(matches!(picture(&mut enc, None), Err(Error::InvalidFrame(_))));
     }
 }

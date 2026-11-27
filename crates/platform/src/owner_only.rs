@@ -778,9 +778,17 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)(IO)R").output().unwrap();
         assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
         let sddl = sddl_of(&dir).unwrap();
-        assert!(sddl.contains(";IO;") && sddl.contains(";S-1-5-32-545)"), "the inherit-only entry for Users is read: {sddl}");
+        let users = sddl
+            .split('(')
+            .filter_map(|ace| ace.split(')').next())
+            .find(|ace| ace.split(';').nth(1).is_some_and(|flags| flags.contains("IO")) && ace.ends_with(";S-1-5-32-545"));
+        let users = users.unwrap_or_else(|| panic!("the inherit-only entry for Users is read: {sddl}"));
+        // The folder also inherits the temp folder's entries (Administrators on a CI runner), which the check reports
+        // first, so it is asked about the Users entry alone.
         let me = current_user_sid().unwrap();
-        assert!(foreign_folder_access(&sddl, &me).is_some_and(|p| p.contains("S-1-5-32-545")), "{sddl}");
+        let only_users = format!("O:{}D:({users})", section(&sddl, "O:").unwrap());
+        assert!(foreign_folder_access(&only_users, &me).is_some_and(|p| p.contains("S-1-5-32-545")), "{sddl}");
+        assert_eq!(foreign_access(&only_users, &me), None, "a file's check skips the inherit-only entry: {sddl}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

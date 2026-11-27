@@ -11,7 +11,7 @@ const MAX_INFLATED: usize = 64 << 20;
 /// may inflate to (`craft_pptx::MAX_TOTAL`). Pictures are the only part of a `.ppt`
 /// that inflates, so a small hostile file can't make the import hold more than a `.pptx` could.
 /// It also fits a 32-bit `usize` (wasm32), where a 4 GiB constant wraps to 0.
-const MAX_TOTAL: usize = 2 << 30;
+pub(crate) const MAX_TOTAL: usize = 2 << 30;
 // A zero or tiny budget would drop every picture without a word, and the shift above can wrap on
 // a 32-bit target (wasm32) without any error, so the build checks it on every target.
 const _: () = assert!(MAX_TOTAL >= MAX_INFLATED);

@@ -61,6 +61,9 @@ impl<W: Write + Seek> Writer<W> {
 
     /// Adds a directory entry with the deterministic 1980 timestamp.
     pub fn add_directory(&mut self, name: &str) -> Result<(), Error> {
+        if crate::entry::has_traversal_component(name) {
+            return Err(Error::Write(format!("{name}: path traversal components are not permitted")));
+        }
         let options = zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::default());
         self.zip.add_directory(name, options).map_err(|e| Error::Write(format!("{name}: {e}")))
     }
@@ -87,6 +90,9 @@ impl<W: Write + Seek> Writer<W> {
     }
 
     fn add_entry(&mut self, name: &str, data: &[u8], compression: Compression, alignment: u16, large_file: bool) -> Result<(), Error> {
+        if crate::entry::has_traversal_component(name) {
+            return Err(Error::Write(format!("{name}: path traversal components are not permitted")));
+        }
         let (method, level) = match compression {
             Compression::Stored => (zip::CompressionMethod::Stored, None),
             Compression::Deflated => (zip::CompressionMethod::Deflated, Some(6)),
@@ -106,6 +112,9 @@ impl<W: Write + Seek> Writer<W> {
     /// Adds an entry by streaming it into the compressor, so large generated entries need not
     /// first be buffered in memory. A name the archive already has is an error.
     pub fn add_with(&mut self, name: &str, compression: Compression, write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>) -> Result<(), Error> {
+        if crate::entry::has_traversal_component(name) {
+            return Err(Error::Write(format!("{name}: path traversal components are not permitted")));
+        }
         let (method, level) = match compression {
             Compression::Stored => (zip::CompressionMethod::Stored, None),
             Compression::Deflated => (zip::CompressionMethod::Deflated, Some(6)),

@@ -2,7 +2,7 @@ name: Shared format crates
 
 on:
   push:
-    branches: [main, next]
+    branches: [main]
     paths:
       - "crates/xml/**"
       - "crates/mime/**"
@@ -15,8 +15,10 @@ on:
       - "crates/silhouette-studio/**"
       - "crates/tiff/**"
       - "crates/heif/**"
+      - "crates/pst/**"
       - "crates/cms/**"
       - "crates/cdr/**"
+      - "crates/texture/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formats.yml"
@@ -33,8 +35,10 @@ on:
       - "crates/silhouette-studio/**"
       - "crates/tiff/**"
       - "crates/heif/**"
+      - "crates/pst/**"
       - "crates/cms/**"
       - "crates/cdr/**"
+      - "crates/texture/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formats.yml"
@@ -67,9 +71,11 @@ jobs:
           - { crate: craft-svg-paths, features: "" }
           - { crate: craft-silhouette-studio, features: "" }
           - { crate: craft-tiff, features: "" }
-          - { crate: craft-heif, features: "testdata" }
+          - { crate: craft-heif, features: "testdata test-support" }
+          - { crate: craft-pst, features: "test-writer test-support" }
           - { crate: craft-cms, features: "" }
           - { crate: craft-cdr, features: "synth" }
+          - { crate: craft-texture, features: "dds parallel" }
     # fmt, clippy with default and with all features, and the tests run in the Workspace gate on
     # every OS; this lints each feature alone and checks the web build.
     name: ${{ matrix.crate }} feature sets, WASM

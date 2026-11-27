@@ -2442,6 +2442,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn command(&self) -> Option<&ResolvedCommand>`. The bound command as step 1 resolved it, with the scoped bindings of the scopes above the component.
   - `pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<std::sync::Arc<ResolvedCommand>>`. `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
   - `pub fn column_room(&self) -> Option<f32>`. The width a component whose height follows its width (wrapped text, a square plot) sizes at: the room the
+  - `pub fn in_row(&self) -> bool`. Whether the component is a direct child of a `Row` body, a bar's included. A component that could wrap into
   - `pub fn picture_width(&self, least: f32, most: f32) -> f32`. The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
   - `pub fn picture_size(&self, least: f32, most: f32, height: impl FnOnce(f32) -> f32) -> Vec2`. The size of a picture whose height follows from its width (a square graph, a wheel, an image at its aspect):
   - `pub fn label(&self) -> Label`. The label as given.
@@ -3058,14 +3059,15 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn scaled(self, scale: f32) -> Self`. The width with a document width multiplied by `scale` (a view's zoom); a theme width stays as the theme names
 - `craft_ui::primitives::DataWidth`: `pub struct DataWidth`. A line width the data gives (a path's thickness, a pen size), in screen points: the caller maps a document width
   - `pub const fn points(points: f32) -> Self`. A width of `points`.
-- `craft_ui::primitives::DocRun`: `pub struct DocRun<'a> { pub text: Cow<'a, str>, pub font: FontRef, pub size: f32, pub weight: u16, pub italic: bool, pub color: DataColor, pub underline: bool, pub strikethrough: bool, pub indent: f32 }`. One run of document text.
+- `craft_ui::primitives::DocRun`: `pub struct DocRun<'a> { pub text: Cow<'a, str>, pub font: FontRef, pub size: f32, pub weight: u16, pub italic: bool, pub color: DataColor, pub underline: bool, pub strikethrough: bool, pub indent: f32, pub coords: Cow<'a, [([u8; 4], f32)]> }`. One run of document text.
   - `pub fn new(text: impl Into<Cow<'a, str>>, font: FontRef, size: f32, color: DataColor) -> Self`. A regular-weight upright run without lines or indent.
   - `pub fn italic(mut self) -> Self`. Italic.
   - `pub fn bold(mut self) -> Self`. Bold weight.
   - `pub fn underline(mut self) -> Self`. Underlined.
   - `pub fn strikethrough(mut self) -> Self`. Struck through.
   - `pub fn indent(mut self, points: f32) -> Self`. `points` of space before the run.
-  - `pub fn into_owned(self) -> DocRun<'static>`. The run owning its text.
+  - `pub fn coords(mut self, coords: impl Into<Cow<'a, [([u8; 4], f32)]>>) -> Self`. The run drawn at the variation coordinates `coords` (axis tag, value) of its face.
+  - `pub fn into_owned(self) -> DocRun<'static>`. The run owning its text and coordinates.
 - `craft_ui::primitives::DocText`: `pub struct DocText<'a> { pub runs: &'a [DocRun<'a>], pub wrap: Option<f32>, pub align: HAlign, pub elide: bool }`. Document text: runs with their own font, size and colour. On `TextRun` these fields would let any component
   - `pub const fn new(runs: &'a [DocRun<'a>]) -> Self`. Unwrapped document text of `runs`.
   - `pub const fn elide(mut self) -> Self`. Cuts the text to one row with an ellipsis at the end.
@@ -4013,7 +4015,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub const fn points_per_inch(self) -> f64`. How many points make an inch.
 - `craft_ui::runtime::env::ResolvedRoot`: `pub struct ResolvedRoot { pub mode: Mode, pub contrast: Contrast, pub motion: MotionMode }`. The mode, contrast and motion of a pass, with `System` resolved.
 - `craft_ui::runtime::env::RevealEdge`: `pub enum RevealEdge { Top, Start, End }`. An edge of the window whose slots a pointer at the edge reveals in body-only mode. The bottom edge and the centre
-- `craft_ui::runtime::env::RootEnv`: `pub struct RootEnv { pub sizes: Arc<AppSizes>, pub text_size: TextSize, pub direction: Direction, pub motion: MotionChoice, pub mode: ModeChoice, pub contrast: ContrastChoice, pub density: Size, pub scale: Scale, pub tab_all_controls: bool, pub tab_toggles_chrome: bool, pub escape_leaves_fields: bool, pub shortcuts_repeat: bool, pub dialog_tab: TabReach, pub canvas_pattern: bool, pub cursor_follows_zoom: bool, pub tooltips: bool, pub values: AppValues, pub today: Option<CalendarDate>, pub wheel: WheelSpeed, pub alt_codes: AltCodePages, pub ctrl_wheel_pinch: bool }`. The app's root values each frame.
+- `craft_ui::runtime::env::RootEnv`: `pub struct RootEnv { pub sizes: Arc<AppSizes>, pub text_size: TextSize, pub direction: Direction, pub motion: MotionChoice, pub mode: ModeChoice, pub contrast: ContrastChoice, pub density: Size, pub scale: Scale, pub tab_all_controls: bool, pub tab_toggles_chrome: bool, pub escape_leaves_fields: bool, pub shortcuts_repeat: bool, pub dialog_tab: TabReach, pub canvas_pattern: bool, pub cursor_follows_zoom: bool, pub tooltips: bool, pub values: AppValues, pub today: Option<CalendarDate>, pub wheel: WheelSpeed, pub pointer_scoped_field_wheel: bool, pub alt_codes: AltCodePages, pub ctrl_wheel_pinch: bool }`. The app's root values each frame.
   - `pub fn new() -> Self`. A root with every value at its default.
   - `pub fn scale(mut self, scale: Scale) -> Self`. Sets the interface scale.
   - `pub fn direction(mut self, direction: Direction) -> Self`. Sets the layout direction.
@@ -4035,6 +4037,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn component_set(&self) -> ComponentSet`. The component set the root's values carry.
   - `pub fn today(mut self, date: CalendarDate) -> Self`. Sets today's date, as the host's clock and time zone give it.
   - `pub fn wheel_speed(mut self, speed: WheelSpeed) -> Self`. Sets this frame's wheel speed.
+  - `pub fn pointer_scoped_field_wheel(mut self, enabled: bool) -> Self`. Sends the wheel to a focused field only while the pointer is over it when enabled.
   - `pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self`. Sets the code pages that decode Alt+numpad codes.
   - `pub fn ctrl_wheel_pinch(mut self, pinch: bool) -> Self`. Sets whether a fractional Ctrl+wheel arrives as a pinch (`ctrl_wheel_pinch`).
 - `craft_ui::runtime::env::RowPressed`: `pub enum RowPressed { Row, Cell(ColumnKey), Part { was_lead: bool } }`. Where the collection holds a primary press on a row, within slop, or the press a part of the row holds.
@@ -4077,7 +4080,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn mode(mut self, mode: Mode) -> Self`. Resolves in `mode`: a plot that is dark in every theme, a preview of the other mode.
   - `pub fn contrast(mut self, contrast: Contrast) -> Self`. Resolves under `contrast`.
   - `pub fn density(mut self, density: Size) -> Self`. Resolves at the density preset `density`.
-- `craft_ui::runtime::env::UnitKind`: `pub enum UnitKind { Pixels, Percent, Degrees, Points, Times, Inches, Centimetres, Millimetres, Picas, PixelsPerInch, PixelsPerCentimetre, Minutes, Columns, LinesPerInch, LinesPerCentimetre, Feet, Yards, Metres, Q, Ha, Letters, Hyphens }`. What a number counts.
+- `craft_ui::runtime::env::UnitKind`: `pub enum UnitKind { Pixels, Percent, Degrees, Points, Times, Inches, Centimetres, Millimetres, Picas, PixelsPerInch, PixelsPerCentimetre, Minutes, Columns, LinesPerInch, LinesPerCentimetre, Feet, Yards, Metres, Q, Ha, Letters, Hyphens, PerInch, Milliseconds }`. What a number counts.
   - `pub const LENGTHS: [UnitKind; 5]`. The lengths a unit choice offers. [`per_inch`](Self::per_inch) answers for more kinds (feet, yards, metres, Q,
   - `pub const fn decimals(self) -> RangeInclusive<usize>`. The digits after the decimal mark a number of this kind shows by default, at most.
   - `pub const fn step(self) -> f64`. What one arrow press, wheel notch or scrub point changes a number of this kind by, where the control that shows
@@ -4343,9 +4346,11 @@ The key stage (spec 9.1, 9.2, 9.3, 9.7): the input hook strips the keys the runt
 Layout memory: sizes one pass measures and the next pass places by, the one discard pass a change asks for, what
 
 - `craft_ui::runtime::layout_memory::emit_text`: `pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>)`. Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
+- `craft_ui::runtime::layout_memory::emit_width`: `pub fn emit_width(ctx: &Context, id: Id, width: f32)`. Hands forward a width a run measured under `id` that a step outside the content that measured it sizes by, as
 - `craft_ui::runtime::layout_memory::forget_kept`: `pub fn forget_kept(ctx: &Context)`. Drops every kept measurement, so the next pass measures each body as a first pass would.
 - `craft_ui::runtime::layout_memory::kept_leaves`: `pub fn kept_leaves(ctx: &Context) -> usize`. How many component entries the valid kept measurements hold, each body counting only the components directly in
 - `craft_ui::runtime::layout_memory::text`: `pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>>`. The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.
+- `craft_ui::runtime::layout_memory::width`: `pub fn width(ctx: &Context, id: Id) -> Option<f32>`. The width a run of this pass handed forward under `id` ([`emit_width`]), or a kept transcript gave this pass.
 
 ## `craft_ui::runtime::memory`
 

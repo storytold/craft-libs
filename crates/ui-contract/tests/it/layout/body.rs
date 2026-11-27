@@ -595,3 +595,24 @@ fn a_scrolling_container_in_a_right_to_left_row_measures_and_shows_finite() {
         assert!(panel.min.x > beside.max.x - SLACK, "under RTL the container is right of the probe after it: {dump}");
     }
 }
+
+/// A labelled container with a footer, shown in a rect narrower than its padding, in either direction: its measuring
+/// run places the footer under the control column of a line with no room, and the container shows.
+#[trial]
+fn a_labelled_container_narrower_than_its_padding_places_its_footer() {
+    use craft_ui::contract::{FooterRegion, Pad, SideLabel};
+    use craft_ui_test_kit::body::Slab;
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let (_, rects) = lay_out(Some(direction), |ui| {
+            let at = Rect::from_min_size(ui.available_rect_before_wrap().min, Vec2::new(4.0, 60.0));
+            let props = ContainerProps::new().label(SideLabel::new()).footer(FooterRegion::new()).pad(Pad::Regular).sizing(Sizing::FillWidth);
+            let narrow = ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+                Slab::new(props).label("Balance").id_salt("field").show(ui, |ui, _| {
+                    Block::new(ITEM).show(ui);
+                })
+            });
+            vec![narrow.inner.output.rect]
+        });
+        assert!(rects[0].min.is_finite() && rects[0].max.is_finite(), "{direction:?}: the container shows at {:?}", rects[0]);
+    }
+}
