@@ -1414,4 +1414,131 @@ mod tests {
         let back = read_chart_xml(&written).unwrap();
         assert!(back.series.iter().all(|s| !s.secondary_axis), "the edited primary-axis assignment is written");
     }
+
+    #[test]
+    fn review_6093532941_title_edit_keeps_same_kind_secondary_axis_and_scale() {
+        let xml = same_kind_chart_xml().replace(
+            r#"<c:valAx><c:axId val="4"/><c:scaling><c:max val="90"/></c:scaling><c:axPos val="r"/><c:crossAx val="3"/></c:valAx>"#,
+            r#"<c:valAx><c:axId val="4"/><c:scaling><c:min val="2"/><c:max val="90"/></c:scaling><c:delete val="1"/><c:axPos val="r"/><c:numFmt formatCode="0.00%" sourceLinked="0"/><c:crossAx val="3"/><c:majorUnit val="5"/></c:valAx>"#,
+        );
+        let mut edited = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(edited.kind, ChartType::Column);
+        assert_eq!((edited.y2_min, edited.y2_max, edited.y2_major), (Some(2.0), Some(90.0), Some(5.0)));
+        assert_eq!((edited.y2_format.as_deref(), edited.y2_hidden), (Some("0.00%"), true));
+        edited.title = Some("Only the chart title changed".into());
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept, "the title edit must take the XML rebuilding route");
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.title, edited.title);
+        assert!(!back.series.iter().find(|s| s.name == "Primary").unwrap().secondary_axis);
+        assert!(back.series.iter().find(|s| s.name == "Secondary").unwrap().secondary_axis, "a title edit must not move the secondary series");
+        assert_eq!((back.y2_min, back.y2_max, back.y2_major), (edited.y2_min, edited.y2_max, edited.y2_major));
+        assert_eq!((back.y2_format.as_deref(), back.y2_hidden), (edited.y2_format.as_deref(), edited.y2_hidden));
+        assert_eq!(back.y_max, edited.y_max, "the primary scale remains independent");
+
+        let doc = crate::xmlx::parse(&written).unwrap();
+        let plot = doc.path(&[Local("chart"), Local("plotArea")]).unwrap();
+        let groups = plot.children(Local("barChart")).collect::<Vec<_>>();
+        assert_eq!(groups.len(), 2, "same type on different axis pairs needs distinct plot groups");
+        let pair = |name: &str| {
+            let group = groups.iter().find(|g| g.children(Local("ser")).any(|s| rich_text(s).as_deref() == Some(name))).unwrap();
+            group.children(Local("axId")).map(|id| id.attr_local("val").unwrap().to_string()).collect::<Vec<_>>()
+        };
+        let (primary, secondary) = (pair("Primary"), pair("Secondary"));
+        assert_eq!((primary.len(), secondary.len()), (2, 2));
+        assert!(primary.iter().all(|id| !secondary.contains(id)), "the secondary pair owns distinct axis IDs");
+        for pair in [&primary, &secondary] {
+            for (i, id) in pair.iter().enumerate() {
+                let axis = plot
+                    .elements()
+                    .find(|a| {
+                        matches!(a.local(), "catAx" | "valAx")
+                            && a.child(Local("axId")).and_then(|v| v.attr_local("val")) == Some(id.as_str())
+                    })
+                    .unwrap();
+                assert_eq!(axis.child(Local("crossAx")).and_then(|v| v.attr_local("val")), Some(pair[1 - i].as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn review_6093532941_series_kind_edit_rebuilds_without_chart_kind_change() {
+        let xml = same_kind_chart_xml().replace(
+            r#"<c:axId val="3"/><c:axId val="4"/>"#,
+            r#"<c:axId val="1"/><c:axId val="2"/>"#,
+        );
+        let mut edited = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(edited.kind, ChartType::Column);
+        assert!(edited.series.iter().all(|s| !s.secondary_axis));
+        edited.series.iter_mut().find(|s| s.name == "Primary").unwrap().kind = Some(ChartType::Line);
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept, "an explicit series-type edit must rebuild the unchanged chart-wide type");
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.series.iter().find(|s| s.name == "Primary").unwrap().kind, Some(ChartType::Line));
+        assert_eq!(back.series.iter().find(|s| s.name == "Secondary").unwrap().kind, Some(ChartType::Column));
+
+        // The former reader used the group's marker switch rather than the retained per-series
+        // none symbols: its unchanged chart-wide baseline genuinely differs from today's reader.
+        let xml = metadata_chart(
+            r#"<c:lineChart><c:grouping val="standard"/>
+<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Edited</c:v></c:tx><c:marker><c:symbol val="none"/></c:marker><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>
+<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Inherited</c:v></c:tx><c:marker><c:symbol val="none"/></c:marker><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>7</c:v></c:pt></c:numLit></c:val></c:ser><c:marker val="1"/></c:lineChart>"#,
+        );
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        assert_eq!(chart_from(&root).unwrap().kind, ChartType::Line);
+        let mut legacy = legacy_chart_from(&root).unwrap();
+        assert_eq!((legacy.kind, legacy.raw_metadata_version), (ChartType::LineMarkers, 0));
+        legacy.raw = Some(xml);
+        legacy.series[0].kind = Some(ChartType::Area);
+        let (written, kept) = crate::chart::write::chart_xml(&legacy);
+        assert!(!kept);
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.series.iter().find(|s| s.name == "Edited").unwrap().kind, Some(ChartType::Area), "legacy provenance must not turn an unchanged chart-wide type into an override");
+        assert_eq!(back.series.iter().find(|s| s.name == "Inherited").unwrap().kind, Some(ChartType::LineMarkers));
+    }
+
+    #[test]
+    fn review_6093532941_series_kind_without_raw_remains_authoritative() {
+        let chart = Chart {
+            kind: ChartType::Column,
+            categories: vec!["Category".into()],
+            series: vec![Series { name: "Explicit area".into(), kind: Some(ChartType::Area), values: vec![Some(7.0)], ..Default::default() }],
+            ..Default::default()
+        };
+        assert!(chart.raw.is_none());
+        let (written, kept) = crate::chart::write::chart_xml(&chart);
+        assert!(!kept);
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.kind, ChartType::Area, "without a raw baseline there is no chart-wide edit to override the explicit series type");
+        assert_eq!(back.series[0].kind, Some(ChartType::Area));
+        assert_eq!((back.series[0].name.as_str(), &back.series[0].values), (chart.series[0].name.as_str(), &chart.series[0].values));
+    }
+
+    #[test]
+    fn review_6093532941_chart_kind_edit_overrides_imported_series_kinds() {
+        let xml = same_kind_chart_xml()
+            .replacen(
+                r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>"#,
+                r#"<c:areaChart><c:grouping val="standard"/>"#,
+                1,
+            )
+            .replacen("</c:barChart>", "</c:areaChart>", 1);
+        let root = crate::xmlx::parse(xml.as_bytes()).unwrap();
+        for legacy in [false, true] {
+            let mut chart = if legacy { legacy_chart_from(&root).unwrap() } else { chart_from(&root).unwrap() };
+            chart.raw = Some(xml.clone());
+            assert_eq!(chart.kind, ChartType::Combo);
+            assert!(chart.series.iter().any(|s| s.kind == Some(ChartType::Column)));
+            assert!(chart.series.iter().any(|s| s.kind == Some(ChartType::Area)));
+            let names_and_values = chart.series.iter().map(|s| (s.name.clone(), s.values.clone())).collect::<Vec<_>>();
+            chart.kind = ChartType::Line;
+            let (written, kept) = crate::chart::write::chart_xml(&chart);
+            assert!(!kept);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.kind, ChartType::Line, "an actual chart-wide edit wins for legacy={legacy}");
+            assert!(back.series.iter().all(|s| s.kind == Some(ChartType::Line)), "imported overrides must not undo the chart-wide edit");
+            assert_eq!(back.series.iter().map(|s| (s.name.clone(), s.values.clone())).collect::<Vec<_>>(), names_and_values);
+        }
+    }
+
 }
