@@ -798,6 +798,75 @@ fn merge_axis_kinds(axis_kinds: &mut [Option<ChartType>; 2], emitted: [Option<Ch
     }
 }
 
+fn plots_and_axes(w: &mut Writer, c: &Chart, raw_kind: Option<ChartType>) {
+    let indexed: Vec<(usize, &Series)> = c.series.iter().enumerate().collect();
+    let main = match c.kind {
+        ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
+        k => k,
+    };
+    let override_kind = (c.kind != ChartType::Combo && raw_kind.is_some_and(|kind| kind != c.kind)).then_some(c.kind);
+    let effective = indexed.iter().map(|(i, s)| (*i, *s, override_kind.unwrap_or(s.kind.unwrap_or(main)))).collect::<Vec<_>>();
+    let first = effective.first().map_or(main, |(_, _, kind)| *kind);
+    let combo = c.kind == ChartType::Combo || effective.iter().any(|(_, _, kind)| *kind != first);
+    let normalize = |kind| {
+        if combo && matches!(group_of(kind), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { kind }
+    };
+    let mut kinds = Vec::new();
+    for (_, _, kind) in &effective {
+        let kind = normalize(*kind);
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    if kinds.is_empty() && !combo {
+        kinds.push(main);
+    }
+    let override_markers = match override_kind {
+        Some(ChartType::Line) => Some(false),
+        Some(ChartType::LineMarkers) => Some(true),
+        _ => None,
+    };
+    let mut axis_kinds: [Option<ChartType>; 2] = [None, None];
+    for kind in &kinds {
+        let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
+        let emitted = plot_kind(w, c, *kind, &list, override_markers);
+        merge_axis_kinds(&mut axis_kinds, emitted);
+    }
+    if !combo
+        && !matches!(
+            first,
+            ChartType::Column
+                | ChartType::StackedColumn
+                | ChartType::PercentColumn
+                | ChartType::Bar
+                | ChartType::StackedBar
+                | ChartType::PercentBar
+                | ChartType::Line
+                | ChartType::LineMarkers
+                | ChartType::StackedLine
+                | ChartType::Area
+                | ChartType::StackedArea
+                | ChartType::Pie
+                | ChartType::Doughnut
+                | ChartType::Scatter
+                | ChartType::Bubble
+                | ChartType::Radar
+                | ChartType::FilledRadar
+                | ChartType::Stock
+        )
+    {
+        log::warn!("pptx: {} chart written as a column chart", first.label());
+    }
+    let axis_group = if combo { Group::Bar } else { group_of(first) };
+    if !matches!(axis_group, Group::Pie | Group::Doughnut) {
+        let primary_kind = if combo { axis_kinds[0].or(axis_kinds[1]).unwrap_or(first) } else { first };
+        axes(w, c, axis_group, primary_kind, false);
+        if let Some(secondary_kind) = axis_kinds[1] {
+            axes(w, c, axis_group, if combo { secondary_kind } else { first }, true);
+        }
+    }
+}
+
 /// The chart part XML, and whether it is the original part (so its relationships still apply).
 pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     // A chart too large to model is written back as it was read.
@@ -866,72 +935,7 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     }
     w.open("c:plotArea", &[]);
     w.empty("c:layout", &[]);
-    let indexed: Vec<(usize, &Series)> = c.series.iter().enumerate().collect();
-    let main = match c.kind {
-        ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
-        k => k,
-    };
-    let override_kind = (c.kind != ChartType::Combo && raw_kind.is_some_and(|kind| kind != c.kind)).then_some(c.kind);
-    let effective = indexed.iter().map(|(i, s)| (*i, *s, override_kind.unwrap_or(s.kind.unwrap_or(main)))).collect::<Vec<_>>();
-    let first = effective.first().map_or(main, |(_, _, kind)| *kind);
-    let combo = c.kind == ChartType::Combo || effective.iter().any(|(_, _, kind)| *kind != first);
-    let normalize = |kind| {
-        if combo && matches!(group_of(kind), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { kind }
-    };
-    let mut kinds = Vec::new();
-    for (_, _, kind) in &effective {
-        let kind = normalize(*kind);
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
-        }
-    }
-    if kinds.is_empty() && !combo {
-        kinds.push(main);
-    }
-    let override_markers = match override_kind {
-        Some(ChartType::Line) => Some(false),
-        Some(ChartType::LineMarkers) => Some(true),
-        _ => None,
-    };
-    let mut axis_kinds: [Option<ChartType>; 2] = [None, None];
-    for kind in &kinds {
-        let list = effective.iter().filter(|(_, _, k)| normalize(*k) == *kind).map(|(i, s, _)| (*i, *s)).collect::<Vec<_>>();
-        let emitted = plot_kind(&mut w, c, *kind, &list, override_markers);
-        merge_axis_kinds(&mut axis_kinds, emitted);
-    }
-    if !combo
-        && !matches!(
-            first,
-            ChartType::Column
-                | ChartType::StackedColumn
-                | ChartType::PercentColumn
-                | ChartType::Bar
-                | ChartType::StackedBar
-                | ChartType::PercentBar
-                | ChartType::Line
-                | ChartType::LineMarkers
-                | ChartType::StackedLine
-                | ChartType::Area
-                | ChartType::StackedArea
-                | ChartType::Pie
-                | ChartType::Doughnut
-                | ChartType::Scatter
-                | ChartType::Bubble
-                | ChartType::Radar
-                | ChartType::FilledRadar
-                | ChartType::Stock
-        )
-    {
-        log::warn!("pptx: {} chart written as a column chart", first.label());
-    }
-    let axis_group = if combo { Group::Bar } else { group_of(first) };
-    if !matches!(axis_group, Group::Pie | Group::Doughnut) {
-        let primary_kind = if combo { axis_kinds[0].or(axis_kinds[1]).unwrap_or(first) } else { first };
-        axes(&mut w, c, axis_group, primary_kind, false);
-        if let Some(secondary_kind) = axis_kinds[1] {
-            axes(&mut w, c, axis_group, if combo { secondary_kind } else { first }, true);
-        }
-    }
+    plots_and_axes(&mut w, c, raw_kind);
     if let Some(dt) = &c.data_table {
         w.open("c:dTable", &[]);
         if dt.horizontal_border {
