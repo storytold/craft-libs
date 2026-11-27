@@ -7,6 +7,7 @@ pub(crate) mod access;
 pub(crate) mod body;
 pub(crate) mod canvas;
 pub(crate) mod collection;
+pub(crate) mod content_inset;
 pub(crate) mod contract;
 pub(crate) mod drag;
 pub(crate) mod egui_surface;

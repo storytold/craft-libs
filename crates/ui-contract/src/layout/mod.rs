@@ -3,6 +3,7 @@
 pub(crate) mod arrange;
 pub(crate) mod body;
 pub(crate) mod column_group;
+mod inset;
 mod label;
 mod slot;
 
@@ -14,6 +15,7 @@ pub use column_group::ambient_width;
 #[doc(hidden)]
 pub use column_group::report_beyond;
 pub(crate) use column_group::{Columns, GLYPHS, LABELS, Reached, ambient_room};
+pub use inset::ContentInset;
 pub use label::{control_baseline, place_label, record_control_baseline};
 pub use slot::measure_slot;
 
