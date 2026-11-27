@@ -484,6 +484,28 @@ fn a_body_part_is_hit_where_the_transform_shows_it_after_a_pan_and_a_zoom() {
     }
 }
 
+/// A press on a collection's body part over its empty space (a graph's wire) moves key focus to the collection, as a
+/// press on an item does, so the keys that act on what the part's press picked reach it.
+#[trial]
+fn a_press_on_a_body_part_focuses_the_collection() {
+    let pad = Rect::from_min_size(Pos2::new(100.0, 20.0), Vec2::new(40.0, 20.0));
+    let (shown, pressed) = (Rc::new(Shown::default()), Rc::new(Cell::new(None::<Pos2>)));
+    let mut fixture = Fixture::new({
+        let (shown, pressed) = (shown.clone(), pressed.clone());
+        move |ui: &mut Ui| {
+            let _ = Board::new(three_items()).with_body_part(pad, &pressed).id_salt("board").show_items(ui, &Count(3), &mut |key, cx| {
+                shown.note(*key, cx.rect);
+                Row::new()
+            });
+        }
+    });
+    fixture.idle(3);
+    assert_eq!(fixture.focused_stop(), None, "nothing has focus before the press");
+    fixture.click_at(shown.rect(0).min + pad.center().to_vec2()).idle(1);
+    assert!(pressed.get().is_some(), "the press takes the part");
+    assert!(fixture.focused_stop().is_some(), "the press on the part focuses the board");
+}
+
 /// A board with no items and its pad at the start of its body, which says whether it is document content.
 fn pad_board(ui: &mut Ui, document: bool) -> craft_ui::testing::story::StoryOutput {
     let pressed = Cell::new(None);

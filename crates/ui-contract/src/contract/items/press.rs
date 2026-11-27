@@ -181,18 +181,26 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // A press that a part of an item won leaves the selection alone and moves the lead to its row. A press on the
         // part of a section row (`section_part`) is the section's own, so the lead goes to it as well. Key focus goes
         // to the collection's stop with the lead, as a press on the row's own area takes it, unless the part takes
-        // focus itself or keeps it where it is.
+        // focus itself or keeps it where it is. A press on a part of the collection's own outside the rows (a graph's
+        // wire) takes key focus the same way.
         let outcome = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id));
         if let (Some(PressPhase::Down { start, .. }), Some(target)) = (outcome.phase, outcome.target)
             && target.part.is_some()
             && local(start.origin).y >= 0.0
-            && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
-            && (target.owner != cx.core.id || target.part.is_some_and(|part| part.key == SECTION))
         {
-            let key = self.source.key(at);
-            self.drags.part_press = Some((key.clone(), self.lead.key.as_ref() == Some(&key)));
-            self.move_lead(at, LeadSource::Pointer);
-            if props.focus_on_press && !target.sense.intersects(Sense::TAKE_FOCUS | Sense::KEEP_FOCUS) {
+            let row = layout
+                .hit(local(start.origin), offset)
+                .filter(|&at| self.source.enabled(at) && layout.shown(at))
+                .filter(|_| target.owner != cx.core.id || target.part.is_some_and(|part| part.key == SECTION));
+            if let Some(at) = row {
+                let key = self.source.key(at);
+                self.drags.part_press = Some((key.clone(), self.lead.key.as_ref() == Some(&key)));
+                self.move_lead(at, LeadSource::Pointer);
+            }
+            if (row.is_some() || target.owner == cx.core.id)
+                && props.focus_on_press
+                && !target.sense.intersects(Sense::TAKE_FOCUS | Sense::KEEP_FOCUS)
+            {
                 focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));
             }
         }
