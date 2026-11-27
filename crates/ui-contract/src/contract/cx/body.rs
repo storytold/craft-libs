@@ -2,7 +2,7 @@
 
 use crate::contract::label;
 use crate::contract::{Container, Resolved, Show, SideLabel};
-use crate::runtime::env::{EnvView, Label, Message};
+use crate::runtime::env::{Env, EnvView, Label, Message};
 use crate::runtime::memory::{MemoryStage, StageAccess, sealed};
 use crate::runtime::overlay::CloseReason;
 use egui::{Id, Rect, Ui};
@@ -132,7 +132,8 @@ impl<'a> BodyCx<'a> {
     /// the placement measured: the child (plus the label line when the label stacks), and the label when it is taller.
     /// `ui` is the body's `Ui`; `key` makes the child's id.
     pub fn labelled<C: Show>(&mut self, ui: &mut Ui, key: impl Hash + Debug, label: Label, side: SideLabel, child: C) -> C::Output {
-        label::flow_leaf(ui, (self.id.with(key), self.resolved.id), (self.resolved.enabled, self.resolved.size), label, side, child, None)
+        let env = Env::of(ui);
+        label::flow_leaf((ui, env), (self.id.with(key), self.resolved.id), (self.resolved.enabled, self.resolved.size), label, side, child, None)
     }
 
     /// `labelled`, with `content` shown inside the label after its text (a sample of what the option picks). The
@@ -160,14 +161,16 @@ impl<'a> BodyCx<'a> {
             Some(&super::Under::new(under.0, under.1)),
         );
         let show = Box::new(move |ui: &mut Ui, rect: Rect| {
+            let place = Env::of(ui);
             let _ = crate::contract::run::show_leaf(
                 &mut Some(crate::contract::Props::id(content, content_id)),
                 ui,
-                crate::contract::run::ShowAt::Rect(rect),
+                (crate::contract::run::ShowAt::Rect(rect), place),
                 None,
             );
         });
-        label::flow_leaf(ui, (id, self.resolved.id), under, label, side, child, Some(label::Trailing { size, show }))
+        let env = Env::of(ui);
+        label::flow_leaf((ui, env), (id, self.resolved.id), under, label, side, child, Some(label::Trailing { size, show }))
     }
 }
 

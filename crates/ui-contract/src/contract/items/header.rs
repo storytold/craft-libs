@@ -621,7 +621,7 @@ impl Header {
                 }
             }
             if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary) {
-                self.ask_menu(&ctx, Some(key.clone()), ctx.pointer_latest_pos().unwrap_or(rect.left_bottom()));
+                self.ask_menu(&ctx, Some(key.clone()), crate::runtime::pointer::frame_raw(&ctx).pos.unwrap_or(rect.left_bottom()));
             }
             if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
                 cx.start_drag(ColumnDrag { table: id, key: key.clone() }, DragPreview::None);
@@ -668,7 +668,7 @@ impl Header {
             && cx.part(ROOM).hovered
             && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary)
         {
-            self.ask_menu(&ctx, None, ctx.pointer_latest_pos().unwrap_or(room.left_bottom()));
+            self.ask_menu(&ctx, None, crate::runtime::pointer::frame_raw(&ctx).pos.unwrap_or(room.left_bottom()));
         }
         self.column_drop(cx, id, rtl);
         self.keyboard_resize(cx);

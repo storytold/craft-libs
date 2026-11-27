@@ -413,7 +413,7 @@ impl Shown {
     /// The entry `reader` keeps for `command`.
     fn find(&self, reader: &Reader, number: u32, command: &CommandRef) -> Option<u64> {
         let ids = self.by_reader.get(reader)?.get(&number)?;
-        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| entry.kept.resolved.command == *command))
+        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| *entry.kept.resolved.command == *command))
     }
 
     /// Keeps `kept` for `reader`, in place of what it kept for the same command.
@@ -848,7 +848,7 @@ impl Board {
             hint_alone: state.is_some_and(CommandState::is_hint_alone),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             edit: self.registry.edit_of(&command.id).is_some(),
-            command: command.clone(),
+            command: Arc::new(command.clone()),
             instance,
         };
         (resolved, key)
@@ -1816,7 +1816,10 @@ pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: Fi
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
-    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press, pass::now(ctx)) }.mods(mods));
+    queue(
+        ctx,
+        Fired { target: command.instance, ..Fired::new(CommandRef::clone(&command.command), source, FirePhase::Press, pass::now(ctx)) }.mods(mods),
+    );
     true
 }
 

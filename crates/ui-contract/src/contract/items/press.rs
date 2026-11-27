@@ -434,7 +434,7 @@ fn item_openers(ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<Item
                     clicked: on_part(outcome.activated),
                     ..response::PressView::default()
                 },
-                pointer: ctx.pointer_latest_pos(),
+                pointer: crate::runtime::pointer::frame_raw(ctx).pos,
             };
             let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
             Some((opener, response))
