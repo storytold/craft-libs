@@ -633,6 +633,7 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
 /// `record_shapes_in` with no note in the run records, for a caller whose own note makes the shapes again: shapes at
 /// stack positions a replay takes from the arena it joins (`sensing`), not from the recorded run.
 pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: Vec<Shape<Id>>) {
+    crate::runtime::replay::note_root(ctx, root);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
@@ -667,9 +668,30 @@ pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
 /// Records that what the running pass shows in `rect` (screen points) follows the pointer: a cursor drawn at the
 /// pointer, a readout of the point under it. A pointer move into, out of or within `rect` runs a pass even when
 /// nothing under the pointer changes ([`gate_pointer_moves`]).
+///
+/// A memoized view whose run marked a rect runs on each pointer move into, out of or within it (`runtime::lazy`).
 pub fn follows_pointer(ctx: &Context, rect: Rect) {
     crate::runtime::replay::journal(ctx, || rect, |ctx, &rect| follows_pointer(ctx, rect));
+    crate::runtime::replay::note_follows(ctx, rect);
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| record.this_follows.push(rect));
+}
+
+/// The running pass's hover point (screen points) when it lies in `rect` (screen points), for code that shows what
+/// it reads there (a readout, a cursor drawn at the point, the row under it): `rect` then follows the pointer
+/// ([`follows_pointer`]). The one way component code reads where the pointer hovers.
+pub fn hover_point_in(ctx: &Context, rect: Rect) -> Option<Pos2> {
+    let at = with_frame(ctx, |_, hover| hover).filter(|at| rect.contains(*at))?;
+    follows_pointer(ctx, rect);
+    Some(at)
+}
+
+/// Marks the hit area of a part with the bounds `rect` on `layer` (layer space) as following the pointer: its owner
+/// read the hover position there (`Cx::hover_pos`). The area is the bounds grown to the least hit size across, as
+/// sensing grows them.
+pub(crate) fn follows_part(ctx: &Context, layer: Layer, rect: Rect) {
+    let target = with_frame(ctx, |frame, _| frame.map_or(0.0, |frame| frame.target));
+    let grow = (Vec2::splat(target) - rect.size()).max(Vec2::ZERO) / 2.0;
+    follows_pointer(ctx, areas::layer_to_screen(ctx, layer) * rect.expand2(grow));
 }
 
 /// Lets a pointer move run no pass when nothing it would change differs: egui's gate
@@ -743,6 +765,7 @@ pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Laye
         || (layer, root, widgets.to_vec(), click),
         |ctx, (layer, root, widgets, click)| record_widgets(ctx, *layer, *root, widgets, *click),
     );
+    crate::runtime::replay::note_root(ctx, root);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         record.this_made.insert(root);
         record.this_made.extend(widgets.iter().copied());

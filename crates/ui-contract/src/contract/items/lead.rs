@@ -193,9 +193,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// The pointer's position, in screen space, while it is over the collection.
+    /// The pointer's position, in screen space, while it is over the collection, which then follows the pointer.
     fn hovered_pos(cx: &Cx<'_, C>) -> Option<Pos2> {
-        crate::runtime::pointer::frame_raw(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
+        let response = &cx.core.response;
+        let screen = crate::runtime::egui::areas::layer_to_screen(&cx.core.ctx, response.layer_id) * response.rect;
+        response.hovered().then(|| crate::runtime::pointer::hover_point_in(&cx.core.ctx, screen)).flatten()
     }
 
     /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,

@@ -827,7 +827,7 @@ impl<'a> TransformBox<'a> {
         let suspend = suspend_key(snap.as_ref());
         for (reference, part) in self.pointer_parts() {
             let Some(result) = cx.part_if_declared(reference) else { continue };
-            let (press, hover) = (result.press, result.hover_pos.filter(|_| result.hovered));
+            let (press, hover) = (result.press, cx.hover_pos(reference));
             let mods = self.mods.unwrap_or(press.mods);
             let acting = drag_mods(mods, suspend);
             if let Some(pos) = hover

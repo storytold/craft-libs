@@ -748,7 +748,8 @@ impl Component for MenuBar<'_> {
             };
             let open = cx.core.toggles.iter().any(|toggle| toggle.part == part && toggle.open);
             // Under the pointer a title is the active row, as it is while its menu is open or the keyboard is on it.
-            let lit = open || cx.hover_pos(part).is_some() || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
+            let lit =
+                open || cx.part_if_declared(part).is_some_and(|result| result.hovered) || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
             let mnemonic = match slot {
                 Open::Title(at) if underlined => texts[at].1.and_then(|(_, index)| index),
                 _ => None,

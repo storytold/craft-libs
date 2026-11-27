@@ -434,8 +434,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // The pointer counts as over a row only while the sensing pass puts it on this collection, so a popup or another
         // widget above it takes the hover as it does for the rows' parts.
         let outcome = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id));
-        let hover_at = ctx.pointer_latest_pos().filter(|_| outcome.hover.any());
-        let over_at = ctx.pointer_latest_pos().filter(|_| outcome.contains);
+        // The row under the pointer follows the pointer over the rows.
+        let screen = crate::runtime::egui::areas::layer_to_screen(&ctx, ui.layer_id()) * rect;
+        let pointer = (outcome.hover.any() || outcome.contains).then(|| crate::runtime::pointer::hover_point_in(&ctx, screen)).flatten();
+        let hover_at = pointer.filter(|_| outcome.hover.any());
+        let over_at = pointer.filter(|_| outcome.contains);
         self.hovered = None;
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.

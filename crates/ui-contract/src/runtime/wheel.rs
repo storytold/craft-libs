@@ -155,6 +155,7 @@ pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
         return;
     }
     crate::runtime::replay::journal(ctx, || taker, |ctx, &taker| register(ctx, taker));
+    crate::runtime::replay::note_taker(ctx, taker.owner);
     let layer = crate::runtime::overlay::drawing_parent(ctx);
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         state.this_layers.insert(taker.owner, layer);

@@ -16,10 +16,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn edge_parts(&mut self, comp: &C, pcx: &mut PartsCx<'_, C>) {
         self.edge = None;
         let Some(rule) = comp.edge_press() else { return };
-        let frame = crate::runtime::pointer::frame_raw(pcx.measure.ui.ctx());
-        let (Some(pos), true) = (frame.pos, frame.mods == rule.mods()) else { return };
+        let ctx = pcx.measure.ui.ctx().clone();
+        if crate::runtime::pointer::frame_raw(&ctx).mods != rule.mods() {
+            return;
+        }
         let Some(layout) = self.layout.clone() else { return };
         let view = self.below_header(pcx.content_rect);
+        // The band lies at the line nearest the pointer, which the rows then follow.
+        let screen = crate::runtime::egui::areas::layer_to_screen(&ctx, pcx.measure.ui.layer_id()) * view;
+        let Some(pos) = crate::runtime::pointer::hover_point_in(&ctx, screen) else { return };
         let rtl = pcx.flow.is_rtl();
         let at = self.xf.map_or(pos, |map| map.to_layer(pos));
         if !view.contains(at) {
