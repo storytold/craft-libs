@@ -174,8 +174,8 @@ pub(crate) struct Measured {
     pub(crate) fills: Option<craft_behavior::Axis>,
 }
 
-/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity, flow and environment,
-/// and its record moves with the room's position (`Place::shift_to`).
+/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, AccessKit state, opacity, flow
+/// and environment, and its record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
     /// The region its parent offered it.
@@ -187,6 +187,9 @@ pub(crate) struct Place {
     /// The font atlas the run's text points into (`Fonts::atlas_generation`): egui clears the atlas when it fills up
     /// and rebuilds it for new text options, and a kept galley's glyphs then name other glyphs.
     pub(crate) atlas: u64,
+    /// Whether the pass built AccessKit nodes (`access::builds_nodes`): a run with AccessKit off keeps no nodes, which a
+    /// pass with it on must show, and AccessKit turns on mid-session (a screen reader starts, automation reads the tree).
+    pub(crate) access: bool,
     /// The opacity everything painted in the room is faded to (`Ui::opacity`, a layer fading in or out): the run's
     /// colours hold it.
     pub(crate) opacity: f32,
@@ -214,7 +217,8 @@ struct Moved {
 
 impl Place {
     /// How a run at this place that took `rect` replays at `now`, or `None` when it cannot. The room may have moved;
-    /// its size, the layer, layout, scale, font atlas, opacity, flow and environment are the ones the run had. A record
+    /// its size, the layer, layout, scale, font atlas, AccessKit state, opacity, flow and environment are the ones the run
+    /// had. A record
     /// that shows an overlay replays only at the room and clip of its run (`Record::pinned`). Any other record moves by
     /// the room's move when that keeps where a run places content (`keeps_placement`, so a moved record is what a run
     /// there gives) and, for a move, the record holds nothing a move cannot place (`Record::movable`: no paint
@@ -233,6 +237,7 @@ impl Place {
             && now.layout == self.layout
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
+            && now.access == self.access
             && now.opacity == self.opacity
             && now.env == self.env
             && now.flow == self.flow;
@@ -513,7 +518,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`), or,
 ///   replaying a run of this frame, after that run started;
 /// - the call's key is the one of its last run (its props key after that run), and its environment (theme, density,
-///   scale, language, window active) and the flow of the body around it (`Flow`) the ones it ran in;
+///   scale, language, window active), the flow of the body around it (`Flow`) and whether the pass builds AccessKit
+///   nodes the ones it ran in;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`) and asked for no discard pass: what it added is
 ///   what the pass was thrown away for;
 /// - the shown life of no component it showed ended (`memory::ended_since`): a replay would show memory state that is

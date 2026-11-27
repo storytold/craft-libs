@@ -141,6 +141,7 @@ impl Lazy {
             layout,
             pixels_per_point: ctx.pixels_per_point(),
             atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
+            access: crate::runtime::egui::access::builds_nodes(&ctx),
             opacity: ui.opacity(),
             env: env.key,
             flow: env.flow(),
