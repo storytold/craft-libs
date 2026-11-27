@@ -3,6 +3,7 @@
 
 use craft_materialx::{Resolved, Shader, StrictMaterial};
 use craft_texture::srgb_to_linear;
+use std::collections::HashSet;
 
 use crate::surface::{
     AlphaMode, Clearcoat, Conversion, ConversionReport, ConvertError, FINITE, NON_NEGATIVE, ReportItem, Sheen, Surface, TextureBinding,
@@ -254,8 +255,9 @@ pub fn try_from_materialx(m: &StrictMaterial) -> Result<Conversion, ConvertError
     let mut inputs = Inputs { table, got: table.iter().map(|_| Got::Missing).collect() };
     let mut textures: Vec<(Role, TextureBinding)> = Vec::new();
     let mut others: Vec<(Role, String, Vec<f32>)> = Vec::new();
-    for (i, (name, value)) in m.inputs.iter().enumerate() {
-        if m.inputs[..i].iter().any(|(n, _)| n == name) {
+    let mut seen = HashSet::new();
+    for (name, value) in &m.inputs {
+        if !seen.insert(name.as_str()) {
             return Err(ConvertError::Duplicate(name.clone()));
         }
         let Some(idx) = table.iter().position(|f| f.name == name) else {
@@ -272,11 +274,22 @@ pub fn try_from_materialx(m: &StrictMaterial) -> Result<Conversion, ConvertError
                     inputs.got[idx] = Got::Constant(v);
                 }
             }
-            Resolved::Image { file, colorspace, uv_tiling } => {
+            Resolved::Image { file, colorspace, uv_tiling } | Resolved::NormalMap { file, colorspace, uv_tiling } => {
                 if matches!(f.role, Role::AlphaMode | Role::AlphaCutoff) {
                     return Err(ConvertError::BadValue { input: name.clone(), reason: "cannot be a texture" });
                 }
-                textures.push((f.role, image_binding(f, file, colorspace.as_deref(), *uv_tiling)?));
+                let binding = image_binding(f, file, colorspace.as_deref(), *uv_tiling)?;
+                let tangent = matches!(value, Resolved::NormalMap { .. });
+                let normal = matches!(f.role, Role::Normal) || (matches!(f.role, Role::CoatKept) && matches!(f.kind, Kind::Vector));
+                if normal && !tangent {
+                    report.items.push(ReportItem::Dropped { input: name.clone(), why: "world-space normal images are not supported" });
+                    continue;
+                }
+                if tangent && !normal {
+                    report.items.push(ReportItem::Dropped { input: name.clone(), why: "a normalmap image is not supported on this input" });
+                    continue;
+                }
+                textures.push((f.role, binding));
                 inputs.got[idx] = Got::Texture;
             }
         }
@@ -577,6 +590,9 @@ fn displacement(
             let mut binding = image_binding(&DISPLACEMENT, file, colorspace.as_deref(), *uv_tiling)?;
             binding.input = TextureInput::Displacement;
             textures.push(binding);
+        }
+        Some(Resolved::NormalMap { .. }) => {
+            return Err(ConvertError::BadValue { input: "displacement".into(), reason: "cannot be a normalmap image" });
         }
     }
     report.items.push(ReportItem::Unshaded { input: "displacement".into() });

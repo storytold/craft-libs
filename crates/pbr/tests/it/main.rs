@@ -6,6 +6,7 @@ mod bench;
 mod bounds;
 mod brdf;
 mod conversion_edges;
+mod conversion_followups;
 mod convert;
 mod differential;
 mod moved;

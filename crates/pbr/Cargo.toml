@@ -20,14 +20,14 @@ workspace = true
 
 [dependencies]
 craft-materialx = { workspace = true, optional = true }
-craft-mesh = { workspace = true, optional = true }
+craft-mesh = { path = "../mesh", default-features = false, optional = true }
 craft-texture = { workspace = true }
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 craft-materialx = { workspace = true }
-craft-mesh = { workspace = true }
+craft-mesh = { path = "../mesh", default-features = false }
 craft-pbr = { path = ".", features = ["parallel", "mesh", "materialx"] }
 # The differential tests run verbatim copies of the apps' previous code, which uses glam and rayon.
 glam = "0.30"

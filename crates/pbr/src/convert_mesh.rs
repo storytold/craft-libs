@@ -77,7 +77,17 @@ pub fn try_from_mesh(m: &MeshMaterial) -> Result<Conversion, ConvertError> {
     let mut textures = Vec::new();
     let mut bind =
         |name: &str, slot: &Option<TextureRef>, input: TextureInput, encoding: TextureEncoding, scale: f32, dropped: Option<&'static str>| {
-            let Some(t) = slot else { return Ok(()) };
+            let Some(t) = slot else {
+                if scale != 1.0 {
+                    let factor = match input {
+                        TextureInput::Normal => "normal_scale",
+                        TextureInput::Occlusion => "occlusion_strength",
+                        _ => name,
+                    };
+                    report.items.push(ReportItem::Dropped { input: factor.to_owned(), why: "the corresponding texture is absent" });
+                }
+                return Ok(());
+            };
             // The texture is checked before a layer that is off drops it.
             let b = binding(name, t, input, encoding, scale)?;
             if let Some(why) = dropped {

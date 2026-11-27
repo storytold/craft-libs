@@ -138,7 +138,11 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
     image becomes a texture binding and the core holds 1 times any weight in its place. A coat or
     sheen roughness image binds as `ClearcoatRoughnessFirst` or `SheenRoughnessFirst`, which read
     the first channel; the glTF bindings `ClearcoatRoughness` and `SheenRoughness` read G and A.
-    Other inputs of the shader's table are kept in `other_inputs`.
+    Tangent-space normal textures require an image connected through a `normalmap` node.
+    Direct world-space normal images are dropped with a report entry. Literal normal-map
+    inputs and authored normal-map frames are unsupported and reported. Authored `constant`,
+    `clamp`, and `mirror` image addressing modes are also reported. Other inputs of the shader's
+    table are kept in `other_inputs`.
 - **Features.** `parallel` computes rows on several threads with rayon. `mesh` and `materialx`
   add the conversions and depend on craft-mesh and craft-materialx. The default build has none of
   them, is serial and builds for `wasm32-unknown-unknown`, as do `mesh` and `materialx`. Results

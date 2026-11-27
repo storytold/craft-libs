@@ -85,6 +85,9 @@ pub enum Resolved {
     /// finite numbers is [`Error::Malformed`]. An image node with a boolean, integer, float or
     /// vector type is in the document's working color space.
     Image { file: String, colorspace: Option<String>, uv_tiling: Option<[f32; 2]> },
+    /// This variant stores an encoded tangent-space image connected through a `normalmap` node.
+    /// The fields have the same meaning as [`Self::Image`].
+    NormalMap { file: String, colorspace: Option<String>, uv_tiling: Option<[f32; 2]> },
 }
 
 /// A surface material resolved from a MaterialX document.
@@ -441,7 +444,10 @@ impl Document {
     /// `uvtiling` that is not two finite numbers are [`Error::Malformed`]. A shader input that is
     /// not in the table gives the warning `input <name> is not read`; the base weight warning of
     /// [`Document::read_material`] is not given, since the weight is read. A `normalmap` node's
-    /// `scale` other than 1 is not read and gives a warning.
+    /// `scale` other than 1 and authored `normal`, `tangent`, and `bitangent` inputs are not applied
+    /// and give warnings. Image inputs of `normalmap` nodes resolve as [`Resolved::NormalMap`].
+    /// Three-component literal normal-map inputs are unsupported and give warnings. Other literal
+    /// sizes return [`Error::Malformed`].
     /// Surface shaders may connect through graph outputs. A graph with several outputs needs a
     /// named selection; a graph with one output uses it regardless of the selection attribute.
     /// Missing node and graph-output references are errors. Supported numeric `constant` nodes
@@ -539,6 +545,8 @@ impl Document {
                     if node.name == "output" {
                         if let Some(from) = node.attr("nodename") {
                             outputs.push((format!("{graph}/{name}"), format!("{graph}/{from}")));
+                        } else if strict {
+                            outputs.push((format!("{graph}/{name}"), String::new()));
                         }
                     } else {
                         nodes.insert(format!("{graph}/{name}"), node);
@@ -666,7 +674,7 @@ fn resolve_value(
 
 fn image_tiling(value: &Resolved) -> Option<[f32; 2]> {
     match value {
-        Resolved::Image { uv_tiling, .. } => {
+        Resolved::Image { uv_tiling, .. } | Resolved::NormalMap { uv_tiling, .. } => {
             uv_tiling.filter(|n| n.iter().all(|v| *v > 0.0)).map(|n| [n[0].clamp(0.001, 1000.0), n[1].clamp(0.001, 1000.0)])
         }
         Resolved::Constant { .. } => None,
@@ -843,11 +851,25 @@ impl<'a> Resolver<'a> {
                         _ => warnings.push(format!("the uvoffset of image {node_name:?} is not read")),
                     }
                 }
+                for mode in ["uaddressmode", "vaddressmode"] {
+                    if let Some(input) = child(mode).filter(|input| has_authored_value(input)) {
+                        match input.attr("value") {
+                            Some("periodic") => {}
+                            Some("constant" | "clamp" | "mirror") | None => warnings.push(format!("the {mode} of image {node_name:?} is not read")),
+                            Some(_) => return Err(Error::Malformed(format!("the {mode} of image {node_name:?} is not a supported addressing mode"))),
+                        }
+                    }
+                }
                 let colorspace = if is_numeric_non_color(node.attr("type")) { self.working() } else { file_input.attr("colorspace").or(node_space) }
                     .map(str::to_owned);
                 Ok(Some(Resolved::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
             }
             "normalmap" => {
+                for name in ["normal", "tangent", "bitangent"] {
+                    if child(name).is_some_and(has_authored_value) {
+                        warnings.push(format!("the {name} of normalmap node {node_name:?} is not read"));
+                    }
+                }
                 // The normal is passed on without the node's scale, so a scale other than 1 is
                 // reported.
                 if let Some(scale) = child("scale").filter(|input| has_authored_value(input)) {
@@ -857,12 +879,34 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 match child("in") {
-                    Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
+                    Some(i) => Ok(match self.value(i, node_scope, node_space, hops + 1, warnings)? {
+                        Some(Resolved::Image { file, colorspace, uv_tiling }) => Some(Resolved::NormalMap { file, colorspace, uv_tiling }),
+                        Some(Resolved::Constant { values, .. }) if values.len() != 3 => {
+                            return Err(Error::Malformed(format!("the input of normalmap node {node_name:?} is not three finite numbers")));
+                        }
+                        Some(Resolved::Constant { .. }) => {
+                            warnings.push(format!("the literal input of normalmap node {node_name:?} is not supported; its value was skipped"));
+                            None
+                        }
+                        value => value,
+                    }),
                     None => Ok(None),
                 }
             }
             "convert" => {
-                let Some(i) = child("in") else { return Ok(None) };
+                let Some(i) = child("in").filter(|input| has_authored_value(input)) else {
+                    let definition = node.attr("nodedef").and_then(|name| name.strip_prefix("ND_convert_")).and_then(|name| name.split_once('_'));
+                    if let Some((from, to)) = definition
+                        && from != to
+                        && node.attr("type").is_none_or(|ty| ty == to)
+                        && let Some(count) = channels(from)
+                        && let Some(values) = converted(&vec![0.0; count], from, to)
+                    {
+                        return Ok(Some(Resolved::Constant { values, colorspace: self.working().map(str::to_owned) }));
+                    }
+                    warnings.push(format!("the input default of convert node {node_name:?} cannot be identified; its value was skipped"));
+                    return Ok(None);
+                };
                 let Some(value) = self.value(i, node_scope, node_space, hops + 1, warnings)? else { return Ok(None) };
                 let to = node.attr("type").unwrap_or("");
                 let from = self.value_type(i, node_scope)?;
@@ -884,7 +928,7 @@ impl<'a> Resolver<'a> {
                     }
                     // An image keeps its own channels, so only a convert that copies every
                     // channel as it is passes it on.
-                    image @ Resolved::Image { .. } => {
+                    image @ (Resolved::Image { .. } | Resolved::NormalMap { .. }) => {
                         let copies = from.is_some_and(|from| from == to || channels(from).is_some_and(|n| n > 1 && channels(to) == Some(n)));
                         if copies {
                             Ok(Some(image))
@@ -902,7 +946,7 @@ impl<'a> Resolver<'a> {
                 match value {
                     // A connected value keeps the color space it resolved; only a written value takes
                     // the working color space.
-                    Some(i) => match self.value(i, node_scope, node_space, hops + 1, warnings)? {
+                    Some(i) => match self.constant_value(i, node, node_scope, node_space, hops + 1, warnings)? {
                         Some(Resolved::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) && i.attr("value").is_some() => {
                             Ok(Some(Resolved::Constant { values, colorspace: self.working().map(str::to_owned) }))
                         }
@@ -927,6 +971,29 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn constant_value(
+        &self,
+        input: &'a El,
+        node: &'a El,
+        scope: Option<&str>,
+        space: Option<&'a str>,
+        hops: usize,
+        warnings: &mut Vec<String>,
+    ) -> Result<Option<Resolved>, Error> {
+        if input.attr("type").is_none()
+            && input.attr("interfacename").is_none()
+            && let Some(text) = input.attr("value")
+            && let Some(ty) = node.attr("type")
+        {
+            let typed = El::new("input").with_attr("type", ty);
+            let values = input_numbers(&typed, text)
+                .ok_or_else(|| Error::Malformed(format!("constant {:?} has a value that does not fit {ty}", node.attr("name").unwrap_or(""))))?;
+            let colorspace = if is_numeric_non_color(Some(ty)) { self.working() } else { input.attr("colorspace").or(space) };
+            return Ok(Some(Resolved::Constant { values, colorspace: colorspace.map(str::to_owned) }));
+        }
+        self.value(input, scope, space, hops, warnings)
+    }
+
     /// The key in `nodes` of the node that `input`, an input of an element in nodegraph `scope`
     /// (or at the top level), connects to.
     fn target(&self, input: &El, scope: Option<&str>) -> Result<Option<String>, Error> {
@@ -948,7 +1015,7 @@ impl<'a> Resolver<'a> {
             )
         } else if let Some(name) = input.attr("nodename") {
             let qualified = scope.map(|g| format!("{g}/{name}"));
-            qualified.filter(|q| self.nodes.contains_key(q)).or_else(|| Some(name.to_owned()))
+            Some(qualified.unwrap_or_else(|| name.to_owned()))
         } else {
             None
         };
@@ -1153,7 +1220,7 @@ mod tests {
         );
         assert_eq!(
             strict.inputs[1],
-            ("geometry_normal".into(), Resolved::Image { file: "tex/normal.png".into(), colorspace: None, uv_tiling: None })
+            ("geometry_normal".into(), Resolved::NormalMap { file: "tex/normal.png".into(), colorspace: None, uv_tiling: None })
         );
         assert_eq!(strict.inputs[2].1, Resolved::Constant { values: vec![1.0, 0.5, 0.25], colorspace: None });
         assert_eq!(strict.displacement, Some(Resolved::Constant { values: vec![0.25], colorspace: None }));
@@ -1180,7 +1247,10 @@ mod tests {
         let image = |file: &str, space: &str| Resolved::Image { file: file.into(), colorspace: Some(space.into()), uv_tiling: None };
         assert_eq!(strict.inputs[0], ("base_color".into(), image("albedo<&.png", "srgb_texture")));
         assert_eq!(strict.inputs[1], ("specular_roughness".into(), image("rough.png", "lin_rec709")));
-        assert_eq!(strict.inputs[2], ("geometry_normal".into(), image("normal.png", "lin_rec709")));
+        assert_eq!(
+            strict.inputs[2],
+            ("geometry_normal".into(), Resolved::NormalMap { file: "normal.png".into(), colorspace: Some("lin_rec709".into()), uv_tiling: None })
+        );
         assert_eq!(strict.displacement, Some(image("height.png", "lin_rec709")));
         assert!(xml.contains("colorspace=\"srgb_texture\""));
         assert!(xml.contains("doc=\"Tiles every 100 x 50 cm\""));
@@ -1352,7 +1422,7 @@ mod tests {
         };
         let scaled = with_scale(r#"<input name="scale" type="float" value="0.5"/>"#);
         assert_eq!(scaled.warnings, vec![r#"the scale of normalmap node "N" is not read"#.to_owned()]);
-        assert!(matches!(input(&scaled, "geometry_normal"), Some(Resolved::Image { .. })));
+        assert!(matches!(input(&scaled, "geometry_normal"), Some(Resolved::NormalMap { .. })));
         for plain in ["", r#"<input name="scale" type="float" value="1"/>"#, r#"<input name="scale" type="vector2" value="1, 1"/>"#] {
             assert!(with_scale(plain).warnings.is_empty(), "{plain}");
         }
@@ -1361,7 +1431,7 @@ mod tests {
             read(&open_pbr(
                 r#"<input name="geometry_normal" nodename="N"/>"#,
                 &format!(
-                    r#"<normalmap name="N" type="vector3"><input name="scale" nodename="K"/><input name="in" value="0.5,0.5,1"/></normalmap><constant name="K" type="float"><input name="value" value="{value}"/></constant>"#
+                    r#"<normalmap name="N" type="vector3"><input name="scale" nodename="K"/><input name="in" nodename="T"/></normalmap><image name="T" type="vector3"><input name="file" value="n.png"/></image><constant name="K" type="float"><input name="value" value="{value}"/></constant>"#
                 ),
             ))
             .unwrap()

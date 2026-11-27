@@ -372,7 +372,7 @@ fn materialx_images_become_bindings_and_the_core_holds_the_factor() {
             ("base_metalness", img("metal.png", Some("srgb_texture"), None)),
             ("specular_roughness", img("rough.png", None, None)),
             ("geometry_opacity", img("cut.png", None, None)),
-            ("geometry_normal", img("n.png", Some("lin_rec709"), None)),
+            ("geometry_normal", Value::NormalMap { file: "n.png".into(), colorspace: Some("lin_rec709".into()), uv_tiling: None }),
             ("emission_color", img("glow.png", Some("acescg"), None)),
             ("emission_luminance", k(&[4.0])),
             ("specular_ior", img("ior.png", None, None)),
@@ -468,7 +468,11 @@ fn materialx_coat_only_inputs_are_dropped_while_the_coat_is_off() {
         (Shader::StandardSurface, "coat", ["coat_normal", "coat_color", "coat_IOR"]),
     ];
     for (shader, weight, [normal, color, ior]) in coat_only {
-        let inputs = [(normal, img("coat_n.png", None, None)), (color, img("coat_c.png", None, None)), (ior, k(&[1.4]))];
+        let inputs = [
+            (normal, Value::NormalMap { file: "coat_n.png".into(), colorspace: None, uv_tiling: None }),
+            (color, img("coat_c.png", None, None)),
+            (ior, k(&[1.4])),
+        ];
         // The coat weight is left at its default of 0.
         let off = try_from_materialx(&mx(shader, &inputs)).unwrap();
         assert_eq!(off.surface.clearcoat, None);
@@ -488,7 +492,11 @@ fn materialx_coat_only_inputs_are_dropped_while_the_coat_is_off() {
             assert!(unshaded(&on, name) && !dropped(&on, name), "{name}");
         }
     }
-    let gltf = try_from_materialx(&mx(Shader::GltfPbr, &[("clearcoat_normal", img("cc_n.png", None, None))])).unwrap();
+    let gltf = try_from_materialx(&mx(
+        Shader::GltfPbr,
+        &[("clearcoat_normal", Value::NormalMap { file: "cc_n.png".into(), colorspace: None, uv_tiling: None })],
+    ))
+    .unwrap();
     assert!(gltf.surface.textures.is_empty() && dropped(&gltf, "clearcoat_normal"));
 }
 

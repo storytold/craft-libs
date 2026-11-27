@@ -195,7 +195,7 @@ fn omitted_node_parameters_keep_their_identity_defaults() {
     let normal = document(
         "open_pbr_surface",
         r#"<input name="geometry_normal" nodename="N"/>"#,
-        r#"<normalmap name="N"><input name="in" value="0.5,0.5,1"/><input name="scale" type="float"/></normalmap>"#,
+        r#"<normalmap name="N"><input name="in" nodename="T"/><input name="scale" type="float"/></normalmap><image name="T" type="vector3"><input name="file" value="n.png"/></image>"#,
         "",
     );
     assert!(normal.read_material_strict(None).unwrap().warnings.is_empty());
@@ -232,6 +232,9 @@ fn connected_image_tiling_keeps_the_resolved_scale() {
         let material = doc.read_material_strict(None).unwrap();
         assert!(material.warnings.is_empty(), "{:?}", material.warnings);
         assert_eq!(material.uv_tiling, [2.0, 3.0]);
+        let converted = try_from_materialx(&material).unwrap();
+        let binding = converted.surface.textures.iter().find(|binding| binding.input == TextureInput::BaseColor).unwrap();
+        assert_eq!(binding.transform.as_ref().map(|transform| transform.scale), Some([2.0, 3.0]));
     }
 }
 
