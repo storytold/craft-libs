@@ -12,6 +12,10 @@ features, so an app can turn them on through either crate.
 
 The `gpu-device` feature of `craft` exports this crate as `craft::gpu_device`.
 
+`native_instance` shares one instance across calls on native targets. It reads wgpu's environment
+settings for flags and backend options when that instance is first created. `native_descriptor`
+reads those settings on every call.
+
 Licensed under MIT OR Apache-2.0.
 
 ## Contents
