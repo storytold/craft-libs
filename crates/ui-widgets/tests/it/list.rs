@@ -73,6 +73,73 @@ fn access_click_activates_a_single_click_list_row() {
     assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Activate(1))));
 }
 
+#[trial]
+fn accessibility_click_respects_current_toggle_availability() {
+    use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource};
+    use craft_ui::contract::{ColumnSpec, ToggleColumn};
+    use craft_ui::list::{ToggleCell, ToggleState};
+    use craft_ui::testing::access::Declared;
+    use craft_ui::testing::focus::AccessActionKind;
+    use std::cell::Cell;
+
+    const CHECK: ColumnKey = ColumnKey::new("include");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    struct Source {
+        row_enabled: bool,
+        toggle_enabled: bool,
+    }
+    impl DisplayOrder<usize> for Source {
+        fn len(&self) -> usize {
+            1
+        }
+        fn key(&self, _: usize) -> usize {
+            0
+        }
+        fn enabled(&self, _: usize) -> bool {
+            self.row_enabled
+        }
+    }
+    impl ItemSource<usize> for Source {
+        fn toggle_enabled(&self, _: usize, _: &ColumnKey) -> bool {
+            self.toggle_enabled
+        }
+    }
+
+    let enabled = Rc::new(Cell::new((true, true, true)));
+    let gates = enabled.clone();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let (list_enabled, row_enabled, toggle_enabled) = gates.get();
+        let source = Source { row_enabled, toggle_enabled };
+        let columns = vec![ColumnSpec::toggle(CHECK, "", ToggleColumn::default()), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
+        let out = List::new("Plates").enabled(list_enabled).columns(columns).show_items(ui, &source, &mut |_, icx| {
+            ListRow::new("Cyan").cells(icx.cells()).toggle(ToggleCell::check(CHECK, ToggleState::Off, "Show {row}"))
+        });
+        held.borrow_mut().extend(out.events);
+    });
+    for (list_enabled, row_enabled, toggle_enabled, denied) in
+        [(false, true, true, "disabled list"), (true, false, true, "disabled row"), (true, true, false, "locked toggle")]
+    {
+        enabled.set((true, true, true));
+        fixture.settle();
+        let cell = fixture.by_label("Show Cyan").expect("the toggle");
+        assert!(fixture.tree().declares_key(cell.node, Declared::Click));
+        seen.borrow_mut().clear();
+        enabled.set((list_enabled, row_enabled, toggle_enabled));
+        fixture.access(AccessActionKind::Click, &cell).settle();
+        assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Toggle(_))), "accessibility toggled a {denied}");
+        let cell = fixture.by_label("Show Cyan").expect("disabled toggle remains visible to accessibility");
+        assert!(!fixture.tree().declares_key(cell.node, Declared::Click), "{denied} still offers accessibility Click");
+    }
+    enabled.set((true, true, true));
+    fixture.settle();
+    let cell = fixture.by_label("Show Cyan").expect("the enabled toggle");
+    seen.borrow_mut().clear();
+    fixture.access(AccessActionKind::Click, &cell).settle();
+    assert_eq!(seen.borrow().iter().filter(|event| matches!(event, CollectionEvent::Toggle(_))).count(), 1);
+}
+
 /// The rects of the three rows of a list shown with `rows`.
 fn row_rects(rows: RowHeight) -> Vec<egui::Rect> {
     let mut fixture = Fixture::new(move |ui| {
