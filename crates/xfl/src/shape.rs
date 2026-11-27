@@ -4,7 +4,7 @@
 //! application's geometry, paint, or animation types. They work with `craft_xml::El` and with
 //! compatible borrowed element adapters implemented by consumers.
 
-use crate::edges::{self, Segment};
+use crate::edges::{self, ParsedEdges, Segment};
 use std::borrow::Cow;
 
 /// An element source used by the borrowed XFL schema views.
@@ -528,6 +528,11 @@ impl<E: XflElement> Edge<'_, E> {
     /// Parsed XFL path segments, using the shared bounded edge grammar.
     pub fn segments(&self) -> Vec<Segment> {
         self.encoded_segments().map(edges::parse_edge_segments).unwrap_or_default()
+    }
+
+    /// Parsed XFL path segments, with a count of the runs that were cut short.
+    pub fn parsed_edges(&self) -> ParsedEdges {
+        self.encoded_segments().map(edges::parse_edges).unwrap_or_default()
     }
 }
 
