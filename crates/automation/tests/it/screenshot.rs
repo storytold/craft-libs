@@ -248,6 +248,34 @@ fn a_request_past_its_deadline_times_out() {
     }
 }
 
+/// A screenshot settled at a given time counts its settle delay and its deadline from that time, on the clock the app
+/// also passes to `issue` and `drain`, not from the wall clock.
+#[trial]
+fn a_screenshot_settled_at_a_time_counts_from_that_time() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+    use craft_automation::screenshot::ScreenshotParams;
+    use serde_json::json;
+
+    let ctx = Context::default();
+    // An app clock ahead of the wall clock.
+    let arrived = motion::now() + Duration::from_secs(60);
+    let (_transport, requests) = channel();
+    let mut control = ControlChannel::new(requests);
+    control.captures.note_geometry(ViewportId::ROOT, geometry(800.0, 600.0));
+    let (request, rx) = ControlRequest::new("ui.screenshot", json!({}));
+    let params = ScreenshotParams::from_params(&json!({})).expect("no params");
+    control.settle_at(request, Reply::screenshot(1, params, ViewportId::ROOT), None, 500.0, arrived);
+    assert!(rx.try_recv().is_err(), "the reply waits for the capture");
+
+    let (finished, callbacks) = settle_and_issue(&mut control.captures, &ctx, arrived + Duration::from_millis(400), None);
+    assert!(finished.is_empty(), "inside its deadline: {:?}", finished.iter().map(error).collect::<Vec<_>>());
+    assert!(callbacks.is_empty(), "not issued inside its settle delay");
+    assert!(control.captures.drain(arrived + DEADLINE - Duration::from_millis(1), None).is_empty(), "inside its deadline");
+    let finished = control.captures.drain(arrived + DEADLINE, None);
+    assert_eq!(finished.len(), 1);
+    assert!(error(&finished[0]).contains("timed out"), "{}", error(&finished[0]));
+}
+
 /// Cancelling releases the budget at once; an image that arrives afterwards is dropped.
 #[trial]
 fn cancellation_releases_the_budget_and_drops_a_late_image() {
