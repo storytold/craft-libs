@@ -255,3 +255,20 @@ fn duplicate_field_names_are_rejected() {
     let bytes = writer.into_inner().unwrap();
     assert!(read(&bytes).unwrap_err().to_string().contains("unique"));
 }
+
+#[test]
+fn int96_timestamps_are_rejected_rather_than_truncated() {
+    use parquet::data_type::{Int96, Int96Type};
+    let schema = Arc::new(parse_message_type("message test { REQUIRED INT96 ts; }").unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    // 1,500,123 ns after 1970-01-01T00:00:00 (Julian day 2,440,588), which milliseconds cannot hold.
+    let mut ts = Int96::new();
+    ts.set_data(1_500_123, 0, 2_440_588);
+    col.typed::<Int96Type>().write_batch(&[ts], None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    let bytes = writer.into_inner().unwrap();
+    assert!(read(&bytes).unwrap_err().to_string().contains("INT96"));
+}

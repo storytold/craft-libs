@@ -180,6 +180,10 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
         if !names.insert(field.name()) {
             return Err(invalid("Parquet field names must be unique"));
         }
+        // INT96 timestamps carry nanoseconds that the record reader cuts to milliseconds.
+        if field.get_physical_type() == Physical::INT96 {
+            return Err(invalid("INT96 Parquet timestamps are not supported; convert to microseconds first"));
+        }
         if let Some(logical) = field.get_basic_info().logical_type_ref() {
             match logical {
                 LogicalType::Time(t) | LogicalType::Timestamp(t) if t.unit == TimeUnit::NANOS => {
