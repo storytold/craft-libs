@@ -142,8 +142,13 @@ fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
     let ch = root.child(Local("chart"))?;
     let pa = ch.child(Local("plotArea"))?;
     let mut c = Chart {
-        categories: vec![], series: vec![], title: None, legend: None, gridlines: false,
-        raw_metadata_version: if legacy { 0 } else { 1 }, ..Default::default()
+        categories: vec![],
+        series: vec![],
+        title: None,
+        legend: None,
+        gridlines: false,
+        raw_metadata_version: if legacy { 0 } else { 1 },
+        ..Default::default()
     };
     c.style = root.child(Local("style")).and_then(|c| c.attr_local("val")).and_then(|v| v.parse().ok()).unwrap_or(2);
     if let Some(t) = ch.child(Local("title")) {
@@ -179,7 +184,8 @@ fn read_chart(root: &El, mut budget: usize, legacy: bool) -> Option<Chart> {
             continue;
         }
         let Some(mut kind) = group_chart_type(name, g) else { continue };
-        if legacy && kind == ChartType::LineMarkers
+        if legacy
+            && kind == ChartType::LineMarkers
             && g.children(Local("ser")).any(|s| s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")) == Some("none"))
         {
             kind = ChartType::Line;
@@ -271,7 +277,9 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
         pa.children(Local("valAx")).filter_map(|a| Some((a.child(Local("axId")).and_then(|c| c.attr_local("val"))?, a))).collect();
     let used: Vec<String> = pa
         .elements()
-        .filter(|g| if legacy { g.local().ends_with("Chart") } else { group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some() })
+        .filter(|g| {
+            if legacy { g.local().ends_with("Chart") } else { group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some() }
+        })
         .filter_map(|g| group_value_axis(val_map, g))
         .collect();
     used.iter().find(|id| val_axes_by_id.get(id.as_str()).is_some_and(|a| !secondary_placed(a))).or(used.first()).cloned()
@@ -534,9 +542,9 @@ fn read_axes<'a>(
                 .filter(|g| group_chart_type(g.local(), g).is_some() && g.children(Local("ser")).next().is_some())
                 .filter_map(|g| group_value_axis(val_map, g))
                 .find(|id| Some(id.as_str()) != primary_id);
-            secondary_id.as_deref().and_then(|id| {
-                pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) == Some(id))
-            })
+            secondary_id
+                .as_deref()
+                .and_then(|id| pa.children(Local("valAx")).find(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")) == Some(id)))
         };
         if let Some(a) = secondary_axis {
             let sc = a.child(Local("scaling"));
@@ -1305,7 +1313,9 @@ mod tests {
     #[test]
     fn primary_axis_titles_follow_the_pair_instead_of_axis_or_empty_group_order() {
         let axis = |tag: &str, id: u32, cross: u32, pos: &str, title: &str, size: Option<u32>, max: Option<u32>| {
-            let text = size.map(|v| format!(r#"<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="{v}"/></a:pPr></a:p></c:txPr>"#)).unwrap_or_default();
+            let text = size
+                .map(|v| format!(r#"<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="{v}"/></a:pPr></a:p></c:txPr>"#))
+                .unwrap_or_default();
             let max = max.map(|v| format!(r#"<c:max val="{v}"/>"#)).unwrap_or_default();
             format!(
                 r#"<c:{tag}><c:axId val="{id}"/><c:scaling><c:orientation val="minMax"/>{max}</c:scaling><c:axPos val="{pos}"/>
@@ -1346,7 +1356,6 @@ mod tests {
             assert!(c.series.iter().find(|s| s.name == "Primary").is_some_and(|s| !s.secondary_axis));
         }
     }
-
 
     #[test]
     fn raw_xml_preservation_distinguishes_legacy_models_from_current_metadata_edits() {
