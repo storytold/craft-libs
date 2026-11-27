@@ -550,7 +550,9 @@ fn the_borders_arms_are_drawn_at_rest() {
     }
     let mut segments: Vec<(Pos2, Pos2)> = Vec::new();
     segments_of(&shapes, &mut segments);
-    let arm = |a: usize, b: usize| segments.iter().any(|(p, q)| (p.distance(at(a)) < 0.01 && q.distance(at(b)) < 0.01) || (p.distance(at(b)) < 0.01 && q.distance(at(a)) < 0.01));
+    let arm = |a: usize, b: usize| {
+        segments.iter().any(|(p, q)| (p.distance(at(a)) < 0.01 && q.distance(at(b)) < 0.01) || (p.distance(at(b)) < 0.01 && q.distance(at(a)) < 0.01))
+    };
     for (anchor, handle) in [(0usize, 1usize), (0, 4), (3, 2), (3, 7), (12, 8), (12, 13), (15, 11), (15, 14)] {
         assert!(arm(anchor, handle), "arm from anchor {anchor} to its border handle {handle}: {segments:?}");
     }

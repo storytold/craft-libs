@@ -33,7 +33,6 @@ const REVEAL_IN_TARGETS: f32 = 7.0;
 /// within 11.02 of the handle in the unplaced contents reached it and those from 12.25 on did not.
 const REACH_IN_TARGETS: f32 = 1.5;
 
-
 /// An anchor or a handle end: `POINT.at(index)` with the index into [`WarpMesh::points`].
 pub const POINT: PartKey = PartKey::new("point");
 
@@ -138,7 +137,13 @@ struct Press {
 
 impl Default for Press {
     fn default() -> Self {
-        Press { mesh: WarpMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() }, target: Target::Split, began: false, quick: false, from: Point::ORIGIN }
+        Press {
+            mesh: WarpMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() },
+            target: Target::Split,
+            began: false,
+            quick: false,
+            from: Point::ORIGIN,
+        }
     }
 }
 
@@ -274,7 +279,8 @@ impl<'a> WarpGrid<'a> {
                     slot.dragging = Some(index);
                 }
                 let from = view.to_doc(start.origin);
-                *cx.press_slot::<Press>() = target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none(), from });
+                *cx.press_slot::<Press>() =
+                    target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none(), from });
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                 let Some(mut held) = cx.press_slot::<Press>().clone() else { return };
@@ -366,7 +372,8 @@ impl<'a> WarpGrid<'a> {
         }
         let quick = hover.is_some_and(|(_, held)| held);
         let preview = hover.map(|(at, _)| at).filter(|_| self.split.is_some() || quick).and_then(|at| {
-            let found = mesh.split_at(self.preset, self.bounds, self.split, self.split.is_none(), space.view.to_doc(at) + space.view.pointer_offset())?;
+            let found =
+                mesh.split_at(self.preset, self.bounds, self.split, self.split.is_none(), space.view.to_doc(at) + space.view.pointer_offset())?;
             let cursor = match found.motion {
                 None => CursorIcon::Crosshair,
                 Some(across) => resize_cursor(&space.view, across),
@@ -487,11 +494,7 @@ impl Component for WarpGrid<'_> {
                     HitShape::circle(at, reach * scale)
                 }
             };
-            let part = cx
-                .part(POINT.at(index as u64), shape)
-                .sense(sense)
-                .priority(HitPriority::new(HitLevel::Handle, 0))
-                .focusable();
+            let part = cx.part(POINT.at(index as u64), shape).sense(sense).priority(HitPriority::new(HitLevel::Handle, 0)).focusable();
             if !armed {
                 part.cursor(CursorIcon::Crosshair);
             }
