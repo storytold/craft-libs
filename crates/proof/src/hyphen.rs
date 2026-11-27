@@ -242,9 +242,10 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
     (nfc, starts)
 }
 
-/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish and Gujarati: a
-/// word in their script (the guard their rules use) whose letters the patterns know, so a word with a
-/// letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish, Gujarati and
+/// Hindi: a word in their script (the guard their rules use; for Gujarati and Hindi, the script's
+/// letters and marks and the joiners inside a conjunct, [`crate::indic`]) whose letters the
+/// patterns know, so a word with a letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
 /// and German: every word, as their embedded patterns do. Any other language: a word whose letters
 /// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
@@ -253,7 +254,9 @@ fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
         ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
-        ProofLang::Gu => core.iter().all(|&c| crate::gu::is_gujarati_char(c)) && pack_knows(pats, core),
+        ProofLang::Gu | ProofLang::Hi => {
+            crate::indic::Script::of(lang).is_some_and(|s| core.iter().all(|&c| s.is_letter(c))) && pack_knows(pats, core)
+        }
         _ => pats.values(core).is_some(),
     }
 }
