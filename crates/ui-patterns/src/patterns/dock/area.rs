@@ -1140,7 +1140,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 }
 
 /// Registers the outer-edge bands and the new-dock bands as the dock's drop spots for the next pass, from the leaves
-/// the split area placed this pass (each as its tree path and rect). A new-dock band runs along a start or end edge
+/// the split area placed in this run (each as its tree path and rect). A new-dock band runs along a start or end edge
 /// that holds no dock.
 fn register_bands<P: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
     scene: &Scene<'_, P>,
@@ -1671,9 +1671,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
         let stripless = |panel: &P| scene.spec(panel).canvas;
         let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(scene.sizes.dock_gap);
-        let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
         let area = SplitArea::new(at.label.clone(), Bind::given(scene.layout.clone()), rules, at.frames).show(ui, |ui, split| {
             DockTargets::<P>::register_room(&ctx, scene.dock, split.rect);
+            // The leaves of this run only: a measuring run of the area lays them out too, and registers nothing.
+            let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
             for (anchor, rect) in split.group_frames::<P>() {
                 let Some(place) = scene.layout.place(&anchor) else { continue };
                 let Some(node) = scene.layout.node_of(&place) else { continue };
@@ -1693,6 +1694,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let (natural, cards) = at.geometry.dock(edge);
                 self.dock(ui, split, DockPlan { edge, columns, rect, flow, open: at.open.clone(), natural, cards });
             }
+            register_bands(scene, &ctx, at.room, &leaves);
         });
         let splits = area
             .output
@@ -1701,7 +1703,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             .map(|(path, rect, node)| DockSource::new(SourceKind::Divider(DividerKind::Split(path.clone())), *rect, *node));
         self.report.sources.extend(splits);
         self.report.split = area.output.edit.events;
-        register_bands(scene, &ctx, at.room, &leaves);
     }
 
     /// A key fed with what every column and the docked tree read of the area: the pruned layout, the dock their spots

@@ -73,9 +73,8 @@ use crate::contract::{
 };
 use crate::runtime::commands::CommandRef;
 use crate::runtime::derived::derived;
-use crate::runtime::env::Label;
+use crate::runtime::env::{AppValues, EnvValue, Label};
 use crate::runtime::focus::KeyUse;
-use crate::runtime::memory::sub;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::dock::{DockEdge, Layout, Node, SplitSize};
 use craft_behavior::{Axis, EditEvents, Flow, Metrics, PartKey, Sense};
@@ -359,25 +358,25 @@ struct FramesKey {
 
 /// A split area's layout laid out in its rect: each group as its anchor panel and rect, each dock as its window edge
 /// and rect, and each handle with the range its divider can travel.
-struct SplitFrames<P> {
-    groups: Vec<(P, Rect)>,
-    docks: Vec<(DockEdge, Rect)>,
+struct SplitFrames<P: Send + Sync> {
+    groups: SplitGroups<P>,
+    docks: SplitDocks,
     handles: Vec<(SplitHandle, (f32, f32))>,
 }
 
-impl<P: Clone> SplitFrames<P> {
+impl<P: Clone + Send + Sync> SplitFrames<P> {
     fn of(layout: &Layout<P>, rect: Rect, sizes: &DockSizes, rules: &FrameRules<'_, P>, rtl: bool) -> Self {
-        let Some(root) = layout.root.as_ref() else { return SplitFrames { groups: Vec::new(), docks: Vec::new(), handles: Vec::new() } };
+        let Some(root) = layout.root.as_ref() else { return Self::none() };
         let frames = tree::frames(root, rect, sizes, rules, rtl);
-        let groups = frames.groups.iter().filter_map(|group| Some((group.anchor()?.clone(), group.rect))).collect();
-        let docks = frames
+        let (anchors, rects): (Vec<P>, Vec<Rect>) = frames.groups.iter().filter_map(|group| Some((group.anchor()?.clone(), group.rect))).unzip();
+        let (edges, dock_rects): (Vec<DockEdge>, Vec<Rect>) = frames
             .groups
             .iter()
             .filter_map(|group| match group.node {
                 Node::Dock { side, .. } => Some((*side, group.rect)),
                 _ => None,
             })
-            .collect();
+            .unzip();
         let handles = frames
             .handles
             .into_iter()
@@ -386,32 +385,58 @@ impl<P: Clone> SplitFrames<P> {
                 (handle, range)
             })
             .collect();
-        SplitFrames { groups, docks, handles }
+        SplitFrames {
+            groups: SplitGroups { anchors: Arc::from(anchors), rects: Arc::from(rects) },
+            docks: SplitDocks { edges: Arc::from(edges), rects: Arc::from(dock_rects) },
+            handles,
+        }
+    }
+
+    fn none() -> Self {
+        SplitFrames { groups: SplitGroups::empty(), docks: SplitDocks::root(), handles: Vec::new() }
     }
 }
 
-/// The groups of the layout with the frames the area gave them this pass, for the body.
-#[derive(Clone)]
-struct PassFrames<P>(Vec<(P, Rect)>);
+/// The groups of the innermost split area, each anchor panel with its rect, as the area lays them out in the run its
+/// body runs in: at the measuring run's rect, or at the real run's after its divider edits.
+#[derive(Clone, PartialEq, crate::contract::MemoProps)]
+struct SplitGroups<P: Send + Sync> {
+    #[memo_props(hash = "a split area's anchors are plain panel values it keys by their hash")]
+    anchors: Arc<[P]>,
+    rects: Arc<[Rect]>,
+}
 
-impl<P> Default for PassFrames<P> {
-    fn default() -> Self {
-        PassFrames(Vec::new())
+impl<P: Send + Sync> SplitGroups<P> {
+    fn empty() -> Self {
+        SplitGroups { anchors: Arc::from(Vec::new()), rects: Arc::from(Vec::new()) }
     }
 }
 
-/// The docks of the layout with the frames the area gave them this pass, for the body.
-#[derive(Clone, Default)]
-struct PassDocks(Vec<(DockEdge, Rect)>);
+impl<P: Clone + PartialEq + Hash + Send + Sync + 'static> EnvValue for SplitGroups<P> {
+    fn root() -> Self {
+        Self::empty()
+    }
+}
 
-const FRAMES: &str = "split_frames";
-const DOCKS: &str = "split_docks";
+/// The docks of the innermost split area, each window edge with its rect, laid out as [`SplitGroups`] are.
+#[derive(Clone, PartialEq, crate::contract::MemoProps)]
+struct SplitDocks {
+    #[memo_props(hash = "a dock edge is a plain enum")]
+    edges: Arc<[DockEdge]>,
+    rects: Arc<[Rect]>,
+}
+
+impl EnvValue for SplitDocks {
+    fn root() -> Self {
+        SplitDocks { edges: Arc::from(Vec::new()), rects: Arc::from(Vec::new()) }
+    }
+}
 
 /// What a split area's body reads of the area's frames, on its `BodyCx`.
 pub trait SplitFramesCx {
     /// The groups of the split area this body belongs to, each as its anchor panel and its rect, with this pass's
     /// resize edits applied: a panel placed at its group's rect sits against the handle in the same pass.
-    fn group_frames<P: Clone + Send + Sync + 'static>(&self) -> Vec<(P, Rect)>;
+    fn group_frames<P: Clone + PartialEq + Hash + Send + Sync + 'static>(&self) -> Vec<(P, Rect)>;
 
     /// The docks of the split area this body belongs to, each as its window edge and its rect, with this pass's
     /// resize edits applied.
@@ -419,12 +444,14 @@ pub trait SplitFramesCx {
 }
 
 impl SplitFramesCx for BodyCx<'_> {
-    fn group_frames<P: Clone + Send + Sync + 'static>(&self) -> Vec<(P, Rect)> {
-        self.memory.recall::<PassFrames<P>>(sub(self.id, FRAMES)).0
+    fn group_frames<P: Clone + PartialEq + Hash + Send + Sync + 'static>(&self) -> Vec<(P, Rect)> {
+        let groups = self.env.get::<SplitGroups<P>>();
+        groups.anchors.iter().cloned().zip(groups.rects.iter().copied()).collect()
     }
 
     fn dock_frames(&self) -> Vec<(DockEdge, Rect)> {
-        self.memory.recall::<PassDocks>(sub(self.id, DOCKS)).0
+        let docks = self.env.get::<SplitDocks>();
+        docks.edges.iter().copied().zip(docks.rects.iter().copied()).collect()
     }
 }
 
@@ -488,10 +515,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let Some(layout) = cx.value().cloned() else {
-            cx.core.memory.shown::<PassFrames<P>>(sub(sub(cx.core.id, "body"), FRAMES)).0.clear();
-            return;
-        };
+        let Some(layout) = cx.value().cloned() else { return };
         let (rect, rtl, sizes, rules) = (cx.rect, cx.flow.is_rtl(), cx.style.sizes, self.rules);
         let frames = self.frames_of(&cx.core.ctx, cx.core.id, &layout, rect, &sizes, rtl);
         let mut edited = false;
@@ -526,9 +550,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
             Some(shown) if edited => Arc::new(SplitFrames::of(shown, rect, &sizes, &rules, rtl)),
             _ => frames,
         };
-        cx.core.memory.shown::<PassDocks>(sub(sub(cx.core.id, "body"), DOCKS)).0 = frames.docks.clone();
-        cx.core.memory.shown::<PassFrames<P>>(sub(sub(cx.core.id, "body"), FRAMES)).0 = frames.groups.clone();
         self.frames = Some(frames);
+    }
+
+    /// The body lays the groups and docks out at the frames of this run: in a measuring run at its rect, in the real
+    /// run after `update`'s divider edits.
+    fn content_env(&self, cx: &Cx<'_, Self>, values: &mut AppValues) {
+        let frames = match cx.value() {
+            Some(layout) => self.frames_of(&cx.core.ctx, cx.core.id, layout, cx.rect, &cx.style.sizes, cx.flow.is_rtl()),
+            None => Arc::new(SplitFrames::none()),
+        };
+        values.set(frames.groups.clone());
+        values.set(frames.docks.clone());
     }
 
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

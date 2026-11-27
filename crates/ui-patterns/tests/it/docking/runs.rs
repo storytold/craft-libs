@@ -681,9 +681,9 @@ fn a_replayed_group_reports_the_focus_it_holds() {
     assert!(focused.borrow().iter().all(|panel| *panel == Some(0)), "every replay reports the focus: {:?}", focused.borrow());
 }
 
-/// The docked tree and its columns report each column and gesture source once in every pass: when the replay audit
-/// runs the tree in place of its replay, and when the docks' split area measures them before it shows them (a new
-/// room).
+/// The docked tree and its columns report each column and gesture source once in every pass, and replay what they
+/// ran: the replay audit runs the tree in place of each replay, at rest and through new rooms, where the docks' split
+/// area measures them before it shows them.
 #[trial]
 fn a_measured_versioned_dock_reports_each_column_and_source_once() {
     let VersionedDock { mut fixture, reported, .. } = versioned_dock(full(2));
@@ -692,8 +692,8 @@ fn a_measured_versioned_dock_reports_each_column_and_source_once() {
     audit_replays(fixture.ctx(), true);
     reported.borrow_mut().clear();
     fixture.idle(4);
-    audit_replays(fixture.ctx(), false);
     fixture.room(Vec2::new(1100.0, 600.0)).idle(4).room(Vec2::new(1200.0, 640.0)).idle(4);
+    audit_replays(fixture.ctx(), false);
     let reported = reported.borrow();
     assert!(reported.iter().all(|counts| *counts == settled), "every pass reports {settled:?}: {reported:?}");
 }
