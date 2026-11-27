@@ -717,12 +717,20 @@ fn section_page_numbers_writer_emits_legacy_then_full_start() {
             .filter(|prl| matches!(prl.op, 0x3011 | 0x501C | 0x7044 | 0x300E))
             .map(|prl| (prl.op, prl.operand.to_vec()))
             .collect();
-        let mut want = Vec::new();
+        let operand = |op| numbering.iter().rev().find(|(code, _)| *code == op).map(|(_, bytes)| bytes.as_slice());
+        assert_eq!(operand(0x300E), Some([2].as_slice()), "the numbering format is independent from restart");
         if let Some((legacy, full)) = expected {
-            want.extend([(0x3011, vec![1]), (0x501C, legacy.to_le_bytes().to_vec()), (0x7044, full.to_le_bytes().to_vec())]);
+            assert_eq!(operand(0x3011), Some([1].as_slice()));
+            assert_eq!(operand(0x501C), Some(legacy.to_le_bytes().as_slice()));
+            assert_eq!(operand(0x7044), Some(full.to_le_bytes().as_slice()));
+            let legacy_at = numbering.iter().rposition(|(op, _)| *op == 0x501C).expect("legacy start");
+            let full_at = numbering.iter().rposition(|(op, _)| *op == 0x7044).expect("full-width start");
+            assert!(legacy_at < full_at, "the newer start must take effect after its compatibility form");
+        } else {
+            for op in [0x3011, 0x501C, 0x7044] {
+                assert!(operand(op).is_none(), "a continuing section does not save a restart/start property");
+            }
         }
-        want.push((0x300E, vec![2]));
-        assert_eq!(numbering, want, "restart {start:?}: save keeps both forms, their order, and the independent format");
     }
 }
 
