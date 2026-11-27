@@ -37,7 +37,7 @@ pub enum CollabError {
     },
     /// Decryption failed: wrong key, tampering, or the message was meant for another room.
     Decrypt,
-    /// Larger than the protocol allows.
+    /// Larger than the protocol allows for its kind ([`MAX_UPDATE`], [`MAX_AWARENESS`]).
     TooLarge(usize),
     /// The room's state hasn't arrived yet.
     NotReady,
@@ -50,7 +50,7 @@ impl std::fmt::Display for CollabError {
             CollabError::Corrupt(m) => write!(f, "a damaged update was dropped: {m}"),
             CollabError::Mismatch { app, schema } => write!(f, "This room is for {app} {schema}"),
             CollabError::Decrypt => write!(f, "a message that can't be decrypted was dropped"),
-            CollabError::TooLarge(n) => write!(f, "a message of {n} bytes is larger than the 16 MiB allowed"),
+            CollabError::TooLarge(n) => write!(f, "a message of {n} bytes is larger than the protocol allows"),
             CollabError::NotReady => write!(f, "the room's document hasn't arrived yet"),
             CollabError::Other(m) => write!(f, "{m}"),
         }

@@ -47,20 +47,26 @@ impl Key {
     }
 }
 
-fn aad(room: &str, method: &str) -> Vec<u8> {
+/// The associated data. A line break separates the two names, so neither may hold one: with
+/// one, two different pairs would give the same bytes and a payload would open as both.
+fn aad(room: &str, method: &str) -> Option<Vec<u8>> {
+    if room.contains('\n') || method.contains('\n') {
+        return None;
+    }
     let mut a = Vec::with_capacity(room.len() + method.len() + 1);
     a.extend_from_slice(room.as_bytes());
     a.push(b'\n');
     a.extend_from_slice(method.as_bytes());
-    a
+    Some(a)
 }
 
-/// Encrypts `plain` for `method` (`collab/update`…) in `room`.
+/// Encrypts `plain` for `method` (`collab/update`…) in `room`. A room or method name with a line
+/// break in it is an error.
 pub fn encrypt(key: &Key, room: &str, method: &str, plain: &[u8]) -> Result<Vec<u8>, CollabError> {
     let cipher = Aes256Gcm::new_from_slice(&key.0).map_err(|_| CollabError::Other("bad key".into()))?;
     let mut nonce = [0u8; 12];
     crate::random_bytes(&mut nonce)?;
-    let aad = aad(room, method);
+    let aad = aad(room, method).ok_or_else(|| CollabError::Other("a room or method name can't hold a line break".into()))?;
     let ct =
         cipher.encrypt(Nonce::from_slice(&nonce), Payload { msg: plain, aad: &aad }).map_err(|_| CollabError::Other("encryption failed".into()))?;
     let mut out = Vec::with_capacity(12 + ct.len());
@@ -77,7 +83,7 @@ pub fn decrypt(key: &Key, room: &str, method: &str, data: &[u8]) -> Result<Vec<u
     }
     let (nonce, ct) = data.split_at(12);
     let cipher = Aes256Gcm::new_from_slice(&key.0).map_err(|_| CollabError::Decrypt)?;
-    let aad = aad(room, method);
+    let aad = aad(room, method).ok_or(CollabError::Decrypt)?;
     cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: &aad }).map_err(|_| CollabError::Decrypt)
 }
 
@@ -122,6 +128,17 @@ mod tests {
         let key = Key::from_bytes(&(0u8..32).collect::<Vec<_>>()).expect("key");
         let sealed: Vec<u8> = (0..80).step_by(2).filter_map(|i| u8::from_str_radix(SEALED_ELSEWHERE.get(i..i + 2)?, 16).ok()).collect();
         assert_eq!(decrypt(&key, "mqtt:host:room", "collab/update", &sealed).expect("decrypt"), b"a yjs update");
+    }
+
+    #[test]
+    fn names_with_a_line_break_are_refused() {
+        // Without the check these two pairs share their associated data.
+        let key = Key([3; 32]);
+        assert!(encrypt(&key, "mqtt:h:r\ncollab/update", "collab/awareness", b"x").is_err());
+        assert!(encrypt(&key, "mqtt:h:r", "collab/update\ncollab/awareness", b"x").is_err());
+        let sealed = encrypt(&key, "mqtt:h:r", "collab/update", b"x").expect("encrypt");
+        assert_eq!(decrypt(&key, "mqtt:h:r\ncollab", "update", &sealed), Err(CollabError::Decrypt));
+        assert_eq!(decrypt(&key, "mqtt:h:r", "collab/update\n", &sealed), Err(CollabError::Decrypt));
     }
 
     const SEALED_ELSEWHERE: &str = "6465666768696a6b6c6d6e6f293ba70c0ac923ee5a032b8d2ef80f03701e8d2b124b76f579ad4f1f";

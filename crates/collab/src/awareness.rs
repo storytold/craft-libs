@@ -14,8 +14,11 @@ use crate::CollabError;
 
 /// A peer is forgotten after this long without an update (milliseconds).
 pub const TIMEOUT_MS: u64 = 30_000;
-/// The local state is sent again after this long, so others don't forget us.
+/// The local state is sent again after this long ([`Awareness::renew`]), so others don't forget us.
 pub const RENEW_MS: u64 = 15_000;
+/// How long a client that left or timed out is remembered by its clock, so a late update from
+/// before it went doesn't bring it back.
+pub const FORGET_MS: u64 = 10 * TIMEOUT_MS;
 
 /// One client's entry.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +53,8 @@ fn read_varuint(data: &[u8], pos: &mut usize) -> Result<u64, CollabError> {
     loop {
         let b = *data.get(*pos).ok_or_else(|| CollabError::Corrupt("awareness: truncated".into()))?;
         *pos += 1;
-        if shift >= 64 {
+        // The tenth byte holds bit 63 alone: anything more doesn't fit 64 bits.
+        if shift >= 64 || (shift == 63 && b & 0x7f > 1) {
             return Err(CollabError::Corrupt("awareness: number too long".into()));
         }
         v |= u64::from(b & 0x7f).checked_shl(shift).unwrap_or(0);
@@ -116,7 +120,15 @@ impl Awareness {
         self.local_update()
     }
 
-    /// Our current state as an update (to renew it, or for a newcomer).
+    /// Our state again under a new clock: what to send every [`RENEW_MS`]. Peers refresh a
+    /// client only for a clock they haven't seen, so sending [`Awareness::local_update`] again
+    /// would not keep us present.
+    pub fn renew(&mut self) -> Vec<u8> {
+        self.clock += 1;
+        self.local_update()
+    }
+
+    /// Our current state as an update under its current clock (for a newcomer).
     pub fn local_update(&self) -> Vec<u8> {
         encode(&[(self.client_id, self.clock, self.local.as_ref())])
     }
@@ -145,11 +157,20 @@ impl Awareness {
         Ok(changed)
     }
 
-    /// Forgets peers not heard of for [`TIMEOUT_MS`] and those that left. Returns whether any went.
+    /// Drops the state of peers not heard of for [`TIMEOUT_MS`]. Returns whether any went. A
+    /// peer that left or timed out keeps its clock for [`FORGET_MS`]: it comes back only with a
+    /// newer one.
     pub fn prune(&mut self, now: u64) -> bool {
-        let before = self.peers.len();
-        self.peers.retain(|_, p| p.state.is_some() && now.saturating_sub(p.seen) < TIMEOUT_MS);
-        self.peers.len() != before
+        let mut went = false;
+        for p in self.peers.values_mut() {
+            if p.state.is_some() && now.saturating_sub(p.seen) >= TIMEOUT_MS {
+                p.state = None;
+                p.seen = now;
+                went = true;
+            }
+        }
+        self.peers.retain(|_, p| p.state.is_some() || now.saturating_sub(p.seen) < FORGET_MS);
+        went
     }
 
     /// The peers present now, with their state.
@@ -211,5 +232,53 @@ mod tests {
     fn an_update_over_the_limit_is_refused_before_it_is_read() {
         let big = vec![0u8; crate::MAX_AWARENESS + 1];
         assert_eq!(decode(&big), Err(CollabError::TooLarge(big.len())));
+    }
+
+    #[test]
+    fn a_renewal_has_a_new_clock() {
+        let mut a = Awareness::new(1);
+        let first = decode(&a.set_local(Some(json!({"x": 1})))).expect("decode");
+        let again = decode(&a.local_update()).expect("decode");
+        let renewed = decode(&a.renew()).expect("decode");
+        assert_eq!(again, first, "a snapshot for a newcomer changes nothing");
+        assert!(renewed[0].1 > first[0].1, "a renewal is newer");
+        assert_eq!(renewed[0].2, first[0].2, "with the same state");
+    }
+
+    #[test]
+    fn a_late_update_does_not_bring_back_a_peer_that_went() {
+        let mut a = Awareness::new(1);
+        let mut b = Awareness::new(2);
+        let here = a.set_local(Some(json!({"x": 1})));
+        let bye = a.set_local(None);
+        b.apply(&here, 0).expect("apply");
+        b.apply(&bye, 10).expect("apply");
+        b.prune(20);
+        assert!(!b.apply(&here, 30).expect("apply"), "the older state is still older after pruning");
+        assert_eq!(b.present().count(), 0);
+
+        // The same after a timeout; a newer clock brings the peer back.
+        let mut c = Awareness::new(3);
+        let mut d = Awareness::new(4);
+        let here = c.set_local(Some(json!({"x": 1})));
+        d.apply(&here, 0).expect("apply");
+        assert!(d.prune(TIMEOUT_MS));
+        assert!(!d.apply(&here, TIMEOUT_MS + 1).expect("apply"));
+        assert_eq!(d.present().count(), 0);
+        assert!(d.apply(&c.renew(), TIMEOUT_MS + 2).expect("apply"));
+        assert_eq!(d.present().count(), 1);
+        // Clocks aren't kept for ever.
+        d.prune(TIMEOUT_MS * 2 + 2);
+        d.prune(TIMEOUT_MS * 2 + 2 + FORGET_MS);
+        assert!(d.peers.is_empty());
+    }
+
+    #[test]
+    fn a_number_past_64_bits_is_refused() {
+        // 2^64 + 1 as a client id would read as 1.
+        let over = [1, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02, 1, 4, b'n', b'u', b'l', b'l'];
+        assert!(decode(&over).is_err());
+        let most = encode(&[(u64::MAX, u64::MAX, None)]);
+        assert_eq!(decode(&most).expect("decode"), vec![(u64::MAX, u64::MAX, None)]);
     }
 }
