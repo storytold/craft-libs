@@ -1,17 +1,18 @@
-//! Stories of `HistoryPanel`: states with redo rows dimmed, snapshots, the source column, empty and disabled.
+//! Stories of `HistoryPanel`: states with redo rows dimmed, one of them also italic, snapshots, the source column,
+//! empty and disabled.
 
 use super::{HistoryFooter, HistoryKey, HistoryPanel, HistoryRow};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-/// The states of a short edit, the last two undone, and two snapshots.
+/// The states of a short edit, the last two undone (the last one kept as a name in italics), and two snapshots.
 fn rows() -> Vec<HistoryRow> {
     vec![
         HistoryRow::snapshot(1, "Snapshot 1"),
         HistoryRow::state(1, "Open"),
         HistoryRow::state(2, "Brush Tool"),
         HistoryRow::state(3, "Gaussian Blur").redo(true),
-        HistoryRow::state(4, "Fill").redo(true),
+        HistoryRow::state(4, "Fill").redo(true).italic(true),
         HistoryRow::snapshot(2, "Before Crop"),
     ]
 }
