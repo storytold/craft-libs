@@ -158,23 +158,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
                 _ => {}
             }
         }
-        let codec = match codec {
-            Some(c) => c,
-            None => match f {
-                b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => CodecConfig::ProRes { fourcc: format },
-                b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
-                b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
-                b"apv1" => CodecConfig::Apv(ApvConfig::default()),
-                b"cvid" | b"CVID" => match ctab {
-                    0 => {
-                        color_table_bytes.map_or_else(unknown, |ct| CodecConfig::Cinepak { fourcc: format, color_table_id: 0, color_table: Some(ct) })
-                    }
-                    -1 => CodecConfig::Cinepak { fourcc: format, color_table_id: -1, color_table: None },
-                    _ => unknown(),
-                },
-                _ => unknown(),
-            },
-        };
+        let codec = resolve_video_codec(format, f, codec, ctab, color_table_bytes, payload);
         return Ok(SampleEntry { format, data_reference_index, codec, video: Some(v), audio: None, bitrate });
     }
     if audio_like {
@@ -390,6 +374,32 @@ fn parse_esds(p: &[u8]) -> Result<CodecConfig> {
         });
     }
     Err(Error::Invalid("esds without DecoderConfigDescriptor".into()))
+}
+
+fn resolve_video_codec(
+    format: FourCc,
+    f: &[u8; 4],
+    codec: Option<CodecConfig>,
+    ctab: i16,
+    color_table: Option<Vec<u8>>,
+    payload: &[u8],
+) -> CodecConfig {
+    if let Some(c) = codec {
+        return c;
+    }
+    let unknown = || CodecConfig::Unknown { fourcc: format, raw: payload.to_vec() };
+    match f {
+        b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => CodecConfig::ProRes { fourcc: format },
+        b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
+        b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
+        b"apv1" => CodecConfig::Apv(ApvConfig::default()),
+        b"cvid" | b"CVID" => match ctab {
+            0 => color_table.map_or_else(unknown, |ct| CodecConfig::Cinepak { fourcc: format, color_table_id: 0, color_table: Some(ct) }),
+            -1 => CodecConfig::Cinepak { fourcc: format, color_table_id: -1, color_table: None },
+            _ => unknown(),
+        },
+        _ => unknown(),
+    }
 }
 
 fn parse_qt_color_table(c: &mut Cur<'_>) -> Option<Vec<u8>> {
