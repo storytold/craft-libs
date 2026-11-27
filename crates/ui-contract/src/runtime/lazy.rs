@@ -499,11 +499,12 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
 ///   loading, no wake time reached;
 /// - what pointer sensing gives it is what its run saw (`pointer::Sensed`: the hover, part and pointer-over facts of
-///   its roots and egui widgets), so a move within one part of it leaves it alone, and a move onto another part, in
-///   or out runs it; while it is under the pointer, the modifiers are the ones its run saw; the pointer did not move
-///   in a rect its run follows the pointer in (`pointer::follows_pointer`, which a hover position read marks), now or
-///   then; no wheel share or owed ease of this pass goes to a taker it registered; no tap of this pass lies in it;
-///   while a drag session runs, the pointer is not over it or an overlay layer it shows;
+///   its roots and egui widgets, and the parts of its roots under the pointer), so a move within one part of it, a
+///   collection's row among them, leaves it alone, and a move onto another part, in or out runs it; while it is under
+///   the pointer, the modifiers are the ones its run saw; the pointer did not move in a rect its run follows the
+///   pointer in (`pointer::follows_pointer`, which a hover position read marks), now or then; no wheel share or owed
+///   ease of this pass goes to a taker it registered; no tap of this pass lies in it; while a drag session runs, the
+///   pointer is not over it or an overlay layer it shows;
 /// - no press that is held started on it or an overlay layer it shows, none of its widgets is dragged, and none of
 ///   that held in its last run;
 /// - the focus is where its run left it (`replay::Held`: the same stop and egui widget of it, or none), and while the

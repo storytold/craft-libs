@@ -889,3 +889,82 @@ fn a_move_that_changes_nothing_under_the_pointer_needs_no_pass() {
     assert!(needs(Some(follow.center()), follow.center() + Vec2::new(5.0, 0.0)), "a move in a rect that follows the pointer runs a pass");
     assert!(needs(None, inside), "the pointer coming in runs a pass");
 }
+
+/// The part of `Knob` over its start half.
+const KNOB: PartKey = PartKey::new("knob");
+
+/// A leaf whose knob part covers its start half, and which logs where the pointer hovers on the knob each pass
+/// (`Cx::hover_pos`).
+#[derive(craft_ui::contract::Component)]
+struct Knob<'a> {
+    #[common]
+    common: craft_ui::contract::Common,
+    seen: &'a RefCell<Vec<Option<Pos2>>>,
+}
+
+impl craft_ui::contract::Component for Knob<'_> {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::GROUP;
+    type Style = craft_ui_test_kit::contract::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: KnobStyleKey) -> Self::Style {
+        craft_ui_test_kit::contract::PlainStyle::min(Vec2::new(200.0, 40.0))
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
+        cx.part(KNOB, Rect::from_min_max(rect.min, rect.center_bottom()));
+    }
+
+    fn update(&mut self, cx: &mut craft_ui::contract::Cx<'_, Self>) {
+        use craft_ui::contract::Pointer as _;
+        self.seen.borrow_mut().push(cx.hover_pos(KNOB));
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// The knob at `KNOB_AT`, logging into `seen`.
+fn show_knob(seen: &RefCell<Vec<Option<Pos2>>>) -> impl FnMut(&mut Ui) + '_ {
+    use craft_ui::contract::Show as _;
+    move |ui: &mut Ui| {
+        Knob { common: craft_ui::contract::Common::new(), seen }.show_at(ui, KNOB_AT);
+    }
+}
+
+const KNOB_AT: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(300.0, 140.0) };
+
+/// `Cx::hover_pos` gives the hover point while the part is hovered, and nothing over the rest of the component.
+#[trial]
+fn hover_pos_reads_the_point_over_its_part_only() {
+    let seen = RefCell::new(Vec::new());
+    let mut show = show_knob(&seen);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let on_knob = Pos2::new(130.0, 120.0);
+    frames.frame(vec![pointer::moved(on_knob)], &mut show);
+    assert_eq!(seen.borrow().last(), Some(&Some(on_knob)), "the point over the knob, in the component's layer space");
+    frames.frame(vec![pointer::moved(Pos2::new(260.0, 120.0))], &mut show);
+    assert_eq!(seen.borrow().last(), Some(&None), "no point over the rest of the component");
+}
+
+/// A component that read the hover position on its part follows the pointer there: a move within the part needs a
+/// pass (`move_needs_pass`); over the rest of the component, which it read nothing on, a move needs none.
+#[trial]
+fn a_hover_position_read_follows_the_pointer() {
+    use craft_ui::runtime::pointer::move_needs_pass;
+    let seen = RefCell::new(Vec::new());
+    let mut show = show_knob(&seen);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let (on_knob, off_knob) = (Pos2::new(130.0, 120.0), Pos2::new(260.0, 120.0));
+    let step = Vec2::new(5.0, 0.0);
+    frames.frame(vec![pointer::moved(on_knob)], &mut show);
+    assert!(move_needs_pass(&frames.ctx, egui::ViewportId::ROOT, Some(on_knob), on_knob + step), "a move within the read part runs a pass");
+    frames.frame(vec![pointer::moved(off_knob)], &mut show);
+    assert!(
+        !move_needs_pass(&frames.ctx, egui::ViewportId::ROOT, Some(off_knob), off_knob + step),
+        "a move over the rest of the component, which read no position, runs none"
+    );
+}

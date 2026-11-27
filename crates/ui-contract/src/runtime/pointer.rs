@@ -682,8 +682,8 @@ pub fn follows_pointer(ctx: &Context, rect: Rect) {
 }
 
 /// The running pass's hover point (screen points) when it lies in `rect` (screen points), for code that shows what
-/// it reads there (a readout, a cursor drawn at the point, the row under it): `rect` then follows the pointer
-/// ([`follows_pointer`]). The one way component code reads where the pointer hovers.
+/// it reads there (a readout, a cursor drawn at the point, a band at the line nearest it): `rect` then follows the
+/// pointer ([`follows_pointer`]). The one way component code reads where the pointer hovers.
 pub fn hover_point_in(ctx: &Context, rect: Rect) -> Option<Pos2> {
     let at = with_frame(ctx, |_, hover| hover).filter(|at| rect.contains(*at))?;
     follows_pointer(ctx, rect);
@@ -1018,6 +1018,9 @@ pub(crate) struct Under {
     pub hover_top: Option<(Winner<Id>, Id)>,
     /// Every root with a shape under the point, on top or not: the roots that contain the pointer.
     pub over: SmallVec<[Id; 4]>,
+    /// The roots' own parts with a shape under the point, on top or not, each with its root: a collection's row that
+    /// contains the pointer under the row's own shapes.
+    pub parts: SmallVec<[(Id, PartRef); 4]>,
 }
 
 impl Under {
@@ -1082,6 +1085,8 @@ pub(crate) struct Sensed {
     hover: SmallVec<[(u8, Id, Id, Option<PartRef>); 3]>,
     /// The run's roots with a shape under the point.
     over: SmallVec<[Id; 4]>,
+    /// The own parts of the run's roots with a shape under the point (`Under::parts`).
+    parts: SmallVec<[(Id, PartRef); 4]>,
     /// The run's egui widgets that contain the point, then its click and drag targets there.
     widgets: SmallVec<[Id; 4]>,
 }
@@ -1089,7 +1094,7 @@ pub(crate) struct Sensed {
 impl Sensed {
     /// Nothing of the run lies under the pointer.
     pub(crate) fn is_empty(&self) -> bool {
-        self.hover.is_empty() && self.over.is_empty() && self.widgets.is_empty()
+        self.hover.is_empty() && self.over.is_empty() && self.parts.is_empty() && self.widgets.is_empty()
     }
 }
 
@@ -1110,6 +1115,7 @@ pub(crate) fn sensed(ctx: &Context, roots: &IdSet, widgets: &IdSet) -> Sensed {
                 }
             }
             sensed.over.extend(under.over.iter().copied().filter(|root| roots.contains(root)));
+            sensed.parts.extend(under.parts.iter().copied().filter(|(root, _)| roots.contains(root)));
         }
         if let Some((contains, click, drag)) = &record.hover_widgets
             && !widgets.is_empty()
@@ -1123,6 +1129,17 @@ pub(crate) fn sensed(ctx: &Context, roots: &IdSet, widgets: &IdSet) -> Sensed {
 /// The running pass's hover point, screen points; `None` while the pointer is not in the window.
 pub(crate) fn hover_point(ctx: &Context) -> Option<Pos2> {
     with_frame(ctx, |_, hover| hover)
+}
+
+/// The own parts of the root `root` with a shape under the running pass's hover point, on top or not
+/// (`Under::parts`), by the pass's one resolution: the parts that contain the pointer.
+pub(crate) fn parts_under(ctx: &Context, root: Id) -> SmallVec<[PartRef; 4]> {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record
+            .hover
+            .as_ref()
+            .map_or_else(SmallVec::new, |(_, _, under)| under.parts.iter().filter(|(owner, _)| *owner == root).map(|(_, part)| *part).collect())
+    })
 }
 
 /// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
@@ -1192,6 +1209,14 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             }
             if !under.over.contains(&root) {
                 under.over.push(root);
+            }
+            for &index in &kept {
+                let shape = &entry.shapes[index];
+                if let Some(part) = shape.part.filter(|_| shape.owner == root)
+                    && !under.parts.contains(&(root, part))
+                {
+                    under.parts.push((root, part));
+                }
             }
             // The winner among the shapes at `indices` by `kind`, with its rank.
             let pick = |indices: &[usize], kind: ResolveFor| {
