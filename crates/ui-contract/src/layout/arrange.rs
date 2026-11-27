@@ -59,7 +59,8 @@ impl<'c> Placed<'c> {
 /// is mirrored through the env's direction when the layout mirrors, so no arrangement reads the direction.
 /// Returns the rect the placement took.
 pub fn arrange(ui: &mut Ui, layout: &dyn Arrangement, children: &mut [Placed<'_>]) -> Rect {
-    let rtl = Env::of(ui).direction.is_rtl();
+    let env = Env::of(ui);
+    let rtl = env.direction.is_rtl();
     let room = ui.available_rect_before_wrap();
     let base = ui.scope_id();
     let ids: Vec<Id> = children.iter().map(|placed| (placed.id)(base)).collect();
@@ -71,7 +72,7 @@ pub fn arrange(ui: &mut Ui, layout: &dyn Arrangement, children: &mut [Placed<'_>
         placed.response = Some(placed.child.show_at(ui, *id, flow.to_physical(*rect)));
     }
     let whole = flow.to_physical(Rect::from_min_size(room.min, taken));
-    super::close_flow_start_in(ui);
+    super::close_flow_start(ui.ctx(), &env);
     alloc::advance_past(ui, whole);
     whole
 }

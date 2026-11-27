@@ -1,9 +1,9 @@
 //! Where rows sit: the rows' rect and scroll range, which rows a pass builds, and rows on the screen.
 
-use super::ItemsHooks;
-use crate::contract::{Collection, Cx};
-use craft_behavior::{Flow, ItemLayout, ScrollPos, SelectionModel};
-use egui::{Pos2, Rect};
+use super::{ItemsHooks, ROW};
+use crate::contract::{Collection, Cx, PartsCx};
+use craft_behavior::{Flow, HitLevel, HitPriority, ItemLayout, ScrollPos, SelectionModel};
+use egui::{Context, Id, Pos2, Rect};
 
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// The rect of the rows: the content rect below the header row.
@@ -13,6 +13,20 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
 
     pub(super) fn rows_rect(&self, cx: &Cx<'_, C>) -> Rect {
         self.below_header(cx.core.content_rect)
+    }
+
+    /// Declares each item row's `ROW` part over its rect in the rows' view: hover only, above the collection's
+    /// background and below its other parts and every row's own shapes.
+    pub(super) fn row_parts(&self, pcx: &mut PartsCx<'_, C>) {
+        for &(hash, _, rect) in &self.row_parts {
+            pcx.part(ROW.at(hash), rect).exact_hit().priority(HitPriority::new(HitLevel::Background, 1));
+        }
+    }
+
+    /// The item row whose `ROW` part, of the collection `id`, contains the pointer this pass, on top or not.
+    pub(super) fn row_under_pointer(&self, ctx: &Context, id: Id) -> Option<usize> {
+        let part = crate::runtime::pointer::parts_under(ctx, id).into_iter().find(|part| part.key == ROW)?;
+        self.row_parts.iter().find(|(hash, ..)| part.index == Some(*hash)).map(|&(_, at, _)| at)
     }
 
     /// Whether the scroll bar shows over the rows' rect `view`: the rows scroll and run past its height.

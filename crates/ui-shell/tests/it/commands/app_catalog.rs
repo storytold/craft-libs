@@ -289,7 +289,7 @@ fn a_command_shown_in_view_is_found_and_one_under_a_layer_is_not() {
     let seen = RefCell::new(Vec::new());
     let mut show = |ui: &mut Ui| {
         seen.borrow_mut().push(shown(ui.ctx(), &command));
-        holds(ui.ctx(), ui.layer_id(), rect, std::slice::from_ref(&command), "Quick".into());
+        holds(ui.ctx(), ui.layer_id(), rect, &std::sync::Arc::from([command.clone()]), "Quick".into());
     };
     let mut frames = Frames::new();
     frames.idle(3, &mut show);
