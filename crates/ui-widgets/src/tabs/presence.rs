@@ -4,9 +4,11 @@ use std::collections::{HashMap, HashSet};
 /// One present tab or outgoing paint-only ghost. Use `visibility` for opacity/entry offset.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TabPresenceFrame {
+    /// Stable identity of the tab.
     pub id: Id,
     /// The caller's current strip position, or the last known position for a departing tab.
     pub position: usize,
+    /// Eased visibility from zero to one.
     pub visibility: f32,
     /// False for outgoing ghosts: do not register tab input, commands or keytips for them.
     pub present: bool,
