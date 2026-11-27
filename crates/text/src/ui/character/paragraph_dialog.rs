@@ -647,6 +647,12 @@ impl ParagraphDialog {
         self.tabs.is_some() && self.paged()
     }
 
+    /// The Tabs page's dialog while that page is the one shown: its fields hold Enter and Escape only then.
+    fn tabs_on_screen(&mut self) -> Option<&mut TabStopsDialog> {
+        let shown = self.tab == ParagraphTab::Tabs && self.tabs_shown();
+        self.tabs.as_mut().filter(|_| shown)
+    }
+
     /// Whether the dialog's values are still those of the refused `answer`: the format and the Tabs page's stops.
     fn matches(&self, answer: &ParagraphAnswer) -> bool {
         answer.format == self.format && self.tabs.as_ref().zip(answer.tabs.as_ref()).is_none_or(|(tabs, refused)| tabs.matches(refused))
@@ -923,7 +929,7 @@ impl ParagraphDialog {
         let mut picked = None;
         // The body applies this pass's edits before the keys are read: the state before it says whether a key ended a
         // field's edit on the Tabs page, the state after whether one began.
-        let editing = self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
+        let editing = self.tabs_on_screen().is_some_and(|tabs| tabs.editing_at_frame_start(ui.ctx()));
         // The pages take a fixed width, as the dialog's do, so a window that follows its content keeps one width and
         // follows only the height of the page shown (the preview fills what it is given).
         ui.horizontal_top(|ui| {
@@ -940,7 +946,7 @@ impl ParagraphDialog {
                 for (at, label) in labels.iter().cloned().enumerate() {
                     let button = Button::new(label).sizing(Sizing::FillWidth).enabled(at == CANCEL || enabled);
                     // While a field on the Tabs page is edited, Enter is the field's and Set is the default button.
-                    let default = at == OK && !self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
+                    let default = at == OK && !self.tabs_on_screen().is_some_and(|tabs| tabs.editing());
                     let button = if default { button.variant(Variant::PRIMARY) } else { button };
                     if button.show(ui).clicks == 1 {
                         picked = Some(at);
@@ -948,7 +954,7 @@ impl ParagraphDialog {
                 }
             });
         });
-        let editing = editing || self.tabs.as_ref().is_some_and(TabStopsDialog::editing);
+        let editing = editing || self.tabs_on_screen().is_some_and(|tabs| tabs.editing());
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
             // An Enter or Escape that begins or ends a field's edit on the Tabs page is the edit's, not the dialog's.

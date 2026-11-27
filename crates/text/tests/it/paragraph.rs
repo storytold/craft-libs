@@ -181,3 +181,41 @@ fn enter_in_default_tab_stops_on_the_tabs_page_leaves_the_dialog_open() {
     fixture.key(egui::Key::Enter, egui::Modifiers::NONE).idle(4);
     assert!(dialog.borrow_mut().take_ok().is_some(), "the next Enter is OK");
 }
+
+/// The Paragraph panel's Tabs page, on the Default tab stops field. `typed` is typed there after a click; `rerun` makes
+/// egui run the frame of the first Enter twice (a layout change asks for it). Returns whether that Enter answered, and
+/// whether the Enter after it did.
+fn enters_in_default_tab_stops(typed: Option<&str>, rerun: bool) -> (bool, bool) {
+    let format = ParagraphFormat { breaks: Some(LineBreakOptions::default()), asian: Some(AsianTypography::default()), ..ParagraphFormat::default() };
+    let dialog = ParagraphDialog::new(format).word(true).held_ok().bare(true).tabs_page(TabStopsDialog::new(Vec::new(), 36.0));
+    let dialog = Rc::new(RefCell::new(dialog));
+    let discard = Rc::new(std::cell::Cell::new(false));
+    let (shown, again) = (dialog.clone(), discard.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        if again.take() {
+            ui.ctx().request_discard("the frame runs twice");
+        }
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    let page = fixture.by_label("Tabs").expect("the Tabs page's tab is shown");
+    fixture.click(&page).idle(4);
+    let field = fixture.by_label("Default tab stops:").expect("the default interval's field");
+    fixture.click(&field).idle(4);
+    if let Some(text) = typed {
+        fixture.key(egui::Key::A, egui::Modifiers::COMMAND).type_text(text);
+    }
+    discard.set(rerun);
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).idle(4);
+    let first = dialog.borrow_mut().take_ok().is_some();
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).idle(4);
+    (first, dialog.borrow_mut().take_ok().is_some())
+}
+
+/// Clicked into without an edit, the field still holds the first Enter (Set is the default button meanwhile); the next
+/// Enter is OK. Also when egui runs the first Enter's frame twice.
+#[trial]
+fn enter_in_a_field_only_clicked_into_or_in_a_rerun_frame_leaves_the_dialog_open() {
+    assert_eq!(enters_in_default_tab_stops(None, false), (false, true), "clicked into, not edited");
+    assert_eq!(enters_in_default_tab_stops(Some("50"), true), (false, true), "edited, the Enter's frame run twice");
+}
