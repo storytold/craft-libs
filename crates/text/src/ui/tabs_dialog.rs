@@ -125,6 +125,8 @@ pub struct TabStopsDialog {
     frame_start: Option<(u64, bool)>,
     /// The selected row's Position field takes the focus the next time it shows: Set moves into the new stop.
     to_edit: bool,
+    /// The Tab stop position box's value, points: Set or Enter there puts a stop at it, as in Word.
+    typed_position: Option<f32>,
     /// Whether OK files its result for the app to judge instead of closing.
     hold: bool,
     /// Whether the dialog draws only its content and its Cancel and OK, for a window of its own that has the title and
@@ -151,6 +153,7 @@ impl TabStopsDialog {
             field_focus: false,
             frame_start: None,
             to_edit: false,
+            typed_position: None,
             hold: false,
             bare: false,
             held: HeldAnswer::new(),
@@ -187,6 +190,26 @@ impl TabStopsDialog {
         self.selected = self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION);
         self.edited = None;
         self.to_edit = self.selected.is_some();
+    }
+
+    /// Set with a position typed in the Tab stop position box: a stop there (Left, no leader), or the stop already
+    /// there selected. A cleared position it lands on is no longer cleared.
+    pub fn set_at(&mut self, position: f32) {
+        if !position.is_finite() {
+            return;
+        }
+        let position = position.clamp(-MAX_POSITION, MAX_POSITION);
+        let at = |stops: &[TabStop]| stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION);
+        if at(&self.stops).is_none() {
+            if self.stops.len() >= MAX_STOPS {
+                return;
+            }
+            self.normalize();
+            self.stops.push(TabStop { position, align: TabAlign::Left, leader: TabLeader::None });
+            self.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+            self.cleared.retain(|gone| (gone - position).abs() >= SAME_POSITION);
+        }
+        self.selected = at(&self.stops);
     }
 
     /// Position order after in-place edits, merging stops within [`SAME_POSITION`] (the edited
@@ -510,6 +533,7 @@ impl TabStopsDialog {
     fn body(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units) {
         let mut fields = FieldPass::default();
         self.default_row(ui, words, &mut fields);
+        self.position_row(ui, words, &mut fields);
         self.table(ui, words, units, &mut fields);
         self.note_fields(fields);
         self.buttons(ui, words);
@@ -541,6 +565,31 @@ impl TabStopsDialog {
             if let Some(Some(points)) = event.value() {
                 self.default_interval = *points as f32;
             }
+        }
+    }
+
+    /// The Tab stop position box: Enter there is Set, a stop at the typed position.
+    fn position_row(&mut self, ui: &mut Ui, words: &TabStopsWords, fields: &mut FieldPass) {
+        let points = Mixed::Same(self.typed_position.map(f64::from));
+        let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
+        let unit = self.unit;
+        let Some(out) =
+            Field::new(words.position.clone()).show(ui, |ui, _| length_field(unit, words.position.clone(), points, range.clone()).show(ui)).inner
+        else {
+            return;
+        };
+        fields.note(ui.ctx(), &out.edit);
+        for event in &out.edit.events {
+            if matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. })
+                && let Some(Some(points)) = event.value()
+            {
+                self.typed_position = Some(*points as f32);
+            }
+        }
+        if out.edit.submitted
+            && let Some(position) = self.typed_position
+        {
+            self.set_at(position);
         }
     }
 
@@ -577,7 +626,8 @@ impl TabStopsDialog {
                 let (at, stop) = (*key, stops[*key]);
                 let (edits, position_ids, noted, ctx) = (&edits, &position_ids, &noted, &ctx);
                 let points = Mixed::Same(Some(f64::from(stop.position)));
-                let position = length_field(unit, words.position.clone(), points, range.clone());
+                // Named after its column: "Tab stop position:" is the box above the table.
+                let position = length_field(unit, words.position_column.clone(), points, range.clone());
                 let align = Select::new(words.alignment.clone(), Bind::given(stop.align), &aligns);
                 let leader = Select::new(words.leader.clone(), Bind::given(stop.leader), &leaders);
                 ListRow::new(texts[at].clone())
@@ -652,7 +702,10 @@ impl TabStopsDialog {
             let set = Button::new(words.set.clone()).enabled(self.stops.len() < MAX_STOPS);
             let set = if self.bare && self.editing() { set.variant(Variant::PRIMARY) } else { set };
             if clicked(&set.show(ui)) {
-                self.new_stop();
+                match self.typed_position {
+                    Some(position) => self.set_at(position),
+                    None => self.new_stop(),
+                }
             }
             if clicked(&Button::new(words.clear.clone()).enabled(self.selected.is_some()).show(ui)) {
                 self.clear();

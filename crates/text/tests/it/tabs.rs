@@ -9,10 +9,20 @@ use egui::{Key, Modifiers};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The node named `label`: for "Position", the first stop row's position field, not the column header of that name.
+fn labelled(fixture: &Fixture, label: &str) -> Option<craft_ui::testing::Target> {
+    if label != "Position" {
+        return fixture.by_label(label);
+    }
+    let field = fixture.by_label("Default tab stops:")?;
+    let role = fixture.tree().role_of(field.node)?;
+    fixture.by_role(role).into_iter().find(|target| fixture.tree().name_of(target.node) == Some(label))
+}
+
 /// Which of `labels` holds the focus.
 fn focused<'a>(fixture: &Fixture, labels: &[&'a str]) -> Option<&'a str> {
     let focused = craft_ui::testing::access::focused_key(fixture.tree());
-    labels.iter().copied().find(|label| fixture.by_label(label).is_some_and(|target| target.node == focused))
+    labels.iter().copied().find(|label| labelled(fixture, label).is_some_and(|target| target.node == focused))
 }
 
 /// A fixture showing `dialog`, and where the result of a closing OK lands.
@@ -32,7 +42,7 @@ fn shown(dialog: TabStopsDialog) -> Shown {
 }
 
 fn press(fixture: &mut Fixture, label: &str) {
-    let target = fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown"));
+    let target = labelled(fixture, label).unwrap_or_else(|| panic!("{label} is shown"));
     fixture.click(&target).idle(4);
 }
 
@@ -42,7 +52,7 @@ fn stop(position: f32, align: TabAlign, leader: TabLeader) -> TabStop {
 
 /// Types `text` into the first row's position field and leaves the field, which ends the edit.
 fn retype_first_position(fixture: &mut Fixture, text: &str) {
-    press(fixture, "Tab stop position:");
+    press(fixture, "Position");
     fixture.key(Key::A, Modifiers::COMMAND).type_text(text).key(Key::Tab, Modifiers::NONE).idle(4);
 }
 
@@ -54,15 +64,15 @@ fn the_dialog_opens_on_the_default_interval_and_set_moves_into_the_new_stop() {
         let _ = shown.borrow_mut().show(ui, &DialogStack::default());
     });
     fixture.idle(30);
-    let labels = ["Default tab stops:", "Tab stop position:", "Set"];
+    let labels = ["Default tab stops:", "Position", "Set"];
     assert_eq!(focused(&fixture, &labels), Some("Default tab stops:"), "the dialog opens on its first field");
     let set = fixture.by_label("Set").expect("Set is shown");
     fixture.click(&set).idle(4);
-    assert_eq!(focused(&fixture, &labels), Some("Tab stop position:"), "Set moves the focus into the new stop's position");
+    assert_eq!(focused(&fixture, &labels), Some("Position"), "Set moves the focus into the new stop's position");
     let set = fixture.by_label("Set").expect("Set is shown");
     fixture.click(&set).idle(4);
     let key = craft_ui::testing::access::focused_key(fixture.tree());
-    assert_eq!(fixture.tree().name_of(key), Some("Tab stop position:"), "a second Set moves into a position field too");
+    assert_eq!(fixture.tree().name_of(key), Some("Position"), "a second Set moves into a position field too");
     let value = fixture.tree().value_of(key).unwrap_or_default();
     assert!(value.contains("72"), "the focus is in the new row's field, at 72 pt: {value:?}");
 }
@@ -151,7 +161,7 @@ fn a_bare_tabs_dialog_has_no_close_box_of_its_own_and_ok_answers() {
 fn a_key_that_ends_a_position_edit_in_the_bare_dialog_does_not_settle_it() {
     let stops = vec![stop(72.0, TabAlign::Left, TabLeader::None)];
     let (mut fixture, _, result) = shown(TabStopsDialog::new(stops.clone(), 36.0).bare(true));
-    press(&mut fixture, "Tab stop position:");
+    press(&mut fixture, "Position");
     fixture.key(Key::A, Modifiers::COMMAND).type_text("108").key(Key::Enter, Modifiers::NONE).idle(4);
     assert!(result.borrow().is_none(), "the Enter that ends the edit does not answer");
     press(&mut fixture, "OK");
@@ -167,7 +177,7 @@ fn a_key_that_ends_a_position_edit_in_the_bare_dialog_does_not_settle_it() {
         }
     });
     fixture.idle(30);
-    press(&mut fixture, "Tab stop position:");
+    press(&mut fixture, "Position");
     fixture.key(Key::A, Modifiers::COMMAND).type_text("108").key(Key::Escape, Modifiers::NONE).idle(4);
     assert!(!*cancelled.borrow(), "the Escape that ends the edit does not cancel the dialog");
     assert_eq!(dialog.borrow_mut().result().stops, vec![stop(72.0, TabAlign::Left, TabLeader::None)], "Escape restored the position");
@@ -197,4 +207,24 @@ fn enter_in_the_default_interval_takes_the_value_and_the_next_enter_answers() {
     fixture.key(Key::Enter, Modifiers::NONE).idle(4);
     let answer = result.borrow().clone().expect("the next Enter is OK");
     assert!((answer.default_interval - 36.0).abs() > 1.0, "the typed interval was taken: {}", answer.default_interval);
+}
+
+/// The Tab stop position box, as in Word: in the bare dialog, Enter there sets a stop at the typed position and leaves
+/// the dialog open, and the next Enter is OK; Set does the same with the typed position.
+#[trial]
+fn enter_in_the_tab_stop_position_box_sets_a_stop_there_and_the_next_enter_answers() {
+    let (mut fixture, dialog, result) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("100 pt").key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(result.borrow().is_none(), "the Enter that sets the stop does not answer");
+    assert_eq!(dialog.borrow_mut().result().stops, [stop(100.0, TabAlign::Left, TabLeader::None)], "Enter set a stop at the typed position");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    let answer = result.borrow().clone().expect("the next Enter is OK");
+    assert_eq!(answer.stops, [stop(100.0, TabAlign::Left, TabLeader::None)]);
+
+    let (mut fixture, dialog, _) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("90 pt");
+    press(&mut fixture, "Set");
+    assert_eq!(dialog.borrow_mut().result().stops, [stop(90.0, TabAlign::Left, TabLeader::None)], "Set put the stop at the typed position");
 }
