@@ -791,10 +791,9 @@ impl DialogHost {
         self.open.iter_mut().find(|dialog| dialog.id() == id).map(|dialog| dialog.as_any_mut())
     }
 
-    /// The open `D` when it is the dialog `id` names (the host holds one `D` at a time; the id
-    /// tells which command it is).
+    /// The first open `D` with `id`. Other dialog types with the same ID are ignored.
     pub fn get_by_id<D: StackDialog>(&self, id: DialogId) -> Option<&D> {
-        self.get_dyn(id)?.downcast_ref()
+        self.open[self.position_by_id_of::<D>(id)?].as_any().downcast_ref()
     }
 
     /// The open `D`, for the app to feed (a preview image) or a script to read.
@@ -809,7 +808,18 @@ impl DialogHost {
 
     /// [`get_mut`](DialogHost::get_mut) for the open `D` that `id` names.
     pub fn get_mut_by_id<D: StackDialog>(&mut self, id: DialogId) -> Option<&mut D> {
-        self.get_dyn_mut(id)?.downcast_mut()
+        let at = self.position_by_id_of::<D>(id)?;
+        self.open[at].as_any_mut().downcast_mut()
+    }
+
+    /// The live `D` of this opening, while it is still open on this host.
+    pub fn get_by_open_serial<D: StackDialog>(&self, serial: u64) -> Option<&D> {
+        self.open.iter().find(|dialog| dialog.serial == serial)?.as_any().downcast_ref()
+    }
+
+    /// [`get_by_open_serial`](Self::get_by_open_serial), mutably.
+    pub fn get_mut_by_open_serial<D: StackDialog>(&mut self, serial: u64) -> Option<&mut D> {
+        self.open.iter_mut().find(|dialog| dialog.serial == serial)?.as_any_mut().downcast_mut()
     }
 
     /// The most recently opened `D`.
@@ -819,6 +829,10 @@ impl DialogHost {
 
     fn position_by_id(&self, id: DialogId) -> Option<usize> {
         self.open.iter().position(|dialog| dialog.id() == id)
+    }
+
+    fn position_by_id_of<D: StackDialog>(&self, id: DialogId) -> Option<usize> {
+        self.open.iter().position(|dialog| dialog.id() == id && dialog.result_type() == TypeId::of::<D>())
     }
 
     fn store_result(&mut self, dialog: &OpenedDialog, result: Box<dyn Any + Send>) {
@@ -832,6 +846,12 @@ impl DialogHost {
     /// the next. `None` when `id` is not open.
     pub fn open_serial(&self, id: DialogId) -> Option<u64> {
         self.open.iter().rfind(|dialog| dialog.id() == id).map(|dialog| dialog.serial)
+    }
+
+    /// Like [`open_serial`](Self::open_serial), restricted to the dialog type `D`.
+    /// Use [`get_by_open_serial`](Self::get_by_open_serial) to access this exact opening after capturing its serial.
+    pub fn open_serial_by_id<D: StackDialog>(&self, id: DialogId) -> Option<u64> {
+        self.open.iter().rfind(|dialog| dialog.id() == id && dialog.result_type() == TypeId::of::<D>()).map(|dialog| dialog.serial)
     }
 
     fn open_with_parent(&mut self, dialog: Box<dyn AnyStackDialog>, parent: Option<DialogId>) -> DialogId {
