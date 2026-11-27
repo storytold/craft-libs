@@ -110,7 +110,7 @@ mod tests {
 
     /// Every buffer a TIFF's conversion makes is charged: its declared pixels, the decoder's own
     /// copy of them, and the PNG; for 16-bit pixels also what they take past the 4 bytes declared
-    /// and the big-endian copy the PNG encoder makes.
+    /// and, on a little-endian target, the big-endian copy the PNG encoder makes.
     #[test]
     fn a_tiff_is_charged_the_decoders_buffer_and_the_encoders_copy() {
         let (w, h) = (40usize, 30usize);
@@ -124,7 +124,9 @@ mod tests {
         let (rgb8, png) = charged(image::DynamicImage::ImageRgb8(image::RgbImage::new(w as u32, h as u32)));
         assert!(rgb8 >= w * h * (4 + 3) + png, "declared pixels, the decoder's buffer, the PNG: {rgb8}");
         let (rgb16, png) = charged(image::DynamicImage::ImageRgb16(image::ImageBuffer::new(w as u32, h as u32)));
-        assert!(rgb16 >= w * h * (6 + 6 + 6) + png, "the pixels, the decoder's buffer, the swapped copy, the PNG: {rgb16}");
+        // The encoder swaps 16-bit samples to big-endian in a copy only on a little-endian target.
+        let swapped = if cfg!(target_endian = "little") { 6 } else { 0 };
+        assert!(rgb16 >= w * h * (6 + 6 + swapped) + png, "the pixels, the decoder's buffer, the swapped copy, the PNG: {rgb16}");
     }
 
     /// A 1 × 1 RGB TIFF compressed with JPEG, its one strip a JPEG whose frame is declared
