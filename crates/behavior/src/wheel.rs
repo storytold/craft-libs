@@ -546,11 +546,8 @@ fn split_at<O: Copy + PartialEq>(
     let vertical_taker = held_vertical.or_else(|| under.iter().copied().find(|t| t.vertical && free(t)));
     // Shift turns the vertical wheel sideways over a scroll region (Photoshop); a value control that takes the
     // vertical wheel keeps Shift as its modifier, and a device that already sends a sideways axis keeps it.
-    let wheel = if zone_view.is_none() && wheel.mods.shift && wheel.scroll.x == 0.0 && vertical_taker.is_some_and(|t| t.scrolls) {
-        Wheel { scroll: Vec2::new(wheel.scroll.y, 0.0), ..wheel }
-    } else {
-        wheel
-    };
+    let shifted = zone_view.is_none() && wheel.mods.shift && wheel.scroll.x == 0.0 && vertical_taker.is_some_and(|t| t.scrolls);
+    let wheel = if shifted { Wheel { scroll: Vec2::new(wheel.scroll.y, 0.0), ..wheel } } else { wheel };
     let vertical = (wheel.scroll.y != 0.0)
         .then(|| {
             zone_view
@@ -575,6 +572,11 @@ fn split_at<O: Copy + PartialEq>(
         (None, Some(v), Some(h)) if v != h => (None, Some(h)),
         (None, vertical, horizontal) => (vertical, horizontal),
     };
+    // A new gesture that starts over a vertical scroll region does not scroll the view under it sideways (a swipe over
+    // a list). A plain wheel over a sideways strip still scrolls the page around it, and Shift's sideways wheel keeps
+    // its taker.
+    let list_inside = |owner: O| under.iter().take_while(|t| t.owner != owner).any(|t| t.scrolls && t.vertical && !t.horizontal && free(t));
+    let horizontal = horizontal.filter(|owner| held.is_some() || shifted || !list_inside(*owner));
     let zoom = pinches(&wheel).then(|| under.iter().find(|t| t.zoom && open(t))).flatten().map(|t| t.owner);
     let scroll = scroll_only(wheel);
     let parts = [
@@ -627,6 +629,10 @@ mod tests {
         assert_eq!(owners(drift), [(2, Vec2::new(0.0, -1.0))], "the running gesture's sideways drift goes to no one");
         let sideways = split(&[canvas, list], at, wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut gesture, 0.02);
         assert!(sideways.is_empty(), "a sideways-only event of the list's gesture scrolls nothing");
+        let fresh = split(&[canvas, list], at, wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
+        assert!(fresh.is_empty(), "a new sideways-only gesture over the list scrolls nothing");
+        let beside = split(&[canvas, list], pos2(250.0, 250.0), wheel(-5.0, 0.0), WheelFocus::new(None), None, &mut WheelGesture::default(), 0.0);
+        assert_eq!(owners(beside), [(1, Vec2::new(-5.0, 0.0))], "a new sideways gesture beside the list scrolls the canvas");
     }
 
     #[test]
