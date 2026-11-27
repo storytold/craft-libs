@@ -1982,6 +1982,74 @@ fn a_drags_readout_is_not_reported_in_the_pass_its_release_ends_the_gesture() {
     assert!(!reported.get(), "the release pass reports none");
 }
 
+/// A tool whose drag asks for a readout while `asks` holds and for none once it is cleared.
+struct Pausing {
+    asks: Rc<Cell<bool>>,
+}
+
+impl CanvasTool for Pausing {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if self.asks.get() {
+            cx.readout(vec![(craft_ui::runtime::env::Label::from("W"), "123 px".to_owned())]);
+        }
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Pause command")
+    }
+}
+
+#[trial]
+fn a_drags_readout_stands_in_the_passes_between_its_moves() {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let asks = Rc::new(Cell::new(true));
+    let tool = RefCell::new(Pausing { asks: Rc::clone(&asks) });
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().readout.is_some());
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.frame(vec![pointer::press(centre)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(centre + BY * (step as f32 / 4.0))]);
+    }
+    // A pass with no move (the pointer rests, the ants or anything else repaint) gives the tool no drag call.
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        assert!(reported.get(), "the readout stays while the pointer rests mid-drag");
+        assert!(fixture.texts().iter().any(|run| run.text.contains("123 px")), "and it still paints");
+    }
+    asks.set(false);
+    fixture.frame(vec![pointer::moved(centre + BY * 1.25)]);
+    assert!(!reported.get(), "a drag that asks for none drops it");
+    fixture.frame(Vec::new());
+    assert!(!reported.get(), "and it does not come back while the pointer rests");
+    asks.set(true);
+    fixture.frame(vec![pointer::moved(centre + BY * 1.5)]);
+    fixture.frame(vec![pointer::release(centre + BY * 1.5)]);
+    fixture.frame(Vec::new());
+    assert!(!reported.get(), "the readout ends with its gesture");
+}
+
 #[trial]
 fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
     assert_eq!(readout_during_a_drag(false, None), (true, true), "by default a tool's readout paints and is reported");
