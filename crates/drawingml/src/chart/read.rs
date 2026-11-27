@@ -189,7 +189,7 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
         if !name.ends_with("Chart") {
             continue;
         }
-        let Some(mut kind) = group_chart_type(name, g) else { continue };
+        let Some((mut kind, group_markers)) = group_metadata(name, g, version) else { continue };
         if legacy
             && kind == ChartType::LineMarkers
             && g.children(Local("ser")).any(|s| s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")) == Some("none"))
@@ -210,7 +210,7 @@ fn read_chart(root: &El, mut budget: usize, version: u16) -> Option<Chart> {
                 ser.marker_visible = Some(match ser.marker.as_deref() {
                     Some("none") => false,
                     Some(_) => true,
-                    None => g.child(Local("marker")).and_then(|m| m.attr_local("val")).and_then(value::to_bool).unwrap_or(false),
+                    None => group_markers,
                 });
             }
             if legacy {
@@ -321,6 +321,15 @@ fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>, 
         }
     }
     used.first().cloned()
+}
+
+// Cache current marker inheritance once per group. The two older save projections keep
+// their former interpretation, including a bare marker element's old false default.
+fn group_metadata(name: &str, g: &El, version: u16) -> Option<(ChartType, bool)> {
+    let kind = group_chart_type(name, g)?;
+    let markers = version >= 2 && g.child(Local("marker")).is_some_and(|m| m.attr_local("val").and_then(value::to_bool).unwrap_or(true));
+    let kind = if markers && kind == ChartType::Line { ChartType::LineMarkers } else { kind };
+    Some((kind, markers))
 }
 
 /// The chart type of a plot group (`name` is its element name), or `None` for an unknown group.
