@@ -109,3 +109,33 @@ fn escape_in_find_what_closes_the_dialog_and_returns_the_focus() {
         }
     }
 }
+
+#[trial]
+fn special_menu_shows_and_inserts_literal_caret_ampersand() {
+    let dialog = Rc::new(RefCell::new(FindReplaceDialog::new("", FindTab::Replace).word(true)));
+    let shown = Rc::clone(&dialog);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.room(egui::vec2(900.0, 1000.0)).settle();
+
+    press(&mut fixture, "Search Options");
+    let replace_box = fixture
+        .by_role(Role::TEXT_INPUT)
+        .into_iter()
+        .find(|input| fixture.tree().name_of(input.node) == Some("Replace with:"))
+        .expect("Replace with input");
+    fixture.click(&replace_box).settle();
+    press(&mut fixture, "Special");
+    let items: Vec<_> = fixture.by_role(Role::MENU_ITEM);
+    let labels: Vec<_> = items.iter().filter_map(|item| fixture.tree().name_of(item.node).map(str::to_owned)).collect();
+    assert!(labels.iter().any(|label| label == "Find What Text  ^&"), "expected literal `^&` in Special menu, got {labels:?}");
+    assert!(!labels.iter().any(|label| label == "Find What Text  ^"), "mnemonic stripping dropped `&` from `^&` in {labels:?}");
+
+    let found_text =
+        items.into_iter().find(|item| fixture.tree().name_of(item.node) == Some("Find What Text  ^&")).expect("Find What Text  ^& menu item");
+    fixture.click(&found_text).settle();
+    let fields = dialog.borrow().json_fields().expect("fields");
+    let inserted = [fields["find"].as_str(), fields["replace"].as_str()];
+    assert!(inserted.contains(&Some("^&")), "expected raw `^&` to be inserted, got {fields:?}");
+}
