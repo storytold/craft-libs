@@ -333,7 +333,19 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.requested_reveal(comp, &layout);
         self.type_ahead(comp, cx, &layout, lead_at);
         self.rest_lead(cx, &layout, seen);
-        request::record_lead(&cx.core.ctx, cx.core.id, self.lead.key.as_ref().and_then(|key| self.index_of(key)));
+        let lead_now = self.lead.key.as_ref().and_then(|key| self.index_of(key));
+        request::record_lead(&cx.core.ctx, cx.core.id, lead_now);
+        // A collection whose lead item shows the focus ring takes the ring around that item while it is shown, and
+        // around itself while it has no lead or its lead is not shown, so its focus always shows.
+        if comp.rings_lead() {
+            cx.core.focus_shape = Some(match lead_now.filter(|&at| layout.shown(at)) {
+                Some(at) => {
+                    let row = self.screen(&layout, rect, at, offset, rtl);
+                    focus::FocusShape::Polygon(vec![row.left_top(), row.right_top(), row.right_bottom(), row.left_bottom()])
+                }
+                None => focus::FocusShape::Rect,
+            });
+        }
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
         }

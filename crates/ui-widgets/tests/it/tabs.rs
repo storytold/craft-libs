@@ -210,6 +210,78 @@ fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {
     assert_eq!(shown.get(), 1, "Enter shows the focused tab");
 }
 
+/// The rects of the focus rings in `shapes`: rect strokes and closed outlines at least two points wide.
+fn rings(shapes: &[egui::Shape]) -> Vec<Rect> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.stroke.width >= 2.0 => Some(rect.rect),
+            egui::Shape::Path(path) if path.closed && path.stroke.width >= 2.0 => Some(Rect::from_points(&path.points)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether a ring in `rings` goes around `target` and no other tab: it holds the target and is not much wider.
+fn ringed(rings: &[Rect], target: Rect) -> bool {
+    rings.iter().any(|ring| ring.expand(1.0).contains_rect(target) && ring.width() < target.width() * 1.5)
+}
+
+/// Tab to a strip rings its lead tab, not the whole strip, whether or not a press on a tab takes the focus; an arrow
+/// moves the ring with the lead and leaves the shown tab as it is.
+#[trial]
+fn the_focused_strip_rings_its_lead_tab() {
+    for keeps in [false, true] {
+        let mut fixture = Fixture::new(move |ui| {
+            let keys = [0_usize, 1, 2];
+            let source = keyed(&keys, |key: &usize| *key);
+            let strip = TabStrip::new("Documents").shown(0);
+            let strip = if keeps { strip.keeps_focus() } else { strip };
+            let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+        });
+        fixture.settle();
+        let rect = |fixture: &Fixture, label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the tab {label}")).rect;
+        let (one, two) = (rect(&fixture, "One"), rect(&fixture, "Two"));
+        let strip = fixture.by_role(Role::TAB_LIST).first().map(|node| node.rect).expect("the strip's node");
+        assert!(rings(&fixture.frame_shapes()).is_empty(), "no ring before the keyboard reaches the strip (keeps_focus {keeps})");
+        fixture.key(Key::Tab, Modifiers::NONE).settle();
+        let shown = rings(&fixture.frame_shapes());
+        assert!(ringed(&shown, one), "Tab rings the lead tab (keeps_focus {keeps}): {shown:?}, tab {one:?}");
+        assert!(!ringed(&shown, two), "the other tabs are not ringed (keeps_focus {keeps}): {shown:?}");
+        assert!(!shown.iter().any(|ring| ring.expand(1.0).contains_rect(strip)), "no ring goes around the strip (keeps_focus {keeps}): {shown:?}");
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+        let moved = rings(&fixture.frame_shapes());
+        assert!(ringed(&moved, two) && !ringed(&moved, one), "the ring follows the lead (keeps_focus {keeps}): {moved:?}");
+    }
+}
+
+/// A focused strip whose lead tab the overflow menu holds rings the strip, so the focus still shows.
+#[trial]
+fn a_focused_strip_whose_lead_tab_is_hidden_rings_the_strip() {
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = TabStrip::new("Documents").shown(0).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+    });
+    fixture.room(egui::vec2(600.0, 100.0)).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    let three = fixture.by_label("Three").expect("the tab Three").rect;
+    assert!(ringed(&rings(&fixture.frame_shapes()), three), "the lead tab is ringed while it is shown");
+    fixture.room(egui::vec2(120.0, 100.0)).settle();
+    let strip = fixture.by_role(Role::TAB_LIST).first().map(|node| node.rect).expect("the strip's node");
+    assert!(
+        fixture.by_label("More tabs").is_some() && fixture.by_label("Three").is_none_or(|node| !strip.contains_rect(node.rect)),
+        "the narrow strip sends the lead tab to the overflow menu"
+    );
+    let shown = rings(&fixture.frame_shapes());
+    assert!(
+        shown.iter().any(|ring| ring.expand(1.0).contains_rect(strip)),
+        "the strip is ringed while its lead is hidden: {shown:?}, strip {strip:?}"
+    );
+}
+
 /// A click on a tab's close button closes the tab, and the close button is a node under its tab's node that an
 /// AccessKit Click closes.
 #[trial]
