@@ -182,7 +182,12 @@ fn shape(pib: u32, anchor: [u16; 8]) -> Vec<u8> {
 
 /// The drawing group (split over a Continue record, as real files do) and one sheet's drawing.
 fn pictures(blips: &[Vec<u8>], shapes: &[u8]) -> (Workbook, Report) {
-    let dgg = od(0x000F, 0xF000, &od(0x002F, 0xF001, &blips.iter().map(|b| fbse(b)).collect::<Vec<_>>().concat()));
+    pictures_in(&blips.iter().map(|b| fbse(b)).collect::<Vec<_>>().concat(), shapes)
+}
+
+/// [`pictures`], from the BStore's FBSE records as given.
+fn pictures_in(entries: &[u8], shapes: &[u8]) -> (Workbook, Report) {
+    let dgg = od(0x000F, 0xF000, &od(0x002F, 0xF001, entries));
     let (first, second) = dgg.split_at(30);
     let dg = od(0x000F, 0xF002, &od(0x000F, 0xF003, shapes));
     // MsoDrawing records are at most 8224 bytes; longer drawings continue in more of them.
@@ -215,6 +220,19 @@ fn reads_pictures() {
     assert!(std::sync::Arc::ptr_eq(&p[0].data, &p[2].data));
     assert_eq!((p[2].anchor.dx1, p[2].anchor.dy1), (512, 128));
     assert!(report.warnings.iter().any(|w| w.contains("pictures were damaged")), "{:?}", report.warnings);
+}
+
+/// The BLIP embedded after an FBSE's name is the picture even when the FBSE's size field is 0:
+/// a workbook has no delay stream for that to point at instead.
+#[test]
+fn a_picture_whose_store_entry_gives_no_size_is_read() {
+    let png = [0x89, b'P', b'N', b'G', 1, 2, 3];
+    let blip = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], &png]));
+    let no_size = od(0x0062, 0xF007, &cat(&[&[0u8; 36], &blip]));
+    let (wb, report) = pictures_in(&no_size, &shape(1, [1, 0, 1, 0, 3, 0, 3, 0]));
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    assert_eq!((p[0].data.as_slice(), p[0].mime), (&png[..], "image/png"));
 }
 
 #[test]

@@ -126,6 +126,13 @@ pub(crate) struct Props {
     pub(crate) alt: String,
 }
 
+/// The simple properties [`Props::from_set`] reads; the others are left out of the set, so they
+/// can't fill it up ([`craft_officeart::props::MAX_PROPS`]) before one of these.
+const READ: [u16; 22] = [
+    0x0004, 0x0100, 0x0101, 0x0102, 0x0103, 0x0104, 0x0181, 0x01BF, 0x01C0, 0x01CB, 0x01D0, 0x01D1, 0x01FF, 0x0384, 0x0385, 0x0386, 0x0387, 0x038F,
+    0x0390, 0x0391, 0x0392, 0x03BF,
+];
+
 impl Props {
     /// The properties of a shape's merged tables (its primary table first, then its secondary and
     /// tertiary ones; boolean words merged flag by flag).
@@ -248,10 +255,10 @@ pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
         }
     }
     let mut props = craft_officeart::props::Props::default();
-    // The alt text is the one complex property read; any other complex entry's operand is a
-    // length, not a value, so it is left out.
+    // Only the properties read are kept. The alt text is the one complex property read; any other
+    // complex entry's operand is a length, not a value, so it is left out.
     for t in primary.iter().rev().chain(&secondary).chain(&tertiary) {
-        props.add_table_where(t, |id, complex| !complex || id == 0x0381);
+        props.add_table_where(t, |id, complex| if complex { id == 0x0381 } else { READ.contains(&id) });
     }
     sp.props = Props::from_set(&props);
     sp
