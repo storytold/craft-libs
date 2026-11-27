@@ -129,9 +129,7 @@ pub fn points(script: Script, word: &[char]) -> Vec<usize> {
             }
         }
     };
-    (1..word.len())
-        .filter(|&i| matches!(at(i), Some(Kind::Vowel | Kind::Consonant)) && at(i - 1) != Some(Kind::Virama) && live(i))
-        .collect()
+    (1..word.len()).filter(|&i| matches!(at(i), Some(Kind::Vowel | Kind::Consonant)) && at(i - 1) != Some(Kind::Virama) && live(i)).collect()
 }
 
 #[cfg(test)]
