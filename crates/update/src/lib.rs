@@ -89,6 +89,8 @@ impl From<&str> for CheckError {
 }
 
 /// Checks for an update against GitHub releases for the given app.
+///
+/// Returns an error when GitHub does not find the repository (renamed, deleted or private).
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
     check_releases_at(&format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo), app, http, current_version)
 }
@@ -100,7 +102,8 @@ fn check_releases_at(url: &str, app: &App, http: &Http, current_version: &str) -
     match http.get_api(url, None)? {
         crate::http::Fetched::Body { text, .. } => Ok(offered_release(&text, app.repo, current_version)?),
         crate::http::Fetched::RateLimited { .. } => Err(CheckError::RateLimited),
-        crate::http::Fetched::NotModified | crate::http::Fetched::NotFound => Ok(None),
+        crate::http::Fetched::NotFound => Err(CheckError::Failed(format!("GitHub has no repository {}, or it is private", app.repo))),
+        crate::http::Fetched::NotModified => Ok(None),
     }
 }
 
