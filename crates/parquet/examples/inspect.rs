@@ -1,8 +1,9 @@
 //! Local import timing without printing any cell contents.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args().nth(1).ok_or("usage: inspect file.parquet [--owned]")?;
-    let owned = std::env::args().any(|arg| arg == "--owned");
+    let mut args = std::env::args_os().skip(1);
+    let path = args.next().ok_or("usage: inspect file.parquet [--owned]")?;
+    let owned = args.any(|arg| arg == "--owned");
     let bytes = std::fs::read(path)?;
     // Native-only timing; std clocks trap on wasm (see clippy.toml).
     #[allow(clippy::disallowed_methods)]
