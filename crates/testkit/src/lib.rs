@@ -17,9 +17,10 @@
 //! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
 //! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
 //!
-//! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
-//! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
-//! polls a condition until it holds and fails the test when the limit passes first. Both read an
+//! On targets other than `wasm32`, `deadline::with_deadline` runs a test body on its own thread
+//! and fails the test when the body has produced no result within its limit, and
+//! `deadline::wait_until` calls a condition again each time a `deadline::Signal` is raised until
+//! it holds, and fails the test when the signal is not raised within the limit. Both read an
 //! optional limit variable that the caller names, `CRAFT_TEST_TIMEOUT_SECS` by default.
 //!
 //! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
@@ -52,7 +53,7 @@ pub mod sample_damage;
 pub mod serial;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use deadline::{DeadlineLimit, wait_until, with_deadline};
+pub use deadline::{DeadlineLimit, Signal, wait_until, with_deadline};
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
 #[cfg(not(target_arch = "wasm32"))]
