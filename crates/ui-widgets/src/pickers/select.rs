@@ -107,10 +107,10 @@ impl<'a> HeaderMenu<'a> {
 /// value, Enter or a click picks, and Escape, Alt+Up or a press outside close it and put the value back. Closed, the
 /// arrow keys, Home and End step the pick through the stepped entries ([`Entry::stepped`]), and so does the wheel over
 /// the field, open or closed, one entry a notch; from a value that is none of them, forward lands on the first and back
-/// on the last. The field is as wide as its widest entry, placeholder or mixed word, at least a field length, so it
-/// keeps its width whichever is shown. A content-sized select fits that widest face, up to a field length; a longer one
-/// elides. A wheel run is one edit gesture, committed when the wheel gesture ends; over the open list it takes over the
-/// entry the keys previewed.
+/// on the last. The field is as wide as its widest entry, unlisted value label, placeholder or mixed word, at least a
+/// field length, so it keeps its width whichever is shown. A content-sized select fits that widest face, up to a field
+/// length. A longer one elides. A wheel run is one edit gesture, committed when the wheel gesture ends. Over the
+/// open list it takes over the entry the keys previewed.
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
@@ -138,9 +138,13 @@ pub struct Select<'a, T: Value + 'static> {
     /// The open list is at least this wide, in points, within the screen; the field's width without it.
     #[prop(quantity = "width of the open list, in points")]
     list_width: Option<f32>,
-    /// Shown, muted, while the value is none of the entries.
+    /// Shown, muted, when the value is none of the entries and has no unlisted label.
     #[prop(into)]
     placeholder: Option<Label>,
+    /// The label of a current value absent from the entries. The face draws it in the usual value ink and exposes
+    /// it as the accessible value. The popup still offers only the entries.
+    #[prop(into)]
+    unlisted_label: Option<Label>,
     /// Adds the host's content to each entry's row.
     #[prop(func = "Fn(&T, ListRow<'a>) -> ListRow<'a>")]
     decorate: Option<RowDress<'a, T>>,
@@ -179,6 +183,7 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             search_kept: None,
             list_width: None,
             placeholder: None,
+            unlisted_label: None,
             decorate: None,
             picture: None,
             picture_only: false,
@@ -194,12 +199,12 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         value.and_then(|value| self.entries.iter().position(|entry| entry.value() == Some(value)))
     }
 
-    /// The text the face shows for `value`, unresolved (none for a value that names no entry and no placeholder), and
-    /// whether it stands in for a pick: the `mixed` word for no value, or the placeholder.
-    fn shown<'s>(&'s self, value: Option<&T>, mixed: &'s Label) -> (Option<&'s Label>, bool) {
-        match self.position(value) {
+    /// The unresolved text the face shows for the current value and whether it draws in muted ink.
+    fn shown<'s>(&'s self, held: Option<usize>, has_value: bool, mixed: &'s Label) -> (Option<&'s Label>, bool) {
+        match held {
             Some(at) => (Some(self.entries[at].face_label()), false),
-            None if value.is_none() => (Some(mixed), true),
+            None if !has_value => (Some(mixed), true),
+            None if self.unlisted_label.is_some() => (self.unlisted_label.as_ref(), false),
             None => (self.placeholder.as_ref(), true),
         }
     }
@@ -319,18 +324,20 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         Sense::CLICK | Sense::FOCUS | Sense::WHEEL_Y
     }
 
-    /// The widest face of an entry (its closed label, or its picture), the placeholder and the mixed word, so the field
-    /// keeps its size whichever is shown; a quiet select's face as it shows now. At least the least width.
+    /// Measure every possible face so the field keeps its size, or just the current face for a quiet select.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let mixed = cx.words::<PickerWords>().mixed.clone();
         let fit = self.fits(cx.resolved.sizing(), cx.env.get::<InBar>().0);
         let face = |(text, picture): (&Label, bool)| cx.face(self.sized_face(cx.env.resolve(text), picture, fit));
         let size = if self.look == SelectLook::Quiet {
-            let (text, muted) = self.shown(cx.value(), &mixed);
-            face((text.unwrap_or(&Label::Empty), !muted))
+            let value = cx.value();
+            let held = self.position(value);
+            let (text, _) = self.shown(held, value.is_some(), &mixed);
+            face((text.unwrap_or(&Label::Empty), held.is_some()))
         } else {
             let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
-            let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
+            let other_faces = self.unlisted_label.iter().chain(&self.placeholder).chain(std::iter::once(&mixed));
+            let texts = entries.chain(other_faces.map(|text| (text, false)));
             texts.map(face).fold(Vec2::ZERO, Vec2::max)
         };
         Vec2::new(size.x.max(cx.style.least_width), size.y)
@@ -388,15 +395,15 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// The picked entry's place among the entries that can be picked, shown as its label, so AccessKit steps and sets it.
-    /// A value that names no entry reads as the placeholder the face shows for it.
+    /// A value that names no entry reads as its face label.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let stops = step_stops(self.entries);
         let range = 0.0..=stops.len().saturating_sub(1) as f64;
         let held = self.position(cx.value());
-        let placeholder = self.placeholder.as_ref().filter(|_| held.is_none() && cx.value().is_some());
+        let unlisted = self.unlisted_label.as_ref().or(self.placeholder.as_ref()).filter(|_| held.is_none() && cx.value().is_some());
         let numeric = match held.and_then(|held| stops.iter().position(|&stop| stop == held)) {
             Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[stops[at]].label()).as_str()),
-            None => match placeholder {
+            None => match unlisted {
                 Some(text) => Numeric::empty(range).text(cx.env.resolve(text).as_str()),
                 None => Numeric::empty(range),
             },
@@ -503,7 +510,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let held = self.position(cx.value());
         let mixed = cx.words::<PickerWords>().mixed.clone();
-        let (text, muted) = self.shown(cx.value(), &mixed);
+        let (text, muted) = self.shown(held, cx.value().is_some(), &mixed);
         let text = text.map_or(Label::Empty, |text| cx.env.resolve(text));
         let mut face = SelectFace::new(text).fit(self.fits(cx.resolved.sizing(), cx.env.get::<InBar>().0));
         if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
