@@ -3,8 +3,8 @@
 use crate::protocol::CANCELLED;
 
 use super::{
-    App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, installed_package_damaged, msi_command, msi_folder_argument, msi_log, process,
-    reinstall_command_ui, turn,
+    App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, installed_package_damaged, msi_command, msi_folder_argument, msi_log, msi_path,
+    process, reinstall_command_ui, turn,
 };
 
 fn msiexec() -> PathBuf {
@@ -38,7 +38,8 @@ pub fn run_msi(msi: &Path, destination: Option<&Path>, stop: &Stop, phase: &mut 
 /// [`explain`], naming the installer's log beside `msi` on a failure it can explain. A 1603 caused
 /// by Windows' damaged saved copy of the installed version says so (#3810).
 fn explain_with_log(code: Option<i32>, msi: &Path) -> Result<(), String> {
-    let log = msi_log(msi);
+    // The log is written beside the resolved package, as `msi_command_ui` passes it.
+    let log = msi_log(&msi_path(msi).unwrap_or_else(|_| msi.to_path_buf()));
     explain(code).map_err(|e| match code {
         Some(1602) | None => e,
         Some(1603) if installed_package_damaged(&log) => format!(
