@@ -287,6 +287,9 @@ pub(crate) struct PointerRead {
     pub release: Option<PointerButton>,
     /// Where the pass's last button release went up, and its modifiers.
     pub released_at: Option<(Pos2, Mods)>,
+    /// The modifiers of the release that ended the primary press, whatever else went up in the pass after it: a
+    /// primary click reads these.
+    pub click_mods: Option<Mods>,
     /// The last press of a button other than the primary one: the button and where it went down.
     pub other_press: Option<(PointerButton, Pos2)>,
     /// Whether the primary button went down in this pass.
@@ -362,6 +365,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut touch_sample = None;
         let mut release = None;
         let mut released_at = None;
+        let mut click_mods = None;
         let mut touches = Vec::new();
         let mut other_press = None;
         let mut rotation = 0.0;
@@ -413,10 +417,14 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                 Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers } => {
                     released_at = Some((*pos, Mods::from_egui(modifiers, os)));
                     if barrel_press {
+                        // The contact that ends here was the barrel's, whose press went down as the secondary one.
                         barrel_press = false;
                         release = Some(PointerButton::Secondary);
                         events.push(PointerEvent::released_by(PointerButton::Secondary, *pos));
                     } else {
+                        // The primary press ends here, so a click of it reads this release's modifiers even when
+                        // another button's release overwrites `released_at` in the same pass.
+                        click_mods = Some(Mods::from_egui(modifiers, os));
                         release = Some(PointerButton::Primary);
                         events.push(PointerEvent::released(*pos));
                     }
@@ -481,6 +489,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             buttons,
             release,
             released_at,
+            click_mods,
             touches,
             other_press,
             primary_pressed: input.pointer.primary_pressed() && !barrel_pressed,

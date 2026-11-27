@@ -52,6 +52,10 @@ pub struct PointerFrame {
     /// The modifiers of the pass's last button release, with the latched ones added; the held `mods` in a pass with no
     /// release and in a rerun pass. The one source of a pick's and a drop's modifiers.
     pub pick_mods: Mods,
+    /// The modifiers of the release that ended the primary press, with the latched ones added; the held `mods` in a
+    /// pass whose click completes without one (a release held for the pass after it). A click's activation reads these:
+    /// a release of another button later in the same pass overwrites `pick_mods`, never this.
+    pub click_mods: Mods,
     /// Where the pass's last button release went up; the latest `pos` in a pass with no release and in a rerun pass. The
     /// one source of a drop's position: a pointer that moves on or leaves the window after the release in the same
     /// frame does not move the drop.
@@ -326,6 +330,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         release: read.release,
         mods,
         pick_mods: read.released_at.map_or(mods, |(_, released)| with_latched(released, latched)),
+        click_mods: read.click_mods.map_or(mods, |released| with_latched(released, latched)),
         pick_pos: read.released_at.map_or(read.pos, |(at, _)| Some(at)),
         multi_tap: tap,
         time: read.time,
@@ -499,6 +504,7 @@ pub(crate) fn frame_raw(ctx: &Context) -> PointerFrame {
         release: None,
         mods: Mods::NONE,
         pick_mods: Mods::NONE,
+        click_mods: Mods::NONE,
         pick_pos: None,
         multi_tap: None,
         time: 0.0,
