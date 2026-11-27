@@ -859,6 +859,21 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         self.more = None;
         let report = self.report();
         let flow = Flow::new(cx.content_rect, cx.flow.is_rtl());
+        // Alt+Down from the strip itself opens the first declared popup. Focused end items open their own menus.
+        if report.overflow > 0.0 {
+            let tabs = flow.take_end(report.ends_room).1;
+            let slot = match self.kind.overflow_place() {
+                OverflowPlace::StripEnd => tabs.take_end(report.overflow).0,
+                OverflowPlace::AfterTabs => tabs.take_start(report.tabs_end).1.take_start(report.overflow).0,
+            };
+            self.more = Some(slot);
+            cx.part(OVERFLOW, slot)
+                .sense(Sense::CLICK)
+                .priority(HitPriority::new(HitLevel::Edge, 0))
+                .over()
+                .toggles("menu")
+                .pointer_only("Alt+Down opens the overflow menu");
+        }
         for slot in &report.ends {
             let Some(end) = self.trailing.get(slot.item) else { continue };
             let enabled = end.enabled::<Self>(&**cx);
@@ -881,21 +896,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
                 let _ = cx.part(GHOST.at(at as u64), flow.span(start, width));
             }
         }
-        if report.overflow <= 0.0 {
-            return;
-        }
-        let tabs = flow.take_end(report.ends_room).1;
-        let slot = match self.kind.overflow_place() {
-            OverflowPlace::StripEnd => tabs.take_end(report.overflow).0,
-            OverflowPlace::AfterTabs => tabs.take_start(report.tabs_end).1.take_start(report.overflow).0,
-        };
-        self.more = Some(slot);
-        cx.part(OVERFLOW, slot)
-            .sense(Sense::CLICK)
-            .priority(HitPriority::new(HitLevel::Edge, 0))
-            .over()
-            .toggles("menu")
-            .pointer_only("Alt+Down opens the overflow menu");
     }
 
     /// A drag or a double click that starts on the empty room is reported; a drag of this strip's tabs that no target
@@ -958,11 +958,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
         }
     }
 
-    /// The overflow button and each end item are buttons named by their labels; an end item with a menu says so.
+    /// The overflow button and each end item are buttons named by their labels and announce the menus they open.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         if self.more.is_some() {
             let node = access.node(OVERFLOW, Role::BUTTON);
             node.name = Name::Text(cx.words::<StripWords>().more.as_str().to_owned());
+            node.has_popup(PopupKind::Menu);
         }
         for slot in self.report().ends {
             let Some(end) = self.trailing.get(slot.item) else { continue };
