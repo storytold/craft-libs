@@ -220,6 +220,38 @@ fn rows_follow_their_predicates_and_carry_their_tooltip() {
     assert!(fixture.tree().is_disabled_key(detail.node), "disabled for the third value");
 }
 
+#[trial]
+fn a_row_checks_all_its_enable_conditions_on_screen_and_in_automation() {
+    let params = vec![
+        Param::new("hyphenate", "Hyphenation", ParamKind::bool(false)),
+        Param::new("zone", "Hyphenation Zone", ParamKind::int(Some(0), None, 0))
+            .enabled_when("hyphenate", true)
+            .and_enabled_when_in("composer", ["singleLine", "standardSingleLine"]),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params.clone(), &values);
+    for (hyphenate, composer, enabled) in [
+        (true, None, false),
+        (false, Some("singleLine"), false),
+        (true, Some("everyLine"), false),
+        (true, Some("singleLine"), true),
+        (true, Some("standardSingleLine"), true),
+    ] {
+        {
+            let mut fields = values.borrow_mut();
+            fields.set("hyphenate", hyphenate);
+            if let Some(composer) = composer {
+                fields.set("composer", composer);
+            }
+        }
+        fixture.settle();
+        let zone = fixture.by_label("Hyphenation Zone").expect("the row stays visible");
+        assert_eq!(!fixture.tree().is_disabled_key(zone.node), enabled, "{hyphenate}, {composer:?}");
+        let mut fields = values.borrow().clone();
+        assert_eq!(set_param_field(&params, &mut fields, "zone", json!(8)).is_ok(), enabled, "{hyphenate}, {composer:?}");
+    }
+}
+
 // A row with two `visible_when` conditions is there only while both hold: the second call adds a condition, not
 // replaces the first. A `disabled` row takes no input whatever the fields hold, from a click or from automation.
 #[trial]
