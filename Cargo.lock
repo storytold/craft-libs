@@ -1870,6 +1870,7 @@ dependencies = [
  "craft-odf",
  "craft-ods",
  "craft-offcrypto",
+ "craft-officeart",
  "craft-opc",
  "craft-openpgp",
  "craft-ora",
@@ -2462,6 +2463,7 @@ dependencies = [
  "chrono",
  "craft-cfb",
  "craft-codepage",
+ "craft-officeart",
  "craft-wordmodel",
  "image",
  "log",
@@ -3516,6 +3518,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-officeart"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "craft-opc"
 version = "0.1.0"
 dependencies = [
@@ -3803,10 +3814,10 @@ dependencies = [
  "craft-cfb",
  "craft-codepage",
  "craft-drawingml",
+ "craft-officeart",
  "craft-pptx",
  "image",
  "log",
- "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]
 
@@ -4877,8 +4888,10 @@ name = "craft-xls"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-officeart",
  "craft-sheet",
  "craft-xls",
+ "image",
  "md-5 0.10.6",
  "miniz_oxide 0.9.1",
  "sha1 0.10.7",

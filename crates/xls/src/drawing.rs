@@ -5,59 +5,30 @@
 
 use std::sync::Arc;
 
+use craft_officeart::blip::{Decode, Format, fbse_record, parse, picture, store_entries};
+use craft_officeart::props::{entries, prop};
+use craft_officeart::record::{MAX_DEPTH, Records};
+use craft_officeart::rt;
+
 use crate::model::ClientAnchor;
 
-/// Pictures read from one workbook at most.
-const MAX_BLIPS: usize = 4096;
-/// Bytes inflated from all of a workbook's metafiles together.
-const MAX_METAFILES: usize = 256 << 20;
-/// Nesting of drawing containers followed at most.
-const MAX_DEPTH: usize = 16;
+/// Bytes all of a workbook's pictures may produce together, inflated or copied.
+const MAX_PICTURE_BYTES: usize = 256 << 20;
 
 /// One stored picture: its bytes (shared by every shape that shows it) and MIME type, or `None`
-/// for a format that is not read (PICT, TIFF) or a damaged one, so that `pib` indexes still
+/// for a format that is not read (PICT) or a damaged one, so that `pib` indexes still
 /// line up.
 pub(crate) type Blip = Option<(Arc<Vec<u8>>, &'static str)>;
-
-/// An Office Drawing record header: version/instance, type, length.
-fn header(b: &[u8], at: usize) -> Option<(u16, u16, usize)> {
-    let h = b.get(at..at.checked_add(8)?)?;
-    let vi = u16::from_le_bytes([*h.first()?, *h.get(1)?]);
-    let ty = u16::from_le_bytes([*h.get(2)?, *h.get(3)?]);
-    let len = u32::from_le_bytes([*h.get(4)?, *h.get(5)?, *h.get(6)?, *h.get(7)?]);
-    Some((vi, ty, usize::try_from(len).ok()?))
-}
-
-/// The records directly inside `b` (a container's body): (version/instance, type, body).
-fn children(b: &[u8]) -> Vec<(u16, u16, &[u8])> {
-    let mut out = Vec::new();
-    let mut at = 0usize;
-    while let Some((vi, ty, len)) = header(b, at) {
-        let start = at + 8;
-        // A record claiming more than is there keeps what is there: the last one in a buffer
-        // is often cut where its sheet's drawing records end.
-        let end = start.saturating_add(len).min(b.len());
-        out.push((vi, ty, b.get(start..end).unwrap_or(&[])));
-        at = end;
-    }
-    out
-}
 
 /// The pictures of the workbook's MsoDrawingGroup, in BStore order (`pib` 1 is the first).
 pub(crate) fn blip_store(dgg: &[u8]) -> Vec<Blip> {
     let mut out = Vec::new();
-    let mut inflate_left = MAX_METAFILES;
-    for (_, ty, body) in children(dgg) {
-        if ty != 0xF000 {
-            continue;
-        }
-        for (_, ty, store) in children(body) {
-            if ty != 0xF001 {
-                continue;
-            }
-            for (_, ty, fbse) in children(store) {
-                if ty == 0xF007 && out.len() < MAX_BLIPS {
-                    out.push(fbse_blip(fbse, &mut inflate_left).map(|(b, m)| (Arc::new(b), m)));
+    let mut work = Decode::new(MAX_PICTURE_BYTES);
+    for dgg in Records::new(dgg).filter(|r| r.kind == rt::DGG_CONTAINER) {
+        for store in Records::new(dgg.data).filter(|r| r.kind == rt::BSTORE_CONTAINER) {
+            for fbse in store_entries(store.data) {
+                if out.len() < craft_officeart::blip::MAX_ENTRIES {
+                    out.push(fbse_blip(fbse, &mut work).map(|(b, m)| (Arc::new(b), m)));
                 }
             }
         }
@@ -68,121 +39,20 @@ pub(crate) fn blip_store(dgg: &[u8]) -> Vec<Blip> {
 /// A picture's bytes and MIME type.
 type Bytes = Option<(Vec<u8>, &'static str)>;
 
-/// The picture of one FBSE: 36 bytes of description, its name, then the BLIP record.
-/// `inflate_left` is what the workbook's metafiles may still inflate to.
-fn fbse_blip(fbse: &[u8], inflate_left: &mut usize) -> Bytes {
-    let name_len = usize::from(*fbse.get(33)?);
-    let rest = fbse.get(36usize.checked_add(name_len)?..)?;
-    let (vi, ty, len) = header(rest, 0)?;
-    let data = rest.get(8..8usize.checked_add(len)?.min(rest.len()))?;
-    let instance = vi >> 4;
-    // EMF and WMF: one or two identifiers, a metafile header, then the (usually zlib) bytes.
-    match (ty, instance) {
-        (0xF01A, 0x3D4) => return metafile(data, 1, false, inflate_left),
-        (0xF01A, 0x3D5) => return metafile(data, 2, false, inflate_left),
-        (0xF01B, 0x216) => return metafile(data, 1, true, inflate_left),
-        (0xF01B, 0x217) => return metafile(data, 2, true, inflate_left),
-        // DIB: identifiers, a tag byte, then a BITMAPINFOHEADER and the pixels.
-        (0xF01F, 0x7A8) => return dib_as_bmp(data.get(17..)?),
-        (0xF01F, 0x7A9) => return dib_as_bmp(data.get(33..)?),
+/// The picture of one FBSE (its BLIP record after its description and name), within `work`: a
+/// metafile inflated, a WMF with its placeable header put back so the picture keeps its size, a
+/// DIB decoded and made a PNG (or a BMP when it can't be decoded), a TIFF decoded and made a PNG
+/// (the picture model and its apps take PNG, not TIFF). PICT is not read.
+fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
+    let (rec, _) = fbse_record(fbse, &[])?;
+    let blip = parse(&rec)?;
+    match blip.format {
+        Format::Pict => return None,
+        Format::Tiff => return Some((craft_officeart::tiff::to_png(blip.raw(), usize::MAX, work)?, "image/png")),
         _ => {}
     }
-    // PNG and JPEG keep one or two 16-byte identifiers and a tag byte before the bytes.
-    let (uids, mime) = match (ty, instance) {
-        (0xF01E, 0x6E0) => (1, "image/png"),
-        (0xF01E, 0x6E1) => (2, "image/png"),
-        (0xF01D | 0xF02A, 0x46A | 0x6E2) => (1, "image/jpeg"),
-        (0xF01D | 0xF02A, 0x46B | 0x6E3) => (2, "image/jpeg"),
-        _ => return None,
-    };
-    let bytes = data.get(16 * uids + 1..)?;
-    (!bytes.is_empty()).then(|| (bytes.to_vec(), mime))
-}
-
-/// Largest metafile inflated from one BLIP.
-const MAX_METAFILE: usize = 64 << 20;
-
-/// An EMF or WMF BLIP's file: after `uids` identifiers comes the 34-byte OfficeArtMetafileHeader
-/// (uncompressed size, bounds, size in EMUs, saved size, compression 0 = DEFLATE in a zlib wrapper
-/// or 0xFE = none, filter), then the saved bytes. A WMF is stored without its placeable header;
-/// one is put back from the bounds so the picture keeps its size.
-fn metafile(data: &[u8], uids: usize, wmf: bool, inflate_left: &mut usize) -> Bytes {
-    let h = data.get(16 * uids..16 * uids + 34)?;
-    let u32_at = |at: usize| Some(u32::from_le_bytes(h.get(at..at + 4)?.try_into().ok()?));
-    let i32_at = |at: usize| Some(i32::from_le_bytes(h.get(at..at + 4)?.try_into().ok()?));
-    let size = usize::try_from(u32_at(0)?).ok()?;
-    let saved = usize::try_from(u32_at(28)?).ok()?;
-    let body = data.get(16 * uids + 34..)?;
-    let body = body.get(..saved.min(body.len()))?;
-    let bytes = match *h.get(32)? {
-        0x00 => {
-            let out = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(body, size.min(MAX_METAFILE).min(*inflate_left)).ok()?;
-            *inflate_left = inflate_left.saturating_sub(out.len());
-            out
-        }
-        0xFE => body.to_vec(),
-        _ => return None,
-    };
-    if bytes.is_empty() {
-        return None;
-    }
-    if !wmf {
-        return Some((bytes, "image/x-emf"));
-    }
-    // Bounds in the metafile's units, size in EMUs (914400 an inch): its units per inch.
-    let (l, t, r, b) = (i32_at(4)?, i32_at(8)?, i32_at(12)?, i32_at(16)?);
-    let width_emu = f64::from(i32_at(20)?);
-    let units = f64::from(r.saturating_sub(l));
-    let inch = if width_emu > 0.0 && units > 0.0 { (units * 914_400.0 / width_emu).round().clamp(1.0, 65_535.0) as u16 } else { 1440 };
-    let clamp16 = |v: i32| v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
-    let mut out = Vec::with_capacity(22 + bytes.len());
-    out.extend_from_slice(&0x9AC6_CDD7u32.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    for v in [l, t, r, b] {
-        out.extend_from_slice(&clamp16(v).to_le_bytes());
-    }
-    out.extend_from_slice(&inch.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    // Checksum: the XOR of the ten words before it.
-    let sum = out.chunks(2).fold(0u16, |x, w| x ^ u16::from_le_bytes([w[0], *w.get(1).unwrap_or(&0)]));
-    out.extend_from_slice(&sum.to_le_bytes());
-    out.extend_from_slice(&bytes);
-    Some((out, "image/x-wmf"))
-}
-
-/// A packed DIB (header, palette, pixels) as a BMP file: the 14-byte file header in front, its
-/// pixel offset counted from the info header's size and palette.
-fn dib_as_bmp(dib: &[u8]) -> Bytes {
-    let u32_at = |at: usize| Some(u32::from_le_bytes(dib.get(at..at + 4)?.try_into().ok()?));
-    let header = u32_at(0)?;
-    if !(12..=124).contains(&header) || dib.len() <= header as usize {
-        return None;
-    }
-    let palette = if header == 12 {
-        0
-    } else {
-        let bits = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
-        let used = u32_at(32)?;
-        let colors = if used > 0 {
-            used.min(256)
-        } else if bits <= 8 {
-            1 << bits
-        } else {
-            0
-        };
-        // BI_BITFIELDS with a 40-byte header keeps its three masks after it.
-        let masks = if header == 40 && u32_at(16)? == 3 { 12 } else { 0 };
-        colors * 4 + masks
-    };
-    let offset = 14 + header + palette;
-    let total = u32::try_from(dib.len()).ok()?.checked_add(14)?;
-    let mut out = Vec::with_capacity(total as usize);
-    out.extend_from_slice(b"BM");
-    out.extend_from_slice(&total.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&offset.to_le_bytes());
-    out.extend_from_slice(dib);
-    Some((out, "image/bmp"))
+    let p = picture(&blip, usize::MAX, work)?;
+    Some((p.data, p.content_type))
 }
 
 /// A picture shape: its BLIP (1-based) and client anchor.
@@ -192,45 +62,58 @@ pub(crate) struct PictureShape {
     pub anchor: ClientAnchor,
 }
 
-/// The picture shapes in a sheet's drawing (its MsoDrawing records joined).
-pub(crate) fn picture_shapes(dg: &[u8]) -> Vec<PictureShape> {
+/// The picture shapes in a sheet's drawing (its MsoDrawing records joined), reading at most
+/// `budget` records more (one budget for the whole workbook, [`craft_officeart::record::MAX_RECORDS`] to start with),
+/// and whether the budget ran out before the drawing's last record, so shapes may be missing.
+pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> (Vec<PictureShape>, bool) {
     let mut out = Vec::new();
-    walk(dg, 0, &mut out);
-    out
+    let mut cut = false;
+    walk(dg, 0, &mut out, budget, &mut cut);
+    (out, cut)
 }
 
-fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>) {
+/// The picture shapes in containers nested at most [`MAX_DEPTH`] deep, reading at most `budget`
+/// records more (shared by the whole workbook); `cut` is set when a record is left unread.
+fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>, budget: &mut usize, cut: &mut bool) {
     if depth > MAX_DEPTH {
         return;
     }
-    for (vi, ty, body) in children(b) {
-        if ty == 0xF004 {
-            if let Some(p) = shape(body) {
+    for r in Records::new(b) {
+        if *budget == 0 {
+            *cut = true;
+            return;
+        }
+        *budget -= 1;
+        if r.kind == rt::SP_CONTAINER {
+            if let Some(p) = shape(r.data, budget, cut) {
                 out.push(p);
             }
-        } else if vi & 0x0F == 0x0F {
-            walk(body, depth + 1, out);
+        } else if r.is_container() {
+            walk(r.data, depth + 1, out, budget, cut);
         }
     }
 }
 
-/// A shape container's BLIP and anchor, when it has both.
-fn shape(sp: &[u8]) -> Option<PictureShape> {
+/// A shape container's BLIP and anchor, when it has both and the budget reads all its records.
+fn shape(sp: &[u8], budget: &mut usize, cut: &mut bool) -> Option<PictureShape> {
     let (mut pib, mut anchor) = (None, None);
-    for (vi, ty, body) in children(sp) {
-        match ty {
+    for r in Records::new(sp) {
+        if *budget == 0 {
+            *cut = true;
+            return None;
+        }
+        *budget -= 1;
+        let body = r.data;
+        match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
-            0xF00B => {
-                for p in body.chunks(6).take(usize::from(vi >> 4)) {
-                    if let [a, b, c, d, e, f] = *p
-                        && u16::from_le_bytes([a, b]) & 0x3FFF == 0x0104
-                    {
-                        pib = Some(u32::from_le_bytes([c, d, e, f]));
-                    }
+            rt::FOPT => {
+                // The last `pib` entry counts; a complex one (its operand a length) is no index.
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                    pib = (!e.is_complex).then_some(e.op);
                 }
             }
             // Client anchor: flags, then eight 16-bit values.
-            0xF010 => {
+            rt::CLIENT_ANCHOR => {
                 let mut v = [0u16; 8];
                 for (i, slot) in v.iter_mut().enumerate() {
                     let at = 2 + i * 2;
@@ -248,17 +131,33 @@ fn shape(sp: &[u8]) -> Option<PictureShape> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_officeart::record::MAX_RECORDS;
 
     fn rec(vi: u16, ty: u16, body: &[u8]) -> Vec<u8> {
         [&vi.to_le_bytes()[..], &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body].concat()
+    }
+
+    /// An FBSE body holding `blip`: 36 bytes of description (its size at 20), then the BLIP.
+    fn fbse_of(blip: &[u8]) -> Vec<u8> {
+        let mut d = [0u8; 36];
+        d[20..24].copy_from_slice(&(blip.len() as u32).to_le_bytes());
+        [&d[..], blip].concat()
+    }
+
+    /// A metafile BLIP: one identifier, the 34-byte header (`fields` as eight u32s, then the
+    /// compression and filter bytes), then `saved`.
+    fn metafile_blip(ty: u16, instance: u16, fields: [u32; 8], compression: u8, saved: &[u8]) -> Vec<u8> {
+        let mut header: Vec<u8> = fields.iter().flat_map(|v| v.to_le_bytes()).collect();
+        header.extend_from_slice(&[compression, 0xFE]);
+        rec(instance << 4, ty, &[&[0u8; 16][..], &header, saved].concat())
     }
 
     #[test]
     fn pictures_and_their_anchors_are_found_and_hostile_drawings_are_harmless() {
         let png = [0x89, b'P', b'N', b'G'];
         let blip = rec(0x6E00, 0xF01E, &[&[0u8; 17][..], &png].concat());
-        let fbse = rec(0x0062, 0xF007, &[&[0u8; 36][..], &blip].concat());
-        let wmf = rec(0x0062, 0xF007, &[&[0u8; 36][..], &rec(0x2160, 0xF01B, &[0; 60])].concat());
+        let fbse = rec(0x0062, 0xF007, &fbse_of(&blip));
+        let wmf = rec(0x0062, 0xF007, &fbse_of(&rec(0x2160, 0xF01B, &[0; 60])));
         let dgg = rec(0x000F, 0xF000, &rec(0x002F, 0xF001, &[fbse, wmf].concat()));
         let store = blip_store(&dgg);
         assert_eq!(store.len(), 2);
@@ -270,55 +169,44 @@ mod tests {
         let sp = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
         let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &sp));
         let anchor = ClientAnchor { col1: 1, dx1: 512, row1: 1, dy1: 0, col2: 3, dx2: 0, row2: 4, dy2: 0 };
-        assert_eq!(picture_shapes(&dg), vec![PictureShape { pib: 1, anchor }]);
+        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), (vec![PictureShape { pib: 1, anchor }], false));
         // Truncated or nonsense drawings give nothing, never a panic.
-        for bad in [&[][..], &[0xFF; 8][..], &[0; 70][..]] {
-            assert_eq!(metafile(bad, 1, false, &mut usize::MAX.clone()), None);
-            let _ = metafile(bad, 2, true, &mut usize::MAX.clone());
-            let _ = dib_as_bmp(bad);
+        for bad in [&[][..], &[0xFF; 8][..], &[0; 70][..], &fbse_of(&[0xFF; 60])[..]] {
+            let _ = fbse_blip(bad, &mut Decode::new(usize::MAX));
         }
         for bad in [&dg[..dg.len() - 5], &[0xFF; 40][..], &[][..], &dgg[..20]] {
-            let _ = picture_shapes(bad);
+            let _ = picture_shapes(bad, &mut MAX_RECORDS.clone());
             let _ = blip_store(bad);
         }
     }
 
     #[test]
-    fn metafiles_share_one_inflate_allowance() {
+    fn metafiles_share_one_budget() {
         // A zlib metafile of 1000 zero bytes, as an EMF BLIP with one identifier.
         let raw = vec![0u8; 1000];
         let z = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
-        let mut header = Vec::new();
-        for v in [1000u32, 0, 0, 10, 10, 0, 0, z.len() as u32] {
-            header.extend_from_slice(&v.to_le_bytes());
-        }
-        header.extend_from_slice(&[0x00, 0xFE]);
-        let data = [&[0u8; 16][..], &header, &z].concat();
-        let mut left = 1500;
-        assert_eq!(metafile(&data, 1, false, &mut left).map(|(b, _)| b.len()), Some(1000));
-        assert_eq!(left, 500);
+        let fbse = fbse_of(&metafile_blip(0xF01A, 0x3D4, [1000, 0, 0, 10, 10, 0, 0, z.len() as u32], 0, &z));
+        let mut work = Decode::new(1500);
+        assert_eq!(fbse_blip(&fbse, &mut work).map(|(b, _)| b.len()), Some(1000));
+        assert_eq!(work.left, 500 - z.len(), "its compressed bytes and what they inflated to");
         // The second would inflate past what is left: refused, not cut.
-        assert_eq!(metafile(&data, 1, false, &mut left), None);
+        assert_eq!(fbse_blip(&fbse, &mut work), None);
     }
 
     #[test]
-    fn a_wmf_gets_its_placeable_header_back_and_a_dib_becomes_a_bmp() {
+    fn a_wmf_gets_its_placeable_header_back_and_a_dib_becomes_a_png() {
         // Bounds 0,0–2000×1000 units over 2 × 1 inches (EMUs): 1000 units an inch; stored as is.
         let wmf = b"WMF records".to_vec();
-        let mut header = Vec::new();
-        for v in [wmf.len() as u32, 0, 0, 2000, 1000, 2 * 914_400, 914_400, wmf.len() as u32] {
-            header.extend_from_slice(&v.to_le_bytes());
-        }
-        header.extend_from_slice(&[0xFE, 0xFE]);
-        let data = [&[0u8; 16][..], &header, &wmf].concat();
-        let (bytes, mime) = metafile(&data, 1, true, &mut usize::MAX.clone()).expect("wmf");
+        let n = wmf.len() as u32;
+        let fbse = fbse_of(&metafile_blip(0xF01B, 0x216, [n, 0, 0, 2000, 1000, 2 * 914_400, 914_400, n], 0xFE, &wmf));
+        let (bytes, mime) = fbse_blip(&fbse, &mut Decode::new(usize::MAX)).expect("wmf");
         assert_eq!(mime, "image/x-wmf");
         assert_eq!(&bytes[..4], &0x9AC6_CDD7u32.to_le_bytes());
         assert_eq!(u16::from_le_bytes([bytes[14], bytes[15]]), 1000, "units per inch");
         let sum = bytes[..20].chunks(2).fold(0u16, |x, w| x ^ u16::from_le_bytes([w[0], w[1]]));
         assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), sum);
         assert_eq!(&bytes[22..], &wmf[..]);
-        // A 1 × 1, 24-bit DIB: the pixels start right after the file and info headers.
+        // A 1 × 1, 24-bit DIB, decoded and made a PNG.
         let mut dib = Vec::new();
         for v in [40u32, 1, 1] {
             dib.extend_from_slice(&v.to_le_bytes());
@@ -327,10 +215,34 @@ mod tests {
         dib.extend_from_slice(&24u16.to_le_bytes());
         dib.extend_from_slice(&[0; 24]);
         dib.extend_from_slice(&[0, 0, 255, 0]);
-        let (bmp, mime) = dib_as_bmp(&dib).expect("bmp");
-        assert_eq!(mime, "image/bmp");
-        assert_eq!(&bmp[..2], b"BM");
-        assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
-        assert_eq!(bmp.len(), 14 + dib.len());
+        let fbse = fbse_of(&rec(0x7A80, 0xF01F, &[&[0u8; 17][..], &dib].concat()));
+        let (png, mime) = fbse_blip(&fbse, &mut Decode::new(usize::MAX)).expect("png");
+        assert_eq!((mime, &png[..4]), ("image/png", &[0x89, b'P', b'N', b'G'][..]));
+    }
+
+    /// A workbook's drawings read at most the shared limit of records together, and containers
+    /// nested at most the shared depth.
+    #[test]
+    fn a_drawing_walk_is_bounded() {
+        let opt = rec(0x0013, 0xF00B, &[&0x4104u16.to_le_bytes()[..], &1u32.to_le_bytes()].concat());
+        let anchor_body: Vec<u8> = [0u16; 9].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let picture = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
+        // Three records a picture: half as many pictures as the limit need half again its records.
+        let count = MAX_RECORDS / 4;
+        let many = rec(0x000F, 0xF003, &vec![picture.clone(); count].concat());
+        let mut budget = MAX_RECORDS;
+        let (first, first_cut) = picture_shapes(&many, &mut budget);
+        let (second, second_cut) = picture_shapes(&many, &mut budget);
+        let (first, second) = (first.len(), second.len());
+        assert!(first == count && second < count, "{first} then {second}: the second sheet gets what is left");
+        // The second sheet is told its drawing was cut short; the first, read whole, isn't.
+        assert!(!first_cut && second_cut);
+        // A budget used up exactly by the drawing's last record cuts nothing.
+        let one = rec(0x000F, 0xF003, &picture);
+        assert!(!picture_shapes(&one, &mut 4).1);
+        assert!(picture_shapes(&one, &mut 3).1);
+        let nested = |levels: usize| (0..levels).fold(picture.clone(), |inner, _| rec(0x000F, 0xF003, &inner));
+        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).0.len(), 1);
+        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).0.is_empty(), "past the depth limit");
     }
 }

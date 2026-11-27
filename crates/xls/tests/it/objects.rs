@@ -167,8 +167,11 @@ fn od(vi: u16, ty: u16, body: &[u8]) -> Vec<u8> {
     cat(&[&vi.to_le_bytes(), &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body])
 }
 
+/// An FBSE holding `blip`: 36 bytes of description (its size at 20), then the BLIP.
 fn fbse(blip: &[u8]) -> Vec<u8> {
-    od(0x0062, 0xF007, &cat(&[&[0u8; 36], blip]))
+    let mut d = [0u8; 36];
+    d[20..24].copy_from_slice(&(blip.len() as u32).to_le_bytes());
+    od(0x0062, 0xF007, &cat(&[&d, blip]))
 }
 
 fn shape(pib: u32, anchor: [u16; 8]) -> Vec<u8> {
@@ -212,6 +215,20 @@ fn reads_pictures() {
     assert!(std::sync::Arc::ptr_eq(&p[0].data, &p[2].data));
     assert_eq!((p[2].anchor.dx1, p[2].anchor.dy1), (512, 128));
     assert!(report.warnings.iter().any(|w| w.contains("pictures were damaged")), "{:?}", report.warnings);
+}
+
+/// A TIFF picture is read as a PNG of the same picture: the picture model and its apps take PNG.
+#[test]
+fn reads_a_tiff_picture_as_a_png() {
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(2, 2, image::Rgb([0, 0, 255])).write_to(&mut tiff, image::ImageFormat::Tiff).unwrap();
+    let blip = od(0x6E40, 0xF029, &cat(&[&[0u8; 17], tiff.get_ref()]));
+    let (wb, report) = pictures(&[blip], &shape(1, [1, 0, 1, 0, 2, 0, 2, 0]));
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    assert_eq!(p[0].mime, "image/png");
+    let img = image::load_from_memory_with_format(&p[0].data, image::ImageFormat::Png).unwrap().to_rgb8();
+    assert_eq!((img.dimensions(), img.get_pixel(1, 1).0), ((2, 2), [0, 0, 255]));
 }
 
 #[test]

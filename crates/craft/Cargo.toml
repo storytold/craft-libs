@@ -232,6 +232,7 @@ craft-sbs = { workspace = true, optional = true }
 craft-ease = { workspace = true, optional = true }
 craft-i18n-build = { workspace = true, optional = true }
 craft-pbr = { workspace = true, optional = true }
+craft-officeart = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -680,6 +681,8 @@ ods = ["dep:craft-ods"]
 ods-test-support = ["ods", "craft-ods/test-support"]
 
 offcrypto = ["dep:craft-offcrypto"]
+
+officeart = ["dep:craft-officeart"]
 
 opc = ["dep:craft-opc"]
 opc-test-support = ["opc", "craft-opc/test-support"]
