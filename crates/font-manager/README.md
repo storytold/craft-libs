@@ -102,6 +102,7 @@ reads finish. The headless `family_rows` function reads these properties synchro
 The default native job service runs these reads on background threads. WebAssembly runs at most one
 queued family read per frame on the UI thread.
 Closed-field arrow and wheel inputs wait for the complete filtered order before changing the family.
+Moving focus away cancels pending steps.
 
 ## Strings
 

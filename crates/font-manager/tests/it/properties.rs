@@ -402,6 +402,7 @@ fn closed_property_field_from(names: &[&'static str]) -> (Fixture, Rc<RefCell<St
     filters.properties.height = Some(Grade::Medium);
     let mut fx = Fixture::new(move |ui| {
         FontPicker::new("Font family", Bind::bound(&mut *shown.borrow_mut()), &catalog).filters(Bind::bound(&mut filters)).show(ui);
+        craft_ui::buttons::Button::new("Next").show(ui);
     });
     let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
     fx.host(Arc::new(host));
@@ -444,6 +445,18 @@ fn closed_field_preserves_multiple_steps_while_properties_load() {
     jobs.run_all();
     fx.settle();
     assert_eq!(family.borrow().as_str(), "Poster", "both queued arrows advance the filtered order");
+}
+
+#[trial]
+fn closed_field_discards_pending_steps_after_focus_leaves() {
+    let (mut fx, family, jobs) = closed_property_field();
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    let next = fx.by_label("Next").expect("another control");
+    fx.click(&next);
+    fx.settle();
+    jobs.run_all();
+    fx.settle();
+    assert_eq!(family.borrow().as_str(), "Book", "leaving the field cancels the pending arrow");
 }
 
 #[trial]

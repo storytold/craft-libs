@@ -869,6 +869,7 @@ pub struct FontPicker<'a> {
     /// Outline properties load through the host's jobs. The list shows a loading message until those reads finish.
     /// WebAssembly runs at most one queued family read per frame on the UI thread.
     /// Closed-field arrows and wheel steps wait until the filtered family order is ready.
+    /// Moving focus away cancels pending steps.
     #[prop]
     properties: bool,
     /// Picks the layout of the filter area.
@@ -1158,6 +1159,9 @@ impl Component for FontPicker<'_> {
         }
         let focused = cx.is_focused();
         let was_focused = std::mem::replace(&mut cx.memory::<Typing>().focused, focused);
+        if was_focused && !focused {
+            cx.memory::<Typing>().steps.clear();
+        }
         let list = cx.popup(POPUP);
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
         let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
