@@ -170,13 +170,15 @@ fn a_tool_change_runs_only_the_toolbar() {
     assert_eq!(ran(&fixture, "ToolbarProps"), 0, "then it replays");
 }
 
-/// A change that resizes the toolbar asks for a discard pass, and the view that asked runs again in it: once per pass.
+/// A change that resizes the toolbar runs its view once: the run's new props are its content's version, so the bar
+/// inside measures afresh and takes its new size in that pass, with no discard pass.
 #[trial]
-fn a_change_that_resizes_the_toolbar_runs_it_in_the_discard_pass_too() {
+fn a_change_that_resizes_the_toolbar_runs_it_once() {
     let (mut fixture, state) = scene();
     state.borrow_mut().width = "a much longer caption".to_owned();
     fixture.frame(vec![]);
-    assert_eq!((ran(&fixture, "ToolbarProps"), ran(&fixture, "StatusProps")), (2, 0), "{:?}", last_frame_memo_runs(fixture.ctx()));
+    assert_eq!((ran(&fixture, "ToolbarProps"), ran(&fixture, "StatusProps")), (1, 0), "{:?}", last_frame_memo_runs(fixture.ctx()));
+    assert_eq!(fixture.passes(), 1, "the frame runs one pass");
     fixture.frame(vec![]);
     assert_eq!(ran(&fixture, "ToolbarProps"), 0, "then it replays");
 }

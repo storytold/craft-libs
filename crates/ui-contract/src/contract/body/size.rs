@@ -15,8 +15,9 @@ use craft_behavior::layout_memory::measure_tolerance;
 use egui::{Context, Id, Rect, Ui, Vec2};
 use std::sync::Arc;
 
-/// The inputs a body's measuring run measures under. A later pass offering the same takes the body's kept
-/// transcript (`layout_memory::kept_serves`); its real run checks that the content is the same.
+/// The inputs a body's measuring run measures under, the content version of the memoized view it runs in among them
+/// (`EnvFacts::view`). A later pass offering the same takes the body's kept transcript (`layout_memory::kept_serves`);
+/// its real run checks that the content is the same.
 #[derive(Clone, PartialEq)]
 pub(super) struct MeasureKey {
     props: MeasuredProps,
@@ -63,6 +64,8 @@ pub(crate) struct EnvFacts {
     measure: Option<f32>,
     grid: Option<Id>,
     egui_cell: bool,
+    /// The content version of the memoized view the body runs in (`Scoped::view_version`).
+    view: Option<u128>,
 }
 
 impl EnvFacts {
@@ -84,6 +87,7 @@ impl EnvFacts {
             measure: env.measure,
             grid: env.grid,
             egui_cell: env.egui_cell,
+            view: env.view_version,
         }
     }
 }

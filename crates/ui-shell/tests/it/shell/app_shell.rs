@@ -214,7 +214,7 @@ fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
 
 /// A settled frame runs a content slot's content once, in one pass: its measure is reused while its inputs are
 /// unchanged. A frame where the content grows (a roomier density makes every button taller) lays the window out again
-/// at most once, shows the new extent in that frame and leaves the next frame settled.
+/// at most once, shows the new extent with the body under it in that frame and leaves the next frame settled.
 #[trial]
 fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame() {
     let runs = Rc::new(Cell::new(0_u32));
@@ -244,9 +244,11 @@ fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame
     fixture.density(Size::Comfortable).frame(Vec::new());
     assert!(fixture.passes() <= 2, "the frame the content grows in lays the window out again at most once: {} passes", fixture.passes());
     let slot = regions.borrow().as_ref().and_then(|regions| regions.slots.first().map(|(_, rect)| *rect)).expect("the slot shows");
+    let body = regions.borrow().as_ref().map(|regions| regions.body).expect("the body shows");
     let grown = seen.borrow().0;
     assert!(grown.height() > before.height() + 1.0, "the roomier density makes the column taller: {before:?} to {grown:?}");
     assert!(slot.expand(1.0).contains_rect(grown), "in the frame it grows in, the slot {slot:?} holds the grown column {grown:?}");
+    assert!((body.top() - slot.bottom()).abs() <= 1.0, "in the frame it grows in, the body {body:?} starts under the grown slot {slot:?}");
     runs.set(0);
     fixture.frame(Vec::new());
     assert_eq!(fixture.passes(), 1, "the frame after the grow is settled: one pass");
@@ -624,6 +626,8 @@ fn a_versioned_content_slot_keeps_its_extent_while_it_replays() {
     let (ran, grown) = frame(&mut frames);
     assert!(ran.contains(&"ribbon"), "a new version runs the slot");
     assert!(grown.top() > settled.top(), "the grown slot pushes the body down in the frame it grew: {grown:?} after {settled:?}");
+    let (_, next) = frame(&mut frames);
+    assert_eq!(next, grown, "the frame after the grow keeps the body where the grow frame put it");
 }
 
 /// A versioned slot that registers a revealed rect registers it again when it replays: the shell reads the same rects

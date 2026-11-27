@@ -112,7 +112,11 @@ pub struct Scoped {
     #[doc(hidden)]
     pub key: EnvKey,
     /// The key of what a memoized view shown in the scope inherits beyond `key` (`scope_key`), once a view asked.
-    scope_key: std::sync::OnceLock<u128>,
+    scope_key: std::sync::OnceLock<(u128, bool)>,
+    /// The key of the memoized view whose content the scope runs in, when that key follows every input of the view
+    /// (`MemoKey::follows`): its content version. A body inside measures under it (`EnvFacts`), so a run of the view
+    /// with other inputs measures afresh instead of taking a transcript its last inputs left.
+    pub(crate) view_version: Option<u128>,
     /// Ambient control size; the root default is `Md`.
     pub size: ControlSize,
     /// How the icon-only buttons of the scope show their glyph; the root default and a layer's is `Control`.
@@ -566,8 +570,9 @@ impl Scoped {
     /// the flow facts, which its place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface,
     /// wheel, directions), the containers around it (arena, roving group, transform, collection item and row, inside
     /// label, footer slot, line length, scroll owner), the command chain, motion, the host's formats and date, and every
-    /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then.
-    pub(crate) fn scope_key(&self) -> u128 {
+    /// app value. Computed once per scope, on the first view that asks; the bytes it fed are counted then. The flag says
+    /// whether the key follows every input it holds (`MemoKey::follows`).
+    pub(crate) fn scope_key(&self) -> (u128, bool) {
         *self.scope_key.get_or_init(|| {
             use crate::contract::{MemoKey, MemoProps as _};
             let mut key = MemoKey::of_view(&self.ctx);
@@ -597,7 +602,7 @@ impl Scoped {
             crate::runtime::measure::count_memo_key_bytes(&self.ctx, key.bytes() + value_bytes);
             #[cfg(not(feature = "testing"))]
             let _ = value_bytes;
-            key.finish()
+            (key.finish(), key.follows())
         })
     }
 
@@ -728,6 +733,7 @@ impl Env {
                 }),
                 key,
                 scope_key: std::sync::OnceLock::new(),
+                view_version: None,
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
