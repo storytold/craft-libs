@@ -416,6 +416,43 @@ struct Kept {
     dragging: bool,
     /// The ramp gesture in progress picks for the colour not edited.
     other: bool,
+    /// The channel drag that moves the other channels with it, while Shift or Command is held.
+    tandem: Option<Tandem>,
+}
+
+/// A channel drag that moved the other channels with Shift or Command held: while it is held, they follow the dragged
+/// one, scaled from the values the colour had when the modifier went down.
+#[derive(Clone, Copy, Debug)]
+struct Tandem {
+    /// The model, colour and channel dragged.
+    slot: (&'static str, usize, usize),
+    /// The values when the modifier went down; `None` once it went up again in the same drag.
+    anchor: Option<ModelValues>,
+}
+
+/// `anchor` with channel `channel` at `x` and the others moved with it: scaled by the ratio the channel moved, or, for a
+/// channel that was at zero or when the dragged one was, shifted by the same amount. Each stays in its range and, for
+/// Web Color, on the web levels. Back at its start, the dragged channel gives back `anchor` itself, so a channel that
+/// was off the web levels returns where it was.
+fn tandem_values(model: &dyn ColorModel, anchor: ModelValues, channel: usize, x: f64, web: bool) -> ModelValues {
+    let from = f64::from(anchor.values[channel]);
+    if (x - from).abs() <= f64::EPSILON {
+        return anchor;
+    }
+    let mut values = anchor;
+    for (j, ch) in model.channels().iter().enumerate() {
+        let v = if j == channel {
+            x
+        } else {
+            let v = f64::from(anchor.values[j]);
+            let v = if from > 0.0 && v > 0.0 { v * x / from } else { v + x - from };
+            let v = if web { (v / WEB_STEP).round() * WEB_STEP } else { v };
+            let range = ChannelRule::of(ch).range;
+            v.clamp(*range.start(), *range.end())
+        };
+        values.values[j] = v as f32;
+    }
+    values
 }
 
 /// The Color panel.
@@ -426,7 +463,8 @@ struct Kept {
 /// - Views: Hue Cube and Brightness Cube are `ColorArea` and `ColorStrip` (hue or brightness in the strip); Color
 ///   Wheel is `ColorWheel`; the slider modes are the channel rows of that model (Grayscale is [`GrayModel`], CMYK is
 ///   [`CmykModel`] through the converter, Web Color is RGB with sliders that snap to web colours). Slider values show
-///   rounded to whole numbers, as Photoshop's fields.
+///   rounded to whole numbers, as Photoshop's fields. In RGB, CMYK and Web Color, a slider dragged with Shift or
+///   Command held moves the other channels with it, in proportion, from the values when the modifier went down.
 /// - Warnings: in the slider modes, the out-of-gamut and web-colour chips under the wells, the cubes the gamut chip
 ///   only; a click takes the nearest colour.
 /// - Ramp: in the slider modes, a `ColorRamp` of the chosen kind; a press picks for the edited well, Alt picks for the
@@ -972,12 +1010,12 @@ impl Body<'_> {
     fn mode_rows(&mut self, ui: &mut Ui, mode: ColorPanelMode) {
         let rgb = self.rgb;
         FieldGroup::new(mode.label(self.words)).labels(LabelScheme::Inspector).gap(Gap::Tight).show(ui, |ui, _| match mode {
-            ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
-            ColorPanelMode::RgbSliders => self.rows(ui, rgb, false),
-            ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
-            ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
-            ColorPanelMode::WebColorSliders => self.rows(ui, rgb, true),
-            _ => self.rows(ui, &HsbModel, false),
+            ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false, false),
+            ColorPanelMode::RgbSliders => self.rows(ui, rgb, false, true),
+            ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false, true),
+            ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false, false),
+            ColorPanelMode::WebColorSliders => self.rows(ui, rgb, true, true),
+            _ => self.rows(ui, &HsbModel, false, false),
         });
     }
 
@@ -1099,17 +1137,81 @@ impl Body<'_> {
         );
     }
 
+    /// An edit of channel `channel` of `current` from a row whose other channels can follow it. While `together`
+    /// (Shift or Command held), a drag moves them with it, from the values when the modifier went down
+    /// ([`tandem_values`]); after the modifier goes up the channel moves alone again. A drag that moved them reports
+    /// the gesture's `start` as the before of its commit or cancel. Only a drag with the pointer `pressed` starts moving
+    /// them; a drag that never did, a wheel turn, a typed value and a key step move the channel alone.
+    fn tandem_event(
+        &mut self,
+        model: &dyn ColorModel,
+        (current, start): (ModelValues, ModelValues),
+        channel: usize,
+        (together, pressed): (bool, bool),
+        web: bool,
+        event: EditEvent<f64>,
+    ) {
+        let slot = (model.id(), self.target.index(), channel);
+        let kept = self.kept.tandem.filter(|tandem| tandem.slot == slot);
+        let anchor = if together { Some(kept.and_then(|tandem| tandem.anchor).unwrap_or(current)) } else { None };
+        let moved = |x: f64| match anchor {
+            Some(anchor) => tandem_values(model, anchor, channel, x, web),
+            None => {
+                let mut values = current;
+                values.values[channel] = x as f32;
+                values
+            }
+        };
+        let event = match event {
+            // A drag the pointer began with the modifier held is a tandem from its start, so a commit that comes with
+            // no update between still moves the other channels.
+            event @ EditEvent::Begin { .. } if together && pressed => {
+                self.kept.tandem = Some(Tandem { slot, anchor });
+                return self.channel_event(model, current, channel, event);
+            }
+            EditEvent::Update { id, value, .. } if (together && pressed) || kept.is_some() => {
+                self.kept.tandem = Some(Tandem { slot, anchor });
+                EditEvent::update(id, moved(value))
+            }
+            EditEvent::Commit { id, after, .. } if (together && pressed) || kept.is_some() => {
+                self.kept.tandem = None;
+                EditEvent::commit(id, Mixed::Same(start), moved(after))
+            }
+            // A cancel that moved the document (a host change) carries no before; one that did not restores the start.
+            EditEvent::Cancel { id, reason, before, .. } if kept.is_some() => {
+                self.kept.tandem = None;
+                EditEvent::cancel(id, reason, before.map(|_| Mixed::Same(start)))
+            }
+            event => {
+                self.kept.tandem = None;
+                return self.channel_event(model, current, channel, event);
+            }
+        };
+        self.model_event(model, event);
+    }
+
     /// The channel rows of `model`, one line each: the channel's letter, which scrubs the value, the slider over the
     /// channel's colours, and the number field with its unit. Web Color has sliders that step by the web levels.
-    fn rows(&mut self, ui: &mut Ui, model: &dyn ColorModel, web: bool) {
+    /// Where `tandem` is set, a drag with Shift or Command held moves the other channels with the dragged one.
+    fn rows(&mut self, ui: &mut Ui, model: &dyn ColorModel, web: bool, tandem: bool) {
         let current = self.values(model);
         // Dynamic Color Sliders off: the tracks keep the colours they had when a drag began.
         let slot = (model.id(), self.target.index());
         let held = self.kept.tracks.iter().find(|(id, target, _)| (*id, *target) == slot).map(|(_, _, values)| *values);
-        let basis = if self.dynamic || !self.kept.dragging { current } else { held.unwrap_or(current) };
+        let start = if self.kept.dragging { held.unwrap_or(current) } else { current };
+        let basis = if self.dynamic { current } else { start };
         if !self.kept.dragging {
             self.kept.tracks.retain(|(id, target, _)| (*id, *target) != slot);
             self.kept.tracks.push((slot.0, slot.1, current));
+            self.kept.tandem = None;
+        }
+        let together = tandem && ui.input(|input| input.modifiers.shift || input.modifiers.command);
+        // Only a pointer drag starts moving the channels together: a Shift wheel turn moves its channel alone. The
+        // release pass counts, so a quick drag whose only move comes with the release still moves them.
+        let pressed = ui.input(|input| input.pointer.primary_down() || input.pointer.primary_released());
+        if !together && let Some(kept) = self.kept.tandem.as_mut() {
+            // The modifier went up: the next press anchors on the colour then, even if the pointer has not moved.
+            kept.anchor = None;
         }
         for (i, ch) in model.channels().iter().enumerate() {
             let mut rule = ChannelRule::of(ch);
@@ -1137,7 +1239,7 @@ impl Body<'_> {
             let shown = (f64::from(current.values[i]) * scale * places).round() / places;
             let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track).show(ui);
             for event in row.into_iter().flat_map(|row| row.events) {
-                self.channel_event(model, current, i, event.map(|x| x / scale));
+                self.tandem_event(model, (current, start), i, (together, pressed), web, event.map(|x| x / scale));
             }
         }
     }

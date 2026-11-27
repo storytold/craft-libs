@@ -12,7 +12,7 @@ use craft_color_ui::ui::{
     SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
-use craft_theme::{ColorModel as _, HsbModel, Srgba};
+use craft_theme::{ColorModel as _, HsbModel, RgbModel, Srgba};
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
@@ -22,7 +22,7 @@ use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::moved;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers, Vec2};
 
 const RED: Srgba = Srgba::rgb(1.0, 0.0, 0.0);
@@ -47,6 +47,17 @@ impl PanelRig {
     }
 
     fn in_room(mode: ColorPanelMode, room: Vec2) -> Self {
+        Self::built(mode, room, false)
+    }
+
+    /// The panel in `mode` on a foreground of `start` that takes each value the panel reports, as a host does.
+    fn applying(mode: ColorPanelMode, start: Srgba) -> Self {
+        let mut rig = Self::built(mode, COLOR_ROOM, true);
+        rig.set_colors([start, BLUE]);
+        rig
+    }
+
+    fn built(mode: ColorPanelMode, room: Vec2, apply: bool) -> Self {
         let start = ColorPanelState { mode, ..Default::default() };
         let state = Rc::new(RefCell::new(start));
         let colors = Rc::new(Cell::new([RED, BLUE]));
@@ -57,6 +68,10 @@ impl PanelRig {
             let mut current = *s.borrow();
             let shown = ColorPanel::new(Bind::bound(&mut current), c.get()).show(ui);
             *s.borrow_mut() = current;
+            let taken = shown.edits.iter().rev().find_map(|(target, edit)| edit.value().filter(|_| *target == PanelTarget::Foreground));
+            if let Some(picked) = taken.filter(|_| apply) {
+                c.set([picked.color, c.get()[1]]);
+            }
             e.borrow_mut().extend(shown.edits);
             o.borrow_mut().extend(shown.pick_color);
             a.borrow_mut().extend(shown.add_to_swatches);
@@ -194,6 +209,260 @@ fn a_channel_step_keeps_the_other_channels_unrounded() {
     for channel in [1, 2] {
         assert!((before[channel] - after[channel]).abs() < 0.01, "channel {channel} kept ({before:?}, {after:?})");
     }
+}
+
+/// Slider `n` of the panel: the channel rows come first.
+fn slider(rig: &PanelRig, n: usize) -> Target {
+    rig.fixture.by_role(Role::SLIDER).into_iter().nth(n).expect("the channel slider")
+}
+
+/// The model values of the last committed gesture: before and after.
+fn committed(rig: &PanelRig) -> (Vec<f32>, Vec<f32>) {
+    let edits = rig.edits.borrow();
+    edits
+        .iter()
+        .rev()
+        .find_map(|(_, edit)| match edit {
+            EditEvent::Commit { before: Mixed::Same(before), after, .. } => Some((before.model?.values.to_vec(), after.model?.values.to_vec())),
+            _ => None,
+        })
+        .expect("a committed drag")
+}
+
+/// The model values of the last edit.
+fn last_values(rig: &PanelRig) -> Vec<f32> {
+    let edits = rig.edits.borrow();
+    edits
+        .iter()
+        .rev()
+        .find_map(|(_, edit)| match edit {
+            EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } => value.model,
+            _ => None,
+        })
+        .expect("an edit")
+        .values
+        .to_vec()
+}
+
+/// Whether the first `channels` of `values` keep the proportions of `anchor` to channel `channel`, and a channel at
+/// zero moved as far as it.
+fn in_proportion(anchor: &[f32], values: &[f32], channel: usize, channels: usize) -> bool {
+    let (anchor, values) = (&anchor[..channels], &values[..channels]);
+    let scale = 1.0 + anchor.iter().chain(values).fold(0.0f32, |a, b| a.max(b.abs()));
+    let moved = values[channel] - anchor[channel];
+    anchor.iter().zip(values).all(|(a, v)| {
+        if *a == 0.0 { (v - moved.max(0.0)).abs() <= scale * 0.01 } else { (v * anchor[channel] - a * values[channel]).abs() <= scale * 0.01 }
+    })
+}
+
+/// A CMYK slider dragged with Shift held moves the other inks with it, in proportion.
+#[trial]
+fn a_shift_drag_moves_the_other_inks_in_proportion() {
+    let mut rig = PanelRig::new(ColorPanelMode::CmykSliders);
+    rig.set_colors([Srgba::rgb(0.3, 0.5, 0.6), BLUE]);
+    let cyan = slider(&rig, 0);
+    rig.fixture.hold(Modifiers::SHIFT).drag(&cyan, Vec2::new(-30.0, 0.0)).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] < before[0], "the cyan fell ({before:?}, {after:?})");
+    assert!((1..4).any(|ink| before[ink] > 0.0 && after[ink] < before[ink]), "another ink fell with it ({before:?}, {after:?})");
+    assert!(in_proportion(&before, &after, 0, 4), "the inks kept their proportions ({before:?}, {after:?})");
+}
+
+/// With the host applying each update, a CMYK Shift drag keeps every step in proportion to the colour it began on,
+/// not to the last step's colour, and the commit lands where the last step was.
+#[trial]
+fn an_applied_shift_drag_keeps_each_step_in_proportion() {
+    let mut rig = PanelRig::applying(ColorPanelMode::CmykSliders, Srgba::rgb(0.3, 0.5, 0.6));
+    let from = slider(&rig, 0).center();
+    rig.fixture.hold(Modifiers::SHIFT).drag_hold_at(from, Vec2::new(-10.0, 0.0));
+    let mut steps = vec![last_values(&rig)];
+    for step in 2..=4 {
+        rig.fixture.frame(vec![moved(from + Vec2::new(-10.0 * step as f32, 0.0))]);
+        steps.push(last_values(&rig));
+    }
+    let last = last_values(&rig);
+    rig.fixture.release_at(from + Vec2::new(-40.0, 0.0)).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] < before[0], "the cyan fell ({before:?}, {after:?})");
+    for values in &steps {
+        assert!(in_proportion(&before, values, 0, 4), "each step kept the proportions ({before:?}, {values:?})");
+    }
+    assert!(after.iter().zip(&last).all(|(a, l)| (a - l).abs() < 0.01), "the commit is the last step ({after:?}, {last:?})");
+}
+
+/// Dragged with Command held to zero and back, an RGB slider brings the other channels back in proportion: they
+/// scale from where they stood when the modifier went down, not from the zero they passed through.
+#[trial]
+fn a_command_drag_through_zero_keeps_the_proportions() {
+    let mut rig = PanelRig::applying(ColorPanelMode::RgbSliders, Srgba::rgb(0.6, 0.3, 0.0));
+    let red = slider(&rig, 0);
+    let from = red.center();
+    rig.fixture.hold(Modifiers::COMMAND).drag_hold_at(from, Vec2::new(-400.0, 0.0));
+    let floor = last_values(&rig);
+    assert!(floor[..3].iter().all(|v| *v == 0.0), "at zero red, every channel is at zero ({floor:?})");
+    rig.fixture.frame(vec![moved(from + Vec2::new(-20.0, 0.0))]);
+    rig.fixture.release_at(from + Vec2::new(-20.0, 0.0)).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] > 0.0 && after[1] > 0.0, "red and green came back ({after:?})");
+    assert!(in_proportion(&before, &after, 0, 3), "green and blue kept their proportion to red ({before:?}, {after:?})");
+}
+
+/// A Web Color drag with Command held, through zero and back to where it began, gives back the starting colour, even
+/// when a channel it moved with it was off the web levels.
+#[trial]
+fn a_web_color_drag_back_to_its_start_keeps_an_off_level_channel() {
+    let mut rig = PanelRig::applying(ColorPanelMode::WebColorSliders, Srgba::rgb(0.6, 200.0 / 255.0, 0.0));
+    let red = slider(&rig, 0);
+    let from = red.center();
+    rig.fixture.hold(Modifiers::COMMAND).drag_hold_at(from, Vec2::new(-400.0, 0.0));
+    rig.fixture.frame(vec![moved(from)]);
+    rig.fixture.release_at(from).settle();
+    let (before, after) = committed(&rig);
+    assert_eq!(after, before, "red is back where it began, and so is green ({before:?}, {after:?})");
+}
+
+/// Dragged up with Shift held, an RGB slider lifts a channel at zero by as much as it moved, and scales the others.
+#[trial]
+fn a_shift_drag_lifts_a_channel_at_zero_by_the_same_amount() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([Srgba::rgb(0.4, 0.2, 0.0), BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.hold(Modifiers::SHIFT).drag(&red, Vec2::new(30.0, 0.0)).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] > before[0] && after[1] > before[1] && after[2] > 0.0, "every channel rose ({before:?}, {after:?})");
+    assert!(in_proportion(&before, &after, 0, 3), "green in proportion, blue by red's rise ({before:?}, {after:?})");
+}
+
+/// Shift pressed in the middle of a drag moves the other channels from the colour at that moment.
+#[trial]
+fn a_shift_pressed_mid_drag_anchors_on_the_colour_then() {
+    let start = Srgba::rgb(0.6, 0.4, 0.2);
+    let mut rig = PanelRig::applying(ColorPanelMode::RgbSliders, start);
+    let red = slider(&rig, 0);
+    let from = red.center();
+    rig.fixture.drag_hold_at(from, Vec2::new(-15.0, 0.0));
+    let anchor = last_values(&rig);
+    let rgb = RgbModel.from_srgb(start).values;
+    assert!((anchor[1] - rgb[1]).abs() < 0.5 && (anchor[2] - rgb[2]).abs() < 0.5, "a plain drag moves red alone ({anchor:?})");
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![moved(from + Vec2::new(-40.0, 0.0))]);
+    rig.fixture.release_at(from + Vec2::new(-40.0, 0.0)).settle();
+    let (_, after) = committed(&rig);
+    assert!(after[1] < anchor[1] && after[2] < anchor[2], "green and blue fell with red ({anchor:?}, {after:?})");
+    assert!(in_proportion(&anchor, &after, 0, 3), "in proportion to the colour when Shift went down ({anchor:?}, {after:?})");
+}
+
+/// Shift let go in the middle of a drag leaves the other channels where they were and moves the dragged one alone; the
+/// commit's before is the colour the drag started on, so undo goes back to it.
+#[trial]
+fn a_shift_let_go_mid_drag_moves_the_channel_alone_and_undoes_to_the_start() {
+    let start = Srgba::rgb(0.6, 0.4, 0.2);
+    let mut rig = PanelRig::applying(ColorPanelMode::RgbSliders, start);
+    let red = slider(&rig, 0);
+    let from = red.center();
+    rig.fixture.hold(Modifiers::SHIFT).drag_hold_at(from, Vec2::new(-30.0, 0.0));
+    let scaled = last_values(&rig);
+    rig.fixture.hold(Modifiers::NONE).frame(vec![moved(from + Vec2::new(-10.0, 0.0))]);
+    rig.fixture.release_at(from + Vec2::new(-10.0, 0.0)).settle();
+    let (before, after) = committed(&rig);
+    let rgb = RgbModel.from_srgb(start).values;
+    assert!(scaled[1] < rgb[1], "Shift moved green with red ({rgb:?}, {scaled:?})");
+    assert!(after[0] > scaled[0], "red moved back on its own ({scaled:?}, {after:?})");
+    assert!((after[1] - scaled[1]).abs() < 0.5 && (after[2] - scaled[2]).abs() < 0.5, "green and blue stayed ({scaled:?}, {after:?})");
+    assert!(before[..3].iter().zip(&rgb[..3]).all(|(b, s)| (b - s).abs() < 0.5), "undo goes back to the start ({rgb:?}, {before:?})");
+}
+
+/// Without the modifier, and in HSB even with it, a dragged slider moves its own channel alone.
+#[trial]
+fn a_drag_moves_one_channel_without_the_modifier_or_in_hsb() {
+    for (mode, held) in [(ColorPanelMode::RgbSliders, Modifiers::NONE), (ColorPanelMode::HsbSliders, Modifiers::SHIFT)] {
+        let mut rig = PanelRig::new(mode);
+        rig.set_colors([Srgba::rgb(0.6, 0.4, 0.2), BLUE]);
+        let first = slider(&rig, 0);
+        rig.fixture.hold(held).drag(&first, Vec2::new(-30.0, 0.0)).settle();
+        let (before, after) = committed(&rig);
+        assert_ne!(before[0], after[0], "{mode:?}: the dragged channel moved");
+        for channel in [1, 2] {
+            assert!((before[channel] - after[channel]).abs() < 0.01, "{mode:?}: channel {channel} kept ({before:?}, {after:?})");
+        }
+    }
+}
+
+/// Only a pointer drag moves the channels together: a Shift key step on the slider, or a value typed into the
+/// field with Shift held, changes its own channel alone.
+#[trial]
+fn a_shift_key_step_or_typed_value_moves_one_channel() {
+    let start = Srgba::rgb(0.6, 0.4, 0.2);
+    let kept = |rig: &PanelRig, what: &str| {
+        let edits = rig.edits.borrow();
+        let edited = edits.iter().rev().find_map(|(_, edit)| edit.value()).expect("the edit").color;
+        let [before, after] = [start, edited].map(|color| RgbModel.from_srgb(color).values);
+        assert_ne!(before[0], after[0], "{what}: red moved");
+        for channel in [1, 2] {
+            assert!((before[channel] - after[channel]).abs() < 0.01, "{what}: channel {channel} kept ({before:?}, {after:?})");
+        }
+    };
+
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.access(AccessActionKind::Focus, &red).settle();
+    rig.fixture.key(Key::ArrowRight, Modifiers::SHIFT).settle();
+    kept(&rig, "a Shift key step");
+
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the red field");
+    rig.fixture.access(AccessActionKind::Focus, &field).settle();
+    rig.fixture.hold(Modifiers::SHIFT).key(Key::A, Modifiers::COMMAND).type_text("200").key(Key::Enter, Modifiers::NONE).settle();
+    kept(&rig, "a value typed with Shift held");
+
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.access(AccessActionKind::Focus, &red).settle();
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![moved(red.center())]);
+    // The fixture's held modifiers reach button events only, so the wheel event carries Shift itself.
+    let shift_wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -40.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::SHIFT,
+        source: egui::MouseWheelSource::Wheel,
+    };
+    rig.fixture.frame(vec![shift_wheel]).settle();
+    kept(&rig, "a wheel turn with Shift held");
+}
+
+/// A quick Shift drag, released in the pass that carries its only move, still moves the other channels with it.
+#[trial]
+fn a_quick_shift_drag_released_with_its_move_moves_the_channels_together() {
+    let start = Srgba::rgb(0.6, 0.4, 0.2);
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let from = slider(&rig, 0).center();
+    let to = from + Vec2::new(-30.0, 0.0);
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![moved(from)]);
+    rig.fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    rig.fixture.frame(vec![moved(to), craft_ui::testing::pointer::release(to)]).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] < before[0] && after[1] < before[1] && after[2] < before[2], "every channel fell with red ({before:?}, {after:?})");
+    assert!(in_proportion(&before, &after, 0, 3), "in proportion to the start ({before:?}, {after:?})");
+}
+
+/// A Shift drag the host's colour change cancels reports no before: the document moved, so there is nothing to undo to.
+#[trial]
+fn a_shift_drag_cancelled_by_the_host_reports_no_before() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([Srgba::rgb(0.6, 0.4, 0.2), BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.hold(Modifiers::SHIFT).drag_hold_at(red.center(), Vec2::new(-30.0, 0.0));
+    rig.set_colors([Srgba::rgb(0.1, 0.8, 0.3), BLUE]);
+    let edits = rig.edits.borrow();
+    let cancel = edits.iter().rev().find_map(|(_, edit)| match edit {
+        EditEvent::Cancel { reason, before, .. } => Some((reason.document_moved(), before.is_some())),
+        _ => None,
+    });
+    assert_eq!(cancel, Some((true, false)), "the host change cancels the drag with no before");
 }
 
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
