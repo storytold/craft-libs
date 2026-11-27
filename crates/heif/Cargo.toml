@@ -19,6 +19,10 @@ heic-rs = { version = "=0.1.4", default-features = false, features = ["std"], op
 heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"], optional = true }
 rayon = { workspace = true, optional = true }
 
+[dev-dependencies]
+craft-testkit = { workspace = true }
+proptest = { workspace = true }
+
 [features]
 default = ["decode"]
 # The decoder (probe, decode, decode_thumbnail, read_metadata): heic-rs for the container and HEVC.
@@ -27,7 +31,9 @@ decode = ["dep:heic-rs", "dep:rayon"]
 # `read_metadata` is this reader.
 metadata = []
 # `craft_heif::testdata`: lossless synthetic HEIF files, for the tests of the crates above.
-testdata = []
+test-support = []
+# The former name of `test-support`, kept until every crate that enables it uses `test-support`.
+testdata = ["test-support"]
 
 [lints]
 workspace = true

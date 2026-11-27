@@ -1,4 +1,4 @@
-use super::{Align, Document, FBlock, FTable, Flow, Fmt, Inline, Kind, Para, VAlign, base64_encode, mime_of, model};
+use super::{Align, Document, FBlock, FTable, Flow, Fmt, Inline, Kind, Para, Spacing, VAlign, base64_encode, mime_of, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -183,25 +183,108 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
     o
 }
 
+/// Formatted code inline spans inside `<pre><code>`: preserves formatting tags while keeping
+/// raw whitespace semantics (spaces and tabs are preserved, not converted to `&nbsp;` or `<br>`).
+fn code_inlines_html(inlines: &[Inline]) -> String {
+    let mut o = String::new();
+    for i in inlines {
+        match i {
+            Inline::Text(t, f) => {
+                let (open, close) = fmt_tags(f);
+                o.push_str(&open);
+                o.push_str(&esc(t));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
+            Inline::Ruby { base, ruby, fmt } => {
+                let (open, close) = fmt_tags(fmt);
+                o.push_str(&open);
+                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", esc(base), esc(ruby)));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
+            Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            Inline::Image(img) => {
+                o.push_str(&format!(
+                    "<img src=\"data:{};base64,{}\" alt=\"{}\" width=\"{}\" height=\"{}\">",
+                    mime_of(&img.ext),
+                    base64_encode(&img.data),
+                    esc(&img.alt),
+                    (img.w / 0.75).round(),
+                    (img.h / 0.75).round()
+                ));
+            }
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
+                let (open, close) = fmt_tags(fmt);
+                o.push_str(&open);
+                o.push_str(&esc(result));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
+            Inline::Figure(alt) | Inline::Chart(craft_flow::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Equation { linear, display } => o.push_str(&craft_math::mathml::linear_to_mathml(linear, *display)),
+            _ => {}
+        }
+    }
+    o
+}
+
 fn trim_num(v: f32) -> String {
     let s = format!("{:.2}", v);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-fn para_attrs(p: &Para) -> String {
-    let mut css: Vec<&str> = Vec::new();
+/// A paragraph's spacing and indents as CSS declarations in points: margins for the space before
+/// and after and the left and right indents, and `text-indent` for a first-line indent (negative:
+/// hanging). Values that aren't finite are left out, and so is a first-line indent that prints as 0.
+fn spacing_css(s: &Spacing) -> Vec<String> {
+    // Rounded to the hundredths `trim_num` prints, so a value that prints as 0 compares as 0.
+    // `+ 0.0` turns -0.0 into 0.0, which would otherwise print as "-0". A value too large to
+    // scale stays as it is.
+    let pt = |v: Option<f32>| {
+        v.filter(|v| v.is_finite()).map(|v| {
+            let r = (v * 100.0).round() / 100.0;
+            if r.is_finite() { r + 0.0 } else { v }
+        })
+    };
+    let mut css = Vec::new();
+    for (name, v) in [("margin-top", s.before), ("margin-right", s.right), ("margin-bottom", s.after), ("margin-left", s.left)] {
+        if let Some(v) = pt(v) {
+            css.push(format!("{name}:{}pt", trim_num(v)));
+        }
+    }
+    if let Some(v) = pt(s.first).filter(|v| *v != 0.0) {
+        css.push(format!("text-indent:{}pt", trim_num(v)));
+    }
+    css
+}
+
+/// A paragraph's ` style="…"` attribute (empty when it has nothing to say): its alignment, with
+/// `spaced` its spacing and indents, a page break before it and its shading.
+fn para_attrs(p: &Para, spaced: bool) -> String {
+    let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
-        css.push(a);
+        css.push(a.to_string());
+    }
+    if spaced {
+        css.extend(spacing_css(&p.spacing));
     }
     if p.page_break {
-        css.push("break-before:page;page-break-before:always");
+        css.push("break-before:page;page-break-before:always".to_string());
+    }
+    if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
+        css.push(format!("background-color:#{}", bg.hex()));
     }
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
 
-fn para_html(p: &Para) -> String {
+/// A paragraph, heading or rule as HTML, with `spaced` keeping its spacing and indents.
+fn para_html(p: &Para, spaced: bool) -> String {
     let body = inlines_html(&p.inlines);
-    let attrs = para_attrs(p);
+    let attrs = para_attrs(p, spaced);
     match p.kind {
         Kind::Heading(n) => format!("<h{n}{attrs}>{body}</h{n}>", n = n.clamp(1, 6)),
         Kind::Title => format!("<h1{attrs}>{body}</h1>"),
@@ -211,21 +294,87 @@ fn para_html(p: &Para) -> String {
     }
 }
 
+/// Render an HTML table element, emitting `<colgroup>` column widths and cell attributes.
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
-    for row in &t.rows {
-        out.push_str("<tr>");
-        for c in row {
-            if c.covered {
+    if !t.widths.is_empty() {
+        out.push_str("<colgroup>\n");
+        for w in &t.widths {
+            out.push_str(&format!("<col style=\"width:{w:.2}pt\">\n"));
+        }
+        out.push_str("</colgroup>\n");
+    }
+    let nrows = t.rows.len();
+    let grid_cols: Vec<Vec<usize>> = t
+        .rows
+        .iter()
+        .map(|row| {
+            let mut x = 0usize;
+            row.iter()
+                .map(|c| {
+                    let start = x;
+                    x = x.saturating_add(c.colspan.clamp(1, 63) as usize);
+                    start
+                })
+                .collect()
+        })
+        .collect();
+    let cell_at_grid = |r: usize, target_g: usize| -> Option<usize> { grid_cols.get(r)?.binary_search(&target_g).ok() };
+    let grid_col = |r: usize, ci: usize| -> usize { grid_cols.get(r).and_then(|row| row.get(ci)).copied().unwrap_or(0) };
+
+    let mut is_covered: Vec<Vec<bool>> = t.rows.iter().map(|r| vec![false; r.len()]).collect();
+    let mut rowspans: Vec<Vec<u32>> = t.rows.iter().map(|r| r.iter().map(|c| c.rowspan.clamp(1, 1000)).collect()).collect();
+
+    for r in 0..nrows {
+        let row_len = t.rows.get(r).map_or(0, |row| row.len());
+        for ci in 0..row_len {
+            if is_covered.get(r).and_then(|row| row.get(ci)).copied().unwrap_or(false) {
                 continue;
             }
+            let Some(c) = t.rows.get(r).and_then(|row| row.get(ci)) else { continue };
+            let g = grid_col(r, ci);
+            let span = c.colspan.clamp(1, 63) as usize;
+            let mut extent = 1u32;
+            for down_r in (r + 1)..nrows {
+                let Some(down_ci) = cell_at_grid(down_r, g) else { break };
+                let Some(down_c) = t.rows.get(down_r).and_then(|row| row.get(down_ci)) else { break };
+                let down_covered = is_covered.get(down_r).and_then(|row| row.get(down_ci)).copied().unwrap_or(false);
+                if grid_col(down_r, down_ci) == g
+                    && down_c.colspan.clamp(1, 63) as usize == span
+                    && down_c.covered
+                    && !down_c.vmerge_restart
+                    && !down_covered
+                {
+                    if let Some(down_row) = is_covered.get_mut(down_r)
+                        && let Some(slot) = down_row.get_mut(down_ci)
+                    {
+                        *slot = true;
+                    }
+                    extent = extent.saturating_add(1);
+                } else {
+                    break;
+                }
+            }
+            if let Some(slot) = rowspans.get_mut(r).and_then(|row| row.get_mut(ci)) {
+                *slot = (*slot).max(extent);
+            }
+        }
+    }
+
+    for (ri, row) in t.rows.iter().enumerate() {
+        out.push_str("<tr>");
+        for (ci, c) in row.iter().enumerate() {
+            if is_covered.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(false) {
+                continue;
+            }
+            let rowspan = rowspans.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(c.rowspan.clamp(1, 1000));
             let tag = if c.header { "th" } else { "td" };
             let mut attrs = String::new();
             if c.colspan > 1 {
                 attrs.push_str(&format!(" colspan=\"{}\"", c.colspan));
             }
-            if c.rowspan > 1 {
-                attrs.push_str(&format!(" rowspan=\"{}\"", c.rowspan));
+            if rowspan > 1 {
+                attrs.push_str(&format!(" rowspan=\"{}\"", rowspan));
             }
             let v_css = match c.valign {
                 Some(VAlign::Center) => "vertical-align:middle",
@@ -236,11 +385,18 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             if !t.borderless {
                 css.insert(0, "border:1px solid #999".to_string());
             }
+            if let Some(w) = c.width {
+                css.push(format!("width:{w:.2}pt"));
+            }
             if let Some(s) = c.shading {
                 css.push(format!("background-color:#{}", s.hex()));
             }
             let single = match c.blocks.as_slice() {
-                [FBlock::Para(p)] if p.kind == Kind::Normal && p.list.is_none() && !p.page_break => Some(p),
+                [FBlock::Para(p)]
+                    if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
+                {
+                    Some(p)
+                }
                 _ => None,
             };
             if let Some(a) = single.and_then(|p| align_css(p.align)) {
@@ -251,7 +407,7 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 Some(p) => out.push_str(&inlines_html(&p.inlines)),
                 None => {
                     out.push('\n');
-                    blocks_html(&c.blocks, out, depth + 1);
+                    blocks_html(&c.blocks, out, depth + 1, false);
                 }
             }
             out.push_str(&format!("</{tag}>"));
@@ -261,7 +417,9 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
-fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
+/// Append `blocks` as HTML. With `spaced`, plain paragraphs and headings write their own spacing
+/// and indents (for a fragment, which has no style sheet). List items, code and quotes don't.
+fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spaced: bool) {
     let mut i = 0;
     while let Some(b) = blocks.get(i) {
         match b {
@@ -275,7 +433,19 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 // Nested lists from consecutive list paragraphs.
                 let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    let Some(li) = q.list else { break };
+                    let Some(li) = q.list else {
+                        // A list item's further paragraph, in its item (its sublists end first).
+                        let Some(lv) = model::continues_list(blocks, i).map(usize::from) else { break };
+                        while stack.len() > lv + 1 {
+                            close_list(&mut stack, out);
+                        }
+                        if stack.len() != lv + 1 || !stack.last().is_some_and(|s| s.1) {
+                            break;
+                        }
+                        out.push_str(&para_html(q, false));
+                        i += 1;
+                        continue;
+                    };
                     let lv = li.level.min(8) as usize;
                     while stack.len() > lv + 1 {
                         close_list(&mut stack, out);
@@ -300,7 +470,7 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                         top.1 = true;
                     }
                     let body = inlines_html(&q.inlines);
-                    let attrs = para_attrs(q);
+                    let attrs = para_attrs(q, false);
                     out.push_str(&format!("<li{attrs}>{body}"));
                     i += 1;
                 }
@@ -310,17 +480,20 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 out.push('\n');
             }
             FBlock::Para(p) if p.kind == Kind::Code => {
-                out.push_str("<pre><code>");
+                // One `<pre>` per run of code paragraphs whose attributes match: they share the
+                // `<pre>`'s shading, so a different background starts a new block.
+                let attrs = para_attrs(p, false);
+                out.push_str(&format!("<pre{attrs}><code>"));
                 let mut first = true;
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    if q.kind != Kind::Code || q.list.is_some() {
+                    if q.kind != Kind::Code || q.list.is_some() || para_attrs(q, false) != attrs {
                         break;
                     }
                     if !first {
                         out.push('\n');
                     }
                     first = false;
-                    out.push_str(&esc(&q.text()));
+                    out.push_str(&code_inlines_html(&q.inlines));
                     i += 1;
                 }
                 out.push_str("</code></pre>\n");
@@ -331,14 +504,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                     if q.kind != Kind::Quote || q.list.is_some() {
                         break;
                     }
-                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }));
+                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }, false));
                     out.push('\n');
                     i += 1;
                 }
                 out.push_str("</blockquote>\n");
             }
             FBlock::Para(p) => {
-                out.push_str(&para_html(p));
+                out.push_str(&para_html(p, spaced));
                 out.push('\n');
                 i += 1;
             }
@@ -357,16 +530,17 @@ fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
 
 /// A complete HTML document.
 pub fn export(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
 /// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
-/// clipboard beside its text, equations as MathML (#816).
+/// clipboard beside its text, equations as MathML (#816). With no style sheet to give them, its
+/// plain paragraphs and headings carry their own spacing and indents.
 pub fn export_fragment(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     let mut out = String::from("<meta charset=\"utf-8\">");
-    blocks_html(&flow.blocks, &mut out, 0);
+    blocks_html(&flow.blocks, &mut out, 0, true);
     out
 }
 
@@ -387,7 +561,7 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
          table{border-collapse:collapse;margin:0.5em 0}\nblockquote{margin:0.5em 2em;font-style:italic;color:#404040}\n\
          pre{background:#f5f5f5;padding:0.5em;font-family:'Courier New',monospace;font-size:10pt}\n</style>\n</head>\n<body>\n",
     );
-    blocks_html(&flow.blocks, &mut out, 0);
+    blocks_html(&flow.blocks, &mut out, 0, false);
     out.push_str("</body>\n</html>\n");
     out
 }

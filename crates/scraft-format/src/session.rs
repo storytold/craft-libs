@@ -3,7 +3,7 @@
 use crate::clip::{bound, bound_sequence};
 use crate::soundcraft_time::{FrameRate, GridScale, GridValue, Range, SampleRate, Samples, TempoMap, TimeFormat};
 use crate::{
-    Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId, SourcePool,
+    Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, MarkerId, MarkerKind, MemoryLocation, OutputPath, Route, Source, SourceId, SourcePool,
     TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
 };
 
@@ -378,6 +378,9 @@ pub struct Session {
     /// Performance). Independent of undo so a restore survives later edits.
     #[serde(default)]
     pub midi_originals: std::collections::BTreeMap<u64, crate::soundcraft_midi::Sequence>,
+    /// The recorded silence that `edit.room_tone_fill` fills gaps with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_tone: Option<crate::RoomTone>,
     #[serde(skip)]
     pub pool: SourcePool,
     /// The folder relative source paths point into: where the session was opened or last saved.
@@ -403,11 +406,17 @@ impl Default for Session {
 }
 
 impl Session {
-    pub const FORMAT_VERSION: u32 = 1;
+    /// Highest session version this build reads. Newer files get `SessionError::Version`,
+    /// not a parse error.
+    pub const FORMAT_VERSION: u32 = 2;
+
+    /// The version a session declares when nothing in it needs a newer reader. Today only
+    /// `Route::Instrument` (an instrument's auxiliary output bus) is unreadable to v1.
+    const BASE_FORMAT_VERSION: u32 = 1;
 
     pub fn new(name: impl Into<String>, sample_rate: SampleRate) -> Self {
         let mut s = Session {
-            format_version: Self::FORMAT_VERSION,
+            format_version: Self::BASE_FORMAT_VERSION,
             name: name.into(),
             sample_rate,
             bit_depth: BitDepthSetting::Int24,
@@ -427,6 +436,7 @@ impl Session {
             next_id: 1,
             comments: String::new(),
             midi_originals: std::collections::BTreeMap::new(),
+            room_tone: None,
             pool: SourcePool::default(),
             folder: None,
         };
@@ -748,7 +758,30 @@ impl Session {
     // ---- persistence ---------------------------------------------------------------------
 
     pub fn to_json(&self) -> Result<String, SessionError> {
-        serde_json::to_string_pretty(self).map_err(|e| SessionError::Format(e.to_string()))
+        let version = self.saved_format_version();
+        if version == self.format_version {
+            serde_json::to_string_pretty(self).map_err(|e| SessionError::Format(e.to_string()))
+        } else {
+            let mut session = self.clone();
+            session.format_version = version;
+            serde_json::to_string_pretty(&session).map_err(|e| SessionError::Format(e.to_string()))
+        }
+    }
+
+    /// The lowest format version that can read this document back. `Route::Instrument` writes
+    /// an enum tag a v1 reader does not know, so a file holding one must declare v2: a v1
+    /// reader then refuses it with `SessionError::Version` rather than a generic parse error.
+    fn saved_format_version(&self) -> u32 {
+        if self.uses_instrument_routes() { Self::FORMAT_VERSION } else { Self::BASE_FORMAT_VERSION }
+    }
+
+    /// Any `Route::Instrument` on a track's input, output or send.
+    fn uses_instrument_routes(&self) -> bool {
+        self.tracks.iter().any(|t| {
+            matches!(t.mixer.input, Route::Instrument { .. })
+                || matches!(t.mixer.output, Route::Instrument { .. })
+                || t.mixer.sends.iter().flatten().any(|s| matches!(s.target, Route::Instrument { .. }))
+        })
     }
 
     /// Parse a session; decoded audio must be attached separately (`pool`).
@@ -867,6 +900,8 @@ impl Session {
         self.outputs.iter_mut().for_each(|o| truncate_chars(&mut o.name, MAX_NAME_CHARS));
         self.groups.iter_mut().for_each(|g| truncate_chars(&mut g.name, MAX_NAME_CHARS));
         self.sources.iter_mut().for_each(|s| truncate_chars(&mut s.name, MAX_NAME_CHARS));
+        // A room tone must play part of a source the session still lists.
+        self.room_tone = self.room_tone.and_then(|t| self.sources.iter().find(|s| s.id == t.source).and_then(|s| t.sanitized(s.frames)));
         // Drop performances whose clip no longer exists anywhere (any playlist).
         let clip_ids: std::collections::BTreeSet<u64> =
             self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| p.clips.iter().map(|c| c.id.0))).collect();
@@ -1216,6 +1251,32 @@ mod tests {
         assert!(matches!(Session::from_json(&v.to_string()), Err(SessionError::Version(999))));
     }
 
+    /// `Route::Instrument` writes an enum tag a v1 reader cannot parse, so a file holding one
+    /// declares v2: an older reader then refuses with `SessionError::Version`, not a generic
+    /// parse error. Sessions without one stay v1 and open in older builds.
+    #[test]
+    fn a_session_with_an_instrument_route_saves_as_v2_and_round_trips() {
+        let mut s = Session::default();
+        let instrument_track = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let aux_track = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, Some("Keys Out"));
+        s.track_mut(aux_track).unwrap().mixer.input = Route::Instrument { track: instrument_track, bus: 1 };
+
+        let text = s.to_json().unwrap();
+        let head: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(head["format_version"], serde_json::json!(Session::FORMAT_VERSION), "v2 so a v1 reader refuses by version");
+        let back = Session::from_json(&text).unwrap();
+        assert_eq!(
+            back.track(aux_track).map(|t| &t.mixer.input),
+            Some(&Route::Instrument { track: instrument_track, bus: 1 }),
+            "the route survives a full save/load"
+        );
+
+        let mut plain = Session::default();
+        plain.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+        let head: serde_json::Value = serde_json::from_str(&plain.to_json().unwrap()).unwrap();
+        assert_eq!(head["format_version"], serde_json::json!(Session::BASE_FORMAT_VERSION), "nothing v2-only stays v1");
+    }
+
     #[test]
     fn the_version_is_checked_as_before() {
         // #892: the version is read without building the whole document as a tree; the errors
@@ -1246,7 +1307,7 @@ mod tests {
             assert_eq!(format(t), want, "{t}");
         }
         let mut v = serde_json::to_value(Session::default()).unwrap();
-        for (ver, want) in [(serde_json::json!(2), 2), (serde_json::json!(1u64 << 40), u32::MAX)] {
+        for (ver, want) in [(serde_json::json!(3), 3), (serde_json::json!(1u64 << 40), u32::MAX)] {
             v["format_version"] = ver;
             assert_eq!(Session::from_json(&v.to_string()), Err(SessionError::Version(want)));
         }
@@ -1257,7 +1318,7 @@ mod tests {
         // A newer version is refused even when the rest would not parse.
         assert_eq!(Session::from_json(r#"{"format_version":7,"tracks":5}"#), Err(SessionError::Version(7)));
         // An older or the current version loads as it did.
-        for ver in [0, 1] {
+        for ver in [0, 1, 2] {
             v["format_version"] = serde_json::json!(ver);
             assert_eq!(Session::from_json(&v.to_string()).map(|s| s.format_version), Ok(ver));
         }
@@ -1304,6 +1365,30 @@ mod tests {
         assert_eq!(tr.active_playlist, 0);
         assert_eq!(tr.mixer.volume_db, 0.0);
         assert!(s.next_id > t.0);
+    }
+
+    #[test]
+    fn a_loaded_room_tone_must_play_a_listed_source() {
+        let mut s = Session::default();
+        let id = SourceId(s.alloc());
+        s.sources.push(crate::Source {
+            id,
+            name: "Tone".into(),
+            path: "Tone.wav".into(),
+            channels: 1,
+            frames: 1000,
+            sample_rate: 48_000,
+            format: crate::FileFormat::Wav,
+            time_reference: 0,
+            unsaved: false,
+        });
+        s.room_tone = Some(crate::RoomTone { source: id, offset: 400, length: 5000, gain_db: -3.0 });
+        let loaded = Session::from_json(&s.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.room_tone, Some(crate::RoomTone { source: id, offset: 400, length: 600, gain_db: -3.0 }), "cut to the source");
+        s.room_tone = Some(crate::RoomTone { source: SourceId(999), offset: 0, length: 10, gain_db: 0.0 });
+        assert_eq!(Session::from_json(&s.to_json().unwrap()).unwrap().room_tone, None, "an unknown source is dropped");
+        s.room_tone = None;
+        assert!(!s.to_json().unwrap().contains("room_tone"), "sessions without one are written as before");
     }
 
     #[test]

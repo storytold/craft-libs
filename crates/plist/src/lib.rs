@@ -1,10 +1,12 @@
-//! Bounded binary Apple property lists, independent of operating-system preferences.
-//! XML and writing are intentionally not implemented in this first extraction.
+//! Bounded binary and XML Apple property lists, independent of operating-system preferences.
+//! Writing and application-specific projections remain with callers.
 //! File discovery, locale selection, bundle validation and application policy stay in callers.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 mod binary;
 mod bytes;
-pub use binary::{DateValue, Value, first_string_in_array, parse_binary, parse_binary_with_limits};
+mod xml;
+pub use binary::{BinaryOptions, DateValue, Value, first_string_in_array, parse_binary, parse_binary_with_limits, parse_binary_with_options};
+pub use xml::{XmlOptions, parse_xml, parse_xml_with_limits, parse_xml_with_options, parse_xml_with_token_limit};
 
 /// Caller-selected resource limits. Zero values refuse the corresponding resource.
 #[derive(Clone, Copy, Debug)]

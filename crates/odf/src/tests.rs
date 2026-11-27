@@ -369,6 +369,28 @@ fn hostile_flat_documents_do_not_panic() {
     assert_eq!(flat::from_package(&zip_of(&[("content.xml", b"<a/>")]), &Limits::DEFAULT), Err(Error::Flat("the package has no media type")));
 }
 
+/// #2219: taking the inline objects and pictures out of a flat document looks through it a
+/// bounded number of times, not once per item. A document of only objects (or only pictures)
+/// searched its whole rest for the other kind on every item.
+#[test]
+fn taking_inline_items_out_is_linear() {
+    let cost = |item: &str, n: usize| {
+        let xml = format!("<office:document><office:body>{}</office:body></office:document>", item.repeat(n));
+        flat::SCANNED.with(|s| s.set(0));
+        let doc = flat::split(xml.as_bytes(), &Limits::DEFAULT).unwrap();
+        (flat::SCANNED.with(|s| s.get()), doc.files.len(), xml.len())
+    };
+    let object = "<draw:object><math:math/></draw:object>";
+    let picture = "<draw:frame><draw:image><office:binary-data>iVBORw0KGgo=</office:binary-data></draw:image></draw:frame>";
+    for item in [object, picture] {
+        let (small, files, _) = cost(item, 1_000);
+        let (large, more_files, len) = cost(item, 2_000);
+        assert_eq!((files, more_files), (1_000, 2_000), "every item is taken out");
+        assert!(large <= 3 * len, "{large} bytes searched in a document of {len}");
+        assert!(large < 3 * small, "twice the items, {small} then {large} bytes searched");
+    }
+}
+
 /// Two files of one name: `zip` keeps one, and which one the writer meant is not known.
 #[test]
 fn two_files_of_one_name_are_refused() {

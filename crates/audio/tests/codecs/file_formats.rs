@@ -410,7 +410,7 @@ fn the_formats_are_named() {
 
 /// ffmpeg's decode of `file` as interleaved `f32`, split into `channels` channels.
 fn ffmpeg_decode(ff: &std::path::Path, file: &[u8], name: &str, channels: usize) -> Vec<Vec<f32>> {
-    let path = crate::testkit::fixtures_dir("file_formats").join(name);
+    let path = crate::integration::codecs::testkit::fixtures_dir("file_formats").join(name);
     std::fs::write(&path, file).unwrap();
     let out = Command::new(ff).args(["-v", "error", "-i"]).arg(&path).args(["-f", "f32le", "-"]).output().unwrap();
     assert!(out.status.success() && out.stderr.is_empty(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
@@ -473,9 +473,9 @@ fn ffmpeg_reads_the_files() {
 /// file from the edit list, which it does only for a track with a `roll` sample group.
 #[test]
 fn apple_reads_the_aac_priming_and_length() {
-    let Some(afinfo) = crate::testkit::oracle::find_tool("afinfo") else { return };
+    let Some(afinfo) = crate::integration::codecs::testkit::oracle::find_tool("afinfo") else { return };
     for (frames, remainder) in [(20_000, 480), (1, 1023), (4096, 0)] {
-        let path = crate::testkit::fixtures_dir("file_formats").join(format!("apple_{frames}.m4a"));
+        let path = crate::integration::codecs::testkit::fixtures_dir("file_formats").join(format!("apple_{frames}.m4a"));
         std::fs::write(&path, encode(&tones(48_000, 2, frames), &EncodeOptions::new(EncodeFormat::Aac)).unwrap()).unwrap();
         let out = Command::new(&afinfo).arg(&path).output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
@@ -527,7 +527,7 @@ fn the_format_queries_agree_with_the_writer() {
     // The most channels is the most: one more is refused, by the layouts of a format that has
     // a fixed set and by the writer of one that has not.
     let most: Vec<u16> = EncodeFormat::ALL.iter().map(|f| f.max_channels()).collect();
-    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8, 2]);
+    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8, 8]);
     for &format in EncodeFormat::ALL {
         let most = format.max_channels();
         match format.fixed_layouts(most) {

@@ -14,8 +14,9 @@
 //! promise bounded completion for arbitrary named hosts/Unix listeners. No detached timeout
 //! thread is spawned; callers needing cancellation must supply a separately bounded transport.
 
-#[cfg(all(test, unix))]
-mod tests;
+#[cfg(test)]
+#[cfg(unix)]
+pub(crate) mod tests;
 
 use super::{Duplex, Error, Job, Printer, Scaling};
 use std::io::{Read, Write};
@@ -33,6 +34,8 @@ const CUPS_SOCKET: &str = "/run/cups/cups.sock";
 const MAX_BODY: usize = 1 << 20;
 const MAX_HEADERS: usize = 8 << 10;
 const MAX_PRINTERS: usize = 256;
+// Even opted-in fleet discovery has a fixed record ceiling in addition to MAX_BODY.
+const MAX_DISCOVERY_QUEUES: usize = 65_536;
 const MAX_NAME: usize = 256;
 /// A job's title on the wire; IPP values are u16-length, and no real title is this long.
 const MAX_JOB_NAME: usize = 255;
@@ -66,7 +69,9 @@ static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 /// How the scheduler is reached: its unix socket, else its loopback port.
 #[derive(Clone, Debug)]
 pub enum Server {
+    /// The scheduler's unix socket.
     Unix(PathBuf),
+    /// The scheduler's loopback port.
     Tcp(SocketAddr),
     /// A caller-authorized host. DNS is resolved once for each connection attempt.
     Named(String, u16),
@@ -253,6 +258,7 @@ pub fn printers() -> Result<Vec<Printer>, Error> {
     printers_at(&endpoints())
 }
 
+/// [`printers`] from the given scheduler endpoints.
 pub fn printers_at(endpoints: &[Server]) -> Result<Vec<Printer>, Error> {
     let queues = discover(endpoints, OPERATION_CUPS_GET_PRINTERS)?;
     let default = discover(endpoints, OPERATION_CUPS_GET_DEFAULT).ok().and_then(|names| names.into_iter().next());
@@ -315,7 +321,9 @@ pub(crate) fn print_job_at(endpoints: &[Server], pdf: &[u8], job: &Job) -> Resul
 /// explicit rather than guessing it from a name shared by a printer and a class.
 #[derive(Clone, Debug)]
 pub struct Destination {
+    /// The queue or class name.
     pub name: String,
+    /// Whether the destination is a class rather than a printer queue.
     pub is_class: bool,
 }
 
@@ -338,9 +346,24 @@ pub fn destinations_at(endpoints: &[Server]) -> Result<Vec<Queue>, Error> {
 /// explicitly choose whether an optional class/default query failure should hide otherwise
 /// usable printer queues. No error is swallowed here except CUPS's absent/unsupported list.
 pub fn queues_at(endpoints: &[Server], is_class: bool) -> Result<Vec<Queue>, Error> {
+    queues_at_with_limit(endpoints, is_class, MAX_PRINTERS)
+}
+
+/// List queues or classes with an explicit fleet-size budget (1 through 65,536).
+///
+/// The existing [`queues_at`] API keeps its 256-queue default. Increasing this budget does
+/// not increase the one-MiB response, HTTP header, name-length or exchange-time limits.
+/// An excessive response is refused in full, never silently truncated. This changes only
+/// local parsing: it does not invent pagination or retry a possibly submitted print job.
+///
+/// # Errors
+/// Returns an error for an invalid budget, an over-budget or malformed response, or a
+/// transport/server error, with the same absent-list handling as [`queues_at`].
+pub fn queues_at_with_limit(endpoints: &[Server], is_class: bool, max_queues: usize) -> Result<Vec<Queue>, Error> {
+    check_queue_limit(max_queues)?;
     let operation = if is_class { 0x4005 } else { OPERATION_CUPS_GET_PRINTERS };
     let reply = post(endpoints, "/", &discovery_request(operation), DISCOVERY_TIMEOUT, true)?;
-    let parsed = parse_reply(&reply)?;
+    let parsed = parse_reply_with_limit(&reply, max_queues)?;
     if !status_ok(parsed.status) {
         if parsed.status == 0x0406 || (is_class && parsed.status == 0x0501) {
             return Ok(Vec::new());
@@ -370,11 +393,17 @@ pub fn default_at(endpoints: &[Server]) -> Result<Option<String>, Error> {
 /// Metadata from one CUPS printer group, without losing which fields belong together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Queue {
+    /// The queue name (`printer-name`).
     pub name: String,
+    /// The description the queue shows (`printer-info`).
     pub info: String,
+    /// The IPP `printer-state` value.
     pub state: u32,
+    /// Whether the queue accepts new jobs (`printer-is-accepting-jobs`).
     pub accepting_jobs: bool,
+    /// Whether this is the scheduler's default destination.
     pub is_default: bool,
+    /// Whether the queue is a class rather than a printer.
     pub is_class: bool,
 }
 impl Default for Queue {
@@ -834,7 +863,22 @@ impl<'a> Reader<'a> {
     }
 }
 
+fn check_queue_limit(max_queues: usize) -> Result<(), Error> {
+    if !(1..=MAX_DISCOVERY_QUEUES).contains(&max_queues) {
+        return Err(Error::Spool("CUPS discovery queue limit must be 1 through 65536".into()));
+    }
+    Ok(())
+}
+
 fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
+    parse_reply_with_limit(reply, MAX_PRINTERS)
+}
+
+fn parse_reply_with_limit(reply: &[u8], max_queues: usize) -> Result<Reply, Error> {
+    check_queue_limit(max_queues)?;
+    if reply.len() > MAX_BODY {
+        return Err(Error::Spool("CUPS reply exceeds limit".into()));
+    }
     let malformed = || Error::Spool("the print server sent a malformed reply".into());
     let mut r = Reader { bytes: reply, pos: 0 };
     let _version = r.array::<2>().ok_or_else(malformed)?;
@@ -854,7 +898,7 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
             }
             GROUP_OPERATION | GROUP_JOB | GROUP_PRINTER | 0x05 => {
                 if !queue.name.is_empty() {
-                    if queues.len() >= MAX_PRINTERS {
+                    if queues.len() >= max_queues {
                         return Err(malformed());
                     }
                     queues.push(std::mem::take(&mut queue));
@@ -879,7 +923,7 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
                 match (group, name, tag) {
                     (GROUP_PRINTER, "printer-name", TAG_NAME) => {
                         if let Some(printer) = std::str::from_utf8(value).ok().filter(|n| !n.is_empty() && n.len() <= MAX_NAME) {
-                            if names.len() >= MAX_PRINTERS {
+                            if names.len() >= max_queues {
                                 return Err(Error::Spool("too many CUPS destinations".into()));
                             }
                             if !queue.name.is_empty() {

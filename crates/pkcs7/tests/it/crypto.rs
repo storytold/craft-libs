@@ -162,11 +162,16 @@ fn signatures_round_trip_for_every_key_type() {
     }
 }
 
+/// New digital ids are self-signed, survive a `.p12` round trip, and are written with the stronger
+/// round count for the key and the MAC. Key derivation takes the time here, so one file per key
+/// type is written and opened once: the wrong password only for the P-256 file (it stops at the
+/// MAC, which is the same code for both), and the round count read off the P-256 file.
 #[test]
 fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
     let name = Name::build("Grace Hopper", "Compilers", "Navy", "grace@example.com", "us");
     let now = Time { year: 2026, month: 10, day: 2, hour: 12, minute: 0, second: 0 };
     for key in [craft_pkcs7::PrivateKey::generate_rsa(2048).unwrap(), craft_pkcs7::PrivateKey::generate_p256().unwrap()] {
+        let is_p256 = matches!(key.public_key(), PublicKey::P256(_));
         let cert = Certificate::self_signed(&name, &key, now, 5, &[0x42, 0x01]).unwrap();
         assert!(cert.is_self_signed());
         assert_eq!(cert.subject.display(), "C=US, O=Navy, OU=Compilers, CN=Grace Hopper, E=grace@example.com");
@@ -177,32 +182,23 @@ fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
         let back = pkcs12::open(&p12, "s3cret").unwrap();
         assert_eq!(back.certificate, id.certificate);
         assert_eq!(back.friendly_name.as_deref(), Some("Grace Hopper"));
-        assert!(matches!(pkcs12::open(&p12, "wrong"), Err(Error::WrongPassword)));
+        if is_p256 {
+            assert!(matches!(pkcs12::open(&p12, "wrong"), Err(Error::WrongPassword)));
+            // OWASP's figure for PBKDF2-HMAC-SHA-256, spelled out so lowering the constant fails here.
+            const ROUNDS: u64 = 600_000;
+            // MacData's iteration count, the last field of the file.
+            let pfx = Tlv::parse_all(&p12).unwrap().children().unwrap();
+            let mac = pfx[2].children().unwrap();
+            assert_eq!(mac[2].u64().unwrap(), ROUNDS);
+            // The same INTEGER three times: the MAC and the PBKDF2 parameters of both encrypted parts.
+            let rounds = craft_pkcs7::der::int(ROUNDS);
+            assert_eq!(p12.windows(rounds.len()).filter(|w| *w == rounds.as_slice()).count(), 3);
+        }
         let d = DigestAlg::Sha256.digest(&[b"x"]);
         let sig = cms::sign_detached(&back.key, &back.certificate, &[], DigestAlg::Sha256, &d).unwrap();
         let sd = cms::SignedData::parse(&sig).unwrap();
         assert!(sd.verify_signature(&back.certificate, &d).unwrap());
     }
-}
-
-#[test]
-fn new_digital_ids_use_the_stronger_round_count_for_the_key_and_the_mac() {
-    let name = Name::build("Grace Hopper", "", "", "", "");
-    let now = Time { year: 2026, month: 10, day: 14, hour: 12, minute: 0, second: 0 };
-    let key = craft_pkcs7::PrivateKey::generate_p256().unwrap();
-    let certificate = Certificate::self_signed(&name, &key, now, 5, &[0x42]).unwrap();
-    let id = pkcs12::DigitalId { key, certificate, chain: Vec::new(), friendly_name: None };
-    let p12 = pkcs12::write(&id, "s3cret12").unwrap();
-    // OWASP's figure for PBKDF2-HMAC-SHA-256, spelled out so lowering the constant fails here.
-    const ROUNDS: u64 = 600_000;
-    // MacData's iteration count, the last field of the file.
-    let pfx = Tlv::parse_all(&p12).unwrap().children().unwrap();
-    let mac = pfx[2].children().unwrap();
-    assert_eq!(mac[2].u64().unwrap(), ROUNDS);
-    // The same INTEGER three times: the MAC and the PBKDF2 parameters of both encrypted parts.
-    let rounds = craft_pkcs7::der::int(ROUNDS);
-    assert_eq!(p12.windows(rounds.len()).filter(|w| *w == rounds.as_slice()).count(), 3);
-    assert_eq!(pkcs12::open(&p12, "s3cret12").unwrap().certificate, id.certificate);
 }
 
 /// A `.p12` whose MAC asks for `rounds` iterations. Its content is empty: opening it must stop
@@ -498,9 +494,17 @@ fn a_responder_that_copies_the_issuers_name_does_not_answer_for_it() {
     let single = der::seq(&[&cert_id, &revoked, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
     let by_key = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&impostor.public_key.key_bits()])));
     // RFC 6960's `[0] EXPLICIT SEQUENCE OF Certificate`, and the certificate directly in `[0]`.
-    for certs in [der::explicit(0, &der::seq(&[&impostor.raw])), der::explicit(0, &impostor.raw)] {
+    for certs in [
+        der::explicit(0, &der::seq(&[&impostor.raw])),
+        der::explicit(0, &impostor.raw),
+        // An unreadable entry must not hide the first readable certificate; later entries
+        // must not replace it. Parsing it still does not authorize the impostor.
+        der::explicit(0, &der::seq(&[&der::seq(&[]), &impostor.raw, &issuer.raw])),
+    ] {
         let forged = OcspResponse::parse(&signed_ocsp(&key, &by_key, Some(&certs), &single, this)).unwrap();
         assert_eq!(forged.check(issuer, issuer, mid_june()), RevocationStatus::Unknown);
+        // Rejection must follow verification policy, not failure to read the embedded certificate.
+        assert_eq!(forged.into_parts().responder_cert.map(|cert| cert.raw), Some(impostor.raw.clone()));
     }
 }
 
@@ -808,5 +812,58 @@ fn verifies_ecdsa_on_p521_and_the_brainpool_curves() {
         // The digest named by the algorithm identifier may be shorter than the curve (SHA-256 on
         // P-521 etc.): that is a different digest, so it must not verify this signature.
         assert!(!key.verify(Scheme::Ecdsa, alg, &digest[..digest.len() / 2], &sig).unwrap(), "{name}: short digest");
+    }
+}
+
+#[test]
+fn parsed_parts_preserve_owned_bytes_and_unverified_fields() {
+    use craft_pkcs7::revocation::{CertStatus, ResponderId};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let cert = craft_pkcs7::x509::Certificate::parse(&id.certificate.raw).unwrap();
+    let raw_pointer = cert.raw.as_ptr();
+    let expected = cert.clone();
+    let parts = cert.into_parts();
+    assert_eq!(parts.raw.as_ptr(), raw_pointer);
+    assert_eq!(parts.raw, expected.raw);
+    assert_eq!(parts.subject, expected.subject);
+    assert_eq!(parts.issuer, expected.issuer);
+    assert_eq!(parts.public_key, expected.public_key);
+    assert_eq!(parts.serial, expected.serial);
+    let der = der::Tlv::parse_all(&parts.raw).unwrap().children().unwrap();
+    assert_eq!(parts.tbs, der[0].raw);
+    assert_eq!(parts.sig_alg, der[1].raw);
+    assert_eq!(parts.signature, der[2].bits().unwrap());
+    let this = mid_june();
+    let bytes = crl(&id, Some((&id.certificate.serial, this)), this, this);
+    let crl = CertificateList::parse(&bytes).unwrap();
+    let revoked_pointer = crl.revoked.as_ptr();
+    let parts = crl.into_parts();
+    assert_eq!(parts.revoked.as_ptr(), revoked_pointer);
+    assert_eq!(parts.revoked, vec![(id.certificate.serial.iter().copied().skip_while(|b| *b == 0).collect(), this)]);
+    assert_eq!(parts.this_update, this);
+    assert_eq!(parts.next_update, Some(this));
+    assert_eq!(parts.issuer_raw, id.certificate.subject.raw);
+    let der = der::Tlv::parse_all(&bytes).unwrap().children().unwrap();
+    assert_eq!(parts.tbs, der[0].raw);
+    assert_eq!(parts.sig_alg, der[1].raw);
+    assert_eq!(parts.signature, der[2].bits().unwrap());
+    for status in [RevocationStatus::Good, RevocationStatus::Unknown, RevocationStatus::Revoked { at: this }] {
+        let response = OcspResponse::parse(&ocsp(&id, status.clone(), this, this)).unwrap();
+        let responses_pointer = response.responses.as_ptr();
+        let parts = response.into_parts();
+        assert_eq!(parts.responses.as_ptr(), responses_pointer);
+        assert!(matches!(&parts.responder_id, ResponderId::ByName(name) if *name == id.certificate.subject.raw));
+        assert!(parts.responder_cert.is_none());
+        let (cert_id, parsed, date, next) = parts.responses.into_iter().next().unwrap().into_parts();
+        assert_eq!(cert_id, craft_pkcs7::revocation::CertId::build(&id.certificate, &id.certificate, DigestAlg::Sha1));
+        assert_eq!((date, next), (this, Some(this)));
+        assert_eq!(
+            parsed,
+            match status {
+                RevocationStatus::Good => CertStatus::Good,
+                RevocationStatus::Unknown => CertStatus::Unknown,
+                RevocationStatus::Revoked { at } => CertStatus::Revoked(at),
+            }
+        );
     }
 }
