@@ -1,6 +1,7 @@
 //! [`PaintBar`]: the options bar members of the Brush, Pencil, Eraser and Mixer Brush tools after the preset picker.
 
 use std::cell::RefCell;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
@@ -201,6 +202,25 @@ pub const MIXER_COMBINATIONS: [Option<(f64, f64, f64)>; 13] = [
 /// The index of the first combination of each group (Dry, Moist, Wet, Very Wet); a separator goes above each.
 pub const MIXER_GROUP_STARTS: [usize; 4] = [1, 4, 7, 10];
 
+/// The percents a field of the bar holds, and whether it takes input.
+struct Percents {
+    range: RangeInclusive<f64>,
+    enabled: bool,
+}
+
+impl Percents {
+    /// 0 to 100 %.
+    fn any(enabled: bool) -> Self {
+        Percents { range: 0.0..=100.0, enabled }
+    }
+
+    /// 1 to 100 %, for Opacity and Flow: a stroke at 0 % paints nothing, so a typed 0 is out of range like 150, and
+    /// the range alert names 1 %.
+    fn from_one(enabled: bool) -> Self {
+        Percents { range: 1.0..=100.0, enabled }
+    }
+}
+
 /// Whether the smoothing options popover is open.
 #[derive(Clone, Default)]
 struct SmoothingOpen(bool);
@@ -208,7 +228,8 @@ struct SmoothingOpen(bool);
 /// The bar's members for one painting tool, after the preset picker that carries the size and the hardness: a rule,
 /// Mode, Opacity and the pressure-for-opacity toggle, Flow and the build-up toggle (not the Pencil), Smoothing and its
 /// options (the Pencil's Auto Erase in their place), Erase to History for the Eraser, a rule and the
-/// pressure-for-size toggle. The Mixer Brush shows its load, combinations and mix values instead.
+/// pressure-for-size toggle. Opacity and Flow hold 1 to 100 %, Smoothing 0 to 100 %. The Mixer Brush shows its load,
+/// combinations and mix values instead.
 #[must_use = "show the bar with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 #[pattern(probe(PaintBar<'static, u32>))]
@@ -269,10 +290,10 @@ impl<'a, M: Value> PaintBar<'a, M> {
                 pass.check(ui, &words.load_after_stroke, true, None, pass.values.mixer.load_after_stroke, |v, x| v.mixer.load_after_stroke = x);
                 pass.check(ui, &words.clean_after_stroke, true, None, pass.values.mixer.clean_after_stroke, |v, x| v.mixer.clean_after_stroke = x);
                 pass.combination(ui, &words);
-                pass.percent(ui, "mixer-wet", &words.wet, true, pass.values.mixer.wet, |v, x| v.mixer.wet = x);
-                pass.percent(ui, "mixer-load", &words.load, true, pass.values.mixer.load, |v, x| v.mixer.load = x);
-                pass.percent(ui, "mixer-mix", &words.mix, true, pass.values.mixer.mix, |v, x| v.mixer.mix = x);
-                pass.percent(ui, "mixer-flow", &words.flow, true, pass.values.mixer.flow, |v, x| v.mixer.flow = x);
+                pass.percent(ui, "mixer-wet", &words.wet, Percents::any(true), pass.values.mixer.wet, |v, x| v.mixer.wet = x);
+                pass.percent(ui, "mixer-load", &words.load, Percents::any(true), pass.values.mixer.load, |v, x| v.mixer.load = x);
+                pass.percent(ui, "mixer-mix", &words.mix, Percents::any(true), pass.values.mixer.mix, |v, x| v.mixer.mix = x);
+                pass.percent(ui, "mixer-flow", &words.flow, Percents::any(true), pass.values.mixer.flow, |v, x| v.mixer.flow = x);
                 pass.check(ui, &words.sample_all_layers, true, None, pass.values.mixer.sample_all_layers, |v, x| v.mixer.sample_all_layers = x);
                 return;
             }
@@ -283,13 +304,13 @@ impl<'a, M: Value> PaintBar<'a, M> {
             } else {
                 pass.mode(ui, &words.mode, modes);
             }
-            pass.percent(ui, "opacity", &words.opacity, sized, pass.values.opacity, |v, x| v.opacity = x);
+            pass.percent(ui, "opacity", &words.opacity, Percents::from_one(sized), pass.values.opacity, |v, x| v.opacity = x);
             pass.toggle(ui, PRESSURE, &words.pressure_opacity, sized, pass.values.pressure_opacity, |v, x| v.pressure_opacity = x);
             if tool != PaintTool::Pencil {
-                pass.percent(ui, "flow", &words.flow, sized && soft, pass.values.flow, |v, x| v.flow = x);
+                pass.percent(ui, "flow", &words.flow, Percents::from_one(sized && soft), pass.values.flow, |v, x| v.flow = x);
                 pass.toggle(ui, "sparkles", &words.build_up, sized && soft, pass.values.build_up, |v, x| v.build_up = x);
             }
-            pass.percent(ui, "smoothing", &words.smoothing, true, pass.values.smoothing.amount, |v, x| v.smoothing.amount = x);
+            pass.percent(ui, "smoothing", &words.smoothing, Percents::any(true), pass.values.smoothing.amount, |v, x| v.smoothing.amount = x);
             if tool == PaintTool::Pencil {
                 Divider::vertical().show(ui);
                 pass.check(ui, &words.auto_erase, true, Some(&words.auto_erase_tip), pass.values.auto_erase, |v, x| v.auto_erase = x);
@@ -361,15 +382,16 @@ impl<M: Value> Pass<'_, M> {
         }
     }
 
-    /// A percent field over a fraction 0..1.
-    fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, enabled: bool, current: f64, set: fn(&mut PaintValues<M>, f64)) {
+    /// A percent field over a fraction 0..1, holding `percents`.
+    fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, percents: Percents, current: f64, set: fn(&mut PaintValues<M>, f64)) {
+        let Percents { range, enabled } = percents;
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
         let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(ui, |ui, _| {
             let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
                 .unit_kind(UnitKind::Percent)
-                .range(0.0..=100.0)
+                .range(range.clone())
                 .commit_decimals(0)
                 .scrub_by_label()
                 .show(ui);
