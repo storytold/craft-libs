@@ -648,6 +648,12 @@ fn updated_switch(elem_str: &str, root_tag: &str, compat_s: &str, enabled: bool)
     elem_str.to_string()
 }
 
+/// Does the switch element carry attributes or content besides its value? A disabled switch keeps
+/// its element only then, so [`updated_switch`] answers this when asked to turn it off.
+fn switch_has_extensions(elem_str: &str, root_tag: &str, compat_s: &str) -> bool {
+    !updated_switch(elem_str, root_tag, compat_s, false).is_empty()
+}
+
 fn sync_compat_switch(root_tag: &str, orig: &mut String, orig_tag: &str, generated: &str, sw_local: &str) -> Option<()> {
     let gen_sw = children(generated, "w:compat").and_then(|(_, _, _, g_kids)| {
         g_kids.into_iter().find(|k| is_wml_switch_child(root_tag, generated, k, sw_local)).and_then(|k| generated.get(k.start..k.end))
@@ -676,13 +682,19 @@ fn sync_compat_switch(root_tag: &str, orig: &mut String, orig_tag: &str, generat
             orig.insert_str(at, &child);
         }
         (matches, Some(_g_text)) => {
-            for &(a, b) in matches[1..].iter().rev() {
-                orig.replace_range(a..b, "");
+            // Drop plain duplicates but never one carrying markup the model doesn't write; with
+            // no such occurrence, the first one stays.
+            let compat: &str = orig;
+            let extended: Vec<bool> = matches.iter().map(|&(a, b)| switch_has_extensions(&compat[a..b], root_tag, compat)).collect();
+            let first_kept = extended.iter().position(|&e| e).unwrap_or(0);
+            for (i, (&(a, b), &keeps_markup)) in matches.iter().zip(&extended).enumerate().rev() {
+                if i == first_kept || keeps_markup {
+                    let updated = updated_switch(&orig[a..b], root_tag, orig, true);
+                    orig.replace_range(a..b, &updated);
+                } else {
+                    orig.replace_range(a..b, "");
+                }
             }
-            let (first_a, first_b) = matches[0];
-            let orig_elem = &orig[first_a..first_b];
-            let updated = updated_switch(orig_elem, root_tag, orig, true);
-            orig.replace_range(first_a..first_b, &updated);
         }
     }
     Some(())
@@ -710,7 +722,8 @@ fn merge_compat(root_tag: &str, orig: &str, orig_tag: &str, generated: &str) -> 
 
     let gen_modes = mode_spans(generated, "w:compat");
     if is_self_closing && gen_modes.is_empty() && !has_any_gen_switch {
-        return Some(orig.to_string());
+        // An empty block goes, as `<w:compat></w:compat>` does below, unless it carries markup.
+        return Some(if compat_has_unmodeled_attrs(root_tag, compat_open) { orig.to_string() } else { String::new() });
     }
 
     let mut out = if is_self_closing {
@@ -789,9 +802,8 @@ fn tag_has_rel_id(root_tag: &str, tag_str: &str) -> bool {
                 depth += 1;
                 if depth == 2 {
                     for attr in e.attributes().with_checks(false).flatten() {
-                        let (res, local) = reader.resolver().resolve_attribute(attr.key);
-                        if local.as_ref() == b"id"
-                            && let quick_xml::name::ResolveResult::Bound(ns) = res
+                        let (res, _) = reader.resolver().resolve_attribute(attr.key);
+                        if let quick_xml::name::ResolveResult::Bound(ns) = res
                             && is_rel_ns(ns.as_ref())
                         {
                             return true;
@@ -823,9 +835,8 @@ fn child_has_rel_id(root_tag: &str, compat_open: &str, child_str: &str) -> bool 
                 depth += 1;
                 if depth >= 3 {
                     for attr in e.attributes().with_checks(false).flatten() {
-                        let (res, local) = reader.resolver().resolve_attribute(attr.key);
-                        if local.as_ref() == b"id"
-                            && let quick_xml::name::ResolveResult::Bound(ns) = res
+                        let (res, _) = reader.resolver().resolve_attribute(attr.key);
+                        if let quick_xml::name::ResolveResult::Bound(ns) = res
                             && is_rel_ns(ns.as_ref())
                         {
                             return true;
@@ -866,9 +877,8 @@ fn compat_has_unmodeled_attrs(root_tag: &str, compat_tag: &str) -> bool {
                         if key.starts_with(b"xmlns:") || key == b"xmlns" {
                             continue;
                         }
-                        let (res, local) = reader.resolver().resolve_attribute(attr.key);
-                        if local.as_ref() == b"id"
-                            && let quick_xml::name::ResolveResult::Bound(ns) = res
+                        let (res, _) = reader.resolver().resolve_attribute(attr.key);
+                        if let quick_xml::name::ResolveResult::Bound(ns) = res
                             && is_rel_ns(ns.as_ref())
                         {
                             continue;
@@ -1365,5 +1375,48 @@ mod tests {
         let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
         assert!(merged.contains("<a:useFELayout/>"), "{merged}");
         assert!(!merged.contains("rId8"), "expected Strict r:id to be omitted: {merged}");
+    }
+
+    #[test]
+    fn deduplicating_an_enabled_switch_keeps_the_occurrence_with_vendor_markup() {
+        let orig = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:vendor"><w:compat><w:doNotExpandShiftReturn/><w:useFELayout/><w:doNotExpandShiftReturn x:vendor="kept"/></w:compat></w:settings>"#;
+        let gen_xml = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:doNotExpandShiftReturn/></w:compat></w:settings>"#;
+        let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
+        assert!(merged.contains(r#"x:vendor="kept""#), "{merged}");
+        assert_eq!(merged.matches("doNotExpandShiftReturn").count(), 1, "{merged}");
+        assert!(merged.contains("<w:useFELayout/>"), "{merged}");
+    }
+
+    #[test]
+    fn a_bare_self_closing_compat_block_goes_like_an_empty_paired_one() {
+        let gen_xml = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:zoom w:percent="100"/></w:settings>"#;
+        let merged_with = |compat: &str| {
+            let orig = format!(
+                r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{compat}<w:rsids><w:rsidRoot w:val="00112233"/></w:rsids></w:settings>"#
+            );
+            String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap()
+        };
+        let self_closing = merged_with("<w:compat/>");
+        assert!(!self_closing.contains("compat"), "{self_closing}");
+        assert!(self_closing.contains(r#"<w:rsidRoot w:val="00112233"/>"#), "{self_closing}");
+        assert_eq!(self_closing, merged_with("<w:compat></w:compat>"));
+    }
+
+    #[test]
+    fn compat_drops_every_relationship_attribute_but_keeps_vendor_ones_of_the_same_name() {
+        let gen_xml = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:zoom w:percent="100"/></w:settings>"#;
+        let decls = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:vendor""#;
+        // On a child of the block.
+        let orig = format!(r#"<w:settings {decls}><w:compat><w:useFELayout/><x:p r:embed="rId9"/><x:o x:embed="keep"/></w:compat></w:settings>"#);
+        let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
+        assert!(!merged.contains("rId9"), "{merged}");
+        assert!(merged.contains(r#"x:embed="keep""#) && merged.contains("<w:useFELayout/>"), "{merged}");
+        // On the block itself.
+        let orig = format!(r#"<w:settings {decls}><w:compat r:link="rId4"><w:useFELayout/></w:compat><w:rsids/></w:settings>"#);
+        let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
+        assert!(!merged.contains("rId4"), "{merged}");
+        let orig = format!(r#"<w:settings {decls}><w:compat x:link="keep"/><w:rsids/></w:settings>"#);
+        let merged = String::from_utf8(merge(orig.as_bytes(), gen_xml.as_bytes()).unwrap()).unwrap();
+        assert!(merged.contains(r#"x:link="keep""#), "{merged}");
     }
 }
