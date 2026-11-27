@@ -22,6 +22,8 @@ pub(crate) enum Reply {
     Gzipped,
     /// GitHub's answer when the quota is used up: 403 with no requests remaining.
     RateLimited,
+    /// GitHub's answer for a repository that is missing or private: 404.
+    NotFound,
 }
 
 /// Serves `body` over plain HTTP following `script`, one reply per connection; records the
@@ -61,6 +63,7 @@ pub(crate) fn serve(body: Vec<u8>, script: Vec<Reply>) -> (String, Arc<Mutex<Vec
                     stream,
                     "HTTP/1.1 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: 4102444800\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 ),
+                Reply::NotFound => write!(stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
                 Reply::Ranged => {
                     let from = range.unwrap_or(0);
                     write!(
@@ -205,4 +208,21 @@ fn a_rate_limited_release_check_is_typed_not_english_text() {
         english.strip_prefix("couldn't reach GitHub (").unwrap().strip_suffix(')').unwrap(),
         localized.strip_prefix("GitHub unreachable: ").unwrap()
     );
+}
+
+#[trial]
+fn a_repository_github_does_not_find_is_an_error_not_up_to_date() {
+    let http = Http::new(crate::TEST_AGENT).unwrap();
+    let app = crate::suite::PHOTOCRAFT;
+    let (url, _) = serve(Vec::new(), vec![Reply::NotFound]);
+    let why = crate::check_releases_at(&url, &app, &http, "0.1.0").unwrap_err();
+    let crate::CheckError::Message(reason) = &why else { panic!("authored failure was flattened: {why:?}") };
+    assert!(reason.to_string().contains(app.repo), "the reason names the repository: {why}");
+    assert_eq!(reason.to_string(), format!("GitHub has no repository {}, or it is private", app.repo));
+    fn translated(text: &str, args: &[(&str, &str)]) -> String {
+        assert_eq!(text, "GitHub has no repository {repo}, or it is private");
+        assert_eq!(args, &[("repo", crate::suite::PHOTOCRAFT.repo)]);
+        crate::translate::fill("GitHub findet das Repository {repo} nicht, oder es ist privat", args)
+    }
+    assert_eq!(reason.translated(translated), format!("GitHub findet das Repository {} nicht, oder es ist privat", app.repo));
 }

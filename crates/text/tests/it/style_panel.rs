@@ -1,5 +1,6 @@
 //! The styles panel's click rules: a click applies, Alt-click clears overrides, a double click opens Options, except on
-//! the character style None; at a bare caret every attempt to apply a character style warns.
+//! the character style None (unless the app makes character style 0 a base style); at a bare caret every attempt to
+//! apply a character style warns.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -136,4 +137,86 @@ fn a_rows_menu_redefines_and_clears_the_overrides_of_that_rows_style() {
     fixture.click(&redefine).idle(4);
     assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![TextStyleAction::Redefine(1)], "the footer redefines the current style");
     assert_eq!(menu_ran(&mut fixture, &state, "None", "Redefine Style"), vec![], "None is never redefined");
+}
+
+/// The selection the panel shows and the actions it reported.
+type Actions = Rc<RefCell<(Selection<u64>, Vec<TextStyleAction>)>>;
+
+/// The tip every editable row describes itself with.
+const ROW_TIP: &str = "Click to apply, Alt-click to clear overrides, double-click for Style Options";
+
+/// A Character Styles panel over a style 0 named `zero`, with style 1 current and overridden; `base` turns on
+/// [`TextStylesPanel::base_character_style`].
+fn character_panel(zero: &'static str, base: bool) -> (Fixture, Actions) {
+    let state = Rc::new(RefCell::new((Selection::<u64>::default(), Vec::<TextStyleAction>::new())));
+    let shared = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let rows = [TextStyleRow::new(0, zero), TextStyleRow::new(1, "Emphasis")];
+        let mut guard = shared.borrow_mut();
+        let (selection, actions) = &mut *guard;
+        let out = TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection))
+            .current(Some(1), true)
+            .target(true)
+            .base_character_style(base)
+            .show(ui);
+        actions.extend(out.action);
+    });
+    fixture.idle(10);
+    (fixture, state)
+}
+
+/// The description the row named `name` carries.
+fn description(fixture: &Fixture, name: &str) -> Option<String> {
+    let row = fixture.by_label(name).expect("the row is shown");
+    fixture.tree().description_of(row.node).map(str::to_owned)
+}
+
+/// By default character style 0 is "No character style": its row says so, and neither its menu, a double click nor the
+/// footer opens its options, duplicates it or deletes it.
+#[trial]
+fn character_style_none_takes_no_options_duplicate_or_delete() {
+    let (mut fixture, state) = character_panel("None", false);
+    assert_eq!(description(&fixture, "None").as_deref(), Some("No character style"), "the row describes itself as no style");
+
+    let none = fixture.by_label("None").expect("the None row is shown");
+    fixture.click(&none).click(&none).idle(4);
+    std::mem::take(&mut state.borrow_mut().1);
+    let options = fixture.by_label("Style Options…").expect("the footer's Style Options");
+    fixture.click(&options).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![], "the footer opens no options for None");
+    let duplicate = fixture.by_label("Duplicate style").expect("the footer's Duplicate");
+    fixture.click(&duplicate).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![], "the footer does not duplicate None");
+
+    assert_eq!(menu_ran(&mut fixture, &state, "None", "Style Options…"), vec![], "the menu opens no options for None");
+}
+
+/// With `base_character_style`, character style 0 is a style like the others: a double click, the footer and its menu
+/// open its options, duplicate it and redefine it, and its row carries the editable rows' tip; it is still never deleted.
+#[trial]
+fn a_base_character_style_takes_options_duplicate_and_redefine_but_not_delete() {
+    let (mut fixture, state) = character_panel("Normal", true);
+    assert_eq!(description(&fixture, "Normal").as_deref(), Some(ROW_TIP), "the row describes itself as editable");
+
+    let normal = fixture.by_label("Normal").expect("the Normal row is shown");
+    fixture.click(&normal).click(&normal).idle(4);
+    assert!(std::mem::take(&mut state.borrow_mut().1).contains(&TextStyleAction::Options(0)), "a double click opens Style Options");
+    let options = fixture.by_label("Style Options…").expect("the footer's Style Options");
+    fixture.click(&options).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![TextStyleAction::Options(0)], "the footer opens its options");
+    let duplicate = fixture.by_label("Duplicate style").expect("the footer's Duplicate");
+    fixture.click(&duplicate).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![TextStyleAction::Duplicate(0)], "the footer duplicates it");
+    let delete = fixture.by_label("Delete style").expect("the footer's Delete");
+    fixture.click(&delete).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![], "the footer does not delete it");
+    fixture.advance(1.0).click(&normal).idle(4);
+    std::mem::take(&mut state.borrow_mut().1);
+    fixture.key(Key::Delete, Modifiers::NONE).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![], "the Delete key does not delete it");
+
+    assert_eq!(menu_ran(&mut fixture, &state, "Normal", "Style Options…"), vec![TextStyleAction::Options(0)], "the menu opens its options");
+    assert_eq!(menu_ran(&mut fixture, &state, "Normal", "Duplicate Style"), vec![TextStyleAction::Duplicate(0)], "the menu duplicates it");
+    assert_eq!(menu_ran(&mut fixture, &state, "Normal", "Redefine Style"), vec![TextStyleAction::Redefine(0)], "the menu redefines it");
+    assert_eq!(menu_ran(&mut fixture, &state, "Normal", "Delete Style"), vec![], "the menu does not delete it");
 }

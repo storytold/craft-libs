@@ -22,6 +22,10 @@ struct Values {
     margin: f64,
     /// In seconds.
     delay: f64,
+    /// The preview cache's limit, in megabytes: a unit no `UnitKind` names.
+    cache: i64,
+    /// The length of a preview's fade, in milliseconds.
+    fade: i64,
     load_plugins: bool,
     plugin_folder: String,
 }
@@ -37,6 +41,8 @@ impl Default for Values {
             tint: Rgba([0xff, 0x88, 0x00, 0xff]),
             margin: 36.0,
             delay: 0.5,
+            cache: 512,
+            fade: 250,
             load_plugins: true,
             plugin_folder: "Plug-ins".to_owned(),
         }
@@ -78,6 +84,8 @@ impl PreferencesModel for Demo {
                         RowKind::length(draft.margin, 0.0..=720.0, LengthUnits::new(UnitKind::Points, UnitKind::Millimetres, 72.0)),
                     ),
                     RowSpec::new("canvas.delay", "Preview delay", RowKind::float(draft.delay, 0.0..=10.0, 1).unit_text("s")),
+                    RowSpec::new("canvas.cache", "Preview cache", RowKind::int(draft.cache, 64..=8192).unit_text("MB")),
+                    RowSpec::new("canvas.fade", "Preview fade", RowKind::int(draft.fade, 0..=2000).counting(UnitKind::Milliseconds)),
                 ],
             )
             .footnote("Canvas settings apply to new documents."),
@@ -102,6 +110,8 @@ impl PreferencesModel for Demo {
             ("canvas.tint", PrefValue::Color(tint)) => self.draft.tint = tint,
             ("canvas.margin", PrefValue::Float(margin)) => self.draft.margin = margin,
             ("canvas.delay", PrefValue::Float(delay)) => self.draft.delay = delay,
+            ("canvas.cache", PrefValue::Int(cache)) => self.draft.cache = cache,
+            ("canvas.fade", PrefValue::Int(fade)) => self.draft.fade = fade,
             ("plugins.load", PrefValue::Bool(on)) => self.draft.load_plugins = on,
             ("plugins.folder", PrefValue::Text(text)) => self.draft.plugin_folder = text,
             _ => {}
@@ -123,6 +133,7 @@ impl PreferencesModel for Demo {
             "canvas" => {
                 (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint);
                 (self.draft.margin, self.draft.delay) = (defaults.margin, defaults.delay);
+                (self.draft.cache, self.draft.fade) = (defaults.cache, defaults.fade);
             }
             "plugins" => (self.draft.load_plugins, self.draft.plugin_folder) = (defaults.load_plugins, defaults.plugin_folder),
             _ => {}
@@ -171,6 +182,13 @@ fn preferences_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
 fn preferences_window_without_matches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let state = PreferencesState { search: "zzz".to_owned(), ..PreferencesState::default() };
+    window(ui, data, state, Demo::default())
+}
+
+/// The Canvas page: number rows with a unit kind's symbol (`px`, `ms`) and with unit text (`s`, `MB`) after the field.
+#[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
+fn preferences_window_with_units(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = PreferencesState { selected: "canvas".to_owned(), ..PreferencesState::default() };
     window(ui, data, state, Demo::default())
 }
 

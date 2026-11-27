@@ -33,7 +33,7 @@ pub struct ManifestEntry {
     pub licence: String,
     /// Licence text, relative to the checkout.
     pub licence_file: String,
-    /// Hex SHA-256 of the font file.
+    /// Hex SHA-256 of the font file. [`Embed`](crate::Embed) checks each selected file against it.
     pub sha256: String,
     /// Where the file came from.
     pub source: String,

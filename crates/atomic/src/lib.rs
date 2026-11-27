@@ -14,9 +14,9 @@
 //!   file retains its previous bytes, or it is replaced completely with the new contents. If an error occurs
 //!   during staging or rename, the target remains unmodified and the staging file is removed in user space.
 //!   An abnormal process termination (e.g. `SIGKILL`, crash, power loss) bypasses user-space cleanup and
-//!   leaves the temporary staging file on disk. Sweeping orphaned staging files is the responsibility of the
-//!   consuming application; the library does not perform background sweeping. The destination file itself is
-//!   never corrupted.
+//!   leaves the temporary staging file on disk. The library does not sweep in the background; the consuming
+//!   application calls [`sweep_temp_files`] for a folder, for example at startup, to remove orphaned staging
+//!   files. The destination file itself is never corrupted.
 //! - **Durability & Ordering Boundaries**:
 //!   Data persistence across power failures involves two sync points:
 //!   1. **Content Flush (`sync_file`)**: The staging file's payload is forced to non-volatile storage
@@ -816,6 +816,57 @@ pub fn temp_name(file: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     let pid = 0;
     format!(".{stem}.{pid}-{n}.craft_tmp")
+}
+
+/// Removes staging files that interrupted writes left in `dir`, and returns how many it removed.
+///
+/// A file is removed when its name has the form [`temp_name`] gives, it is a regular file (a
+/// symbolic link is not followed), and it was last modified at least `min_age` ago. The process
+/// id in the name is not used to decide, since the system reuses process ids. A save updates its
+/// staging file's modification time only while it writes bytes, not while it flushes or renames,
+/// and removing the staging file makes that save fail. Pass a `min_age` longer than the longest
+/// time any save into `dir`, by any process including the calling one, may go without writing,
+/// counting the final flush and rename. On Windows, a write may not update the modification time
+/// until the staging file's handle closes, so pass a `min_age` longer than the longest whole save,
+/// from the staging file's creation through the rename. Entries that cannot be read or removed are
+/// left in place. Subfolders are not searched.
+/// On `wasm32` this returns an `Unsupported` error.
+pub fn sweep_temp_files(dir: &Path, min_age: std::time::Duration) -> io::Result<usize> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (dir, min_age);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "staging files cannot be swept on this platform"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let now = std::time::SystemTime::now();
+        let entries = std::fs::read_dir(dir).map_err(|e| io::Error::new(e.kind(), format!("cannot read {}: {e}", dir.display())))?;
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            if !entry.file_name().to_str().is_some_and(is_temp_name) {
+                continue;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+            let old = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= min_age);
+            if meta.is_file() && old && std::fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+}
+
+/// Whether `name` has the form [`temp_name`] gives (`.{stem}.{pid}-{n}.craft_tmp`), with a stem
+/// of at most [`TEMP_STEM_BYTES`] bytes.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_temp_name(name: &str) -> bool {
+    // Decimal digits with no leading zero, as `format!` writes an integer; a lone `0` is allowed.
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    let Some((stem, tail)) = name.strip_prefix('.').and_then(|rest| rest.strip_suffix(".craft_tmp")).and_then(|rest| rest.rsplit_once('.')) else {
+        return false;
+    };
+    let Some((pid, n)) = tail.split_once('-') else { return false };
+    stem.len() <= TEMP_STEM_BYTES && digits(pid) && digits(n) && pid.parse::<u32>().is_ok() && n.parse::<u64>().is_ok()
 }
 
 /// The end of an error message: whether an original file was left as it was.
