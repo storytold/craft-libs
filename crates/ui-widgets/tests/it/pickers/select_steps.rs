@@ -108,3 +108,31 @@ fn a_value_on_no_entry_reads_as_the_placeholder_the_face_shows() {
         assert_eq!(fixture.tree().value_of(node), Some(read), "the field reads what its face shows");
     }
 }
+
+#[trial]
+fn an_unlisted_value_keeps_its_closed_label_and_picture_outside_the_options() {
+    let held = Rc::new(RefCell::new(9u8));
+    let pictures = Rc::new(RefCell::new(Vec::new()));
+    let shown = held.clone();
+    let painted = pictures.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "Uniform"), Entry::new(2u8, "Taper")];
+        Select::new("Profile", Bind::bound(&mut *shown.borrow_mut()), &entries)
+            .placeholder("Missing")
+            .unlisted_label("Custom profile")
+            .picture(|value, _, _| painted.borrow_mut().push(*value))
+            .show(ui);
+    });
+    fixture.settle();
+    let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
+    assert_eq!(fixture.tree().value_of(node), Some("Custom profile"));
+    assert!(!pictures.borrow().is_empty());
+    assert!(pictures.borrow().iter().all(|&value| value == 9));
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert_eq!(fixture.by_role(Role::LIST_BOX_OPTION).len(), 2);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(*held.borrow(), 9);
+    assert_eq!(fixture.tree().value_of(node), Some("Custom profile"));
+}

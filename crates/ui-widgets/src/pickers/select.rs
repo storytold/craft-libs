@@ -141,10 +141,15 @@ pub struct Select<'a, T: Value + 'static> {
     /// Shown, muted, while the value is none of the entries.
     #[prop(into)]
     placeholder: Option<Label>,
+    /// The closed label of a bound value outside the options. When set, the face also paints that value's picture
+    /// and assistive technology reads the label. The value does not add a row to the list.
+    #[prop(into)]
+    unlisted_label: Option<Label>,
     /// Adds the host's content to each entry's row.
     #[prop(func = "Fn(&T, ListRow<'a>) -> ListRow<'a>")]
     decorate: Option<RowDress<'a, T>>,
-    /// Paints an entry's picture, given its value: the thumbnail of its row and of the face while it is picked.
+    /// Paints a value's picture in its option row and on the face while it is picked. With an unlisted label, also
+    /// paints the picture on the face for the current value outside the options.
     #[prop(func = "Fn(&T, &ContentPainterCx, Rect)")]
     picture: Option<SelectPicture<'a, T>>,
     /// The face shows the picked entry's picture alone; its label stays the accessible value.
@@ -179,6 +184,7 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             search_kept: None,
             list_width: None,
             placeholder: None,
+            unlisted_label: None,
             decorate: None,
             picture: None,
             picture_only: false,
@@ -200,7 +206,10 @@ impl<'a, T: Value + 'static> Select<'a, T> {
         match self.position(value) {
             Some(at) => (Some(self.entries[at].face_label()), false),
             None if value.is_none() => (Some(mixed), true),
-            None => (self.placeholder.as_ref(), true),
+            None => match self.unlisted_label.as_ref() {
+                Some(label) => (Some(label), false),
+                None => (self.placeholder.as_ref(), true),
+            },
         }
     }
 
@@ -330,7 +339,10 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             face((text.unwrap_or(&Label::Empty), !muted))
         } else {
             let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
-            let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
+            let texts = entries
+                .chain(self.unlisted_label.iter().map(|text| (text, true)))
+                .chain(self.placeholder.iter().map(|text| (text, false)))
+                .chain(std::iter::once((&mixed, false)));
             texts.map(face).fold(Vec2::ZERO, Vec2::max)
         };
         Vec2::new(size.x.max(cx.style.least_width), size.y)
@@ -388,15 +400,15 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// The picked entry's place among the entries that can be picked, shown as its label, so AccessKit steps and sets it.
-    /// A value that names no entry reads as the placeholder the face shows for it.
+    /// A value outside the entries reads as the unlisted label or placeholder that the face shows.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let stops = step_stops(self.entries);
         let range = 0.0..=stops.len().saturating_sub(1) as f64;
         let held = self.position(cx.value());
-        let placeholder = self.placeholder.as_ref().filter(|_| held.is_none() && cx.value().is_some());
+        let unlisted = self.unlisted_label.as_ref().or(self.placeholder.as_ref()).filter(|_| held.is_none() && cx.value().is_some());
         let numeric = match held.and_then(|held| stops.iter().position(|&stop| stop == held)) {
             Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[stops[at]].label()).as_str()),
-            None => match placeholder {
+            None => match unlisted {
                 Some(text) => Numeric::empty(range).text(cx.env.resolve(text).as_str()),
                 None => Numeric::empty(range),
             },
@@ -509,7 +521,12 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
             face = face.leading(icon.clone());
         }
-        if let (Some(picture), Some(value)) = (self.picture.as_ref(), held.and_then(|at| self.entries[at].value())) {
+        let picture_value = match held {
+            Some(at) => self.entries[at].value(),
+            None if self.unlisted_label.is_some() => cx.value(),
+            None => None,
+        };
+        if let (Some(picture), Some(value)) = (self.picture.as_ref(), picture_value) {
             face = face.thumb(self.picture_aspect, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
         }
         ui.face(FACE, if muted { face.placeholder() } else { face });
