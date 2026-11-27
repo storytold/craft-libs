@@ -38,8 +38,9 @@ assert!(Records::new(&fopt[..5]).next().is_none());
 - `dib`: a DIB decoded within limits and re-encoded as a PNG, or kept as a BMP placeholder.
 - `wmf`: a WMF's placeable header, which the BLIP store leaves out, rebuilt from the BLIP's
   metafile header.
-- `tiff`: a TIFF decoded within limits and re-encoded as a PNG, for a reader whose apps draw PNG
-  but not TIFF.
+- `tiff` (the `tiff` feature, which `craft-xls` turns on): a TIFF decoded within limits and
+  re-encoded as a PNG, for a reader whose apps draw PNG but not TIFF. Without the feature no TIFF
+  decoder is built, and a TIFF BLIP is still read as its raw bytes.
 
 All three readers read BLIPs, property tables and drawings with these rules and limits, and make
 the same files of them: a DIB decoded as a PNG (a BMP when it can't be), a WMF with its placeable

@@ -10,7 +10,14 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# TIFF pictures decoded and made PNG files (`tiff::to_png`), for a reader whose apps can't draw
+# TIFF. Without it a TIFF BLIP is still read, as its raw bytes.
+tiff = ["image/tiff", "dep:tiff"]
+
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["png", "bmp", "tiff"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 log = { workspace = true }
 miniz_oxide = { workspace = true }
+# Only its tag reader, to size a JPEG-compressed TIFF's frames before `image` decodes them.
+tiff = { version = "0.11", default-features = false, optional = true }

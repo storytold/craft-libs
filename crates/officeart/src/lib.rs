@@ -25,5 +25,6 @@ pub mod dib;
 pub mod props;
 pub mod record;
 pub mod rt;
+#[cfg(feature = "tiff")]
 pub mod tiff;
 pub mod wmf;
