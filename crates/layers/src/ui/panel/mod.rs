@@ -33,7 +33,7 @@ use craft_ui::layout_components::Stack;
 use craft_ui::list::ListWords;
 use craft_ui::menu::MenuRow;
 use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::Remember as _;
 use egui::{Response, Ui};
 
@@ -188,6 +188,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     blend_rows: bool,
     filter_bar: bool,
     filter_types: Vec<FilterBy>,
+    no_matches_message: Option<Label>,
     find_name: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
     trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
@@ -263,6 +264,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             blend_rows: true,
             filter_bar: true,
             filter_types: FilterBy::ALL.to_vec(),
+            no_matches_message: None,
             find_name: false,
             row_menu: None,
             trailing: None,
@@ -274,6 +276,14 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             footer: None,
             deletable: false,
         }
+    }
+
+    /// A host-localized label centred in the rows body when filtering leaves no rows listed.
+    /// Absent by default. An actually empty tree, an unfiltered tree and a filter with a match
+    /// show no message. The text is display-only; the list still owns its input and empty-area menu.
+    pub fn no_matches_message(mut self, message: impl Into<Label>) -> Self {
+        self.no_matches_message = Some(message.into());
+        self
     }
 
     /// The panel's persisted section: the Panel Options and Show Filters. Without it the panel uses
@@ -415,6 +425,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             blend_rows,
             filter_bar,
             filter_types,
+            no_matches_message,
             find_name,
             row_menu,
             trailing,
@@ -526,7 +537,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 if let Some(layer) = rename.clone() {
                     start_rename(ui, list, layer);
                 }
-                let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered(), &unlock_label);
+                let body = show_body(ui, &cx, &rows, session, &plan, no_matches_message.as_ref(), &unlock_label);
                 let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
                 let focused = body.response.has_focus();
                 let mut reported = body.events;
