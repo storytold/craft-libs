@@ -29,7 +29,7 @@ pub use stroke_cells::{StrokeCells, StrokeCellsOutput};
 pub use words::ShapeWords;
 
 /// The drawing mode of the vector tools.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum VectorMode {

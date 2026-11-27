@@ -73,7 +73,7 @@ pub(crate) fn unfade(ui: &Ui, core: &mut CxCore<'_>, fade: Option<Fade>) {
 }
 
 /// The index the next shape `ui` paints gets in its layer's paint list.
-pub(crate) fn next_shape(ui: &Ui) -> usize {
+fn next_shape(ui: &Ui) -> usize {
     ui.ctx().graphics(|layers| layers.get(ui.layer_id()).map_or(0, |list| list.next_idx().0))
 }
 

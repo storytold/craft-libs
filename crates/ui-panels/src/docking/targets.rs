@@ -18,7 +18,7 @@ pub use craft_behavior::dock::{SIDE_ZONE_DEPTH_SHARE, SIDE_ZONE_FRACTION};
 
 /// The sizes of a dock's drop bands and zones and of the windows it floats, resolved from the theme's tokens.
 /// A dock's component style calls [`Self::style`] from `Component::style`, so the sizes are cached with it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct DockSizes {
     /// Depth of a group's side zones with `DockConfig::side_edge_zones` (the rail width).
@@ -106,7 +106,7 @@ pub struct DockSizes {
 }
 
 /// Which docked columns a dock shows as cards ([`DockConfig::column_cards`](super::DockConfig::column_cards)).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ColumnCards {
     /// None: every column fills its cell.
