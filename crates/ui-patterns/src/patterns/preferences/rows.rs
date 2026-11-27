@@ -169,6 +169,12 @@ fn hinted<C: Props>(control: C, row: &ShownRow) -> C {
     }
 }
 
+/// The sentence to write under a row the host draws: its help line, or its hover text where the pattern has no hover
+/// target of its own to carry it.
+fn host_text(row: &ShownRow) -> Option<&Label> {
+    row.help.as_ref().or(row.tooltip.as_ref())
+}
+
 /// Shows `row` as `layout` lays rows out and records what it edited in `out`.
 pub(super) fn show_row<H: PreferencesModel + ?Sized>(
     ui: &mut Ui,
@@ -271,17 +277,25 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             }
         }
         Kind::CustomRows => {
-            // The host draws the rows and their labels; the rule's enabled state and help apply to them as to a field.
-            // Its hover text belongs to the controls the host draws, which carry it themselves.
+            // The host draws the rows and their labels; the rule's enabled state and text apply to the row as they do
+            // to a field. Neither the stack around a host's rows nor the field around its control takes a pointer of
+            // its own, so a row the host draws keeps its sentence on the page: its hover text falls back to the line,
+            // and the rule's words are lost nowhere.
             Stack::new().id_salt(key).enabled(row.enabled).show(ui, |ui, _| {
                 out.custom_changed |= host.custom_row(ui, key);
-                if let Some(help) = &row.help {
-                    Help::Text(help.clone()).text().show(ui);
+                if let Some(text) = host_text(row) {
+                    Help::Text(text.clone()).text().show(ui);
                 }
             });
         }
         Kind::Custom => {
-            field().show(ui, |ui, _| {
+            // The same for a row whose control the host draws inside our field: its sentence stays the line under it.
+            let field = field_of(row);
+            let field = match (row.help.is_none(), &row.tooltip) {
+                (true, Some(tooltip)) => field.help(Help::Text(tooltip.clone())),
+                _ => field,
+            };
+            field.show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_row(ui, key));
             });
         }
