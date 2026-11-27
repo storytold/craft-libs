@@ -65,16 +65,27 @@ impl Arrangement {
         }
     }
 
-    /// Whether the entry is enabled with `documents` open and `floating` floating windows:
-    /// n-up needs at least two documents, Float in Window a docked one, Consolidate a second
-    /// group or a floating window, the Match entries at least two documents.
-    pub fn enabled(self, documents: usize, groups: usize, floating: usize) -> bool {
+    /// Whether the entry is enabled with `documents` documents open, `groups` docked document groups and
+    /// `floating` floating document windows: 2-up needs two documents and 3-up three, 4-up and 6-up grey below four,
+    /// Consolidate All to Tabs and Match Zoom, Location and All work from one document, Cascade needs a floating
+    /// document window, Float in Window a docked one. No entry greys because of how the documents are split up, so
+    /// `groups` decides nothing: Consolidate All to Tabs is also enabled with a single tab group.
+    pub fn enabled(self, documents: usize, _groups: usize, floating: usize) -> bool {
         match self {
-            Self::ConsolidateAllToTabs => groups > 1 || floating > 0,
+            Self::ConsolidateAllToTabs => documents > 0,
             Self::FloatInWindow => documents > floating,
             Self::NewWindowForDocument => documents > 0,
-            Self::TileAllVertically | Self::TileAllHorizontally | Self::Cascade | Self::Tile | Self::FloatAllInWindows => documents > 0,
-            _ => documents > 1,
+            Self::TileAllVertically | Self::TileAllHorizontally | Self::Tile | Self::FloatAllInWindows => documents > 0,
+            // Cascade steps floating windows only: greyed while every document is tabbed or tiled.
+            Self::Cascade => floating > 0,
+            Self::TwoUpVertical | Self::TwoUpHorizontal => documents >= 2,
+            Self::ThreeUpVertical | Self::ThreeUpHorizontal | Self::ThreeUpStacked => documents >= 3,
+            // Measured greyed with three documents and enabled with six; four and five documents keep the state
+            // these entries had, which is why the threshold is four and not the number of cells.
+            Self::FourUp | Self::SixUp => documents >= 4,
+            // Not measured (a rotated view needs a GPU): Match Rotation keeps its rule of two documents.
+            Self::MatchRotation => documents > 1,
+            Self::MatchZoom | Self::MatchLocation | Self::MatchAll => documents > 0,
         }
     }
 }
