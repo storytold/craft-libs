@@ -191,7 +191,7 @@ fn scroll_owner_inside(takers: &[WheelTaker<Id>], owner: Id, at: Pos2, dy: f32) 
 
 /// The begin hook (H7): rotates the registrations, ends the wheel gesture a press or the gap closed, and splits this
 /// pass's wheel input.
-pub(crate) fn begin(ctx: &Context) {
+pub(crate) fn begin(ctx: &Context, pointer_scoped_field_wheel: bool) {
     let viewport = pass::current_viewport(ctx);
     // Takes the pass's snapshot of the canvas a modal keeps open, which the input hook and the layer test read.
     let hole = sampler::hole_of_pass(ctx);
@@ -267,6 +267,9 @@ pub(crate) fn begin(ctx: &Context) {
                 || touch_rotation != 0.0
                 || touch_pan != Vec2::ZERO;
             if moves || device_end {
+                let outside_field = pointer_scoped_field_wheel
+                    && state.last.iter().find(|taker| taker.field && Some(taker.owner) == focused).is_some_and(|taker| !taker.rect.contains(at));
+                let by_position = by_position || outside_field;
                 let share = Wheel::new(scroll, mods, unit, phase)
                     .source(source)
                     .zoom(zoom)
