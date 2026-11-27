@@ -11,12 +11,12 @@ use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec, PanelSpecs
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
-use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press};
 use craft_ui::testing::{
     Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs,
     last_pass_runs, trial,
 };
+use craft_ui::testing::{audit_replays, in_audit_run};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -574,6 +574,8 @@ struct VersionedDock {
     versions: Rc<RefCell<Vec<u64>>>,
     workspace: Rc<RefCell<Arc<Workspace<usize>>>>,
     focused: Rc<RefCell<Vec<Option<usize>>>>,
+    /// How many docked columns and gesture sources each pass reported.
+    reported: Rc<RefCell<Vec<(usize, usize)>>>,
 }
 
 fn versioned_dock(layout: Layout<usize>) -> VersionedDock {
@@ -581,17 +583,19 @@ fn versioned_dock(layout: Layout<usize>) -> VersionedDock {
     let versions = Rc::new(RefCell::new(vec![0; 32]));
     let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
     let focused = Rc::new(RefCell::new(Vec::new()));
+    let reported = Rc::new(RefCell::new(Vec::new()));
     let mut panels = Versioned { versions: Rc::clone(&versions) };
-    let (shown, seen) = (Rc::clone(&workspace), Rc::clone(&focused));
+    let (shown, seen, counts) = (Rc::clone(&workspace), Rc::clone(&focused), Rc::clone(&reported));
     let mut fixture = Fixture::new(move |ui| {
         let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &labels, &mut panels, DockConfig::default()).show(ui);
         seen.borrow_mut().push(output.focused);
+        counts.borrow_mut().push((output.columns.len(), output.sources.len()));
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(SETTLE);
     body_runs();
     spec_reads();
     focused.borrow_mut().clear();
-    VersionedDock { fixture, versions, workspace, focused }
+    VersionedDock { fixture, versions, workspace, focused, reported }
 }
 
 /// The dock's containers: what a settled dock whose panels all have versions runs none of.
@@ -675,4 +679,21 @@ fn a_replayed_group_reports_the_focus_it_holds() {
     fixture.idle(3);
     assert_eq!(runs_of(&fixture, &CONTAINERS), 0, "the focused dock replays");
     assert!(focused.borrow().iter().all(|panel| *panel == Some(0)), "every replay reports the focus: {:?}", focused.borrow());
+}
+
+/// The docked tree and its columns report each column and gesture source once in every pass: when the replay audit
+/// runs the tree in place of its replay, and when the docks' split area measures them before it shows them (a new
+/// room).
+#[trial]
+fn a_measured_versioned_dock_reports_each_column_and_source_once() {
+    let VersionedDock { mut fixture, reported, .. } = versioned_dock(full(2));
+    let settled = *reported.borrow().last().expect("the dock reported");
+    assert_eq!(settled.0, 2, "the dock's two columns are placed");
+    audit_replays(fixture.ctx(), true);
+    reported.borrow_mut().clear();
+    fixture.idle(4);
+    audit_replays(fixture.ctx(), false);
+    fixture.room(Vec2::new(1100.0, 600.0)).idle(4).room(Vec2::new(1200.0, 640.0)).idle(4);
+    let reported = reported.borrow();
+    assert!(reported.iter().all(|counts| *counts == settled), "every pass reports {settled:?}: {reported:?}");
 }

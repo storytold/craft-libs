@@ -1617,8 +1617,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // A docked column takes the dock's height, a stepped one (a tool rail) too: the references' docked
             // toolbar keeps its column's surface down to the dock's foot, with the tools at the top
             // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
-            // tall as its content.
-            self.report.placed.push(Placed { panel: first.clone(), rect: cell });
+            // tall as its content. A measuring run of the container around the dock places it too; the dock reports
+            // its columns from the pass's real run only, once.
+            if crate::runtime::measure::effect(ui.ctx(), "dock::placed_report") {
+                self.report.placed.push(Placed { panel: first.clone(), rect: cell });
+            }
             let card = plan.cards.get(at).copied().flatten();
             let place = ("docked", plan.edge, at);
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone(), card };
@@ -1640,7 +1643,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // The view's room is the column's cell, so the pointer over the cell, and nowhere else, runs it.
         let drawn = ui.scope_builder(UiBuilder::new().max_rect(cell), |ui| MemoView::new(id, view, column_view::<P>).show(ui)).inner;
         if let Some(drawn) = drawn {
-            self.add_drawn(drawn);
+            self.add_drawn(ui, drawn);
         }
     }
 
@@ -1655,7 +1658,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let rail_footer = self.scene.rail_footer.cloned();
         let view = TreeView { key, rail_footer, pass: &mut *self, at };
         if let Some(drawn) = MemoView::new(id, view, tree_view::<P>).show(ui) {
-            self.add_drawn(drawn);
+            self.add_drawn(ui, drawn);
         }
     }
 
@@ -1788,8 +1791,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
-    /// Adds what a view drew, by its run or its replay, to the report.
-    fn add_drawn(&mut self, drawn: Drawn<P>) {
+    /// Adds what a view drew, by its run or its replay, to the report: in the pass's real run only. A measuring run's
+    /// replay returns the kept real run's report, which the real run adds once.
+    fn add_drawn(&mut self, ui: &Ui, drawn: Drawn<P>) {
+        if !crate::runtime::measure::effect(ui.ctx(), "dock::drawn_report") {
+            return;
+        }
         self.report.sources.extend(drawn.sources);
         self.report.shown.extend(drawn.shown);
         self.report.placed.extend(drawn.placed);
@@ -1972,8 +1979,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
                 self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
             });
-            let dividers = output.dividers.into_iter().map(|(divider, rect, node)| DockSource::new(SourceKind::Divider(divider), rect, node));
-            self.report.sources.extend(dividers);
+            if crate::runtime::measure::effect(ui.ctx(), "dock::divider_report") {
+                let dividers = output.dividers.into_iter().map(|(divider, rect, node)| DockSource::new(SourceKind::Divider(divider), rect, node));
+                self.report.sources.extend(dividers);
+            }
             let width = output.width.map(|width| width - inset);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width, flyout: None }
         };
