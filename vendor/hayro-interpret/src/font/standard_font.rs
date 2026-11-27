@@ -566,6 +566,12 @@ impl StandardKind {
             // base font metrics.
             let should_width = if self.fallback {
                 if let Some(Width::Value(w)) = self.widths.get(code as usize).copied() {
+                    // Craft patch (zero width): a `/Widths` entry of 0 is no width to narrow the
+                    // stand-in's glyph to; narrowed to it, the glyph vanished. The shape is kept and
+                    // only the advance is 0, as PDFium and pdf.js draw it (pdfcraft #8524).
+                    if w <= 0.0 {
+                        return path;
+                    }
                     w
                 } else {
                     return path;
