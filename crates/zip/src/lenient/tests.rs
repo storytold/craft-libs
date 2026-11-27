@@ -182,6 +182,10 @@ fn verified_unicode_path_overrides_a_legacy_zip_name() {
         zip[end + 12..end + 16].copy_from_slice(&((end - central + extra.len()) as u32).to_le_bytes());
         zip.splice(end..end, extra);
         assert_named_entry_reads(&zip, expected);
+        let entry = &parse(&zip, 1).unwrap().entries[0];
+        zip[30] = b'x';
+        assert!(matches!(raw_entry_data(&zip, entry), Err(ZipError::Corrupt(_))), "a Unicode Path alias must not hide a changed local name");
+        assert!(matches!(file::read_named_entry(&mut std::io::Cursor::new(&zip), expected, 0), Err(ZipError::Corrupt(_))));
     }
 }
 
