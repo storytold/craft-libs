@@ -382,8 +382,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 
 - [`craft-raster3d`](crates/raster3d/README.md): a CPU renderer for a prepared 3D scene, from
   EffectCraft: clipping, rasterization with a top-left fill rule, physically based shading,
-  shadow maps, a box resolve of supersampled output and sRGB encoding. Scenes, sizes and work are
-  checked and bounded by `Limits` before anything is allocated. Building the scene stays in each app.
+  shadow maps, a box resolve of supersampled output and sRGB encoding. Scenes and sizes are
+  checked before the target is allocated. `Limits` bounds sizes and coverage work. Preparation can
+  allocate clipping and triangle buffers before a work-limit error. Building the scene stays in each app.
 
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer

@@ -7,6 +7,8 @@
 //! shaded once; transparent triangles (already sorted back to front) are then shaded per
 //! fragment and blended over, depth-tested against the opaque surfaces.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rayon::prelude::*;
 
 use crate::scene::{Scene, Vertex, validate, validate_passes, validate_shadow_refs};
@@ -371,6 +373,8 @@ struct Band<'a> {
     y0: i32,
     rows: usize,
     w: usize,
+    spent: &'a AtomicU64,
+    limit: u64,
 }
 
 /// The screen triangles of one pass and the indices of those in the current band.
@@ -427,7 +431,7 @@ impl Band<'_> {
     /// Shade each pixel's visible opaque fragment. A discarded fragment (alpha test, back face)
     /// gives way to the nearest surviving fragment under the pixel, and the pixel's visibility
     /// depth becomes that fragment's ([`EMPTY`] when none survives).
-    fn shade_opaque(&self, opaque: Pass, vis: &mut Visibility, crow: &mut [[f32; 4]], drow: &mut [f32]) {
+    fn shade_opaque(&self, opaque: Pass, vis: &mut Visibility, crow: &mut [[f32; 4]], drow: &mut [f32]) -> Result<(), RenderError> {
         let s = self.s;
         let mut discarded = vec![false; self.rows * self.w];
         for i in 0..self.rows * self.w {
@@ -445,9 +449,9 @@ impl Band<'_> {
             }
         }
         if !discarded.contains(&true) {
-            return;
+            return Ok(());
         }
-        for (i, best) in self.fallback(opaque, vis, &discarded).into_iter().enumerate() {
+        for (i, best) in self.fallback(opaque, vis, &discarded)?.into_iter().enumerate() {
             if !discarded[i] {
                 continue;
             }
@@ -460,19 +464,21 @@ impl Band<'_> {
                 None => vis[i].1 = EMPTY,
             }
         }
+        Ok(())
     }
 
     /// For each discarded pixel of the band, the nearest surviving opaque fragment of a screen
     /// triangle other than the pixel's visible one, inside the depth range as in
     /// [`Band::visibility`]: (ndc z, color, camera depth). Triangles are
-    /// visited in index order over their bounding boxes, so this pass tests no more pixels than
-    /// [`Band::visibility`], and among fragments at equal depth the first triangle's is kept.
+    /// visited in index order over their bounding boxes, and among fragments at equal depth the
+    /// first triangle's is kept. Coverage tests count toward [`Limits::max_work`].
     #[allow(clippy::type_complexity)]
-    fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Vec<Option<(f32, [f32; 4], f32)>> {
+    fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Result<Vec<Option<(f32, [f32; 4], f32)>>, RenderError> {
         let (s, w, y0, rows) = (self.s, self.w, self.y0, self.rows);
         let mut best: Vec<Option<(f32, [f32; 4], f32)>> = vec![None; rows * w];
         for &tj in opaque.bins {
             let t2 = &opaque.tris[tj as usize];
+            let mut tests = 0u64;
             for y in t2.bbox[1].max(y0)..t2.bbox[3].min(y0 + rows as i32) {
                 let r = (y - y0) as usize * w;
                 for x in t2.bbox[0]..t2.bbox[2] {
@@ -480,6 +486,7 @@ impl Band<'_> {
                     if !discarded[i] || vis[i].0 == tj {
                         continue;
                     }
+                    tests += 1;
                     if let Some((z, l2)) = cover(t2, x as f64 + 0.5, y as f64 + 0.5)
                         && nearer(z, best[i].map_or(EMPTY, |b| b.0))
                     {
@@ -490,8 +497,12 @@ impl Band<'_> {
                     }
                 }
             }
+            let needed = self.spent.fetch_add(tests, Ordering::Relaxed).saturating_add(tests);
+            if needed > self.limit {
+                return Err(RenderError::TooMuchWork { needed, limit: self.limit });
+            }
         }
-        best
+        Ok(best)
     }
 
     /// Transparent fragments in order, blended over the opaque result where they are nearer.
@@ -518,21 +529,23 @@ impl Band<'_> {
 }
 
 /// Rasterize and shade set-up screen triangles into a target of `pixels` pixels.
-fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Target {
+fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize, work: u64, limit: u64) -> Result<Target, RenderError> {
     let (w, h) = (s.width as usize, s.height as usize);
     let bands = (h as i32 + BAND - 1) / BAND;
     let ob = bin(opaque, bands);
     let tb = bin(trans, bands);
     let mut color = vec![[0.0f32; 4]; pixels];
     let mut depth = vec![f32::INFINITY; pixels];
-    color.par_chunks_mut(w * BAND as usize).zip(depth.par_chunks_mut(w * BAND as usize)).enumerate().for_each(|(band, (crow, drow))| {
-        let b = Band { s, y0: band as i32 * BAND, rows: crow.len() / w, w };
+    let spent = AtomicU64::new(work);
+    color.par_chunks_mut(w * BAND as usize).zip(depth.par_chunks_mut(w * BAND as usize)).enumerate().try_for_each(|(band, (crow, drow))| {
+        let b = Band { s, y0: band as i32 * BAND, rows: crow.len() / w, w, spent: &spent, limit };
         let (op, tp) = (Pass { tris: opaque, bins: &ob[band] }, Pass { tris: trans, bins: &tb[band] });
         let mut vis = b.visibility(op);
-        b.shade_opaque(op, &mut vis, crow, drow);
+        b.shade_opaque(op, &mut vis, crow, drow)?;
         b.blend_transparent(tp, &vis, crow);
-    });
-    Target { width: s.width, height: s.height, color, depth }
+        Ok::<(), RenderError>(())
+    })?;
+    Ok(Target { width: s.width, height: s.height, color, depth })
 }
 
 /// Rasterize and shade the scene at its raster size.
@@ -547,7 +560,7 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
     let mut work = 0;
     let opaque = setup(s, &clip, 0..s.opaque_count as usize, &mut work, limits.max_work)?;
     let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len(), &mut work, limits.max_work)?;
-    let t = raster(s, &opaque, &trans, pixels);
+    let t = raster(s, &opaque, &trans, pixels, work, limits.max_work)?;
     // Finite inputs near the top of the f32 range can still overflow in shading.
     if let Some(i) = t.color.iter().zip(&t.depth).position(|(c, d)| !c.iter().all(|v| v.is_finite()) || d.is_nan()) {
         return Err(RenderError::BadPixel(i));

@@ -92,8 +92,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   resolves by `Scene::ssaa`, and rejects a factor that does not divide the raster size before it
   renders.
 - **Limits.** `Limits` caps the raster pixels (2^24), the triangles of a scene (2^22), its vertices, used or not (3 × 2^22), the lights
-  (1024) and the coverage tests of the visibility and transparent passes (2^31: the pixels of every
-  clipped triangle's bounding box, plus one per triangle). `try_render`, `try_render_cpu` and
+  (1024) and the coverage tests of the visibility, transparent and fallback passes (2^31). Preparation
+  counts every clipped triangle's bounding-box pixels plus one per triangle; fallback tests count
+  during rendering. `try_render`, `try_render_cpu` and
   `try_shadow_maps` check the scene first and return a `RenderError` before they allocate a target
   or a map: a zero side, a size over the limits, a side over 2^30, a buffer over `isize::MAX` bytes, a light whose shadow map does not
   exist (`try_render`; a mark of −1 means no shadow), an index list that is not whole triangles, an index, material
@@ -121,7 +122,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   scene triangle. A band of 16 rows that has a discarded opaque pixel also holds 29 bytes per pixel
   (a discard flag and a candidate fragment) while its opaque pixels are shaded. The search for a
   surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
-  once more, so it runs no more coverage tests than the visibility pass.
+  once more, so it runs no more coverage tests than the visibility pass. Its tests count toward
+  `max_work`, and it can return `TooMuchWork` after the target is allocated.
 
 ## Origin
 
@@ -146,8 +148,9 @@ texture is sampled between large finite texels of opposite signs. Halfway betwee
 overflows `f32`.
 Changes from those files:
 
-- Scenes, resolve factors and pixels are checked, and sizes, triangles, lights and coverage work
-  are bounded, before anything is allocated. EffectCraft panicked on an index or a material
+- Scenes, resolve factors and pixels are checked. `Limits` bounds sizes, triangles, lights and
+  coverage work. Scene and size checks precede target allocation. Preparation can allocate clipping
+  and triangle buffers before a work-limit error. EffectCraft panicked on an index or a material
   reference that did not exist, an alpha-masked caster whose texture did not exist, an environment
   level range that overflowed, a zero raster width and a resolve factor of 0. It returned a cropped
   image for a factor that did not divide the size, NaN or infinite pixels for values that were not

@@ -332,14 +332,32 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     // depth reaches 0 is behind the light and cannot be occluded.
     let (iz, iq) = (1.0 / z, 1.0 / (m.focal * z));
     let open = |xi: i64, yi: i64| -> f32 {
-        let s = at(xi, yi) + bias;
+        let t = at(xi, yi);
+        if t == f32::INFINITY {
+            return 1.0;
+        }
+        let s = t + bias;
         let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
-        let lit = if m.ortho {
-            z - g * texel <= s
+        let fast = if m.ortho {
+            (s.is_finite() && g.is_finite() && texel.is_finite()).then_some(z - g * texel <= s)
         } else {
             let inv = iz + g * iq;
-            inv <= 0.0 || inv * s >= 1.0
+            (s.is_finite() && inv.is_finite()).then_some(inv <= 0.0 || inv * s >= 1.0)
         };
+        let lit = fast.unwrap_or_else(|| {
+            let (z, focal) = (f64::from(z), f64::from(m.focal));
+            let texel = if m.ortho { 1.0 / focal } else { z.abs() / focal };
+            let bias = f64::from(m.bias) * texel * (1.0 + 3.0 * (1.0 - f64::from(n_l.clamp(0.0, 1.0))));
+            let s = f64::from(t) + bias;
+            let g = f64::from(tx) * (xi as f64 + 0.5 - f64::from(u)) + f64::from(ty) * (yi as f64 + 0.5 - f64::from(v));
+            if m.ortho {
+                z - g * texel <= s
+            } else {
+                let iz = 1.0 / z;
+                let inv = iz + g * (iz / focal);
+                inv <= 0.0 || inv * s >= 1.0
+            }
+        });
         if lit { 1.0 } else { 0.0 }
     };
     // The penumbra in output pixels, converted through the receiver's texel footprint, and at
@@ -617,8 +635,22 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::shadow_coord;
+    use super::{shadow_coord, shadow_factor};
     use crate::scene::ShadowMap;
+
+    #[test]
+    fn overflowing_footprints_preserve_populated_shadow_comparisons() {
+        let view = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        for ortho in [true, false] {
+            for depth in [0.5, 2.0] {
+                let m = ShadowMap { view, focal: 1.0, ortho, size: 8, offset: 0, bias: 0.0, radius: 0.0 };
+                let texels = vec![depth; 64];
+                let expected = shadow_factor(&m, &texels, [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], 1.0);
+                let wide = ShadowMap { focal: f32::from_bits(1 << 19), ..m };
+                assert_eq!(shadow_factor(&wide, &texels, [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], 1.0), expected, "ortho {ortho}, depth {depth}");
+            }
+        }
+    }
 
     #[test]
     fn a_receiver_whose_projection_overflows_f32_is_projected_in_f64() {
