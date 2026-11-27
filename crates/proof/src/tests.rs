@@ -627,11 +627,47 @@ fn mixed_language_paragraphs_check_each_run_in_its_language() {
     assert!(v.iter().all(|i| i.lang == ProofLang::It && i.message == "Possibile errore di ortografia"), "{v:?}");
 }
 
+/// Every [`ProofLang`], for `mixed_spans_never_panic` to draw from. `fr` stands for the
+/// [`ProofLang::Pack`] languages (and runs the French grammar rules, which need no dictionary).
+fn every_lang() -> Vec<ProofLang> {
+    use ProofLang as L;
+    // Stops compiling when a language is added: add it to the list below too.
+    let _ = |l: L| match l {
+        L::En | L::EnGb | L::EnAu | L::EnCa | L::Pl | L::Bg | L::Pt | L::It | L::Hr | L::Tr | L::Ru | L::Cs | L::Id => (),
+        L::Es | L::EsMx | L::Es419 | L::EsUy | L::Gu | L::Hi | L::De | L::Pack(_) | L::Other => (),
+    };
+    let fr = ProofLang::from_tag(Some("fr"));
+    assert!(matches!(fr, L::Pack(_)), "{fr:?}");
+    vec![
+        L::En,
+        L::EnGb,
+        L::EnAu,
+        L::EnCa,
+        L::Pl,
+        L::Bg,
+        L::Pt,
+        L::It,
+        L::Hr,
+        L::Tr,
+        L::Ru,
+        L::Cs,
+        L::Id,
+        L::Es,
+        L::EsMx,
+        L::Es419,
+        L::EsUy,
+        L::Gu,
+        L::Hi,
+        L::De,
+        fr,
+        L::Other,
+    ]
+}
+
 proptest::proptest! {
     #[test]
-    fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..16), 0..6)) {
-        let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Gu, ProofLang::Hi, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
-        let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
+    fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, proptest::sample::select(every_lang())), 0..6)) {
+        let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), l)).collect();
         for i in check_text(&s, &spans) {
             proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
         }

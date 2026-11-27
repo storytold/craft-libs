@@ -488,11 +488,10 @@ impl Component for TimelineView<'_> {
             return;
         }
         let mut next = target;
-        let pointer = cx.response.hover_pos().unwrap_or_else(|| cx.rect.center());
         let left = cx.flow.span(self.inset(), width).left();
         if let Some(wheel) = cx.take_wheel() {
             // The wheel's own point: over a child (the ruler) the view itself has no hover.
-            let pointer = wheel.at.unwrap_or(pointer);
+            let pointer = wheel.at.unwrap_or_else(|| cx.rect.center());
             let at = next.time_at(pointer.x.max(left), left);
             self.wheel(wheel, &mut next, at, width);
         }

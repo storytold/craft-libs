@@ -1,19 +1,24 @@
 //! Settled memoized views: a settled view adds its last run to the pass in place of running, and runs when one of the
-//! settled rules breaks: the pointer over it, a bound value, inspection record or command state it read, its room, its
+//! settled rules breaks: what pointer sensing gives it, a pointer move it follows, a bound value, inspection record or command state it read, its room, its
 //! environment (theme, density, language), an animation or a repaint asked inside it. Input elsewhere in the window
 //! does not run it.
 
 use crate::values::kit::{AT, INITIAL, Scrub, Seen};
+use craft_behavior::MotionMode;
 use craft_theme::{Contrast, Mode, Size};
 use craft_ui::buttons::Button;
-use craft_ui::choice::{Radio, RadioGroup};
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing, Tracked, bind_tracked};
+use craft_ui::choice::{Checkbox, Radio, RadioGroup};
+use craft_ui::contract::{
+    Bind, CommandSet, MemoProps, MemoView, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Sizing, Tracked, bind_tracked,
+};
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
+use craft_ui::list::{List, ListRow};
 use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, CommandStates, Commands as _};
+use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, last_pass_measuring_runs, trial};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -30,6 +35,8 @@ thread_local! {
     static SEEN: Seen = Seen::default();
     /// The id and rect of the button each view of `Scene` showed when it last ran.
     static BUTTONS: [Cell<(Id, Rect)>; 2] = const { [Cell::new((Id::NULL, Rect::NOTHING)), Cell::new((Id::NULL, Rect::NOTHING))] };
+    /// The rect of each row of the rows view, by key, as its last run built it.
+    static ROW_RECTS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
     /// The buttons of `Shown`, `Beside`, `Published` and `Measured`, as the command scene's views last showed them.
     static COMMAND_BUTTONS: [Cell<Id>; 4] = const { [Cell::new(Id::NULL), Cell::new(Id::NULL), Cell::new(Id::NULL), Cell::new(Id::NULL)] };
 }
@@ -180,6 +187,268 @@ fn hovering_a_settled_view_runs_it_alone() {
     assert!(other > 0, "the view the pointer left runs to show its hover leaving");
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames, vec![]), [0, 0], "once its hover faded, the view settles again");
+}
+
+/// A pointer that moves within one part of a settled view, once its hover has settled, leaves it settled: what
+/// sensing gives the view is the same.
+#[trial]
+fn a_move_within_a_settled_views_part_replays_it() {
+    let scene = Scene::new(false, false);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let over = Scene::button(1).1.center();
+    scene.frame(&mut frames, vec![moved(over)]);
+    scene.settle(&mut frames);
+    for step in 1..=3 {
+        let at = over + Vec2::new(step as f32, 0.0);
+        assert_eq!(scene.frame(&mut frames, vec![moved(at)]), [0, 0], "move {step} within the hovered button replays both views");
+    }
+}
+
+/// A pointer that moves onto another part of a settled view runs that view in the frame it arrives, and only it; the
+/// view settles again once its hover has.
+#[trial]
+fn a_move_onto_another_part_runs_the_view_once() {
+    let scene = Scene::new(false, false);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    scene.frame(&mut frames, vec![moved(Scene::button(0).1.center())]);
+    scene.settle(&mut frames);
+    let [reader, other] = scene.frame(&mut frames, vec![moved(READER.center())]);
+    assert!(reader > 0, "the move from the button onto the scrub runs the view that shows both");
+    assert_eq!(other, 0, "the view beside it stays settled");
+    scene.settle(&mut frames);
+    assert_eq!(scene.frame(&mut frames, vec![]), [0, 0], "once its hover settled, the view replays again");
+}
+
+/// A view that marks a rect as following the pointer.
+#[derive(MemoProps)]
+struct Follower {
+    follows: bool,
+}
+
+fn follower(props: &mut Follower, ui: &mut Ui) {
+    let response = Button::new("Gamma").show(ui).response;
+    BUTTONS.with(|buttons| buttons[0].set((response.id, response.rect)));
+    if props.follows {
+        craft_ui::runtime::pointer::follows_pointer(ui.ctx(), response.rect);
+    }
+}
+
+/// A settled view whose run marked a rect as following the pointer runs on every move within it; one that marked
+/// none replays on the same moves.
+#[trial]
+fn a_view_that_follows_the_pointer_runs_on_every_move() {
+    for follows in [true, false] {
+        let show = |ui: &mut Ui| {
+            in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
+                MemoView::new("follower", Follower { follows }, follower).show(ui);
+            });
+        };
+        let mut frames = Frames::new();
+        frames.idle(30, show);
+        let over = Scene::button(0).1.center();
+        frames.frame(vec![moved(over)], show);
+        frames.idle(30, show);
+        for step in 1..=3 {
+            frames.frame(vec![moved(over + Vec2::new(step as f32, 0.0))], show);
+            let runs = runs_of(&frames.ctx, "Follower");
+            assert_eq!(runs > 0, follows, "move {step}: the view runs exactly when its run follows the pointer ({follows})");
+        }
+    }
+}
+
+/// A press on a part of a settled view runs that view, and only it, and so does its release.
+#[trial]
+fn a_press_and_its_release_run_the_view() {
+    let scene = Scene::new(false, false);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let at = Scene::button(1).1.center();
+    scene.frame(&mut frames, vec![moved(at)]);
+    scene.settle(&mut frames);
+    let [reader, other] = scene.frame(&mut frames, vec![press(at)]);
+    assert!(other > 0 && reader == 0, "the press runs the view under it alone: {reader} {other}");
+    let [reader, other] = scene.frame(&mut frames, vec![release(at)]);
+    assert!(other > 0 && reader == 0, "the release runs it alone: {reader} {other}");
+}
+
+/// A modifier change runs the settled view under the pointer, whose parts sense with the held modifiers, and not the
+/// view beside it; both settle again with the modifier held.
+#[trial]
+fn a_modifier_change_under_the_pointer_runs_the_view() {
+    let scene = Scene::new(false, false);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    scene.frame(&mut frames, vec![moved(Scene::button(1).1.center())]);
+    scene.settle(&mut frames);
+    frames.hold(egui::Modifiers::SHIFT);
+    let [reader, other] = scene.frame(&mut frames, vec![]);
+    assert!(other > 0, "Shift going down runs the view under the pointer");
+    assert_eq!(reader, 0, "the view away from the pointer stays settled");
+    scene.settle(&mut frames);
+    assert_eq!(scene.frame(&mut frames, vec![]), [0, 0], "with Shift held, both views settle again");
+}
+
+/// Frames with motion off: a hover shows and fades in one frame, with no fade that runs its view.
+fn still_frames() -> Frames {
+    let mut frames = Frames::new();
+    frames.root(RootEnv::default().motion(MotionMode::Off));
+    frames
+}
+
+/// A view showing a list of `count` rows, which notes each row's rect as it builds it.
+#[derive(MemoProps)]
+struct Rows {
+    count: usize,
+}
+
+fn rows(props: &mut Rows, ui: &mut Ui) {
+    let keys: Vec<usize> = (0..props.count).collect();
+    let source = craft_behavior::keyed(&keys, |key: &usize| *key);
+    List::new("Rows").show_items(ui, &source, &mut |key, item| {
+        ROW_RECTS.with(|rects| {
+            let mut rects = rects.borrow_mut();
+            if rects.len() <= *key {
+                rects.resize(*key + 1, Rect::NOTHING);
+            }
+            rects[*key] = item.rect;
+        });
+        ListRow::new(format!("Row {key}"))
+    });
+}
+
+/// The rect of the row `key` of the rows view, as its last run built it.
+fn row_rect(key: usize) -> Rect {
+    ROW_RECTS.with(|rects| rects.borrow()[key])
+}
+
+/// The rows view of `count` rows in the scene's room.
+fn show_rows(count: usize) -> impl Fn(&mut Ui) + Copy {
+    move |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
+            MemoView::new("rows", Rows { count }, rows).show(ui);
+        });
+    }
+}
+
+/// The fills painted as rects inside `row` across most of its height: a row's hover fill among them.
+fn fills_in(shapes: &[egui::Shape], row: Rect) -> usize {
+    shapes
+        .iter()
+        .filter(|shape| {
+            matches!(shape, egui::Shape::Rect(rect)
+                if rect.fill.a() > 0 && row.expand(0.5).contains_rect(rect.rect) && rect.rect.height() > row.height() / 2.0)
+        })
+        .count()
+}
+
+/// A pointer moving within one row of a list in a settled view replays the view; a move onto another row runs it
+/// once, and the hover fill moves to that row. A list of 10 rows, and one of 40 that scrolls.
+#[trial]
+fn a_list_in_a_settled_view_runs_only_when_the_pointer_changes_rows() {
+    for count in [10, 40] {
+        let show = show_rows(count);
+        let mut frames = still_frames();
+        frames.idle(30, show);
+        let (first, second) = (row_rect(1), row_rect(2));
+        frames.frame(vec![moved(first.center())], show);
+        frames.idle(30, show);
+        for step in 1..=3 {
+            frames.frame(vec![moved(first.center() + Vec2::new(10.0 * step as f32, 0.0))], show);
+            assert_eq!(runs_of(&frames.ctx, "Rows"), 0, "{count} rows: move {step} within the row replays the view");
+        }
+        let shapes = frames.frame_shapes(show);
+        assert!(fills_in(&shapes, first) > 0, "{count} rows: the row under the pointer shows the hover fill");
+        assert_eq!(fills_in(&shapes, second), 0, "{count} rows: the next row shows none");
+        frames.frame(vec![moved(second.center())], show);
+        assert_eq!(runs_of(&frames.ctx, "Rows"), 1, "{count} rows: the move onto the next row runs the view once");
+        frames.idle(30, show);
+        assert_eq!(runs_of(&frames.ctx, "Rows"), 0, "{count} rows: the view settles again");
+        let shapes = frames.frame_shapes(show);
+        assert!(fills_in(&shapes, second) > 0, "{count} rows: the row the pointer reached shows the hover fill");
+        assert_eq!(fills_in(&shapes, first), 0, "{count} rows: the row it left shows none");
+    }
+}
+
+/// A wheel over the rows of a list in a settled view runs the view, whose list takes the wheel and scrolls.
+#[trial]
+fn a_wheel_over_a_scroll_area_in_a_settled_view_runs_it() {
+    let show = show_rows(40);
+    let mut frames = still_frames();
+    frames.idle(30, show);
+    let before = row_rect(1);
+    frames.frame(vec![moved(before.center())], show);
+    frames.idle(30, show);
+    frames.frame(vec![wheel(-30.0)], show);
+    assert!(runs_of(&frames.ctx, "Rows") > 0, "the wheel runs the view whose list takes it");
+    frames.idle(30, show);
+    assert_ne!(row_rect(1), before, "the rows scrolled");
+}
+
+/// A view showing a check box, whose hover asks for the pointing hand.
+#[derive(MemoProps)]
+struct Checked {}
+
+fn checked(_: &mut Checked, ui: &mut Ui) {
+    let response = Checkbox::new(Bind::given(true)).label("Grid").show(ui).response;
+    BUTTONS.with(|buttons| buttons[0].set((response.id, response.rect)));
+}
+
+/// A settled view replayed under the pointer asks for the cursor its run asked for.
+#[trial]
+fn a_replayed_hovered_view_keeps_its_cursor() {
+    let show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
+            MemoView::new("checked", Checked {}, checked).show(ui);
+        });
+    };
+    let mut frames = still_frames();
+    frames.idle(30, show);
+    let at = Scene::button(0).1.center();
+    frames.frame(vec![moved(at)], show);
+    assert_eq!(frames.cursor_icon(), egui::CursorIcon::PointingHand, "the hovered check box asks for the pointing hand");
+    frames.idle(30, show);
+    frames.frame(vec![moved(at + Vec2::new(1.0, 0.0))], show);
+    assert_eq!(runs_of(&frames.ctx, "Checked"), 0, "the move within the check box replays the view");
+    assert_eq!(frames.cursor_icon(), egui::CursorIcon::PointingHand, "the replay asks for the cursor its run asked for");
+}
+
+/// A view showing a button with a tooltip.
+#[derive(MemoProps)]
+struct Tipped {}
+
+fn tipped(_: &mut Tipped, ui: &mut Ui) {
+    let response = Button::new("Delta").tooltip("Hint").show(ui).response;
+    BUTTONS.with(|buttons| buttons[0].set((response.id, response.rect)));
+}
+
+/// A tooltip shows once the pointer has rested on its button for the delay: the settled view replays while it waits,
+/// runs once at the wake its run asked for, which opens the tooltip's layer, and once more in the next frame, when the
+/// layer, sized in the first, paints the tooltip; then it replays with the tooltip shown.
+#[trial]
+fn a_tooltip_shows_after_its_delay_with_one_run_at_its_wake() {
+    let show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
+            MemoView::new("tipped", Tipped {}, tipped).show(ui);
+        });
+    };
+    let mut frames = still_frames();
+    frames.idle(30, show);
+    frames.frame(vec![moved(Scene::button(0).1.center())], show);
+    frames.idle(2, show);
+    // A second of frames, past the delay.
+    let seen: Vec<(usize, bool)> = (0..60)
+        .map(|_| {
+            frames.frame(vec![], show);
+            (runs_of(&frames.ctx, "Tipped"), painted(&frames, "Hint"))
+        })
+        .collect();
+    let shown = seen.iter().position(|(_, shown)| *shown).expect("the tooltip shows within a second");
+    let ran: Vec<usize> = (0..seen.len()).filter(|&frame| seen[frame].0 > 0).collect();
+    assert!(shown > 0, "the tooltip waits for its delay: {seen:?}");
+    assert_eq!(ran, [shown - 1, shown], "the view runs at the wake and in the frame the tooltip first paints: {seen:?}");
+    assert!(seen[shown..].iter().all(|(_, shown)| *shown), "the tooltip stays shown: {seen:?}");
 }
 
 /// Drags the editor right in steps; returns per frame from the press on the passes, the runs of each view, and whether

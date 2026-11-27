@@ -853,7 +853,7 @@ impl<'a> BezierOverlay<'a> {
                 continue;
             }
             let Some(result) = cx.part_if_declared(item.part()) else { continue };
-            let (press, hover) = (result.press, result.hover_pos);
+            let (press, hover) = (result.press, cx.hover_pos(item.part()));
             pressed |= press.phase.is_press();
             if let Some(at) = hover {
                 let rank = match item.kind {
@@ -916,7 +916,7 @@ impl<'a> BezierOverlay<'a> {
         if matches!(self.tool, BezierTool::AddAnchor | BezierTool::DeleteAnchor)
             && let Some(result) = cx.part_if_declared(EMPTY)
         {
-            let (press, hover) = (result.press, result.hover_pos);
+            let (press, hover) = (result.press, cx.hover_pos(EMPTY));
             // The part covers the canvas background, so it owns the cursor the host tool shows off the paths too.
             if hover.is_some() {
                 let tool = if self.tool == BezierTool::AddAnchor { PathTool::AddAnchor } else { PathTool::DeleteAnchor };
