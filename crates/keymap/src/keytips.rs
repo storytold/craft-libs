@@ -11,6 +11,7 @@ const MAX_LABEL_CHARS: usize = 256;
 /// are reserved or already assigned; the host should keep the control available without a badge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Allocation {
+    /// The assigned letter for each considered label, or `None` when none is free.
     pub letters: Vec<Option<char>>,
     /// Labels after the first 4096 are not considered. Report this if exposing imported catalogs.
     pub omitted: usize,
