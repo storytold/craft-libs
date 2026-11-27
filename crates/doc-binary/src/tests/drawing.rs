@@ -701,9 +701,11 @@ fn a_dib_with_a_large_tail_is_charged_for_its_copy() {
 fn a_primary_property_table_wins_over_a_secondary_one() {
     let table = |typ: u16, fill: u32| rec(3, 1, typ, &[&0x0181u16.to_le_bytes()[..], &fill.to_le_bytes()].concat());
     let fsp = rec(2, 1, officeart::rt::FSP, &[0u8; 8]);
-    let body = [fsp, table(officeart::rt::FOPT, 0x0000_00FF), table(officeart::rt::SECONDARY_FOPT, 0x00FF_0000)].concat();
-    let sp = officeart::shape(&body, &mut usize::MAX.clone());
-    assert_eq!(sp.props.fill_color, Some(Rgb(0xFF, 0, 0)));
+    let (primary, secondary) = (table(officeart::rt::FOPT, 0x0000_00FF), table(officeart::rt::SECONDARY_FOPT, 0x00FF_0000));
+    for body in [[fsp.clone(), primary.clone(), secondary.clone()].concat(), [fsp, secondary, primary].concat()] {
+        let sp = officeart::shape(&body, &mut usize::MAX.clone());
+        assert_eq!(sp.props.fill_color, Some(Rgb(0xFF, 0, 0)));
+    }
 }
 
 /// A secondary property table wins over a tertiary one, even when the tertiary one comes first

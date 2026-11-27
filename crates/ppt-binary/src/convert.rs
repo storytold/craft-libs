@@ -341,7 +341,9 @@ impl<'a> Ctx<'a> {
         let Some(parent) = masters.get(&atom.master_id).cloned() else { return };
         let scheme = if atom.follow_master_scheme { parent.scheme } else { scheme_of(&m.rec).unwrap_or(parent.scheme) };
         let Some(id) = self.alloc() else { return };
-        let drawing = draw::drawing(&m.rec, &mut self.drawing_records);
+        // The master's background is used instead of this one's: it isn't read.
+        let read = if atom.follow_master_background { draw::shapes } else { draw::drawing };
+        let drawing = read(&m.rec, &mut self.drawing_records);
         self.drawings_cut |= drawing.cut;
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), parent.ids[0]];
@@ -445,7 +447,9 @@ impl<'a> Ctx<'a> {
             kinds.iter().find(|(k, _)| *k == kind).map(|(_, id)| *id).or(*first)
         })?;
         let id = SlideId(self.alloc()?);
-        let drawing = draw::drawing(&s.rec, &mut self.drawing_records);
+        // The master's background is used instead of this one's: it isn't read.
+        let read = if atom.follow_master_background { draw::shapes } else { draw::drawing };
+        let drawing = read(&s.rec, &mut self.drawing_records);
         self.drawings_cut |= drawing.cut;
         // The n-th outline block of a text type takes the n-th numbering entry for that type.
         let mut seen: HashMap<u32, usize> = HashMap::new();
