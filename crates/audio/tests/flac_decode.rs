@@ -4,6 +4,7 @@
 //! ffmpeg's encoder writes at every compression level.
 
 use craft_audio::flac::{DecodeError, Decoder, Encoder, EncoderConfig, STREAMINFO_OFFSET, StreamInfo, decode};
+use craft_audio::{AudioError, CodecId, CodecParams, SampleFormat, TrackDecoder};
 use std::process::Command;
 
 fn signal(channels: usize, frames: usize, bits: u32, seed: u32) -> Vec<Vec<i32>> {
@@ -80,16 +81,68 @@ fn frames_decode_one_at_a_time() {
 }
 
 #[test]
+fn track_decoder_uses_streaminfo_layout_and_packet_length() {
+    let source = signal(4, 80, 24, 17);
+    let mut config = EncoderConfig::new(96_000, 4, 24);
+    config.block_size = 32;
+    let mut encoder = Encoder::new(config).expect("encoder");
+    let mut private = encoder.header(&["WAVEFORMATEXTENSIBLE_CHANNEL_MASK=0x603"]);
+    let planes: Vec<&[i32]> = source.iter().map(Vec::as_slice).collect();
+    let mut packets = encoder.encode_frames(&planes).expect("packets");
+    packets.push(encoder.finish());
+    let at = STREAMINFO_OFFSET as usize;
+    private[at..at + 34].copy_from_slice(&encoder.streaminfo());
+
+    let params = CodecParams::new(CodecId::Flac).with_extradata(private).with_sample_rate(48_000).with_channels(4);
+    let mut track = TrackDecoder::new(&params, &[]).expect("native FLAC track");
+    assert_eq!(track.sample_rate(), 96_000);
+    assert_eq!(track.flac_stream_info().expect("FLAC stream info").bits_per_sample, 24);
+    assert_eq!(track.layout().channels(), 4);
+    assert_eq!(track.layout().mask(), Some(0x603));
+    assert_eq!(track.sample_format(), SampleFormat::Int24);
+    assert_eq!(track.frames_per_packet(), None);
+    assert_eq!(track.preroll(), 0);
+
+    let final_packet = packets.last().expect("final packet");
+    let decoded = track.decode(final_packet).expect("independent final frame");
+    assert_eq!(decoded.frames(), 16);
+    for (plane, expected) in decoded.channels.iter().zip(&source) {
+        for (sample, expected) in plane.iter().zip(&expected[64..]) {
+            assert_eq!(*sample, (f64::from(*expected) / 8_388_608.0) as f32);
+        }
+    }
+    assert_eq!(track.decode(&packets[0]).expect("backwards seek").frames(), 32);
+    let truncated = &final_packet[..final_packet.len() - 1];
+    assert_eq!(track.flac_packet_frames(truncated), Some(16));
+    assert!(matches!(track.decode(truncated), Err(AudioError::Malformed(_))));
+    let concealed = track.conceal(Some(truncated)).expect("silence from the intact header");
+    assert_eq!(concealed.frames(), 16);
+    assert_eq!(concealed.peak(), 0.0);
+    track.reset();
+    assert_eq!(track.decode(final_packet).expect("decode after reset"), decoded);
+
+    let mut extra = final_packet.clone();
+    extra.push(0);
+    assert!(matches!(track.decode(&extra), Err(AudioError::Malformed(_))));
+    assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Flac), &[]), Err(AudioError::Malformed(_))));
+    let mut incomplete = params.clone();
+    incomplete.extradata.truncate(at + 33);
+    assert!(matches!(TrackDecoder::new(&incomplete, &[]), Err(AudioError::Malformed(_))));
+}
+
+#[test]
 fn hostile_input_is_an_error_not_a_panic() {
-    let src = signal(2, 6000, 16, 11);
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut and flipped byte.
+    let step = craft_media_testkit::hostile::divisor();
+    let src = signal(2, 3500, 16, 11);
     let file = encode(&src, 44_100, 16, 1152, 5);
-    for n in 0..file.len().min(3000) {
+    for n in (0..file.len().min(3000)).step_by(step) {
         let _ = decode(&file[..n]);
     }
     // A cut file is truncated, not silently shorter.
     assert!(decode(&file[..file.len() - 5]).is_err());
     // Every bit flip in the first frames is caught by a CRC or another check, never a panic.
-    for i in 0..file.len().min(2500) {
+    for i in (0..file.len().min(2500)).step_by(step) {
         for bit in 0..8 {
             let mut c = file.clone();
             c[i] ^= 1 << bit;

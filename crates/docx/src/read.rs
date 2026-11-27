@@ -73,7 +73,7 @@ pub(crate) struct Reader<'p> {
     file_orders: craft_wordmodel::para::FileOrders,
     pub doc: Document,
     pub pc: PropCtx,
-    revs: HashMap<(u8, String, String, Option<String>), u32>,
+    revs: HashMap<(u8, String, String, Option<String>, Option<String>), u32>,
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,
@@ -154,9 +154,11 @@ pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Resul
     read_opened_in(pkg, ChunkState::new(chunks)).map(|(doc, ..)| doc)
 }
 
-/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
-/// graphic work left of that.
-fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
+/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes,
+/// graphic work and XML elements left of that.
+fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize, usize), DocxError> {
+    // The budget is per read, so a package read twice (tests, a Flat OPC conversion) starts over.
+    pkg.reset_budget();
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
     let Some(root) = pkg.xml_strict(&main)? else {
@@ -252,7 +254,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         lenient("numbering", r.read_numbering(&p));
     }
     // Without a stated mode (or settings at all) Word lays a document out as Word 2007 did.
-    r.doc.settings.compat_mode = craft_wordmodel::LEGACY_COMPAT_MODE;
+    // Retain `compat_mode` as `None` when omitted from the source file to preserve XML fidelity on save (#3308).
+    r.doc.settings.compat_mode = None;
     if let Some(p) = part(rt::SETTINGS) {
         lenient("settings", r.read_settings(&p));
     }
@@ -371,11 +374,11 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
-    let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
+    let (left, bytes, graphic, elements) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, pkg.elements_left());
     let mut doc = r.doc;
     doc.skipped_parts.extend(pkg.skipped().iter().cloned());
     doc.ensure_nonempty();
-    Ok((doc, left, bytes, graphic))
+    Ok((doc, left, bytes, graphic, elements))
 }
 
 /// Most move ranges open at once, and most move names tracked, per file.

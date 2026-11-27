@@ -1,0 +1,513 @@
+//! The accounts file: who has signed in and at which deployment.
+//!
+//! No token is in here. Every field is something a user interface shows, or something needed to
+//! find the token in the keychain. See [`crate::store`] for the token itself.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::error::Error;
+
+/// The format this code writes. A reader that does not recognise the number leaves the file alone.
+pub const FORMAT: u32 = 1;
+
+/// The largest accounts file that will be read. A suite account list is a few hundred bytes. A
+/// megabyte is already far past anything legitimate.
+const MAX_BYTES: u64 = 1 << 20;
+
+/// One account, as the suite remembers it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Account {
+    /// The handle for this account inside the suite. It is also the keychain entry's user name.
+    ///
+    /// A digest of `service` and `user` (see [`handle`]). Signing in again as the same person at
+    /// the same deployment therefore lands on the same keychain entry. No stale entry is left
+    /// behind.
+    pub id: String,
+    /// The deployment this account signs in to, as a base URL with no trailing slash.
+    pub service: String,
+    /// The deployment's own identifier for this account: the OIDC subject, never an address.
+    pub user: String,
+    /// What to show a person. Never an identity: two people can share a display name.
+    pub display: String,
+    pub email: Option<String>,
+    /// Unix seconds when this account was first stored here.
+    pub added: i64,
+    /// Unix seconds when an application last used it.
+    pub last_used: i64,
+    /// Whether cloud storage is linked, as recorded by [`crate::NewAccount::linked`] at sign-in.
+    /// For a user interface only; the deployment is the authority and is asked again on each
+    /// start.
+    pub linked: bool,
+    /// Bumped every time this row's content changes: a sign-in that replaces the entry, or (per
+    /// RFC-0025's cross-app lifecycle guarantees) a removal. A caller that read the account before
+    /// one of those passes its generation back on a later write; [`crate::Store::update_token`]
+    /// refuses a write made against a generation that is no longer current, so a refresh started
+    /// before a change completes can never land after it and overwrite something newer.
+    pub generation: u32,
+}
+
+/// What is left behind when an account is removed: the generation it reached, so a re-add or a
+/// stale write can never land before it.
+///
+/// RFC-0025's "Cross-app lifecycle guarantees" (point 2): generations are monotonic across removal
+/// and re-add. Without this, a removed-and-re-added account restarted at generation 0, so a stale
+/// refresh from before the removal passed the generation check against the new session and
+/// replaced its token; a refresh racing a removal could even put a keychain entry back after the
+/// removal deleted it. See [`Located::Tombstoned`] and [`crate::Store::update_token`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tombstone {
+    pub id: String,
+    /// The generation the account reached, bumped once more by the removal itself. A write
+    /// against any generation at or before this one is stale.
+    pub generation: u32,
+}
+
+/// Where [`Accounts::locate`] found (or didn't find) an id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Located<'a> {
+    /// A row is on the list.
+    Active(&'a Account),
+    /// No row, but a tombstone: the account was removed and holds this generation. A write against
+    /// it is stale, never [`crate::Error::Unknown`]; see [`crate::Store::update_token`].
+    Tombstoned(u32),
+    /// Neither. This handle has never been on this list.
+    Unknown,
+}
+
+/// The whole file.
+///
+/// `format` has no `#[serde(default)]` of its own, unlike every other field here. A container-
+/// level default would fill a missing `format` key in from this struct's own `Default` impl,
+/// which answers [`FORMAT`]: a file that never said what format it was would then read as
+/// exactly the format this build understands. Requiring the key keeps a file that never
+/// declared a format from passing as one that did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Accounts {
+    pub format: u32,
+    #[serde(default)]
+    pub accounts: Vec<Account>,
+    /// The account an application should use when it has no reason to prefer another.
+    #[serde(default)]
+    pub active: Option<String>,
+    /// Removed accounts, holding the generation they reached. See [`Tombstone`].
+    #[serde(default)]
+    pub tombstones: Vec<Tombstone>,
+}
+
+impl Default for Accounts {
+    fn default() -> Accounts {
+        Accounts { format: FORMAT, accounts: Vec::new(), active: None, tombstones: Vec::new() }
+    }
+}
+
+impl Accounts {
+    pub fn get(&self, id: &str) -> Option<&Account> {
+        self.accounts.iter().find(|a| a.id == id)
+    }
+
+    /// The generation a tombstone for `id` holds, when there is one.
+    pub fn tombstone_generation(&self, id: &str) -> Option<u32> {
+        self.tombstones.iter().find(|t| t.id == id).map(|t| t.generation)
+    }
+
+    /// Finds `id` as an active row, a tombstone, or neither. The one lookup
+    /// [`crate::Store::update_token`] needs to answer a write with the right error: a stale
+    /// generation against a row that is still there, a stale generation against one that was
+    /// removed, or a handle that was never on this list at all.
+    pub fn locate(&self, id: &str) -> Located<'_> {
+        match self.get(id) {
+            Some(account) => Located::Active(account),
+            None => match self.tombstone_generation(id) {
+                Some(generation) => Located::Tombstoned(generation),
+                None => Located::Unknown,
+            },
+        }
+    }
+
+    /// The active account, when one is named and still on the list.
+    ///
+    /// An `active` naming an account that is gone gives the ordinary answer of `None`. A
+    /// half-finished sign-out on another machine must not stop an application starting.
+    pub fn current(&self) -> Option<&Account> {
+        self.active.as_deref().and_then(|id| self.get(id))
+    }
+
+    /// Adds or replaces an account. The account then becomes the active one.
+    ///
+    /// Clears any tombstone for this id: the account is current again, so nothing should still
+    /// answer a write against it with "removed".
+    ///
+    /// For a sign-in. [`Store::set_active`] is the other caller allowed to change `active`; a
+    /// background refresh never should. See [`Accounts::refresh_in_place`].
+    ///
+    /// [`Store::set_active`]: crate::Store::set_active
+    pub fn put(&mut self, account: Account) {
+        self.tombstones.retain(|t| t.id != account.id);
+        self.active = Some(account.id.clone());
+        match self.accounts.iter_mut().find(|a| a.id == account.id) {
+            Some(existing) => *existing = account,
+            None => self.accounts.push(account),
+        }
+    }
+
+    /// Replaces an active row's content without touching which account is current.
+    ///
+    /// For [`Store::update_token`]: a refresh is maintenance a person never asked for by name. It
+    /// must not steal the selection away from whichever account they actually picked, the way
+    /// [`Accounts::put`] would. Does nothing when `id` no longer names an active row; the caller
+    /// has already confirmed it does, under the same lock, right before calling this.
+    ///
+    /// [`Store::update_token`]: crate::Store::update_token
+    pub fn refresh_in_place(&mut self, id: &str, account: Account) {
+        if let Some(existing) = self.accounts.iter_mut().find(|a| a.id == id) {
+            *existing = account;
+        }
+    }
+
+    /// Drops an account and leaves a tombstone holding its generation, bumped once more by the
+    /// removal itself (RFC-0025 lifecycle guarantee 2). Whoever is left over, if anybody, becomes
+    /// active.
+    ///
+    /// Refuses with [`Error::GenerationExhausted`] when `generation` is already `u32::MAX`.
+    /// Wrapping past it would hand out a small number again. A stale caller's check against that
+    /// small number would then pass. Monotonic generations exist to rule that out.
+    pub fn remove_with_tombstone(&mut self, id: &str, generation: u32) -> Result<(), Error> {
+        let bumped = generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.to_owned()))?;
+        self.accounts.retain(|a| a.id != id);
+        if self.active.as_deref() == Some(id) {
+            self.active = self.accounts.first().map(|a| a.id.clone());
+        }
+        match self.tombstones.iter_mut().find(|t| t.id == id) {
+            Some(existing) => existing.generation = bumped,
+            None => self.tombstones.push(Tombstone { id: id.to_owned(), generation: bumped }),
+        }
+        Ok(())
+    }
+}
+
+/// The handle for an account at a deployment.
+///
+/// A digest, with the address and the subject kept out of it. The digest is stable. One account
+/// therefore stays on one keychain entry however many times somebody signs in. The handle is also
+/// opaque. A credential manager window puts the handle on screen. Nobody's address belongs in that
+/// list.
+pub fn handle(service: &str, user: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(normalise(service).as_bytes());
+    hash.update(b"\n");
+    hash.update(user.as_bytes());
+    let digest = hash.finalize();
+    digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+/// A deployment's base URL with any trailing slashes taken off. One deployment is then one account
+/// however the URL was typed.
+pub fn normalise(service: &str) -> String {
+    service.trim().trim_end_matches('/').to_owned()
+}
+
+/// Plain `http://` on loopback, with a numeric port. The host is exactly `127.0.0.1`, `localhost`
+/// or `[::1]`; a userinfo prefix in front of another host does not count. The same spelling
+/// `craft-update` uses for a local mirror.
+fn loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let Some((host, port)) = authority.rsplit_once(':') else { return false };
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]") && !port.is_empty() && port.parse::<u16>().is_ok()
+}
+
+/// Whether a stored deployment address is one a caller may present a token to.
+///
+/// `https://` is allowed. Plain `http://` is only allowed on loopback, with a numeric port. Empty
+/// is not: there is no deployment to send a token to. A row in `accounts.json` can name any
+/// string; this is the gate that stops a caller sending the keychain token to it.
+pub fn allowed_service_base(service: &str) -> bool {
+    service.starts_with("https://") || loopback_http(service)
+}
+
+/// The checks [`crate::Store::shared`] applies before handing a token back.
+///
+/// The address has to be one a Craft app may dial ([`allowed_service_base`]). The row's `id` has
+/// to still be the handle its own `service` and `user` hash to. The second check is what catches
+/// a row whose `service` was edited in place while its `id` was left alone: the address changes,
+/// but nothing re-derives the handle, so an address check alone would wave it through.
+pub fn validate_target(account: &Account) -> Result<(), String> {
+    if !allowed_service_base(&account.service) {
+        return Err("the stored account's service address is not one a Craft app may send a token to".to_owned());
+    }
+    if handle(&account.service, &account.user) != account.id {
+        return Err("the stored account's service or user no longer matches its handle".to_owned());
+    }
+    Ok(())
+}
+
+/// Just the file's name, for an error a log might show.
+///
+/// The full path sits under a user's profile folder and names them. [`Store::shared`] logs a
+/// read failure at `warn`. Every message built here therefore says only the file, never the
+/// path it lived under. The name alone is enough to say which file failed and why.
+///
+/// [`Store::shared`]: crate::Store::shared
+fn named(path: &Path) -> &str {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("the accounts file")
+}
+
+/// Reads the file. A missing file is an empty list. That is what "nobody has signed in" looks like.
+///
+/// Accepts only a file that explicitly declares this exact [`FORMAT`]. `format` carries no
+/// `#[serde(default)]` (see [`Accounts`]). A file with no `format` key therefore fails to parse
+/// here. It never quietly reads as [`FORMAT`] through [`Accounts`]'s own `Default` impl. A file
+/// that spells out `"format": 0` parses fine. The check just below rejects it there, the same as
+/// any other value [`FORMAT`] does not name. Without both checks, an unrelated JSON file that
+/// happens to parse into this permissive shape (every other field here defaults) could be read
+/// as an empty account list and then overwritten outright by the next sign-in, a format this
+/// reader never actually established.
+pub fn read(path: &Path) -> Result<Accounts, Error> {
+    let bytes = match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > MAX_BYTES => {
+            return Err(Error::Malformed(format!("{} is {} bytes, too large to be an account list", named(path), meta.len())));
+        }
+        Ok(_) => std::fs::read(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Accounts::default()),
+        Err(e) => return Err(Error::Io(format!("couldn't read {} ({e})", named(path)))),
+    };
+    let bytes = bytes.map_err(|e| Error::Io(format!("couldn't read {} ({e})", named(path))))?;
+    let parsed: Accounts = serde_json::from_slice(&bytes).map_err(|e| Error::Malformed(format!("{} didn't parse ({e})", named(path))))?;
+    if parsed.format != FORMAT {
+        return Err(Error::Malformed(format!(
+            "{} declares format {}. This build writes and reads only format {FORMAT}. A missing or unrecognised marker is never read as an account list.",
+            named(path),
+            parsed.format
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Writes the file through a temporary file and a rename. The rename is atomic: a reader never
+/// sees a half-written file, only the previous write or this one, never a mix of both.
+///
+/// That atomicity is not durability. The temporary file is flushed to disk with `sync_all` before
+/// the rename. The rename itself then never promotes data the disk has not actually taken yet.
+/// Without that flush, power loss right after the rename could still leave an empty or truncated
+/// file on a filesystem that reorders writes behind a rename. [`read`] would then answer
+/// [`Error::Malformed`] forever. Every mutation here reads the file first. There would be
+/// nothing left to repair it with.
+///
+/// Readable by this user alone: mode `0600` on Unix, and on Windows an access list of this user and
+/// SYSTEM only from the moment the file exists, whatever folder a portable install or
+/// [`crate::paths::ENV_VAR`] chose. On Windows the access list is protected, so a change to the
+/// folder's list does not reach the file. The file holds no token. It does
+/// say who is signed in. That is nobody else's business.
+///
+/// Refuses a list that would serialize past `MAX_BYTES`, before any file is touched. [`read`]
+/// rejects a file that large; writing one anyway would succeed here and then make every later
+/// read of this list fail, including the reads every other mutation needs before it can repair
+/// anything. An oversized `display` or `email` on one account is the realistic way to reach this,
+/// not the ordinary handful of accounts a suite ever holds.
+pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
+    let dir = path.parent().ok_or_else(|| Error::Io(format!("{} has no parent folder", path.display())))?;
+    let json = serde_json::to_vec_pretty(accounts).map_err(|e| Error::Malformed(e.to_string()))?;
+    if json.len() as u64 > MAX_BYTES {
+        return Err(Error::Malformed(format!(
+            "the account list would be {} bytes, too large to write; {} would reject it unread",
+            json.len(),
+            path.display()
+        )));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("couldn't create {} ({e})", dir.display())))?;
+
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let pid = std::process::id();
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("accounts");
+    let tmp_name = format!(".{file_name}.{stamp}.{pid}.tmp");
+    #[cfg(not(windows))]
+    let tmp = dir.join(&tmp_name);
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
+        file.write_all(&json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
+        file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
+    }
+    #[cfg(windows)]
+    let tmp = private_copy(path, dir, &tmp_name, &json)?;
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let mut file =
+            OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
+        file.write_all(&json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
+        file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
+    }
+    std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))?;
+    // The flush above persisted the file's bytes. The rename changed a directory entry, and that
+    // entry has its own durability: on Linux, power loss after this function returned could
+    // otherwise resurrect the older list, losing a tombstone a discard already reported written.
+    // Directories open and sync on unix only; elsewhere the rename's own guarantees stand alone.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            let dir = std::fs::File::open(parent).map_err(|e| Error::Io(format!("couldn't open {} ({e})", parent.display())))?;
+            dir.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", parent.display())))?;
+        }
+    }
+    Ok(())
+}
+
+/// Write `json` to a new file beside the list at `path`, in its folder `dir`, that only this user
+/// and SYSTEM can open, and return its path for [`write`] to rename into place.
+///
+/// A new file on Windows takes its folder's access list, and a portable install or
+/// [`crate::paths::ENV_VAR`] can name a folder that lets every local user read what is created in
+/// it. Every copy is created by `owner_only::create_private_file`, which gives the file a protected
+/// access list of this user and SYSTEM only in the call that creates it. The rename keeps that
+/// list, and a later change to the folder's list does not reach it. That call runs PowerShell, so
+/// [`prepare`] creates an empty copy before the accounts lock is taken, and this function writes
+/// the list into it. Without a copy this thread prepared (a direct call, or a failed preparation),
+/// the copy is created here, named `tmp_name`.
+#[cfg(windows)]
+fn private_copy(path: &Path, dir: &Path, tmp_name: &str, json: &[u8]) -> Result<std::path::PathBuf, Error> {
+    use std::io::Write;
+    if let Some((copy, mut file)) = take_prepared(path) {
+        match file.write_all(json).and_then(|()| file.sync_all()) {
+            Ok(()) => return Ok(copy),
+            Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(&copy);
+                log::warn!("couldn't write a prepared copy of the account list ({e}); a new one is created");
+            }
+        }
+    }
+    let tmp = dir.join(tmp_name);
+    user_sid()
+        .and_then(|me| craft_platform::owner_only::create_private_file(&tmp, &me, json))
+        .map_err(|e| Error::Io(format!("couldn't create {} for its owner only ({e})", tmp.display())))?;
+    Ok(tmp)
+}
+
+/// Copies made by [`prepare`] that wait for [`private_copy`]: the thread that made the copy, the
+/// list it is for, the copy, and the copy held open without delete sharing.
+#[cfg(windows)]
+type Prepared = Vec<(std::thread::ThreadId, std::path::PathBuf, std::path::PathBuf, std::fs::File)>;
+
+/// The copy one [`prepare`] call made. Dropping it closes and removes the copy if no write took it.
+#[cfg(windows)]
+pub(crate) struct PreparedCopy(Option<std::path::PathBuf>);
+
+#[cfg(windows)]
+impl Drop for PreparedCopy {
+    fn drop(&mut self) {
+        let Some(copy) = self.0.take() else { return };
+        let mut waiting = prepared();
+        let Some(at) = waiting.iter().position(|(_, _, waiting, _)| *waiting == copy) else { return };
+        let (_, _, copy, file) = waiting.swap_remove(at);
+        drop(waiting);
+        drop(file);
+        let _ = std::fs::remove_file(&copy);
+    }
+}
+
+/// The copies waiting for [`private_copy`].
+#[cfg(windows)]
+fn prepared() -> std::sync::MutexGuard<'static, Prepared> {
+    static PREPARED: std::sync::Mutex<Prepared> = std::sync::Mutex::new(Vec::new());
+    PREPARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The copy of the list at `path` that this thread prepared, with its open handle, removed from the
+/// waiting list. A copy another thread prepared is left for that thread's write.
+#[cfg(windows)]
+fn take_prepared(path: &Path) -> Option<(std::path::PathBuf, std::fs::File)> {
+    let me = std::thread::current().id();
+    let mut prepared = prepared();
+    let at = prepared.iter().position(|(thread, list, ..)| *thread == me && list == path)?;
+    let (_, _, copy, file) = prepared.swap_remove(at);
+    Some((copy, file))
+}
+
+/// This user's SID, read once per process (`whoami` is a process start).
+#[cfg(windows)]
+fn user_sid() -> std::io::Result<String> {
+    static SID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(sid) = SID.get() {
+        return Ok(sid.clone());
+    }
+    let sid = craft_platform::owner_only::current_user_sid()?;
+    Ok(SID.get_or_init(|| sid).clone())
+}
+
+/// Before the accounts lock is taken, create an empty copy of the list at `path` for its owner only
+/// and keep it open for [`private_copy`], so that the PowerShell run it needs doesn't hold the lock
+/// other processes wait on. The caller keeps the returned [`PreparedCopy`] until its change under
+/// the lock is done; a change that writes nothing then has its copy removed. A failure here is left
+/// for [`write`] to handle.
+///
+/// The copy is opened without delete sharing and then checked, so no other account can remove,
+/// rename or replace it between the check and the write. A copy that fails the check is removed.
+/// Empty copies beside the list that are at least a minute old, which ended processes left, are
+/// removed first; a copy that a running process holds open can't be, since removing it needs
+/// delete sharing.
+#[cfg(windows)]
+pub(crate) fn prepare(path: &Path) -> PreparedCopy {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use craft_platform::owner_only;
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: no `FILE_SHARE_DELETE`.
+    const SHARE_NO_DELETE: u32 = 0x1 | 0x2;
+    /// How old an empty copy that no process holds must be before it is removed. Another process
+    /// that is preparing its copy has it closed for a moment, between its creation and the open.
+    const LEFT_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return PreparedCopy(None) };
+    let Ok(me) = user_sid() else { return PreparedCopy(None) };
+    let _ = std::fs::create_dir_all(dir);
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let left = entry.file_name();
+        let left = left.to_string_lossy();
+        if left.starts_with(&format!(".{name}."))
+            && left.ends_with(".prepared.tmp")
+            && entry.metadata().is_ok_and(|meta| {
+                meta.is_file() && meta.len() == 0 && meta.modified().ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age >= LEFT_AFTER)
+            })
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let copy = dir.join(format!(".{name}.{}.{}.prepared.tmp", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    if let Err(e) = owner_only::create_private_file(&copy, &me, b"") {
+        log::warn!("couldn't prepare a copy of the account list for its owner only ({e})");
+        return PreparedCopy(None);
+    }
+    let checked = std::fs::OpenOptions::new().write(true).share_mode(SHARE_NO_DELETE).open(&copy).and_then(|file| {
+        match owner_only::foreign_access(&owner_only::sddl_of(&copy)?, &me) {
+            None => Ok(file),
+            Some(problem) => Err(std::io::Error::other(problem)),
+        }
+    });
+    match checked {
+        Ok(file) => {
+            prepared().push((std::thread::current().id(), path.to_path_buf(), copy.clone(), file));
+            PreparedCopy(Some(copy))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&copy);
+            log::warn!("a prepared copy of the account list is not this user's alone ({e}); it was removed");
+            PreparedCopy(None)
+        }
+    }
+}

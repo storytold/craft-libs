@@ -158,3 +158,29 @@ fn own_picture_fill_keeps_image() {
     assert_eq!((float.wrap, float.x, float.y), (Wrap::InFrontOfText, 72.0, 100.0));
     assert_eq!(doc.media[media].as_slice(), BLUE_PNG);
 }
+
+#[test]
+fn nested_picture_soft_edges_survive_repeated_saves() {
+    use std::io::Read;
+
+    for (input_radius, expected_radius) in [(76_200, Some(76_200)), (0, None), (-1, None), (i64::MAX, Some(1_270_000))] {
+        let effect = format!(r#"<a:effectLst><a:softEdge rad="{input_radius}"/></a:effectLst></pic:spPr>"#);
+        let mut bytes = package(&INLINE_XML.replace("</pic:spPr>", &effect));
+        for _ in 0..2 {
+            let doc = craft_docx::read(&bytes).unwrap();
+            check_box(&doc);
+            bytes = craft_docx::write(&doc).unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+            let mut xml = String::new();
+            zip.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+            // The text box's DrawingML and VML fallback can both carry the same picture.
+            let mut effects = xml.split("<a:softEdge ").skip(1).peekable();
+            assert_eq!(effects.peek().is_some(), expected_radius.is_some(), "{input_radius}");
+            if let Some(radius) = expected_radius {
+                let attr = format!(r#"rad="{radius}""#);
+                assert!(effects.all(|e| e.starts_with(&attr)), "{xml}");
+            }
+        }
+        check_box(&craft_docx::read(&bytes).unwrap());
+    }
+}

@@ -69,7 +69,15 @@ const SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" mc:Ignorable="w14 w15"><w:zoom w:percent="120"/><w:removePersonalInformation/><w:removeDateAndTime/><w:proofState w:spelling="clean" w:grammar="clean"/><w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataSource r:id="rId9"/></w:mailMerge><w:trackRevisions/><w:defaultTabStop w:val="708"/><w:hyphenationZone w:val="425"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="enableOpenTypeFeatures" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/></w:compat><w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars><w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids><m:mathPr><m:mathFont m:val="Cambria Math"/><m:smallFrac m:val="0"/></m:mathPr><w:themeFontLang w:val="pl-PL"/><w:decimalSymbol w:val=","/><w:listSeparator w:val=";"/><w14:docId w14:val="1A2B3C4D"/></w:settings>"#;
 
 fn with_settings(settings: &str) -> Vec<u8> {
-    package("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &[("rId1", &format!("{REL}/settings"), "settings.xml")], &[], &[("word/settings.xml", settings)])
+    let sources = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="{REL}/mailMergeSource" Target="file:///__wordcraft_missing_source__/letters.xlsx" TargetMode="External"/></Relationships>"#
+    );
+    package(
+        "<w:p><w:r><w:t>Text</w:t></w:r></w:p>",
+        &[("rId1", &format!("{REL}/settings"), "settings.xml")],
+        &[],
+        &[("word/settings.xml", settings), ("word/_rels/settings.xml.rels", &sources)],
+    )
 }
 
 fn pos(s: &str, needle: &str) -> usize {
@@ -83,7 +91,8 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     doc.settings.track_changes = false;
     let files = save(&doc);
     let s = text(&files, "word/settings.xml");
-    // Kept byte for byte: everything the model doesn't hold, the original root and zoom.
+    // Unmodelled children and the original root are kept byte for byte. The regenerated zoom
+    // still has its original 120 percent value when the model has not changed it.
     for kept in [
         r#"<w:zoom w:percent="120"/>"#,
         r#"<w:proofState w:spelling="clean" w:grammar="clean"/>"#,
@@ -100,11 +109,12 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     ] {
         assert!(s.contains(kept), "{kept} lost: {s}");
     }
-    // Owned: Track Changes was turned off; one compatibility mode; the mail merge source (a
-    // relationship that isn't carried) is dropped rather than left dangling.
+    // Owned: Track Changes was turned off; one compatibility mode. Mail merge now carries its
+    // source with newly allocated relationship IDs rather than leaving dangling references.
     assert!(!s.contains("trackRevisions"), "{s}");
     assert_eq!(s.matches("compatibilityMode").count(), 1, "{s}");
-    assert!(!s.contains("mailMerge") && !s.contains("rId9"), "{s}");
+    assert!(s.contains("mailMerge"), "{s}");
+    assert!(text(&files, "word/_rels/settings.xml.rels").contains("file:///__wordcraft_missing_source__/letters.xlsx"));
     // The privacy options are the model's (#1062): written once each, and gone when turned off.
     assert_eq!(s.matches("removePersonalInformation").count(), 1, "{s}");
     assert_eq!(s.matches("removeDateAndTime").count(), 1, "{s}");
@@ -124,6 +134,37 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     // A second generation is identical.
     let again = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert_eq!(text(&save(&again), "word/settings.xml"), s);
+}
+
+#[test]
+fn changed_zoom_survives_merged_settings_and_reads_back_as_page_width() {
+    let old_zoom = r#"<w:zoom w:percent="120"/>"#;
+    let updated_zoom = r#"<w:zoom w:val="bestFit" w:percent="145"/>"#;
+    for original in [SETTINGS.to_string(), SETTINGS.replace(old_zoom, "")] {
+        let mut doc = craft_docx::read(&with_settings(&original)).unwrap();
+        assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+        doc.settings.zoom = Some(craft_wordmodel::Zoom { percent: 145, fit: Some(craft_wordmodel::ZoomFit::PageWidth) });
+        let bytes = craft_docx::write(&doc).unwrap();
+        let settings = text(&unzip(&bytes), "word/settings.xml");
+        assert_eq!(settings.matches("<w:zoom ").count(), 1, "{settings}");
+        assert!(settings.contains(updated_zoom), "{settings}");
+        // The retained root and unrelated child bytes still belong to the original file.
+        let root_end = original.find("><w:").unwrap() + 1;
+        assert!(settings.starts_with(&original[..root_end]), "{settings}");
+        for kept in [
+            r#"<w:proofState w:spelling="clean" w:grammar="clean"/>"#,
+            r#"<w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars>"#,
+            r#"<w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids>"#,
+        ] {
+            assert!(settings.contains(kept), "{kept} lost: {settings}");
+        }
+        assert!(pos(&settings, "<w:zoom ") < pos(&settings, "<w:proofState"));
+        let again = craft_docx::read(&bytes).unwrap();
+        let zoom = again.settings.zoom.unwrap();
+        assert_eq!(zoom.percent, 145);
+        assert!(matches!(zoom.fit, Some(craft_wordmodel::ZoomFit::PageWidth)));
+        assert_eq!(text(&save(&again), "word/settings.xml"), settings);
+    }
 }
 
 #[test]
@@ -162,4 +203,84 @@ fn do_not_track_moves_round_trips() {
     let s = text(&save(&doc), "word/settings.xml");
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
+}
+
+#[test]
+fn cleared_compatibility_mode_removes_it_from_merged_settings() {
+    let mut doc = craft_docx::read(&with_settings(SETTINGS)).unwrap();
+    assert_eq!(doc.settings.compat_mode, Some(15));
+    assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+
+    // Case 1: compat_mode is set to None, and no other compat switch is enabled.
+    doc.settings.compat_mode = None;
+    let files = save(&doc);
+    let s = text(&files, "word/settings.xml");
+    assert!(!s.contains("compatibilityMode"), "expected mode removed: {s}");
+    assert!(s.contains("<w:compat>"), "expected w:compat preserved for unowned settings: {s}");
+    assert!(s.contains("overrideTableStyleFontSizeAndJustification"), "{s}");
+    assert!(s.contains("enableOpenTypeFeatures"), "{s}");
+
+    let reopened = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.settings.compat_mode, None);
+
+    // Case 2: compat_mode is set to None, but another switch is enabled.
+    doc.settings.do_not_expand_shift_return = true;
+    let files2 = save(&doc);
+    let s2 = text(&files2, "word/settings.xml");
+    assert!(!s2.contains("compatibilityMode"), "expected mode removed: {s2}");
+    assert!(s2.contains("<w:compat>"), "{s2}");
+    assert!(s2.contains("<w:doNotExpandShiftReturn/>"), "expected switch preserved: {s2}");
+    assert!(s2.contains("overrideTableStyleFontSizeAndJustification"), "{s2}");
+    assert!(s2.contains("enableOpenTypeFeatures"), "{s2}");
+
+    let reopened2 = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    assert_eq!(reopened2.settings.compat_mode, None);
+    assert!(reopened2.settings.do_not_expand_shift_return);
+}
+
+/// Hide spelling errors and Hide grammar errors in this document only (`w:hideSpellingErrors`,
+/// `w:hideGrammaticalErrors`) are read, written once each (before `w:proofState` in a merged
+/// part), written in a generated part, and left out when they are turned off.
+#[test]
+fn hidden_proofing_errors_round_trip() {
+    let original = SETTINGS.replace("<w:proofState", r#"<w:hideSpellingErrors/><w:hideGrammaticalErrors w:val="1"/><w:proofState"#);
+    let mut doc = craft_docx::read(&with_settings(&original)).unwrap();
+    assert!(doc.settings.hide_spelling_errors && doc.settings.hide_grammar_errors);
+    let s = text(&save(&doc), "word/settings.xml");
+    assert_eq!(s.matches("hideSpellingErrors").count(), 1, "{s}");
+    assert_eq!(s.matches("hideGrammaticalErrors").count(), 1, "{s}");
+    assert!(pos(&s, "<w:hideSpellingErrors/>") < pos(&s, "<w:hideGrammaticalErrors/>"));
+    assert!(pos(&s, "<w:hideGrammaticalErrors/>") < pos(&s, "<w:proofState"), "{s}");
+    assert!(s.contains("ClauseSet"), "a merged part: {s}");
+    doc.settings.hide_spelling_errors = false;
+    doc.settings.hide_grammar_errors = false;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(!s.contains("hideSpellingErrors") && !s.contains("hideGrammaticalErrors"), "{s}");
+
+    // Turned on in a part that lacks them: inserted once each, before `w:proofState`.
+    let mut doc = craft_docx::read(&with_settings(SETTINGS)).unwrap();
+    assert!(!doc.settings.hide_spelling_errors && !doc.settings.hide_grammar_errors);
+    doc.settings.hide_spelling_errors = true;
+    doc.settings.hide_grammar_errors = true;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert_eq!(s.matches("hideSpellingErrors").count(), 1, "{s}");
+    assert_eq!(s.matches("hideGrammaticalErrors").count(), 1, "{s}");
+    assert!(pos(&s, "removeDateAndTime") < pos(&s, "<w:hideSpellingErrors/>"), "{s}");
+    assert!(pos(&s, "<w:hideGrammaticalErrors/>") < pos(&s, "<w:proofState"), "{s}");
+
+    // `w:val="false"` and `w:val="0"` show them.
+    let off = SETTINGS.replace("<w:proofState", r#"<w:hideSpellingErrors w:val="false"/><w:hideGrammaticalErrors w:val="0"/><w:proofState"#);
+    let read = craft_docx::read(&with_settings(&off)).unwrap();
+    assert!(!read.settings.hide_spelling_errors && !read.settings.hide_grammar_errors);
+    let s = text(&save(&read), "word/settings.xml");
+    assert!(!s.contains("hideSpellingErrors") && !s.contains("hideGrammaticalErrors"), "{s}");
+
+    // A document of our own: absent by default, written when on, and read back.
+    let mut doc = craft_wordmodel::Document::new();
+    assert!(!text(&save(&doc), "word/settings.xml").contains("hideSpellingErrors"));
+    doc.settings.hide_grammar_errors = true;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(s.contains("<w:hideGrammaticalErrors/>") && !s.contains("hideSpellingErrors"), "{s}");
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    assert!(back.settings.hide_grammar_errors && !back.settings.hide_spelling_errors);
 }
