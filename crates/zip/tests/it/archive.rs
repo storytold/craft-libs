@@ -340,3 +340,31 @@ fn raw_bytes_with_traversal_and_invalid_utf8_are_flagged() {
     assert_eq!(seekable.entry_sizes(0).unwrap(), None);
     assert_eq!(seekable.read_index(0, 10).unwrap(), None);
 }
+
+#[test]
+fn virtual_names_strip_a_leading_separator_and_still_refuse_traversal() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("/docProps/core.xml", &b"core"[..]), ("../evil.xml", b"evil"), ("C:/drive.xml", b"drive"), ("/", b"")] {
+        zip.start_file(name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+
+    // The named API stays closed to a leading separator; the virtual one reads it without it.
+    assert_eq!(archive.entry_name(0).unwrap(), None);
+    assert_eq!(archive.read("/docProps/core.xml", 100).unwrap(), None);
+    assert_eq!(archive.virtual_entry_name(0).unwrap().as_deref(), Some("docProps/core.xml"));
+    assert_eq!(archive.virtual_entry_size(0).unwrap(), Some(4));
+    assert_eq!(archive.read_virtual_index(0, 100).unwrap().as_deref(), Some(&b"core"[..]));
+
+    // Traversal, drive prefixes and an empty name stay unreadable either way.
+    for index in 1..archive.len() {
+        assert_eq!(archive.virtual_entry_name(index).unwrap(), None, "entry {index}");
+        assert_eq!(archive.virtual_entry_size(index).unwrap(), None, "entry {index}");
+        assert_eq!(archive.read_virtual_index(index, 100).unwrap(), None, "entry {index}");
+    }
+}

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
-use crate::entry::{has_traversal_component, has_traversal_component_bytes};
+use crate::entry::{has_traversal_component, has_traversal_component_bytes, sanitize_path};
 use crate::preflight::{ReadError, read_entry};
 use crate::{Budget, Error, check_entry_count};
 
@@ -115,6 +115,34 @@ impl<'a> Archive<'a> {
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
         let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
         Ok(Some(name.into_owned()))
+    }
+
+    /// The name at `index` in a virtual namespace, for a format whose entry names are never
+    /// joined to a filesystem path (OPC part names, for one): leading `/` and `\` removed, so a
+    /// legacy writer's `/docProps/core.xml` is `docProps/core.xml`. Names that still contain
+    /// traversal components (`..`, a drive prefix, a NUL) after that, and names that are not
+    /// UTF-8, return `None`. A caller that extracts entries to disk uses [`Self::entry_name`].
+    pub fn virtual_entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        let raw = file.name_raw();
+        let start = raw.iter().position(|b| *b != b'/' && *b != b'\\').unwrap_or(raw.len());
+        if raw[start..].is_empty() || has_traversal_component_bytes(&raw[start..]) {
+            return Ok(None);
+        }
+        let Ok(name) = file.name() else { return Ok(None) };
+        Ok(sanitize_path(&name).map(str::to_string))
+    }
+
+    /// The size the entry at `index` declares, when it has a [`Self::virtual_entry_name`].
+    pub fn virtual_entry_size(&mut self, index: usize) -> Result<Option<u64>, Error> {
+        if self.virtual_entry_name(index)?.is_none() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        Ok(Some(file.size()))
     }
 
     /// Whether the entry at `index` is a directory according to ZIP filename conventions.
@@ -264,15 +292,29 @@ impl<'a> Archive<'a> {
         self.read_index_named(index, &name, max)
     }
 
+    /// Read the entry at `index` under the same size, checksum and budget rules as [`Self::read`],
+    /// when it has a [`Self::virtual_entry_name`]; `None` otherwise.
+    pub fn read_virtual_index(&mut self, index: usize, max: u64) -> Result<Option<Vec<u8>>, Error> {
+        let Some(name) = self.virtual_entry_name(index)? else {
+            return Ok(None);
+        };
+        self.read_at(index, &name, max).map(Some)
+    }
+
     fn read_index_named(&mut self, index: usize, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         if has_traversal_component(name) {
             return Ok(None);
         }
+        self.read_at(index, name, max).map(Some)
+    }
+
+    /// The entry at `index`, whose name the caller has already checked; `name` is for errors.
+    fn read_at(&mut self, index: usize, name: &str, max: u64) -> Result<Vec<u8>, Error> {
         let entry = |msg: String| Error::Entry { name: name.to_string(), msg };
         let f = self.zip.by_index(index).map_err(|e| entry(e.to_string()))?;
         let declared = f.size();
         match read_entry(f, declared, max, &mut self.budget) {
-            Ok(data) => Ok(Some(data)),
+            Ok(data) => Ok(data),
             Err(ReadError::DeclaredTooLarge { limit, .. }) | Err(ReadError::Overrun { limit }) => {
                 Err(Error::EntryTooLarge { name: name.to_string(), limit })
             }
