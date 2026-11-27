@@ -317,6 +317,25 @@ fn alt_click_steps_a_slot_and_a_modified_click_is_never_a_double_click() {
     assert_eq!(rig.doubles.get(), 1, "two plain clicks are a double click");
 }
 
+/// The primary button going down or up at `pos` with `modifiers` in the event itself.
+fn primary_with(pos: Pos2, pressed: bool, modifiers: Modifiers) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers }
+}
+
+/// A quick Alt-click whose Alt is up again before the frame ends still steps the slot: the click reads the modifiers
+/// of its release, not the ones held when the frame runs.
+#[trial]
+fn an_alt_click_whose_alt_goes_up_in_the_same_frame_steps_the_slot() {
+    let mut rig = rig(true);
+    let at = button(&rig).center();
+    // Nothing is held when the frame runs; the press and the release carry Alt.
+    rig.fixture.hold(Modifiers::NONE);
+    rig.fixture.frame(vec![moved(at), primary_with(at, true, Modifiers::ALT), primary_with(at, false, Modifiers::ALT)]);
+    rig.fixture.idle(2);
+    assert_eq!(*rig.selected.borrow(), [REDO], "the Alt-click picks the next tool, not the shown one");
+    assert!(rig.fixture.by_role(Role::MENU).is_empty(), "an Alt-click opens no flyout");
+}
+
 /// The name of the flyout's tear-off bar.
 const TEAR_OFF: &str = "Tear Off Group";
 

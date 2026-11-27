@@ -55,6 +55,11 @@ bitflags! {
         /// it that senses a drag, with its start. Released within slop it is the shape's click. Declared with `CLICK`,
         /// without `DRAG`.
         const PASSES_DRAG = 131072;
+        /// The vertical wheel share, taken only while the component holds key focus or a press armed it, in any wheel
+        /// scope: a control whose wheel steps what focus picks rather than what the pointer is over (the focused thumb
+        /// of a range). Every other wheel bit the shape senses waits for focus with it. A control that senses no wheel
+        /// bit takes no wheel at all, so the wheel over it scrolls the region around it.
+        const WHEEL_Y_FOCUSED = 262144;
     }
 }
 
@@ -63,7 +68,12 @@ impl Sense {
     pub const PRESS: Sense = Sense::CLICK.union(Sense::DRAG);
 
     /// The bits that make a shape register a wheel taker.
-    pub const WHEELS: Sense = Sense::WHEEL.union(Sense::WHEEL_X).union(Sense::WHEEL_Y).union(Sense::WHEEL_ZOOM).union(Sense::WHEEL_ZOOMS_VIEW);
+    pub const WHEELS: Sense = Sense::WHEEL
+        .union(Sense::WHEEL_X)
+        .union(Sense::WHEEL_Y)
+        .union(Sense::WHEEL_ZOOM)
+        .union(Sense::WHEEL_ZOOMS_VIEW)
+        .union(Sense::WHEEL_Y_FOCUSED);
 
     /// Whether a press can start on a shape with this sense.
     pub const fn takes_press(self) -> bool {

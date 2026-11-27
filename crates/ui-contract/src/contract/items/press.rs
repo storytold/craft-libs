@@ -58,6 +58,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if layout.mirrors() && rtl { flow.to_physical(Rect::from_min_size(at, Vec2::ZERO)).min } else { at }
         };
         let mods_now = crate::runtime::pointer::frame_raw(&ctx).mods;
+        // What a click decides and reports reads the modifiers of its release, which a quick click can let go of in the
+        // same frame.
+        let click_mods = crate::runtime::pointer::frame_raw(&ctx).pick_mods;
         // A click on a row the collection does not take (a caption, a disabled row) is no pick: the layers around the
         // collection (a dropdown's list) stay open.
         if cx.core.activation.as_ref().is_some_and(|activation| !activation.by_key)
@@ -233,7 +236,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
         {
             // A modified click is a command on the thumbnail (load as selection, and so on), not a pick.
-            let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
+            let mods = click_mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
                     self.click_pick(comp, at, false, false, mods);
@@ -248,7 +251,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && click
                     && let Some(at) = self.index_of(&key)
                 {
-                    self.click_pick(comp, at, false, false, mods_now);
+                    self.click_pick(comp, at, false, false, click_mods);
                 }
                 if click
                     && props.menu_on_click
@@ -276,7 +279,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && click
                     && self.index_of(&key).is_some()
                 {
-                    self.events.push(CollectionEvent::CommandClick { key, mods: mods_now });
+                    self.events.push(CollectionEvent::CommandClick { key, mods: click_mods });
                 }
                 // The press machine makes a middle release a click only for a collection that senses `MIDDLE_CLICK`.
                 if click
@@ -299,9 +302,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && let Some(at) = self.index_of(&key)
                 {
                     if Self::select_mode(comp) == SelectMode::Single {
-                        self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
+                        self.change_by(SelectionChange::Clear, PickBy::Pointer(click_mods));
                     } else {
-                        self.click_pick(comp, at, false, false, mods_now);
+                        self.click_pick(comp, at, false, false, click_mods);
                     }
                 }
             }
@@ -343,7 +346,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let column = if Self::selects_cells(comp) { layout.column_at(local(pos), offset) } else { None };
                 match column {
                     Some(column) => self.cell_press(comp, layout, at, column, false, false),
-                    None => self.pick_by(comp, at, false, false, PickBy::Pointer(released.mods)),
+                    None => self.pick_by(comp, at, false, false, PickBy::Pointer(released.pick_mods)),
                 }
             }
             self.move_lead(at, LeadSource::Pointer);

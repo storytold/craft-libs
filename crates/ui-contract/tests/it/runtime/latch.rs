@@ -156,3 +156,20 @@ fn a_latch_change_adds_no_pass() {
     assert_eq!(held, steady);
     assert_eq!(released, steady, "releasing runs no extra pass");
 }
+
+#[trial]
+fn a_click_reads_the_modifiers_of_its_release() {
+    let rig = Rig::new();
+    let mut frames = Frames::new();
+    frames.idle(3, |ui| rig.show(ui));
+    let at = rig.at();
+    frames.frame(vec![moved(at)], |ui| rig.show(ui));
+    rig.clear();
+    // A quick Alt-click: the press and the release carry Alt, which is up again when the frame runs.
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::ALT };
+    frames.frame(vec![button(true), button(false)], |ui| rig.show(ui));
+    frames.idle(1, |ui| rig.show(ui));
+    let log = rig.log.borrow();
+    assert_eq!(log.activations, [Mods::ALT], "the activation carries the release's Alt, not the frame's held modifiers");
+    assert!(log.pointer.iter().all(|mods| !mods.alt), "nothing is held when the frames run: {:?}", log.pointer);
+}
