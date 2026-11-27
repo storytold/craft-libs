@@ -282,3 +282,31 @@ fn the_tab_stop_position_box_shows_the_next_free_step() {
     let positions: Vec<f32> = dialog.borrow_mut().result().stops.iter().map(|stop| stop.position).collect();
     assert_eq!(positions, vec![72.0, 180.0, 216.0], "Set put a stop at the step the box showed");
 }
+
+/// What the Tab stop position box holds when the user changes their mind: Escape restores the box, an emptied box is
+/// the next free step again, and Enter on a position a stop holds adds the next free step, as Set does.
+#[trial]
+fn escape_or_an_emptied_box_leaves_no_position_typed_and_enter_on_a_held_position_adds_the_next_step() {
+    let positions = |dialog: &Rc<RefCell<TabStopsDialog>>| dialog.borrow_mut().result().stops.iter().map(|stop| stop.position).collect::<Vec<f32>>();
+    let (mut fixture, dialog, _) = shown(TabStopsDialog::new(Vec::new(), 36.0).bare(true));
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("90 pt").key(Key::Escape, Modifiers::NONE).idle(4);
+    press(&mut fixture, "Set");
+    assert_eq!(positions(&dialog), vec![36.0], "Escape dropped the typed position");
+
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("90 pt").key(Key::A, Modifiers::COMMAND).key(Key::Backspace, Modifiers::NONE).idle(4);
+    press(&mut fixture, "Set");
+    assert_eq!(positions(&dialog), vec![36.0, 72.0], "an emptied box is the next free step");
+
+    press(&mut fixture, "Tab stop position:");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("36 pt").key(Key::Enter, Modifiers::NONE).idle(4);
+    assert_eq!(positions(&dialog), vec![36.0, 72.0, 108.0], "Enter on a held position adds the next free step, as Set");
+}
+
+/// An interval too small to move past a stop (an imported one is not clamped) does not hang the next-step search.
+#[trial]
+fn a_tiny_default_interval_still_finds_a_next_step() {
+    let (fixture, _, _) = shown(TabStopsDialog::new(vec![stop(72.0, TabAlign::Left, TabLeader::None)], 1.0e-7).bare(true));
+    assert!(fixture.by_label("Tab stop position:").is_some(), "the dialog drew");
+}

@@ -181,7 +181,13 @@ impl TabStopsDialog {
     /// Where Set puts a stop when no position is typed: the next free multiple of the default interval after the last
     /// stop, past cleared positions; `None` past [`MAX_POSITION`]. An empty Tab stop position box shows it.
     fn next_step(&self) -> Option<f32> {
-        let step = if self.default_interval.is_finite() && self.default_interval > 0.0 { self.default_interval } else { FALLBACK_INTERVAL };
+        // A step under SAME_POSITION lands on the stop it leaves (an imported interval is not clamped), so the search
+        // would not end.
+        let step = if self.default_interval.is_finite() && self.default_interval > 0.0 {
+            self.default_interval.max(SAME_POSITION)
+        } else {
+            FALLBACK_INTERVAL
+        };
         let taken = |at: f32| {
             self.stops.iter().any(|stop| (stop.position - at).abs() < SAME_POSITION)
                 || self.cleared.iter().any(|gone| (gone - at).abs() < SAME_POSITION)
@@ -192,6 +198,16 @@ impl TabStopsDialog {
             position += step;
         }
         (position.is_finite() && position <= MAX_POSITION).then_some(position)
+    }
+
+    /// Set, and Enter in the Tab stop position box: a stop at the typed position if no stop holds it, otherwise at the
+    /// next free step, so Set always adds a stop.
+    fn set(&mut self) {
+        let held = |at: f32| self.stops.iter().any(|stop| (stop.position - at).abs() < SAME_POSITION);
+        match self.typed_position.filter(|at| !held(*at)) {
+            Some(position) => self.set_at(position),
+            None => self.new_stop(),
+        }
     }
 
     /// Set with a position typed in the Tab stop position box: a stop there (Left, no leader), or the stop already
@@ -545,11 +561,9 @@ impl TabStopsDialog {
         if let Some(out) = &edit {
             fields.push(FieldPass::of(ui.ctx(), NumberField::Default, out.response.id, &out.edit));
         }
+        // Escape (`Cancel`) restores the interval from before the edit.
         for event in edit.into_iter().flat_map(|out| out.edit.events) {
-            if !matches!(event, EditEvent::Update { .. } | EditEvent::Commit { .. } | EditEvent::Set { .. }) {
-                continue;
-            }
-            if let Some(Some(points)) = event.value() {
+            if let Some(Some(points)) = event.landed() {
                 self.default_interval = *points as f32;
             }
         }
@@ -568,25 +582,17 @@ impl TabStopsDialog {
             return;
         };
         fields.push(FieldPass::of(ui.ctx(), NumberField::Position, out.response.id, &out.edit));
+        // Escape restores the box; an emptied box, or the next free step it shows, is no position typed.
         for event in &out.edit.events {
-            let typed = matches!(event, EditEvent::Update { .. });
-            // Leaving an empty box commits the step it shows, which is no position typed.
-            let kept = matches!(event, EditEvent::Commit { .. } | EditEvent::Set { .. })
-                && (self.typed_position.is_some() || event.value() != Some(&next.map(f64::from)));
-            if (typed || kept)
-                && let Some(Some(points)) = event.value()
-            {
-                self.typed_position = Some(*points as f32);
+            if let Some(value) = event.landed() {
+                self.typed_position = value.filter(|points| Some(*points) != next.map(f64::from)).map(|points| points as f32);
             }
         }
         // Enter in the box is Set at the position it shows (the one typed, or the next free step) while the box holds
         // the keys; after that, Enter is OK.
         let held = self.keys.at_frame_start(ui.ctx().cumulative_frame_nr()) == Some(NumberField::Position);
-        if out.edit.submitted
-            && held
-            && let Some(position) = self.typed_position.or(next)
-        {
-            self.set_at(position);
+        if out.edit.submitted && held {
+            self.set();
         }
     }
 
@@ -699,13 +705,7 @@ impl TabStopsDialog {
             let set = Button::new(words.set.clone()).enabled(self.stops.len() < MAX_STOPS);
             let set = if self.set_is_default() { set.variant(Variant::PRIMARY) } else { set };
             if clicked(&set.show(ui)) {
-                // The box shows the selected stop: Set with a position no stop holds puts one there, otherwise it adds
-                // the next free step, so Set always adds a stop.
-                let held = |at: f32| self.stops.iter().any(|stop| (stop.position - at).abs() < SAME_POSITION);
-                match self.typed_position.filter(|at| !held(*at)) {
-                    Some(position) => self.set_at(position),
-                    None => self.new_stop(),
-                }
+                self.set();
             }
             if clicked(&Button::new(words.clear.clone()).enabled(self.selected.is_some()).show(ui)) {
                 self.clear();
