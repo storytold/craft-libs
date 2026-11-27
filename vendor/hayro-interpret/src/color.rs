@@ -30,6 +30,100 @@ std::thread_local! {
     static TINT_TRANSFORM_RUNS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
     // PdfCraft patch (55): see `note_color_fallback`.
     static COLOR_FALLBACK: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    // Craft patch (ICC fallback): see `record_icc_fallback`.
+    static ICC_FALLBACKS: core::cell::Cell<Vec<IccFallbackNote>> = const { core::cell::Cell::new(Vec::new()) };
+    // Craft patch (ICC fallback): see `ColorSpace::built`.
+    static ICC_FALLBACKS_BUILT: core::cell::Cell<Option<Vec<(u128, IccFallback)>>> = const { core::cell::Cell::new(None) };
+}
+
+/// Craft patch (ICC fallback): why an `/ICCBased` colour space did not use its embedded profile
+/// and fell back to its `/Alternate`, else to the device space for `/N` (ISO 32000-2 §8.6.5.5).
+/// Reported as [`ExtendedWarning::IccProfileFallback`](crate::ExtendedWarning::IccProfileFallback).
+/// A page records at most 64 profiles: past that, later profiles on the page are not reported.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum IccFallback {
+    /// The profile stream did not decode, or its bytes did not parse as an ICC profile. A stream
+    /// that does not decode leaves the whole colour space unreadable, as before, and its paints
+    /// report `ColorFallback` too.
+    ProfileUnreadable,
+    /// `/N` is not 1, 3 or 4.
+    UnsupportedComponents,
+    /// The colour library refused a transform from the profile to sRGB, for instance because
+    /// `/N` does not match the profile's colour space.
+    TransformRefused,
+}
+
+/// Craft patch (ICC fallback): how many profiles a page records, and a colour space carries.
+const MAX_ICC_FALLBACKS: usize = 64;
+
+/// Craft patch (ICC fallback): one profile's fallback on the page being interpreted.
+#[derive(Copy, Clone)]
+struct IccFallbackNote {
+    /// The profile's cache key: its stream object, or its contents for a stream written directly.
+    profile: u128,
+    reason: IccFallback,
+    reported: bool,
+}
+
+/// Craft patch (ICC fallback): add `(profile, reason)` to `notes` unless the profile is in it or
+/// it is full.
+fn push_icc_fallback(notes: &mut Vec<(u128, IccFallback)>, profile: u128, reason: IccFallback) {
+    if notes.len() < MAX_ICC_FALLBACKS && !notes.iter().any(|(p, _)| *p == profile) {
+        notes.push((profile, reason));
+    }
+}
+
+/// Craft patch (ICC fallback): record that the profile keyed `profile` fell back for `reason`,
+/// for the page (see `record_icc_fallback`) and for the colour space being read, which keeps it
+/// to report again when it is taken from the cache (see `ColorSpace::built`).
+fn note_icc_fallback(profile: u128, reason: IccFallback) {
+    ICC_FALLBACKS_BUILT.with(|built| {
+        let mut notes = built.take();
+        if let Some(notes) = notes.as_mut() {
+            push_icc_fallback(notes, profile, reason);
+        }
+        built.set(notes);
+    });
+    record_icc_fallback(profile, reason);
+}
+
+/// Craft patch (ICC fallback): add a fallback to the page's record, once per profile, to be
+/// reported when the content stream being interpreted ends. Per thread, like patch (55)'s flag.
+fn record_icc_fallback(profile: u128, reason: IccFallback) {
+    ICC_FALLBACKS.with(|page| {
+        let mut notes = page.take();
+        if notes.len() < MAX_ICC_FALLBACKS && !notes.iter().any(|n| n.profile == profile) {
+            notes.push(IccFallbackNote {
+                profile,
+                reason,
+                reported: false,
+            });
+        }
+        page.set(notes);
+    });
+}
+
+/// Craft patch (ICC fallback): the fallbacks recorded and not yet reported, marking them
+/// reported, so each profile is reported once per page.
+pub(crate) fn take_icc_fallbacks() -> SmallVec<[IccFallback; 4]> {
+    ICC_FALLBACKS.with(|page| {
+        let mut notes = page.take();
+        let fresh = notes
+            .iter_mut()
+            .filter(|n| !n.reported)
+            .map(|n| {
+                n.reported = true;
+                n.reason
+            })
+            .collect();
+        page.set(notes);
+        fresh
+    })
+}
+
+/// Craft patch (ICC fallback): forget the fallbacks of another page.
+pub(crate) fn reset_icc_fallbacks() {
+    ICC_FALLBACKS.with(|page| page.set(Vec::new()));
 }
 
 /// PdfCraft patch (55): record that a colour could not be computed and was painted in a
@@ -156,6 +250,18 @@ enum IccProfileKey<'a> {
     Content { dict: u128, data: &'a [u8] },
 }
 
+/// Craft patch (ICC fallback): what an `/ICCBased` profile stream reads as, kept in the cache
+/// with the reason it could not be used, so that a cache hit reports it too.
+#[derive(Clone)]
+enum IccRead {
+    /// The space the profile converts through (`DeviceRGB` for an sRGB profile).
+    Space(ColorSpaceType),
+    /// The profile decoded but could not be used.
+    Unusable(IccFallback),
+    /// The stream did not decode.
+    Undecodable,
+}
+
 /// PdfCraft patch (48): the object of the `/ICCBased` profile `stream` that `array` names, or
 /// `None` for a stream written directly in the array (its dictionary lies within the array's
 /// bytes). Such a stream has no object of its own: its dictionary reports the object that
@@ -203,39 +309,54 @@ impl ColorSpaceType {
                     // PdfCraft patch (74): what's kept is what the profile itself reads as. What
                     // it falls back to depends on how deep it was met, and kept with the profile
                     // a page could build a chain past the limit on spaces already read.
-                    let read = || {
+                    let content_key = || {
                         let data = icc_stream.raw_data();
-                        let content = IccProfileKey::Content {
+                        hash128(&IccProfileKey::Content {
                             dict: icc_stream.cache_key(),
                             data: &data,
-                        };
-                        cache.get_or_insert_with(hash128(&content), || {
+                        })
+                    };
+                    let read = |key: u128| {
+                        cache.get_or_insert_with(key, || {
                             cache.count_icc_profile_read();
-                            let decoded = icc_stream.decoded().ok()?;
-                            Some(ICCProfile::new(&decoded, num_components).map(|icc| {
+                            let Ok(decoded) = icc_stream.decoded() else {
+                                return Some(IccRead::Undecodable);
+                            };
+                            Some(match ICCProfile::new(&decoded, num_components) {
                                 // TODO: For SVG and PNG we can assume that the output color space is
                                 // sRGB. If we ever implement PDF-to-PDF, we probably want to
                                 // let the user pass the native color type and don't make this optimization
                                 // if it's not sRGB.
-                                if icc.is_srgb() {
-                                    Self::DeviceRgb
-                                } else {
-                                    Self::ICCBased(icc)
-                                }
-                            }))
+                                Ok(icc) if icc.is_srgb() => IccRead::Space(Self::DeviceRgb),
+                                Ok(icc) => IccRead::Space(Self::ICCBased(icc)),
+                                Err(reason) => IccRead::Unusable(reason),
+                            })
                         })
                     };
-                    let profile = match icc_stream_object(&color_array, &icc_stream) {
+                    let (profile_key, profile) = match icc_stream_object(&color_array, &icc_stream)
+                    {
                         Some(object) => {
-                            cache.get_or_insert_with(hash128(&IccProfileKey::Object(object)), read)
+                            let key = hash128(&IccProfileKey::Object(object));
+                            (key, cache.get_or_insert_with(key, || read(content_key())))
                         }
-                        None => read(),
+                        None => {
+                            let key = content_key();
+                            (key, read(key))
+                        }
                     };
-                    return profile?
-                        .or_else(|| {
-                            dict.get::<Object<'_>>(ALTERNATE)
-                                .and_then(|o| Self::new(o, cache, depth + 1))
-                        })
+                    // Craft patch (ICC fallback): say why the profile was not used.
+                    let reason = match profile? {
+                        IccRead::Space(space) => return Some(space),
+                        IccRead::Unusable(reason) => reason,
+                        IccRead::Undecodable => {
+                            note_icc_fallback(profile_key, IccFallback::ProfileUnreadable);
+                            return None;
+                        }
+                    };
+                    note_icc_fallback(profile_key, reason);
+                    return dict
+                        .get::<Object<'_>>(ALTERNATE)
+                        .and_then(|o| Self::new(o, cache, depth + 1))
                         .or_else(|| match dict.get::<u8>(N) {
                             Some(1) => Some(Self::DeviceGray),
                             Some(3) => Some(Self::DeviceRgb),
@@ -299,60 +420,139 @@ impl ColorSpaceType {
     }
 }
 
-/// A PDF color space.
+/// A PDF color space. Craft patch (ICC fallback): the second field holds the ICC profile
+/// fallbacks met while it was read (see `ColorSpace::built`).
 #[derive(Debug, Clone)]
-pub struct ColorSpace(Arc<ColorSpaceType>);
+pub struct ColorSpace(Arc<ColorSpaceType>, Option<Arc<[(u128, IccFallback)]>>);
+
+/// Craft patch (ICC fallback): a colour space read, else the ICC profile fallbacks met by the
+/// read that failed, as the colour space cache keeps it (see `ColorSpace::cached`).
+pub(crate) type ColorSpaceRead = Result<ColorSpace, Arc<[(u128, IccFallback)]>>;
 
 impl ColorSpace {
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Self::within(object, cache, 0)
+        Self::read(object, cache).ok()
+    }
+
+    /// Craft patch (ICC fallback): as `new`, keeping the fallbacks of a read that fails.
+    pub(crate) fn read(object: Object<'_>, cache: &Cache) -> ColorSpaceRead {
+        Self::built(|| Self::within(object, cache, 0))
+    }
+
+    /// Craft patch (ICC fallback): the space cached under `key`, read by `read` when no entry
+    /// holds it. A failed read is cached with its fallbacks, so that each call, a hit or not,
+    /// records the fallbacks for the page being interpreted, the space read or not.
+    pub(crate) fn cached(
+        cache: &Cache,
+        key: u128,
+        read: impl FnOnce() -> ColorSpaceRead,
+    ) -> Option<Self> {
+        match cache.get_or_insert_with(key, || Some(read()))? {
+            Ok(space) => {
+                space.report_icc_fallbacks();
+                Some(space)
+            }
+            Err(notes) => {
+                for &(profile, reason) in notes.iter() {
+                    record_icc_fallback(profile, reason);
+                }
+                None
+            }
+        }
     }
 
     /// A colour space named by another, `depth` levels down.
     fn within(object: Object<'_>, cache: &Cache, depth: u32) -> Option<Self> {
-        Some(Self(Arc::new(ColorSpaceType::new(object, cache, depth)?)))
+        Some(Self::of(ColorSpaceType::new(object, cache, depth)?))
+    }
+
+    fn of(space: ColorSpaceType) -> Self {
+        Self(Arc::new(space), None)
+    }
+
+    /// Craft patch (ICC fallback): the space `build` reads, keeping the ICC profile fallbacks
+    /// met while reading it, for `report_icc_fallbacks`. A space read while another is being
+    /// read passes its fallbacks on to the other too; when the outermost read ends, the
+    /// thread keeps none.
+    fn built(build: impl FnOnce() -> Option<Self>) -> ColorSpaceRead {
+        let outer = ICC_FALLBACKS_BUILT.with(|built| built.replace(Some(Vec::new())));
+        let space = build();
+        let notes = ICC_FALLBACKS_BUILT.with(|built| {
+            let notes = built.take().unwrap_or_default();
+            let outer = outer.map(|mut outer| {
+                for &(profile, reason) in &notes {
+                    push_icc_fallback(&mut outer, profile, reason);
+                }
+                outer
+            });
+            built.set(outer);
+            notes
+        });
+        let Some(mut space) = space else {
+            return Err(notes.into());
+        };
+        if !notes.is_empty() {
+            space.1 = Some(notes.into());
+        }
+        Ok(space)
+    }
+
+    /// Craft patch (ICC fallback): record, for the page being interpreted, the ICC profile
+    /// fallbacks met when this space was read, for a space taken from the cache.
+    fn report_icc_fallbacks(&self) {
+        for &(profile, reason) in self.1.iter().flat_map(|notes| notes.iter()) {
+            record_icc_fallback(profile, reason);
+        }
     }
 
     /// PdfCraft patch (80): as `new`, except that an `/Indexed` space with no lookup table is
     /// built (marked tableless) rather than unreadable, for the image and colour operators to
     /// handle it (see `Indexed::new`). Every other space is read as by `new`.
     pub(crate) fn new_allowing_tableless(object: Object<'_>, cache: &Cache) -> Option<Self> {
+        Self::read_allowing_tableless(object, cache).ok()
+    }
+
+    /// Craft patch (ICC fallback): as `new_allowing_tableless`, keeping the fallbacks of a read
+    /// that fails.
+    pub(crate) fn read_allowing_tableless(object: Object<'_>, cache: &Cache) -> ColorSpaceRead {
         if let Object::Array(array) = &object
             && array
                 .flex_iter()
                 .next::<Name<'_>>()
                 .is_some_and(|family| matches!(family.deref(), INDEXED | I))
         {
-            return Indexed::new(array, cache, 0, true)
-                .map(|indexed| Self(Arc::new(ColorSpaceType::Indexed(indexed))));
+            return Self::built(|| {
+                Indexed::new(array, cache, 0, true)
+                    .map(|indexed| Self::of(ColorSpaceType::Indexed(indexed)))
+            });
         }
-        Self::new(object, cache)
+        Self::read(object, cache)
     }
 
     /// Create a new color space from the name.
     pub(crate) fn new_from_name(name: &Name<'_>) -> Option<Self> {
-        ColorSpaceType::new_from_name(name).map(|c| Self(Arc::new(c)))
+        ColorSpaceType::new_from_name(name).map(Self::of)
     }
 
     /// Return the device gray color space.
     pub(crate) fn device_gray() -> Self {
-        Self(Arc::new(ColorSpaceType::DeviceGray))
+        Self::of(ColorSpaceType::DeviceGray)
     }
 
     /// Return the device RGB color space.
     pub(crate) fn device_rgb() -> Self {
-        Self(Arc::new(ColorSpaceType::DeviceRgb))
+        Self::of(ColorSpaceType::DeviceRgb)
     }
 
     /// Return the device CMYK color space.
     pub(crate) fn device_cmyk() -> Self {
-        Self(Arc::new(ColorSpaceType::DeviceCmyk))
+        Self::of(ColorSpaceType::DeviceCmyk)
     }
 
     /// Return the pattern color space.
     pub(crate) fn pattern() -> Self {
-        Self(Arc::new(ColorSpaceType::Pattern(Self::device_gray())))
+        Self::of(ColorSpaceType::Pattern(Self::device_gray()))
     }
 
     pub(crate) fn pattern_cs(&self) -> Option<Self> {
@@ -601,9 +801,9 @@ impl<'r, 'a> DefaultColorSpaces<'r, 'a> {
                     .resources
                     .get_color_space(&Name::new_unescaped(family.default_key()))?;
                 let key = object.cache_key();
-                let space = self
-                    .cache
-                    .get_or_insert_with(key, || ColorSpace::new(object.clone(), &self.cache))?;
+                let space = ColorSpace::cached(&self.cache, key, || {
+                    ColorSpace::read(object.clone(), &self.cache)
+                })?;
                 space.can_stand_in_for(family).then_some((space, key))
             })
             .clone()
@@ -1429,8 +1629,10 @@ impl Debug for ICCProfile {
 }
 
 impl ICCProfile {
-    fn new(profile: &[u8], number_components: usize) -> Option<Self> {
-        let src_profile = ColorProfile::new_from_slice(profile).ok()?;
+    /// Craft patch (ICC fallback): the error says why the profile cannot be used.
+    fn new(profile: &[u8], number_components: usize) -> Result<Self, IccFallback> {
+        let src_profile =
+            ColorProfile::new_from_slice(profile).map_err(|_| IccFallback::ProfileUnreadable)?;
 
         const SRGB_MARKER: &[u8] = b"sRGB";
 
@@ -1455,7 +1657,7 @@ impl ICCProfile {
         is_lab: bool,
         number_components: usize,
         digest: u128,
-    ) -> Option<Self> {
+    ) -> Result<Self, IccFallback> {
         let src_layout = match number_components {
             1 => Layout::Gray,
             3 => Layout::Rgb,
@@ -1463,7 +1665,7 @@ impl ICCProfile {
             _ => {
                 warn!("unsupported number of components {number_components} for ICC profile");
 
-                return None;
+                return Err(IccFallback::UnsupportedComponents);
             }
         };
 
@@ -1476,9 +1678,9 @@ impl ICCProfile {
                 Layout::Rgb,
                 TransformOptions::default(),
             )
-            .ok()?;
+            .map_err(|_| IccFallback::TransformRefused)?;
 
-        Some(Self(Arc::new(ICCColorRepr {
+        Ok(Self(Arc::new(ICCColorRepr {
             src_profile,
             src_layout,
             number_components,
@@ -2254,12 +2456,12 @@ impl ColorSpace {
     /// colours are converted sample by sample), converting process colour through its
     /// `simulation` (patch 36).
     pub(crate) fn plate(&self, plate: &Plate) -> Self {
-        Self(Arc::new(ColorSpaceType::Plate(PlateSpace {
+        Self::of(ColorSpaceType::Plate(PlateSpace {
             inner: self.clone(),
             ink: plate.ink.clone(),
             simulation: plate.simulation.clone(),
             spots_as_process: plate.spots_as_process,
-        })))
+        }))
     }
 
     /// PdfCraft patch (36): whether `simulation` converts this space's colours (see
@@ -3198,5 +3400,387 @@ mod device_cmyk_gray_tests {
         assert_close(&[2.0, -1.0, f32::NAN, f32::INFINITY], 0.7);
         assert_close(&[], 1.0);
         assert_close(&[0.0, 0.0], 1.0);
+    }
+}
+
+#[cfg(test)]
+mod icc_fallback_tests {
+    use super::IccFallback;
+    use crate::font::Glyph;
+    use crate::interpret::{ExtendedWarning, InterpreterSettings, interpret_page};
+    use crate::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, Paint,
+        PathDrawMode, SoftMask,
+    };
+    use hayro_syntax::Pdf;
+    use kurbo::{Affine, BezPath, Rect};
+    use std::sync::{Arc, Mutex};
+
+    /// An s15Fixed16Number (ICC.1 §4.6).
+    fn s15f16(value: f64) -> [u8; 4] {
+        ((value * 65536.0).round() as i32).to_be_bytes()
+    }
+
+    fn be32(value: usize) -> [u8; 4] {
+        u32::try_from(value).expect("small profile").to_be_bytes()
+    }
+
+    /// A linear RGB display profile (ICC v2, D50) with sRGB's colorants. The device model stays
+    /// blank: a profile whose model reads `sRGB` is drawn as `DeviceRGB` without a transform.
+    fn rgb_profile() -> Vec<u8> {
+        let colorants = [
+            [0.4361, 0.2225, 0.0139],
+            [0.3851, 0.7169, 0.0971],
+            [0.1431, 0.0606, 0.7141],
+        ];
+        let mut tags: Vec<([u8; 4], Vec<u8>)> = Vec::new();
+        for (signature, [x, y, z]) in [*b"rXYZ", *b"gXYZ", *b"bXYZ"].into_iter().zip(colorants) {
+            tags.push((
+                signature,
+                [
+                    b"XYZ ".as_slice(),
+                    &[0; 4],
+                    &s15f16(x),
+                    &s15f16(y),
+                    &s15f16(z),
+                ]
+                .concat(),
+            ));
+        }
+        for signature in [*b"rTRC", *b"gTRC", *b"bTRC"] {
+            tags.push((
+                signature,
+                [b"curv".as_slice(), &[0; 4], &be32(1), &[1, 0]].concat(),
+            ));
+        }
+        let start = 128 + 4 + 12 * tags.len();
+        let (mut table, mut data) = (Vec::new(), Vec::new());
+        for (signature, tag) in &tags {
+            table.extend_from_slice(signature);
+            table.extend_from_slice(&be32(start + data.len()));
+            table.extend_from_slice(&be32(tag.len()));
+            data.extend_from_slice(tag);
+            data.resize(data.len().next_multiple_of(4), 0);
+        }
+        let mut profile = vec![0; 128];
+        profile[0..4].copy_from_slice(&be32(start + data.len()));
+        profile[8..12].copy_from_slice(&[2, 0x10, 0, 0]);
+        profile[12..16].copy_from_slice(b"mntr");
+        profile[16..20].copy_from_slice(b"RGB ");
+        profile[20..24].copy_from_slice(b"XYZ ");
+        profile[36..40].copy_from_slice(b"acsp");
+        for (i, value) in [0.9642, 1.0, 0.8249].into_iter().enumerate() {
+            profile[68 + 4 * i..72 + 4 * i].copy_from_slice(&s15f16(value));
+        }
+        profile.extend_from_slice(&be32(tags.len()));
+        profile.extend(table);
+        profile.extend(data);
+        profile
+    }
+
+    /// An `ASCIIHex` profile stream object with `/N n` and `extra` dictionary entries.
+    fn profile_stream(n: u8, extra: &str, profile: &[u8]) -> String {
+        let hex: String = profile.iter().map(|b| format!("{b:02X}")).collect();
+        format!(
+            "<< /N {n} {extra} /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}>\nendstream",
+            hex.len() + 1
+        )
+    }
+
+    fn content_stream(data: &str) -> String {
+        format!("<< /Length {} >>\nstream\n{data}endstream", data.len())
+    }
+
+    /// A PDF of `pages` pages, objects 3, 4, … each drawing `content` (object 3 + pages) with
+    /// `/CS` as `[/ICCBased p 0 R]`, where `p` is the profile stream `profile`. Object 1 is the
+    /// catalog, 2 the page tree; the profile follows the content.
+    fn pdf(pages: usize, content: &str, profile: String, forms: &[String]) -> Pdf {
+        let profile_id = 4 + pages;
+        pdf_with_space(
+            pages,
+            content,
+            profile,
+            forms,
+            &format!("[/ICCBased {profile_id} 0 R]"),
+        )
+    }
+
+    /// As `pdf`, with `/CS` as `space`.
+    fn pdf_with_space(
+        pages: usize,
+        content: &str,
+        profile: String,
+        forms: &[String],
+        space: &str,
+    ) -> Pdf {
+        let content_id = 3 + pages;
+        let profile_id = content_id + 1;
+        let kids: String = (0..pages).map(|i| format!("{} 0 R ", 3 + i)).collect();
+        let xobjects: String = (0..forms.len())
+            .map(|i| format!("/F{i} {} 0 R ", profile_id + 1 + i))
+            .collect();
+        let resources = format!("<< /ColorSpace << /CS {space} >> /XObject << {xobjects}>> >>");
+        let mut bodies = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!("<< /Type /Pages /Count {pages} /Kids [{kids}] >>"),
+        ];
+        for _ in 0..pages {
+            bodies.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents {content_id} 0 R /Resources {resources} >>"));
+        }
+        bodies.push(content_stream(content));
+        bodies.push(profile);
+        for form in forms {
+            let len = form.len();
+            bodies.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources {resources} /Length {len} >>\nstream\n{form}endstream"));
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                bodies.len() + 1
+            )
+            .as_bytes(),
+        );
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    const FILL: &str = "/CS cs 0.5 0.5 0.5 sc 0 0 10 10 re f\n";
+
+    /// Records the colour of each path filled or stroked in a solid colour.
+    #[derive(Default)]
+    struct FillColours(Vec<[u8; 4]>);
+
+    impl Device<'_> for FillColours {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, paint: &Paint<'_>, _: &PathDrawMode) {
+            if let Paint::Color(colour) = paint {
+                self.0.push(colour.to_rgba().to_rgba8());
+            }
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(
+            &mut self,
+            _: &Glyph<'_>,
+            _: Affine,
+            _: Affine,
+            _: &Paint<'_>,
+            _: &GlyphDrawMode,
+        ) {
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    /// The ICC fallbacks each page reported, its pages interpreted in order through one cache.
+    fn fallbacks(pdf: &Pdf) -> Vec<Vec<IccFallback>> {
+        render(pdf).0
+    }
+
+    /// The ICC fallbacks each page reported, and the colours the pages filled in.
+    fn render(pdf: &Pdf) -> (Vec<Vec<IccFallback>>, Vec<[u8; 4]>) {
+        let cache = InterpreterCache::new();
+        let mut device = FillColours::default();
+        let reported = pdf
+            .pages()
+            .iter()
+            .map(|page| {
+                let warnings = Arc::new(Mutex::new(Vec::new()));
+                let settings = InterpreterSettings {
+                    extended_warning_sink: {
+                        let warnings = warnings.clone();
+                        Arc::new(move |warning| {
+                            if let ExtendedWarning::IccProfileFallback(reason) = warning {
+                                warnings.lock().expect("warnings").push(reason);
+                            }
+                        })
+                    },
+                    ..InterpreterSettings::default()
+                };
+                let mut context = Context::new(
+                    Affine::IDENTITY,
+                    Rect::new(0.0, 0.0, 100.0, 100.0),
+                    &cache,
+                    pdf.xref(),
+                    settings,
+                );
+                interpret_page(page, &mut context, &mut device);
+                warnings.lock().expect("warnings").clone()
+            })
+            .collect();
+        (reported, device.0)
+    }
+
+    fn one_page(n: u8, profile: &[u8]) -> Vec<IccFallback> {
+        let pdf = pdf(
+            1,
+            FILL,
+            profile_stream(n, "/Alternate /DeviceRGB", profile),
+            &[],
+        );
+        fallbacks(&pdf).concat()
+    }
+
+    #[test]
+    fn a_usable_profile_reports_no_fallback() {
+        assert_eq!(one_page(3, &rgb_profile()), []);
+    }
+
+    #[test]
+    fn a_truncated_profile_reports_it_unreadable() {
+        let profile = rgb_profile();
+        assert_eq!(
+            one_page(3, &profile[..100]),
+            [IccFallback::ProfileUnreadable]
+        );
+    }
+
+    #[test]
+    fn bytes_that_are_not_a_profile_report_it_unreadable() {
+        assert_eq!(one_page(3, &[0x5A; 300]), [IccFallback::ProfileUnreadable]);
+    }
+
+    #[test]
+    fn two_components_report_an_unsupported_count() {
+        assert_eq!(
+            one_page(2, &rgb_profile()),
+            [IccFallback::UnsupportedComponents]
+        );
+    }
+
+    #[test]
+    fn a_component_count_the_profile_does_not_have_reports_the_transform_refused() {
+        assert_eq!(one_page(1, &rgb_profile()), [IccFallback::TransformRefused]);
+    }
+
+    /// Used three times on a page, once more in a form on it: reported once.
+    #[test]
+    fn a_profile_used_again_on_the_page_is_reported_once() {
+        let content = format!("{FILL}{FILL}/F0 Do\n{FILL}");
+        let pdf = pdf(
+            1,
+            &content,
+            profile_stream(2, "", &rgb_profile()),
+            &[FILL.to_string()],
+        );
+        assert_eq!(fallbacks(&pdf), [[IccFallback::UnsupportedComponents]]);
+    }
+
+    /// The second page takes the space from the cache the first filled, and still reports it.
+    #[test]
+    fn each_page_that_uses_the_profile_reports_it() {
+        let pdf = pdf(
+            2,
+            FILL,
+            profile_stream(2, "/Alternate /DeviceRGB", &rgb_profile()),
+            &[],
+        );
+        assert_eq!(
+            fallbacks(&pdf),
+            [
+                [IccFallback::UnsupportedComponents],
+                [IccFallback::UnsupportedComponents]
+            ]
+        );
+    }
+
+    /// A profile stream whose `/Filter` does not decode its bytes.
+    fn undecodable_profile() -> String {
+        // `{` is not an ASCII base-85 digit.
+        let data = "{{{{{~>";
+        format!(
+            "<< /N 3 /Alternate /DeviceRGB /Filter /ASCII85Decode /Length {} >>
+stream
+{data}
+endstream",
+            data.len()
+        )
+    }
+
+    /// A profile stream that does not decode leaves the space unreadable, and says the profile
+    /// was unreadable.
+    #[test]
+    fn a_profile_stream_that_does_not_decode_reports_it_unreadable() {
+        let pdf = pdf(1, FILL, undecodable_profile(), &[]);
+        assert_eq!(fallbacks(&pdf), [[IccFallback::ProfileUnreadable]]);
+    }
+
+    /// The second page takes the unreadable space from the cache the first filled, and still
+    /// reports it.
+    #[test]
+    fn each_page_that_uses_an_undecodable_profile_reports_it() {
+        let pdf = pdf(2, FILL, undecodable_profile(), &[]);
+        assert_eq!(
+            fallbacks(&pdf),
+            [
+                [IccFallback::ProfileUnreadable],
+                [IccFallback::ProfileUnreadable]
+            ]
+        );
+    }
+
+    /// As above, for the profile read as the pages' `/DefaultRGB`.
+    #[test]
+    fn each_page_whose_default_space_has_an_undecodable_profile_reports_it() {
+        let space = "[/ICCBased 6 0 R] /DefaultRGB [/ICCBased 6 0 R]";
+        let fill = "/DeviceRGB cs 0.5 0.5 0.5 sc 0 0 10 10 re f
+";
+        let pdf = pdf_with_space(2, fill, undecodable_profile(), &[], space);
+        assert_eq!(
+            fallbacks(&pdf),
+            [
+                [IccFallback::ProfileUnreadable],
+                [IccFallback::ProfileUnreadable]
+            ]
+        );
+    }
+
+    /// With no `/Alternate`, a profile that can't be used is drawn in the device space for `/N`.
+    #[test]
+    fn a_fallback_without_an_alternate_draws_in_the_device_space_for_n() {
+        let fill = "/CS cs 0.3 sc 0 0 10 10 re f
+";
+        let profile = || profile_stream(1, "", &rgb_profile());
+        let icc = pdf(1, fill, profile(), &[]);
+        let gray = pdf_with_space(1, fill, profile(), &[], "/DeviceGray");
+        let (reported, colours) = render(&icc);
+        assert_eq!(reported, [[IccFallback::TransformRefused]]);
+        assert!(!colours.is_empty());
+        assert_eq!(colours, render(&gray).1);
+    }
+
+    /// Reporting the fallback leaves the drawing as it was: the fill is the one the same page
+    /// draws with its ICC space replaced by the `/Alternate`.
+    #[test]
+    fn a_reported_fallback_draws_as_its_alternate() {
+        let alternate = "[/CalRGB << /WhitePoint [0.9505 1 1.089] /Gamma [1.8 1.8 1.8] >>]";
+        let fill = "/CS cs 0.2 0.5 0.8 sc 0 0 10 10 re f
+";
+        let profile = || profile_stream(3, &format!("/Alternate {alternate}"), &[0x5A; 300]);
+        let icc = pdf(1, fill, profile(), &[]);
+        let replaced = pdf_with_space(1, fill, profile(), &[], alternate);
+        let device = pdf_with_space(1, fill, profile(), &[], "/DeviceRGB");
+        let (reported, colours) = render(&icc);
+        assert_eq!(reported, [[IccFallback::ProfileUnreadable]]);
+        assert_eq!(colours, render(&replaced).1);
+        assert_ne!(
+            colours,
+            render(&device).1,
+            "the alternate differs from DeviceRGB"
+        );
     }
 }

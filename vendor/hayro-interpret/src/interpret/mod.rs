@@ -104,7 +104,8 @@ pub struct InterpreterSettings {
     /// the PDF file. Providing a callback allows you to catch those warnings and handle them, if desired.
     pub warning_sink: WarningSinkFn,
     /// Optional callback for extended PdfCraft warnings (`ColorFallback`, `MalformedIndexedImage`,
-    /// `Type3WidthsMissing`) kept separate from [`InterpreterWarning`] for backward compatibility.
+    /// `Type3WidthsMissing`, `IccProfileFallback`) kept separate from [`InterpreterWarning`] for
+    /// backward compatibility.
     pub extended_warning_sink: ExtendedWarningSinkFn,
     /// Whether annotations should be rendered as well.
     ///
@@ -218,6 +219,20 @@ pub enum ExtendedWarning {
     /// which ISO 32000-2 Table 110 requires, was selected; its glyphs advance by the widths
     /// their glyph procedures set with `d0`/`d1`. Reported each time such a font is selected.
     Type3WidthsMissing,
+    /// Craft patch (ICC fallback): an `/ICCBased` colour space did not use its embedded profile,
+    /// for the reason given, and was drawn in its `/Alternate` space, else in the device space
+    /// for `/N` (ISO 32000-2 §8.6.5.5). Reported once per profile per page, when the content
+    /// stream that first met it ends. At most 64 profiles are reported per page: past that,
+    /// later profiles on the page are not reported.
+    IccProfileFallback(crate::color::IccFallback),
+}
+
+/// Craft patch (ICC fallback): report the ICC profile fallbacks the content stream met that the
+/// page has not reported yet.
+fn report_icc_fallbacks(context: &Context<'_>) {
+    for reason in crate::color::take_icc_fallbacks() {
+        (context.settings.extended_warning_sink)(ExtendedWarning::IccProfileFallback(reason));
+    }
 }
 
 /// PdfCraft patch (73): ends a page's JBIG2 allowance with the page, so that what decodes on its
@@ -1218,6 +1233,7 @@ pub fn interpret<'a>(
     if crate::color::take_color_fallback() {
         (context.settings.extended_warning_sink)(ExtendedWarning::ColorFallback);
     }
+    report_icc_fallbacks(context);
 }
 
 /// PdfCraft patch: the bytes of a window of page content. A window grows only while an instruction
@@ -1280,4 +1296,5 @@ fn interpret_content<'a>(
     if crate::color::take_color_fallback() {
         (context.settings.extended_warning_sink)(ExtendedWarning::ColorFallback);
     }
+    report_icc_fallbacks(context);
 }
