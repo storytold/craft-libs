@@ -488,6 +488,11 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         w.tag("c:axId").attr("val", AX_CAT).empty();
         w.open("c:scaling", &[]);
         w.tag("c:orientation").attr("val", "minMax").empty();
+        for (name, bound) in [("c:min", c.x_min), ("c:max", c.x_max)] {
+            if let Some(bound) = bound.filter(|v| v.is_finite()) {
+                w.tag(name).attr("val", bound).empty();
+            }
+        }
         w.close();
         w.tag("c:delete").attr("val", 0).empty();
         w.tag("c:axPos").attr("val", "b").empty();
@@ -620,7 +625,10 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
             w.tag("c:grouping").attr("val", grouping).empty();
         }
         Group::Line | Group::Area => w.tag("c:grouping").attr("val", grouping).empty(),
-        Group::Scatter => w.tag("c:scatterStyle").attr("val", "lineMarker").empty(),
+        Group::Scatter => {
+            let lines = list.iter().any(|(_, s)| s.scatter_lines);
+            w.tag("c:scatterStyle").attr("val", if lines { "lineMarker" } else { "marker" }).empty();
+        }
         Group::Radar => w.tag("c:radarStyle").attr("val", if kind == ChartType::FilledRadar { "filled" } else { "marker" }).empty(),
         _ => {}
     }
@@ -1137,6 +1145,25 @@ mod region_map_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scatter_axis_bounds_and_line_style_survive_rebuilt_xml() {
+        for lines in [false, true] {
+            let mut c = crate::chart::Chart::sample(crate::chart::ChartType::Scatter);
+            c.x_min = Some(-2.0);
+            c.x_max = Some(8.0);
+            for series in &mut c.series {
+                series.scatter_lines = lines;
+                series.marker = Some("none".into());
+            }
+            let (xml, kept) = super::chart_xml(&c);
+            assert!(!kept, "the test exercises the rebuilt chart writer");
+            let read = crate::chart::read::read_chart_xml(&xml).expect("written scatter chart");
+            assert_eq!((read.x_min, read.x_max), (c.x_min, c.x_max), "explicit horizontal bounds survive saving");
+            assert!(read.series.iter().all(|s| s.scatter_lines == lines), "scatter line style survives saving");
+            assert!(read.series.iter().all(|s| s.marker.as_deref() == Some("none")), "saving keeps markers hidden");
+        }
+    }
+
     use crate::chart::{Chart, ChartType, Series};
     use crate::color::{ColorTransform, Rgba};
     use crate::style::ColorRef;

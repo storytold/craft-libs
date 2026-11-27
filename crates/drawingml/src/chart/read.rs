@@ -210,6 +210,24 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
             outline: flag("showOutline"),
         }
     });
+    // Scatter groups have two value axes. Keep their horizontal bounds separately
+    // from the primary category plot's value scale in a combination chart.
+    if let Some(g) = pa.elements().find(|g| matches!(g.local(), "scatterChart" | "bubbleChart")) {
+        let ids: Vec<&str> = g.children(Local("axId")).filter_map(|a| a.attr_local("val")).collect();
+        if let Some(ax) = pa.children(Local("valAx")).find(|a| {
+            matches!(a.child(Local("axPos")).and_then(|p| p.attr_local("val")), Some("b" | "t"))
+                && a.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
+        }) {
+            let bound = |name| {
+                ax.path(&[Local("scaling"), Local(name)])
+                    .and_then(|v| v.attr_local("val"))
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| v.is_finite())
+            };
+            c.x_min = bound("min");
+            c.x_max = bound("max");
+        }
+    }
     let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
@@ -226,7 +244,16 @@ fn group_value_axis(val_map: &std::collections::HashMap<&str, bool>, g: &El) -> 
 /// sits on the right or top, or crosses the category axis at its maximum.
 fn primary_value_axis(pa: &El, val_map: &std::collections::HashMap<&str, bool>) -> Option<String> {
     let secondary_placed = |a: &El| {
-        a.child(Local("crosses")).and_then(|c| c.attr_local("val")) == Some("max")
+        // Crossing at the maximum also places a value axis at the normal edge when
+        // the category axis is reversed; it does not make that axis secondary.
+        let cross_id = a.child(Local("crossAx")).and_then(|c| c.attr_local("val"));
+        let reversed = pa.elements().any(|cat| {
+            matches!(cat.local(), "catAx" | "dateAx")
+                && cross_id.is_some()
+                && cat.child(Local("axId")).and_then(|id| id.attr_local("val")) == cross_id
+                && cat.path(&[Local("scaling"), Local("orientation")]).and_then(|o| o.attr_local("val")) == Some("maxMin")
+        });
+        (a.child(Local("crosses")).and_then(|c| c.attr_local("val")) == Some("max") && !reversed)
             || matches!(a.child(Local("axPos")).and_then(|c| c.attr_local("val")), Some("r" | "t"))
     };
     let val_axes_by_id: std::collections::HashMap<&str, &El> =
@@ -364,7 +391,11 @@ fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categorie
         fill: simple_fill(s.child(Local("spPr"))),
         line: simple_line(s.child(Local("spPr"))),
         smooth: s.child(Local("smooth")).and_then(|v| v.attr_local("val").and_then(value::to_bool)).unwrap_or(false),
-        marker: s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")).filter(|m| *m != "none").map(String::from),
+        marker: s.path(&[Local("marker"), Local("symbol")]).and_then(|m| m.attr_local("val")).map(String::from),
+        scatter_lines: g
+            .child(Local("scatterStyle"))
+            .and_then(|style| style.attr_local("val"))
+            .is_some_and(|style| matches!(style, "line" | "lineMarker" | "smooth" | "smoothMarker")),
         kind: Some(kind),
         secondary_axis: secondary,
         ..Default::default()
@@ -676,6 +707,35 @@ fn text_size(e: Option<&El>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    // Original XML generated here from ECMA-376 chart elements; no user-deck content.
+    #[test]
+    fn reversed_horizontal_bars_keep_their_axis_with_a_scatter_overlay() {
+        let xml = br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>
+          <c:barChart><c:barDir val="bar"/><c:grouping val="stacked"/>
+            <c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>300</c:v></c:pt></c:numLit></c:val></c:ser>
+            <c:axId val="10"/><c:axId val="20"/>
+          </c:barChart>
+          <c:scatterChart><c:scatterStyle val="lineMarker"/>
+            <c:ser><c:idx val="1"/><c:marker><c:symbol val="none"/></c:marker>
+              <c:xVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>350</c:v></c:pt><c:pt idx="1"><c:v>350</c:v></c:pt></c:numLit></c:xVal>
+              <c:yVal><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>0</c:v></c:pt><c:pt idx="1"><c:v>1</c:v></c:pt></c:numLit></c:yVal>
+            </c:ser><c:axId val="30"/><c:axId val="40"/>
+          </c:scatterChart>
+          <c:valAx><c:axId val="30"/><c:scaling><c:min val="100"/><c:max val="700"/></c:scaling><c:axPos val="b"/><c:crossAx val="40"/></c:valAx>
+          <c:valAx><c:axId val="40"/><c:scaling><c:min val="0"/><c:max val="1"/></c:scaling><c:axPos val="l"/><c:crossAx val="30"/></c:valAx>
+          <c:valAx><c:axId val="20"/><c:scaling><c:min val="100"/></c:scaling><c:axPos val="b"/><c:crossAx val="10"/><c:crosses val="max"/></c:valAx>
+          <c:catAx><c:axId val="10"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:axPos val="r"/><c:crossAx val="20"/></c:catAx>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+        let c = super::read_chart_xml(xml).expect("generated chart");
+        assert_eq!(c.kind, super::ChartType::Combo);
+        assert!(!c.series[0].secondary_axis, "bar values use the primary valuation scale");
+        assert!(c.series[1].secondary_axis, "scatter y values use a separate scale");
+        assert!(c.y_min.is_some_and(|min| min > c.y2_max.unwrap_or_default()));
+        assert!(c.x_max.is_some_and(|max| max > c.series[1].x_values[0].unwrap_or_default()));
+        assert!(c.series[1].scatter_lines);
+        assert_eq!(c.series[1].marker.as_deref(), Some("none"));
+    }
+
     use super::*;
 
     #[test]
