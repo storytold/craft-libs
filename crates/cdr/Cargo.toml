@@ -1,6 +1,6 @@
 [package]
 name = "craft-cdr"
-description = "Bounded reader for .cdr drawings of versions 1 to 27 and .cmx files: WL records, RIFF index, compressed lists, ZIP packages, shapes, fills, outlines, pages and layers, and the picture a file keeps of its drawing; writer for version 15 .cdr drawings"
+description = "Bounded reader for .cdr drawings of versions 1 to 27 and .cmx files: WL records, RIFF index, compressed lists, ZIP packages, shapes, fills, outlines, pages and layers, and the picture a file keeps of its drawing; writer for version 15 .cdr drawings, and a .cmx writer in the layouts it reads"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
