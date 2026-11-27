@@ -326,8 +326,9 @@ fn end_lives(reg: &mut Registry, owners: impl IntoIterator<Item = Id>) {
 pub(crate) fn evict(ctx: &Context) {
     let now = frame::clock(ctx);
     let live = pass::live_viewports(ctx);
+    let running = frame::running(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
-        let due = |r: &OwnerRecord| owner_due(r.pass, r.at, pass::pass_nr(ctx, r.viewport), now, live.contains(&r.viewport));
+        let due = |r: &OwnerRecord| owner_due(r.pass, r.at, pass::pass_nr_beside(ctx, running, r.viewport), now, live.contains(&r.viewport));
         let dead: IdSet = reg.owners.iter().filter(|(_, r)| due(r)).map(|(id, _)| *id).collect();
         if dead.is_empty() {
             return;

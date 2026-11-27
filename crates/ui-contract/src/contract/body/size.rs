@@ -305,13 +305,13 @@ impl<'b> BodyHooks<'b> {
 
     /// The room the mount offers: a layer's room, unless the host gives it a rect of its own size, else the rect the
     /// container is shown at, else the room of the flow. `tokens` are the container's own, as its token scope sets them:
-    /// the layer keeps the inset from the screen edge the host places it with.
-    pub(super) fn mount_room(&self, props: &ContainerProps, ui: &Ui, id: Id, at: ShowAt, tokens: &UiTokens) -> Vec2 {
+    /// the layer keeps the inset from the screen edge the host places it with. `env` is the env `ui`'s children are
+    /// placed under.
+    pub(super) fn mount_room(&self, props: &ContainerProps, (ui, env): (&Ui, &Env), id: Id, at: ShowAt, tokens: &UiTokens) -> Vec2 {
         match (overlay_of(props), self.fixed) {
             (Some(overlay), false) => {
-                let env = Env::of(ui);
-                let overlay = &overlay.opened_in(&env);
-                let room = Self::layer_room(ui.ctx(), &env, overlay).size();
+                let overlay = &overlay.opened_in(env);
+                let room = Self::layer_room(ui.ctx(), env, overlay).size();
                 // An anchored layer's body runs in the room the anchor leaves on the side it takes, as the host
                 // offers it: a body taller than that scrolls instead of covering the anchor.
                 let ctx = ui.ctx();
@@ -319,7 +319,7 @@ impl<'b> BodyHooks<'b> {
                 let rtl = env.layer_direction().is_rtl();
                 match crate::contract::overlay::measuring_room(
                     ctx,
-                    &env,
+                    env,
                     id,
                     overlay,
                     own,
@@ -336,20 +336,20 @@ impl<'b> BodyHooks<'b> {
                 (Mount::Pane(ShellPane { at: Some(rect), content_extent: true, .. }), _) => rect.size(),
                 (_, ShowAt::Rect(rect)) => rect.size(),
                 (_, ShowAt::Flow) => {
-                    let room = crate::layout::flow_room(ui);
+                    let room = crate::layout::flow_room(ui, env);
                     // A row that shrinks its children to fit gives a body among them a width: it measures and shows
                     // in that room. A body that fills a bounded row takes the rest of it instead.
                     let fills = !self.sizing(props).content_width() && room.x.is_finite();
-                    let cap = match Env::of(ui).shrink {
+                    let cap = match env.shrink {
                         Some(crate::layout::Shrink::Apply(row)) if !fills => crate::layout::shrink_cap(ui.ctx(), row, id).map(|cap| cap.width),
                         _ => None,
                     };
                     // A body that fills the height of a `Stack` body that scrolls along y takes a share of what the view
                     // shows (`layout::view_room`): it runs in that room, bounded like a body in a room that does not scroll.
-                    let shares_view = !room.y.is_finite() && self.sizing(props).fills_height() && crate::layout::shares_y(ui);
-                    let y = shares_view.then(|| crate::layout::view_room(ui, craft_behavior::Axis::Y)).flatten().unwrap_or(room.y);
+                    let shares_view = !room.y.is_finite() && self.sizing(props).fills_height() && crate::layout::shares_y(env);
+                    let y = shares_view.then(|| crate::layout::view_room(ui, env, craft_behavior::Axis::Y)).flatten().unwrap_or(room.y);
                     // A body that fills the height of the row line it stands on runs in that line.
-                    let y = self.line_height(props, &Env::of(ui), at).unwrap_or(y);
+                    let y = self.line_height(props, env, at).unwrap_or(y);
                     Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(y))
                 }
             },

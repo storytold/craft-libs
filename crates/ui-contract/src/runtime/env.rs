@@ -791,6 +791,8 @@ impl Env {
     ///
     /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
+        #[cfg(feature = "testing")]
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
         // The root env stands for an entry above the whole stack.
@@ -960,6 +962,18 @@ impl Env {
     pub(crate) fn set_root(ctx: &Context, viewport: ViewportId, env: Env) {
         PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| envs.root = Some(env));
     }
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread walked a `Ui` stack for its env (`Env::of`).
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn env_walks() -> u64 {
+    WALKS.with(std::cell::Cell::get)
 }
 
 /// One viewport's env entries by the `Ui` they are installed for, and its root env. The lock is held only to

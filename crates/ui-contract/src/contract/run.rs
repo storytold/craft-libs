@@ -85,6 +85,8 @@ pub(crate) struct Measuring<'a, 's> {
     pub at: ShowAt,
     /// The width a `Proposal::Width` sets: the room is that wide and unbounded in height.
     pub width: Option<f32>,
+    /// The env the component's parent installed for `ui`, under which `ui`'s children are placed.
+    pub place: &'a Env,
     pub env: &'a Env,
     pub scx: &'a StyleCx<'s>,
     pub resolved: &'a Resolved<'s>,
@@ -126,8 +128,9 @@ pub(crate) trait ShapeHooks<C: Component> {
     }
 
     /// The size step 6 allocates, from the measured `size`: a body that fills reads the available rect of `ui`: the
-    /// parent's at step 5, and the host's at step 6 when the host runs the pass in a `Ui` of its own.
-    fn sized(&self, _comp: &C, _ui: &Ui, _id: Id, size: Vec2) -> Vec2 {
+    /// parent's at step 5, and the host's at step 6 when the host runs the pass in a `Ui` of its own. `place` is the
+    /// env `ui`'s children are placed under.
+    fn sized(&self, _comp: &C, _ui: &Ui, _place: &Env, _id: Id, size: Vec2) -> Vec2 {
         size
     }
 
@@ -210,8 +213,9 @@ pub(crate) trait ShapeHooks<C: Component> {
         0.0
     }
 
-    /// What the shape adds to the content size at step 5, before padding and `min_size`.
-    fn extent(&mut self, _comp: &C, _ui: &Ui, _at: ShowAt, _id: Id, _scx: &StyleCx<'_>) -> Vec2 {
+    /// What the shape adds to the content size at step 5, before padding and `min_size`. `place` is the env the parent
+    /// `ui`'s children are placed under.
+    fn extent(&mut self, _comp: &C, _ui: &Ui, _place: &Env, _at: ShowAt, _id: Id, _scx: &StyleCx<'_>) -> Vec2 {
         Vec2::ZERO
     }
 
@@ -219,13 +223,13 @@ pub(crate) trait ShapeHooks<C: Component> {
     /// inputs only: a body runs its regions in an invisible sizing pass and measures what they took. The default is
     /// `extent`.
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
-        self.extent(comp, at.ui, at.at, cx.core.id, at.scx)
+        self.extent(comp, at.ui, at.place, at.at, cx.core.id, at.scx)
     }
 
     /// A real pass's step 5 for a body or an item shape: what the shape adds to the content size, from a measuring run
     /// of its contents in this pass (or the record one left in this pass). The default is `extent`.
     fn pass_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, _style: &C::Style, _shown: Option<Arc<ValueOf<C>>>) -> Vec2 {
-        self.extent(comp, at.ui, at.at, at.resolved.id, at.scx)
+        self.extent(comp, at.ui, at.place, at.at, at.resolved.id, at.scx)
     }
 
     /// The width by which the shape's content wants to be wider than the size it measured to, because the room cut
@@ -327,15 +331,15 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         (scope != crate::runtime::focus::FocusPolicy::NONE).then_some(scope)
     }
 
-    fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
+    fn sized(&self, comp: &C, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2 {
         use craft_behavior::Axis;
-        let room = crate::layout::leaf_fill_room(ui);
+        let room = crate::layout::leaf_fill_room(ui, place);
         // A leaf is given an axis its enclosing body does not size from its content: there it fills, elsewhere it keeps
         // its measured size, so it never sets that size.
-        let content = Env::of(ui).content;
+        let content = place.content;
         let fill = |measured: f32, offered: f32, along: Axis| {
             let given = if along == Axis::X { !content.0 } else { !content.1 };
-            crate::layout::fill_size(ui, id, along, measured, offered, given)
+            crate::layout::fill_size(ui, place, id, along, measured, offered, given)
         };
         // The control beside an inspector's label fills the cell the label leaves, unless its caller sized it to its
         // content.
@@ -343,7 +347,7 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         if sizing == Some(super::Sizing::Fill) {
             return Vec2::new(fill(size.x, room.x, Axis::X), fill(size.y, room.y, Axis::Y));
         }
-        let in_cell = Env::of(ui).cell_fills && sizing != Some(super::Sizing::Content);
+        let in_cell = place.cell_fills && sizing != Some(super::Sizing::Content);
         match comp.fills().or(in_cell.then_some(Axis::X)) {
             Some(Axis::X) => Vec2::new(fill(size.x, room.x, Axis::X), size.y),
             Some(Axis::Y) => Vec2::new(size.x, fill(size.y, room.y, Axis::Y)),
@@ -535,9 +539,9 @@ pub(crate) trait Erased {
     fn fills_width(&self) -> bool;
     /// How much wider than the size it measured to the shape's content wants to be (`ShapeHooks::overflow`).
     fn overflow(&self) -> f32;
-    fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
+    fn sized(&self, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2;
     fn arena(&self) -> bool;
-    fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2;
+    fn extent(&mut self, ui: &Ui, place: &Env, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2;
     fn pad(&self, tokens: &UiTokens) -> f32;
     fn host(&mut self, at: HostCx<'_>) -> Box<dyn Host>;
     fn record(&mut self, stage: &mut MemoryStage, ctx: &Context, id: Id);
@@ -598,7 +602,7 @@ pub(crate) trait ErasedPass<'a> {
     fn in_flow(&self) -> bool;
     fn regions(&self, id: Id) -> Vec<(Id, Vec2)>;
     fn focus(&self) -> Option<focus::FocusPolicy>;
-    fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
+    fn sized(&self, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2;
     fn fills_width(&self) -> bool;
     fn first_line(&self, ctx: &Context, id: Id, height: f32) -> Option<f32>;
     fn first_is_row_line(&self) -> bool;
@@ -656,6 +660,8 @@ struct Pass<'p, 'r, 'a> {
     p: &'p mut dyn ErasedPass<'a>,
     facts: &'r TypeFacts,
     env: &'r Env,
+    /// The env the parent installed for the parent `Ui`.
+    place: &'r Env,
     style: &'r dyn StyleView,
     resolved: &'r Resolved<'r>,
     trace: Trace<'r>,
@@ -834,8 +840,9 @@ fn sense_root(ui: &Ui, member: Option<crate::runtime::env::ArenaId>, spec: RootS
     }
 }
 
-/// Step 6: the rect the root takes in `ui`, and whether it is a fill-width root held at its measured width.
-fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Vec2, inert: bool, rtl: bool) -> (Rect, bool) {
+/// Step 6: the rect the root takes in `ui`, whose children are placed under `place`, and whether it is a fill-width
+/// root held at its measured width.
+fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, (at, place): (ShowAt, &Env), env: &Env, size: Vec2, inert: bool, rtl: bool) -> (Rect, bool) {
     let (ctx, id) = (ui.ctx().clone(), p.resolved.id);
     if p.dropped {
         return (Rect::from_min_size(ui.cursor().min, Vec2::ZERO), false);
@@ -845,16 +852,16 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
     // the column settles on, so it never sets that width.
     let held = !inert
         && matches!(at, ShowAt::Flow)
-        && ((env.content_column && p.p.fills_width()) || (crate::layout::in_grid_content_column(ui) && p.p.fills_width_only()));
+        && ((env.content_column && p.p.fills_width()) || (crate::layout::in_grid_content_column(&ctx, place) && p.p.fills_width_only()));
     let rect = if held {
         // The column's settled width, read before the child takes its place in it. A sizing or measuring run has no
         // settled width yet: there the child shows at its own size.
         let column = (!ui.is_sizing_pass() && !crate::runtime::measure::active(ui.ctx()))
-            .then(|| crate::layout::flow_room(ui).x)
+            .then(|| crate::layout::flow_room(ui, place).x)
             .filter(|width| width.is_finite())
             .unwrap_or(0.0);
         let line = p.p.first_is_row_line();
-        let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y), line });
+        let flowed = steps::place(ui, place, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y), line });
         // The column's first sweep learns which of its held children measured narrower than it settles on.
         if let Some(ColumnSweep::Count(column)) = env.column {
             crate::layout::report_held(&ctx, column, id, crate::layout::HeldKind::Fill, flowed.width());
@@ -864,7 +871,7 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
     } else {
         let fill = p.p.fills_width() && !p.p.fills_width_only();
         let size = if inert { Vec2::ZERO } else { size };
-        let placed = steps::place(ui, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() });
+        let placed = steps::place(ui, place, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() });
         // A picture its measure held (`MeasureCx::picture_size`) reports its placed width, padding included.
         if let Some(ColumnSweep::Count(column)) = env.column
             && crate::layout::held_kind(&ctx, column, id) == Some(crate::layout::HeldKind::Picture)
@@ -897,7 +904,9 @@ fn create_node(ctx: &Context, ui: &Ui, id: Id, member: bool, role: Role) -> bool
 fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
     let scope = enter_scope(p, ui);
     let env = host_env.unwrap_or(p.env);
-    if let Some(mut h) = sense_steps(p, ui, host_at, env) {
+    // A host that runs the pass in a `Ui` of its own installs the env it gives for it; else the pass runs in the parent.
+    let place = host_env.unwrap_or(p.place);
+    if let Some(mut h) = sense_steps(p, ui, (host_at, place), env) {
         update_steps(p, env, &h);
         overlay_step(p, ui, env, &h);
         state_steps(p, ui, env, &h);
@@ -955,15 +964,15 @@ struct HostStep {
 /// inert component.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<Box<HostStep>> {
+fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, (host_at, place): (Option<ShowAt>, &Env), env: &Env) -> Option<Box<HostStep>> {
     let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
     let (resolved, inert, facts) = (p.resolved, p.inert, p.facts);
     // 6 place
     let at = host_at.unwrap_or(p.at);
     // A root that fills takes the room of the `Ui` its host runs it in: a pane's or a layer's own, not its parent's.
-    let size = if ui.scope_id() == p.parent { p.size } else { p.p.sized(ui, id, p.measured) };
-    let (rect, held) = place_root(p, ui, at, env, size, inert, rtl);
+    let size = if ui.scope_id() == p.parent { p.size } else { p.p.sized(ui, place, id, p.measured) };
+    let (rect, held) = place_root(p, ui, (at, place), env, size, inert, rtl);
     p.trace.mark(Step::Place);
     // What the content wants past the room counts where the root's width comes from its content: a content-sized
     // root, or a fill-width one held at its measured width. A root that fills the flow keeps to the room it fills, and
@@ -1475,30 +1484,30 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
-pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+/// Runs `t` in `ui`, whose children are placed under `place`: the env its parent installed for it, which every step
+/// of the run reads the place from.
+pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, place: Env) {
     if crate::runtime::pass_state::in_component_tree() {
-        return run_in_context(t, ui, at, tip);
+        return run_in_context(t, ui, at, tip, place);
     }
     let ctx = ui.ctx().clone();
-    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip));
+    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip, place));
 }
 
-fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
-    let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
+fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, place: Env) {
+    let ctx = ui.ctx().clone();
+    let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(&ctx, &place)).flatten();
     match cell {
-        Some((grid, column, sized)) => {
-            let ctx = ui.ctx().clone();
-            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip));
-        }
-        None => run_steps(t, ui, at, tip),
+        Some((grid, column, sized)) => crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip, place)),
+        None => run_steps(t, ui, at, tip, place),
     }
 }
 
 /// Steps 1 to 17 of `run`. A component's children run inside step 5 (a body's measuring run) and inside the passes
 /// of steps 6 to 16, so the frames on that path keep only what the run reads after them: each step runs in its own
 /// function, and `run_steps` holds what steps 1 to 5 found.
-fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
-    let begun = begin(t, ui);
+fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, place: Env) {
+    let begun = begin(t, ui, place);
     let mut stage = begun.open_stage(t);
     let mixed = value_step(t, &begun, &mut stage);
     let resolved = begun.resolved(t);
@@ -1525,7 +1534,9 @@ struct Begun {
     sizing: bool,
     /// The inspector records this run; read once per run.
     recording: bool,
-    /// The env of the parent `Ui`, which the style reads.
+    /// The env the parent installed for the parent `Ui`, under which the run is placed.
+    place: Env,
+    /// The place env in the component's token scope, which the style reads.
     env: Env,
     /// The env with the component's own command instance, when it has one.
     own_env: Option<Env>,
@@ -1564,7 +1575,7 @@ impl Begun {
 /// Steps 1 to 3: env, style and id.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn begin(t: &mut dyn Erased, ui: &Ui) -> Box<Begun> {
+fn begin(t: &mut dyn Erased, ui: &Ui, place: Env) -> Box<Begun> {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1579,7 +1590,7 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Box<Begun> {
     let recording = !sizing && inspect::recording(&ctx);
     // 1 env: `Common` moves out of the component; `Resolved` borrows it. A themed component resolves its own look in its
     // scope, and everything it shows inherits it.
-    let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
+    let env = scoped_env(&ctx, place.clone(), t.theme_scope());
     let common: Common = t.take_common();
     let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant, &env));
     // 2 style
@@ -1595,7 +1606,7 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Box<Begun> {
     }
     // The command instance the component is, which steps 4 to 17 run under.
     let own_env = t.instance_scope().map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
-    Box::new(Begun { ctx, facts, shape, sizing, recording, env, own_env, common, step1, style, id })
+    Box::new(Begun { ctx, facts, shape, sizing, recording, place, env, own_env, common, step1, style, id })
 }
 
 /// Step 4, value: returns whether the binding holds a mixed value. A sizing pass reads the cancel and ends nothing:
@@ -1647,7 +1658,7 @@ fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
             {
                 Some(width)
             }
-            _ => Some(crate::layout::flow_room(ui).x)
+            _ => Some(crate::layout::flow_room(ui, &begun.place).x)
                 .filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(ctx))),
         },
     };
@@ -1656,7 +1667,7 @@ fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
     // room (`mount_room`). A body that fills the width of a bounded room takes the room or its share of it (`sized`),
     // so it is no unit.
     let in_flow = matches!(at, ShowAt::Flow) && t.fills().is_none();
-    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
+    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui, &begun.place).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let given = match shrink {
         Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(ctx, row, id),
@@ -1693,10 +1704,10 @@ fn extent_step(
     }
     let scx = steps::style_cx(ctx, &begun.env, &begun.step1);
     if sizing || matches!(shape, ShapeKind::Body | ShapeKind::Item) {
-        let measuring = Measuring { ui, at, width: None, env, scx: &scx, resolved, command: begun.step1.command.clone(), mixed };
+        let measuring = Measuring { ui, at, width: None, place: &begun.place, env, scx: &scx, resolved, command: begun.step1.command.clone(), mixed };
         if sizing { t.measured_extent(&measuring, stage) } else { t.pass_extent(&measuring) }
     } else {
-        t.extent(ui, at, id, &scx)
+        t.extent(ui, &begun.place, at, id, &scx)
     }
 }
 
@@ -1729,7 +1740,9 @@ fn measure_step(
     let fills = |axis: craft_behavior::Axis| t.fills() == Some(axis) || begun.common.sizing == Some(super::Sizing::Fill);
     let tells_least = shape == ShapeKind::Leaf
         && matches!(at, ShowAt::Flow)
-        && [craft_behavior::Axis::X, craft_behavior::Axis::Y].into_iter().any(|axis| fills(axis) && crate::layout::counting_fills(ui, axis));
+        && [craft_behavior::Axis::X, craft_behavior::Axis::Y]
+            .into_iter()
+            .any(|axis| fills(axis) && crate::layout::counting_fills(ctx, &begun.place, axis));
     let min = (in_label || tells_least).then(|| {
         let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
         Call { proposal: Proposal::Min, room: None, inputs, took }
@@ -1777,8 +1790,9 @@ fn measure_step(
         }
         false => cap,
     };
-    let fit_room =
-        (leaf_in_flow && shrink == Some(crate::layout::Shrink::Fit)).then(|| crate::layout::flow_room(ui).x).filter(|room| room.is_finite());
+    let fit_room = (leaf_in_flow && shrink == Some(crate::layout::Shrink::Fit))
+        .then(|| crate::layout::flow_room(ui, &begun.place).x)
+        .filter(|room| room.is_finite());
     let cap = match fit_room.filter(|room| size.x > *room) {
         Some(room) => Some(cap.map_or(room, |cap| cap.min(room)).max(least(&mut *t))),
         None => cap,
@@ -1788,7 +1802,7 @@ fn measure_step(
     let measured = size;
     // A component on a layer or in a window of its own takes no room in the parent's flow: the parent neither sizes it
     // nor counts it among the children that share its room. Its host sizes it in its own `Ui`.
-    let size = if t.in_flow() { t.sized(ui, id, size) } else { size };
+    let size = if t.in_flow() { t.sized(ui, &begun.place, id, size) } else { size };
     match shrink {
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             // The `Ideal` size in no room, and the least width at which its content shows whole.
@@ -1873,6 +1887,7 @@ fn passes<'a>(
         p: e,
         facts: &begun.facts,
         env: begun.env(),
+        place: &begun.place,
         style: &*begun.style,
         resolved,
         trace: begun.trace(),
@@ -1948,9 +1963,11 @@ pub(super) fn measure_shape(
     purpose: MeasureFor,
 ) -> Vec2 {
     let facts = t.facts();
+    // The one walk of a measure: what follows reads the place from it.
+    let place = Env::of(ui);
     let env = match under {
-        Some(under) => super::cx::child_env(&Env::of(ui), under),
-        None => Env::of(ui),
+        Some(under) => super::cx::child_env(&place, under),
+        None => place.clone(),
     };
     let env = scoped_env(ui.ctx(), env, t.theme_scope());
     let id = id.unwrap_or_else(|| steps::id(ui, &t.common().id, false, false, facts.style_key, facts.name));
@@ -1971,7 +1988,7 @@ pub(super) fn measure_shape(
         Vec2::ZERO
     } else {
         let mut stage = MemoryStage::open_peek(ui.ctx(), id);
-        let measuring = Measuring { ui, at, width, env: &env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
+        let measuring = Measuring { ui, at, width, place: &place, env: &env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
         t.measured_extent(&measuring, &mut stage)
     };
     let ask = |t: &mut dyn Erased, proposal: Proposal| measured(t, &MeasureIn { ui, env: &env, proposal, room: None }, &*style, &resolved, extent);

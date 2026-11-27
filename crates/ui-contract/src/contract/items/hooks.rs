@@ -187,13 +187,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Self::props_pad(comp, tokens)
     }
 
-    fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
+    fn sized(&self, comp: &C, ui: &Ui, place: &Env, id: Id, size: Vec2) -> Vec2 {
         let sizing = comp.props(Internal::new()).sizing;
         // A collection that measured its width from its content takes that width; the column it sits in holds it.
         let width = if self.content_sized(comp) || self.from_content.0 {
             size.x
         } else {
-            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
+            crate::layout::body::fill_size(ui, place, id, Axis::X, size.x, self.room.x, true)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
             (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
@@ -1133,12 +1133,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Step 5 in both runs: what the rows take in the room `measuring` gives. The auto rows in view are measured
     /// first (`measure_ahead`), so the collection takes its size, and places its rows, by this pass's measure.
     fn items_extent(&mut self, comp: &C, measuring: &Measuring<'_, '_>, id: Id) -> Vec2 {
-        let (ui, scx) = (measuring.ui, measuring.scx);
+        let (ui, env, scx) = (measuring.ui, measuring.place, measuring.scx);
         let room = match measuring.at {
             ShowAt::Rect(rect) => rect.size(),
-            ShowAt::Flow => crate::layout::flow_room(ui),
+            ShowAt::Flow => crate::layout::flow_room(ui, env),
         };
-        let env = Env::of(ui);
         // The layout reads the component's own motion memory (`StyleCx::exiting`): an item leaving its source keeps
         // its room until its exit ends.
         let scx = &scx.measured_by(ui).owned_by(id, env.motion);
@@ -1148,7 +1147,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
         // across the width the column settles on.
-        let held = env.content_column || crate::layout::in_grid_content_column(ui);
+        let held = env.content_column || crate::layout::in_grid_content_column(ui.ctx(), env);
         self.from_content = (!env.gives_width() && (crate::runtime::measure::active(ui.ctx()) || !held), env.content.1);
         self.header.measure(scx);
         self.header.read_content(ui.ctx(), id);
@@ -1157,7 +1156,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Under a body that does not give the width, the measuring run lays the rows out at the width the collection
         // asks for, so the height it reports is the one it has at that width (a grid's rows at its columns).
         let from_content = self.from_content.0 && !self.content_sized(comp);
-        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, ui, id, room, item, scx));
+        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, (ui, env), id, room, item, scx));
         let width = match (bounded, self.content_sized(comp)) {
             (true, false) => asked.unwrap_or(room.x),
             // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
@@ -1220,14 +1219,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let rows = self.content.y.max(empty).max(floor);
         let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
         if !(self.scrolls && room.y.is_finite()) {
-            let wide = if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx)) } else { self.content.x };
+            let wide =
+                if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, (ui, env), id, room, item, scx)) } else { self.content.x };
             return Vec2::new(wide, height);
         }
         // A scrolling collection in a bounded room: `Content` takes its rows up to the room, `Fill` the room.
         let wide = if self.content_sized(comp) {
             self.content.x
         } else if from_content {
-            asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx))
+            asked.unwrap_or_else(|| self.width_from_content(comp, (ui, env), id, room, item, scx))
         } else {
             0.0
         };
