@@ -289,3 +289,35 @@ fn unannotated_binary_is_rejected_even_when_every_value_is_null() {
         assert!(read(&bytes).unwrap_err().to_string().contains("Binary"));
     }
 }
+
+#[test]
+fn a_row_group_count_mismatch_fails_before_any_row_callback() {
+    let schema = Arc::new(parse_message_type("message test { REQUIRED INT64 x; }").unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    for v in [1i64, 2] {
+        let mut group = writer.next_row_group().unwrap();
+        let mut col = group.next_column().unwrap().unwrap();
+        col.typed::<Int64Type>().write_batch(&[v], None, None).unwrap();
+        col.close().unwrap();
+        group.close().unwrap();
+    }
+    let bytes = writer.into_inner().unwrap();
+    let footer_start = limits::footer(&bytes, &LIMITS).unwrap();
+    // FileMetaData field 3, num_rows, is compact-Thrift header 0x16 followed by zigzag 2.
+    let at: Vec<_> = (footer_start..bytes.len() - 9).filter(|&i| bytes[i..i + 2] == [0x16, 4]).collect();
+    assert_eq!(at.len(), 1);
+    for (declared, zigzag) in [(3, 6), (1, 2)] {
+        let mut patched = bytes.clone();
+        patched[at[0] + 1] = zigzag;
+        let reader = SerializedFileReader::new(Bytes::from(patched.clone())).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), declared);
+        let mut calls = 0;
+        let error = super::read_rows(&patched, &LIMITS, |_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("row-group rows"), "{error}");
+        assert_eq!(calls, 0);
+    }
+}

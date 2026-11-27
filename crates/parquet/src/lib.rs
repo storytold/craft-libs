@@ -214,6 +214,11 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
             return Err(invalid("Binary and nested Parquet values are not supported"));
         }
     }
+    // The row iterator follows the row-group counts, so a mismatch has to fail before `on_row` runs.
+    let declared = metadata.row_groups().iter().try_fold(0i64, |sum, group| sum.checked_add(group.num_rows()));
+    if declared != Some(info.num_rows()) {
+        return Err(invalid("Parquet row-group rows do not match the file row count"));
+    }
     // Check every advertised page allocation before the decoder sees it.
     limits::pages(&bytes, metadata, footer_start, limits)?;
     let mut count = 0u64;
