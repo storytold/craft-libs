@@ -1,6 +1,6 @@
 //! Gujarati proofing using the installed Hunspell `gu_IN` dictionary (never bundled).
 //! Suggestions use its runtime MAP/REP/TRY/KEY tables. Generic grammar checks have Gujarati
-//! messages; hyphenation keeps the existing fallback.
+//! messages. Hyphenation is by akshara ([`crate::indic`]).
 
 pub mod grammar;
 pub(crate) mod suggest;

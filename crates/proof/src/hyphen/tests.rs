@@ -194,3 +194,18 @@ fn gujarati_pack_patterns_fit_checks_script_and_exceptions() {
     let en_word: Vec<char> = "hyphenation".chars().collect();
     assert!(!pack_patterns_fit(ProofLang::Gu, &pats, &en_word));
 }
+
+/// storytold/vectorcraft#4947: Gujarati text breaks between aksharas, within the paragraph's
+/// limits, where it used to fall to the English rules and get no break at all; a Latin word in
+/// a Gujarati run is still hyphenated as English.
+#[test]
+fn gujarati_breaks_between_aksharas_within_the_limits() {
+    let lim = Limits::default();
+    let gu = |w: &str| hyphenate_word_in(w, &lim, ProofLang::Gu);
+    assert_eq!(gu("વિદ્યાર્થી"), "વિ-દ્યા-ર્થી", "a conjunct is never split");
+    assert_eq!(word_breaks_in("વિદ્યાર્થી", ProofLang::Gu).1, Source::Rules);
+    // A lone consonant at either end is fewer letters than `after_first`/`before_last` allow.
+    assert_eq!(gu("અમદાવાદ"), "અમ-દા-વાદ");
+    assert_eq!(gu("«ગુજરાતી»"), "«ગુ-જ-રા-તી»", "punctuation around the word");
+    assert_eq!(gu("Typography"), hyphenate_word_in("Typography", &lim, ProofLang::En));
+}

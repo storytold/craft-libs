@@ -71,8 +71,8 @@ pub enum ProofLang {
     /// and the `vos` forms of verbs (`tenés`, `vení`, `decime`) accepted ([`crate::es::voseo`]).
     EsUy,
     /// Gujarati (`gu`, `gu-IN`, `guj`): the installed Hunspell dictionary (`gu_IN`, when there is
-    /// one), dictionary-driven suggestions and generic checks with Gujarati messages. Hyphenation
-    /// keeps the fallback patterns.
+    /// one), dictionary-driven suggestions and generic checks with Gujarati messages.
+    /// Hyphenation breaks between aksharas ([`crate::indic`]), or follows a `gu` pack's patterns.
     Gu,
     /// German (`de`, `de-DE`, `de-AT`…; `de-CH` and `de-LI` are [`ProofLang::Pack`] `de-ch`, with
     /// their own dictionary and these patterns): hyphenation by the German patterns (reformed
