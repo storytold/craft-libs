@@ -79,7 +79,8 @@ pub struct TextOptions {
     pub role: TypeRole,
     /// The text size in points in place of the role's, for text whose size is the user's to choose (a document
     /// editor's text size); the face stays the role's. `None` takes the role's size. The component sizes the part for
-    /// it, since a role's line height no longer measures the text.
+    /// it, since a role's line height no longer measures the text: a single-line part centres that row on the part
+    /// rather than on the role's baseline, which a row taller than the role's would leave.
     pub size: Option<f32>,
     /// A multi-line text starts at the top of its part; unset, it is centred on the part's height, as a single line is.
     pub top: bool,

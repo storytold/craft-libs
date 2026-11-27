@@ -48,7 +48,8 @@ pub(crate) struct Edit<'a> {
     /// is not clipped to `rect`.
     pub galley: Option<std::sync::Arc<egui::Galley>>,
     /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
-    /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
+    /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line, and a text
+    /// whose size is the caller's own is centred there whatever this says.
     pub baseline: Option<f32>,
     /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
     /// (`text_adapter`), and a single line or a laid-out galley ignores it.
@@ -159,7 +160,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
     // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, placed so the
     // text's baseline is `baseline`, else centred on the part's centre line. egui centres the row in the rect, whatever
-    // row it allocates from the rect's top.
+    // row it allocates from the rect's top. A text whose size is the caller's own is centred on the part too: its row is
+    // taller than the role's, so the role's baseline would lift the row and its clip out of the top of the part.
     let rect = if multiline || galley.is_some() {
         rect
     } else {
@@ -174,7 +176,10 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         };
         let row = probe.size().y;
         let first_baseline = probe.rows.first().and_then(|placed| placed.row.glyphs.first().map(|glyph| placed.pos.y + glyph.pos.y));
-        let centre = match baseline.zip(first_baseline) {
+        // The row sits on the control's baseline, which every text of the line shares. A size of the caller's own sets
+        // a row taller than the role's that this baseline would carry out of the part's top, so that row is centred on
+        // the part's centre line instead, where the role's own row sits.
+        let centre = match baseline.zip(first_baseline).filter(|_| size.is_none()) {
             Some((baseline, first)) => baseline - first + row / 2.0,
             None => rect.center().y,
         };

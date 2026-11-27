@@ -842,9 +842,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // moves by a share of it.
         let decimals = self.decimals().max(decimals_for_step(step));
         let scale = self.scale;
-        let mut scrub =
-            Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| V::of_number(round_to(number, decimals) / scale))
-                .on_field();
+        // The rounded value is kept in the range after the rounding: a drag that runs into a range end finer than the
+        // decimals it rounds to carries the value past it (0.005 to 0.01), and the range holds the write at its end,
+        // as a typed value does.
+        let kept = move |number: f64| V::of_number(rule.settle(round_to(number, decimals)) / scale);
+        let mut scrub = Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, kept).on_field();
         if self.scrub {
             scrub = scrub.by_label();
         }
