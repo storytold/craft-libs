@@ -407,9 +407,10 @@ pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
         GlyphRole::Tool => (icon.md, None),
         GlyphRole::ToolRail => (icon.lg, Some(text.muted)),
         GlyphRole::PanelRail => (cx.glyph(), Some(text.faint)),
+        GlyphRole::Compact => (icon.glyph_sm, None),
         _ => (cx.glyph(), None),
     };
-    let side = super::small_icon(cx, side);
+    let side = if cx.glyph_role() == GlyphRole::Compact { side } else { super::small_icon(cx, side) };
     let mut ink = off.text.clone();
     if let Some(rest) = rest {
         ink.off.rest = cx.color(rest);

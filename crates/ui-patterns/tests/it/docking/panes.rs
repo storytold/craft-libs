@@ -1,12 +1,15 @@
 //! `PaneArea`: a pane docks only at the edges its spec allows, and Escape during a pane's title drag cancels the drag.
 
 use craft_behavior::Intent;
+use craft_i18n::Direction;
+use craft_theme::{Contrast, Mode};
 use craft_ui::contract::{BodyCx, PaneEdge, Role};
 use craft_ui::docking::GroupDrag;
 use craft_ui::patterns::dock::{PaneArea, PaneCommands, PaneContent, PaneEdges, PanePlace, PaneRequest, PaneSpec, PaneState};
 use craft_ui::runtime::commands::{FireSource, fire};
 use craft_ui::runtime::{drag, keys};
 use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::style::tokens;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -211,4 +214,39 @@ fn float_reports_the_rect_the_pane_floats_in() {
     assert_eq!(float_rects(&kept.take()), vec![FLOAT], "the kept rect is reported");
     let frame = kept.fixture.by_label("Pane 0").expect("the floating pane").rect;
     assert!((frame.min - FLOAT.min).length() < 1.0, "the pane floats in its kept rect: {frame:?}");
+}
+
+/// The x of each vertical divider-coloured line one frame of `bed` paints.
+fn vertical_rules(bed: &mut Bed) -> Vec<f32> {
+    let divider = craft_ui::style::rgba_color(tokens(Mode::Light, Contrast::Standard).color.line.divider);
+    bed.fixture
+        .frame_shapes()
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points: [a, b], stroke } if (a.x - b.x).abs() < 0.5 && stroke.color == divider => Some(a.x),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A docked pane rules its inner edge, the one facing the centre, which flips in RTL; a floating pane rules nothing.
+#[trial]
+fn a_docked_pane_rules_its_inner_edge_and_a_floating_one_does_not() {
+    const EXTENT: f32 = 200.0;
+    for (edge, rtl, inner) in [
+        (PaneEdge::Start, false, EXTENT),
+        (PaneEdge::End, false, ROOM.x - EXTENT),
+        (PaneEdge::Start, true, ROOM.x - EXTENT),
+        (PaneEdge::End, true, EXTENT),
+    ] {
+        let mut bed = bed(PaneEdges::SIDES, PaneState::docked(edge, EXTENT));
+        if rtl {
+            bed.fixture.direction(Direction::Rtl).settle();
+        }
+        let rules = vertical_rules(&mut bed);
+        assert!(rules.iter().any(|x| (x - inner).abs() < 3.0), "{edge:?} rtl={rtl}: a rule on the inner edge at {inner}, got {rules:?}");
+        assert_eq!(rules.len(), 1, "{edge:?} rtl={rtl}: no rule on the outer edge");
+    }
+    let mut floating = bed(PaneEdges::SIDES, PaneState::floating(FLOAT));
+    assert_eq!(vertical_rules(&mut floating), Vec::<f32>::new(), "a floating pane draws no inner-edge rule");
 }
