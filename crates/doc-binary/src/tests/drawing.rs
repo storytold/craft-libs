@@ -147,6 +147,25 @@ fn floating_picture_from_the_blip_store_keeps_position_and_wrap() {
     assert_eq!(doc.media.get(media).map(|b| b.as_slice()), Some(png.as_slice()));
 }
 
+/// Properties Word's reader doesn't use don't take the room of one it does: a table naming
+/// [`craft_officeart::props::MAX_PROPS`] unused ones before its `pib` still links its picture.
+#[test]
+fn unused_properties_leave_room_for_the_picture() {
+    let png = tiny_png();
+    let mut props: Vec<(u16, u32)> = (0..craft_officeart::props::MAX_PROPS as u16).map(|i| (0x1000 + i, 0)).collect();
+    props.push((0x0104, 1));
+    let pic = sp(&[fsp(75, 1025, 0xA00), fopt(&props, &[])]);
+    let art = art_content(&[fbse_png(&png)], &[pic]);
+    let spas = plc(&[1, 3], &spa(1025, [1440, 720, 4320, 2160], spa_flags(1, 0, 2, false)));
+    let text = "A\u{8}B\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let Some(InlineObject::Image { media, .. }) = p0.objects.first() else { panic!("no image: {:?}", p0.objects) };
+    assert_eq!(doc.media.get(media).map(|b| b.as_slice()), Some(png.as_slice()));
+}
+
 /// Layout in table cell is `fLayoutInCell` (bit 15) of the Group Shape Boolean Properties
 /// (0x03BF), valid when `fUsefLayoutInCell` (bit 31) is set; otherwise it's on, its default
 /// ([MS-ODRAW] §2.3.4.44). Off, the shape is placed outside the cell it is anchored in.
