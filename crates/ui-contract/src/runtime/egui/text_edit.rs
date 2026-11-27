@@ -217,11 +217,15 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                     // A laid-out galley sits at the rect's corner, as a painted run does.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
-                        (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, rtl) => match (end_aligned, rtl) {
-                            (true, false) | (false, true) => egui::Align2::RIGHT_CENTER,
-                            (true, true) | (false, false) => egui::Align2::LEFT_CENTER,
-                        },
+                        (centred, rtl) => {
+                            let across = match (centred, end_aligned == rtl) {
+                                (true, _) => egui::Align::Center,
+                                (false, true) => egui::Align::Min,
+                                (false, false) => egui::Align::Max,
+                            };
+                            // A multi-line text starts at the part's top, however many of its lines the text fills.
+                            egui::Align2([across, if multiline { egui::Align::Min } else { egui::Align::Center }])
+                        }
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);

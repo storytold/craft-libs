@@ -22,7 +22,7 @@ use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
 use craft_behavior::{ColumnWidth, keyed};
 use craft_quit::{CloseAnswer, CloseScope};
-use egui::{Key, Modifiers, Rect, Ui, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -575,6 +575,44 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
     let left = dialog(&fixture);
     reopen(&mut fixture, &open);
     assert_eq!(dialog(&fixture), left, "a reopen under the same key starts where the dialog was left");
+}
+
+/// The dialog moves by its whole top strip, as a title bar does: a drag in the frame's padding above the title, or
+/// beside it at either side, moves it too, not only a drag on the title's line (photocraft#17112).
+#[trial]
+fn a_dialog_moves_by_the_padding_around_its_title() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog,
+        |ui| {
+            Text::new("Body text").show(ui);
+        },
+    );
+    fixture.room(BAND_ROOM);
+    fixture.settle();
+    let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect;
+    let title = |fixture: &Fixture| {
+        let band = fixture.by_role(Role::HEADING).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Options"));
+        band.expect("the title band").rect
+    };
+    let start = dialog(&fixture);
+    let line = title(&fixture);
+    assert!(line.top() > start.top(), "the title lies inside the frame's padding: {line:?} in {start:?}");
+    let points = [
+        ("above the title", Pos2::new(line.center().x, (start.top() + line.top()) / 2.0)),
+        ("before the title", Pos2::new((start.left() + line.left()) / 2.0, line.center().y)),
+        ("after the title", Pos2::new(start.right() - 3.0, line.center().y)),
+    ];
+    for (what, at) in points {
+        let before = dialog(&fixture);
+        let at = at + (before.min - start.min);
+        fixture.drag_at(at, BAND_DRAG).settle();
+        assert_eq!(dialog(&fixture).min - before.min, BAND_DRAG, "a drag in the padding {what} moves the dialog");
+    }
+    let before = dialog(&fixture);
+    fixture.drag_at(before.center_bottom() + IN_BODY, BODY_DRAG).settle();
+    assert_eq!(dialog(&fixture), before, "a drag that starts in the body still moves nothing");
 }
 
 #[trial]

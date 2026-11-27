@@ -3,7 +3,7 @@
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-use super::{FieldStyle, text_part};
+use super::{FieldStyle, lines_inset, text_part};
 use crate::choice::Checkbox;
 use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Props as _, Role, WordSetCx as _,
@@ -135,11 +135,12 @@ fn shown_of(shown: Option<&AltText>) -> AltText {
     shown.cloned().unwrap_or_else(|| AltText::parts(Mixed::Mixed, Mixed::Mixed))
 }
 
-/// The height of the description box and the size of the check.
-fn sizes(cx: &MeasureCx<'_, AltTextField<'_>>) -> (f32, Vec2) {
+/// The height of the description's lines, the space above and below them, and the size of the check.
+fn sizes(cx: &MeasureCx<'_, AltTextField<'_>>) -> (f32, f32, Vec2) {
     let words = cx.words::<AltTextWords>();
     let line = cx.layout(&TextRun::new("M")).size().y;
-    (line * LINES as f32, cx.child("decorative", &mut check_face(Mixed::Same(false), &words), Proposal::Ideal))
+    let check = cx.child("decorative", &mut check_face(Mixed::Same(false), &words), Proposal::Ideal);
+    (line * LINES as f32, lines_inset(&cx.style.metrics, line), check)
 }
 
 impl Component for AltTextField<'_> {
@@ -158,9 +159,9 @@ impl Component for AltTextField<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let (text, check) = sizes(cx);
+        let (text, inset, check) = sizes(cx);
         let width = cx.room.unwrap_or(check.x);
-        Vec2::new(width, text + cx.gap() + check.y)
+        Vec2::new(width, 2.0 * inset + text + cx.gap() + check.y)
     }
 
     /// The description box (a text part, disabled while every object is decorative, showing the mixed word as its
@@ -168,10 +169,10 @@ impl Component for AltTextField<'_> {
     /// its own value.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let content = cx.content_rect;
-        let (text, check) = sizes(cx);
+        let (text, inset, check) = sizes(cx);
         let words = cx.words::<AltTextWords>();
-        let area = Rect::from_min_size(content.min, vec2(content.width(), text));
-        let check_at = Rect::from_min_size(pos2(content.min.x, area.max.y + cx.gap()), vec2(content.width(), check.y));
+        let area = Rect::from_min_size(content.min + vec2(0.0, inset), vec2(content.width(), text));
+        let check_at = Rect::from_min_size(pos2(content.min.x, area.max.y + inset + cx.gap()), vec2(content.width(), check.y));
         let value = shown_of(cx.value());
         let placeholder = if value.text.same().is_some() { words.alt_text.clone() } else { words.mixed.clone() };
         let options = TextOptions { lines: Some(LINES), placeholder: Some(placeholder), enabled: !value.all_decorative(), ..TextOptions::default() };

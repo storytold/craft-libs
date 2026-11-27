@@ -1,6 +1,6 @@
 //! Document faces read from a catalog: loaded off the pass, ready from the pass after, kept across a definitions
 //! replacement and while drawn lately (a settled view's replay counts), served to egui without making its fonts again,
-//! and held within one budget; and a face's chain of sibling subsets.
+//! and held within one budget; a face's chain of sibling subsets; and a run at variation coordinates of its face.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,6 +17,8 @@ use craft_ui::testing::{Frames, MemoRun, document_face_budget, last_frame_memo_r
 use egui::{Color32, FontId, Response, Vec2};
 
 const FONT: &[u8] = include_bytes!("../../fonts/NotoSans-test.ttf");
+/// A variable font (`wght`, 400 to 900).
+const VARIABLE: &[u8] = include_bytes!("../../../../font-subset/tests/data/orbitron/Orbitron[wght].ttf");
 const ARABIC: &[u8] = include_bytes!("../../fonts/NotoSansArabic-test.ttf");
 
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -32,6 +34,8 @@ struct Tally {
     loads: Arc<AtomicUsize>,
     threads: Arc<Mutex<Vec<ThreadId>>>,
     states: Arc<Mutex<HashMap<String, FaceState>>>,
+    /// The widths of the same run in the face "variable" at its default, at `wght` 400 and at 900.
+    widths: Arc<Mutex<Vec<f32>>>,
 }
 
 impl Tally {
@@ -48,12 +52,13 @@ impl Tally {
     }
 }
 
-/// The face `key` loads: "split" is a Latin subset chained to the Arabic subset "arabic"; every other key loads the
-/// Latin subset alone.
+/// The face `key` loads: "split" is a Latin subset chained to the Arabic subset "arabic", "variable" a variable
+/// font; every other key loads the Latin subset alone.
 fn face_of(key: &str) -> FaceBytes {
     match key {
         "split" => FaceBytes::new(Arc::from(FONT), 0).chain(["arabic"]),
         "arabic" => FaceBytes::new(Arc::from(ARABIC), 0),
+        "variable" => FaceBytes::new(Arc::from(VARIABLE), 0),
         _ => FaceBytes::new(Arc::from(FONT), 0),
     }
 }
@@ -101,6 +106,14 @@ impl Component for Owner {
             if let FaceState::Ready(font) = &state {
                 let runs = [DocRun::new("Ag", font.clone(), 14.0, DataColor::new(Color32::BLACK))];
                 let _ = cx.layout_doc(&DocText::new(&runs));
+                if key == "variable" {
+                    let at = [vec![], vec![(*b"wght", 400.0)], vec![(*b"wght", 900.0)]];
+                    let width = |coords: &Vec<([u8; 4], f32)>| {
+                        let runs = [DocRun::new("Hamburg", font.clone(), 100.0, DataColor::new(Color32::BLACK)).coords(coords)];
+                        cx.layout_doc(&DocText::new(&runs)).size().x
+                    };
+                    *self.tally.widths.lock().expect("the widths") = at.iter().map(width).collect();
+                }
             }
             self.tally.states.lock().expect("the states").insert(key.clone(), state);
         }
@@ -150,6 +163,16 @@ fn shown(frames: &mut Frames, jobs: &ManualJobs, tally: &Tally, keys: &[String])
 /// atlas with them, when a face changes its definitions.
 fn generation(frames: &Frames) -> u64 {
     frames.ctx.fonts(|fonts| fonts.atlas_generation())
+}
+
+#[trial]
+fn a_run_is_laid_out_at_its_variation_coordinates() {
+    let (mut frames, jobs, tally) = rig();
+    shown(&mut frames, &jobs, &tally, &["variable".to_owned()]);
+    let widths = tally.widths.lock().expect("the widths").clone();
+    let [plain, regular, black] = widths[..] else { panic!("{widths:?}") };
+    assert_ne!(black, regular, "the run is laid out at its coordinates");
+    assert_eq!(plain, regular, "the face's default weight");
 }
 
 #[trial]
