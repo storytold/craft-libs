@@ -149,6 +149,8 @@ fn signature(tree: &AccessTree) -> HashMap<NodeKey, String> {
 /// Every action a node declares changes something: a click, an edit, a node state or the focus. A repeated set of
 /// nodes runs on a fixed sample under the gate's fraction ([`nodes::sampled_actions`]).
 fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
+    // The sets of nodes read so far, so that under the sampling gate a set of one role shown by every story is read once.
+    let mut seen = Vec::new();
     for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
         let fixture = &subject.base(story).fixture;
         let actions = [
@@ -163,7 +165,7 @@ fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
             .filter(|key| tree.data_of(*key).is_some_and(|node| !node.is_disabled()))
             .flat_map(|key| actions.iter().filter(move |(declared, _)| tree.declares_key(key, *declared)).map(move |(declared, _)| (key, *declared)))
             .collect();
-        let nodes = nodes::sampled_actions(tree, declared)
+        let nodes = nodes::sampled_actions(tree, declared, &mut seen)
             .into_iter()
             .filter_map(|(key, declared)| actions.iter().find(|(known, _)| *known == declared).map(|(_, kind)| (key, *kind)));
         for (key, kind) in nodes {
@@ -220,15 +222,26 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
         _ => None,
     };
     for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
-        for &(key, _, step) in keys.iter().filter(|(_, kept, _)| *kept) {
+        // Up and Down take the intents Right and Left do through the same code, so the sampled run leaves them out.
+        let sampled = nodes::samples_repeats();
+        for &(key, _, step) in keys.iter().filter(|(key, kept, _)| *kept && !(sampled && matches!(key, Key::ArrowUp | Key::ArrowDown))) {
             let mut fixture = input_fixture(story);
             fixture.key(Key::Tab, Modifiers::NONE);
             fixture.settle();
             let (before, was_open) = (fixture.data().snapshot(), any_expanded(fixture.tree()));
-            let declares_before = |declared| {
+            let declared_before: Vec<Declared> = {
                 let tree = fixture.tree();
-                tree.keys().into_iter().any(|node| tree.declares_key(node, declared))
+                let mut found = Vec::new();
+                for node in tree.keys() {
+                    for declared in [Declared::Expand, Declared::Collapse, Declared::Click, Declared::Increment, Declared::Decrement] {
+                        if !found.contains(&declared) && tree.declares_key(node, declared) {
+                            found.push(declared);
+                        }
+                    }
+                }
+                found
             };
+            let declares_before = |declared| declared_before.contains(&declared);
             let (can_expand, can_collapse) = (declares_before(Declared::Expand), declares_before(Declared::Collapse));
             let can_click = declares_before(Declared::Click);
             let steps_before = (declares_before(Declared::Increment), declares_before(Declared::Decrement));

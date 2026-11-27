@@ -352,7 +352,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
-    /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
+    /// Zoom typing: a Tab rewrites the draft (with no draft it moves focus) and a press on the field's other parts
+    /// keeps it unapplied.
     #[must_use]
     pub(super) fn zoom_typing(mut self) -> Self {
         self.options.tab = crate::primitives::TabKey::Rewrites;

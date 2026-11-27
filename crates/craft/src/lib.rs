@@ -341,6 +341,8 @@ pub use craft_scraft_format as scraft_format;
 pub use craft_settings as settings;
 #[cfg(feature = "sf2")]
 pub use craft_sf2 as sf2;
+#[cfg(feature = "shared-vec")]
+pub use craft_shared_vec as shared_vec;
 #[cfg(feature = "sheet")]
 pub use craft_sheet as sheet;
 #[cfg(feature = "shx")]
