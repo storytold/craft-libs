@@ -261,6 +261,9 @@ pub struct FloatingGroup<'a> {
     /// Whether only the title row shows.
     #[prop]
     minimized: bool,
+    /// Whether the floating window's edge grips can resize it.
+    #[prop]
+    resizable: bool,
     /// The column the window holds, whose bar the title row is.
     #[prop]
     column: Option<WindowColumn>,
@@ -355,6 +358,7 @@ impl<'a> FloatingGroup<'a> {
             limits: SizeLimits::default(),
             opacity: 1.0,
             minimized: false,
+            resizable: true,
             column: None,
             sized: Sizing::Content,
             native: None,
@@ -462,11 +466,12 @@ impl<'a> FloatingGroup<'a> {
             None => (frame.min.x, frame.max.map_or(f32::INFINITY, |max| max.x)),
         });
         let held = self.held_rect().zip(widths);
-        let mut overlay = Overlay::floating().movable(true).resizable(!self.minimized).opacity(self.opacity).body_scroll(false);
+        let resizable = self.resizable && !self.minimized;
+        let mut overlay = Overlay::floating().movable(true).resizable(resizable).opacity(self.opacity).body_scroll(false);
         overlay = if let Some((shown, (least, most))) = held {
             // The sides resize the column's width; its content fixes its height.
             let height = shown.height();
-            let edges = if self.minimized { ResizeEdges::NONE } else { ResizeEdges::LEFT.union(ResizeEdges::RIGHT) };
+            let edges = if resizable { ResizeEdges::LEFT.union(ResizeEdges::RIGHT) } else { ResizeEdges::NONE };
             overlay.placed(shown).resize_edges(edges).size_limits(SizeLimits::new(Vec2::new(least, height), Vec2::new(most.max(least), height)))
         } else if let Some(size) = self.column.and_then(|column| column.fitted) {
             // The host turns a resize into the column's steps, and the window takes the size they make.
