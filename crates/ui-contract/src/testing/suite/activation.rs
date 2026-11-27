@@ -149,6 +149,8 @@ fn signature(tree: &AccessTree) -> HashMap<NodeKey, String> {
 /// Every action a node declares changes something: a click, an edit, a node state or the focus. A repeated set of
 /// nodes runs on a fixed sample under the gate's fraction ([`nodes::sampled_actions`]).
 fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
+    // The sets of nodes read so far, so that under the sampling gate a set of one role shown by every story is read once.
+    let mut seen = Vec::new();
     for story in subject.stories.iter().filter(|story| !story.covers.contains(&Required::Invalid)) {
         let fixture = &subject.base(story).fixture;
         let actions = [
@@ -163,7 +165,7 @@ fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
             .filter(|key| tree.data_of(*key).is_some_and(|node| !node.is_disabled()))
             .flat_map(|key| actions.iter().filter(move |(declared, _)| tree.declares_key(key, *declared)).map(move |(declared, _)| (key, *declared)))
             .collect();
-        let nodes = nodes::sampled_actions(tree, declared)
+        let nodes = nodes::sampled_actions(tree, declared, &mut seen)
             .into_iter()
             .filter_map(|(key, declared)| actions.iter().find(|(known, _)| *known == declared).map(|(_, kind)| (key, *kind)));
         for (key, kind) in nodes {

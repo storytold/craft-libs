@@ -35,6 +35,30 @@ fn with_rows(story: &Story, least: usize) -> Option<(Fixture, Target, Vec<Target
     (shown.len() >= least).then_some((fixture, container, shown))
 }
 
+/// What the first rows of a story allow, as a click on a row shows it: the key role the focused stop takes and whether
+/// the click selects.
+#[derive(Default)]
+pub(super) struct RowsProbe {
+    role: Option<craft_behavior::KeyRole>,
+    selects: bool,
+}
+
+/// The [`RowsProbe`] of `story`: one fixture, one click.
+pub(super) fn probe_rows(story: &Story) -> RowsProbe {
+    let Some((mut fixture, _, shown)) = with_rows(story, 1) else { return RowsProbe::default() };
+    fixture.take_outputs();
+    row_click::click(&mut fixture, &shown[shown.len().min(2) - 1]);
+    let selects = events(&mut fixture).contains(&CollectionKind::Selection);
+    RowsProbe { role: fixture.focused_role(), selects }
+}
+
+/// Whether a story can run a case that needs `wanted` of its rows. Under the sampling gate the cases that run on
+/// one story skip, from one shared probe, the stories that cannot run them; a run that does not sample runs every
+/// story and decides in the case.
+fn can_run(subject: &Subject, story: &Story, wanted: impl Fn(&RowsProbe) -> bool) -> bool {
+    !super::nodes::samples_repeats() || wanted(subject.row_probe(story))
+}
+
 /// The collection events of every pass since the last call.
 fn events(fixture: &mut Fixture) -> Vec<CollectionKind> {
     fixture.take_outputs().into_iter().flat_map(|output| output.collection).collect()
@@ -159,6 +183,9 @@ pub(super) fn click_selects_one_row(subject: &Subject) -> Result<(), String> {
         return Ok(());
     }
     for story in &subject.stories {
+        if !can_run(subject, story, |probe| probe.selects) {
+            continue;
+        }
         let Some((mut fixture, container, shown)) = with_rows(story, 2) else { continue };
         fixture.take_outputs();
         row_click::click(&mut fixture, &shown[1]);
@@ -189,6 +216,9 @@ pub(super) fn type_ahead_moves_the_lead(subject: &Subject) -> Result<(), String>
         return Ok(());
     }
     for story in &subject.stories {
+        if !can_run(subject, story, |probe| probe.role.is_some_and(|role| role.type_ahead)) {
+            continue;
+        }
         let Some((mut fixture, container, shown)) = with_rows(story, 3) else { continue };
         let names: Vec<Option<char>> = shown.iter().map(|row| fixture.tree().name_of(row.node).and_then(|name| name.chars().next())).collect();
         let Some(first) = names[0] else { continue };
@@ -223,6 +253,9 @@ pub(super) fn rename_commits_and_cancels_once(subject: &Subject) -> Result<(), S
     }
     let rename = |kinds: &[CollectionKind], edit: EditKind| kinds.iter().filter(|kind| **kind == CollectionKind::Rename(edit)).count();
     for story in &subject.stories {
+        if !can_run(subject, story, |probe| probe.role.is_some_and(|role| role.rename)) {
+            continue;
+        }
         let Some((mut fixture, container, shown)) = with_rows(story, 1) else { continue };
         row_click::click(&mut fixture, &shown[0]);
         fixture.take_outputs();
@@ -276,6 +309,9 @@ pub(super) fn rename_ends_when_the_editor_loses_focus(subject: &Subject) -> Resu
     }
     let rename = |kinds: &[CollectionKind], edit: EditKind| kinds.iter().filter(|kind| **kind == CollectionKind::Rename(edit)).count();
     for story in &subject.stories {
+        if !can_run(subject, story, |probe| probe.role.is_some_and(|role| role.rename)) {
+            continue;
+        }
         let Some((mut fixture, _, shown)) = with_rows(story, 2) else { continue };
         row_click::click(&mut fixture, &shown[0]);
         fixture.take_outputs();
@@ -318,6 +354,9 @@ pub(super) fn keyboard_reorder_ends_once(subject: &Subject) -> Result<(), String
             .collect()
     };
     for story in &subject.stories {
+        if !can_run(subject, story, |probe| probe.role.is_some_and(|role| role.reorderable.is_some())) {
+            continue;
+        }
         let Some((mut fixture, _, shown)) = with_rows(story, 2) else { continue };
         row_click::click(&mut fixture, &shown[0]);
         fixture.take_outputs();
@@ -460,14 +499,14 @@ fn nodes_of(fixture: &Fixture, container: &Target, role: Role) -> Vec<Target> {
 
 /// A click on a cell that changes the selection leaves that cell's sub-node reporting `SELECTED`, and a cell in
 /// another row reporting none. A collection whose click selects nothing is not read.
-fn selected_cell_reports_selected(story: &Story) -> Result<(), String> {
-    let Some((mut fixture, container, _)) = with_rows(story, 2) else { return Ok(()) };
+fn selected_cell_reports_selected(story: &Story) -> Result<bool, String> {
+    let Some((mut fixture, container, _)) = with_rows(story, 2) else { return Ok(false) };
     let cells = nodes_of(&fixture, &container, Role::CELL);
-    let Some(clicked) = cells.first().copied() else { return Ok(()) };
+    let Some(clicked) = cells.first().copied() else { return Ok(false) };
     fixture.take_outputs();
     fixture.click(&clicked);
     if !events(&mut fixture).contains(&CollectionKind::Selection) {
-        return Ok(());
+        return Ok(false);
     }
     let now = nodes_of(&fixture, &container, Role::CELL);
     if !now.iter().any(|cell| cell.node == clicked.node && super::nodes::is_selected(&fixture, cell.node)) {
@@ -479,16 +518,16 @@ fn selected_cell_reports_selected(story: &Story) -> Result<(), String> {
     {
         return Err(format!("{}: a cell outside the selection reports `SELECTED`", story.name));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Header cells carry a name. From the keyboard, Enter on a header cell that declares `Click` and a sort direction (a sortable column) gives a column event,
 /// and the resize and move commands that are enabled for the focused column give one: a resize through the arrow
 /// keys, a move at once. A column that is not movable or resizable leaves its command disabled and is not read.
-fn header_cells_report_column_events(story: &Story) -> Result<(), String> {
-    let Some((mut fixture, container, _)) = with_rows(story, 0) else { return Ok(()) };
+fn header_cells_report_column_events(story: &Story) -> Result<bool, String> {
+    let Some((mut fixture, container, _)) = with_rows(story, 0) else { return Ok(false) };
     let headers = nodes_of(&fixture, &container, Role::COLUMN_HEADER);
-    let Some(first) = headers.first().copied() else { return Ok(()) };
+    let Some(first) = headers.first().copied() else { return Ok(false) };
     let name = story.name;
     if headers.iter().any(|header| fixture.tree().name_of(header.node).is_none_or(str::is_empty)) {
         return Err(format!("{name}: a column header has no name"));
@@ -527,7 +566,7 @@ fn header_cells_report_column_events(story: &Story) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The sub-nodes of cells and columns: a selected cell's sub-node reports `SELECTED`, and header cells are announced
@@ -536,9 +575,20 @@ pub(super) fn cells_and_columns_are_reported(subject: &Subject) -> Result<(), St
     if !is_items(subject) {
         return Ok(());
     }
+    // Under the sampling gate each check runs on the first story that gets past its gates (cells, a selecting click,
+    // column headers) and is not repeated on the others.
+    let sampled = super::nodes::samples_repeats();
+    let (mut cells_read, mut headers_read) = (false, false);
     for story in &subject.stories {
-        selected_cell_reports_selected(story)?;
-        header_cells_report_column_events(story)?;
+        if !(sampled && cells_read) {
+            cells_read |= selected_cell_reports_selected(story)?;
+        }
+        if !(sampled && headers_read) {
+            headers_read |= header_cells_report_column_events(story)?;
+        }
+        if sampled && cells_read && headers_read {
+            break;
+        }
     }
     Ok(())
 }

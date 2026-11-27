@@ -142,10 +142,13 @@ fn tree_order(tree: &AccessTree) -> Vec<NodeKey> {
     ordered
 }
 
+/// What makes nodes one set for [`sampled_actions`]: the role of the parent, the role of the node and the action.
+pub(super) type ActionSet = (Option<Role>, Option<Role>, Declared);
+
 /// `pairs` (a node and an action it declares) in tree order; when [`samples_repeats`], set by set, each repeated set
 /// cut to its first, middle and last node. Nodes of one role and parent role that declare the same action are one set,
 /// so the cells of every row of a table are one set, not one set per row.
-pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declared)>) -> Vec<(NodeKey, Declared)> {
+pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declared)>, seen: &mut Vec<ActionSet>) -> Vec<(NodeKey, Declared)> {
     let rank: std::collections::HashMap<NodeKey, usize> = tree_order(tree).into_iter().enumerate().map(|(at, key)| (key, at)).collect();
     pairs.sort_by_key(|(node, _)| rank.get(node).copied().unwrap_or(usize::MAX));
     let ordered = pairs;
@@ -161,6 +164,15 @@ pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declar
             None => sets.push(vec![pair]),
         }
     }
+    // A set the component shows in more than one story (a table's rows and headers) is read in the first story only.
+    sets.retain(|set| {
+        let key = set_of(&set[0]);
+        let new = !seen.contains(&key);
+        if new {
+            seen.push(key);
+        }
+        new
+    });
     sets.iter().flat_map(|set| sample(set)).collect()
 }
 
