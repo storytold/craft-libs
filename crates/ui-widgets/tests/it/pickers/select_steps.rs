@@ -1,10 +1,11 @@
 //! A Select steps over its stepped entries only. A value on an entry that is not stepped has no place among them: it
 //! offers both steps, and a step forward lands on the first stop and a step back on the last.
 
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Entry, Role, Show as _};
 use craft_ui::list::ThumbAspect;
 use craft_ui::pickers::Select;
-use craft_ui::testing::access::Declared;
+use craft_ui::testing::access::{Declared, focused_key};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Key, Modifiers, Rect, Ui};
 use std::cell::{Cell, RefCell};
@@ -37,6 +38,29 @@ fn a_select_steps_over_its_stepped_entries_and_from_an_unstepped_one_to_an_end()
     assert_eq!(step(1, Key::ArrowDown), (3, (true, false)), "the first stop skips the unstepped Two and offers no step back");
     assert_eq!(step(4, Key::ArrowDown), (1, (true, true)), "from an unstepped entry, forward lands on the first stop");
     assert_eq!(step(4, Key::ArrowUp), (3, (true, true)), "from an unstepped entry, back lands on the last stop");
+}
+
+#[trial]
+fn tab_in_a_select_keeps_the_enabled_match_reached_by_type_ahead() {
+    let story = Story::new("select_skips_disabled_option", |ui, data| {
+        let entries = [Entry::new(1u8, "Current"), Entry::new(2u8, "Blocked").enabled(false), Entry::new(3u8, "Better")];
+        let out = Select::new("Pick", data.bind("value", 1u8), &entries).show(ui);
+        Button::new("Next").show(ui);
+        out.into()
+    });
+    let mut fixture = Fixture::story(&story);
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    assert!(!fixture.by_role(Role::LIST_BOX).is_empty(), "Alt+Down opens the list before typing");
+    fixture.type_text("b").settle();
+    let preview = *fixture.data().value("value", 1u8);
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert!(fixture.by_role(Role::LIST_BOX).is_empty(), "Tab closes the list");
+    let next = fixture.by_label("Next").expect("the next control");
+    assert_eq!(focused_key(fixture.tree()), next.node, "Tab moves focus to the next control");
+    assert_eq!(*fixture.data().value("value", 1u8), 3, "Tab keeps the enabled match");
+    assert_eq!(preview, 3, "typing already previewed that enabled match");
 }
 
 #[trial]
