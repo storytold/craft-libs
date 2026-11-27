@@ -7,6 +7,7 @@ use egui::{Id, Rect};
 pub struct UnderlineFrame {
     /// The underline rectangle to paint.
     pub rect: Rect,
+    /// Whether another frame is needed to finish the transition.
     pub moving: bool,
 }
 
