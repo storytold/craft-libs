@@ -10,11 +10,11 @@ use craft_ui::patterns::preferences::{
     GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesModel, PreferencesPage, PreferencesState, PreferencesWindow,
     PreferencesWords, RowKind, RowSpec,
 };
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, trial};
-use egui::Ui;
+use egui::{Key, Modifiers, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -188,6 +188,66 @@ fn a_host_labelled_row_shows_its_rules_help_and_follows_its_enabled_state() {
     let help = fixture.texts().iter().find(|run| run.text == "Drawn with its note").map(|run| run.rect).expect("the help shows");
     assert!(help.top() >= button.rect.bottom(), "the help {help:?} sits under the host's rows {:?}", button.rect);
     assert!(fixture.tree().is_disabled_key(button.node), "the disabled rule disables the host's button");
+}
+
+/// Number rows with units: a counted kind, unit text, both, and a float with unit text. Every `set` is recorded.
+#[derive(Default)]
+struct Counted {
+    sets: Vec<(String, PrefValue)>,
+}
+
+impl PreferencesModel for Counted {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        let rows = vec![
+            RowSpec::new("output.size", "Brush size", RowKind::int(24, 1..=64).counting(UnitKind::Pixels)),
+            RowSpec::new("output.bitrate", "Bitrate", RowKind::int(6000, 100..=200_000).unit_text("kbps")),
+            RowSpec::new("output.delay", "Delay", RowKind::int(250, 0..=2000).counting(UnitKind::Milliseconds).unit_text("msec")),
+            RowSpec::new("output.buffer", "Buffer", RowKind::float(1.5, 0.5..=64.0, 1).unit_text("GiB")),
+        ];
+        vec![PageSpec::new("output", "Output", rows)]
+    }
+
+    fn set(&mut self, key: &str, value: PrefValue) {
+        self.sets.push((key.to_owned(), value));
+    }
+
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+
+    fn reset_page(&mut self, _: &str) {}
+}
+
+/// An integer or number row shows its counted kind's symbol after the field, or its unit text when it counts no kind;
+/// the counted kind wins over unit text, and reads the typed text.
+#[trial]
+fn number_rows_show_their_unit_or_unit_text_after_the_field() {
+    let counted = Rc::new(RefCell::new(Counted::default()));
+    let shown = Rc::clone(&counted);
+    let mut state = PreferencesState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        PreferencesPage::new(Bind::bound(&mut state)).show(ui, &mut *shown.borrow_mut());
+    });
+    fixture.room(Vec2::new(1280.0, 800.0)).settle();
+    for (label, unit) in [("Brush size", "px"), ("Bitrate", "kbps"), ("Delay", "ms"), ("Buffer", "GiB")] {
+        let field = fixture.by_label(label).expect("the number field");
+        let painted = fixture
+            .texts()
+            .iter()
+            .filter(|text| text.text == unit && !text.elided && text.clip.contains_rect(text.rect) && field.rect.contains_rect(text.rect))
+            .count();
+        assert_eq!(painted, 1, "one visible {unit} on {label}");
+    }
+    assert!(!fixture.texts().iter().any(|text| text.text == "msec"), "the counted kind's symbol wins over unit text");
+    let field = fixture.by_label("Delay").expect("the delay field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("120ms").key(Key::Tab, Modifiers::NONE).settle();
+    let last = counted.borrow().sets.last().cloned();
+    assert_eq!(last, Some(("output.delay".to_owned(), PrefValue::Int(120))), "the counted kind reads the typed text");
 }
 
 struct Model {

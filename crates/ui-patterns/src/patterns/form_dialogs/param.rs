@@ -730,6 +730,8 @@ fn is_path_list(value: &FieldValue) -> bool {
 struct RowTexts {
     hint: Option<Label>,
     tooltip: Option<Tooltip>,
+    /// The text after the number ([`Param::unit_label`]).
+    unit: Option<Label>,
 }
 
 /// When a row takes input.
@@ -1389,6 +1391,15 @@ impl Param {
         self
     }
 
+    /// Text shown after the number of a number, int, optional-number or range row in place of the symbol of its
+    /// [`unit`](Self::unit), for a quantity no [`UnitKind`] names (`kbps`, `MB`). The host passes it in the user's
+    /// language. Typed text is still read by the row's `unit`, or as a plain number without one.
+    #[must_use]
+    pub fn unit_label(mut self, text: impl Into<Label>) -> Self {
+        self.texts.get_or_insert_default().unit = Some(text.into());
+        self
+    }
+
     /// Parses the registry notation into a list, labels from the keys in Title Case with two fixed names (`cellSize`
     /// is `Cell Size`, `bpc` is `Black Point Compensation`;
     /// `{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0}`). Apps with their own command
@@ -1424,6 +1435,11 @@ impl Param {
     /// The row's tooltip text.
     pub(crate) fn tooltip_text(&self) -> Option<&Tooltip> {
         self.texts.as_deref()?.tooltip.as_ref()
+    }
+
+    /// The text after the row's number ([`Param::unit_label`]).
+    pub(crate) fn unit_label_text(&self) -> Option<&Label> {
+        self.texts.as_deref()?.unit.as_ref()
     }
 
     /// The label a [`Param::in_footer`] row shows while on; `None` for a row in the body.
