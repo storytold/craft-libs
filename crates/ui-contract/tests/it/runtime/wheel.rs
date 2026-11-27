@@ -675,3 +675,125 @@ fn direct_precise_input_cancels_only_older_motion_on_its_axis() {
     assert_eq!(step(&mut frames, vec![pointer::press(at.get())]), Vec2::ZERO, "a press stops the owed motion");
     assert_eq!(step(&mut frames, vec![pointer::release(at.get())]), Vec2::ZERO);
 }
+
+#[trial]
+fn a_finger_scroll_keeps_the_modifiers_it_began_with_to_its_end_and_through_its_momentum() {
+    // egui reports ⌘ as `mac_cmd` and `command` on macOS, and the Ctrl key as `ctrl` and `command` elsewhere.
+    let cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    const SCROLLS: (bool, bool) = (true, false);
+    const ZOOMS: (bool, bool) = (false, true);
+    // macOS reports the fingers and the momentum run after them; Wayland reports the fingers' phases with no source.
+    for (os, key, fingers) in [(Os::Mac, cmd, MouseWheelSource::Trackpad), (Os::Linux, ctrl, MouseWheelSource::Unknown)] {
+        let region = Id::unique("held_region");
+        let view = Id::unique("held_view");
+        let seen: Rc<RefCell<Vec<(Id, Wheel)>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let ctx = ui.ctx();
+            register(ctx, WheelTaker::new(region, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).scrolls(true));
+            // A view that takes only the zoom share, as a zoomable preview inside a scrolling page does.
+            let zooms = WheelTaker::for_sense(view, Rect::from_min_size(Pos2::new(100.0, 75.0), Vec2::new(200.0, 150.0)), Sense::WHEEL_ZOOM);
+            register(ctx, zooms.expect("WHEEL_ZOOM registers a wheel taker"));
+            for id in [region, view] {
+                if let Some(share) = take_share(ctx, id) {
+                    log.borrow_mut().push((id, share));
+                }
+            }
+        });
+        fixture.os(os);
+        fixture.settle();
+        fixture.frame(vec![pointer::moved(Pos2::new(200.0, 150.0))]);
+        seen.borrow_mut().clear();
+        // Whether a frame of `events` scrolled the region, and whether it zoomed the view.
+        let step = |fixture: &mut Fixture, events: Vec<Event>| -> (bool, bool) {
+            fixture.frame(events);
+            let shares = std::mem::take(&mut *seen.borrow_mut());
+            let scrolled = shares.iter().any(|(id, share)| *id == region && share.scroll != Vec2::ZERO);
+            let zoomed = shares.iter().any(|(id, share)| *id == view && share.zoom != 1.0);
+            (scrolled, zoomed)
+        };
+        let finger = |phase: TouchPhase, dy: f32, modifiers: Modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, dy),
+            phase,
+            modifiers,
+            source: fingers,
+        };
+        let momentum = |phase: TouchPhase, dy: f32, modifiers: Modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, dy),
+            phase,
+            modifiers,
+            source: MouseWheelSource::Momentum,
+        };
+        let notch = |modifiers: Modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, -1.0),
+            phase: TouchPhase::Move,
+            modifiers,
+            source: if os == Os::Mac { MouseWheelSource::Wheel } else { MouseWheelSource::Unknown },
+        };
+        let mac = os == Os::Mac;
+
+        // A plain flick, then the zoom key pressed while its momentum runs: the momentum scrolls to its end.
+        if mac {
+            assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Start, -10.0, Modifiers::NONE)]), SCROLLS, "a plain swipe scrolls");
+            assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Move, -10.0, Modifiers::NONE)]), SCROLLS);
+            step(&mut fixture, vec![finger(TouchPhase::End, 0.0, Modifiers::NONE)]);
+            assert_eq!(step(&mut fixture, vec![momentum(TouchPhase::Start, -8.0, Modifiers::NONE)]), SCROLLS, "its momentum scrolls");
+            fixture.hold(key);
+            for _ in 0..3 {
+                assert_eq!(step(&mut fixture, vec![momentum(TouchPhase::Move, -6.0, key)]), SCROLLS, "⌘ pressed during the momentum: it scrolls on");
+            }
+            assert!(!step(&mut fixture, vec![momentum(TouchPhase::End, 0.0, key)]).1, "its end zooms nothing");
+            fixture.hold(Modifiers::NONE);
+            fixture.advance(GESTURE_GAP);
+        }
+
+        // The zoom key pressed while the fingers still move: the swipe stays a scroll; a pinch during it still zooms.
+        assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Start, -10.0, Modifiers::NONE)]), SCROLLS, "{os:?}: a plain swipe scrolls");
+        fixture.hold(key);
+        assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Move, -10.0, key)]), SCROLLS, "{os:?}: the key pressed mid-swipe: it scrolls on");
+        assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Move, -10.0, key)]), SCROLLS, "{os:?}");
+        assert!(step(&mut fixture, vec![Event::Zoom(1.1)]).1, "{os:?}: a pinch zooms whatever the swipe holds");
+        assert!(!step(&mut fixture, vec![finger(TouchPhase::End, 0.0, key)]).1, "{os:?}: its end zooms nothing");
+
+        // The key held before the fingers land: the swipe zooms throughout, after the key's release and through its
+        // momentum too. The next swipe reads the keys afresh, also one that lands while the momentum runs.
+        fixture.advance(GESTURE_GAP);
+        assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Start, -10.0, key)]), ZOOMS, "{os:?}: a swipe begun with the key held zooms");
+        assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Move, -10.0, key)]), ZOOMS, "{os:?}");
+        fixture.hold(Modifiers::NONE);
+        assert_eq!(
+            step(&mut fixture, vec![finger(TouchPhase::Move, -10.0, Modifiers::NONE)]),
+            ZOOMS,
+            "{os:?}: the key released mid-swipe: it zooms on"
+        );
+        step(&mut fixture, vec![finger(TouchPhase::End, 0.0, Modifiers::NONE)]);
+        if mac {
+            assert_eq!(step(&mut fixture, vec![momentum(TouchPhase::Start, -8.0, Modifiers::NONE)]), ZOOMS, "its momentum zooms on");
+            assert_eq!(step(&mut fixture, vec![momentum(TouchPhase::Move, -6.0, Modifiers::NONE)]), ZOOMS);
+            step(&mut fixture, vec![momentum(TouchPhase::End, 0.0, Modifiers::NONE)]);
+        }
+        assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Start, -10.0, Modifiers::NONE)]), SCROLLS, "{os:?}: the next swipe reads its own keys");
+        step(&mut fixture, vec![finger(TouchPhase::End, 0.0, Modifiers::NONE)]);
+        if mac {
+            step(&mut fixture, vec![momentum(TouchPhase::Start, -8.0, Modifiers::NONE)]);
+            fixture.hold(key);
+            step(&mut fixture, vec![momentum(TouchPhase::End, 0.0, key)]);
+            assert_eq!(step(&mut fixture, vec![finger(TouchPhase::Start, -10.0, key)]), ZOOMS, "fingers that land on the momentum with ⌘ held zoom");
+            fixture.hold(Modifiers::NONE);
+            step(&mut fixture, vec![finger(TouchPhase::End, 0.0, Modifiers::NONE)]);
+        }
+
+        // A wheel reports no phases: each notch counts with the keys held at it, one notch after another.
+        fixture.advance(GESTURE_GAP);
+        let keys = if mac { vec![cmd, Modifiers::CTRL] } else { vec![ctrl] };
+        for held in keys {
+            assert_eq!(step(&mut fixture, vec![notch(Modifiers::NONE)]), SCROLLS, "{os:?}: a plain notch scrolls");
+            assert_eq!(step(&mut fixture, vec![notch(held)]), ZOOMS, "{os:?}: a notch with {held:?} zooms");
+            assert_eq!(step(&mut fixture, vec![notch(Modifiers::NONE)]), SCROLLS, "{os:?}: the next plain notch scrolls");
+        }
+    }
+}
