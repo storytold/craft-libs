@@ -657,6 +657,54 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
 }
 
+#[trial]
+fn a_mixed_swatches_selection_rejects_reorder_and_deletes_each_entry_once() {
+    use craft_ui::contract::SelectMode;
+
+    let entry = |name: &str, color| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb(color));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", [1.0, 0.0, 0.0])] },
+        SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue", [0.0, 0.0, 1.0])] },
+    ];
+    let state = Rc::new(RefCell::new(SwatchesState::default()));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let reorders = Rc::new(Cell::new(0));
+    let (seen, moves, held) = (edits.clone(), reorders.clone(), state.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = SwatchesPanel::new(&groups, Bind::bound(&mut *held.borrow_mut()), RED).select(SelectMode::Multi).select_groups(true).show(ui);
+        seen.borrow_mut().extend(out.edits);
+        for event in out.events {
+            if matches!(event, craft_ui::patterns::presets::PresetEvent::Reorder(_)) {
+                moves.set(moves.get() + 1);
+            }
+        }
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    let group = |name: &str| {
+        let tree = fixture.tree();
+        tree.with_role(Role::LIST_BOX_OPTION)
+            .into_iter()
+            .find(|&key| tree.name_of(key).is_some_and(|label| label == name || label.starts_with(&format!("{name},"))))
+            .and_then(|key| fixture.target(key))
+            .unwrap_or_else(|| panic!("the {name} group"))
+    };
+    let basics = group("Basics");
+    let red = fixture.by_label("Red, #ff0000").expect("the Red swatch");
+    let blue = fixture.by_label("Blue, #0000ff").expect("the Blue swatch");
+    let other = group("Other");
+    fixture.click(&basics).hold(Modifiers::COMMAND).click(&red).click(&blue).hold(Modifiers::NONE).settle();
+    let keys = [SwatchKey::Group("Basics".to_owned()), SwatchKey::Swatch("Red".to_owned()), SwatchKey::Swatch("Blue".to_owned())];
+    assert_eq!(state.borrow().selection.items, keys, "the group and swatch keys are selected together");
+    fixture.drag(&red, other.center() - red.center()).settle();
+    assert!(edits.borrow().is_empty());
+    assert_eq!(reorders.get(), 0, "the swatch source refuses a mixed reorder");
+    fixture.key(Key::Delete, Modifiers::NONE).settle();
+    let reported = edits.borrow();
+    assert_eq!(reported.len(), 2, "the group delete already includes Red: {reported:?}");
+    assert!(reported.contains(&SwatchEdit::DeleteGroup { group: "Basics".to_owned() }));
+    assert!(reported.contains(&SwatchEdit::delete("Blue".to_owned())));
+}
+
 /// A group with an empty name holds the swatches outside every group: they show at the top with no header, so no
 /// heading or disclosure button of the panel is left without a name, and a named group keeps its header.
 #[trial]
