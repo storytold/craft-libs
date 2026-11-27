@@ -234,7 +234,8 @@ pub struct Series {
     /// The marker symbol, including explicit `"none"`; `None` means no symbol was specified.
     pub marker: Option<String>,
     /// Effective marker visibility of an imported stacked line series, independent of its
-    /// symbol and stacking kind. An explicit symbol still takes precedence on rebuild.
+    /// symbol and stacking kind. An explicit symbol takes precedence unless a chart-wide
+    /// line-type edit against the raw baseline overrides retained marker settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker_visible: Option<bool>,
     /// The series' plot type, including its line-marker override. DrawingML reads retain this
