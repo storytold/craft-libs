@@ -654,7 +654,8 @@ impl<'p> Page<'p> {
 
 /// The thumbnail of `key` in `rect`, asked for at the size it paints. The store paints the placeholder while the
 /// picture is not ready and the failure mark when it failed; a key the source has no picture for (`Blank`) gets the
-/// file icon on the sunken tile.
+/// file icon on the sunken tile. A cell outside the painter's clip (scrolled out of view) paints nothing and asks the
+/// store nothing, so the app's `ThumbSource` is not asked about cards nobody sees.
 pub(super) fn paint_thumb(
     cx: &ContentPainterCx,
     rect: Rect,
@@ -663,6 +664,9 @@ pub(super) fn paint_thumb(
     key: &ThumbKey,
     paper: Option<DataColor>,
 ) {
+    if !cx.painter.clip_rect().intersect(rect).is_positive() {
+        return;
+    }
     let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
     let state = thumbnails.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
     let paint = match paper {
