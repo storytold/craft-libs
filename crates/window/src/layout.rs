@@ -249,3 +249,7 @@ fn read_config(var: &dyn Fn(&str) -> Option<String>, relative: &str) -> Option<S
     std::fs::File::open(config.join(relative)).ok()?.take(1 << 20).read_to_end(&mut bytes).ok()?;
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod tests;
