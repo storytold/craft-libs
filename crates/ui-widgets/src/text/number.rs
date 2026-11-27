@@ -524,14 +524,17 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
     /// reads every length spelling).
     fn number_codec(&self, units: &Units) -> NumberCodec {
-        self.codec.clone().unwrap_or_else(|| {
-            let reader = match self.lengths {
-                Some(lengths) => units.length_reader(lengths),
-                None => units.reader(self.unit_kind),
-            };
-            let codec = NumberCodec::new(reader, self.decimals());
-            if self.fixed_decimals.is_some() || self.percent_decimals().is_some() { codec.fixed() } else { codec }
-        }).round_trip_f32(self.round_trip_f32)
+        self.codec
+            .clone()
+            .unwrap_or_else(|| {
+                let reader = match self.lengths {
+                    Some(lengths) => units.length_reader(lengths),
+                    None => units.reader(self.unit_kind),
+                };
+                let codec = NumberCodec::new(reader, self.decimals());
+                if self.fixed_decimals.is_some() || self.percent_decimals().is_some() { codec.fixed() } else { codec }
+            })
+            .round_trip_f32(self.round_trip_f32)
     }
 
     /// The decimals the field shows: its codec's, fixed or maximum precision, a percent field's own, else its unit
@@ -868,11 +871,12 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let decimals = self.decimals();
         let scale = self.scale;
         let exact = self.round_trip_f32;
-        let mut scrub =
-            Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| {
-                V::of_number(if exact { f64::from((number / scale) as f32) } else { round_to(number, decimals) / scale })
-            })
-                .on_field();
+        let mut scrub = Scrub::new(
+            drag,
+            move |value: &V| value.number().unwrap_or(0.0) * scale,
+            move |number| V::of_number(if exact { f64::from((number / scale) as f32) } else { round_to(number, decimals) / scale }),
+        )
+        .on_field();
         if self.scrub {
             scrub = scrub.by_label();
         }
@@ -897,7 +901,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             cx.popup("slider").close(cx);
         }
         let rule = self.rule();
-        let fine_shows = if self.round_trip_f32 { rule.high - rule.low <= 10.0 } else { self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS) };
+        let fine_shows =
+            if self.round_trip_f32 { rule.high - rule.low <= 10.0 } else { self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS) };
         // A press on a half steps in the pass it goes down; while it is held the steps due since the last pass
         // repeat, from the press's own start time and the pass's time, so a rerun pass (no time elapsed) steps none.
         for (key, notches) in [(NumberField::STEP_UP, 1), (NumberField::STEP_DOWN, -1)] {
@@ -935,7 +940,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         if let Some(wheel) = cx.take_wheel() {
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
             let origin = if self.round_trip_f32 { from } else { 0.0 };
-            let steps = ValueSteps::new(from - origin, rule.low - origin, rule.high - origin, rule.step, rule.step * LARGE_STEPS).fine(rule.step / LARGE_STEPS);
+            let steps = ValueSteps::new(from - origin, rule.low - origin, rule.high - origin, rule.step, rule.step * LARGE_STEPS)
+                .fine(rule.step / LARGE_STEPS);
             // A notch that changes the value proposes it; the runtime's zero-scroll end share changes none and ends
             // the run.
             let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {

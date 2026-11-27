@@ -43,10 +43,15 @@ impl PickedColor {
     /// keep their hue, black its hue and saturation, a typed Lab colour outside sRGB its values), otherwise converted.
     pub(super) fn values_in(&self, model: &dyn ColorModel) -> ModelValues {
         match self.model {
-            Some(values) if values.model == model.id() && match model.channel_precision() {
-                ChannelPrecision::Float32 => model.to_srgb(&values.values).to_rgb_array() == self.color.to_rgb_array(),
-                _ => model.to_srgb(&values.values).same_rgb8(self.color),
-            } => values,
+            Some(values)
+                if values.model == model.id()
+                    && match model.channel_precision() {
+                        ChannelPrecision::Float32 => model.to_srgb(&values.values).to_rgb_array() == self.color.to_rgb_array(),
+                        _ => model.to_srgb(&values.values).same_rgb8(self.color),
+                    } =>
+            {
+                values
+            }
             _ => model.from_srgb(self.color),
         }
     }
@@ -55,7 +60,9 @@ impl PickedColor {
     /// the rules left it alone.
     pub(super) fn with_values(&self, values: &ModelValues, model: &dyn ColorModel, rules: &Rules<'_>) -> PickedColor {
         let made = model.to_srgb(&values.values).with_alpha(self.color.a);
-        if rules.exact_rgb.is_some() && ![made.r, made.g, made.b, made.a].iter().all(|v| v.is_finite()) { return *self; }
+        if rules.exact_rgb.is_some() && ![made.r, made.g, made.b, made.a].iter().all(|v| v.is_finite()) {
+            return *self;
+        }
         let color = rules.apply(made);
         PickedColor { color, model: rules.same(color, made).then_some(*values) }
     }
@@ -64,7 +71,9 @@ impl PickedColor {
     pub(super) fn with_channel(&self, model: &dyn ColorModel, channel: usize, value: f64, rules: &Rules<'_>) -> PickedColor {
         let mut values = self.values_in(model);
         let value = value as f32;
-        if model.channel_precision() == ChannelPrecision::Float32 && !value.is_finite() { return *self; }
+        if model.channel_precision() == ChannelPrecision::Float32 && !value.is_finite() {
+            return *self;
+        }
         values.values[channel] = value;
         self.with_values(&values, model, rules)
     }
@@ -83,13 +92,17 @@ impl PickedColor {
 
     /// A colour set as such (a sample, a click on a swatch): no model values stay with it.
     pub(super) fn with_color(&self, color: Srgba, rules: &Rules<'_>) -> PickedColor {
-        if rules.exact_rgb.is_some() && ![color.r, color.g, color.b, color.a].iter().all(|v| v.is_finite()) { return *self; }
+        if rules.exact_rgb.is_some() && ![color.r, color.g, color.b, color.a].iter().all(|v| v.is_finite()) {
+            return *self;
+        }
         PickedColor { color: rules.apply(color), model: None }
     }
 
     /// The hex field's colour; this value itself while the field shows it.
     pub(super) fn with_hex(&self, rgba: Rgba, rules: &Rules<'_>) -> PickedColor {
-        if rules.exact_rgb.is_none() && rgba == self.color.to_rgba() { return *self; }
+        if rules.exact_rgb.is_none() && rgba == self.color.to_rgba() {
+            return *self;
+        }
         let color = Srgba::from(rgba);
         self.with_color(if rules.exact_rgb.is_some() { color.with_alpha(self.color.a) } else { color }, rules)
     }
@@ -99,7 +112,6 @@ impl PickedColor {
         f64::from(self.color.a) * 100.0
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -124,7 +136,8 @@ mod tests {
         assert_eq!(hex.color.to_rgb_array(), Srgba::from(color.to_rgba()).to_rgb_array());
         assert_eq!(hex.color.a, color.a);
         assert!(hex.model.is_none());
-        let web_source = PickedColor { color: Srgba::rgb(2.0, 0.0, -0.25).with_alpha(0.37), model: Some(ModelValues::new("rgb", &[2.0, 0.0, -0.25])) };
+        let web_source =
+            PickedColor { color: Srgba::rgb(2.0, 0.0, -0.25).with_alpha(0.37), model: Some(ModelValues::new("rgb", &[2.0, 0.0, -0.25])) };
         let web = web_source.through(&Rules { web: true, ..rules.clone() });
         assert!(web.color.same_rgb8(web_source.color), "this pair deliberately has the same SDR projection");
         assert_ne!(web.color, web_source.color);

@@ -127,10 +127,14 @@ pub struct FloatRgbModel {
 
 impl FloatRgbModel {
     /// Every finite f32 RGB component, including negative values and values above one.
-    pub const fn raw() -> Self { Self { bounded: false } }
+    pub const fn raw() -> Self {
+        Self { bounded: false }
+    }
 
     /// Fractional RGB components within 0..=1, without eight-bit quantization.
-    pub const fn bounded() -> Self { Self { bounded: true } }
+    pub const fn bounded() -> Self {
+        Self { bounded: true }
+    }
 }
 
 /// CIE Lab, D50, Bradford-adapted.
@@ -218,8 +222,12 @@ impl ColorModel for RgbModel {
 }
 
 impl ColorModel for FloatRgbModel {
-    fn id(&self) -> &'static str { "rgb" }
-    fn name(&self) -> &'static str { "RGB" }
+    fn id(&self) -> &'static str {
+        "rgb"
+    }
+    fn name(&self) -> &'static str {
+        "RGB"
+    }
     fn channels(&self) -> &[Channel] {
         const RAW: [Channel; 3] = [
             channel(("Red", "RGB red"), "R", (f32::MIN, f32::MAX), "", 7, 1.0, 2),
@@ -233,7 +241,9 @@ impl ColorModel for FloatRgbModel {
         ];
         if self.bounded { &BOUNDED } else { &RAW }
     }
-    fn channel_precision(&self) -> ChannelPrecision { ChannelPrecision::Float32 }
+    fn channel_precision(&self) -> ChannelPrecision {
+        ChannelPrecision::Float32
+    }
     fn from_srgb(&self, color: Srgba) -> ModelValues {
         ModelValues::new(self.id(), &color.to_rgb_array())
     }
@@ -249,7 +259,9 @@ impl ColorModel for FloatRgbModel {
         high[channel] = 1.0;
         vec![self.to_srgb(&low), self.to_srgb(&high)]
     }
-    fn default_on(&self) -> DefaultOn { RgbModel.default_on() }
+    fn default_on(&self) -> DefaultOn {
+        RgbModel.default_on()
+    }
 }
 
 impl ColorModel for LabModel {
@@ -310,10 +322,15 @@ pub fn builtin_models() -> [&'static dyn ColorModel; 4] {
 /// outside sRGB stay as typed, none of which sRGB alone can say (PhotoCraft's `Keep`).
 pub fn kept_or_converted(model: &dyn ColorModel, color: Srgba, kept: Option<&ModelValues>) -> ModelValues {
     match kept {
-        Some(k) if k.model == model.id() && match model.channel_precision() {
-            ChannelPrecision::Float32 => model.to_srgb(&k.values).to_rgb_array() == color.to_rgb_array(),
-            _ => model.to_srgb(&k.values).same_rgb8(color),
-        } => *k,
+        Some(k)
+            if k.model == model.id()
+                && match model.channel_precision() {
+                    ChannelPrecision::Float32 => model.to_srgb(&k.values).to_rgb_array() == color.to_rgb_array(),
+                    _ => model.to_srgb(&k.values).same_rgb8(color),
+                } =>
+        {
+            *k
+        }
         _ => model.from_srgb(color),
     }
 }

@@ -462,7 +462,8 @@ impl<'a> Run<'_, 'a> {
             Some(held) => held.read(&mut *body).and_then(|held| held.same().copied()).unwrap_or(false),
             None => memo.web,
         };
-        let exact_rgb = self.models.iter().copied().find(|model| model.id() == "rgb" && model.channel_precision() == craft_theme::ChannelPrecision::Float32);
+        let exact_rgb =
+            self.models.iter().copied().find(|model| model.id() == "rgb" && model.channel_precision() == craft_theme::ChannelPrecision::Float32);
         let rules = Rules { web: held_web, constrain: self.constrain.clone(), exact_rgb };
 
         // The Full layout shows a mode its models offer.

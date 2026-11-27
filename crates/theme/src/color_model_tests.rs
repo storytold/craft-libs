@@ -23,7 +23,6 @@ fn every_model_round_trips_srgb_to_the_same_8_bit_colour() {
     }
 }
 
-
 #[test]
 fn float_rgb_models_keep_raw_components_and_bound_without_eight_bit_rounding() {
     use crate::color_model::{ChannelPrecision, ColorModel, FloatRgbModel, ModelValues, RgbModel, kept_or_converted};

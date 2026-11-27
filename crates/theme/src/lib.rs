@@ -71,7 +71,8 @@ pub use app_sizes::{AppSizes, SizeMap, SizeValue};
 pub use builtins::builtins;
 pub use color::{Hsb, Lab, Oklab, Oklch, Rgba, Srgba};
 pub use color_model::{
-    Channel, ChannelPrecision, ColorModel, DefaultOn, FloatRgbModel, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, builtin_models, kept_or_converted,
+    Channel, ChannelPrecision, ColorModel, DefaultOn, FloatRgbModel, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel,
+    builtin_models, kept_or_converted,
 };
 pub use contrast::{contrast_ratio, ensure_contrast, non_text_contrast_min, relative_luminance, text_contrast_min};
 pub use derive::{Anchoring, ContrastCheck, PassMove, Ramps, over};

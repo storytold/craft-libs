@@ -378,32 +378,36 @@ impl Codec for NumberCodec {
     /// read it. With zoom typing the note's `cut` says a second decimal separator cut the text.
     fn parse_tagged(&self, text: &str, start: &Option<f64>) -> Result<(Option<f64>, ParseNote), NotAValue> {
         let read = || {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Ok((None, ParseNote::default()));
-        }
-        if self.zoom {
-            return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
-        }
-        if self.share
-            && let Some(share) = self.reader.share(trimmed)
-        {
-            return start.map(|start| (Some(start * share), ParseNote::default())).ok_or(NotAValue);
-        }
-        match self.reader.read_tagged(text, *start) {
-            Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
-            Err(rejected) => {
-                self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Ok((None, ParseNote::default()));
             }
-        }
+            if self.zoom {
+                return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
+            }
+            if self.share
+                && let Some(share) = self.reader.share(trimmed)
+            {
+                return start.map(|start| (Some(start * share), ParseNote::default())).ok_or(NotAValue);
+            }
+            match self.reader.read_tagged(text, *start) {
+                Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
+                Err(rejected) => {
+                    self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
+                }
+            }
         };
         let (value, note) = read()?;
-        let value = value.map(|number| {
-            if self.round_trip_f32 {
-                let number = number as f32;
-                number.is_finite().then_some(f64::from(number)).ok_or(NotAValue)
-            } else { Ok(number) }
-        }).transpose()?;
+        let value = value
+            .map(|number| {
+                if self.round_trip_f32 {
+                    let number = number as f32;
+                    number.is_finite().then_some(f64::from(number)).ok_or(NotAValue)
+                } else {
+                    Ok(number)
+                }
+            })
+            .transpose()?;
         Ok((value, note))
     }
 
@@ -430,7 +434,6 @@ mod tests {
         assert_eq!(NumberCodec::new(Reader::new(), 1).fixed().format(&Some(-0.04)), "0.0");
     }
 }
-
 
 #[cfg(test)]
 mod float_number_tests {

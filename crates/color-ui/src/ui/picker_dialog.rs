@@ -512,13 +512,17 @@ impl ColorPickerDialog {
     pub fn working_rgb(mut self, model: impl ColorModel + Send + Sync + 'static) -> ColorPickerDialog {
         if model.channel_precision() == ChannelPrecision::Float32 {
             for held in [&mut self.opening, &mut self.current] {
-                *held = held.filter(|picked| [picked.color.r, picked.color.g, picked.color.b, picked.color.a].iter().all(|v| v.is_finite())).map(|mut picked| {
-                    let color = picked.color;
-                    let constrained = model.to_srgb(&model.from_srgb(color).values).with_alpha(color.a);
-                    if color != constrained { picked.model = None; }
-                    picked.color = constrained;
-                    picked
-                });
+                *held = held.filter(|picked| [picked.color.r, picked.color.g, picked.color.b, picked.color.a].iter().all(|v| v.is_finite())).map(
+                    |mut picked| {
+                        let color = picked.color;
+                        let constrained = model.to_srgb(&model.from_srgb(color).values).with_alpha(color.a);
+                        if color != constrained {
+                            picked.model = None;
+                        }
+                        picked.color = constrained;
+                        picked
+                    },
+                );
             }
         }
         self.working_rgb = Some(Box::new(model));
@@ -583,9 +587,13 @@ impl ColorPickerDialog {
     pub fn set_color(&mut self, mut picked: PickedColor) {
         if let Some(model) = self.exact_rgb() {
             let color = picked.color;
-            if ![color.r, color.g, color.b, color.a].iter().all(|v| v.is_finite()) { return; }
+            if ![color.r, color.g, color.b, color.a].iter().all(|v| v.is_finite()) {
+                return;
+            }
             let constrained = model.to_srgb(&model.from_srgb(color).values).with_alpha(color.a);
-            if constrained != color { picked.model = None; }
+            if constrained != color {
+                picked.model = None;
+            }
             picked.color = constrained;
         }
         self.current = Some(picked);
@@ -713,7 +721,9 @@ impl StackDialog for ColorPickerDialog {
             Some(Srgba::rgb(channel(0)?, channel(1)?, channel(2)?))
         });
         let mut color = parsed.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
-        if exact { color.a = self.current.map_or(1.0, |current| current.color.a); }
+        if exact {
+            color.a = self.current.map_or(1.0, |current| current.color.a);
+        }
         self.set_color(PickedColor { color, model: None });
         Ok(())
     }

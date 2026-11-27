@@ -837,7 +837,6 @@ fn changing_a_number_fields_edit_target_clears_the_old_draft_with_equal_values()
     }
 }
 
-
 /// Opt-in float channels use the ordinary number field, including focus, stepping, scrubbing and accessibility.
 type ExactNumber = (craft_ui::testing::Fixture, std::rc::Rc<RefCell<Option<f64>>>, std::rc::Rc<Cell<Option<egui::Id>>>);
 

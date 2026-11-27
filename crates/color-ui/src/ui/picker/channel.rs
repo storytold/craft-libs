@@ -40,7 +40,12 @@ impl ChannelRule {
 
     /// The rule of `channel`.
     pub fn of(channel: &Channel) -> ChannelRule {
-        ChannelRule { range: f64::from(channel.min)..=f64::from(channel.max), step: f64::from(channel.step), decimals: channel.decimals, round_trip_f32: false }
+        ChannelRule {
+            range: f64::from(channel.min)..=f64::from(channel.max),
+            step: f64::from(channel.step),
+            decimals: channel.decimals,
+            round_trip_f32: false,
+        }
     }
 }
 

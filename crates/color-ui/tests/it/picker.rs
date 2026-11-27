@@ -610,7 +610,6 @@ fn a_request_for_the_swatches_opens_the_picker_on_its_swatch_view() {
     assert!(!shows_swatches(request()), "without it the picker opens on the Color Models");
 }
 
-
 #[trial]
 fn exact_working_rgb_fields_and_automation_preserve_components_in_both_dialog_layouts() {
     use craft_theme::FloatRgbModel;
@@ -620,8 +619,13 @@ fn exact_working_rgb_fields_and_automation_preserve_components_in_both_dialog_la
         let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
         fixture.room(vec2(900.0, 700.0));
         let opening = Srgba::rgb(1e-8, 2.5, -0.25).with_alpha(0.37);
-        dialogs.borrow_mut().open(ColorPickerDialog::new("float", "Float", opening)
-            .layout(layout).tab(ColorPickerTab::Custom).working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
+        dialogs.borrow_mut().open(
+            ColorPickerDialog::new("float", "Float", opening)
+                .layout(layout)
+                .tab(ColorPickerTab::Custom)
+                .working_rgb(FloatRgbModel::raw())
+                .web_colors_remembered(false),
+        );
         fixture.idle(6);
         let ctx = fixture.ctx().clone();
         let id = dialog_id(("color-picker", "float"));
@@ -646,8 +650,9 @@ fn exact_working_rgb_fields_and_automation_preserve_components_in_both_dialog_la
         let answer = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).expect("an OK answer");
         assert_eq!(answer.picked.color, Srgba::rgb(rgb[0], rgb[1], rgb[2]).with_alpha(opening.a));
 
-        dialogs.borrow_mut().open(ColorPickerDialog::new("float", "Float", opening)
-            .layout(layout).working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
+        dialogs
+            .borrow_mut()
+            .open(ColorPickerDialog::new("float", "Float", opening).layout(layout).working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
         fixture.idle(6);
         assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "color", serde_json::json!([4, 5, 6])), Ok(()));
         let cancel = fixture.by_label("Cancel").expect("Cancel");
@@ -673,7 +678,6 @@ fn bounded_float_dialog_arrays_and_legacy_hex_keep_their_distinct_contracts() {
     assert_eq!(legacy.current().expect("legacy hex").color.to_hex(), "#336699");
 }
 
-
 #[trial]
 fn explicit_hex_and_web_edits_clamp_float_rgb_even_when_the_projection_is_unchanged() {
     use craft_theme::FloatRgbModel;
@@ -683,8 +687,9 @@ fn explicit_hex_and_web_edits_clamp_float_rgb_even_when_the_projection_is_unchan
         let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
         fixture.room(vec2(900.0, 700.0));
         let opening = Srgba::rgb(2.0, 0.0, -0.25).with_alpha(0.37);
-        dialogs.borrow_mut().open(ColorPickerDialog::new("sdr", "SDR choice", opening)
-            .working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
+        dialogs
+            .borrow_mut()
+            .open(ColorPickerDialog::new("sdr", "SDR choice", opening).working_rgb(FloatRgbModel::raw()).web_colors_remembered(false));
         fixture.idle(6);
         assert_eq!(dialog_field(&dialogs, "color"), Some(serde_json::json!(opening.to_rgb_array())), "passive hex display preserves HDR");
         if hex {
@@ -700,7 +705,6 @@ fn explicit_hex_and_web_edits_clamp_float_rgb_even_when_the_projection_is_unchan
         assert!(answer.picked.model.is_none());
     }
 }
-
 
 #[trial]
 fn raw_float_channel_keeps_untouched_hdr_numbers_but_edits_an_sdr_track() {
