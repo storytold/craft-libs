@@ -21,15 +21,16 @@ that codec crates use to describe a file and configure a decoder.
 | `matroska` | `craft_media::matroska` | none |
 | `ogg` | `craft_media::ogg` | none |
 | `avi` | `craft_media::avi` | none |
+| `bink` | `craft_media::bink` | none |
 | `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
 | `vmd` | `craft_media::vmd` | none |
-| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
+| (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource`, `craft_media::interleave` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `bink`, `mxf`, `mpegts` and `vmd` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -201,6 +202,15 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | `ac-3`/`ec-3` | `Ac3 { dac3 }` / `Eac3 { dec3 }` |
 | `tmcd` | `Timecode(TimecodeConfig)`: flags (drop frame), timescale, frame duration, fps, start frame, reel name; `format_frame()` |
 | anything else | `Unknown { fourcc, raw }` |
+
+An encoder's parameter sets give the `avcC` and `hvcC` records directly:
+`AvcConfig::from_parameter_sets(sps, pps, length_size)` and
+`HevcConfig::from_parameter_sets(vps, sps, pps, length_size)` read the profile, level and the other
+fields the record repeats from the SPS, including the High-profile chroma format and bit depths of
+`avcC`, and mark each `hvcC` array complete. `AvcSps::parse` and `HevcSps::parse` return those SPS
+fields, and `HevcSps::picture_size` is the picture size inside the conformance window. A NAL unit of
+the wrong type, an empty one, one longer than 65,535 bytes or a length size other than 1, 2 or 4 is
+an error.
 
 Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `gama` and `btrt` into
 `VideoParams`, and QuickTime's `logs` box into `VideoParams::log_transfer_function`: the CoreMedia log
@@ -448,6 +458,14 @@ link of a chained file), unless it carries on the page sequence of a stream with
 page yet. Damage recovery may read bytes again up to twice the file's length plus 1 MiB, so a file
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
+`probe` reads only the first pages: it stops once every stream that begins there has its header
+packets, after `PROBE_PACKETS` data packets, or at the first page that would start after
+`PROBE_BYTES` (128 MiB), a limit the search past damage keeps to as well. `PacketReader`
+reads the same first pages, then returns the data packets of every stream in file order, one page
+at a time, into a buffer the caller reuses. It keeps no packet list, so the cap on kept packets does
+not apply to it; damage is skipped with the same budget and warnings as `open`. Header packets stay
+in `streams()`, where a later link of a chained file appears as a new stream when its pages are
+reached. `OggFile::read_packet_into` reads a packet into a reused buffer.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
 
 The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
@@ -456,6 +474,41 @@ packets, granule positions, BOS/EOS, CRC-32), puts each header packet on pages o
 audio pages at a byte or packet target, and can replace the final granule position for Ogg Opus
 end trimming. `opus_tags` and `vorbis_comment` build the comment headers; tag names that are not
 valid field names (Vorbis I §5.2.1) are left out.
+
+## `bink`
+
+A clean-room Bink 1 (`.bik`) demuxer. Bink has no published specification: the layout follows the
+public description of the container on the MultimediaWiki (`wiki.multimedia.cx`, "Bink Container")
+and was checked against ffprobe on real files. No FFmpeg or other Bink implementation was read;
+ffprobe is a test oracle only. No muxer.
+
+```rust
+use craft_media::bink::open;
+
+let file = open(&bytes)?; // any ByteSource
+let video = file.video_params(); // CodecId::BinkVideo, signature as tag, size, flags as extradata
+for i in 0..file.frames.len() {
+    let frame = file.read_frame(&bytes, i)?;
+    let packets = file.split_frame(&frame)?; // one optional packet per audio track, then video
+}
+```
+
+| Part | |
+|---|---|
+| Header | signature and revision letter, frame count, picture size, frame rate, video flags (alpha, grayscale, scaling) |
+| Audio tracks | sample rate, stereo flag, RDFT or DCT form (`CodecId::BinkAudioRdft` / `BinkAudioDct`), track ID |
+| Index | one offset per frame; bit 0 marks a key frame |
+| Frames | per audio track a length, decoded size and packet; the video packet is the rest |
+| Damage | a truncated file opens with the frames that are whole |
+
+Limits, each with a test: at most 256 audio tracks and a picture of at most 32767 by 32767 (more
+is refused), and a frame table bounded by the index entries the file could hold. Bink 2 files
+(`KB2`) are refused with `Error::Bink2`.
+
+Tests: hand-built files, truncation, invalid headers and random damage (never a panic).
+`tests/oracle_bink.rs` compares the stream, size and key flag of every packet with ffprobe's for the `.bik` files
+under `CRAFT_BINK_SAMPLES`, and is skipped when that is not set: no tool here writes Bink
+files, and existing ones are not ours to commit.
 
 ## `avi`
 
@@ -1009,6 +1062,39 @@ always built, so a crate that uses only `bitstream` can name it too. `isobmff::B
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.
 
+## Interleaving live streams
+
+`craft_media::interleave::Interleaver` (always built) merges the packets of several live streams,
+such as a video and an audio encoder, into the time order that `matroska::MkvWriter` and
+`mpegts::mux` take. Each stream's packets are pushed with a non-decreasing `order` (a time shared
+by every stream, for example the decoding time in nanoseconds), and `pop` releases them sorted by
+`(order, stream)`. A packet waits only while a stream that has not ended could still send one that
+sorts before it.
+
+```rust
+use craft_media::interleave::{InterleaveError, Interleaver};
+use std::num::NonZeroUsize;
+
+const MAX_HELD: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+let mut il = Interleaver::new(2, 2_000_000_000).with_max_held(MAX_HELD); // 2 s of lag
+il.push(0, video_dts_ns, video_packet)?;
+il.push(1, audio_dts_ns, audio_packet)?;
+loop {
+    match il.pop() {
+        Ok(Some(p)) => { /* write p.value to stream p.stream */ }
+        Ok(None) => break,                             // wait for more packets
+        Err(InterleaveError::Behind(stream)) => { /* that encoder is too slow: stop */ break }
+        Err(e) => return Err(e.into()),
+    }
+}
+il.end_all(); // at the end, pop releases every held packet in order
+```
+
+When the held packets span more than the lag limit, or reach the packet limit, while a stream has
+nothing queued, `pop` returns `Behind` with that stream and keeps every packet. `push` refuses a
+packet beyond the packet limit (`Full`), on an ended or unknown stream, or with an `order` earlier
+than the stream's previous packet.
+
 ## Tests
 
 - Unit tests cover the bit reader and writer, the box reader (64-bit, size-0, `uuid`, truncated and
@@ -1018,7 +1104,8 @@ custom source (a web `Blob`, a network range reader) to use every container with
   additions, color and mastering metadata, Chapters, Tags, Attachments, CRC-32, Cue-less seek,
   hostile cluster timestamps) and mux-demux round trips. For Ogg (`src/ogg`): page parsing, CRC,
   packets across pages, damage resync and its read budget, lost pages, chained links and stray
-  beginning-of-stream flags, the packet and header caps, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
+  beginning-of-stream flags, the packet and header caps, the first-pages probe and its limits, the
+  sequential reader against `open`, Opus timing (end trimming, hostile granules) and the codec parameters of each codec.
 - `tests/roundtrip.rs`: property tests that write random multi-track files (progressive and
   fragmented) and read them back.
 - `tests/oracle_demux.rs` and `tests/oracle_mux.rs` compare the demuxer and muxer with ffprobe and

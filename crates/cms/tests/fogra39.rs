@@ -430,6 +430,8 @@ fn separates_like_the_reference_application() {
     for (rgb, want) in REFERENCE_SEPARATIONS {
         for ((intent, bpc), want) in SEPARATION_INTENTS.into_iter().zip(want) {
             let got = separation(intent, bpc, rgb);
+            // `f32::max` drops a NaN, so a NaN ink would otherwise count as no difference.
+            assert!(got.iter().all(|v| v.is_finite()), "{rgb:?} {intent:?} bpc {bpc}: {got:?}");
             let diff = (0..4).map(|i| (got[i] - want[i]).abs()).fold(0.0f32, f32::max);
             eprintln!("{rgb:?} {intent:?} bpc {bpc}: {got:.1?} reference {want:?} (max {diff:.1})");
             worst = worst.max(diff);
