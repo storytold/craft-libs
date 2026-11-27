@@ -309,7 +309,7 @@ fn status_bar(ui: &mut Ui, state: &mut MockState) {
             Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
         })
         .show(ui, |ui, _| {
-            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view), document.size, *status_item, &values).show(ui).item;
+            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view => zoom), document.size, *status_item, &values).show(ui).item;
             Divider::vertical().show(ui);
             Text::new(words.color_mode.clone()).show(ui);
             Divider::vertical().show(ui);
