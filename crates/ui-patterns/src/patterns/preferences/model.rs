@@ -115,6 +115,9 @@ pub struct RowSpec<'a> {
     pub keywords: &'a str,
     /// Help under the control: "Applies at next launch." A line break starts a new paragraph. The search matches it.
     pub help: Option<&'a str>,
+    /// Hover text for the row's field, shown after the host's tooltip delay and not at all while the host has
+    /// tooltips off. It paints no line under the row; the control's accessible description carries it.
+    pub tooltip: Option<&'a str>,
     /// False for hidden rows and rows hidden by another value.
     pub visible: bool,
     /// False: the control is drawn disabled.
@@ -133,7 +136,7 @@ pub struct RowSpec<'a> {
 impl<'a> RowSpec<'a> {
     /// A visible, enabled row with no keywords or help.
     pub fn new(key: &'a str, label: &'a str, kind: RowKind<'a>) -> Self {
-        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, pills: None, kind }
+        Self { key, label, keywords: "", help: None, tooltip: None, visible: true, enabled: true, step: None, pills: None, kind }
     }
 
     /// Sets extra search text for the row.
@@ -147,6 +150,14 @@ impl<'a> RowSpec<'a> {
     #[must_use]
     pub fn help(mut self, help: &'a str) -> Self {
         self.help = Some(help);
+        self
+    }
+
+    /// Sets the hover text of the row's field; it shows after the host's tooltip delay, and not while the host has
+    /// tooltips off.
+    #[must_use]
+    pub fn tooltip(mut self, tooltip: &'a str) -> Self {
+        self.tooltip = Some(tooltip);
         self
     }
 

@@ -10,9 +10,11 @@ pub fn matches(matcher: &Matcher, label: &str, keywords: &str, key: &str) -> boo
     matcher.is_empty() || [label, keywords, key].iter().any(|text| matcher.score(text).is_some())
 }
 
-/// Whether `row` matches the matcher's query: its label, keywords, key or help.
+/// Whether `row` matches the matcher's query: its label, keywords, key, help line or hover text.
 pub fn row_matches(matcher: &Matcher, row: &RowSpec<'_>) -> bool {
-    matches(matcher, row.label, row.keywords, row.key) || row.help.is_some_and(|help| matches(matcher, help, "", ""))
+    matches(matcher, row.label, row.keywords, row.key)
+        || row.help.is_some_and(|help| matches(matcher, help, "", ""))
+        || row.tooltip.is_some_and(|tooltip| matches(matcher, tooltip, "", ""))
 }
 
 /// A page that the page list shows.

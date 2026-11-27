@@ -5,7 +5,7 @@ use super::model::{PrefValue, PreferencesModel, RowKind, RowSpec};
 use super::page::PreferencesLayout;
 use crate::buttons::Button;
 use crate::choice::{Checkbox, Segmented, Swatch};
-use crate::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, Entry, FieldLayout, Props, Show as _, ShowContainer as _, TooltipSpec, clicked};
 use crate::display::{Shade, Text};
 use crate::form::{Field, Help};
 use crate::layout_components::{Row, Stack};
@@ -26,6 +26,8 @@ pub(super) struct ShownRow {
     pub key: String,
     pub label: Label,
     pub help: Option<Label>,
+    /// The row's hover text; it paints no line of its own.
+    pub tooltip: Option<Label>,
     pub enabled: bool,
     pub pills: Option<bool>,
     pub kind: Kind,
@@ -80,6 +82,7 @@ impl ShownRow {
             key: row.key.to_owned(),
             label: Label::from(row.label.to_owned()),
             help: row.help.map(|help| Label::from(help.to_owned())),
+            tooltip: row.tooltip.map(|tooltip| Label::from(tooltip.to_owned())),
             enabled: row.enabled,
             pills: row.pills,
             kind,
@@ -147,12 +150,22 @@ fn help_line(ui: &mut Ui, help: &Option<Label>) {
     }
 }
 
-/// The field a row's control stands in: named by the row, with its help.
+/// The field a row's control stands in: named by the row, with its help line.
 fn field_of(row: &ShownRow) -> Field {
     let field = Field::new(row.label.clone()).id_salt(row.key.as_str()).enabled(row.enabled);
     match &row.help {
         Some(help) => field.help(Help::Text(help.clone())),
         None => field,
+    }
+}
+
+/// The row's hover text, on a control the pointer can rest on. The field around it takes no pointer of its own
+/// (`Field::sense` is empty), so the sentence belongs on the control: that is what shows the tip and what the node's
+/// description carries.
+fn hinted<C: Props>(control: C, row: &ShownRow) -> C {
+    match &row.tooltip {
+        Some(tooltip) => control.tooltip(TooltipSpec::new(tooltip.clone())),
+        None => control,
     }
 }
 
@@ -178,7 +191,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
         Kind::Bool(value) => {
             let mut next = None;
             field().layout(FieldLayout::After).show(ui, |ui, _| {
-                next = Checkbox::new(Bind::given(*value)).show(ui).events.landed().cloned();
+                next = hinted(Checkbox::new(Bind::given(*value)), row).show(ui).events.landed().cloned();
             });
             record(next.map(PrefValue::Bool));
         }
@@ -195,9 +208,9 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             let segments = as_segments(options, *unit, row.pills, cards);
             control(ui, row, cards, |ui| {
                 next = if segments {
-                    Segmented::new(label.clone(), Bind::given(value.clone()), options).show(ui).value().cloned()
+                    hinted(Segmented::new(label.clone(), Bind::given(value.clone()), options), row).show(ui).value().cloned()
                 } else {
-                    Select::new(label.clone(), Bind::given(value.clone()), options).show(ui).events.landed().cloned()
+                    hinted(Select::new(label.clone(), Bind::given(value.clone()), options), row).show(ui).events.landed().cloned()
                 };
             });
             record(next.map(PrefValue::Choice));
@@ -207,7 +220,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             control(ui, row, cards, |ui| {
                 let shown =
                     number(units, label, *value as f64, *unit, unit_text.as_ref(), 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
-                next = shown.show(ui).edit.events.landed().cloned().flatten();
+                next = hinted(shown, row).show(ui).edit.events.landed().cloned().flatten();
             });
             record(next.map(|v| PrefValue::Int(v.round() as i64)));
         }
@@ -217,7 +230,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
                 let shown = number(units, label, *value, *unit, unit_text.as_ref(), usize::from(*decimals))
                     .range(range.clone())
                     .step(step.unwrap_or_else(|| step_for(range, *decimals)));
-                next = shown.show(ui).edit.events.landed().cloned().flatten();
+                next = hinted(shown, row).show(ui).edit.events.landed().cloned().flatten();
             });
             record(next.map(PrefValue::Float));
         }
@@ -225,14 +238,14 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             let mut next = None;
             field().show(ui, |ui, _| {
                 let shown = NumberField::length(label.clone(), Bind::given(Some(*value)), *lengths).range(range.clone());
-                next = shown.show(ui).edit.events.landed().cloned().flatten();
+                next = hinted(shown, row).show(ui).edit.events.landed().cloned().flatten();
             });
             record(next.map(PrefValue::Float));
         }
         Kind::Text(value) => {
             let mut next = None;
             control(ui, row, cards, |ui| {
-                next = TextField::new(label.clone(), Bind::given(value.clone())).show(ui).events.landed().cloned();
+                next = hinted(TextField::new(label.clone(), Bind::given(value.clone())), row).show(ui).events.landed().cloned();
             });
             record(next.map(PrefValue::Text));
         }
@@ -240,9 +253,9 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             let mut next = None;
             let mut ask = None;
             let mut pair = |ui: &mut Ui| {
-                let swatch = Swatch::new(label.clone(), Srgba::from(*color)).picker(key).id_salt("choose").show(ui);
+                let swatch = hinted(Swatch::new(label.clone(), Srgba::from(*color)).picker(key).id_salt("choose"), row).show(ui);
                 ask = swatch.pick_color;
-                next = HexField::hex(label.clone(), Bind::given(*color)).id_salt("hex").show(ui).events.landed().cloned();
+                next = hinted(HexField::hex(label.clone(), Bind::given(*color)).id_salt("hex"), row).show(ui).events.landed().cloned();
             };
             // A card's line holds the swatch and the hex field after the label; a field holds them in a row.
             control(ui, row, cards, |ui| {
@@ -259,6 +272,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
         }
         Kind::CustomRows => {
             // The host draws the rows and their labels; the rule's enabled state and help apply to them as to a field.
+            // Its hover text belongs to the controls the host draws, which carry it themselves.
             Stack::new().id_salt(key).enabled(row.enabled).show(ui, |ui, _| {
                 out.custom_changed |= host.custom_row(ui, key);
                 if let Some(help) = &row.help {

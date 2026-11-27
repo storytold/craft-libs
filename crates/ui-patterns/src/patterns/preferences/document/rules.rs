@@ -21,7 +21,7 @@ pub struct SettingRule {
     pub key: String,
     /// English label; without one the key's last part is spelled out ([`setting_label`]).
     pub label: Option<String>,
-    /// English help text shown with the row; `None` shows none.
+    /// English help text for the row, which the window shows as its hover text; `None` shows none.
     pub help: Option<String>,
     /// The control to use; `None` picks it from the value's type.
     pub kind: Option<RuleKind>,
@@ -104,7 +104,9 @@ impl SettingRule {
         self
     }
 
-    /// Sets the English help text shown with the row; it translates under `setting.<key>.help`.
+    /// Sets the English help text of the row. The window shows it as hover text on the row's field, after the host's
+    /// tooltip delay and not at all while the host has tooltips off (`RootEnv::tooltips`); it paints no line under the
+    /// row and reaches the control's accessible description. It translates under `setting.<key>.help`.
     #[must_use]
     pub fn help(mut self, english: impl Into<String>) -> Self {
         self.help = Some(english.into());
