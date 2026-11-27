@@ -243,9 +243,10 @@ impl UvGBuffer {
                             if stepped.iter().enumerate().any(|(i, (value, uncertainty))| *value < eps[i] - uncertainty) {
                                 continue;
                             }
-                            let exact = stepped.iter().enumerate().any(|(i, (value, uncertainty))| {
-                                (value - eps[i]).abs() <= *uncertainty || *uncertainty > area.abs() * 1e-12
-                            });
+                            let exact = stepped
+                                .iter()
+                                .enumerate()
+                                .any(|(i, (value, uncertainty))| (value - eps[i]).abs() <= *uncertainty || *uncertainty > area.abs() * 1e-12);
                             let [w0, w1, w2] = if exact {
                                 let point = DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
                                 edges.map(|(a, b)| edge(a, b, point) * area.signum())
