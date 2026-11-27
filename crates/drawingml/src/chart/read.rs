@@ -1499,19 +1499,31 @@ mod tests {
 
     #[test]
     fn review_6093532941_series_kind_without_raw_remains_authoritative() {
-        let chart = Chart {
-            kind: ChartType::Column,
-            categories: vec!["Category".into()],
-            series: vec![Series { name: "Explicit area".into(), kind: Some(ChartType::Area), values: vec![Some(7.0)], ..Default::default() }],
-            ..Default::default()
-        };
-        assert!(chart.raw.is_none());
-        let (written, kept) = crate::chart::write::chart_xml(&chart);
-        assert!(!kept);
-        let back = read_chart_xml(&written).unwrap();
-        assert_eq!(back.kind, ChartType::Area, "without a raw baseline there is no chart-wide edit to override the explicit series type");
-        assert_eq!(back.series[0].kind, Some(ChartType::Area));
-        assert_eq!((back.series[0].name.as_str(), &back.series[0].values), (chart.series[0].name.as_str(), &chart.series[0].values));
+        for kind in [ChartType::Area, ChartType::Bar, ChartType::PercentColumn] {
+            let chart = Chart {
+                kind: ChartType::Column,
+                categories: vec!["Category".into()],
+                series: vec![Series { name: "Explicit type".into(), kind: Some(kind), values: vec![Some(7.0)], ..Default::default() }],
+                ..Default::default()
+            };
+            assert!(chart.raw.is_none());
+            let (written, kept) = crate::chart::write::chart_xml(&chart);
+            assert!(!kept);
+            let back = read_chart_xml(&written).unwrap();
+            assert_eq!(back.kind, kind, "without a raw baseline there is no chart-wide edit to override the explicit series type");
+            assert_eq!(back.series[0].kind, Some(kind));
+            assert_eq!((back.series[0].name.as_str(), &back.series[0].values), (chart.series[0].name.as_str(), &chart.series[0].values));
+
+            let doc = crate::xmlx::parse(&written).unwrap();
+            let plot = doc.path(&[Local("chart"), Local("plotArea")]).unwrap();
+            let category = plot.child(Local("catAx")).unwrap();
+            let value = plot.child(Local("valAx")).unwrap();
+            assert_eq!(category.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(if kind.horizontal() { "l" } else { "b" }));
+            assert_eq!(value.child(Local("axPos")).and_then(|a| a.attr_local("val")), Some(if kind.horizontal() { "b" } else { "l" }));
+            let format = value.child(Local("numFmt")).unwrap();
+            assert_eq!(format.attr_local("formatCode"), Some(if kind.percent() { "0%" } else { "General" }));
+            assert_eq!(format.attr_local("sourceLinked"), Some("1"), "the format is the effective type's default, not an explicit override");
+        }
     }
 
     #[test]
