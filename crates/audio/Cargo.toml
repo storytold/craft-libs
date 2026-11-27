@@ -82,6 +82,8 @@ dsd = []
 mpa-encode = ["mpa-decode", "mp3-encode"]
 # Bluetooth Low Complexity Subband Coding (SBC) audio codec (`sbc`).
 sbc = []
+# Smacker audio (Huffman-coded DPCM) chunk decoder (`smacker`).
+smacker-decode = ["craft-media/smacker"]
 # Sierra VMD sound decoder (`vmd::Decoder`): 8-bit PCM and 16-bit DPCM.
 vmd-decode = []
 # Multi-resolution waveform overviews (`peaks`).
@@ -123,3 +125,7 @@ required-features = ["decode"]
 [[example]]
 name = "encode"
 required-features = ["lossless-encode", "aac-encode"]
+
+[[test]]
+name = "it"
+path = "tests/main.rs"
