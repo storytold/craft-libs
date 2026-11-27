@@ -1368,7 +1368,8 @@ mod tests {
                 { "name": "Primary", "values": [2.0], "kind": null, "secondaryAxis": false }
             ],
             "raw": xml
-        })).unwrap();
+        }))
+        .unwrap();
         let (written, kept) = crate::chart::write::chart_xml(&legacy);
         assert!(kept, "an unchanged legacy save retains its unmodelled XML");
         let doc = crate::xmlx::parse(&written).unwrap();
@@ -1383,7 +1384,8 @@ mod tests {
                 { "name": "Explicit", "marker": "diamond" }, { "name": "Unmarked" }
             ],
             "raw": line_marker_chart_xml()
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(crate::chart::write::chart_xml(&legacy_line).1, "legacy group marker and symbol semantics remain comparable");
 
         let mut edited = legacy.clone();
