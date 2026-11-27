@@ -8,7 +8,9 @@ use std::rc::Rc;
 use craft_behavior::Mixed;
 use craft_color_ui::ui::{PairWell, SwatchPair, SwatchPairOutput, Well};
 use craft_theme::{Srgba, ThemeId};
+use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
+use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rect, Ui, Vec2, vec2};
 
@@ -116,6 +118,35 @@ fn a_pair_well_drags_its_payload_and_takes_a_drop_a_mixed_well_does_neither() {
 fn the_well_corner_follows_the_theme_well_shape() {
     assert_eq!(clicks("craft.adwaita"), [Some(Well::Primary), None], "round wells");
     assert_eq!(clicks("craft.pro"), [Some(Well::Primary), Some(Well::Primary)], "square wells");
+}
+
+/// A rest of the pointer on a well shows the well's label, and one on the Swap or Default button shows that button's
+/// label: a host that names a well "Fill (X)" shows its key there.
+#[trial]
+fn a_rest_on_a_well_or_a_button_shows_its_label() {
+    let mut fixture = Fixture::new(|ui| {
+        let wells = [PairWell::new("Fill (X)", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Stroke (X)", Srgba::rgb(1.0, 1.0, 1.0))];
+        SwatchPair::<()>::new("Fill and Stroke", wells, Bind::given(Well::Primary))
+            .swap_button("Swap (Shift+X)")
+            .default_button("Default (D)")
+            .popover(false)
+            .show(ui);
+    });
+    fixture.room(vec2(200.0, 200.0)).settle();
+    let wells = fixture.by_role(Role::RADIO_BUTTON);
+    let swap = fixture.by_label("Swap (Shift+X)").expect("the Swap button").rect.center();
+    let default = fixture.by_label("Default (D)").expect("the Default button").rect.center();
+    let spots =
+        [(in_primary(wells[0].rect), "Fill (X)"), (in_secondary(wells[1].rect), "Stroke (X)"), (swap, "Swap (Shift+X)"), (default, "Default (D)")];
+    for (at, tip) in spots {
+        fixture.frame(vec![moved(egui::pos2(199.0, 199.0))]);
+        fixture.settle();
+        assert!(!fixture.texts().iter().any(|run| run.text == tip), "no {tip:?} before the rest");
+        fixture.frame(vec![moved(at)]);
+        fixture.advance(DELAY);
+        fixture.settle();
+        assert!(fixture.texts().iter().any(|run| run.text == tip), "a rest there shows {tip:?}");
+    }
 }
 
 /// A popover that opens with the pair as its first stop puts the focus on the active well, as Tab into the pair does:

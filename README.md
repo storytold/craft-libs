@@ -377,8 +377,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
   means stays in each app.
 
-- [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
-  app menu. Unsaved-document decisions and save prompts stay in each app.
+- [`craft-quit`](crates/quit/README.md): native macOS quit, a window close held for unsaved
+  documents, the Quit menu item id and the unsaved-changes question one document at a time
+  (`CloseGuard`). The prompt and the saving stay in each app.
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).

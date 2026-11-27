@@ -67,6 +67,8 @@ pub struct TextOptions {
     pub mask: bool,
     /// A parsable draft applies as typed whatever the codec says.
     pub live: bool,
+    /// The owner of the current draft, when the same field can edit different values.
+    pub edit_target: Option<egui::IdSalt>,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
     /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
@@ -161,6 +163,7 @@ impl Default for TextOptions {
             limit: None,
             mask: false,
             live: false,
+            edit_target: None,
             clear_on_escape: false,
             keep_on_escape: false,
             mono: false,
