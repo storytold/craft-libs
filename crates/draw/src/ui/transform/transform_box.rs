@@ -1521,7 +1521,7 @@ impl Component for TransformBox<'_> {
                         continue;
                     }
                     cx.part(CORNER_ZONE.at(2 * u64::from(k) + u64::from(side != k)), zone)
-                        .sense(Sense::DRAG | Sense::CLICK)
+                        .sense(Sense::DRAG | Sense::CLICK | context)
                         .priority(HitPriority::new(HitLevel::Handle, ZONE_SUB))
                         .pointer_only(EDGE_BY_KEY)
                         // A zone ends where it was measured to end: never grown to the pointer's target size.
@@ -1535,7 +1535,7 @@ impl Component for TransformBox<'_> {
                 // The corner's own reach where the view reads the pointer, and no more of the bands: past it the side
                 // beside the corner takes the press, as in the reference application.
                 cx.part(CORNER_REACH.at(2 * u64::from(k)), HitShape::circle(sides[corner], style.handle_reach))
-                    .sense(Sense::DRAG | Sense::CLICK)
+                    .sense(Sense::DRAG | Sense::CLICK | context)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(CORNER_BY_KEY);
                 continue;
@@ -1760,7 +1760,6 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
         _ => None,
     }
 }
-
 
 /// The direction an edge of `quad` is dragged along: the top edge's direction for a side, its normal for the top or
 /// bottom edge; `None` for another part or a collapsed top edge.
