@@ -231,7 +231,10 @@ mod native {
                                 let method = msg.get("method").and_then(Json::as_str);
                                 // `host/…` requests during one of the app's requests are still
                                 // answered by that request (protocol 1.1).
-                                let pushed = method.is_some_and(|m| m.starts_with("collab/") || !busy.load(Ordering::SeqCst));
+                                // Read once: a request that ends between two reads must not turn
+                                // a message with a method into an answer nobody asked for.
+                                let in_request = busy.load(Ordering::SeqCst);
+                                let pushed = method.is_some_and(|m| m.starts_with("collab/") || !in_request);
                                 if pushed {
                                     if flooded {
                                         continue;
@@ -248,8 +251,8 @@ mod native {
                                         continue;
                                     }
                                     push::push(&rid, Incoming::Message(msg));
-                                } else if !busy.load(Ordering::SeqCst) {
-                                    // An answer nobody asked for.
+                                } else if !in_request {
+                                    // No method and no request waiting: an answer nobody asked for.
                                     log::debug!("plugin {rid}: ignored an answer to no request");
                                 } else {
                                     match inbox.try_send(Ok(msg)) {
@@ -386,7 +389,11 @@ mod native {
                     Err(RecvTimeoutError::Disconnected) => return Err(RequestError::fatal(self.with_stderr("the plugin exited".into()))),
                 };
                 if let Some(call) = msg.get("method").and_then(Json::as_str) {
-                    // The plugin asks the host something while it works (or notifies it).
+                    // The plugin asks the host something while it works (or notifies it). Not
+                    // once the time is up, even for a message that was received just before.
+                    if Instant::now() >= deadline {
+                        return Err(late());
+                    }
                     let answer = host(call, msg.get("params").unwrap_or(&Json::Null));
                     if let Some(rid) = msg.get("id") {
                         let reply = match answer {
