@@ -6,6 +6,7 @@ use std::f32::consts::{PI, TAU};
 use glam::{Vec2, Vec3};
 
 use crate::mesh::{Mesh, SubMesh};
+use crate::{GeomError, Result};
 
 /// A UV-space rectangle: origin and size.
 #[derive(Clone, Copy, Debug)]
@@ -87,7 +88,8 @@ impl Builder {
     }
 }
 
-/// UV sphere of `radius` centred at `center`.
+/// A UV sphere of `radius` centered at the origin. The seam endpoints have identical positions
+/// at each ring. Vertices at each pole share one position.
 pub fn sphere(radius: f32, segments: usize, rings: usize) -> Mesh {
     let mut b = Builder::default();
     sphere_into(&mut b, Vec3::ZERO, radius, segments.max(3), rings.max(2), UvRect::FULL);
@@ -97,37 +99,46 @@ pub fn sphere(radius: f32, segments: usize, rings: usize) -> Mesh {
 fn sphere_into(b: &mut Builder, center: Vec3, radius: f32, segs: usize, rings: usize, r: UvRect) {
     b.grid(rings, segs, |i, j| {
         let (u, v) = (j as f32 / segs as f32, i as f32 / rings as f32);
-        let (theta, phi) = (v * PI, u * TAU + PI * 1.5);
-        let n = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
+        let (theta, phi) = (v * PI, if j == segs { PI * 1.5 } else { u * TAU + PI * 1.5 });
+        let n = if i == 0 {
+            Vec3::Y
+        } else if i == rings {
+            -Vec3::Y
+        } else {
+            Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin())
+        };
         (center + n * radius, n, r.map(u, v))
     });
 }
 
 /// A box with rounded edges (`bevel` = edge radius; 0 gives a plain cube). Faces are laid out
 /// in a 3×2 UV atlas.
-pub fn rounded_box(half: Vec3, bevel: f32) -> Mesh {
+/// Each half extent must be finite and positive, and its doubled value must be finite.
+/// `bevel` must be finite and between zero and 95% of the smallest half extent.
+pub fn rounded_box(half: Vec3, bevel: f32) -> Result<Mesh> {
+    if !half.is_finite() || !half.cmpgt(Vec3::ZERO).all() || !(half * 2.0).is_finite() {
+        return Err(GeomError::Invalid("box half extents must be positive and finite, with finite doubled extents".into()));
+    }
+    if !bevel.is_finite() || bevel < 0.0 || bevel > half.min_element() * 0.95 {
+        return Err(GeomError::Invalid("box bevel must be finite and between zero and 95% of the smallest half extent".into()));
+    }
     let mut b = Builder::default();
     rounded_box_into(&mut b, Vec3::ZERO, half, bevel, UvRect::FULL);
-    b.finish("Box")
+    Ok(b.finish("Box"))
 }
 
-/// The cube primitive (sharp edges).
-pub fn cube(size: f32) -> Mesh {
-    let mut m = rounded_box(Vec3::splat(size * 0.5), 0.0);
+/// The cube primitive (sharp edges). `size` must be finite and have a finite positive half extent.
+pub fn cube(size: f32) -> Result<Mesh> {
+    let mut m = rounded_box(Vec3::splat(size * 0.5), 0.0)?;
     m.materials = vec!["Cube".into()];
     if let Some(s) = m.submeshes.first_mut() {
         s.name = "Cube".into();
     }
-    m
+    Ok(m)
 }
 
 fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: UvRect) {
-    // A negative half-size is its magnitude; a NaN or zero one gets a tiny box, so the bevel range
-    // below is never empty and the UV mapping never divides by zero.
-    // A negative half-size is its magnitude; a NaN or zero one gets a tiny box, so the bevel range
-    // below is never empty and the UV mapping never divides by zero.
-    let half = Vec3::from_array(half.to_array().map(|h| if h.is_finite() { h.abs().max(1e-6) } else { 1e-6 }));
-    let bevel = if bevel.is_finite() { bevel.clamp(0.0, half.min_element() * 0.95) } else { 0.0 };
+    let bevel = bevel.clamp(0.0, half.min_element() * 0.95);
     // (normal, U = right, V = down) per face, seen from outside.
     let faces = [
         (Vec3::Z, Vec3::X, -Vec3::Y),
@@ -143,13 +154,16 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
         let inner = h - bevel;
         let mut v = Vec::new();
         for i in 0..kb {
-            v.push(-h + bevel * i as f32 / kb as f32);
+            v.push(-h + bevel * (i as f32 / kb as f32));
         }
         for i in 0..=kc {
-            v.push(-inner + 2.0 * inner * i as f32 / kc as f32);
+            v.push(inner * (2.0 * (i as f32 / kc as f32) - 1.0));
         }
         for i in 1..=kb {
-            v.push(inner + bevel * i as f32 / kb as f32);
+            v.push(if i == kb { h } else { inner + bevel * (i as f32 / kb as f32) });
+        }
+        for i in 0..v.len() / 2 {
+            v[i] = -v[v.len() - 1 - i];
         }
         v
     };
@@ -163,7 +177,7 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
             let (a, c) = (cu[j], cv[i]);
             let q = *n * hn + *u * a + *v * c;
             let clamped = q.clamp(-inner, inner);
-            let dir = (q - clamped).try_normalize().unwrap_or(*n);
+            let dir = (q - clamped).as_dvec3().try_normalize().map(|v| v.as_vec3()).unwrap_or(*n);
             let p = if bevel > 0.0 { clamped + dir * bevel } else { q };
             let nn = if bevel > 0.0 { dir } else { *n };
             (center + p, nn, cell.map((a + hu) / (2.0 * hu), (c + hv) / (2.0 * hv)))
@@ -192,8 +206,7 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
         let t = Vec2::new(next.0 - prev.0, next.1 - prev.1).try_normalize().unwrap_or(Vec2::NEG_Y);
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
-        let phi = u * TAU + PI * 1.5;
-        let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
+        let dir = circle_sample(j, segs);
         let p = center + dir * rad + Vec3::Y * y;
         let n = dir * n2.x + Vec3::Y * n2.y;
         (p, n, r.map(u, len[i] / total))
@@ -327,14 +340,19 @@ fn preview_orb_radius(d: Vec3) -> f32 {
     radius + relief
 }
 
+fn circle_sample(column: usize, segments: usize) -> Vec3 {
+    let angle = if column == segments { PI * 1.5 } else { column as f32 / segments as f32 * TAU + PI * 1.5 };
+    Vec3::new(angle.cos(), 0.0, -angle.sin())
+}
+
 /// A flat disk facing up (+Y) or down, with planar UVs inside `r`.
 fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, r: UvRect) {
     let n = if up { Vec3::Y } else { Vec3::NEG_Y };
     let c = b.vert(center, n, r.map(0.5, 0.5));
     let first = b.p.len() as u32;
     for j in 0..segs {
-        let a = j as f32 / segs as f32 * TAU;
-        let (x, z) = (a.cos(), a.sin());
+        let sample = circle_sample(j, segs);
+        let (x, z) = (sample.x, sample.z);
         // Top view: +X right, +Z down the texture; bottom view mirrors X.
         let uv = if up { r.map(0.5 + x * 0.5, 0.5 + z * 0.5) } else { r.map(0.5 + x * 0.5, 0.5 - z * 0.5) };
         b.vert(center + Vec3::new(x, 0.0, z) * radius, n, uv);
@@ -342,9 +360,9 @@ fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, 
     for j in 0..segs as u32 {
         let (a, bb) = (first + j, first + (j + 1) % segs as u32);
         if up {
-            b.idx.extend_from_slice(&[c, bb, a]);
-        } else {
             b.idx.extend_from_slice(&[c, a, bb]);
+        } else {
+            b.idx.extend_from_slice(&[c, bb, a]);
         }
         b.diag.push(0);
     }
@@ -366,8 +384,8 @@ pub fn torus(major: f32, minor: f32, segs: usize, sides: usize) -> Mesh {
     let (segs, sides) = (segs.max(3), sides.max(3));
     b.grid(sides, segs, |i, j| {
         let (u, v) = (j as f32 / segs as f32, i as f32 / sides as f32);
-        let phi = u * TAU + PI * 1.5;
-        let theta = v * TAU;
+        let phi = if j == segs { PI * 1.5 } else { u * TAU + PI * 1.5 };
+        let theta = if i == sides { 0.0 } else { v * TAU };
         let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
         let n = dir * theta.cos() - Vec3::Y * theta.sin();
         (dir * major + n * minor, n, Vec2::new(u, v))
@@ -471,8 +489,8 @@ pub fn builtin(id: &str) -> Option<Mesh> {
     Some(match id {
         "material_ball" | "materialball" | "ball" => material_ball(),
         "sphere" => sphere(1.0, 128, 64),
-        "cube" => cube(2.0),
-        "rounded_cube" | "roundedcube" | "box" => rounded_box(Vec3::ONE, 0.15),
+        "cube" => cube(2.0).ok()?,
+        "rounded_cube" | "roundedcube" | "box" => rounded_box(Vec3::ONE, 0.15).ok()?,
         "cylinder" => cylinder(1.0, 2.0, 96),
         "torus" => torus(1.0, 0.35, 128, 48),
         "plane" => plane(2.0, 16),
@@ -499,20 +517,162 @@ pub const BUILTINS: [(&str, &str); 9] = [
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn accepted_small_box_dimensions_are_preserved() {
+        let cube = cube(1e-7).unwrap();
+        let (lo, hi) = cube.bounds();
+        assert_eq!(hi - lo, Vec3::splat(1e-7));
+        let half = Vec3::new(5e-8, 2e-7, 3e-7);
+        let mesh = rounded_box(half, 0.0).unwrap();
+        let (lo, hi) = mesh.bounds();
+        assert_eq!((lo, hi), (-half, half));
+    }
+
+    #[test]
+    fn rounded_box_face_boundaries_share_exact_positions() {
+        for (half, bevel) in [(1.038, 0.037), (1e21, 1e20)] {
+            let mut builder = Builder::default();
+            rounded_box_into(&mut builder, Vec3::ZERO, Vec3::splat(half), bevel, UvRect::FULL);
+            assert!(builder.n[0].abs().min_element() > 0.5, "rounded corner normal {:?}, half={half}", builder.n[0]);
+            let key = |p: Vec3| p.to_array().map(|v| if v == 0.0 { 0 } else { v.to_bits() });
+            let mut counts = std::collections::HashMap::new();
+            for &position in &builder.p {
+                *counts.entry(key(position)).or_insert(0usize) += 1;
+            }
+            let side = 23;
+            for face in 0..6 {
+                for row in 0..side {
+                    for column in 0..side {
+                        if row == 0 || column == 0 || row == side - 1 || column == side - 1 {
+                            let position = builder.p[face * side * side + row * side + column];
+                            assert!(counts[&key(position)] >= 2, "unmatched boundary {position:?}, half={half}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_caps_match_the_wall_at_every_segment_count() {
+        for segments in [3, 6, 7, 32] {
+            let mesh = cylinder(1.0, 2.0, segments);
+            for row in 0..=1 {
+                let (first, last) = (row * (segments + 1), row * (segments + 1) + segments);
+                assert_eq!(mesh.positions[first], mesh.positions[last]);
+                assert_eq!(mesh.normals[first], mesh.normals[last]);
+                assert!(mesh.uvs[first].x < mesh.uvs[last].x);
+            }
+            for y in [-1.0, 1.0] {
+                let wall: Vec<_> = mesh
+                    .positions
+                    .iter()
+                    .zip(&mesh.normals)
+                    .filter_map(|(position, normal)| (position.y == y && normal.y == 0.0).then_some(*position))
+                    .collect();
+                let rim: Vec<_> = mesh
+                    .positions
+                    .iter()
+                    .zip(&mesh.normals)
+                    .filter_map(|(position, normal)| {
+                        (position.y == y && normal.y != 0.0 && position.x * position.x + position.z * position.z > 0.5).then_some(*position)
+                    })
+                    .collect();
+                assert_eq!(rim.len(), segments);
+                assert!(rim.iter().all(|position| wall.contains(position)), "{segments} segments at height {y}: {rim:?} vs {wall:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_poles_use_identical_endpoint_positions() {
+        for segments in [3, 7, 32] {
+            let rings = 8;
+            let mesh = sphere(1.0, segments, rings);
+            for (row, expected) in [(0, Vec3::Y), (rings, -Vec3::Y)] {
+                for column in 0..=segments {
+                    let index = row * (segments + 1) + column;
+                    assert_eq!(mesh.positions[index], expected);
+                    assert_eq!(mesh.normals[index], expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_geometry_closes_its_longitudinal_uv_seam_exactly() {
+        for segments in [3, 7, 32] {
+            let rings = 8;
+            let mesh = sphere(1.0, segments, rings);
+            let width = segments + 1;
+            for row in 0..=rings {
+                let (a, b) = (row * width, row * width + segments);
+                assert_eq!(mesh.positions[a], mesh.positions[b], "seam row {row}");
+                assert_eq!(mesh.normals[a], mesh.normals[b], "seam normal row {row}");
+                assert_eq!((mesh.uvs[a].x, mesh.uvs[b].x), (0.0, 1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn torus_geometry_closes_both_uv_seams_exactly() {
+        for (segs, sides) in [(3, 3), (7, 5), (32, 12)] {
+            let mesh = torus(1.0, 0.35, segs, sides);
+            let width = segs + 1;
+            for row in 0..=sides {
+                let (a, b) = (row * width, row * width + segs);
+                assert_eq!(mesh.positions[a], mesh.positions[b], "u seam row {row}");
+                assert_eq!(mesh.normals[a], mesh.normals[b], "u seam normal row {row}");
+                assert_eq!((mesh.uvs[a].x, mesh.uvs[b].x), (0.0, 1.0));
+            }
+            for col in 0..=segs {
+                let (a, b) = (col, sides * width + col);
+                assert_eq!(mesh.positions[a], mesh.positions[b], "v seam column {col}");
+                assert_eq!(mesh.normals[a], mesh.normals[b], "v seam normal column {col}");
+                assert_eq!((mesh.uvs[a].y, mesh.uvs[b].y), (0.0, 1.0));
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
-    fn rounded_box_takes_negative_zero_and_nan_sizes() {
-        for half in [Vec3::splat(-1.0), Vec3::ZERO, Vec3::NAN, Vec3::new(1.0, f32::INFINITY, -2.0)] {
-            for bevel in [0.0, 0.2, -1.0, f32::NAN] {
-                let m = rounded_box(half, bevel);
-                m.validate().unwrap();
-                assert!(m.uvs.iter().all(|uv| uv.is_finite()), "{half:?} {bevel}");
+    fn invalid_cube_dimensions_do_not_panic() {
+        for size in [-1.0, 0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let result = std::panic::catch_unwind(|| cube(size));
+            assert!(result.is_ok(), "cube({size}) panicked");
+            assert!(result.unwrap().is_err(), "cube({size}) must reject invalid dimensions");
+        }
+    }
+
+    #[test]
+    fn invalid_rounded_box_dimensions_do_not_panic() {
+        for axis in 0..3 {
+            for value in [-1.0, 0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX] {
+                let mut half = Vec3::ONE;
+                half[axis] = value;
+                let result = std::panic::catch_unwind(|| rounded_box(half, 0.0));
+                assert!(result.is_ok(), "rounded_box({half:?}) panicked");
+                assert!(result.unwrap().is_err(), "rounded_box({half:?}) must reject invalid dimensions");
             }
         }
-        let m = rounded_box(Vec3::splat(-1.0), 0.0);
-        let (lo, hi) = m.bounds();
-        assert!((lo + Vec3::ONE).length() < 1e-5 && (hi - Vec3::ONE).length() < 1e-5, "{lo:?} {hi:?}");
+    }
+
+    #[test]
+    fn invalid_box_bevels_are_rejected_instead_of_clamped() {
+        for bevel in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.950001] {
+            assert!(rounded_box(Vec3::ONE, bevel).is_err(), "{bevel}");
+        }
+        for bevel in [0.0, 0.95] {
+            assert!(rounded_box(Vec3::ONE, bevel).is_ok(), "{bevel}");
+        }
+        assert!(cube(2.0).is_ok());
+    }
+
+    #[test]
+    fn large_finite_box_extents_keep_generated_positions_finite() {
+        let mesh = rounded_box(Vec3::new(1e38, 1.0, 1.0), 0.0).unwrap();
+        assert!(mesh.positions.iter().all(|p| p.is_finite()));
     }
 
     /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
