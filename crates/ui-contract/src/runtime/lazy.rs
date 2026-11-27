@@ -513,7 +513,7 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
 ///   loading, no wake time reached;
 /// - what pointer sensing gives it is what its run saw (`pointer::Sensed`: the hover, part and pointer-over facts of
-///   its roots and egui widgets, and the parts of its roots under the pointer), so a move within one part of it, a
+///   the components whose shapes it registered and of its egui widgets), so a move within one part of it, a
 ///   collection's row among them, leaves it alone, and a move onto another part, in or out runs it; while it is under
 ///   the pointer, the modifiers are the ones its run saw; the pointer did not move in a rect its run follows the
 ///   pointer in (`pointer::follows_pointer`, which a hover position read marks), now or then; no wheel share or owed
@@ -667,7 +667,7 @@ fn pressed(ctx: &Context, layer: Layer, rect: Rect, overlays: &[replay::ShownLay
 /// `offset`: the pointer rules of `settled`.
 fn pointer_reaches(ctx: &Context, settled: &Settled, rect: Rect, offset: Vec2) -> bool {
     let facts = &settled.record.facts;
-    let sensed = crate::runtime::pointer::sensed(ctx, &facts.roots, &settled.record.widgets);
+    let sensed = crate::runtime::pointer::sensed(ctx, &facts.sensors, &settled.record.widgets);
     let changed = |input: Input| inputs::generation(ctx, input) != settled.seen[input as usize];
     let hover = crate::runtime::pointer::hover_point(ctx);
     let follows = changed(Input::Pointer)
@@ -754,7 +754,7 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     let revealed = focus::targets(ctx)[1];
     let engaged_now = record.focus.stop_ids().any(|stop| revealed == Some(stop));
     let lives = crate::runtime::memory::ended_generation(ctx);
-    let sensed = crate::runtime::pointer::sensed(ctx, &record.facts.roots, &record.widgets);
+    let sensed = crate::runtime::pointer::sensed(ctx, &record.facts.sensors, &record.widgets);
     let pointer = crate::runtime::pointer::hover_point(ctx);
     let mut settled =
         Settled { record, frame: 0, place, rect, engaged: engaged_now, sensed, pointer, key, pass: 0, edits, output, lives, seen, view };

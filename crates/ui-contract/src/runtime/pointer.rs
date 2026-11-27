@@ -667,7 +667,7 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
 /// `record_shapes_in` with no note in the run records, for a caller whose own note makes the shapes again: shapes at
 /// stack positions a replay takes from the arena it joins (`sensing`), not from the recorded run.
 pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: Vec<Shape<Id>>) {
-    crate::runtime::replay::note_root(ctx, root);
+    crate::runtime::replay::note_sensors(ctx, shapes.iter().map(|shape| shape.owner));
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
@@ -799,7 +799,6 @@ pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Laye
         || (layer, root, widgets.to_vec(), click),
         |ctx, (layer, root, widgets, click)| record_widgets(ctx, *layer, *root, widgets, *click),
     );
-    crate::runtime::replay::note_root(ctx, root);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         record.this_made.insert(root);
         record.this_made.extend(widgets.iter().copied());
@@ -1047,6 +1046,8 @@ pub(crate) struct Under {
     pub hover_top: Option<(Winner<Id>, Id)>,
     /// Every root with a shape under the point, on top or not: the roots that contain the pointer.
     pub over: SmallVec<[Id; 4]>,
+    /// Every component (root or member) that owns a shape under the point, on top or not.
+    pub owners: SmallVec<[Id; 4]>,
     /// The roots' own parts with a shape under the point, on top or not, each with its root: a collection's row that
     /// contains the pointer under the row's own shapes.
     pub parts: SmallVec<[(Id, PartRef); 4]>,
@@ -1103,16 +1104,17 @@ pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
 }
 
-/// What pointer sensing gives a memoized view's run in the running pass (`runtime::lazy`): of the arena roots and egui
-/// widgets the run registered, the ones under the pass's hover point and what they win there. Equal answers in two
-/// passes mean every hover, part and pointer-over fact the run's components read is the same; a hover position is
-/// not part of it, as the code that reads one marks itself ([`follows_pointer`]).
+/// What pointer sensing gives a memoized view's run in the running pass (`runtime::lazy`): of the components that own
+/// shapes the run registered (arena roots and members) and of its egui widgets, the ones under the pass's hover point
+/// and what they win there. A component's facts are its own: a member's view sees a move over a sibling member or its
+/// root as nothing. Equal answers in two passes mean every hover, part and pointer-over fact the run's components read
+/// is the same; a hover position is not part of it, as the code that reads one marks itself ([`follows_pointer`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Sensed {
     /// The press winners and the shape that hovers beside them (`Under`), each as its kind, root, owner and part, of
-    /// the run's roots. None while a press is open: only the press's target hovers, and the press runs it.
+    /// the run's components. None while a press is open: only the press's target hovers, and the press runs it.
     hover: SmallVec<[(u8, Id, Id, Option<PartRef>); 3]>,
-    /// The run's roots with a shape under the point.
+    /// The run's components with a shape under the point.
     over: SmallVec<[Id; 4]>,
     /// The own parts of the run's roots with a shape under the point (`Under::parts`).
     parts: SmallVec<[(Id, PartRef); 4]>,
@@ -1127,24 +1129,24 @@ impl Sensed {
     }
 }
 
-/// What pointer sensing gives the arena roots `roots` and egui widgets `widgets` of a run in the running pass
+/// What pointer sensing gives the components `sensors` and egui widgets `widgets` of a run in the running pass
 /// ([`Sensed`]): read from the pass's one resolution at the hover point.
-pub(crate) fn sensed(ctx: &Context, roots: &IdSet, widgets: &IdSet) -> Sensed {
+pub(crate) fn sensed(ctx: &Context, sensors: &IdSet, widgets: &IdSet) -> Sensed {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         let mut sensed = Sensed::default();
         if let Some((_, _, under)) = &record.hover
-            && !roots.is_empty()
+            && !sensors.is_empty()
         {
             if !record.captured {
                 let found = [under.press.click, under.press.drag, under.hover_top];
                 for (kind, (winner, root)) in (0u8..).zip(found).filter_map(|(kind, found)| Some((kind, found?))) {
-                    if roots.contains(&root) {
+                    if sensors.contains(&winner.owner) {
                         sensed.hover.push((kind, root, winner.owner, winner.part));
                     }
                 }
             }
-            sensed.over.extend(under.over.iter().copied().filter(|root| roots.contains(root)));
-            sensed.parts.extend(under.parts.iter().copied().filter(|(root, _)| roots.contains(root)));
+            sensed.over.extend(under.owners.iter().copied().filter(|owner| sensors.contains(owner)));
+            sensed.parts.extend(under.parts.iter().copied().filter(|(root, _)| sensors.contains(root)));
         }
         if let Some((contains, click, drag)) = &record.hover_widgets
             && !widgets.is_empty()
@@ -1241,6 +1243,9 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             }
             for &index in &kept {
                 let shape = &entry.shapes[index];
+                if !under.owners.contains(&shape.owner) {
+                    under.owners.push(shape.owner);
+                }
                 if let Some(part) = shape.part.filter(|_| shape.owner == root)
                     && !under.parts.contains(&(root, part))
                 {
