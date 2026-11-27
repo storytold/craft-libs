@@ -7,7 +7,10 @@
   "upstream_repository": "https://github.com/linebender/kurbo",
   "upstream_revision": "838b69ef35f3381cefc007d86aa8364f5a6dc673",
   "upstream_directory": "kurbo",
-  "local_patches": [],
+  "local_patches": [
+    "In `src/stroke.rs`, `StrokeCtx::do_linear` skips a cusp, or the end point, whose tangent from the point before it is exactly zero, instead of passing the tangent to `do_join` and `do_line`, which divide by its length, so a collinear cubic whose cusps round onto the point before them or onto its end point no longer gives NaN coordinates. The test `stroke::tests::linear_cubic_with_coincident_cusps` covers it.",
+    "In `src/stroke.rs`, the stroker skips a quadratic or cubic whose start or end tangent from `PathSeg::tangents` is zero, as it skips a zero-length line, so a closed loop with control arms shorter than 1e-6 no longer gives NaN coordinates. The test `stroke::tests::tiny_closed_loops` covers it."
+  ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "4bfe3d4ab606efdb8e558db546ae666decc53fa3caa34865b4f66ffa67449a66", "source_git_blob": null, "sha256": "4bfe3d4ab606efdb8e558db546ae666decc53fa3caa34865b4f66ffa67449a66" },
     { "path": "Cargo.lock", "source_sha256": "1f13e8fcd58e548bb2130320c3ed5addb20ff658722d3f20b697c2a6a0b27e90", "source_git_blob": null, "sha256": "1f13e8fcd58e548bb2130320c3ed5addb20ff658722d3f20b697c2a6a0b27e90" },
@@ -57,7 +60,7 @@
     { "path": "src/shape.rs", "source_sha256": "226a32a1996d298e9587cc921b7cc8644ca6e04b2c740732e0a63ab00d3351ae", "source_git_blob": null, "sha256": "226a32a1996d298e9587cc921b7cc8644ca6e04b2c740732e0a63ab00d3351ae" },
     { "path": "src/simplify.rs", "source_sha256": "771fc68a2dd0a00d994906176641bcb17c9351b3d1205e037a78a5893b51a684", "source_git_blob": null, "sha256": "771fc68a2dd0a00d994906176641bcb17c9351b3d1205e037a78a5893b51a684" },
     { "path": "src/size.rs", "source_sha256": "645a1f7ba1528b1b10e5881d53019eac428e556c1d9bdea8d3f42ce351c00950", "source_git_blob": null, "sha256": "645a1f7ba1528b1b10e5881d53019eac428e556c1d9bdea8d3f42ce351c00950" },
-    { "path": "src/stroke.rs", "source_sha256": "9ae69c57571d653a34ded745e176869ef587e4ff5c3dcb1607a398df7e029498", "source_git_blob": null, "sha256": "9ae69c57571d653a34ded745e176869ef587e4ff5c3dcb1607a398df7e029498" },
+    { "path": "src/stroke.rs", "source_sha256": "9ae69c57571d653a34ded745e176869ef587e4ff5c3dcb1607a398df7e029498", "source_git_blob": null, "sha256": "9f430ffc660e8777551d4c67cc1ff3e4006539c7f31680626721c2105f054c9e" },
     { "path": "src/svg.rs", "source_sha256": "b403a258614b3e287c3e5210b0745814f08acda92e95696bdddbf50e341fa3be", "source_git_blob": null, "sha256": "b403a258614b3e287c3e5210b0745814f08acda92e95696bdddbf50e341fa3be" },
     { "path": "src/translate_scale.rs", "source_sha256": "8b82eb5f46744cb9a044263e200d79d797270616320337e4230356942ab85f1a", "source_git_blob": null, "sha256": "8b82eb5f46744cb9a044263e200d79d797270616320337e4230356942ab85f1a" },
     { "path": "src/triangle.rs", "source_sha256": "27a6cddb109ae36ef55c470261c689d085502ab72a47f3a32ca22e771df7b03e", "source_git_blob": null, "sha256": "27a6cddb109ae36ef55c470261c689d085502ab72a47f3a32ca22e771df7b03e" },

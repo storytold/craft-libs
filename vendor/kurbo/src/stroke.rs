@@ -328,6 +328,14 @@ fn stroke_undashed(
                 if p1 != p0 || p2 != p0 {
                     let q = QuadBez::new(p0, p1, p2);
                     let (tan0, tan1) = PathSeg::Quad(q).tangents();
+                    // Craft patch (zero tangent): `tangents` falls back to the
+                    // chord when the control arms are shorter than its
+                    // threshold, and the chord of a loop that ends where it
+                    // starts is zero. Such a loop is skipped like a zero-length
+                    // line.
+                    if tan0 == Vec2::ZERO || tan1 == Vec2::ZERO {
+                        continue;
+                    }
                     ctx.do_join(style, tan0);
                     ctx.do_cubic(style, q.raise(), tolerance);
                     ctx.last_tan = tan1;
@@ -337,6 +345,10 @@ fn stroke_undashed(
                 if p1 != p0 || p2 != p0 || p3 != p0 {
                     let c = CubicBez::new(p0, p1, p2, p3);
                     let (tan0, tan1) = PathSeg::Cubic(c).tangents();
+                    // Craft patch (zero tangent): as for a quadratic above.
+                    if tan0 == Vec2::ZERO || tan1 == Vec2::ZERO {
+                        continue;
+                    }
                     ctx.do_join(style, tan0);
                     ctx.do_cubic(style, c, tolerance);
                     ctx.last_tan = tan1;
@@ -594,15 +606,21 @@ impl StrokeCtx {
                 let z = mt * (mt * mt * p[0] + 3.0 * t * (mt * p[1] + t * p[2])) + t * t * t * p[3];
                 let p = ref_pt + z * ref_vec;
                 let tan = p - self.last_pt;
-                self.do_join(&style, tan);
-                self.do_line(&style, tan, p);
-                self.last_tan = tan;
+                // Craft patch (zero tangent): after rounding, a cusp can land
+                // on the previous point, and a zero tangent has no normal.
+                if tan != Vec2::ZERO {
+                    self.do_join(&style, tan);
+                    self.do_line(&style, tan, p);
+                    self.last_tan = tan;
+                }
             }
         }
         let tan = c.p3 - self.last_pt;
-        self.do_join(&style, tan);
-        self.do_line(&style, tan, c.p3);
-        self.last_tan = tan;
+        if tan != Vec2::ZERO {
+            self.do_join(&style, tan);
+            self.do_line(&style, tan, c.p3);
+            self.last_tan = tan;
+        }
         self.do_join(&style, tan1);
     }
 }
@@ -1177,5 +1195,67 @@ mod tests {
 
         let infinite_width = Stroke::new(f64::INFINITY);
         assert!(!infinite_width.is_nan());
+    }
+
+    // A curve that ends where it starts, with control arms shorter than the
+    // threshold of `PathSeg::tangents`, has a zero tangent at both ends.
+    #[test]
+    fn tiny_closed_loops() {
+        for arm in [1e-7, 1e-5] {
+            for lead_in in [false, true] {
+                let mut cubic = BezPath::new();
+                let mut quad = BezPath::new();
+                for path in [&mut cubic, &mut quad] {
+                    path.move_to((0.0, 10.0));
+                    if lead_in {
+                        path.line_to((10.0, 10.0));
+                    } else {
+                        path.move_to((10.0, 10.0));
+                    }
+                }
+                cubic.curve_to((10.0 + arm, 10.0), (10.0 + arm, 10.0 + arm), (10.0, 10.0));
+                quad.quad_to((10.0 + arm, 10.0), (10.0, 10.0));
+                for path in [&mut cubic, &mut quad] {
+                    path.line_to((10.0, 20.0));
+                }
+                for (name, path) in [("cubic", &cubic), ("quad", &quad)] {
+                    let outline = stroke(path, &Stroke::new(2.0), &StrokeOpts::default(), 0.25);
+                    assert!(outline.is_finite(), "{name} {arm} {lead_in}");
+                    let bounds = outline.bounding_box();
+                    assert!(
+                        bounds.y0 < 10.0 && bounds.y1 > 20.0,
+                        "{name} {arm} {lead_in} {bounds:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    // A collinear cubic that runs back and forth has cusps. After rounding, a
+    // cusp can map to the point before it or to the end point, giving a zero
+    // tangent. In the first path, a double cusp root gives two cusps at the
+    // same point; in the second, the cusp rounds to the end point.
+    #[test]
+    fn linear_cubic_with_coincident_cusps() {
+        use crate::Join;
+        for svg in [
+            "M342.22660294061905,5 C342.22654190545893,5 342.22660294061905,5 342.22654190545893,5",
+            "M697.7493196978551,5 C697.7493115238381,5 697.7492364261329,5 697.7492364262838,5",
+        ] {
+            let path = BezPath::from_svg(svg).unwrap();
+            for join in [Join::Bevel, Miter, Join::Round] {
+                for width in [0.3, 3.0] {
+                    for tolerance in [0.25, 0.01] {
+                        let style = Stroke::new(width).with_join(join);
+                        let outline = stroke(&path, &style, &StrokeOpts::default(), tolerance);
+                        assert!(
+                            !outline.elements().is_empty(),
+                            "{svg} {join:?} {width} {tolerance}"
+                        );
+                        assert!(outline.is_finite(), "{svg} {join:?} {width} {tolerance}");
+                    }
+                }
+            }
+        }
     }
 }
