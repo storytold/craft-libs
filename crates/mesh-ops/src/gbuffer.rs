@@ -205,7 +205,7 @@ impl UvGBuffer {
                     }
                     let (qa, qb, qc) = (pa, pb, pc);
                     let area = edge(qa, qb, qc);
-                    if area.abs() < 1e-12 {
+                    if area == 0.0 || !area.is_finite() {
                         continue;
                     }
                     let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as u32;
@@ -233,7 +233,25 @@ impl UvGBuffer {
                     for y in y0..y1 {
                         for x in x0..x1 {
                             let d = DVec2::new(f64::from(x - x0), f64::from(y - y0));
-                            let [w0, w1, w2] = [0, 1, 2].map(|i| base[i] + (step[i].x * d.x + step[i].y * d.y));
+                            let stepped = [0, 1, 2].map(|i| {
+                                let dx = step[i].x * d.x;
+                                let dy = step[i].y * d.y;
+                                let value = base[i] + (dx + dy);
+                                let uncertainty = 32.0 * f64::EPSILON * (base[i].abs() + dx.abs() + dy.abs());
+                                (value, uncertainty)
+                            });
+                            if stepped.iter().enumerate().any(|(i, (value, uncertainty))| *value < eps[i] - uncertainty) {
+                                continue;
+                            }
+                            let exact = stepped.iter().enumerate().any(|(i, (value, uncertainty))| {
+                                (value - eps[i]).abs() <= *uncertainty || *uncertainty > area.abs() * 1e-12
+                            });
+                            let [w0, w1, w2] = if exact {
+                                let point = DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                                edges.map(|(a, b)| edge(a, b, point) * area.signum())
+                            } else {
+                                stepped.map(|(value, _)| value)
+                            };
                             if w0 < eps[0] || w1 < eps[1] || w2 < eps[2] {
                                 continue;
                             }
@@ -346,19 +364,23 @@ impl UvGBuffer {
 
 /// Interpolate triangle `t` at barycentrics (weights of vertices 1 and 2).
 pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
-    let (b1, b2) = (f64::from(b1), f64::from(b2));
-    surface_at_wide(mesh, t, [1.0 - b1 - b2, b1, b2])
-}
-
-fn surface_at_wide(mesh: &Mesh, t: u32, [b0, b1, b2]: [f64; 3]) -> Option<Surface> {
-    if ![b0, b1, b2].into_iter().all(f64::is_finite) {
+    if !b1.is_finite() || !b2.is_finite() {
         return None;
     }
-    let weights = [b0, b1, b2].map(|weight| {
-        let mut result = Expansion::new();
-        result.add(weight);
-        result
-    });
+    let mut weights = [Expansion::new(); 3];
+    weights[0].add(1.0);
+    weights[0].add(-f64::from(b1));
+    weights[0].add(-f64::from(b2));
+    weights[1].add(f64::from(b1));
+    weights[2].add(f64::from(b2));
+    if b1 >= 0.0 && b2 >= 0.0 && b1 + b2 == 1.0 && weights[0].value() < 0.0 {
+        let major = if b1 <= b2 { 2 } else { 1 };
+        let value = f64::from(b1.min(b2));
+        weights[0] = Expansion::new();
+        weights[major] = Expansion::new();
+        weights[major].add(1.0);
+        weights[major].add(-value);
+    }
     surface_at_expanded(mesh, t, weights, 1.0)
 }
 
@@ -369,6 +391,9 @@ fn surface_at_expanded(mesh: &Mesh, t: u32, weights: [Expansion<12>; 3], denomin
         Some(glam::DVec3::from_array(interpolate(&weights, [a, b, c].map(|value| value.to_array().map(f64::from)), denominator)))
     };
     let pos = p(&mesh.positions)?.as_vec3();
+    if !pos.is_finite() {
+        return None;
+    }
     let nrm = p(&mesh.normals)?.try_normalize().map_or(Vec3::Y, |normal| normal.as_vec3());
     let corners = [mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3()];
     let normal = glam::DVec3::from_array(std::array::from_fn(|axis| {
@@ -715,6 +740,93 @@ mod tests {
             assert!(buffer.raster_uvs.contains_key(&triangle));
             assert!(buffer.surface(&mesh, i).is_some());
         }
+    }
+
+    #[test]
+    fn surface_at_keeps_positive_interior_corner_weights() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        mesh.positions = vec![Vec3::X * 2.0_f32.powi(25), Vec3::ZERO, Vec3::Y];
+        let surface = surface_at(&mesh, 0, 0.5, 0.5 - 2.0_f32.powi(-25)).unwrap();
+        assert_eq!(surface.pos.x, 1.0);
+        mesh.positions = vec![Vec3::X * 2.0_f32.powi(60), Vec3::ZERO, Vec3::X * -2.0_f32.powi(60)];
+        let small = surface_at(&mesh, 0, 2.0_f32.powi(-60), 0.5).unwrap();
+        assert_eq!(small.pos.x, -1.0);
+    }
+
+    #[test]
+    fn surface_at_retains_edge_complements_below_double_precision() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        mesh.positions = vec![Vec3::ZERO, Vec3::new(1.0, -2.0_f32.powi(40), 0.0), Vec3::Y * 2.0_f32.powi(100)];
+        let surface = surface_at(&mesh, 0, 1.0, 2.0_f32.powi(-60)).unwrap();
+        assert_eq!(surface.pos.y, 2.0_f32.powi(-20));
+        mesh.indices.swap(1, 2);
+        let swapped = surface_at(&mesh, 0, 2.0_f32.powi(-60), 1.0).unwrap();
+        assert_eq!(swapped.pos.y, surface.pos.y);
+    }
+
+    #[test]
+    fn thin_interior_raster_weights_keep_their_proportions() {
+        let height = 2.0_f32.powi(-43) + 2.0_f32.powi(-53);
+        let mesh = mesh_with_uvs([[0.0, -height / 2.0], [1.0, 1.0], [0.0, height / 2.0]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 2, 2);
+        assert!(buffer.covered(3));
+        for (actual, expected) in buffer.bary[3].into_iter().zip([0.125, 0.75, 0.125]) {
+            assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+        }
+    }
+
+    #[test]
+    fn fallback_raster_weights_keep_a_unit_sum() {
+        let low = -2.0_f32.powi(-56);
+        let high = 2.0_f32.powi(-43) + low;
+        let far = 2.0_f32.powi(51);
+        let mesh = mesh_with_uvs([[0.0, low], [far, far], [0.0, high]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 64, 64);
+        let texel = 32 * 65;
+        assert!(buffer.covered(texel));
+        let sum: f64 = buffer.bary[texel].iter().sum();
+        assert!((sum - 1.0).abs() < 1e-12, "{sum}");
+    }
+
+    #[test]
+    fn raster_stepping_preserves_tiny_offsets_from_a_far_diagonal() {
+        let tiny = 2.0_f32.powi(-60);
+        let far = 2.0_f32.powi(60);
+        let mesh = mesh_with_uvs([[0.0, tiny], [far, far], [0.0, tiny * 2.0]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 64, 64);
+        for coordinate in 0..64 {
+            assert!(!buffer.covered(coordinate * 65), "diagonal texel {coordinate}");
+        }
+    }
+
+    #[test]
+    fn a_small_nonzero_uv_island_covers_its_interior_texel_center() {
+        let start = 0.5 - 2.0_f32.powi(-22);
+        let length = 2.0_f32.powi(-20);
+        let mesh = mesh_with_uvs([[start, start], [start + length, start], [start, start + length]]);
+        let buffer = UvGBuffer::new(&mesh, 0, 1, 1);
+        assert!(buffer.covered(0));
+        assert!(buffer.surface(&mesh, 0).is_some());
+    }
+
+    #[test]
+    fn surface_at_preserves_float_edge_weights_and_small_endpoint_offsets() {
+        for far in [1.0, 2.0_f32.powi(32)] {
+            for (height, u, v, expected_y) in [(1280.0, 0.2, 0.8, 1024.0), (67108864.0, 1.0, 2.0_f32.powi(-26), 1.0)] {
+                let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+                mesh.positions = vec![Vec3::new(-far, 0.0, 0.0), Vec3::ZERO, Vec3::new(0.0, height, 0.0)];
+                let surface = surface_at(&mesh, 0, u, v).unwrap();
+                assert_eq!(surface.pos.x, 0.0, "{far} {height}");
+                assert!((surface.pos.y - expected_y).abs() < 0.001, "{far} {height}");
+            }
+        }
+    }
+
+    #[test]
+    fn surface_rejects_positions_that_overflow_during_interpolation() {
+        let mut mesh = mesh_with_uvs([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        mesh.positions = vec![Vec3::new(-f32::MAX, 0.0, 0.0), Vec3::new(f32::MAX, 0.0, 0.0), Vec3::new(f32::MAX, 1.0, 0.0)];
+        assert!(surface_at(&mesh, 0, 0.625, 0.5).is_none());
     }
 
     #[test]

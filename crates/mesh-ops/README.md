@@ -15,6 +15,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle
   and barycentrics under the texel center. `surface` reads its position, normal and tangent frame.
   `surface_at` interpolates a triangle at supplied barycentric weights.
+  `surface_at` retains positive interior weights. When nonnegative supplied `f32` weights sum
+  to `1.0` in `f32` arithmetic, a negative opposite corner weight after widening is clamped to zero. Small offsets
+  along that edge are preserved.
   `bary` stores all three corner weights as `[f64; 3]` for each texel. `overlaps` counts each texel
   once when distinct triangles with overlapping interiors cover its center.
   `surface` retains local attribute offsets between far UV corners. Its unit tangents are
@@ -22,7 +25,7 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   `raster_uvs` stores vertex IDs and UV corners for triangles that own texels. Other triangle IDs
   are absent. The raster mapping stays fixed when the mesh's UVs change or its triangle corners
   are reordered. `surface` returns `None` when a triangle's vertex membership changes or its
-  interpolated UVs are non-finite.
+  interpolated positions or UVs are non-finite.
   `bary` keeps the corner order used during rasterization. Use `surface` after reordering corners.
 - **Primitives.** Sphere, rounded box, cube, cylinder, torus and plane with UVs and tangents, and
   the built-in scenes in `primitives::BUILTINS`.
