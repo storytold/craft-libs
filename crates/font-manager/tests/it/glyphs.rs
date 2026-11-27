@@ -203,6 +203,57 @@ fn an_open_menu_keeps_the_clicked_cell_when_that_row_changes() {
     assert!(menu.iter().all(|cell| *cell == GlyphCell::Char(FIRST)), "the row's new glyph does not take the menu: {menu:?}");
 }
 
+/// Unencoded glyphs 1 to 300 in every face: the same id names another glyph in another face.
+struct Unencoded;
+
+impl GlyphSource for Unencoded {
+    fn cells(&self, _: &str, _: &str, _: &str) -> Vec<GlyphCell> {
+        (1..=300).map(GlyphCell::Glyph).collect()
+    }
+
+    fn glyph(&self, _: &str, _: &str, _: GlyphCell, _: u32) -> Option<ColorImage> {
+        None
+    }
+}
+
+#[trial]
+fn an_open_menu_does_not_report_a_glyph_id_from_another_face() {
+    let family = Rc::new(RefCell::new("Plain".to_owned()));
+    let host_family = Rc::clone(&family);
+    let seen = Rc::new(RefCell::new(Vec::<GlyphCell>::new()));
+    let shown = Rc::clone(&seen);
+    let (mut style, mut settings) = ("Regular".to_owned(), GlyphsPanelSettings::default());
+    let mut fx = Fixture::new(move |ui| {
+        let out = {
+            let mut family = host_family.borrow_mut();
+            GlyphsPanel::new("Glyphs", &Unencoded, Bind::bound(&mut *family), Bind::bound(&mut style), Bind::bound(&mut settings))
+                .can_insert(true)
+                .show(ui)
+        };
+        if let Some(menu) = out.menu {
+            shown.borrow_mut().push(menu.cell);
+            Menu::context("Glyph", &menu.opener).show(ui, |ui, _| {
+                MenuItem::new("Insert Glyph").show(ui);
+            });
+        }
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let cell = fx.by_label("1, glyph 1").expect("the first glyph");
+    let at = cell.center();
+    fx.frame(vec![pointer::moved(at), pointer::secondary(at, true)]);
+    fx.frame(vec![pointer::secondary(at, false)]);
+    fx.settle();
+    assert!(seen.borrow().contains(&GlyphCell::Glyph(1)), "the click names the glyph");
+
+    seen.borrow_mut().clear();
+    *family.borrow_mut() = "Other".to_owned();
+    fx.frame(Vec::new());
+    fx.settle();
+    let menu = seen.borrow().clone();
+    assert!(menu.is_empty(), "the clicked id names another glyph in the new face, so the menu reports none: {menu:?}");
+}
+
 #[trial]
 fn glyphs_panel_alternates() {
     let (mut fx, _seen) = rig();
