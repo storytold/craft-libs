@@ -64,6 +64,12 @@ pub trait NavOutline {
         None
     }
 
+    /// `RaggedGrid`: how many columns a vertical move from row `from` to row `to` shifts the column by, for rows that are
+    /// offset against each other (a honeycomb's). 0 for rows that line up.
+    fn column_shift(&self, _from: usize, _to: usize) -> isize {
+        0
+    }
+
     /// `Cell`: the cells of every position (a row of a sheet).
     fn columns(&self) -> usize {
         1
@@ -324,16 +330,17 @@ fn ragged_at(outline: &dyn NavOutline, row: usize, column: usize) -> Option<usiz
 fn ragged(outline: &dyn NavOutline, state: &NavState, lead: usize, mv: NavMove) -> NavStep {
     let Some((row, column, _)) = locate(outline, lead) else { return NavStep::Unhandled };
     let rows = (0..).take_while(|&r| outline.row_len(r).is_some()).count();
-    // A row without a position that takes the lead (a closed group's) is passed over in the move's direction.
-    let toward = |rows: Vec<usize>| moved(rows.into_iter().find_map(|row| ragged_at(outline, row, column)));
-    let vertical = |to: Option<usize>| moved(to.and_then(|row| ragged_at(outline, row, column)));
+    // A row without a position that takes the lead (a closed group's, a divider's) is passed over in the move's
+    // direction.
+    let shifted = |to: usize| column.saturating_add_signed(outline.column_shift(row, to));
+    let toward = |rows: Vec<usize>| moved(rows.into_iter().find_map(|to| ragged_at(outline, to, shifted(to))));
     match mv {
         NavMove::Back => moved(neighbour(outline, state, lead, false)),
         NavMove::Forward => moved(neighbour(outline, state, lead, true)),
         NavMove::Up => toward((0..row).rev().collect()),
         NavMove::Down => toward((row + 1..rows).collect()),
-        NavMove::PageUp => vertical(Some(row.saturating_sub(state.page))),
-        NavMove::PageDown => vertical(Some((row + state.page).min(rows - 1))),
+        NavMove::PageUp => toward((0..=row.saturating_sub(state.page)).rev().collect()),
+        NavMove::PageDown => toward(((row + state.page).min(rows - 1)..rows).collect()),
         NavMove::Start => moved(first_enabled(outline)),
         NavMove::End => moved(last_enabled(outline)),
     }

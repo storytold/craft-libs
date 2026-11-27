@@ -7,6 +7,7 @@ use crate::runtime::memory::{self, MemoryStage};
 use craft_behavior::{MotionKind, Playback};
 use craft_theme::Motion;
 use egui::{Context, Id, Pos2, Rect, Vec2};
+use std::hash::Hash;
 
 /// Which token of `MotionTokens` gives a spec its duration and curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +211,31 @@ pub struct Presence {
     pub exiting: bool,
 }
 
+impl Presence {
+    /// The presence of an openness `t` whose target is open or closed.
+    fn at(t: f32, open: bool) -> Self {
+        Presence { t, visible: open || t > 0.0, exiting: !open && t > 0.0 }
+    }
+}
+
+/// One key of a keyed presence: the hash of its key, its openness, the frame that last drove it open, and what the
+/// caller keeps with it while it shows.
+#[derive(Clone)]
+struct KeyedEntry<P> {
+    key: Id,
+    tween: Tween<f32>,
+    /// A key that no pass of the running frame drove open is closing.
+    open_in: Option<u64>,
+    payload: P,
+}
+
+/// The keys of one keyed presence name, in the order they first opened, and the frame the name was first driven.
+#[derive(Clone)]
+struct Keyed<P> {
+    born: u64,
+    entries: Vec<KeyedEntry<P>>,
+}
+
 /// What a viewport's animations asked for in the running pass.
 #[derive(Default)]
 pub(crate) struct Wanted {
@@ -217,14 +243,18 @@ pub(crate) struct Wanted {
     wake: Option<f64>,
 }
 
+/// The instant type [`now`] returns: `std::time::Instant` on native targets, a clock that works in the browser on
+/// wasm.
+pub use web_time::Instant;
+
 /// The wall clock's reading, for a host that drives a store on real time (`ShellApp::tick`). It is the one place
 /// outside a pass that reads the clock.
-pub fn now() -> web_time::Instant {
-    web_time::Instant::now()
+pub fn now() -> Instant {
+    Instant::now()
 }
 
 /// Marks the running viewport as having an animation that is not at its end value.
-fn note_unsettled(ctx: &Context) {
+pub(crate) fn note_unsettled(ctx: &Context) {
     crate::runtime::replay::note_unsettled(ctx);
     PerViewport::<Wanted>::with(ctx, pass::current_viewport(ctx), |wanted| wanted.unsettled = true);
 }
@@ -257,7 +287,61 @@ pub(crate) fn layer_presence(ctx: &Context, base: Id, owner: Id, policy: MotionP
     let stage = MemoryStage::open_owned(ctx, memory::sub(base, "presence"), owner);
     let presence = Driver { stage: &stage, base, policy }.presence("open", open, spec);
     stage.write_back();
+    // The exit that ends here is the last pass in which the layer's hosts run it: from the next pass `layer_fading`
+    // answers false and they skip it. What ran around it this pass does not hold for the next one.
+    if !open && !layer_fading(ctx, base) {
+        note_unsettled(ctx);
+    }
     presence
+}
+
+/// Moves `tween` toward `target` at `now` by `spec` under `policy`, or sets it there where the mode does not run
+/// `spec`'s kind. Every named tween, keyed or not, and the read of a keyed exit step through here.
+fn advance_tween<T: Interpolate>(policy: &MotionPolicy, tween: &mut Tween<T>, target: T, spec: MotionSpec, now: f64) {
+    if policy.mode.playback(spec.kind) != Playback::Run {
+        *tween = Tween::at(target);
+        return;
+    }
+    if tween.target() != target {
+        // A follow steps from its last evaluation toward wherever its target is now; restarting its clock
+        // would hold it still for a frame each time the target moves.
+        match spec.curve {
+            Curve::Tween => tween.retarget(target, now),
+            Curve::Follow => tween.to = target,
+        }
+    }
+    tween.step(now, spec.motion(policy), spec.curve);
+}
+
+/// The slot of the keyed presence `name` of the component `base`.
+fn keyed_slot_of(base: Id, name: &'static str) -> Id {
+    memory::sub(base, ("presence_keyed", name))
+}
+
+/// The keys of the keyed presence `name` of the component `base` that are not among `listed`, closing from where
+/// they are at this pass's clock, each with its last payload. It reads a copy and stores nothing: the same keys,
+/// values and order `Driver::exiting` gives in the same pass, for code that runs before the component's own pass
+/// drives this frame's open keys (a collection's layout).
+pub(crate) fn peek_exiting<P: Clone + Send + Sync + 'static>(
+    ctx: &Context,
+    base: Id,
+    policy: MotionPolicy,
+    name: &'static str,
+    spec: MotionSpec,
+    listed: &[Id],
+) -> Vec<(Presence, P)> {
+    let Some(keyed) = store::peek_clone::<Keyed<P>>(ctx, keyed_slot_of(base, name)) else { return Vec::new() };
+    let now = frame::clock(ctx);
+    keyed
+        .entries
+        .into_iter()
+        .filter(|entry| !listed.contains(&entry.key))
+        .filter_map(|mut entry| {
+            advance_tween(&policy, &mut entry.tween, 0.0, spec, now);
+            let presence = Presence::at(entry.tween.shown(), false);
+            presence.visible.then_some((presence, entry.payload))
+        })
+        .collect()
 }
 
 /// The hover, press and on tweens of one component.
@@ -315,7 +399,10 @@ impl Driver<'_> {
         let sizing = self.stage.is_peek();
         let now = frame::clock(ctx);
         let existing = if sizing { store::peek_clone::<Tween<T>>(ctx, id) } else { store::take::<Tween<T>>(ctx, id) };
-        let runs = self.policy.mode.playback(spec.kind) == Playback::Run;
+        // A tween that moves in this pass (a new target, also one it jumps to, or a step, also its last one) leaves the
+        // slot in another state than the run found it in, which the next run reads (`layer_fading` among others): a
+        // record of the run is not replayed. Only a tween still running asks for another frame.
+        let moved = existing.as_ref().is_some_and(|tween| tween.target() != target || !tween.is_settled());
         let mut tween = match existing {
             Some(tween) => tween,
             None => {
@@ -325,23 +412,13 @@ impl Driver<'_> {
                 Tween::at(target)
             }
         };
-        if !runs {
-            tween = Tween::at(target);
-        } else {
-            if tween.target() != target {
-                // A follow steps from its last evaluation toward wherever its target is now; restarting its clock
-                // would hold it still for a frame each time the target moves.
-                match spec.curve {
-                    Curve::Tween => tween.retarget(target, now),
-                    Curve::Follow => tween.to = target,
-                }
-            }
-            tween.step(now, spec.motion(&self.policy), spec.curve);
-        }
+        self.advance(&mut tween, target, spec, now);
         let shown = tween.shown();
         if !sizing {
             if !tween.is_settled() {
                 note_unsettled(ctx);
+            } else if moved {
+                crate::runtime::replay::note_unsettled(ctx);
             }
             store::put(ctx, id, tween);
         }
@@ -352,9 +429,114 @@ impl Driver<'_> {
         self.anim(name, f32::from(u8::from(on)), spec)
     }
 
+    /// Moves `tween` toward `target` at `now` by `spec`, or sets it there where the mode does not run `spec`'s kind.
+    /// Named tweens, keyed or not, step through here.
+    fn advance<T: Interpolate>(&self, tween: &mut Tween<T>, target: T, spec: MotionSpec, now: f64) {
+        advance_tween(&self.policy, tween, target, spec, now);
+    }
+
+    /// The presence of the unkeyed `name`: the one-key case of `presence_keyed`, kept in a plain tween slot because
+    /// the overlay host reads a layer's openness there (`layer_fading`).
     pub(crate) fn presence(&self, name: &'static str, open: bool, spec: MotionSpec) -> Presence {
-        let t = self.anim_bool(name, open, spec);
-        Presence { t, visible: open || t > 0.0, exiting: !open && t > 0.0 }
+        Presence::at(self.anim_bool(name, open, spec), open)
+    }
+
+    /// The slot of a component's keyed presence `name`.
+    fn keyed_slot(&self, name: &'static str) -> Id {
+        keyed_slot_of(self.base, name)
+    }
+
+    /// The frame the running pass belongs to; both passes of one frame share it.
+    fn frame(&self) -> u64 {
+        let ctx = self.stage.ctx();
+        pass::frame_nr(ctx, pass::current_viewport(ctx))
+    }
+
+    /// The keys of `name` as stored; a sizing pass reads a copy and the real pass takes them out to put them back.
+    /// `None` when the name has never been driven.
+    fn load_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str) -> Option<Keyed<P>> {
+        let ctx = self.stage.ctx();
+        let id = self.keyed_slot(name);
+        if self.stage.is_peek() { store::peek_clone::<Keyed<P>>(ctx, id) } else { store::take::<Keyed<P>>(ctx, id) }
+    }
+
+    /// Puts the keys of `name` back after a real pass and asks for the next frame while one of them moves. A sizing
+    /// pass stores nothing.
+    fn store_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str, keyed: Keyed<P>) {
+        if self.stage.is_peek() {
+            return;
+        }
+        let ctx = self.stage.ctx();
+        if keyed.entries.iter().any(|entry| !entry.tween.is_settled()) {
+            note_unsettled(ctx);
+        }
+        store::put(ctx, self.keyed_slot(name), keyed);
+    }
+
+    /// The presence of `key` among the keys of `name`, which keeps `payload` with it while it is visible. In the
+    /// frame the name is first driven every key starts at its target, as `anim` does; a key that appears later
+    /// enters from closed. Two passes of one frame step to the same value, because a tween's value depends only on
+    /// the pass clock.
+    pub(crate) fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: Id,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence {
+        let ctx = self.stage.ctx();
+        let (now, frame) = (frame::clock(ctx), self.frame());
+        let mut keyed = self.load_keyed::<P>(name).unwrap_or_else(|| {
+            if !self.stage.is_peek() {
+                memory::adopt::<Keyed<P>>(ctx, self.stage.owner(), self.keyed_slot(name));
+            }
+            Keyed { born: frame, entries: Vec::new() }
+        });
+        let target = f32::from(u8::from(open));
+        let at = match keyed.entries.iter().position(|entry| entry.key == key) {
+            Some(at) => at,
+            None => {
+                let start = if keyed.born == frame { target } else { 0.0 };
+                keyed.entries.push(KeyedEntry { key, tween: Tween::at(start), open_in: None, payload: payload.clone() });
+                keyed.entries.len() - 1
+            }
+        };
+        let mut presence = Presence::at(target, open);
+        if let Some(entry) = keyed.entries.get_mut(at) {
+            self.advance(&mut entry.tween, target, spec, now);
+            entry.open_in = open.then_some(frame);
+            entry.payload = payload;
+            presence = Presence::at(entry.tween.shown(), open);
+        }
+        if !presence.visible {
+            keyed.entries.retain(|entry| entry.key != key);
+        }
+        self.store_keyed(name, keyed);
+        presence
+    }
+
+    /// The keys of `name` that no pass of the running frame drove open, closing from where they are, each with the
+    /// payload it was last given; a key is dropped, payload and all, once it has faded out. Read it after driving
+    /// this frame's open keys.
+    pub(crate) fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec) -> Vec<(Presence, P)> {
+        let Some(mut keyed) = self.load_keyed::<P>(name) else { return Vec::new() };
+        let (now, frame) = (frame::clock(self.stage.ctx()), self.frame());
+        let mut out = Vec::new();
+        keyed.entries.retain_mut(|entry| {
+            if entry.open_in == Some(frame) {
+                return true;
+            }
+            entry.open_in = None;
+            self.advance(&mut entry.tween, 0.0, spec, now);
+            let presence = Presence::at(entry.tween.shown(), false);
+            if presence.visible {
+                out.push((presence, entry.payload.clone()));
+            }
+            presence.visible
+        });
+        self.store_keyed(name, keyed);
+        out
     }
 
     pub(crate) fn jump<T: Interpolate>(&self, name: &'static str, value: T) {
@@ -396,7 +578,7 @@ impl Driver<'_> {
 }
 
 /// Asks for a pass of the running viewport at `at`; the earliest request wins.
-fn wake_at(ctx: &Context, at: f64) {
+pub(crate) fn wake_at(ctx: &Context, at: f64) {
     crate::runtime::replay::note_wake(ctx, at);
     PerViewport::<Wanted>::with(ctx, pass::current_viewport(ctx), |wanted| wanted.wake = Some(wanted.wake.map_or(at, |old| old.min(at))));
 }
@@ -433,6 +615,22 @@ pub trait Animate: crate::runtime::memory::sealed::Sealed {
     fn anim_bool(&self, name: &'static str, on: bool, spec: MotionSpec) -> f32;
     /// Open-close presence for something shown while it opens and fades out.
     fn presence(&self, name: &'static str, open: bool, spec: MotionSpec) -> Presence;
+    /// Open-close presence of one of a set of things under `name`, told apart by `key`, such as the items of a list
+    /// that enter and leave. `payload` is kept with the key while it is visible, so a thing its owner no longer has
+    /// can still be drawn while it fades out (`exiting`). The first frame of `name` starts every key at its target;
+    /// a key that appears later enters from closed.
+    fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: impl Hash,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence;
+    /// The keys of `name` that no pass of this frame drove open through `presence_keyed`, fading out, each with the
+    /// payload it was last given; a key is forgotten once it has faded out. Call it after driving the frame's open
+    /// keys.
+    fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec) -> Vec<(Presence, P)>;
     /// Sets `name` to `value` with no animation.
     fn jump<T: Interpolate>(&self, name: &'static str, value: T);
     /// The 0 to 1 position of a loop of `period` seconds, stepped every `tick` seconds when given; `None` when
@@ -445,6 +643,14 @@ pub trait Animate: crate::runtime::memory::sealed::Sealed {
     fn now(&self) -> f64;
     /// Asks for a pass at `at` (timers, holds, polls), whatever the motion mode.
     fn wake_at(&self, at: f64);
+}
+
+/// The id of a presence key: its hash, so a key needs no `Debug` to tell its presence apart.
+pub(crate) fn key_id(key: &impl Hash) -> Id {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    store::unique(hasher.finish())
 }
 
 /// The types that reach the motion service.
@@ -463,6 +669,21 @@ impl<X: Drives + crate::runtime::memory::sealed::Sealed> Animate for X {
 
     fn presence(&self, name: &'static str, open: bool, spec: MotionSpec) -> Presence {
         self.driver().presence(name, open, spec)
+    }
+
+    fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: impl Hash,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence {
+        self.driver().presence_keyed(name, key_id(&key), open, payload, spec)
+    }
+
+    fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec) -> Vec<(Presence, P)> {
+        self.driver().exiting(name, spec)
     }
 
     fn jump<T: Interpolate>(&self, name: &'static str, value: T) {

@@ -4,13 +4,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorPopover, ColorReadout, ColorWarning, PickedColor};
+use craft_color_ui::ui::{
+    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorPopover, ColorReadout, ColorWarning,
+    PickedColor, PickerLibrary, PickerSwatches,
+};
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, ShowContainer as _};
-use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rect, vec2};
 
@@ -118,6 +122,59 @@ fn a_dialog_reopened_keeps_only_web_colors_and_recalls_the_values_kept_on_ok() {
     fixture.click(&reset).idle(4);
     fixture.hold(Modifiers::NONE).idle(2);
     assert_eq!(edited(&dialogs), Some(values), "Reset returns the typed values");
+}
+
+/// A working RGB twice as wide as sRGB: 255 is sRGB's half.
+struct WideRgb;
+
+impl ColorModel for WideRgb {
+    fn id(&self) -> &'static str {
+        RgbModel.id()
+    }
+    fn name(&self) -> &'static str {
+        RgbModel.name()
+    }
+    fn channels(&self) -> &[craft_theme::Channel] {
+        static RGB: RgbModel = RgbModel;
+        RGB.channels()
+    }
+    fn from_srgb(&self, c: Srgba) -> ModelValues {
+        ModelValues::new(self.id(), &[c.r * 510.0, c.g * 510.0, c.b * 510.0])
+    }
+    fn to_srgb(&self, v: &[f32; craft_theme::MAX_CHANNELS]) -> Srgba {
+        Srgba::rgb(v[0] / 510.0, v[1] / 510.0, v[2] / 510.0)
+    }
+    fn default_on(&self) -> craft_theme::DefaultOn {
+        RgbModel.default_on()
+    }
+}
+
+/// The dialog's RGB fields are the host's working RGB, in both layouts: the values `kept` gives in it stand, where the
+/// built-in sRGB would show its own numbers.
+#[trial]
+fn the_dialogs_rgb_fields_show_the_hosts_working_values() {
+    let wide = Srgba::rgb(0.3, 0.2, 0.1);
+    let kept = WideRgb.from_srgb(wide);
+    for layout in [ColorPickerDialogLayout::Full, ColorPickerDialogLayout::Tabbed] {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let dialog = ColorPickerDialog::new("fill", "Fill", wide).layout(layout).tab(ColorPickerTab::Custom).working_rgb(WideRgb).kept(kept);
+        dialogs.borrow_mut().open(dialog);
+        fixture.idle(6);
+        if layout == ColorPickerDialogLayout::Tabbed {
+            let ctx = fixture.ctx().clone();
+            let set = dialogs.borrow_mut().set_json_field(&ctx, dialog_id(("color-picker", "fill")), "model", serde_json::json!("rgb"));
+            assert_eq!(set, Ok(()), "the compact picker shows RGB");
+            fixture.idle(4);
+        }
+        let tree = fixture.tree();
+        let red = tree.with_role(Role::SPIN_BUTTON).into_iter().find(|node| tree.name_of(*node) == Some("Red"));
+        let shown = red.and_then(|node| tree.numeric_of(node)).and_then(|numeric| numeric.value);
+        let shown = shown.unwrap_or_else(|| panic!("{layout:?}: the Red field"));
+        assert!((shown - f64::from(kept.values[0])).abs() < 0.5, "{layout:?}: Red shows the working value {kept:?}, not {shown}");
+    }
 }
 
 /// The densities and themes every layout trial runs in: compact and comfortable, a Pro and a Studio theme.
@@ -242,7 +299,10 @@ fn the_full_picker_keeps_photoshops_arrangement_in_every_room_density_and_theme(
     for look in LOOKS {
         let wide = full_picker(600.0, look, 2);
         let parts = FullParts::of(&wide, 2);
-        the_arrangement_holds_in_other_rooms(look, &wide, &parts);
+        // The rooms are compared in one look, the widest: each look's own arrangement is checked below.
+        if look == ROOMS_LOOK {
+            the_arrangement_holds_in_other_rooms(look, &wide, &parts);
+        }
         the_area_strip_and_compare_block_stand_as_in_photoshop(look, &parts);
         the_field_groups_stand_under_the_compare_block(look, &parts);
         the_hex_field_and_the_rows_under_the_area_stand_as_in_photoshop(look, &parts);
@@ -255,6 +315,9 @@ fn the_full_picker_keeps_photoshops_arrangement_in_every_room_density_and_theme(
 }
 
 type Look = (Size, &'static str);
+
+/// The look the other rooms are compared in: the comfortable density is the widest, so a narrow room presses it most.
+const ROOMS_LOOK: Look = (Size::Comfortable, "craft.studio");
 
 /// Wider and narrower rooms leave the arrangement alone, and the warnings move no other part.
 fn the_arrangement_holds_in_other_rooms(look: Look, wide: &Fixture, parts: &FullParts) {
@@ -354,6 +417,59 @@ fn the_color_picker_dialog_stands_its_buttons_over_the_second_group_in_photoshop
     }
 }
 
+/// The Color Swatches button switches the dialog to the swatch view, which marks the cell of the current colour; a click
+/// on another cell is an edit that OK answers. A remembered library past the end shows the last library, and an empty
+/// library shows the notice.
+#[trial]
+fn the_color_picker_dialogs_swatch_view_marks_the_current_colour_and_a_pick_is_an_edit() {
+    let (red, blue, green) = (Srgba::rgb(1.0, 0.0, 0.0), Srgba::rgb(0.0, 0.0, 1.0), Srgba::rgb(0.0, 1.0, 0.0));
+    let library = |name: &'static str, swatches: &[(&'static str, Srgba)]| {
+        PickerLibrary::new(name, swatches.iter().map(|(name, color)| (Label::from(*name), *color)).collect())
+    };
+    let open = |libraries: Vec<PickerLibrary>| {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let dialog = ColorPickerDialog::new("fill", "Fill", red).swatch_view(PickerSwatches::new(libraries, "No swatches"));
+        dialogs.borrow_mut().open(dialog);
+        fixture.idle(6);
+        (dialogs, fixture)
+    };
+    let id = dialog_id(("color-picker", "fill"));
+
+    let (dialogs, mut fixture) = open(vec![library("Basic", &[("Red", red), ("Blue", blue)])]);
+    let toggle = fixture.by_label("Color Swatches").expect("the dialog shows the Color Swatches button");
+    fixture.click(&toggle).idle(4);
+    let selected = |fixture: &Fixture, name: &str| {
+        let cell = fixture.by_label(name).unwrap_or_else(|| panic!("the swatch view shows {name}"));
+        fixture.tree().selected_of(cell.node).unwrap_or(false)
+    };
+    assert!(selected(&fixture, "Red"), "the cell equal to the current colour is marked");
+    assert!(!selected(&fixture, "Blue"), "and no other");
+    let blue_cell = fixture.by_label("Blue").expect("the blue cell");
+    fixture.click(&blue_cell).idle(4);
+    let current = dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).map(|picked| picked.color.to_hex());
+    assert_eq!(current, Some(blue.to_hex()), "a click on a cell edits the colour");
+    let ctx = fixture.ctx().clone();
+    assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx));
+    let answered = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).map(|result| result.picked.color.to_hex());
+    assert_eq!(answered, Some(blue.to_hex()), "OK answers the picked colour");
+
+    let (dialogs, mut fixture) = open(vec![library("Basic", &[("Red", red)]), library("Spare", &[("Green", green)])]);
+    let ctx = fixture.ctx().clone();
+    assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "swatches", serde_json::json!(true)), Ok(()));
+    assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "library", serde_json::json!(9)), Ok(()));
+    fixture.idle(4);
+    assert!(fixture.by_label("Green").is_some(), "a library past the end shows the last library");
+
+    let (dialogs, mut fixture) = open(vec![library("Empty", &[])]);
+    let ctx = fixture.ctx().clone();
+    assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "swatches", serde_json::json!(true)), Ok(()));
+    fixture.idle(4);
+    assert!(fixture.texts().iter().any(|run| run.text == "No swatches"), "an empty library shows the notice");
+}
+
 /// The Compact picker's width is set by the area and the strip, and its rows take that width; its popover is as wide
 /// wherever the well stands and whatever the room.
 #[trial]
@@ -381,4 +497,115 @@ fn the_compact_picker_is_as_wide_as_its_area_and_strip_wherever_it_opens() {
     }
     assert!(first.0.x > first.0.y, "the compact area is wider than tall");
     assert!(first.1 > first.0.x, "the rows reach past the area, to the strip's end");
+}
+
+/// A field of the open dialog as automation reads it.
+fn dialog_field(dialogs: &Rc<RefCell<DialogHost>>, name: &str) -> Option<serde_json::Value> {
+    dialogs.borrow().get::<ColorPickerDialog>().and_then(|dialog| dialog.json_fields()).and_then(|fields| fields.get(name).cloned())
+}
+
+/// The current colour of the open dialog as `#rrggbb`.
+fn dialog_color(dialogs: &Rc<RefCell<DialogHost>>) -> Option<String> {
+    dialogs.borrow().get::<ColorPickerDialog>().and_then(|dialog| dialog.current()).map(|picked| picked.color.to_hex())
+}
+
+/// The tabbed dialog opens on the tab it was given; a hex typed on Custom and a honeycomb cell picked on Standard both
+/// reach the answer, and the tab is a field automation reads and sets.
+#[trial]
+fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(vec2(900.0, 700.0));
+    fixture.host(std::sync::Arc::new(Host::builder(AppInfo { id: "picker-test", name: "Picker test", version: "0" }).build()));
+    let ctx = fixture.ctx().clone();
+    let id = dialog_id(("color-picker", "fill"));
+    let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
+    let cells: Vec<(Label, Srgba)> = ["#ff0000", "#00ff00", "#0000ff", "#ffff00"]
+        .iter()
+        .enumerate()
+        .map(|(at, hex)| (Label::from(format!("Standard {at}")), colour(hex)))
+        .collect();
+    let greys = vec![(Label::from("Gray 1"), colour("#808080"))];
+
+    dialogs.borrow_mut().open(
+        ColorPickerDialog::new("fill", "Fill", colour("#123456"))
+            .layout(ColorPickerDialogLayout::Tabbed)
+            .standard(cells, greys)
+            .tab(ColorPickerTab::Custom)
+            .web_colors_remembered(false),
+    );
+    fixture.idle(6);
+    assert_eq!(dialog_field(&dialogs, "tab"), Some(serde_json::json!("custom")), "the dialog opens on the tab it was given");
+    assert!(fixture.by_label("Hex color").is_some(), "the Custom page shows the compact picker");
+    assert!(fixture.by_label("Standard 0").is_none(), "and not the honeycomb");
+    assert_eq!(dialog_field(&dialogs, "model"), Some(serde_json::Value::Null), "no model is picked yet");
+    assert!(fixture.by_label("Red").is_none(), "the first model (HSB) shows no red channel");
+    let set = dialogs.borrow_mut().set_json_field(&ctx, id, "model", serde_json::json!(RgbModel.id()));
+    assert_eq!(set, Ok(()), "the model of the Custom page is a field");
+    fixture.idle(6);
+    assert_eq!(dialog_field(&dialogs, "model"), Some(serde_json::json!(RgbModel.id())), "the field names the model shown");
+    assert!(fixture.by_label("Red").is_some(), "and the compact rows show that model's channels");
+
+    type_into(&mut fixture, "Hex color", "336699");
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#336699"), "a hex typed on Custom is the colour");
+
+    let set = dialogs.borrow_mut().set_json_field(&ctx, id, "tab", serde_json::json!("standard"));
+    assert_eq!(set, Ok(()), "the tab is a field of the dialog");
+    fixture.idle(6);
+    assert!(fixture.by_label("Hex color").is_none(), "Standard shows no hex field");
+    let cell = fixture.by_label("Standard 2").expect("the honeycomb shows its cells");
+    fixture.click(&cell);
+    fixture.idle(4);
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#0000ff"), "a honeycomb pick is the colour");
+
+    assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx), "OK answers");
+    let answered = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).map(|result| result.picked.color.to_hex());
+    assert_eq!(answered.as_deref(), Some("#0000ff"));
+}
+
+/// The Full dialog opens with its hex field focused and selected; digits typed there and Enter commit the colour and
+/// confirm the dialog, as in the reference image editor's Color Picker (the tabbed Colors dialog keeps Enter in the
+/// field instead).
+#[trial]
+fn enter_in_the_full_dialogs_hex_field_confirms_the_typed_colour() {
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(vec2(900.0, 700.0));
+    fixture.host(std::sync::Arc::new(Host::builder(AppInfo { id: "picker-test", name: "Picker test", version: "0" }).build()));
+    let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
+    dialogs
+        .borrow_mut()
+        .open(ColorPickerDialog::new("foreground", "Color Picker (Foreground Color)", colour("#000000")).web_colors_remembered(false));
+    fixture.idle(6);
+    assert!(dialogs.borrow().get::<ColorPickerDialog>().is_some(), "the picker is open");
+
+    fixture.type_text("336699");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(dialogs.borrow().get::<ColorPickerDialog>().is_none(), "Enter in the hex field confirms the dialog");
+    let answer = dialogs.borrow_mut().take::<ColorPickerDialog>();
+    let Some(DialogResult::Ok(result)) = answer else { panic!("the dialog answers OK") };
+    assert_eq!(result.picked.color.to_hex(), "#336699", "with the typed colour");
+}
+
+/// A request that asks for the swatches opens the picker on its Color Swatches view; one that doesn't opens it on the
+/// Color Models.
+#[trial]
+fn a_request_for_the_swatches_opens_the_picker_on_its_swatch_view() {
+    let red = Srgba::rgb(1.0, 0.0, 0.0);
+    let shows_swatches = |request: craft_ui::runtime::requests::ColorRequest| {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let libraries = vec![PickerLibrary::new("Basic", vec![(Label::from("Brick"), red)])];
+        dialogs.borrow_mut().open(ColorPickerDialog::from_request(request).swatch_view(PickerSwatches::new(libraries, "No swatches")));
+        fixture.idle(6);
+        fixture.by_label("Brick").is_some()
+    };
+    let request = || craft_ui::runtime::requests::ColorRequest::new("fill", red);
+    assert!(shows_swatches(request().on_swatches()), "the swatch view shows the library's cells");
+    assert!(!shows_swatches(request()), "without it the picker opens on the Color Models");
 }

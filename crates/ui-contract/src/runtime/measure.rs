@@ -52,6 +52,17 @@ struct BodyRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// The derived values built in a pass, by component id, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+pub(crate) struct DerivedBuilds {
+    pass: u64,
+    builds: Vec<(Id, u32)>,
+    /// The frame `frame_builds` counts, and the builds of every pass of it.
+    frame: u64,
+    frame_builds: Vec<(Id, u32)>,
+}
+
 /// How many contributions the measuring runs of a pass made that stand, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -84,6 +95,14 @@ struct RowMeasures {
     rows: Vec<(Id, u32)>,
 }
 
+/// The collection rows whose item was built, by item id, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+struct RowBuilds {
+    pass: u64,
+    rows: Vec<(Id, u32)>,
+}
+
 /// The rows that asked their body units for their least widths, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -92,8 +111,19 @@ struct LeastRuns {
     runs: Vec<(Id, u32)>,
 }
 
-/// Runs `f` as a measuring run. Nested calls are fine.
+/// Runs `f` as a measuring run, for code outside the framework that measures before it shows (an app that sizes a rect
+/// by `Show::measure_in` and then shows the component with `show_at`). Nested calls are fine.
+///
+/// What `f` measures is its own: it joins no kept transcript of the body around it, in that body's measuring run or in
+/// its real run alike. Otherwise the body's measuring run would keep it as one of the body's components while the
+/// real run, measuring outside every transcript, never asks it, and the body would read as changed every frame.
 pub fn run<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
+    measuring(ctx, || super::layout_memory::boundary(ctx, true, f))
+}
+
+/// Runs `f` as a measuring run whose measures join the transcript of the body whose measuring run is open around it:
+/// the framework's own measuring runs. Nested calls are fine.
+pub(crate) fn measuring<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
     /// Restores the depth when the run ends, by a panic too: a context used after a caught panic is not measuring.
     struct Open<'a>(&'a Context, u32);
     impl Drop for Open<'_> {
@@ -166,9 +196,19 @@ pub fn take_effects(ctx: &Context) -> Vec<&'static str> {
     store::with::<EffectLog, _>(ctx, |log| if log.pass == frame { std::mem::take(&mut log.effects) } else { Vec::new() })
 }
 
+/// Whether the running code is a run of the replay audit (`runtime::audit`): that is the audit's work, not the pass's,
+/// so the count trials count nothing in it.
+#[cfg(feature = "testing")]
+fn uncounted(ctx: &Context) -> bool {
+    super::replay::in_audit_run(ctx)
+}
+
 /// Counts a measuring run of the contents of the body `id` in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_body(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<BodyRuns, _>(ctx, |log| {
         if log.pass != pass {
@@ -184,6 +224,9 @@ pub(crate) fn count_body(ctx: &Context, id: Id) {
 /// Counts a contribution a measuring run made in this pass (`delta` 1), or a draft took back (-1).
 #[cfg(feature = "testing")]
 pub(crate) fn count_contribution(ctx: &Context, delta: i64) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<Contributions, _>(ctx, |log| {
         if log.pass != pass {
@@ -217,7 +260,7 @@ pub fn body_runs(ctx: &Context) -> Vec<(Id, u32)> {
 /// Counts a run of a component of the type `name` in this pass, measuring or real. Counts nothing without `testing`.
 pub(crate) fn count_run(ctx: &Context, name: &'static str) {
     #[cfg(feature = "testing")]
-    {
+    if !uncounted(ctx) {
         let pass = ctx.cumulative_pass_nr();
         pass_state::with::<TypeRuns, _>(ctx, |log| {
             if log.pass != pass {
@@ -244,6 +287,9 @@ pub fn last_pass_runs(ctx: &Context) -> Vec<(&'static str, u32)> {
 /// Counts a build and measure of the rows of the collection `id` for the largest in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_widest(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<WidestRuns, _>(ctx, |log| {
         if log.pass != pass {
@@ -266,6 +312,9 @@ pub fn widest_runs(ctx: &Context) -> Vec<(Id, u32)> {
 /// Counts a build and measure of the height of a collection's auto row, kept under `id`, in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_row_measure(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<RowMeasures, _>(ctx, |log| {
         if log.pass != pass {
@@ -285,6 +334,31 @@ pub fn row_measures(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<RowMeasures, _>(ctx, |log| if log.pass == last { log.rows.clone() } else { Vec::new() })
 }
 
+/// Counts a build of the item `id` of a collection row in this pass: for a measure, or to show it.
+#[cfg(feature = "testing")]
+pub(crate) fn count_row_build(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    store::with::<RowBuilds, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = RowBuilds { pass, rows: Vec::new() };
+        }
+        match log.rows.iter_mut().find(|(row, _)| *row == id) {
+            Some((_, count)) => *count += 1,
+            None => log.rows.push((id, 1)),
+        }
+    });
+}
+
+/// The collection rows whose item was built in the last pass, by item id, and how many times each.
+#[cfg(feature = "testing")]
+pub fn row_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    store::with::<RowBuilds, _>(ctx, |log| if log.pass == last { log.rows.clone() } else { Vec::new() })
+}
+
 /// Counts a chord text an access report read for a node in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_chord_text(ctx: &Context) {
@@ -297,9 +371,73 @@ pub fn chord_texts(ctx: &Context) -> u32 {
     last_totals(ctx, |log| log.chord_texts, 0)
 }
 
+/// Counts a component's `Access` built for its report in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_access_build(ctx: &Context) {
+    totals(ctx, |log| log.access_builds += 1);
+}
+
+/// The `Access` values the reports of the last pass built: none for a component whose report has no reader of them.
+#[cfg(feature = "testing")]
+pub fn last_pass_access_builds(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.access_builds, 0)
+}
+
+/// Counts a tooltip text built in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_tip_text(ctx: &Context) {
+    totals(ctx, |log| log.tip_texts += 1);
+}
+
+/// The tooltip texts built in the last pass: only for a tooltip the pointer or the keyboard wants, or one still shown.
+#[cfg(feature = "testing")]
+pub fn last_pass_tip_texts(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.tip_texts, 0)
+}
+
+/// What a command resolution was for.
+#[cfg(feature = "testing")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Resolve {
+    /// A resolution nothing kept: a reader's first, or one for a key press or a fire.
+    New,
+    /// A kept resolution made again because an input of it changed.
+    Again,
+    /// A kept resolution compared with a full one by the testing check every 100th pass.
+    Checked,
+}
+
+/// Counts a command resolution in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_resolve(ctx: &Context, what: Resolve) {
+    totals(ctx, |log| log.resolves[what as usize] += 1);
+}
+
+/// The command resolutions of the last pass of kind `what`.
+#[cfg(feature = "testing")]
+pub fn last_pass_resolves(ctx: &Context, what: Resolve) -> u32 {
+    last_totals(ctx, |log| log.resolves[what as usize], 0)
+}
+
+/// Counts a kept resolution a wake walked to compare its key.
+#[cfg(feature = "testing")]
+pub(crate) fn count_wake_walk(ctx: &Context) {
+    totals(ctx, |log| log.wake_walks += 1);
+}
+
+/// The kept resolutions the wakes of the last pass walked.
+#[cfg(feature = "testing")]
+pub fn last_pass_wake_walks(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.wake_walks, 0)
+}
+
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_least(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<LeastRuns, _>(ctx, |log| {
         if log.pass != pass {
@@ -318,79 +456,130 @@ pub fn least_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<LeastRuns, _>(ctx, |log| log.runs.clone())
 }
 
-/// What a settling child's decision was.
+/// How a memoized view, or a scrolled `Lazy` child, took part in a pass.
 #[cfg(feature = "testing")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Settle {
-    /// The child ran.
+pub enum MemoRun {
+    /// It ran.
     Ran,
-    /// The child's last run was replayed in place of running.
+    /// Its last run was replayed in place of running.
     Replayed,
-    /// The child is out of view and took its last extent without running.
+    /// It is out of view and took its last extent without running.
     OutOfView,
 }
 
-/// The settled-test decisions of one pass.
+/// How each memoized view took part in one pass (real runs only), and in every pass of one frame (every call, the
+/// calls of sizing and measuring runs included).
 #[cfg(feature = "testing")]
 #[derive(Default)]
-pub(crate) struct SettleLog {
+pub(crate) struct MemoLog {
     pass: u64,
-    decisions: Vec<(Id, Settle)>,
+    runs: Vec<(&'static str, Id, MemoRun)>,
+    frame: u64,
+    frame_runs: Vec<(&'static str, Id, MemoRun)>,
 }
 
-/// Counts the decision about the settling child `id` in this pass. Fed by `lazy::settled` (ran, replayed) and
-/// `lazy::decide` (out of view); a rename of that decision point moves both calls.
+/// Counts how the view `name` (`id`) took part in a call of this pass; `real` for a call in a real run. Fed by
+/// `contract::Lazy`'s one runner, which memoized views share.
 #[cfg(feature = "testing")]
-pub(crate) fn count_settle(ctx: &Context, id: Id, what: Settle) {
+pub(crate) fn count_memo_run(ctx: &Context, name: &'static str, id: Id, run: MemoRun, real: bool) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
-    pass_state::with::<SettleLog, _>(ctx, |log| {
-        if log.pass != pass {
-            *log = SettleLog { pass, decisions: Vec::new() };
+    let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
+    pass_state::with::<MemoLog, _>(ctx, |log| {
+        if log.frame != frame {
+            log.frame = frame;
+            log.frame_runs.clear();
         }
-        log.decisions.push((id, what));
+        log.frame_runs.push((name, id, run));
+        if real {
+            if log.pass != pass {
+                log.pass = pass;
+                log.runs.clear();
+            }
+            log.runs.push((name, id, run));
+        }
     });
 }
 
-/// The settled-test decisions of the last pass, by child id, in the order they were made; empty when that pass made none.
+/// How the memoized views (by name, `"Lazy"` for a `Lazy` child) took part in the real run of the last pass, in the
+/// order they were decided; empty when that pass decided none.
 #[cfg(feature = "testing")]
-pub fn last_pass_settles(ctx: &Context) -> Vec<(Id, Settle)> {
+pub fn last_pass_memo_runs(ctx: &Context) -> Vec<(&'static str, Id, MemoRun)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    pass_state::with::<SettleLog, _>(ctx, |log| if log.pass == last { log.decisions.clone() } else { Vec::new() })
+    pass_state::with::<MemoLog, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
-/// Bytes fed into memo keys in one pass, and the layouts, measure asks and chord texts of that pass.
+/// How the memoized views took part in every pass of the last frame, in order: every call, those of sizing and
+/// measuring runs included (a `Ran` there is a measuring run, which keeps no record). Empty when that frame decided
+/// none.
+#[cfg(feature = "testing")]
+pub fn last_frame_memo_runs(ctx: &Context) -> Vec<(&'static str, Id, MemoRun)> {
+    let viewport = super::egui::pass::current_viewport(ctx);
+    let last = super::egui::pass::frame_nr(ctx, viewport).saturating_sub(1);
+    pass_state::with::<MemoLog, _>(ctx, |log| if log.frame == last { log.frame_runs.clone() } else { Vec::new() })
+}
+
+/// Bytes fed into memo keys in one pass, and the layouts, measure asks, chord texts, `Access` values and tooltip texts
+/// of that pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-pub(crate) struct PassTotals {
+pub(crate) struct Totals {
     pass: u64,
     key_bytes: usize,
     text_layouts: u32,
     chord_texts: u32,
+    access_builds: u32,
+    tip_texts: u32,
+    resolves: [u32; 3],
+    wake_walks: u32,
     asks: Vec<(&'static str, u32)>,
 }
 
+/// The totals of the running pass and of the one before it, which a pass's own counting does not overwrite: a pass
+/// that counts in its begin hook keeps the last pass readable.
 #[cfg(feature = "testing")]
-fn totals<R>(ctx: &Context, f: impl FnOnce(&mut PassTotals) -> R) -> R {
+#[derive(Default)]
+pub(crate) struct PassTotals {
+    current: Totals,
+    previous: Totals,
+}
+
+#[cfg(feature = "testing")]
+fn totals<R>(ctx: &Context, f: impl FnOnce(&mut Totals) -> R) -> R {
     let pass = ctx.cumulative_pass_nr();
     pass_state::with::<PassTotals, _>(ctx, |log| {
-        if log.pass != pass {
-            *log = PassTotals { pass, ..PassTotals::default() };
+        if log.current.pass != pass {
+            let current = std::mem::replace(&mut log.current, Totals { pass, ..Totals::default() });
+            log.previous = current;
         }
-        f(log)
+        f(&mut log.current)
     })
 }
 
 #[cfg(feature = "testing")]
-fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R {
+fn last_totals<R>(ctx: &Context, f: impl FnOnce(&Totals) -> R, none: R) -> R {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    pass_state::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
+    pass_state::with::<PassTotals, _>(ctx, |log| {
+        if log.current.pass == last {
+            f(&log.current)
+        } else if log.previous.pass == last {
+            f(&log.previous)
+        } else {
+            none
+        }
+    })
 }
 
-/// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`; until it exists, by `lazy::settled` (8 bytes
-/// per call with a content version).
+/// Counts `bytes` fed into a memo key in this pass: a memoized view's key, before its run and after it.
 #[cfg(feature = "testing")]
 pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
+    if uncounted(ctx) {
+        return;
+    }
     totals(ctx, |log| log.key_bytes += bytes);
 }
 
@@ -400,9 +589,53 @@ pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
     last_totals(ctx, |log| log.key_bytes, 0)
 }
 
+/// Counts a build of a derived value of the component `id` in this pass (`runtime::derived`).
+#[cfg(feature = "testing")]
+pub(crate) fn count_derived(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| {
+        if log.frame != frame {
+            log.frame = frame;
+            log.frame_builds.clear();
+        }
+        if log.pass != pass {
+            log.pass = pass;
+            log.builds.clear();
+        }
+        for builds in [&mut log.builds, &mut log.frame_builds] {
+            match builds.iter_mut().find(|(of, _)| *of == id) {
+                Some((_, count)) => *count += 1,
+                None => builds.push((id, 1)),
+            }
+        }
+    });
+}
+
+/// The components that built a derived value in any pass of the last frame, and how many builds each.
+#[cfg(feature = "testing")]
+pub fn last_frame_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx)).saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.frame == last { log.frame_builds.clone() } else { Vec::new() })
+}
+
+/// The components that built a derived value in the last pass, and how many builds each; empty when that pass built
+/// none.
+#[cfg(feature = "testing")]
+pub fn last_pass_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.pass == last { log.builds.clone() } else { Vec::new() })
+}
+
 /// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_text_layout(ctx: &Context) {
+    if uncounted(ctx) {
+        return;
+    }
     totals(ctx, |log| log.text_layouts += 1);
 }
 
@@ -415,6 +648,9 @@ pub fn last_pass_text_layouts(ctx: &Context) -> u32 {
 /// Counts a measure call of a leaf component of the type `name` in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_measure_ask(ctx: &Context, name: &'static str) {
+    if uncounted(ctx) {
+        return;
+    }
     totals(ctx, |log| match log.asks.iter_mut().find(|(ty, _)| *ty == name) {
         Some((_, count)) => *count += 1,
         None => log.asks.push((name, 1)),

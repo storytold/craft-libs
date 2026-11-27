@@ -13,7 +13,7 @@ use egui::{Response, Ui};
 
 /// A message for the status bar and its tone. A component with something to say in the status bar reports this in
 /// its output; the host keeps the newest one and shows it as the last member of its status bar's body.
-#[derive(Clone, Debug, PartialEq, crate::contract::Pattern)]
+#[derive(Clone, Debug, PartialEq, crate::contract::Pattern, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct StatusMessage {
     /// The message.
@@ -95,7 +95,7 @@ pub struct StatusProgressOutput {
 /// A background task's progress, for a status bar's trailing group: the task's name, a progress bar that moves a
 /// segment while the extent is unknown, the percentage and an optional cancel button. The progress bar is named by
 /// the task and reports the fraction as its value.
-#[derive(crate::contract::Pattern)]
+#[derive(crate::contract::Pattern, crate::contract::MemoProps)]
 pub struct StatusProgress {
     label: Label,
     fraction: Option<f32>,

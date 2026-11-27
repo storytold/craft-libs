@@ -52,6 +52,8 @@ pub struct PaintUi<'a> {
     /// The fade `steps::fade` began (`DisabledLook::Faded`): the faces paint their enabled look, and the children
     /// shown from here lie under the component's veil.
     pub(crate) fade: Option<super::steps::Fade>,
+    /// The composite has a node (`CxCore::node`): its step 16 fills its parts' sub-nodes from the faces' records.
+    pub(crate) node: bool,
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
 }
@@ -148,6 +150,13 @@ impl PaintUi<'_> {
         self.child_with(id, rect, child, None, None)
     }
 
+    /// Makes the child shown with `key` the one a click on the composite's label focuses, in place of the composite's
+    /// first stop, such as the number field of a row whose slider comes first in Tab order. A child with no stop this
+    /// pass leaves the first stop.
+    pub fn label_target(&mut self, key: impl Hash + Debug) {
+        access::scope::label_target(self.ui.ctx(), self.id, self.id.with(key));
+    }
+
     /// Shows a child with rich tooltip content.
     pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output {
         self.child_with(self.id.with(key), rect, child, Some(Box::new(tip)), None)
@@ -161,7 +170,9 @@ impl PaintUi<'_> {
         let env = Env::of(self.ui);
         let mut child = child;
         let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
-        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, text: &label, side: &side, under: &under };
+        // Without a node of its own the composite leaves the label to the node its own `Ui` sits under.
+        let parent = self.node.then_some(self.id);
+        let at = LeafLabel { id, owner: self.id, parent, row: rect, egui_cell: false, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
@@ -181,12 +192,15 @@ impl PaintUi<'_> {
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
+        // The kids' `Ui` holds no entry of its own: they inherit the env of the composite's `Ui`.
+        let outer = Env::of(parent);
         let kids = self.kids.get_or_insert_with(|| {
             let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
-            alloc::child(parent, access::with_parent(builder, self.id))
+            // Without a node of its own the composite leaves its children to the node its own `Ui` sits under.
+            alloc::child(parent, if self.node { access::with_parent(builder, self.id) } else { builder })
         });
         let ctx = kids.ctx().clone();
-        let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
+        let env = super::cx::child_env(&outer, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
         // A child shown while the owner's fade runs lies under the owner's veil, so a faded child adds none of its own.
         let env = match self.fade {
             Some(_) => {
@@ -197,10 +211,11 @@ impl PaintUi<'_> {
             }
             None => env,
         };
-        let installed = Env::install_for(kids, env);
+        let installed = Env::install_for(kids, env.clone());
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
-        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip));
+        let output =
+            layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, (ShowAt::Rect(rect), env), tip));
         Env::restore(&ctx, installed);
         output
     }
@@ -210,16 +225,30 @@ impl PaintUi<'_> {
     /// colour through `StyleCx::host_ink` and its muted colour through `StyleCx::host_muted_ink`. It registers no id, senses nothing, opens no memory stage and
     /// fires nothing.
     pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C) {
-        self.face_with(part.into(), face, self.text);
+        self.face_with(part.into(), face, self.text, true);
     }
 
     /// `face`, for a face on a fill the composite draws for that part alone (a plate over a picture): the face reads
     /// `ink` through `StyleCx::host_ink` instead of the composite's text colour.
     pub fn face_in<C: Show>(&mut self, part: impl Into<PartRef>, face: C, ink: &Stateful<StyleColor>) {
-        self.face_with(part.into(), face, Some(ink));
+        self.face_with(part.into(), face, Some(ink), true);
     }
 
-    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>) {
+    /// [`face`](Self::face) painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a
+    /// component fading in or out as the one component that draws it. A share outside 0 to 1 is clamped and a
+    /// non-finite one leaves the opacity as it was; fades stack with the opacity already in force. A faded face is a
+    /// look only: it reports no sub-node, so a component fading out has no node while it fades.
+    pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32) {
+        let kept = self.ui.opacity();
+        if share.is_finite() {
+            self.ui.set_opacity(kept * share.clamp(0.0, 1.0));
+        }
+        self.face_with(part.into(), face, self.text, false);
+        self.ui.set_opacity(kept);
+    }
+
+    /// Paints `face` for `part`; a `reported` face gives the part's sub-node its facts (`steps::report_parts`).
+    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>, reported: bool) {
         let Some(result) = self.results.get(&(part.key, part.index)) else {
             debug_assert!(false, "face for a part `parts` did not declare");
             return;
@@ -235,13 +264,14 @@ impl PaintUi<'_> {
             flags: self.flags,
             enabled: self.enabled,
             faded: self.fade.is_some(),
+            reported: reported && self.node,
         };
-        let record = run::paint_face(self.ui, self.env, &source, part, face);
+        let (baseline, record) = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();
-        if let Some(baseline) = record.baseline {
+        if let Some(baseline) = baseline {
             own.baseline.get_or_insert(baseline);
         }
-        own.faces.push(record);
+        own.faces.extend(record);
     }
 
     /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code

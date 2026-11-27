@@ -45,13 +45,14 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 unicode-segmentation = "1.13"
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 
 [[example]]
 name = "hyphgen"
 required-features = ["generator"]
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 positioned = ["dep:kurbo"]
 default = ["hyphen", "bidi", "segment"]
 # Hyphenation points; English (bundled dictionary and patterns) needs no further feature.

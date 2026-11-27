@@ -4,12 +4,12 @@
 //!
 //! [`export_file_name`] is the pure file-name rule the export dialogs share.
 
-mod as_dialog;
-mod options;
-mod path_row;
+pub(crate) mod as_dialog;
+pub(crate) mod options;
+pub(crate) mod path_row;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::PreviewRequest;
 use crate::contract::SaveKey;
@@ -388,7 +388,7 @@ const MIN_SIDE: f64 = 1.0;
 
 impl ExportOptions {
     /// The options as the controls can hold them for a document of size `source`: a format the list has (the first
-    /// when not), a resample method of `methods` (the first when not; any method when `methods` is empty), a quality
+    /// when not), a resample method of `methods` (Automatic when listed, else the first; any method when `methods` is empty), a quality
     /// of 1 to 100, and a size the document can take. A linked pixel width keeps its width and
     /// takes the height from this document (the last export's proportions would stretch another shape); unlinked
     /// pixels stay as asked when in range; anything out of range becomes 100 percent.
@@ -399,10 +399,8 @@ impl ExportOptions {
         {
             self.format = first.id.to_owned();
         }
-        if let Some(first) = Resample::ALL.iter().find(|method| methods.contains(method))
-            && !methods.contains(&self.resample)
-        {
-            self.resample = *first;
+        if !methods.is_empty() && !methods.contains(&self.resample) {
+            self.resample = if methods.contains(&default_resample()) { default_resample() } else { methods[0] };
         }
         self.quality = self.quality.clamp(*QUALITY.start(), *QUALITY.end());
         let in_range = |side: u32| (MIN_SIDE..=MAX_DOCUMENT_SIDE).contains(&f64::from(side));

@@ -1,4 +1,5 @@
-mod cache;
-mod library_theme;
-mod surface_look;
-mod theme_scope;
+pub(crate) mod cache;
+pub(crate) mod library_theme;
+pub(crate) mod link_look;
+pub(crate) mod surface_look;
+pub(crate) mod theme_scope;

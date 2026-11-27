@@ -7,17 +7,18 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, Entry, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit, WordSetCx as _,
-    request_rename,
+    Bind, CollectionEvent, ColumnSpec, Entry, Props as _, ScrollAnchor, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
+    WordSetCx as _, request_rename,
 };
 use crate::layout_components::Stack;
 use crate::menu::Menu;
 use crate::popover::Popover;
-use crate::primitives::{ContentPainterCx, IconSpec};
+use crate::primitives::{ContentPainterCx, IconSpec, Span};
 use crate::runtime::env::{Env, Label};
 use crate::style::{Corners, SurfaceKind};
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
+use crate::tile_grid::GroupHeads;
+use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Rect, Ui};
 use std::borrow::Cow;
@@ -228,7 +229,7 @@ fn list_layers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .rename(true)
         .rename_column(NAME)
         .columns(columns)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
+        .selection(data.bind("selection", Selection::single(0_usize)))
         .show_items(ui, &Layers(&rows), &mut |key, icx| {
             let layer = &rows[*key];
             let row = ListRow::new(layer.name.clone())
@@ -302,10 +303,10 @@ fn mask_thumb(cx: &ContentPainterCx, rect: Rect) {
 fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let linked = *data.value("linked", [true; 2]);
     let target = *data.value("target", ThumbTarget::Extra(0));
-    let out = List::<usize>::new("Layers")
-        .natural_height(true)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
-        .show_items(ui, &Labels(&MASK_ROWS), &mut |key, icx| {
+    let out = List::<usize>::new("Layers").natural_height(true).selection(data.bind("selection", Selection::single(0_usize))).show_items(
+        ui,
+        &Labels(&MASK_ROWS),
+        &mut |key, icx| {
             let row = ListRow::new(MASK_ROWS[*key]).state(icx.row.clone()).thumb(ThumbSize::Medium, layer_thumb);
             match *key {
                 0 => row
@@ -317,7 +318,8 @@ fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 1 => row.clipped(true),
                 _ => row.italic(true),
             }
-        });
+        },
+    );
     for event in &out.events {
         match event {
             CollectionEvent::Item(0, RowEvent::LinkToggled { thumb, linked: on, .. }) => {
@@ -420,11 +422,10 @@ impl ItemSource<usize> for TreeNodes<'_> {}
 fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let open = data.value("open", first_open()).clone();
     let shown = shown_nodes(&open);
-    let out = List::<usize>::new("Layers")
-        .tree(true)
-        .natural_height(true)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
-        .show_items(ui, &TreeNodes { shown: &shown, open: &open }, &mut |key, _| {
+    let out = List::<usize>::new("Layers").tree(true).natural_height(true).selection(data.bind("selection", Selection::single(0_usize))).show_items(
+        ui,
+        &TreeNodes { shown: &shown, open: &open },
+        &mut |key, _| {
             let (name, depth) = TREE[*key];
             let row = ListRow::new(name).depth(depth);
             if is_group(*key) {
@@ -432,7 +433,8 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             } else {
                 row.icon(IconSpec::svg(IconId::new("check")))
             }
-        });
+        },
+    );
     let groups: Vec<usize> = (0..TREE.len()).filter(|&at| is_group(at)).collect();
     for event in &out.events {
         if let CollectionEvent::Open(change) = event {
@@ -443,22 +445,17 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// Rows with the "More" button of `row_menu`, shown on the hovered and the selected row: a click on it opens the host's
-/// row menu, whose Rename opens the row's rename field.
+/// row menu, whose rows act on the row the list reports for the open menu (`CollectionResponse::menu`); its Rename
+/// opens that row's rename field.
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = names(4);
-    let out = List::<usize>::new("Layers")
-        .rename(true)
-        .row_menu()
-        .selection(Bind::bound(data.value("selection", Selection::single(1_usize))))
-        .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
-    let menu_row = data.value("menu", None::<usize>);
-    for event in &out.events {
-        if let CollectionEvent::ContextMenu(request) = event {
-            *menu_row = Some(request.key);
-        }
-    }
-    if let Some(row) = *menu_row {
+    let out = List::<usize>::new("Layers").rename(true).row_menu().selection(data.bind("selection", Selection::single(1_usize))).show_items(
+        ui,
+        &Names(&names),
+        &mut |key, _| ListRow::new(names[*key].clone()),
+    );
+    if let Some(row) = out.menu.as_ref().map(|request| request.key) {
         let entries = [
             Entry::new(String::from("rename"), "Rename"),
             Entry::new(String::from("duplicate"), "Duplicate"),
@@ -468,11 +465,56 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         if menu.picked.as_deref() == Some("rename") {
             request_rename(ui.ctx(), out.response.id, &row);
         }
-        if menu.closed.is_some() {
-            *menu_row = None;
+    }
+    out.into()
+}
+
+/// A search for "Chapter" that hides "Notes": the button renames "Notes" anyway, as an app names a bookmark it just
+/// created during a search. The row stays listed while its rename runs and goes once the new name is committed, unless
+/// that name matches.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_rename_while_filtered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const NOTES: usize = 2;
+    let id = crate::testing::memory::global("list_rename_while_filtered", ());
+    let names = data.value("names", vec![String::from("Chapter 1"), String::from("Chapter 2"), String::from("Notes")]).clone();
+    // The button sits at the start of the list's width, which is the right under right-to-left.
+    let start = if Env::of(ui).view().direction().is_rtl() { egui::Align::Max } else { egui::Align::Min };
+    let button = ui.with_layout(egui::Layout::top_down(start), |ui| Button::new("Rename Notes").show(ui)).inner;
+    if crate::contract::clicked(&button) {
+        request_rename(ui.ctx(), id, &NOTES);
+    }
+    let out = List::<usize>::new("Bookmarks")
+        .id(id)
+        .rename(true)
+        .natural_height(true)
+        .filter("Chapter", |key: &usize| vec![Label::from(names[*key].clone())])
+        .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
+    for event in &out.events {
+        if let CollectionEvent::Rename(EditEvent::Commit { after, .. }) = event
+            && let Some(name) = data.value("names", Vec::<String>::new()).get_mut(after.key)
+        {
+            name.clone_from(&after.name);
         }
     }
     out.into()
+}
+
+/// Search results whose wrapped text marks the match: each row's lines are spans, the match a highlighted one.
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_search_result_marked_match(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    const RESULTS: [(&str, &str, &str); 3] = [
+        ("The ", "quarterly", " report covers the first three months of the year."),
+        ("Each ", "quarterly", " figure is rounded to the nearest thousand."),
+        ("Compare these with the previous ", "quarterly", " totals."),
+    ];
+    let pages: Vec<String> = (0..RESULTS.len()).map(|at| format!("Page {}", 2 * at + 3)).collect();
+    List::<usize>::new("Search results")
+        .natural_height(true)
+        .show_items(ui, &Names(&pages), &mut |key, _| {
+            let (before, found, after) = RESULTS[*key];
+            ListRow::new(pages[*key].clone()).lines(vec![Span::new(before), Span::new(found).highlight(), Span::new(after)])
+        })
+        .into()
 }
 
 #[story(List<'static, usize>, covers = [One], drive = Drive::Never)]
@@ -572,11 +614,10 @@ fn event_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 /// An undo list of `count` actions, "Step 1" the oldest, starting with `mark`, and its footer as the readout: the
 /// actions a pick undoes, or Cancel while none is marked.
-fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) -> StoryOutput {
+fn undo_list(ui: &mut Ui, mark: &mut UndoMark, mark_at: ValueAt<'_>, count: usize) -> StoryOutput {
     let labels: Vec<String> = (1..=count).rev().map(|n| format!("Step {n}")).collect();
-    let mark = data.value("mark", mark);
     let rows = UndoRows::new(&labels);
-    let out = UndoList::new("Undo History").selection(Bind::bound(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
+    let out = UndoList::new("Undo History").selection(mark_at.bind(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
     let env = Env::of(ui);
     let words = env.words::<UndoWords>();
     let footer = footer_text(&words, env.format(), mark).map_or_else(|| words.cancel.clone(), Label::from);
@@ -586,7 +627,8 @@ fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) ->
 /// WordCraft's undo list: 30 actions, the newest three marked.
 #[story(UndoList<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn undo_list_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 30, UndoMark::at(2))
+    let (mark, mark_at) = data.value_at("mark", UndoMark::at(2));
+    undo_list(ui, mark, mark_at, 30)
 }
 
 /// The drive of the popover story: a click on its button.
@@ -597,24 +639,93 @@ fn open_undo_history(fixture: &mut Fixture) {
 }
 
 /// The list as WordCraft hosts it: a button opens it in a popover.
-#[story(UndoList<'static>, covers = [], drive = Drive::Custom(open_undo_history))]
+#[story(UndoList<'static>, covers = [Open], drive = Drive::Custom(open_undo_history))]
 fn undo_list_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let opener = Button::new("Undo History").show(ui);
-    let mut open = *data.value("open", false);
+    let ((open, open_at), (mark, mark_at)) = data.pair_at(("open", false), ("mark", UndoMark::at(2)));
     let mut shown = None;
-    let popover = Popover::new("Undo History", Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
-        shown = Some(undo_list(ui, data, 30, UndoMark::at(2)));
+    let popover = Popover::new("Undo History", open_at.bind(open)).opened_by(&opener).show(ui, |ui, _| {
+        shown = Some(undo_list(ui, mark, mark_at, 30));
     });
-    *data.value("open", false) = open;
     shown.unwrap_or_else(|| popover.output.into())
 }
 
 #[story(UndoList<'static>, covers = [One], drive = Drive::Never)]
 fn undo_list_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 1, UndoMark::default())
+    let (mark, mark_at) = data.value_at("mark", UndoMark::default());
+    undo_list(ui, mark, mark_at, 1)
 }
 
 #[story(UndoList<'static>, covers = [Empty], drive = Drive::Never)]
 fn undo_list_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 0, UndoMark::default())
+    let (mark, mark_at) = data.value_at("mark", UndoMark::default());
+    undo_list(ui, mark, mark_at, 0)
+}
+
+/// A log that follows its newest row: while the scroll is at the end, the button's new rows keep it there; scrolling up
+/// leaves it.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_follows_end(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let count = data.value("count", 12_usize);
+    let mut shown = StoryOutput::default();
+    Stack::new().show(ui, |ui, _| {
+        if crate::contract::clicked(&Button::new("Add a row").show(ui)) {
+            *count += 1;
+        }
+        let names = names(*count);
+        shown = List::<usize>::new("Log")
+            .max_rows(6)
+            .scroll_anchor(ScrollAnchor::End)
+            .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()))
+            .into();
+    });
+    shown
+}
+
+/// A tree whose top-level groups after the first are set apart by a rule, with no title and no disclosure.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_rule_heads(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let groups: Vec<usize> = (0..TREE.len()).filter(|&at| is_group(at)).collect();
+    let all_open = || {
+        let mut open = OpenSet::new();
+        for at in &groups {
+            open.set(at, true);
+        }
+        open
+    };
+    let open = data.value("open", all_open()).clone();
+    let shown = shown_nodes(&open);
+    let out = List::<usize>::new("Layers").tree(true).group_heads(GroupHeads::Rule).natural_height(true).show_items(
+        ui,
+        &TreeNodes { shown: &shown, open: &open },
+        &mut |key, _| {
+            let (name, depth) = TREE[*key];
+            let row = ListRow::new(name).depth(depth);
+            if is_group(*key) { row.group(open.is_open(key)) } else { row }
+        },
+    );
+    // The first top-level group and the nested ones keep their disclosure: the story opens and closes them.
+    for event in &out.events {
+        if let CollectionEvent::Open(change) = event {
+            data.value("open", all_open()).apply(&change.key, change.open, change.all, &groups);
+        }
+    }
+    out.into()
+}
+
+/// A row with a body under it: the body is part of the row's slot.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_detail_body(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let names = names(4);
+    List::<usize>::new("Effects")
+        .natural_height(true)
+        .show_items(ui, &Names(&names), &mut |key, icx| {
+            if *key == 1 {
+                icx.detail(|ui| {
+                    Button::new("Apply").show(ui);
+                });
+            }
+            ListRow::new(names[*key].clone())
+        })
+        .into()
 }

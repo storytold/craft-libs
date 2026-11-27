@@ -2,22 +2,22 @@
 //! control (20.6). The strips and the corner are parts at handle priority in the canvas's arena. A drag from a strip
 //! reports a guide being placed; a drag from the corner moves the zero point.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod ticks;
 
-pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
+pub use ticks::{CENTIMETRE_LABEL_STEP_MIN, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
 
 use super::words::CanvasWords;
-use super::{CanvasRulers, CanvasSpace, GuideDrag, RulerText, Snap, canvas_snap, canvas_space, context_menu, readout};
+use super::{CanvasRulers, CanvasSpace, GuideDrag, RulerText, Snap, context_menu, readout};
 use crate::contract::overlay::Anchor;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, MeasureCx, Name, Outcome, OverlayUi, Overlays as _,
     PaintUi, PartsCx, Pointer as _, Props as _, Role, Styled as _, WordSetCx as _,
 };
 use crate::menu::Menu;
-use crate::primitives::{PaintShape, RectSide, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
-use crate::runtime::env::{EnvView, Label, UnitKind};
+use crate::primitives::{PaintShape, RectSide, RulerFace, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
+use crate::runtime::env::{Label, UnitKind};
 use crate::runtime::focus::KeyUse;
 use crate::runtime::memory::Remember as _;
 use crate::style::{ComponentStyle, RuleKind, StyleColor, StyleCx, TextLook, TypeRole, UiTokens};
@@ -137,10 +137,20 @@ pub struct RulersStyle {
     pad: f32,
     /// How far a vertical label's next character sits below the one before: the label role's size.
     pitch: f32,
+    /// The face: the prop's, else the component set's.
+    face: RulerFace,
+    /// The strips and the corner.
     fill: StyleColor,
-    margin: StyleColor,
+    /// The well: the edge face's margin bands, the centred face's bar.
+    well: StyleColor,
+    /// The centred face's margin bands, shaded as the desk round the page.
+    shade: StyleColor,
     label: TextLook,
     marker: StyleColor,
+    /// The zero point's cross hairs over the view.
+    cross: StyleColor,
+    /// The halo under the cross hairs, so they read on the paper, the pasteboard and any art.
+    halo: StyleColor,
 }
 
 /// The type role of the tick labels.
@@ -178,11 +188,14 @@ enum MenuRow {
 /// The rulers of a canvas: ticks and labels counted from a zero point, level whatever the view's rotation, a pointer
 /// marker, the guide drag-out and the zero point's corner.
 ///
-/// - Show it with `show_at` over the canvas's rect inside the `Canvas` body, and lay the view out in
-///   [`Rulers::content_rect`] of that rect. The units come from the canvas ([`Canvas::rulers`](super::Canvas::rulers));
-///   the rulers hold the zero point's edit.
-/// - A drag on the top ruler reports a horizontal guide in [`RulersOutput::guide`], one on the left ruler a vertical
-///   guide; Alt turns it, Shift snaps it to the ticks, and a release over a ruler or off the document reports no
+/// Rulers show only through [`Canvas::with_rulers`](super::Canvas::with_rulers): the canvas hands them its space and
+/// snap, and shown anywhere else they take no input.
+///
+/// - Give it to the canvas ([`Canvas::with_rulers`](super::Canvas::with_rulers)), which shows it along the top and
+///   left of its rect and lays its view out inside the strips. The units come from the canvas
+///   ([`Canvas::rulers`](super::Canvas::rulers)); the rulers hold the zero point's edit.
+/// - A drag on the top ruler reports a horizontal guide in [`RulersOutput::guide`] and to the canvas's body
+///   ([`ruler_guide`](super::ruler_guide)), one on the left ruler a vertical guide; Alt turns it, Shift snaps it to the ticks, and a release over a ruler or off the document reports no
 ///   position, which removes the guide.
 /// - A drag out of the corner moves the zero point: cross hairs show where it lands, Shift snaps to the ticks
 ///   (otherwise the canvas's [`Snap`]), dropped back on the corner it stays, Esc cancels. A double click
@@ -209,14 +222,21 @@ pub struct Rulers<'a> {
     /// no menu.
     #[prop]
     units: Option<&'a [UnitKind]>,
+    /// The face; unset, the scope's component set picks it ([`RulerFace::of`]).
+    #[style_key]
+    #[prop]
+    face: Option<RulerFace>,
+    /// The canvas's space and snap in this pass, which the canvas hands to the rulers it shows.
+    space: Option<CanvasSpace>,
+    snap: Option<Snap>,
     guide: Option<GuideDrag>,
     picked: Option<UnitKind>,
     context: Option<RulerPart>,
 }
 
 impl<'a> Rulers<'a> {
-    /// Rulers named `label` that edit the zero point `zero` (document units). The units and the zero they count from
-    /// are the canvas's ([`Canvas::rulers`](super::Canvas::rulers)); the app passes the same zero to both.
+    /// Rulers named `label` that edit the zero point `zero` (document units). The canvas reads its zero from here;
+    /// the units are the canvas's ([`Canvas::rulers`](super::Canvas::rulers)).
     pub fn new(label: impl Into<Label>, zero: Bind<'a, Point>) -> Self {
         Rulers {
             common: Common::new(),
@@ -225,6 +245,9 @@ impl<'a> Rulers<'a> {
             interactive: true,
             margins: RulerMargins::default(),
             units: None,
+            face: None,
+            space: None,
+            snap: None,
             guide: None,
             picked: None,
             context: None,
@@ -238,6 +261,14 @@ impl<'a> Rulers<'a> {
         Self::content_rect_of(full, thickness(cx.tokens))
     }
 
+    /// The top strip, the left strip and the corner where they meet inside the canvas's rect `full`, each as thick as
+    /// the canvas's own rulers, for a ruler of another component (a text ruler, a page ruler) that lies along them.
+    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect, Rect) {
+        let env = crate::runtime::env::Env::of(ui);
+        let cx = StyleCx::of_env(ui.ctx(), &env);
+        strips(full, thickness(cx.tokens))
+    }
+
     /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a
     /// text ruler or a page view's ruler shows the same ticks as the canvas's. One labelled step beyond each end is
     /// included. `zoom` is screen points per document unit along the axis. Empty when the units are unusable.
@@ -245,13 +276,25 @@ impl<'a> Rulers<'a> {
         ticks::ticks(units, rule, zoom, values)
     }
 
+    /// The zero point the binding holds, which the canvas publishes in its space.
+    pub(super) fn zero(&self) -> Point {
+        Self::zero_of(self.zero.value())
+    }
+
     fn zero_of(value: Option<&Point>) -> Point {
         value.copied().unwrap_or(Point::ZERO)
     }
 
+    /// The canvas's space and snap of this pass: the canvas shows the rulers and hands them over.
+    pub(super) fn on_canvas(mut self, space: Option<CanvasSpace>, snap: Option<Snap>) -> Self {
+        self.space = space;
+        self.snap = snap;
+        self
+    }
+
     /// The units the canvas published, whatever the pass.
-    fn published(env: &EnvView<'_>) -> CanvasRulers {
-        canvas_space(env).map(|space| space.rulers()).unwrap_or_default()
+    fn published(&self) -> CanvasRulers {
+        self.space.map(|space| space.rulers()).unwrap_or_default()
     }
 
     /// Where the zero point lands for the pointer at `pos`: on the nearest tick of the rulers with Shift, else where
@@ -281,10 +324,12 @@ impl<'a> Rulers<'a> {
             PressPhase::Drag { pos, .. } => (GesturePhase::Update, pos),
             PressPhase::Release { pos, click: false, .. } => (GesturePhase::Commit, pos),
             PressPhase::Cancel { .. } => (GesturePhase::Cancel, start.origin),
+            PressPhase::Down { .. } if press.double_pressed() => (GesturePhase::Commit, start.origin),
             _ => return None,
         };
         let along = if press.mods.alt { across_axis(part.guide_along()) } else { part.guide_along() };
-        let at = (phase != GesturePhase::Cancel && content.contains(pos)).then(|| {
+        // PLAN: a double press lies on the strip itself, outside `content`; the guides' bounds decide whether it lands.
+        let at = (phase != GesturePhase::Cancel && (press.double_pressed() || content.contains(pos))).then(|| {
             let across = coordinate_across(along, space.view.to_doc(pos));
             if press.mods.shift {
                 let (text, _) = space.rulers().across(along);
@@ -328,17 +373,21 @@ impl Component for Rulers<'_> {
     type Style = RulersStyle;
     type Output = RulersOutput;
 
-    fn style(cx: &StyleCx<'_>, _: RulersStyleKey) -> RulersStyle {
+    fn style(cx: &StyleCx<'_>, key: RulersStyleKey) -> RulersStyle {
         let c = &cx.tokens.color;
         RulersStyle {
             metrics: Metrics::new(),
             thickness: thickness(cx.tokens),
             pad: cx.tokens.space.gap.tight,
             pitch: cx.tokens.typography.get(LABEL_ROLE).size,
+            face: key.face.unwrap_or(RulerFace::of(cx.set())),
             fill: cx.color(c.surface.chrome),
-            margin: cx.color(c.surface.sunken),
+            well: cx.color(c.surface.sunken),
+            shade: cx.color(c.surface.canvas),
             label: TextLook::new(LABEL_ROLE, Stateful::new(cx.color(c.text.muted))),
             marker: cx.color(c.text.normal),
+            cross: cx.color(c.overlay.stroke),
+            halo: cx.color(c.overlay.halo),
         }
     }
 
@@ -354,12 +403,12 @@ impl Component for Rulers<'_> {
     /// strip's keyboard path is the guide dialog.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let (top, left, corner) = strips(rect, cx.style.thickness);
-        let space = canvas_space(&cx.env);
+        let space = self.space;
         let handle = HitPriority::new(HitLevel::Handle, 0);
         for (part, strip) in [(RulerPart::Horizontal, top), (RulerPart::Vertical, left)] {
             let declared = cx.part(part.part(), strip).priority(handle).pointer_only("the New Guide... command places a guide by number");
             if self.interactive {
-                let declared = declared.sense(Sense::DRAG | Sense::CLICK);
+                let declared = declared.sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK);
                 if let Some(space) = space {
                     declared.cursor(resize_cursor(&space.view, motion_across(part.guide_along())));
                 }
@@ -367,7 +416,11 @@ impl Component for Rulers<'_> {
         }
         let declared = cx.part(CORNER, corner).priority(handle);
         if self.interactive {
-            let sense = if self.origin_locked { Sense::CLICK | Sense::CONTEXT_CLICK } else { Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS };
+            let sense = if self.origin_locked {
+                Sense::CLICK | Sense::CONTEXT_CLICK
+            } else {
+                Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS
+            };
             let declared = declared.sense(sense);
             if self.origin_locked {
                 declared.pointer_only("the zero point is locked");
@@ -380,7 +433,7 @@ impl Component for Rulers<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let Some(space) = canvas_space(&cx.env) else { return };
+        let Some(space) = self.space else { return };
         let (_, _, corner) = strips(cx.rect, cx.style.thickness);
         let content = Rulers::content_rect_of(cx.rect, cx.style.thickness);
         let zero = Self::zero_of(cx.value());
@@ -395,17 +448,25 @@ impl Component for Rulers<'_> {
         let press = cx.part(CORNER).press;
         let started = press.phase.start().filter(|start| start.button == PointerButton::Primary);
         if started.is_some() && !self.origin_locked {
+            // Every step of the drag proposes where it lands, its start and its release too: a drag of one move lands.
+            // A release lands only while the drag's edit is open: a cancelled drag stays cancelled.
+            let land =
+                |pos: Pos2, start: Point| if corner.contains(pos) { start } else { Self::landing(&space, self.snap.as_ref(), pos, press.mods, zero) };
             match press.phase {
-                PressPhase::DragStart { .. } => {
+                PressPhase::DragStart { pos, .. } => {
                     *cx.press_slot::<Point>() = Some(zero);
                     cx.begin();
+                    cx.propose(land(pos, zero));
                 }
                 PressPhase::Drag { pos, .. } => {
                     let start = cx.press_slot::<Point>().unwrap_or(zero);
-                    let at = if corner.contains(pos) { start } else { Self::landing(&space, canvas_snap(&cx.env).as_ref(), pos, press.mods, zero) };
-                    cx.propose(at);
+                    cx.propose(land(pos, start));
                 }
-                PressPhase::Release { click: false, .. } => cx.commit(),
+                PressPhase::Release { pos, click: false, .. } if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) => {
+                    let start = cx.press_slot::<Point>().unwrap_or(zero);
+                    cx.propose(land(pos, start));
+                    cx.commit();
+                }
                 _ => {}
             }
             if press.double_pressed() {
@@ -440,9 +501,9 @@ impl Component for Rulers<'_> {
         let popup = cx.popup("menu");
         let numbers = cx.env.units();
         let words = cx.words::<CanvasWords>();
-        let shown = Self::published(&cx.env).x.kind;
+        let shown = self.published().x.kind;
         let mut entries: Vec<Entry<MenuRow>> =
-            units.iter().map(|&kind| Entry::new(MenuRow::Unit(kind), Label::from(numbers.symbol(kind))).checked(kind == shown)).collect();
+            units.iter().map(|&kind| Entry::new(MenuRow::Unit(kind), numbers.name(kind)).checked(kind == shown)).collect();
         entries.push(Entry::separator());
         entries.push(Entry::new(MenuRow::ResetZero, Label::from(words.ruler_reset_zero.as_str().to_owned())).enabled(!self.origin_locked));
         let name = Label::from(words.ruler_menu.as_str().to_owned());
@@ -461,7 +522,7 @@ impl Component for Rulers<'_> {
         let style = cx.style;
         let (top, left, corner) = strips(cx.rect, style.thickness);
         let zero = Self::zero_of(cx.value());
-        let space = canvas_space(&cx.env);
+        let space = self.space;
         let draw = ui.draw();
         let rect = |rect: Rect| PaintShape::Rect(rect, CornerRadius::ZERO);
         let dragging = matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update));
@@ -471,7 +532,9 @@ impl Component for Rulers<'_> {
             for (from, to) in
                 [(Point::new(zero.x, visible.y0), Point::new(zero.x, visible.y1)), (Point::new(visible.x0, zero.y), Point::new(visible.x1, zero.y))]
             {
-                draw.stroke(&PaintShape::Path(vec![space.view.to_screen(from), space.view.to_screen(to)]), StrokeWidth::Thin, style.marker);
+                let path = PaintShape::Path(vec![space.view.to_screen(from), space.view.to_screen(to)]);
+                draw.stroke(&path, StrokeWidth::Thick, style.halo);
+                draw.stroke(&path, StrokeWidth::Thin, style.cross);
             }
             if let Some(at) = crate::runtime::pointer::frame(&cx.core.ctx).pos {
                 let numbers = cx.env.units();
@@ -491,11 +554,39 @@ impl Component for Rulers<'_> {
             draw.fill(&rect(corner), style.fill);
             return;
         };
+        let face = style.face;
         let level = space.view.level(zero);
         let rulers = space.rulers();
         let text_of = |part: RulerPart| if part == RulerPart::Vertical { rulers.y } else { rulers.x };
-        for (part, strip, spans) in [(RulerPart::Horizontal, top, &self.margins.horizontal), (RulerPart::Vertical, left, &self.margins.vertical)] {
-            let vertical = part == RulerPart::Vertical;
+        // The divider is painted inside each strip's inner edge; the ticks keep clear of it so they keep their full
+        // length, and the centred face's bar is inset in what is left.
+        let band = draw.rule_width(RuleKind::Divider);
+        let tick_strip = |part: RulerPart, strip: Rect| {
+            if part == RulerPart::Vertical {
+                Rect::from_min_max(strip.min, Pos2::new(strip.right() - band, strip.bottom()))
+            } else {
+                Rect::from_min_max(strip.min, Pos2::new(strip.right(), strip.bottom() - band))
+            }
+        };
+        let painter = ui.content_painter(cx);
+        let parts = [(RulerPart::Horizontal, top, TickEdge::Bottom), (RulerPart::Vertical, left, TickEdge::Right)];
+        let bars = parts.map(|(part, strip, edge)| painter.ruler_bar(tick_strip(part, strip), edge, face));
+        if face == RulerFace::Centred {
+            for bar in &bars {
+                draw.fill(&rect(*bar), style.well);
+            }
+        }
+        // The edge face shades the margin bands across the strip in the well colour; the centred face shades them on
+        // its bar, as the text ruler shades its margins.
+        let mut margin_bands: [Vec<Rect>; 2] = [Vec::new(), Vec::new()];
+        for (((part, strip, _), spans), (bar, bands)) in
+            parts.iter().zip([&self.margins.horizontal, &self.margins.vertical]).zip(bars.iter().zip(margin_bands.iter_mut()))
+        {
+            let vertical = *part == RulerPart::Vertical;
+            let across = match face {
+                RulerFace::Edge => *strip,
+                RulerFace::Centred => *bar,
+            };
             for span in spans {
                 let at = |along: f64| {
                     let p = if vertical { Point::new(zero.x, along) } else { Point::new(along, zero.y) };
@@ -504,58 +595,79 @@ impl Component for Rulers<'_> {
                 };
                 let (a, b) = (at(span.start), at(span.end));
                 let (lo, hi) = (a.min(b), a.max(b));
-                let band = if vertical {
-                    Rect::from_min_max(Pos2::new(strip.left(), lo), Pos2::new(strip.right(), hi))
+                let shaded = if vertical {
+                    Rect::from_min_max(Pos2::new(across.left(), lo), Pos2::new(across.right(), hi))
                 } else {
-                    Rect::from_min_max(Pos2::new(lo, strip.top()), Pos2::new(hi, strip.bottom()))
+                    Rect::from_min_max(Pos2::new(lo, across.top()), Pos2::new(hi, across.bottom()))
                 };
-                let band = band.intersect(strip);
-                if band.is_positive() {
-                    draw.fill(&rect(band), style.margin);
+                let shaded = shaded.intersect(across);
+                if shaded.is_positive() {
+                    draw.fill(&rect(shaded), if face == RulerFace::Centred { style.shade } else { style.well });
+                    bands.push(shaded);
                 }
             }
         }
 
-        let painter = ui.content_painter(cx);
         let numbers = cx.env.units();
         let label = &style.label;
         let color = cx.resolve(&label.color);
         // A label is painted where the strip shows it: it overlaps the strip and stays inside the rulers' rect, so a
-        // label that hangs off an end of the strip is left out.
+        // label that hangs off an end of the strip is left out. The centred face numbers no margin band.
         let shows = |strip: Rect, text: Rect| text.intersects(strip) && cx.rect.contains_rect(text);
-        for (part, strip, edge) in [(RulerPart::Horizontal, top, TickEdge::Bottom), (RulerPart::Vertical, left, TickEdge::Right)] {
+        for (((part, strip, edge), bar), bands) in parts.into_iter().zip(bars).zip(&margin_bands) {
             let vertical = part == RulerPart::Vertical;
             let ticks = Self::axis_ticks(&text_of(part), &level, strip, part, zero);
-            let marks: Vec<Tick> =
-                ticks.iter().map(|(tick, at)| Tick::new(*at - if vertical { strip.top() } else { strip.left() }, tick.rank)).collect();
-            // The divider is painted inside the strip's inner edge; the ticks hang from its inner side so they keep their full length.
-            let band = draw.rule_width(RuleKind::Divider);
-            let tick_strip = if vertical {
-                Rect::from_min_max(strip.min, Pos2::new(strip.right() - band, strip.bottom()))
-            } else {
-                Rect::from_min_max(strip.min, Pos2::new(strip.right(), strip.bottom() - band))
-            };
-            painter.ticks(tick_strip, edge, &marks);
+            let mut galleys = Vec::new();
             for (tick, at) in ticks.iter().filter(|(tick, _)| tick.rank == TickRank::Major) {
                 let text = text_of(part).tick_label(&numbers, tick.value, tick.step);
                 if vertical {
                     // One character per line, centred in the strip: a narrow "1" lines up with a "0".
-                    let mut y = at + style.pad;
-                    for ch in text.chars() {
-                        let layout = draw.layout(&TextRun::new(ch.to_string()).role(label.role).color(color), f32::INFINITY);
-                        let at = Pos2::new(strip.center().x - layout.size().x / 2.0, y);
+                    let layouts: Vec<_> =
+                        text.chars().map(|ch| draw.layout(&TextRun::new(ch.to_string()).role(label.role).color(color), f32::INFINITY)).collect();
+                    let mut y = match face {
+                        RulerFace::Edge => at + style.pad,
+                        RulerFace::Centred => at - style.pitch * layouts.len() as f32 / 2.0,
+                    };
+                    let middle = match face {
+                        RulerFace::Edge => strip.center().x,
+                        RulerFace::Centred => bar.center().x,
+                    };
+                    let placed: Vec<_> = layouts
+                        .into_iter()
+                        .map(|layout| {
+                            let at = Pos2::new(middle - layout.size().x / 2.0, y);
+                            y += style.pitch;
+                            (at, layout)
+                        })
+                        .collect();
+                    let column = placed.iter().fold(Rect::NOTHING, |all, (at, layout)| all.union(Rect::from_min_size(*at, layout.size())));
+                    if face == RulerFace::Centred && (!shows(strip, column) || bands.iter().any(|band| band.intersects(column))) {
+                        continue;
+                    }
+                    for (at, layout) in placed {
                         if shows(strip, Rect::from_min_size(at, layout.size())) {
-                            draw.galley(at, &layout);
+                            galleys.push((at, layout));
                         }
-                        y += style.pitch;
                     }
                 } else {
                     let layout = draw.layout(&TextRun::new(text).role(label.role).color(color), f32::INFINITY);
-                    let at = Pos2::new(at + style.pad, strip.top() + style.pad);
-                    if shows(strip, Rect::from_min_size(at, layout.size())) {
-                        draw.galley(at, &layout);
+                    let boxed = match face {
+                        RulerFace::Edge => Rect::from_min_size(Pos2::new(at + style.pad, strip.top() + style.pad), layout.size()),
+                        RulerFace::Centred => RulerFace::centred_number(bar, edge, *at, layout.size()),
+                    };
+                    let clear = face == RulerFace::Edge || !bands.iter().any(|band| band.intersects(boxed));
+                    if shows(strip, boxed) && clear {
+                        galleys.push((boxed.min, layout));
                     }
                 }
+            }
+            let origin = if vertical { bar.top() } else { bar.left() };
+            let marks: Vec<Tick> = ticks.iter().map(|(tick, at)| Tick::new(*at - origin, tick.rank)).collect();
+            let boxes: Vec<Rect> = galleys.iter().map(|(at, layout)| Rect::from_min_size(*at, layout.size())).collect();
+            let marks = face.beside_numbers(edge, origin, marks, &boxes, style.pad);
+            painter.ticks(bar, edge, face, &marks);
+            for (at, layout) in &galleys {
+                draw.galley(*at, layout);
             }
         }
 
@@ -604,7 +716,8 @@ pub struct RulersOutput {
     /// document's origin (a double click on the corner, the menu's Reset Zero Point).
     pub zero: EditResponse<Point>,
     /// The guide a drag from a strip is placing in this pass. The app forwards it to the guides control; it ends
-    /// with a `Commit` or a `Cancel`, and a position of `None` removes the guide.
+    /// with a `Commit` or a `Cancel`, and a position of `None` removes the guide. A double press on a strip reports
+    /// one in phase `Commit` without a `Begin` before it.
     pub guide: Option<GuideDrag>,
     /// A unit picked from the rulers' own menu ([`Rulers::units`]): the app keeps it as the ruler unit.
     pub unit_picked: Option<UnitKind>,

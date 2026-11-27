@@ -6,8 +6,9 @@ use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::Dialog;
 use crate::display::Text;
 use crate::layout_components::Grid;
+use crate::runtime::commands::CommandScope;
 use crate::runtime::env::WindowKey;
-use crate::shell::{CanvasPanel, Slot};
+use crate::shell::{BarGrip, CanvasPanel, OptionsBarPlace, ScreenMode, ScreenModeButton, ScreenModeSet, Slot};
 use crate::testing::{Drive, StoryData, StoryOutput, stage, story};
 use craft_behavior::ColumnWidth;
 use egui::Ui;
@@ -16,18 +17,33 @@ use egui::Ui;
 fn app_shell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     AppShell::new(WindowKey::main())
-        .title_bar(|ui, _, _| {
-            Text::new("Title").show(ui);
-        })
-        .top(Slot::new("options").reveal().label("Options"), |ui, _, _| {
-            Text::new("Options").show(ui);
-        })
-        .bottom(Slot::new("status").label("Status"), |ui, _, _| {
-            Text::new("Status").show(ui);
-        })
-        .start(Slot::new("tools").reveal().label("Tools"), |ui, _, _| {
-            Text::new("Tools").show(ui);
-        })
+        .title_bar(
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Title").show(ui);
+            },
+        )
+        .top(
+            Slot::new("options").reveal().label("Options"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Options").show(ui);
+            },
+        )
+        .bottom(
+            Slot::new("status").label("Status"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Status").show(ui);
+            },
+        )
+        .start(
+            Slot::new("tools").reveal().label("Tools"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Tools").show(ui);
+            },
+        )
         .body(|ui, _, _| {
             Text::new("Document").show(ui);
         })
@@ -39,15 +55,27 @@ fn app_shell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn app_shell_canvas(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     AppShell::new(WindowKey::main())
-        .title_bar_if(true, |ui, _, _| {
-            Text::new("Title").show(ui);
-        })
-        .options_bar(true, |ui, _, _| {
-            Text::new("Options").show(ui);
-        })
-        .status(true, |ui, _, _| {
-            Text::new("Status").show(ui);
-        })
+        .title_bar_if(
+            true,
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Title").show(ui);
+            },
+        )
+        .options_bar(
+            true,
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Options").show(ui);
+            },
+        )
+        .status(
+            true,
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Status").show(ui);
+            },
+        )
         .body(|ui, _, _| {
             CanvasPanel::new()
                 .tabs(|ui, _| {
@@ -57,6 +85,99 @@ fn app_shell_canvas(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
                     Text::new("Document").show(ui);
                 });
         })
+        .show_at(ui, room, &mut ())
+        .into()
+}
+
+/// A document shell in `mode` of the Document set: a title bar and a tool rail that the mode hides, the screen bar
+/// with the screen-mode button, and a drop-down slot shown while `dropped` is set.
+fn document_shell(ui: &mut Ui, mode: ScreenMode, dropped: &mut bool) -> StoryOutput {
+    let room = stage(ui);
+    AppShell::embedded(WindowKey::new(format!("document-{mode:?}")))
+        .mode_set(ScreenModeSet::Document)
+        .screen_mode(Bind::given(mode))
+        .dropped(Bind::bound(dropped))
+        .title_bar(
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Title").show(ui);
+            },
+        )
+        .top(
+            Slot::new("screen").screen_bar().label("Screen"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Page 1 of 3").show(ui);
+                let _ = ScreenModeButton::new(mode).show(ui);
+            },
+        )
+        .top(
+            Slot::new("ribbon").drops().label("Ribbon"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Ribbon").show(ui);
+            },
+        )
+        .start(
+            Slot::new("tools").reveal().label("Tools"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Tools").show(ui);
+            },
+        )
+        .body(|ui, _, _| {
+            Text::new("Document").show(ui);
+        })
+        .show_at(ui, room, &mut ())
+        .into()
+}
+
+/// Focus: the screen bar over the body on the black surround, with the drop-down slot shown until a press in the
+/// body folds it away.
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_focus(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut dropped = *data.value("dropped", true);
+    let shown = document_shell(ui, ScreenMode::Focus, &mut dropped);
+    *data.value("dropped", true) = dropped;
+    shown
+}
+
+/// Immersive: the screen bar over the body, which fills the room with its own canvas; no drop-down slot.
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_immersive(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let mut dropped = false;
+    document_shell(ui, ScreenMode::Immersive, &mut dropped)
+}
+
+/// A full-window page in place of the slots and the body, with the band of the window's ends over its top.
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_page(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let room = stage(ui);
+    AppShell::embedded(WindowKey::new("page"))
+        .title_bar(
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Title").show(ui);
+            },
+        )
+        .start(
+            Slot::new("tools").reveal().label("Tools"),
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Tools").show(ui);
+            },
+        )
+        .body(|ui, _, _| {
+            Text::new("Document").show(ui);
+        })
+        .page(
+            true,
+            CommandScope::APP,
+            |_| Some(0),
+            |ui, _, _| {
+                Text::new("Print").show(ui);
+            },
+        )
         .show_at(ui, room, &mut ())
         .into()
 }
@@ -111,4 +232,47 @@ fn app_shell_dialogs_in_regions(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
         *data.value("open_b", true) = open[1] || closed;
     }
     shown.pop().map_or_else(StoryOutput::default, StoryOutput::from)
+}
+
+#[story(BarGrip, covers = [Default], drive = Drive::Never)]
+fn bar_grip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    BarGrip::new().show(ui).into()
+}
+
+/// An embedded shell whose options bar starts at `home` and follows its grip: a drag of the grip docks or floats it on
+/// the release, and the story keeps the place under `key`.
+fn options_shell(ui: &mut Ui, data: &mut StoryData, key: &'static str, home: OptionsBarPlace) -> StoryOutput {
+    let room = stage(ui);
+    let mut place = *data.value(key, home);
+    let shown = AppShell::embedded(WindowKey::new(key.to_owned()))
+        .options_place(Bind::bound(&mut place))
+        .options_bar(
+            true,
+            |_| Some(0),
+            |ui, _, _| {
+                BarGrip::new().show(ui);
+                Text::new("Options").show(ui);
+            },
+        )
+        .body(|ui, _, _| {
+            Text::new("Document").show(ui);
+        })
+        .show_at(ui, room, &mut ());
+    *data.value(key, home) = place;
+    shown.into()
+}
+
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_options_top(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    options_shell(ui, data, "options_top", OptionsBarPlace::default())
+}
+
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_options_bottom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    options_shell(ui, data, "options_bottom", OptionsBarPlace::new(true, false, None))
+}
+
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_options_floating(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    options_shell(ui, data, "options_floating", OptionsBarPlace::new(false, true, Some([24.0, 40.0])))
 }

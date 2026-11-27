@@ -334,7 +334,7 @@ impl SuiteClient {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// The suite as a reading page sees it: [`SuiteClient::shown`] and the latest snapshot, as of [`SuiteClient::view`].
 #[derive(Clone)]

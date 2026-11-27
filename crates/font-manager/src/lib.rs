@@ -25,7 +25,7 @@ pub mod glyphs;
 #[cfg(feature = "ui")]
 pub mod missing;
 #[cfg(feature = "ui")]
-mod panel;
+pub(crate) mod panel;
 #[cfg(feature = "ui")]
 pub mod picker;
 
@@ -33,12 +33,14 @@ pub use craft_font_catalog;
 pub use craft_font_catalog::{Catalog, FaceInfo, FontEnv, Source};
 #[cfg(feature = "ui")]
 pub use panel::{
-    FontSources, FontSourcesOutput, FontsBrowseWords, FontsCommand, FontsPanel, FontsPanelOutput, FontsPanelSettings, FontsPanelView,
+    CATALOGS, FontSources, FontSourcesOutput, FontsBrowseWords, FontsCommand, FontsPanel, FontsPanelOutput, FontsPanelSettings, FontsPanelView,
     FontsPanelWords, Options, Preset, Tab, install_interface_fonts,
 };
 
 /// The registered stories and trials of this crate.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }

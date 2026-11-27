@@ -3,18 +3,22 @@
 // The test files name the library as `craft_ui`, as the crates that use it do.
 extern crate craft_ui_patterns as craft_ui;
 
-mod blend_keys;
-mod docking;
-mod form_dialogs;
+pub(crate) mod blend_keys;
+pub(crate) mod docking;
+pub(crate) mod form_dialogs;
 
 // Panels family.
-mod panels;
+pub(crate) mod panels;
 
-mod preferences;
-mod presets;
+pub(crate) mod preferences;
+pub(crate) mod presets;
 
-use craft_ui::testing::registered;
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registered());
+    craft_ui::testing::run(
+        module_path!(),
+        env!("CARGO_PKG_NAME"),
+        &craft_ui::testing::Registry::of(&[register, craft_ui::testing::register, craft_ui_test_kit::testing::register]),
+    );
 }

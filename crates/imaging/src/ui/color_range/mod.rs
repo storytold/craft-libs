@@ -10,11 +10,11 @@
 //! - [`ColorRangeValue`]: the command's parameters. [`ColorSamples`] holds the sampled points and the order they were
 //!   made in; its `pick` is also Replace Color's sampling rule.
 
-mod dialog;
+pub(crate) mod dialog;
 mod hosted;
 mod labels;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod value;
 
 pub use dialog::{ColorRangeDialog, ColorRangeOutput};

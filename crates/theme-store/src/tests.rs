@@ -3,7 +3,7 @@
 use craft_ui::testing::trial;
 use std::{fs, path::Path, time::Duration};
 
-use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Selection, Size, TextSize, ThemeId, ThemePair};
+use craft_theme::{ComponentSet, ContrastChoice, ModeChoice, MotionChoice, Selection, Size, TextSize, ThemeId, ThemePair};
 
 use crate::{
     Accepted, FileStamp, Problem, SelectionChange, SelectionError, Store, StoreError, StoreOptions, SuiteDir,
@@ -31,6 +31,7 @@ fn sel(theme: &str, mode: ModeChoice) -> Selection {
         motion: MotionChoice::System,
         size: Size::Compact,
         text_size: TextSize::Small,
+        set: ComponentSet::Creative,
     }
 }
 

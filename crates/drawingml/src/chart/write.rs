@@ -195,11 +195,16 @@ fn str_cache(w: &mut Writer, f: &str, vals: &[String]) {
 }
 
 fn num_cache(w: &mut Writer, f: &str, vals: &[Option<f64>]) {
+    num_cache_fmt(w, f, vals, "General");
+}
+
+/// [`num_cache`] with the cells' number format (the date format of date categories).
+fn num_cache_fmt(w: &mut Writer, f: &str, vals: &[Option<f64>], format_code: &str) {
     let vals = capped(vals);
     w.open("c:numRef", &[]);
     w.leaf("c:f", &[], f);
     w.open("c:numCache", &[]);
-    w.leaf("c:formatCode", &[], "General");
+    w.leaf("c:formatCode", &[], format_code);
     w.tag("c:ptCount").attr("val", vals.len()).empty();
     for (i, v) in vals.iter().enumerate() {
         if let Some(v) = v.filter(|v| v.is_finite()) {
@@ -368,7 +373,7 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
     if matches!(g, Group::Scatter | Group::Bubble) {
         let xs: Vec<Option<f64>> = if s.x_values.is_empty() { (1..=s.values.len()).map(|v| Some(v as f64)).collect() } else { s.x_values.clone() };
         w.open("c:xVal", &[]);
-        num_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs);
+        num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs, c.category_format.as_deref().unwrap_or("General"));
         w.close();
         w.open("c:yVal", &[]);
         num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
@@ -384,7 +389,22 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         }
     } else {
         w.open("c:cat", &[]);
-        str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &c.categories);
+        // Number or date categories keep their cell format; text ones are strings.
+        let nums: Option<Vec<Option<f64>>> = c.category_format.as_ref().and_then(|_| {
+            c.categories
+                .iter()
+                .map(|t| if t.trim().is_empty() { Some(None) } else { t.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map(Some) })
+                .collect()
+        });
+        match (&c.category_format, nums) {
+            (Some(code), Some(nums)) => num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &nums, code),
+            // Mixed number and text categories are strings, as Excel writes them: the numbers as
+            // their formatted labels, which a reload could not rebuild from the raw serials.
+            _ => {
+                let labels: Vec<String> = (0..c.categories.len()).map(|i| c.category_label(i)).collect();
+                str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
+            }
+        }
         w.close();
         w.open("c:val", &[]);
         num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
@@ -474,7 +494,10 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
-        w.tag("c:numFmt").attr("formatCode", "General").attr("sourceLinked", 1).empty();
+        w.tag("c:numFmt")
+            .attr("formatCode", c.category_format.as_deref().unwrap_or("General"))
+            .attr("sourceLinked", u8::from(c.category_format.is_none()))
+            .empty();
         w.tag("c:majorTickMark").attr("val", "out").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
@@ -494,7 +517,10 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
-        w.tag("c:numFmt").attr("formatCode", "General").attr("sourceLinked", 1).empty();
+        w.tag("c:numFmt")
+            .attr("formatCode", c.category_format.as_deref().unwrap_or("General"))
+            .attr("sourceLinked", u8::from(c.category_format.is_none()))
+            .empty();
         w.tag("c:majorTickMark").attr("val", "none").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
@@ -645,9 +671,9 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
                 w.close();
             }
         }
-        Group::Pie => w.tag("c:firstSliceAng").attr("val", 0).empty(),
+        Group::Pie => w.tag("c:firstSliceAng").attr("val", c.first_slice_angle % 360).empty(),
         Group::Doughnut => {
-            w.tag("c:firstSliceAng").attr("val", 0).empty();
+            w.tag("c:firstSliceAng").attr("val", c.first_slice_angle % 360).empty();
             w.tag("c:holeSize").attr("val", (c.hole_size.clamp(0.1, 0.9) * 100.0).round() as i64).empty();
         }
         _ => {}
@@ -730,9 +756,15 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     }
     let mut w = Writer::document();
     w.tag("c:chartSpace").attr("xmlns:c", NS_C).attr("xmlns:a", NS_A).attr("xmlns:r", NS_R).open();
-    w.tag("c:date1904").attr("val", 0).empty();
+    w.tag("c:date1904").attr("val", u8::from(c.date_1904)).empty();
     w.tag("c:roundedCorners").attr("val", 0).empty();
     w.tag("c:style").attr("val", c.style.clamp(1, 48)).empty();
+    if let Some(pivot) = c.pivot_source.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        w.open("c:pivotSource", &[]);
+        w.tag("c:name").text(pivot);
+        w.tag("c:fmtId").attr("val", 0).empty();
+        w.close();
+    }
     w.open("c:chart", &[]);
     match &c.title {
         Some(t) => {
@@ -801,6 +833,22 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         if !matches!(g, Group::Pie | Group::Doughnut) {
             axes(&mut w, c, g);
         }
+    }
+    if let Some(dt) = &c.data_table {
+        w.open("c:dTable", &[]);
+        if dt.horizontal_border {
+            w.empty("c:showHorzBorder", &[]);
+        }
+        if dt.vertical_border {
+            w.empty("c:showVertBorder", &[]);
+        }
+        if dt.outline {
+            w.empty("c:showOutline", &[]);
+        }
+        if dt.show_keys {
+            w.empty("c:showKeys", &[]);
+        }
+        w.close();
     }
     if let Some(f) = &c.plot_fill {
         sp_pr(&mut w, Some(f), None);
@@ -1265,5 +1313,48 @@ mod cache_cap_tests {
         let xml = String::from_utf8(super::chart_xml(&c).0).unwrap();
         assert!(xml.contains("<c:f>Data!$C$1</c:f>") && xml.contains("<c:f>Data!$A$2:$A$3</c:f>") && xml.contains("<c:f>'My sheet'!$C$2:$C$3</c:f>"));
         assert_eq!(crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap().series[0].refs, c.series[0].refs);
+    }
+    #[test]
+    fn an_edited_date_chart_keeps_its_date_system_and_category_format() {
+        let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:date1904 val="1"/><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:cat><c:numRef><c:f>Sheet1!$A$2:$A$3</c:f><c:numCache><c:formatCode>m/d/yyyy</c:formatCode><c:ptCount val="2"/><c:pt idx="0"><c:v>43830</c:v></c:pt><c:pt idx="1"><c:v>43861</c:v></c:pt></c:numCache></c:numRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:dateAx><c:axId val="1"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:dateAx><c:valAx><c:axId val="2"/><c:axPos val="l"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#;
+        let mut c = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+        // Excel shows Jan-24 and Feb-24 (1904 system).
+        assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), ("Jan-24", "Feb-24"));
+        c.title = Some("Edited".into());
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!(back.title.as_deref(), Some("Edited"));
+        assert!(back.date_1904);
+        assert_eq!((back.category_label(0).as_str(), back.category_label(1).as_str()), ("Jan-24", "Feb-24"));
+        assert_eq!(back.categories, ["43830", "43861"]);
+        // Text categories stay strings.
+        let mut t = Chart { kind: ChartType::Bar, categories: vec!["a".into(), "b".into()], ..Default::default() };
+        t.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
+        let text = String::from_utf8(super::chart_xml(&t).0).unwrap();
+        assert!(text.contains("<c:strCache>") && text.contains(r#"<c:date1904 val="0"/>"#), "{text}");
+    }
+
+    #[test]
+    fn explicit_general_category_format_survives_a_rebuild() {
+        let mut c =
+            Chart { kind: ChartType::Bar, categories: vec!["12345678901.25".into()], category_format: Some("General".into()), ..Default::default() };
+        c.series.push(Series { values: vec![Some(1.0)], ..Default::default() });
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!(back.category_format, c.category_format);
+        assert_eq!(back.category_label(0), c.category_label(0));
+        assert_eq!(back.categories, c.categories);
+    }
+
+    #[test]
+    fn mixed_date_and_text_categories_keep_their_labels_through_a_write() {
+        let mut c = Chart {
+            kind: ChartType::Bar,
+            categories: vec!["45292".into(), "TBD".into()],
+            category_format: Some("mmm-yy".into()),
+            ..Default::default()
+        };
+        c.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
+        assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), ("Jan-24", "TBD"));
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!((back.category_label(0).as_str(), back.category_label(1).as_str()), ("Jan-24", "TBD"));
     }
 }

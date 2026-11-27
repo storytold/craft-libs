@@ -4,11 +4,15 @@
 use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_draw::ui::slice::{SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceRefusal, SliceTool, SliceToolSettings};
-use craft_ui::contract::{CommandSet, Show as _};
+use craft_draw::ui::slice::{
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOptions, SliceOptionsDialog, SliceOrigin,
+    SliceOverlay, SliceRefusal, SliceTool, SliceToolSettings,
+};
+use craft_ui::contract::{CommandSet, Role, Show as _};
+use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, HoldsOk};
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::frame::take_output;
-use craft_ui::testing::{ToolFixture, trial};
+use craft_ui::testing::{Fixture, ToolFixture, access, trial};
 use egui::{Key, Modifiers, Pos2, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -202,4 +206,116 @@ fn delete_takes_the_key_for_the_selected_slice() {
             assert_eq!(ran, reaches_the_app, "{name}, {key:?}: the app's {app:?} runs only when the tool leaves the key");
         }
     }
+}
+
+/// The names a screen reader reads for the nodes of `role` in the shown Divide Slice dialog, in tree order.
+fn divide_names(divide: DivideSlices, role: Role) -> Vec<String> {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    host.borrow_mut().open(DivideSlicesDialog::new(divide));
+    fixture.idle(10);
+    let tree = fixture.tree();
+    fixture.by_role(role).iter().map(|target| access::name(tree, target.node).unwrap_or_default().to_owned()).collect()
+}
+
+/// Divide Slice's two axes show the same Divide By choice and value rows; each axis's radio group and value field
+/// name their axis by its caption after their visible label, so a screen reader tells the rows from the columns.
+#[trial]
+fn divide_slice_names_each_axis_control_by_its_axis() {
+    let by_count = DivideSlices::new(Some(DivideBy::Count(2)), Some(DivideBy::Count(3)));
+    let by_size = DivideSlices::new(Some(DivideBy::Size(72.0)), Some(DivideBy::Size(36.0)));
+    let cases = [
+        ("the Divide By groups", by_count, Role::RADIO_GROUP, "Divide By"),
+        ("the count fields", by_count, Role::SPIN_BUTTON, "slices, evenly spaced"),
+        ("the size fields", by_size, Role::SPIN_BUTTON, "per slice"),
+    ];
+    for (what, divide, role, label) in cases {
+        let names = divide_names(divide, role);
+        let [rows, columns] = names.as_slice() else { panic!("{what}: one for each axis, got {names:?}") };
+        assert_ne!(rows, columns, "{what} have different names");
+        for (name, axis) in [(rows, "Divide Horizontally Into"), (columns, "Divide Vertically Into")] {
+            assert!(name.starts_with(label), "{what}: {name:?} starts with the visible label {label:?}");
+            assert!(name.contains(axis), "{what}: {name:?} names its axis {axis:?}");
+        }
+    }
+}
+
+const STALE_SELECTION: &str = "Select the opening slices and try again.";
+
+#[trial]
+fn slice_options_keeps_its_draft_after_the_app_refuses_ok() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    let id = host.borrow_mut().open(SliceOptionsDialog::new(SliceOptions::default()).held_ok());
+    fixture.idle(10);
+    host.borrow_mut().set_json_field(fixture.ctx(), id, "name", serde_json::json!("Draft name")).unwrap();
+    fixture.idle(4);
+
+    fixture.click(&fixture.by_label("OK").unwrap()).idle(4);
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Waiting));
+    let draft = host.borrow_mut().get_mut::<SliceOptionsDialog>().unwrap().take_ok().unwrap();
+    assert_eq!(draft.name, "Draft name");
+    assert!(host.borrow_mut().get_mut::<SliceOptionsDialog>().unwrap().take_ok().is_none());
+    assert!(host.borrow_mut().take::<SliceOptionsDialog>().is_none());
+    host.borrow_mut().get_mut::<SliceOptionsDialog>().unwrap().answer_ok(Err(STALE_SELECTION.into()));
+    fixture.idle(4);
+    assert_eq!(host.borrow().get::<SliceOptionsDialog>().unwrap().options(), &draft);
+    assert!(fixture.by_label(STALE_SELECTION).is_some(), "the refusal shows in the dialog");
+
+    fixture.click(&fixture.by_label("OK").unwrap()).idle(4);
+    let mut open = host.borrow_mut();
+    let dialog = open.get_mut::<SliceOptionsDialog>().unwrap();
+    assert_eq!(dialog.take_ok(), Some(draft.clone()));
+    dialog.answer_ok(Ok(()));
+    drop(open);
+    fixture.idle(4);
+    assert_eq!(host.borrow_mut().take::<SliceOptionsDialog>().and_then(DialogResult::ok), Some(draft));
+}
+
+#[trial]
+fn divide_slices_can_retry_a_held_answer_and_cancel_it_while_waiting() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    let id = host.borrow_mut().open(DivideSlicesDialog::new(DivideSlices::new(None, None)).held_ok());
+    fixture.idle(10);
+    assert!(!host.borrow_mut().confirm::<DivideSlicesDialog>(fixture.ctx()));
+    assert!(host.borrow().held_state(id).is_none(), "two disabled axes produce no answer");
+    host.borrow_mut().set_json_field(fixture.ctx(), id, "rows", serde_json::json!(3)).unwrap();
+    fixture.idle(4);
+
+    let ok = fixture.by_label("OK").unwrap();
+    assert!(!fixture.tree().is_disabled_key(ok.node), "setting one axis enables OK");
+    fixture.click(&ok).idle(4);
+    let draft = DivideSlices::new(Some(DivideBy::Count(3)), None);
+    let mut open = host.borrow_mut();
+    let dialog = open.get_mut::<DivideSlicesDialog>().unwrap();
+    assert_eq!(dialog.take_ok(), Some(draft));
+    dialog.answer_ok(Err(STALE_SELECTION.into()));
+    drop(open);
+    fixture.idle(4);
+    assert!(fixture.by_label(STALE_SELECTION).is_some());
+    assert!(!host.borrow_mut().confirm::<DivideSlicesDialog>(fixture.ctx()), "programmatic OK files before closing");
+    let mut open = host.borrow_mut();
+    let dialog = open.get_mut::<DivideSlicesDialog>().unwrap();
+    assert_eq!(dialog.take_ok(), Some(draft));
+    dialog.answer_ok(Ok(()));
+    assert!(open.confirm::<DivideSlicesDialog>(fixture.ctx()));
+    assert_eq!(open.take::<DivideSlicesDialog>().and_then(DialogResult::ok), Some(draft));
+    open.open(DivideSlicesDialog::new(draft).held_ok());
+    assert!(!open.confirm::<DivideSlicesDialog>(fixture.ctx()));
+    drop(open);
+
+    fixture.idle(4);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(4);
+    assert!(matches!(host.borrow_mut().take::<DivideSlicesDialog>(), Some(DialogResult::Cancel)));
+    host.borrow_mut().open(DivideSlicesDialog::new(draft));
+    assert!(host.borrow_mut().confirm::<DivideSlicesDialog>(fixture.ctx()), "ordinary callers close immediately");
+    assert_eq!(host.borrow_mut().take::<DivideSlicesDialog>().and_then(DialogResult::ok), Some(draft));
 }

@@ -8,8 +8,8 @@ use craft_theme::variant::{Emphasis, Tone};
 use craft_theme::{Stateful, Variant};
 use egui::{CornerRadius, Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Seconds for the unknown-extent segment to cross the track.
 const SWEEP: f64 = 1.25;

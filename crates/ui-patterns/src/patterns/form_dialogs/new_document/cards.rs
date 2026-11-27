@@ -1,20 +1,21 @@
 //! The left column of New Document: the category tabs over the grid of preset cards, or the list of saved presets.
 
 use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, PresetCategory, size_line};
-use super::{NewDocumentWords, Read, RecentDocumentAction, Session, Setup, background_label, depth_label, mode_label};
+use super::settings::{CardCx, CardSource, DocumentCard, DocumentSettings, RasterSetup};
+use super::{NewDocumentWords, Read, RecentDocumentAction, Session, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
-use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, CollectionEvent, MemoProps, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::menu::{Menu, MenuItem};
-use crate::patterns::presets::PresetId;
-use crate::primitives::{ContentPainterCx, PaintShape};
-use crate::runtime::env::{Label, UnitKind};
+use crate::patterns::presets::{PresetId, PresetLibrary};
+use crate::primitives::{ContentPainterCx, StrokeWidth};
+use crate::runtime::env::{Env, EnvValue, Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
-use crate::tile_grid::{Tile, TileGrid};
+use crate::tile_grid::{CardText, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
-use egui::{CornerRadius, Rect, Response, Ui, vec2};
+use egui::{CornerRadius, Rect, Response, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::sync::Arc;
@@ -33,16 +34,16 @@ pub(super) enum TabId {
 
 impl TabId {
     /// The id of the `tab` binding: `"recent"`, the category's id, or `"saved"`.
-    pub(super) fn key(self, categories: &[PresetCategory]) -> String {
+    pub(super) fn key<P>(self, categories: &[PresetCategory<P>]) -> String {
         match self {
             TabId::Recent => RECENT_KEY.to_owned(),
             TabId::Saved => SAVED_KEY.to_owned(),
-            TabId::Category(at) => categories.get(at).map_or_else(|| RECENT_KEY.to_owned(), |category| category.id.to_owned()),
+            TabId::Category(at) => categories.get(at).map_or_else(|| RECENT_KEY.to_owned(), |category| category.id.to_string()),
         }
     }
 
     /// The tab a [`key`](Self::key) names; `None` for an id no tab has.
-    pub(super) fn from_key(key: &str, categories: &[PresetCategory]) -> Option<TabId> {
+    pub(super) fn from_key<P>(key: &str, categories: &[PresetCategory<P>]) -> Option<TabId> {
         match key {
             RECENT_KEY => Some(TabId::Recent),
             SAVED_KEY => Some(TabId::Saved),
@@ -54,38 +55,16 @@ impl TabId {
 const RECENT_KEY: &str = "recent";
 const SAVED_KEY: &str = "saved";
 
-/// A card of the grid, or a saved preset's row, ready to show and to apply.
+/// The open menu's target and the entries that make its position valid.
 #[derive(Clone)]
-pub(super) struct Card {
-    pub(super) title: Label,
-    /// The size line under the title.
-    pub(super) line: String,
-    /// What the card sets: the size and unit, or (a recent document, a saved preset) everything but the name.
-    pub(super) settings: DocumentOptions,
-    pub(super) restores_all: bool,
-    /// What a category card does to Artboards: `Some(true)` turns it on (Web, Mobile), `Some(false)` takes back what
-    /// such a card turned on; `None` (Recent, Clipboard, Saved) leaves it.
-    pub(super) artboard: Option<bool>,
-    /// The hover text of a recent document, which names everything it restores.
-    pub(super) detail: Option<String>,
-    /// The width and height the page outline has.
-    pub(super) aspect: (u32, u32),
-    /// The library preset a Saved row stands for.
-    pub(super) saved: Option<PresetId>,
-    /// The index in the supplied Recent list, before adding or filtering any cards.
-    pub(super) recent_index: Option<usize>,
-}
-
-/// The open menu's target. A changed list invalidates its position, even when it still has the same length.
-#[derive(Clone)]
-pub(super) struct RecentMenu {
+pub(super) struct RecentMenu<S> {
     index: usize,
-    list: Arc<[(usize, DocumentOptions)]>,
+    entries: Arc<[(usize, S)]>,
 }
 
 /// The card the user picked in this pass.
-pub(super) struct Picked {
-    pub(super) card: Card,
+pub(super) struct Picked<S> {
+    pub(super) card: DocumentCard<S>,
     pub(super) index: usize,
     /// Enter or a double click: create the document from the card.
     pub(super) activated: bool,
@@ -93,18 +72,18 @@ pub(super) struct Picked {
 
 /// What the left column reports.
 #[derive(Default)]
-pub(super) struct Left {
+pub(super) struct Left<S> {
     pub(super) tab: Option<TabId>,
-    pub(super) picked: Option<Picked>,
+    pub(super) picked: Option<Picked<S>>,
     /// The saved presets the Delete intent removed.
     pub(super) delete: Vec<PresetId>,
     pub(super) recent_action: Option<RecentDocumentAction>,
 }
 
 /// The cards as a display order keyed by position.
-struct CardList<'a>(&'a [Card]);
+struct CardList<'a, S>(&'a [DocumentCard<S>]);
 
-impl DisplayOrder<usize> for CardList<'_> {
+impl<S: DocumentSettings> DisplayOrder<usize> for CardList<'_, S> {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -122,35 +101,58 @@ impl DisplayOrder<usize> for CardList<'_> {
     }
 }
 
-impl ItemSource<usize> for CardList<'_> {}
+impl<S: DocumentSettings> ItemSource<usize> for CardList<'_, S> {}
 
 /// The columns of preset cards the grid holds: the dialog's left side is as wide as they are.
 const CARD_COLUMNS: usize = 3;
 
-/// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
-pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
-    let (setup, words) = (read.setup, read.words);
+/// What the cards of the open tab are built from.
+fn card_cx<'a, S: DocumentSettings>(session: &Session<S>, values: &'a S, read: &Read<'a, S>) -> CardCx<'a, S> {
+    CardCx {
+        values,
+        setup: read.setup,
+        orientation: session.orientation,
+        recents: read.recents,
+        presets: read.categories,
+        units: read.units,
+        words: read.words,
+        preset_words: read.preset_words,
+    }
+}
+
+/// The position of the clipboard's card in Recent: the dialog opens on it.
+pub(super) fn clipboard_at<S: DocumentSettings>(session: &Session<S>, values: &S, read: &Read<'_, S>) -> Option<usize> {
+    S::recent_cards(&card_cx(session, values, read)).iter().position(|card| card.source == CardSource::Clipboard)
+}
+
+/// Shows the full-width category strip above the two columns.
+pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read: &Read<'_, S>, left: &mut Left<S>) {
+    let words = read.words;
     let tabs: Vec<TabId> =
-        std::iter::once(TabId::Recent).chain((0..setup.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
+        std::iter::once(TabId::Recent).chain((0..read.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
     let source = keyed(&tabs, |tab| *tab);
     let strip = TabStrip::new(words.tabs.clone())
         .kind(TabKind::Text)
         .shown(session.tab)
-        .show_items(ui, &source, &mut |tab, _| Tab::new(tab_title(*tab, setup, words)));
+        .show_items(ui, &source, &mut |tab, _| Tab::new(tab_title(*tab, read.categories, words)));
     for event in strip.response.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(tab) = keys.last()
         {
             left.tab = Some(*tab);
         }
     }
+}
 
+/// Shows the cards or saved presets in the category picked in this pass.
+pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &mut Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
+    let words = read.words;
     let tab = left.tab.unwrap_or(session.tab);
-    let recent_menu = tab == TabId::Recent && setup.recent_menu;
+    let recent_menu = tab == TabId::Recent && read.recent_menu;
     if !recent_menu {
         session.recent_menu = None;
     }
-    let cards = cards_of(tab, session, values, read);
+    let cards = cards_of(tab, read.library, &card_cx(session, values, read));
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
     let selection = selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
     let stamp = stamp_of(tab, cards.len());
@@ -178,27 +180,38 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &DocumentOptions,
             });
         route(shown.events, &cards, left);
         if let Some(card) = pressed.get().and_then(|at| cards.get(at)) {
-            left.delete.extend(card.saved);
+            left.delete.extend(saved_id(card));
         }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
-        Text::new(words.presets_heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);
+        let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
+        Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
+        let look = Env::of(ui).get::<PresetCardLook>();
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
+            .card()
+            .card_text(match look {
+                PresetCardLook::Outline => CardText::Preset,
+                PresetCardLook::Page => CardText::Page,
+            })
+            .fill_row()
+            .aspect(2.0)
             .select(SelectMode::Single)
             .detail_line()
             .rows_stamp(stamp)
             .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index]));
+            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index], look));
         if recent_menu {
             if let Some(request) = shown.response.events.iter().rev().find_map(|event| match event {
                 CollectionEvent::ContextMenu(request) => Some(request),
                 _ => None,
             }) {
-                session.recent_menu = cards
-                    .get(request.key)
-                    .and_then(|card| card.recent_index)
-                    .map(|index| RecentMenu { index, list: recent_items(setup).map(|(at, item)| (at, item.clone())).collect() });
+                session.recent_menu = cards.get(request.key).and_then(|card| {
+                    let position = card.recent_position?;
+                    let entries: Arc<[_]> = recent_items(read.recent_source).map(|(index, entry)| (index, entry.clone())).collect();
+                    let index = entries.get(position)?.0;
+                    Some(RecentMenu { index, entries })
+                });
             }
             left.recent_action = show_recent_menu(ui, &shown.response.response, read, &mut session.recent_menu);
         }
@@ -206,8 +219,18 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &DocumentOptions,
     }
 }
 
-fn show_recent_menu(ui: &mut Ui, response: &Response, read: &Read<'_>, menu: &mut Option<RecentMenu>) -> Option<RecentDocumentAction> {
-    let target = menu.take().filter(|target| recent_items(read.setup).eq(target.list.iter().map(|(at, item)| (*at, item))))?;
+/// The valid entries and their positions before filtering.
+pub(super) fn recent_items<S: DocumentSettings>(source: &[S]) -> impl Iterator<Item = (usize, &S)> {
+    source.iter().enumerate().filter(|(_, entry)| entry.fits())
+}
+
+fn show_recent_menu<S: DocumentSettings>(
+    ui: &mut Ui,
+    response: &Response,
+    read: &Read<'_, S>,
+    menu: &mut Option<RecentMenu<S>>,
+) -> Option<RecentDocumentAction> {
+    let target = menu.take().filter(|target| recent_items(read.recent_source).eq(target.entries.iter().map(|(index, entry)| (*index, entry))))?;
     let mut action = None;
     let shown = Menu::context(read.words.recent.clone(), response).show(ui, |ui, _| {
         if MenuItem::new(read.words.delete.clone()).show(ui).ran {
@@ -223,34 +246,42 @@ fn show_recent_menu(ui: &mut Ui, response: &Response, read: &Read<'_>, menu: &mu
     action
 }
 
+/// The library preset a Saved row stands for.
+fn saved_id<S>(card: &DocumentCard<S>) -> Option<PresetId> {
+    match &card.source {
+        CardSource::Saved(id) => Some(*id),
+        _ => None,
+    }
+}
+
 /// Turns a collection's events into the card picked: a selection change picks, Enter or a double click activates.
-fn route<E>(events: Vec<CollectionEvent<usize, E>>, cards: &[Card], left: &mut Left) {
+fn route<E, S: DocumentSettings>(events: Vec<CollectionEvent<usize, E>>, cards: &[DocumentCard<S>], left: &mut Left<S>) {
     for event in events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(index) = keys.last() {
                     pick(left, cards, *index, false);
                 }
             }
             CollectionEvent::Activate(index) => pick(left, cards, index, true),
-            CollectionEvent::Delete(keys) => left.delete.extend(keys.iter().filter_map(|index| cards.get(*index).and_then(|card| card.saved))),
+            CollectionEvent::Delete(keys) => left.delete.extend(keys.iter().filter_map(|index| cards.get(*index).and_then(saved_id))),
             _ => {}
         }
     }
 }
 
 /// Records the card at `index` as the one picked this pass; an activation stays once it was seen.
-fn pick(left: &mut Left, cards: &[Card], index: usize, activated: bool) {
+fn pick<S: DocumentSettings>(left: &mut Left<S>, cards: &[DocumentCard<S>], index: usize, activated: bool) {
     let Some(card) = cards.get(index) else { return };
     let activated = activated || left.picked.as_ref().is_some_and(|picked| picked.index == index && picked.activated);
     left.picked = Some(Picked { card: card.clone(), index, activated });
 }
 
 /// The position the grid shows selected: the card picked in the tab, else the recent document the details show.
-fn selected_of(tab: TabId, session: &Session, values: &DocumentOptions, cards: &[Card]) -> Option<usize> {
+fn selected_of<S: DocumentSettings>(tab: TabId, session: &Session<S>, values: &S, cards: &[DocumentCard<S>]) -> Option<usize> {
     match session.card {
         Some(at) => (at < cards.len()).then_some(at),
-        None if tab == TabId::Recent => cards.iter().position(|card| card.restores_all && card.settings.same_document(values)),
+        None if tab == TabId::Recent => cards.iter().position(|card| card.source == CardSource::Recent && card.settings.same_document(values)),
         None => None,
     }
 }
@@ -265,24 +296,44 @@ fn stamp_of(tab: TabId, count: usize) -> u64 {
     (code << 32) | count as u64
 }
 
-fn tab_title(tab: TabId, setup: &Setup, words: &NewDocumentWords) -> Label {
+fn tab_title<P>(tab: TabId, categories: &[PresetCategory<P>], words: &NewDocumentWords) -> Label {
     match tab {
         TabId::Recent => words.recent.clone(),
         TabId::Saved => words.saved.clone(),
-        TabId::Category(at) => setup.categories.get(at).map_or_else(Label::default, |category| match category.id {
+        TabId::Category(at) => categories.get(at).map_or_else(Label::default, |category| match category.id.as_ref() {
             "photo" => words.photo.clone(),
             "print" => words.print.clone(),
             "art" => words.art.clone(),
             "web" => words.web.clone(),
             "mobile" => words.mobile.clone(),
             "film" => words.film.clone(),
-            _ => Label::from(category.title.to_owned()),
+            _ => category.title.clone(),
         }),
     }
 }
 
+/// The cards `tab` lists.
+fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, cx: &CardCx<'_, S>) -> Vec<DocumentCard<S>> {
+    match tab {
+        TabId::Category(at) => {
+            cx.presets.get(at).map_or_else(Vec::new, |category| category.presets.iter().map(|preset| S::preset_card(preset, cx)).collect())
+        }
+        TabId::Saved => library
+            .items()
+            .into_iter()
+            .filter(|preset| preset.value.fits())
+            .map(|preset| {
+                let mut card = S::saved_card(&preset.name, &preset.value, cx);
+                card.source = CardSource::Saved(preset.id);
+                card
+            })
+            .collect(),
+        TabId::Recent => S::recent_cards(cx),
+    }
+}
+
 /// A preset's name: the word set's for a built-in id, the app's own English name otherwise.
-fn preset_title(preset: &DocumentPreset, setup: &Setup, words: &NewDocumentWords, preset_words: &NewDocumentPresetWords) -> Label {
+fn preset_title(preset: &DocumentPreset, setup: &RasterSetup, words: &NewDocumentWords, preset_words: &NewDocumentPresetWords) -> Label {
     if preset.id == DEFAULT_ID {
         return match &setup.app_name {
             Some(app) => Label::from(words.default_size_named.fill(&[("app", app.as_str())])),
@@ -292,137 +343,112 @@ fn preset_title(preset: &DocumentPreset, setup: &Setup, words: &NewDocumentWords
     preset_words.name_of(preset.id).cloned().unwrap_or_else(|| Label::from(preset.name.to_owned()))
 }
 
-/// The cards `tab` lists.
-fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read<'_>) -> Vec<Card> {
-    let Read { setup, library, words, preset_words, units, .. } = *read;
-    let preset_card = |preset: &DocumentPreset| {
-        let preset = session.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
-        let mut settings = preset.options(setup.print_ppi, setup.screen_ppi);
-        if preset.is_print() && !matches!(values.unit, UnitKind::Pixels | UnitKind::Percent) {
-            settings.unit = values.unit;
-        }
-        Card {
-            title: preset_title(&preset, setup, words, preset_words),
-            line: size_line(&settings, words, units),
-            aspect: (settings.size.width, settings.size.height),
-            settings,
-            restores_all: false,
-            artboard: Some(preset.artboard),
-            detail: None,
-            saved: None,
-            recent_index: None,
-        }
-    };
-    match tab {
-        TabId::Category(at) => setup.categories.get(at).map_or_else(Vec::new, |category| category.presets.iter().map(preset_card).collect()),
-        TabId::Saved => library
-            .items()
-            .into_iter()
-            .filter(|preset| preset.value.fits())
-            .map(|preset| {
-                let settings = &preset.value;
-                let line = words.saved_detail.fill(&[
-                    ("size", &size_line(settings, words, units)),
-                    ("mode", mode_label(words, settings.color_mode).as_str()),
-                    ("depth", depth_label(words, settings.depth).as_str()),
-                ]);
-                Card {
-                    title: Label::from(preset.name.clone()),
-                    line,
-                    aspect: (settings.size.width, settings.size.height),
-                    settings: settings.clone(),
-                    restores_all: true,
-                    artboard: None,
-                    detail: None,
-                    saved: Some(preset.id),
-                    recent_index: None,
-                }
-            })
-            .collect(),
-        TabId::Recent => {
-            let mut cards = Vec::new();
-            if let Some(size) = setup.clipboard {
-                let settings = DocumentOptions { size, pixels_per_inch: setup.screen_ppi, unit: UnitKind::Pixels, ..DocumentOptions::default() };
-                cards.push(Card {
-                    title: words.clipboard.clone(),
-                    line: size_line(&settings, words, units),
-                    aspect: (size.width, size.height),
-                    settings,
-                    restores_all: false,
-                    artboard: None,
-                    detail: None,
-                    saved: None,
-                    recent_index: None,
-                });
-            }
-            for (recent_index, recent) in recent_items(setup) {
-                let title = recent_title(recent, setup, words, preset_words);
-                let line = size_line(recent, words, units);
-                let detail = words.recent_detail.fill(&[
-                    ("title", title.as_str()),
-                    ("size", &line),
-                    ("mode", mode_label(words, recent.color_mode).as_str()),
-                    ("background", background_label(words, recent.background).as_str()),
-                ]);
-                cards.push(Card {
-                    title,
-                    line,
-                    aspect: (recent.size.width, recent.size.height),
-                    settings: recent.clone(),
-                    restores_all: true,
-                    artboard: None,
-                    detail: Some(detail),
-                    saved: None,
-                    recent_index: Some(recent_index),
-                });
-            }
-            for preset in &setup.recent_defaults {
-                let card = Card { artboard: None, ..preset_card(preset) };
-                let listed = recent_items(setup)
-                    .any(|(_, recent)| recent.size == card.settings.size && recent.pixels_per_inch == card.settings.pixels_per_inch);
-                if !listed {
-                    cards.push(card);
-                }
-            }
-            cards
-        }
+/// The card of a built-in preset, turned with the orientation; a print preset shows in the unit the settings show.
+pub(super) fn raster_preset_card(preset: &DocumentPreset, cx: &CardCx<'_, DocumentOptions>) -> DocumentCard<DocumentOptions> {
+    let preset = cx.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
+    let mut settings = preset.options(cx.setup.print_ppi, cx.setup.screen_ppi);
+    if preset.is_print() && !matches!(cx.values.unit, UnitKind::Pixels | UnitKind::Percent) {
+        settings.unit = cx.values.unit;
     }
+    DocumentCard::new(
+        preset_title(&preset, cx.setup, cx.words, cx.preset_words),
+        size_line(&settings, cx.words, cx.units),
+        settings,
+        CardSource::Preset { artboard: Some(preset.artboard) },
+    )
 }
 
-fn recent_items(setup: &Setup) -> impl Iterator<Item = (usize, &DocumentOptions)> {
-    setup.recent.iter().enumerate().filter(|(_, recent)| recent.fits())
+/// The row of a saved preset. The dialog sets the source to the library's id; it restores everything but the name
+/// either way.
+pub(super) fn raster_saved_card(name: &str, saved: &DocumentOptions, cx: &CardCx<'_, DocumentOptions>) -> DocumentCard<DocumentOptions> {
+    let words = cx.words;
+    let line = words.saved_detail.fill(&[
+        ("size", &size_line(saved, words, cx.units)),
+        ("mode", mode_label(words, saved.color_mode).as_str()),
+        ("depth", depth_label(words, saved.depth).as_str()),
+    ]);
+    DocumentCard::new(Label::from(name.to_owned()), line, saved.clone(), CardSource::Recent)
+}
+
+/// The cards Recent lists: the clipboard's size, the recent documents, then the app's default sizes not yet among them.
+pub(super) fn raster_recent_cards(cx: &CardCx<'_, DocumentOptions>) -> Vec<DocumentCard<DocumentOptions>> {
+    let (setup, words, units) = (cx.setup, cx.words, cx.units);
+    let mut cards = Vec::new();
+    if let Some(size) = setup.clipboard {
+        let settings = DocumentOptions { size, pixels_per_inch: setup.screen_ppi, unit: UnitKind::Pixels, ..DocumentOptions::default() };
+        cards.push(DocumentCard::new(words.clipboard.clone(), size_line(&settings, words, units), settings, CardSource::Clipboard));
+    }
+    for (position, recent) in cx.recents.iter().enumerate() {
+        let title = recent_title(recent, cx);
+        let line = size_line(recent, words, units);
+        let detail = words.recent_detail.fill(&[
+            ("title", title.as_str()),
+            ("size", &line),
+            ("mode", mode_label(words, recent.color_mode).as_str()),
+            ("background", background_label(words, recent.background).as_str()),
+        ]);
+        cards.push(DocumentCard::recent(title, line, recent.clone(), position).tooltip(detail));
+    }
+    for preset in &setup.recent_defaults {
+        let mut card = raster_preset_card(preset, cx);
+        card.source = CardSource::Preset { artboard: None };
+        let listed = cx.recents.iter().any(|recent| recent.size == card.settings.size && recent.pixels_per_inch == card.settings.pixels_per_inch);
+        if !listed {
+            cards.push(card);
+        }
+    }
+    cards
 }
 
 /// A recent document takes the name of the built-in preset it matches.
-fn recent_title(recent: &DocumentOptions, setup: &Setup, words: &NewDocumentWords, preset_words: &NewDocumentPresetWords) -> Label {
+fn recent_title(recent: &DocumentOptions, cx: &CardCx<'_, DocumentOptions>) -> Label {
     let matches = |preset: &&DocumentPreset| {
         recent.size.width == preset.width && recent.size.height == preset.height && recent.pixels_per_inch == preset.pixels_per_inch
     };
-    let found = setup.categories.iter().flat_map(|category| category.presets.iter()).chain(setup.recent_defaults.iter()).find(matches);
-    found.map_or_else(|| words.custom.clone(), |preset| preset_title(preset, setup, words, preset_words))
+    let found = cx.presets.iter().flat_map(|category| category.presets.iter()).chain(cx.setup.recent_defaults.iter()).find(matches);
+    found.map_or_else(|| cx.words.custom.clone(), |preset| preset_title(preset, cx.setup, cx.words, cx.preset_words))
 }
 
-/// The tile of a card: the page outline at the card's aspect, the title and the size line.
-fn tile_of(card: &Card) -> Tile<'static> {
-    let aspect = card.aspect;
-    let tile = Tile::new(card.title.clone())
-        .detail(card.line.clone())
-        .thumb(ThumbAspect::SQUARE, move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, aspect));
-    match &card.detail {
-        Some(detail) => tile.tooltip(detail.clone()),
+/// How New Document's preset cards show their page. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum PresetCardLook {
+    /// A small page outline in content ink on a raised card, the name and size line centred under it.
+    #[default]
+    Outline,
+    /// Blank paper on its shadow (`Tile::page`) on a flat card (`CardText::Page`): the name strong on up to two lines,
+    /// the size line under it. VectorCraft's preset cards, as production drew them.
+    Page,
+}
+
+/// The tile of a card: the page at the card's aspect in `look`, the title and the size line.
+fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>, look: PresetCardLook) -> Tile<'static> {
+    let page = card.settings.page();
+    let tile = Tile::new(card.title.clone()).detail(card.line.clone());
+    let tile = match look {
+        PresetCardLook::Outline => {
+            tile.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page))
+        }
+        PresetCardLook::Page => tile.page(page.0, page.1),
+    };
+    match &card.tooltip {
+        Some(tooltip) => tile.tooltip(tooltip.clone()),
         None => tile,
     }
 }
 
-/// The page outline in the picture: a well, and the page's outline at its aspect inside it.
-fn paint_page(painter: &ContentPainterCx<'_>, picture: Rect, (width, height): (u32, u32)) {
-    let well = painter.plot_frame(picture);
-    painter.outline(&PaintShape::Rect(page_rect(well, width, height), CornerRadius::ZERO));
+/// A page icon inside the tile's picture, in content ink so the tile alone draws the selection ring.
+fn paint_page(painter: &ContentPainterCx<'_>, picture: Rect, (width, height): (f64, f64)) {
+    let page = page_rect(picture, width, height);
+    let stroke = Stroke::new(painter.stroke_width(StrokeWidth::Thin), painter.ink());
+    painter.painter.rect_stroke(page, CornerRadius::ZERO, stroke, StrokeKind::Inside);
 }
 
-/// The largest rect of the page's aspect that fits `room`, centred in it.
-fn page_rect(room: Rect, width: u32, height: u32) -> Rect {
-    let (width, height) = (width.max(1) as f32, height.max(1) as f32);
-    let scale = (room.width() / width).min(room.height() / height);
+/// The page's aspect inside `room`, capped at the 30-point size of the original outline.
+fn page_rect(room: Rect, width: f64, height: f64) -> Rect {
+    const PAGE_SIDE: f32 = 30.0;
+    let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
+    let scale = (room.width().min(PAGE_SIDE) / width).min(room.height().min(PAGE_SIDE) / height);
     Rect::from_center_size(room.center(), vec2(width * scale, height * scale))
 }

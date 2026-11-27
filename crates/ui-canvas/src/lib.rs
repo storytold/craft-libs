@@ -13,10 +13,10 @@ extern crate self as craft_ui;
 #[doc(hidden)]
 pub use craft_ui_panels::canvas_data;
 #[cfg(feature = "testing")]
+pub use craft_ui_panels::registry;
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub use craft_ui_panels::story_kit;
-#[cfg(feature = "testing")]
-pub use craft_ui_panels::testing_registered;
 #[doc(hidden)]
 pub use craft_ui_panels::{__private, __register_command_set, __register_contract, __register_pattern};
 pub use craft_ui_panels::{InstallError, InstallSpec, contract, fonts, install, layout, primitives, runtime, style, words};
@@ -31,7 +31,9 @@ pub mod canvas_controls;
 
 /// Dialog shells and prompts, with the full-window dialog family that shows a canvas.
 pub mod dialog {
-    pub use crate::canvas::full_window::{FullWindowDialog, FullWindowDialogStyle, FullWindowWorkspace, HostedWorkspace, WorkspaceCx, WorkspacePass};
+    pub use crate::canvas::full_window::{
+        FullWindowDialog, FullWindowDialogStyle, FullWindowWorkspace, HostedWorkspace, OWN_WINDOW_MIN_SIZE, WorkspaceCx, WorkspacePass,
+    };
     pub use crate::canvas::full_window_parts::{
         FullWindowCanvas, FullWindowCanvasOutput, FullWindowSide, FullWindowSideOutput, FullWindowSideStyle, FullWindowStatus,
         FullWindowStatusOutput, FullWindowTitle, FullWindowTitleOutput, FullWindowView, FullWindowZoomBar, FullWindowZoomBarOutput, RasterOverlay,
@@ -51,5 +53,6 @@ pub mod testing {
     };
     pub use craft_ui_panels::testing::*;
 
-    crate::testing_registered!();
+    #[cfg(feature = "suite")]
+    crate::registry!();
 }

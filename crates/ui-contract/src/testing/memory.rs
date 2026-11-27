@@ -89,13 +89,13 @@ pub fn global(name: &'static str, scope: impl Hash + Debug) -> Id {
 }
 
 /// Registers `fact` for the next pass of the running viewport.
-pub fn register_fact<T: Clone + Send + Sync + 'static>(ctx: &Context, fact: T) {
+pub fn register_fact<T: Clone + PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static>(ctx: &Context, fact: T) {
     Facts::register(ctx, fact);
 }
 
 /// The facts the running viewport's previous pass registered.
 pub fn facts_of_last_pass<T: Clone + Send + Sync + 'static>(ctx: &Context) -> Vec<T> {
-    Facts::of_last_pass(ctx)
+    Facts::with_last_pass(ctx, <[T]>::to_vec)
 }
 
 /// Runs `f` on a child `Ui` of `ui`.

@@ -3,7 +3,7 @@
 //!
 //! One component serves both states. Idle, the field has the plain widget keys (Tab leaves, Enter and Space start
 //! recording). Recording, its key use is `KeyUse::RECORDER` (every key is a chord; bare Tab stays a chord because
-//! the field keeps Tab). The recording field takes key focus on every run it lacks it.
+//! the field keeps Tab). A recording field can take key focus when its caller allows it.
 
 use craft_behavior::{Metrics, Proposal, Sense};
 use craft_keymap::{Chord, Key};
@@ -17,8 +17,8 @@ use craft_ui::runtime::focus::{self, FocusTarget, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, Ink, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole};
 use egui::{Rect, Response, Ui, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The field claims bare Escape while recording, so it reaches the field as a chord (the keymap's recorder reads it as
 /// cancel) and neither leaves the row nor closes the dialog.
@@ -85,6 +85,7 @@ struct Recorder {
     shown: Label,
     chords: Vec<Chord>,
     started: bool,
+    take_focus: bool,
 }
 
 impl Component for Recorder {
@@ -114,6 +115,9 @@ impl Component for Recorder {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         if self.recording {
             if !cx.response.has_focus() {
+                if !self.take_focus {
+                    return;
+                }
                 focus::request(&cx.response.ctx, FocusTarget::Id(cx.response.id));
             }
             self.chords.extend(cx.intents().take_chords());
@@ -147,12 +151,13 @@ pub(crate) struct ChordRecorder {
     recording: bool,
     shown: Label,
     salt: Option<&'static str>,
+    take_focus: bool,
 }
 
 impl ChordRecorder {
     /// A recorder named `label` showing `shown`.
     pub(crate) fn new(label: impl Into<Label>, recording: bool, shown: impl Into<Label>) -> Self {
-        ChordRecorder { label: label.into(), recording, shown: shown.into(), salt: None }
+        ChordRecorder { label: label.into(), recording, shown: shown.into(), salt: None, take_focus: true }
     }
 
     /// Salts the field's id.
@@ -162,9 +167,15 @@ impl ChordRecorder {
         self
     }
 
+    /// Whether a recording may take focus when the field does not have it.
+    pub(crate) fn take_focus(mut self, take_focus: bool) -> Self {
+        self.take_focus = take_focus;
+        self
+    }
+
     fn component(self) -> (Recorder, Option<&'static str>) {
-        let ChordRecorder { label, recording, shown, salt } = self;
-        (Recorder { common: Common::new(), recording, shown, chords: Vec::new(), started: false }.label(label), salt)
+        let ChordRecorder { label, recording, shown, salt, take_focus } = self;
+        (Recorder { common: Common::new(), recording, shown, chords: Vec::new(), started: false, take_focus }.label(label), salt)
     }
 
     /// Shows the field.

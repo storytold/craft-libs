@@ -18,25 +18,45 @@ pub enum Anchor {
     /// A corner or edge of a rect in the opener's layer space, inset by the panel padding and kept inside the safe
     /// rect: the body a toast stack sits in.
     Corner(Rect, Align2),
+    /// The placed panel rect of the parent layer the overlay opened from.
+    Parent,
 }
 
 /// Where a floating layer sits.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FloatPlace {
-    /// A position for the layer's left-top, in the layer's parent space; `None` centres it in the viewport.
+    /// Where the layer's `corner` sits, in the layer's parent space; `None` centres it in the viewport.
     pub pos: Option<Pos2>,
+    /// The corner of the layer that sits at `pos`.
+    pub corner: Align2,
+}
+
+impl Default for FloatPlace {
+    fn default() -> Self {
+        FloatPlace::centred()
+    }
 }
 
 impl FloatPlace {
     /// Centred in the viewport.
     pub const fn centred() -> Self {
-        FloatPlace { pos: None }
+        FloatPlace { pos: None, corner: Align2::LEFT_TOP }
     }
 
-    /// At `pos`.
+    /// With its left-top at `pos`.
     pub const fn at(pos: Pos2) -> Self {
-        FloatPlace { pos: Some(pos) }
+        FloatPlace { pos: Some(pos), corner: Align2::LEFT_TOP }
+    }
+
+    /// With its `corner` at `pos`.
+    pub const fn corner_at(pos: Pos2, corner: Align2) -> Self {
+        FloatPlace { pos: Some(pos), corner }
+    }
+
+    /// The top left of a layer `size` large whose `corner` sits at `pos`; `None` for a centred layer.
+    pub(crate) fn top_left(&self, size: Vec2) -> Option<Pos2> {
+        self.pos.map(|pos| pos - self.corner.pos_in_rect(&Rect::from_min_size(Pos2::ZERO, size)).to_vec2())
     }
 }
 
@@ -56,6 +76,14 @@ pub enum Place {
         /// Beside the anchor, it lines up with the anchor's other end when that fits and the aligned end does not,
         /// instead of sliding inside the bounds: a submenu of a low row opens upward.
         flips_across: bool,
+        /// Where the layer sits from the place it would take: shifts it by this much.
+        offset: egui::Vec2,
+        /// A rect the layer keeps clear of, in the layer's own space.
+        clear: Option<egui::Rect>,
+        /// Below or above the anchor, a layer that fits on neither side keeps its size and slides over the anchor,
+        /// inside its bounds, instead of being cut to the room left beside it: a task bar under a crop frame that
+        /// fills the canvas.
+        covers: bool,
     },
     /// Free-standing.
     Float(FloatPlace),
@@ -64,15 +92,42 @@ pub enum Place {
 impl Place {
     /// An anchored place.
     pub const fn anchored(anchor: Anchor, side: Side, align: Align) -> Self {
-        Place::Anchored { anchor, side, align, flips_across: false }
+        Place::Anchored { anchor, side, align, flips_across: false, offset: egui::Vec2::ZERO, clear: None, covers: false }
     }
 
     /// The place, beside its anchor, lining up with the anchor's other end when that fits and the aligned end does not.
     pub const fn flipping_across(self) -> Self {
         match self {
-            Place::Anchored { anchor, side, align, .. } => Place::Anchored { anchor, side, align, flips_across: true },
+            Place::Anchored { anchor, side, align, offset, clear, covers, .. } => {
+                Place::Anchored { anchor, side, align, flips_across: true, offset, clear, covers }
+            }
             float => float,
         }
+    }
+
+    /// The place shifted by `by` from where it would sit; no change off `Anchored`.
+    pub fn offset(mut self, by: egui::Vec2) -> Self {
+        if let Place::Anchored { offset, .. } = &mut self {
+            *offset = by;
+        }
+        self
+    }
+
+    /// The place, below or above its anchor, sliding over the anchor when it fits on neither side; no change off
+    /// `Anchored`.
+    pub fn covering_anchor(mut self) -> Self {
+        if let Place::Anchored { covers, .. } = &mut self {
+            *covers = true;
+        }
+        self
+    }
+
+    /// The place keeping clear of `rect`; no change off `Anchored`.
+    pub fn clear_of(mut self, rect: egui::Rect) -> Self {
+        if let Place::Anchored { clear, .. } = &mut self {
+            *clear = Some(rect);
+        }
+        self
     }
 }
 

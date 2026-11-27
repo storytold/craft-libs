@@ -61,7 +61,7 @@ the app's pins (`apps.<id>`), then the theme's high-contrast pins, then the app'
 | `shape` | no | `null`, or `{ "radius": { control, popup, window, panel, button, pill? }, "radius_offset": { control?, popup?, window? }, "edge": "flat" or {"bevel": {"width": 1}}, "knob": "round" or "tab", "wells": "square" or "round" }`; `knob` is the shape of a value track's thumb (default `"round"`; Classic's `"tab"` is an upright tab); `wells` is the shape of a colour well that stands on its own, SwatchPair's (default `"square"`; Adwaita, Breeze and Soft are `"round"`); a radius is a number or `"full"`; `radius` needs the first five keys when present and fixes the radii at every Size; `radius_offset` (numbers, negative allowed, missing keys 0) is added to the control, popup and window radii in force, so the theme keeps its own shape at every Size (Soft: control +1, popup +2, window +2, which makes 7/10/14 at Comfortable and 4/6/8 at Compact); a "full" radius and `panel`, `button` and `pill` are not offset, and a sum below 0 is 0; `pill` (switch, slider, progress and badge shapes, clamped to half the part's height) defaults to `"full"`, and Classic sets it to 0 |
 | `light`, `dark` | no | colour pins: dotted token path to `#RRGGBB`, `#RRGGBBAA` or a reference `"{token.path}"` (see References); surfaces (`surface.*` except `surface.scrim`) must be opaque. A `seeds` key holds that mode's seed overrides: `neutral`, `accent` and `status.good/warn/bad/info`, each optional; a field it names replaces the theme's `seeds` value in that mode and the rest fall through |
 | `high_contrast` | no | `{ "light": {...}, "dark": {...} }`, pins used only in high contrast; no `seeds` key (it is an error there and in `apps`) |
-| `apps` | no | per-app `{ light, dark, high_contrast }`, applied over the theme's values for that app; its `high_contrast` pins apply after the theme's |
+| `apps` | no | per-app `{ light, dark, high_contrast, shape }`, applied over the theme's values for that app; its `high_contrast` pins apply after the theme's; its `shape` (as the theme's `shape`) replaces the theme's whole for that app, and `null` or no key keeps the theme's |
 
 - JSON, at most 256 KiB. `schema_version` is the format; `version` is the author's revision.
 - Paths are flat dotted strings (`"surface.panel"`), never nested objects.
@@ -93,12 +93,12 @@ High contrast meets every minimum below: it moves pinned values that miss one. S
 
 | Pair | Standard | High |
 |---|---|---|
-| `text.normal`, `text.muted`, `text.faint` on surfaces (background, panel, chrome, raised, sunken), `state.hover` and `state.pressed` | 4.5 | 7 |
-| `text.on_selected` on `state.selected` and `state.selected_hover` | 4.5 | 7 |
+| `text.normal`, `text.muted`, `text.faint` on surfaces (background, panel, chrome, raised, sunken, control), `state.hover` and `state.pressed` | 4.5 | 7 |
+| `text.on_selected` on `state.selected` and `state.selected_hover`; `text.on_inverse` on `surface.inverse` | 4.5 | 7 |
 | `accent.text` on `surface.panel`, `surface.raised` and `surface.sunken`; `accent.on_soft` on `accent.soft` | 4.5 | 7 |
 | Status text (`status.good.fg` ...) on `surface.panel`, `surface.raised` and its own `status.*.bg` | 4.5 | 7 |
 | `text.on_accent` on `accent.solid`, `accent.hover` and `accent.pressed`; `text.on_strong` on `accent.strong`, `accent.strong_hover` and `accent.strong_pressed`; `text.on_status` on the status solids and their hover and pressed steps | 4.5 | 7 |
-| `line.focus` on the surfaces; `accent.solid` on the control surfaces (panel, raised, sunken: checked and selected marks); `line.mark` (slider marks and ticks, the badge ring) on the control surfaces, `state.hover` and `state.pressed`; `overlay.stroke` on `overlay.halo` over black and over white | 3 | 4.5 |
+| `line.focus` on the surfaces; `accent.solid` on the control surfaces (panel, raised, sunken: checked and selected marks); `line.mark` (slider marks and ticks, the badge ring) on the control surfaces, `state.hover` and `state.pressed`; `overlay.stroke` and `overlay.cursor` on `overlay.halo` over black and over white | 3 | 4.5 |
 | State cues: `accent.border` (the outline of a selected or on control) on the control surfaces; `overlay.handle_stroke` on `overlay.handle_fill` (a selected anchor against a hollow one); the data channel colours (`data.red` ... `data.yellow`) on `surface.sunken` (a curve editor's plot) | 0 (listed, never warned) | 4.5 |
 | The thumb of a canvas scroll bar (`text.faint`, `text.muted`) on its track (`surface.chrome`) | 0 (listed, never warned) | 3 |
 

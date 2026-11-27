@@ -46,7 +46,7 @@ pub enum CursorIcon {
 }
 
 /// An icon's egui-free key (5.2), so plain data such as [`PaintedCursor::Tool`] names icons without egui.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui_macros::PlainData)]
 pub struct IconId(Cow<'static, str>);
 
 impl IconId {
@@ -68,7 +68,7 @@ impl From<Cow<'static, str>> for IconId {
 }
 
 /// A mark beside a painted cursor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CursorBadge {
     /// A plus.
@@ -100,7 +100,7 @@ pub enum CursorBadge {
 }
 
 /// The kind of a [`CursorBadge::Count`] mark.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CountMark {
     /// A point is added.
@@ -196,6 +196,8 @@ pub enum PaintedCursor {
     Arrow {
         /// The arrow is drawn hollow.
         hollow: bool,
+        /// The art turns about its hotspot to point along this direction; `None` is the base art.
+        toward: Option<Vec2>,
     },
     /// An I-beam across a path with a filled triangle toward each grabbable side.
     #[non_exhaustive]
@@ -206,16 +208,20 @@ pub enum PaintedCursor {
         end: bool,
     },
     /// A pointer with the tool's icon below and right of it: a crosshair (Perspective Crop), or an arrow with its tip
-    /// on the hotspot (Paint Bucket, Ruler).
+    /// on the hotspot (Paint Bucket, Ruler, the lassos).
     #[non_exhaustive]
     PointerTool {
         /// The pointer the icon rides beside.
         pointer: PointerGlyph,
         /// The icon.
         icon: IconId,
+        /// A mark at the icon's lower right.
+        badge: Option<CursorBadge>,
     },
     /// No cursor at all.
     Hidden,
+    /// A plain I-beam, visible on light and dark.
+    IBeam,
 }
 
 impl PaintedCursor {
@@ -275,7 +281,12 @@ impl PaintedCursor {
 
     /// An arrow with its tip on the hotspot, hollow when `hollow`.
     pub const fn arrow(hollow: bool) -> Self {
-        PaintedCursor::Arrow { hollow }
+        PaintedCursor::Arrow { hollow, toward: None }
+    }
+
+    /// A solid arrow turned about its hotspot to point along `dir`.
+    pub const fn arrow_toward(dir: Vec2) -> Self {
+        PaintedCursor::Arrow { hollow: false, toward: Some(dir) }
     }
 
     /// An I-beam across the path with a triangle toward each grabbable side.
@@ -285,7 +296,12 @@ impl PaintedCursor {
 
     /// `pointer` with the tool's icon below and right of it.
     pub const fn pointer_tool(pointer: PointerGlyph, icon: IconId) -> Self {
-        PaintedCursor::PointerTool { pointer, icon }
+        PaintedCursor::PointerTool { pointer, icon, badge: None }
+    }
+
+    /// `pointer` with the tool's icon below and right of it, and `badge` at the icon's lower right.
+    pub const fn pointer_tool_badged(pointer: PointerGlyph, icon: IconId, badge: Option<CursorBadge>) -> Self {
+        PaintedCursor::PointerTool { pointer, icon, badge }
     }
 
     /// A system cursor with a mark.
@@ -342,9 +358,16 @@ pub enum CursorPriority {
     DropTarget,
     /// A drag in progress.
     Drag,
+    /// Hides the pointer over everything, links included, while a presentation runs.
+    Hidden,
 }
 
 /// The winning request: the highest priority, the later request on a tie.
 pub fn pick(requests: &[(Cursor, CursorPriority)]) -> Option<&Cursor> {
-    requests.iter().enumerate().max_by_key(|(order, (_, priority))| (*priority, *order)).map(|(_, (cursor, _))| cursor)
+    pick_index(requests).map(|at| &requests[at].0)
+}
+
+/// The index of the winning request ([`pick`]).
+pub fn pick_index(requests: &[(Cursor, CursorPriority)]) -> Option<usize> {
+    requests.iter().enumerate().max_by_key(|(order, (_, priority))| (*priority, *order)).map(|(at, _)| at)
 }

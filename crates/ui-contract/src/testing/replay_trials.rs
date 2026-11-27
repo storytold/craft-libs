@@ -71,6 +71,26 @@ fn journal_entries_compare_by_their_call_and_arguments() {
     assert_ne!(first.journal[1], other_call.journal[1], "another call with the same arguments");
 }
 
+/// A registration whose `again` notes itself, as the services' public registration calls do.
+fn renote(ctx: &egui::Context, args: &(egui::Id, u32)) {
+    replay::journal(ctx, || *args, renote);
+}
+
+// A record replayed inside the run of another record is part of that run: the outer record holds each of its journal
+// entries once, whether the entry's call notes itself again or not, so the outer record's own replay registers them.
+#[trial]
+fn a_record_replayed_inside_another_run_is_in_its_journal() {
+    let mut frames = Frames::new();
+    let id = fixture::named_id("owner");
+    let inner = record(&mut frames, |ctx| {
+        replay::journal(ctx, || (id, 1), note_a);
+        renote(ctx, &(id, 2));
+    });
+    assert_eq!(inner.journal.len(), 2, "both notes are in the inner record");
+    let outer = record(&mut frames, |ctx| replay::replay(ctx, &inner, &egui::RecordShift::none(Rect::EVERYTHING)));
+    assert_eq!(outer.journal, inner.journal, "the outer record holds the replayed journal, each entry once");
+}
+
 // A focus transcript with one changed stop compares unequal to the run before it; one with the same stops equal.
 #[trial]
 fn a_transcript_with_one_changed_stop_compares_unequal() {
@@ -90,6 +110,49 @@ fn a_transcript_with_one_changed_stop_compares_unequal() {
     assert_ne!(first.focus, changed.focus, "the second stop's keys changed");
 }
 
+#[trial]
+fn replayed_focus_stops_keep_their_own_target() {
+    let mut frames = Frames::new();
+    let parent = fixture::named_id("parent");
+    let child = fixture::named_id("child");
+    let recorded = record(&mut frames, |ctx| focus::register_stop(ctx, Stop::new(child, KeyUse::CODE)));
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx();
+        let from = focus::stop_count(ctx);
+        focus::replay(ctx, &recorded.focus);
+        assert_eq!(focus::first_stop_inside(ctx, parent, from, None), Some(focus::FocusTarget::Id(child)));
+        assert_eq!(focus::first_stop_inside(ctx, child, from, None), None);
+    });
+}
+
+// The app's own egui widgets drawn inside a recorded view are stops of its transcript, and none drawn before it; the
+// replay registers each once, where the view shows, after the widgets drawn before it.
+#[trial]
+fn a_recorded_view_holds_the_app_s_widgets_drawn_in_it_and_its_replay_registers_them_once() {
+    let mut frames = Frames::new();
+    let [before, inside] = [fixture::named_id("app before"), fixture::named_id("app inside")];
+    let rect = |x: f32| Rect::from_min_size(Pos2::new(x, 100.0), Vec2::new(80.0, 30.0));
+    let mut recorded = None;
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx().clone();
+        fixture::host_button(ui, before, rect(20.0));
+        replay::open(&ctx);
+        fixture::host_button(ui, inside, rect(120.0));
+        recorded = Some(replay::close(&ctx, fixture::layer_of(ui)));
+    });
+    let recorded = recorded.expect("the frame ran");
+    assert_eq!(recorded.focus.stop_ids().collect::<Vec<_>>(), [inside], "the transcript holds the widget drawn in the view alone");
+    let mut order = Vec::new();
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx();
+        fixture::host_button(ui, before, rect(20.0));
+        focus::replay(ctx, &recorded.focus);
+        focus::stop_count(ctx);
+        order = focus::tab_order(ctx, |_| true).into_iter().map(|(id, _)| id).collect();
+    });
+    assert_eq!(order, [before, inside], "the replay registers the view's widget once, after the one drawn before it");
+}
+
 /// Records `stops` run inside a record, with `entering` the first-pass flag of the layer scope it pushes, inside the
 /// scope `outer` when one is given.
 fn layer_scope_record(frames: &mut Frames, outer: Option<egui::Id>, entering: bool) -> replay::Record {
@@ -102,7 +165,7 @@ fn layer_scope_record(frames: &mut Frames, outer: Option<egui::Id>, entering: bo
         }
         replay::open(&ctx);
         focus::register_stop(&ctx, Stop::new(fixture::named_id("beside"), KeyUse::CODE));
-        focus::push_scope_from(&ctx, scope, FocusPolicy::NONE, None, None, false, Some(entering));
+        focus::push_scope_from(&ctx, scope, FocusPolicy::POPUP, None, None, false, Some(entering));
         focus::register_stop(&ctx, Stop::new(stop, KeyUse::CODE));
         focus::pop_scope(&ctx);
         record = Some(replay::close(&ctx, fixture::layer_of(ui)));
@@ -152,7 +215,7 @@ fn a_replayed_member_stacks_above_the_members_before_it() {
     let shown = |ui: &mut egui::Ui, replayed: bool| {
         sensing::sense_members(ui, arena, &[spec(before, Rect::from_min_size(Pos2::ZERO, Vec2::splat(10.0))), spec(cover, rect)]);
         if replayed {
-            replay::replay(ui.ctx(), &recorded);
+            replay::replay(ui.ctx(), &recorded, &egui::RecordShift::none(Rect::EVERYTHING));
             return None;
         }
         let ctx = ui.ctx().clone();
@@ -173,4 +236,28 @@ fn a_replayed_member_stacks_above_the_members_before_it() {
         let _ = shown(ui, true);
     });
     assert_eq!(hovered, Some([true, false]), "the replayed child is above the member that covers it");
+}
+
+// A popup scope that appears with nothing focused has no opener, and keeps none once focus moved into it: the opener is
+// taken when the scope first appears, never from a later pass's focus, which is a stop inside the scope itself. A
+// recorded first pass, the next real run and a replay then register the same.
+#[trial]
+fn a_scope_keeps_the_opener_of_the_pass_it_appeared_in() {
+    let mut frames = Frames::new();
+    let [scope, stop] = [fixture::named_id("popup"), fixture::named_id("inside")];
+    let mut openers = Vec::new();
+    let mut focused = Vec::new();
+    for first in [true, false, false] {
+        frames.frame(Vec::new(), |ui| {
+            let ctx = ui.ctx().clone();
+            focused.push(focus::focused_stop(&ctx));
+            focus::register_stop(&ctx, Stop::new(fixture::named_id("beside"), KeyUse::CODE));
+            focus::push_scope_from(&ctx, scope, FocusPolicy::POPUP, None, None, false, Some(first));
+            focus::register_stop(&ctx, Stop::new(stop, KeyUse::CODE));
+            focus::pop_scope(&ctx);
+            openers.push(focus::with(&ctx, |state| state.scopes.get(&scope).map(|rec| rec.opener)));
+        });
+    }
+    assert_eq!(focused[1], Some((stop, None)), "focus moved into the popup after its first pass");
+    assert_eq!(openers, vec![Some(None); 3], "the popup keeps the opener of its first pass");
 }

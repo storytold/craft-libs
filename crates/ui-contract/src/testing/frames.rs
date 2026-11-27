@@ -186,15 +186,25 @@ impl Frames {
     }
 
     /// One frame of `viewport`, a child window of the root while the root stays live, with `events`; `ui` runs once
-    /// per pass. Returns the number of passes.
+    /// per pass. Returns the number of passes. The child opens with its first frame and stays open, listed in the root's
+    /// frames too, until [`close_viewport`](Self::close_viewport) or a `ViewportCommand::Close` for it.
     pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize {
-        set_input(&self.ctx, self.input());
+        // The app's input is the root's, once per app frame: a child window's frame runs inside it.
+        if viewport == egui::ViewportId::ROOT {
+            set_input(&self.ctx, self.input());
+        }
         let mut passes = 0;
         self.run(viewport, events, |root| {
             passes += 1;
             ui(root);
         });
         passes
+    }
+
+    /// One frame with `events`, as [`frame`](Self::frame); returns whether the frame sent a window a close command.
+    pub fn frame_closing(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
+        set_input(&self.ctx, self.input());
+        self.run(egui::ViewportId::ROOT, events, ui)
     }
 
     /// One frame with no `set_input`, as an app that never calls it would drive it: the root values and the
@@ -242,6 +252,22 @@ impl Frames {
         self.files.dropped = names.iter().map(|name| (*name).to_owned()).collect();
     }
 
+    /// The hovering files drop on the window in the next frame as a web page drops them, with neither path nor bytes:
+    /// the page reads the file `name` asynchronously, and its `bytes` arrive after that frame. The fixture opens the read
+    /// in the drop frame and posts the file into the file inbox after it, as the wasm read does; the pass after it
+    /// delivers the drop once.
+    pub fn read_dropped(&mut self, name: &str, bytes: &[u8]) {
+        self.files.hovered.clear();
+        self.files.read.push((name.to_owned(), bytes.to_vec()));
+    }
+
+    /// The hovering files drop on the window in the next frame as a browser on the desktop hands a file over: by the
+    /// relative name `name`, which locates no file, with its `bytes` at hand.
+    pub fn drop_with_bytes(&mut self, name: &str, bytes: &[u8]) {
+        self.files.hovered.clear();
+        self.files.given.push((name.to_owned(), bytes.to_vec()));
+    }
+
     /// Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls
     /// [`advance`](Self::advance). Held-pointer repeats, hover delays and animations then wait for the test.
     pub fn still_clock(&mut self) {
@@ -251,6 +277,11 @@ impl Frames {
     /// Moves the clock on by `seconds` before the next frame.
     pub fn advance(&mut self, seconds: f64) {
         self.time += seconds;
+    }
+
+    /// Closes the child window `viewport`, as its user would: later frames no longer list it.
+    pub fn close_viewport(&mut self, viewport: egui::ViewportId) {
+        fixture::close_viewport(&self.ctx, viewport);
     }
 
     /// `n` frames with no events.
@@ -280,7 +311,23 @@ impl Frames {
             self.told = self.modifiers;
             events.insert(0, fixture::modifiers_changed(self.modifiers));
         }
-        let files = fixture::OsFiles { hovered: self.files.hovered.clone(), dropped: std::mem::take(&mut self.files.dropped) };
+        // A real pointer button event carries the modifiers held as it happens, and a new press reads its event's
+        // modifiers (F-144): a generated press or release that names none (`pointer::press`) carries the held ones.
+        if self.modifiers != egui::Modifiers::NONE {
+            for event in &mut events {
+                if let Event::PointerButton { modifiers, .. } = event
+                    && *modifiers == egui::Modifiers::NONE
+                {
+                    *modifiers = self.modifiers;
+                }
+            }
+        }
+        let files = fixture::OsFiles {
+            hovered: self.files.hovered.clone(),
+            dropped: std::mem::take(&mut self.files.dropped),
+            read: std::mem::take(&mut self.files.read),
+            given: std::mem::take(&mut self.files.given),
+        };
         let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, viewport, events, files, ui);
         match &mut self.paint {
             Some(Recorded(paint)) => {

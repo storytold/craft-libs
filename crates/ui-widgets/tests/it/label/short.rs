@@ -48,3 +48,21 @@ fn a_hidden_label_with_content_shows_only_the_content() {
     let radio = fixture.by_label(SIZE).expect("the label's text names the control");
     assert!(radio.rect.max.x <= sample.rect.min.x, "the content follows its radio, as a label after it does");
 }
+
+/// A field whose label is hidden names its control and shows no label of its own: the control is the one node
+/// named by the label's text, so a screen reader reads the name once. Guards against the hidden label still adding a
+/// node beside the control it names.
+#[trial]
+fn a_hidden_field_label_names_its_control_and_adds_no_node() {
+    use craft_ui::choice::Checkbox;
+    use craft_ui::contract::Role;
+    const STEP: &str = "1. Draw a shape";
+    let mut fixture = Fixture::new(|ui| {
+        Field::new(STEP).side(SideLabel::new().kind(LabelKind::Hidden)).show(ui, |ui, _| Checkbox::new(Bind::given(false)).show(ui));
+    });
+    fixture.settle();
+    let tree = fixture.tree();
+    let named: Vec<_> = tree.keys().into_iter().filter(|key| tree.name_of(*key) == Some(STEP)).collect();
+    let check = fixture.by_role(Role::CHECK_BOX).first().expect("the check box").node;
+    assert_eq!(named, vec![check], "only the check box carries the name: {:?}", named.iter().map(|key| tree.role_of(*key)).collect::<Vec<_>>());
+}

@@ -2,7 +2,7 @@
 
 use crate::contract::label;
 use crate::contract::{Container, Resolved, Show, SideLabel};
-use crate::runtime::env::{EnvView, Label, Message};
+use crate::runtime::env::{Env, EnvView, Label, Message};
 use crate::runtime::memory::{MemoryStage, StageAccess, sealed};
 use crate::runtime::overlay::CloseReason;
 use egui::{Id, Rect, Ui};
@@ -28,6 +28,7 @@ pub struct BodyCx<'a> {
     gate: Option<&'a mut bool>,
     gate_mixed: bool,
     close: Option<CloseReason>,
+    exiting: bool,
     field_message: Option<(Message, craft_theme::variant::Tone)>,
     owner: Option<BodyOwner<'a>>,
 }
@@ -47,7 +48,7 @@ impl<'a> BodyCx<'a> {
         memory.claim(id);
         let (gate_mixed, field_message, owner) =
             shared.map_or((false, None, None), |shared| (shared.gate_mixed, shared.field_message, Some(shared.owner)));
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, field_message, owner }
+        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, exiting: false, field_message, owner }
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set: the opener
@@ -65,11 +66,29 @@ impl<'a> BodyCx<'a> {
         self.env.host()?.files().take_answer(ticket)
     }
 
+    pub(crate) fn with_exiting(mut self, exiting: bool) -> Self {
+        self.exiting = exiting;
+        self
+    }
+
+    /// Whether the container has closed and its body only stays on screen while it fades out. `is_open` reads true
+    /// then; a region that belongs to the open container (a companion layer) is not shown.
+    pub fn is_exiting(&self) -> bool {
+        self.exiting
+    }
+
     /// The validity message of the first control in the container's label scope, recorded last frame, with the
     /// tone it shows in: a container whose footer declares `FooterRegion::status` shows it as its status text. `None`
     /// when the container has no label or no control reported one.
     pub fn field_message(&self) -> Option<(Message, craft_theme::variant::Tone)> {
         self.field_message.clone()
+    }
+
+    /// Whether a drag of the container's move band (`DragBand::Move`) moves its layer in this pass, from the pass the
+    /// drag starts to the one before its release: a grip in the body shows the move.
+    pub fn moving(&self) -> bool {
+        let band = crate::primitives::sensing::part_press(self.memory.ctx(), self.resolved.id, crate::contract::MOVE_BAND.into());
+        matches!(band.press.phase, craft_behavior::PressPhase::DragStart { .. } | craft_behavior::PressPhase::Drag { .. })
     }
 
     /// Whether the body is open.
@@ -113,7 +132,8 @@ impl<'a> BodyCx<'a> {
     /// the placement measured: the child (plus the label line when the label stacks), and the label when it is taller.
     /// `ui` is the body's `Ui`; `key` makes the child's id.
     pub fn labelled<C: Show>(&mut self, ui: &mut Ui, key: impl Hash + Debug, label: Label, side: SideLabel, child: C) -> C::Output {
-        label::flow_leaf(ui, (self.id.with(key), self.resolved.id), (self.resolved.enabled, self.resolved.size), label, side, child, None)
+        let env = Env::of(ui);
+        label::flow_leaf((ui, env), (self.id.with(key), self.resolved.id), (self.resolved.enabled, self.resolved.size), label, side, child, None)
     }
 
     /// `labelled`, with `content` shown inside the label after its text (a sample of what the option picks). The
@@ -141,14 +161,16 @@ impl<'a> BodyCx<'a> {
             Some(&super::Under::new(under.0, under.1)),
         );
         let show = Box::new(move |ui: &mut Ui, rect: Rect| {
+            let place = Env::of(ui);
             let _ = crate::contract::run::show_leaf(
                 &mut Some(crate::contract::Props::id(content, content_id)),
                 ui,
-                crate::contract::run::ShowAt::Rect(rect),
+                (crate::contract::run::ShowAt::Rect(rect), place),
                 None,
             );
         });
-        label::flow_leaf(ui, (id, self.resolved.id), under, label, side, child, Some(label::Trailing { size, show }))
+        let env = Env::of(ui);
+        label::flow_leaf((ui, env), (id, self.resolved.id), under, label, side, child, Some(label::Trailing { size, show }))
     }
 }
 
@@ -191,6 +213,12 @@ impl<'a> BodyCx<'a> {
 }
 
 impl BodyCx<'_> {
+    /// The value this body derives from `key`: kept while `key` is unchanged, else built by `build`
+    /// ([`runtime::derived`](crate::runtime::derived::derived), under the body's id).
+    pub fn derived<K: crate::contract::MemoProps, V: Send + Sync + 'static>(&self, key: &K, build: impl FnOnce() -> V) -> std::sync::Arc<V> {
+        crate::runtime::derived::derived(self.memory.ctx(), self.id, key, build)
+    }
+
     /// Takes the Escape of this pass that no component took: a field that clears on Escape passes it on once it
     /// is empty. `true` once per Escape; the enclosing scope (a dialog, a popover) then does not act on it.
     /// Components shown earlier in the body have run by the time the body asks.

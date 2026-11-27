@@ -1,8 +1,8 @@
 //! `ColorChoice`: a choice among named colours with a custom colour, as Photoshop's pasteboard colour
 //! (Preferences, Interface), the Crop shield colour and the Note colour.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _};
@@ -59,7 +59,7 @@ pub enum ChosenColor {
 pub struct ColorChoiceOutput {
     /// The choice's response.
     pub response: Response,
-    /// The row chosen this pass; the host stores it.
+    /// The row committed this pass; the host stores it. Navigating an open popup reports no choice.
     pub chosen: Option<ChosenColor>,
     /// "Select Custom Color…" was chosen, for this pass only: the app opens its colour picker from the request (key
     /// [`ColorChoice::CUSTOM_KEY`], the custom colour) and, on OK, stores the colour and chooses
@@ -151,7 +151,7 @@ impl<'a> ColorChoice<'a> {
         entries.push(Entry::separator());
         entries.push(Entry::new(Row::SelectCustom, words.select_custom.as_str().to_owned()));
         let shown = Select::new(self.label.clone(), Bind::given(row), &entries).enabled(self.enabled).show(ui);
-        let picked = shown.value().cloned();
+        let picked = shown.events.committed().cloned();
         let mut pick_color = None;
         let chosen = match picked {
             Some(Row::Named(id)) => Some(ChosenColor::Named(id)),

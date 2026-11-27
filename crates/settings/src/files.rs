@@ -1,6 +1,13 @@
 //! [`SettingsFiles`]: the file access a [`SettingsStore`](crate::SettingsStore) goes through, so an
 //! app can route its settings elsewhere (PhotoCraft's `Services` file closures, browser storage).
 
+#[cfg(target_arch = "wasm32")]
+mod local_storage;
+
+#[cfg(target_arch = "wasm32")]
+pub use local_storage::LocalStorageFiles;
+
+use std::any::Any;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +35,12 @@ pub trait SettingsFiles: Send + Sync {
     }
     /// Whether `dir` accepts a new file.
     fn check_writable(&self, dir: &Path) -> io::Result<()>;
+    /// Takes a `.lock` file beside the settings file at `path`, held from the disk check to the write; dropping the
+    /// box releases it. Files with nothing to lock keep the default, which holds none.
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let _ = path;
+        None
+    }
 }
 
 /// The file system, through `craft-atomic` and [`recovery`](crate::recovery): what the store does
@@ -38,12 +51,27 @@ pub struct DiskFiles;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SettingsFiles for DiskFiles {
+    /// A file larger than [`MAX_CONFIG_BYTES`](crate::store::MAX_CONFIG_BYTES) fails with
+    /// `ErrorKind::FileTooLarge` without being read into memory; text that is not UTF-8 fails with
+    /// `ErrorKind::InvalidData`, as `std::fs::read_to_string` does.
     fn read(&self, path: &Path) -> io::Result<Option<String>> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Ok(Some(text)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
+        use std::io::Read as _;
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let limit = crate::store::MAX_CONFIG_BYTES;
+        if file.metadata()?.len() > limit {
+            return Err(crate::store::too_large());
         }
+        // The length can change after the check, or be unknown (a pipe), so the read is capped too.
+        let mut bytes = Vec::new();
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > limit {
+            return Err(crate::store::too_large());
+        }
+        String::from_utf8(bytes).map(Some).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     fn write(&self, path: &Path, text: &str) -> io::Result<()> {
@@ -69,7 +97,42 @@ impl SettingsFiles for DiskFiles {
     fn check_writable(&self, dir: &Path) -> io::Result<()> {
         crate::recovery::check_writable(dir)
     }
+
+    /// An advisory lock on `.<file>.lock` beside `path`, so two processes saving at once (logging out closes every
+    /// window together) take turns at checking, merging and replacing the file instead of one losing the other's
+    /// changes. `None` (save unlocked) when the lock file cannot be opened or is not free within `LOCK_WAIT`.
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let name = path.file_name().map_or_else(|| "config.toml".into(), |n| n.to_string_lossy().into_owned());
+        let lock = path.with_file_name(format!(".{name}.lock"));
+        let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) {
+            Ok(file) => file,
+            Err(e) => {
+                log::warn!("settings: cannot open {}, saving without it: {e}", lock.display());
+                return None;
+            }
+        };
+        let start = std::time::Instant::now();
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Some(Box::new(file)),
+                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < LOCK_WAIT => std::thread::sleep(LOCK_POLL),
+                Err(e) => {
+                    log::warn!("settings: {} is held, saving without it: {e}", lock.display());
+                    return None;
+                }
+            }
+        }
+    }
 }
+
+/// How long a save waits for another process's save to finish before going ahead anyway: a save takes
+/// milliseconds, and a process stuck holding the lock must not stop this one from saving.
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How often a waiting save tries the lock again.
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// New files are owner-only; on a replace `craft-atomic` keeps the existing file's mode.
 #[cfg(all(unix, not(target_arch = "wasm32")))]

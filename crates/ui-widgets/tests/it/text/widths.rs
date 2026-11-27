@@ -31,6 +31,34 @@ fn a_small_field_is_narrower_than_a_standard_one() {
     }
 }
 
+/// A field asked for a width in characters takes it over the field length: 48 characters are wider than the field
+/// length, the width grows with the count, and `0` keeps the field length.
+#[trial]
+fn a_field_takes_the_width_of_the_characters_it_asks_for() {
+    let mut frames = Frames::new();
+    let shown = Cell::new([0.0; 4]);
+    let mut text = String::from("CONFIDENTIAL");
+    frames.idle(3, |ui| {
+        let width = |ui: &mut egui::Ui, text: &mut String, salt: &str, chars: Option<u16>| {
+            let field = TextField::new("Text", Bind::bound(text)).id_salt(salt);
+            let field = match chars {
+                Some(chars) => field.width_chars(chars),
+                None => field,
+            };
+            field.show(ui).response.rect.width()
+        };
+        let plain = width(ui, &mut text, "plain", None);
+        let zero = width(ui, &mut text, "zero", Some(0));
+        let wide = width(ui, &mut text, "wide", Some(48));
+        let wider = width(ui, &mut text, "wider", Some(64));
+        shown.set([plain, zero, wide, wider]);
+    });
+    let [plain, zero, wide, wider] = shown.get();
+    assert!((zero - plain).abs() < 0.01, "0 characters keep the field length: {zero} against {plain}");
+    assert!(wide > plain, "48 characters are wider than the field length: {wide} against {plain}");
+    assert!(wider > wide, "the width grows with the count: {wider} against {wide}");
+}
+
 /// A small number field with a pop-up slider shows "100%" whole before its chevron, and is no wider than its content
 /// needs: under a number cell, the chevron and a quarter cell. A field over a long range keeps one cell.
 #[trial]
@@ -62,7 +90,7 @@ fn a_small_percent_field_shows_its_value_whole_beside_the_chevron() {
     fixture.settle();
     let chevron = fixture.by_role(Role::BUTTON).first().unwrap_or_else(|| panic!("the field shows its chevron")).rect;
     let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
-    let value = painted("100").unwrap_or_else(|| panic!("the field shows its value"));
+    let value = painted("100.0").unwrap_or_else(|| panic!("the field shows its value"));
     let unit = painted("%").unwrap_or_else(|| panic!("the field shows its unit"));
     assert!(value.max.x <= unit.min.x, "the value ends before its unit: {value:?} {unit:?}");
     assert!(unit.max.x <= chevron.min.x, "the unit ends before the chevron: {unit:?} {chevron:?}");

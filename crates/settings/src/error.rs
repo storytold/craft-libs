@@ -3,7 +3,7 @@
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::time::Instant;
+use web_time::Instant;
 
 /// Why a schema migration step failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +38,14 @@ pub struct SectionError {
     /// The deserialization error.
     pub message: String,
 }
+
+impl fmt::Display for SectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "settings section [{}] was reset to defaults: {}", self.section, self.message)
+    }
+}
+
+impl std::error::Error for SectionError {}
 
 /// Why the store will not write `config.toml`.
 #[derive(Debug)]

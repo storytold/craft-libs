@@ -602,7 +602,8 @@ impl<M: TimelineModel> Timeline<'_, M> {
                     show_pane(ui, *side, indices);
                 }
                 if both {
-                    let split = SplitArea::pair(words.tracks.clone(), Axis::Y, (Side::Upper, Side::Lower), share, rules)
+                    // The rules read nothing that changes: their revision is fixed.
+                    let split = SplitArea::pair(words.tracks.clone(), Axis::Y, (Side::Upper, Side::Lower), share, rules, 0)
                         .divider_label(words.divider.clone())
                         .show(ui, |ui, body| {
                             for (side, rect) in body.group_frames::<Side>() {
@@ -872,8 +873,8 @@ pub struct TopStripStyle {
     metrics: Metrics,
 }
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The model of the pattern's registration probe: no tracks.
 struct EmptySequence(crate::time::TimeView);

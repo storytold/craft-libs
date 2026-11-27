@@ -612,6 +612,103 @@ fn table_look_bitmask_and_legacy_merges() {
     assert!(!l.header_row && l.total_row && l.first_column && !l.last_column && !l.banded_rows && l.banded_columns);
 }
 
+/// A table without `w:tblGrid` (template libraries leave it out) gets its grid from the cells'
+/// preferred widths, as Word rebuilds it on opening: the widest `w:tcW` among the cells that
+/// occupy a column alone, a spanning cell's width shared among the columns no cell sizes, and an
+/// inch for a column nothing sizes. A row after `w:gridBefore` starts at its own column.
+#[test]
+fn a_table_without_a_grid_takes_its_columns_from_the_cells() {
+    let body = r#"
+<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="auto"/></w:tblPr>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="24000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="30000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/><w:tr><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="1440" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+ <w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="4320" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:tbl><w:tblPr/>
+ <w:tr><w:tc><w:tcPr><w:tcW w:w="10" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:p/>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![300.0, 1200.0]);
+    let Block::Table(t) = &*d.body[1] else { panic!() };
+    assert_eq!(t.grid, vec![50.0, 125.0, 125.0]);
+    let Block::Table(t) = &*d.body[2] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 72.0]);
+    // A row after `w:gridBefore` starts at its own column: its cell sizes the second one.
+    let Block::Table(t) = &*d.body[3] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 216.0]);
+    // A tiny width is kept down to Word's narrowest column, 26 twips (measured), not 4 pt.
+    let Block::Table(t) = &*d.body[4] else { panic!() };
+    assert_eq!(t.grid, vec![1.3, 150.0]);
+}
+
+/// Spanning cells of a table without `w:tblGrid`, against the grid Word saves for the same cells
+/// (points; Word also merges columns no cell edge separates, which draws the same).
+#[test]
+fn spanning_cells_size_a_gridless_table_as_in_word() {
+    let tc = |w: u32, span: u32| format!(r#"<w:tc><w:tcPr><w:tcW w:w="{}" w:type="dxa"/><w:gridSpan w:val="{span}"/></w:tcPr><w:p/></w:tc>"#, w * 20);
+    let grid = |rows: &[&[(u32, u32)]]| {
+        let rows: String = rows.iter().map(|r| format!("<w:tr>{}</w:tr>", r.iter().map(|&(w, s)| tc(w, s)).collect::<String>())).collect();
+        let d = read_body(&format!("<w:tbl><w:tblPr/>{rows}</w:tbl><w:p/>"));
+        let Block::Table(t) = &*d.body[0] else { panic!() };
+        t.grid.clone()
+    };
+    // What a span lacks goes to its last column, in whichever order the rows come.
+    assert_eq!(grid(&[&[(100, 1), (100, 1)], &[(300, 2)]]), [100.0, 200.0]);
+    assert_eq!(grid(&[&[(300, 2)], &[(100, 1), (100, 1)]]), [100.0, 200.0]);
+    assert_eq!(grid(&[&[(50, 1), (50, 1)], &[(300, 2)], &[(50, 1), (70, 1)]]), [50.0, 250.0]);
+    // The widest of several spans over the same columns decides (Word: one column, 300).
+    assert_eq!(grid(&[&[(100, 2)], &[(300, 2)]]).iter().sum::<f32>(), 300.0);
+    assert_eq!(grid(&[&[(300, 2)], &[(100, 2)]]), grid(&[&[(100, 2)], &[(300, 2)]]));
+    assert_eq!(grid(&[&[(100, 2), (100, 1)], &[(300, 2), (100, 1)]]).iter().sum::<f32>(), 400.0);
+    // Overlapping spans are taken from the left.
+    assert_eq!(grid(&[&[(100, 2), (100, 1)], &[(50, 1), (300, 2)]]), [50.0, 50.0, 250.0]);
+    assert_eq!(grid(&[&[(100, 2), (100, 2)], &[(40, 1), (200, 2), (40, 1)]]), [40.0, 60.0, 140.0, 40.0]);
+    assert_eq!(grid(&[&[(40, 1), (200, 2), (40, 1)], &[(100, 2), (100, 2)]]), [40.0, 60.0, 140.0, 40.0]);
+    assert_eq!(grid(&[&[(300, 3)], &[(100, 2), (50, 1)], &[(30, 1), (30, 1), (30, 1)]]), [30.0, 70.0, 200.0]);
+    // A span narrower than its columns narrows nothing.
+    assert_eq!(grid(&[&[(100, 1), (100, 1)], &[(50, 2)]]), [100.0, 100.0]);
+    // A span past the last column, and a width that means nothing, break nothing.
+    assert!((grid(&[&[(100, 1), (100, 1)], &[(500, 9)]]).iter().sum::<f32>() - 500.0).abs() < 0.01);
+    let d = read_body(
+        r#"<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w="NaN" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="-40" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#,
+    );
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 72.0]);
+    // An empty `w:tblGrid` is a grid all the same: the columns keep their inch.
+    let d =
+        read_body(r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![72.0]);
+    // The narrowest column counts before a span shares out what it lacks: the span keeps its width.
+    let d = read_body(
+        r#"<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w="10" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#,
+    );
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid[0], 1.3);
+    assert!((t.grid.iter().sum::<f32>() - 100.0).abs() < 0.01, "{:?}", t.grid);
+    // A span cut off at the last column kept gives the rest to no other column.
+    let ones = tc(20, 1).repeat(62);
+    let d = read_body(&format!("<w:tbl><w:tblPr/><w:tr>{ones}{}</w:tr><w:tr>{ones}{}</w:tr></w:tbl><w:p/>", tc(50, 1), tc(300, 2)));
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid.len(), 63);
+    assert_eq!(t.grid[62], 50.0);
+    // With no width of its own there, the kept column takes its share of the span, not all of it.
+    let d = read_body(&format!("<w:tbl><w:tblPr/><w:tr>{ones}</w:tr><w:tr>{ones}{}</w:tr></w:tbl><w:p/>", tc(300, 2)));
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid.len(), 63);
+    assert_eq!(t.grid[62], 150.0);
+}
+
 #[test]
 fn styles_numbering_settings_notes_comments_from_parts() {
     let styles = format!(
@@ -1183,17 +1280,17 @@ fn compatibility_mode_is_read_and_defaults_to_word_2007() {
     let compat = |v: &str| {
         format!(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{v}"/></w:compat>"#)
     };
-    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, 15);
-    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, 14);
+    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, Some(15));
+    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, Some(14));
     // Unnamed, out of range or junk values.
-    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(None).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
-    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, 11);
-    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, 99);
-    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, None);
+    assert_eq!(with_settings(None).settings.compat_mode, None);
+    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, Some(11));
+    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, Some(99));
+    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, None);
     // Another vendor's setting of the same name is ignored.
     let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
-    assert_eq!(with_settings(Some(other)).settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some(other)).settings.compat_mode, None);
 }
 
 #[test]
@@ -1361,7 +1458,9 @@ fn anchor_stacking_order_is_read_and_kept() {
 
 #[test]
 fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
-    assert_eq!(read_body("<w:p/>").settings.compat_mode, craft_wordmodel::LEGACY_COMPAT_MODE);
+    let d = read_body("<w:p/>");
+    assert_eq!(d.settings.compat_mode, None);
+    assert_eq!(d.settings.effective_compat_mode(), craft_wordmodel::LEGACY_COMPAT_MODE);
 }
 
 #[test]
@@ -1639,6 +1738,39 @@ fn body_cell_vml_picture_stays_in_its_cell() {
         .flat_map(|p| p.objects.iter().filter_map(|o| o.frame()).map(|(_, _, f)| f.outside_cell))
         .collect();
     assert_eq!(floats, vec![false]);
+}
+
+/// A VML shape in a body table cell with Layout in table cell off (`o:allowincell="f"`, which
+/// Word writes for such a shape in a document in Word 2003 compatibility mode, user-checked) is
+/// placed outside its cell, as Word draws it: beside the table, and the cell's text doesn't wrap
+/// around it. Without the attribute, or with it on, the shape stays laid out in its cell. Both
+/// survive save and reopen.
+#[test]
+fn body_cell_vml_shape_with_layout_in_cell_off_is_placed_outside_the_cell() {
+    let shape = |allow: &str| {
+        format!(
+            r##"<w:r><w:pict><v:shape id="Box1" type="#_x0000_t202" style="position:absolute;margin-left:-60pt;margin-top:4pt;width:48pt;height:40pt;z-index:251659264;mso-position-horizontal-relative:text;mso-position-vertical-relative:text" {allow} filled="f"><v:textbox><w:txbxContent><w:p><w:r><w:t>ICON</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="topAndBottom"/></v:shape></w:pict></w:r>"##
+        )
+    };
+    let floats = |d: &Document| -> Vec<(bool, Wrap)> {
+        let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+        t.rows[0].cells[0]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter().filter_map(|o| o.frame()).map(|(_, _, f)| (f.outside_cell, f.wrap)))
+            .collect()
+    };
+    for (allow, outside) in [(r#"o:allowincell="f""#, true), (r#"o:allowincell="false""#, true), (r#"o:allowincell="t""#, false), ("", false)] {
+        let run = shape(allow);
+        let body = format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="7200"/></w:tblGrid><w:tr><w:tc><w:p>{run}<w:r><w:t>Box title</w:t></w:r></w:p><w:p><w:r><w:t>Box text</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#
+        );
+        let d = craft_docx::read(&docx(&body, &[], &[])).unwrap();
+        assert_eq!(floats(&d), vec![(outside, Wrap::TopAndBottom)], "{allow}");
+        let d2 = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(floats(&d2), vec![(outside, Wrap::TopAndBottom)], "saved: {allow}");
+    }
 }
 
 /// Issue #149: an absolutely positioned VML text box in a header floats where its style puts it
@@ -2574,6 +2706,42 @@ fn move_revisions_round_trip() {
     let to_end = xml.find("<w:moveToRangeEnd").unwrap();
     assert!(xml[to_start..to_end].contains("</w:p>"), "{xml}");
     check(&craft_docx::read(&out).unwrap());
+}
+
+/// Two insertions by one author with one local `w:date`, told apart (or not) by `dateUtc`.
+fn two_insertions_at_one_local_time(utc: [&str; 2]) -> String {
+    let ins = |id: u32, utc: &str, text: &str| {
+        format!(r#"<w:ins w:id="{id}" w:author="Ada" w:date="2026-11-01T01:30:00Z" {utc}><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:ins>"#)
+    };
+    format!("<w:p>{}{}</w:p>", ins(1, utc[0], " One"), ins(2, utc[1], " Two"))
+}
+
+/// Issue #3206: a tracked change's `dateUtc` is read under any prefix bound to Word's namespace
+/// for it, and saved under that namespace.
+#[test]
+fn a_tracked_change_utc_time_is_read_under_any_prefix_for_its_namespace() {
+    let du = r#"xmlns:du="http://schemas.microsoft.com/office/word/2023/wordml/word16du""#;
+    let body = two_insertions_at_one_local_time([
+        &format!(r#"{du} du:dateUtc="2026-11-01T05:30:00Z""#),
+        &format!(r#"{du} du:dateUtc="2026-11-01T06:30:00Z""#),
+    ]);
+    let d = read_body(&body);
+    let utc: Vec<_> = d.revisions.iter().map(|r| r.date_utc.as_deref()).collect();
+    assert_eq!(utc, [Some("2026-11-01T05:30:00Z"), Some("2026-11-01T06:30:00Z")]);
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert_eq!(attr_values(&xml, "w:ins", "w16du:dateUtc"), ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"]);
+}
+
+/// Issue #3206: an unqualified `dateUtc` doesn't say it's Word's UTC time, so it neither tells
+/// changes apart nor is saved under Word's namespace.
+#[test]
+fn an_unqualified_date_utc_is_not_a_tracked_change_utc_time() {
+    let body = two_insertions_at_one_local_time([r#"dateUtc="2026-11-01T05:30:00Z""#, r#"dateUtc="2026-11-01T06:30:00Z""#]);
+    let d = read_body(&body);
+    assert_eq!(d.revisions.len(), 1, "one author, kind and local date is one change");
+    assert_eq!(d.revisions[0].date_utc, None);
+    let xml = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert!(!xml.contains("dateUtc="), "{xml}");
 }
 
 /// A document's own footnote separators and continuation notice are kept (ECMA-376 §17.11), and

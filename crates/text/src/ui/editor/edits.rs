@@ -7,7 +7,7 @@ use std::ops::Range;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{Granularity, MoveMods, NavMove, SurroundingUnit};
 
-use super::{EditKind, TextEditorHost, TextSelection};
+use super::{EditKind, TextEditorCommand, TextEditorHost, TextSelection};
 use crate::quotes::{QuoteStyle, smart_quotes};
 
 /// Most clicks in a run that select more: 2 a word, 3 a line, 4 a paragraph, 5 all text.
@@ -26,6 +26,9 @@ pub(super) struct Session {
     pub dragging: Option<u32>,
     /// The chars the press selected, which a drag by word, line or paragraph keeps selected.
     pub drag_origin: Range<usize>,
+    /// The word a double press selected: the Shift-clicks after it extend from the whole word, in either direction,
+    /// while the selection holds it. A key move, Select All or a plain press ends it.
+    pub word: Option<Range<usize>>,
     /// The pass time of the last edit, move or press: the caret blink restarts from it.
     pub blink_start: f64,
     /// Length and hash of the host's text as the last pass left it.
@@ -40,6 +43,8 @@ pub(super) struct Done {
     pub changed: bool,
     pub commit: bool,
     pub cancel: bool,
+    pub next: bool,
+    pub previous: bool,
 }
 
 /// Length and hash of `text`, to tell whether it changed between passes.
@@ -180,13 +185,15 @@ impl Edits<'_> {
         self.clamp_selection();
     }
 
-    /// Replace `range` through the host and put the caret after the new text.
-    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> bool {
-        if !self.host.replace(range.clone(), text, kind) {
-            return false;
-        }
-        self.selection = TextSelection::caret_at(range.start + text.chars().count());
-        true
+    /// Replace `range` through the host and put the caret after the chars the host inserted. Returns them, `None`
+    /// when the host refused.
+    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> Option<Range<usize>> {
+        let kept = self.host.replace(range.clone(), text, kind)?;
+        let chars = self.chars();
+        let start = range.start.min(chars);
+        let end = start.saturating_add(kept).min(chars);
+        self.selection = TextSelection::caret_at(end);
+        Some(start..end)
     }
 
     /// Replace the selection with `text` (line endings become `\n`). An application edit ends a live composition.
@@ -196,7 +203,7 @@ impl Edits<'_> {
         if range.is_empty() && text.is_empty() {
             return false;
         }
-        if !self.replace(range, &text, kind) {
+        if self.replace(range, &text, kind).is_none() {
             return false;
         }
         self.end_composition();
@@ -223,7 +230,7 @@ impl Edits<'_> {
     /// Delete the selection ([`EditKind::Deleted`]); the caller has copied it.
     pub fn delete_selection(&mut self) -> bool {
         let range = self.clamped();
-        !range.is_empty() && self.replace(range, "", EditKind::Deleted)
+        !range.is_empty() && self.replace(range, "", EditKind::Deleted).is_some()
     }
 
     /// New marked text (or its end, with empty `text`). Returns the range of marked text that ended, for a commit
@@ -238,10 +245,11 @@ impl Edits<'_> {
         }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let range = marked.unwrap_or_else(|| self.clamped());
-        if self.replace(range.clone(), &text, EditKind::Composing) {
-            self.session.preedit = Some(range.start..range.start + text.chars().count());
-            self.session.preedit_text = text;
-            self.session.preedit_active = active;
+        if let Some(written) = self.replace(range, &text, EditKind::Composing) {
+            // The marked text is what the host kept of it.
+            self.session.preedit_text = char_slice(self.host.text(), &written);
+            self.session.preedit_active = active.filter(|a| a.end <= written.len());
+            self.session.preedit = Some(written);
             self.done.changed = true;
         }
         None
@@ -250,14 +258,14 @@ impl Edits<'_> {
     /// The text a composition committed, replacing its `marked` range.
     pub fn commit_marked(&mut self, marked: Range<usize>, text: &str) {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        if self.replace(marked, &text, EditKind::Committed) {
+        if self.replace(marked, &text, EditKind::Committed).is_some() {
             self.done.changed = true;
         }
     }
 
     /// The marked text that ended without a commit is deleted.
     pub fn drop_marked(&mut self, marked: Range<usize>) {
-        if self.replace(marked, "", EditKind::Composing) {
+        if self.replace(marked, "", EditKind::Composing).is_some() {
             self.done.changed = true;
         }
     }
@@ -278,10 +286,10 @@ impl Edits<'_> {
             return false;
         }
         // The trailing run first, so the leading run's offsets stay valid.
-        if end < to && !self.host.replace(end..to, "", EditKind::Deleted) {
+        if end < to && self.host.replace(end..to, "", EditKind::Deleted).is_none() {
             return false;
         }
-        if from < start && !self.host.replace(from..start, "", EditKind::Deleted) {
+        if from < start && self.host.replace(from..start, "", EditKind::Deleted).is_none() {
             return false;
         }
         let shift = start - from;
@@ -297,6 +305,24 @@ impl Edits<'_> {
         self.selection.caret = to.min(self.chars());
         if !extend {
             self.selection.anchor = self.selection.caret;
+        }
+    }
+
+    /// Runs one of the session's commands. Commit and Cancel wait while a composition is open: the key belongs to the
+    /// input method then. The Character panel toggle sets `character_panel`.
+    pub fn command(&mut self, command: TextEditorCommand, character_panel: &mut bool) {
+        match command.along_flow(self.host.vertical()) {
+            TextEditorCommand::Commit => self.done.commit |= self.session.preedit.is_none(),
+            TextEditorCommand::Cancel => self.done.cancel |= self.session.preedit.is_none(),
+            TextEditorCommand::CharacterPanel => *character_panel = true,
+            command => {
+                if let Some(key) = command.style_key(self.selection.is_empty()) {
+                    let handled = self.host.style_key(key, self.selection);
+                    if !handled && let Some((step, mods)) = command.fallback() {
+                        self.move_along(step, mods);
+                    }
+                }
+            }
         }
     }
 
@@ -342,6 +368,7 @@ impl Edits<'_> {
             NavMove::PageDown => chars,
             _ => caret,
         };
+        self.session.word = None;
         self.move_caret(to, mods.extend);
     }
 
@@ -367,11 +394,12 @@ impl Edits<'_> {
         if range.is_empty() {
             return false;
         }
-        self.replace(range, "", EditKind::Deleted)
+        self.replace(range, "", EditKind::Deleted).is_some()
     }
 
     /// Select everything.
     pub fn select_all(&mut self) {
+        self.session.word = None;
         self.selection = TextSelection { anchor: 0, caret: self.chars() };
     }
 
@@ -383,15 +411,31 @@ impl Edits<'_> {
         let chars = self.chars();
         let offset = offset.min(chars);
         let count = click_count(clicks);
-        self.selection.caret = offset;
-        if !shift {
-            self.selection.anchor = offset;
-        }
+        let selected = self.selection.range();
+        // A Shift-click after a double press extends from the whole word: the far end of the word stays, whichever
+        // side the click is on, and a click inside the word keeps just the word.
+        let word = self.session.word.take().filter(|word| shift && count == 1 && selected.start <= word.start && word.end <= selected.end);
         self.session.drag_origin = offset..offset;
+        if let Some(word) = word {
+            self.selection = if offset < word.start {
+                TextSelection { anchor: word.end, caret: offset }
+            } else if offset > word.end {
+                TextSelection { anchor: word.start, caret: offset }
+            } else {
+                TextSelection { anchor: word.start, caret: word.end }
+            };
+            self.session.word = Some(word);
+        } else {
+            self.selection.caret = offset;
+            if !shift {
+                self.selection.anchor = offset;
+            }
+        }
         if count >= 2 {
             let line = (count == 3).then(|| self.host.line_range(line));
             let range = click_selection(self.host.text(), offset, line, count);
             self.selection = TextSelection { anchor: range.start, caret: range.end };
+            self.session.word = (count == 2 && !range.is_empty()).then(|| range.clone());
             self.session.drag_origin = range;
         }
         self.session.dragging = Some(count);

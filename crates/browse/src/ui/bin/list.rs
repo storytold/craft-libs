@@ -103,7 +103,7 @@ where
     let thumb = state.settings.thumbnails;
     let specs = columns_of(columns, &state.settings.widths, words.name.clone());
     let value_columns: Vec<ColumnKey> = specs.iter().map(|spec| spec.key.clone()).filter(|key| *key != NAME).collect();
-    let mods = craft_ui::runtime::pointer::frame(ui.ctx()).mods;
+    let mods = craft_ui::runtime::pointer::mods(ui.ctx());
     let tile_words = Env::of(ui).words::<TileWords>();
     if let Some(key) = rename {
         request_rename(ui.ctx(), id, &key);
@@ -179,7 +179,7 @@ where
     }
     for event in out.events {
         match event {
-            CollectionEvent::Selection(change) => events.push(BinEvent::Selection(change)),
+            CollectionEvent::Selection { change, .. } => events.push(BinEvent::Selection(change)),
             CollectionEvent::Activate(key) => events.push(open_event(model, key, mods.cmd, mods.shift || mods.alt)),
             CollectionEvent::ContextMenu(request) => events.push(BinEvent::ContextMenu(request)),
             CollectionEvent::Delete(keys) => events.push(BinEvent::Remove(keys)),

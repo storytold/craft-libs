@@ -10,14 +10,14 @@ use crate::stroke::StrokeStyle;
 
 use super::shape_drag::{BoxConstraints, ShapeDragOptions, ShapeKind};
 
-mod arrowheads;
-mod bar;
-mod gear;
-mod mode_select;
-mod panel;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod arrowheads;
+pub(crate) mod bar;
+pub(crate) mod gear;
+pub(crate) mod mode_select;
+pub(crate) mod panel;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
-mod stroke_cells;
+pub(crate) mod stroke_cells;
 mod words;
 
 pub use arrowheads::{ArrowheadsOutput, ArrowheadsPopover};
@@ -29,7 +29,7 @@ pub use stroke_cells::{StrokeCells, StrokeCellsOutput};
 pub use words::ShapeWords;
 
 /// The drawing mode of the vector tools.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum VectorMode {

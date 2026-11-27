@@ -13,6 +13,18 @@ fn session() -> BoxState {
     BoxState::from_rect(Rect::new(0.0, 0.0, 100.0, 50.0))
 }
 
+#[test]
+fn corner_drag_preserves_the_offset_of_the_press() {
+    let start = session();
+    let press = p(96.0, 47.0);
+    let rules = BoxRules::default();
+    let back = drag(&start, &start, BoxPart::Corner(2), press, press, Mods::default(), &rules);
+    assert_eq!(back, start, "returning to the press must restore the box");
+    let moved = drag(&start, &start, BoxPart::Corner(2), press, press + Vec2::new(20.0, 10.0), Mods::SHIFT, &rules);
+    assert!(near(moved.quad[2], start.quad[2] + Vec2::new(20.0, 10.0)), "the corner follows the movement, keeping the press offset");
+    assert!(near(moved.quad[0], start.quad[0]), "the opposite corner stays fixed");
+}
+
 fn dragged(from: Point, to: Point, mods: Mods, rules: &BoxRules) -> BoxState {
     let start = session();
     drag(&start, &start, start.part_at(from, 8.0), from, to, mods, rules)
@@ -29,6 +41,15 @@ fn corners_are(s: &BoxState, x0: f64, y0: f64, x1: f64, y1: f64) -> bool {
 
 fn turns(q: &[Point; 4]) -> [f64; 4] {
     std::array::from_fn(|k| (q[(k + 1) % 4] - q[k]).cross(q[(k + 2) % 4] - q[(k + 1) % 4]))
+}
+
+#[test]
+fn proportional_corner_uses_the_larger_relative_drag_even_when_shrinking() {
+    let rules = BoxRules::default().with_scale(ScaleRule::LargerAxis);
+    let wider = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::NONE, &rules);
+    assert!(corners_are(&wider, 0.0, 0.0, 200.0, 100.0));
+    let smaller = dragged(p(100.0, 50.0), p(75.0, 50.0), Mods::NONE, &rules);
+    assert!(corners_are(&smaller, 0.0, 0.0, 75.0, 37.5));
 }
 
 #[test]
@@ -90,6 +111,29 @@ fn a_distort_corner_stops_before_the_box_folds() {
     let flat = BoxState::new([p(0.0, 0.0), p(1.0, 0.0), p(2.0, 0.0), p(3.0, 0.0)], p(1.5, 0.0));
     let q = drag(&flat, &flat, BoxPart::Corner(0), p(0.0, 0.0), p(5.0, 5.0), Mods::CMD, &rules).quad;
     assert_eq!(q, [p(5.0, 5.0), p(1.0, 0.0), p(2.0, 0.0), p(3.0, 0.0)]);
+}
+
+#[test]
+fn a_corners_box_keeps_a_corner_proportional_until_shift_and_stretches_an_edge_on_one_axis() {
+    let linked = BoxRules::default().with_scale(ScaleRule::Corners);
+    let unlinked = linked.with_aspect_linked(false);
+    for rules in [&linked, &unlinked] {
+        // A plain corner keeps the proportions along the diagonal, whatever the aspect link says.
+        let kept = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::NONE, rules);
+        assert!(corners_are(&kept, 0.0, 0.0, 184.0, 92.0), "{:?}", kept.quad);
+        // ⇧ frees them.
+        let freed = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::SHIFT, rules);
+        assert!(corners_are(&freed, 0.0, 0.0, 200.0, 60.0), "{:?}", freed.quad);
+        // The right edge's middle stretches only x, with ⇧ or without.
+        for mods in [Mods::NONE, Mods::SHIFT] {
+            let edge = dragged(p(100.0, 25.0), p(150.0, 40.0), mods, rules);
+            assert!(corners_are(&edge, 0.0, 0.0, 150.0, 50.0), "{mods:?}: {:?}", edge.quad);
+        }
+    }
+    // A ⌘ corner distorts as it does under the default rule: the gesture is left alone.
+    let distorted = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::CMD, &linked);
+    assert_eq!(distorted, dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::CMD, &BoxRules::default()));
+    assert!(near(distorted.quad[2], p(200.0, 60.0)) && near(distorted.quad[0], p(0.0, 0.0)), "{:?}", distorted.quad);
 }
 
 #[test]

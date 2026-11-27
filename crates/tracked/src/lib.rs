@@ -305,13 +305,13 @@ impl<T: PlainData> Tracked<T> {
         f(&mut **self)
     }
 
-    /// Called by craft-ui's `bind_tracked!` only: the value without moving the revision, and the write count. The
-    /// macro borrows each bound field from the value through a field path and gives the binding the count, which it
-    /// moves on every write that changes the field. A direct call can write any part of the value without moving the
+    /// Called by craft-ui's `bind_tracked!` only: the value without moving the revision, the write count and the
+    /// source id. The macro borrows each bound field from the value through a field path and gives the binding the
+    /// count, which it moves on every write that changes the field, and the source, which names the field's reads. A direct call can write any part of the value without moving the
     /// revision, so readers keyed by it would miss the write; design-lint rejects direct calls in UI crates.
     #[doc(hidden)]
-    pub fn __split_for_bind(&mut self) -> (&mut T, &Cell<u64>) {
-        (&mut self.value, Cell::from_mut(&mut self.revision.count))
+    pub fn __split_for_bind(&mut self) -> (&mut T, &Cell<u64>, u64) {
+        (&mut self.value, Cell::from_mut(&mut self.revision.count), self.revision.source)
     }
 
     /// The value, leaving the tracking.
@@ -323,6 +323,38 @@ impl<T: PlainData> Tracked<T> {
 impl<T: PlainData + Clone> Clone for Tracked<T> {
     fn clone(&self) -> Tracked<T> {
         Tracked::new(self.value.clone())
+    }
+}
+
+/// `value`, as a new source at count 0 ([`Tracked::new`]).
+impl<T: PlainData> From<T> for Tracked<T> {
+    fn from(value: T) -> Tracked<T> {
+        Tracked::new(value)
+    }
+}
+
+/// Equal values compare equal, whatever their revisions.
+impl<T: PlainData + PartialEq> PartialEq for Tracked<T> {
+    fn eq(&self, other: &Tracked<T>) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T: PlainData + Eq> Eq for Tracked<T> {}
+
+/// Saved as its value.
+#[cfg(feature = "serde")]
+impl<T: PlainData + serde::Serialize> serde::Serialize for Tracked<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(serializer)
+    }
+}
+
+/// Loaded as a new source.
+#[cfg(feature = "serde")]
+impl<'de, T: PlainData + serde::Deserialize<'de>> serde::Deserialize<'de> for Tracked<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tracked<T>, D::Error> {
+        T::deserialize(deserializer).map(Tracked::new)
     }
 }
 

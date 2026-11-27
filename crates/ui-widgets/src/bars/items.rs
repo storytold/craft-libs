@@ -11,7 +11,7 @@ use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, GlyphRole, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, GlyphRole, StyleCx};
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Axis, IconId, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_theme::Variant;
@@ -21,7 +21,7 @@ const ITEM: PartKey = PartKey::new("item");
 const MORE: PartKey = PartKey::new("more");
 
 /// What an item shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ItemDisplay {
     /// The command's icon; the label is the tooltip and the accessible name. A command with no icon shows `Text`.
@@ -34,7 +34,7 @@ pub enum ItemDisplay {
 }
 
 /// What the "More" menu of a `BarItems` strip lists.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum MoreMenu {
     /// The items the strip has no room for, and the `Menu` items; "More" shows only when there are any.
@@ -45,7 +45,7 @@ pub enum MoreMenu {
 }
 
 /// One command of a `BarItems` strip.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct BarItem {
     /// The command the item shows and runs.
@@ -89,11 +89,13 @@ impl BarItem {
 
 /// The style of a bar item strip: the gap between items, the space around the rule of a section change and the
 /// space between the groups of a vertical strip.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct BarItemsStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// Between an item and the rule of a section change.
     joint: f32,
     /// The clear space of a section change, on both sides of its rule together.
@@ -108,7 +110,7 @@ pub struct BarItemsStyle {
 #[derive(Clone)]
 struct Present {
     item: BarItem,
-    resolved: ResolvedCommand,
+    resolved: std::sync::Arc<ResolvedCommand>,
 }
 
 /// Where the parts of a strip sit this pass.
@@ -136,25 +138,26 @@ struct Group {
 
 /// What an item's part wears.
 enum Face {
-    Action(IconButton<'static>),
-    Toggle(ToggleButton<'static>),
-    Text(Button<'static>),
+    // Boxed: each button face is several hundred bytes.
+    Action(Box<IconButton<'static>>),
+    Toggle(Box<ToggleButton<'static>>),
+    Text(Box<Button<'static>>),
 }
 
 impl Face {
     fn size<C: Component>(self, cx: &MeasureCx<'_, C>) -> Vec2 {
         match self {
-            Face::Action(face) => cx.face(face),
-            Face::Toggle(face) => cx.face(face),
-            Face::Text(face) => cx.face(face),
+            Face::Action(face) => cx.face(*face),
+            Face::Toggle(face) => cx.face(*face),
+            Face::Text(face) => cx.face(*face),
         }
     }
 
     fn paint(self, ui: &mut PaintUi<'_>, part: PartRef) {
         match self {
-            Face::Action(face) => ui.face(part, face),
-            Face::Toggle(face) => ui.face(part, face),
-            Face::Text(face) => ui.face(part, face),
+            Face::Action(face) => ui.face(part, *face),
+            Face::Toggle(face) => ui.face(part, *face),
+            Face::Text(face) => ui.face(part, *face),
         }
     }
 }
@@ -176,12 +179,14 @@ fn face_of(present: &Present, glyphs: GlyphRole) -> Face {
     let icon = icon_of(resolved);
     let toggle = resolved.checked.is_some();
     match (display_of(present), icon) {
-        (ItemDisplay::Icon, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon).icon_only().glyphs(glyphs)),
-        (ItemDisplay::Icon, Some(icon)) => Face::Action(IconButton::command(icon, item.command.clone()).glyphs(glyphs)),
-        (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon)),
-        (ItemDisplay::IconText, Some(icon)) => Face::Text(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon)),
-        (_, _) if toggle => Face::Toggle(ToggleButton::command(item.command.clone())),
-        (_, _) => Face::Text(Button::command(item.command.clone()).variant(Variant::GHOST)),
+        (ItemDisplay::Icon, Some(icon)) if toggle => {
+            Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon).icon_only().glyphs(glyphs)))
+        }
+        (ItemDisplay::Icon, Some(icon)) => Face::Action(Box::new(IconButton::command(icon, item.command.clone()).glyphs(glyphs))),
+        (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon))),
+        (ItemDisplay::IconText, Some(icon)) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon))),
+        (_, _) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()))),
+        (_, _) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST))),
     }
 }
 
@@ -302,6 +307,7 @@ impl Component for BarItems {
         let gap = cx.tokens.space.gap.inline;
         BarItemsStyle {
             metrics: Metrics::new().gap(gap),
+            focus: cx.focus_look(),
             joint: gap,
             section_gap: gap * 2.0,
             stack_gap: gap + cx.tokens.space.gap.stack,
@@ -383,7 +389,9 @@ impl Component for BarItems {
             slot(rect, axis, rtl, from, more_length)
         });
         for &(index, cell) in &shown {
-            let part = cx.part(ITEM.at(index as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            // An edit command's item keeps the focus where it is, so the edit reaches the focused component.
+            let sense = if present[index].resolved.edit { Sense::CLICK | Sense::FOCUS | Sense::KEEP_FOCUS } else { Sense::CLICK | Sense::FOCUS };
+            let part = cx.part(ITEM.at(index as u64), cell).sense(sense).focusable();
             if display_of(&present[index]) == ItemDisplay::Icon {
                 let resolved = &present[index].resolved;
                 part.tooltip(match &resolved.chord {

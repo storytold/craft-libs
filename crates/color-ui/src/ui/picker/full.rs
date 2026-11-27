@@ -18,8 +18,9 @@ use super::{Collected, ColorPicker, ColorPickerWords, Pass, PickedColor};
 use crate::ui::{AreaMode, AreaShape, CompareSwatch};
 
 /// Two columns that never stack: the two halves of the picker, the right half (compare block and actions over the two
-/// field groups), and each field group (the radio cell, then the channel's letter, field and unit).
-const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
+/// field groups), each field group (the radio cell, then the channel's letter, field and unit), and the dialog's Color
+/// Swatches view (the swatches, then the buttons' cell).
+pub(crate) const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
 
 /// The models the picker shows and the area modes it offers.
 #[derive(Clone, Copy)]
@@ -84,8 +85,9 @@ impl<'a> Body<'a> {
     }
 
     /// The compare block, the colour being edited over the one the picker started from, with the warnings column after
-    /// it; a click on the current half or on a warning sets that colour.
-    fn compare_block(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
+    /// it; a click on the current half or on a warning sets that colour. The Compact layout shows it beside its area
+    /// when the host gives a compare colour.
+    pub(super) fn compare_block(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
         let current = match pass.compare {
             Mixed::Same(current) => Mixed::Same(current.color),
             Mixed::Mixed => Mixed::Mixed,

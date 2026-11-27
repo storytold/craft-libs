@@ -5,6 +5,7 @@ use super::context::{Cx, CxCore};
 use super::item::ItemCx;
 use super::measure::MeasureCx;
 use crate::contract::Component;
+use crate::primitives::ContentPainterCx;
 use crate::runtime::env::Label;
 use craft_i18n::{Format, WordSet};
 use std::sync::Arc;
@@ -89,5 +90,20 @@ impl<K> WordSetCx for ItemCx<'_, '_, K> {
 
     fn format(&self) -> &Format {
         self.env.format()
+    }
+}
+
+impl WordSetCx for ContentPainterCx<'_> {
+    /// A content painter has no label of its own: the empty label.
+    fn label(&self) -> Label {
+        Label::default()
+    }
+
+    fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L> {
+        ContentPainterCx::words(self)
+    }
+
+    fn format(&self) -> &Format {
+        ContentPainterCx::format(self)
     }
 }

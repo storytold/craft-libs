@@ -212,7 +212,8 @@ impl<'a> FullWindowCanvas<'a> {
             // flow; the canvas itself has no content size, so a content-sized column around it (a preview pane in a
             // side column) sizes from its other content instead of taking the whole room the canvas is offered.
             let rect = ui.available_rect_before_wrap();
-            let shown = given.settled(rect, size, ppp);
+            let scheme = Env::of_root(ui.ctx()).view().get::<craft_behavior::ZoomScheme>();
+            let shown = given.settled(rect, size, ppp, &scheme);
             // What the tool host did; none in a measuring run, where it does not run.
             let mut hosted = None;
             let canvas = Canvas::new(label.clone()).view(shown.view()).document(shown.size()).navigation(navigation).outer_view_commands().show_at(
@@ -272,7 +273,12 @@ impl<'a> FullWindowCanvas<'a> {
                 let event = EditEvent::set(Mixed::Same(given), next, name.clone(), None);
                 let _ = bind.write(cx, &event);
             }
-            let hover = output.response.hover_pos().filter(|_| output.response.hovered()).map(|at| next.view().to_doc(at));
+            let hover = output
+                .response
+                .hovered()
+                .then(|| crate::runtime::pointer::hover_point_in(ui.ctx(), output.response.rect))
+                .flatten()
+                .map(|at| next.view().to_doc(at));
             FullWindowCanvasOutput { response: output.response, hover, tool: hosted }
         });
         root.inner.unwrap_or_else(|| FullWindowCanvasOutput { response: root.output, hover: None, tool: ToolHostResponse::default() })

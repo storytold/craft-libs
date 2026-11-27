@@ -21,8 +21,8 @@ use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 use super::WarpMesh;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The bend of both arcs the Cylinder starts with, in units of the half axis: about a quarter of the width.
 const DEFAULT_DEPTH: f64 = 0.5;
@@ -405,7 +405,7 @@ impl Component for CylinderWarp<'_> {
                 results.push((handle, result.press));
             }
         }
-        if let Some((hover_pos, press)) = cx.part_if_declared(BODY).map(|result| (result.hover_pos, result.press)) {
+        if let Some((hover_pos, press)) = cx.part_if_declared(BODY).map(|result| (cx.hover_pos(BODY), result.press)) {
             let on_surface = hover_pos.is_some_and(|at| self.mesh.surface_at(space.view.to_doc(at)).is_some());
             if on_surface {
                 cx.cursor(CursorIcon::Move, craft_behavior::CursorPriority::Part);

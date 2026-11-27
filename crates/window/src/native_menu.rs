@@ -15,6 +15,8 @@
 //! - A change of [`Bar::structure`] rebuilds every menu; a change of [`Bar::windows`] rebuilds only
 //!   the [`MenuKind::Windows`] menu, because AppKit adds its own items there. Anything else is
 //!   updated in place (label, enabled, checked).
+//! - When a rebuild fails, the menus stay as they were and [`NativeBar::failed`] reports it, so
+//!   the caller can apply the same bar again later.
 //! - While a menu is open ([`NativeBar::tracking`]) the caller waits to apply changes: replacing a
 //!   menu the platform is tracking can leave it stranded on screen.
 //! - Only items with a [`Shortcut`] become key equivalents; the caller decides which shortcuts
@@ -38,6 +40,9 @@ pub use imp::{hide_app, hide_other_apps, install_app_menu, system_title};
 /// that chose the item, on the main thread. An id the app does not know belongs to a platform item (Services, Zoom, …), which the
 /// platform already handled.
 pub type Handler = Arc<dyn Fn(&str, Chosen) + Send + Sync>;
+
+/// Called from any thread when menu tracking ends, so the app repaints and applies the changes it held back.
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// How a menu item was chosen: by a key equivalent or a click, and the modifiers held then.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -249,6 +254,17 @@ impl Options {
     }
 }
 
+/// Whether a menu is open. Safe from any thread; false where there is no application menu bar.
+pub fn menu_tracking() -> bool {
+    imp::menu_tracking()
+}
+
+/// Whether a menu began tracking since the last call, which clears it. Safe from any thread; false where there is
+/// no application menu bar.
+pub fn take_menu_began() -> bool {
+    imp::take_menu_began()
+}
+
 /// The installed menu bar.
 pub struct NativeBar(imp::Installed);
 
@@ -256,9 +272,10 @@ impl NativeBar {
     /// Make `bar` the application's menu bar. Call it once, on the main thread, before the event
     /// loop starts menus of its own. `None` when the platform refused the menus (the app keeps its
     /// in-window menus), off the main thread, when a bar is already installed, or on a platform
-    /// without an application menu bar. It replaces a menu from [`install_app_menu`].
-    pub fn install(bar: &Bar, options: Options) -> Option<NativeBar> {
-        imp::Installed::install(bar, options).map(NativeBar)
+    /// without an application menu bar. It replaces a menu from [`install_app_menu`]. `wake` is called when menu
+    /// tracking ends.
+    pub fn install(bar: &Bar, options: Options, wake: Wake) -> Option<NativeBar> {
+        imp::Installed::install(bar, options, wake).map(NativeBar)
     }
 
     /// Where chosen items go. The process has one handler, the one set last.
@@ -273,9 +290,20 @@ impl NativeBar {
         self.0.apply(bar)
     }
 
+    /// Whether the last [`NativeBar::apply`] had to rebuild menus and could not. The menus stay as
+    /// they were, and applying the same bar again tries the rebuild again.
+    pub fn failed(&self) -> bool {
+        self.0.failed()
+    }
+
     /// Whether one of the menus is open.
     pub fn tracking(&self) -> bool {
         self.0.tracking()
+    }
+
+    /// Whether a menu began tracking since the last call ([`take_menu_began`]).
+    pub fn take_began(&self) -> bool {
+        self.0.take_began()
     }
 
     /// Close the open menu, if there is one.

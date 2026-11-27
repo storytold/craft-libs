@@ -35,8 +35,8 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Response, Ui, Vec2, vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The Eyedropper options bar's words, English by default.
@@ -61,7 +61,7 @@ craft_ui::words! {
 }
 
 /// How many pixels around the pointer the eyedropper averages: Photoshop's Sample Size list.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum SampleSize {
@@ -115,7 +115,7 @@ impl SampleSize {
 }
 
 /// Which layers the eyedropper reads: Photoshop's Sample list.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum SampleSource {
@@ -172,7 +172,7 @@ impl SampleSource {
 }
 
 /// The Eyedropper's options bar values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct EyedropperOptions {

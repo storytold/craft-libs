@@ -330,6 +330,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 .iter()
                 .map(|w| Floating { column: column_shape(&w.column), rect: Rect::ZERO, native: None, edge: None, ..w.clone() })
                 .collect(),
+            next_window: self.next_window,
         }
     }
 
@@ -512,9 +513,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     return Err(DockError::InvalidGeometry);
                 }
                 // A window's width is its rect's; only a collapsed column keeps to an edge of its own.
-                let window = Floating::new(Column { width: None, ..moving.column }, rect);
+                let id = match moving.id {
+                    Some(id) => id,
+                    None => self.fresh_window_id(),
+                };
+                let window = Floating::new(id, Column { width: None, ..moving.column }, rect);
                 let edge = edge.filter(|_| window.column.iconic);
-                self.floating.push(Floating { id: moving.id.unwrap_or(window.id), edge, ..window });
+                self.floating.push(Floating { edge, ..window });
                 Ok(())
             }
             Target::NewDock { side } => {
@@ -573,7 +578,17 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                             moving.column.groups.iter_mut().for_each(|group| group.height = height);
                         }
                         let index = place.group_index().ok_or(DockError::InvalidPlacement)?;
-                        let groups = &mut self.column_mut(&place).ok_or(DockError::MissingTarget)?.groups;
+                        let column = self.column_mut(&place).ok_or(DockError::MissingTarget)?;
+                        // Groups shown at a width of their own, in a floating window or an expanded column, keep it
+                        // as the flyout width of the collapsed column they join.
+                        if column.iconic
+                            && !moving.column.iconic
+                            && let Some(width) = moving.column.width
+                        {
+                            let flyout = (column.width != Some(width)).then_some(width);
+                            moving.column.groups.iter_mut().for_each(|group| group.flyout_width = flyout);
+                        }
+                        let groups = &mut column.groups;
                         let index = (index + usize::from(below)).min(groups.len());
                         groups.splice(index..index, moving.column.groups);
                         Ok(())

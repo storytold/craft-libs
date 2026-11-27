@@ -1,7 +1,7 @@
 //! [`MagneticLassoTool`]: an outline that snaps to the edges the app's [`EdgeTracer`] finds.
 
 use craft_behavior::geometry::SelectionOperation;
-use craft_behavior::{CancelReason, Cursor, PaintedCursor};
+use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerGlyph};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
@@ -11,9 +11,6 @@ use serde::{Deserialize, Serialize};
 
 use super::lasso::{DraftKey, draft_command, outline_access};
 use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionProbe, SelectionShape};
-
-/// Where the magnetic lasso cursor's icon touches the document: the icon's own origin.
-const ICON_HOTSPOT: Vec2 = Vec2::ZERO;
 
 /// The detection settings of one edge query.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,7 +44,7 @@ pub trait EdgeTracer {
 /// The Magnetic Lasso's options bar, persisted by the app (decisions §2.4). The options bar edits
 /// [`MagneticLassoTool::settings_mut`]; `[` and `]` change `width` ([`step_width`](Self::step_width)): the tool while an
 /// outline is open, the app's shortcuts otherwise.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase", default)]
 #[non_exhaustive]
 pub struct MagneticSettings {
@@ -407,9 +404,11 @@ impl<T: EdgeTracer> MagneticLassoTool<T> {
     }
 
     /// The pointer moved to `p` (button up or down): freehand adds points, otherwise the outline
-    /// follows the edges, walking a long jump in steps.
+    /// follows the edges, walking a long jump in steps. A pass the pointer stayed put in (a key went
+    /// down or up under it) traces the live segment again but fastens nothing.
     fn moved(&mut self, pointer: &ToolPointer, p: Point, zoom: f64) {
         let Some(o) = self.outline.as_mut() else { return };
+        let fasten = o.pointer != p;
         o.pointer = p;
         if o.freehand {
             // ⌥-drag: the pointer's path is the outline.
@@ -427,7 +426,7 @@ impl<T: EdgeTracer> MagneticLassoTool<T> {
         // along it.
         let n = ((last.distance(p) / step).ceil() as usize).clamp(1, 256);
         for k in 1..=n {
-            self.follow(last.lerp(p, k as f64 / n as f64), search, spacing, true);
+            self.follow(last.lerp(p, k as f64 / n as f64), search, spacing, fasten);
         }
     }
 
@@ -476,8 +475,8 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
         if self.tool.outline.as_ref().is_some_and(|o| !o.down) { ToolClaims::NONE.keyboard().deletes() } else { ToolClaims::NONE }
     }
 
-    /// The width circle under the canvas's precise cursor (`width * zoom`, at least the slop); otherwise the lasso
-    /// icon with the operation's badge.
+    /// The width circle under the canvas's precise cursor (`width * zoom`, at least the slop); otherwise the arrow on
+    /// the pointer with the lasso icon beside it and the operation's badge.
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         let tool = &*self.tool;
         if cx.precise()
@@ -492,7 +491,7 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
             None if cx.mods.cmd => None,
             None => SelectionOperation::resolve(tool.bar, cx.mods, self.probe.has_selection()).badge(),
         };
-        PaintedCursor::tool(ToolIcon::MagneticLasso.icon(), ICON_HOTSPOT, badge).into()
+        PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, ToolIcon::MagneticLasso.icon(), badge).into()
     }
 
     /// The first click starts an outline; later ones close near the first point, add a straight segment with Alt (and

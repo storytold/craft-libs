@@ -1,13 +1,14 @@
 //! The frame loop: installed options, the one-press rule, the per-frame output, and the command states a settled
-//! region shows.
+//! memoized view shows.
 
 use craft_ui::contract::{
-    CommandSet, Common, Component, Container, ContainerProps, Cx, Lazy, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
+    CommandSet, Common, Component, Container, ContainerProps, Cx, MemoProps, MemoView, Mount, Overlay, Props as _, Role, Show as _,
+    ShowContainer as _,
 };
 use craft_ui::runtime::commands::{CommandGate, CommandInput, CommandRef};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
 use egui::{Event, Id, Modifiers, PointerButton, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -58,13 +59,45 @@ fn one_press_per_pass_and_a_discard_pass_gets_no_held_events() {
     assert_eq!(run(&mut frames, vec![], false), vec![Vec::<&str>::new()]);
 }
 
-/// Pass-local state: inside a pass the pipeline looks up no service in context data per run, so a settled pass of
-/// forty leaves makes as many lookups as one of ten.
+/// Pass-local state: inside a pass the pipeline looks up no service in context data per run, and each run reaches the
+/// pass state and the pass's facts through its component tree's binding, so a settled pass of forty command-bound
+/// leaves (each registers the command it shows, a per-viewport record) makes as many lookups and unbound reads as one
+/// of ten.
 #[trial]
 fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
     use craft_ui::runtime::egui::memory::service_lookups;
+    use craft_ui::testing::unbound_pass_state_reads;
     use craft_ui_test_kit::contract::Panel;
     let settled_lookups = |leaves: usize| {
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut egui::Ui| {
+            Panel::new().id_salt("leaves").show(ui, |ui, _| {
+                for at in 0..leaves {
+                    let seen = std::cell::RefCell::new(Seen::default());
+                    Probe::new(&seen).label(format!("Leaf {at}")).command(Shown::Apply).show(ui);
+                }
+            });
+        };
+        for _ in 0..3 {
+            frames.frame(vec![], &mut show);
+        }
+        let (lookups, unbound) = (service_lookups(), unbound_pass_state_reads());
+        frames.frame(vec![], &mut show);
+        (service_lookups() - lookups, unbound_pass_state_reads() - unbound)
+    };
+    let ((ten, ten_unbound), (forty, forty_unbound)) = (settled_lookups(10), settled_lookups(40));
+    assert_eq!(ten, forty, "context-data lookups grow with the runs: {ten} for ten leaves, {forty} for forty");
+    assert_eq!(ten_unbound, forty_unbound, "unbound pass-state reads grow with the runs: {ten_unbound} for ten leaves, {forty_unbound} for forty");
+}
+
+/// The place env: a run takes the env its parent installed for its `Ui` from its caller, or walks the `Ui` stack for it
+/// once where app code shows it, and every step and layout helper of the run reads it from there. A pass of forty
+/// leaves in a panel walks no more often per run than one of ten: at most once.
+#[trial]
+fn a_run_walks_its_ui_stack_for_its_env_at_most_once() {
+    use craft_ui::testing::{env_walks, last_pass_runs};
+    use craft_ui_test_kit::contract::Panel;
+    let walks_and_runs = |leaves: usize| {
         let mut frames = Frames::new();
         let mut show = |ui: &mut egui::Ui| {
             Panel::new().id_salt("leaves").show(ui, |ui, _| {
@@ -77,15 +110,20 @@ fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
         for _ in 0..3 {
             frames.frame(vec![], &mut show);
         }
-        let before = service_lookups();
-        frames.frame(vec![], &mut show);
-        service_lookups() - before
+        let walks = env_walks();
+        assert_eq!(frames.frame(vec![], &mut show), 1, "the settled frame is one pass");
+        let runs: u32 = last_pass_runs(&frames.ctx).iter().map(|(_, runs)| runs).sum();
+        (env_walks() - walks, u64::from(runs))
     };
-    let (ten, forty) = (settled_lookups(10), settled_lookups(40));
-    assert_eq!(ten, forty, "context-data lookups grow with the runs: {ten} for ten leaves, {forty} for forty");
+    let ((ten, ten_runs), (forty, forty_runs)) = (walks_and_runs(10), walks_and_runs(40));
+    assert!(forty_runs > ten_runs, "the leaves run in the pass: {ten_runs} runs for ten leaves, {forty_runs} for forty");
+    assert!(
+        forty - ten <= forty_runs - ten_runs,
+        "env walks grow faster than the runs: {ten} walks in {ten_runs} runs for ten leaves, {forty} in {forty_runs} for forty"
+    );
 }
 
-/// The app command the settled region's probe is bound to; its modal rule is the default one, `Blocked`.
+/// The app command the settled view's probe is bound to; its modal rule is the default one, `Blocked`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
 #[command(prefix = "frameTrial")]
 #[non_exhaustive]
@@ -94,9 +132,9 @@ enum Shown {
     Apply,
 }
 
-/// A gate that refuses `Shown::Apply` when `refuses`, else lets every command through. Each call makes a new closure.
+/// A gate that refuses `Shown::Apply` when `refuses`, else lets every command through. Each call makes a new gate.
 fn gate(refuses: bool) -> CommandInput {
-    CommandInput::new().gate(CommandGate::new(move |command: &CommandRef| !refuses || Shown::from_ref(command).is_none()))
+    CommandInput::new().gate(CommandGate::new(refuses, |refuses: &bool, command: &CommandRef| !*refuses || Shown::from_ref(command).is_none()))
 }
 
 /// A modal layer with an empty body.
@@ -125,26 +163,40 @@ impl Component for Modal {
 
 impl Container for Modal {}
 
-/// A settling region of room `room` holding a probe bound to `Shown::Apply`, and a modal layer beside it while `open`
-/// holds.
+thread_local! {
+    /// What the probe in the command view recorded when it last ran.
+    static COMMAND_SEEN: RefCell<Seen> = RefCell::new(Seen::default());
+    /// What the probe in the routed view recorded when it last ran.
+    static INSIDE_SEEN: RefCell<Seen> = RefCell::new(Seen::default());
+}
+
+/// The calls of every pass of the last frame in which a memoized view ran, measuring runs included.
+fn view_runs(frames: &Frames) -> usize {
+    last_frame_memo_runs(&frames.ctx).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count()
+}
+
+/// The command view: a probe bound to `Shown::Apply`.
+#[derive(MemoProps)]
+struct CommandView {}
+
+fn command_view(_: &mut CommandView, ui: &mut Ui) {
+    COMMAND_SEEN.with(|seen| Probe::new(seen).command(Shown::Apply).show(ui));
+}
+
+/// The command view in a region of room `room`, and a modal layer beside it while `open` holds.
 struct CommandScene {
-    runs: Cell<usize>,
     open: Cell<bool>,
     room: Cell<Vec2>,
-    seen: RefCell<Seen>,
 }
 
 impl CommandScene {
     fn new() -> CommandScene {
-        CommandScene { runs: Cell::new(0), open: Cell::new(false), room: Cell::new(Vec2::new(200.0, 80.0)), seen: RefCell::new(Seen::default()) }
+        CommandScene { open: Cell::new(false), room: Cell::new(Vec2::new(200.0, 80.0)) }
     }
 
     fn show(&self, ui: &mut Ui) {
         in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), self.room.get()), |ui| {
-            Lazy::new("commands", 0.0).settles(true).show(ui, |ui| {
-                self.runs.set(self.runs.get() + 1);
-                Probe::new(&self.seen).command(Shown::Apply).show(ui);
-            });
+            MemoView::new("commands", CommandView {}, command_view).show(ui);
         });
         if self.open.get() {
             let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
@@ -152,11 +204,10 @@ impl CommandScene {
         }
     }
 
-    /// The region's runs in one frame with no input.
+    /// The view's runs in one frame with no input.
     fn frame(&self, frames: &mut Frames) -> usize {
-        self.runs.set(0);
         frames.frame(vec![], |ui| self.show(ui));
-        self.runs.get()
+        view_runs(frames)
     }
 
     fn settle(&self, frames: &mut Frames) {
@@ -165,14 +216,14 @@ impl CommandScene {
 
     /// Whether the probe's node is disabled in the last frame's tree.
     fn disabled(&self, frames: &mut Frames) -> bool {
-        let id: Id = self.seen.borrow().id.expect("the probe ran");
+        let id: Id = COMMAND_SEEN.with(|seen| seen.borrow().id.expect("the probe ran"));
         frames.tree().is_disabled(id)
     }
 }
 
-/// fx.F23: a settled region shows a command's new enabled state after a frame whose only change is the app's gate, and
+/// fx.F23: a settled view shows a command's new enabled state after a frame whose only change is the app's gate, and
 /// after a modal layer beside it closes with no input. Each pass resolves again, before any component runs, what every
-/// reader was shown, and the settled region whose resolution changed runs. The access tree hides what sits behind an
+/// reader was shown, and the settled view whose resolution changed runs. The access tree hides what sits behind an
 /// open modal layer, so the region's run under the modal (its room changed) is read only through what it shows once
 /// the layer closed.
 #[trial]
@@ -184,7 +235,7 @@ fn a_command_state_change_with_no_input_repaints_the_settled_region() {
     assert!(!scene.disabled(&mut frames), "Apply starts enabled");
 
     frames.commands(gate(true));
-    assert!(scene.frame(&mut frames) > 0, "the gate refusing Apply runs the settled region");
+    assert!(scene.frame(&mut frames) > 0, "the gate refusing Apply runs the settled view");
     assert!(scene.disabled(&mut frames), "the region shows Apply disabled in the frame the gate refuses it");
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames), 0, "it settles again");
@@ -209,7 +260,7 @@ fn a_command_state_change_with_no_input_repaints_the_settled_region() {
 }
 
 /// fx.F23's count relation: a frame given a new gate closure that answers as the last one did resolves every reader to
-/// what it was shown, so no settled region runs, in a frame's first pass or in a discard pass the frame reruns. A gate
+/// what it was shown, so no settled view runs, in a frame's first pass or in a discard pass the frame reruns. A gate
 /// that answers otherwise runs the region.
 #[trial]
 fn an_unchanged_gate_reruns_no_settled_region() {
@@ -219,10 +270,9 @@ fn an_unchanged_gate_reruns_no_settled_region() {
     scene.settle(&mut frames);
     for frame in 0..4 {
         frames.commands(gate(false));
-        assert_eq!(scene.frame(&mut frames), 0, "frame {frame} with a fresh, equal gate ran the settled region");
+        assert_eq!(scene.frame(&mut frames), 0, "frame {frame} with a fresh, equal gate ran the settled view");
     }
     frames.commands(gate(false));
-    scene.runs.set(0);
     let mut first = true;
     let passes = frames.frame(vec![], |ui| {
         scene.show(ui);
@@ -231,7 +281,7 @@ fn an_unchanged_gate_reruns_no_settled_region() {
         }
     });
     assert_eq!(passes, 2, "the frame reruns its pass");
-    assert_eq!(scene.runs.get(), 0, "neither pass of the frame ran the settled region");
+    assert_eq!(view_runs(&frames), 0, "neither pass of the frame ran the settled view");
     frames.commands(gate(true));
     assert!(scene.frame(&mut frames) > 0, "a gate that refuses the region's command runs it");
 }
@@ -255,36 +305,39 @@ fn frames_over_a_given_context_run_on_it() {
     assert!(second, "a second driver over the installed context runs on it");
 }
 
-/// An AccessKit request routed to a component inside a settled region reaches it: the region runs once in the pass
-/// that routes a Focus to its probe's node, though it has a content version (so input alone does not run it), and not
-/// at all in the same frame whose Focus goes to a probe outside it. The probes take no focus, so no focus request
-/// runs the region in their place.
+/// The routed view: a probe labelled Inside that senses clicks.
+#[derive(MemoProps)]
+struct Routed {}
+
+fn routed(_: &mut Routed, ui: &mut Ui) {
+    INSIDE_SEEN.with(|seen| Probe::new(seen).label("Inside").sense(craft_behavior::Sense::CLICK).show(ui));
+}
+
+/// An AccessKit request routed to a component inside a settled memoized view reaches it: the view runs once in the
+/// pass that routes a Focus to its probe's node, and not at all in the same frame whose Focus goes to a probe outside
+/// it. The probes take no focus, so no focus request runs the view in their place.
 #[trial]
-fn a_routed_access_request_runs_its_settled_region_once() {
+fn a_routed_access_request_runs_its_settled_view_once() {
     use craft_ui::testing::focus::{AccessActionKind, access_request};
-    let runs = Cell::new(0usize);
-    let (inside, outside) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let outside = RefCell::new(Seen::default());
     let show = |ui: &mut Ui| {
         in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(200.0, 80.0)), |ui| {
-            Lazy::new("routed", 0.0).settles(true).content(1).show(ui, |ui| {
-                runs.set(runs.get() + 1);
-                Probe::new(&inside).label("Inside").sense(craft_behavior::Sense::CLICK).show(ui);
-            });
+            MemoView::new("routed", Routed {}, routed).show(ui);
             Probe::new(&outside).label("Outside").sense(craft_behavior::Sense::CLICK).show(ui);
         });
     };
     let mut frames = Frames::new();
     frames.idle(30, show);
-    let (inside_id, outside_id) = (inside.borrow().id.expect("the inside probe ran"), outside.borrow().id.expect("the outside probe ran"));
+    let inside_id = INSIDE_SEEN.with(|seen| seen.borrow().id.expect("the inside probe ran"));
+    let outside_id = outside.borrow().id.expect("the outside probe ran");
     assert_ne!(inside_id, outside_id, "two probes");
     let count = |frames: &mut Frames, target: Id| {
-        runs.set(0);
         let passes = frames.frame(vec![access_request(AccessActionKind::Focus, target)], show);
-        (runs.get(), passes)
+        (view_runs(frames), passes)
     };
     let (elsewhere, _) = count(&mut frames, outside_id);
-    assert_eq!(elsewhere, 0, "a Focus routed outside the settled region runs it in no pass");
+    assert_eq!(elsewhere, 0, "a Focus routed outside the settled view runs it in no pass");
     frames.idle(30, show);
     let (routed, passes) = count(&mut frames, inside_id);
-    assert_eq!(routed, 1, "a Focus routed into the settled region runs it once ({passes} passes in the frame)");
+    assert_eq!(routed, 1, "a Focus routed into the settled view runs it once ({passes} passes in the frame)");
 }

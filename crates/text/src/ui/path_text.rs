@@ -1,7 +1,7 @@
 //! `PathTextMarkers`: the start, end and overflow marks of text laid on a path, a canvas control.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::{Point, Vec2 as PathVec};
 use craft_behavior::{
@@ -358,7 +358,7 @@ impl<'a> PathTextMarkers<'a> {
         let mut held: Option<Grip> = *cx.press_slot::<Grip>();
         for (reference, part) in self.pointer_parts() {
             let Some(result) = cx.part_if_declared(reference) else { continue };
-            let (press, hover) = (result.press, result.hover_pos.filter(|_| result.hovered));
+            let (press, hover) = (result.press, cx.hover_pos(reference));
             if let Some(pos) = hover
                 && held.is_none()
             {

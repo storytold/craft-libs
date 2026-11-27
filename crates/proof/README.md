@@ -19,6 +19,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | French (fr-FR, fr-CA and other French pack locales) | the installed Language pack or Hunspell dictionary; dictionary-driven elisions and accent-oriented suggestions | conservative typography and basic checks, with Quebec punctuation spacing in fr-CA | the Language pack (generic fr fallback) |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
+| Gujarati, Hindi | the installed Hunspell dictionary (Hindi: nukta letters spelled either way) | generic checks | akshara rules (or a Language pack) |
 
 Grammar rules, suggestion tuning and the rule-based hyphenation are code: they work in every
 build.
@@ -244,7 +245,7 @@ NFC/NFD lookup with original ranges, suggestions and pack hyphenation. The opt-i
 dictionary gate fails when its input is missing; it never silently skips its assertions:
 
 ```sh
-WORDCRAFT_DICTIONARIES=/absolute/isolated/french-dictionary cargo test -p craft-proof --test french_dictionary -- --ignored
+WORDCRAFT_DICTIONARIES=/absolute/isolated/french-dictionary cargo test -p craft-proof --test it -- french_dictionary:: --ignored
 ```
 
 For a reproducible real-dictionary run, use Dicollecte 7.7 from LibreOffice/dictionaries

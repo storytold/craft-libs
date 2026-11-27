@@ -5,53 +5,48 @@ use super::appearance::VariantAxis;
 use super::catalog::Catalog;
 use super::commands::GalleryCommands;
 use super::layout::{self, PanelId};
-use super::picks::CardState;
+use super::picks::Cells;
 use super::settings::GallerySettings;
 use super::tree::{self, TreeKey};
+use crate::chrome::GallerySpecs;
 use crate::mock::MockState;
 use craft_behavior::Selection;
 use craft_behavior::dock::Workspace as Dock;
 use craft_theme_editor::ThemeWorkspace;
-use craft_ui::contract::Level;
+use craft_ui::contract::{Level, Tracked};
 use craft_ui::display::InspectLayers;
 use craft_ui::list::OpenSet;
 use craft_ui::runtime::env::RootEnv;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// What each shown story keeps between frames, by story index.
-pub type Cells = HashMap<usize, CardState>;
-
-/// What the panels browse: the catalog, the tree's state and the shown cells.
+/// What the panels browse: the catalog, the tree's state and the shown cells. The values a panel reads or edits are
+/// `Tracked`, so a panel's memoized view keys on their revisions.
 #[non_exhaustive]
 pub struct Browser {
     /// What is listed.
     pub catalog: Catalog,
     /// The text that narrows the tree.
-    pub filter: String,
+    pub filter: Tracked<String>,
     /// The selected row of the tree.
-    pub selection: Selection<TreeKey>,
+    pub selection: Tracked<Selection<TreeKey>>,
     /// The open level groups.
-    pub open: OpenSet<TreeKey>,
-    /// The components workspace's dock layout.
-    pub dock: Dock<PanelId>,
+    pub open: Tracked<OpenSet<TreeKey>>,
     /// The story each component's card shows, by the component's registered name and the story's name. A component
     /// without an entry shows its first story.
-    pub story_of: HashMap<&'static str, &'static str>,
+    pub story_of: Tracked<HashMap<&'static str, &'static str>>,
     /// The level the Overview shows, as its slug; empty until one is chosen.
-    pub level: String,
+    pub level: Tracked<String>,
     /// Counts the resets of the stories; a card's id scope names it, so a reset mounts the card anew.
     pub generation: u32,
     /// The shown stories' values.
     pub cells: Cells,
-    /// The component whose tab a panel asked to open in this pass.
-    pub open_request: Option<&'static str>,
     /// The selection the Overview's cards last followed: its level shown and its card brought into view; the outer `None`
     /// before they first ran.
-    pub followed: Option<Option<&'static str>>,
+    pub followed: Tracked<Option<Option<&'static str>>>,
     /// The selected component the tree last opened the level of; the outer `None` before the first pass. Applying settings
     /// sets it to the restored selection, so a level closed before a restart stays closed.
-    pub tree_seen: Option<Option<&'static str>>,
+    pub tree_seen: Tracked<Option<Option<&'static str>>>,
 }
 
 /// What the dock shows.
@@ -95,12 +90,16 @@ pub struct Viewer {
     pub browser: Browser,
     /// What the theme panels share.
     pub themes: ThemeWorkspace,
+    /// The components workspace's dock layout.
+    pub dock: Arc<Dock<PanelId>>,
     /// The theme workspace's dock layout.
-    pub theme_dock: Dock<PanelId>,
+    pub theme_dock: Arc<Dock<PanelId>>,
+    /// The panel specs both docks show.
+    pub specs: Tracked<GallerySpecs>,
     /// The mock application the theme workspace's App preview shows.
     pub mock: MockState,
     /// The drawings the inspector shows over the selected card's stories.
-    pub inspect_layers: InspectLayers,
+    pub inspect_layers: Tracked<InspectLayers>,
     /// The revision of the theme workspace's app layer that `env.sizes` holds; none before the first sync.
     sizes_synced: Option<u64>,
 }
@@ -110,17 +109,15 @@ impl Viewer {
     pub fn new(catalog: Catalog, settings: &GallerySettings) -> Self {
         let browser = Browser {
             catalog,
-            filter: String::new(),
-            selection: Selection::default(),
-            open: OpenSet::new(),
-            dock: layout::default_components(),
-            story_of: HashMap::new(),
-            level: String::new(),
+            filter: Tracked::default(),
+            selection: Tracked::default(),
+            open: Tracked::new(OpenSet::new()),
+            story_of: Tracked::default(),
+            level: Tracked::default(),
             generation: 0,
-            cells: Cells::new(),
-            open_request: None,
-            followed: None,
-            tree_seen: None,
+            cells: Cells::default(),
+            followed: Tracked::default(),
+            tree_seen: Tracked::default(),
         };
         let mut viewer = Viewer {
             env: RootEnv::default(),
@@ -131,9 +128,11 @@ impl Viewer {
             more_open: false,
             browser,
             themes: ThemeWorkspace::new(),
-            theme_dock: layout::default_theme(),
+            dock: Arc::new(layout::default_components()),
+            theme_dock: Arc::new(layout::default_theme()),
+            specs: Tracked::new(GallerySpecs),
             mock: MockState::default(),
-            inspect_layers: InspectLayers::default(),
+            inspect_layers: Tracked::new(InspectLayers::default()),
             sizes_synced: None,
         };
         viewer.restore(settings);
@@ -146,21 +145,21 @@ impl Viewer {
         self.workspace = settings.workspace();
         self.preview = settings.preview();
         let browser = &mut self.browser;
-        browser.filter.clone_from(&settings.filter);
-        browser.open = OpenSet::new();
+        browser.filter.edit(|filter| filter.clone_from(&settings.filter));
+        let mut open = OpenSet::new();
         for level in settings.open_levels.iter().filter_map(|saved| tree::level_named(saved)) {
-            browser.open.set(&TreeKey::Level(level), true);
+            open.set(&TreeKey::Level(level), true);
         }
-        browser.selection = browser
+        *browser.open = open;
+        *browser.selection = browser
             .catalog
             .component(&settings.selected)
             .map_or_else(Selection::default, |component| Selection::single(TreeKey::Component(component.type_name)));
-        browser.tree_seen = Some(browser.selected_type());
-        browser.level.clone_from(&settings.level);
-        browser.story_of = settings.story_of(&browser.catalog);
-        let known = |name: &str| browser.catalog.component(name).is_some();
-        browser.dock = layout::load(&settings.dock, Workspace::Components, &known);
-        self.theme_dock = layout::load(&settings.theme_dock, Workspace::Theme, &known);
+        *browser.tree_seen = Some(browser.selected_type());
+        browser.level.edit(|level| level.clone_from(&settings.level));
+        *browser.story_of = settings.story_of(&browser.catalog);
+        Arc::make_mut(&mut self.dock).replace(layout::load(&settings.dock, Workspace::Components, &browser.catalog));
+        Arc::make_mut(&mut self.theme_dock).replace(layout::load(&settings.theme_dock, Workspace::Theme, &browser.catalog));
     }
 
     /// Makes the root's app sizes the theme workspace's app layer, when the layer was edited since the last sync.
@@ -186,26 +185,27 @@ impl Viewer {
     /// The dock layout of the shown workspace.
     pub fn dock_mut(&mut self) -> &mut Dock<PanelId> {
         match self.workspace {
-            Workspace::Components => &mut self.browser.dock,
-            Workspace::Theme => &mut self.theme_dock,
+            Workspace::Components => Arc::make_mut(&mut self.dock),
+            Workspace::Theme => Arc::make_mut(&mut self.theme_dock),
         }
     }
 
     /// Opens the tab of the component registered as `type_name` beside the Overview and shows it.
-    pub fn open_component(&mut self, type_name: &'static str) {
-        let _ = self.browser.dock.set_visible(PanelId::Component(type_name), true, Some(PanelId::Overview), false, |panel| panel.permissions());
+    pub fn open_component(&mut self, type_name: &str) {
+        let _ = Arc::make_mut(&mut self.dock)
+            .set_visible(PanelId::component(type_name), true, Some(PanelId::Overview), false, |panel| panel.permissions());
     }
 
     /// Puts the shown workspace's panels back at their default places. The open component tabs are documents and stay.
     pub fn reset_layout(&mut self) {
         let workspace = self.workspace;
-        let tabs = layout::open_tabs(&self.browser.dock);
-        *self.dock_mut() = layout::default_for(workspace);
+        let tabs = layout::open_tabs(&self.dock);
+        self.dock_mut().replace(layout::default_for(workspace));
         if workspace == Workspace::Components {
             for tab in tabs {
-                self.open_component(tab);
+                self.open_component(&tab);
             }
-            let _ = self.browser.dock.set_visible(PanelId::Overview, true, None, false, |panel| panel.permissions());
+            let _ = Arc::make_mut(&mut self.dock).set_visible(PanelId::Overview, true, None, false, |panel| panel.permissions());
         }
     }
 

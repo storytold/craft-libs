@@ -19,7 +19,7 @@ pub fn body(ui: &mut Ui, key: &'static str, layout: &BodyLayout, sizes: &[Vec2])
     let place = |ui: &mut Ui| sizes.iter().map(|size| place_in_flow(ui, *size)).collect::<Vec<_>>();
     let builder = egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible();
     let env = crate::runtime::env::Env::of(ui);
-    crate::runtime::measure::run(&ui.ctx().clone(), || ui.scope_builder(builder, |ui| run_body(ui, &env, id, layout, Vec2::ZERO, place)));
+    crate::runtime::measure::measuring(&ui.ctx().clone(), || ui.scope_builder(builder, |ui| run_body(ui, &env, id, layout, Vec2::ZERO, place)));
     run_body(ui, &env, id, layout, Vec2::ZERO, place)
 }
 
@@ -136,4 +136,16 @@ pub fn in_row_region<R>(ui: &mut Ui, rect: egui::Rect, body: impl FnOnce(&mut Ui
 /// Takes `size` in the layout of `ui` and returns its rect.
 pub fn allocate(ui: &mut Ui, size: Vec2) -> egui::Rect {
     crate::runtime::egui::alloc::space(ui, size)
+}
+
+/// The innermost scroll area `ui` lays content out for, as the area keys its scroll state.
+pub fn scroll_area(ui: &Ui) -> Option<Id> {
+    crate::runtime::env::Env::of(ui).view().lazy_view().map(|view| view.owner)
+}
+
+/// The child the scroll position of the scroll area `area` ([`scroll_area`]) is named by: the first child at or after
+/// the view's start in the last real run that laid the content out, which keeps what is in view in place while
+/// extents before it change.
+pub fn scroll_anchor(ctx: &egui::Context, area: Id) -> Option<Id> {
+    crate::contract::body::scroll::anchor_of(ctx, area)
 }

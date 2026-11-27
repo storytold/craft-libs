@@ -38,7 +38,7 @@ pub const PATH_OPTIONS_COLOR_KEY: &str = "pathOptions.color";
 
 /// The pen's Path Options, persisted by the app with its preferences (Photoshop's Pen gear popover). Serialised in
 /// camelCase; unknown fields are ignored and missing ones take their defaults.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PathOptionsSettings {
@@ -51,6 +51,24 @@ pub struct PathOptionsSettings {
     /// The path line's width in pixels, within [`THICKNESS_RANGE`](Self::THICKNESS_RANGE); `None` uses the theme's
     /// medium line.
     pub thickness: Option<f32>,
+    /// The anchor's size in points; `None` uses the theme's.
+    pub anchor_size: Option<f32>,
+    /// How the direction handles' ends are drawn.
+    pub handles: HandleStyle,
+}
+
+/// How the direction handles' ends are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::PlainData)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum HandleStyle {
+    /// Filled ends.
+    #[default]
+    Solid,
+    /// Hollow ends.
+    Hollow,
+    /// Large ends.
+    Large,
 }
 
 impl PathOptionsSettings {

@@ -20,8 +20,8 @@ fn a_draft_adds_its_pieces_after_the_existing_chips() {
     assert_eq!(codec.parse("two words", &Vec::new()), Ok(chips(&["two words"])), "a space does not end a chip");
 }
 
-mod field {
-    use craft_ui::contract::{Bind, Role, Show as _};
+pub(crate) mod field {
+    use craft_ui::contract::{Role, Show as _};
     use craft_ui::testing::access::name;
     use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, pointer, trial};
     use craft_ui::text::ChipField;
@@ -33,7 +33,7 @@ mod field {
 
     /// Eight chips in one line at most, with Clear All; the field's report goes to the story data.
     fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-        let out = ChipField::new("Keywords", Bind::bound(data.value("chips", keywords()))).max_lines(1).clear_all().show(ui);
+        let out = ChipField::new("Keywords", data.bind("chips", keywords())).max_lines(1).clear_all().show(ui);
         if let Some(at) = out.activated {
             *data.value("activated", None::<usize>) = Some(at);
         }

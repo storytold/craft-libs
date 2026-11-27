@@ -1,7 +1,7 @@
 //! The crop shield: the options that dim the area outside the frame.
 
 use crate::canvas::CanvasSpace;
-use crate::primitives::{Draw, PaintShape};
+use crate::primitives::Draw;
 use crate::style::DataColor;
 use craft_behavior::geometry::outside_pieces;
 use craft_behavior::kurbo::Point;
@@ -13,7 +13,7 @@ const SHIELD_OPACITY: f32 = 75.0;
 const SHIELD_EDITING: f32 = 0.5;
 
 /// The shield's colour.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ShieldColor {
@@ -25,7 +25,7 @@ pub enum ShieldColor {
 }
 
 /// The crop gear menu's shield options. Photoshop's defaults: shown, enabled, Match Canvas, 75 %, Auto Adjust on.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct CropShield {
@@ -63,15 +63,17 @@ impl Default for CropShield {
     }
 }
 
-/// Paints `fill` over the canvas quad outside the convex `hole`, in screen points: one polygon per convex piece of
-/// [`outside_pieces`]. The one shield painter for both crops.
+/// Paints `fill` over the canvas quad outside the convex `hole`, in screen points: the convex pieces of
+/// [`outside_pieces`] as one unfeathered mesh, so the translucent shield shows no seam where two pieces meet
+/// (photocraft#16410). The one shield painter for both crops.
 pub fn paint_outside(draw: &Draw<'_>, canvas: [Pos2; 4], hole: &[Pos2], fill: DataColor) {
     let point = |p: Pos2| Point::new(f64::from(p.x), f64::from(p.y));
     let hole: Vec<Point> = hole.iter().copied().map(point).collect();
-    for piece in outside_pieces(canvas.map(point), &hole) {
-        let piece = piece.into_iter().map(|p| Pos2::new(p.x as f32, p.y as f32)).collect();
-        draw.data_fill(&PaintShape::Polygon(piece), fill);
-    }
+    let pieces: Vec<Vec<Pos2>> = outside_pieces(canvas.map(point), &hole)
+        .into_iter()
+        .map(|piece| piece.into_iter().map(|p| Pos2::new(p.x as f32, p.y as f32)).collect())
+        .collect();
+    draw.data_fill_tiled(&pieces, fill);
 }
 
 impl CropShield {

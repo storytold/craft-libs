@@ -240,11 +240,11 @@ impl Default for EsignDialog {
 }
 
 /// A send operation id no other send in this process has used, from a random
-/// start so one saved by an earlier process is unlikely to repeat either.
-/// Mirrors `docking::model::fresh_window_id`: a counter kept on one
-/// [`EsignDialog`] repeats across two dialog instances (two windows, or one
-/// replaced after a document closes), and two sends sharing an idempotency
-/// key have a conforming provider return the first envelope for the second.
+/// start so one saved by an earlier process is unlikely to repeat either. A
+/// counter kept on one [`EsignDialog`] would repeat across two dialog instances
+/// (two windows, or one replaced after a document closes), and two sends
+/// sharing an idempotency key have a conforming provider return the first
+/// envelope for the second.
 fn fresh_send_id() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     use std::sync::OnceLock;

@@ -23,7 +23,12 @@ fn data(name: &str, state: CardState) -> CardData {
 
 #[story(FamilyCard, covers = [Default], drive = Drive::Never)]
 fn family_card_not_installed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    show_as_only_item(ui, FamilyCard::new(data("Hack", CardState::Offer { preview: true }))).into()
+    show_as_only_item(ui, FamilyCard::new(data("Hack", CardState::Offer { preview: true, destinations: true }))).into()
+}
+
+#[story(FamilyCard, covers = [], drive = Drive::Never)]
+fn family_card_craft_apps_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    show_as_only_item(ui, FamilyCard::new(data("Hack", CardState::Offer { preview: true, destinations: false }))).into()
 }
 
 #[story(FamilyCard, covers = [], drive = Drive::Never)]
@@ -43,7 +48,7 @@ fn family_card_installed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(FamilyCard, covers = [], drive = Drive::Never)]
 fn family_card_not_curated(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let mut card = data("Hack", CardState::Offer { preview: false });
+    let mut card = data("Hack", CardState::Offer { preview: false, destinations: true });
     card.curated = false;
     show_as_only_item(ui, FamilyCard::new(card)).into()
 }
@@ -51,7 +56,7 @@ fn family_card_not_curated(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn cards(ui: &mut Ui, keys: &[usize]) -> StoryOutput {
     FamilyCards::new("Families")
         .show_items(ui, &CardKeys::new(keys, |_| None), &mut |key, _| {
-            let state = if key % 2 == 0 { CardState::Installed } else { CardState::Offer { preview: true } };
+            let state = if key % 2 == 0 { CardState::Installed } else { CardState::Offer { preview: true, destinations: true } };
             FamilyCard::new(data(&format!("Family {key}"), state))
         })
         .into()

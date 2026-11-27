@@ -33,8 +33,13 @@ parameter carries it in the `CommandRef`:
 `CommandRef::with_params("file.open_recent", json!({"index": 3}))`. Items built directly use
 `Item::new(command, label)` with `.shortcut(chord)`, `.enabled(..)`, `.check(..)` or
 `.radio(..)` (the item's `ItemKind`), `.role(..)`, `.platforms(..)`, `.tint(colour)` and
-`.tooltip(text)` (both for the in-window bar only; the native macOS menu ignores them); submenus use
-`Node::submenu(label, children)`, with `.role(..)` for a tagged one. A shortcut is a
+`.tooltip(text)` and `.sample(aspect, face)` (a `craft_ui::primitives::FacePaint` painted in a
+column of its own between the label and the shortcut, `aspect` times as wide as the row's text
+line is high: a font menu's samples) (all three for the in-window bar only; the native macOS menu
+ignores them); submenus use `Node::submenu(label, children)`, with `.role(..)` for a tagged one.
+`Node::heading(label)` (`Node::Heading`) is a caption over the rows after it and never a command:
+it takes no mnemonic letter and no help-search entry, the native menu shows it as a disabled
+item, and `tidy` drops one with no item after it before the next separator. A shortcut is a
 `craft_keymap::Chord`: `cmd` is ⌘ and `ctrl` the Control key. macOS shows radio items as check
 items. The app's open documents go in `MenuBar::documents` (`Document::new(command, name)`,
 `.active(..)` for the one in front, `hidden` for one kept open but not listed), and the layouts
@@ -96,7 +101,8 @@ items.
 Each frame, `apply_state(&mut bar, |command| ItemState { enabled, checked })` sets enabled and
 checked from the app's state. `checked: Some(..)` makes a plain item a check item and selects or
 clears a radio item; `None` leaves the kind as it is. The built-in items and the open documents
-are left alone. Both run on the app's bar, before the layout.
+are left alone. Both run on the app's bar, before the layout. The bar is held in a `Tracked<MenuBar>`; both write it only when an item changes, so
+its revision (the key of the in-window bar's kept labels and of `sync_with`) moves only then.
 
 ## Keyboard Shortcuts dialog
 
@@ -131,7 +137,11 @@ app translates. The dialog never opens a file dialog or touches the file system.
 
 ## Windows, Linux and web: the in-window bar
 
-`MenuBarUi` draws a laid-out bar in a top panel and returns the titles' rect (`MenuBarOutput`).
+`MenuBarUi` draws a laid-out bar and returns the titles' rect and the width every title takes side by
+side (`MenuBarOutput`). A host that puts controls after the titles on the same row compares that
+width with the room it leaves the bar. Show it inside a
+`Stack` (a top panel's body) or the title bar's row: there the titles that don't fit its room fold
+into "…".
 Each item is a command row: its enabled state, check mark and chord follow the command in the
 runtime's command state and keymap, and a choice is a `Fired` with `FireSource::Menu` in the
 frame's output. `.help_search(true)` starts the Help menu with a search field over every command
@@ -140,7 +150,9 @@ frame's output. `.help_search(true)` starts the Help menu with a search field ov
 ```rust
 let laid_out = craft_menu::layout(&menu_bar, Target::current(), &LayoutOptions::new("Sample")).bar;
 egui::Panel::top("menu-bar").show(ui, |ui| {
-    MenuBarUi::new(&laid_out).keyboard(!dialog_open).help_search(true).show(ui);
+    Stack::new().show(ui, |ui, _| {
+        MenuBarUi::new(&laid_out).keyboard(!dialog_open).help_search(true).show(ui);
+    });
 });
 // The commands chosen arrive in `FrameOutput.fired`.
 ```
@@ -153,9 +165,11 @@ egui::Panel::top("menu-bar").show(ui, |ui| {
   and leaves Alt alone; F10 still reaches the in-window bar of a browser. `.keyboard(false)`
   turns the bar's keys off (a modal dialog or the shortcut recorder has them); on `Target::Mac`
   they are off unless set. `.mnemonics(&[("View", 'W'), ("file.open", 'P')])` names preferred
-  letters by title as shown or by command id. A label without an ASCII letter or digit shows its
-  English label's letter after it, "文件(F)", before a trailing ellipsis ("開く(O)…"), when
-  `.english(&hook)` returns that English label for the `Labeled::Command` or `Labeled::Title`.
+  letters by title as shown or by command id. A label without an ASCII letter or digit takes its
+  English label's letter when the item, submenu or menu carries that English label
+  (`Item::english`, `Node::english`, `Menu::english`). In a CJK interface language the letter
+  shows after the label, "文件(F)", before a trailing ellipsis ("開く(O)…"); in any other script
+  it is hidden ("Файл" stays as written) and still opens or runs the entry.
 - **Items:** a command the runtime's gate forbids, or whose state is disabled, is greyed and never
   fires. A submenu whose items are all disabled is greyed. The shortcut column shows the command's
   chord, else the item's own shortcut, in the shell's names (⌘ glyphs on a Mac). `.target(..)`
@@ -214,7 +228,15 @@ sets it back to the app's state, so the app's state always wins.
 While a menu is open, a click or Escape in the window closes it and does not reach egui (no
 canvas gesture, no tool action); pointer moves pass through. Only one click is kept this way
 until the menu reports closed, so a menu wrongly reported open costs one click. Menu updates wait
-until the menu closes. A rebuild that fails keeps the menus as they were.
+until the menu closes; the end of tracking wakes egui, and that frame applies them. A rebuild that
+fails keeps the menus as they were, and the same menus are tried once more a second later, with no
+input needed (`RebuildRetry`). When that fails too, the next change to the menus tries again.
+
+AppKit's `NSMenuDidBeginTracking` and `NSMenuDidEndTracking` notifications say whether a menu is
+open (`craft_window::native_menu::menu_tracking()`, safe from any thread). Each begin comes back
+once as `Event::Opened`, and `NativeMenu::take_opened` reports it once, for an app that refreshes
+what a menu lists (a scripts folder) as it opens. It changes nothing the menus show, so it does
+not re-sync them.
 
 ## Per frame
 
@@ -240,7 +262,7 @@ Each frame, in this order:
 2. `set_gate`, with the app's state for this frame.
 3. `take_clicks`, and run the commands it returns: the clicks since the last frame that the gate
    allows now. Minimize and Quit are already handled.
-4. `sync_with`, which lays the menus out again only when the app's state changed or a menu event
+4. `sync_with`, which lays the menus out again only when its key changed or a menu event
    arrived, and re-syncs them in place when the gate changed.
 
 ```rust
@@ -256,14 +278,13 @@ if let Some(menu) = &mut self.native_menu {
     for command in menu.take_clicks(ctx) {
         self.run_command(ctx, &command);
     }
-    let state = self.menu_state_hash(craft_menu::had_input(ctx).then_some(ctx.cumulative_frame_nr()));
-    for c in menu.sync_with(state, || craft_menu::mac_layout(&self.menu_bar(), &LayoutOptions::new("PhotoCraft"))) {
+    for c in menu.sync_with(&(&self.menu_bar, &self.workspace), || craft_menu::mac_layout(&self.menu_bar(), &LayoutOptions::new("PhotoCraft"))) {
         log::info!("menu: {} is {} on macOS and {} in the app; {}", c.shortcut, c.system, c.command, c.resolution);
     }
 }
 ```
 
-`sync_with` builds the layout only when `state` changed or a menu event arrived, because
+`sync_with` builds the layout only when its key changed or a menu event arrived, because
 building the rows usually walks every command's enabled state. The backend then updates labels,
 enabled and checked in place and rebuilds only when `structure_key` (or, for the open
 documents, `window_key`) changes. Adding or removing an item in a dynamic list (recent files,
@@ -271,11 +292,10 @@ workspaces, plugins) changes `structure_key`; relabelling one doesn't. An item t
 item once stays one, unchecked, when the app's state stops giving it a checked state, so that
 doesn't rebuild the menus.
 
-`state` must cover everything the menus show. A change that comes without input, such as a load
-or save finishing on a worker or a timer, leaves the menus stale until the next input or menu
-event unless it is in the hash. An app that can't keep the hash complete calls
-`menu.sync(layout)` instead, with the layout built every frame: it is compared with the last
-one and synced only when it differs.
+The key is a `MemoProps` value: the menu model held in a `Tracked<MenuBar>` (`apply_state` and
+`apply_keymap` write it only when an item changes, so its revision moves only then) and whatever
+else the layout reads, each as a checked input, so a change that comes without input (a load
+finishing on a worker) reaches the menus the frame it lands.
 
 An app that needs a click while egui is idle (to wake its own loop, or hand the command to a
 worker) sets `menu.on_command(Box::new(|command| ..))`. The hook runs from the menu event

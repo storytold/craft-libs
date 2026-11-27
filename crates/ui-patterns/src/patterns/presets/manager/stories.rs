@@ -2,7 +2,8 @@
 
 use super::PresetManager;
 use crate::contract::{Bind, Entry};
-use crate::patterns::presets::PresetRow;
+use crate::patterns::presets::{PresetFns, PresetRow, PresetSource};
+use crate::runtime::env::Env;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -14,14 +15,12 @@ fn kinds() -> Vec<Entry<u32>> {
 
 /// Shows a manager over `rows` of the picked kind; `load` adds the host's Load… button. The preset keyed 1 is
 /// built in: it cannot be renamed or deleted.
-fn show_manager(ui: &mut Ui, data: &mut StoryData, rows: &[PresetRow<u32>], load: bool) -> StoryOutput {
+fn show_manager(ui: &mut Ui, data: &mut StoryData, rows: fn(&(), &Env) -> Vec<PresetRow<u32>>, load: bool) -> StoryOutput {
     let kinds = kinds();
+    let source = PresetSource::new((), PresetFns::new(rows).can_rename(not_built_in).can_delete(not_built_in));
     // `data` hands out one value at a time, so the picked kind is copied out and written back.
     let mut kind = *data.value("kind", 0u32);
-    let mut manager = PresetManager::new("Preset Manager", &kinds, Bind::bound(&mut kind), rows)
-        .opened(Bind::bound(data.value("open", true)))
-        .can_rename(|key: &u32| *key != 1)
-        .can_delete(|key: &u32| *key != 1);
+    let mut manager = PresetManager::new("Preset Manager", &kinds, Bind::bound(&mut kind), &source).opened(data.bind("open", true));
     if load {
         manager = manager.actions(vec![(Label::from("Load…"), Some(Label::from("Import brushes (.abr)")))]);
     }
@@ -38,19 +37,22 @@ fn show_manager(ui: &mut Ui, data: &mut StoryData, rows: &[PresetRow<u32>], load
     StoryOutput::from(out).readout(readout)
 }
 
+/// The preset keyed 1 is built in.
+fn not_built_in(_: &(), key: &u32) -> bool {
+    *key != 1
+}
+
 #[story(PresetManager<'static, u32, u32>, covers = [], drive = Drive::Never)]
 fn preset_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = vec![PresetRow::item(2, "Soft Round", 0), PresetRow::item(3, "Chalk", 0), PresetRow::item(4, "Hard Edge", 0)];
-    show_manager(ui, data, &rows, true)
+    show_manager(ui, data, |_, _| vec![PresetRow::item(2, "Soft Round", 0), PresetRow::item(3, "Chalk", 0), PresetRow::item(4, "Hard Edge", 0)], true)
 }
 
 #[story(PresetManager<'static, u32, u32>, covers = [], drive = Drive::Never)]
 fn preset_manager_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    show_manager(ui, data, &[], false)
+    show_manager(ui, data, |_, _| Vec::new(), false)
 }
 
 #[story(PresetManager<'static, u32, u32>, covers = [], drive = Drive::Never)]
 fn preset_manager_built_in(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = vec![PresetRow::item(1, "Round (built-in)", 0), PresetRow::item(2, "Soft Round", 0)];
-    show_manager(ui, data, &rows, false)
+    show_manager(ui, data, |_, _| vec![PresetRow::item(1, "Round (built-in)", 0), PresetRow::item(2, "Soft Round", 0)], false)
 }

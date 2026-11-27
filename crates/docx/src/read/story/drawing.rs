@@ -291,7 +291,8 @@ impl Reader<'_> {
     /// A picture: the first `a:blip` in `pic` and its crop.
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
-        float.set_spin(xfrm_spin(pic.find("pic:spPr")));
+        let props = pic.find("pic:spPr");
+        float.set_spin(xfrm_spin(props));
         let Some(embed) = blip.attr("r:embed") else {
             // A linked picture holds no copy: nothing to draw, and nothing is fetched.
             if let Some(link) = blip.attr("r:link") {
@@ -311,7 +312,14 @@ impl Reader<'_> {
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None })
+        let radius = props
+            .and_then(|e| e.child("a:effectLst"))
+            .and_then(|e| e.child("a:softEdge"))
+            .and_then(|e| e.attr("rad"))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let fx = crate::units::blip_fx(blip).with_soft_edge_emu(radius);
+        Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups

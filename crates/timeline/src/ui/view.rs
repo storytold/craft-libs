@@ -127,7 +127,8 @@ impl TimeAxis {
 }
 
 /// The env value that carries the axis of the innermost [`TimelineView`]; `None` outside one.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
+#[memo_props(every_pass = "the axis the timeline rebuilds each pass from its view")]
 struct InTimeline(Option<TimeAxis>);
 
 impl EnvValue for InTimeline {
@@ -487,11 +488,10 @@ impl Component for TimelineView<'_> {
             return;
         }
         let mut next = target;
-        let pointer = cx.response.hover_pos().unwrap_or_else(|| cx.rect.center());
         let left = cx.flow.span(self.inset(), width).left();
         if let Some(wheel) = cx.take_wheel() {
             // The wheel's own point: over a child (the ruler) the view itself has no hover.
-            let pointer = wheel.at.unwrap_or(pointer);
+            let pointer = wheel.at.unwrap_or_else(|| cx.rect.center());
             let at = next.time_at(pointer.x.max(left), left);
             self.wheel(wheel, &mut next, at, width);
         }
@@ -632,5 +632,5 @@ impl Outcome for TimelineViewOutput {
     }
 }
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
