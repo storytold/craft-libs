@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use parquet::{
     basic::{ConvertedType, LogicalType, Repetition, TimeUnit, Type as Physical},
-    data_type::{BoolType, ByteArray, ByteArrayType, DoubleType},
+    data_type::{BoolType, ByteArray, ByteArrayType, Decimal, DoubleType},
     errors::ParquetError,
     file::{reader::FileReader, serialized_reader::SerializedFileReader, writer::SerializedFileWriter},
     record::Field,
@@ -245,7 +245,10 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
         }
         let row = row?;
         values.clear();
-        for (_, field) in row.into_columns() {
+        for (name, field) in row.into_columns() {
+            if let Field::Decimal(decimal @ Decimal::Bytes { .. }) = &field {
+                decimal_length(&name, decimal)?;
+            }
             values.push(value(field)?);
         }
         on_row(&values)?;
@@ -279,9 +282,43 @@ fn value(field: Field) -> Result<Value> {
         Field::TimestampMillis(v) => Value::TimestampMillis(v),
         Field::TimestampMicros(v) => Value::TimestampMicros(v),
         // Keep exact decimal text rather than silently rounding arbitrary precision values.
+        // `read_buffer` has already bounded the value's length with `decimal_length`.
         Field::Decimal(_) => Value::Decimal(text(field.to_string())?),
         _ => return Err(invalid("Binary and nested Parquet values are not supported")),
     })
+}
+/// Refuses a byte-backed decimal value longer than its declared precision needs, before the record
+/// reader turns it into digits. INT32 and INT64 decimals hold at most 8 bytes and skip this check. Formatting costs time and memory that grow faster than the value's
+/// length, and a page may hold a value of tens of MiB. Redundant sign-extension bytes do not count,
+/// so a wide FIXED_LEN_BYTE_ARRAY column still reads.
+fn decimal_length(name: &str, decimal: &Decimal) -> Result<()> {
+    let length = significant_bytes(decimal.data()).len();
+    let allowed = decimal_bytes(decimal.precision());
+    if length > allowed {
+        return Err(Error::Format(format!(
+            "A value in Parquet decimal field {name:?} holds {length} significant bytes, more than the {allowed} that precision {} allows",
+            decimal.precision()
+        )));
+    }
+    Ok(())
+}
+
+/// Drops leading bytes that only repeat the sign of a big-endian two's complement number.
+fn significant_bytes(mut bytes: &[u8]) -> &[u8] {
+    while let [first, rest @ ..] = bytes {
+        match rest.first() {
+            Some(next) if (*first == 0x00 && next & 0x80 == 0) || (*first == 0xFF && next & 0x80 != 0) => bytes = rest,
+            _ => break,
+        }
+    }
+    bytes
+}
+
+/// The fewest two's complement bytes that hold every unscaled value of `precision` digits: the
+/// smallest `n` with `floor(log10(2^(8n - 1) - 1)) >= precision`, as the Parquet format defines
+/// for FIXED_LEN_BYTE_ARRAY decimals.
+fn decimal_bytes(precision: i32) -> usize {
+    ((f64::from(precision.max(1)) * std::f64::consts::LOG2_10 + 1.0) / 8.0).ceil() as usize
 }
 fn finite(number: f64) -> Result<Value> {
     if !number.is_finite() {

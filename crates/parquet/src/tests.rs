@@ -385,3 +385,95 @@ fn a_76_digit_decimal_still_reads() {
     assert_eq!(digits, &format!("0.{}1", "0".repeat(75)));
     assert!(matches!(read(&decimal_file(76, 0)).unwrap().rows[0][0], Value::Decimal(_)));
 }
+
+fn decimal_value_file(physical: &str, precision: i32, value: Vec<u8>) -> Vec<u8> {
+    let schema = format!("message test {{ REQUIRED {physical} d (DECIMAL({precision},0)); }}");
+    let schema = Arc::new(parse_message_type(&schema).unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    if physical == "BYTE_ARRAY" {
+        col.typed::<ByteArrayType>().write_batch(&[ByteArray::from(value)], None, None).unwrap();
+    } else {
+        let value = parquet::data_type::FixedLenByteArray::from(value);
+        col.typed::<parquet::data_type::FixedLenByteArrayType>().write_batch(&[value], None, None).unwrap();
+    }
+    col.close().unwrap();
+    group.close().unwrap();
+    writer.into_inner().unwrap()
+}
+
+#[test]
+fn decimal_byte_lengths_follow_the_parquet_definition() {
+    // floor(log10(2^(8n - 1) - 1)) digits fit in n bytes; check every precision u128 can hold.
+    for precision in 1..=38u32 {
+        let needed = (1..=16u32).find(|n| 10u128.pow(precision) <= 1u128 << (8 * n - 1)).unwrap();
+        assert_eq!(decimal_bytes(precision as i32), needed as usize, "precision {precision}");
+    }
+    assert_eq!(decimal_bytes(76), 32);
+    assert_eq!(significant_bytes(&[0, 0, 0x7F]), &[0x7F]);
+    assert_eq!(significant_bytes(&[0xFF, 0xFF, 0x80]), &[0x80]);
+    assert_eq!(significant_bytes(&[0, 0x80]), &[0, 0x80]);
+    assert_eq!(significant_bytes(&[0xFF, 0x7F]), &[0xFF, 0x7F]);
+    assert!(significant_bytes(&[]).is_empty());
+}
+
+#[test]
+fn an_oversized_decimal_value_fails_before_any_row_callback() {
+    // 1 MiB of 0x01 bytes under DECIMAL(1,0) took 0.73 s to format before this check.
+    for physical in ["BYTE_ARRAY", "FIXED_LEN_BYTE_ARRAY(4096)"] {
+        let bytes = decimal_value_file(physical, 1, vec![1u8; 4096]);
+        let mut calls = 0;
+        let error = super::read_rows(&bytes, &LIMITS, |_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("significant bytes"), "{error}");
+        assert_eq!(calls, 0);
+        assert!(read(&bytes).unwrap_err().to_string().contains("significant bytes"));
+    }
+    let error = read(&decimal_value_file("BYTE_ARRAY", 2, vec![1, 0])).unwrap_err();
+    assert!(error.to_string().contains("2 significant bytes"), "{error}");
+}
+
+#[test]
+fn full_precision_and_sign_extended_decimals_still_read() {
+    let digits = |physical: &str, precision: i32, value: Vec<u8>| {
+        let table = read(&decimal_value_file(physical, precision, value)).unwrap();
+        let Value::Decimal(digits) = &table.rows[0][0] else { panic!("{:?}", table.rows[0][0]) };
+        digits.trim_end_matches('.').to_owned()
+    };
+    // 10^76 - 1 needs all 32 bytes that precision 76 allows.
+    let mut max = [0u8; 32];
+    max[31] = 1;
+    for _ in 0..76 {
+        let mut carry = 0u32;
+        for byte in max.iter_mut().rev() {
+            let next = u32::from(*byte) * 10 + carry;
+            *byte = (next & 0xFF) as u8;
+            carry = next >> 8;
+        }
+    }
+    let mut borrow = 1u16;
+    for byte in max.iter_mut().rev() {
+        let next = u16::from(*byte).wrapping_sub(borrow);
+        borrow = u16::from(next > 0xFF);
+        *byte = (next & 0xFF) as u8;
+    }
+    assert_eq!(digits("BYTE_ARRAY", 76, max.to_vec()), "9".repeat(76));
+    // Sign extension past the needed length reads as the same number.
+    assert_eq!(digits("BYTE_ARRAY", 2, vec![0, 0, 0, 99]), "99");
+    assert_eq!(digits("BYTE_ARRAY", 2, vec![0xFF, 0xFF, 0xFF, 0x9D]), "-99");
+    assert_eq!(digits("FIXED_LEN_BYTE_ARRAY(16)", 9, [vec![0u8; 12], 999_999_999u32.to_be_bytes().to_vec()].concat()), "999999999");
+    // INT64 decimals keep reading as before, even past their declared digits.
+    let schema = Arc::new(parse_message_type("message test { REQUIRED INT64 d (DECIMAL(2,0)); }").unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    col.typed::<Int64Type>().write_batch(&[1000], None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    let table = read(&writer.into_inner().unwrap()).unwrap();
+    assert_eq!(table.rows[0][0], Value::Decimal("1000.".into()));
+}
