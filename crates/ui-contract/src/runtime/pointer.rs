@@ -369,7 +369,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         if events {
             inputs::bump(ctx, Input::Pointer);
         }
-        // A press or release, or an outside press the layer stack's input hook took before egui saw it.
+        // A press or release, or an outside press the layer stack's input hook took before egui saw it. The buttons
+        // held are part of the press state ([`press_state`]) too.
+        inputs::observe(ctx, Input::Press, frame.buttons);
         if frame.press.is_some() || frame.release.is_some() || crate::runtime::overlay::absorbed_press_raw(ctx).is_some() {
             inputs::bump(ctx, Input::Press);
         }
@@ -468,7 +470,8 @@ pub(crate) fn with_frame<R>(ctx: &Context, f: impl FnOnce(Option<&PointerFrame>,
 }
 
 /// The running pass's pointer input. A tracked input (`runtime::inputs`): a memoized view that reads it runs when the
-/// pointer changes. A view that reads only the modifiers reads [`mods`].
+/// pointer changes. A view that reads only the modifiers reads [`mods`], one that reads only the buttons, presses and
+/// releases [`press_state`].
 pub fn frame(ctx: &Context) -> PointerFrame {
     crate::runtime::replay::note_input(ctx, Input::Pointer);
     frame_raw(ctx)
@@ -479,6 +482,32 @@ pub fn frame(ctx: &Context) -> PointerFrame {
 pub fn mods(ctx: &Context) -> Mods {
     crate::runtime::replay::note_input(ctx, Input::Modifiers);
     with_pass_raw(ctx, |pointer| pointer.frame.as_ref().map_or(Mods::NONE, |frame| frame.mods))
+}
+
+/// The press state of a pass: the buttons held, and the primary press and the release the pass brought.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PressState {
+    /// The buttons held (`PointerFrame::buttons`).
+    pub buttons: Buttons,
+    /// The primary press of the pass (`PointerFrame::press`).
+    pub press: Option<PressStart>,
+    /// The button released in the pass (`PointerFrame::release`).
+    pub release: Option<PointerButton>,
+}
+
+/// The press state of the running pass. A tracked input (`Input::Press`): a memoized view that reads it runs on a
+/// press or a release, and a pointer move leaves it alone. A view that needs the pointer's position reads [`frame`].
+pub fn press_state(ctx: &Context) -> PressState {
+    crate::runtime::replay::note_input(ctx, Input::Press);
+    with_pass_raw(ctx, |pointer| {
+        let frame = pointer.frame.as_ref();
+        PressState {
+            buttons: frame.map_or(Buttons::empty(), |frame| frame.buttons),
+            press: frame.and_then(|frame| frame.press),
+            release: frame.and_then(|frame| frame.release),
+        }
+    })
 }
 
 /// Where the primary press of the running pass started. A tracked input (`Input::Press`): a layer's dismissal decides by

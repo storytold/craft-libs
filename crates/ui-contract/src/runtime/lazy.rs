@@ -140,6 +140,8 @@ struct Entry {
     /// in its real run, so each kind places the child as it last laid it out. Out of view the child keeps it at any
     /// room; it is measured again when it meets the reach.
     sizes: [Option<Measured>; 2],
+    /// The pass of the last measuring run in `sizes`.
+    measuring_pass: u64,
     /// What the child registered with the focus service in the last real run that showed it. Out of view the
     /// child registers it again in its place, so Tab and F6 reach its stops; it runs while one of them holds focus
     /// or a focus request asks to reveal one.
@@ -450,9 +452,12 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
 /// Records what a run that showed the child `id` found: what it measured in a run of this kind and, from a real run,
 /// what it registered with the focus service.
 pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, measured: Measured, registered: Option<Transcript>) {
-    write(ctx, id, |store, _, frame| {
+    write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(owner, id, frame);
         entry.sizes[usize::from(!sizing)] = Some(measured);
+        if sizing {
+            entry.measuring_pass = pass_nr;
+        }
         if let Some(registered) = registered {
             entry.focus = Arc::new(registered);
         }
@@ -466,10 +471,14 @@ pub(crate) fn fills(ctx: &Context, id: Id, sizing: bool) -> Option<craft_behavio
     with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[own].or(entry.sizes[other])).and_then(|measured| measured.fills))
 }
 
-/// The extent the child `id` took in the last measuring or real run that showed it (this pass's measuring run once it
-/// ran), at whatever room it had; `None` before any run showed it.
+/// The extent the child `id` took in this pass's measuring run once it ran, else in the last real run that showed it,
+/// at whatever room it had; `None` before any run showed it.
 pub(crate) fn last_extent(ctx: &Context, id: Id) -> Option<Vec2> {
-    with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[1].map(|measured| measured.size)))
+    with(ctx, |store, pass_nr, _| {
+        let entry = store.entries.get(&id)?;
+        let measured = entry.sizes[0].filter(|_| entry.measuring_pass == pass_nr);
+        measured.or(entry.sizes[1]).map(|measured| measured.size)
+    })
 }
 
 /// Registers what the skipped child `id` registered with the focus service in the last real run that showed it, in
