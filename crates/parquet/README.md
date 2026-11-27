@@ -18,7 +18,7 @@ binary64 precision into text, or a column into a header row is the caller's work
 
 Supported input: flat optional or required numeric, Boolean and UTF-8 fields; decimals (as exact
 digits); dates; millisecond and microsecond times and timestamps, as stored. Formula-looking
-strings stay text. NaN and infinities, nested, repeated, list and map fields, duplicate field
+strings stay text. Decimals whose precision or scale passes 76 digits, NaN and infinities, nested, repeated, list and map fields, duplicate field
 names, binary values, unknown logical types, nanosecond and INT96 times and timestamps, encrypted
 files and external column files are refused with a message, never truncated.
 

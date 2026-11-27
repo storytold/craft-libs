@@ -348,3 +348,40 @@ fn the_writing_pass_checks_the_values_it_writes() {
     .unwrap_err();
     assert!(error.to_string().contains("changed type"), "{error}");
 }
+
+fn decimal_file(precision: i32, scale: i32) -> Vec<u8> {
+    let schema = format!("message test {{ REQUIRED BYTE_ARRAY d (DECIMAL({precision},{scale})); }}");
+    let schema = Arc::new(parse_message_type(&schema).unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    col.typed::<ByteArrayType>().write_batch(&[ByteArray::from(vec![1u8])], None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    writer.into_inner().unwrap()
+}
+
+#[test]
+fn decimals_past_76_digits_fail_before_any_row_callback() {
+    // A scale of 2,000,000 took about a minute of CPU per cell before the cap.
+    for (precision, scale) in [(77, 77), (77, 0), (2_000_000, 2_000_000)] {
+        let bytes = decimal_file(precision, scale);
+        let mut calls = 0;
+        let error = super::read_rows(&bytes, &LIMITS, |_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("76-digit"), "{error}");
+        assert_eq!(calls, 0);
+        assert!(read(&bytes).unwrap_err().to_string().contains("76-digit"));
+    }
+}
+
+#[test]
+fn a_76_digit_decimal_still_reads() {
+    let table = read(&decimal_file(76, 76)).unwrap();
+    let Value::Decimal(digits) = &table.rows[0][0] else { panic!("{:?}", table.rows[0][0]) };
+    assert_eq!(digits, &format!("0.{}1", "0".repeat(75)));
+    assert!(matches!(read(&decimal_file(76, 0)).unwrap().rows[0][0], Value::Decimal(_)));
+}

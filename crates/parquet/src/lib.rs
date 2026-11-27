@@ -32,6 +32,12 @@ fn invalid(message: &str) -> Error {
 /// The longest text value or field name, in bytes, read or written.
 pub const MAX_TEXT_BYTES: usize = 1 << 20;
 
+/// The most digits a decimal field's precision or scale may declare, Arrow Decimal256's limit.
+///
+/// The record reader writes out every scale digit of every value, so a larger scale costs CPU time
+/// per cell that the file's size does not bound.
+pub const MAX_DECIMAL_DIGITS: i32 = 76;
+
 /// Table size caps chosen by the caller.
 ///
 /// `max_cells` counts one row of field names plus the data rows, times the columns, so it bounds
@@ -183,6 +189,16 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
         // INT96 timestamps carry nanoseconds that the record reader cuts to milliseconds.
         if field.get_physical_type() == Physical::INT96 {
             return Err(invalid("INT96 Parquet timestamps are not supported; convert to microseconds first"));
+        }
+        let decimal = field.get_basic_info().converted_type() == ConvertedType::DECIMAL
+            || matches!(field.get_basic_info().logical_type_ref(), Some(LogicalType::Decimal(_)));
+        if decimal && (field.get_precision() > MAX_DECIMAL_DIGITS || field.get_scale() > MAX_DECIMAL_DIGITS) {
+            return Err(Error::Format(format!(
+                "Parquet decimal field {:?} declares precision {} and scale {}, past the {MAX_DECIMAL_DIGITS}-digit limit",
+                field.name(),
+                field.get_precision(),
+                field.get_scale()
+            )));
         }
         if let Some(logical) = field.get_basic_info().logical_type_ref() {
             match logical {
