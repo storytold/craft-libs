@@ -17,7 +17,8 @@
 //! drive's current directory otherwise. Returned executable paths are absolute.
 //!
 //! A file the OS can start is, on Windows, one whose extension is `.com`, `.exe`, `.bat` or `.cmd`
-//! in any case, and on Unix one with an execute bit set. The search skips any other file and goes on.
+//! in any case, and on Unix one the current process has permission to execute. The search skips
+//! any other file and goes on.
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
 //! non-blank line of its standard output, or of its standard error when standard output is blank.
@@ -509,7 +510,7 @@ fn candidate_names(program: &str, windows: bool, pathext: Option<&OsStr>) -> Vec
 }
 
 /// Whether the OS can start the file at `p`: on Windows a file whose extension, in any case, is one of
-/// [`WINDOWS_SUFFIXES`], and on Unix a file with an execute bit set.
+/// [`WINDOWS_SUFFIXES`], and on Unix a file the current process has permission to execute.
 fn startable(p: &Path, windows: bool) -> bool {
     if !p.is_file() {
         return false;
@@ -523,8 +524,7 @@ fn startable(p: &Path, windows: bool) -> bool {
 
 #[cfg(unix)]
 fn executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+    rustix::fs::accessat(rustix::fs::CWD, p, rustix::fs::Access::EXEC_OK, rustix::fs::AtFlags::EACCESS).is_ok()
 }
 
 #[cfg(not(unix))]
@@ -1034,6 +1034,29 @@ mod tests {
         assert_eq!(locate(&search("ffmpeg", None, Some(&path), &[])).unwrap(), exe);
         let found = locate(&search("ffmpeg", Some(data.as_os_str()), None, &[]));
         assert!(matches!(found, Err(OracleError::InvalidExplicitPath { .. })), "{found:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_lookup_uses_the_current_process_execute_permission() {
+        use std::os::unix::fs::PermissionsExt;
+        let first = Scratch::new("owner-noexec");
+        let second = Scratch::new("owner-exec");
+        let candidate = script(first.path(), "qpdf", "printf 'first\\n'");
+        let usable = script(second.path(), "qpdf", "printf 'second\\n'");
+        let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+        for mode in [0o601, 0o610] {
+            std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(mode)).unwrap();
+            let can_start = Command::new(&candidate).output().is_ok();
+            let found = find_in("qpdf", "--version", None, Some(&path), &[], ProbeLimits::default()).unwrap();
+            assert_eq!(found.path(), if can_start { candidate.as_path() } else { usable.as_path() });
+            let explicit = locate(&search("qpdf", Some(candidate.as_os_str()), None, &[]));
+            if can_start {
+                assert_eq!(explicit.unwrap(), candidate);
+            } else {
+                assert!(matches!(explicit, Err(OracleError::InvalidExplicitPath { .. })), "{explicit:?}");
+            }
+        }
     }
 
     /// On Windows only a `.com`, `.exe`, `.bat` or `.cmd` file, in any case, is found or accepted.
