@@ -493,13 +493,17 @@ impl Component for Slider<'_> {
             Some(value) => Numeric::new(*value, range),
             None => Numeric::empty(range),
         };
-        // The app's stepper decides which ways the row can step; a key policy's own amount is the step it reports, else
-        // the scale's small step.
-        let step = self.key_policy.and_then(ScalarKeyPolicy::amount).unwrap_or_else(|| scale.small());
-        access.numeric(numeric.step(step));
-        if let Some(stepper) = &self.stepper {
-            let can_step = |steps| ladder_value(stepper, &scale, cx.value().copied(), steps).is_some();
-            access.variable_steps(can_step(1.0), can_step(-1.0));
+        // A stepper's ladder decides which ways the row can step, and a fixed step would contradict it; otherwise a key
+        // policy's own amount is the step the row reports, else the scale's small step.
+        match &self.stepper {
+            Some(stepper) => {
+                let can_step = |steps| ladder_value(stepper, &scale, cx.value().copied(), steps).is_some();
+                access.numeric(numeric).variable_steps(can_step(1.0), can_step(-1.0));
+            }
+            None => {
+                let step = self.key_policy.and_then(ScalarKeyPolicy::amount).unwrap_or_else(|| scale.small());
+                access.numeric(numeric.step(step));
+            }
         }
     }
 
