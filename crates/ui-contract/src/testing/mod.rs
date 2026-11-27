@@ -61,6 +61,8 @@ pub use crate::runtime::measure::{
     last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, last_pass_tip_texts, least_runs as shrink_least_runs,
     row_builds, row_measures, run as measuring_run, take_effects, widest_runs,
 };
+#[cfg(feature = "testing")]
+pub use crate::runtime::pass_state::unbound_reads as unbound_pass_state_reads;
 pub use craft_ui_macros::{story, trial};
 pub use fixture::{Fixture, Impure, Room, Target};
 pub use frames::Frames;

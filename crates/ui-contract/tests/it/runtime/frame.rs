@@ -59,11 +59,14 @@ fn one_press_per_pass_and_a_discard_pass_gets_no_held_events() {
     assert_eq!(run(&mut frames, vec![], false), vec![Vec::<&str>::new()]);
 }
 
-/// Pass-local state: inside a pass the pipeline looks up no service in context data per run, so a settled pass of
-/// forty leaves makes as many lookups as one of ten.
+/// Pass-local state: inside a pass the pipeline looks up no service in context data per run, and each run reaches the
+/// pass state and the pass's facts through its component tree's binding, so a settled pass of forty command-bound
+/// leaves (each registers the command it shows, a per-viewport record) makes as many lookups and unbound reads as one
+/// of ten.
 #[trial]
 fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
     use craft_ui::runtime::egui::memory::service_lookups;
+    use craft_ui::testing::unbound_pass_state_reads;
     use craft_ui_test_kit::contract::Panel;
     let settled_lookups = |leaves: usize| {
         let mut frames = Frames::new();
@@ -71,19 +74,20 @@ fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
             Panel::new().id_salt("leaves").show(ui, |ui, _| {
                 for at in 0..leaves {
                     let seen = std::cell::RefCell::new(Seen::default());
-                    Probe::new(&seen).label(format!("Leaf {at}")).show(ui);
+                    Probe::new(&seen).label(format!("Leaf {at}")).command(Shown::Apply).show(ui);
                 }
             });
         };
         for _ in 0..3 {
             frames.frame(vec![], &mut show);
         }
-        let before = service_lookups();
+        let (lookups, unbound) = (service_lookups(), unbound_pass_state_reads());
         frames.frame(vec![], &mut show);
-        service_lookups() - before
+        (service_lookups() - lookups, unbound_pass_state_reads() - unbound)
     };
-    let (ten, forty) = (settled_lookups(10), settled_lookups(40));
+    let ((ten, ten_unbound), (forty, forty_unbound)) = (settled_lookups(10), settled_lookups(40));
     assert_eq!(ten, forty, "context-data lookups grow with the runs: {ten} for ten leaves, {forty} for forty");
+    assert_eq!(ten_unbound, forty_unbound, "unbound pass-state reads grow with the runs: {ten_unbound} for ten leaves, {forty_unbound} for forty");
 }
 
 /// The app command the settled view's probe is bound to; its modal rule is the default one, `Blocked`.
