@@ -139,3 +139,42 @@ fn glyphs_panel_alternates() {
         assert!(visible(&fx, alternate), "the popup lists every alternate of the cell");
     }
 }
+
+#[trial]
+fn the_font_style_and_category_pickers_fit_in_a_narrow_glyphs_panel() {
+    let expected_family = "A particularly long font family name";
+    let families = ["Plain".to_owned(), expected_family.to_owned()];
+    let styles = ["Regular".to_owned(), "Extra Bold Extended Italic".to_owned()];
+    let selected = Rc::new(RefCell::new(String::new()));
+    let seen = Rc::clone(&selected);
+    let (mut family, mut style, mut settings) = ("Plain".to_owned(), "Regular".to_owned(), GlyphsPanelSettings::default());
+    let mut fx = Fixture::new(move |ui| {
+        let out = GlyphsPanel::new("Glyphs", &Plain, Bind::bound(&mut family), Bind::bound(&mut style), Bind::bound(&mut settings))
+            .families(&families)
+            .styles(&styles)
+            .show(ui);
+        if out.font_changed {
+            *seen.borrow_mut() = family.clone();
+        }
+    });
+    let width = 100.0;
+    fx.room(egui::vec2(width, 520.0)).settle();
+    for label in ["Font", "Style", "Category"] {
+        let target = fx.by_label(label).unwrap_or_else(|| panic!("missing {label}"));
+        assert!(target.rect.left() >= 0.0 && target.rect.right() <= width, "{label} overflows at {:?}", target.rect);
+    }
+    let category = fx.by_label("Category").expect("the Category picker");
+    fx.access(craft_ui::testing::focus::AccessActionKind::Focus, &category).settle();
+    fx.room(egui::vec2(480.0, 520.0)).settle();
+    let wide_category = fx.by_label("Category").expect("the Category picker stays available");
+    let caption = fx.by_label("Show:").expect("the Category caption");
+    assert_eq!(wide_category.node, category.node);
+    assert_eq!(fx.tree().focused_key(), category.node);
+    assert!(wide_category.rect.center().y >= caption.rect.top() && wide_category.rect.center().y <= caption.rect.bottom());
+    fx.room(egui::vec2(width, 520.0)).settle();
+    let font = fx.by_label("Font").expect("the Font picker");
+    fx.click(&font).settle();
+    let choice = fx.by_label(expected_family).expect("the long font name is accessible in the picker");
+    fx.click(&choice).settle();
+    assert_eq!(&*selected.borrow(), expected_family);
+}
