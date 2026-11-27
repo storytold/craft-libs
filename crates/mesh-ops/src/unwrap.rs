@@ -26,7 +26,8 @@ const CHART_COS: f32 = 0.5;
 pub fn weld_ids(positions: &[Vec3]) -> Vec<u32> {
     let (lo, hi) =
         positions.iter().map(|p| p.as_dvec3()).fold((DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
-    let cell = ((hi - lo).length() * 1e-6).max(1e-12);
+    let diagonal = (hi - lo).length();
+    let cell = if diagonal > 0.0 && diagonal.is_finite() { diagonal * 1e-6 } else { 1.0 };
     let mut map: HashMap<[i64; 3], u32> = HashMap::with_capacity(positions.len());
     positions
         .iter()
@@ -47,6 +48,33 @@ pub fn all_triangles_degenerate(mesh: &Mesh) -> bool {
             [a, b, c] => p(a) == p(b) || p(a) == p(c) || p(b) == p(c),
             _ => true,
         })
+}
+
+fn face_has_area(positions: [Vec3; 3]) -> bool {
+    (0..3).any(|axis| {
+        let next = (axis + 1) % 3;
+        let [a, b, c] = positions.map(|position| [f64::from(position[axis]), f64::from(position[next])]);
+        let products = [a[0] * b[1], b[0] * c[1], c[0] * a[1], -a[1] * b[0], -b[1] * c[0], -c[1] * a[0]];
+        let (mut expansion, mut len) = ([0.0; 6], 0);
+        for mut value in products {
+            let mut kept = 0;
+            for index in 0..len {
+                let part = expansion[index];
+                let sum = value + part;
+                let part_virtual = sum - value;
+                let value_virtual = sum - part_virtual;
+                let error = (value - value_virtual) + (part - part_virtual);
+                if error != 0.0 {
+                    expansion[kept] = error;
+                    kept += 1;
+                }
+                value = sum;
+            }
+            expansion[kept] = value;
+            len = kept + 1;
+        }
+        expansion[..len].iter().any(|part| *part != 0.0)
+    })
 }
 
 #[derive(Clone)]
@@ -128,6 +156,11 @@ fn check_input(mesh: &Mesh) -> Result<()> {
         return Err(GeomError::Invalid("mesh colors are not one finite color per vertex".into()));
     }
     if all_triangles_degenerate(mesh) {
+        return Err(GeomError::Invalid("every triangle of the mesh is degenerate".into()));
+    }
+    if !mesh.indices.is_empty()
+        && mesh.indices.as_chunks::<3>().0.iter().all(|vertices| !face_has_area(vertices.map(|vertex| mesh.positions[vertex as usize])))
+    {
         return Err(GeomError::Invalid("every triangle of the mesh is degenerate".into()));
     }
     Ok(())
@@ -329,7 +362,7 @@ pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Res
     }
 
     // Rebuild vertices: one per (vertex, chart).
-    let mut remap: HashMap<(u32, u32), u32> = HashMap::with_capacity(mesh.positions.len() * 2);
+    let mut remap: HashMap<(u32, u32), u32> = HashMap::with_capacity(mesh.positions.len().saturating_mul(2).min(mesh.indices.len()));
     let (mut positions, mut normals, mut uvs, mut colors) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut indices = Vec::with_capacity(mesh.indices.len());
     for (t, &c) in chart_of.iter().enumerate() {
@@ -446,6 +479,29 @@ impl Mesh {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tiny_quads_keep_their_shared_chart_edge() {
+        let mut mesh = quad();
+        for position in &mut mesh.positions {
+            *position *= 2.0_f32.powi(-42);
+        }
+        assert_eq!(auto_unwrap(&mut mesh, 4.0, 16).unwrap(), 1);
+        assert_eq!(weld_ids(&[Vec3::ONE; 4]), vec![0; 4]);
+    }
+
+    #[test]
+    fn nonempty_all_collinear_meshes_are_rejected_unchanged() {
+        for positions in [vec![Vec3::ZERO, Vec3::X, Vec3::X * 2.0], {
+            let d = Vec3::new(1.0, 17.0, 0.0);
+            vec![Vec3::ZERO, d * (3.0 * 2.0_f32.powi(-49)), d]
+        }] {
+            let mut mesh = Mesh::from_parts(positions, Some(vec![Vec3::Z; 3]), Vec::new(), vec![0, 1, 2], "m").unwrap();
+            let before = mesh.clone();
+            assert!(auto_unwrap(&mut mesh, 4.0, 256).is_err());
+            assert_eq!(mesh, before);
+        }
+    }
+
     #[test]
     fn missing_normals_keep_tiny_and_large_face_directions() {
         for scale in [1e-25, 1e25] {
