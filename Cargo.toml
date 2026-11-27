@@ -32,6 +32,7 @@ craft-ssip = { path = "crates/ssip" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 craft-render-parity = { path = "crates/render-parity" }
+craft-shared-vec = { path = "crates/shared-vec" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`

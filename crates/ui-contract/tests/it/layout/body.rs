@@ -377,6 +377,37 @@ fn a_content_column_sweeps_again_only_for_a_square_picture_narrower_than_it() {
     }
 }
 
+/// The window's region and the rect of a `Picture` of `least` shown straight in a window `room` wide.
+fn picture_in_room(least: f32, square: bool, room: f32) -> (Rect, Rect) {
+    let (seen, region) = (Rc::new(RefCell::new(Seen::default())), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown, shown_region) = (Rc::clone(&seen), Rc::clone(&region));
+    let measures = Rc::new(Measures::default());
+    let mut fixture = Fixture::new(move |ui| {
+        shown_region.set(ui.available_rect_before_wrap());
+        Picture { common: Common::new(), least, square, seen: &shown, measures: &measures }.id_salt("picture").show(ui);
+    });
+    fixture.room(Vec2::new(room, 800.0)).settle();
+    let picture = seen.borrow().rect;
+    (region.get(), picture)
+}
+
+// A picture offered less room than its least (a panel at its narrowest) takes that room and stays inside it; offered
+// more, it shows across the room.
+#[trial]
+fn a_picture_offered_less_room_than_its_least_stays_inside_it() {
+    for square in [false, true] {
+        let (region, narrow) = picture_in_room(400.0, square, 300.0);
+        let dump = format!("square {square}, region {region:?}, picture {narrow:?}");
+        assert!(narrow.right() <= region.right() + SLACK, "the picture stays inside the room it is offered: {dump}");
+        assert!(narrow.width() > 2.0 * PICTURE_PAD + SLACK, "the picture still shows: {dump}");
+        if square {
+            assert!((narrow.width() - 2.0 * PICTURE_PAD - narrow.height()).abs() < SLACK, "a square picture stays square: {dump}");
+        }
+        let (region, wide) = picture_in_room(400.0, square, 700.0);
+        assert!(wide.width() > 400.0 + 2.0 * PICTURE_PAD + SLACK, "offered more than its least, it shows across the room: {wide:?} in {region:?}");
+    }
+}
+
 #[trial]
 fn a_space_between_child_leaves_room_for_the_siblings_after_it() {
     let (first, last) = (Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())));

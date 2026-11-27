@@ -1910,6 +1910,7 @@ dependencies = [
  "craft-scraft-format",
  "craft-settings",
  "craft-sf2",
+ "craft-shared-vec",
  "craft-sheet",
  "craft-shx",
  "craft-silhouette-studio",
@@ -2048,6 +2049,7 @@ name = "craft-appkit"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
 ]
@@ -2281,6 +2283,7 @@ dependencies = [
  "craft-atomic",
  "craft-control-protocol",
  "craft-flags",
+ "craft-platform",
  "dirs",
  "getrandom 0.3.4",
  "log",
@@ -2420,6 +2423,7 @@ name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-browse",
@@ -4100,6 +4104,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-shared-vec"
+version = "0.1.0"
+dependencies = [
+ "craft-shared-vec",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-sheet"
 version = "0.1.0"
 
@@ -4218,6 +4232,7 @@ dependencies = [
 name = "craft-suite-account"
 version = "0.1.0"
 dependencies = [
+ "craft-platform",
  "dirs",
  "keyring",
  "keyring-core",

@@ -191,7 +191,7 @@ overflows `f32`.
 Changes from those files:
 
 - Scenes, resolve factors and pixels are checked. `Limits` bounds sizes, triangles, lights and
-  coverage work. Scene and size checks precede target allocation. Preparation can allocate clipping
+  coverage work. Scene and size checks precede target allocation. Preparation can allocate vertex
   and triangle buffers before a work-limit error. EffectCraft panicked on an index or a material
   reference that did not exist, an alpha-masked caster whose texture did not exist, an environment
   level range that overflowed, a zero raster width and a resolve factor of 0. It returned a cropped
