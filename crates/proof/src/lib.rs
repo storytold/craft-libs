@@ -500,10 +500,16 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
     let is_w = |c: char| is_core(c) || c == '\'' || c == '’' || c == '-';
     // The char before was a letter, digit or mark, or a joiner kept after one.
     let mut after_core = false;
+    // Is the first char after the current run of joiners a letter, digit or mark? Looked up once
+    // per run, so a long run of joiners costs linear time, not quadratic.
+    let mut run_ends_core: Option<bool> = None;
     for (i, c) in text.char_indices() {
         let w = if is_joiner(c) {
-            after_core && text.get(i + c.len_utf8()..).and_then(|rest| rest.chars().find(|&n| !is_joiner(n))).is_some_and(is_core)
+            after_core
+                && *run_ends_core
+                    .get_or_insert_with(|| text.get(i + c.len_utf8()..).and_then(|rest| rest.chars().find(|&n| !is_joiner(n))).is_some_and(is_core))
         } else {
+            run_ends_core = None;
             is_w(c)
         };
         after_core = if is_joiner(c) { w } else { is_core(c) };
