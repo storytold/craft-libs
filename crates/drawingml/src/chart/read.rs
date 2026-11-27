@@ -1795,4 +1795,30 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn current_line_marker_defaults_distinguish_bare_false_and_absent() {
+        // Show Marker uses CT_Boolean: a present element without val defaults to true.
+        for grouping in ["standard", "stacked", "percentStacked"] {
+            for (flag, visible) in [("<c:marker/>", true), ("<c:marker val=\"true\"/>", true), ("<c:marker val=\"0\"/>", false), ("", false)] {
+                let xml = review_line_chart(grouping, true, &[("Inherited", None)]).replace("<c:marker val=\"1\"/>", flag);
+                let mut chart = read_chart_xml(xml.as_bytes()).unwrap();
+                let expected = if grouping == "standard" {
+                    assert_eq!(chart.kind, if visible { ChartType::LineMarkers } else { ChartType::Line });
+                    None
+                } else {
+                    Some(serde_json::json!(visible))
+                };
+                assert_eq!(serde_json::to_value(&chart).unwrap()["series"][0].get("markerVisible"), expected.as_ref());
+                assert_eq!(chart.series[0].marker, None);
+                chart.title = Some("Title only".into());
+                let (written, kept) = crate::chart::write::chart_xml(&chart);
+                assert!(!kept);
+                let back = read_chart_xml(&written).unwrap();
+                assert_eq!(back.kind, chart.kind);
+                assert_eq!(back.series[0].marker, None);
+                assert_eq!(serde_json::to_value(back).unwrap()["series"][0].get("markerVisible"), expected.as_ref());
+            }
+        }
+    }
 }
