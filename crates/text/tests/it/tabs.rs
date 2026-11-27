@@ -253,3 +253,21 @@ fn the_default_button_follows_the_field_that_holds_enter() {
     press(&mut fixture, "Position");
     assert_eq!(default(&dialog), (false, false), "a click into a stop's position: Enter takes the position");
 }
+
+/// As in Word, the Tab stop position box shows the selected stop's position: the first stop's when the dialog opens,
+/// another's when its row is selected; it empties when Clear leaves nothing selected.
+#[trial]
+fn the_tab_stop_position_box_shows_the_selected_stop() {
+    let stops = vec![stop(72.0, TabAlign::Left, TabLeader::None), stop(144.0, TabAlign::Left, TabLeader::None)];
+    let (mut fixture, dialog, _) = shown(TabStopsDialog::new(stops, 36.0).bare(true));
+    let shown_in_box = |fixture: &Fixture| {
+        let target = fixture.by_label("Tab stop position:").expect("the box is shown");
+        fixture.tree().value_of(target.node).unwrap_or_default().to_owned()
+    };
+    assert!(shown_in_box(&fixture).contains("72"), "the box opens on the first stop: {:?}", shown_in_box(&fixture));
+    dialog.borrow_mut().select(Some(1));
+    fixture.idle(4);
+    assert!(shown_in_box(&fixture).contains("144"), "the box follows the selection: {:?}", shown_in_box(&fixture));
+    press(&mut fixture, "Clear");
+    assert!(!shown_in_box(&fixture).contains("144"), "Clear empties the box: {:?}", shown_in_box(&fixture));
+}

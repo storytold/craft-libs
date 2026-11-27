@@ -99,8 +99,10 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 ///   leader `Select` whose options read as Word's list does ("1 ……"). Editing the position keeps the rows in order
 ///   until the edit ends, then [`TabStopsDialog::normalize`] restores position order and merges stops moved onto one
 ///   another (the edited row wins).
-/// - Set adds a stop at the next free multiple of the default interval after the last stop, left aligned, no leader,
-///   selected; Clear moves the selected stop to "to be cleared"; Clear All clears every stop.
+/// - The Tab stop position box shows the selected stop's position (the first stop is selected when the dialog
+///   opens), as in Word. Set puts a stop at the box's position, or, when a stop already holds it (or the box is
+///   empty), at the next free multiple of the default interval after the last stop; the new stop is left aligned, no
+///   leader, selected. Clear moves the selected stop to "to be cleared"; Clear All clears every stop.
 /// - Positions are clamped to ±[`MAX_POSITION`]; at most [`MAX_STOPS`] stops are read from a paragraph.
 /// - Keys: a number field (Default tab stops, Tab stop position, a row's position) holds Enter and Escape from when the
 ///   user moves focus into it, clicks it or types in it until it takes one of them ([`FieldKeys`]). Enter in the Tab stop
@@ -152,6 +154,13 @@ impl TabStopsDialog {
             bare: false,
             held: HeldAnswer::new(),
         }
+        .first_selected()
+    }
+
+    /// The dialog opens on the first stop selected, its position in the box, as Word's does.
+    fn first_selected(mut self) -> Self {
+        self.select(Some(0));
+        self
     }
 
     /// Sets the unit the position fields show.
@@ -181,7 +190,7 @@ impl TabStopsDialog {
         }
         self.stops.push(TabStop { position, align: TabAlign::Left, leader: TabLeader::None });
         self.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
-        self.selected = self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION);
+        self.select(self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION));
         self.edited = None;
         self.to_edit = self.selected.is_some();
     }
@@ -241,9 +250,12 @@ impl TabStopsDialog {
         self.edited = Some(at);
     }
 
-    /// Selects the stop at index `at`, or none.
+    /// Selects the stop at index `at`, or none. As in Word, the Tab stop position box shows a selected stop's position.
     pub fn select(&mut self, at: Option<usize>) {
         self.selected = at.filter(|at| *at < self.stops.len());
+        if let Some(stop) = self.selected.map(|at| self.stops[at]) {
+            self.typed_position = Some(stop.position);
+        }
     }
 
     /// Clear: the selected stop moves to "to be cleared".
@@ -252,6 +264,7 @@ impl TabStopsDialog {
         let stop = self.stops.remove(at);
         self.cleared.push(stop.position);
         self.selected = None;
+        self.typed_position = None;
         self.edited = None;
     }
 
@@ -259,6 +272,7 @@ impl TabStopsDialog {
     pub fn clear_all(&mut self) {
         self.cleared.extend(self.stops.drain(..).map(|stop| stop.position));
         self.selected = None;
+        self.typed_position = None;
         self.edited = None;
     }
 
@@ -574,7 +588,8 @@ impl TabStopsDialog {
     /// selection change moves the selected stop.
     fn table(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units, fields: &mut Vec<FieldPass>) {
         let columns = vec![
-            ColumnSpec::new(POSITION, words.position_column.clone(), ColumnWidth::Content),
+            // Wide enough for its header with no rows, and for the position field.
+            ColumnSpec::new(POSITION, words.position_column.clone(), ColumnWidth::Controls(4.0)),
             ColumnSpec::new(ALIGNMENT, words.alignment.clone(), ColumnWidth::fill(1.0)),
             ColumnSpec::new(LEADER, words.leader.clone(), ColumnWidth::fill(1.0)),
         ];
@@ -678,7 +693,10 @@ impl TabStopsDialog {
             let set = Button::new(words.set.clone()).enabled(self.stops.len() < MAX_STOPS);
             let set = if self.set_is_default() { set.variant(Variant::PRIMARY) } else { set };
             if clicked(&set.show(ui)) {
-                match self.typed_position {
+                // The box shows the selected stop: Set with a position no stop holds puts one there, otherwise it adds
+                // the next free step, so Set always adds a stop.
+                let held = |at: f32| self.stops.iter().any(|stop| (stop.position - at).abs() < SAME_POSITION);
+                match self.typed_position.filter(|at| !held(*at)) {
                     Some(position) => self.set_at(position),
                     None => self.new_stop(),
                 }
