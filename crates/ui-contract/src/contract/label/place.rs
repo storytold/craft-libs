@@ -67,20 +67,22 @@ pub(super) fn hidden_control(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flo
     }
 }
 
-/// How far a control with its label after it (a check box row: a labelled check box, or a field whose label follows
-/// its control) starts from its row's start. Under a form whose labelled rows share a label column, a row of the
-/// column's flow starts past the column and the gap, so its control lines up with theirs, when the row has room for
-/// the column, the gap and the control; 0 elsewhere. An inspector's check rows stay at the row's start.
-fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -> f32 {
+/// The label column a control with its label after it (a check box row: a labelled check box, or a field whose label
+/// follows its control) starts past. Under a form whose labelled rows share a label column, a row of the column's flow
+/// starts past the column and the gap, so its control lines up with theirs, when the row has room for the column, the
+/// gap and the control: that column, or 0 while the form has none. `None` where the row stays at its start whatever
+/// the column: an inspector's check rows, a row outside the column's flow, and a row too narrow for the column.
+fn after_column(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -> Option<f32> {
     if input.side.layout != FieldLayout::After || !input.in_column || env.values.get::<LabelScheme>() != LabelScheme::Form {
-        return 0.0;
+        return None;
     }
     match crate::layout::ambient_width(ctx, &crate::layout::LABELS, 0.0).filter(|column| *column > 0.0) {
         Some(column) if input.room >= column + gap + input.control_min => {
             crate::layout::note_beside(ctx, &crate::layout::LABELS, input.room - gap - input.control_min);
-            column + gap
+            Some(column)
         }
-        _ => 0.0,
+        Some(_) => None,
+        None => Some(0.0),
     }
 }
 
@@ -89,12 +91,20 @@ fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -
 pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: &Ui, leaf: &mut LabelLeaf, glyph: bool, flow: Flow) -> Placed {
     let rtl = env.direction.is_rtl();
     let gap = label_gap(env);
-    let indent = after_indent(ctx, env, input, gap);
+    let after_column = after_column(ctx, env, input, gap);
+    let indent = after_column.filter(|column| *column > 0.0).map_or(0.0, |column| column + gap);
     let mut natural = leaf.measure_in(kids, craft_behavior::Proposal::Ideal);
     if input.side.layout == FieldLayout::After && !input.egui_cell {
         // The label takes the room the control and the gap leave, and its detail wraps there.
         let room = (input.row.width() - indent - input.control_min - gap).max(0.0);
-        if natural.x > room {
+        let wraps = natural.x > room;
+        // A wider label column leaves the label less room: the row's measure holds while the group's column stays
+        // within the column it read, or for a label on one line, within the widest column that keeps it there.
+        if let Some(column) = after_column {
+            let one_line = input.row.width() - input.control_min - gap - natural.x - gap;
+            crate::layout::note_beside(ctx, &crate::layout::LABELS, if wraps { column } else { one_line });
+        }
+        if wraps {
             natural = leaf.measure_in(kids, craft_behavior::Proposal::Width(room));
         }
     }

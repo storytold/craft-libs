@@ -606,7 +606,12 @@ pub(crate) fn run<C: Component>(
     // ended its gesture without putting back the value from before it), and the part starts afresh from its value.
     if !crate::runtime::memory::shown_last_pass(&ctx, id) {
         state = TextState::default();
+    } else if state.edit_target != part.options.edit_target {
+        // The old target's draft and gesture must never reach the new target's binding.
+        cx.cancel(CancelReason::HostChanged);
+        state = TextState::default();
     }
+    state.edit_target = part.options.edit_target;
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
     let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, window_blur, menu_open, left_for_part } = text;
@@ -678,6 +683,12 @@ pub(crate) fn run<C: Component>(
 }
 
 impl<C: Component> Cx<'_, C> {
+    /// The response of a declared selection part after `paint` shows it, or `None` when the part has no widget.
+    pub fn selection_response(&self, part: impl Into<PartRef>) -> Option<egui::Response> {
+        let part = part.into();
+        self.core.selections.contains(&part).then(|| self.core.ctx.read_response(selection_id(self.core.id, part))).flatten()
+    }
+
     /// Changes the text part's draft in the next pass: `Some(text)` puts `text` in as a change of the typing run (one
     /// that begins the run when none is under way), the caret at its end; `None` ends the run with the text from
     /// before it, without the run's Escape reaching the host. A combo box's keys in its open list put the active

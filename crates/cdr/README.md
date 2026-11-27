@@ -97,6 +97,36 @@ arrowheads and lenses are not read; the drawing's `warnings` name each kind it h
 path is left out and the objects it clips are read without it. Files in big-endian byte order and
 files with 16-bit coordinates are refused.
 
+`write_cmx` writes a drawing as a `.cmx` file with 32-bit coordinates in the layouts `read_cmx`
+reads, so that `read_cmx` leaves nothing out because of the `Limits` given: pages with their
+sizes, layers with their names, groups, and curves with uniform fills and outlines. What the file
+holds differently from the drawing is reported, as below. Rectangles and ellipses are
+written as curves, and a clipping container as a group of its fill, the objects it clips
+(unclipped) and its outline. A rounded rectangle scaled differently along its two sides gets round
+corners, not stretched ones. Hidden layers, groups and shapes, guide and grid layers, guidelines
+and master layers are left out; opacity, blend modes, fill rules and locked states are not
+written, desktop layers are written as drawing layers, and a spot color with no name opens as a
+process color; every use of a named spot color takes the look of its use at the strongest tint
+among the uses whose look is known.
+
+`write_cmx` returns an error, and writes nothing, for a coordinate, page side or outline width
+past the 32-bit range, a negative or NaN outline width, a page side that rounds to 0, more than
+65,535 pages, layers on a page or different colors, pens, line types, dash patterns or outlines, a
+dash pattern of more than 32,765 lengths, groups nested deeper than the limits allow, more chunks,
+objects, coordinates or dashes than a read within the limits takes, a file longer than their input
+size, and a chunk past its 32-bit size. Otherwise the returned `Written` reports paths split or cut into several curves, dashes
+rounded to whole outline widths, nonzero fills that may fill differently, names that open
+shortened, spot colors at a tint too low to keep their look, with no name or with no known look
+(written black), uses of one ink with different looks, and what was left out or written opaque,
+unclipped or unlocked.
+
+The header's index offsets, the index chunks (`LIST indx`), the instruction counts and offsets
+inside page, layer and group records, and the bounds inside layer and group records are not
+written, so a reader must find the chunks by their ids and walk the instructions in order, as
+`read_cmx` does. The record of a page with a size holds the edges of its curves, or of the page
+when it has none. `PROVENANCE.md`'s "Written
+fields" table lists every field the `.cmx` writer sets.
+
 ## Writing
 
 `write` writes a drawing as a `.cdr` file of version 15: a ZIP package whose first member,
@@ -157,8 +187,8 @@ degree of its angle.
 
 ## Provenance
 
-`PROVENANCE.md` lists every record layout the reader relies on, and the rows only the writer
-needs, with their public sources and status.
+`PROVENANCE.md` lists every record layout the reader relies on, and the rows only the writers
+need, with their public sources and status.
 Code cites the rows by id (`R1` ...), and `tests/it/provenance.rs` fails when a cited id has no row.
 The test inputs are synthetic drawings built by `src/synth.rs` and `src/synth_cmx.rs` (the
 `synth` feature); no third-party file is committed.

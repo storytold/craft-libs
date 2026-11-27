@@ -3,7 +3,7 @@
 use crate::runtime::access::Role;
 use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::testing::fixture::{Fixture, Target};
-use crate::testing::story::Story;
+use crate::testing::story::{Required, Story};
 use craft_behavior::PartRef;
 
 /// `node` and every node below it.
@@ -81,12 +81,12 @@ pub(super) fn is_selected(fixture: &Fixture, node: NodeKey) -> bool {
 }
 
 /// Whether the cases that run once per member of a repeated set (each repeat of a part, each row that declares an
-/// action) run on a fixed sample of the set: under the gate's sweep fraction, `craft_testkit::hostile::divisor` above
-/// 1. The nightly run sets no fraction and checks every member.
-fn samples_repeats() -> bool {
+/// action) run on a fixed sample of the set: when no sweep fraction is set (a local run) or it is above 1 (the gate).
+/// Only an explicit `CRAFT_HOSTILE_DIVISOR=1`, which the nightly and full-validation runs set, checks every member.
+pub(super) fn samples_repeats() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        craft_testkit::hostile::divisor() > 1
+        std::env::var_os(craft_testkit::hostile::DIVISOR_VARIABLE).is_none() || craft_testkit::hostile::divisor() > 1
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -142,16 +142,21 @@ fn tree_order(tree: &AccessTree) -> Vec<NodeKey> {
     ordered
 }
 
+/// What makes nodes one set for [`sampled_actions`]: the role of the parent, the role of the node and the action.
+pub(super) type ActionSet = (Option<Role>, Option<Role>, Declared);
+
 /// `pairs` (a node and an action it declares) in tree order; when [`samples_repeats`], set by set, each repeated set
-/// cut to its first, middle and last node. Nodes that share a parent and a role and declare the same action are one set.
-pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declared)>) -> Vec<(NodeKey, Declared)> {
+/// cut to its first, middle and last node. Nodes of one role and parent role that declare the same action are one set,
+/// so the cells of every row of a table are one set, not one set per row.
+pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declared)>, seen: &mut Vec<ActionSet>) -> Vec<(NodeKey, Declared)> {
     let rank: std::collections::HashMap<NodeKey, usize> = tree_order(tree).into_iter().enumerate().map(|(at, key)| (key, at)).collect();
     pairs.sort_by_key(|(node, _)| rank.get(node).copied().unwrap_or(usize::MAX));
     let ordered = pairs;
     if !samples_repeats() {
         return ordered;
     }
-    let set_of = |(node, declared): &(NodeKey, Declared)| (tree.parent_of_key(*node), tree.role_of(*node), *declared);
+    let set_of =
+        |(node, declared): &(NodeKey, Declared)| (tree.parent_of_key(*node).and_then(|parent| tree.role_of(parent)), tree.role_of(*node), *declared);
     let mut sets: Vec<Vec<(NodeKey, Declared)>> = Vec::new();
     for pair in ordered {
         match sets.iter_mut().find(|set| set_of(&set[0]) == set_of(&pair)) {
@@ -159,17 +164,32 @@ pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declar
             None => sets.push(vec![pair]),
         }
     }
+    // A set the component shows in more than one story (a table's rows and headers) is read in the first story only.
+    sets.retain(|set| {
+        let key = set_of(&set[0]);
+        let new = !seen.contains(&key);
+        if new {
+            seen.push(key);
+        }
+        new
+    });
     sets.iter().flat_map(|set| sample(set)).collect()
 }
 
 /// `stories` cut, when [`samples_repeats`], to the first story of each distinct kind: stories that cover the same
 /// required states, drive the same way, give the same disabled reason and set command states alike differ only in
 /// what they show, which the cases that read the type as a whole (`reads`, `variants`, `containers`) see through
-/// the first of them. The nightly run keeps every story.
-pub(super) fn sampled_stories(stories: Vec<Story>) -> Vec<Story> {
+/// the first of them. With `by_content`, a story that covers only `Empty` or `One` is dropped while another story
+/// remains: the cases that act on what a story shows (activation) have nothing to act on in a collection with no
+/// rows or one row, and the cases that need those stories (the required states, `items-empty`) run without it.
+/// The nightly run keeps every story.
+pub(super) fn sampled_stories(stories: Vec<Story>, by_content: bool) -> Vec<Story> {
     if !samples_repeats() {
         return stories;
     }
+    let few_rows =
+        |story: &Story| by_content && !story.covers.is_empty() && story.covers.iter().all(|state| matches!(state, Required::Empty | Required::One));
+    let stories = if stories.iter().any(|story| !few_rows(story)) { stories.into_iter().filter(|story| !few_rows(story)).collect() } else { stories };
     let kind = |story: &Story| (story.covers, std::mem::discriminant(&story.drive), story.disabled_text, story.commands.is_some());
     let mut kept: Vec<Story> = Vec::new();
     for story in stories {

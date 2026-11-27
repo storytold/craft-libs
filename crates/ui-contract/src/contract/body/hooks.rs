@@ -1708,7 +1708,15 @@ impl BodyHooks<'_> {
                 let left = if plan.rtl { body.max.x - size.x } else { body.min.x };
                 layout::report_bracket_control(ctx, row, Rect::from_min_size(egui::pos2(left, body.min.y), *size), plan.rtl);
             }
-            let label_extra = plan.label_extra;
+            // A label after the control counts the height it reaches below the body the control took, not below the
+            // row: a measuring run's row can be taller than its body, and a label that wraps there is taller than it.
+            let after = plan.label_rect.is_positive() && props.label.as_ref().is_some_and(|side| side.layout == label::FieldLayout::After);
+            let label_extra = if after {
+                let control = Rect::from_min_size(plan.body_rect.min, Vec2::new(plan.body_rect.width(), size.y));
+                label_extra_of(plan.regions.body, control, plan.label_rect, plan.rtl)
+            } else {
+                plan.label_extra
+            };
             // A body beside its label in a content-sized column of rows reports how far it reaches past the label
             // column, so that column's container measures its rows at the widest label.
             let beside = |side: &&label::SideLabel| side.layout != label::FieldLayout::After && label_extra.x > 0.0 && label_extra.y <= 0.0;

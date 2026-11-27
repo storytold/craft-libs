@@ -4,8 +4,10 @@
 use super::{ActiveLook, ControlPlace, GroupLevel, RibbonLook};
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::list::ThumbAspect;
-use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
-use crate::style::{FocusLook, GlyphRole, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
+use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun, Wrap};
+use crate::style::{
+    ComponentStyle as _, FocusLook, GlyphRole, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts,
+};
 use craft_behavior::{Flow, Insets, Metrics, Proposal};
 use craft_theme::{
     Stateful, States, Variant,
@@ -106,8 +108,8 @@ pub(crate) struct FaceSpec<'a> {
     pub align: HAlign,
     /// The command's chord, shown after the label of an inline face and dropped before the label elides.
     pub chord: Option<&'a str>,
-    /// A caption-role second line under the icon and label of an inline face, wrapped to the face's width.
-    pub detail: Option<&'a str>,
+    /// A caption under the icon and label of an inline face, with its wrapping policy.
+    pub detail: Option<(&'a str, Wrap)>,
 }
 
 impl FaceSpec<'_> {
@@ -154,8 +156,8 @@ impl FaceSpec<'_> {
         })
     }
 
-    fn detail_run(&self) -> Option<TextRun<'_>> {
-        self.detail.filter(|detail| !detail.is_empty()).map(|detail| TextRun::new(detail).role(TypeRole::Caption))
+    pub(super) fn detail_run(&self) -> Option<TextRun<'_>> {
+        self.detail.filter(|(detail, _)| !detail.is_empty()).map(|(detail, wrap)| TextRun::new(detail).role(TypeRole::Caption).wrap(wrap))
     }
 }
 
@@ -476,7 +478,21 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
     let (icon, gap) = (measured_icon(cx), cx.gap());
     let trail = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonLook>()).unwrap_or(icon);
     let fixed = spec.icons_width(icon, trail) + gap * spec.gaps() as f32;
-    let room = cx.room.unwrap_or(f32::INFINITY);
+    let detail = spec.detail_run();
+    let wraps = detail.as_ref().is_some_and(|run| run.wrap == Wrap::Wrap);
+    let room = cx.room.or_else(|| {
+        if !wraps {
+            return None;
+        }
+        let width = match cx.proposal {
+            Proposal::Width(width) => width,
+            Proposal::Size(size) => size.x,
+            _ => return None,
+        };
+        let pad = cx.style.metrics().padding;
+        width.is_finite().then(|| (width - pad.start - pad.end).max(0.0))
+    });
+    let room = room.unwrap_or(f32::INFINITY);
     let (text, chord) = if spec.label.is_empty() {
         (Vec2::ZERO, None)
     } else if cx.proposal == Proposal::Min {
@@ -493,7 +509,7 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         }
     };
     let row = Vec2::new(text.x + fixed + chord.map_or(0.0, |width| width + gap), text.y.max(icon));
-    let Some(detail) = spec.detail_run() else { return row };
+    let Some(detail) = detail else { return row };
     let detail = if cx.proposal == Proposal::Min { cx.least(&detail).size() } else { cx.layout_at(&detail, room).size() };
     Vec2::new(row.x.max(detail.x), row.y + gap + detail.y)
 }
