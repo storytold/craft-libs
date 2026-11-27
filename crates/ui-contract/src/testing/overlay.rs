@@ -5,6 +5,7 @@ use egui::{Context, Id, Pos2, Rect};
 
 /// What the layer stack of the running viewport judges the presses of this pass by.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct PressJudgement {
     /// The screen rects a press may land in without closing the top menu family, as the last pass left them: the
     /// family, its anchors and its peers. `None` when the top layer does not absorb outside presses.
