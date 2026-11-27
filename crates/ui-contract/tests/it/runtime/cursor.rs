@@ -3,6 +3,7 @@
 
 use craft_behavior::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor, PointerGlyph};
 use craft_host::target::{Backend, Caps, Os, Runtime, ShellInfo};
+use craft_theme::{Appearance, ColorToken, Contrast, Mode, ModeChoice, Rgba, Size, TextSize, ThemeDef, format, resolve};
 use craft_ui::runtime::cursor;
 use craft_ui::runtime::env::{RootEnv, Scale};
 use craft_ui::testing::pointer::moved;
@@ -242,6 +243,52 @@ fn a_badged_tool_pointer_keeps_its_tip_on_the_hotspot_and_the_badge_below_right(
         }
         let none = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), None);
         assert_eq!(reach(&painted(&mut frames, none).image.unwrap()), reach(&plain), "{scale}: no badge is the plain pointer");
+    }
+}
+
+/// A library theme whose overlay marks take a blue tint from its accent, with `overlay.cursor` pinned to white in dark
+/// mode when `pinned`.
+fn tinted_theme(pinned: bool) -> Arc<ThemeDef> {
+    let pin = if pinned { r##", "dark": { "overlay.cursor": "#ffffff" }"## } else { "" };
+    let json = format!(
+        r##"{{
+            "schema": "craft-design-theme", "schema_version": 1,
+            "id": "trial.cursor-ink", "name": "Cursor ink",
+            "seeds": {{
+                "neutral": "#535353", "accent": "#78ADF6",
+                "status": {{ "good": "#85DC6A", "warn": "#E8B046", "bad": "#FF8080", "info": "#78ADF6" }}
+            }}{pin}
+        }}"##
+    );
+    Arc::new(format::parse(json.as_bytes()).expect("the trial's theme parses").theme)
+}
+
+/// A painted pointer is drawn in `overlay.cursor`: a theme that pins it gets a tool's icon and the pointer's own marks
+/// in the pin, with no pixel in `overlay.stroke`, and a theme that does not gets them in `overlay.stroke`, which the
+/// cursor colour follows.
+#[trial]
+fn a_painted_pointer_is_drawn_in_the_cursor_colour() {
+    let appearance =
+        Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::default(), text_size: TextSize::default(), reduced_motion: false };
+    for pinned in [false, true] {
+        let def = tinted_theme(pinned);
+        let tokens = resolve(&def, appearance, None).tokens;
+        let (ink, stroke) = (tokens.color(ColorToken::OverlayCursor), tokens.color(ColorToken::OverlayStroke));
+        assert_eq!(ink == stroke, !pinned, "pinned {pinned}: the cursor colour follows overlay.stroke unless pinned");
+        let mut frames = frames(linux(), 1.0);
+        frames.root(RootEnv::new().library_theme(def).mode(ModeChoice::Dark));
+        for cursor in [
+            PaintedCursor::tool(IconId::new("brush"), Vec2::new(4.0, 20.0), None),
+            PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new("lasso")),
+            PaintedCursor::Hand,
+        ] {
+            let image = painted(&mut frames, cursor.clone()).image.unwrap();
+            let drawn_in = |colour: Rgba| image.rgba.chunks(4).any(|p| p[3] == 255 && (0..3).all(|i| p[i].abs_diff(colour.0[i]) <= 2));
+            assert!(drawn_in(ink), "pinned {pinned}, {cursor:?}: drawn in overlay.cursor");
+            if pinned {
+                assert!(!drawn_in(stroke), "{cursor:?}: no pixel in overlay.stroke");
+            }
+        }
     }
 }
 

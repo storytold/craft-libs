@@ -36,7 +36,7 @@ use crate::runtime::env::{Env, Label};
 use crate::text::RangeAlert;
 use craft_behavior::{CanvasTransform, DisplayOrder, EditEvent, ItemSource, Mixed, SelectionChange};
 
-use crate::runtime::memory::{Lifetime, MemoryStage, with_session};
+use crate::runtime::memory::{Lifetime, MemoryStage};
 
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
@@ -45,10 +45,11 @@ use crate::sections::{DialogRole, FooterButton};
 use crate::contract::{CaptionColumn, LabelScheme};
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
-use egui::{Context, Pos2, Rect, Response, Ui};
+use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use serde_json::Value;
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
@@ -471,14 +472,6 @@ impl<'a> ParamPresets<'a> {
     }
 }
 
-/// The footer rows of a [`ParamDialog`] between passes: whether each was on when the last pass ended, which its
-/// button label shows, and the key of the row whose button was pressed, which the next pass flips.
-#[derive(Clone, Debug, Default)]
-struct FooterRows {
-    on: Vec<bool>,
-    flip: Option<String>,
-}
-
 /// What `ParamDialog::below` draws under the rows.
 pub struct BelowRows<'a>(BelowRowsFn<'a>);
 
@@ -719,17 +712,11 @@ impl<'a> ParamDialog<'a> {
         }
         // The pane shows only in a dialog that previews.
         let preview = preview.filter(|_| previews);
-        // The footer rows' buttons follow the extra buttons. A button's label cannot change inside the pass that
-        // draws it, so it shows the state the previous pass left.
+        // The footer rows' buttons follow the extra buttons; the body settles them by tag after it reads the fields.
         let footer_rows: Vec<&Param> = params.iter().filter(|param| param.footer_on().is_some()).collect();
-        let footer_id = crate::runtime::memory::unique(("paramDialog.footer", key.as_str()));
-        let footer_states: Vec<bool> =
-            if footer_rows.is_empty() { Vec::new() } else { with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on.clone()) };
-        let footer_buttons = footer_rows.iter().enumerate().map(|(at, param)| {
-            let on = footer_states.get(at).copied().unwrap_or(false);
-            let label = param.footer_on().filter(|_| on).unwrap_or_else(|| param.label.clone());
-            FooterButton::new(label, DialogRole::Other).stays_open(true)
-        });
+        let footer_buttons = footer_rows.iter().map(|param| footer_toggle(param, false, true));
+        let footer_owner = crate::runtime::overlay::running_dialog(ui.ctx()).unwrap_or_else(|| ui.scope_id());
+        let footer_owner = crate::runtime::memory::unique(("paramDialog.footer.owner", footer_owner, key.as_str()));
         let buttons: Vec<FooterButton> = extra_buttons.iter().map(|(_, button)| button.clone()).chain(footer_buttons).collect();
         if !buttons.is_empty() {
             form = form.extra_buttons(buttons);
@@ -807,7 +794,8 @@ impl<'a> ParamDialog<'a> {
             // A footer row pressed in the previous pass flips once; a measuring run leaves it for the real one.
             if !footer_rows.is_empty()
                 && !crate::runtime::measure::active(ui.ctx())
-                && let Some(flip) = with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip.take())
+                && let Some(flip) = footer_flips(ui.ctx(), |flips| flips.ready.remove(&footer_owner))
+                && footer_rows.iter().any(|param| param.key == flip && param.enabled(values))
             {
                 let on = values.bool(&flip).unwrap_or(false);
                 values.set(flip, FieldValue::Bool(!on));
@@ -883,10 +871,13 @@ impl<'a> ParamDialog<'a> {
                 }
             }
             *cx.memory::<Live>() = live.clone();
-            if !footer_rows.is_empty() {
-                let states: Vec<bool> = footer_rows.iter().map(|param| values.bool(&param.key).unwrap_or(false)).collect();
-                with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on = states);
-            }
+            *cx.memory::<FooterToggles>() = FooterToggles {
+                owner: Some(footer_owner),
+                buttons: footer_rows
+                    .iter()
+                    .map(|param| (param.key.clone(), footer_toggle(param, values.bool(&param.key).unwrap_or(false), param.enabled(values))))
+                    .collect(),
+            };
             // OK and Enter wait while a row's text does not parse.
             rows.as_ref().is_none_or(|rows| !rows.unparsed)
         });
@@ -897,12 +888,6 @@ impl<'a> ParamDialog<'a> {
             Some(ResetPick::Extra(at)) => extra_buttons.get(at).map(|(id, _)| id.clone()),
             _ => None,
         };
-        if let Some(ResetPick::Extra(at)) = pick
-            && let Some(param) = at.checked_sub(extra_buttons.len()).and_then(|at| footer_rows.get(at))
-        {
-            with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip = Some(param.key.clone()));
-            crate::runtime::frame::request_repaint(ui.ctx());
-        }
         // Footer and row buttons share one channel. The rows' own slot is emptied, so a host that absorbs the rows
         // files the press once.
         let action = rows.as_mut().and_then(|rows: &mut ParamRowsOutput| rows.action.take()).or(pressed);
@@ -1020,6 +1005,48 @@ struct Footing {
     ok: Option<bool>,
 }
 
+/// The current labels and enablement of the generated footer buttons, from this dialog's body.
+#[derive(Clone, Default)]
+struct FooterToggles {
+    owner: Option<Id>,
+    buttons: Vec<(String, FooterButton)>,
+}
+
+/// One pass of queued flips, keyed by dialog instance. Flips whose dialogs do not show on the next pass expire.
+#[derive(Default)]
+struct FooterFlips {
+    ready: HashMap<Id, String>,
+    next: HashMap<Id, String>,
+}
+
+impl crate::runtime::frame::Stored for FooterFlips {}
+
+fn footer_flips<R>(ctx: &Context, f: impl FnOnce(&mut FooterFlips) -> R) -> R {
+    use crate::runtime::frame::{PassStep, PerViewport, Stamped, running};
+    let (viewport, pass) = if let Some(facts) = running(ctx) {
+        (facts.viewport, facts.pass_nr)
+    } else {
+        let viewport = ctx.viewport_id();
+        (viewport, ctx.cumulative_pass_nr_for(viewport))
+    };
+    PerViewport::<Stamped<FooterFlips>>::with_pass(
+        ctx,
+        viewport,
+        pass,
+        |flips, step| match step {
+            PassStep::Next => flips.ready = std::mem::take(&mut flips.next),
+            PassStep::Skipped => *flips = FooterFlips::default(),
+        },
+        f,
+    )
+}
+
+fn footer_toggle(param: &Param, on: bool, enabled: bool) -> FooterButton {
+    let label = param.footer_on().filter(|_| on).unwrap_or_else(|| param.label.clone());
+    let tag = crate::runtime::memory::unique(("paramDialog.footer", &param.key));
+    FooterButton::new(label, DialogRole::Other).tagged(tag).stays_open(true).enabled(enabled)
+}
+
 /// What a footer with a Reset alternative answered with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1117,11 +1144,30 @@ impl ResetFooter {
                 if let (Some(ok), Some(accept)) = (footing.ok, buttons.first_mut()) {
                     accept.set_enabled(ok);
                 }
+                let toggles = &cx.memory::<FooterToggles>().buttons;
+                for button in buttons {
+                    if let Some(tag) = button.tag()
+                        && let Some((_, toggle)) = toggles.iter().find(|(_, toggle)| toggle.tag() == Some(tag))
+                    {
+                        *button = toggle.clone();
+                    }
+                }
             })
             .on_pick(move |button, cx| {
                 if pick.resetting() && button.role() == DialogRole::Other && *button.label() == pick.reset {
                     restore(cx);
                     crate::runtime::frame::request_repaint(cx.memory.ctx());
+                }
+                let toggles = cx.memory::<FooterToggles>();
+                if let (Some(owner), Some(tag)) = (toggles.owner, button.tag())
+                    && let Some((key, _)) = toggles.buttons.iter().find(|(_, toggle)| toggle.tag() == Some(tag))
+                {
+                    let key = key.clone();
+                    let ctx = cx.memory.ctx();
+                    footer_flips(ctx, |flips| {
+                        flips.next.insert(owner, key);
+                    });
+                    crate::runtime::frame::request_repaint(ctx);
                 }
             })
     }

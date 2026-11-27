@@ -13,8 +13,8 @@ use super::words::ParamWords;
 use crate::buttons::{Button, IconButton, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _, Sampler as _,
-    Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
+    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelKind, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _,
+    Sampler as _, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
 };
 use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -451,10 +451,9 @@ impl Line<'_> {
         // the captions share a column ([`CaptionColumn`]), where it stands beside the group as every caption does.
         let env = Env::of(ui);
         let view = env.view();
-        if matches!(self.param.kind, ParamKind::Custom(_))
-            && view.get::<LabelScheme>() == LabelScheme::Inline
-            && !view.get::<CaptionColumn>().shared()
-        {
+        let own_caption = view.get::<LabelScheme>() == LabelScheme::Inline && !view.get::<CaptionColumn>().shared();
+        let heading = matches!(self.param.kind, ParamKind::Custom(_)) && own_caption;
+        if heading {
             field = field.layout(FieldLayout::Above);
         }
         if self.compact {
@@ -463,10 +462,16 @@ impl Line<'_> {
         if let Some(tip) = self.param.tooltip_text() {
             field = field.tooltip(tip.clone());
         }
-        if self.param.option().resettable() {
+        let options = self.param.option();
+        if options.resettable() {
             field = field.side(SideLabel::new().reset_dot(true));
+        } else if options.hides_caption() && !heading {
+            field = field.side(SideLabel::new().kind(LabelKind::Hidden));
+            if own_caption {
+                field = field.layout(FieldLayout::Above);
+            }
         }
-        field.show(ui, |ui, _| match self.param.option().help_link() {
+        field.show(ui, |ui, _| match options.help_link() {
             None => body(ui),
             Some(_) => beside(ui, |ui| {
                 body(ui);
@@ -504,8 +509,14 @@ impl Line<'_> {
         fixed: bool,
     ) -> NumberField<'static> {
         let unit = self.param.unit;
-        let field = bound_field(units, self.name.clone(), value, decimals, unit, codec, fixed);
-        if let Some(unit) = unit { field.unit_kind(unit) } else { field }
+        let mut field = bound_field(units, self.name.clone(), value, decimals, unit, codec, fixed);
+        if let Some(unit) = unit {
+            field = field.unit_kind(unit);
+        }
+        if let Some(text) = self.param.unit_label_text() {
+            field = field.unit(text.clone());
+        }
+        field
     }
 
     /// Shows `body` across the form for a full-width row, without a label, or else beside the row's label.
@@ -873,6 +884,9 @@ impl<'p> Pass<'p> {
             if let Some(kind) = line.param.unit {
                 slider = slider.unit_kind(kind);
             }
+            if let Some(text) = line.param.unit_label_text() {
+                slider = slider.unit(text.clone());
+            }
             if layout == SliderFieldLayout::Stacked {
                 slider = slider.id_salt(line.key).enabled(line.enabled);
                 if let Some(tip) = line.param.tooltip_text() {
@@ -906,7 +920,8 @@ impl<'p> Pass<'p> {
         // Match the ordinary range row's number field precision when the caller sets no step.
         let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
         let step = set_step.unwrap_or(default_step);
-        let unit = line.param.unit.map(|kind| (kind, self.units.symbol(kind)));
+        let kind = line.param.unit;
+        let symbol: Option<Label> = line.param.unit_label_text().cloned().or_else(|| kind.map(|kind| self.units.symbol(kind).into()));
         let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
             Row::new().show(ui, |ui, _| {
@@ -919,11 +934,14 @@ impl<'p> Pass<'p> {
                 if set_step.is_some() || default_step != 1.0 {
                     field = field.step(step).snap_typed(set_step.is_some());
                 }
-                if let Some((kind, _)) = &unit {
-                    field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);
+                if let Some(kind) = kind {
+                    field = field.unit_kind(kind);
+                }
+                if symbol.is_some() {
+                    field = field.unit_placement(UnitPlacement::After);
                 }
                 let shown = field.show(ui);
-                if let Some((_, symbol)) = &unit {
+                if let Some(symbol) = &symbol {
                     Text::new(symbol.clone()).show(ui);
                 }
                 self.alert(shown.out_of_range);
@@ -947,6 +965,9 @@ impl<'p> Pass<'p> {
                 (None, codec) => line.scalar_field(self.units, line.bind(Some(value), default), decimals, codec, self.shaded),
             }
             .step(step);
+            if let Some(text) = line.param.unit_label_text() {
+                field = field.unit(text.clone());
+            }
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }

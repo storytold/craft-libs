@@ -32,7 +32,7 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
     let overlay = &env.tokens.color.overlay;
     let pen = Pen {
         art: RefCell::new(Art::default()),
-        fill: crate::style::rgba_color(overlay.stroke),
+        fill: crate::style::rgba_color(overlay.cursor),
         halo: crate::style::rgba_color(overlay.halo),
         thin: env.tokens.stroke.thin,
         rtl: env.direction.is_rtl(),

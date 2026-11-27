@@ -1139,6 +1139,88 @@ fn a_footer_row_flips_its_value_and_automation_sets_it() {
     assert!(!ParamDialog::remembered(&footer_params(), &fields).contains("grid"), "the footer key is not remembered");
 }
 
+#[trial]
+fn a_footer_toggle_takes_input_only_while_all_its_conditions_hold() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    fn build(fields: &mut DialogFields) -> ParamDialog<'_> {
+        let rows = vec![
+            Param::new("custom", "Custom", ParamKind::bool(false)),
+            Param::new("advanced", "Advanced", ParamKind::bool(false)),
+            Param::new("grid", "Show Grid", ParamKind::bool(false))
+                .enabled_when("custom", true)
+                .and_enabled_when_in("advanced", [true])
+                .in_footer("Hide Grid"),
+        ];
+        ParamDialog::new("conditional-grid", "Grid", rows).values(Bind::bound(fields))
+    }
+    let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "conditional-grid", DialogFields::new(), build));
+    let grid = || on_dialog(&host, |dialog| dialog.fields().bool("grid")).flatten();
+    fixture.idle(6);
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "custom", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button stays visible");
+    assert!(fixture.tree().is_disabled_key(button.node));
+    fixture.click(&button).idle(6);
+    assert_ne!(grid(), Some(true), "a disabled footer button does not flip the value");
+    assert!(host.borrow_mut().set_json_field(&ctx, id, "grid", json!(true)).is_err());
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button");
+    assert!(!fixture.tree().is_disabled_key(button.node));
+    fixture.press(&button).release(&button);
+    assert_ne!(grid(), Some(true), "the flip waits for the next pass");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(false)), Ok(()));
+    fixture.idle(6);
+    assert_ne!(grid(), Some(true), "a queued flip is dropped once its condition no longer holds");
+
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "advanced", json!(true)), Ok(()));
+    fixture.idle(6);
+    let button = fixture.by_label("Show Grid").expect("the footer button is enabled again");
+    fixture.click(&button).idle(6);
+    assert_eq!(grid(), Some(true));
+    assert!(fixture.by_label("Hide Grid").is_some());
+}
+
+#[trial]
+fn a_queued_footer_press_follows_its_dialog_when_the_stack_changes() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    let lower = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("lower"));
+    let top = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("top"));
+    fixture.idle(6);
+    let top_button = fixture.by_label("Show Grid").expect("the top dialog's toggle");
+    fixture.press(&top_button).release(&top_button);
+    assert!(host.borrow_mut().cancel_by_id(&ctx, lower));
+    let new = host.borrow_mut().open(HostedParamDialog::new(&ctx, "grid", DialogFields::new(), gridded).instance("new"));
+    fixture.idle(6);
+    let grid = |id| host.borrow().get_by_id::<HostedParamDialog>(id).and_then(|dialog| dialog.fields().bool("grid"));
+    assert_eq!(grid(top), Some(true), "the press follows the original dialog");
+    assert_eq!(grid(new), Some(false), "the new dialog does not inherit the press");
+}
+
+#[trial]
+fn a_replacement_footer_button_keeps_its_own_enablement() {
+    let mut fixture = Fixture::new(|ui| {
+        ParamDialog::new("custom-footer", "Custom Footer", footer_params())
+            .shaped(|dialog| {
+                dialog.buttons([
+                    FooterButton::new("OK", DialogRole::Accept),
+                    FooterButton::new("Cancel", DialogRole::Cancel),
+                    FooterButton::new("Unavailable", DialogRole::Other).enabled(false),
+                ])
+            })
+            .show(ui);
+    });
+    fixture.settle();
+    let replacement = fixture.by_label("Unavailable").expect("the caller's replacement button");
+    assert!(fixture.tree().is_disabled_key(replacement.node));
+    assert!(fixture.by_label("Show Grid").is_none());
+}
+
 // The presets row lists the presets; a pick writes the preset's values as one edit, and a value edited after it
 // leaves the values matching no preset.
 #[trial]
