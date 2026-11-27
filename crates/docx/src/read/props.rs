@@ -224,7 +224,7 @@ impl PropCtx {
         let mut c = *self.theme_colors.get(slot)?;
         let byte = |a: &str| e.attr(a).and_then(|v| u8::from_str_radix(v.trim(), 16).ok()).map(|v| f64::from(v) / 255.0);
         if let Some(t) = byte(tint) {
-            c = adjust_lum(c, |l| l * t + (1.0 - t));
+            c = theme_tint(c, t);
         } else if let Some(s) = byte(shade) {
             c = adjust_lum(c, |l| l * s);
         }
@@ -236,6 +236,17 @@ impl PropCtx {
         // `nil` counts as no shading, whatever fill it carries (MS-OI29500 17.18.78).
         if e.attr("w:val") == Some("nil") {
             return None;
+        }
+        if let Some(percent) = shading_percent(e) {
+            let background = self
+                .theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade")
+                .or_else(|| e.attr("w:fill").and_then(Rgb::parse))
+                .unwrap_or(Rgb(255, 255, 255));
+            let foreground = self
+                .theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade")
+                .or_else(|| e.attr("w:color").and_then(Rgb::parse))
+                .unwrap_or(Rgb(0, 0, 0));
+            return Some(mix_shading(background, foreground, percent));
         }
         if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
             return Some(c);
@@ -494,6 +505,25 @@ impl PropCtx {
     }
 }
 
+/// WordprocessingML text and background tints share their conversion. Work in
+/// HSL luminance while retaining the hue/saturation through the channel ratios;
+/// DrawingML's own colour modifiers keep their separate conversion rules.
+fn theme_tint(c: Rgb, tint: f64) -> Rgb {
+    let channels = [f64::from(c.0), f64::from(c.1), f64::from(c.2)];
+    let lo = channels.into_iter().fold(255.0, f64::min);
+    let hi = channels.into_iter().fold(0.0, f64::max);
+    let lum = (hi + lo) / 510.0;
+    let saturation = if hi == lo { 0.0 } else { (hi - lo) / if lum > 0.5 { 510.0 - hi - lo } else { hi + lo } };
+    let light = lum * tint + 1.0 - tint;
+    let max = if light < 0.5 { light * (1.0 + saturation) } else { light + saturation - light * saturation };
+    let min = 2.0 * light - max;
+    let byte = |v: f64| {
+        let ratio = if hi == lo { 0.0 } else { (v - lo) / (hi - lo) };
+        ((min + (max - min) * ratio) * 255.0 + 1e-9).floor().clamp(0.0, 255.0) as u8
+    };
+    Rgb(byte(channels[0]), byte(channels[1]), byte(channels[2]))
+}
+
 pub fn align(v: &str) -> Align {
     match v {
         "center" => Align::Center,
@@ -539,6 +569,42 @@ fn shd_fill(e: &El) -> Option<Rgb> {
         return e.attr("w:color").and_then(Rgb::parse);
     }
     None
+}
+
+/// ST_Shd percentage patterns. The quarter-eighth names abbreviate their
+/// half-percent values (pct12 means 12.5%, not 12%).
+fn shading_percent(e: &El) -> Option<u16> {
+    Some(match e.attr("w:val")? {
+        "pct5" => 50,
+        "pct10" => 100,
+        "pct12" => 125,
+        "pct15" => 150,
+        "pct20" => 200,
+        "pct25" => 250,
+        "pct30" => 300,
+        "pct35" => 350,
+        "pct37" => 375,
+        "pct40" => 400,
+        "pct45" => 450,
+        "pct50" => 500,
+        "pct55" => 550,
+        "pct60" => 600,
+        "pct62" => 625,
+        "pct65" => 650,
+        "pct70" => 700,
+        "pct75" => 750,
+        "pct80" => 800,
+        "pct85" => 850,
+        "pct87" => 875,
+        "pct90" => 900,
+        "pct95" => 950,
+        _ => return None,
+    })
+}
+
+fn mix_shading(bg: Rgb, fg: Rgb, percent: u16) -> Rgb {
+    let mix = |b: u8, f: u8| ((u32::from(b) * u32::from(1000 - percent) + u32::from(f) * u32::from(percent)) / 1000) as u8;
+    Rgb(mix(bg.0, fg.0), mix(bg.1, fg.1), mix(bg.2, fg.2))
 }
 
 impl PropCtx {

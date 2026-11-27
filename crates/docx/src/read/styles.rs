@@ -270,6 +270,8 @@ impl Reader<'_> {
             sheet.add_default_gallery();
         }
         self.doc.styles = Arc::new(sheet);
+        let themed = !self.pc.theme_colors.is_empty();
+        crate::style_source::capture(&mut self.doc, &root, &self.pc.alias, self.pc.color_map, themed);
         Ok(())
     }
 
@@ -399,6 +401,8 @@ impl Reader<'_> {
         }
         Arc::make_mut(&mut self.doc.numbering).abstracts = abstracts;
         Arc::make_mut(&mut self.doc.numbering).nums = nums;
+        let themed = !self.pc.theme_colors.is_empty();
+        crate::style_source::capture_numbering(&mut self.doc, &root, &self.pc.alias, self.pc.color_map, themed);
         Ok(())
     }
 

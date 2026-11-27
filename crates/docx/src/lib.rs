@@ -35,6 +35,7 @@ pub fn application_name() -> &'static str {
 }
 mod read;
 mod smart_art;
+mod style_source;
 #[cfg(test)]
 mod test_log;
 mod units;

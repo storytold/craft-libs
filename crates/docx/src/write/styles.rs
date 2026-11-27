@@ -138,7 +138,16 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
     if st.locked {
         w.empty("w:locked", &[]);
     }
-    style_property_xml(wr, w, st);
+    let source_run = match crate::style_source::fragments(wr.doc, st) {
+        Some(crate::style_source::Fragments::Complete(source)) => {
+            w.raw(&source);
+            w.close("w:style");
+            return;
+        }
+        Some(crate::style_source::Fragments::Run(source)) => Some(source),
+        None => None,
+    };
+    style_property_xml(wr, w, st, source_run.as_deref());
     if let Some(t) = &st.table {
         table_style_tblpr(w, t);
         // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
@@ -191,7 +200,7 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
     w.close("w:style");
 }
 
-fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
+fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, source_run: Option<&str>) {
     let para_change = st.para_change.as_deref().filter(|ch| ch.old.formatting() != st.para.formatting());
     if (!st.para.is_empty() || para_change.is_some()) && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
@@ -211,6 +220,10 @@ fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
             w.close("w:pPrChange");
         }
         w.close("w:pPr");
+    }
+    if let Some(rpr) = source_run {
+        w.raw(rpr);
+        return;
     }
     let run_change = st.chr_change.as_deref().filter(|ch| ch.old.formatting() != st.chr.formatting());
     if (props::has_rpr(&st.chr) || run_change.is_some()) && st.kind != StyleKind::Numbering {
@@ -250,7 +263,7 @@ pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {
             w.val("w:name", n);
         }
         for (i, l) in a.levels.iter().take(9).enumerate() {
-            write_level(&mut w, i, l);
+            write_level(&mut w, i, l, doc, &crate::style_source::numbering_key("abstractNum", a.id, i));
         }
         w.close("w:abstractNum");
     }
@@ -268,7 +281,7 @@ pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {
                 w.val("w:startOverride", &start.to_string());
             }
             if let Some(level) = level {
-                write_level(&mut w, lvl as usize, level);
+                write_level(&mut w, lvl as usize, level, doc, &crate::style_source::numbering_key("num", n.id, lvl as usize));
             }
             w.close("w:lvlOverride");
         }
@@ -279,7 +292,7 @@ pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {
 }
 
 /// One `w:lvl` (list level `i`).
-fn write_level(w: &mut W, i: usize, l: &Level) {
+fn write_level(w: &mut W, i: usize, l: &Level, doc: &Document, source_key: &str) {
     w.open("w:lvl", &[("w:ilvl", &i.to_string())]);
     w.val("w:start", &l.start.to_string());
     w.val("w:numFmt", l.format.ooxml());
@@ -314,6 +327,10 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
         w.empty("w:ind", &[("w:left", &ind), ("w:firstLine", &crate::units::twips(-l.hanging))]);
     }
     w.close("w:pPr");
-    props::rpr(w, &l.chr);
+    if let Some(rpr) = crate::style_source::numbering_rpr(doc, source_key, &l.chr) {
+        w.raw(&rpr);
+    } else {
+        props::rpr(w, &l.chr);
+    }
     w.close("w:lvl");
 }

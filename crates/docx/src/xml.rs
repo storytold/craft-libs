@@ -25,6 +25,7 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"),
     ("c", "http://schemas.openxmlformats.org/drawingml/2006/chart"),
     ("pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"),
+    ("asvg", "http://schemas.microsoft.com/office/drawing/2016/SVG/main"),
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
     ("wpi", "http://schemas.microsoft.com/office/word/2010/wordprocessingInk"),

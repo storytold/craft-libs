@@ -149,6 +149,7 @@ impl Reader<'_> {
     }
 
     fn read_run(&mut self, sc: &mut StoryCtx, pb: &mut PB, r: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
+        let run_start = pb.text.len();
         let props = match r.child("w:rPr") {
             Some(p) => self.run_props(p, ctx),
             None => self.run_props_none(ctx),
@@ -159,6 +160,20 @@ impl Reader<'_> {
         }
         if let Some((kind, id, custom)) = note.take() {
             self.emit_obj(sc, pb, InlineObject::NoteRef { kind, id, custom: custom.unwrap_or_default() }, &props);
+        }
+        // A bookmark/control before the first run has its own model offset.
+        // Keep the run start too, otherwise its revision hint is discarded.
+        pb.run_boundaries.push(run_start);
+        pb.run_boundaries.push(pb.text.len());
+        if pb.text.len() > run_start
+            && let Some(id) = r.attr("w:rsidRPr")
+        {
+            pb.run_formatting_revisions.push((run_start, id.to_string()));
+        }
+        if pb.text.len() > run_start
+            && let Some(id) = r.attr("w:rsidR")
+        {
+            pb.run_editing_revisions.push((run_start, id.to_string()));
         }
     }
 

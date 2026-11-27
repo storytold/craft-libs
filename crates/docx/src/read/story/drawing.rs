@@ -89,6 +89,15 @@ impl Reader<'_> {
             }
             obj
         };
+        if let InlineObject::Image { float, .. } = &mut obj {
+            // Only a root picture has distinct wp and DrawingML extents. A
+            // group's members already use the group's unquantized coordinates.
+            float.picture_extent = gd.find("pic:spPr").and_then(|p| p.child("a:xfrm")).and_then(|x| x.child("a:ext")).and_then(|ext| {
+                let size = [ext.attr("cx").and_then(u32_of)?, ext.attr("cy").and_then(u32_of)?];
+                (size.iter().all(|&v| v > 0 && v <= 50_800_000) && size != [(w * 12_700.0).round() as u32, (h * 12_700.0).round() as u32])
+                    .then_some(size)
+            });
+        }
         if !alt.is_empty() {
             obj.set_alt_text(&alt);
         }
@@ -301,7 +310,19 @@ impl Reader<'_> {
             }
             return None;
         };
-        let media = self.media_for(rels, embed)?;
+        let mut media = self.media_for(rels, embed)?;
+        let svg = blip.find("asvg:svgBlip").and_then(|b| b.attr("r:embed")).and_then(|id| {
+            let rel = rels.by_id(id)?;
+            // A missing optional vector does not make its available raster
+            // fallback a missing picture. Never fetch an external vector.
+            if rel.external || self.pkg.get_shared(&rel.target).is_none() {
+                return None;
+            }
+            self.media_for(rels, id)
+        });
+        if let Some(svg) = svg {
+            media = self.doc.add_svg_picture(&media, &svg)?;
+        }
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {
@@ -312,13 +333,8 @@ impl Reader<'_> {
                 }
             }
         }
-        let radius = props
-            .and_then(|e| e.child("a:effectLst"))
-            .and_then(|e| e.child("a:softEdge"))
-            .and_then(|e| e.attr("rad"))
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
-        let fx = crate::units::blip_fx(blip).with_soft_edge_emu(radius);
+        let effects = props.and_then(|e| e.child("a:effectLst")).map(effect_list).unwrap_or_default();
+        let fx = crate::units::blip_fx(blip).with_shape_effects(effects);
         Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None })
     }
 
