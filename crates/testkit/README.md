@@ -249,6 +249,8 @@ Changes from `craft-media-testkit`'s `hammer`:
 
 The program found is run once with `version_arg` and standard input closed. `Oracle::version()` is the first non-blank line of its standard output, or of its standard error when standard output is blank. `ProbeLimits` bounds the run: each output stream may hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte limit. On Unix the child runs in its own process group, and the whole group is killed. On Windows only the child is killed. `ProbeLimits::VERSION` (the default) allows 64 KiB per stream and 5 seconds, and `ProbeLimits::LISTING` allows 1 MiB per stream and 5 seconds. These values are this crate's own defaults. A timeout too long to set a deadline, such as `Duration::MAX`, returns `OracleError::InvalidTimeout` without starting the program. A successful lookup is cached for the process under every input it read; a failed lookup is not cached, so the next call searches again.
 
+On Windows, drive-relative paths such as `C:tools\qpdf.exe` use the captured current directory on the same drive, or that drive's current directory otherwise. Returned executable paths are absolute. The resolved executable path is part of the cache key.
+
 `find_in` takes the explicit path, the `PATH` list and the install folders as arguments, so a test can search folders it made without changing the process environment.
 
 `ffmpeg_supports_format(ff, name, limits)` runs `ffmpeg -hide_banner -formats` and looks for `name` in the name column only. A run that fails to start, passes `limits` or exits with a failure status returns an error. `ffmpeg_version(ff)` reads the version from ffmpeg's banner line.
@@ -286,6 +288,9 @@ variable reads it with `skip::required`, so one rule applies to all of them.
 The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
 `CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
 `skip::REQUIRED_VAR` (`CRAFT_TEST_REQUIRED`) is the default name.
+
+The example assumes `find_qpdf()` reports only an absent program. Use `require_oracle!` with
+`oracle::find` so other lookup errors fail the test. Optional skips ignore stderr write failures.
 
 ```rust
 use craft_testkit::skip::{REQUIRED_VAR, craft_fonts, skip};

@@ -12,6 +12,8 @@
 //!    Elsewhere it tries the bare name, then `<name>.exe`. A name that already has an extension is
 //!    tried as it is.
 //! 3. The install folders [`known_dirs`] lists.
+//! Windows drive-relative paths use the captured current directory on the same drive, or that
+//! drive's current directory otherwise. Returned executable paths are absolute.
 //!
 //! A file the OS can start is, on Windows, one whose extension is `.com`, `.exe`, `.bat` or `.cmd`
 //! in any case, and on Unix one with an execute bit set. The search skips any other file and goes on.
@@ -429,18 +431,18 @@ impl Key {
     }
 }
 
-fn cache() -> &'static Mutex<HashMap<Key, Oracle>> {
-    static CACHE: OnceLock<Mutex<HashMap<Key, Oracle>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<(Key, PathBuf), Oracle>> {
+    static CACHE: OnceLock<Mutex<HashMap<(Key, PathBuf), Oracle>>> = OnceLock::new();
     CACHE.get_or_init(Mutex::default)
 }
 
 /// Find, probe and cache one program. The cache lock is not held while the program runs.
 fn lookup(s: &Search<'_>, version_arg: &str, limits: ProbeLimits) -> Result<Oracle, OracleError> {
-    let key = Key::new(s, version_arg, limits);
+    let path = locate(s)?;
+    let key = (Key::new(s, version_arg, limits), path.clone());
     if let Some(hit) = cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return Ok(hit.clone());
     }
-    let path = locate(s)?;
     let mut cmd = Command::new(&path);
     cmd.arg(version_arg);
     let out = run_bounded(cmd, &path, limits, &mut Observed::default())?;
@@ -461,9 +463,30 @@ fn valid_name(program: &str) -> bool {
     !program.is_empty() && program != "." && program != ".." && !program.contains(['/', '\\', ':', '\0'])
 }
 
-/// `dir` as an absolute path: a relative one is joined to `cwd`, or dropped without a `cwd`.
+/// Returns an absolute path for `dir`. A relative path requires `cwd`.
+/// Windows drive-relative paths use `cwd` on the same drive, or that drive's current directory.
 fn anchored(dir: &Path, cwd: Option<&Path>) -> Option<PathBuf> {
-    if dir.is_absolute() { Some(dir.to_path_buf()) } else { cwd.map(|c| c.join(dir)) }
+    if dir.is_absolute() {
+        return Some(dir.to_path_buf());
+    }
+    let cwd = cwd?;
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut parts = dir.components();
+        if let Some(Component::Prefix(prefix)) = parts.next() {
+            let same_drive = cwd.components().next().is_some_and(|part| match part {
+                Component::Prefix(base) => match (prefix.kind(), base.kind()) {
+                    (Prefix::Disk(a), Prefix::Disk(b)) => a.eq_ignore_ascii_case(&b),
+                    (a, b) => a == b,
+                },
+                _ => false,
+            });
+            let base = if same_drive { cwd.to_path_buf() } else { std::path::absolute(prefix.as_os_str()).ok()? };
+            return Some(base.join(parts.as_path()));
+        }
+    }
+    Some(cwd.join(dir))
 }
 
 /// The file names tried in each folder, in order.
@@ -536,8 +559,9 @@ fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
 
 /// The first non-blank line of `stdout`, or of `stderr` when `stdout` is blank, trimmed.
 fn version_line(stdout: &[u8], stderr: &[u8]) -> String {
-    let text = if stdout.iter().all(u8::is_ascii_whitespace) { stderr } else { stdout };
-    String::from_utf8_lossy(text).lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().to_owned()
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    stdout.lines().chain(stderr.lines()).map(str::trim).find(|line| !line.is_empty()).unwrap_or_default().to_owned()
 }
 
 /// A finished child's status and output.
@@ -963,6 +987,21 @@ mod tests {
         assert_ne!(key_a, key_b);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_paths_use_the_captured_directory() {
+        let directory = Scratch::new("drive-relative");
+        let expected = directory.file("qpdf.exe");
+        let drive = directory.path().components().next().unwrap();
+        let relative = PathBuf::from(drive.as_os_str()).join("qpdf.exe");
+        let mut inputs = search("qpdf", Some(relative.as_os_str()), None, &[]);
+        inputs.windows = true;
+        inputs.cwd = Some(directory.path());
+        let found = locate(&inputs).unwrap();
+        assert!(found.is_absolute(), "{}", found.display());
+        assert_eq!(found, expected);
+    }
+
     #[test]
     fn windows_exe_and_pathext_order_is_honored() {
         let pathext = OsStr::new(".COM;.EXE;.BAT;.CMD;.VBS;.cmd;;");
@@ -1035,6 +1074,7 @@ mod tests {
     fn version_line_prefers_stdout_then_stderr() {
         assert_eq!(version_line(b"qpdf version 11.9.0\nRun qpdf --copyright\n", b"ignored"), "qpdf version 11.9.0");
         assert_eq!(version_line(b"\n", b"pdftoppm version 24.02.0\n"), "pdftoppm version 24.02.0");
+        assert_eq!(version_line("\u{a0}\n\u{2003}\n".as_bytes(), b"qpdf version 11.9.0\n"), "qpdf version 11.9.0");
         assert_eq!(version_line(b"", b""), "");
     }
 
