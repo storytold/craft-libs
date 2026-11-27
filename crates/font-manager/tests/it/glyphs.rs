@@ -106,6 +106,39 @@ fn the_marked_cell_is_selected_and_revealed_only_in_the_pass_that_carries_reveal
 }
 
 #[trial]
+fn a_held_host_mark_leaves_the_keyboard_selection_on_the_active_glyph() {
+    use egui::{Key, Modifiers};
+    use std::cell::Cell;
+
+    let mark = Rc::new(Cell::new(GlyphCell::Char('ā')));
+    let held_mark = Rc::clone(&mark);
+    let activated = Rc::new(Cell::new(None));
+    let reported = Rc::clone(&activated);
+    let (mut family, mut style) = ("Plain".to_owned(), "Regular".to_owned());
+    let mut settings = GlyphsPanelSettings::default();
+    let mut fx = Fixture::new(move |ui| {
+        let out = GlyphsPanel::new("Glyphs", &Plain, Bind::bound(&mut family), Bind::bound(&mut style), Bind::bound(&mut settings))
+            .can_insert(true)
+            .marked(held_mark.get())
+            .show(ui);
+        if out.activated.is_some() {
+            reported.set(out.activated);
+        }
+    });
+    fx.in_room(Room::Window).settle();
+    assert!(selected(&fx, 'ā'), "the host mark selects the starting glyph");
+    let start = fx.by_label(&name('ā')).expect("the marked glyph");
+    fx.click(&start).key(Key::ArrowRight, Modifiers::NONE).settle();
+    assert!(selected(&fx, 'Ă'), "the selection follows the keyboard lead with the same host mark");
+    fx.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(activated.get(), Some(GlyphCell::Char('Ă')));
+
+    mark.set(GlyphCell::Char('Ą'));
+    fx.frame(Vec::new()).settle();
+    assert!(selected(&fx, 'Ą'), "a new host mark selects its glyph");
+}
+
+#[trial]
 fn a_corner_pick_reports_the_cell_and_the_glyph() {
     let (mut fx, seen) = rig();
     let cell = fx.by_label(&name(FIRST)).expect("the first cell");
