@@ -695,6 +695,41 @@ fn paints_canvas(device: Rect, width: u16, height: u16) -> bool {
             && device.y1 > 0.0)
 }
 
+/// Craft patch (text baselines): baselines snap up to this many device pixels per point
+/// (144 dpi), the screen sizes where Adobe Reader, `MuPDF`, pdfium and poppler were measured doing
+/// it. Above it (print, OCR rasters, high zoom) half a pixel is too small to see, and positions
+/// stay exact.
+pub(crate) const SNAP_BASELINES_UP_TO: f32 = 2.0;
+
+/// Craft patch (text baselines): how far to move an upright glyph so its baseline sits on a whole
+/// pixel row. Adobe Reader, `MuPDF`, pdfium and poppler all draw text that way: measured against the
+/// exact position, they are up to half a pixel off it, in step with each other, while hayro drew
+/// every glyph at its exact position, so a line of text sat up to half a pixel away from theirs and
+/// its horizontal strokes were spread over two rows. `device` maps glyph space to device pixels. A
+/// rotated or skewed glyph (any off-diagonal term) keeps its exact position, as does a transform
+/// that is not finite.
+fn baseline_shift(device: Affine) -> f64 {
+    let [a, b, c, d, _, f] = device.as_coeffs();
+    let scale = a.abs().max(d.abs());
+    if scale.is_nan()
+        || scale <= 0.0
+        || !f.is_finite()
+        || b.abs() > scale * 1e-9
+        || c.abs() > scale * 1e-9
+    {
+        return 0.0;
+    }
+    // Halves round up, not away from zero, as in `snap_minified_image`: a tile's origin moves the
+    // baseline by whole pixels, and only then does it land on the row the whole page puts it on
+    // (-0.5 must go to 0 as 24.5 goes to 25).
+    (f + 0.5).floor() - f
+}
+
+/// `device` with its baseline on a whole pixel row (`baseline_shift`).
+fn baseline_snapped(device: Affine) -> Affine {
+    Affine::translate((0.0, baseline_shift(device))) * device
+}
+
 /// PdfCraft patch: whether a path drawn with `transform` can paint a pixel of a `width` ×
 /// `height` canvas. `reach` is how far its paint extends beyond the path, in user space: 0 for a
 /// fill; for a stroke, half its width times the larger of its miter limit (kurbo draws a miter
@@ -873,6 +908,9 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// Craft patch (text baselines): put upright glyphs' baselines on whole pixel rows
+    /// (`baseline_shift`); set by `render_into` for screen sizes only (`SNAP_BASELINES_UP_TO`).
+    pub(crate) snap_baselines: bool,
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -1015,6 +1053,7 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            snap_baselines: false,
         }
     }
 
@@ -1122,6 +1161,7 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                snap_baselines: self.snap_baselines,
             };
             let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1662,6 +1702,7 @@ impl Renderer {
             preview: self.preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            snap_baselines: self.snap_baselines,
         };
         t.interpret(&mut renderer, initial_transform, is_stroke);
         let mut pix = offscreen_pixmap(size.0, size.1, true);
@@ -1731,6 +1772,7 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            snap_baselines: self.snap_baselines,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
@@ -2188,7 +2230,12 @@ impl Renderer {
 
                 self.fill_path(
                     base_outline.as_ref(),
-                    transform * glyph_transform,
+                    // Craft patch (text baselines): the baseline on a whole pixel row.
+                    if self.snap_baselines {
+                        baseline_snapped(transform * glyph_transform)
+                    } else {
+                        transform * glyph_transform
+                    },
                     paint,
                     FillRule::NonZero,
                     // PdfCraft patch: glyph outlines are text for the reading-colours mapping.
@@ -2220,7 +2267,13 @@ impl Renderer {
 
                 self.stroke_path(
                     &(glyph_transform * base_outline.as_ref().clone()),
-                    transform,
+                    // Craft patch (text baselines): the baseline on a whole pixel row.
+                    if self.snap_baselines {
+                        Affine::translate((0.0, baseline_shift(transform * glyph_transform)))
+                            * transform
+                    } else {
+                        transform
+                    },
                     paint,
                     stroke_props,
                     true,
@@ -2899,6 +2952,8 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        // Craft patch (text baselines): a soft mask keeps exact positions.
+        snap_baselines: false,
     }
 }
 

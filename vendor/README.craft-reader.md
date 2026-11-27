@@ -388,6 +388,16 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+A craft-libs patch, labeled `Craft patch (text baselines)` in code comments, puts the baseline of
+upright text on a whole pixel row at screen sizes. hayro drew every glyph at its exact position.
+Adobe Reader, MuPDF, pdfium and poppler round the baseline to the nearest pixel row instead, so a
+line of small text sat up to half a pixel away from theirs and its horizontal strokes spread over
+two rows. `baseline_shift` in hayro's `renderer.rs` moves a glyph with no rotation or skew by that
+fraction of a pixel; `fill_glyph` and `stroke_glyph` apply it when `Renderer::snap_baselines` is
+set, and `render_into` sets it up to `SNAP_BASELINES_UP_TO`, 2 device pixels a point (144 dpi).
+Above that (print, OCR rasters, high zoom), and for rotated or skewed glyphs, Type 3 glyphs and
+soft masks, positions stay exact. hayro's `text_baseline_tests` check the three cases.
+
 ## Cooperative opening cancellation
 
 The syntax reader also supports cooperative cancellation scoped to one open operation through

@@ -269,6 +269,9 @@ pub fn render_into<'a>(
         device.ctx.set_max_coverage(max);
     }
 
+    // Craft patch (text baselines): text baselines on whole pixel rows at screen sizes.
+    device.snap_baselines = x_scale.max(y_scale) <= renderer::SNAP_BASELINES_UP_TO;
+
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
     // objects composite with an initially transparent backdrop, and the group is then put on
     // the paper (ISO 32000-2, page group), so a blend mode only blends where something was
@@ -857,5 +860,121 @@ mod mesh_extent_tests {
         let p = render_at(fixture("/Sh0 sh", (195, 100, 205, 110)), 1.0);
         assert_eq!(px(&p, 196, 98), [255, 0, 0, 255]);
         assert_eq!(px(&p, 150, 50), [255, 255, 255, 255]);
+    }
+}
+
+/// Craft patch (text baselines): upright text sits with its baseline on a whole pixel row at screen
+/// sizes, as Adobe Reader, `MuPDF`, pdfium and poppler draw it. Each case draws the same line twice,
+/// its baseline 0.1 and 0.4 pixels below the same pixel row (both round to that row): upright text
+/// at screen sizes must come out as the same pixels; rotated text, and any text drawn at more than
+/// two pixels a point (print, OCR rasters, high zoom), keeps its exact position, so there the two
+/// must differ.
+#[cfg(test)]
+mod text_baseline_tests {
+    use super::{InterpreterSettings, Pdf, RenderCache, RenderSettings, render, render_pdf};
+    use vello_cpu::color::palette::css::WHITE;
+
+    /// A 120 x 40 pt page showing `text` in Helvetica (a standard font, drawn by its substitute)
+    /// at 20 pt, through the text matrix `tm` (`a b c d e f`).
+    fn page(tm: &str, text: &str) -> Vec<u8> {
+        let content = format!("BT /F1 20 Tf {tm} Tm ({text}) Tj ET");
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        )
+        .into_bytes()
+    }
+
+    /// The page's pixels at `scale` device pixels a point, after checking the text drew some ink.
+    fn pixels(tm: &str, text: &str, scale: f32) -> Vec<u8> {
+        let pdf = Pdf::new(page(tm, text)).unwrap();
+        let pixmap = render_pdf(&pdf, scale, InterpreterSettings::default(), None, None)
+            .unwrap()
+            .remove(0);
+        let data = pixmap.data_as_u8_slice().to_vec();
+        assert!(data.chunks(4).any(|p| p[0] < 128), "no text drawn for {tm}");
+        data
+    }
+
+    #[test]
+    fn upright_text_draws_with_its_baseline_on_a_whole_pixel_row() {
+        // At one pixel a point the page is 40 rows high: a baseline at y = 15.9 pt is 24.1 rows
+        // down, at 15.6 pt 24.4 rows down; both belong on row 24.
+        assert_eq!(
+            pixels("1 0 0 1 10 15.9", "HHxg", 1.0),
+            pixels("1 0 0 1 10 15.6", "HHxg", 1.0)
+        );
+        // Mirrored upright (a text matrix with d < 0) as well.
+        assert_eq!(
+            pixels("1 0 0 -1 10 30.9", "HHxg", 1.0),
+            pixels("1 0 0 -1 10 30.6", "HHxg", 1.0)
+        );
+    }
+
+    #[test]
+    fn rotated_text_keeps_its_exact_position() {
+        // One glyph turned 30 degrees, moved 0.3 pt along the page's height (its origin 24.1 and
+        // 24.4 rows from the top edge, the step the upright case snaps away): the ink must move.
+        assert_ne!(
+            pixels("0.866 0.5 -0.5 0.866 60 15.9", "H", 1.0),
+            pixels("0.866 0.5 -0.5 0.866 60 15.6", "H", 1.0)
+        );
+    }
+
+    #[test]
+    fn text_drawn_above_screen_sizes_keeps_its_exact_position() {
+        // At 3 pixels a point, baselines 72.15 and 72.3 rows down (y = 15.95 and 15.9 pt) would
+        // both snap to row 72; kept exact, the 0.15 pixel step must move the ink.
+        assert_ne!(
+            pixels("1 0 0 1 10 15.95", "HHxg", 3.0),
+            pixels("1 0 0 1 10 15.9", "HHxg", 3.0)
+        );
+    }
+
+    #[test]
+    fn a_tile_puts_a_baseline_half_a_pixel_off_on_the_row_the_whole_page_does() {
+        // A baseline at y = 15.5 pt is 24.5 rows down, so the whole page snaps it to row 25. A tile
+        // starting at row 25 sees it at -0.5: it must snap to the tile's row 0, the same page row,
+        // or the descenders in the tile sit one row higher than on the whole page.
+        let pdf = Pdf::new(page("1 0 0 1 10 15.5", "gjpq")).unwrap();
+        let first = pdf.pages().get(0).expect("the fixture has one page");
+        let cache = RenderCache::new();
+        let settings = InterpreterSettings::default();
+        let at = |y_offset: f32, height: Option<u16>| {
+            let render_settings = RenderSettings {
+                bg_color: WHITE,
+                y_offset,
+                height,
+                ..RenderSettings::default()
+            };
+            render(first, &cache, &settings, &render_settings)
+        };
+        let (whole, tile) = (at(0.0, None), at(25.0, Some(15)));
+        let tile = tile.data_as_u8_slice();
+        assert!(
+            tile.chunks(4).any(|p| p[0] < 128),
+            "no descenders in the tile"
+        );
+        let row = 120 * 4;
+        let moved: Vec<usize> = whole.data_as_u8_slice()[25 * row..]
+            .chunks(row)
+            .zip(tile.chunks(row))
+            .enumerate()
+            .filter(|(_, (page_row, tile_row))| page_row != tile_row)
+            .map(|(y, _)| 25 + y)
+            .collect();
+        assert!(
+            moved.is_empty(),
+            "page rows the tile draws differently: {moved:?}"
+        );
     }
 }
