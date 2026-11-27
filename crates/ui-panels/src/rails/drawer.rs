@@ -413,8 +413,11 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                         });
                         if searchable {
                             let state = stack.memory::<DrawerSearch>();
-                            if std::mem::take(&mut clear_search) {
+                            if clear_search {
                                 state.query.clear();
+                                if !crate::runtime::measure::active(ui.ctx()) {
+                                    clear_search = false;
+                                }
                             }
                             let field = TextField::search(words.drawer_search.clone(), Bind::bound(&mut state.query));
                             field.drives(list_id).show(ui);
