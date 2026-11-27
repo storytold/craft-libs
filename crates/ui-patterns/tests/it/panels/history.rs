@@ -68,20 +68,25 @@ fn history_source_cell_sets_the_source_without_selecting() {
     assert!(seen.borrow().contains(&HistoryEvent::Select(HistoryKey::State(3))), "{:?}", seen.borrow());
 }
 
-/// The format the panel painted the first run of the label `label` in.
+/// The format the panel painted the label `label` in: the style of the one run its galley holds. A label that came
+/// back as more than one run is not the label this panel draws, so the trial stops rather than read the first style.
 fn painted_label(shapes: &[egui::Shape], label: &str) -> egui::TextFormat {
-    shapes
+    let galley = shapes
         .iter()
         .find_map(|shape| match shape {
-            egui::Shape::Text(text) if text.galley.job.text == label => text.galley.job.sections.first().map(|section| section.format.clone()),
+            egui::Shape::Text(text) if text.galley.job.text == label => Some(text.galley.clone()),
             _ => None,
         })
-        .unwrap_or_else(|| panic!("the row {label:?} paints its label as text"))
+        .unwrap_or_else(|| panic!("the row {label:?} paints its label as text"));
+    let [section] = galley.job.sections.as_slice() else {
+        panic!("the label {label:?} paints as one run of one style, got {:?}", galley.job.sections);
+    };
+    section.format.clone()
 }
 
 /// A row the host marks italic draws its label in italics, and italics change no ink: a redone row stays dimmed
 /// whether or not it is italic, an italic row that is not redone reads in the ink of the plain row next to it, and a
-/// row without the flag stands upright.
+/// row without the flag stands upright. A snapshot row takes the two flags the same way a state row does.
 #[trial]
 fn an_italic_label_slants_itself_and_leaves_the_ink_to_redo() {
     let rows = vec![
@@ -90,6 +95,7 @@ fn an_italic_label_slants_itself_and_leaves_the_ink_to_redo() {
         HistoryRow::state(3, "Fill").redo(true).italic(true),
         HistoryRow::state(4, "Text").italic(true),
         HistoryRow::state(5, "Crop"),
+        HistoryRow::snapshot(9, "Before Crop").redo(true).italic(true),
     ];
     let mut fixture = Fixture::new(move |ui| {
         let _ = HistoryPanel::new(&rows, Some(HistoryKey::State(1))).show(ui);
@@ -101,11 +107,30 @@ fn an_italic_label_slants_itself_and_leaves_the_ink_to_redo() {
     let both = painted_label(&shapes, "Fill");
     let italic_only = painted_label(&shapes, "Text");
     let plain = painted_label(&shapes, "Crop");
+    let snapshot = painted_label(&shapes, "Before Crop");
     assert!(!current.italics && !redo.italics && !plain.italics, "a row without the flag draws its label upright: {current:?} {redo:?} {plain:?}");
     assert!(both.italics && italic_only.italics, "both flagged rows draw their labels in italics: {both:?} {italic_only:?}");
     assert_ne!(redo.color, plain.color, "a redone row reads dimmer than a plain one: {redo:?} {plain:?}");
     assert_eq!(both.color, redo.color, "the italic redone row keeps the dimmed ink: {both:?} {redo:?}");
     assert_eq!(italic_only.color, plain.color, "italics alone change no ink: {italic_only:?} {plain:?}");
+    assert!(snapshot.italics, "a flagged snapshot row slants too: {snapshot:?}");
+    assert_eq!(snapshot.color, redo.color, "and takes the same dimmed ink as a flagged state row: {snapshot:?} {redo:?}");
+}
+
+/// A panel the host disables still draws a flagged row's label in italics: the flag is not an enable state, and the
+/// stories show the look under a disabled panel.
+#[trial]
+fn a_disabled_panel_still_draws_the_flagged_label_italic() {
+    let rows = vec![HistoryRow::state(1, "Open"), HistoryRow::state(2, "Brush").redo(true).italic(true)];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = HistoryPanel::new(&rows, Some(HistoryKey::State(1))).enabled(false).show(ui);
+    });
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let plain = painted_label(&shapes, "Open");
+    let kept = painted_label(&shapes, "Brush");
+    assert!(!plain.italics, "the unflagged row stands upright while the panel is disabled: {plain:?}");
+    assert!(kept.italics, "the flagged row keeps its slant while the panel is disabled: {kept:?}");
 }
 
 /// The panel's source row, marked redo and italic at once, draws its label slanted and dimmed and keeps its source

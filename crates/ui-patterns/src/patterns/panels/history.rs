@@ -84,7 +84,7 @@ impl HistoryRow {
         self
     }
 
-    /// Draws the name in italics; it composes with [`HistoryRow::redo`], which dims the row.
+    /// Draws the name in italics; it composes with [`HistoryRow::redo`], which dims the row, and it changes no ink.
     #[must_use]
     pub fn italic(mut self, italic: bool) -> Self {
         self.italic = italic;
@@ -372,7 +372,9 @@ impl<'a> HistoryPanel<'a> {
                 if row.redo {
                     item = item.ink(RowInk::Dimmed);
                 }
-                item = item.italic(row.italic);
+                if row.italic {
+                    item = item.italic(true);
+                }
                 if has_source {
                     let on = ToggleState::of(source == Some(row.key));
                     item = item.toggle(ToggleCell::check(SOURCE, on, words.history_source_cell.clone()));
