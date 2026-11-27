@@ -240,6 +240,85 @@ fn a_share_reaching_four_of_five_names_the_fifth() {
     assert_eq!(left.chosen.first().map(|c| &c.target), Some(&ShareTarget::Email("nobody@@".into())));
 }
 
+fn copied(ctx: &Context) -> Vec<String> {
+    ctx.output(|o| o.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(text) = c { Some(text.clone()) } else { None }).collect())
+}
+
+fn ask_for_link(dialog: &mut ShareDialog) -> u64 {
+    let granting = dialog.issue(Request::Grant(Grant {
+        id: "files/budget.xlsx".into(),
+        password: None,
+        targets: Vec::new(),
+        permission: Permission::View,
+        note: None,
+        notify: false,
+    }));
+    if let Some(sheet) = &mut dialog.open {
+        sheet.granting = Some(granting);
+    }
+    granting
+}
+
+fn link(url: &str) -> Answer {
+    let mut made = share("s1", ShareTarget::Email("anyone@example.com".into()));
+    made.url = Some(url.into());
+    Answer::Granted { shared: vec![made], failed: Vec::new() }
+}
+
+#[test]
+fn a_granted_link_goes_to_the_clipboard() {
+    let (ctx, mut dialog, _) = ready();
+    let granting = ask_for_link(&mut dialog);
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert_eq!(copied(&ctx), ["https://cloud.example/l/budget"]);
+}
+
+#[test]
+fn a_link_granted_after_the_sheet_moved_on_is_not_copied() {
+    let (ctx, mut dialog, _) = ready();
+    let granting = ask_for_link(&mut dialog);
+    dialog.close();
+    dialog.open("files/plan.docx", "Plan");
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert!(copied(&ctx).is_empty(), "the budget's link must not replace the clipboard while the plan is open");
+
+    let (ctx, mut dialog, _) = ready();
+    let granting = ask_for_link(&mut dialog);
+    dialog.close();
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert!(copied(&ctx).is_empty(), "nor after the sheet closed");
+}
+
+/// Whether one frame of the sheet offers "Get a link" as a button that can
+/// be pressed, read off the accessibility tree.
+fn link_button_enabled(dialog: &mut ShareDialog) -> Option<bool> {
+    let ctx = Context::default();
+    ctx.enable_accesskit();
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 900.0))), ..Default::default() };
+    let mut output = ctx.run_ui(raw, |ui| dialog.show_in(ui));
+    output.textures_delta.clear();
+    let tree = output.platform_output.accesskit_update?;
+    tree.nodes
+        .iter()
+        .find(|(_, node)| node.role() == egui::accesskit::Role::Button && node.label() == Some("Get a link"))
+        .map(|(_, node)| !node.is_disabled())
+}
+
+#[test]
+fn get_a_link_waits_while_a_grant_is_in_flight() {
+    let ctx = Context::default();
+    let mut dialog = ShareDialog::new();
+    dialog.connect(Silent::default());
+    dialog.collect(&ctx);
+    dialog.receive(&ctx, 1, Ok(can(vec![Capability::Sharing, Capability::LinkShares])));
+    dialog.open("files/budget.xlsx", "Budget");
+    assert_eq!(link_button_enabled(&mut dialog), Some(true));
+    let granting = ask_for_link(&mut dialog);
+    assert_eq!(link_button_enabled(&mut dialog), Some(false), "a second grant would make the first one's link be dropped");
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert_eq!(link_button_enabled(&mut dialog), Some(true));
+}
+
 #[test]
 fn a_refusal_that_stopped_the_whole_call_is_not_a_failed_recipient() {
     let (ctx, mut dialog, _) = ready();
