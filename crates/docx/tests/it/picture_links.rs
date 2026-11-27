@@ -801,3 +801,55 @@ fn deepest_linked_vml_tree_survives_flow_and_docx() {
     let reopened = craft_docx::read(&craft_docx::write(&rebuilt).unwrap()).unwrap();
     check(&reopened);
 }
+
+/// Original Flow callers used the mark for a textless paragraph's single drawing.
+#[test]
+fn a_single_flow_picture_keeps_its_paragraph_mark_link() {
+    const MARK: &str = "https://example.com/paragraph";
+    const OWN: &str = "https://example.com/object";
+    let bytes = Arc::new(png());
+    for (links, text, expected) in [
+        (vec![None], false, vec![Some(MARK)]),
+        (vec![Some(OWN)], false, vec![Some(OWN)]),
+        (vec![Some("")], false, vec![None]),
+        (vec![None, None], false, vec![None, None]),
+        (vec![Some(OWN), None], false, vec![Some(OWN), None]),
+        (vec![None, Some(OWN)], false, vec![None, Some(OWN)]),
+        (vec![None], true, vec![None]),
+    ] {
+        let inlines = links
+            .into_iter()
+            .map(|link| {
+                let mut picture = craft_flow::make_img(bytes.clone(), Some(12.0), Some(6.0), "original picture").unwrap();
+                picture.link = link.map(str::to_string);
+                craft_flow::Inline::Image(picture)
+            })
+            .collect();
+        let mut paragraph = craft_flow::Para {
+            inlines,
+            mark: Some(Box::new(CharProps { link: Some(MARK.into()), ..Default::default() })),
+            ..Default::default()
+        };
+        if text {
+            paragraph.push_text("beside the picture", &Default::default());
+        }
+        let flow = craft_flow::Flow { blocks: vec![craft_flow::FBlock::Para(paragraph)], ..Default::default() };
+        let model = craft_flow::to_doc(&flow);
+        let reopened = craft_docx::read(&craft_docx::write(&model).unwrap()).unwrap();
+        let expected: Vec<_> = expected.into_iter().map(|target| target.map(str::to_string)).collect();
+        for current in [&model, &reopened] {
+            assert_eq!(
+                picture_links(current),
+                expected,
+                "only the legacy single drawing inherits the mark; explicit targets and neighbors keep their own scope"
+            );
+            let paragraph = current.body[0].as_para().unwrap();
+            assert_eq!(paragraph.objects.len(), expected.len());
+            for object in &paragraph.objects {
+                let InlineObject::Image { media, w, h, .. } = object else { panic!("the picture remains a picture") };
+                assert_eq!(current.media.get(media).unwrap().as_slice(), bytes.as_slice());
+                assert!((*w - 12.0).abs() < 0.001 && (*h - 6.0).abs() < 0.001, "the original picture size is retained");
+            }
+        }
+    }
+}

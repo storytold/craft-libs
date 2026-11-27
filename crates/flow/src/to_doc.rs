@@ -576,6 +576,14 @@ impl<'a> Builder<'a> {
             out.props.keep_next = Some(true);
         }
         out.section.clone_from(&p.section);
+        // A legacy paragraph-mark target belongs to its sole drawing, not to an unlinked neighbor.
+        let single_drawing = p.textless()
+            && p.inlines
+                .iter()
+                .filter(|i| matches!(i, Inline::Image(_) | Inline::Chart(_) | Inline::Shape { .. } | Inline::Group { .. } | Inline::Figure(_)))
+                .take(2)
+                .count()
+                == 1;
         // Inlines are appended in order, so build the runs directly: inserting each one through
         // `Paragraph::insert_text` rescans every earlier run and is quadratic in their number.
         for i in &p.inlines {
@@ -612,7 +620,10 @@ impl<'a> Builder<'a> {
                             .map(|m| CharProps { ins: None, del: None, fmt_change: None, ..m.clone() })
                             .unwrap_or_default();
                         if !matches!(i, Inline::Chart(_)) {
-                            cp.link = drawing_link(i).map(str::trim).filter(|s| !s.is_empty()).and_then(super::kept_link).map(|s| s.to_string());
+                            let link = drawing_link(i);
+                            if link.is_some() || !single_drawing {
+                                cp.link = link.map(str::trim).filter(|s| !s.is_empty()).and_then(super::kept_link).map(|s| s.to_string());
+                            }
                         }
                         cp = self.budget(cp);
                         if let Some(f) = obj.float_mut()
