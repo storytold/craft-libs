@@ -335,6 +335,9 @@ fn malformed_numbering_levels_are_skipped_instead_of_becoming_level_zero() {
         })
         .collect();
     assert_eq!(paragraphs.len(), 5);
+    assert!(doc.numbering.level_is_defined(1, 0));
+    assert!(!doc.numbering.level_is_defined(1, 2), "effective defaults remain distinguishable from source definitions");
+    assert!(doc.numbering.level(1, 2).is_some(), "Word's effective default level remains available");
     assert_eq!(paragraphs[0].props.numbering.map(|n| (n.num, n.level)), Some((1, 0)), "an omitted level defaults to zero");
     assert_eq!(paragraphs[1].props.numbering.map(|n| (n.num, n.level)), Some((1, 2)), "a valid level is preserved");
     for p in &paragraphs[2..] {
@@ -379,7 +382,9 @@ fn extended_properties_are_kept_without_words_counts_and_personal_ones_follow_th
         assert!(!a.contains(gone), "{gone}: {a}");
     }
     assert!(a.contains("<Application>WordCraft</Application>"));
-    let private = make(SETTINGS);
+    // This privacy fixture has no mail-merge source relationships; do not include a dangling source.
+    let settings = SETTINGS.replace(r#"<w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataSource r:id="rId9"/></w:mailMerge>"#, "");
+    let private = make(&settings);
     assert!(!private.contains("Company") && !private.contains("Manager"), "{private}");
     assert!(private.contains("<Template>Normal.dotm</Template>"));
 }

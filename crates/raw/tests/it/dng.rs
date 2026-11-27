@@ -1,7 +1,7 @@
 //! Synthetic DNG round trips: every storage variant we decode is written with our own TIFF writer (and LJ92
 //! encoder) and must decode bit-exactly.
 
-use craft_raw::opcodes::{Area, Opcode};
+use craft_raw::opcodes::{self, Area, Opcode};
 use craft_raw::{
     BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect, decode,
     embedded_preview, probe, write_dng,
@@ -15,7 +15,7 @@ fn scene_value(x: usize, y: usize, c: u8, max: f32) -> f32 {
     v * max
 }
 
-fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
+pub(super) fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
     let black = 256.0;
     let white = 16000.0;
     let mut data = Vec::with_capacity(w * h * cpp);
@@ -58,12 +58,14 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         color,
         wb_multipliers: None,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera,
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: craft_raw::RawNotices::default(),
     }
 }
 
@@ -192,7 +194,7 @@ fn deflate_roundtrips_integer_and_float() {
 
 // ---------------------------------------------------------------- hand-built variants
 
-fn base_ifd(w: usize, h: usize, bits: u16, cpp: usize, cfa: bool) -> IfdBuilder {
+pub(super) fn base_ifd(w: usize, h: usize, bits: u16, cpp: usize, cfa: bool) -> IfdBuilder {
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w as u32]));
@@ -207,12 +209,12 @@ fn base_ifd(w: usize, h: usize, bits: u16, cpp: usize, cfa: bool) -> IfdBuilder 
     ifd
 }
 
-fn dng(raw: IfdBuilder, order: ByteOrder) -> Vec<u8> {
+pub(super) fn dng(raw: IfdBuilder, order: ByteOrder) -> Vec<u8> {
     dng_with(raw, order, |_| {})
 }
 
 /// [`dng`] with extra IFD 0 tags (where DNG writers put camera-profile tags).
-fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8> {
+pub(super) fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8> {
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
     ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 6, 0, 0]));
@@ -235,12 +237,12 @@ fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilde
     TiffWriter::new(order, false).write(&[ifd0]).unwrap()
 }
 
-fn pattern(w: usize, h: usize, cpp: usize, bits: u32) -> Vec<u16> {
+pub(super) fn pattern(w: usize, h: usize, cpp: usize, bits: u32) -> Vec<u16> {
     let max = (1u32 << bits) - 1;
     (0..w * h * cpp).map(|i| ((i as u32).wrapping_mul(2654435761u32) >> 7) % (max + 1)).map(|v| v as u16).collect()
 }
 
-fn pack_msb(v: &[u16], bits: u32, w: usize) -> Vec<u8> {
+pub(super) fn pack_msb(v: &[u16], bits: u32, w: usize) -> Vec<u8> {
     let mut out = Vec::new();
     for row in v.chunks(w) {
         let mut acc = 0u64;
@@ -260,7 +262,7 @@ fn pack_msb(v: &[u16], bits: u32, w: usize) -> Vec<u8> {
     out
 }
 
-fn u16_bytes(v: &[u16], order: ByteOrder) -> Vec<u8> {
+pub(super) fn u16_bytes(v: &[u16], order: ByteOrder) -> Vec<u8> {
     let mut b = Vec::new();
     v.iter().for_each(|&x| order.put_u16(&mut b, x));
     b
@@ -400,6 +402,172 @@ fn floating_point_dngs() {
     let bytes: Vec<u8> = vals.iter().flat_map(|&v| f32_to_f16(v).to_be_bytes()).collect();
     raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
     assert_eq!(decode(&dng(raw, ByteOrder::Big)).unwrap().data, RawData::F32(vals));
+}
+
+/// The chunks (tiles of `tw` x `th`, or strips when `tw == w`) of an image of `cpp` interleaved samples per pixel, each
+/// nominal-sized (strips: clipped to the image height) with zero padding past the image edge: one chunk per tile, and for `planar` one set of chunks per
+/// plane (one sample per pixel), plane after plane.
+pub(super) fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw: usize, th: usize, planar: bool) -> Vec<Vec<T>> {
+    let planes = if planar { cpp } else { 1 };
+    let ccpp = if planar { 1 } else { cpp };
+    let mut out = Vec::new();
+    for plane in 0..planes {
+        for ty in 0..h.div_ceil(th) {
+            for tx in 0..w.div_ceil(tw) {
+                // a strip holds only the rows inside the image, a tile its nominal size
+                let rows = if tw == w { th.min(h - ty * th) } else { th };
+                let mut c = vec![T::default(); tw * rows * ccpp];
+                for y in 0..th.min(h - ty * th) {
+                    for x in 0..tw.min(w - tx * tw) {
+                        for s in 0..ccpp {
+                            let src = ((ty * th + y) * w + tx * tw + x) * cpp + if planar { plane } else { s };
+                            c[(y * tw + x) * ccpp + s] = px[src];
+                        }
+                    }
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+pub(super) fn layout_image(raw: &mut IfdBuilder, chunks: Vec<Vec<u8>>, w: usize, tile: (usize, usize)) {
+    raw.set_image(if tile.0 == w {
+        ImageData::Strips { rows_per_strip: tile.1 as u32, strips: chunks }
+    } else {
+        ImageData::Tiles { tile_width: tile.0 as u32, tile_height: tile.1 as u32, tiles: chunks }
+    });
+}
+
+/// Uncompressed integer DNGs in every chunk layout (chunky and planar, tiles and strips with edge chunks, several chunks
+/// per image) at several bit depths and byte orders decode to the samples they were built from.
+#[test]
+fn uncompressed_chunk_layouts_place_every_sample() {
+    let (w, h) = (37, 23);
+    for cpp in [1usize, 3] {
+        for bits in [8u32, 12, 16] {
+            let px = pattern(w, h, cpp, bits);
+            // tiles overhanging both edges, strips with a shorter last strip
+            for tile in [(16, 16), (w, 5), (w, h), (16, 32)] {
+                for planar in [false, true] {
+                    if planar && cpp == 1 {
+                        continue;
+                    }
+                    for order in [ByteOrder::Little, ByteOrder::Big] {
+                        let ccpp = if planar { 1 } else { cpp };
+                        let chunks: Vec<Vec<u8>> = chunk_samples(&px, w, h, cpp, tile.0, tile.1, planar)
+                            .iter()
+                            .map(|c| match bits {
+                                8 => c.iter().map(|&v| v as u8).collect(),
+                                16 => u16_bytes(c, order),
+                                _ => pack_msb(c, bits, tile.0 * ccpp),
+                            })
+                            .collect();
+                        let mut raw = base_ifd(w, h, bits as u16, cpp, cpp == 1);
+                        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+                        if planar {
+                            raw.set(t::PLANAR_CONFIGURATION, Value::Short(vec![2]));
+                        }
+                        layout_image(&mut raw, chunks, w, tile);
+                        let img = decode(&dng(raw, order)).unwrap();
+                        assert_eq!(img.cpp, cpp);
+                        assert_eq!(img.data, RawData::U16(px.clone()), "cpp {cpp} bits {bits} tile {tile:?} planar {planar} {order:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Deflate with the integer and floating-point predictors, chunky and planar tiles and strips.
+#[test]
+fn deflate_chunk_layouts_place_every_sample() {
+    let (w, h) = (37, 23);
+    for planar in [false, true] {
+        let cpp = 3;
+        let ccpp = if planar { 1 } else { cpp };
+        let px = pattern(w, h, cpp, 16);
+        for tile in [(16, 16), (w, 5)] {
+            // integer predictor 2 on 16-bit samples
+            let chunks: Vec<Vec<u8>> = chunk_samples(&px, w, h, cpp, tile.0, tile.1, planar)
+                .into_iter()
+                .map(|mut c| {
+                    for row in c.chunks_mut(tile.0 * ccpp) {
+                        for i in (ccpp..row.len()).rev() {
+                            row[i] = row[i].wrapping_sub(row[i - ccpp]);
+                        }
+                    }
+                    miniz_oxide::deflate::compress_to_vec_zlib(&u16_bytes(&c, ByteOrder::Little), 6)
+                })
+                .collect();
+            let mut raw = base_ifd(w, h, 16, cpp, false);
+            raw.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
+            raw.set(t::PREDICTOR, Value::Short(vec![2]));
+            if planar {
+                raw.set(t::PLANAR_CONFIGURATION, Value::Short(vec![2]));
+            }
+            layout_image(&mut raw, chunks, w, tile);
+            let img = decode(&dng(raw, ByteOrder::Little)).unwrap();
+            assert_eq!(img.data, RawData::U16(px.clone()), "integer predictor, tile {tile:?} planar {planar}");
+        }
+    }
+}
+
+/// Floating-point DNGs (uncompressed and with the floating-point predictor) in tiled and strip, chunky and planar
+/// layouts with several chunks and edge chunks.
+#[test]
+fn float_chunk_layouts_place_every_sample() {
+    let (w, h) = (37, 23);
+    for cpp in [1usize, 3] {
+        let vals: Vec<f32> = (0..w * h * cpp).map(|i| ((i * 37) % 200) as f32 / 64.0).collect();
+        for tile in [(16, 16), (w, 5)] {
+            for planar in [false, true] {
+                if planar && cpp == 1 {
+                    continue;
+                }
+                let ccpp = if planar { 1 } else { cpp };
+                let parts = chunk_samples(&vals, w, h, cpp, tile.0, tile.1, planar);
+                for bits in [16u16, 24, 32] {
+                    let bp = bits as usize / 8;
+                    for (pred, order) in [(1u16, ByteOrder::Little), (1, ByteOrder::Big), (3, ByteOrder::Little)] {
+                        if pred == 1 && bits != 16 && bits != 32 {
+                            continue; // uncompressed 24-bit floats are not written by this test
+                        }
+                        let chunks: Vec<Vec<u8>> = parts
+                            .iter()
+                            .map(|c| {
+                                if pred == 3 {
+                                    let enc = fp_encode(c, bp, ccpp, tile.0 * ccpp);
+                                    miniz_oxide::deflate::compress_to_vec_zlib(&enc, 6)
+                                } else if bits == 16 {
+                                    c.iter()
+                                        .flat_map(
+                                            |&v| if order == ByteOrder::Big { f32_to_f16(v).to_be_bytes() } else { f32_to_f16(v).to_le_bytes() },
+                                        )
+                                        .collect()
+                                } else {
+                                    c.iter().flat_map(|&v| if order == ByteOrder::Big { v.to_be_bytes() } else { v.to_le_bytes() }).collect()
+                                }
+                            })
+                            .collect();
+                        let mut raw = base_ifd(w, h, bits, cpp, cpp == 1);
+                        raw.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
+                        raw.set(t::COMPRESSION, Value::Short(vec![if pred == 3 { compression::DEFLATE } else { 1 }]));
+                        if pred == 3 {
+                            raw.set(t::PREDICTOR, Value::Short(vec![3]));
+                        }
+                        if planar {
+                            raw.set(t::PLANAR_CONFIGURATION, Value::Short(vec![2]));
+                        }
+                        layout_image(&mut raw, chunks, w, tile);
+                        let img = decode(&dng(raw, order)).unwrap();
+                        assert_eq!(img.data, RawData::F32(vals.clone()), "cpp {cpp} {bits}-bit pred {pred} tile {tile:?} planar {planar} {order:?}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -581,6 +749,7 @@ fn malformed_profile_look_tags_are_ignored() {
 }
 
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
+#[cfg(feature = "jxl")]
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
     use zune_core::bit_depth::BitDepth;
     use zune_core::colorspace::ColorSpace;
@@ -597,6 +766,7 @@ fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8
 }
 
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
+#[cfg(feature = "jxl")]
 fn jxl_container(cs: &[u8]) -> Vec<u8> {
     let mut b = vec![0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a, 0, 0, 0, 0x14];
     b.extend_from_slice(b"ftypjxl \0\0\0\0jxl ");
@@ -609,6 +779,7 @@ fn jxl_container(cs: &[u8]) -> Vec<u8> {
 /// A tiled JPEG XL raw IFD of `px`. Edge tiles alternate between being coded at their in-image size
 /// and padded to the nominal tile size (with junk the decoder must drop); tiles alternate between bare
 /// codestreams and containers.
+#[cfg(feature = "jxl")]
 fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, tile: (usize, usize)) -> IfdBuilder {
     let (tw, th) = tile;
     let mut tiles = Vec::new();
@@ -636,6 +807,7 @@ fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, t
 }
 
 #[test]
+#[cfg(feature = "jxl")]
 fn jpeg_xl_tiles_decode_bit_exactly() {
     let (w, h) = (37, 29);
     // LinearRaw 3 × 16-bit, the full code range
@@ -663,6 +835,7 @@ fn jpeg_xl_tiles_decode_bit_exactly() {
 }
 
 #[test]
+#[cfg(feature = "jxl")]
 fn malformed_jpeg_xl_tiles_are_errors() {
     use craft_raw::RawError;
     let (w, h) = (16, 16);
@@ -700,6 +873,7 @@ fn malformed_jpeg_xl_tiles_are_errors() {
 
 /// One undecodable tile makes the whole image an error: it is never returned with a black tile.
 #[test]
+#[cfg(feature = "jxl")]
 fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
     use craft_raw::RawError;
     let (w, h) = (32, 16);
@@ -722,6 +896,7 @@ fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
 /// about twice what one plane may use, and is an error rather than an allocation the header asks
 /// for. The same samples without the alpha channel decode.
 #[test]
+#[cfg(feature = "jxl")]
 fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
     use craft_raw::RawError;
     use zune_core::bit_depth::BitDepth;
@@ -743,6 +918,7 @@ fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
 }
 
 #[test]
+#[cfg(feature = "jxl")]
 fn jpeg_xl_preview_ifd_is_offered() {
     let raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
     let RawData::U16(px) = &raw.data else { unreachable!() };
@@ -948,18 +1124,31 @@ fn malformed_semantic_masks_are_skipped() {
         let mut zero = mask_ifd(2, 2, "zero size", vec![0; 4]);
         zero.set(t::IMAGE_WIDTH, Value::Long(vec![0]));
         ifd0.add_sub_ifd(zero);
+        // A 4x4 8-bit mask needs 16 visible samples; three bytes must not be
+        // accepted as a synthetic mask with thirteen zero-filled samples.
         let mut short = mask_ifd(4, 4, "short strip", vec![200; 3]);
         short.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
         ifd0.add_sub_ifd(short);
+        let mut valid = mask_ifd(4, 2, "valid crop", vec![10, 20, 30, 40, 50, 60, 70, 255]);
+        valid.set(t::MASK_SUB_AREA, Value::Long(vec![1, 2, 8, 4]));
+        ifd0.add_sub_ifd(valid);
         let mut outside = mask_ifd(2, 2, "sub area too small", vec![255; 4]);
         outside.set(t::MASK_SUB_AREA, Value::Long(vec![3, 0, 2, 4]));
         ifd0.add_sub_ifd(outside);
     });
-    assert_eq!(decode(&bytes).unwrap().cpp, 3);
+    let raw = decode(&bytes).unwrap();
+    let baseline = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
+    assert_eq!((raw.width, raw.height, raw.cpp), (8, 6, 3));
+    assert_eq!(raw.data, baseline.data, "optional damaged masks must not change base image samples");
     let masks = craft_raw::semantic_masks(&bytes);
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["short strip", "sub area too small"]);
-    assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
+    assert_eq!(names, ["valid crop", "sub area too small"], "the truncated mask is omitted, and later usable masks survive");
+    assert_eq!(masks[0].data, [10u16, 20, 30, 40, 50, 60, 70, 255].map(|sample| sample * 257));
+    assert_eq!(masks[0].sub_area, Some(craft_raw::semantic::MaskSubArea { top: 1, left: 2, full_width: 8, full_height: 4 }));
+    assert!((masks[0].value_at(2.5, 1.5) - 10. / 255.).abs() < 1e-4);
+    assert_eq!(masks[0].value_at(1.5, 1.5), 0.);
+    assert!(masks[1].sub_area.is_none(), "the complete mask survives while a sub area it doesn't fit is ignored");
+    assert_eq!(masks[1].data, vec![65535; 4]);
     for m in &masks {
         assert_eq!(m.data.len(), m.width * m.height);
     }
@@ -1163,10 +1352,75 @@ fn white_level_defaults_to_the_linearization_tables_maximum() {
     };
     let img = build(None);
     assert!(img.linearized);
+    assert_eq!(img.linearization_table.as_deref(), Some(table.as_slice()));
     assert_eq!(img.data, RawData::U16(codes.iter().map(|&c| table[c as usize]).collect()));
     assert_eq!(img.white, vec![51000.0], "255 × 200, the table's top");
     // a stated level still wins
     assert_eq!(build(Some(40000)).white, vec![40000.0]);
+}
+
+/// DNG chapter 7: OpcodeList1 runs on the stored codes, then the LinearizationTable maps them to
+/// sensor values. When list 1 is present, decode leaves the table unapplied so the develop pipeline
+/// can keep that order. Applying the table first would give a different picture.
+#[test]
+fn opcode_list1_runs_on_stored_samples_before_linearization() {
+    let (w, h) = (4, 2);
+    let stored = vec![2u16; w * h];
+    // table: 2 → 20, 7 → 30, 20 → 99 (so the two orders disagree)
+    let mut table = vec![0u16; 32];
+    table[2] = 20;
+    table[7] = 30;
+    table[20] = 99;
+    // MapTable: 2 → 7, 20 → 8
+    let mut map: Vec<u16> = (0..32).collect();
+    map[2] = 7;
+    map[20] = 8;
+    let area = Area { top: 0, left: 0, bottom: h as u32, right: w as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+    let list1 = opcodes::write_list(&[Opcode::MapTable { area, table: map.clone() }]);
+
+    let mut raw = base_ifd(w, h, 16, 1, true);
+    raw.set(t::COMPRESSION, Value::Short(vec![compression::NONE]));
+    raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&stored, ByteOrder::Little)] });
+    raw.set(t::LINEARIZATION_TABLE, Value::Short(table.clone()));
+    raw.set(t::OPCODE_LIST_1, Value::Undefined(list1));
+    raw.set(t::WHITE_LEVEL, Value::Long(vec![100]));
+    let img = decode(&dng(raw, ByteOrder::Little)).unwrap();
+    assert!(!img.linearized, "list 1 is present, so the table must wait");
+    assert_eq!(img.data, RawData::U16(stored.clone()));
+    assert_eq!(img.linearization_table.as_deref(), Some(table.as_slice()));
+    assert_eq!(img.opcodes.list1.len(), 1);
+
+    let apply_map = |samples: &mut [u16]| {
+        for s in samples {
+            let i = (*s as usize).min(map.len() - 1);
+            *s = map[i];
+        }
+    };
+
+    let mut correct = img.clone();
+    if let RawData::U16(v) = &mut correct.data {
+        apply_map(v);
+    }
+    correct.apply_linearization();
+    assert!(correct.linearized);
+    // 2 → 7 (MapTable) → 30 (linearization)
+    assert_eq!(correct.data, RawData::U16(vec![30; w * h]));
+
+    let mut wrong = img.clone();
+    wrong.apply_linearization();
+    if let RawData::U16(v) = &mut wrong.data {
+        apply_map(v);
+    }
+    // 2 → 20 (linearization) → 8 (MapTable)
+    assert_eq!(wrong.data, RawData::U16(vec![8; w * h]));
+    assert_ne!(correct.data, wrong.data);
+
+    // the unapplied table and list 1 survive a write / decode round trip
+    let back = decode(&write_dng(&img, &DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() }).unwrap()).unwrap();
+    assert!(!back.linearized);
+    assert_eq!(back.data, RawData::U16(stored));
+    assert_eq!(back.linearization_table.as_deref(), Some(table.as_slice()));
+    assert_eq!(back.opcodes.list1.len(), 1);
 }
 
 /// PhotoCraft: `AsShotWhiteXY` is a chromaticity, so both coordinates lie inside (0, 1).

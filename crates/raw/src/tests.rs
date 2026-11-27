@@ -44,11 +44,13 @@ fn an_active_area_that_wraps_past_the_image_is_corrupt() {
         color: ColorData::default(),
         wb_multipliers: None,
         linearized: false,
+        linearization_table: None,
         opcodes: OpcodeLists::default(),
         camera: Camera::default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: crate::RawNotices::default(),
         pixel_aspect: 1.0,
     };
     assert!(raw.validate().is_err(), "`x + width` wrapped: the area is outside the image");

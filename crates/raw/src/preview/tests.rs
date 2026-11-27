@@ -582,7 +582,19 @@ fn cr3_prefers_the_full_size_jpeg_track() {
     let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &craw)].concat());
     let stsz = full(b"stsz", &[0u32.to_be_bytes(), 1u32.to_be_bytes(), (big.len() as u32).to_be_bytes()].concat());
     let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
-    let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))));
+    let trak = bx(
+        b"trak",
+        &bx(
+            b"mdia",
+            &bx(
+                b"minf",
+                &bx(
+                    b"stbl",
+                    &[stsd, full(b"stsc", &[1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>()), stsz, co64].concat(),
+                ),
+            ),
+        ),
+    );
     file.extend(bx(b"moov", &trak));
     file.resize(at as usize, 0);
     file.extend_from_slice(&big);
@@ -590,6 +602,48 @@ fn cr3_prefers_the_full_size_jpeg_track() {
     // a track pointing past the end falls back to PRVW
     file.truncate(at as usize + 100);
     assert_eq!(embedded_preview(&file).unwrap(), small);
+}
+
+#[cfg(feature = "cr3")]
+#[test]
+fn cr3_skips_bad_preview_tracks_but_never_uses_sensor_tracks_as_jpeg() {
+    let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };
+    let full = |kind: &[u8; 4], body: &[u8]| bx(kind, &[&[0u8; 4][..], body].concat());
+    let track = |jpeg: bool, at: u64, len: u32| {
+        let mut entry = vec![0u8; 82];
+        if jpeg {
+            entry.extend(bx(b"JPEG", &[0; 4]));
+        }
+        let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &entry)].concat());
+        let stsz = full(b"stsz", &[len.to_be_bytes(), 1u32.to_be_bytes()].concat());
+        let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
+        bx(
+            b"trak",
+            &bx(
+                b"mdia",
+                &bx(
+                    b"minf",
+                    &bx(
+                        b"stbl",
+                        &[stsd, full(b"stsc", &[1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>()), stsz, co64].concat(),
+                    ),
+                ),
+            ),
+        )
+    };
+    let good = fake_jpeg(100);
+    for first in [track(true, u64::MAX, 32), track(true, 4096, 32)] {
+        let mut bytes = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+        bytes.extend(bx(b"moov", &[first, track(true, 4128, good.len() as u32)].concat()));
+        bytes.resize(4128, 0);
+        bytes.extend(&good);
+        assert_eq!(embedded_preview(&bytes).as_deref(), Some(good.as_slice()));
+    }
+    let mut bytes = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+    bytes.extend(bx(b"moov", &track(false, 4096, good.len() as u32)));
+    bytes.resize(4096, 0);
+    bytes.extend(&good);
+    assert_eq!(embedded_preview(&bytes), None, "a sensor sample is not a rendered preview even if its bytes look like JPEG");
 }
 
 #[cfg(feature = "cr3")]
@@ -608,7 +662,19 @@ fn cr3_with(prvw_jpeg: &[u8], big: &[u8]) -> Vec<u8> {
     let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &craw)].concat());
     let stsz = full(b"stsz", &[0u32.to_be_bytes(), 1u32.to_be_bytes(), (big.len() as u32).to_be_bytes()].concat());
     let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
-    let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))));
+    let trak = bx(
+        b"trak",
+        &bx(
+            b"mdia",
+            &bx(
+                b"minf",
+                &bx(
+                    b"stbl",
+                    &[stsd, full(b"stsc", &[1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>()), stsz, co64].concat(),
+                ),
+            ),
+        ),
+    );
     file.extend(bx(b"moov", &trak));
     file.resize(at as usize, 0);
     file.extend_from_slice(big);
@@ -656,7 +722,19 @@ fn the_smallest_preview_covering_the_size_is_chosen() {
     let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &craw)].concat());
     let stsz = full(b"stsz", &[0u32.to_be_bytes(), 1u32.to_be_bytes(), (big.len() as u32).to_be_bytes()].concat());
     let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
-    let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))));
+    let trak = bx(
+        b"trak",
+        &bx(
+            b"mdia",
+            &bx(
+                b"minf",
+                &bx(
+                    b"stbl",
+                    &[stsd, full(b"stsc", &[1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>()), stsz, co64].concat(),
+                ),
+            ),
+        ),
+    );
     file.extend(bx(b"moov", &trak));
     file.resize(at as usize, 0);
     file.extend_from_slice(&big);
@@ -769,7 +847,19 @@ fn a_cr3_with_two_prvw_boxes_offers_both() {
     let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &craw)].concat());
     let stsz = full(b"stsz", &[0u32.to_be_bytes(), 1u32.to_be_bytes(), (big.len() as u32).to_be_bytes()].concat());
     let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
-    let trak = bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))));
+    let trak = bx(
+        b"trak",
+        &bx(
+            b"mdia",
+            &bx(
+                b"minf",
+                &bx(
+                    b"stbl",
+                    &[stsd, full(b"stsc", &[1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>()), stsz, co64].concat(),
+                ),
+            ),
+        ),
+    );
     file.extend(bx(b"moov", &trak));
     // (the track in the media data, as a camera writes it, after a `free` box up to it)
     let pad = at as usize - 16 - file.len();
@@ -861,4 +951,69 @@ fn the_cr3_copy_chosen_for_a_thumbnail_decodes() {
         let (_, w, h, c) = crate::tiffraw::lossy_jpeg(&j, 3, 1 << 20).unwrap();
         assert_eq!(((w, h), c), (want, 3), "covering {min} px");
     }
+}
+
+#[cfg(feature = "orf")]
+/// ORF capability reporting must not disable preview scanning for an unrecognized stream.
+#[test]
+fn supported_orf_keeps_unreferenced_jpeg_fallback() {
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set_image(ImageData::Strips { rows_per_strip: 64, strips: vec![vec![0; 16]] });
+    let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+    file[2..4].copy_from_slice(b"RO");
+    let jpeg = scan_jpeg(3, 900);
+    file.extend_from_slice(&jpeg);
+    let format = crate::probe(&file).unwrap();
+    assert_eq!(format, crate::RawFormat::Orf);
+    assert!(format.is_supported());
+    assert!(matches!(crate::decode(&file), Err(crate::RawError::Unsupported(_))));
+    assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
+    assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
+}
+
+#[cfg(feature = "cr2")]
+/// CR2 capability reporting must not disable preview scanning when preview tags are missing or damaged.
+#[test]
+fn supported_cr2_keeps_unreferenced_jpeg_fallback() {
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    let raw_tiff = TiffWriter::default().write(&[ifd]).unwrap();
+    let mut file = Vec::new();
+    file.extend_from_slice(b"II*\0\x10\0\0\0CR\x02\0\0\0\0\0");
+    file.extend_from_slice(&raw_tiff[8..]);
+    let jpeg = scan_jpeg(3, 900);
+    file.extend_from_slice(&jpeg);
+    let format = crate::probe(&file).unwrap();
+    assert_eq!(format, crate::RawFormat::Cr2);
+    assert!(format.is_supported());
+    assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
+    assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
+}
+
+#[cfg(feature = "dng")]
+/// DNG capability reporting must not disable preview scanning when preview tags are missing or damaged.
+#[test]
+fn supported_dng_keeps_unreferenced_jpeg_fallback() {
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set_image(ImageData::Strips { rows_per_strip: 64, strips: vec![vec![0; 16]] });
+    let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+    let jpeg = scan_jpeg(3, 900);
+    file.extend_from_slice(&jpeg);
+    let format = crate::probe(&file).unwrap();
+    assert_eq!(format, crate::RawFormat::Dng);
+    assert!(format.is_supported());
+    assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
+    assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
 }

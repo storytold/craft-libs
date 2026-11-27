@@ -206,35 +206,110 @@ pub mod packbits {
     /// `-128` no-op bytes (which are always permitted). Errors, rather than
     /// overflowing, when `out.len() + expected` does not fit in `usize`.
     pub(crate) fn decode_into(src: &[u8], expected: usize, out: &mut Vec<u8>) -> Result<()> {
-        let target = out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        decode_row(src, expected, out, false)
+    }
+
+    /// Appends a recovery row: complete oversized packets are clipped and a short
+    /// row is zero-padded. Truncated packet payloads still fail; trailing packets
+    /// after the row is full are ignored. Strict decoding remains the default.
+    ///
+    /// Appended row bytes are bounded by `max_row_bytes` and the PSD decoded-size
+    /// limit; callers enforce their aggregate image budget. Allocation is fallible.
+    /// Existing output is retained; an error may leave a partially appended row.
+    pub fn decode_padded_into(src: &[u8], expected: usize, max_row_bytes: usize, out: &mut Vec<u8>) -> Result<()> {
+        if expected > max_row_bytes || expected as u64 > super::MAX_DECODED_BYTES {
+            return Err(PsdError::LimitExceeded("PackBits recovery row exceeds limit"));
+        }
+        out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        out.try_reserve_exact(expected).map_err(|_| PsdError::OutOfMemory("PackBits recovery row allocation failed"))?;
+        decode_row(src, expected, out, true)
+    }
+
+    /// Decodes a strict PackBits row directly into caller-owned storage, without allocating.
+    ///
+    /// The output must be filled exactly: short input, truncated packets and packets that
+    /// overflow the row are errors. Trailing bytes after the row is full are ignored, as by
+    /// [`decode`]. An error may leave a decoded prefix in `out`; its remaining bytes are unchanged.
+    pub fn decode_to_slice(src: &[u8], out: &mut [u8]) -> Result<()> {
+        let mut offset: usize = 0;
+        decode_packets(src, out.len(), false, |packet| {
+            let len = packet.len();
+            // The walker caps each packet by the remaining row, before exposing it here.
+            let end = offset.checked_add(len).ok_or(PsdError::LimitExceeded("PackBits output offset overflow"))?;
+            let dst = out.get_mut(offset..end).ok_or(PsdError::LimitExceeded("PackBits output slice overflow"))?;
+            match packet {
+                RowPacket::Literal(bytes) => dst.copy_from_slice(bytes),
+                RowPacket::Fill(value, _) => dst.fill(value),
+            }
+            offset = end;
+            Ok(())
+        })
+    }
+
+    enum RowPacket<'a> {
+        Literal(&'a [u8]),
+        Fill(u8, usize),
+    }
+
+    impl RowPacket<'_> {
+        fn len(&self) -> usize {
+            match self {
+                Self::Literal(bytes) => bytes.len(),
+                Self::Fill(_, len) => *len,
+            }
+        }
+    }
+
+    fn decode_row(src: &[u8], expected: usize, out: &mut Vec<u8>, padded: bool) -> Result<()> {
+        out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        decode_packets(src, expected, padded, |packet| {
+            match packet {
+                RowPacket::Literal(bytes) => out.extend_from_slice(bytes),
+                RowPacket::Fill(value, len) => out.extend(std::iter::repeat_n(value, len)),
+            }
+            Ok(())
+        })
+    }
+
+    // One packet walker serves strict Vec, strict slice and padded recovery decoding. It
+    // validates the complete payload before clipping or emitting, preserving recovery errors.
+    fn decode_packets(src: &[u8], expected: usize, padded: bool, mut emit: impl FnMut(RowPacket<'_>) -> Result<()>) -> Result<()> {
+        let mut remaining = expected;
         let mut i = 0;
-        while out.len() < target {
+        while remaining > 0 {
             let Some(&h) = src.get(i) else {
+                if padded {
+                    emit(RowPacket::Fill(0, remaining))?;
+                    break;
+                }
                 return Err(PsdError::Decompress("PackBits row ended early".into()));
             };
             i += 1;
             let h = h as i8;
             if h >= 0 {
                 let len = h as usize + 1;
-                let Some(lit) = src.get(i..i + len) else {
+                let Some(lit) = i.checked_add(len).and_then(|end| src.get(i..end)) else {
                     return Err(PsdError::Decompress("PackBits literal truncated".into()));
                 };
-                if len > target - out.len() {
+                if !padded && len > remaining {
                     return Err(PsdError::Decompress("PackBits literal overflows row".into()));
                 }
-                out.extend_from_slice(lit);
+                let take = len.min(remaining);
+                emit(RowPacket::Literal(&lit[..take]))?;
+                remaining -= take;
                 i += len;
             } else if h != -128 {
-                let len = 1 - h as isize;
-                let len = len as usize;
+                let len = (1 - h as isize) as usize;
                 let Some(&b) = src.get(i) else {
                     return Err(PsdError::Decompress("PackBits run truncated".into()));
                 };
                 i += 1;
-                if len > target - out.len() {
+                if !padded && len > remaining {
                     return Err(PsdError::Decompress("PackBits run overflows row".into()));
                 }
-                out.extend(std::iter::repeat_n(b, len));
+                let take = len.min(remaining);
+                emit(RowPacket::Fill(b, take))?;
+                remaining -= take;
             }
         }
         Ok(())
@@ -439,15 +514,24 @@ fn read_count(r: &mut Reader<'_>, v: Version) -> Result<usize> {
     Ok(if v.is_psb() { r.u32()? as usize } else { r.u16()? as usize })
 }
 
+/// Reads `rows` RLE byte-count entries (`u16` for PSD, `u32` for PSB) from `data`,
+/// returning the parsed counts and the remaining row-payload slice.
+pub fn read_rle_row_counts(data: &[u8], rows: usize, version: Version) -> Result<(Vec<usize>, &[u8])> {
+    let mut r = Reader::new(data);
+    let count_size = if version.is_psb() { 4 } else { 2 };
+    r.check_count(rows as u64, count_size as u64)?;
+    let mut counts = Vec::with_capacity(rows);
+    for _ in 0..rows {
+        counts.push(read_count(&mut r, version)?);
+    }
+    Ok((counts, r.peek_rest()))
+}
+
 fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>> {
     let rows = layout.rows()?;
     let rb = layout.row_bytes();
-    let mut r = Reader::new(data);
-    r.check_count(rows as u64, layout.count_size() as u64)?;
-    let mut counts = Vec::with_capacity(rows);
-    for _ in 0..rows {
-        counts.push(read_count(&mut r, layout.version)?);
-    }
+    let (counts, rest) = read_rle_row_counts(data, rows, layout.version)?;
+    let mut r = Reader::new(rest);
     // PackBits expands at most 64x (2 input bytes -> 128 output bytes).
     if (total as u64) > (r.remaining() as u64).saturating_mul(64) {
         return Err(PsdError::Decompress("RLE data too short for declared size".into()));
@@ -667,6 +751,147 @@ pub fn zip_decompress(data: &[u8], expected: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Decompresses a zlib stream up to `limit` output bytes, verifying the zlib trailer
+/// when the stream ends within `limit`.
+///
+/// Unlike [`zip_decompress`], a stream that ends cleanly with fewer than `limit` bytes
+/// returns the bytes produced so far so callers can apply their own recovery (such as
+/// zero-padding a short layer channel). Corrupt streams, bad Adler-32 checksums, or
+/// streams that produce more than `limit` bytes return an error.
+pub fn zip_decompress_up_to(data: &[u8], limit: usize) -> Result<Vec<u8>> {
+    const OOM: PsdError = PsdError::OutOfMemory("not enough memory for the decoded channel data");
+    let mut decoder = flate2::Decompress::new(true);
+    let mut out = Vec::new();
+    out.try_reserve_exact(limit.min(data.len().saturating_mul(1032))).map_err(|_| OOM)?;
+    let mut buf = vec![0u8; limit.clamp(8192, 1 << 20)];
+    loop {
+        let before = (decoder.total_in(), decoder.total_out());
+        let input = data.get(before.0 as usize..).ok_or_else(|| PsdError::Decompress("zlib input overflow".into()))?;
+        let status = decoder.decompress(input, &mut buf, flate2::FlushDecompress::None).map_err(|e| PsdError::Decompress(e.to_string()))?;
+        let got = decoder.total_out();
+        if got > limit as u64 {
+            return Err(PsdError::LimitExceeded("zlib output exceeds caller limit"));
+        }
+        let n = (got - before.1) as usize;
+        out.try_reserve(n).map_err(|_| OOM)?;
+        out.extend_from_slice(buf.get(..n).ok_or_else(|| PsdError::Decompress("zlib output overflow".into()))?);
+        if status == flate2::Status::StreamEnd {
+            return Ok(out);
+        }
+        if before == (decoder.total_in(), got) {
+            return Err(PsdError::Decompress("incomplete zlib stream".into()));
+        }
+    }
+}
+
+/// Staged access to a sequence of encoded image planes (e.g. a single layer channel or
+/// a multi-plane merged image).
+///
+/// Unlike [`decode_planes`], this lets callers:
+/// - borrow uncompressed (`Raw`) planes directly from the input slice without copying,
+/// - read only a prefix of `total_planes` (for example skipping trailing spot channels),
+/// - supply their own per-plane allocation, memory budget, and RLE/ZIP recovery policy.
+#[derive(Debug, Clone)]
+pub enum PlaneStream<'a> {
+    /// Uncompressed planes: each [`Self::next_raw_plane`] borrows `plane_bytes` from `rest`.
+    Raw {
+        /// Remaining unread bytes.
+        rest: &'a [u8],
+    },
+    /// PackBits RLE planes: `counts` holds `total_planes * height` row byte counts, followed by `rest`.
+    Rle {
+        /// Per-row byte counts for all planes, plane after plane.
+        counts: Vec<usize>,
+        /// Remaining unread row payload bytes.
+        rest: &'a [u8],
+    },
+    /// Inflated ZIP data holding consecutive planes.
+    Zip {
+        /// Inflated bytes (at most `zip_limit`).
+        data: Vec<u8>,
+    },
+}
+
+impl<'a> PlaneStream<'a> {
+    /// Prepares a plane stream from `data` (positioned immediately after the 2-byte compression field).
+    ///
+    /// For RLE, reads the `total_planes * height` row-count table. For ZIP/ZIP-with-prediction,
+    /// invokes `before_zip(zip_limit)` (allowing callers to charge a memory budget before
+    /// allocation) and inflates up to `zip_limit` bytes via [`zip_decompress_up_to`].
+    pub fn open(
+        compression: Compression,
+        data: &'a [u8],
+        total_planes: usize,
+        height: usize,
+        version: Version,
+        zip_limit: usize,
+        before_zip: impl FnOnce(usize) -> Result<()>,
+    ) -> Result<Self> {
+        match compression {
+            Compression::Raw => Ok(Self::Raw { rest: data }),
+            Compression::Rle => {
+                let total_rows = total_planes.checked_mul(height).ok_or(PsdError::LimitExceeded("row count overflow"))?;
+                let (counts, rest) = read_rle_row_counts(data, total_rows, version)?;
+                Ok(Self::Rle { counts, rest })
+            }
+            Compression::Zip | Compression::ZipPrediction => {
+                before_zip(zip_limit)?;
+                Ok(Self::Zip { data: zip_decompress_up_to(data, zip_limit)? })
+            }
+            Compression::Unknown(c) => Err(PsdError::Unsupported(format!("compression method {c}"))),
+        }
+    }
+
+    /// Borrows the next `plane_bytes` from a `Raw` stream, advancing past it.
+    pub fn next_raw_plane(&mut self, plane_bytes: usize) -> Result<&'a [u8]> {
+        let Self::Raw { rest } = self else {
+            return Err(PsdError::invalid("expected raw plane stream"));
+        };
+        if rest.len() < plane_bytes {
+            return Err(PsdError::UnexpectedEof { offset: rest.len(), needed: plane_bytes - rest.len() });
+        }
+        let (head, tail) = rest.split_at(plane_bytes);
+        *rest = tail;
+        Ok(head)
+    }
+
+    /// Decodes `height` RLE rows of `plane_index` into `out`, advancing past their payload bytes.
+    ///
+    /// When `padded` is true, uses [`packbits::decode_padded_into`] (zero-padding short rows and
+    /// clipping oversized packets); otherwise uses strict PackBits decoding.
+    pub fn next_rle_plane_into(&mut self, plane_index: usize, row_bytes: usize, height: usize, padded: bool, out: &mut Vec<u8>) -> Result<()> {
+        let Self::Rle { counts, rest } = self else {
+            return Err(PsdError::invalid("expected RLE plane stream"));
+        };
+        let base = plane_index.checked_mul(height).ok_or(PsdError::LimitExceeded("row count overflow"))?;
+        for row in 0..height {
+            let n = *counts.get(base + row).ok_or(PsdError::UnexpectedEof { offset: 0, needed: 1 })?;
+            if rest.len() < n {
+                return Err(PsdError::UnexpectedEof { offset: rest.len(), needed: n - rest.len() });
+            }
+            let (src, tail) = rest.split_at(n);
+            *rest = tail;
+            if padded {
+                packbits::decode_padded_into(src, row_bytes, row_bytes, out)?;
+            } else {
+                packbits::decode_into(src, row_bytes, out)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns a mutable slice of `plane_bytes` for `plane_index` in a `Zip` stream.
+    pub fn zip_plane_mut(&mut self, plane_index: usize, plane_bytes: usize) -> Result<&mut [u8]> {
+        let Self::Zip { data } = self else {
+            return Err(PsdError::invalid("expected ZIP plane stream"));
+        };
+        let start = plane_index.checked_mul(plane_bytes).ok_or(PsdError::LimitExceeded("plane offset overflow"))?;
+        let end = start.checked_add(plane_bytes).ok_or(PsdError::LimitExceeded("plane offset overflow"))?;
+        let len = data.len();
+        data.get_mut(start..end).ok_or(PsdError::UnexpectedEof { offset: len, needed: end.saturating_sub(len) })
+    }
+}
+
 /// Applies horizontal delta prediction in place (encoder side).
 ///
 /// * 1/8-bit: byte-wise delta per row.
@@ -745,8 +970,42 @@ pub fn unpredict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     if rb == 0 {
         return Ok(());
     }
+    let mut scratch = if layout.depth == 32 && buf.len() >= rb { vec![0; rb] } else { Vec::new() };
+    unpredict_rows(buf, layout, &mut scratch)
+}
+
+/// Reverses prediction without allocating, using caller-accounted scratch memory.
+///
+/// `buf` must contain exactly `planes * height` complete rows. For 32-bit samples,
+/// `scratch` must hold at least one row (`width * 4` bytes); other depths need none.
+/// Layout, input length and scratch capacity are checked before any bytes are changed.
+/// Scratch contents are overwritten. Unlike [`unpredict`], partial or surplus rows
+/// are rejected, making this suitable for callers with explicit decode budgets.
+pub fn unpredict_with_scratch(buf: &mut [u8], layout: &PlaneLayout, scratch: &mut [u8]) -> Result<()> {
+    let rb = match layout.depth {
+        1 => layout.width.div_ceil(8),
+        8 => layout.width,
+        16 => layout.width.checked_mul(2).ok_or(PsdError::LimitExceeded("row size overflow"))?,
+        32 => layout.width.checked_mul(4).ok_or(PsdError::LimitExceeded("row size overflow"))?,
+        d => return Err(PsdError::Unsupported(format!("prediction for depth {d}"))),
+    };
+    let expected =
+        rb.checked_mul(layout.height).and_then(|n| n.checked_mul(layout.planes)).ok_or(PsdError::LimitExceeded("decoded size overflow"))?;
+    if buf.len() != expected {
+        return Err(PsdError::Invalid("prediction buffer length does not match layout".into()));
+    }
+    if rb == 0 || buf.is_empty() {
+        return Ok(());
+    }
+    if layout.depth == 32 && scratch.len() < rb {
+        return Err(PsdError::Invalid("prediction scratch is shorter than one row".into()));
+    }
+    unpredict_rows(buf, layout, scratch)
+}
+
+fn unpredict_rows(buf: &mut [u8], layout: &PlaneLayout, scratch: &mut [u8]) -> Result<()> {
+    let rb = layout.row_bytes();
     let w = layout.width;
-    let mut scratch = Vec::new();
     for row in buf.chunks_exact_mut(rb) {
         match layout.depth {
             1 | 8 => {
@@ -763,8 +1022,8 @@ pub fn unpredict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             32 => {
-                scratch.clear();
-                scratch.extend_from_slice(row);
+                scratch[..rb].copy_from_slice(row);
+                let scratch = &scratch[..rb];
                 // The byte-wise running sum runs across the four planes, so
                 // plane k starts at the wrapping total of planes 0..k.
                 let (p0, rest) = scratch.split_at(w);

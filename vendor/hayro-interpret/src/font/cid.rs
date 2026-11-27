@@ -15,11 +15,16 @@ use hayro_syntax::object::{Array, Object};
 use kurbo::{BezPath, Vec2};
 use skrifa::attribute::Style;
 use skrifa::charmap::MapVariant;
+use skrifa::raw::TableProvider;
 use skrifa::raw::collections::int_set::Domain;
+use skrifa::raw::tables::gsub::{ExtensionSubtable, Gsub, SingleSubst, SubstitutionLookup};
+use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
+use skrifa::raw::types::Tag;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub(crate) struct Type0Font {
@@ -42,14 +47,25 @@ pub(crate) struct Type0Font {
     /// Whether the `to_unicode` map is a UCS2 `CMap` (CID-indexed) rather than
     /// a `ToUnicode` `CMap` (code-indexed).
     to_unicode_is_cid_indexed: bool,
+    /// PdfCraft patch (84): the character collection's UCS2 CMap (by CID), for the codes the
+    /// font's own `/ToUnicode` gives nothing for, whether or not its program is embedded.
+    ucs2: Option<Ucs2>,
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
     /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
+    /// PdfCraft patch (107): for a substitute of a font of an Adobe collection, which CIDs are
+    /// the vertical forms of their characters, drawn with the substitute's vertical glyphs.
+    vertical_forms: Option<VerticalForms>,
     /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
     /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
     /// to CIDs only and gave no text at all.
     identity_to_unicode: bool,
+    /// PdfCraft patch: an Arial or a Times New Roman the PDF doesn't embed, as a TrueType CID
+    /// font (`CIDFontType2`) whose CIDs aren't of an Adobe character collection. Its CIDToGIDMap
+    /// gives glyph indexes in the author's font, which numbers its first 258 glyphs in the
+    /// standard Macintosh order of the TrueType `post` table (#5889, #6449).
+    mac_glyph_order: bool,
 }
 
 impl Type0Font {
@@ -86,7 +102,9 @@ impl Type0Font {
                     if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
                         (FontQuery::Standard(standard), true)
                     } else {
-                        let mut query = FallbackFontQuery::new(dict);
+                        // PdfCraft patch: the style comes from the descendant's descriptor.
+                        let mut query =
+                            FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
                         query.character_collection = character_collection.clone();
 
                         warn!(
@@ -129,27 +147,50 @@ impl Type0Font {
             .is_some_and(|n| matches!(n.as_ref(), b"Identity-H" | b"Identity-V"));
         let mut to_unicode_is_cid_indexed = false;
 
+        // PdfCraft patch (84): the character collection's UCS2 CMap (ISO 32000-2 §9.10.2), CID
+        // to Unicode, for a font of an Adobe collection whether or not its program is embedded.
+        let mut ucs2 = character_collection
+            .as_ref()
+            .and_then(|cc| cc.family.ucs2_cmap())
+            .and_then(|name| (cmap_resolver)(name))
+            .map(|data| Ucs2 {
+                data,
+                resolver: cmap_resolver.clone(),
+                map: OnceLock::new(),
+            });
         // If there is no ToUnicode map, try to get the UCS2 CMap.
         if fallback
             && to_unicode.is_none()
-            && let Some(cc) = character_collection.as_ref()
-            && let Some(ucs2_name) = cc.family.ucs2_cmap()
-            && let Some(data) = (cmap_resolver)(ucs2_name)
+            && let Some(ucs2_cmap) = ucs2.take().and_then(|u| u.parse())
         {
-            let resolver = cmap_resolver.clone();
-            if let Some(ucs2_cmap) = CMap::parse(data, move |n| (resolver)(n)) {
-                to_unicode = Some(ucs2_cmap);
-                to_unicode_is_cid_indexed = true;
-            }
+            to_unicode = Some(ucs2_cmap);
+            to_unicode_is_cid_indexed = true;
         }
 
         let adobe_collection = character_collection
             .as_ref()
             .is_some_and(|cc| cc.family.ucs2_cmap().is_some());
+        // PdfCraft patch (107): only a substitute draws a CID through its character, and so
+        // loses the vertical form the CID names; an embedded program has the CID's own glyph.
+        let vertical_forms = character_collection
+            .as_ref()
+            .filter(|_| fallback)
+            .and_then(|cc| VerticalForms::new(&cc.family, cmap_resolver));
 
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
+
+        // PdfCraft patch: the descendant names the font program itself; a Type 0 font's own
+        // `/BaseFont` may carry the CMap's name after it.
+        let mac_glyph_order = fallback
+            && !adobe_collection
+            && descendant_font
+                .get::<Name<'_>>(SUBTYPE)
+                .is_some_and(|s| s.deref() == CID_FONT_TYPE2)
+            && descendant_font
+                .get::<Name<'_>>(BASE_FONT)
+                .is_some_and(|n| numbers_glyphs_in_mac_order(strip_subset_prefix(n.as_str())));
 
         // Extract font flags from descriptor
         let font_flags = font_descriptor
@@ -171,8 +212,11 @@ impl Type0Font {
             font_flags,
             fallback,
             to_unicode_is_cid_indexed,
+            ucs2,
             adobe_collection,
+            vertical_forms,
             identity_to_unicode,
+            mac_glyph_order,
         })
     }
 
@@ -190,9 +234,19 @@ impl Type0Font {
         };
 
         if self.fallback
-            && let Some(glyph) = self.map_via_unicode(to_unicode_key)
+            && let Some(glyph) = self.map_via_unicode(to_unicode_key, cid)
         {
             // Yay, Unicode worked!
+            return glyph;
+        }
+
+        // PdfCraft patch: the CID of an Arial or a Times New Roman the PDF doesn't embed names
+        // one of that font's glyphs, which the substitute draws by that name. Taken as the
+        // substitute's own glyph index it drew an unrelated glyph: "Low Power" as
+        // "@ck 'Dck Yf" (#5889), "Salarié(e) du régime" as "Salari²*g+f w't²i lo" (#6449).
+        if self.mac_glyph_order
+            && let Some(glyph) = self.map_via_mac_glyph_name(cid)
+        {
             return glyph;
         }
 
@@ -233,8 +287,8 @@ impl Type0Font {
 
     /// Map a character code (or CID) to a glyph ID
     /// by first getting its Unicode and then looking up the codepoint in the
-    /// font's cmap.
-    fn map_via_unicode(&self, key: u32) -> Option<GlyphId> {
+    /// font's cmap. `cid` is the code's CID.
+    fn map_via_unicode(&self, key: u32, cid: u32) -> Option<GlyphId> {
         let to_unicode = self.to_unicode.as_ref()?;
 
         let (character, selector) = to_unicode
@@ -266,32 +320,44 @@ impl Type0Font {
 
         match &self.font_type {
             FontType::OpenType(t) => {
-                let charmap = t.font_ref().charmap();
+                let font = t.font_ref();
+                let charmap = font.charmap();
                 // PdfCraft patch: the face's glyph for that form when its `cmap` has one, else its
                 // glyph for the character, as when a form isn't supported (Unicode FAQ on
                 // variation sequences).
-                if let Some(selector) = selector
+                let glyph = if let Some(selector) = selector
                     && let Some(MapVariant::Variant(glyph)) = charmap.map_variant(character, selector)
                 {
-                    return Some(glyph);
-                }
-                // PdfCraft patch: a substitute may lack a spacing character (#3601; e.g.
-                // Adobe-Japan1's U+2002). Draw its ordinary space instead of .notdef;
-                // the PDF's widths and Unicode mapping still determine advance and text.
-                charmap.map(character).or_else(|| match character {
-                    '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
-                    _ => None,
+                    Some(glyph)
+                } else {
+                    // PdfCraft patch: a substitute may lack a spacing character (#3601; e.g.
+                    // Adobe-Japan1's U+2002). Draw its ordinary space instead of .notdef;
+                    // the PDF's widths and Unicode mapping still determine advance and text.
+                    charmap.map(character).or_else(|| match character {
+                        '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
+                        _ => None,
+                    })
+                }?;
+                // PdfCraft patch (107): a CID that is its character's vertical form (「 in a
+                // vertical column is CID 7911 in Adobe-Japan1, not 686) draws the substitute's
+                // vertical glyph for the character, not its ordinary one (#7167).
+                Some(match &self.vertical_forms {
+                    Some(forms) if forms.is_vertical_form(cid, character) => {
+                        forms.vertical_glyph(font, glyph)
+                    }
+                    _ => glyph,
                 })
             }
             FontType::Cff(c) => {
                 // Map codepoint to glyph name via AFL, and then look it up.
-                if let Some(name) = glyph_names::get_reverse(character)
-                    && let Some(gid) = c.glyph_index_by_name(name)
-                {
-                    Some(gid)
-                } else {
-                    None
-                }
+                let by_name = |character: char| {
+                    glyph_names::get_reverse(character).and_then(|name| c.glyph_index_by_name(name))
+                };
+                // PdfCraft patch: a soft hyphen the substitute has no glyph for is its hyphen
+                // (#5888). Windows exporters map the hyphen glyph of a font they don't embed to
+                // U+00AD, which ISO 32000-2 Annex D.2 calls typographically the same as the
+                // hyphen; without this the CID, taken as a glyph index, drew an unrelated glyph.
+                by_name(character).or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
             }
             FontType::Type1(_) => {
                 // We could in theory map to a glyph via AFL and then look up
@@ -302,6 +368,27 @@ impl Type0Font {
                 None
             }
         }
+    }
+
+    /// PdfCraft patch: the substitute's glyph for the author's glyph that `cid` gives, found by
+    /// that glyph's name in the standard Macintosh order. `None` past the 258 glyphs the order
+    /// names, and for a substitute that isn't a name-keyed CFF font (the standard substitutes
+    /// are); .notdef for a name the substitute has no glyph for.
+    fn map_via_mac_glyph_name(&self, cid: u32) -> Option<GlyphId> {
+        let FontType::Cff(c) = &self.font_type else {
+            return None;
+        };
+        if c.is_cid() {
+            return None;
+        }
+        let gid = self.cid_to_gid_map.map(u16::try_from(cid).ok()?);
+        let name = *DEFAULT_GLYPH_NAMES.get(usize::try_from(gid.to_u32()).ok()?)?;
+        // `.null` and `nonmarkingreturn` draw nothing, and `nonbreakingspace` is a space.
+        let name = match name {
+            ".null" | "nonmarkingreturn" | "nonbreakingspace" => "space",
+            name => name,
+        };
+        Some(c.glyph_index_by_name(name).unwrap_or(GlyphId::NOTDEF))
     }
 
     fn code_to_cid(&self, code: u32) -> Option<u32> {
@@ -426,6 +513,13 @@ impl Type0Font {
         }
     }
 
+    /// PdfCraft patch: the code's width w0 (its horizontal displacement, from `/W` or `/DW`)
+    /// in either writing mode. In vertical writing it is the glyph's extent across the column
+    /// (ISO 32000-2 §9.7.4.3).
+    pub(crate) fn code_horizontal_width(&self, code: u32) -> f32 {
+        self.horizontal_width(self.code_to_cid(code).unwrap_or(0))
+    }
+
     fn horizontal_width(&self, cid: u32) -> f32 {
         self.widths.get(&cid).copied().unwrap_or(self.dw)
     }
@@ -465,7 +559,8 @@ impl Type0Font {
     /// identity `/ToUnicode` name, when the code is a control or a lone surrogate).
     pub(crate) fn char_code_to_unicode(&self, code: u32) -> Option<BfString> {
         if self.identity_to_unicode {
-            // Controls and lone surrogates are not text.
+            // Controls and lone surrogates are not text. The same rule builds the editing
+            // map, `identity_to_unicode` in crates/fonts/src/pdf.rs: keep both alike.
             return char::from_u32(code)
                 .filter(|c| !c.is_control())
                 .map(BfString::Char);
@@ -476,10 +571,334 @@ impl Type0Font {
             } else {
                 code
             };
-            return to_unicode.lookup_bf_string(key);
+            // PdfCraft patch (85): a `/ToUnicode` written as a CID CMap (`begincidrange` /
+            // `begincidchar`, whose destinations are numbers) gives the code's Unicode value as
+            // that number, as glyph lookup already reads it (`map_via_unicode`) and as pdftotext
+            // and PDFium extract it. ISO 32000-2 §9.10.3 has `beginbfrange` / `beginbfchar` here;
+            // Word writes CID ranges, and such text extracted nothing.
+            if let Some(s) = to_unicode.lookup_bf_string(key).or_else(|| {
+                (1..=4)
+                    .find_map(|len| {
+                        to_unicode
+                            .lookup_cid_code(key, len)
+                            .and_then(|cid| char::from_u32(cid.to_u32()))
+                    })
+                    .map(BfString::Char)
+            }) {
+                return Some(s);
+            }
+        }
+        // PdfCraft patch (84): then the collection's UCS2 CMap, by the code's CID.
+        if let Some(ucs2) = self.ucs2.as_ref().and_then(Ucs2::cmap)
+            && let Some(s) = self
+                .code_to_cid(code)
+                .and_then(|cid| ucs2.lookup_bf_string(cid))
+        {
+            return Some(s);
         }
 
         None
+    }
+}
+
+/// PdfCraft patch (84): a collection's UCS2 CMap, parsed the first time a code needs it: a font
+/// whose `/ToUnicode` maps every code it shows never parses it.
+struct Ucs2 {
+    data: &'static [u8],
+    resolver: CMapResolverFn,
+    map: OnceLock<Option<CMap>>,
+}
+
+impl Ucs2 {
+    fn parse(&self) -> Option<CMap> {
+        let resolver = self.resolver.clone();
+        CMap::parse(self.data, move |n| (resolver)(n))
+    }
+
+    fn cmap(&self) -> Option<&CMap> {
+        self.map.get_or_init(|| self.parse()).as_ref()
+    }
+}
+
+impl std::fmt::Debug for Ucs2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ucs2")
+            .field("bytes", &self.data.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The most `vert` lookups applied to one glyph: a face has one or two.
+const MAX_VERTICAL_LOOKUPS: usize = 32;
+
+/// PdfCraft patch (107): the vertical forms of an Adobe collection's characters, and a
+/// substitute's glyphs for them.
+///
+/// A collection gives some characters a CID of their own for vertical writing: 「 is CID 686 in
+/// Adobe-Japan1 and its vertical form CID 7911; 、。ー…（） and the small kana have such CIDs too.
+/// A `-V` CMap (`UniJIS-UCS2-V`) picks them for a vertical column, and older documents set them
+/// with `Identity-H` down a column (#7167). The UCS2 CMap gives both CIDs the same character,
+/// so a substitute, which draws a CID through its character, drew the horizontal form.
+///
+/// A CID is a vertical form when the collection's Unicode `-V` CMap gives it for its character
+/// and the `-H` CMap gives another: those CMaps say which CID each writing mode uses for a
+/// character, and are among the bundled ones, so no table is added. The UTF-16 CMaps are read
+/// first; the older UCS-2 ones too, for the few vertical forms only they name (Adobe-Japan1's
+/// “ ‘ 〓, CIDs 8279, 8281 and 8270, which `UniJIS-UTF16-V` gives their horizontal CIDs). Such a
+/// CID draws the substitute's glyph for the character through the substitute's OpenType `vert`
+/// substitution (`vrt2` when it has no `vert`), as a vertical line set in that face would; a
+/// face without one draws the character's ordinary glyph, as before.
+struct VerticalForms {
+    /// The UTF-16 `-H` and `-V` CMaps, when the resolver has them.
+    unicode: Option<CMapPair>,
+    /// The UCS-2 `-H` and `-V` CMaps, when the resolver has them.
+    legacy: Option<CMapPair>,
+    /// The script whose `vert` lookups apply first (`kana`, `hani` or `hang`).
+    script: Tag,
+    /// The substitute's `vert` lookups, read the first time a vertical form is drawn.
+    lookups: OnceLock<Vec<u16>>,
+}
+
+/// A horizontal and a vertical CMap of one collection, parsed the first time they are read.
+struct CMapPair {
+    horizontal: &'static [u8],
+    vertical: &'static [u8],
+    resolver: CMapResolverFn,
+    maps: OnceLock<Option<(CMap, CMap)>>,
+}
+
+impl CMapPair {
+    fn new(
+        horizontal: hayro_cmap::CMapName<'_>,
+        vertical: hayro_cmap::CMapName<'_>,
+        resolver: &CMapResolverFn,
+    ) -> Option<Self> {
+        Some(Self {
+            horizontal: resolver(horizontal)?,
+            vertical: resolver(vertical)?,
+            resolver: resolver.clone(),
+            maps: OnceLock::new(),
+        })
+    }
+
+    /// The horizontal and the vertical CMap.
+    fn maps(&self) -> Option<&(CMap, CMap)> {
+        self.maps
+            .get_or_init(|| {
+                let resolver = self.resolver.clone();
+                let horizontal = CMap::parse(self.horizontal, move |n| (resolver)(n))?;
+                let resolver = self.resolver.clone();
+                let vertical = CMap::parse(self.vertical, move |n| (resolver)(n))?;
+                Some((horizontal, vertical))
+            })
+            .as_ref()
+    }
+}
+
+impl VerticalForms {
+    /// `None` for a collection without Unicode CMaps (Identity, custom ones), and when the
+    /// resolver has neither the UTF-16 nor the UCS-2 pair.
+    fn new(family: &CidFamily, resolver: &CMapResolverFn) -> Option<Self> {
+        use hayro_cmap::CMapName;
+        let (unicode, legacy, script) = match family {
+            CidFamily::AdobeJapan1 => (
+                (CMapName::UniJisUtf16H, CMapName::UniJisUtf16V),
+                (CMapName::UniJisUcs2H, CMapName::UniJisUcs2V),
+                b"kana",
+            ),
+            CidFamily::AdobeGB1 => (
+                (CMapName::UniGbUtf16H, CMapName::UniGbUtf16V),
+                (CMapName::UniGbUcs2H, CMapName::UniGbUcs2V),
+                b"hani",
+            ),
+            CidFamily::AdobeCNS1 => (
+                (CMapName::UniCnsUtf16H, CMapName::UniCnsUtf16V),
+                (CMapName::UniCnsUcs2H, CMapName::UniCnsUcs2V),
+                b"hani",
+            ),
+            CidFamily::AdobeKorea1 => (
+                (CMapName::UniKsUtf16H, CMapName::UniKsUtf16V),
+                (CMapName::UniKsUcs2H, CMapName::UniKsUcs2V),
+                b"hang",
+            ),
+            CidFamily::AdobeIdentity | CidFamily::Custom { .. } => return None,
+        };
+        let unicode = CMapPair::new(unicode.0, unicode.1, resolver);
+        let legacy = CMapPair::new(legacy.0, legacy.1, resolver);
+        if unicode.is_none() && legacy.is_none() {
+            return None;
+        }
+        Some(Self {
+            unicode,
+            legacy,
+            script: Tag::new(script),
+            lookups: OnceLock::new(),
+        })
+    }
+
+    /// Whether `cid` is the vertical form of `character`, its character in the UCS2 CMap.
+    fn is_vertical_form(&self, cid: u32, character: char) -> bool {
+        // The UTF-16 CMaps take a character as its UTF-16 code units, one or two.
+        let mut units = [0; 2];
+        let (code, len) = match *character.encode_utf16(&mut units) {
+            [unit] => (u32::from(unit), 2),
+            [high, low] => ((u32::from(high) << 16) | u32::from(low), 4),
+            _ => return false,
+        };
+        // Either pair may be missing or fail to parse (a caller's resolver need not have both);
+        // the other still decides.
+        if let Some((horizontal, vertical)) = self.unicode.as_ref().and_then(CMapPair::maps) {
+            // The character's horizontal CID is no vertical form, and most CIDs drawn are that
+            // one: they never read the UCS-2 CMaps.
+            if horizontal.lookup_cid_code(code, len) == Some(cid) {
+                return false;
+            }
+            if vertical.lookup_cid_code(code, len) == Some(cid) {
+                return true;
+            }
+        }
+        // The UCS-2 CMaps cover the Basic Multilingual Plane, a character's one code unit.
+        len == 2
+            && self.legacy.as_ref().and_then(CMapPair::maps).is_some_and(
+                |(horizontal, vertical)| {
+                    vertical.lookup_cid_code(code, 2) == Some(cid)
+                        && horizontal.lookup_cid_code(code, 2) != Some(cid)
+                },
+            )
+    }
+
+    /// `glyph`, the face's glyph for a character, as the face's `vert` lookups substitute it.
+    fn vertical_glyph(&self, font: &FontRef<'_>, glyph: GlyphId) -> GlyphId {
+        let Ok(gsub) = font.gsub() else {
+            return glyph;
+        };
+        let lookups = self
+            .lookups
+            .get_or_init(|| vertical_lookups(&gsub, self.script));
+        // Each lookup applies to what the ones before it gave, as in a shaper.
+        lookups.iter().fold(glyph, |glyph, &index| {
+            substitute(&gsub, index, glyph).unwrap_or(glyph)
+        })
+    }
+}
+
+impl std::fmt::Debug for VerticalForms {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerticalForms")
+            .field("script", &self.script)
+            .finish_non_exhaustive()
+    }
+}
+
+/// PdfCraft patch (107): the lookups of a face's `vert` feature (`vrt2` when it has no `vert`),
+/// in lookup order: the feature `script`'s default language system lists, else `DFLT`'s, else
+/// every such feature of the face. Empty when it has none.
+fn vertical_lookups(gsub: &Gsub<'_>, script: Tag) -> Vec<u16> {
+    let Ok(features) = gsub.feature_list() else {
+        return Vec::new();
+    };
+    let is_vertical = |index: u16| {
+        features
+            .feature_records()
+            .get(usize::from(index))
+            .filter(|r| [Tag::new(b"vert"), Tag::new(b"vrt2")].contains(&r.feature_tag()))
+            .and_then(|r| r.feature(features.offset_data()).ok())
+            .is_some_and(|f| !f.lookup_list_indices().is_empty())
+    };
+    let listed: Option<Vec<u16>> = gsub.script_list().ok().and_then(|scripts| {
+        [script, Tag::new(b"DFLT")].into_iter().find_map(|tag| {
+            let record = scripts
+                .script_records()
+                .iter()
+                .find(|r| r.script_tag() == tag)?;
+            let language = record
+                .script(scripts.offset_data())
+                .ok()?
+                .default_lang_sys()?
+                .ok()?;
+            // The language system's required feature (0xFFFF: none) and its other features
+            // (OpenType `LangSys`): a face may list `vert` as either.
+            let required = Some(language.required_feature_index()).filter(|&i| i != 0xFFFF);
+            let listed: Vec<u16> = required
+                .into_iter()
+                .chain(language.feature_indices().iter().map(|i| i.get()))
+                .collect();
+            // A script that lists no vertical feature leaves the choice to the next.
+            listed.iter().any(|&i| is_vertical(i)).then_some(listed)
+        })
+    });
+    for tag in [Tag::new(b"vert"), Tag::new(b"vrt2")] {
+        let mut lookups: Vec<u16> = features
+            .feature_records()
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                r.feature_tag() == tag
+                    && listed
+                        .as_ref()
+                        .is_none_or(|l| u16::try_from(*i).is_ok_and(|i| l.contains(&i)))
+            })
+            .filter_map(|(_, r)| r.feature(features.offset_data()).ok())
+            .flat_map(|f| {
+                f.lookup_list_indices()
+                    .iter()
+                    .map(|i| i.get())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if !lookups.is_empty() {
+            lookups.sort_unstable();
+            lookups.dedup();
+            lookups.truncate(MAX_VERTICAL_LOOKUPS);
+            return lookups;
+        }
+    }
+    Vec::new()
+}
+
+/// PdfCraft patch (107): what lookup `index` substitutes for `glyph`, when it is a single
+/// substitution (directly or through an extension) that covers it.
+fn substitute(gsub: &Gsub<'_>, index: u16, glyph: GlyphId) -> Option<GlyphId> {
+    let lookup = gsub
+        .lookup_list()
+        .ok()?
+        .lookups()
+        .get(usize::from(index))
+        .ok()?;
+    match lookup {
+        SubstitutionLookup::Single(lookup) => lookup
+            .subtables()
+            .iter()
+            .filter_map(Result::ok)
+            .find_map(|s| single(&s, glyph)),
+        SubstitutionLookup::Extension(lookup) => lookup
+            .subtables()
+            .iter()
+            .filter_map(Result::ok)
+            .find_map(|s| match s {
+                ExtensionSubtable::Single(s) => s.extension().ok().and_then(|s| single(&s, glyph)),
+                _ => None,
+            }),
+        _ => None,
+    }
+}
+
+/// What a single substitution subtable substitutes for `glyph`, when its coverage holds it.
+fn single(subtable: &SingleSubst<'_>, glyph: GlyphId) -> Option<GlyphId> {
+    match subtable {
+        SingleSubst::Format1(s) => {
+            s.coverage().ok()?.get(glyph)?;
+            // The delta is added modulo 65536 (OpenType GSUB lookup type 1, format 1).
+            let id = u16::try_from(glyph.to_u32()).ok()?;
+            Some(GlyphId::new(u32::from(
+                id.wrapping_add(s.delta_glyph_id() as u16),
+            )))
+        }
+        SingleSubst::Format2(s) => {
+            let index = s.coverage().ok()?.get(glyph)?;
+            let id = s.substitute_glyph_ids().get(usize::from(index))?.get();
+            Some(GlyphId::from(id))
+        }
     }
 }
 
@@ -592,6 +1011,37 @@ fn is_variation_selector(c: char) -> bool {
     matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }
 
+/// PdfCraft patch: whether `name`, a `/BaseFont` without its subset tag, is one of the four
+/// faces of Arial or Times New Roman as exporters name them: `ArialMT`, `Arial-BoldMT`,
+/// `Arial-ItalicMT`, `Arial-BoldItalicMT`, `TimesNewRomanPSMT`, `TimesNewRomanPS-BoldMT` and so
+/// on, or `Arial` or `TimesNewRoman` followed by `,Bold`, `,Italic` or `,BoldItalic`. Both
+/// number their first 258 glyphs in the standard Macintosh order. Arial Narrow, Arial Black,
+/// Arial Unicode MS and Arial Rounded are other fonts, numbered their own way. Letter case
+/// doesn't matter, `MT` included.
+fn numbers_glyphs_in_mac_order(name: &str) -> bool {
+    let (family, style) = name.split_once([',', '-', ' ']).unwrap_or((name, ""));
+    let style: String = style
+        .chars()
+        .filter(|c| !matches!(c, ',' | '-' | ' '))
+        .collect();
+    ["Arial", "TimesNewRoman", "TimesNewRomanPS"]
+        .iter()
+        .any(|f| without_mt(family).eq_ignore_ascii_case(f))
+        && ["", "Regular", "Bold", "Italic", "BoldItalic"]
+            .iter()
+            .any(|s| without_mt(&style).eq_ignore_ascii_case(s))
+}
+
+/// PdfCraft patch: `name` without a trailing `MT` in any letter case (Monotype's mark in
+/// PostScript names such as `ArialMT`).
+fn without_mt(name: &str) -> &str {
+    name.len()
+        .checked_sub(2)
+        .and_then(|stem| Some((name.get(..stem)?, name.get(stem..)?)))
+        .filter(|(_, suffix)| suffix.eq_ignore_ascii_case("MT"))
+        .map_or(name, |(stem, _)| stem)
+}
+
 /// PdfCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).
 const MAX_CID: u32 = 65_535;
 
@@ -689,6 +1139,8 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
     }
 }
 
+/// PdfCraft patch test (ported from craft-libs): a /W2 run whose first CID is past `MAX_CID`
+/// is skipped and the rest of the table kept.
 #[cfg(test)]
 mod tests {
     use super::read_widths2;
@@ -705,5 +1157,77 @@ mod tests {
         assert_eq!(map.get(&10), Some(&[900.0, 450.0, 860.0]));
         assert_eq!(map.get(&25), Some(&[800.0, 400.0, 870.0]));
         assert_eq!(map.len(), 12);
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::ObjectIdentifier;
+
+    /// A PDF whose object 5 is `array`, for what references in it can reach.
+    fn with_array(array: &str) -> Pdf {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >> endobj\n\
+             4 0 obj 20 endobj\n5 0 obj {array} endobj\n6 0 obj 22 endobj\n\
+             7 0 obj 7 0 R endobj\n8 0 obj 9 0 R endobj\n9 0 obj 8 0 R endobj\n\
+             10 0 obj 4 0 R endobj\n11 0 obj [500 600] endobj\n12 0 obj [-1000 500 880] endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n"
+        );
+        Pdf::new(pdf.into_bytes()).unwrap()
+    }
+
+    /// `/W` and `/W2` read groups of items, and either kind can start with a reference: taken for
+    /// the whole group it was lost, with all that followed, and those glyphs fell back to `/DW`.
+    #[test]
+    fn a_width_group_can_start_with_a_reference() {
+        let widths = |array: &str| {
+            let pdf = with_array(array);
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+            let mut read: Vec<_> = read_widths(&array).unwrap().into_iter().collect();
+            read.sort_by_key(|(cid, _)| *cid);
+            read
+        };
+        let by_list = vec![(20, 500.0), (21, 600.0)];
+        assert_eq!(widths("[20 [500 600]]"), by_list);
+        assert_eq!(widths("[4 0 R [500 600]]"), by_list);
+        let by_range = vec![(20, 700.0), (21, 700.0), (22, 700.0)];
+        assert_eq!(widths("[20 22 700]"), by_range);
+        assert_eq!(widths("[4 0 R 22 700]"), by_range);
+        assert_eq!(widths("[4 0 R 6 0 R 700]"), by_range);
+        assert_eq!(widths("[1 [100] 4 0 R [500 600]]"), vec![(1, 100.0), (20, 500.0), (21, 600.0)], "after a group");
+
+        let vertical = |array: &str| {
+            let pdf = with_array(array);
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+            let mut read: Vec<_> = read_widths2(&array).unwrap().into_iter().collect();
+            read.sort_by_key(|(cid, _)| *cid);
+            read
+        };
+        let by_list = vec![(20, [-1000.0, 500.0, 880.0])];
+        assert_eq!(vertical("[20 [-1000 500 880]]"), by_list);
+        assert_eq!(vertical("[4 0 R [-1000 500 880]]"), by_list);
+        let by_range = vec![(20, [-900.0, 400.0, 800.0]), (21, [-900.0, 400.0, 800.0]), (22, [-900.0, 400.0, 800.0])];
+        assert_eq!(vertical("[20 22 -900 400 800]"), by_range);
+        assert_eq!(vertical("[4 0 R 22 -900 400 800]"), by_range);
+
+        // A group's list can be given by reference too, and a reference to a reference is what it
+        // names.
+        let by_list = vec![(20, 500.0), (21, 600.0)];
+        assert_eq!(widths("[20 11 0 R]"), by_list);
+        assert_eq!(widths("[10 0 R [500 600]]"), by_list);
+        assert_eq!(widths("[10 0 R 11 0 R]"), by_list);
+        assert_eq!(vertical("[20 12 0 R]"), vec![(20, [-1000.0, 500.0, 880.0])]);
+
+        // A reference that only leads back to itself holds no number, so those glyphs keep `/DW`.
+        for array in ["[7 0 R [500 600]]", "[8 0 R [500 600]]", "[20 7 0 R 700]", "[7 0 R 8 0 R 700]", "[20 [7 0 R 600]]"] {
+            assert!(widths(array).is_empty(), "{array}");
+        }
+        for array in ["[7 0 R [-1000 500 880]]", "[8 0 R 22 -900 400 800]", "[20 [7 0 R 500 880]]"] {
+            assert!(vertical(array).is_empty(), "{array}");
+        }
     }
 }

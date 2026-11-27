@@ -70,9 +70,10 @@ const MAX_TEMPLATE_PATH: usize = 32 * 1024;
 
 pub(crate) struct Reader<'p> {
     pkg: &'p Package,
+    file_orders: craft_wordmodel::para::FileOrders,
     pub doc: Document,
     pub pc: PropCtx,
-    revs: HashMap<(u8, String, String, Option<String>), u32>,
+    revs: HashMap<(u8, String, String, Option<String>, Option<String>), u32>,
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,
@@ -119,6 +120,10 @@ pub(crate) struct Reader<'p> {
     pub theme_fills: shape_style::ThemeFills,
     /// The fill of the group being read (what its members' `a:grpFill` stands for).
     pub group_fill: Option<craft_wordmodel::fill::Fill>,
+    /// The package has no default table style (no styles part, or none marked `w:default`):
+    /// Word then gives tables no cell margins rather than its Normal Table's 0.08". Set by
+    /// `read_styles`, which runs before any story with tables is read.
+    pub no_default_table_style: bool,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -149,9 +154,11 @@ pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Resul
     read_opened_in(pkg, ChunkState::new(chunks)).map(|(doc, ..)| doc)
 }
 
-/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
-/// graphic work left of that.
-fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
+/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes,
+/// graphic work and XML elements left of that.
+fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize, usize), DocxError> {
+    // The budget is per read, so a package read twice (tests, a Flat OPC conversion) starts over.
+    pkg.reset_budget();
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
     let Some(root) = pkg.xml_strict(&main)? else {
@@ -163,7 +170,9 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     let rels = pkg.rels(&main);
     let mut doc = Document::new();
     doc.body.clear();
+    let file_orders = pkg.file_orders()?;
     let mut r = Reader {
+        file_orders,
         pkg,
         doc,
         pc: PropCtx::default(),
@@ -193,6 +202,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         theme_fills: Default::default(),
         group_fill: None,
         chunks,
+        no_default_table_style: true,
     };
     r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
@@ -363,10 +373,11 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
-    let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
+    let (left, bytes, graphic, elements) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, pkg.elements_left());
     let mut doc = r.doc;
+    doc.skipped_parts.extend(pkg.skipped().iter().cloned());
     doc.ensure_nonempty();
-    Ok((doc, left, bytes, graphic))
+    Ok((doc, left, bytes, graphic, elements))
 }
 
 /// Most move ranges open at once, and most move names tracked, per file.

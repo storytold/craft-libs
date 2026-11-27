@@ -7,18 +7,7 @@ use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, Inline, Kind, model
 
 /// Escape text for Markdown (inline context).
 pub fn escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '~' | '|' | '&' => {
-                out.push('\\');
-                out.push(c);
-            }
-            '\u{000C}' | '\u{000E}' => {}
-            _ => out.push(c),
-        }
-    }
-    out
+    crate::escaping::escape(s, false)
 }
 
 /// Escape what would start a block at the beginning of a line. Leading spaces are kept, but at
@@ -346,6 +335,10 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     let mut i = 0;
     let mut counters = [0u32; 9];
     let mut prev_list = false;
+    // How far each level's last item's text is indented (where its further paragraphs go), and
+    // the level of the last item.
+    let mut conts = [0usize; 9];
+    let mut prev_level = 0usize;
     let mut prev_top_ordered = false;
     while let Some(b) = blocks.get(i) {
         match b {
@@ -376,6 +369,8 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
             }
             FBlock::Para(p) => {
                 let body = inlines_md(&p.inlines);
+                // A further paragraph of an item still open: its level.
+                let in_item = model::continues_list(blocks, i).map(usize::from).filter(|lv| prev_list && *lv <= prev_level);
                 match p.list {
                     Some(li) => {
                         let lv = li.level.min(8) as usize;
@@ -398,6 +393,10 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         let marker = if li.ordered { format!("{}.", n.unwrap_or(1)) } else { "-".to_string() };
                         let pad = " ".repeat(4 * lv);
                         let cont = " ".repeat(4 * lv + marker.len() + 1);
+                        if let Some(c) = conts.get_mut(lv) {
+                            *c = cont.len();
+                        }
+                        prev_level = lv;
                         let body = if p.kind == Kind::Code {
                             code_span(&p.text())
                         } else {
@@ -418,6 +417,22 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         if !next_is_list {
                             out.push(String::new());
                         }
+                    }
+                    // A list item's further paragraph: in its item, and the list goes on after it.
+                    None if in_item.is_some() => {
+                        let lv = in_item.unwrap_or_default();
+                        prev_level = lv;
+                        // A sublist after it is a new one.
+                        for d in counters.iter_mut().skip(lv + 1) {
+                            *d = 0;
+                        }
+                        let pad = " ".repeat(conts.get(lv).copied().unwrap_or(0));
+                        let text = match p.kind {
+                            Kind::Heading(n) => format!("{} {}", "#".repeat(n.clamp(1, 6) as usize), heading_text(&body)),
+                            _ => escape_lines(body).replace("\\\n", &format!("\\\n{pad}")),
+                        };
+                        out.push(format!("{pad}{text}").trim_end().to_string());
+                        out.push(String::new());
                     }
                     None => {
                         prev_list = false;

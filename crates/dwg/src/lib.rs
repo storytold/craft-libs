@@ -21,6 +21,11 @@
 //! These bound the input- and output-size variants. A small file that declares a huge internal
 //! table or section can still make the dependency allocate before any size is known, so the app
 //! runs both directions in a child process ([`worker`]): what that kills is the child.
+//!
+//! Isolation is not optional for untrusted input. With no worker configured the conversion is
+//! refused rather than run here, and a worker that cannot start is an error, so a missing worker
+//! never turns into decoding a hostile file in the caller's process. [`worker::allow_in_process`]
+//! is the explicit exception, for input the caller knows is trusted.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -57,6 +62,10 @@ impl Limits {
 
 /// A byte count in megabytes for messages ("9.9 MB", "1024 MB").
 #[cfg_attr(no_dwg_bridge, allow(dead_code))]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Megabyte formatting is rounded for display; exact integer precision beyond 2^53 bytes is not meaningful."
+)]
 fn mb(n: u64) -> String {
     let m = n as f64 / f64::from(1u32 << 20);
     if m >= 100.0 { format!("{m:.0} MB") } else { format!("{m:.1} MB") }
@@ -65,18 +74,26 @@ fn mb(n: u64) -> String {
 #[cfg(not(no_dwg_bridge))]
 pub mod worker;
 #[cfg(not(no_dwg_bridge))]
-pub use worker::{WORKER_ARG, crash_worker_for_test, decode, encode_as, encode_kept_noted, encode_noted, serve_if_asked, use_own_worker, use_worker};
+pub use worker::{
+    WORKER_ARG, allow_in_process, crash_worker_for_test, decode, encode_as, encode_kept_noted, encode_noted, serve_if_asked, use_own_worker,
+    use_worker,
+};
 #[cfg(not(no_dwg_bridge))]
 mod proxy_transport;
 
 #[cfg(not(no_dwg_bridge))]
 mod native {
+    use std::fmt::Write as _;
     use std::io::{Cursor, Write};
     use std::panic::AssertUnwindSafe;
 
     use super::{Limits, mb};
 
     /// Read DWG bytes and return an ASCII DXF rendition, within [`Limits::DEFAULT`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the DWG cannot be read or post-processed, or its DXF rendition exceeds the default limits.
     pub fn dwg_to_dxf(bytes: &[u8]) -> Result<Vec<u8>, String> {
         dwg_to_dxf_with(bytes, Limits::DEFAULT)
     }
@@ -84,6 +101,10 @@ mod native {
     /// [`dwg_to_dxf`] with explicit limits. Both are checked before the expensive step they
     /// guard: the input size before the DWG reader runs, the DXF size while it is written, so a
     /// runaway conversion stops at the limit instead of filling memory first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input exceeds `limits`, decoding fails, or the DXF output exceeds `limits`.
     pub fn dwg_to_dxf_with(bytes: &[u8], limits: Limits) -> Result<Vec<u8>, String> {
         dwg_to_dxf_noted(bytes, limits).map(|(dxf, _)| dxf)
     }
@@ -92,6 +113,10 @@ mod native {
     /// failsafe mode: an object record it can't decode is skipped instead of failing the whole
     /// file, and the notes say how many were skipped and of which types, so a partial read never
     /// passes for a complete one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input exceeds `limits`, decoding fails, or the DXF output exceeds `limits`.
     pub fn dwg_to_dxf_noted(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
         if bytes.len() > limits.max_dwg_bytes {
             return Err(format!(
@@ -114,13 +139,13 @@ mod native {
         let mut notes = read_notes(&outcome.stats);
         let mut doc = outcome.document;
         notes.extend(
-            guarded(AssertUnwindSafe(|| application_objects(&mut doc))).map_err(|_| "the DWG application object conversion failed".to_string())?,
+            guarded(AssertUnwindSafe(|| application_objects(&mut doc))).map_err(|()| "the DWG application object conversion failed".to_string())?,
         );
         // After application_objects, so the proxy objects it makes are numbered as the DXF's.
         notes.extend(
-            guarded(AssertUnwindSafe(|| super::proxy_transport::prepare(&mut doc))).map_err(|_| "the DWG proxy conversion failed".to_string())?,
+            guarded(AssertUnwindSafe(|| super::proxy_transport::prepare(&mut doc))).map_err(|()| "the DWG proxy conversion failed".to_string())?,
         );
-        let orphans = guarded(AssertUnwindSafe(|| post_process(&mut doc))).map_err(|_| "the DWG post-processing failed on this file".to_string())?;
+        let orphans = guarded(AssertUnwindSafe(|| post_process(&mut doc))).map_err(|()| "the DWG post-processing failed on this file".to_string())?;
         if orphans > 0 {
             let (s, were) = if orphans == 1 { ("", "was") } else { ("s", "were") };
             notes.push(format!("DWG: {orphans} DGN line style component{s} that no line style definition uses {were} left out"));
@@ -624,7 +649,7 @@ mod native {
             // A real table has at most one merge per cell; more ranges than that come from a
             // damaged file and would only make this rows × cols × ranges.
             let max_ranges = rows.saturating_mul(cols).min(1 << 16);
-            for r in t.merged_ranges.iter().take(max_ranges).cloned().collect::<Vec<_>>() {
+            for r in t.merged_ranges.iter().take(max_ranges).copied().collect::<Vec<_>>() {
                 // Clamp to the table: the ranges come from the file.
                 let (bottom, right) = (r.bottom_row.min(rows.saturating_sub(1)), r.right_col.min(cols.saturating_sub(1)));
                 if r.top_row > bottom || r.left_col > right || rows == 0 || cols == 0 || (r.top_row, r.left_col) == (bottom, right) {
@@ -695,6 +720,35 @@ mod native {
         }
     }
 
+    /// A FIELD's format string between the two places acadrust 0.6.6 keeps it. Its DXF reader
+    /// puts a pre-2007 field's format (group 4) only in `Field::format`, and its DWG writer
+    /// writes that one only for versions before 2007; from 2007 it writes `value.format`. A field
+    /// read from an older drawing and written as DWG 2007 or later would lose its format
+    /// (`dd/MM/yyyy`, `%lu2`). The child values hold no format of their own in the old DXF.
+    ///
+    /// `legacy`: the group 4 formats of a DXF that was read as a newer version than it declares
+    /// ([`legacy_field_formats`]), which the reader then skipped. They go back into an empty
+    /// `Field::format` first, as the reader puts them there under the DXF's own version, so a
+    /// DWG before 2007 keeps them too.
+    fn field_formats(doc: &mut acadrust::CadDocument, legacy: &[(acadrust::Handle, String)]) {
+        for (handle, format) in legacy {
+            if let Some(acadrust::objects::ObjectType::Field(f)) = doc.objects.get_mut(handle)
+                && f.format.is_empty()
+            {
+                f.format.clone_from(format);
+            }
+        }
+        if doc.version < acadrust::DxfVersion::AC1021 {
+            return;
+        }
+        for o in doc.objects.values_mut() {
+            let acadrust::objects::ObjectType::Field(f) = o else { continue };
+            if f.value.format.is_empty() && !f.format.is_empty() {
+                f.value.format = f.format.clone();
+            }
+        }
+    }
+
     /// The DWG dimension flags byte. Its bit 1 is DXF group 70's bit 32 (ODA DWG specification,
     /// common dimension data), which acadrust keeps no copy of from DXF: it is set here as
     /// CADCraft's DXF writer always sets it (#1094). Bit 0, the opposite of group 70's bit 128,
@@ -707,8 +761,8 @@ mod native {
     }
 
     /// Leave out DGN line style components (`LS*COMPONENT`) that no line style definition uses
-    /// (#1482). A drawing that once came from MicroStation can carry hundreds of thousands of
-    /// them, orphaned copies piled up by earlier DGN imports and copy-pastes (AutoCAD's PURGE
+    /// (#1482). A drawing that once came from `MicroStation` can carry hundreds of thousands of
+    /// them, orphaned copies piled up by earlier DGN imports and copy-pastes (`AutoCAD`'s PURGE
     /// removes them as orphaned data): in a real 83 MB site plan they were 888,483 of 889,053
     /// components and made its DXF rendition 1.2 GB, over [`Limits::DEFAULT`], so the file
     /// didn't open at all. No definition that was read refers to them (a definition the reader
@@ -838,7 +892,7 @@ mod native {
         for (name, code, value) in unwritten_header_vars(h) {
             let written = section.windows(name.len() + 2).any(|w| w.starts_with(name.as_bytes()) && w.ends_with(b"\r\n"));
             if !written && value.parse::<f64>().is_ok_and(f64::is_finite) {
-                add.push_str(&format!("  9\r\n{name}\r\n{code:>3}\r\n{value}\r\n"));
+                let _ = write!(add, "  9\r\n{name}\r\n{code:>3}\r\n{value}\r\n");
             }
         }
         dxf.splice(end..end, add.into_bytes());
@@ -870,14 +924,22 @@ mod native {
     /// Oldest DWG version written; older DXF input is written as this version.
     const MIN_DWG_VERSION: acadrust::DxfVersion = acadrust::DxfVersion::AC1018;
 
-    /// Convert DXF bytes into a DWG file of the DXF's version, and at least AutoCAD 2004
+    /// Convert DXF bytes into a DWG file of the DXF's version, and at least `AutoCAD` 2004
     /// (AC1018).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the DXF cannot be decoded or the DWG cannot be written, including oversized input.
     pub fn dxf_to_dwg(dxf: &[u8]) -> Result<Vec<u8>, String> {
         convert(dxf, None, None).map(|(dwg, _)| dwg)
     }
 
     /// Convert DXF bytes into a DWG file of `version`, a code from [`super::VERSIONS`] ("AC1032"),
     /// whatever version the DXF declares.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported version, invalid DXF, oversized input, or a DWG write failure.
     pub fn dxf_to_dwg_as(dxf: &[u8], version: &str) -> Result<Vec<u8>, String> {
         dxf_to_dwg_noted(dxf, version).map(|(dwg, _)| dwg)
     }
@@ -895,8 +957,9 @@ mod native {
     /// read from a file of version `kept` ("AC1032"), and acadrust reads several of those
     /// differently by version: read as R2000, an AC1032 file's mental ray render settings came out
     /// a class version too high, for which the ODA rejects the whole DWG, and a field lost its
-    /// cached value. So the DXF is read as `kept` declares. A `kept` version that is unknown, or
-    /// not newer than the DXF's own, changes nothing.
+    /// cached value. So the DXF is read as `kept` declares; the formats of the DXF's own pre-2007
+    /// fields, which the reader skips then, are restored. A `kept`
+    /// version that is unknown, or not newer than the DXF's own, changes nothing.
     pub fn dxf_to_dwg_kept_as(dxf: &[u8], version: &str, kept: &str) -> Result<Vec<u8>, String> {
         dxf_to_dwg_kept_noted(dxf, version, kept).map(|(dwg, _)| dwg)
     }
@@ -962,6 +1025,35 @@ mod native {
         Some(out)
     }
 
+    /// The format (group 4) of each FIELD record in an ASCII DXF, by handle. acadrust 0.6.6 reads
+    /// it only from a DXF that declares a version before 2007 (AC1021), where it follows the
+    /// field code or the object handles, before group 91 (`read_field_object_dxf`). When
+    /// [`declare_version`] made an older DXF read as 2007 or later, a field the DXF wrote itself
+    /// would lose its format; a field carried over from a 2007+ file has none and keeps its own
+    /// `value.format`.
+    fn legacy_field_formats(dxf: &[u8]) -> Vec<(acadrust::Handle, String)> {
+        let Some(pairs) = super::proxy_transport::text_pairs(dxf) else { return Vec::new() };
+        let mut formats = Vec::new();
+        let (mut in_field, mut handle, mut format, mut past) = (false, None, None, false);
+        for pair in pairs {
+            let Some((code, value)) = pair else { break };
+            match code {
+                0 => {
+                    if let (Some(h), Some(f)) = (handle.take(), format.take()) {
+                        formats.push((h, f));
+                    }
+                    in_field = value == "FIELD" || value == "ACDBFIELD";
+                    (handle, format, past) = (None, None, false);
+                }
+                5 if in_field && handle.is_none() => handle = u64::from_str_radix(value.trim(), 16).ok().map(acadrust::Handle::new),
+                4 if in_field && !past && format.is_none() => format = Some(value),
+                91 if in_field => past = true,
+                _ => {}
+            }
+        }
+        formats
+    }
+
     /// The byte offset and the trimmed value of header variable `name` in an ASCII DXF: the value
     /// of the group that follows the `9` group naming it. The file is read as (group code,
     /// value) line pairs, in one pass with no buffering, up to the first `0`/`ENDSEC`, the end
@@ -1003,7 +1095,7 @@ mod native {
 
     /// The current dimension style (`$DIMSTYLE`) by its name: the DXF gives the name, and the
     /// handle read with it needn't be the style's in the document, in which case the DWG writer
-    /// fell back to Standard and AutoCAD opened the drawing with Standard current (#1051).
+    /// fell back to Standard and `AutoCAD` opened the drawing with Standard current (#1051).
     fn current_dimstyle(doc: &mut acadrust::CadDocument) {
         let name = doc.header.current_dimstyle_name.clone();
         if let Some(h) = doc.dim_styles.iter().find(|ds| ds.name.eq_ignore_ascii_case(&name)).map(|ds| ds.handle) {
@@ -1013,7 +1105,7 @@ mod native {
 
     /// The current text style (`$TEXTSTYLE`) by its name, the same way as [`current_dimstyle`]:
     /// the handle read with the DXF needn't be the style's in the document, in which case the DWG
-    /// writer fell back to Standard and AutoCAD opened the drawing with Standard current (#1650).
+    /// writer fell back to Standard and `AutoCAD` opened the drawing with Standard current (#1650).
     fn current_text_style(doc: &mut acadrust::CadDocument) {
         let name = doc.header.current_text_style_name.clone();
         if let Some(h) = doc.text_styles.iter().find(|ts| ts.name.eq_ignore_ascii_case(&name)).map(|ts| ts.handle) {
@@ -1190,20 +1282,24 @@ mod native {
             ));
         }
         // Decoding a code page to UTF-8 can grow the text, so the limit applies again.
-        let data = match kept.and_then(|k| declare_version(dxf, k)) {
-            Some(d) if d.len() > Limits::DEFAULT.max_dxf_bytes => {
+        let (data, legacy) = match kept.and_then(|k| declare_version(dxf, k).map(|d| (k, d))) {
+            Some((_, d)) if d.len() > Limits::DEFAULT.max_dxf_bytes => {
                 return Err(format!(
                     "DXF: the input is {} as UTF-8, larger than the {} accepted for DWG conversion",
                     mb(d.len() as u64),
                     mb(Limits::DEFAULT.max_dxf_bytes as u64)
                 ));
             }
-            Some(d) => d,
-            None => dxf.to_vec(),
+            // Read as 2007 or later, the DXF's own fields lose their formats: restored after.
+            Some((k, d)) => (d, k >= acadrust::DxfVersion::AC1021),
+            None => (dxf.to_vec(), false),
         };
-        let (classes, source) = guarded(AssertUnwindSafe(|| (dxf_class_names(&data), super::proxy_transport::source_classes(&data))))
-            .map_err(|_| "the DXF proxy class conversion failed".to_string())?;
-        let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(|r| r.read()))
+        let (classes, source, legacy) = guarded(AssertUnwindSafe(|| {
+            let legacy = if legacy { legacy_field_formats(&data) } else { Vec::new() };
+            (dxf_class_names(&data), super::proxy_transport::source_classes(&data), legacy)
+        }))
+        .map_err(|_| "the DXF proxy class conversion failed".to_string())?;
+        let mut doc = std::panic::catch_unwind(move || acadrust::DxfReader::from_reader(Cursor::new(data)).and_then(acadrust::DxfReader::read))
             .map_err(|_| "the DXF→DWG conversion failed".to_string())?
             .map_err(|e| format!("DXF: {e}"))?;
         match version {
@@ -1230,6 +1326,7 @@ mod native {
             };
             other_layout_owners(&mut doc);
             table_style_rows(&mut doc, true);
+            field_formats(&mut doc, &legacy);
             dimension_flags(&mut doc);
             let mut unwritten = drop_unwritable(&mut doc);
             for (kind, n) in proxies {
@@ -1242,14 +1339,14 @@ mod native {
             current_layer(&mut doc);
             unwritten
         }))
-        .map_err(|_| "the DXF to DWG conversion failed on this file".to_string())?;
+        .map_err(|()| "the DXF to DWG conversion failed on this file".to_string())?;
         let dwg = std::panic::catch_unwind(AssertUnwindSafe(|| acadrust::DwgWriter::write_to_vec(&doc)))
             .map_err(|_| "the DWG writer failed on this drawing".to_string())?
             .map_err(|e| format!("DWG write: {e}"))?;
         Ok((dwg, unwritten))
     }
 
-    /// AutoCAD's entry name for the drawing variables dictionary (the DXF Reference calls it the
+    /// `AutoCAD`'s entry name for the drawing variables dictionary (the DXF Reference calls it the
     /// ACDBVARIABLEDICTIONARY; dictionary keys are case-insensitive).
     const VARIABLE_DICTIONARY: &str = "AcDbVariableDictionary";
 
@@ -1265,11 +1362,11 @@ mod native {
         if valid.contains(&value) { value.to_string() } else { default.to_string() }
     }
 
-    /// Add the drawing variables dictionary AutoCAD always writes into the named object
+    /// Add the drawing variables dictionary `AutoCAD` always writes into the named object
     /// dictionary, with the variables it keeps there, when the drawing has none (#1813).
     /// Vectric Aspire 10.5 reads a 2004 (AC1018) DWG without it as empty ("No data was imported
     /// from the DXF / DWG file"), though it reads the same drawing as DXF — which has no such
-    /// dictionary either, as CADCraft's and ezdxf's writers don't make one. AutoCAD's AC1032 DWGs
+    /// dictionary either, as CADCraft's and ezdxf's writers don't make one. `AutoCAD`'s AC1032 DWGs
     /// read there without it, so newer output is left as it was, and a dictionary the drawing
     /// does have keeps its own entries and values.
     fn add_variable_dictionary(doc: &mut acadrust::CadDocument) {
@@ -1318,7 +1415,7 @@ mod native {
 
     /// Entities of a layout other than the one in `*Paper_Space` are written owned by their block
     /// (entity mode 0, with its handle). acadrust writes every paper-space entity with mode 1,
-    /// "paper space", which AutoCAD reads as the `*Paper_Space` block's: everything drawn on a
+    /// "paper space", which `AutoCAD` reads as the `*Paper_Space` block's: everything drawn on a
     /// second layout landed on the first one, and the second stayed empty (#1057).
     fn other_layout_owners(doc: &mut acadrust::CadDocument) {
         let others: std::collections::HashSet<acadrust::Handle> = doc
@@ -1541,11 +1638,11 @@ thread_local! {
 /// Panics when a test asked for `stage` to fail (see [`PANIC_IN`]); does nothing otherwise.
 #[cfg(not(no_dwg_bridge))]
 #[allow(clippy::panic)]
-fn fail_in_test(_stage: &str) {
+fn fail_in_test(stage: &str) {
+    #[cfg(not(test))]
+    let _ = stage;
     #[cfg(test)]
-    if PANIC_IN.with(|p| p.get()) == Some(_stage) {
-        panic!("test-forced panic in {_stage}");
-    }
+    assert!(PANIC_IN.with(std::cell::Cell::get) != Some(stage), "test-forced panic in {stage}");
 }
 
 /// The error for a DWG version this writer can't create.
@@ -1568,6 +1665,8 @@ pub fn serve_if_asked() -> Option<i32> {
 }
 #[cfg(no_dwg_bridge)]
 pub fn use_own_worker() {}
+#[cfg(no_dwg_bridge)]
+pub fn allow_in_process() {}
 #[cfg(no_dwg_bridge)]
 pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
     dwg_to_dxf_noted(bytes, limits)
@@ -1623,6 +1722,8 @@ pub fn dxf_to_dwg_kept_noted(_dxf: &[u8], _version: &str, _kept: &str) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     /// The DXF of an empty drawing, enough for the bridge to make a small DWG.
@@ -1716,9 +1817,9 @@ mod tests {
         let mut s = String::from("  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n");
         for (text, flags, sub, pts) in dims {
             s += "  0\nDIMENSION\n  8\n0\n100\nAcDbEntity\n100\nAcDbDimension\n 10\n0\n 20\n0\n 30\n0\n";
-            s += &format!(" 11\n50\n 21\n-20\n 31\n0\n 70\n{flags}\n  1\n{text}\n  3\nStandard\n100\n{sub}\n");
-            for (code, [x, y]) in pts.iter() {
-                s += &format!("{code:>3}\n{x}\n{:>3}\n{y}\n{:>3}\n0\n", code + 10, code + 20);
+            let _ = write!(s, " 11\n50\n 21\n-20\n 31\n0\n 70\n{flags}\n  1\n{text}\n  3\nStandard\n100\n{sub}\n");
+            for (code, [x, y]) in *pts {
+                let _ = write!(s, "{code:>3}\n{x}\n{:>3}\n{y}\n{:>3}\n0\n", code + 10, code + 20);
             }
         }
         s + "  0\nENDSEC\n  0\nEOF\n"
@@ -1787,13 +1888,17 @@ mod tests {
             .collect()
     }
 
-    /// Issue #1482: a DWG that once came from MicroStation can carry hundreds of thousands of DGN
+    /// Issue #1482: a DWG that once came from `MicroStation` can carry hundreds of thousands of DGN
     /// line style components no definition uses (a real 83 MB site plan: 888,483 of 889,053, a
     /// 1.2 GB DXF rendition over the limit, so it didn't open). They're left out with a note, and
     /// their dictionary entries with them; the definition and every component it reaches —
     /// through compound and point components, around a cycle — are kept.
     #[cfg(not(no_dwg_bridge))]
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This integration test builds and verifies one complete DGN component graph; splitting the fixture would obscure reachability."
+    )]
     fn orphaned_dgn_line_style_components_are_left_out() {
         use acadrust::objects::*;
         let mut doc = acadrust::CadDocument::new();
@@ -2091,6 +2196,129 @@ mod tests {
                 })
                 .collect();
             assert_eq!(frames, [vec![0xDE, 0xAD, 0xBE, 0xEF]], "{version}");
+        }
+    }
+
+    /// A FIELD read from a pre-2007 DXF keeps its format (group 4) only in `Field::format`, which
+    /// acadrust's DWG writer writes just for versions before 2007: saved as DWG 2007 or later the
+    /// format (`dd/MM/yyyy`) was lost. A 2007+ field with its own format is written as it is.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn field_formats_survive_saving_an_older_drawing_as_dwg_2007_or_later() {
+        let formats = |dwg: Vec<u8>| -> Vec<String> {
+            let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+            back.objects
+                .values()
+                .filter_map(|o| match o {
+                    acadrust::objects::ObjectType::Field(f) => Some(f.value.format.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        for source in ["AC1015", "AC1018"] {
+            let dxf = format!(
+                "  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\n{source}\n  0\nENDSEC\n  0\nSECTION\n  2\nCLASSES\n  0\nCLASS\n  1\nFIELD\n  2\nAcDbField\n  3\nObjectDBX Classes\n 90\n0\n 91\n0\n  0\nENDSEC\n  0\nSECTION\n  2\nOBJECTS\n  0\nFIELD\n  5\nA1F\n330\n1F\n  1\nAcVar\n  2\n\\AcVar Date\n  4\ndd/MM/yyyy\n 90\n0\n 97\n0\n 91\n0\n 92\n0\n 94\n0\n 95\n0\n 96\n0\n300\n\n  0\nENDSEC\n  0\nEOF\n"
+            );
+            assert_eq!(formats(dxf_to_dwg_as(dxf.as_bytes(), "AC1032").unwrap()), ["dd/MM/yyyy"], "{source}");
+        }
+        let mut doc = acadrust::CadDocument::new();
+        doc.classes.add_or_update(acadrust::classes::DxfClass::new("FIELD", "AcDbField"));
+        let handle = doc.allocate_handle();
+        let field = acadrust::objects::Field {
+            handle,
+            owner: doc.header.named_objects_dict_handle,
+            evaluator_id: "AcVar".into(),
+            code: "\\AcVar Date".into(),
+            value: acadrust::entities::CellValue { format: "%lu2".into(), ..Default::default() },
+            ..Default::default()
+        };
+        doc.objects.insert(handle, acadrust::objects::ObjectType::Field(field));
+        let mut dxf = Vec::new();
+        acadrust::DxfWriter::new(&doc).write_to_writer(&mut dxf).unwrap();
+        assert_eq!(formats(dxf_to_dwg_as(&dxf, "AC1032").unwrap()), ["%lu2"]);
+    }
+
+    /// A FIELD record as an AC1015/AC1018 DXF writes it, its format `dd/MM/yyyy` in group 4.
+    #[cfg(not(no_dwg_bridge))]
+    fn legacy_field(handle: acadrust::Handle, owner: acadrust::Handle) -> String {
+        format!(
+            "  0\r\nFIELD\r\n  5\r\n{handle:X}\r\n330\r\n{owner:X}\r\n  1\r\nAcVar\r\n  2\r\n\\AcVar Date\r\n  4\r\ndd/MM/yyyy\r\n 90\r\n0\r\n 97\r\n0\r\n 91\r\n0\r\n 92\r\n0\r\n 94\r\n0\r\n 95\r\n0\r\n 96\r\n0\r\n300\r\n\r\n"
+        )
+    }
+
+    /// The FIELD formats of a DWG by handle: `value.format` from 2007, `Field::format` before.
+    #[cfg(not(no_dwg_bridge))]
+    fn dwg_field_formats(dwg: Vec<u8>) -> Vec<(u64, String)> {
+        let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+        let mut formats: Vec<(u64, String)> = back
+            .objects
+            .values()
+            .filter_map(|o| match o {
+                acadrust::objects::ObjectType::Field(f) => Some((f.handle.into(), f.pre2007_format().to_string())),
+                _ => None,
+            })
+            .collect();
+        formats.sort();
+        formats
+    }
+
+    /// CADCraft's R2000 DXF of a drawing with fields declares AC1015 (or the drawing's AC1018)
+    /// and is read as the `kept` version, for which acadrust skips group 4: an older drawing's own
+    /// field lost its format (`dd/MM/yyyy`) in the DWG (#1580 review).
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn field_formats_survive_a_kept_version_newer_than_the_drawing() {
+        for source in ["AC1015", "AC1018"] {
+            for kept in ["AC1024", "AC1032"] {
+                let owner = acadrust::Handle::new(0x1F);
+                let legacy = legacy_field(acadrust::Handle::new(0xA1F), owner);
+                let dxf = format!(
+                    "  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\n{source}\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nCLASSES\r\n  0\r\nCLASS\r\n  1\r\nFIELD\r\n  2\r\nAcDbField\r\n  3\r\nObjectDBX Classes\r\n 90\r\n0\r\n 91\r\n0\r\n  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nOBJECTS\r\n{legacy}  0\r\nENDSEC\r\n  0\r\nEOF\r\n"
+                );
+                for version in ["AC1032", "AC1018"] {
+                    let got = dwg_field_formats(dxf_to_dwg_kept_as(dxf.as_bytes(), version, kept).unwrap());
+                    assert_eq!(got, [(0xA1F, "dd/MM/yyyy".to_string())], "{source} kept {kept} as {version}");
+                }
+            }
+        }
+    }
+
+    /// The same DXF with a field carried over from a 2007+ file next to the drawing's own: the
+    /// carried-over one keeps its own `value.format` (`%lu2`), the drawing's own its group 4
+    /// format (`dd/MM/yyyy`).
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn field_formats_survive_a_kept_version_with_carried_over_and_own_fields() {
+        for source in ["AC1015", "AC1018"] {
+            for kept in ["AC1024", "AC1032"] {
+                // The carried-over field as acadrust writes 2007+ DXF, the drawing's own field in
+                // the old layout, under the older version.
+                let mut doc = acadrust::CadDocument::new();
+                doc.classes.add_or_update(acadrust::classes::DxfClass::new("FIELD", "AcDbField"));
+                let (carried, own) = (doc.allocate_handle(), doc.allocate_handle());
+                let field = acadrust::objects::Field {
+                    handle: carried,
+                    owner: doc.header.named_objects_dict_handle,
+                    evaluator_id: "AcVar".into(),
+                    code: "\\AcVar Date".into(),
+                    value: acadrust::entities::CellValue { format: "%lu2".into(), ..Default::default() },
+                    ..Default::default()
+                };
+                doc.objects.insert(carried, acadrust::objects::ObjectType::Field(field));
+                let mut dxf = Vec::new();
+                acadrust::DxfWriter::new(&doc).write_to_writer(&mut dxf).unwrap();
+                let dxf = String::from_utf8(dxf).unwrap();
+                let dxf = dxf.replacen("$ACADVER\r\n  1\r\nAC1032\r\n", &format!("$ACADVER\r\n  1\r\n{source}\r\n"), 1);
+                let at = dxf.find("  0\r\nFIELD\r\n").unwrap();
+                let dxf = format!("{}{}{}", &dxf[..at], legacy_field(own, doc.header.named_objects_dict_handle), &dxf[at..]);
+                assert!(dxf.contains(&format!("$ACADVER\r\n  1\r\n{source}\r\n")));
+                for version in ["AC1032", "AC1018"] {
+                    let got = dwg_field_formats(dxf_to_dwg_kept_as(dxf.as_bytes(), version, kept).unwrap());
+                    let mut want = vec![(carried.into(), "%lu2".to_string()), (own.into(), "dd/MM/yyyy".to_string())];
+                    want.sort();
+                    assert_eq!(got, want, "mixed {source} kept {kept} as {version}");
+                }
+            }
         }
     }
 }

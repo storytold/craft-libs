@@ -12,10 +12,14 @@ mod ac3_encoder_oracle;
 mod ac3_oracle;
 mod alac;
 mod concealment;
+mod file_formats;
 mod mp3_decoder_oracle;
 mod mp3_encoder_oracle;
 mod mpa_oracle;
 mod opus;
 mod opusenc;
+mod packet_encoder;
 mod routing_oracle;
 mod track_decoder;
+#[cfg(feature = "vorbis-encode")]
+mod vorbis_encoder_oracle;

@@ -7,7 +7,7 @@
 //! - [`TextDecoder`] and [`codepage`]: text in the file's code pages, `\uN` with its fallback
 //!   characters and surrogate pairs. [`esc`] goes the other way. [`dttm_to_iso`],
 //!   [`iso_to_dttm`], [`date_words`] and [`iso_date`] are RTF's two date forms.
-//! - [`read`] and [`write`]: a file to and from a small neutral model ([`Document`]):
+//! - [`read`] and [`fn@write`]: a file to and from a small neutral model ([`Document`]):
 //!   paragraphs with outline level, alignment, indents and spacing, runs with bold, italic,
 //!   underline, strikethrough, superscript and subscript, size, colour and font, and tables.
 //!
@@ -46,4 +46,4 @@ pub use lex::{Token, Tokens, is_rtf};
 pub use model::{Align, Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table, VertAlign};
 pub use read::{MAX_COLORS, MAX_FONT_NAME, MAX_FONTS, MAX_GROUPS, NotRtf, read};
 pub use text::TextDecoder;
-pub use write::{esc, esc_font, push_esc, write};
+pub use write::{OutlineWriter, esc, esc_font, push_esc, write};
